@@ -79,14 +79,8 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * GLA-32 (owner decision, 2026-09-19): account@glr.co.th is notified at exactly one sales-pipeline
- * moment — {@link DepositNoticeService#issue} — never at {@code confirmDepositPaid}/
- * {@code confirmFinalPayment}/close. Drives a deal through the REAL Steps 1-6 services (no
- * shortcuts, same approach as {@code DepositNoticeIssueGuardIntegrationTest}) up to a DRAFT deposit
- * notice, then exercises {@code issue()} itself with a REAL {@link SalesNotificationMailRouter} so
- * both the in-app row and the shared-mailbox email are real, not a {@code NO_OP} double.
- */
+/** GLA-32 (owner decision, 2026-09-19): account@glr.co.th is notified at exactly one sales-pipeline moment —
+ * DepositNoticeService#issue — never at confirmDepositPaid/ confirmFinalPayment/close. */
 class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -170,21 +164,19 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         ceoActor = actor(ceoUserId, "ceo");
         accountActor = actor(accountEmployeeId, "account");
 
-        // Setup noise (submit/pickup/approve/etc. below all raise their own real mail) must not
-        // leak into a test's own assertions.
+        // Setup noise (submit/pickup/approve/etc. below all raise their own real mail) must not leak into a test's own
+        // assertions.
         mailer.sent.clear();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Positive: the first issue notifies account, in-app AND by mail
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void issue_firstTime_insertsAnAccountInAppRowWithTicketCustomerAndAmount() {
         DraftFixture fixture = buildDraftDepositNotice();
-        // Setup (create/submit/pickup/factory-quote/costing/decision/quotation/confirm-order) is
-        // driven through the same REAL notifications wiring and raises plenty of its own
-        // import/ceo/sales rows and mail — isolate issue()'s OWN effect from that noise.
+        // Setup (create/submit/pickup/factory-quote/costing/decision/quotation/confirm-order) is driven through the
+        // same REAL notifications wiring and raises plenty of its own import/ceo/sales rows and mail — isolate
+        // issue()'s OWN effect from that noise.
         long maxNotificationIdBeforeIssue = maxNotificationId();
         mailer.sent.clear();
 
@@ -193,8 +185,8 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         List<Map<String, Object>> newRows = jdbc.queryForList("""
             SELECT employee_id, type, message, link FROM hr.notification WHERE notification_id > :maxId
             """, Map.of("maxId", maxNotificationIdBeforeIssue));
-        // issue() raises exactly one notification, addressed at "account" alone — no other role
-        // gets a row from this specific call.
+        // issue() raises exactly one notification, addressed at "account" alone — no other role gets a row from this
+        // specific call.
         assertThat(newRows).hasSize(1);
         Map<String, Object> row = newRows.get(0);
         assertThat(row.get("employee_id")).isEqualTo(accountEmployeeId);
@@ -204,14 +196,13 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(message).contains(fixture.ticketCode());
         assertThat(message).contains(fixture.customerName());
         assertThat(message).contains(issued.docNumber());
-        // Opus review (2026-09-19): account matches this against a bank transfer, which is the
-        // deposit PLUS 7% VAT — the message must show BOTH figures, not depositAmount alone.
+        // Opus review (2026-09-19): account matches this against a bank transfer, which is the deposit PLUS 7% VAT —
+        // the message must show BOTH figures, not depositAmount alone.
         assertThat(message).contains(ThaiText.money(issued.depositAmount()));
         assertThat(message).contains(ThaiText.money(issued.totalPayable()));
         assertThat(issued.totalPayable()).isNotEqualByComparingTo(issued.depositAmount());
         assertThat(message).doesNotContain("ฉบับแก้ไข");
-        // The title (TICKET_EVENT_TITLES' own entry) already ends "รอยืนยันรับชำระ" — the message
-        // must not repeat it.
+        // The title (TICKET_EVENT_TITLES' own entry) already ends "รอยืนยันรับชำระ" — the message must not repeat it.
         assertThat(message).doesNotContain("รอยืนยันรับชำระ");
     }
 
@@ -231,15 +222,9 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(toAccount.textBody()).contains(issued.docNumber());
     }
 
-    /**
-     * Opus review (2026-09-19): {@code doc.customerName()} CAN be blank (see
-     * {@code DepositNoticeService.resolveCustomerHeader}'s own comments on the new
-     * pricing-request chain), so this pins the same "ไม่ระบุลูกค้า" fallback
-     * {@code TicketService#notifySalesManagerOfRepDeclaration} already uses for the identical
-     * gap. Nulled directly on the row rather than threaded through the whole pipeline (which
-     * always supplies a real name via the ticket summary) — this simulates the gap cheaply
-     * without inventing a new code path to reach it.
-     */
+    /** Opus review (2026-09-19): doc.customerName() CAN be blank (see DepositNoticeService.resolveCustomerHeader's
+     * own comments on the new pricing-request chain), so this pins the same "ไม่ระบุลูกค้า" fallback
+     * TicketService#notifySalesManagerOfRepDeclaration already uses for the identical gap. */
     @Test
     void issue_blankCustomerName_fallsBackToPlaceholderRatherThanPrintingBlank() {
         DraftFixture fixture = buildDraftDepositNotice();
@@ -256,9 +241,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(message).doesNotContain(fixture.customerName());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Wrong-way-round: a failed issue (precondition 409) notifies nobody
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void issue_secondCallOnAnAlreadyIssuedDocIsRefused_andRaisesNoSecondAccountNotification() {
@@ -276,9 +259,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(mailer.sent()).isEmpty();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Rollback: the critical AfterCommit trap this branch exists to avoid regressing
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void issue_rolledBackTransaction_notifiesNobodyByRowOrByMail() {
@@ -291,8 +272,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
             throw new IllegalStateException("forced rollback after the account notification was raised");
         })).isInstanceOf(IllegalStateException.class);
 
-        // Load-bearing: zero rows proves the transaction actually rolled back, not that issue()
-        // never ran.
+        // Load-bearing: zero rows proves the transaction actually rolled back, not that issue() never ran.
         assertThat(countAccountNotificationRows()).isZero();
         assertThat(mailer.sent())
             .as("a rolled-back issue() must not email account about a deposit notice that no "
@@ -300,12 +280,9 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
             .isEmpty();
     }
 
-    /**
-     * The other half of the same contract — a committed issue() through the same real
-     * transactional proxy must still mail after commit. Without this, {@link
-     * #issue_rolledBackTransaction_notifiesNobodyByRowOrByMail} alone would stay green on wiring
-     * that can never send at all.
-     */
+    /** The other half of the same contract — a committed issue() through the same real transactional proxy must
+     * still mail after commit. Without this, #issue_rolledBackTransaction_notifiesNobodyByRowOrByMail alone would
+     * stay green on wiring that can never send at all. */
     @Test
     void issue_committedTransaction_actuallyMailsAfterCommitThroughTheRealProxy() {
         DraftFixture fixture = buildDraftDepositNotice();
@@ -318,9 +295,7 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(mailer.recipients()).contains("account@glr.co.th");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Pin: confirmDepositPaid must NOT notify account (owner decided explicitly against it)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void confirmDepositPaid_doesNotRaiseASecondAccountNotification() {
@@ -330,8 +305,8 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(rowsAfterIssue).isEqualTo(1);
         mailer.sent.clear();
 
-        // GLA-118 (owner ruling 2026-09-17): confirmDepositPaid is account-only now — the CEO
-        // fallback this used to exercise is gone, so this drives it as account instead.
+        // GLA-118 (owner ruling 2026-09-17): confirmDepositPaid is account-only now — the CEO fallback this used to
+        // exercise is gone, so this drives it as account instead.
         ticketService.confirmDepositPaid(fixture.ticketId(), accountActor);
 
         assertThat(countAccountNotificationRows())
@@ -340,11 +315,9 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         assertThat(mailer.recipients()).doesNotContain("account@glr.co.th");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Fixture helpers — mirrors DepositNoticeIssueGuardIntegrationTest's approach for driving a
-    // deal to a DRAFT deposit notice through the real Steps 1-6 services, stopping one call short
-    // of issue() so each test drives that call itself.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Fixture helpers — mirrors DepositNoticeIssueGuardIntegrationTest's approach for driving a deal to a DRAFT
+    // deposit notice through the real Steps 1-6 services, stopping one call short of issue() so each test drives
+    // that call itself.
 
     private record DraftFixture(long ticketId, long docId, String ticketCode, String customerName) {}
 
@@ -354,9 +327,9 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
             """, Map.of("accountId", accountEmployeeId), Long.class);
     }
 
-    /** Baseline marker so a test can isolate the rows ITS OWN call adds from the setup pipeline's
-     *  own import/ceo/sales notifications (submit/pickup/quotation/confirm-order all raise their
-     *  own, through the same real wiring). */
+    /** Baseline marker so a test can isolate the rows ITS OWN call adds from the setup pipeline's own
+     * import/ceo/sales notifications (submit/pickup/quotation/confirm-order all raise their own, through the same
+     * real wiring). */
     private long maxNotificationId() {
         return jdbc.queryForObject(
             "SELECT COALESCE(MAX(notification_id), 0) FROM hr.notification", Map.of(), Long.class);
@@ -382,15 +355,9 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
         long ticketItemId = created.items().get(0).id();
 
         BigDecimal quantity = new BigDecimal("10");
-        // Rebased onto develop @84f4123e (V184): V185/GLA-125 made color/texture/thicknessMm/
-        // sqmPerPiece/piecesPerBox/a quantity/originCountry/leadTimeMin+MaxDays unconditionally
-        // required (PricingRequestService#requireItemFieldsComplete) -- the old 18-arg compat
-        // shape (requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis sent directly, no
-        // tile fields) now 400s with "ขาด สี, ผิว, ความหนา, ... ประเทศต้นทาง, ระยะเวลานำเข้า (วัน)".
-        // Rebuilt as a complete new-form item: PIECES mode, wastageMode NONE, roundToFullBox
-        // false, so the derived requestedQty comes out EXACTLY equal to `quantity` -- preserving
-        // this fixture's original "requestedQty/quotedQuantity both equal `quantity`" arithmetic
-        // that driveDraftPricingRequestToQuotationAccepted's factory response relies on.
+        // Rebased onto develop @84f4123e: V185/GLA-125 made color/texture/thicknessMm/ sqmPerPiece/piecesPerBox/a
+        // quantity/originCountry/leadTimeMin+MaxDays unconditionally required -- the old 18-arg compat shape now 400s
+        // with "ขาด สี, ผิว, ความหนา, ... ประเทศต้นทาง, ระยะเวลานำเข้า".
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             ticketItemId, catalogProductId, null, "SCG", "Tile AccountNotice", "SCG Tile AccountNotice", "ขาว", "ด้าน",
             "60x60", FACTORY, null, null, null, null, QuantityType.CONFIRMED, null, null, null,
@@ -468,10 +435,8 @@ class DepositNoticeAccountNotificationIntegrationTest extends AbstractPostgresIn
             true, LocalDate.now(), false, null, false);
     }
 
-    /**
-     * Same double as {@code SalesNotificationMailRoutingIntegrationTest} — captures the full
-     * rendered mail so subject/body assertions are possible, not just the recipient.
-     */
+    /** Same double as SalesNotificationMailRoutingIntegrationTest — captures the full rendered mail so subject/body
+     * assertions are possible, not just the recipient. */
     record SentMail(String to, String subject, String htmlBody, String textBody) {}
 
     private static final class CapturingMailer implements Mailer {

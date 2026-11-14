@@ -18,16 +18,9 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Verifies the P1-3 observability floor's Actuator health exposure: an anonymous {@code GET
- * /actuator/health} is permitted under default-deny (proves the {@code SecurityConfig} allowlist
- * addition works) and returns {@code UP} with no component/detail leak (per
- * {@code management.endpoint.health.show-details: never}), while an unauthenticated protected
- * endpoint stays a 401 — i.e. the actuator permit did not widen default-deny to anything else.
- * Boots the real context over the real {@code SecurityFilterChain}, mirroring
- * {@link SecurityAuthorizationIntegrationTest}; needs a real Postgres, resolved by
- * {@link PostgresTestSupport} (TEST_DB_URL override, else a throwaway Testcontainers Postgres).
- */
+/** Verifies the P1-3 observability floor's Actuator health exposure: an anonymous GET /actuator/health is
+ * permitted under default-deny and returns UP with no component/detail leak, while an unauthenticated
+ * protected endpoint stays a 401. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -57,16 +50,16 @@ class ActuatorHealthIntegrationTest {
         mvc.perform(get("/actuator/health"))
             .andExpect(status().isOk())
             .andExpect(jsonPath("$.status").value("UP"))
-            // show-details: never -> no component breakdown (e.g. no "db"/"diskSpace" detail) leaks
-            // to an anonymous caller.
+            // show-details: never -> no component breakdown (e.g. no "db"/"diskSpace" detail) leaks to an anonymous
+            // caller.
             .andExpect(jsonPath("$.components").doesNotExist())
             .andExpect(jsonPath("$.details").doesNotExist());
     }
 
     @Test
     void protectedEndpointStillRequiresAuthentication() throws Exception {
-        // The actuator permit must not widen default-deny: an unrelated protected endpoint is
-        // still 401 when unauthenticated.
+        // The actuator permit must not widen default-deny: an unrelated protected endpoint is still 401 when
+        // unauthenticated.
         mvc.perform(get("/api/employees")).andExpect(status().isUnauthorized());
     }
 }

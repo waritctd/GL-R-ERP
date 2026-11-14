@@ -24,9 +24,9 @@ class CommissionCalculatorTest {
 
     @Test
     void progressiveCommission_appliesHighRollerRateAboveThreeMillion() {
-        // Tiers 1-12 (0-3,000,000, all fully taxed once base exceeds 3,000,000) sum to
-        // 48,750.00. V81 corrected tier 13 from 7.5000% to 3.2500%: the 500,000 excess above
-        // 3,000,000 is now taxed at 3.25% = 16,250.00. Total = 65,000.00 (was 86,250.00 pre-V81).
+        // Tiers 1-12 (0-3,000,000, all fully taxed once base exceeds 3,000,000) sum to 48,750.00. V81 corrected tier
+        // 13 from 7.5000% to 3.2500%: the 500,000 excess above 3,000,000 is now taxed at 3.25% = 16,250.00. Total =
+        // 65,000.00 (was 86,250.00 pre-V81).
         BigDecimal commission = calculator.progressiveCommission(new BigDecimal("3500000.00"));
 
         assertThat(commission).isEqualByComparingTo(new BigDecimal("65000.00"));
@@ -99,8 +99,8 @@ class CommissionCalculatorTest {
         assertThat(withOverpayment.commissionableBase()).isGreaterThan(baseline.commissionableBase());
     }
 
-    // ── Slice A1: <50,000 monthly floor (written wrong-way-round: the below-floor case is the
-    // assertion that matters) ──
+    // Slice A1: <50,000 monthly floor (written wrong-way-round: the below-floor case is the assertion that
+    // matters)
 
     @Test
     void progressiveCommission_belowFiftyThousandFloor_paysZero() {
@@ -123,15 +123,9 @@ class CommissionCalculatorTest {
 
     @Test
     void progressiveCommission_doesNotPreRoundAFullPrecisionBase_beforeRunningTheBrackets() {
-        // 801,204.4999999999 sits just under the exact tie point (801,204.50) that tier 4's 1%
-        // rate produces at 4,262.045 (750,000-1,000,000 bracket: 3,750.00 for tiers 1-3, plus
-        // 51,204.4999999999 * 1% = 512.044999999999 -> total 4,262.044999999999). Rounding ONLY
-        // that final total (this method's contract) gives 4,262.04. If this method pre-rounded
-        // the input base to 2dp first (the pre-calc-refine bug), the base would round UP to
-        // 801,204.50 exactly, landing precisely on the tie and giving 4,262.05 instead -- a real,
-        // observable divergence, not a cosmetic one. Mutation-checked: reintroducing the
-        // pre-rounding (money(monthlyCommissionableBase) instead of a plain null check) flips
-        // this assertion from 4,262.04 to 4,262.05.
+        // 801,204.4999999999 sits just under the exact tie point (801,204.50) that tier 4's 1% rate produces at
+        // 4,262.045 (750,000-1,000,000 bracket: 3,750.00 for tiers 1-3, plus 51,204.4999999999 * 1% = 512.044999999999
+        // -> total 4,262.044999999999).
         BigDecimal commission = calculator.progressiveCommission(new BigDecimal("801204.4999999999"));
 
         assertThat(commission).isEqualByComparingTo(new BigDecimal("4262.04"));
@@ -139,18 +133,15 @@ class CommissionCalculatorTest {
 
     @Test
     void progressiveCommission_aboveThreeMillion_usesCorrectedTier13Rate() {
-        // Base = 3,200,000: tiers 1-12 (0-3,000,000, all fully taxed) sum to 48,750.00, then the
-        // 200,000 excess above 3,000,000 is taxed at the corrected 3.25% = 6,500.00.
-        // Total = 48,750.00 + 6,500.00 = 55,250.00.
+        // Base = 3,200,000: tiers 1-12 (0-3,000,000, all fully taxed) sum to 48,750.00, then the 200,000 excess above
+        // 3,000,000 is taxed at the corrected 3.25% = 6,500.00. Total = 48,750.00 + 6,500.00 = 55,250.00.
         BigDecimal commission = calculator.progressiveCommission(new BigDecimal("3200000.00"));
 
         assertThat(commission).isEqualByComparingTo(new BigDecimal("55250.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Issue #405 — monthlyIncentive: ladder boundaries (highest threshold reached wins, NOT
-    // cumulative/pro-rated), plus the explicit "no 80,000 row" and empty/null-input guards.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Issue #405 — monthlyIncentive: ladder boundaries (highest threshold reached wins, NOT cumulative/pro-rated),
+    // plus the explicit "no 80,000 row" and empty/null-input guards.
 
     @Test
     void monthlyIncentive_justBelowFirstThreshold_paysZero() {
@@ -203,8 +194,8 @@ class CommissionCalculatorTest {
 
     @Test
     void monthlyIncentive_wellAboveFourthThreshold_staysAt65000_noEightyThousandRow() {
-        // The workbook's second "8.00 ล้าน -> 80,000" row is superseded and must NOT exist -- a
-        // base of 12,000,000 pays 65,000, the same as exactly 8,000,000.
+        // The workbook's second "8.00 ล้าน -> 80,000" row is superseded and must NOT exist -- a base of 12,000,000
+        // pays 65,000, the same as exactly 8,000,000.
         BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("12000000.00"), INCENTIVE_LADDER);
 
         assertThat(incentive).isEqualByComparingTo(new BigDecimal("65000.00"));
@@ -212,8 +203,8 @@ class CommissionCalculatorTest {
 
     @Test
     void monthlyIncentive_emptyLadder_paysZero() {
-        // An empty (or mis-seeded, i.e. any payroll month before 2026-08-01) ladder must mean
-        // ZERO -- never an invented default table (deliberately unlike TierConfig.defaults()).
+        // An empty (or mis-seeded, i.e. any payroll month before 2026-08-01) ladder must mean ZERO -- never an
+        // invented default table (deliberately unlike TierConfig.defaults()).
         BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("9000000.00"), List.of());
 
         assertThat(incentive).isEqualByComparingTo(BigDecimal.ZERO);
@@ -225,10 +216,7 @@ class CommissionCalculatorTest {
         assertThat(calculator.monthlyIncentive(new BigDecimal("-100.00"), INCENTIVE_LADDER)).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Issue #405 — stockSaleBonus: STEPPED, not a percentage; disabled/null config; negative
-    // receipts.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Issue #405 — stockSaleBonus: STEPPED, not a percentage; disabled/null config; negative receipts.
 
     @Test
     void stockSaleBonus_justBelowOneBlock_paysZero() {
@@ -246,8 +234,8 @@ class CommissionCalculatorTest {
 
     @Test
     void stockSaleBonus_twoAndAHalfBlocks_paysTwoWholeBlocksNotTwoThousandFiveHundred() {
-        // Stepped: the ฿50,000 remainder above two whole ฿100,000 blocks earns nothing. A naive
-        // 1% read of ฿250,000 would give ฿2,500 -- that is NOT this rule.
+        // Stepped: the ฿50,000 remainder above two whole ฿100,000 blocks earns nothing. A naive 1% read of ฿250,000
+        // would give ฿2,500 -- that is NOT this rule.
         BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("250000.00"), ENABLED_STOCK_BONUS);
 
         assertThat(bonus).isEqualByComparingTo(new BigDecimal("2000.00"));
@@ -272,8 +260,8 @@ class CommissionCalculatorTest {
 
     @Test
     void stockSaleBonus_negativeReceipts_paysZero() {
-        // e.g. a month where a CLAWBACK's negative actual_received outweighs the stock-linked
-        // sales -- the clamp-at-zero-before-flooring rule.
+        // e.g. a month where a CLAWBACK's negative actual_received outweighs the stock-linked sales -- the
+        // clamp-at-zero-before-flooring rule.
         BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("-50000.00"), ENABLED_STOCK_BONUS);
 
         assertThat(bonus).isEqualByComparingTo(BigDecimal.ZERO);
@@ -281,8 +269,8 @@ class CommissionCalculatorTest {
 
     @Test
     void stockSaleBonus_defaultDisabledSeedConfig_paysZero() {
-        // The literal V108 seed row: enabled = FALSE. Proves the "ships config-gated OFF" claim
-        // against the exact config shape production starts with.
+        // The literal V108 seed row: enabled = FALSE. Proves the "ships config-gated OFF" claim against the exact
+        // config shape production starts with.
         StockBonusConfig seeded = new StockBonusConfig(false, LocalDate.of(2026, 8, 1), new BigDecimal("100000.00"), new BigDecimal("1000.00"));
 
         BigDecimal bonus = calculator.stockSaleBonus(new BigDecimal("1000000.00"), seeded);
@@ -290,11 +278,9 @@ class CommissionCalculatorTest {
         assertThat(bonus).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Issue #405 — the four-rep workbook reconciliation table, to the satang. Each rep's tier
-    // base and tier commission are asserted first (proving the existing tier math is untouched),
-    // then the incentive on top, then the combined total the issue's own table specifies.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Issue #405 — the four-rep workbook reconciliation table, to the satang. Each rep's tier base and tier
+    // commission are asserted first (proving the existing tier math is untouched), then the incentive on top, then
+    // the combined total the issue's own table specifies.
 
     @Test
     void workbookReconciliation_chanida_belowFloorIncentiveThreshold_noIncentive() {
@@ -340,14 +326,12 @@ class CommissionCalculatorTest {
         assertThat(tierCommission.add(incentive)).isEqualByComparingTo(new BigDecimal("140433.75"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // V148 — itemDerivedWeight: per-item stock-commission weighting, the pure blending math.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void itemDerivedWeight_singleFullyStockedItem_twoX_yieldsExactlyTwo() {
-        // The brief's own sanity check: a single fully-stock item at x2 must yield
-        // effectiveWeight = 2, independent of the item's absolute qty/price.
+        // The brief's own sanity check: a single fully-stock item at x2 must yield effectiveWeight = 2, independent of
+        // the item's absolute qty/price.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("100.00"), new BigDecimal("100.00"), new BigDecimal("500.0000"), null, 2));
@@ -373,13 +357,9 @@ class CommissionCalculatorTest {
 
     @Test
     void itemDerivedWeight_wrongWayRound_zeroStockShare_storedThreeX_contributesOnlyOneX() {
-        // The owner's own workbook case: a row marked *3 but sourced against an import request
-        // (qtyFromStock = 0) must NOT be credited — only stock-sourced quantity ever earns weight.
-        // Reviewer finding (2026-08-16): the blend computes to exactly 1 here (no genuine
-        // stock-earned credit), so the method returns EMPTY, not Optional.of(1) — freezing a
-        // redundant, non-null 1.000000 would silently defeat the record-level weightMultiplier
-        // manager control (COALESCE always prefers a non-null frozen value). Empty is what lets
-        // that control go on working for a ticket like this one.
+        // The owner's own workbook case: a row marked *3 but sourced against an import request (qtyFromStock = 0) must
+        // NOT be credited — only stock-sourced quantity ever earns weight. Empty is what lets that control go on
+        // working for a ticket like this one.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("100.00"), BigDecimal.ZERO, new BigDecimal("500.0000"), null, 3));
@@ -391,8 +371,8 @@ class CommissionCalculatorTest {
 
     @Test
     void itemDerivedWeight_mixedStockAndImportLines_matchesTheBriefsOwnOneSixExample() {
-        // A deal mixing a fully-stock x2 line (60 units) with a fully-import line (40 units, never
-        // weighted): (60*2 + 40*1) / 100 = 1.6 — the brief's own worked figure.
+        // A deal mixing a fully-stock x2 line (60 units) with a fully-import line (40 units, never weighted): (60*2 +
+        // 40*1) / 100 = 1.6 — the brief's own worked figure.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("60.00"), new BigDecimal("60.00"), new BigDecimal("1000.0000"), null, 2),
@@ -407,23 +387,21 @@ class CommissionCalculatorTest {
 
     @Test
     void itemDerivedWeight_approvedPriceNull_fallsBackToProposedPrice() {
-        // Fallback chosen for this task: approvedPrice missing -> proposedPrice. Constructed so
-        // the fallback being SKIPPED (price treated as 0) would produce a different, wrong answer
-        // (1.0 instead of 1.666667) — a real test of the fallback being consulted, not just a
-        // price-invariant identity.
+        // Fallback chosen for this task: approvedPrice missing -> proposedPrice. Constructed so the fallback being
+        // SKIPPED (price treated as 0) would produce a different, wrong answer (1.0 instead of 1.666667) — a real test
+        // of the fallback being consulted, not just a price-invariant identity.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
-            // Fully import (qtyFromStock = 0): contributes itemValue 1,000 at weight 1 regardless
-            // of its own weightMultiplier=2 (never consulted -- zero stock share).
+            // Fully import (qtyFromStock = 0): contributes itemValue 1,000 at weight 1 regardless of its own
+            // weightMultiplier=2 (never consulted -- zero stock share).
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("10.00"), BigDecimal.ZERO, new BigDecimal("100.0000"), null, 2),
-            // approvedPrice NULL, proposedPrice 50 -- fully stock, x3: itemValue 500 (using the
-            // fallback price), contribution 500*30 = 15,000.
+            // approvedPrice NULL, proposedPrice 50 -- fully stock, x3: itemValue 500 (using the fallback price),
+            // contribution 500*30 = 15,000.
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("10.00"), new BigDecimal("10.00"), null, new BigDecimal("50.0000"), 3));
-        // totalItemValue = 1,000 + 500 = 1,500; weightedContribution = 1,000 + 15,000 = ... wait,
-        // see the Javadoc math: contribution_1 = 100*(10 + 1*0) = 1,000; contribution_2 =
-        // 50*(10 + 2*10) = 50*30 = 1,500. Total contribution = 1,000 + 1,500 = 2,500. blended =
-        // 2,500 / 1,500 = 1.666666... -> 1.666667 at the stored 6dp scale.
+        // totalItemValue = 1,000 + 500 = 1,500; weightedContribution = 1,000 + 15,000 = ... wait, see the Javadoc
+        // math: contribution_1 = 100*(10 + 1*0) = 1,000; contribution_2 = 50*(10 + 2*10) = 50*30 = 1,500. Total
+        // contribution = 1,000 + 1,500 = 2,500.
 
         Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
 
@@ -437,8 +415,8 @@ class CommissionCalculatorTest {
             // Priced normally: single fully-stock item at x2 -> would alone yield 2 exactly.
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("10.00"), new BigDecimal("10.00"), new BigDecimal("100.0000"), null, 2),
-            // approvedPrice AND proposedPrice both null -> price treated as 0 -> contributes ZERO
-            // to both numerator and denominator, as if this line did not exist for weighting.
+            // approvedPrice AND proposedPrice both null -> price treated as 0 -> contributes ZERO to both numerator and
+            // denominator, as if this line did not exist for weighting.
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("5.00"), new BigDecimal("5.00"), null, null, 3));
 
@@ -462,14 +440,14 @@ class CommissionCalculatorTest {
     @Test
     void itemDerivedWeight_zeroQtyItem_doesNotSkewOrDivideByZero() {
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
-            // qty = 0 -> the V54 CHECK guarantees qtyFromStock is also 0 for this row in real
-            // data; itemValue = 0, contributes nothing either way.
+            // qty = 0 -> the V54 CHECK guarantees qtyFromStock is also 0 for this row in real data; itemValue = 0,
+            // contributes nothing either way.
             new CommissionCalculator.ItemStockWeightInput(
                 BigDecimal.ZERO, BigDecimal.ZERO, new BigDecimal("999.0000"), null, 3),
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("10.00"), new BigDecimal("5.00"), new BigDecimal("200.0000"), null, 2));
-        // Without the qty=0 item: itemValue 2,000, contribution 200*(10+1*5)=3,000, blended 1.5 --
-        // asserting the SAME 1.5 below proves the zero-qty item did not skew the result.
+        // Without the qty=0 item: itemValue 2,000, contribution 200*(10+1*5)=3,000, blended 1.5 -- asserting the SAME
+        // 1.5 below proves the zero-qty item did not skew the result.
 
         Optional<BigDecimal> weight = calculator.itemDerivedWeight(items, new BigDecimal("100000.00"));
 
@@ -507,11 +485,8 @@ class CommissionCalculatorTest {
 
     @Test
     void itemDerivedWeight_resultIsClampedToOneToThree_evenWithMalformedNegativePriceInput() {
-        // Defensive clamp: a negative price (this column has no CHECK against one) can otherwise
-        // pull the weighted average below 1 -- raw blended here would be 7,000/9,000 = 0.777778,
-        // clamped up to exactly 1. Reviewer finding (2026-08-16): a value clamped UP to exactly 1
-        // is exactly as "no genuine signal" as a natural 1, so this now returns EMPTY too (falls
-        // back to the plain weightMultiplier) rather than freezing a redundant 1.000000.
+        // Defensive clamp: a negative price (this column has no CHECK against one) can otherwise pull the weighted
+        // average below 1 -- raw blended here would be 7,000/9,000 = 0.777778, clamped up to exactly 1.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("10.00"), new BigDecimal("10.00"), new BigDecimal("-100.0000"), null, 3),
@@ -523,41 +498,12 @@ class CommissionCalculatorTest {
         assertThat(weight).isEmpty();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Characterisation tests -- multi-item, value-weighted allocation. See itemDerivedWeight's
-    // own "Validation status" Javadoc paragraph: the owner's real commission workbook contains no
-    // multi-item weighted deal (every weighted row there has exactly one item, where per-item and
-    // record-level weighting collapse to an identical answer), so this pro-rata-by-item-value
-    // allocation ACROSS MULTIPLE ITEMS has never been checked against real reconciled data. These
-    // three tests pin the CURRENT multi-item behaviour on synthetic deals -- built from BigDecimal
-    // arithmetic and reduced by hand in each comment below, never by running the method under
-    // test -- so a future silent change to the allocation fails loudly. They characterise, they do
-    // not certify correctness.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Characterisation tests -- multi-item, value-weighted allocation. They characterise, they do not certify
+    // correctness.
 
     @Test
     void itemDerivedWeight_twoItemsDifferentValue_blendIsValueWeighted_notASimplePerItemAverage() {
         // Item A: qty 10 @ price 1,000, fully stock-sourced (qtyFromStock = 10) at x2.
-        //   itemValue_A       = 10 * 1,000 = 10,000
-        //   effectiveWeight_A = 1 + (2-1) * (10/10) = 2
-        // Item B: qty 10 @ price 100, NOT stock-sourced at all (qtyFromStock = 0), stored x3 --
-        // irrelevant, stockFraction is 0 either way so effectiveWeight_B is 1 regardless of n.
-        //   itemValue_B       = 10 * 100 = 1,000
-        //   effectiveWeight_B = 1 + (3-1) * (0/10) = 1
-        //
-        // Value-weighted blend (what this method computes):
-        //   blended = (itemValue_A * effectiveWeight_A + itemValue_B * effectiveWeight_B)
-        //           / (itemValue_A + itemValue_B)
-        //           = (10,000*2 + 1,000*1) / (10,000 + 1,000)
-        //           = 21,000 / 11,000
-        //           = 1.9090909090909... -> 1.909091 at the stored 6dp scale (HALF_UP)
-        //
-        // A NAIVE PER-ITEM AVERAGE that ignores item value -- (effectiveWeight_A +
-        // effectiveWeight_B) / 2 = (2 + 1) / 2 = 1.5 -- gives a DIFFERENT answer. 1.909091 and 1.5
-        // are deliberately far apart (not a rounding-distance apart) so a test pinned to one
-        // cannot silently also satisfy the other: this test asserts the value-weighted figure and
-        // explicitly rules out the naive average, so it fails loudly if the allocation is ever
-        // swapped for a plain per-item average.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("10"), new BigDecimal("10"), new BigDecimal("1000"), null, 2),
@@ -574,22 +520,8 @@ class CommissionCalculatorTest {
 
     @Test
     void itemDerivedWeight_threeItemsMixedMultipliers_partialStockCoverage_blendsToPointFourFive() {
-        // Item 1: qty 5 @ price 200, x1 stock weight, partially stock-sourced (qtyFromStock = 3 of
-        // 5) -- irrelevant to the result, since (weightMultiplier - 1) = 0 for x1 regardless of
-        // stock fraction.
-        //   itemValue_1       = 5 * 200 = 1,000
-        //   effectiveWeight_1 = 1 + (1-1) * (3/5) = 1
-        // Item 2: qty 8 @ price 150, x2, half stock-sourced (qtyFromStock = 4 of 8).
-        //   itemValue_2       = 8 * 150 = 1,200
-        //   effectiveWeight_2 = 1 + (2-1) * (4/8) = 1.5
-        // Item 3: qty 6 @ price 300, x3, one-third stock-sourced (qtyFromStock = 2 of 6).
-        //   itemValue_3       = 6 * 300 = 1,800
-        //   effectiveWeight_3 = 1 + (3-1) * (2/6) = 1 + 2*(1/3) = 5/3
-        //
-        //   totalItemValue       = 1,000 + 1,200 + 1,800 = 4,000
-        //   weightedContribution = 1,000*1 + 1,200*1.5 + 1,800*(5/3)
-        //                        = 1,000 + 1,800 + 3,000 = 5,800
-        //   blended = 5,800 / 4,000 = 1.45 exactly -- no repeating decimal, no rounding needed.
+        // Item 1: qty 5 @ price 200, x1 stock weight, partially stock-sourced (qtyFromStock = 3 of 5) -- irrelevant to
+        // the result, since (weightMultiplier - 1) = 0 for x1 regardless of stock fraction.
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
             new CommissionCalculator.ItemStockWeightInput(
                 new BigDecimal("5"), new BigDecimal("3"), new BigDecimal("200"), null, 1),
@@ -606,20 +538,9 @@ class CommissionCalculatorTest {
 
     @Test
     void itemDerivedWeight_importSourcedLine_contributesExactlyOneX_regardlessOfStoredMultiplier() {
-        // Item A: qty 4 @ price 500, fully stock-sourced (qtyFromStock = 4) at x2.
-        //   itemValue_A       = 4 * 500 = 2,000
-        //   effectiveWeight_A = 1 + (2-1) * (4/4) = 2
-        // Item B: qty 5 @ price 200, import-sourced -- qtyFromStock = 0 -- so stockFraction = 0
-        // and effectiveWeight_B = 1 + (n-1)*0 = 1 for ANY stored weightMultiplier n. Proved below
-        // by running the SAME deal twice with two different stored multipliers on item B (x2, then
-        // x3) and asserting the blended result is numerically identical both times.
-        //   itemValue_B = 5 * 200 = 1,000
-        //
-        //   totalItemValue       = 2,000 + 1,000 = 3,000
-        //   weightedContribution = 2,000*2 + 1,000*1 = 5,000
-        //   blended = 5,000 / 3,000 = 1.6666666666... -> 1.666667 at the stored 6dp scale
-        //   (HALF_UP) -- identical for both variants of item B, since qtyFromStock = 0 removes n
-        //   from the arithmetic entirely (price_i * (qty_i + (n-1)*0) = price_i * qty_i).
+        // Item A: qty 4 @ price 500, fully stock-sourced (qtyFromStock = 4) at x2. Proved below by running the SAME
+        // deal twice with two different stored multipliers on item B (x2, then x3) and asserting the blended result is
+        // numerically identical both times.
         CommissionCalculator.ItemStockWeightInput stockItem = new CommissionCalculator.ItemStockWeightInput(
             new BigDecimal("4"), new BigDecimal("4"), new BigDecimal("500"), null, 2);
         CommissionCalculator.ItemStockWeightInput importItemStoredTwoX = new CommissionCalculator.ItemStockWeightInput(
@@ -635,17 +556,12 @@ class CommissionCalculatorTest {
         assertThat(weightWithTwoXStored).isPresent();
         assertThat(weightWithThreeXStored).isPresent();
         assertThat(weightWithTwoXStored.get()).isEqualByComparingTo("1.666667");
-        // The import-sourced line's stored multiplier (x2 vs x3) must not change the result at
-        // all -- qtyFromStock = 0 means it never earns credit above 1x either way.
+        // The import-sourced line's stored multiplier (x2 vs x3) must not change the result at all -- qtyFromStock = 0
+        // means it never earns credit above 1x either way.
         assertThat(weightWithThreeXStored.get()).isEqualByComparingTo(weightWithTwoXStored.get());
     }
 
-    /**
-     * Golden pin of the money math the pending-approval / item-weight feature must only CALL, never
-     * change. Expected values were produced by running the calculator as it stood before that
-     * feature and hard-coded; any change to itemDerivedWeight, monthlyTierBase or
-     * progressiveCommission(TierConfig.defaults()) turns this red.
-     */
+    /** Golden pin of the money math the pending-approval / item-weight feature must only CALL, never change. */
     @Test
     void goldenFixedInputs_outputsUnchanged() {
         List<CommissionCalculator.ItemStockWeightInput> items = List.of(
@@ -681,10 +597,8 @@ class CommissionCalculatorTest {
             .isEqualByComparingTo("0.00");
     }
 
-    // ── Manager TEAM OVERRIDE (V199): (companyBase - threshold) x rate% ──────────────────────
-    // Source: accountant's nine monthly workbooks, sheet อัตราค่าคอม K2 "ยอดรับเงิน(ไม่รวม Vat) - 3
-    // ล้าน *0.075%". The figures below are the workbook's own ex-VAT company totals and the
-    // amounts the accountant typed, reproduced to the satang.
+    // Manager TEAM OVERRIDE (V199): (companyBase - threshold) x rate% ────────────────────── Source: accountant's
+    // nine monthly workbooks, sheet อัตราค่าคอม K2 "ยอดรับเงิน(ไม่รวม Vat) - 3 ล้าน *0.075%".
 
     private static final TeamOverrideConfig WORKBOOK_TEAM_OVERRIDE = new TeamOverrideConfig(
         true, new BigDecimal("3000000.00"), new BigDecimal("0.0750"),
@@ -764,9 +678,9 @@ class CommissionCalculatorTest {
 
     @Test
     void teamOverride_doesNotPreRoundItsInputTo2dp_roundsOnlyTheFinalFigure() {
-        // monthlyTierBase carries 10dp and the override must round only ONCE, at the end.
-        // excess 1,000,006.666666666 x 0.075% = 750.0049999995 -> 750.00. Had the base been
-        // pre-rounded to 2dp (4,000,006.67) the excess would be 1,000,006.67 -> 750.005025 -> 750.01.
+        // monthlyTierBase carries 10dp and the override must round only ONCE, at the end. excess 1,000,006.666666666 x
+        // 0.075% = 750.0049999995 -> 750.00. Had the base been pre-rounded to 2dp (4,000,006.67) the excess would be
+        // 1,000,006.67 -> 750.005025 -> 750.01.
         assertThat(calculator.teamOverride(new BigDecimal("4000006.666666666"), WORKBOOK_TEAM_OVERRIDE))
             .isEqualByComparingTo("750.00");
         assertThat(calculator.teamOverride(new BigDecimal("4000006.67"), WORKBOOK_TEAM_OVERRIDE))

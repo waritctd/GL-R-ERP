@@ -1,5 +1,5 @@
-// Central query-key factory for the shared server-state layer. Keeping keys in
-// one place makes invalidation call sites unambiguous and typo-proof.
+// Central query-key factory for the shared server-state layer. Keeping keys in one place makes invalidation
+// call sites unambiguous and typo-proof.
 export const queryKeys = {
   currentEmployee: (id) => ['currentEmployee', id],
   employees: () => ['employees'],
@@ -73,8 +73,8 @@ export const queryKeys = {
   // Reserved for a future react-query migration of CommissionPage's payrollReady() read
   // (GET /api/commissions/payroll-ready, the hr-only summary view); nothing constructs this key yet.
   commissionsPayrollReady: (payrollMonth) => ['commissions', 'payrollReady', payrollMonth ?? ''],
-  // Self-service landing (EmployeeSelfService): own attendance.daily() reads. `to` defaults to
-  // "today" server-side when omitted, same as AttendancePage's self view.
+  // Self-service landing (EmployeeSelfService): own attendance.daily() reads. `to` defaults to "today"
+  // server-side when omitted, same as AttendancePage's self view.
   attendanceDaily: (from, to) => ['attendance', 'daily', from ?? '', to ?? ''],
   // AttendancePage's team/company view: scoped by employeeId/divisionId as well as the date
   // range, unlike attendanceDaily above, whose key has neither filter (always "my own"), so it
@@ -88,14 +88,13 @@ export const queryKeys = {
   // Attachment list: mirrors SpecialMoneyController's nested .../{id}/attachments endpoint,
   // same shape as taxAllowanceAttachments above. First caller: AttachmentList.jsx.
   specialMoneyAttachments: (id) => ['specialMoney', 'attachments', id ?? ''],
-  // CEO approve dialog's ceiling preview (GET .../approval-preview) -- keyed on the request id so
-  // opening a different row's dialog re-fetches rather than reusing a stale ceiling.
+  // CEO approve dialog's ceiling preview (GET .../approval-preview) -- keyed on the request id so opening a
+  // different row's dialog re-fetches rather than reusing a stale ceiling.
   specialMoneyApprovalPreview: (id) => ['specialMoney', 'approvalPreview', id ?? ''],
   // ticketDetail/ticketAttachments: used by TicketDetailPage.
   ticketList: (status) => ['tickets', 'list', status ?? ''],
-  // Account role-scoped views: the CLOSED_PAID picker AccountOverview/
-  // AccountFinancePage/CommissionPage's createFromDeal flow all use — same
-  // `salesStage` query param, distinct key from the plain ticketList above.
+  // Account role-scoped views: the CLOSED_PAID picker AccountOverview/ AccountFinancePage/CommissionPage's
+  // createFromDeal flow all use — same `salesStage` query param, distinct key from the plain ticketList above.
   ticketListBySalesStage: (salesStage) => ['tickets', 'list', 'salesStage', salesStage ?? ''],
   // Coerced to Number: TicketDetailPage reaches this id via useParams() (a STRING), while
   // ImportFulfilmentPage/DealFulfilmentPanel pass the ticket's own numeric `id`/`ticketId`.
@@ -110,8 +109,8 @@ export const queryKeys = {
   unitBasisCatalog: () => ['meta', 'unit-bases'],
   // See ticketDetail's comment above for why Number() matters.
   ticketActions: (id) => ['tickets', 'actions', id == null ? id : Number(id)],
-  // Finance-only read model of one deal (GET /api/finance/deals/{id}), account + ceo. Number()-coerced
-  // for the same route-param-is-a-string reason as ticketDetail above.
+  // Finance-only read model of one deal (GET /api/finance/deals/{id}), account + ceo. Number()-coerced for the
+  // same route-param-is-a-string reason as ticketDetail above.
   financeDeal: (id) => ['finance', 'deal', id == null ? id : Number(id)],
   ticketPayments: (id) => ['tickets', 'payments', id],
   ticketDeliveries: (id) => ['tickets', 'deliveries', id],
@@ -127,8 +126,8 @@ export const queryKeys = {
   // GET /api/tickets/{id}/procurement-source: where each line comes from, and whether the rep has decided.
   procurementSource: (ticketId) => ['tickets', 'procurement-source', ticketId == null ? ticketId : Number(ticketId)],
   storedImportRequestDetail: (id) => ['importRequests', 'detail', id],
-  // The import-only per-deal view (GET /api/import/deals/{id}). Number() for the same route-param
-  // string vs numeric-field reason as ticketDetail above.
+  // The import-only per-deal view (GET /api/import/deals/{id}). Number() for the same route-param string vs
+  // numeric-field reason as ticketDetail above.
   importDeal: (ticketId) => ['importDeal', Number(ticketId)],
   ticketAttachments: (id) => ['tickets', 'attachments', id],
   // Deal parties (deal-party-model.md). Number()-coerced like ticketDetail above: TicketDetailPage

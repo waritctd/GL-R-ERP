@@ -56,8 +56,8 @@ public record LeaveRequestDto(
     String managerName,
     OffsetDateTime createdAt,
     OffsetDateTime updatedAt,
-    // Paper-form (ใบลาหยุด F-HR-020) "contact during leave" block -- autofilled from the employee's
-    // current address/phone when the requester leaves them blank. See LeaveService#resolveContact.
+    // Paper-form (ใบลาหยุด F-HR-020) "contact during leave" block -- autofilled from the employee's current
+    // address/phone when the requester leaves them blank. See LeaveService#resolveContact.
     String contactHouseNo,
     String contactSubdistrict,
     String contactDistrict,
@@ -65,37 +65,20 @@ public record LeaveRequestDto(
     String contactPhone,
     // §5.2 leave purpose (V125): self-declared, optional -- see LeaveService#normalizePurposeCode.
     String purposeCode,
-    // §5.2 emergency-filing exception (V125): TRUE if this request was approved via the monthly
-    // emergency tolerance rather than by meeting its type's ordinary advance notice -- see
-    // LeaveService#autoRejectNote and hr.leave_request.emergency_filing's migration comment.
+    // §5.2 emergency-filing exception (V125): TRUE if this request was approved via the monthly emergency
+    // tolerance rather than by meeting its type's ordinary advance notice -- see LeaveService#autoRejectNote and
+    // hr.leave_request.emergency_filing's migration comment.
     boolean emergencyFiling,
     // Phase A0a (structured rejection outcome, V131): the machine-readable LeaveRuleCode name (e.g.
-    // "SICK_CERTIFICATE_WINDOW") behind an AUTO_REJECTED request's systemNote, and the params that
-    // rendered it -- see LeaveRuleOutcome/LeaveRuleMessages. Both null-safe: systemNoteCode is
-    // {@code null} for an APPROVED request or any historical pre-V131 row (V131 backfills nothing --
-    // see that migration's comment); systemNoteParams is never {@code null}, only an empty map, in
-    // either of those same cases. systemNote itself remains the source of truth for DISPLAY (a
-    // human-readable Thai sentence); these two fields are the stable contract a caller should branch
-    // logic on instead of parsing that sentence.
+    // "SICK_CERTIFICATE_WINDOW") behind an AUTO_REJECTED request's systemNote, and the params that rendered it --
+    // see LeaveRuleOutcome/LeaveRuleMessages.
     String systemNoteCode,
     Map<String, String> systemNoteParams,
-    // Phase A0b (GET /api/leave/review-summary phase): computed SERVER-SIDE, per requesting actor,
-    // by LeaveService#withCanReviewFlag -- true when this actor could act on this employee's
-    // requests (HR/CEO, or this employee's own direct manager), the SAME decision
-    // LeaveService#approve/#reject already gate on. NOT a role check (a department manager reviews
-    // their own reports too, despite REVIEW_ALL_ROLES being {hr} only) and NOT "is this SPECIFIC
-    // request actionable right now" -- callers should still check status == SUBMITTED themselves.
-    // LeaveRepository#mapRequest always writes false here (it has no actor to check against);
-    // LeaveService overwrites it for every DTO it returns -- see #withCanReviewFlag.
+    // Phase A0b: computed SERVER-SIDE, per requesting actor, by LeaveService#withCanReviewFlag -- true when this
+    // actor could act on this employee's requests, the SAME decision LeaveService#approve/#reject already gate on.
     boolean canReview,
-    // feat/pending-approver-info: "who this is waiting on" for a SUBMITTED request -- read-only,
-    // informational, NOT an authorization decision (see PendingApproverSql's Javadoc). "manager"
-    // when the requester has an active direct manager (reports_to_employee_id resolves to an
-    // active employee -- the same person managerEmployeeId/managerName above already describe);
-    // otherwise "hr" (leave has no CEO stage -- REVIEW_ALL_ROLES is {hr} only). Both null for any
-    // non-SUBMITTED status. pendingApproverName is null when the role is "hr" and more than one
-    // active hr-role employee exists -- see LeaveRepository#resolvePendingApprover's Javadoc for
-    // why a single name cannot be picked in that case.
+    // feat/pending-approver-info: "who this is waiting on" for a SUBMITTED request -- read-only, informational,
+    // NOT an authorization decision. "manager" when the requester has an active direct manager; otherwise "hr".
     String pendingApproverRole,
     String pendingApproverName,
     // §5 WARN_UNPAID_* gates: every warning that fired for

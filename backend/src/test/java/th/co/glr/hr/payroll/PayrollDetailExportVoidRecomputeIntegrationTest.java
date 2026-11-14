@@ -23,17 +23,9 @@ import th.co.glr.hr.payroll.export.PayrollExportFile;
 import th.co.glr.hr.payroll.export.PayrollExportKind;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Owner requirement (2026-07-30): the detailed payroll xlsx export must never trust whatever is
- * sitting in a VOID period's {@code hr.payroll_line} row -- a real, current example is 2026-07,
- * {@code period_id=1}, {@code status='VOID'}, whose rows carry HR's typed special-pay inputs
- * behind stale/zero computed tax and net-pay figures. This test reproduces exactly that shape (a
- * genuinely processed period, then corrupted computed columns + flipped to VOID via direct SQL --
- * simulating whatever produced July's real row) and proves {@link PayrollService#export} recomputes
- * through the live {@link PayrollService} preview path rather than reading the corrupted figures
- * back out. Driven through the real {@link PayrollService}/{@link PayrollCalculator}/real Postgres,
- * not Mockito -- the point under test is that the corrupted SQL row is NOT what comes back.
- */
+/** Owner requirement: the detailed payroll xlsx export must never trust whatever is sitting in a VOID period's
+ * hr.payroll_line row -- a real, current example is 2026-07, period_id=1, status='VOID', whose rows carry HR's
+ * typed special-pay inputs behind stale/zero computed tax and net-pay figures. */
 class PayrollDetailExportVoidRecomputeIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate MONTH = LocalDate.of(2026, 3, 1);
 
@@ -81,9 +73,9 @@ class PayrollDetailExportVoidRecomputeIntegrationTest extends AbstractPostgresIn
             .orElseThrow();
         BigDecimal correctNetPay = correct.netPay();
 
-        // Corrupt the computed columns (simulating whatever left July's real row stale/zero) while
-        // leaving the HR-typed input column (special_pay_1) intact, then flip the period to VOID --
-        // exactly July 2026's real shape per the owner's brief.
+        // Corrupt the computed columns (simulating whatever left July's real row stale/zero) while leaving the
+        // HR-typed input column (special_pay_1) intact, then flip the period to VOID -- exactly July 2026's real shape
+        // per the owner's brief.
         jdbc.update("""
             UPDATE hr.payroll_line
                SET net_amount = 0, gross_taxable_income = 0, withholding_tax = 0, social_security = 0
@@ -111,11 +103,7 @@ class PayrollDetailExportVoidRecomputeIntegrationTest extends AbstractPostgresIn
             assertThat(dataRow.getCell(codeCol).getStringCellValue()).isEqualTo("VOID-001");
 
             FormulaEvaluator evaluator = workbook.getCreationHelper().createFormulaEvaluator();
-            // รวมรายได้ที่ต้องเสียภาษี (R) is a live SUM formula over the reconstructed line's own
-            // input cells -- unlike the old sheet's netPay()-verbatim column, this format recomputes
-            // from cells, so what we can assert directly against PayrollLineDto is the TAXABLE GROSS,
-            // not the final net (see PayrollDetailExporter's class javadoc on why net pay here is a
-            // simplified re-derivation, not PayrollLineDto#netPay() verbatim).
+            // รวมรายได้ที่ต้องเสียภาษี is a live SUM formula over the reconstructed line's own input cells.
             double gross = evaluator.evaluate(dataRow.getCell(grossCol)).getNumberValue();
             assertThat(BigDecimal.valueOf(gross))
                 .as("must equal the ORIGINAL correct recomputed gross taxable income, NOT the "

@@ -26,35 +26,9 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Shared harness for the tests that ask what a REAL signed-in session can still do: the real
- * embedded Tomcat on a random port, real HTTP, real Postgres, the real {@code SecurityFilterChain}.
- *
- * <p>That is not thoroughness for its own sake. A session's lifetime is decided by the servlet
- * container's own validity check and expiry sweep, which {@code MockMvc}'s {@code MockHttpSession}
- * never runs, and both failure directions are silent: a "never" the container reads as "already
- * expired" logs the whole company out on every request, and an account re-check that is wired but
- * never reached leaves a dismissed employee signed in. Neither shows up anywhere but here.
- *
- * <p><b>The session store is Tomcat's own, in memory — NOT {@code hr.spring_session}.</b> The pom
- * still carries {@code spring-session-jdbc} and its comment still says sessions are externalized to
- * Postgres (#23), but that has not been true since the Spring Boot 4.1 upgrade (ec230864,
- * 2026-07-07): Boot 4 moved the session auto-configuration into {@code spring-boot-session-jdbc},
- * which this build does not depend on, so nothing wires Spring Session at all. The first draft of
- * these tests autowired {@code JdbcIndexedSessionRepository} and could not start — there is no
- * such bean — and production agrees: the newest row in {@code hr.spring_session} was last touched
- * on 2026-07-07. So the helpers below read and age a session where it actually lives
- * ({@link #stored}); "a session never expires" therefore means "until the backend restarts".
- * Restoring the database-backed store is a separate decision and no part of these tests.
- *
- * <p>Idleness is produced by AGEING the stored session ({@link #ageSession}) rather than sleeping,
- * and the container's background expiry sweep is run directly ({@link #runExpirySweep}) rather
- * than waited for.
- *
- * <p>Concrete subclasses carry their own {@code @SpringBootTest} (they differ in configuration) and
- * their own {@code @EnabledIf} — which JUnit does not inherit; see
- * {@code AbstractPostgresIntegrationTest}'s Javadoc.
- */
+/** Shared harness for the tests that ask what a REAL signed-in session can still do: the real embedded Tomcat
+ * on a random port, real HTTP, real Postgres, the real SecurityFilterChain. That is not thoroughness for its
+ * own sake. */
 abstract class AbstractRealSessionIntegrationTest {
 
     @DynamicPropertySource
@@ -83,13 +57,7 @@ abstract class AbstractRealSessionIntegrationTest {
 
     // ── a signed-in browser ──────────────────────────────────────────────────────────────────
 
-    /**
-     * A browser's two cookies, held by hand. The session cookie is captured ONCE, at sign-in, and
-     * deliberately never updated from later responses: when the server ends a session it also
-     * tells the browser to drop the cookie, and a helper that obeyed would prove nothing about
-     * what an OLD cookie — a forgotten device, a copied one — can still do. That is the question
-     * these tests ask.
-     */
+    /** A browser's two cookies, held by hand. That is the question these tests ask. */
     final class Browser {
         private final HttpClient http = HttpClient.newHttpClient();
         private String sessionCookie;
@@ -166,9 +134,8 @@ abstract class AbstractRealSessionIntegrationTest {
 
     record Account(long id, String email) {}
 
-    /** An active employee who can sign in, in the ฝ่าย whose {@code source_code} is
-     * {@code divisionCode} — which is what {@code DivisionAccessPolicy#roleFor} derives the role
-     * from ("HR" → hr, anything it does not recognise → employee). */
+    /** An active employee who can sign in, in the ฝ่าย whose source_code is divisionCode — which is what
+     * DivisionAccessPolicy#roleFor derives the role from ("HR" → hr, anything it does not recognise → employee). */
     Account employee(String divisionCode, String divisionName) {
         String tag = UUID.randomUUID().toString().substring(0, 8);
         String email = "session-" + tag + "@glr.co.th";

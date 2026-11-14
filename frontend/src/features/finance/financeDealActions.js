@@ -1,9 +1,6 @@
-// Ordering of the money actions the server offers on a finance deal (FinanceDealDto.availableActions).
-// The server decides WHICH actions exist; this only decides which one leads the header.
-//
-// Priority mirrors the order a deal's money moves: confirm the deposit, take the final payment,
-// record any other payment, confirm the close, set up billing, then the stage moves. Reversing a
-// close confirmation is never the headline action.
+// Ordering of the money actions the server offers on a finance deal (FinanceDealDto.availableActions). The
+// server decides WHICH actions exist; this only decides which one leads the header. Reversing a close
+// confirmation is never the headline action.
 const PRIORITY = [
   'DEPOSIT_PAID',
   'FINAL_PAYMENT',

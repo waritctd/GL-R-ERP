@@ -35,29 +35,22 @@ import th.co.glr.hr.ticket.TicketRepository;
 public class CommissionService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final Set<String> SALES_ROLES = Set.of("sales");
-    // Slice A2 (AUTHZ CHANGE — see docs/agent-handoffs/102_feat-sales-commission-auto-approval.md):
-    // sales can no longer submit/create commissions at all — commission creation moved to the
-    // accountant's auto-create trigger (createFromDeal) at deal close. sales_manager/ceo keep the
-    // ability they already had (e.g. manual/unlinked corrections); account replaces sales as the
-    // day-to-day creator role for the JSON/multipart submit() path too, in addition to owning
-    // createFromDeal exclusively.
+    // Slice A2 (AUTHZ CHANGE — see docs/agent-handoffs/102_feat-sales-commission-auto-approval.md): sales can no
+    // longer submit/create commissions at all — commission creation moved to the accountant's auto-create trigger
+    // (createFromDeal) at deal close.
     private static final Set<String> SUBMIT_ROLES = Set.of("account", "sales_manager", "ceo");
     private static final Set<String> CREATE_FROM_DEAL_ROLES = Set.of("account");
     private static final Set<String> MANAGER_ROLES = Set.of("sales_manager");
     private static final Set<String> PENDING_VIEW_ROLES = Set.of("sales_manager", "ceo");
     private static final Set<String> CEO_ROLES = Set.of("ceo");
     private static final Set<String> PAYROLL_ROLES = Set.of("hr");
-    // Who may read the commission list (GET /api/commissions). Matches the frontend's
-    // canListCommissionRecords exactly — SALES, SALES_MANAGER, CEO only. NOT hr (reads via the
-    // payroll-ready feed, PAYROLL_ROLES) and NOT account (only does createFromDeal, never lists);
-    // import/plain-employee/warehouse/qc have no business reason to see commission amounts. Sales
-    // is additionally row-scoped to its own rows below; sales_manager/ceo see the full feed.
+    // Who may read the commission list (GET /api/commissions). Matches the frontend's canListCommissionRecords
+    // exactly — SALES, SALES_MANAGER, CEO only. Sales is additionally row-scoped to its own rows below;
+    // sales_manager/ceo see the full feed.
     private static final Set<String> LIST_VIEWER_ROLES =
         Set.of("sales", "sales_manager", "ceo");
-    // feat/commission-manual-adjustments: ONLY sales_manager/ceo may create a manual commission
-    // entry (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE). This is the authorization boundary this branch is required to
-    // prove with a real-DB, wrong-way-round integration test per CLAUDE.md -- see
-    // ManualCommissionAuthzIntegrationTest.
+    // feat/commission-manual-adjustments: ONLY sales_manager/ceo may create a manual commission entry
+    // (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE).
     private static final Set<String> MANUAL_CREATE_ROLES = Set.of("sales_manager", "ceo");
     private static final Set<String> MANUAL_KINDS = Set.of(
         CommissionKind.ADJUSTMENT, CommissionKind.MANAGER, CommissionKind.STOCK_BONUS, CommissionKind.INCENTIVE);
@@ -145,34 +138,25 @@ public class CommissionService {
         // manager's #adjustItemWeights while SUBMITTED. See #computeItemDerivedWeight's own Javadoc.
         Optional<BigDecimal> itemDerivedWeight =
             computeItemDerivedWeight(safeRequest.sourceTicketId(), calculation.actualReceived());
-        // Commission-closed-month guard: computed and checked on the DERIVED, normalized
-        // first-of-month value that createCommissionRecord below actually writes -- not on the raw
-        // caller-supplied invoiceDate. Runs before any write (invoice row, file storage, attachment)
-        // so a refused submission leaves nothing behind.
+        // Commission-closed-month guard: computed and checked on the DERIVED, normalized first-of-month value that
+        // createCommissionRecord below actually writes -- not on the raw caller-supplied invoiceDate.
         LocalDate payrollMonth = saleCommissionPayrollMonth(safeRequest.invoiceDate());
         requireCommissionPayrollMonthOpen(payrollMonth, safeRequest.invoiceDate());
 
         try {
             long invoiceId = commissions.createInvoice(safeRequest);
-            // V134 storage-durability fix -- TRANSITIONAL dual-write: bytes go to
-            // hr.file_attachment_blob (via saveWithContent below) AND the file still goes to disk
-            // (via store, unchanged) because the SAME file_path string is also registered into
-            // sales.attachment, which is out of this branch's scope and still disk-only. See
-            // CommissionAttachmentRepository#saveWithContent's javadoc for the full rationale and
-            // the follow-up this leaves behind.
+            // V134 storage-durability fix -- TRANSITIONAL dual-write: bytes go to hr.file_attachment_blob AND the file
+            // still goes to disk because the SAME file_path string is also registered into sales.attachment, which is out
+            // of this branch's scope and still disk-only.
             FileStorageService.StoredFile storedFile = fileStorage.store(
                 "commission-invoice",
                 invoiceId,
                 invoiceAttachment,
                 COMMISSION_INVOICE_MIME_TYPES
             );
-            // The disk copy above is NOT part of this transaction — Postgres cannot undo it. Every
-            // write below (attachment row, attachInvoiceFile, commission record, audit) can still
-            // fail and roll the whole method back, which would leave that file on disk forever with
-            // no row referencing it. deleteOnRollback ties it to the transaction's outcome; on the
-            // success path it does nothing at all. See its Javadoc for why the write stays here
-            // rather than being hoisted out of the transaction (invoiceId is generated above, in
-            // this same transaction).
+            // The disk copy above is NOT part of this transaction — Postgres cannot undo it. Every write below (attachment
+            // row, attachInvoiceFile, commission record, audit) can still fail and roll the whole method back, which would
+            // leave that file on disk forever with no row referencing it.
             fileStorage.deleteOnRollback(storedFile);
             long attachmentId = commissionAttachments.saveWithContent(
                 invoiceId,
@@ -204,14 +188,8 @@ public class CommissionService {
         }
     }
 
-    /**
-     * V134 storage-durability fix: reads the SAME upload's bytes a second time for the database
-     * dual-write, after {@code fileStorage.store} already validated/cap-checked and wrote it to
-     * disk. Safe to call twice on one {@code MultipartFile} -- both Spring's real servlet-backed
-     * implementation and {@code MockMultipartFile} (used throughout this codebase's tests) support
-     * repeated reads, since the upload is already fully spooled (to a temp file or an in-memory
-     * buffer) by the time either read happens.
-     */
+    /** V134 storage-durability fix: reads the SAME upload's bytes a second time for the database dual-write, after
+     * fileStorage.store already validated/cap-checked and wrote it to disk. */
     private byte[] invoiceContentBytes(MultipartFile invoiceAttachment) {
         try {
             return invoiceAttachment.getBytes();
@@ -291,8 +269,8 @@ public class CommissionService {
             request.withholdingTax(),
             request.overpayment()
         );
-        // Re-checks CLOSED_PAID and computes the payable-amount cross-check snapshot — the exact
-        // same gate submit() has always enforced. Never loosened for this trigger.
+        // Re-checks CLOSED_PAID and computes the payable-amount cross-check snapshot — the exact same gate submit()
+        // has always enforced. Never loosened for this trigger.
         DealLinkage linkage = resolveDealLinkage(request);
         // Per-item stock-commission weighting: computed and FROZEN here, once, from this
         // SAME ticket already loaded above -- no second fetch needed, unlike submit()'s wrapper
@@ -302,27 +280,25 @@ public class CommissionService {
         // figure #sumActiveWeightedActualReceived weights and submit()'s own call below uses.
         Optional<BigDecimal> itemDerivedWeight =
             calculator.itemDerivedWeight(toItemStockWeightInputs(ticket.items()), calculation.actualReceived());
-        // Commission-closed-month guard: same guard and same placement rationale as submit() above
-        // -- computed on the DERIVED, normalized first-of-month value, checked before any write
-        // (invoice row, file storage, ticket attachment) so a refused create leaves nothing behind,
-        // including no spurious invoiceOnFile flip on the ticket.
+        // Commission-closed-month guard: same guard and same placement rationale as submit above -- computed on the
+        // DERIVED, normalized first-of-month value, checked before any write so a refused create leaves nothing
+        // behind, including no spurious invoiceOnFile flip on the ticket.
         LocalDate payrollMonth = saleCommissionPayrollMonth(request.invoiceDate());
         requireCommissionPayrollMonthOpen(payrollMonth, request.invoiceDate());
 
         try {
             long invoiceId = commissions.createInvoice(request);
-            // V134 storage-durability fix -- TRANSITIONAL dual-write, same rationale as #submit
-            // above: see CommissionAttachmentRepository#saveWithContent's javadoc.
+            // V134 storage-durability fix -- TRANSITIONAL dual-write, same rationale as #submit above: see
+            // CommissionAttachmentRepository#saveWithContent's javadoc.
             FileStorageService.StoredFile storedFile = fileStorage.store(
                 "commission-invoice",
                 invoiceId,
                 invoiceAttachment,
                 COMMISSION_INVOICE_MIME_TYPES
             );
-            // Same non-transactional disk write as #submit above, with one more row riding on it:
-            // this path also registers the SAME file_path into sales.attachment below, so a
-            // rollback here strands the one physical file that two separate rows pointed at.
-            // Registered once — the file is one file, and deleting it once undoes both references.
+            // Same non-transactional disk write as #submit above, with one more row riding on it: this path also registers
+            // the SAME file_path into sales.attachment below, so a rollback here strands the one physical file that two
+            // separate rows pointed at.
             fileStorage.deleteOnRollback(storedFile);
             long attachmentId = commissionAttachments.saveWithContent(
                 invoiceId,
@@ -334,8 +310,8 @@ public class CommissionService {
                 invoiceContentBytes(invoiceAttachment)
             );
             commissions.attachInvoiceFile(invoiceId, attachmentId);
-            // Reuses the existing ticket-attachment path so the same upload also satisfies the
-            // close gate's invoiceOnFile check — no separate upload flow for the accountant.
+            // Reuses the existing ticket-attachment path so the same upload also satisfies the close gate's invoiceOnFile
+            // check — no separate upload flow for the accountant.
             attachments.save(
                 ticketId,
                 null,
@@ -417,9 +393,9 @@ public class CommissionService {
         return calculator.itemDerivedWeight(toItemStockWeightInputs(items), actualReceived);
     }
 
-    /** Maps the ticket-package DTO onto the calculator's decoupled, dependency-free input shape
-     * -- see {@link CommissionCalculator.ItemStockWeightInput}'s own Javadoc for why the
-     * calculator does not take {@link TicketItemDto} directly. */
+    /** Maps the ticket-package DTO onto the calculator's decoupled, dependency-free input shape -- see
+     * CommissionCalculator.ItemStockWeightInput's own Javadoc for why the calculator does not take TicketItemDto
+     * directly. */
     private List<CommissionCalculator.ItemStockWeightInput> toItemStockWeightInputs(List<TicketItemDto> items) {
         return items.stream()
             .map(item -> new CommissionCalculator.ItemStockWeightInput(
@@ -468,14 +444,9 @@ public class CommissionService {
         if (!MANAGER_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        // Serialise concurrent adjusters of the SAME record BEFORE reading anything the decision
-        // depends on. Under READ COMMITTED, two managers re-weighting different lines interleave:
-        // each re-reads the deal's items before the other commits, and the last writer freezes an
-        // effective_weight_multiplier (what payroll reads via COALESCE) that ignores the other's
-        // line. With the row lock held until commit, the second adjuster's reads (status, items)
-        // all happen after the first has committed. Taken before requireRecord so the record we
-        // validate and diff for the audit row is the post-lock one. A missing id locks nothing and
-        // falls through to requireRecord's 404.
+        // Serialise concurrent adjusters of the SAME record BEFORE reading anything the decision depends on. With the
+        // row lock held until commit, the second adjuster's reads (status, items) all happen after the first has
+        // committed.
         commissions.lockRecordForUpdate(id);
         CommissionRecord existing = requireRecord(id);
         if (!CommissionKind.SALE.equals(existing.kind()) || existing.sourceTicketId() == null) {
@@ -518,10 +489,8 @@ public class CommissionService {
         return toPending(after);
     }
 
-    /**
-     * Builds one pending card. {@code estimatedCommission} is this record's marginal contribution to its
-     * rep's payroll month, composed only from existing calculator calls (same pattern as {@link #simulate}).
-     */
+    /** Builds one pending card. estimatedCommission is this record's marginal contribution to its rep's payroll
+     * month, composed only from existing calculator calls (same pattern as #simulate). */
     private PendingCommissionDto toPending(CommissionRecord record) {
         Long ticketId = record.sourceTicketId();
         var summary = ticketId == null ? Optional.<th.co.glr.hr.ticket.TicketSummaryDto>empty()
@@ -553,10 +522,8 @@ public class CommissionService {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถแก้ไขรายการค่าคอมมิชชั่นที่ถูกยกเลิกแล้วได้");
         }
         if (MANUAL_KINDS.contains(existing.kind())) {
-            // Manual entries (ADJUSTMENT/MANAGER) have no invoice_details row to edit -- existing
-            // .invoiceDetails() is null for them (V84). There is nothing here to update; the
-            // manual_amount/manual_reason a manual entry was created with is immutable by design
-            // (create a fresh entry, or use the clawback-style correction pattern, if it was wrong).
+            // Manual entries (ADJUSTMENT/MANAGER) have no invoice_details row to edit -- existing .invoiceDetails() is
+            // null for them (V84).
             throw new ApiException(HttpStatus.CONFLICT, "รายการค่าคอมมิชชั่นแบบกรอกเองไม่มีรายการหักจากใบกำกับภาษีให้แก้ไข");
         }
         // A CLAWBACK record shares its
@@ -611,17 +578,16 @@ public class CommissionService {
         commissions.updateDeductions(existing.invoiceDetails().id(), grossAmount, bankFees, suspenseVat,
             transportFee, cutFee, shortfall, withholdingTax, overpayment);
 
-        // Commission redesign calc-refine: the tier-base weight multiplier (1/2/3, see
-        // CommissionCalculator) is set here as part of the same manager/CEO review step — sales
-        // has no route to this endpoint at all (requireManagerOrCeo above), so no separate check
-        // is needed to keep sales from setting it.
+        // Commission redesign calc-refine: the tier-base weight multiplier (1/2/3, see CommissionCalculator) is set
+        // here as part of the same manager/CEO review step — sales has no route to this endpoint at all
+        // (requireManagerOrCeo above), so no separate check is needed to keep sales from setting it.
         int weightMultiplier = valueOrExisting(request.weightMultiplier(), existing.weightMultiplier());
         commissions.updateWeightMultiplier(id, weightMultiplier);
 
         CommissionRecord refreshed = requireRecord(id);
         InvoiceDetails invoice = refreshed.invoiceDetails();
-        // Final commission is ALWAYS recomputed from the stored fields — there is no path that
-        // lets a reviewer set the final amount directly.
+        // Final commission is ALWAYS recomputed from the stored fields — there is no path that lets a reviewer set the
+        // final amount directly.
         InvoiceCalculation calculation = calculator.calculateInvoice(
             invoice.grossAmount(),
             invoice.bankFees(),
@@ -635,8 +601,8 @@ public class CommissionService {
         commissions.updateCommissionAmountsForInvoice(invoice.id(), calculation);
         CommissionRecord after = requireRecord(id);
         auditService.record(actor, "UPDATE_COMMISSION_DEDUCTIONS", "commission_record", id, existing, after);
-        // The reason is recorded as its own audit entry (not a field on commission_record) —
-        // required on every call per Slice A2 (CLAUDE.md "permission changes must ship evidence").
+        // The reason is recorded as its own audit entry (not a field on commission_record) — required on every call
+        // per Slice A2 (CLAUDE.md "permission changes must ship evidence").
         auditService.record(actor, "UPDATE_COMMISSION_DEDUCTIONS_REASON", "commission_record", id, null,
             Map.of("reason", request.reason()));
         return after;
@@ -740,25 +706,9 @@ public class CommissionService {
         return clawback;
     }
 
-    /**
-     * Manual commission entries (feat/commission-manual-adjustments): a sales_manager/CEO adds a
-     * hand-typed, signed {@code amount} for a manual {@code kind} ({@link CommissionKind#ADJUSTMENT},
-     * {@link CommissionKind#MANAGER}, {@link CommissionKind#STOCK_BONUS}, or
-     * {@link CommissionKind#INCENTIVE}) against {@code salesRepId}'s {@code payrollMonth}. The amount
-     * is stored VERBATIM in {@code manual_amount} -- it never goes through {@link
-     * CommissionCalculator#calculateInvoice} or any tier/progressive math, and there is no
-     * invoice/{@code sourceTicketId} attached.
-     *
-     * <p>Authz boundary (the thing this branch must prove with a real-DB integration test): only
-     * {@code sales_manager}/{@code ceo} may call this -- {@code sales}, any other rep role,
-     * {@code account}, {@code import}, and {@code hr} all get 403, with zero rows created.
-     *
-     * <p>Created by a {@code sales_manager} lands {@code MANAGER_APPROVED} (the manager vouches
-     * for it, but it still needs CEO sign-off before it counts toward payroll); created by the
-     * {@code ceo} lands {@code APPROVED} directly. From {@code MANAGER_APPROVED}, the existing
-     * {@link #approve(long, UserPrincipal)}/{@link #ceoApprove} chain carries it to {@code
-     * APPROVED} exactly as it does for a SALE commission -- no parallel approval path exists.
-     */
+    /** Manual commission entries (feat/commission-manual-adjustments): a sales_manager/CEO adds a hand-typed,
+     * signed amount for a manual kind (CommissionKind#ADJUSTMENT, CommissionKind#MANAGER,
+     * CommissionKind#STOCK_BONUS, or CommissionKind#INCENTIVE) against salesRepId's payrollMonth. */
     @Transactional
     public CommissionRecord createManualCommission(
             Long salesRepId, String kind, BigDecimal amount, String reason, LocalDate payrollMonth, UserPrincipal actor) {
@@ -778,15 +728,15 @@ public class CommissionService {
         if (reason == null || reason.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลสำหรับรายการค่าคอมมิชชั่นแบบกรอกเอง");
         }
-        // A MANAGER-kind entry represents team/manager commission earned, not a correction --
-        // never negative. An ADJUSTMENT may legitimately be negative (a deduction/clawback-style
-        // correction), so no sign restriction there.
+        // A MANAGER-kind entry represents team/manager commission earned, not a correction -- never negative. An
+        // ADJUSTMENT may legitimately be negative (a deduction/clawback-style correction), so no sign restriction
+        // there.
         if (CommissionKind.MANAGER.equals(kind) && amount.signum() < 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "รายการค่าคอมมิชชั่นประเภท MANAGER ต้องไม่ติดลบ");
         }
         LocalDate month = payrollMonth == null ? currentPayrollMonth() : payrollMonth(payrollMonth);
-        // Commission-closed-month guard: month here is already the normalized first-of-month value
-        // that commissions.createManualCommission below actually writes.
+        // Commission-closed-month guard: month here is already the normalized first-of-month value that
+        // commissions.createManualCommission below actually writes.
         requireCommissionPayrollMonthOpen(month);
         boolean ceoCreated = CEO_ROLES.contains(actor.role());
         long commissionId = commissions.createManualCommission(
@@ -837,9 +787,8 @@ public class CommissionService {
      */
     public List<CommissionRepOptionDto> listManualCommissionRepOptions(UserPrincipal actor) {
         if (!MANUAL_CREATE_ROLES.contains(actor.role())) {
-            // Same roles as createManualCommission's gate, but a different action -- this refuses
-            // a READ (viewing the rep list), not a create, so the message says so rather than
-            // reusing the create-flow wording verbatim.
+            // Same roles as createManualCommission's gate, but a different action -- this refuses a READ (viewing the rep
+            // list), not a create, so the message says so rather than reusing the create-flow wording verbatim.
             throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะผู้จัดการฝ่ายขายหรือ CEO เท่านั้นที่ดูรายชื่อนี้ได้");
         }
         return commissions.findActiveSalesRepOptions(DivisionAccessPolicy.SALES_DIVISION_CODE);
@@ -861,12 +810,8 @@ public class CommissionService {
             request.withholdingTax(),
             request.overpayment()
         );
-        // Commission redesign calc-refine: the monthly TIER BASE is now the full-precision
-        // SUM(actual_received x weight_multiplier) / 1.07, not a sum of already-2dp-rounded
-        // commissionable_base rows. The invoice being simulated hasn't been persisted (no
-        // weight_multiplier choice yet — that only happens later, in the manager-review step), so
-        // it is folded into the weighted sum at its default weight of 1 before dividing, rather
-        // than adding an already-rounded 2dp commissionableBase onto a full-precision base.
+        // Commission redesign calc-refine: the monthly TIER BASE is now the full-precision SUM(actual_received x
+        // weight_multiplier) / 1.07, not a sum of already-2dp-rounded commissionable_base rows.
         BigDecimal existingWeightedActualReceived = commissions.sumActiveWeightedActualReceived(salesRepId, month);
         BigDecimal projectedWeightedActualReceived = existingWeightedActualReceived.add(invoice.actualReceived());
         BigDecimal existingBase = calculator.monthlyTierBase(existingWeightedActualReceived);
@@ -973,15 +918,15 @@ public class CommissionService {
             ? zero
             : calculator.monthlyIncentive(base, commissions.findIncentiveTiers(month));
 
-        // Same rule + same gating as computeRepPayrollCommissions (incl. its performance
-        // short-circuit: no stock-share aggregate when config is off or a manual entry replaces it).
+        // Same rule + same gating as computeRepPayrollCommissions (incl. its performance short-circuit: no stock-share
+        // aggregate when config is off or a manual entry replaces it).
         StockBonusConfig stockBonusConfig = commissions.findStockBonusConfig(month).orElse(StockBonusConfig.disabled());
         BigDecimal stockBonusAmount = (manualStockBonusTotal.signum() > 0 || !stockBonusConfig.enabled())
             ? zero
             : calculator.stockSaleBonus(commissions.sumActiveStockActualReceived(repId, month), stockBonusConfig);
 
-        // Team override: only a recipient of an ENABLED generation, and only then is the
-        // company-wide base read at all (the authz rule in this method's Javadoc).
+        // Team override: only a recipient of an ENABLED generation, and only then is the company-wide base read at all
+        // (the authz rule in this method's Javadoc).
         TeamOverrideConfig teamOverrideConfig = activeTeamOverrideConfig(month);
         boolean recipient = teamOverrideConfig.recipients().stream().anyMatch(r -> r.employeeId() == repId);
         BigDecimal teamOverrideAmount = zero;
@@ -999,8 +944,8 @@ public class CommissionService {
                 : calculator.teamOverride(companyBaseFull, teamOverrideConfig);
         }
 
-        // Display figures: raw (unweighted) base and the x2/x3 uplift, both 2dp so that
-        // raw + uplift == commissionableBase exactly as displayed.
+        // Display figures: raw (unweighted) base and the x2/x3 uplift, both 2dp so that raw + uplift ==
+        // commissionableBase exactly as displayed.
         BigDecimal displayBase = base.setScale(2, RoundingMode.HALF_UP);
         BigDecimal rawBase = calculator.monthlyTierBase(
             commissions.sumActiveActualReceived(repId, month).max(BigDecimal.ZERO)).setScale(2, RoundingMode.HALF_UP);
@@ -1019,34 +964,18 @@ public class CommissionService {
             companyBase, overrideThreshold, overrideRate);
     }
 
-    /**
-     * The team-override generation for {@code month}, or {@link TeamOverrideConfig#disabled()} when
-     * there is none OR the generation is switched off -- a disabled generation is treated as "no
-     * recipients" everywhere (payroll pays nothing, the summary exposes nothing).
-     */
+    /** The team-override generation for month, or TeamOverrideConfig#disabled() when there is none OR the
+     * generation is switched off -- a disabled generation is treated as "no recipients" everywhere (payroll pays
+     * nothing, the summary exposes nothing). */
     private TeamOverrideConfig activeTeamOverrideConfig(LocalDate month) {
         return commissions.findTeamOverrideConfig(month)
             .filter(TeamOverrideConfig::enabled)
             .orElse(TeamOverrideConfig.disabled());
     }
 
-    /**
-     * Per-tier breakdown of {@code base} WITHOUT re-implementing the bracket math {@link
-     * CommissionCalculator#progressiveCommission} already owns (and which must stay byte-identical
-     * per CLAUDE.md — its per-tier split is private). Each row's commission is the CUMULATIVE
-     * difference over the unmodified public {@code progressiveCommission}: the commission through
-     * a given tier equals the calculator's own answer for {@code base} capped at that tier's upper
-     * bound (every higher tier then contributes nothing, every lower tier contributes exactly what
-     * it contributes at the real base), so the running difference between consecutive capped calls
-     * is that tier's own share. Rows therefore sum EXACTLY to {@code progressiveCommission(base)} —
-     * composed entirely from the audited calculator, with no second copy of the bracket arithmetic
-     * anywhere.
-     *
-     * <p>Caveat: the attribution assumes upper bounds ascend with {@code tierNumber} and that tier
-     * 1's upper bound is at or above the monthly floor (true for the seeded config). If a future
-     * config broke that, the TOTAL would still be exact (the differences telescope regardless);
-     * only the per-row attribution would shift.
-     */
+    /** Per-tier breakdown of base WITHOUT re-implementing the bracket math
+     * CommissionCalculator#progressiveCommission already owns (and which must stay byte-identical per CLAUDE.md —
+     * its per-tier split is private). */
     private List<CommissionTierRowDto> tierRows(BigDecimal base, List<TierConfig> tiers) {
         List<TierConfig> ordered = tiers.stream()
             .sorted(Comparator.comparingInt(TierConfig::tierNumber)).toList();
@@ -1115,11 +1044,9 @@ public class CommissionService {
     private PayrollRun computePayrollRun(LocalDate payrollMonth) {
         List<CommissionRecord> records = commissions.findApprovedRecordsByMonth(payrollMonth);
         Map<Long, RepAccumulator> grouped = new LinkedHashMap<>();
-        // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual-adjustments)
-        // never feed the tier calc -- accumulated separately here and added to each rep's FINAL
-        // commission total only, on top of the tier commission, never into commissionableBase
-        // itself. Only APPROVED records reach this point at all (findApprovedRecordsByMonth), so a
-        // manual entry still sitting at MANAGER_APPROVED correctly does not count yet.
+        // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual-adjustments) never feed the
+        // tier calc -- accumulated separately here and added to each rep's FINAL commission total only, on top of the
+        // tier commission, never into commissionableBase itself.
         Map<Long, BigDecimal> manualTotals = new LinkedHashMap<>();
         Map<Long, String> manualOnlyRepNames = new LinkedHashMap<>();
         // Transition safeguard: a rep-month's approved
@@ -1139,10 +1066,9 @@ public class CommissionService {
         // suppress (grouped.getOrDefault(...).signum() > 0 is false for zero).
         Map<Long, BigDecimal> manualIncentiveTotals = new LinkedHashMap<>();
         Map<Long, BigDecimal> manualStockBonusTotals = new LinkedHashMap<>();
-        // Manager TEAM OVERRIDE (V199): same replacement rule -- a recipient whose summed approved
-        // manual MANAGER entries are STRICTLY POSITIVE (the accountant still hand-types the figure)
-        // has the auto limb suppressed; zero (a note) does not suppress. A negative MANAGER cannot
-        // exist (createManualCommission 400s it), so "correction layered on top" is unreachable.
+        // Manager TEAM OVERRIDE (V199): same replacement rule -- a recipient whose summed approved manual MANAGER
+        // entries are STRICTLY POSITIVE (the accountant still hand-types the figure) has the auto limb suppressed;
+        // zero (a note) does not suppress.
         Map<Long, BigDecimal> manualManagerTotals = new LinkedHashMap<>();
         for (CommissionRecord record : records) {
             if (MANUAL_KINDS.contains(record.kind())) {
@@ -1160,15 +1086,9 @@ public class CommissionService {
                 }
                 continue;
             }
-            // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash
-            // x weight_multiplier), not the already-2dp-rounded commissionable_base column — see
-            // CommissionRepository#sumActiveWeightedActualReceived for the same change at the
-            // single-rep query path (simulate()). V148: the weight used is now
-            // record.effectiveWeight() (COALESCE(effective_weight_multiplier, weight_multiplier))
-            // -- the frozen per-item blend when one was computed, else the plain weight_multiplier
-            // exactly as before this feature. Every pre-V148 record has effectiveWeight() ==
-            // weightMultiplier() (effective_weight_multiplier is NULL), so this cannot change the
-            // contribution of any record this migration did not touch.
+            // Commission redesign calc-refine: accumulate the WEIGHTED actual-received (real cash x weight_multiplier), not
+            // the already-2dp-rounded commissionable_base column — see CommissionRepository#sumActiveWeightedActualReceived
+            // for the same change at the single-rep query path (simulate()).
             grouped.computeIfAbsent(record.salesRepId(), id -> new RepAccumulator(record.salesRepId(), record.salesRepName()))
                 .add(record.actualReceived(), record.effectiveWeight());
         }
@@ -1180,12 +1100,12 @@ public class CommissionService {
         List<IncentiveTierConfig> incentiveLadder = commissions.findIncentiveTiers(payrollMonth);
         StockBonusConfig stockBonusConfig = commissions.findStockBonusConfig(payrollMonth).orElse(StockBonusConfig.disabled());
         BigDecimal zero = BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP);
-        // Team override: config + company base loaded ONCE for the month. The base is the
-        // UNWEIGHTED, APPROVED-only company-wide ex-VAT sum at full precision (payroll must never
-        // count an unapproved receipt). Skipped entirely when no enabled generation applies.
+        // Team override: config + company base loaded ONCE for the month. The base is the UNWEIGHTED, APPROVED-only
+        // company-wide ex-VAT sum at full precision (payroll must never count an unapproved receipt). Skipped entirely
+        // when no enabled generation applies.
         TeamOverrideConfig teamOverrideConfig = activeTeamOverrideConfig(payrollMonth);
-        // NULL (not 0.00) when no override applies -- disabled, no generation yet, or no recipients:
-        // "company receipts 0.00" would be a lie for a month that simply has no override rule.
+        // NULL (not 0.00) when no override applies -- disabled, no generation yet, or no recipients: "company receipts
+        // 0.00" would be a lie for a month that simply has no override rule.
         boolean overrideApplies = !teamOverrideConfig.recipients().isEmpty();
         BigDecimal companyBase = overrideApplies
             ? calculator.monthlyTierBase(commissions.sumCompanyActualReceived(payrollMonth, true).max(BigDecimal.ZERO))
@@ -1207,20 +1127,17 @@ public class CommissionService {
             BigDecimal tierCommission = calculator.progressiveCommission(safeBase, tiers);
             BigDecimal displayBase = safeBase.setScale(2, RoundingMode.HALF_UP);
             BigDecimal manualAmount = manualTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO);
-            // Suppress the auto limb only when the rep's summed manual entries of that kind are
-            // STRICTLY POSITIVE (a replacement) -- zero/negative (a correction) leaves the auto
-            // limb computing normally; see the map-building comment above for the full rationale.
+            // Suppress the auto limb only when the rep's summed manual entries of that kind are STRICTLY POSITIVE (a
+            // replacement) -- zero/negative (a correction) leaves the auto limb computing normally; see the map-building
+            // comment above for the full rationale.
             boolean incentiveReplaced = manualIncentiveTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO).signum() > 0;
             BigDecimal incentiveAmount = incentiveReplaced
                 ? zero
                 : calculator.monthlyIncentive(safeBase, incentiveLadder);
             boolean stockBonusReplaced = manualStockBonusTotals.getOrDefault(rep.salesRepId, BigDecimal.ZERO).signum() > 0;
-            // Review fix (performance): short-circuit before the repo call (a GROUP BY ticket_id
-            // aggregate over the whole sales.ticket_item table) when there is nothing to compute
-            // -- config disabled, or the auto limb is replaced by a positive manual entry. Without
-            // this, computeRepPayrollCommissions ran that full aggregate once per rep on every
-            // payroll run, including every historic month, even though STOCK_BONUS ships
-            // config-gated OFF and would resolve to zero anyway.
+            // Review fix (performance): short-circuit before the repo call (a GROUP BY ticket_id aggregate over the whole
+            // sales.ticket_item table) when there is nothing to compute -- config disabled, or the auto limb is replaced
+            // by a positive manual entry.
             BigDecimal stockBonusAmount = (stockBonusReplaced || !stockBonusConfig.enabled())
                 ? zero
                 : calculator.stockSaleBonus(commissions.sumActiveStockActualReceived(rep.salesRepId, payrollMonth), stockBonusConfig);
@@ -1250,9 +1167,9 @@ public class CommissionService {
                 zero, manualAmount, zero, zero, teamOverrideAmount, manualAmount.add(teamOverrideAmount)));
             repIds.add(entry.getKey());
         }
-        // A recipient with NO approved record of any kind this month still earns the override: give
-        // them a row -- but only when the amount is positive (a zero override with nothing else to
-        // pay creates no row, so a below-threshold month leaves no empty recipient lines).
+        // A recipient with NO approved record of any kind this month still earns the override: give them a row -- but
+        // only when the amount is positive (a zero override with nothing else to pay creates no row, so a
+        // below-threshold month leaves no empty recipient lines).
         for (Map.Entry<Long, BigDecimal> entry : teamOverrideByEmployee.entrySet()) {
             if (repIds.contains(entry.getKey()) || entry.getValue().signum() <= 0) {
                 continue;
@@ -1264,15 +1181,8 @@ public class CommissionService {
         return new PayrollRun(results, companyBase == null ? null : companyBase.setScale(2, RoundingMode.HALF_UP));
     }
 
-    /**
-     * Map view of {@link #computeRepPayrollCommissions} for callers -- {@code
-     * PayrollService#commissionPayByEmployee} -- that only need the final payable total per rep,
-     * not the full base/manual breakdown {@link #payrollReadySummary} displays.
-     *
-     * @param payrollMonth must already be normalized to the 1st of the month (payroll always
-     *                     passes an already-normalized month here; see {@code
-     *                     PayrollService#normalizeMonth}).
-     */
+    /** Map view of #computeRepPayrollCommissions for callers -- PayrollService#commissionPayByEmployee -- that only
+     * need the final payable total per rep, not the full base/manual breakdown #payrollReadySummary displays. */
     public Map<Long, BigDecimal> payrollCommissionTotalsByEmployee(LocalDate payrollMonth) {
         Map<Long, BigDecimal> totals = new LinkedHashMap<>();
         for (RepPayrollCommission rep : computeRepPayrollCommissions(payrollMonth)) {
@@ -1390,12 +1300,7 @@ public class CommissionService {
             : request.reviewerNote().trim();
     }
 
-    /**
-     * Null-safe description of a commission record for notification text. Manual entries (kind
-     * ADJUSTMENT/MANAGER, V84) have no invoice -- {@code record.invoiceDetails()} is {@code null}
-     * for them (see {@code CommissionRepository#mapInvoiceDetails}), so every notify* helper below
-     * must go through this rather than calling {@code invoiceDetails().invoiceNumber()} directly.
-     */
+    /** Null-safe description of a commission record for notification text. */
     private String describeRecord(CommissionRecord record) {
         if (record.invoiceDetails() != null) {
             return "ใบกำกับ " + record.invoiceDetails().invoiceNumber();
@@ -1627,9 +1532,9 @@ public class CommissionService {
             this.salesRepName = salesRepName;
         }
 
-        // V148: takes the resolved effective weight (a BigDecimal -- a per-item blend can be
-        // fractional, e.g. 1.6, which the record's raw SMALLINT weightMultiplier could never
-        // express) rather than the raw int weight_multiplier this took before that feature.
+        // V148: takes the resolved effective weight (a BigDecimal -- a per-item blend can be fractional, e.g. 1.6,
+        // which the record's raw SMALLINT weightMultiplier could never express) rather than the raw int
+        // weight_multiplier this took before that feature.
         private void add(BigDecimal actualReceived, BigDecimal effectiveWeight) {
             BigDecimal received = actualReceived == null ? BigDecimal.ZERO : actualReceived;
             unweightedActualReceived = unweightedActualReceived.add(received);

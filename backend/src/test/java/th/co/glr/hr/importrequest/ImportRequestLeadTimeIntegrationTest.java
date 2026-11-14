@@ -32,15 +32,9 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Lead time / expected arrival (V184, owner decision 09-18 #2 — "they also need to automatically
- * fill estimations of how many days it'll take for the item to arrive like the direct quote
- * form") — against real Postgres, through the real service.
- *
- * <p>Autofill correctness is plumbing ({@link LeadTimeDefaults} is a pure, already-unit-testable
- * map), but WHERE it is applied (draft creation, carried across a revision) and WHO may change it
- * afterwards is authz-and-lifecycle-shaped, so per CLAUDE.md this needs real-DB evidence.
- */
+/** Lead time / expected arrival (V184, owner decision 09-18 #2 — "they also need to automatically fill
+ * estimations of how many days it'll take for the item to arrive like the direct quote form") — against real
+ * Postgres, through the real service. */
 class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private ImportRequestService service;
@@ -348,12 +342,9 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
 
     // ── vesselEtaNote re-derivation (REVIEW ROUND 2, S-D/S-E) ────────────────────────────────────
 
-    /**
-     * S-D: {@code setLeadTime} moves {@code expectedArrivalFrom}/{@code To} (derived from
-     * firstIssuedDate+leadTime), so a {@code vesselEtaNote} that is still exactly the AUTO-DERIVED
-     * text for the OLD range must move with it, and so must the unsent order-email draft's body
-     * (it quotes the same window). A CEO-typed CUSTOM note is left exactly alone.
-     */
+    /** S-D: setLeadTime moves expectedArrivalFrom/To (derived from firstIssuedDate+leadTime), so a vesselEtaNote
+     * that is still exactly the AUTO-DERIVED text for the OLD range must move with it, and so must the unsent
+     * order-email draft's body (it quotes the same window). */
     @Test
     void setLeadTime_reDerivesTheAutoVesselEtaNote_andRegeneratesTheUnsentEmailBody() {
         insertFactory("ETA Redrive Factory", "IT", null); // autofills 75-90
@@ -392,12 +383,9 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(afterLeadTime.vesselEtaNote()).isEqualTo("Vessel confirmed by phone, mid-December");
     }
 
-    /**
-     * S-E: {@code revise} carries the predecessor's {@code vesselEtaNote} forward; its own
-     * {@code issue} re-derives it only when it is STILL exactly the auto-derived text for this
-     * draft's own (carried-forward, unedited) range — otherwise (a CEO-typed custom note) it is left
-     * exactly alone across the revision.
-     */
+    /** S-E: revise carries the predecessor's vesselEtaNote forward; its own issue re-derives it only when it is
+     * STILL exactly the auto-derived text for this draft's own (carried-forward, unedited) range — otherwise (a
+     * CEO-typed custom note) it is left exactly alone across the revision. */
     @Test
     void revision_carriesVesselEtaNoteForward_andReDerivesOnlyIfStillAutoDerived() {
         insertFactory("ETA Revise Factory", "IT", null); // autofills 75-90
@@ -409,23 +397,14 @@ class ImportRequestLeadTimeIntegrationTest extends AbstractPostgresIntegrationTe
 
         ImportRequestDto v2 = service.revise(v1, owner);
         ImportRequestDto issuedV2 = service.issue(v2.id(), null, owner);
-        // Same anchor (firstIssuedDate carried forward) and same range -- re-derivation reproduces
-        // the identical text, so the note stays consistent with issuedV2's own derived window.
+        // Same anchor (firstIssuedDate carried forward) and same range -- re-derivation reproduces the identical text,
+        // so the note stays consistent with issuedV2's own derived window.
         assertThat(issuedV2.vesselEtaNote()).isEqualTo(issuedV1.vesselEtaNote());
         assertThat(issuedV2.firstIssuedDate()).isEqualTo(issuedV1.firstIssuedDate());
     }
 
-    /**
-     * REVIEW ROUND 3, item 1 (S-E regression, confirmed against real Postgres): {@code revise}
-     * carries v1's auto-derived "(75–90 วัน)" note forward onto v2's draft unchanged; the OWNING REP
-     * then edits v2's OWN lead time to 60–70 via {@code update} (a case never exercised by the
-     * existing S-E tests above, which only revise WITHOUT touching lead time afterwards). v2's issue
-     * must show a 60–70 estimate, not the stale 75–90 text carried in from v1 — the bug was that
-     * {@link ImportRequestService#issue}'s old exact-string comparison ("does the stored note equal
-     * the derivation for THIS draft's CURRENT range") never matched a note that was auto-derived for
-     * a DIFFERENT (predecessor) range, so it was wrongly treated as a CEO-typed custom note and left
-     * stale.
-     */
+    /** REVIEW ROUND 3, item 1: revise carries v1's auto-derived "" note forward onto v2's draft unchanged; the
+     * OWNING REP then edits v2's OWN lead time to 60–70 via update. */
     @Test
     void revision_thenEditingLeadTime_thenIssue_showsTheNewRange_notThePredecessors() {
         insertFactory("ETA Revise Then Edit Factory", "IT", null); // autofills 75-90

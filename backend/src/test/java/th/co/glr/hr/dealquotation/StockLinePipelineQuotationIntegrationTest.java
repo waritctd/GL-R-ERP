@@ -25,24 +25,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.pricingstock.AbstractStockLineIntegrationTest;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
-/**
- * Slice 1, stock lines: the pipeline quotation ({@link DealQuotationService#createFromPricingRequest},
- * the engine the new-form pricing chain produces quotations with) copies each pricing-request
- * item's {@code stock_source} onto {@code sales.quotation_item}, and a stock line comes out with a
- * real price. Lives in the {@code dealquotation} package only because
- * {@code wirePricingRequestDependencies} is package-private.
- *
- * <p>Fixture note: the APPROVED stock decision is seeded through the repositories
- * ({@link #seedStockOnlyDecision}) and then marked approved with a raw UPDATE, so this test fails on
- * ITS OWN assertion and not inside the unbuilt {@code startReview}/{@code approve} paths (those
- * have their own tests in {@code StockLineCeoDecisionIntegrationTest}).
- *
- * <p>Deliberately NOT covered: the LEGACY quotation engine ({@code CustomerQuotationService#create},
- * decisions with no price mode) - see the report; stock lines on a legacy-mode decision are an open
- * design question, not something to silently pin.
- *
- * <p>[PIN] = passes before the feature exists on purpose.
- */
+/** Slice 1, stock lines: the pipeline quotation (DealQuotationService#createFromPricingRequest, the engine the
+ * new-form pricing chain produces quotations with) copies each pricing-request item's stock_source onto
+ * sales.quotation_item, and a stock line comes out with a real price. */
 class StockLinePipelineQuotationIntegrationTest extends AbstractStockLineIntegrationTest {
 
     private DealQuotationService quotationService;

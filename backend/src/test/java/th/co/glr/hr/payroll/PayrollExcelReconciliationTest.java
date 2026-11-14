@@ -76,10 +76,8 @@ class PayrollExcelReconciliationTest {
         new SheetRow("เจนเนตร",   "36000",   "12700", "48700", "1337", "875", "2212", "46488")
     );
 
-    /**
-     * Taxable gross (sheet column W) is base salary plus the whole พิเศษ block. This is the figure
-     * the special-money work will add per-diem and life-event aid into, so it has to match first.
-     */
+    /** Taxable gross (sheet column W) is base salary plus the whole พิเศษ block. This is the figure the
+     * special-money work will add per-diem and life-event aid into, so it has to match first. */
     @Test
     void grossEarningsMatchesTheSheetsTaxableIncomeColumn() {
         for (SheetRow row : MAY_2026) {
@@ -91,10 +89,8 @@ class PayrollExcelReconciliationTest {
         }
     }
 
-    /**
-     * Social security, on base salary only, 5% capped at the 2026 wage ceiling of 17,500 → 875.
-     * Every employee in this sample earns above the ceiling, so all seven land on 875.
-     */
+    /** Social security, on base salary only, 5% capped at the 2026 wage ceiling of 17,500 → 875. Every employee in
+     * this sample earns above the ceiling, so all seven land on 875. */
     @Test
     void socialSecurityMatchesTheSheet() {
         for (SheetRow row : MAY_2026) {
@@ -130,14 +126,9 @@ class PayrollExcelReconciliationTest {
             .isEqualByComparingTo(new BigDecimal("500.00"));
     }
 
-    /**
-     * The sheet's own arithmetic, reproduced by the engine: net = gross - deductions + non-taxable.
-     * Feeding the accountant's tax figure in as a post-tax deduction isolates this identity from the
-     * allowance question, so a failure here means the engine's *structure* diverges from the sheet.
-     *
-     * <p>Pure arithmetic on the transcribed sheet figures -- does not call the calculator at all, so
-     * it needed no change for the {@code calculateClassified} repoint.
-     */
+    /** The sheet's own arithmetic, reproduced by the engine: net = gross - deductions + non-taxable. Feeding the
+     * accountant's tax figure in as a post-tax deduction isolates this identity from the allowance question, so a
+     * failure here means the engine's *structure* diverges from the sheet. */
     @Test
     void netPayIdentityMatchesTheSheetWhenTheAccountantsTaxIsSubstituted() {
         for (SheetRow row : MAY_2026) {
@@ -154,18 +145,8 @@ class PayrollExcelReconciliationTest {
         }
     }
 
-    /**
-     * The tax gap, stated rather than hidden.
-     *
-     * <p>Run for January so the projection covers a full year, the engine withholds 1,204.17/month
-     * for จริญญา where the accountant withholds 296. The engine is not wrong — it simply has no
-     * personal-allowance data. Crediting it with the allowance total the sheet's figure implies
-     * brings the two into line, which is the proof that this is a missing-input problem and not a
-     * formula problem.
-     *
-     * <p>Operational consequence: {@code PayrollTaxAllowanceInput}'s 16 fields must be populated
-     * per employee from the accountant's records before the engine's tax column can be trusted.
-     */
+    /** The tax gap, stated rather than hidden. Operational consequence: PayrollTaxAllowanceInput's 16 fields must
+     * be populated per employee from the accountant's records before the engine's tax column can be trusted. */
     @Test
     void withholdingTaxDependsOnAllowancesThatTheSheetDoesNotCarry() {
         SheetRow row = sheetRow("จริญญา");
@@ -175,33 +156,21 @@ class PayrollExcelReconciliationTest {
             .withFailMessage("with no allowance data the engine should over-withhold versus the sheet")
             .isGreaterThan(new BigDecimal(row.tax()));
 
-        // Directional proof that this is a missing-input problem, not a formula problem: feeding
-        // the engine allowance data moves its withholding down toward the accountant's figure.
-        // The exact reconstruction is not attempted here — each allowance field carries its own
-        // statutory cap, so the accountant's total cannot be expressed as a single number.
+        // Directional proof that this is a missing-input problem, not a formula problem: feeding the engine allowance
+        // data moves its withholding down toward the accountant's figure.
         PayrollClassifiedCalculation withSomeAllowances = calculateForMonth(row, allowancesTotalling(new BigDecimal("60000")), 1);
         assertThat(withSomeAllowances.withholdingTax())
             .withFailMessage("allowance data should reduce the engine's withholding")
             .isLessThan(withNoAllowances.withholdingTax());
     }
 
-    /**
-     * ค่าตอบแทนกรรมการ (director remuneration, sheet column G) is NOT เงินเดือน.
-     *
-     * <p>In the workbook the five directors have column G filled and D/H (salary) empty, the same
-     * amount every month, and — decisively — <strong>no social security row at all</strong>.
-     * Director remuneration is not wages under the Social Security Act, so no contribution is due.
-     * Employees, by contrast, all carry 875.
-     *
-     * <p>The engine has no concept of this when director pay is (mis-)entered as ordinary salary.
-     * {@code ssoIncluded(SALARY)} defaults TRUE, so a director whose remuneration is stored as their
-     * salary is charged 875 a month that the accountant does not charge — the company over-deducts,
-     * and the SSO filing disagrees with the payroll.
-     */
+    /** ค่าตอบแทนกรรมการ (director remuneration, sheet column G) is NOT เงินเดือน. In the workbook the five
+     * directors have column G filled and D/H (salary) empty, the same amount every month, and — decisively — no
+     * social security row at all. */
     @Test
     void directorRemunerationEnteredAsSalaryWronglyChargesSocialSecurity() {
-        // กัลยาณี, May 2026: G = 150,000, no salary, no SSO in the sheet. Entered here AS salary (the
-        // historical mis-entry this test demonstrates), so SALARY's default-TRUE SSO inclusion fires.
+        // กัลยาณี, May 2026: G = 150,000, no salary, no SSO in the sheet. Entered here AS salary (the historical
+        // mis-entry this test demonstrates), so SALARY's default-TRUE SSO inclusion fires.
         PayrollClassifiedCalculation asSalary = calculateClassified(
             new BigDecimal("150000"), BigDecimal.ZERO, BigDecimal.ZERO, true, PayrollTaxAllowanceInput.empty(), 5);
 
@@ -211,18 +180,9 @@ class PayrollExcelReconciliationTest {
         assertThat(asSalary.grossEarnings()).isEqualByComparingTo(new BigDecimal("150000"));
     }
 
-    /**
-     * The workaround that happens to be correct, recorded so it is a deliberate choice rather than
-     * an accident: enter director remuneration as พิเศษ 1 (an allowance) with a ZERO base salary,
-     * AND explicitly exclude that slot from the SSO wage base. Gross is unchanged and social
-     * security correctly falls to zero.
-     *
-     * <p>It is still a workaround. The modern, correct path is the dedicated {@code
-     * DIRECTOR_REMUNERATION} component (SSO-excluded by default, see {@code
-     * PayrollAllowanceDirectorNonTaxableIntegrationTest}) — this test pins the OLD workaround
-     * specifically, because nothing stops HR from typing the figure into an ordinary allowance slot
-     * instead and forgetting to flip its SSO tick, silently over-deducting.
-     */
+    /** The workaround that happens to be correct, recorded so it is a deliberate choice rather than an accident:
+     * enter director remuneration as พิเศษ 1 (an allowance) with a ZERO base salary, AND explicitly exclude that
+     * slot from the SSO wage base. */
     @Test
     void directorRemunerationEnteredAsAnAllowanceMatchesTheSheet() {
         PayrollClassifiedCalculation asAllowance = calculateClassified(
@@ -267,28 +227,18 @@ class PayrollExcelReconciliationTest {
         // (gradual for REGULAR_REPROJECT, immediate for EXTRA_CUMULATIVE_ACTUAL, and the month each
         // one first reaches zero) is unaffected by rounding.
 
-        // REGULAR_REPROJECT (ข้อ 1(4)): annualised x months remaining, so it decays gradually and is
-        // still withholding something through May; zero only from June (measured).
+        // REGULAR_REPROJECT (ข้อ 1(4)): annualised x months remaining, so it decays gradually and is still withholding
+        // something through May; zero only from June (measured).
         assertDecaysToZeroWithNoYearToDate(row, PayrollTaxTreatment.REGULAR_REPROJECT,
             new BigDecimal("1204.00"), new BigDecimal("269.00"), 6);
 
-        // EXTRA_CUMULATIVE_ACTUAL (ข้อ 1(6)): actual amount, never multiplied out, so there is no
-        // projection to shrink gradually -- it is already zero by March (measured).
+        // EXTRA_CUMULATIVE_ACTUAL (ข้อ 1(6)): actual amount, never multiplied out, so there is no projection to shrink
+        // gradually -- it is already zero by March (measured).
         assertDecaysToZeroWithNoYearToDate(row, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL,
             new BigDecimal("915.00"), BigDecimal.ZERO, 3);
     }
 
-    /**
-     * Drives January, May, August, and the month immediately before {@code firstZeroMonth}, then
-     * asserts: January is pinned to the exact figure named by {@code expectedJanuary}; withholding
-     * never rises January→May→August (the direction the migration hazard runs); May is pinned to
-     * {@code expectedMay} (which may itself be zero, for the classification that has already
-     * collapsed by then); the month before the pinned zero-point is still withholding something
-     * (so the pin cannot be satisfied by an engine that withholds nothing all year); and the pinned
-     * month is exactly zero. Wrong-way-round by construction: an engine that stopped decaying, or
-     * that reached zero on a DIFFERENT month than the one pinned here, fails one of these, not just
-     * the ones that happen to already be true.
-     */
+    /** Checks expected monthly withholding decays to its first zero month when year-to-date data is absent. */
     private void assertDecaysToZeroWithNoYearToDate(
             SheetRow row, PayrollTaxTreatment treatment,
             BigDecimal expectedJanuary, BigDecimal expectedMay, int firstZeroMonth) {
@@ -371,11 +321,9 @@ class PayrollExcelReconciliationTest {
             .isEqualByComparingTo(january.withholdingTax());
     }
 
-    /**
-     * An HR override REPLACES the withheld amount outright, so a satang override would put a satang
-     * straight back onto the filing and the transfer file. 1315.60 is not hypothetical — it is the
-     * ป.96 correction typed for ชนิดา ทองเทพ in the August 2026 run, before the whole-baht rule.
-     */
+    /** An HR override REPLACES the withheld amount outright, so a satang override would put a satang straight back
+     * onto the filing and the transfer file. 1315.60 is not hypothetical — it is the ป.96 correction typed for
+     * ชนิดา ทองเทพ in the August 2026 run, before the whole-baht rule. */
     @Test
     void aSatangWithholdingTaxOverrideIsRoundedToWholeBahtToo() {
         SheetRow row = sheetRow("จริญญา");
@@ -395,12 +343,8 @@ class PayrollExcelReconciliationTest {
         return calculateForMonth(row, allowances, month, PayrollTaxTreatment.REGULAR_REPROJECT);
     }
 
-    /**
-     * Same as the 3-arg overload, but with the พิเศษ block's classification left open rather than
-     * hardcoded to {@code REGULAR_REPROJECT}. Added for {@link
-     * #anEmptyYearToDateUnderWithholdsAndReachesZeroLateInTheYear()}, which must drive the
-     * mid-year-first-run hazard under more than one classification -- see that test's own javadoc.
-     */
+    /** Same as the 3-arg overload, but with the พิเศษ block's classification left open rather than hardcoded to
+     * REGULAR_REPROJECT. */
     private PayrollClassifiedCalculation calculateForMonth(
             SheetRow row, PayrollTaxAllowanceInput allowances, int month, PayrollTaxTreatment specialPayTreatment) {
         // The whole พิเศษ block collapsed into slot 1 (only the total matters for the maths),
@@ -458,16 +402,15 @@ class PayrollExcelReconciliationTest {
         amounts.put(PayrollComponent.DIRECTOR_REMUNERATION, directorRemuneration);
 
         Map<PayrollComponent, PayrollTaxTreatment> treatments = new EnumMap<>(PayrollComponent.class);
-        // SALARY is auto-REGULAR_REPROJECT (PayrollClassifiedCalculationInput#treatmentOf) -- no
-        // entry needed here.
+        // SALARY is auto-REGULAR_REPROJECT (PayrollClassifiedCalculationInput#treatmentOf) -- no entry needed here.
         treatments.put(PayrollComponent.SPECIAL_PAY_1, specialPayTreatment);
         treatments.put(PayrollComponent.DIRECTOR_REMUNERATION, PayrollTaxTreatment.REGULAR_REPROJECT);
 
         Map<PayrollComponent, Boolean> sso = new EnumMap<>(PayrollComponent.class);
         sso.put(PayrollComponent.SALARY, true);
         sso.put(PayrollComponent.SPECIAL_PAY_1, ssoIncludeSpecialPay1);
-        // DIRECTOR_REMUNERATION intentionally absent -> excluded, matching the V95 SSO-inclusion
-        // default and the Social Security Act (director fees are not wages).
+        // DIRECTOR_REMUNERATION intentionally absent -> excluded, matching the V95 SSO-inclusion default and the
+        // Social Security Act (director fees are not wages).
 
         return calculator.calculateClassified(new PayrollClassifiedCalculationInput(
             1L,

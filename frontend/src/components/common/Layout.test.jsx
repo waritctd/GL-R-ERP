@@ -19,9 +19,8 @@ describe('Panel', () => {
     expect(panel.className).toContain('bg-surface');
     expect(panel.className).toContain('border-border');
     expect(panel.className).toContain('rounded-md');
-    // Item 3 (owner-approved polish): cards are border-only now — a
-    // `shadow-sm` alongside the border was visually redundant at that
-    // token's 1px/3%-opacity value. See Layout.jsx's Panel doc comment.
+    // Item 3 (owner-approved polish): cards are border-only now — a `shadow-sm` alongside the border was visually
+    // redundant at that token's 1px/3%-opacity value. See Layout.jsx's Panel doc comment.
     expect(panel.className).not.toContain('shadow-sm');
   });
 
@@ -46,15 +45,14 @@ describe('Panel', () => {
     const header = screen.getByRole('heading', { name: 'สิ่งที่ต้องทำ' }).closest('div');
     expect(header?.className).toContain('px-5');
     expect(header?.className).toContain('border-b');
-    // The card lends no padding in this mode, so the header must not also carry
-    // the default bottom margin — it would push the rule away from the title.
+    // The card lends no padding in this mode, so the header must not also carry the default bottom margin — it
+    // would push the rule away from the title.
     expect(header?.className).toContain('mb-0');
   });
 
   it('does not give a bordered header to a panel that merely zeroes its padding', () => {
-    // The old API inferred "flush" by regex-sniffing `p-0` out of `className`,
-    // so any caller zeroing padding for an unrelated reason silently acquired a
-    // rule under its title. `flush` is now the only way to ask for that.
+    // The old API inferred "flush" by regex-sniffing `p-0` out of `className`, so any caller zeroing padding for
+    // an unrelated reason silently acquired a rule under its title. `flush` is now the only way to ask for that.
     render(
       <Panel title="สิ่งที่ต้องทำ" className="!p-0">
         <p>เนื้อหา</p>
@@ -97,32 +95,27 @@ describe('StatGrid', () => {
     expect(screen.getByText('การ์ด 2')).toBeTruthy();
     expect(grid.className).toContain('grid-cols-4');
     expect(grid.className).toContain('nav-drawer:grid-cols-2');
-    // ≤720px stays 2-up (not a single stacked column) — a single column was
-    // forcing users to scroll past several screens of stat tiles before
-    // reaching real content.
+    // ≤720px stays 2-up (not a single stacked column) — a single column was forcing users to scroll past several
+    // screens of stat tiles before reaching real content.
     expect(grid.className).toContain('mobile:grid-cols-2');
   });
 });
 
-// jsdom has no layout engine, so none of this can assert the geometry the
-// component exists to produce — every rect is 0×0 here. What it CAN pin is the
-// contract that produces it: the classes are on the rendered element, and the
-// label association is the right one. The measured geometry these classes
-// produce is recorded in Layout.jsx's own comment.
+// jsdom has no layout engine, so none of this can assert the geometry the component exists to produce — every
+// rect is 0×0 here. What it CAN pin is the contract that produces it: the classes are on the rendered element,
+// and the label association is the right one.
 describe('FilterField', () => {
   it('can shrink below its content and takes a full line on mobile', () => {
     render(<FilterField label="จากวันที่" data-testid="f"><input type="date" readOnly value="2026-08-10" /></FilterField>);
     const field = screen.getByTestId('f');
 
-    // The bug this component exists to remove: a flex item's automatic minimum
-    // size is its content's min-content width, so a field wrapping a native
-    // date control could not shrink and pushed the row out of the bar on iOS.
+    // The bug this component exists to remove: a flex item's automatic minimum size is its content's min-content
+    // width, so a field wrapping a native date control could not shrink and pushed the row out of the bar on iOS.
     expect(field.className).toContain('min-w-0');
     // One field per line at ≤720px — equal widths, one label x-position.
     expect(field.className).toContain('mobile:basis-full');
-    // A shared floor above mobile, and deliberately NO `grow`: a lone wrapped
-    // field would otherwise absorb its whole line (measured 565px beside 218px
-    // siblings at 768px), which is the raggedness this replaces.
+    // A shared floor above mobile, and deliberately NO `grow`: a lone wrapped field would otherwise absorb its
+    // whole line (measured 565px beside 218px siblings at 768px), which is the raggedness this replaces.
     expect(field.className).toContain('basis-[190px]');
     expect(field.className.split(/\s+/)).not.toContain('grow');
   });
@@ -144,9 +137,8 @@ describe('FilterField', () => {
       </FilterField>,
     );
 
-    // Wrong-way-round on purpose: the risk is the name landing on a BUTTON, or
-    // on nothing, because a <label> wrapping three controls is ambiguous. That
-    // is what broke AttendancePage's findByLabelText('วันที่').
+    // Wrong-way-round on purpose: the risk is the name landing on a BUTTON, or on nothing, because a <label>
+    // wrapping three controls is ambiguous. That is what broke AttendancePage's findByLabelText('วันที่').
     const named = screen.getByLabelText('วันที่');
     expect(named.tagName).toBe('INPUT');
     expect(named.getAttribute('type')).toBe('date');
@@ -156,14 +148,8 @@ describe('FilterField', () => {
   });
 });
 
-// A flush Panel is what DataTable renders every table into, and those tables carry a
-// `nav-drawer:min-w-[Npx]` floor. A minimum wider than the card, inside a box that clips both axes
-// and scrolls neither, does not overflow — it disappears, with no scrollbar and no page overflow to
-// hint anything is missing. Measured on main at 768px: /leave lost 280px, /employee-requests 238px,
-// /profile 198px, /attendance 158px, all unreachable by any gesture, and the columns that vanish
-// are the rightmost — where these tables put status and row actions.
-//
-// jsdom cannot see any of that (no layout engine), so this pins the contract that produces it.
+// A flush Panel is what DataTable renders every table into, and those tables carry a `nav-drawer:min-w-[Npx]`
+// floor. jsdom cannot see any of that (no layout engine), so this pins the contract that produces it.
 describe('Panel flush overflow', () => {
   it('scrolls horizontally instead of clipping, while still clipping vertically for the card radius', () => {
     render(<Panel flush data-testid="p"><div>ตาราง</div></Panel>);
@@ -172,11 +158,11 @@ describe('Panel flush overflow', () => {
 
     // The whole point: a table wider than the card must be reachable.
     expect(classes).toContain('overflow-x-auto');
-    // ...and `overflow-hidden` must NOT come back. It is the exact regression this replaces, and
-    // it reads as harmless.
+    // ...and `overflow-hidden` must NOT come back. It is the exact regression this replaces, and it reads as
+    // harmless.
     expect(classes).not.toContain('overflow-hidden');
-    // Vertical stays clipped — that is what makes the corners follow the radius, and keeping it
-    // means this change is strictly a widening: nothing visible before becomes clipped now.
+    // Vertical stays clipped — that is what makes the corners follow the radius, and keeping it means this change
+    // is strictly a widening: nothing visible before becomes clipped now.
     expect(classes).toContain('overflow-y-hidden');
   });
 
@@ -189,30 +175,8 @@ describe('Panel flush overflow', () => {
     expect(classes).not.toContain('overflow-y-hidden');
   });
 
-  // ── THE ONE CALLER THAT OVERRIDES THIS, AND WHY IT SURVIVES ────────────────
-  // PayrollPage passes `panelClassName="max-h-[min(68vh,760px)] overflow-auto"` and is the only
-  // user of DataTable's `stickyHeader`. Its panel therefore needs a real VERTICAL scrollport —
-  // exactly what the flush default now declines to give.
-  //
-  // It works because `Panel` merges through `cn()` (twMerge ∘ clsx), and tailwind-merge treats the
-  // `overflow-auto` shorthand as conflicting with both longhands, so they are dropped:
-  //
-  //   cn(base, 'overflow-x-auto overflow-y-hidden', 'max-h-[…] overflow-auto')
-  //     -> 'base max-h-[…] overflow-auto'
-  //
-  // Verified in the browser on /payroll: the rendered class list carries neither longhand, and the
-  // panel computes overflow-x auto / overflow-y auto / max-height 612px with sticky descendants
-  // present and working.
-  //
-  // THE FRAGILITY THIS TEST EXISTS FOR: if anyone "simplifies" Panel to string concatenation
-  // instead of `cn`, both longhands stay in the list, `overflow-y-hidden` can win by emission
-  // order, and payroll silently loses vertical scrolling and its sticky header. Nothing else in
-  // the suite would notice — which is precisely why it is asserted here.
-  //
-  // (Credit: the sticky reasoning came from a parallel session. Their first version of it said no
-  // flush-Panel caller has a sticky descendant; that is false — PayrollPage has them. The reason
-  // this change is safe is not "no sticky children exist", it is that `overflow-y: hidden` gives
-  // a flush Panel no vertical scrollport, so no sticky child's nearest scroll container moves.)
+  // THE ONE CALLER THAT OVERRIDES THIS, AND WHY IT SURVIVES ──────────────── PayrollPage passes
+  // `panelClassName="max-h-[min(68vh,760px)] overflow-auto"` and is the only user of DataTable's `stickyHeader`.
   it('lets a caller override the flush overflow wholesale, so PayrollPage keeps its scrollport', () => {
     render(
       <Panel flush data-testid="p" className="max-h-[min(68vh,760px)] overflow-auto">
@@ -223,8 +187,8 @@ describe('Panel flush overflow', () => {
 
     expect(classes).toContain('overflow-auto');
     expect(classes).toContain('max-h-[min(68vh,760px)]');
-    // Wrong-way-round on purpose: the failure is the longhand SURVIVING the merge and clamping
-    // the vertical axis back shut.
+    // Wrong-way-round on purpose: the failure is the longhand SURVIVING the merge and clamping the vertical axis
+    // back shut.
     expect(classes).not.toContain('overflow-y-hidden');
     expect(classes).not.toContain('overflow-x-auto');
   });

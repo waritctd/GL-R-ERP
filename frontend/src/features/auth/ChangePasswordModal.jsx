@@ -52,12 +52,9 @@ const changePasswordFormSchema = z.object({
   }
 });
 
-/**
- * Self-service password change. Used in two modes:
- *  - forced: shown as a blocking gate when the session principal has
- *    mustChangePassword = true (no dismiss; only "change" or "logout").
- *  - optional: dismissable, launched voluntarily by the user.
- */
+/** Self-service password change. Used in two modes: - forced: shown as a blocking gate when the session
+ * principal has mustChangePassword = true (no dismiss; only "change" or "logout"). - optional: dismissable,
+ * launched voluntarily by the user. */
 export function ChangePasswordModal({ forced = false, loading = false, onSubmit, onClose, onLogout }) {
   const panelRef = useRef(null);
   const previouslyFocused = useRef(null);
@@ -82,9 +79,9 @@ export function ChangePasswordModal({ forced = false, loading = false, onSubmit,
     : errors.newPassword?.message === PASSWORD_REUSED_MESSAGE
       ? PASSWORD_REUSED_MESSAGE
       : '';
-  // The confirm field can carry either the required error (shown inline) or the
-  // mismatch error (shown in the form-level formError banner below); render only
-  // the required message inline to avoid duplicating the mismatch message.
+  // The confirm field can carry either the required error (shown inline) or the mismatch error (shown in the
+  // form-level formError banner below); render only the required message inline to avoid duplicating the
+  // mismatch message.
   const confirmPasswordFieldError = errors.confirmPassword?.message === CONFIRM_PASSWORD_REQUIRED_MESSAGE
     ? CONFIRM_PASSWORD_REQUIRED_MESSAGE
     : undefined;

@@ -322,10 +322,8 @@ class AttendanceControllerTest {
         verifyNoInteractions(attendanceService);
     }
 
-    // Controller-level wiring only: no role gate to prove here (see the endpoint's own javadoc for
-    // why), month parsing, and the response headers/body. AttendanceMonthlySummaryServiceTest covers
-    // the aggregation rules and AttendanceMonthlySummaryIntegrationTest covers scope enforcement
-    // against a real database -- neither of those is re-tested with this mocked service.
+    // Controller-level wiring only: no role gate to prove here (see the endpoint's own javadoc for why), month
+    // parsing, and the response headers/body.
     @Test
     void exportsMonthlySummaryForAnyAuthenticatedCaller() throws Exception {
         byte[] workbook = {1, 2, 3};

@@ -3,20 +3,6 @@ import { api } from './mockApi.js';
 
 // GLA-129 branch 1 review round 1 (2026-09-23): "mock tests must pin the gates" — the same rule
 // mockApi.remainingInvoiceAuthz.test.js/mockApi.gla118PaymentAuthz.test.js already state at length.
-// Before this file, requireBillingNoteWriteGate/requireBillingNoteReadAccess (mirrors
-// BillingNoteService#hasWriteGrant/#requireReadAccess) had ZERO mock-side pinning — a future edit
-// could silently drift back to more-permissive-than-production, or drop the existence-oracle
-// ordering fix (F2/S7), with nothing here to go red. Per CLAUDE.md, this is NOT authz evidence on
-// its own — the mock's authorization is never authoritative, see
-// BillingNoteServiceIntegrationTest (backend/src/test/java/th/co/glr/hr/billing/, including its
-// own wrong-way-round suite) for the real evidence — it only proves the mock's plumbing matches
-// the rules it claims to mirror.
-//
-// Customer 6 / ticket 19 (demoSales.js, SALES1-owned, ISSUED deposit notice 2026-08-11) is the
-// one seed customer wired to a real candidate — see mockCustomers' own comment on why. SALES1 is
-// sales@glr.co.th (role quick-login `sales` resolves to the FIRST active `sales`-role db.users
-// row, which is this one); sales2@glr.co.th is a non-owning sales rep, same as the sibling
-// remaining-invoice test's OTHER_SALES_REP.
 
 const GRANT_HOLDER = { email: 'employee@glr.co.th', password: 'demo1234' }; // role employee, canIssueBillingNote: true
 const NON_OWNING_SALES = { email: 'sales2@glr.co.th', password: 'demo1234' };
@@ -29,14 +15,9 @@ async function loginGrantHolder() {
   await api.auth.login(GRANT_HOLDER);
 }
 
-// The seed carries exactly ONE real ISSUED source document under a customer row (ticket 19's
-// deposit notice, via customer 6) — every earlier test in this file that needs a claimable
-// candidate consumes it and never releases it, so a LATER test cannot reuse it (state persists
-// across it()s in this module, same as the sibling remaining-invoice test file). Minting a fresh
-// storedRemainingInvoices chain on ticket 19 (SALES1-owned, real approvedPrice items, status
-// quotation_issued — createDraft's own precondition) gives each test its own independent
-// candidate instead. A distinct `quotationId` tag per call keeps the chains from colliding with
-// each other (storedRemainingInvoices' own one-live-per-chain rule).
+// The seed carries exactly ONE real ISSUED source document under a customer row. Minting a fresh
+// storedRemainingInvoices chain on ticket 19 (SALES1-owned, real approvedPrice items, status quotation_issued
+// — createDraft's own precondition) gives each test its own independent candidate instead.
 async function mintFreshRemainingInvoiceCandidate(quotationId) {
   await loginRole('sales'); // resolves to SALES1, ticket 19's owner
   const { remainingInvoice: draft } = await api.storedRemainingInvoices.createDraft(19, { quotationId });
@@ -66,9 +47,9 @@ describe('mockApi.billingNotes — write gate (mirrors BillingNoteService#hasWri
     expect(byGrant.createdByName).toBeTruthy();
   });
 
-  // F2/S7 (matching BillingNoteService's own fix): the write gate must run BEFORE the existence
-  // lookup, so an unauthorized caller cannot tell "no such note" (404) from "wrong state" (409)
-  // without ever passing the gate. Review round 1 caught this reversed for all seven methods.
+  // F2/S7 (matching BillingNoteService's own fix): the write gate must run BEFORE the existence lookup, so an
+  // unauthorized caller cannot tell "no such note" (404) from "wrong state" (409) without ever passing the gate.
+  // Review round 1 caught this reversed for all seven methods.
   it('update/issue/revise/cancel/markReceived/markSettled/remove refuse a non-grant role with 403 even against a BOGUS id (gate before lookup)', async () => {
     const bogusId = 999999;
     for (const role of NO_GRANT_ROLES) {
@@ -111,10 +92,8 @@ describe('mockApi.billingNotes — createDraft leaves no orphan on a line-valida
     expect(after).toBe(before); // no orphan DRAFT with zero lines
   });
 
-  // Distinct from the zero-amount case above: 0 is rejected whether or not the cent-rounding step
-  // runs at all, so it cannot catch a regression in that specific line. A sub-satang amount only
-  // 409s if it is rounded to the cent FIRST (mirrors setScale(2, HALF_UP).signum() <= 0) —
-  // reverting to a bare `manualAmount > 0` check would let this one through.
+  // Distinct from the zero-amount case above: 0 is rejected whether or not the cent-rounding step runs at all,
+  // so it cannot catch a regression in that specific line.
   it('a sub-satang MANUAL amount (0.004) rounds to zero and is refused', async () => {
     await loginGrantHolder();
     await expect(api.billingNotes.createDraft(6, {
@@ -203,26 +182,23 @@ describe('mockApi.billingNotes — double-billing claim tracking', () => {
       lines: [{ sourceType: 'REMAINING_INVOICE', sourceId: riCandidate.sourceId }],
     })).rejects.toMatchObject({ status: 409 });
 
-    // revise() hands the claim to the correction draft, not to the open pool — mirrors
-    // releaseLines(id) immediately followed by replaceLines(newId, copied) inside the SAME
-    // transaction, so the source is never actually free mid-revise. It shows as alreadyBilled,
-    // now blocked by the CORRECTION rather than by the original issued note.
+    // revise() hands the claim to the correction draft, not to the open pool — mirrors releaseLines(id)
+    // immediately followed by replaceLines(newId, copied) inside the SAME transaction, so the source is never
+    // actually free mid-revise.
     const { billingNote: correction } = await api.billingNotes.revise(issued.id);
     expect(correction.status).toBe('DRAFT');
     expect(correction.lines).toHaveLength(1);
     const { alreadyBilled: duringCorrection } = await api.billingNotes.candidates(6);
     expect(duringCorrection.some((c) => c.sourceId === riCandidate.sourceId && c.blockedByNoteId === correction.id)).toBe(true);
 
-    // Dropping the line from the correction (update() whole-value-replaces lines) frees the
-    // source — the predecessor's own claim was already released at revise() time, so nothing
-    // else still holds it. This is the scenario release existed for: "revise note N, then update
-    // the correction to drop a line — the dropped source must become billable again immediately."
+    // Dropping the line from the correction (update() whole-value-replaces lines) frees the source — the
+    // predecessor's own claim was already released at revise() time, so nothing else still holds it.
     await api.billingNotes.update(correction.id, { lines: [] });
     const { candidates: afterDrop } = await api.billingNotes.candidates(6);
     expect(afterDrop.some((c) => c.sourceId === riCandidate.sourceId)).toBe(true);
 
-    // Re-claim it on the correction, then abandon the correction entirely — restores the
-    // predecessor's own claim (mirrors restoreLinesToIssued).
+    // Re-claim it on the correction, then abandon the correction entirely — restores the predecessor's own claim
+    // (mirrors restoreLinesToIssued).
     await api.billingNotes.update(correction.id, { lines: [{ sourceType: 'REMAINING_INVOICE', sourceId: riCandidate.sourceId }] });
     await api.billingNotes.remove(correction.id);
     const { candidates: afterAbandon, alreadyBilled: blockedAfterAbandon } = await api.billingNotes.candidates(6);
@@ -230,11 +206,9 @@ describe('mockApi.billingNotes — double-billing claim tracking', () => {
     expect(blockedAfterAbandon.some((c) => c.sourceId === riCandidate.sourceId && c.blockedByNoteId === issued.id)).toBe(true);
   });
 
-  // Review round 2 (2026-09-23): remove() used to restore the predecessor's claim
-  // UNCONDITIONALLY, which let it double-claim a source a THIRD note had grabbed in the meantime
-  // — a sequential path a UI user can walk (no concurrency needed), and the exact
-  // more-permissive-than-production direction CLAUDE.md warns about. Mirrors
-  // restoreLinesToIssued's own DataIntegrityViolationException -> 409 mapping.
+  // Review round 2: remove used to restore the predecessor's claim UNCONDITIONALLY, which let it double-claim a
+  // source a THIRD note had grabbed in the meantime — a sequential path a UI user can walk, and the exact
+  // more-permissive-than-production direction CLAUDE.md warns about.
   it('remove() on an abandoned correction refuses to restore a claim a THIRD note has since taken, and changes nothing', async () => {
     const ri = await mintFreshRemainingInvoiceCandidate(303);
     await loginGrantHolder();
@@ -255,8 +229,8 @@ describe('mockApi.billingNotes — double-billing claim tracking', () => {
       lines: [{ sourceType: 'REMAINING_INVOICE', sourceId: riCandidate.sourceId }],
     });
 
-    // Abandoning the correction must now refuse — restoring issued's claim would double-claim
-    // the source the interloper already holds.
+    // Abandoning the correction must now refuse — restoring issued's claim would double-claim the source the
+    // interloper already holds.
     await expect(api.billingNotes.remove(correction.id)).rejects.toMatchObject({ status: 409 });
 
     // Nothing changed: the correction draft still exists, the interloper still holds the claim.

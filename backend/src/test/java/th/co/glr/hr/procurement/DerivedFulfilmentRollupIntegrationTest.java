@@ -95,19 +95,9 @@ import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * Real-DB coverage for the factory-PO -&gt; ticket import-status rollup ({@code
- * TicketRepository#deriveImportStatus}, {@code TicketService#applyPurchaseOrderRollup}, and the
- * refusal guard the ticket-level {@code markShipping}/{@code markGoodsReceived} setters now carry).
- * This is a permission/behaviour change (a role that previously succeeded now gets a 409 on a
- * PO-tracked deal), so per CLAUDE.md it ships as a real-DB integration test through the real
- * services, never mocks — see {@code AbstractPostgresIntegrationTest}.
- *
- * <p>Fixture wiring is copied from {@link ProcurementServiceIntegrationTest} (read that class
- * first): the same {@code @BeforeEach} hand-wiring of Steps 1-7's real services, and the same
- * {@code driveToProcurement}/{@code driveToQuotationIssuedNotYetAccepted} two-factory fixture,
- * which is exactly what a rollup test needs — TWO factory purchase orders on ONE ticket.
- */
+/** Real-DB coverage for the factory-PO -> ticket import-status rollup (TicketRepository#deriveImportStatus,
+ * TicketService#applyPurchaseOrderRollup, and the refusal guard the ticket-level
+ * markShipping/markGoodsReceived setters now carry). */
 class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -157,8 +147,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         factoryQuoteRepository = factoryQuotes;
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
@@ -167,8 +157,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
             landedCostCalculator);
 
         costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         decisionRepository = new PricingDecisionRepository(jdbc);
@@ -211,10 +201,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
     private void insertFactory(String name) {
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Refusal guard — wrong-way-round: the caller must NOT be able to do the thing they
-    // shouldn't, and the row must NOT have changed, not merely that a throw happened.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Refusal guard — wrong-way-round: the caller must NOT be able to do the thing they shouldn't, and the row
+    // must NOT have changed, not merely that a throw happened.
 
     @Test
     void importCannotMarkGoodsReceivedWhileTheOtherFactoryIsStillShipping() {
@@ -233,8 +221,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThatThrownBy(() -> ticketService.markGoodsReceived(deal.ticketId, importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        // Not merely "did not become GOODS_RECEIVED" — pin the exact value the PO rollup already
-        // wrote (SHIPPING), proving the refused call really left the row untouched.
+        // Not merely "did not become GOODS_RECEIVED" — pin the exact value the PO rollup already wrote (SHIPPING),
+        // proving the refused call really left the row untouched.
         TicketSummaryDto after = tickets.findById(deal.ticketId).orElseThrow().summary();
         assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.SHIPPING);
     }
@@ -266,11 +254,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         List<FactoryPurchaseOrderDto> created = procurement.createPurchaseOrders(deal.pricingRequestId,
             new CreateFactoryPurchaseOrdersRequest(null), importActor);
         assertThat(created).hasSize(2);
-        // Neither PO has been progressed — both still OPEN, so the PO rollup itself currently
-        // asserts nothing (deriveImportStatus would return null). The refusal must fire anyway:
-        // it is unconditional on PO presence, not "only when the PO rollup disagrees" (design
-        // decision 4) — a ticket-level write that happens to agree by coincidence still bypasses
-        // the PO record as the source of truth.
+        // Neither PO has been progressed — both still OPEN, so the PO rollup itself currently asserts nothing
+        // (deriveImportStatus would return null).
 
         assertThatThrownBy(() -> ticketService.markShipping(deal.ticketId, importActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -279,9 +264,7 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.IR_ISSUED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The rollup itself.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void rollupMovesTicketToShippingWhenOnlyOneFactoryHasShipped() {
@@ -315,8 +298,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         TicketSummaryDto after = tickets.findById(deal.ticketId).orElseThrow().summary();
         assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
         assertThat(after.salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
-        // driveToProcurement always reaches DEPOSIT_PAID before issueImportRequest, so
-        // applyGoodsReceived's payment-track branch is exercised too, not just the fulfillment write.
+        // driveToProcurement always reaches DEPOSIT_PAID before issueImportRequest, so applyGoodsReceived's
+        // payment-track branch is exercised too, not just the fulfillment write.
         assertThat(after.paymentStatus()).isEqualTo("AWAITING_FINAL_PAYMENT");
         // A permanent event, not just the current status column — this is what
         // TicketService#warehouseDeliveryAvailable keys on to unlock WAREHOUSE-source delivery.
@@ -339,15 +322,13 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
 
         procurement.cancel(poB.id(), new CancelFactoryPurchaseOrderRequest("เปลี่ยนโรงงานใหม่"), importActor);
 
-        // B is now CANCELLED, i.e. no longer "live" — the only live PO (A) is RECEIVED, so the
-        // rollup completes even though the deal now has an unreceived PO on it (it just isn't live).
+        // B is now CANCELLED, i.e. no longer "live" — the only live PO (A) is RECEIVED, so the rollup completes even
+        // though the deal now has an unreceived PO on it (it just isn't live).
         TicketSummaryDto after = tickets.findById(deal.ticketId).orElseThrow().summary();
         assertThat(after.fulfillmentStatus()).isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The close-gate protection (delivery-axis firewall).
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void aLatePoMutationCannotRewriteFullyDelivered() {
@@ -363,35 +344,28 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThat(tickets.findById(deal.ticketId).orElseThrow().summary().fulfillmentStatus())
             .isEqualTo(FulfilmentStatus.GOODS_RECEIVED);
 
-        // V184: completeDelivery's gate transferred to {ceo, owning-rep} only -- salesActor, not
-        // importActor. See DeliveryAuthzIntegrationTest for the authz pin itself.
+        // V184: completeDelivery's gate transferred to {ceo, owning-rep} only -- salesActor, not importActor. See
+        // DeliveryAuthzIntegrationTest for the authz pin itself.
         TicketDto afterDelivery = ticketService.completeDelivery(
             deal.ticketId, new CompleteDeliveryRequest(null, null), salesActor);
         assertThat(afterDelivery.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
         // Both POs are now RECEIVED — a terminal (CLOSED) PO status, so neither
-        // recordShippingDetail/recordGoodsReceived/cancel can legitimately run again through
-        // ProcurementService (its own compare-and-set guards refuse a closed PO with 409, before
-        // ever reaching the rollup call). The only way left to exercise the exact scenario the
-        // delivery-axis firewall exists for — a rollup call arriving after the ticket has already
-        // left the import axis — is to call applyPurchaseOrderRollup directly, as the plan for
-        // this branch anticipates.
+        // recordShippingDetail/recordGoodsReceived/cancel can legitimately run again through ProcurementService (its
+        // own compare-and-set guards refuse a closed PO with 409, before ever reaching the rollup call).
         ticketService.applyPurchaseOrderRollup(deal.ticketId, importActor);
 
         TicketSummaryDto afterLateRollup = tickets.findById(deal.ticketId).orElseThrow().summary();
         assertThat(afterLateRollup.fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Non-regression: a deal with NO purchase orders keeps using the ticket-level setters.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void aStockOnlyDealWithNoPurchaseOrdersStillUsesTheTicketLevelSetters() {
         DealFixture deal = driveToProcurement(true);
-        // Deliberately never call procurement.createPurchaseOrders — zero rows in
-        // sales.factory_purchase_order for this ticket, confirmed via the real repository below,
-        // not assumed.
+        // Deliberately never call procurement.createPurchaseOrders — zero rows in sales.factory_purchase_order for
+        // this ticket, confirmed via the real repository below, not assumed.
         assertThat(tickets.hasLivePurchaseOrders(deal.ticketId)).isFalse();
 
         ticketService.markIrSent(deal.ticketId, importActor);
@@ -403,9 +377,7 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         assertThat(afterGoodsReceived.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The close gate itself, on a PO-tracked multi-factory deal.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void multiFactoryDealCanStillClose() {
@@ -446,10 +418,7 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         // ...and everything else about closing is made ready...
         ticketService.confirmFinalPayment(deal.ticketId, accountActor);
         insertInvoiceAttachment(deal.ticketId, accountUserId);
-        // ...but the goods were never delivered onward to the customer. deliveryGateComplete
-        // requires FULLY_DELIVERED specifically — GOODS_RECEIVED must not be accepted as
-        // "delivered" (see TicketService#deliveryGateComplete's own Javadoc: this predicate used
-        // to wrongly accept GOODS_RECEIVED too, and that was a real bug, not a style choice).
+        // ...but the goods were never delivered onward to the customer.
         assertThatThrownBy(() -> ticketService.confirmCloseReady(deal.ticketId, accountActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
@@ -467,19 +436,15 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
         return pos.stream().filter(po -> factoryName.equals(po.factoryName())).findFirst().orElseThrow();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Fixture helpers — copied from ProcurementServiceIntegrationTest (read that class for the
-    // full step-by-step rationale); a two-factory deal is what a PO rollup test needs, and
-    // driveToQuotationIssuedNotYetAccepted already produces exactly that.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Fixture helpers — copied from ProcurementServiceIntegrationTest (read that class for the full step-by-step
+    // rationale); a two-factory deal is what a PO rollup test needs, and driveToQuotationIssuedNotYetAccepted
+    // already produces exactly that.
 
     private record DealFixture(long ticketId, long pricingRequestId) {}
 
-    /** Drives a brand-new deal all the way to {@code DealStage.PROCUREMENT} via the REAL
-     * Steps 1-6 services: QUOTATION_ACCEPTED -&gt; confirmOrder -&gt; deposit notice issued -&gt;
-     * confirmDepositPaid -&gt; (optionally) issueImportRequest. Two items, two distinct
-     * factories, so downstream tests can assert "2 factories -&gt; 2 POs" without a second
-     * fixture. */
+    /** Drives a brand-new deal all the way to DealStage.PROCUREMENT via the REAL Steps 1-6 services:
+     * QUOTATION_ACCEPTED -> confirmOrder -> deposit notice issued -> confirmDepositPaid -> (optionally)
+     * issueImportRequest. */
     private DealFixture driveToProcurement(boolean issueImportRequest) {
         DealFixture deal = driveToQuotationIssuedNotYetAccepted(FACTORY_A, FACTORY_B);
         CustomerQuotationDto issued = quotationRepository.findByPricingRequest(deal.pricingRequestId).stream()
@@ -529,8 +494,8 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
             salesActor);
         long ticketId = created.summary().id();
 
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
         // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest itemA = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductIdA, null, "SCG", "Tile Rollup A", "SCG Tile Rollup A",
@@ -571,9 +536,9 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
             FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
             factoryQuoteService.markReadyForCosting(responded.id(), importActor);
         }
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the LAST factory quote is ready — Import no longer
-        // creates/recalculates/submits a costing of its own; the CEO's startReview below computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the LAST factory quote is ready — Import no longer creates/recalculates/submits a costing of its
+        // own; the CEO's startReview below computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -593,10 +558,9 @@ class DerivedFulfilmentRollupIntegrationTest extends AbstractPostgresIntegration
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

@@ -115,8 +115,8 @@ function LeadTimeInline({ row, editable, onSave, saving, showToast }) {
 
 export function ImportFulfilmentPage({ user, showToast }) {
   const queryClient = useQueryClient();
-  // Nav-gated to import/ceo; anyone here may advance. A read-only viewer (should one ever reach
-  // it) still gets the bars, just without the controls.
+  // Nav-gated to import/ceo; anyone here may advance. A read-only viewer (should one ever reach it) still gets
+  // the bars, just without the controls.
   const editable = user?.role === 'import' || user?.role === 'ceo';
   const [stepFilter, setStepFilter] = useState('ALL');
   const [search, setSearch] = useState('');
@@ -196,8 +196,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
               && !all.some((r) => r.status === 'DRAFT');
           }
         } catch {
-          // A failed confirmation read must not claim completion — fall through to the ordinary
-          // toast, same as "not GOODS_RECEIVED" would.
+          // A failed confirmation read must not claim completion — fall through to the ordinary toast, same as "not
+          // GOODS_RECEIVED" would.
           completesDeal = false;
         }
       }
@@ -259,8 +259,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
         return;
       }
       const factoryRows = query?.data ?? [];
-      // Only ISSUED rows are shipments this page tracks — a stray DRAFT (e.g. mid-creation on the
-      // deal page) is not this worklist's concern.
+      // Only ISSUED rows are shipments this page tracks — a stray DRAFT (e.g. mid-creation on the deal page) is not
+      // this worklist's concern.
       const issuedRows = factoryRows.filter((r) => r.status === 'ISSUED');
       if (issuedRows.length === 0) {
         // The legacy section is for the pre-V184 chain only — IR_ISSUED/IR_SENT/SHIPPING
@@ -310,9 +310,9 @@ export function ImportFulfilmentPage({ user, showToast }) {
         // computed just above).
         allReceived: ticket?.fulfillmentStatus === 'GOODS_RECEIVED'
           || (ticket?.fulfillmentStatus === 'PARTIALLY_DELIVERED' && received === rows.length
-            // A factory still in DRAFT is not received: Java's allFactoriesReceived requires every
-            // required factory to have an ISSUED row. (A required factory with no row at all is not
-            // visible to this list — the deal page shows it.)
+            // A factory still in DRAFT is not received: Java's allFactoriesReceived requires every required factory to
+            // have an ISSUED row. (A required factory with no row at all is not visible to this list — the deal page shows
+            // it.)
             && !factoryRows.some((r) => r.status === 'DRAFT')),
       });
     });

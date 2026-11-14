@@ -25,22 +25,13 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Issue #405 — real-DB coverage for the auto-computed INCENTIVE ladder + STOCK_BONUS. Per
- * CLAUDE.md, the config-generation-selection SQL ({@code effective_from <=} the payroll month)
- * and the stock-share join (a {@code GROUP BY ticket_id} subquery over
- * {@code sales.ticket_item}) cannot be proven by Mockito — a mocked repository would happily
- * "pass" while the SQL selected the wrong generation or mis-joined the stock share. Every test
- * here drives the real {@link CommissionRepository} against real Postgres and reads the result
- * back through the real {@link CommissionService#payrollReadySummary}, the same path HR's
- * payroll-ready screen and {@code PayrollService#commissionPayByEmployee} both use.
- */
+/** Issue #405 — real-DB coverage for the auto-computed INCENTIVE ladder + STOCK_BONUS. */
 class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate JULY_2026 = LocalDate.of(2026, 7, 1);
     private static final LocalDate AUGUST_2026 = LocalDate.of(2026, 8, 1);
     private static final LocalDate INVOICE_DATE = LocalDate.of(2026, 7, 15);
-    // 3,210,000.00 / 1.07 = 3,000,000.00 exactly -- lands precisely on the first INCENTIVE
-    // threshold with no rounding ambiguity.
+    // 3,210,000.00 / 1.07 = 3,000,000.00 exactly -- lands precisely on the first INCENTIVE threshold with no
+    // rounding ambiguity.
     private static final BigDecimal ACTUAL_RECEIVED_AT_FIRST_THRESHOLD = new BigDecimal("3210000.00");
 
     private CommissionRepository commissions;
@@ -76,11 +67,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
             999_555L, true, LocalDate.now(), false, null, false);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Fix-forward: a payroll month before 2026-08-01 gets ZERO incentive (no matching
-    // generation), the same real receipt in August gets the ladder. Proves the
-    // generation-selection SQL, not just the pure calculator method.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Fix-forward: a payroll month before 2026-08-01 gets ZERO incentive (no matching generation), the same real
+    // receipt in August gets the ladder. Proves the generation-selection SQL, not just the pure calculator method.
 
     @Test
     void julyMonth_getsZeroIncentive_augustMonthGetsLadder_forTheIdenticalReceipt() {
@@ -103,10 +91,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
             .isEqualByComparingTo(new BigDecimal("15000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Stock share: proves the real GROUP BY ticket_id join actually pro-rates a mixed ticket,
-    // and that a fully-imported ticket (qty_from_stock = 0) contributes zero.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Stock share: proves the real GROUP BY ticket_id join actually pro-rates a mixed ticket, and that a
+    // fully-imported ticket (qty_from_stock = 0) contributes zero.
 
     @Test
     void stockShareJoin_proRatesMixedTicket_andYieldsZeroForFullyImportedTicket() {
@@ -115,14 +101,14 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         long mixedRep = createEmployee("พนักงานขาย สต๊อคผสม", "mixed-stock@glr.co.th", "SA", "แผนกขาย");
         long importedRep = createEmployee("พนักงานขาย นำเข้าล้วน", "imported-stock@glr.co.th", "SA", "แผนกขาย");
 
-        // 40 of 100 qty from stock -> stockShare 0.4. ฿500,000 received x 0.4 = ฿200,000 stock
-        // receipts -> floor(200000 / 100000) x 1000 = ฿2,000.
+        // 40 of 100 qty from stock -> stockShare 0.4. ฿500,000 received x 0.4 = ฿200,000 stock receipts ->
+        // floor(200000 / 100000) x 1000 = ฿2,000.
         long mixedTicketId = createTicket(mixedRep);
         addTicketItem(mixedTicketId, new BigDecimal("100.00"), new BigDecimal("40.00"));
         seedApprovedStockLinkedCommission(mixedRep, mixedTicketId, new BigDecimal("500000.00"), AUGUST_2026);
 
-        // qty_from_stock = 0 across the board -> stockShare 0 -> zero stock receipts regardless
-        // of how much was received.
+        // qty_from_stock = 0 across the board -> stockShare 0 -> zero stock receipts regardless of how much was
+        // received.
         long importedTicketId = createTicket(importedRep);
         addTicketItem(importedTicketId, new BigDecimal("100.00"), BigDecimal.ZERO);
         seedApprovedStockLinkedCommission(importedRep, importedTicketId, new BigDecimal("500000.00"), AUGUST_2026);
@@ -134,14 +120,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         assertThat(importedSummary.stockBonusAmount()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Review fix (2026-08-02), wrong-way-round: a still-SUBMITTED receipt (nobody has approved
-    // it) must NOT contribute to the stock bonus, even though it has a real linked ticket with a
-    // real stock share. An earlier version of sumActiveStockActualReceived used a
-    // NOT IN ('VOID','REJECTED') filter that let this leak through -- proven here with the exact
-    // numbers the reviewer's real-DB probe found: ฿6,000 (wrong, includes the SUBMITTED receipt)
-    // vs. ฿1,000 (correct, APPROVED-only).
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Review fix (2026-08-02), wrong-way-round: a still-SUBMITTED receipt (nobody has approved it) must NOT
+    // contribute to the stock bonus, even though it has a real linked ticket with a real stock share.
 
     @Test
     void stockBonus_ignoresAStillSubmittedReceipt_reflectsOnlyTheApprovedOne() {
@@ -154,8 +134,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         addTicketItem(approvedTicketId, new BigDecimal("100.00"), new BigDecimal("100.00"));
         seedApprovedStockLinkedCommission(salesRepId, approvedTicketId, new BigDecimal("100000.00"), AUGUST_2026);
 
-        // SUBMITTED (never approved by anyone): ฿500,000 fully from stock on a DIFFERENT ticket.
-        // If this leaked in, receipts would be 600,000 -> 6 blocks -> ฿6,000. It must not.
+        // SUBMITTED (never approved by anyone): ฿500,000 fully from stock on a DIFFERENT ticket. If this leaked in,
+        // receipts would be 600,000 -> 6 blocks -> ฿6,000. It must not.
         long submittedTicketId = createTicket(salesRepId);
         addTicketItem(submittedTicketId, new BigDecimal("100.00"), new BigDecimal("100.00"));
         seedSubmittedStockLinkedCommission(salesRepId, submittedTicketId, new BigDecimal("500000.00"), AUGUST_2026);
@@ -166,10 +146,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         assertThat(summary.stockBonusAmount()).isNotEqualByComparingTo(new BigDecimal("6000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Config-gated OFF by default: the seeded V108 row (enabled = FALSE) pays zero until the
-    // CEO flips it, then pays once flipped -- same ticket/receipt, only the config row changes.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Config-gated OFF by default: the seeded V108 row (enabled = FALSE) pays zero until the CEO flips it, then
+    // pays once flipped -- same ticket/receipt, only the config row changes.
 
     @Test
     void stockBonus_staysZeroWithSeededDisabledConfig_andPaysOnceFlippedTrue() {
@@ -179,8 +157,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         addTicketItem(ticketId, new BigDecimal("100.00"), new BigDecimal("100.00")); // fully from stock
         seedApprovedStockLinkedCommission(salesRepId, ticketId, new BigDecimal("300000.00"), AUGUST_2026);
 
-        // Seeded config is enabled = FALSE -- must pay zero even though the stock share (100%)
-        // and receipts (฿300,000, three whole ฿100,000 blocks) would otherwise pay ฿3,000.
+        // Seeded config is enabled = FALSE -- must pay zero even though the stock share (100%) and receipts (฿300,000,
+        // three whole ฿100,000 blocks) would otherwise pay ฿3,000.
         SalesRepCommissionSummaryDto beforeEnable = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
         assertThat(beforeEnable.stockBonusAmount()).isEqualByComparingTo(BigDecimal.ZERO);
 
@@ -190,11 +168,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         assertThat(afterEnable.stockBonusAmount()).isEqualByComparingTo(new BigDecimal("3000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Double-count guard (transition safeguard): an approved manual INCENTIVE/STOCK_BONUS for
-    // the rep-month suppresses the auto-computed limb -- exactly one of each in the total, not
-    // two.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Double-count guard (transition safeguard): an approved manual INCENTIVE/STOCK_BONUS for the rep-month
+    // suppresses the auto-computed limb -- exactly one of each in the total, not two.
 
     @Test
     void manualIncentiveSuppression_exactlyOneIncentiveInTheTotal_notTwo() {
@@ -228,19 +203,14 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
 
         SalesRepCommissionSummaryDto summary = repSummaryFor(commissionService.payrollReadySummary(AUGUST_2026, hrActor), salesRepId);
 
-        // Auto-computed stock bonus (would be ฿3,000 here) is suppressed; only the manual
-        // ฿1,000 appears.
+        // Auto-computed stock bonus (would be ฿3,000 here) is suppressed; only the manual ฿1,000 appears.
         assertThat(summary.stockBonusAmount()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(summary.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("1000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Review fix (2026-08-02): the double-count guard only suppresses the auto limb for a
-    // STRICTLY POSITIVE summed manual amount (a replacement). A ZERO or NEGATIVE manual entry is
-    // a CORRECTION layered on top -- the auto limb must still compute, and the correction adds to
-    // it. The pre-fix guard treated "one exists" as suppression, so a -5,000 correction on top of
-    // a real 15,000 auto incentive would have paid -5,000 total instead of the correct 10,000.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Review fix (2026-08-02): the double-count guard only suppresses the auto limb for a STRICTLY POSITIVE summed
+    // manual amount (a replacement). A ZERO or NEGATIVE manual entry is a CORRECTION layered on top -- the auto
+    // limb must still compute, and the correction adds to it.
 
     @Test
     void negativeManualIncentive_isACorrection_autoLimbStillComputesAndCorrectionAdds() {
@@ -295,10 +265,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         assertThat(summary.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("-1000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Authz regression: the new fields ride the existing payrollReadySummary response -- no new
-    // role gate was added or widened. A non-payroll role still 403s.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Authz regression: the new fields ride the existing payrollReadySummary response -- no new role gate was
+    // added or widened. A non-payroll role still 403s.
 
     @Test
     void payrollReadySummary_stillForbiddenForNonPayrollRole_newFieldsOpenNoNewPath() {
@@ -311,9 +279,7 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private SalesRepCommissionSummaryDto repSummaryFor(PayrollCommissionSummaryDto summary, long salesRepId) {
         return summary.salesReps().stream()
@@ -356,12 +322,9 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
                 .addValue("qtyFromStock", qtyFromStock));
     }
 
-    /**
-     * Seeds one real, fully APPROVED (manager + CEO) unlinked SALE commission — mirrors {@code
-     * CommissionCalcRefineIntegrationTest#seedCommissionRecord}/{@code
-     * ManualCommissionIntegrationTest#seedApprovedTierCommission}, parameterized by payroll month
-     * so the fix-forward test can seed the identical receipt into two different months.
-     */
+    /** Seeds one real, fully APPROVED unlinked SALE commission — mirrors
+     * CommissionCalcRefineIntegrationTest#seedCommissionRecord/ManualCommissionIntegrationTest#seedApprovedTierCommission,
+     * parameterized by payroll month so the fix-forward test can seed the identical receipt into two different months. */
     private long seedApprovedTierCommission(long salesRepId, BigDecimal actualReceived, LocalDate payrollMonth) {
         SubmitCommissionRequest request = new SubmitCommissionRequest(
             null, salesRepId, "INV-INCENTIVE-" + UUID.randomUUID(), INVOICE_DATE, actualReceived,
@@ -377,8 +340,8 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         return commissionId;
     }
 
-    /** Same as {@link #seedApprovedTierCommission}, but linked to a real ticket for the
-     * stock-share join to key off of ({@code source_ticket_id}). */
+    /** Same as #seedApprovedTierCommission, but linked to a real ticket for the stock-share join to key off of
+     * (source_ticket_id). */
     private long seedApprovedStockLinkedCommission(long salesRepId, long ticketId, BigDecimal actualReceived, LocalDate payrollMonth) {
         SubmitCommissionRequest request = new SubmitCommissionRequest(
             ticketId, salesRepId, "INV-STOCKBONUS-" + UUID.randomUUID(), INVOICE_DATE, actualReceived,
@@ -394,12 +357,9 @@ class CommissionIncentiveStockBonusIntegrationTest extends AbstractPostgresInteg
         return commissionId;
     }
 
-    /**
-     * Review fix (2026-08-02): same as {@link #seedApprovedStockLinkedCommission} but deliberately
-     * left at {@code SUBMITTED} -- nobody has reviewed it -- so tests can prove it does NOT
-     * contribute to {@link CommissionRepository#sumActiveStockActualReceived}'s APPROVED-only
-     * aggregation.
-     */
+    /** Review fix (2026-08-02): same as #seedApprovedStockLinkedCommission but deliberately left at SUBMITTED --
+     * nobody has reviewed it -- so tests can prove it does NOT contribute to
+     * CommissionRepository#sumActiveStockActualReceived's APPROVED-only aggregation. */
     private long seedSubmittedStockLinkedCommission(long salesRepId, long ticketId, BigDecimal actualReceived, LocalDate payrollMonth) {
         SubmitCommissionRequest request = new SubmitCommissionRequest(
             ticketId, salesRepId, "INV-STOCKBONUS-SUBMITTED-" + UUID.randomUUID(), INVOICE_DATE, actualReceived,

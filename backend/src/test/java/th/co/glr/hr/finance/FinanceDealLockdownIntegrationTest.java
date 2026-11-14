@@ -23,14 +23,7 @@ import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.TicketController;
 
-/**
- * H1 part 2 -- the account lockdown, against the real service, real controllers (MockMvc) and real Postgres.
- *
- * <p>Wrong-way-round first: what account can NO LONGER reach through /api/tickets, which /tickets routes were
- * removed outright, which roles the finance routes refuse, and that a deal outside account's list scope is
- * refused on every finance route -- then the happy path, where every route must both return the finance shape
- * AND actually move the database.
- */
+/** H1 part 2 -- the account lockdown, against the real service, real controllers (MockMvc) and real Postgres. */
 class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
 
     // ═══ B3: account is refused on the /api/tickets read + money routes ═════════════════════════
@@ -347,18 +340,9 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
 
     // ═══ B3 design: the shared TicketService money methods enforce scope THEMSELVES ═════════════
 
-    /**
-     * A deal whose ONLY reason to refuse account is its scope: an otherwise valid DEPOSIT_PAID deal (live, an
-     * accepted quotation, the payment status the balance actions need) moved below S10, so neither the stage
-     * floor nor the pending-payment rule admits it. Without requireAccountScope these calls would SUCCEED and
-     * write a receipt, so a 403 here can only come from the scope check (a 409 from an unrelated
-     * precondition would fail the status assertion).
-     *
-     * <p>Merge note (develop's deal-route staging): the quotation_only container this test used to rely on is
-     * no longer excluded from the list scope. confirmDepositPaid needs DEPOSIT_NOTICE_ISSUED, which the
-     * pending-payment rule always admits, so its scope check has no reachable out-of-scope real deal; it
-     * stays pinned by TicketServiceTest.
-     */
+    /** A deal whose ONLY reason to refuse account is its scope: an otherwise valid DEPOSIT_PAID deal (live, an
+     * accepted quotation, the payment status the balance actions need) moved below S10, so neither the stage floor
+     * nor the pending-payment rule admits it. */
     @Test
     void theTicketServiceMoneyMethods_refuseAccountOutsideItsScope_with403_andWriteNothing() {
         long balance = createS15Deal("DEPOSIT_PAID");
@@ -376,10 +360,8 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
         assertThat(paymentStatusOf(balance)).isEqualTo("DEPOSIT_PAID");
     }
 
-    /**
-     * Write-commits-but-response-403 fix, end to end: a deal that is in scope only via the pending-payment rule,
-     * acted on by account, returns 200 with the updated view and the write persists.
-     */
+    /** Write-commits-but-response-403 fix, end to end: a deal that is in scope only via the pending-payment rule,
+     * acted on by account, returns 200 with the updated view and the write persists. */
     @Test
     void anAllowedAccountAction_thatMovesTheDealOutOfScope_stillReturnsTheUpdatedView() throws Exception {
         long id = createTicket(DealStage.NEGOTIATION);
@@ -391,8 +373,8 @@ class FinanceDealLockdownIntegrationTest extends FinanceDealTestBase {
 
         assertThat(paymentStatusOf(id)).isEqualTo("DEPOSIT_PAID");          // the write persisted
         assertThat(receiptCount(id)).isEqualTo(1);
-        // (deposit-paid also auto-advances the stage to S11, so this real deal stays in scope; the scope-EXIT
-        // case itself is pinned deterministically by FinanceDealServiceTest.)
+        // (deposit-paid also auto-advances the stage to S11, so this real deal stays in scope; the scope-EXIT case
+        // itself is pinned deterministically by FinanceDealServiceTest.)
         assertThat(deal.get("money").get("paymentStatus").asText()).isEqualTo("DEPOSIT_PAID");
         assertThat(deal.has("availableActions")).isTrue();
     }

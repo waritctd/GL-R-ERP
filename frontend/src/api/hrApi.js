@@ -16,12 +16,12 @@ export const api = {
     logout: () => apiRequest(API_ROUTES.auth.logout, { method: 'POST' }),
     me: () => apiRequest(API_ROUTES.auth.me),
     changePassword: (payload) => apiRequest(API_ROUTES.auth.changePassword, { method: 'POST', body: payload }),
-    // Self-service "forgot password". Mirrors AuthController#forgotPassword: always resolves with
-    // the same generic { message } shape, whether or not the address matched an employee - never
-    // branch on this response to infer account existence.
+    // Self-service "forgot password". Mirrors AuthController#forgotPassword: always resolves with the same generic
+    // { message } shape, whether or not the address matched an employee - never branch on this response to infer
+    // account existence.
     forgotPassword: (payload) => apiRequest(API_ROUTES.auth.forgotPassword, { method: 'POST', body: payload }),
-    // Mirrors AuthController#resetPassword. Rejects (ApiError) with a Thai message when the token
-    // is missing/expired/already used, or when the new password equals the employee's own code.
+    // Mirrors AuthController#resetPassword. Rejects (ApiError) with a Thai message when the token is
+    // missing/expired/already used, or when the new password equals the employee's own code.
     resetPassword: (payload) => apiRequest(API_ROUTES.auth.resetPassword, { method: 'POST', body: payload }),
   },
   // Read-only "view as employee". Mirrors ViewAsController; the owner gate is server-side.
@@ -31,8 +31,8 @@ export const api = {
     stop: () => apiRequest(API_ROUTES.viewAs.root, { method: 'DELETE' }),
   },
   // Admin-only cross-employee activity. Mirrors ActivityLogController; the gate is
-  // ActivityLogService.requireAdmin, which re-reads hr.employee.is_admin per request —
-  // a client that fakes `admin` on the session gains nothing.
+  // ActivityLogService.requireAdmin, which re-reads hr.employee.is_admin per request — a client that fakes
+  // `admin` on the session gains nothing.
   activityLog: {
     list: (params) => apiRequest(withQuery(API_ROUTES.activityLog.list, params)),
     audit: (params) => apiRequest(withQuery(API_ROUTES.activityLog.audit, params)),
@@ -44,23 +44,20 @@ export const api = {
     create: (payload) => apiRequest(API_ROUTES.employees.create, { method: 'POST', body: payload }),
     get: (id) => apiRequest(API_ROUTES.employees.detail(id)),
     update: (id, payload) => apiRequest(API_ROUTES.employees.detail(id), { method: 'PATCH', body: payload }),
-    // HR-only. Mints a fresh temporary password, stores only its BCrypt hash, and sets
-    // must_change_password = TRUE (EmployeeAuthRepository#setTemporaryPassword), so the employee is
-    // forced through ChangePasswordModal at next login. Resolves `{ temporaryPassword }` —
-    // the plaintext is returned ONCE and is not retrievable afterwards, so the caller must show it
-    // to the operator immediately and must never log, cache or persist it.
+    // HR resets to a temporary password shown once; never log or persist it, and require a password change at next
+    // login.
     resetPassword: (id) => apiRequest(API_ROUTES.employees.resetPassword(id), { method: 'POST' }),
-    // Quotation v2's approver signature (hr.employee_signature, V166). Multipart upload — same
-    // idiom as pricingRequests.uploadAttachment below — png/jpeg <= 1 MB, gated self/ceo/admin.
+    // Quotation v2's approver signature (hr.employee_signature, V166). Multipart upload — same idiom as
+    // pricingRequests.uploadAttachment below — png/jpeg <= 1 MB, gated self/ceo/admin.
     uploadSignature: async (id, file) => {
       const formData = new FormData();
       formData.append('file', file);
       const res = await fetch(API_ROUTES.employees.signature(id), {
         method: 'PUT',
         credentials: 'include',
-        // csrfHeaders('PUT') is required, not decorative -- CsrfCookieFilter 403s any unsafe
-        // /api/ method missing X-XSRF-TOKEN; see the tax-allowance upload's own comment on the
-        // older attachment call sites that forgot this and only 403'd in production.
+        // csrfHeaders('PUT') is required, not decorative -- CsrfCookieFilter 403s any unsafe /api/ method missing
+        // X-XSRF-TOKEN; see the tax-allowance upload's own comment on the older attachment call sites that forgot this
+        // and only 403'd in production.
         headers: { ...csrfHeaders('PUT') },
         body: formData,
       });
@@ -77,22 +74,11 @@ export const api = {
       }
       return payload;
     },
-    // Returns the URL to GET, not a fetch — same idiom as pricingRequests.attachmentUrl /
-    // attachments.fileUrl below: an <img src> hits this directly (session cookie carries auth),
-    // there is no JSON envelope to unwrap.
+    // Returns the URL to GET, not a fetch — same idiom as pricingRequests.attachmentUrl / attachments.fileUrl
+    // below: an <img src> hits this directly (session cookie carries auth), there is no JSON envelope to unwrap.
     getSignature: (id) => API_ROUTES.employees.signature(id),
-    // Probe-only existence check, used by SignatureCard.jsx to decide whether to render an image
-    // at all (#M1) instead of finding out via the browser's onerror handler AFTER a broken-image
-    // box already flashed. EmployeeSignatureService#get 404s when hr.employee_signature has no
-    // row for this employee — any non-2xx here means "no signature", not just a 404.
-    //
-    // HEAD, not GET: EmployeeSignatureController declares only @GetMapping on this route, but
-    // Spring MVC's annotated-controller support maps HEAD to the same handler transparently
-    // whenever GET is mapped (RequestMappingInfo always adds HEAD alongside a declared GET, and
-    // the framework strips the body via HttpHeadResponseWrapper before it reaches the client) --
-    // confirmed by reading EmployeeSignatureController itself, which has no separate @RequestMapping
-    // for HEAD. A probe that only needs res.ok has no reason to pull the image bytes over the
-    // wire just to throw them away.
+    // Probe-only existence check, used by SignatureCard.jsx to decide whether to render an image at all (#M1)
+    // instead of finding out via the browser's onerror handler AFTER a broken-image box already flashed.
     hasSignature: async (id) => {
       const res = await fetch(API_ROUTES.employees.signature(id), { method: 'HEAD', credentials: 'include' });
       return res.ok;
@@ -112,16 +98,16 @@ export const api = {
     employees: () => apiRequest(API_ROUTES.attendance.employees),
     recalculate: (payload) =>
       apiRequest(API_ROUTES.attendance.recalculate, { method: 'POST', body: payload }),
-    // CEO/HR stand-up / WFH roster: marks everyone in employee_ids present with no punches for
-    // work_date. Resubmitting reconciles the roster — leaving someone off un-marks them.
+    // CEO/HR stand-up / WFH roster: marks everyone in employee_ids present with no punches for work_date.
+    // Resubmitting reconciles the roster — leaving someone off un-marks them.
     markPresent: (payload) =>
       apiRequest(API_ROUTES.attendance.markPresent, { method: 'POST', body: payload }),
     backfillCards: (payload) =>
       apiRequest(API_ROUTES.attendance.cardsBackfill, { method: 'POST', body: payload }),
     importDat: (payload) => apiRequest(API_ROUTES.attendance.importDat, { method: 'POST', body: payload }),
     devices: () => apiRequest(API_ROUTES.attendance.devices),
-    // HR monthly attendance summary (xlsx). Plain fetch + res.blob(), same shape as
-    // payroll.exportFile above -- apiRequest's JSON handling is wrong for a binary download.
+    // HR monthly attendance summary (xlsx). Plain fetch + res.blob(), same shape as payroll.exportFile above --
+    // apiRequest's JSON handling is wrong for a binary download.
     monthlySummary: async (params) => {
       const res = await fetch(withQuery(API_ROUTES.attendance.monthlySummary, params), { credentials: 'include' });
       if (!res.ok) throw new Error('Download failed');
@@ -140,8 +126,8 @@ export const api = {
   workSchedules: {
     list: () => apiRequest(API_ROUTES.workSchedules.list),
   },
-  // Mirrors WorkScheduleAssignmentController (attendance/schedule/) — hr.work_schedule_assignment
-  // admin CRUD, HR/CEO only.
+  // Mirrors WorkScheduleAssignmentController (attendance/schedule/) — hr.work_schedule_assignment admin CRUD,
+  // HR/CEO only.
   workScheduleAssignments: {
     list: () => apiRequest(API_ROUTES.workScheduleAssignments.list),
     create: (payload) =>
@@ -159,8 +145,7 @@ export const api = {
   },
   // Mirrors AttendanceCorrectionController (attendance/correction/) — an employee who missed a
   // clock-in/clock-out scan requests the correct time; CEO-only approval, NO manager stage (see
-  // AttendanceCorrectionService class javadoc). Unlike overtime/leave there is no `employees`
-  // lookup: submit is always self-only, so there is no "file on behalf of" picker to populate.
+  // AttendanceCorrectionService class javadoc).
   attendanceCorrection: {
     list: (params) => apiRequest(withQuery(API_ROUTES.attendanceCorrection.list, params)),
     create: (payload) => apiRequest(API_ROUTES.attendanceCorrection.create, { method: 'POST', body: payload }),
@@ -179,8 +164,8 @@ export const api = {
     reject: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.reject(id), { method: 'POST', body: payload }),
     cancel: (id, payload = {}) => apiRequest(API_ROUTES.specialMoney.cancel(id), { method: 'POST', body: payload }),
     attachments: (id) => apiRequest(API_ROUTES.specialMoney.attachments(id)),
-    // Evidence upload. Multipart, so it bypasses apiRequest's JSON body handling the same way
-    // leave.create does for its attachment.
+    // Evidence upload. Multipart, so it bypasses apiRequest's JSON body handling the same way leave.create does
+    // for its attachment.
     addAttachment: async (id, file) => {
       const formData = new FormData();
       formData.append('file', file);
@@ -218,8 +203,8 @@ export const api = {
       formData.append('startDate', payload.startDate);
       formData.append('endDate', payload.endDate);
       formData.append('reason', payload.reason);
-      // Sub-day leave: only appended when the requester picked times (guard undefined/null so a
-      // whole-day submit never sends empty startTime/endTime multipart fields).
+      // Sub-day leave: only appended when the requester picked times (guard undefined/null so a whole-day submit
+      // never sends empty startTime/endTime multipart fields).
       if (payload.startTime) formData.append('startTime', payload.startTime);
       if (payload.endTime) formData.append('endTime', payload.endTime);
       // Paper-form contact block: optional overrides of the autofilled default.
@@ -228,12 +213,8 @@ export const api = {
       if (payload.contactDistrict) formData.append('contactDistrict', payload.contactDistrict);
       if (payload.contactProvince) formData.append('contactProvince', payload.contactProvince);
       if (payload.contactPhone) formData.append('contactPhone', payload.contactPhone);
-      // §5.3.5 pool choice (V161): LeaveController's multipart endpoint resolves this the same way
-      // as every other query param here -- Spring binds the string to LeaveQuotaPoolPreference via
-      // Enum.valueOf. This is the branch every real submission actually takes (see the comment
-      // below on `hasOwnProperty('attachmentFile')` always being true), so this is where the field
-      // has to travel for it to reach the backend at all -- the JSON branch above already forwards
-      // whatever is in `payload` verbatim and needs no separate handling.
+      // §5.3.5 pool choice (V161): LeaveController's multipart endpoint resolves this the same way as every other
+      // query param here -- Spring binds the string to LeaveQuotaPoolPreference via Enum.valueOf.
       if (payload.quotaPoolPreference) formData.append('quotaPoolPreference', payload.quotaPoolPreference);
       if (payload.attachmentFile) formData.append('attachment', payload.attachmentFile);
       // Every submission from LeaveRequestPage.jsx's payload always sets `attachmentFile` (null when
@@ -347,10 +328,8 @@ export const api = {
       }
       return res.json();
     },
-    // Phase A4: certificate download for a review row (ReviewQueueTab.jsx) or the requester's own
-    // expanded row (MyLeaveTab.jsx). Access (owning employee, or a canReviewEmployee reviewer of
-    // them) is enforced entirely server-side — see LeaveService#resolveAttachmentForDownload and
-    // LeaveController#downloadAttachment's own comment on why an unknown id 404s rather than 403s.
+    // Phase A4: certificate download for a review row (ReviewQueueTab.jsx) or the requester's own expanded row
+    // (MyLeaveTab.jsx).
     downloadAttachment: async (attachmentId) => {
       const res = await fetch(API_ROUTES.leave.attachmentDownload(attachmentId), { credentials: 'include' });
       if (!res.ok) {
@@ -359,9 +338,9 @@ export const api = {
       }
       return res.blob();
     },
-    // Leave-request composer, Phase C: caller's own holiday + resolved work-schedule context for
-    // { from, to } -- see routes.js's comment. `params` mirrors the shape of other range-taking
-    // reads on this namespace (balances/list) rather than positional (from, to) args.
+    // Leave-request composer, Phase C: caller's own holiday + resolved work-schedule context for { from, to } --
+    // see routes.js's comment. `params` mirrors the shape of other range-taking reads on this namespace
+    // (balances/list) rather than positional (from, to) args.
     calendarContext: (params) => apiRequest(withQuery(API_ROUTES.leave.calendarContext, params)),
     // Printable leave-records report (รายงานสรุปใบลางาน); see routes.js's comment on the scope.
     // `params` is { year, month } (month optional, whole-year when omitted); read as a blob (a PDF),
@@ -399,8 +378,8 @@ export const api = {
     // editable, decidedAt, quotationNumber, lines }; POST { lines:[{itemId, fromStock}] } -> { ticket }.
     getProcurementSource: (id) => apiRequest(API_ROUTES.tickets.procurementSource(id)),
     decideProcurementSource: (id, payload) => apiRequest(API_ROUTES.tickets.procurementSource(id), { method: 'POST', body: payload }),
-    // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
-    // reserveStock above.
+    // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to reserveStock
+    // above.
     updateItemWeightMultipliers: (id, payload) =>
       apiRequest(API_ROUTES.tickets.itemWeightMultipliers(id), { method: 'POST', body: payload }),
     recordDelivery: (id, payload) => apiRequest(API_ROUTES.tickets.deliveries(id), { method: 'POST', body: payload }),
@@ -425,9 +404,8 @@ export const api = {
     listDocs: (id) => apiRequest(API_ROUTES.tickets.listDocs(id)),
     revision: (id, payload) => apiRequest(API_ROUTES.tickets.revision(id), { method: 'POST', body: payload }),
     // Prefill + preview for the remaining-invoice download dialog. Mirrors
-    // DepositNoticeService#getRemainingInvoiceOptions. `quotationId` (optional): live-preview a
-    // specific qualifying quotation when several exist — see RemainingInvoiceOptionsDto's own
-    // quotationOptions/defaultQuotationId Javadoc.
+    // DepositNoticeService#getRemainingInvoiceOptions. `quotationId` (optional): live-preview a specific qualifying
+    // quotation when several exist — see RemainingInvoiceOptionsDto's own quotationOptions/defaultQuotationId Javadoc.
     remainingInvoiceOptions: (id, quotationId) =>
       apiRequest(API_ROUTES.depositNotices.remainingInvoiceOptions(id, quotationId)),
     // There is no stateless remaining-invoice file download: RemainingInvoiceDialog downloads
@@ -568,10 +546,8 @@ export const api = {
       return res.blob();
     },
   },
-  // Mirrors ImportDealController — the import-only per-deal view. Role (import/ceo) and import's
-  // worklist row-scope are enforced in ImportDealService; this method carries no gate of its own.
-  // Resolves `{ deal }`; `deal.importRequests` is the same shape storedImportRequests.listForTicket
-  // returns, and `deal.items` never carries a price.
+  // Mirrors ImportDealController — the import-only per-deal view. Resolves `{ deal }`; `deal.importRequests` is
+  // the same shape storedImportRequests.listForTicket returns, and `deal.items` never carries a price.
   importDeals: {
     get: (ticketId) => apiRequest(API_ROUTES.importDeals.get(ticketId)),
   },
@@ -602,8 +578,8 @@ export const api = {
     updateEmailDraft: (id, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.emailDraft(id), { method: 'PATCH', body: payload }),
     markEmailSent: (id) => apiRequest(API_ROUTES.storedImportRequests.markEmailSent(id), { method: 'POST' }),
-    // Binary, so it goes through fetch directly — same shape as importRequests.download above.
-    // `copy`: 'factory' | undefined (internal, the default).
+    // Binary, so it goes through fetch directly — same shape as importRequests.download above. `copy`: 'factory' |
+    // undefined (internal, the default).
     download: async (id, copy) => {
       const res = await fetch(API_ROUTES.storedImportRequests.file(id, copy), { credentials: 'include' });
       if (!res.ok) {
@@ -638,15 +614,12 @@ export const api = {
     // DealEntryAccess.requireCanEnterDeal, same as customers.create.
     create: (payload) => apiRequest(API_ROUTES.designers.create, { method: 'POST', body: payload }),
   },
-  // Mirrors DealStageMetaController (ticket/). The deal pipeline's shape — stages with their
-  // display number, S-sheet code, phase, write gate and auto-advance flag, plus the phase list and
-  // the lost/cancel reason CODE sets. Labels stay client-side; see utils/format.js + stageMeta.js.
+  // Mirrors DealStageMetaController (ticket/). The deal pipeline's shape — stages with their display number,
+  // S-sheet code, phase, write gate and auto-advance flag, plus the phase list and the lost/cancel reason CODE
+  // sets. Labels stay client-side; see utils/format.js + stageMeta.js.
   meta: {
     dealStages: () => apiRequest(API_ROUTES.meta.dealStages),
-    // Mirrors UnitBasisMetaController (pricingrequest/) — UnitBasis's four codes with their Thai
-    // display units. Unlike dealStages, the labels here ARE server-supplied (see that controller's
-    // doc comment for why): they are meant to match pricingRequestMeta.js's UNIT_BASIS_OPTIONS,
-    // which stays the source for that file's other, unrelated call sites.
+    // Mirrors UnitBasisMetaController (pricingrequest/) — UnitBasis's four codes with their Thai display units.
     unitBases: () => apiRequest(API_ROUTES.meta.unitBases),
   },
   // Lead-time change requests. Import raises ONE per factory quote
@@ -665,8 +638,8 @@ export const api = {
   factoryConfigs: {
     list: () => apiRequest(API_ROUTES.factoryConfigs.list),
     names: () => apiRequest(API_ROUTES.factoryConfigs.names),
-    // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
-    // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.markFactoryQuoteContacted.
+    // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory RFQ email is
+    // manual-only). See priceImport.updateFactory / pricingRequests.markFactoryQuoteContacted.
   },
   locations: {
     provinces: () => apiRequest(API_ROUTES.locations.provinces),
@@ -706,17 +679,16 @@ export const api = {
     addFreightRate: (payload) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRates, { method: 'POST', body: payload }),
     deleteFreightRate: (freightRateId) => apiRequest(API_ROUTES.pricingFormulaConfig.freightRate(freightRateId), { method: 'DELETE' }),
   },
-  // V153 thickness fallbacks — mirrors ThicknessDefaultController. save() sends the WHOLE edited
-  // set in one request and gets the refreshed gap list back, so the panel re-renders from server
-  // truth rather than patching local state.
+  // V153 thickness fallbacks — mirrors ThicknessDefaultController. save() sends the WHOLE edited set in one
+  // request and gets the refreshed gap list back, so the panel re-renders from server truth rather than patching
+  // local state.
   catalogThicknessDefaults: {
     list: () => apiRequest(API_ROUTES.catalog.thicknessDefaults),
     save: (payload) => apiRequest(API_ROUTES.catalog.thicknessDefaults, { method: 'PUT', body: payload }),
   },
-  // Finance-only deal read (account + ceo) -- mirrors FinanceDealController.
-  // Also the money actions (H1 lockdown): each delegates server-side to the existing ticket business method and
-  // returns { deal }. account: row-scoped to its list scope; deposit-paid / final-payment / payments /
-  // close-confirm are account-only, billing / close-revoke / stage / comments are account + ceo.
+  // Finance-only deal read (account + ceo) -- mirrors FinanceDealController. account: row-scoped to its list
+  // scope; deposit-paid / final-payment / payments / close-confirm are account-only, billing / close-revoke /
+  // stage / comments are account + ceo.
   finance: {
     getDeal: (id) => apiRequest(API_ROUTES.finance.deal(id)),
     addComment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'comments'), { method: 'POST', body: payload }),
@@ -821,13 +793,13 @@ export const api = {
       }
       return res.json();
     },
-    // `payload` passes straight through as the JSON body, so `weightMultiplier` (calc-refine,
-    // V82) rides along with the existing deduction fields automatically — no new plumbing
-    // needed here, only in the caller. Mirrors UpdateCommissionDeductionsRequest verbatim.
+    // `payload` passes straight through as the JSON body, so `weightMultiplier` (calc-refine, V82) rides along
+    // with the existing deduction fields automatically — no new plumbing needed here, only in the caller. Mirrors
+    // UpdateCommissionDeductionsRequest verbatim.
     updateDeductions: (id, payload) => apiRequest(API_ROUTES.commissions.deductions(id), { method: 'PATCH', body: payload }),
-    // Manual commission entries (feat/commission-manual-adjustments): sales_manager/ceo submit a
-    // hand-typed { salesRepId, kind, amount, reason, payrollMonth } — no invoice, never touches
-    // the tier calc. Mirrors CommissionController#createManual / ManualCommissionRequest verbatim.
+    // Manual commission entries (feat/commission-manual-adjustments): sales_manager/ceo submit a hand-typed {
+    // salesRepId, kind, amount, reason, payrollMonth } — no invoice, never touches the tier calc. Mirrors
+    // CommissionController#createManual / ManualCommissionRequest verbatim.
     createManualCommission: (payload) => apiRequest(API_ROUTES.commissions.manual, { method: 'POST', body: payload }),
     // The manual-commission rep picker's data source: active employees in ฝ่ายขาย, the SAME list for
     // sales_manager and ceo. The full rule is on CommissionService#listManualCommissionRepOptions.
@@ -892,8 +864,8 @@ export const api = {
       return res.blob();
     },
     distributePayslips: (periodId) => apiRequest(API_ROUTES.payroll.distribute(periodId), { method: 'POST' }),
-    // C1: standing tax-allowance declaration, persisted per employee/tax-year so HR does not retype
-    // it every run. GET is HR+CEO (view), PUT is HR-only (edit).
+    // C1: standing tax-allowance declaration, persisted per employee/tax-year so HR does not retype it every run.
+    // GET is HR+CEO (view), PUT is HR-only (edit).
     getTaxAllowances: (year) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowances, { year })),
     saveTaxAllowances: (year, items) => apiRequest(withQuery(API_ROUTES.payroll.taxAllowances, { year }), { method: 'PUT', body: { items } }),
     // Tax-allowance DECLARATION workflow, staged separately from the legacy bulk editor above; a
@@ -911,8 +883,8 @@ export const api = {
     // here. Mirrors PayrollService#estimateAllowanceEffect.
     estimateMyTaxAllowanceDeclaration: (declaration) =>
       apiRequest(API_ROUTES.payroll.taxAllowanceDeclarations.estimate, { method: 'POST', body: declaration }),
-    // แบบ ล.ย.01 as a flattened PDF of the government's own form. Both return a Blob rather than
-    // JSON, so they use fetch directly — the same shape downloadTaxAllowanceAttachment uses.
+    // แบบ ล.ย.01 as a flattened PDF of the government's own form. Both return a Blob rather than JSON, so they use
+    // fetch directly — the same shape downloadTaxAllowanceAttachment uses.
     renderMyTaxAllowanceForm: async (declaration) => {
       const res = await fetch(API_ROUTES.payroll.taxAllowanceDeclarations.formDraft, {
         method: 'POST',
@@ -1035,19 +1007,9 @@ export const api = {
     // Resolves `{ items }`, a record of which deductions HR holds written employee consent for on
     // paper. It is NOT an enforcement gate: no payroll calculation reads it.
     getDeductionConsents: (params) => apiRequest(withQuery(API_ROUTES.payroll.deductionConsents, params)),
-    // Upserts ONE (employeeId, deductionKind) row — the table's UNIQUE key, so re-recording the
-    // same pair overwrites rather than appending (V107). The audit log carries the history; this
-    // row only ever holds the current fact. hr ONLY (hasRole('HR') / EDIT_ROLES), narrower than the
-    // read above, which CEO also gets.
-    //
-    // ⚠️ The response is NOT the whole register. DeductionWrittenConsentService#upsert returns
-    // `repository.findAll(employeeId, deductionKind)` — the rows for the pair just written, i.e.
-    // exactly one row. A caller that assigned it over its list state would blank the table, so
-    // DeductionConsentsPage invalidates and refetches instead of writing the response through.
-    //
-    // 400 when deductionKind is outside CONSENT_APPLICABLE_KINDS (WARNING_LETTER / CUSTOMER_RETURN
-    // / OTHER_PRETAX / OTHER_POST_TAX — V107's CHECK constraint); 404 when the employee does not
-    // exist. Recording a row changes no payroll figure: nothing reads this table back.
+    // Upserts ONE (employeeId, deductionKind) row — the table's UNIQUE key, so re-recording the same pair
+    // overwrites rather than appending (V107). The audit log carries the history; this row only ever holds the
+    // current fact.
     upsertDeductionConsent: (payload) =>
       apiRequest(API_ROUTES.payroll.deductionConsents, { method: 'PUT', body: payload }),
   },
@@ -1122,10 +1084,9 @@ export const api = {
       body: JSON.parse(json),
     }),
   },
-  // Mirrors PricingRequestController + PricingRequestService (pricingrequest/).
-  // Detail-shaped responses (create/get/update/submit/pickup/cancel) come back
-  // wrapped as { pricingRequest }; list-shaped
-  // responses (listForTicket/queue) come back as { items }.
+  // Mirrors PricingRequestController + PricingRequestService (pricingrequest/). Detail-shaped responses
+  // (create/get/update/submit/pickup/cancel) come back wrapped as { pricingRequest }; list-shaped responses
+  // (listForTicket/queue) come back as { items }.
   pricingRequests: {
     listForTicket: (ticketId) => apiRequest(API_ROUTES.pricingRequests.listForTicket(ticketId)),
     create: (ticketId, payload) => apiRequest(API_ROUTES.pricingRequests.create(ticketId), { method: 'POST', body: payload }),
@@ -1235,8 +1196,8 @@ export const api = {
       { method: 'DELETE' },
     ),
     cancel: (id, payload) => apiRequest(API_ROUTES.pricingRequests.cancel(id), { method: 'POST', body: payload }),
-    // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation
-    // COMMIT 4) — distinct from the raw factory-quote attachments above.
+    // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation COMMIT 4) —
+    // distinct from the raw factory-quote attachments above.
     uploadAttachment: async (id, file) => {
       const formData = new FormData();
       formData.append('file', file);

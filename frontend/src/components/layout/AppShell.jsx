@@ -62,9 +62,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const [viewAsPickerOpen, setViewAsPickerOpen] = useState(false);
   const drawerRef = useRef(null);
   const menuButtonRef = useRef(null);
-  // One ref for one element: <main> IS the scroll container (it carries
-  // `.content-scroll`), so the skip link's focus target and the scrolled box
-  // are the same node — see the JSX comment on <main> below.
+  // One ref for one element: <main> IS the scroll container (it carries `.content-scroll`), so the skip link's
+  // focus target and the scrolled box are the same node — see the JSX comment on <main> below.
   const mainRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
@@ -91,11 +90,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     updateContentScrolled();
   }, [location.pathname, updateContentScrolled]);
 
-  // WCAG 2.2 §2.4.1 Bypass Blocks: a bare `href="#main-content"` moves the
-  // viewport but focus-follows-fragment behaviour is inconsistent across
-  // browsers, so this focuses the target explicitly rather than relying on
-  // it. `tabIndex={-1}` on <main> (below) makes it programmatically
-  // focusable without adding it to the normal tab sequence.
+  // WCAG 2.2 §2.4.1 Bypass Blocks: a bare `href="#main-content"` moves the viewport but focus-follows-fragment
+  // behaviour is inconsistent across browsers, so this focuses the target explicitly rather than relying on it.
   const handleSkipLinkClick = useCallback((event) => {
     event.preventDefault();
     mainRef.current?.focus();
@@ -104,10 +100,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const navLocked = isSelfServiceLocked(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
-    // Admin capability, not a role: `user.admin` comes from AuthResponse and is held by exactly
-    // one person. Ungrouped and directly under the dashboard because it is a whole-portal view,
-    // not part of any one ฝ่าย's work. Hiding it is cosmetic — ActivityLogService.requireAdmin is
-    // what actually refuses everyone else.
+    // Admin capability, not a role: `user.admin` comes from AuthResponse and is held by exactly one person.
+    // Ungrouped and directly under the dashboard because it is a whole-portal view, not part of any one ฝ่าย's
+    // work.
     { path: '/activity-log', label: 'บันทึกการใช้งาน', helper: 'Portal activity log', icon: 'clipboard', show: Boolean(user.admin) },
     // Division-manager (non-sales) "ทีมของฉัน" group: reuses the /employee-requests, /leave,
     // /attendance routes every role already has (dual submit+approve pages for anyone with
@@ -125,11 +120,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     },
     { path: '/leave', label: 'การอนุมัติวันลา', helper: 'Approve team leave', icon: 'clipboard', group: 'team', show: isTeamManager },
     { path: '/attendance', label: 'ทีมในฝ่าย', helper: 'Team roster & attendance', icon: 'users', group: 'team', show: isTeamManager },
-    // งานขาย is one workspace: the deal pipeline (/tickets — one ticket = one deal,
-    // คำขอราคา and โครงการ merged into one page) plus the ภาพรวม dashboard as a tab
-    // (SalesTabs). `match` keeps this item highlighted across both and detail pages.
-    // Distinct from the "งานขาย" (Sales) group header it sits under below —
-    // repeating the group name on its first item read as a stutter.
+    // งานขาย is one workspace: the deal pipeline (/tickets — one ticket = one deal, คำขอราคา and โครงการ merged
+    // into one page) plus the ภาพรวม dashboard as a tab (SalesTabs). `match` keeps this item highlighted across
+    // both and detail pages.
     {
       path: '/tickets',
       label: 'รายการดีล',
@@ -164,16 +157,12 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // feature flag.
     { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', group: 'sales', show: hasPermission(user.role, 'canViewCatalog') && SALES_ENABLED },
     { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', group: 'sales', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
-    // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS
-    // comment for why this is a narrower audience than a single request's detail page.
+    // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS comment for why this is a
+    // narrower audience than a single request's detail page.
     { path: '/pricing-requests', label: 'คิวขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
-    // Import's stream-2 workspace, placed immediately after stream 1 so its two
-    // obligations to Sales read as two adjacent items in the order a deal travels
-    // (price, then goods). NARROWER audience than its neighbour on purpose:
-    // canActOnFulfilment mirrors TicketService.FULFILMENT_ROLES {import, ceo},
-    // while canViewPricingRequestQueue also includes sales_manager — who would
-    // find every button on this page 403s. `building`, not `clipboard`: the
-    // neighbour already owns that glyph, and the chain ends at the warehouse.
+    // Import's stream-2 workspace, placed immediately after stream 1 so its two obligations to Sales read as two
+    // adjacent items in the order a deal travels (price, then goods). `building`, not `clipboard`: the neighbour
+    // already owns that glyph, and the chain ends at the warehouse.
     { path: '/fulfilment', label: 'งานนำเข้า', helper: 'Import fulfilment worklist', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item: the invoice+commission step (บันทึกใบกำกับ /
     // create-from-deal at close) is the LAST STAGE of the งานการเงิน money lifecycle + the
@@ -189,9 +178,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
-    // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in
-    // the topbar UserMenu, and the two pages are merged into /profile. /requests
-    // stays here because an HR review queue is work, not personal admin.
+    // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in the topbar UserMenu, and the two
+    // pages are merged into /profile. /requests stays here because an HR review queue is work, not personal admin.
     { path: '/requests', label: 'คำขอแก้ไขข้อมูล', helper: 'Profile requests', icon: 'clipboard', group: 'hr', show: hasPermission(user.role, 'canReviewProfileRequests'), badge: pendingRequestCount },
     // Tax-allowance (ล.ย.01) HR register: mirrors the route's own guard
     // (canViewTaxAllowanceRegister: hr+ceo) so CEO's read-only visibility into the register
@@ -221,9 +209,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // clearing something, which is precisely what this register does NOT do.
     { path: '/payroll/deduction-consents', label: 'ทะเบียนหนังสือยินยอมหักเงิน', helper: 'Written deduction consents', icon: 'clipboard', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', group: 'self', show: true },
-    // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried
-    // in ?tab=). `match` keeps this item highlighted on both /employee-requests and
-    // the /overtime redirect alias, mirroring the /tickets pattern above.
+    // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried in ?tab=). `match` keeps this item
+    // highlighted on both /employee-requests and the /overtime redirect alias, mirroring the /tickets pattern
+    // above.
     {
       path: '/employee-requests',
       // Matches the page's own <PageHeader> title (RequestsPage.jsx).

@@ -31,66 +31,9 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * Step 7 of the sales pricing-flow redesign: Factory Purchase Order and Import Execution.
- *
- * <p><strong>This step genuinely builds new entities — it is not a bridge into existing
- * machinery.</strong> Unlike Step 6 (which found a substantial, already-tested deposit/payment
- * pipeline to bridge a new-chain deal into), there is no pre-existing procurement/purchase-order
- * module anywhere in this codebase. {@code th.co.glr.hr.ticket.FulfilmentStatus} is a bare
- * sequence of string flags with no PO record, no supplier detail, no ETA/ETD, no customs
- * tracking, no landed-cost record, and no linkage to which factory-quote revision was actually
- * used — see {@code V77__factory_purchase_order.sql}'s own header comment for the full account.
- *
- * <p><strong>Source of truth — do not re-pick a factory/price at PO time.</strong> A PO's items
- * are sourced EXCLUSIVELY from the pricing request's currently-APPROVED {@code
- * sales.pricing_decision}'s own {@code pricing_costing_id} — i.e. exactly the costing version
- * that produced the customer's selling price (Step 3) and that the customer has already accepted
- * a quotation against (Steps 4-5). {@link #createPurchaseOrders} never accepts a caller-supplied
- * factory or price; it groups {@code sales.pricing_costing_item} rows by {@code factory_name} and
- * mints one PO per factory, each carrying a FROZEN snapshot of quantity/unit price/currency at
- * creation time — never recomputed later (the costing itself is immutable post-SUBMITTED, so
- * there is nothing to drift from).
- *
- * <p><strong>Gate — deliberately at least as strict as {@code issueImportRequest}'s own, not
- * weaker.</strong> A PO may only be created once BOTH: (1) {@code pricing_request.status ==
- * QUOTATION_ACCEPTED} (Step 5's terminal status — the only status a {@code pricing_costing_item}
- * chain can ever be trusted as "sold", since {@code PricingRequestStatus.ALLOWED} never moves a
- * request past it), AND (2) the deal has already reached {@code DealStage.PROCUREMENT} — i.e.
- * {@code TicketService.issueImportRequest} has already fired for this ticket. The task explicitly
- * asked for a gate "consistent with {@code issueImportRequest}'s own existing precondition, do
- * not invent a weaker gate" — reusing {@code DealStage.PROCUREMENT} (rather than re-deriving
- * {@code issueImportRequest}'s own quotation/deposit boolean logic a second time in a sibling
- * package) is the strictest available reading of that instruction: a PO cannot exist before
- * Import has actually issued the import request for this deal.
- *
- * <p><strong>The PO rollup is now the source of truth for the ticket's IMPORT axis.</strong> Every
- * PO-progressing call here ({@link #recordShippingDetail}, {@link #recordGoodsReceived}, {@link
- * #cancel}) ends by calling {@code TicketService#applyPurchaseOrderRollup}, which derives {@code
- * SHIPPING}/{@code GOODS_RECEIVED} from this deal's live (non-CANCELLED) PO statuses and writes it
- * onto {@code sales.ticket.fulfillment_status} when doing so is safe (import axis, monotonic —
- * see that method's own Javadoc). As a consequence, {@code TicketService#markShipping} and {@code
- * #markGoodsReceived} now REFUSE with 409 on any deal that has at least one live PO — a
- * ticket-level click cannot say which factory shipped or received, so it cannot legitimately
- * "delegate" to the PO record it doesn't reference, and refusing is the only option that invents
- * no data (see those two methods' own comments for the fuller reasoning). {@code
- * TicketService#markIrSent} and {@code #issueImportRequest} are UNAFFECTED — POs cannot exist
- * before {@code issueImportRequest} runs (they require {@code DealStage.PROCUREMENT}, which only
- * that method sets), and IR_SENT is a pre-shipment milestone the POs say nothing about, so neither
- * can ever be contradicted by the PO rollup. The DELIVERY axis ({@code reserveStock}/{@code
- * recordPartialDelivery}/{@code completeDelivery}, {@code FROM_STOCK}/{@code
- * PARTIALLY_DELIVERED}/{@code FULLY_DELIVERED}) is untouched by any of this — the rollup only ever
- * writes while the ticket is still on the import axis, by design (the delivery-axis firewall in
- * {@code applyPurchaseOrderRollup}).
- *
- * <p><strong>Confidentiality.</strong> Raw supplier PO detail (price, proforma reference, payment
- * schedule) is Import/CEO territory, reusing the {@code RAW_QUOTE_ROLES}/{@code
- * RAW_DECISION_ROLES} confidentiality pattern already established by {@code FactoryQuoteService}/
- * {@code PricingDecisionService} — {@code sales}/{@code sales_manager} cannot reach any endpoint
- * on this service at all (a stricter cut than those two classes' own per-field filtering, since
- * this branch does not build a separate sales-facing "progress only" view — see the branch
- * handoff's own scope note for why that was left out).
- */
+/** Step 7 of the sales pricing-flow redesign: Factory Purchase Order and Import Execution. Source of truth — do
+ * not re-pick a factory/price at PO time. This step genuinely builds new entities — it is not a bridge into
+ * existing machinery. */
 @Service
 public class ProcurementService {
     private static final Set<String> RAW_PO_ROLES = Set.of("import", "ceo");
@@ -111,9 +54,7 @@ public class ProcurementService {
         this.ticketService = ticketService;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Create — one PO per distinct factory on the pricing request's APPROVED costing.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
     public List<FactoryPurchaseOrderDto> createPurchaseOrders(long pricingRequestId,
@@ -121,10 +62,9 @@ public class ProcurementService {
         requireRole(actor, RAW_PO_ROLES);
         String clientRequestId = validateUuid(request == null ? null : request.clientRequestId());
 
-        // Serializes every create call for this pricing request — same advisory-lock key every
-        // earlier step already uses (PricingRequestRepository.lockPricingRequest), reached into
-        // directly rather than duplicated, per the established "an orchestrating layer reaching
-        // into a sibling aggregate's repository directly" precedent (handoff 95, decision 3).
+        // Serializes every create call for this pricing request — same advisory-lock key every earlier step already
+        // uses, reached into directly rather than duplicated, per the established "an orchestrating layer reaching
+        // into a sibling aggregate's repository directly" precedent.
         pricingRequests.lockPricingRequest(pricingRequestId);
 
         if (clientRequestId != null) {
@@ -153,8 +93,8 @@ public class ProcurementService {
             throw new ApiException(HttpStatus.CONFLICT, "ไม่พบรายการต้นทุนสำหรับสร้างใบสั่งซื้อโรงงาน");
         }
 
-        // Group by factory — one PO per distinct factory (Step 2's own per-factory quote
-        // grouping, mirrored here per this class's own Javadoc).
+        // Group by factory — one PO per distinct factory (Step 2's own per-factory quote grouping, mirrored here per
+        // this class's own Javadoc).
         Map<String, List<CostingItemForPo>> byFactory = new LinkedHashMap<>();
         for (CostingItemForPo item : items) {
             byFactory.computeIfAbsent(item.factoryName(), k -> new ArrayList<>()).add(item);
@@ -172,12 +112,9 @@ public class ProcurementService {
                 List<Long> costingItemIds = factoryItems.stream().map(CostingItemForPo::pricingCostingItemId).toList();
                 int inserted = purchaseOrders.insertItems(created, pricingRequestId, costingItemIds);
                 if (inserted != costingItemIds.size()) {
-                    // Every item in factoryItems was read from THIS pricing request's own
-                    // approved costing a moment ago, so this can only mean the cross-tenant
-                    // guard inside insertItems (pc.pricing_request_id = :pricingRequestId)
-                    // rejected a line it should never have been asked to reject, or a
-                    // concurrent writer raced this one — either way, refuse rather than leave a
-                    // PO with a silently short item list.
+                    // Every item in factoryItems was read from THIS pricing request's own approved costing a moment ago, so this
+                    // can only mean the cross-tenant guard inside insertItems rejected a line it should never have been asked to
+                    // reject, or a concurrent writer raced this one.
                     throw new ApiException(HttpStatus.CONFLICT,
                         "สร้างรายการใบสั่งซื้อโรงงานไม่ครบถ้วน — กรุณาลองใหม่");
                 }
@@ -194,9 +131,7 @@ public class ProcurementService {
         return result;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Progress the PO — independent of the ticket-level fulfillment flags.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
     public FactoryPurchaseOrderDto recordSupplierProforma(long id, RecordSupplierProformaRequest request, UserPrincipal actor) {
@@ -224,24 +159,9 @@ public class ProcurementService {
         return requirePo(id);
     }
 
-    /**
-     * Step 8: extends the Step 7 goods-received flag flip with the ACTUAL quantity received per
-     * line (vs the ordered {@code quantity} already frozen on the PO item), plus a QC/damage
-     * note — {@code discrepancyQty} is computed on read (see
-     * {@link ProcurementRepository#withItems}), never stored, mirroring
-     * {@code estimatedLandedCostPerUnitThb}'s own "estimate vs actual, never conflated"
-     * discipline one field over.
-     *
-     * <p><strong>Backward-compatible default:</strong> {@code request.items()} is optional — a
-     * caller that supplies none (every existing caller, including the unmodified Step 7 frontend)
-     * gets the exact prior behavior, with every line's {@code qtyReceived} defaulted to its own
-     * ordered {@code quantity} (zero discrepancy, nothing to report). A caller that DOES supply
-     * items must cover every line on the PO — see {@link RecordGoodsReceivedRequest}'s own
-     * Javadoc for why a partial receiving report is rejected outright rather than silently
-     * accepted (this is a real business-logic guard, not a formatting nicety: without it, the PO
-     * would move to the terminal RECEIVED status while some lines keep {@code qty_received=NULL}
-     * forever, which is a worse state than not reporting a discrepancy at all).
-     */
+    /** Step 8: extends the Step 7 goods-received flag flip with the ACTUAL quantity received per line, plus a
+     * QC/damage note — discrepancyQty is computed on read, never stored, mirroring estimatedLandedCostPerUnitThb's
+     * own "estimate vs actual, never conflated" discipline one field over. */
     @Transactional
     public FactoryPurchaseOrderDto recordGoodsReceived(long id, RecordGoodsReceivedRequest request, UserPrincipal actor) {
         requireRole(actor, RAW_PO_ROLES);
@@ -251,23 +171,14 @@ public class ProcurementService {
         }
         List<ItemReceiptRequest> items = request.items();
         if (items == null) {
-            // Genuinely absent (JSON omits the field, or sends null) — the backward-compatible
-            // default. An explicitly-supplied EMPTY list is different: the caller told us
-            // something, and zero items never covers a real PO's item set, so it falls into the
-            // strict branch below and is correctly rejected as incomplete, not silently defaulted.
+            // Genuinely absent (JSON omits the field, or sends null) — the backward-compatible default.
             items = po.items().stream()
                 .map(item -> new ItemReceiptRequest(item.id(), item.quantity(), null))
                 .toList();
         } else {
-            // A single set-equality check both rejects an unknown itemId (requestedItemIds would
-            // then contain an element validItemIds structurally cannot) AND rejects a partial/
-            // incomplete list (a missing element) — for two finite sets, "contains something the
-            // other doesn't" and "not equal" are the same fact. An earlier draft had a separate
-            // per-id "unknown item" loop ahead of this check; mutation-testing it (see the branch
-            // handoff's own Authz/Guard Evidence) proved it could NEVER independently reject
-            // anything this check wouldn't already catch on its own, in any fixture — not merely
-            // hard to isolate with the tests at hand, but a set-theory tautology, so it was
-            // removed rather than kept as "unverified-but-harmless" dead code.
+            // A single set-equality check both rejects an unknown itemId (requestedItemIds would then contain an element
+            // validItemIds structurally cannot) AND rejects a partial/ incomplete list (a missing element) — for two
+            // finite sets, "contains something the other doesn't" and "not equal" are the same fact.
             Set<Long> validItemIds = po.items().stream().map(FactoryPurchaseOrderItemDto::id).collect(Collectors.toSet());
             Set<Long> requestedItemIds = items.stream().map(ItemReceiptRequest::itemId).collect(Collectors.toSet());
             if (!requestedItemIds.equals(validItemIds)) {
@@ -280,10 +191,9 @@ public class ProcurementService {
         }
         int rows = purchaseOrders.recordGoodsReceived(id, request.actualLandedCostThb());
         if (rows == 0) {
-            // Lost a race against another recordGoodsReceived/cancel call between the status
-            // check above and this compare-and-set — the per-item writes above are harmless to
-            // have run (they only ever touch qty_received/qc_note, never status), the PO simply
-            // stays wherever the concurrent call left it.
+            // Lost a race against another recordGoodsReceived/cancel call between the status check above and this
+            // compare-and-set — the per-item writes above are harmless to have run (they only ever touch
+            // qty_received/qc_note, never status), the PO simply stays wherever the concurrent call left it.
             throw new ApiException(HttpStatus.CONFLICT, "ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถบันทึกรับสินค้าได้อีก");
         }
         logEvent(po, PricingRequestEventKind.FACTORY_PO_GOODS_RECEIVED, actor,
@@ -301,17 +211,14 @@ public class ProcurementService {
             throw new ApiException(HttpStatus.CONFLICT, "ใบสั่งซื้อนี้ปิดแล้ว ไม่สามารถยกเลิกได้");
         }
         logEvent(po, PricingRequestEventKind.FACTORY_PO_CANCELLED, actor, "ยกเลิกใบสั่งซื้อโรงงาน: " + request.reason());
-        // Cancelling the last not-yet-received PO can itself COMPLETE the rollup — e.g. PO A
-        // RECEIVED + PO B just CANCELLED now means every remaining LIVE PO is RECEIVED. Do not
-        // skip this call on the cancel path just because "cancel" sounds like it only ever
-        // subtracts.
+        // Cancelling the last not-yet-received PO can itself COMPLETE the rollup — e.g. PO A RECEIVED + PO B just
+        // CANCELLED now means every remaining LIVE PO is RECEIVED. Do not skip this call on the cancel path just
+        // because "cancel" sounds like it only ever subtracts.
         ticketService.applyPurchaseOrderRollup(po.ticketId(), actor);
         return requirePo(id);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Reads.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     public FactoryPurchaseOrderDto get(long id, UserPrincipal actor) {
         requireRole(actor, RAW_PO_ROLES);
@@ -328,9 +235,7 @@ public class ProcurementService {
         return purchaseOrders.findAll(status);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private void logEvent(FactoryPurchaseOrderDto po, String eventKind, UserPrincipal actor, String message) {
         pricingRequests.addEvent(po.pricingRequestId(), po.ticketId(), actor.id(), actor.name(),

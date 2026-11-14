@@ -85,20 +85,9 @@ public final class ImportRequestRequests {
         @Size(max = 100) String countryOther
     ) {}
 
-    /**
-     * Edits a draft, or the import-owned footer of an issued form.
-     *
-     * <p>Every field is nullable and every nullable field is <strong>ignored when absent</strong>
-     * rather than written as null — a PATCH, not a PUT. That matters because two different callers
+    /** Edits a draft, or the import-owned footer of an issued form. That matters because two different callers
      * touch this: the draft editor sends the body fields, and the footer editor sends only
-     * {@code vesselEtaNote}/checked/approved. A PUT shape would have the second silently blank the
-     * first's work.
-     *
-     * <p>{@link #items} is the whole line list or nothing: sending it replaces every line, sending it
-     * absent leaves them alone. Partial line edits are deliberately not supported — the printed form
-     * is a numbered sequence, so a caller that could add one line without restating the rest would
-     * have to be trusted to renumber, and it would not be.
-     */
+     * vesselEtaNote/checked/approved. */
     public record UpdateImportRequestRequest(
         @Size(max = 200) String projectName,
         @Size(max = 200) String customerName,
@@ -120,17 +109,9 @@ public final class ImportRequestRequests {
          */
         @Min(1) @Max(365) Integer leadTimeMinDays,
         @Min(1) @Max(365) Integer leadTimeMaxDays,
-        /**
-         * REVIEW ROUND 2, S-F: "กำหนดวันที่ต้องการของ" on THIS FORM — a BODY field like {@code
-         * projectName} (moves only while DRAFT, owning rep/CEO only), separate from {@link
-         * SetRequiredByNoteRequest}, which sets the DEAL-level value new drafts snapshot FROM. Sent
-         * absent leaves it alone; sent blank/{@code null}-equivalent is not distinguishable from
-         * absent under this record's own PATCH semantics, so clearing it to genuinely empty is not
-         * supported here — matching every other {@code @Size String} field on this record. If this
-         * form's own value is still blank at {@link
-         * th.co.glr.hr.importrequest.ImportRequestService#issue}, it is re-snapshotted from the
-         * deal's current value at that time (see that method).
-         */
+        /** REVIEW ROUND 2, S-F: "กำหนดวันที่ต้องการของ" on THIS FORM — a BODY field like projectName (moves only while
+         * DRAFT, owning rep/CEO only), separate from SetRequiredByNoteRequest, which sets the DEAL-level value new
+         * drafts snapshot FROM. */
         @Size(max = 200) String requiredByNote
     ) {}
 

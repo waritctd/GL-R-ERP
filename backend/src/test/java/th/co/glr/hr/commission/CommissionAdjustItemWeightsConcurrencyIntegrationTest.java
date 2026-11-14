@@ -39,29 +39,9 @@ import th.co.glr.hr.ticket.TicketItemDto;
 import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * {@link CommissionService#adjustItemWeights} must serialise concurrent adjusters of the SAME
- * commission record (row lock on {@code sales.commission_record}). Without it, under READ
- * COMMITTED, two managers re-weighting DIFFERENT lines of one deal interleave: each re-reads the
- * deal's items before the other commits, and the last writer freezes an
- * {@code effective_weight_multiplier} (what payroll reads via COALESCE) that ignores the other
- * manager's line -- while the item weights themselves end up correct, so nothing looks wrong.
- *
- * <p><b>Why the race is forced, not hoped for.</b> A plain two-thread start is a tiny window and
- * would pass un-fixed most runs; that would be a fake green. {@link
- * #concurrentAdjustersOfDifferentLines_frozenWeightReflectsBothLines} instead pauses adjuster 1
- * (a Mockito spy on {@link TicketRepository}) right AFTER its re-read of the items and BEFORE its
- * frozen-weight write, for up to {@code PAUSE_SECONDS} or until adjuster 2 has finished -- the
- * exact losing interleaving. Un-fixed, adjuster 2 runs to completion inside that pause and adjuster
- * 1 then overwrites it with a stale blend. Fixed, adjuster 2 is blocked on the row lock, the
- * wait times out, adjuster 1 commits, and adjuster 2 then re-reads both lines. Both paths go
- * through the REAL service behind a REAL {@code @Transactional} proxy ({@link #transactional}) --
- * the harness's hand-wired services have no AOP proxy, so without that wrapper the method would
- * run with autocommit and the row lock would be released at once (see CLAUDE.md / the memory note
- * that {@code @Transactional} is inert in this suite).
- *
- * <p>{@code @EnabledIf} is repeated on the class because it is not {@code @Inherited}.
- */
+/** CommissionService#adjustItemWeights must serialise concurrent adjusters of the SAME commission record (row
+ * lock on sales.commission_record). Why the race is forced, not hoped for. Un-fixed, adjuster 2 runs to
+ * completion inside that pause and adjuster 1 then overwrites it with a stale blend. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -107,8 +87,8 @@ class CommissionAdjustItemWeightsConcurrencyIntegrationTest extends AbstractPost
         CountDownLatch adjuster1Paused = new CountDownLatch(1);
         CountDownLatch adjuster2Finished = new CountDownLatch(1);
         AtomicInteger adjuster1FindByIdCalls = new AtomicInteger();
-        // adjustItemWeights calls tickets.findById twice: (1) line-ownership check, (2) the
-        // post-update re-read that feeds the blend. Pause adjuster 1 right after call (2).
+        // adjustItemWeights calls tickets.findById twice: (1) line-ownership check, (2) the post-update re-read that
+        // feeds the blend. Pause adjuster 1 right after call (2).
         doAnswer(invocation -> {
             Object result = invocation.callRealMethod();
             if ("adjuster-1".equals(Thread.currentThread().getName())
@@ -168,8 +148,8 @@ class CommissionAdjustItemWeightsConcurrencyIntegrationTest extends AbstractPost
         CountDownLatch lockHeld = new CountDownLatch(1);
         CountDownLatch releaseLock = new CountDownLatch(1);
         AtomicReference<Throwable> holderFailure = new AtomicReference<>();
-        // Holder: a separate connection/transaction that has taken the record's row lock -- exactly
-        // what a concurrent adjuster that got there first holds.
+        // Holder: a separate connection/transaction that has taken the record's row lock -- exactly what a concurrent
+        // adjuster that got there first holds.
         Thread holder = new Thread(() -> {
             try {
                 transactionTemplate.executeWithoutResult(status -> {
@@ -206,10 +186,7 @@ class CommissionAdjustItemWeightsConcurrencyIntegrationTest extends AbstractPost
         // While the lock is held the adjuster must NOT get through.
         assertThat(adjusterDone.await(2, TimeUnit.SECONDS))
             .as("adjustItemWeights must wait for the commission_record row lock").isFalse();
-        // ...and it must be parked BEFORE it has written anything. Un-fixed, the adjuster would
-        // already have UPDATEd line B (its transaction holds that row's lock, uncommitted) and only
-        // stall afterwards on the final frozen-weight UPDATE; a NOWAIT probe on line B tells the two
-        // apart without depending on timing.
+        // ...and it must be parked BEFORE it has written anything.
         org.assertj.core.api.Assertions.assertThatCode(() -> jdbc.queryForObject(
                 "SELECT item_id FROM sales.ticket_item WHERE item_id = :id FOR UPDATE NOWAIT",
                 Map.of("id", lineB), Long.class))

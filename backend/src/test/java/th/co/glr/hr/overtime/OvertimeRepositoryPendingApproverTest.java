@@ -8,14 +8,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import org.junit.jupiter.api.Test;
 
-/**
- * feat/pending-approver-info: unit tests for {@link OvertimeRepository#resolvePendingApproverRole}/
- * {@link OvertimeRepository#resolvePendingApproverName} -- plain Mockito-on-a-mocked-{@link
- * ResultSet} tests, not a real-DB integration test. Read-only informational resolvers, not an
- * authorization decision (see {@link LeaveRepository}'s equivalent test class Javadoc in the
- * {@code leave} package for the full reasoning, which applies identically here) -- they mirror
- * {@code OvertimeService#approve}'s own SUBMITTED/MANAGER_APPROVED branching, never gate it.
- */
+/** feat/pending-approver-info: unit tests for OvertimeRepository#resolvePendingApproverRole/
+ * OvertimeRepository#resolvePendingApproverName -- plain Mockito-on-a-mocked-ResultSet tests, not a real-DB
+ * integration test. */
 class OvertimeRepositoryPendingApproverTest {
 
     private final OvertimeRepository repository = new OvertimeRepository(null);
@@ -41,8 +36,8 @@ class OvertimeRepositoryPendingApproverTest {
     @Test
     void submittedWithoutManagerStage_resolvesToCeoDirectly() throws SQLException {
         // hasManagerApprover false -- manager-less ฝ่าย, or requester IS the manager (Rule 2 of
-        // ManagerApproverRepository) -- routes straight to the CEO, mirroring
-        // OvertimeService#approve's ceoDirectApprove branch.
+        // ManagerApproverRepository) -- routes straight to the CEO, mirroring OvertimeService#approve's
+        // ceoDirectApprove branch.
         ResultSet rs = resultSet("SUBMITTED", false, null, "ราม");
 
         assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("ceo");
@@ -59,9 +54,8 @@ class OvertimeRepositoryPendingApproverTest {
 
     @Test
     void multipleCeoCandidates_omitsNameButKeepsRole() throws SQLException {
-        // Ambiguity case: PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL resolves to SQL NULL when
-        // more than one active ceo-role employee exists -- stood in here by the (mocked) SQL layer
-        // already reporting null.
+        // Ambiguity case: PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL resolves to SQL NULL when more than one active
+        // ceo-role employee exists -- stood in here by the (mocked) SQL layer already reporting null.
         ResultSet rs = resultSet("SUBMITTED", false, null, null);
 
         assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("ceo");

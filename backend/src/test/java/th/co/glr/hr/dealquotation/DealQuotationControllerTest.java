@@ -24,17 +24,8 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 
-/**
- * Pins the {@code GET /api/deal-quotations/{id}/file} response contract — same MockMvc
- * standalone pattern {@code CustomerQuotationControllerTest} uses for the sibling pricing-chain
- * quotation endpoint. {@code QuotationRenderer} (reused unmodified by
- * {@link DealQuotationRenderAdapter}) fills a real BIFF8 (.xls) company template, so the response
- * must advertise {@code application/vnd.ms-excel} and a {@code .xls} filename even when the
- * caller asked for {@code ?format=xlsx}.
- *
- * <p>The download filename is the quotation NUMBER (sanitised), not the internal id — see
- * {@link DealQuotationController#file}'s own Javadoc.
- */
+/** Pins the GET /api/deal-quotations/{id/file} response contract — same MockMvc standalone pattern
+ * CustomerQuotationControllerTest uses for the sibling pricing-chain quotation endpoint. */
 class DealQuotationControllerTest {
     private static final byte[] OLE2_MAGIC_BYTES =
         {(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
@@ -45,8 +36,8 @@ class DealQuotationControllerTest {
         .setControllerAdvice(new ApiExceptionHandler())
         .build();
 
-    /** Owner decision 2026-09-13 (B): calculate-line forwards ?documentLanguage to the service,
-     * and an absent one reaches it as null (which the service reads as TH). */
+    /** Owner decision 2026-09-13 (B): calculate-line forwards ?documentLanguage to the service, and an absent one
+     * reaches it as null (which the service reads as TH). */
     @Test
     void calculateLineForwardsTheDocumentLanguageQueryParam() throws Exception {
         DealQuotationDtos.DealQuotationItemDto preview = new DealQuotationDtos.DealQuotationItemDto(0L, 0,
@@ -93,9 +84,9 @@ class DealQuotationControllerTest {
 
     @Test
     void fileNameOfARevisionIsSanitisedButKeepsTheHyphenSuffix() throws Exception {
-        // A revision's number ("QT-2026-0042-2") must survive sanitisation intact -- hyphens are
-        // in the allowed set -- and any character outside [A-Za-z0-9._-] must become "_" rather
-        // than being dropped silently or breaking the Content-Disposition header.
+        // A revision's number ("QT-2026-0042-2") must survive sanitisation intact -- hyphens are in the allowed set --
+        // and any character outside [A-Za-z0-9._-] must become "_" rather than being dropped silently or breaking the
+        // Content-Disposition header.
         when(service.get(eq(43L), any(UserPrincipal.class))).thenReturn(quotation(43L, "QT/2026\\0042-2"));
         when(service.renderPdf(eq(43L), any(UserPrincipal.class))).thenReturn("%PDF-1.4\n".getBytes());
 
@@ -110,9 +101,9 @@ class DealQuotationControllerTest {
             .andExpect(status().isUnauthorized());
     }
 
-    /** Slice 1 (IA §7): {@code …/confirm-order} is the real route and {@code …/promote-to-deal} is kept
-     * as an alias for one release — BOTH must dispatch to the same service method. Against the
-     * pre-slice controller the confirm-order POST is a 404 (no such mapping). */
+    /** Slice 1 (IA §7): …/confirm-order is the real route and …/promote-to-deal is kept as an alias for one release
+     * — BOTH must dispatch to the same service method. Against the pre-slice controller the confirm-order POST is
+     * a 404 (no such mapping). */
     @Test
     void confirmOrder_andThePromoteToDealAlias_bothReachConfirmOrderFromDirectQuotation() throws Exception {
         DealQuotationDtos.PromoteToDealResultDto result =

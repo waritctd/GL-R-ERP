@@ -22,18 +22,8 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.ApprovedLeaveSpanDto;
 import th.co.glr.hr.leave.LeaveRepository;
 
-/**
- * Unit coverage for the AGGREGATION rules stated in {@link AttendanceMonthlySummaryService}'s own
- * javadoc -- ขาดงาน/ลา attribution and the OT-hours flag gate. Scope RESOLUTION (who may see which
- * employees) is deliberately NOT re-tested here: that is {@link AttendanceScopeIntegrationTest}'s
- * job, against a real database, per CLAUDE.md's "permission changes must ship evidence" rule.
- *
- * <p>{@link #attendanceService} below is a REAL (unmocked) {@link AttendanceService} wired with a
- * mocked {@link AttendanceDailyService} it never calls from here -- this lets {@code resolveScope}
- * run its actual hr-branch logic for {@link #HR_USER} without needing Mockito to stub a
- * package-private method, and it is exactly as fast as mocking would have been (resolveScope is
- * pure in-memory logic with no I/O).
- */
+/** Unit coverage for the AGGREGATION rules stated in AttendanceMonthlySummaryService's own javadoc -- ขาดงาน/ลา
+ * attribution and the OT-hours flag gate. */
 class AttendanceMonthlySummaryServiceTest {
     private static final YearMonth MONTH = YearMonth.of(2026, 8);
     private static final LocalDate A_WORKDAY = LocalDate.of(2026, 8, 5); // a Wednesday
@@ -96,14 +86,9 @@ class AttendanceMonthlySummaryServiceTest {
         assertThat(row.totalLeaveDays()).isEqualByComparingTo(BigDecimal.ONE);
     }
 
-    /**
-     * {@link LeaveRepository#findApprovedLeaveOverlapping}'s own WHERE clause is
-     * {@code status = 'APPROVED'} -- a SUBMITTED/REJECTED/CANCELLED request never reaches this
-     * service at all, so the fixture representing "a request exists but isn't (yet, or any longer)
-     * approved" is the SAME empty leave list a no-leave-at-all day produces. This documents that
-     * fact rather than exercising a branch this service could decide differently -- there is none;
-     * the filtering is the repository's job, not this class's.
-     */
+    /** LeaveRepository#findApprovedLeaveOverlapping's own WHERE clause is status = 'APPROVED' -- a
+     * SUBMITTED/REJECTED/CANCELLED request never reaches this service at all, so the fixture representing "a
+     * request exists but isn't approved" is the SAME empty leave list a no-leave-at-all day produces. */
     @Test
     void aSubmittedRejectedOrCancelledLeaveDoesNotSuppressAbsence() {
         stubDay(day(A_WORKDAY, true, AttendanceDayStatus.NO_RECORD, List.of(), 0));
@@ -143,13 +128,9 @@ class AttendanceMonthlySummaryServiceTest {
         assertThat(row.absentDays()).isEqualTo(0);
     }
 
-    /**
-     * {@code AttendanceDailyService#toDto} never actually assigns
-     * {@link AttendanceDayFlag#WORKED_LATE_UNAPPROVED} alongside a non-zero {@code overtimeMinutes}
-     * (the two flags come from a mutually exclusive if/else) -- this fixture builds that "impossible"
-     * combination directly to prove the AGGREGATION reads the flag, not the raw minutes, exactly as
-     * this class's own javadoc ("OT hours") explains.
-     */
+    /** AttendanceDailyService#toDto never actually assigns AttendanceDayFlag#WORKED_LATE_UNAPPROVED alongside a
+     * non-zero overtimeMinutes -- this fixture builds that "impossible" combination directly to prove the
+     * AGGREGATION reads the flag, not the raw minutes, exactly as this class's own javadoc explains. */
     @Test
     void otHoursComeOnlyFromDaysFlaggedOvertimeApproved() {
         stubDay(day(A_WORKDAY, true, AttendanceDayStatus.PRESENT, List.of(AttendanceDayFlag.WORKED_LATE_UNAPPROVED), 90));

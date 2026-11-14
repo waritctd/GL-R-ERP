@@ -26,13 +26,8 @@ public class AttendanceCorrectionRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /**
-     * True when {@code employeeId} already has an OPEN (SUBMITTED) correction request for
-     * {@code workDate} -- a friendlier pre-check ahead of the DB-level
-     * {@code ux_attendance_correction_one_open_per_employee_day} race backstop (see
-     * {@link AttendanceCorrectionService#submit}'s {@code DuplicateKeyException} handling for the
-     * last-resort case where two submissions genuinely race).
-     */
+    /** True when employeeId already has an OPEN correction request for workDate -- a friendlier pre-check ahead of
+     * the DB-level ux_attendance_correction_one_open_per_employee_day race backstop. */
     public boolean hasOpenRequest(long employeeId, LocalDate workDate) {
         Boolean exists = jdbc.queryForObject("""
             SELECT EXISTS(
@@ -143,15 +138,9 @@ public class AttendanceCorrectionRepository {
 
     // --- attendance_punch write (approve-only; see AttendanceCorrectionService#approve) ----------
 
-    /**
-     * The badge_code an HR-corrected punch should carry. {@code hr.employee.badge_card_no} is
-     * nullable (V1) -- an employee who was never issued a physical badge (or whose card is not yet
-     * resolved) still needs a valid, non-blank {@code badge_code} to satisfy
-     * {@code chk_attendance_punch_badge_nonblank}, so this falls back to a synthetic,
-     * unambiguous-as-manual label. This is a label for audit/debugging only (the punch's
-     * {@code employee_id} column, not {@code badge_code}, is what every read path actually joins
-     * on) -- see {@code hr.attendance_punch.badge_code}'s V7 column comment.
-     */
+    /** The badge_code an HR-corrected punch should carry. This is a label for audit/debugging only (the punch's
+     * employee_id column, not badge_code, is what every read path actually joins on) -- see
+     * hr.attendance_punch.badge_code's V7 column comment. */
     public String resolveBadgeCode(long employeeId) {
         String badgeCode = jdbc.query(
             "SELECT badge_card_no FROM hr.employee WHERE employee_id = :employeeId",
@@ -163,15 +152,8 @@ public class AttendanceCorrectionRepository {
         return badgeCode == null || badgeCode.isBlank() ? "MANUAL-" + employeeId : badgeCode;
     }
 
-    /**
-     * The site an HR-corrected punch should carry, since {@code hr.attendance_punch.site_code} is
-     * {@code NOT NULL} but a correction request never asks the employee to pick one. Preference
-     * order: (1) the day's existing {@code attendance_daily.site_code}, if a partial record already
-     * exists (the common case -- one side of the punch already scanned, only the other side is
-     * missing); (2) the employee's most recent punch anywhere, so a first-ever correction still
-     * lands at their usual site; (3) {@code 'SHOWROOM'}, the same seeded default {@code
-     * AttendanceScopeIntegrationTest} and every other test fixture in this codebase already uses.
-     */
+    /** The site an HR-corrected punch should carry, since hr.attendance_punch.site_code is NOT NULL but a
+     * correction request never asks the employee to pick one. */
     public String resolveSiteCode(long employeeId, LocalDate workDate) {
         return jdbc.query("""
             SELECT COALESCE(
@@ -191,12 +173,9 @@ public class AttendanceCorrectionRepository {
             .orElse("SHOWROOM");
     }
 
-    /**
-     * Inserts one HR-corrected punch. Always {@code punch_source = 'MANUAL'},
-     * {@code ingest_method = 'MANUAL_ENTRY'} -- the two enum slots V7 reserved for exactly this and
-     * that, before this feature, nothing wrote (see V7's {@code chk_attendance_punch_source}/
-     * {@code chk_attendance_ingest_method}).
-     */
+    /** Inserts one HR-corrected punch. Always punch_source = 'MANUAL', ingest_method = 'MANUAL_ENTRY' -- the two
+     * enum slots V7 reserved for exactly this and that, before this feature, nothing wrote (see V7's
+     * chk_attendance_punch_source/ chk_attendance_ingest_method). */
     public long insertManualPunch(
             long employeeId, String siteCode, String badgeCode, OffsetDateTime punchTime, LocalDate workDate) {
         Long punchId = jdbc.queryForObject("""

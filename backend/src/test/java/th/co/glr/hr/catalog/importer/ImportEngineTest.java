@@ -14,10 +14,8 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.*;
 
-/**
- * C4: verifies ImportEngine handles every special case from the 9 factory profiles.
- * All tests are pure-unit (no Spring context, no DB).
- */
+/** C4: verifies ImportEngine handles every special case from the 9 factory profiles. All tests are pure-unit
+ * (no Spring context, no DB). */
 class ImportEngineTest {
 
     private ImportEngine engine;
@@ -99,9 +97,9 @@ class ImportEngineTest {
 
         @Test @DisplayName("no magnitude guess: declared unit alone decides the conversion")
         void declaredUnitAloneDecidesConversion() {
-            // Same string, two declared units, two DIFFERENT (both correct) results — the
-            // magnitude-based "< 300 => cm" guess this replaces would have picked ONE answer for
-            // both and been wrong for whichever profile disagreed with it.
+            // Same string, two declared units, two DIFFERENT (both correct) results — the magnitude-based "< 300 => cm"
+            // guess this replaces would have picked ONE answer for both and been wrong for whichever profile disagreed
+            // with it.
             BigDecimal[] asCm = ImportEngine.parseSize("150x600", null, "cm", "mm");
             assertThat(asCm[0]).isEqualByComparingTo("1500.00");
             assertThat(asCm[1]).isEqualByComparingTo("6000.00");
@@ -115,9 +113,9 @@ class ImportEngineTest {
         @DisplayName("REGRESSION (mutation-checked): CDE '150x600' under an mm-declared profile "
             + "must be 150x600 mm, never guessed as 1500x6000 mm")
         void mmDeclaredIsNeverGuessedAsCentimetres() {
-            // CDE's real defect: the old x<300 guess would read this as centimetres (10x wrong).
-            // Reinstating that guess in ImportEngine#toMm must turn this test red — verified by
-            // hand during implementation (see PR body), then reverted.
+            // CDE's real defect: the old x<300 guess would read this as centimetres (10x wrong). Reinstating that guess in
+            // ImportEngine#toMm must turn this test red — verified by hand during implementation (see PR body), then
+            // reverted.
             BigDecimal[] r = ImportEngine.parseSize("150x600", null, "mm", "mm");
             assertThat(r[0]).isEqualByComparingTo("150.00");
             assertThat(r[1]).isEqualByComparingTo("600.00");
@@ -126,8 +124,8 @@ class ImportEngineTest {
         @Test @DisplayName("normalize-on-write: same physical tile from two declared units stores "
             + "byte-identical mm dimensions")
         void sameTileFromTwoDeclaredUnitsConverges() {
-            // A 60x120 cm tile (Padana-style, declared cm) and a 600x1200 mm tile (LEA-style,
-            // declared mm) are the SAME physical tile and must store identical width_mm/height_mm.
+            // A 60x120 cm tile (Padana-style, declared cm) and a 600x1200 mm tile (LEA-style, declared mm) are the SAME
+            // physical tile and must store identical width_mm/height_mm.
             BigDecimal[] fromCmProfile = ImportEngine.parseSize("60x120", null, "cm", "mm");
             BigDecimal[] fromMmProfile = ImportEngine.parseSize("600x1200", null, "mm", "mm");
 
@@ -404,8 +402,8 @@ class ImportEngineTest {
 
         private ByteArrayInputStream makeWorkbook(String sheetName, Object[][] headerAndRows)
             throws Exception {
-            // NOT try-with-resources: close() must happen after write() to avoid
-            // try-with-resources suppressing the return value if close() throws
+            // NOT try-with-resources: close() must happen after write() to avoid try-with-resources suppressing the return
+            // value if close() throws
             XSSFWorkbook wb = new XSSFWorkbook();
             Sheet s = wb.createSheet(sheetName);
             for (int r = 0; r < headerAndRows.length; r++) {
@@ -430,10 +428,9 @@ class ImportEngineTest {
             p.columns = columns;
             p.defaults = defaults != null ? defaults : Map.of();
             p.sheets = List.of(sheetConf(sheet, headerRow));
-            // sizeUnit/thicknessUnit are REQUIRED (ImportEngine#parse fails the whole import
-            // otherwise) — these fixtures don't exercise real-factory unit facts, so "mm" is an
-            // arbitrary but valid default; tests that care about the actual conversion override it
-            // explicitly.
+            // sizeUnit/thicknessUnit are REQUIRED (ImportEngine#parse fails the whole import otherwise) — these fixtures
+            // don't exercise real-factory unit facts, so "mm" is an arbitrary but valid default; tests that care about the
+            // actual conversion override it explicitly.
             p.sizeUnit = "mm";
             p.thicknessUnit = "mm";
             return p;
@@ -585,8 +582,8 @@ class ImportEngineTest {
             ImportResult r = engine.parse(makeWorkbook("Trim-Tiles", data), prof, 1L);
             assertThat(r.errors()).isEmpty();
             assertThat(r.rows()).hasSize(2);
-            // Previously these were left NULL, which made uq_price degenerate to
-            // (version_id, size_raw). They now carry a synthesised code instead.
+            // Previously these were left NULL, which made uq_price degenerate to (version_id, size_raw). They now carry a
+            // synthesised code instead.
             assertThat(r.rows().get(0).productCode()).startsWith(ImportEngine.SURROGATE_PREFIX);
             assertThat(r.rows().get(1).productCode()).startsWith(ImportEngine.SURROGATE_PREFIX);
             assertThat(r.rows().get(0).priceUnit()).isEqualTo("per_sqm");
@@ -597,8 +594,8 @@ class ImportEngineTest {
 
         @Test @DisplayName("Surrogate — same size, different product ⇒ different codes (Trim-Tiles loss)")
         void surrogate_sameSizeDifferentProductGetsDistinctCodes() throws Exception {
-            // The exact shape that collapsed 74 Trim-Tiles rows to 17: no Code column,
-            // several distinct products sharing one size at different prices.
+            // The exact shape that collapsed 74 Trim-Tiles rows to 17: no Code column, several distinct products sharing
+            // one size at different prices.
             Object[][] data = {
                 {"Thickness (mm)", "Item",               "Size (cm)", "PRICE 2026", "UM"},
                 {9.0,              "GRADINO",            "33X150",    244.0,        "pcs"},
@@ -680,8 +677,8 @@ class ImportEngineTest {
             String second = engine.parse(makeWorkbook("Trim-Tiles", data), prof2, 1L)
                                   .rows().get(0).productCode();
 
-            // Assert a code was actually synthesised before comparing — otherwise this
-            // passes vacuously when both sides are NULL (verified by mutation check).
+            // Assert a code was actually synthesised before comparing — otherwise this passes vacuously when both sides
+            // are NULL (verified by mutation check).
             assertThat(first).startsWith(ImportEngine.SURROGATE_PREFIX);
             // Stability is what keeps PriceImportService's incremental merge matching.
             assertThat(second).isEqualTo(first);
@@ -799,10 +796,9 @@ class ImportEngineTest {
                 "pcs_per_box",  "Pcs/Box"
             ), Map.of("currency", "EUR"), "Collections", 1);
             prof.allowMissingCode = false;
-            // 60x60 cm = 0.36 m^2/piece, which is exactly what the box figures below reconcile to
-            // — declaring "mm" here would make 60x60 MM (0.0036 m^2) disagree by ~100x and
-            // quarantine the row instead, which is the point of the reconciliation feature this
-            // test now also exercises.
+            // 60x60 cm = 0.36 m^2/piece, which is exactly what the box figures below reconcile to — declaring "mm" here
+            // would make 60x60 MM (0.0036 m^2) disagree by ~100x and quarantine the row instead, which is the point of the
+            // reconciliation feature this test now also exercises.
             prof.sizeUnit = "cm";
 
             ImportResult r = engine.parse(makeWorkbook("Collections", data), prof, 1L);
@@ -907,8 +903,8 @@ class ImportEngineTest {
             + "commit) rather than importing a wrong figure silently — CDE-shaped defect")
         void reconciliationDisagreementQuarantinesTheRow() throws Exception {
             Object[][] data = {
-                // Declared mm. Box figures say 0.36 m^2/piece (60cm x 60cm); the size string
-                // says "60x60" which under mm is 60mm x 60mm = 0.0036 m^2/piece -- ~100x apart.
+                // Declared mm. Box figures say 0.36 m^2/piece (60cm x 60cm); the size string says "60x60" which under mm is
+                // 60mm x 60mm = 0.0036 m^2/piece -- ~100x apart.
                 {"Code", "Size",  "Price", "Um", "m²/Box", "Pcs/Box"},
                 {"CDE-1", "60x60", 18.0,   "MQ", 1.44,     4.0},
             };
@@ -924,8 +920,8 @@ class ImportEngineTest {
 
             ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 7L);
 
-            // Quarantined, not dropped: it IS staged (so the operator can see and fix it), just
-            // excluded from commit and reported.
+            // Quarantined, not dropped: it IS staged (so the operator can see and fix it), just excluded from commit and
+            // reported.
             assertThat(r.rows()).hasSize(1);
             assertThat(r.errors()).isEmpty();
             PriceRow row = r.rows().get(0);
@@ -945,8 +941,7 @@ class ImportEngineTest {
         @Test @DisplayName("reconciliation AGREE within tolerance imports normally")
         void reconciliationAgreementImportsNormally() throws Exception {
             Object[][] data = {
-                // 60cm x 60cm = 0.36 exactly; box figure rounds to 0.3564 (~1% off) — within the
-                // 2% tolerance.
+                // 60cm x 60cm = 0.36 exactly; box figure rounds to 0.3564 (~1% off) — within the 2% tolerance.
                 {"Code", "Size",  "Price", "Um", "m²/Box", "Pcs/Box"},
                 {"P-1", "60x60", 18.0,     "MQ", 1.4256,   4.0},
             };
@@ -998,9 +993,9 @@ class ImportEngineTest {
             + "the box 'sqm' figure (really linear metres) wildly disagrees with width x height")
         void perLinearMIsNeverQuarantinedAsAnAreaMismatch() throws Exception {
             Object[][] data = {
-                // A 7x60 cm trim: box column holds LINEAR METRES per box (per V153's own finding),
-                // not m^2 -- comparing 0.750 "linear metres/piece" against width*height=0.042 m^2
-                // would be a ~18x "mismatch" if it were ever compared as area. It must not be.
+                // A 7x60 cm trim: box column holds LINEAR METRES per box (per V153's own finding), not m^2 -- comparing 0.750
+                // "linear metres/piece" against width*height=0.042 m^2 would be a ~18x "mismatch" if it were ever compared as
+                // area. It must not be.
                 {"Code", "Size", "Price", "Um", "m²/Box", "Pcs/Box"},
                 {"TRIM-1", "7x60", 15.0,  "ML", 15.0,      20.0},
             };
@@ -1021,8 +1016,8 @@ class ImportEngineTest {
             assertThat(row.priceUnit()).isEqualTo("per_linear_m");
             assertThat(row.sqmProvenance()).isEqualTo("linear_metre_not_area");
             assertThat(row.quarantineReason()).isNull();
-            // sqmPerPiece must stay null -- 15.0/20.0 = 0.750 linear metres/piece is NOT an area,
-            // and nothing may write it where downstream code reads an area.
+            // sqmPerPiece must stay null -- 15.0/20.0 = 0.750 linear metres/piece is NOT an area, and nothing may write it
+            // where downstream code reads an area.
             assertThat(row.sqmPerPiece()).isNull();
             // The profile height (shorter side, 70mm) IS captured, correctly labelled.
             assertThat(row.sqmPerLinearM()).isEqualByComparingTo(new BigDecimal("0.070000"));
@@ -1102,8 +1097,8 @@ class ImportEngineTest {
             PriceRow row = r.rows().get(0);
             assertThat(row.thicknessMm()).isNull();
             assertThat(row.thicknessUnitDeclared()).isEqualTo("none");
-            // Row still imports and prices normally -- "none" is about interpretation, not a
-            // precondition that a thickness must exist.
+            // Row still imports and prices normally -- "none" is about interpretation, not a precondition that a thickness
+            // must exist.
             assertThat(row.sqmProvenance()).isEqualTo("computed_from_dimensions");
         }
 
@@ -1303,8 +1298,8 @@ class ImportEngineTest {
             ), Map.of("currency", "USD"), "Sheet", 1);
             prof.sizeUnit = "mm";
             prof.thicknessUnit = "mm";
-            // Deliberately DIFFERENT from the stated 9mm above, so an accidental override is
-            // immediately visible as a wrong number, not just a wrong provenance tag.
+            // Deliberately DIFFERENT from the stated 9mm above, so an accidental override is immediately visible as a
+            // wrong number, not just a wrong provenance tag.
             prof.defaultThicknessMm = new BigDecimal("5.0");
 
             ImportResult r = engine.parse(makeWorkbook("Sheet", data), prof, 1L);

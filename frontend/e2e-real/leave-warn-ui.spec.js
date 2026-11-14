@@ -30,10 +30,9 @@ import { apiSessionFor, apiWrite, disposeSessions } from './helpers/api.js';
 
 const OWNER_ROLE = 'employee'; // DEMO-EMP01
 
-// Design tokens actually rendered for each LeaveRulePanel tone (frontend/src/index.css) -- read
-// as real computed `color` on the panel's own heading (`style.accent`, LeaveRulePanel.jsx), never
-// as a class-name match. This is what makes "amber, not danger" a real assertion instead of one
-// that would still pass if the two tones' colours were swapped but the wrapping markup untouched.
+// Design tokens actually rendered for each LeaveRulePanel tone (frontend/src/index.css) -- read as real
+// computed `color` on the panel's own heading (`style.accent`, LeaveRulePanel.jsx), never as a class-name
+// match.
 const WARNING_HEADING_COLOR = 'rgb(146, 64, 14)'; // --color-warning-dark
 const DANGER_HEADING_COLOR = 'rgb(220, 38, 38)'; // --color-danger
 
@@ -49,14 +48,8 @@ function daysFromToday(days) {
   return base.toISOString().slice(0, 10);
 }
 
-/**
- * The first real weekday (Mon-Fri) at or after `+days`, whose OWN next calendar day is also a
- * weekday -- i.e. a Mon/Tue/Wed/Thu. Needed only for the contiguous-block setup: VACATION on D and
- * PERSONAL on D+1 must both land on days the employee would actually work, or the rule's own
- * "no intervening workday" test (LeaveService#isContiguous) has nothing to compare. See
- * write-leave-review.spec.js's `workingDayFromToday` for the same Bangkok-TZ weekend-flake
- * reasoning this helper inherits verbatim (public holidays are NOT skipped here either).
- */
+/** The first real weekday (Mon-Fri) at or after `+days`, whose OWN next calendar day is also a weekday -- i.e.
+ * a Mon/Tue/Wed/Thu. */
 function adjacentWeekdayPairStart(days) {
   let iso = daysFromToday(days);
   for (let i = 0; i < 10; i += 1) {
@@ -133,8 +126,8 @@ async function chooseTypeAndAdvance(page, typeNameTh) {
   await expect(page.getByRole('heading', { name: /วันที่และรายละเอียด/ })).toBeVisible();
 }
 
-/** Step 2: set dates (defaults are already today/today -- only call this to change them), fill
- *  the required reason, and optionally set the PERSONAL purpose select. */
+/** Step 2: set dates (defaults are already today/today -- only call this to change them), fill the required
+ * reason, and optionally set the PERSONAL purpose select. */
 async function fillStep2({
   page, startDate, endDate, reason, purposeCode,
 }) {
@@ -151,23 +144,14 @@ async function advanceToStep3(page) {
   await expect(page.getByLabel('กำลังตรวจสอบคำขอ')).toHaveCount(0);
 }
 
-/** The real computed heading colour of a rendered LeaveRulePanel, located by its RULE_META label
- *  text (`getByText`, never a class name -- see this file's header). */
+/** The real computed heading colour of a rendered LeaveRulePanel, located by its RULE_META label text
+ * (`getByText`, never a class name -- see this file's header). */
 function panelHeadingColor(page, label) {
   return page.getByText(label, { exact: true }).evaluate((el) => getComputedStyle(el).color);
 }
 
-/**
- * Neither MyLeaveTab nor ReviewQueueTab passes `searchable` to DataTable, so there is no search
- * box to filter with -- the row for a given (unique) reason string has to be located directly.
- * Matches EITHER row shape DataTable can render: a desktop `<tr class="data-row">` (>=721px) or a
- * mobile `<li class="record-card">` (<721px) -- see DataTable.jsx's own branch for `asCards`.
- * `.first()` is deliberate, not a shortcut: once a desktop row is expanded, DataTable renders a
- * SECOND sibling `<tr>` for the expanded detail panel, which repeats the same reason text
- * (renderLeaveRequestExpanded's own "เหตุผล" field) -- the real row is always the first of the two
- * in DOM order, the expanded detail second. On mobile the expanded content lives inside the SAME
- * `<li>`, so there is only ever one match there regardless of expand state.
- */
+/** Neither MyLeaveTab nor ReviewQueueTab passes `searchable` to DataTable, so there is no search box to filter
+ * with -- the row for a given (unique) reason string has to be located directly. */
 function rowFor(page, reason) {
   return page.locator('tr, li').filter({ hasText: reason }).first();
 }
@@ -189,9 +173,9 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
     });
     await advanceToStep3(page);
 
-    // The ADVANCE_NOTICE panel is rendered (RULE_META label), amber-toned, and NOT wrapped in the
-    // role="alert" the BLOCK path uses (LeaveRequestPage.jsx: only step3Blocking/step3Error get
-    // role="alert" -- see case 5 below for the block-path contrast).
+    // The ADVANCE_NOTICE panel is rendered (RULE_META label), amber-toned, and NOT wrapped in the role="alert" the
+    // BLOCK path uses (LeaveRequestPage.jsx: only step3Blocking/step3Error get role="alert" -- see case 5 below
+    // for the block-path contrast).
     const label = 'แจ้งล่วงหน้าไม่ครบกำหนด';
     await expect(page.getByText(label, { exact: true })).toBeVisible();
     await expect(page.getByRole('alert')).toHaveCount(0);
@@ -203,8 +187,8 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
   });
 
   test('a clean request (no warning) shows the plain submit label', async ({ page }) => {
-    // Contrast half of case 1's label assertion: VACATION booked with full advance notice trips
-    // no gate at all, so the button must read the PLAIN label, not the unpaid one.
+    // Contrast half of case 1's label assertion: VACATION booked with full advance notice trips no gate at all, so
+    // the button must read the PLAIN label, not the unpaid one.
     await gotoComposer(page);
     await chooseTypeAndAdvance(page, 'ลาพักร้อน'); // VACATION, advance_notice_days = 3
     const cleanDay = adjacentWeekdayPairStart(120);
@@ -222,14 +206,9 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
     // The wedding purpose exists only on PERSONAL, whose 1-day notice no request can be short of on
     // a weekend (see NOTICE_SHORT).
     test.skip(weekendInBangkok(), 'PERSONAL cannot be short of notice when today is a Sat/Sun');
-    // PERSONAL + purposeCode=WEDDING, requested for MORE than the 3-day wedding cap (§5.2,
-    // WEDDING_MAX_DAYS, hardcoded WEDDING_LEAVE_MAX_DAYS=3.00) AND submitted same-day (violates
-    // the 1-day notice, ADVANCE_NOTICE) -- LeaveService#autoRejectNote evaluates the wedding cap
-    // first, appends it to `warnings`, and (being WARN_UNPAID_ALL/EXCESS, never BLOCK since V164)
-    // keeps going rather than returning -- so ADVANCE_NOTICE fires too and BOTH accumulate on one
-    // response. PERSONAL's generic max_consecutive_days column is NULL since V120 (superseded by
-    // FIRST_YEAR_MAX_DAYS -- LeaveRuleCode's own class Javadoc), so only WEDDING_MAX_DAYS's own
-    // hardcoded 3-day cap is in play here, not a second, redundant consecutive-days warning.
+    // PERSONAL + purposeCode=WEDDING, requested for MORE than the 3-day wedding cap AND submitted same-day --
+    // LeaveService#autoRejectNote evaluates the wedding cap first, appends it to `warnings`, and keeps going
+    // rather than returning -- so ADVANCE_NOTICE fires too and BOTH accumulate on one response.
     await gotoComposer(page);
     await chooseTypeAndAdvance(page, 'ลากิจ');
     const start = todayInBangkok();
@@ -244,9 +223,9 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
     await expect(page.getByText(weddingLabel, { exact: true })).toBeVisible();
     await expect(page.getByText(noticeLabel, { exact: true })).toBeVisible();
 
-    // The count that matters (not merely "one is present" -- a regression that kept only the
-    // FIRST warning would still pass two separate `toBeVisible()` calls if it kept the wrong one
-    // twice; this counts the actual number of rendered panel headings).
+    // The count that matters (not merely "one is present" -- a regression that kept only the FIRST warning would
+    // still pass two separate `toBeVisible()` calls if it kept the wrong one twice; this counts the actual number
+    // of rendered panel headings).
     const warningHeadings = page.locator('strong').filter({ hasText: new RegExp(`^(${weddingLabel}|${noticeLabel})$`) });
     await expect(warningHeadings).toHaveCount(2);
   });
@@ -282,17 +261,17 @@ test.describe('leave composer: §5 WARN_UNPAID_* rendering (V164 UI)', () => {
   test('case 4: a dateless preview renders no warning at all, and never a fabricated "0 วัน"', async ({ page }) => {
     await gotoComposer(page);
     await chooseTypeAndAdvance(page, 'ลากิจ');
-    // Dates default to today/today -- clear the start date so step2Params becomes null
-    // (LeaveRequestPage.jsx: `if (!employeeId || !leaveTypeCode || !startDate || !endDate) return
-    // null`), which disables the preview query entirely rather than fetching for an empty range.
+    // Dates default to today/today -- clear the start date so step2Params becomes null (LeaveRequestPage.jsx: `if
+    // (!employeeId || !leaveTypeCode || !startDate || !endDate) return null`), which disables the preview query
+    // entirely rather than fetching for an empty range.
     await page.locator('#leave-start-date').fill('');
     await page.locator('#leave-reason').fill('e2e-real: case4 dateless preview');
 
     const mainRegion = page.locator('main');
     await expect(mainRegion.getByText('แจ้งล่วงหน้าไม่ครบกำหนด')).toHaveCount(0);
     await expect(mainRegion.getByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/)).toHaveCount(0);
-    // The fabrication this case exists to catch: a stale/zeroed preview rendering "0 วัน" as
-    // though it were a real answer for a request with no dates at all.
+    // The fabrication this case exists to catch: a stale/zeroed preview rendering "0 วัน" as though it were a real
+    // answer for a request with no dates at all.
     await expect(mainRegion.getByText('0 วัน', { exact: true })).toHaveCount(0);
   });
 });
@@ -326,8 +305,8 @@ test.describe('leave composer: a BLOCK gate still blocks (contrast case)', () =>
 
       const label = 'ลาต่อเนื่องกับวันลาอื่น';
       await expect(page.getByText(label, { exact: true })).toBeVisible();
-      // BLOCK renders inside role="alert" (step3Blocking) -- the structural contrast with every
-      // WARN_UNPAID_* case above, none of which ever gets that wrapper.
+      // BLOCK renders inside role="alert" (step3Blocking) -- the structural contrast with every WARN_UNPAID_* case
+      // above, none of which ever gets that wrapper.
       await expect(page.getByRole('alert').getByText(label, { exact: true })).toBeVisible();
       expect(await panelHeadingColor(page, label)).toBe(DANGER_HEADING_COLOR);
 
@@ -378,15 +357,15 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
     expect(request_.status).toBe('SUBMITTED');
     requestId = request_.id;
     totalDays = Number(request_.totalDays);
-    // Still exactly 1 even when the end date is stretched over a weekend: totalDays counts
-    // WORKING days, so today..Monday on a Saturday is the single Monday.
+    // Still exactly 1 even when the end date is stretched over a weekend: totalDays counts WORKING days, so
+    // today..Monday on a Saturday is the single Monday.
     expect(totalDays, 'this request must resolve to exactly 1 working day').toBe(1);
   });
 
   test.afterAll(async () => {
     if (requestId) {
-      // Reviewer cancel works from either SUBMITTED (if case 6 never got to approve) or APPROVED
-      // (the normal path) -- see write-leave-review.spec.js's own cleanup for the same reasoning.
+      // Reviewer cancel works from either SUBMITTED (if case 6 never got to approve) or APPROVED (the normal path)
+      // -- see write-leave-review.spec.js's own cleanup for the same reasoning.
       const cleanup = await apiWrite(sessions.hr, 'post', `/api/leave/${requestId}/cancel`, {});
       expect(cleanup.status(), 'cleanup cancel must succeed or this spec is not re-runnable').toBe(200);
     }
@@ -435,10 +414,9 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
     ).toBe(quotaRemainingBeforeCreate);
   });
 
-  // Case 8: status badge + "ไม่รับค่าจ้าง N วัน" badge are stacked vertically (never inline), with
-  // the day count spelled out (never truncated), at 375/820/1280 -- asserted via REAL geometry
-  // (boundingBox comparison + scrollWidth<=clientWidth), never a class-name check: a class can be
-  // present while flex-direction/order/wrapping regresses underneath it.
+  // Case 8: status badge + "ไม่รับค่าจ้าง N วัน" badge are stacked vertically, with the day count spelled out,
+  // at 375/820/1280 -- asserted via REAL geometry, never a class-name check: a class can be present while
+  // flex-direction/order/wrapping regresses underneath it.
   const VIEWPORTS = [
     { width: 375, height: 812, label: '375 (mobile card)' },
     { width: 820, height: 1180, label: '820 (desktop grid)' },
@@ -458,10 +436,9 @@ test.describe.serial('leave approver: warning visibility, pay-consequence confir
     expect(statusBox, 'status badge must have real geometry').toBeTruthy();
     expect(unpaidBox, 'unpaid badge must have real geometry').toBeTruthy();
 
-    // STACKED, not inline: the unpaid badge's top must sit at or below the status badge's own
-    // bottom (allowing a hairline of anti-aliasing/rounding slack), and the two must be
-    // left-aligned within a few px -- an inline layout would instead sit them side by side at
-    // roughly the SAME y with different x.
+    // STACKED, not inline: the unpaid badge's top must sit at or below the status badge's own bottom (allowing a
+    // hairline of anti-aliasing/rounding slack), and the two must be left-aligned within a few px -- an inline
+    // layout would instead sit them side by side at roughly the SAME y with different x.
     expect(unpaidBox.y, 'unpaid badge must sit BELOW the status badge, not beside it').toBeGreaterThanOrEqual(statusBox.y + statusBox.height - 2);
     expect(Math.abs(unpaidBox.x - statusBox.x), 'the two badges must be left-aligned (stacked column)').toBeLessThanOrEqual(4);
 

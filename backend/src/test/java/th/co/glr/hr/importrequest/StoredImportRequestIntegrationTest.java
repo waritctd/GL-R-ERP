@@ -39,21 +39,8 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * The STORED ใบขอซื้อ lifecycle, against real Postgres through the real service and repository —
- * rewritten for V184's per-FACTORY grain (was per-brand) and owner decision 1's new authorisation
- * model. The pre-V184 version of this class tested {@code createDrafts}/{@code issue}/etc. grouped
- * by {@code brand} and gated on {@code import}/{@code ceo}; both are now wrong: the grouping key is
- * {@code factory_id} and the write roles are the deal's OWNING sales rep + CEO (full BODY write),
- * {@code import} (step advance + post-issue lead time + order-email edit/mark-sent only — NOT the
- * printed footer, owner decision 09-19), the CEO ALONE (the printed footer), {@code sales_manager}
- * (read only).
- *
- * <p>These are WRITES — unlike the preview endpoints, which are read-only — so per CLAUDE.md they
- * need real-DB authz evidence, written wrong-way-round. Mockito cannot reach any of this: a mocked
- * repository would pass happily while the {@code UPDATE} and the two partial unique indexes did
- * something else.
- */
+/** The STORED ใบขอซื้อ lifecycle, against real Postgres through the real service and repository — rewritten for
+ * V184's per-FACTORY grain (was per-brand) and owner decision 1's new authorisation model. */
 class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private ImportRequestService service;
@@ -103,10 +90,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         accountUser = principal(insertEmployee("STORED-ACC"), "account");
         salesManager = principal(insertEmployee("STORED-SM"), "sales_manager");
 
-        // Pre-seeded factory master rows (V184 grouping key) — the deal's lines are hand-typed
-        // against these names via ticket_item.factory, which is the simplest of the three
-        // resolution-cascade inputs (ImportRequestQueryRepository#factoryResolutionCandidates) and
-        // exercises the everyday case, not the auto-create path (covered separately).
+        // Pre-seeded factory master rows — the deal's lines are hand-typed against these names via
+        // ticket_item.factory, which is the simplest of the three resolution-cascade inputs and exercises the everyday
+        // case, not the auto-create path.
         padanaFactoryId = insertFactory("Padana Stored Test");
         leaFactoryId = insertFactory("LEA Stored Test");
 
@@ -118,30 +104,23 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     // ── lifecycle (per-FACTORY as of V184) ──────────────────────────────────────────────────────
 
-    /**
-     * PR-B REVIEW ROUND 1, S9: {@code ImportRequestRepository.findByTicket} used to {@code ORDER BY
-     * r.brand, r.version} — stale since V184 made {@code brand} a nullable DISPLAY snapshot
-     * (derived from {@code ticket_item.brand}, see {@code ImportRequestService.FactoryGroup
-     * #brandLabel}) and {@code factory_id}/{@code factory_name} the real, NOT NULL per-row identity
-     * (owner decision 2, GLA-105). Reproduces the bug directly: the two lines' brands are seeded in
-     * the OPPOSITE alphabetical order from their resolved factories, so the old ordering would
-     * return [zeta, alpha] while the fix (ORDER BY factory_name) must return [alpha, zeta].
-     */
+    /** PR-B REVIEW ROUND 1, S9: ImportRequestRepository.findByTicket used to ORDER BY r.brand, r.version — stale
+     * since V184 made brand a nullable DISPLAY snapshot and factory_id/factory_name the real, NOT NULL per-row
+     * identity. */
     @Test
     void list_ordersByFactoryName_notByTheNullableBrandSnapshot() {
         long alphaFactoryId = insertFactory("Alpha Factory Order Test");
         long zetaFactoryId = insertFactory("Zeta Factory Order Test");
         long orderTicketId = insertTicket("IRORDER-1", "บริษัท ทดสอบลำดับ จำกัด");
-        // brand "Zzz Brand" (sorts LAST) is on the factory that sorts FIRST by name, and vice
-        // versa — see this test's own Javadoc above for why that combination is deliberate.
+        // brand "Zzz Brand" (sorts LAST) is on the factory that sorts FIRST by name, and vice versa — see this test's
+        // own Javadoc above for why that combination is deliberate.
         insertItemWithDivergentBrand(orderTicketId, "Zzz Brand", "Alpha Factory Order Test",
             "Model A", "10x10 cm", "5", "pcs", 0);
         insertItemWithDivergentBrand(orderTicketId, "Aaa Brand", "Zeta Factory Order Test",
             "Model Z", "10x10 cm", "5", "pcs", 1);
 
         List<ImportRequestDto> drafts = service.createDrafts(orderTicketId, null, owner);
-        // Confirms the fixture actually diverges brand from factory name before trusting the
-        // ordering assertion below.
+        // Confirms the fixture actually diverges brand from factory name before trusting the ordering assertion below.
         assertThat(byFactory(drafts, alphaFactoryId).brand()).isEqualTo("Zzz Brand");
         assertThat(byFactory(drafts, zetaFactoryId).brand()).isEqualTo("Aaa Brand");
 
@@ -355,11 +334,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /**
-     * Two partial unique indexes on (ticket_id, factory_id): a correction is prepared while the
-     * previous version is still live, and the revision's issue carries the predecessor's progress
-     * step FORWARD rather than resetting it to CONTACTED (import-request-per-factory-PLAN.md §3).
-     */
+    /** Two partial unique indexes on (ticket_id, factory_id): a correction is prepared while the previous version
+     * is still live, and the revision's issue carries the predecessor's progress step FORWARD rather than
+     * resetting it to CONTACTED (import-request-per-factory-PLAN.md §3). */
     @Test
     void revise_leavesThePreviousVersionIssuedUntilTheReplacementIsIssued_andCarriesTheStepForward() {
         long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -403,17 +380,15 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(id, null, owner);
 
-        // Body: refused to import outright — FORBIDDEN, not CONFLICT, because import is not even in
-        // FULL_WRITE_ROLES for a body change; requireFullWrite rejects it before the DRAFT-only
-        // status check is ever reached.
+        // Body: refused to import outright — FORBIDDEN, not CONFLICT, because import is not even in FULL_WRITE_ROLES
+        // for a body change; requireFullWrite rejects it before the DRAFT-only status check is ever reached.
         assertThatThrownBy(() -> service.update(id,
                 new UpdateImportRequestRequest("แก้โครงการ", null, null, null, null, null, null, null, null, null, null, null),
                 importUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        // Body via the deal owner IS authorised to attempt it, but is refused anyway — CONFLICT,
-        // because the form is ISSUED (frozen), not DRAFT. This is the status-layer check the import
-        // case above never reaches.
+        // Body via the deal owner IS authorised to attempt it, but is refused anyway — CONFLICT, because the form is
+        // ISSUED (frozen), not DRAFT. This is the status-layer check the import case above never reaches.
         assertThatThrownBy(() -> service.update(id,
                 new UpdateImportRequestRequest("แก้โครงการ", null, null, null, null, null, null, null, null, null, null, null),
                 owner))
@@ -421,19 +396,15 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /**
-     * The printed form's footer (Checked By/date, Approve By/date, vessel ETA) — owner decision
-     * 09-19, CEO ONLY, superseding decision 1's original wording that had let the owning rep and
-     * import touch it too. Written wrong-way-round per CLAUDE.md: the owning rep, import and
-     * sales_manager must each be refused, not just "CEO can" on its own.
-     */
+    /** The printed form's footer (Checked By/date, Approve By/date, vessel ETA) — owner decision 09-19, CEO ONLY,
+     * superseding decision 1's original wording that had let the owning rep and import touch it too. */
     @Test
     void issuedFormFooter_isWritableByCeoOnly_ownerRepImportAndSalesManagerAllRefused() {
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         ImportRequestDto issued = service.issue(id, null, owner);
-        // vesselEtaNote is auto-prefilled by the SYSTEM at issue (owner decision 09-18 #3 §A) — a
-        // service-internal write, unaffected by 09-19's actor-role gate. Captured here so the
-        // "untouched" assertion below compares against the real starting value, not an assumed null.
+        // vesselEtaNote is auto-prefilled by the SYSTEM at issue (owner decision 09-18 #3 §A) — a service-internal
+        // write, unaffected by 09-19's actor-role gate. Captured here so the "untouched" assertion below compares
+        // against the real starting value, not an assumed null.
         String vesselEtaNoteAtIssue = issued.vesselEtaNote();
         assertThat(vesselEtaNoteAtIssue).isNotBlank();
         UpdateImportRequestRequest footerEdit = new UpdateImportRequestRequest(
@@ -450,8 +421,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatThrownBy(() -> service.update(id, footerEdit, salesManager))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        // None of the three refused attempts touched anything: still the system's auto-prefilled
-        // value, not the "ETA ปลายเดือน" any of them tried to write.
+        // None of the three refused attempts touched anything: still the system's auto-prefilled value, not the "ETA
+        // ปลายเดือน" any of them tried to write.
         ImportRequestDto untouched = service.get(id, ceoUser);
         assertThat(untouched.vesselEtaNote()).isEqualTo(vesselEtaNoteAtIssue);
         assertThat(untouched.checkedByName()).isNull();
@@ -491,11 +462,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(text).contains("ยู่ฮุย").doesNotContain("ลูกค้าใหม่");
     }
 
-    /**
-     * REVIEW ROUND 2, S-B: the printed header must name the FACTORY this particular form is for —
-     * V184 made factory the grouping key, so a per-factory form that printed only a bare brand label
-     * (or a brand shared with ANOTHER factory's own form) would no longer say which one it is.
-     */
+    /** REVIEW ROUND 2, S-B: the printed header must name the FACTORY this particular form is for — V184 made
+     * factory the grouping key, so a per-factory form that printed only a bare brand label (or a brand shared with
+     * ANOTHER factory's own form) would no longer say which one it is. */
     @Test
     void aStoredFormsPrintedHeader_namesItsOwnFactory() throws Exception {
         long padanaId = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -505,13 +474,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(text).contains("Padana Stored Test");
     }
 
-    /**
-     * OWNER DECISION 09-19 #2: the copy that actually reaches a supplier must not show the customer
-     * name or the deposit-received date. The INTERNAL copy (everything, the default — same call
-     * every existing test above already makes) still shows both; only the explicit FACTORY copy
-     * blanks them. Everything else — factory header, lines, required-by, doc number — is IDENTICAL
-     * between the two.
-     */
+    /** OWNER DECISION 09-19 #2: the copy that actually reaches a supplier must not show the customer name or the
+     * deposit-received date. The INTERNAL copy (everything, the default — same call every existing test above
+     * already makes) still shows both; only the explicit FACTORY copy blanks them. */
     @Test
     void factoryCopy_omitsCustomerNameAndDepositDate_internalCopyKeepsBoth() throws Exception {
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -527,15 +492,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             .contains("Lithos Nero Nat");
     }
 
-    /**
-     * V184's DB-layer backstop, tested independently of the service's own "skip an already-covered
-     * factory" check ({@link #createDrafts_isOnePerFactory_andSkipsFactoriesAlreadyCovered}): even a
-     * raw SQL insert that bypasses the service entirely cannot put a second ISSUED row on the same
-     * (ticket, factory) — {@code ux_import_request_ticket_factory_issued}, {@code CREATE UNIQUE
-     * INDEX ... WHERE status = 'ISSUED'}. "Enforced in the database, not by a service-side
-     * check-then-insert, which races" (V154's own comment on the ancestor, brand-keyed index this
-     * one replaced).
-     */
+    /** V184's DB-layer backstop, tested independently of the service's own "skip an already-covered factory" check:
+     * even a raw SQL insert that bypasses the service entirely cannot put a second ISSUED row on the same —
+     * ux_import_request_ticket_factory_issued, CREATE UNIQUE INDEX ... */
     @Test
     void uniquePartialIndex_refusesASecondIssuedRowForTheSameTicketAndFactory_evenBypassingTheService() {
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -773,10 +732,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(stored.findByTicket(ticketId)).isEmpty();
     }
 
-    /**
-     * {@code sales_manager} reads (owner decision 1's third tier) but must be refused every write —
-     * create, issue, footer edit and step advance alike.
-     */
+    /** sales_manager reads (owner decision 1's third tier) but must be refused every write — create, issue, footer
+     * edit and step advance alike. */
     @Test
     void salesManagerIsReadOnly() {
         assertThatThrownBy(() -> service.createDrafts(ticketId, null, salesManager))
@@ -808,14 +765,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     // ── กำหนดวันที่ต้องการของ — SALES's field, a DIFFERENT gate ────────────────────────────────
 
-    /**
-     * REVIEW ROUND 2, S-F cheap nit: renamed from {@code
-     * requiredByNote_isSetByTheOwningRep_andSnapshottedOntoTheFormAtIssue} — that name was
-     * misleading, since the assertion runs right after {@code createDrafts} and never calls {@code
-     * issue} at all, so what it actually pins is the DRAFT-CREATION-time snapshot, not an at-issue
-     * one. The genuine at-issue re-snapshot (new behaviour, S-F) is
-     * {@link #requiredByNote_isReSnapshottedAtIssue_onlyWhenStillBlankOnTheDraft}.
-     */
+    /** REVIEW ROUND 2, S-F cheap nit: renamed from
+     * requiredByNote_isSetByTheOwningRep_andSnapshottedOntoTheFormAtIssue. The genuine at-issue re-snapshot (new
+     * behaviour, S-F) is #requiredByNote_isReSnapshottedAtIssue_onlyWhenStillBlankOnTheDraft. */
     @Test
     void requiredByNote_isSetByTheOwningRep_andSnapshottedOntoTheFormAtCreation() {
         service.setRequiredByNote(ticketId, new SetRequiredByNoteRequest("Within 21/5/26"), owner);
@@ -824,11 +776,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(service.get(id, owner).requiredByNote()).isEqualTo("Within 21/5/26");
     }
 
-    /**
-     * REVIEW ROUND 2, S-F: {@code requiredByNote} is ALSO a body field on the FORM itself (not just
-     * the deal-level snapshot source above) — editable by the owning rep/CEO while DRAFT, through
-     * {@link #update}, distinct from {@link SetRequiredByNoteRequest} which sets the DEAL's value.
-     */
+    /** REVIEW ROUND 2, S-F: requiredByNote is ALSO a body field on the FORM itself (not just the deal-level
+     * snapshot source above) — editable by the owning rep/CEO while DRAFT, through #update, distinct from
+     * SetRequiredByNoteRequest which sets the DEAL's value. */
     @Test
     void requiredByNote_isEditableOnTheDraftByOwningRepOrCeo_notByANonOwningRepOrImport() {
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -852,17 +802,14 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(afterCeo.requiredByNote()).isEqualTo("Within 20 days");
     }
 
-    /**
-     * REVIEW ROUND 2, S-F: a draft's OWN {@code requiredByNote}, if it is STILL blank at issue,
-     * is re-snapshotted at that point from the deal's CURRENT value — not frozen forever at
-     * whatever it read (nothing, in the common case) at draft creation. Once the owning rep/CEO has
-     * typed one directly onto the form, issue never overwrites it.
-     */
+    /** REVIEW ROUND 2, S-F: a draft's OWN requiredByNote, if it is STILL blank at issue, is re-snapshotted at that
+     * point from the deal's CURRENT value — not frozen forever at whatever it read (nothing, in the common case)
+     * at draft creation. */
     @Test
     void requiredByNote_isReSnapshottedAtIssue_onlyWhenStillBlankOnTheDraft() {
-        // ONE createDrafts call raises BOTH factories' drafts at once (setUp's ticket already has
-        // items for both) — capture both ids from it rather than calling createDrafts a second
-        // time, which would find every factory already covered and 409.
+        // ONE createDrafts call raises BOTH factories' drafts at once (setUp's ticket already has items for both) —
+        // capture both ids from it rather than calling createDrafts a second time, which would find every factory
+        // already covered and 409.
         List<ImportRequestDto> drafts = DraftSeed.seed(jdbc, ticketId, owner);
         long blankId = byFactory(drafts, padanaFactoryId).id();
         long typedId = byFactory(drafts, leaFactoryId).id();
@@ -881,15 +828,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(issuedTyped.requiredByNote()).isEqualTo("Custom, do not overwrite");
     }
 
-    /**
-     * REVIEW ROUND 3, item 2 (S-F regression, confirmed against real Postgres): {@code revise} must
-     * carry the ISSUED form's OWN {@code requiredByNote} forward, not fall back to whatever the DEAL
-     * currently reads. The bug was that {@code revise}'s call to {@code insertDraft} left the new
-     * override argument unset, so the row fell all the way back to {@code
-     * TicketSnapshot#requiredByNote} — silently dropping anything the rep had typed directly onto
-     * THIS form (rather than the deal-level field {@link SetRequiredByNoteRequest} sets) the moment
-     * it was revised.
-     */
+    /** REVIEW ROUND 3, item 2 (S-F regression, confirmed against real Postgres): revise must carry the ISSUED
+     * form's OWN requiredByNote forward, not fall back to whatever the DEAL currently reads. */
     @Test
     void requiredByNote_typedOnTheFormBeforeItsFirstIssue_survivesARevision() {
         long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -909,11 +849,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     // ── REVIEW ROUND 1, S3: read access is also ownership-scoped, wrong-way-round ────────────────
 
-    /**
-     * {@code requireRead} lets CEO/import/sales_manager read ANY deal's IR, but a {@code sales} rep
-     * must be the deal's OWN owner — {@code otherSalesRep} holds the identical role, so this is the
-     * case that actually tests the ownership half rather than the role half.
-     */
+    /** requireRead lets CEO/import/sales_manager read ANY deal's IR, but a sales rep must be the deal's OWN owner —
+     * otherSalesRep holds the identical role, so this is the case that actually tests the ownership half rather
+     * than the role half. */
     @Test
     void nonOwningSalesRepCannotReadListOrDownloadAnotherRepsIr() throws Exception {
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -929,20 +867,17 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
 
-        // The owning rep, CEO, import and sales_manager — every role requireRead DOES admit — must
-        // still succeed, so the case above is a real ownership scope, not a blanket outage.
+        // The owning rep, CEO, import and sales_manager — every role requireRead DOES admit — must still succeed, so
+        // the case above is a real ownership scope, not a blanket outage.
         assertThat(service.get(id, owner).id()).isEqualTo(id);
         assertThat(service.get(id, ceoUser).id()).isEqualTo(id);
         assertThat(service.get(id, importUser).id()).isEqualTo(id);
         assertThat(service.get(id, salesManager).id()).isEqualTo(id);
     }
 
-    /**
-     * {@code deleteDraft} is a {@link #FULL_WRITE_ROLES}-only action per the class Javadoc — import
-     * (footer-only) and sales_manager (read-only) must both be refused, not just a non-owning rep
-     * (already covered by {@link #nonOwningSalesRepCannotCreateIssueOrRevise}/{@link
-     * #importCannotCreateIssueOrRevise}, which do not touch delete).
-     */
+    /** deleteDraft is a #FULL_WRITE_ROLES-only action per the class Javadoc — import (footer-only) and
+     * sales_manager (read-only) must both be refused, not just a non-owning rep (already covered by
+     * #nonOwningSalesRepCannotCreateIssueOrRevise/#importCannotCreateIssueOrRevise, which do not touch delete). */
     @Test
     void importAndSalesManagerCannotDeleteDraft() {
         long lea = byFactory(DraftSeed.seed(jdbc, ticketId, owner), leaFactoryId).id();
@@ -960,27 +895,24 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     // ── REVIEW ROUND 1, S4: a stored ใบขอซื้อ must refuse on an inactive deal ───────────────────
 
-    /**
-     * {@code issue}/{@code revise}/{@code update}/{@code setLeadTime}/{@code advanceStep} must all
-     * refuse once the deal has gone LOST — matching every legacy ticket-mutating method's own
-     * {@code TicketService#requireActive} guard, which this stored aggregate did not previously
-     * share.
-     */
+    /** issue/revise/update/setLeadTime/advanceStep must all refuse once the deal has gone LOST — matching every
+     * legacy ticket-mutating method's own TicketService#requireActive guard, which this stored aggregate did not
+     * previously share. */
     @Test
     void everyMutatingMethod_isRefusedOnceTheDealIsInactive() {
         long padana = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
         service.issue(padana, null, owner);
         long lea = byFactory(service.list(ticketId, owner), leaFactoryId).id();
-        // A THIRD, not-yet-covered factory, added before markLost — so the post-lost createDrafts
-        // call below fails for the INACTIVE-DEAL reason this test is about, not the unrelated
-        // "every factory already covered" conflict createDrafts would otherwise throw first.
+        // A THIRD, not-yet-covered factory, added before markLost — so the post-lost createDrafts call below fails for
+        // the INACTIVE-DEAL reason this test is about, not the unrelated "every factory already covered" conflict
+        // createDrafts would otherwise throw first.
         long thirdFactoryId = insertFactory("Inactive Deal Third Factory");
         insertItem(ticketId, "Inactive Deal Third Factory", "Line C", "60x60 cm", "5", "pcs", 3);
 
         markLost(ticketId);
 
-        // Cheap nit (REVIEW ROUND 2): extended to createDrafts, updateEmailDraft, markEmailSent,
-        // deleteDraft — everyMutatingMethod now really does mean every one.
+        // Cheap nit (REVIEW ROUND 2): extended to createDrafts, updateEmailDraft, markEmailSent, deleteDraft —
+        // everyMutatingMethod now really does mean every one.
         assertThatThrownBy(() -> service.createDrafts(ticketId, null, owner))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -992,9 +924,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThatThrownBy(() -> service.revise(padana, owner))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
-        // Footer write is CEO-only as of owner decision 09-19 — importUser would 403 before ever
-        // reaching the inactive-deal check this test is about, so ceoUser (the role actually
-        // authorised to write the footer) is the one that exercises requireDealActive here.
+        // Footer write is CEO-only as of owner decision 09-19 — importUser would 403 before ever reaching the
+        // inactive-deal check this test is about, so ceoUser (the role actually authorised to write the footer) is the
+        // one that exercises requireDealActive here.
         assertThatThrownBy(() -> service.update(padana, new UpdateImportRequestRequest(
                 null, null, null, "ETA", null, null, null, null, null, null, null, null), ceoUser))
             .isInstanceOfSatisfying(ApiException.class,
@@ -1019,8 +951,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        // Nothing moved: padana's step is still whatever issue() set it to (CONTACTED), its email
-        // never got marked sent, and lea's draft is still there (deleteDraft refused).
+        // Nothing moved: padana's step is still whatever issue() set it to (CONTACTED), its email never got marked
+        // sent, and lea's draft is still there (deleteDraft refused).
         assertThat(stored.findById(padana).orElseThrow().importStep()).isEqualTo(ImportRequestStep.CONTACTED);
         assertThat(stored.findById(padana).orElseThrow().emailSentAt()).isNull();
         assertThat(stored.findById(lea)).isPresent();
@@ -1028,10 +960,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
 
     // ── REVIEW ROUND 1, S7: the arrival anchor never moves on a revision ─────────────────────────
 
-    /**
-     * A same-day (or later) revision must NOT push the derived arrival window out — it stays
-     * anchored on the FACTORY'S FIRST issue date (owner default decision, flagged for the owner).
-     */
+    /** A same-day (or later) revision must NOT push the derived arrival window out — it stays anchored on the
+     * FACTORY'S FIRST issue date (owner default decision, flagged for the owner). */
     @Test
     void revision_doesNotMoveTheArrivalAnchor() {
         long v1 = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -1072,8 +1002,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(service.get(id, owner).importStep()).isEqualTo(ImportRequestStep.CONTACTED);
     }
 
-    /** REVIEW ROUND 1 nit: the ticket_event message names the step in the owner's own Thai labels,
-     * not the raw uppercase code. */
+    /** REVIEW ROUND 1 nit: the ticket_event message names the step in the owner's own Thai labels, not the raw
+     * uppercase code. */
     @Test
     void advanceStep_eventMessageUsesThaiStepLabels() {
         long id = byFactory(DraftSeed.seed(jdbc, ticketId, owner), padanaFactoryId).id();
@@ -1153,12 +1083,9 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
             """, Map.of("name", name), Long.class);
     }
 
-    /**
-     * Already at {@code quotation_issued} + {@code DEPOSIT_PAID} + {@code sales_stage=ORDER_RECEIVED}
-     * — the readiness floor {@code TicketService#requireImportRequestIssuable}/{@code
-     * stageAtLeastOrderReceived} both need — so every test can go straight to exercising the IR
-     * lifecycle without re-deriving that setup per test.
-     */
+    /** Already at quotation_issued + DEPOSIT_PAID + sales_stage=ORDER_RECEIVED — the readiness floor
+     * TicketService#requireImportRequestIssuable/stageAtLeastOrderReceived both need — so every test can go
+     * straight to exercising the IR lifecycle without re-deriving that setup per test. */
     private long insertTicket(String code, String customerName) {
         return jdbc.queryForObject("""
             INSERT INTO sales.ticket (code, title, created_by, customer_name, status, payment_status,
@@ -1182,11 +1109,8 @@ class StoredImportRequestIntegrationTest extends AbstractPostgresIntegrationTest
                 .addValue("sort", sortOrder).addValue("factory", factory));
     }
 
-    /**
-     * Like {@link #insertItem} but lets {@code brand} and {@code factory} diverge — {@link
-     * #insertItem} deliberately sets them equal, which is the everyday fixture shape but cannot
-     * exercise {@link #list_ordersByFactoryName_notByTheNullableBrandSnapshot}'s bug.
-     */
+    /** Like #insertItem but lets brand and factory diverge — #insertItem deliberately sets them equal, which is the
+     * everyday fixture shape but cannot exercise #list_ordersByFactoryName_notByTheNullableBrandSnapshot's bug. */
     private void insertItemWithDivergentBrand(long ticket, String brand, String factory, String model,
                             String size, String qty, String unit, int sortOrder) {
         jdbc.update("""

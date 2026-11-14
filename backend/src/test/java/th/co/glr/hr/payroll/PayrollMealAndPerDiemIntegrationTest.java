@@ -26,17 +26,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Defect fix (Opus review, 2026-07-29): {@code meal_allowance}, {@code per_diem_exempt}, {@code
- * per_diem_taxable} and {@code per_diem_basis} (V97) were read from the request, folded into
- * tax/SSO arithmetic, and then discarded -- persisted nowhere, read back from nowhere. Entering
- * ค่าอาหาร ฿1,680 with per-diem ฿700 exempt / ฿300 taxable used to store all four as zero/null while
- * still correctly taxing the money once (verified consequence in the review: {@code gross_amount}
- * and {@code non_taxable_income} were right, the four dedicated columns were not).
- *
- * <p>Driven through the real {@link PayrollService#process}/{@link PayrollRepository}, per
- * CLAUDE.md's requirement that business-logic changes get real-DB coverage.
- */
+/** Defect fix (Opus review, 2026-07-29): meal_allowance, per_diem_exempt, per_diem_taxable and per_diem_basis
+ * (V97) were read from the request, folded into tax/SSO arithmetic, and then discarded -- persisted nowhere,
+ * read back from nowhere. */
 class PayrollMealAndPerDiemIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final int TAX_YEAR = 2026;
 
@@ -95,13 +87,13 @@ class PayrollMealAndPerDiemIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(line.perDiemTaxable()).isEqualByComparingTo("300.00");
         assertThat(line.perDiemBasis()).isEqualTo("FLAT_RATE_S42_2");
 
-        // Both taxable additions land in gross; the exempt per-diem joins non-taxable income.
-        // gross = 30,000 salary + 1,680 meal + 300 per-diem-taxable = 31,980.00
+        // Both taxable additions land in gross; the exempt per-diem joins non-taxable income. gross = 30,000 salary +
+        // 1,680 meal + 300 per-diem-taxable = 31,980.00
         assertThat(line.grossEarnings()).isEqualByComparingTo("31980.00");
         assertThat(line.nonTaxableIncome()).isEqualByComparingTo("700.00");
 
-        // Re-reading straight from the DB (not the service's in-memory return value) confirms the
-        // same thing survives the actual INSERT + SELECT round trip, not just the in-memory object.
+        // Re-reading straight from the DB (not the service's in-memory return value) confirms the same thing survives
+        // the actual INSERT + SELECT round trip, not just the in-memory object.
         PayrollLineDto reread = onlyLine(payrollRepository.findPeriodById(processed.id()).orElseThrow(), employeeId);
         assertThat(reread.mealAllowance()).isEqualByComparingTo("1680.00");
         assertThat(reread.perDiemExempt()).isEqualByComparingTo("700.00");
@@ -120,9 +112,9 @@ class PayrollMealAndPerDiemIntegrationTest extends AbstractPostgresIntegrationTe
         // First run: no meal/per-diem at all.
         payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
 
-        // Second run (the DELETE+INSERT reprocess path, PayrollRepository#saveProcessedPeriod): now
-        // with meal allowance and per-diem. Proves the UPDATE/reprocess path also persists the four
-        // fields, not only a brand-new period's first insert.
+        // Second run (the DELETE+INSERT reprocess path, PayrollRepository#saveProcessedPeriod): now with meal
+        // allowance and per-diem. Proves the UPDATE/reprocess path also persists the four fields, not only a brand-new
+        // period's first insert.
         PayrollEmployeeInputRequest input = mealAndPerDiemInput(
             employeeId, new BigDecimal("1000.00"),
             BigDecimal.ZERO, new BigDecimal("500.00"), PerDiemBasis.REIMBURSED_S42_1);
@@ -135,10 +127,8 @@ class PayrollMealAndPerDiemIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(reread.perDiemBasis()).isEqualTo("REIMBURSED_S42_1");
     }
 
-    /**
-     * {@code chk_payroll_line_per_diem_basis_present} (V97) must actually be reachable through the
-     * real insert path, not just declared in the migration: an amount with a null basis is rejected.
-     */
+    /** chk_payroll_line_per_diem_basis_present (V97) must actually be reachable through the real insert path, not
+     * just declared in the migration: an amount with a null basis is rejected. */
     @Test
     void insertingAPerDiemAmountWithNoBasisIsRejectedByTheDatabase() {
         long employeeId = seedEmployee("MEAL-003", "ไม่มีเบซิส", "ทดสอบ", new BigDecimal("30000.00"));
@@ -151,17 +141,9 @@ class PayrollMealAndPerDiemIntegrationTest extends AbstractPostgresIntegrationTe
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    /**
-     * F2 fix (Opus review, 2026-07-30): before this fix, the frontend had no basis selector at all
-     * (so HR could never supply one) and {@link PayrollService#calculateLine} passed
-     * {@code input.perDiemBasis()} straight through to the INSERT unvalidated -- Preview always
-     * succeeded (it never writes a row) and Process 500'd on {@code
-     * chk_payroll_line_per_diem_basis_present} the moment HR typed a per-diem amount. This drives
-     * the REAL {@link PayrollService#process} (not the repository directly, unlike the DB-level test
-     * above) and asserts the failure is now a clean {@link ApiException} 400 naming the employee and
-     * the missing basis, thrown BEFORE any INSERT is attempted -- never a bare
-     * {@link DataIntegrityViolationException} surfacing as a 500.
-     */
+    /** before this fix, the frontend had no basis selector at all and PayrollService#calculateLine passed
+     * input.perDiemBasis straight through to the INSERT unvalidated -- Preview always succeeded and Process 500'd
+     * on chk_payroll_line_per_diem_basis_present the moment HR typed a per-diem amount. */
     @Test
     void processRejectsAPerDiemAmountWithNoBasisAsACleanFourHundredNotAFiveHundred() {
         long employeeId = seedEmployee("MEAL-004", "ไม่ระบุฐาน", "ทดสอบ", new BigDecimal("30000.00"));
@@ -195,11 +177,8 @@ class PayrollMealAndPerDiemIntegrationTest extends AbstractPostgresIntegrationTe
             .hasMessageContaining("MEAL-005");
     }
 
-    /**
-     * Preview shares {@link PayrollService#calculateLine} with Process, so it now catches the same
-     * missing-basis defect up front too -- fail fast rather than letting HR reach Process only to be
-     * rejected there.
-     */
+    /** Preview shares PayrollService#calculateLine with Process, so it now catches the same missing-basis defect up
+     * front too -- fail fast rather than letting HR reach Process only to be rejected there. */
     @Test
     void previewAlsoRejectsAPerDiemAmountWithNoBasisBeforeAnyDatabaseWriteIsEvenAttempted() {
         long employeeId = seedEmployee("MEAL-006", "พรีวิวไม่ระบุฐาน", "ทดสอบ", new BigDecimal("30000.00"));
@@ -284,10 +263,8 @@ class PayrollMealAndPerDiemIntegrationTest extends AbstractPostgresIntegrationTe
         );
     }
 
-    /** A hand-crafted line with a non-zero per-diem-taxable amount but a null basis -- must be
-     *  rejected by chk_payroll_line_per_diem_basis_present, not silently accepted. Every field is
-     *  listed individually against {@link PayrollLineDto}'s canonical (53-arg) field order, since a
-     *  positional record constructor gives no other way to check the mapping is right. */
+    /** A hand-crafted line with a non-zero per-diem-taxable amount but a null basis -- must be rejected by
+     * chk_payroll_line_per_diem_basis_present, not silently accepted. */
     private PayrollLineDto malformedLineMissingPerDiemBasis(long employeeId, String code, String name) {
         BigDecimal zero = BigDecimal.ZERO;
         return new PayrollLineDto(

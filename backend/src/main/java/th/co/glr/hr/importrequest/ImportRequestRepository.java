@@ -15,16 +15,9 @@ import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestItemDto;
 import th.co.glr.hr.importrequest.ImportRequestRequests.ImportRequestItemInput;
 
-/**
- * Persistence for {@code sales.import_request} (V154) — the STORED ใบขอซื้อ.
- *
- * <p><strong>Writes only.</strong> Every read of the DEAL — the snapshot an IR freezes, and the
- * deal's lines grouped by brand — belongs to {@link ImportRequestQueryRepository}, which is the one
- * production has been exercising. This class briefly carried its own copies of both; they are gone
- * rather than reconciled, because two readers of the same rows is how the two drift (and the copy
- * here had {@code e.nick_name} for a column really called {@code nickname}, which nothing caught
- * until the other one was executed against real Postgres).
- */
+/** Persistence for sales.import_request (V154) — the STORED ใบขอซื้อ. Writes only. Every read of the DEAL — the
+ * snapshot an IR freezes, and the deal's lines grouped by brand — belongs to ImportRequestQueryRepository,
+ * which is the one production has been exercising. */
 @Repository
 public class ImportRequestRepository {
 
@@ -53,16 +46,9 @@ public class ImportRequestRepository {
           JOIN sales.ticket t ON t.ticket_id = r.ticket_id
         """;
 
-    /**
-     * PR-B REVIEW ROUND 1, S9: {@code ORDER BY r.brand} was stale — V184 made {@code brand} a
-     * nullable display snapshot and {@code factory_id}/{@code factory_name} the real per-row
-     * identity (owner decision 2, GLA-105), so a null brand sorted those rows unpredictably ahead
-     * of/behind the rest instead of grouping by factory. {@code factory_name} is NOT NULL (the
-     * snapshot every row carries regardless of brand), so it orders every row deterministically.
-     * Mirrored by mockApi.js's own {@code mockImportRequestsForTicket} sort (the helper
-     * {@code storedImportRequests.listForTicket} actually delegates to) — see that function's own
-     * comment.
-     */
+    /** PR-B REVIEW ROUND 1, S9: ORDER BY r.brand was stale — V184 made brand a nullable display snapshot and
+     * factory_id/factory_name the real per-row identity (owner decision 2, GLA-105), so a null brand sorted those
+     * rows unpredictably ahead of/behind the rest instead of grouping by factory. */
     public List<ImportRequestDto> findByTicket(long ticketId) {
         List<ImportRequestDto> rows = jdbc.query(
             SELECT_IR + " WHERE r.ticket_id = :id ORDER BY r.factory_name, r.version",
@@ -77,11 +63,8 @@ public class ImportRequestRepository {
         return withItems(rows).stream().findFirst();
     }
 
-    /**
-     * Loads the items for every row in ONE query rather than per row. Not premature optimisation: a
-     * deal with several brand IRs would otherwise issue one query per form on a page that always
-     * renders all of them.
-     */
+    /** Loads the items for every row in ONE query rather than per row. Not premature optimisation: a deal with
+     * several brand IRs would otherwise issue one query per form on a page that always renders all of them. */
     private List<ImportRequestDto> withItems(List<ImportRequestDto> rows) {
         if (rows.isEmpty()) {
             return rows;
@@ -129,11 +112,9 @@ public class ImportRequestRepository {
             r.supersededById(), r.createdAt(), r.updatedAt(), r.issuedAt(), 0, items);
     }
 
-    /**
-     * {@code expectedArrivalFrom}/{@code To} are DERIVED, not columns — left {@code null} here (the
-     * same placeholder discipline {@code pageCount}'s {@code 0} already uses) and filled in by
-     * {@link ImportRequestService#withPageCount}, the one place both derived fields are computed.
-     */
+    /** expectedArrivalFrom/To are DERIVED, not columns — left null here (the same placeholder discipline
+     * pageCount's 0 already uses) and filled in by ImportRequestService#withPageCount, the one place both derived
+     * fields are computed. */
     private static ImportRequestDto mapRow(java.sql.ResultSet rs) throws java.sql.SQLException {
         return new ImportRequestDto(
             rs.getLong("import_request_id"), rs.getLong("ticket_id"), rs.getString("ticket_code"),
@@ -168,30 +149,7 @@ public class ImportRequestRepository {
 
     // ── Writes ────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * @param brandLabel the display-snapshot "Brand" header — the distinct brand(s) of this
-     *                   factory's lines on the deal, already joined by the caller (V184: brand is no
-     *                   longer the grouping key, {@code factoryId} is; see that column's comment).
-     * @param leadTimeMinDays (V184, owner decision 09-18 #2) either both this and {@code
-     *                   leadTimeMaxDays} are null or both are set — the CALLER decides which:
-     *                   {@code createDrafts} passes the factory-country autofill ({@code
-     *                   LeadTimeDefaults}), {@code revise} passes the predecessor's carried-forward
-     *                   actual values. This method does not derive them itself, so a test can see
-     *                   exactly what each caller chose.
-     * @param leadTimeMaxDays see {@code leadTimeMinDays}.
-     * @param vesselEtaNote (REVIEW ROUND 2, S-E) {@code null} for a brand-new draft ({@code
-     *                   createDrafts} — nothing to carry, {@link ImportRequestService#issue} derives
-     *                   one fresh), or the predecessor's own value CARRIED FORWARD unchanged for a
-     *                   revision ({@code revise}) — so a CEO-typed custom note survives a correction
-     *                   instead of being silently reset to null and re-derived from scratch.
-     * @param requiredByNoteOverride (REVIEW ROUND 3, item 2 — S-F regression) {@code null}/blank for
-     *                   a brand-new draft ({@code createDrafts} — nothing of its OWN to carry, the
-     *                   row falls back to {@code snap.requiredByNote()} exactly as before), or the
-     *                   predecessor's own {@code requiredByNote} CARRIED FORWARD for a revision
-     *                   ({@code revise}) — without this, a revision fell all the way back to the
-     *                   DEAL's current value, silently dropping anything the rep had typed directly
-     *                   onto the form itself.
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public long insertDraft(long ticketId, long factoryId, String factoryName, String brandLabel,
                             int version, ImportRequestQueryRepository.TicketSnapshot snap,
                             Integer leadTimeMinDays, Integer leadTimeMaxDays, String vesselEtaNote,
@@ -249,14 +207,7 @@ public class ImportRequestRepository {
         }
     }
 
-    /**
-     * Body fields — draft only; the WHERE clause enforces that, not the caller.
-     *
-     * @param requiredByNote (REVIEW ROUND 2, S-F) this FORM's own "กำหนดวันที่ต้องการของ" —
-     *                       separate from {@code sales.ticket.required_by_note} (the DEAL-level
-     *                       value {@link #insertDraft} snapshots FROM at creation). COALESCE like
-     *                       every other field here: absent leaves the existing value alone.
-     */
+    /** Body fields — draft only; the WHERE clause enforces that, not the caller. */
     public int updateDraftBody(long id, String projectName, String customerName, String repName,
                                String requiredByNote) {
         return jdbc.update("""
@@ -272,12 +223,8 @@ public class ImportRequestRepository {
                 .addValue("rep", repName).addValue("requiredBy", requiredByNote));
     }
 
-    /**
-     * CR-1: records the quotation-derived lead time this row was BUILT from (null/null = built from
-     * the country default). Kept apart from {@code lead_time_*} so a manual post-issue edit does not
-     * overwrite it: {@code ImportRequestService#revise} compares a freshly derived value against this
-     * to tell "the quotation changed" from "import edited it by hand".
-     */
+    /** CR-1: records the quotation-derived lead time this row was BUILT from (null/null = built from the country
+     * default). */
     public void setDerivedLeadTime(long id, Integer minDays, Integer maxDays) {
         jdbc.update("""
             UPDATE sales.import_request
@@ -303,15 +250,9 @@ public class ImportRequestRepository {
             });
     }
 
-    /**
-     * Sets lead time (V184, owner decision 09-18 #2) directly — not COALESCE, unlike {@link
-     * #updateDraftBody}/{@link #updateFooter} — because both callers ({@code
-     * ImportRequestService#update} for the DRAFT-stage owning-rep/CEO edit, {@code #setLeadTime}
-     * for the post-issue import/CEO edit) have already validated a COMPLETE {@code (min, max)} pair
-     * before calling this, per {@code chk_import_request_lead_time}'s own "both or neither" pairing
-     * — there is no partial write for this method to guard against. {@code status <> 'SUPERSEDED'}
-     * is the same archived-document backstop {@link #updateFooter} applies.
-     */
+    /** Sets lead time directly — not COALESCE, unlike #updateDraftBody/#updateFooter — because both callers have
+     * already validated a COMPLETE pair before calling this, per chk_import_request_lead_time's own "both or
+     * neither" pairing — there is no partial write for this method to guard against. */
     public int updateLeadTime(long id, int leadTimeMinDays, int leadTimeMaxDays) {
         return jdbc.update("""
             UPDATE sales.import_request
@@ -321,12 +262,9 @@ public class ImportRequestRepository {
                 .addValue("min", leadTimeMinDays).addValue("max", leadTimeMaxDays));
     }
 
-    /**
-     * The import-owned footer. Allowed on an ISSUED form as well as a draft — those four fields are
-     * filled in by hand AFTER the form is raised (that is the whole point of the printed approval
-     * block), so restricting them to DRAFT would make them unusable. SUPERSEDED is excluded: it is an
-     * archived document.
-     */
+    /** The import-owned footer. Allowed on an ISSUED form as well as a draft — those four fields are filled in by
+     * hand AFTER the form is raised (that is the whole point of the printed approval block), so restricting them
+     * to DRAFT would make them unusable. SUPERSEDED is excluded: it is an archived document. */
     public int updateFooter(long id, String vesselEtaNote, String checkedBy, LocalDate checkedDate,
                             String approvedBy, LocalDate approvedDate) {
         return jdbc.update("""
@@ -344,31 +282,7 @@ public class ImportRequestRepository {
                 .addValue("approvedDate", approvedDate));
     }
 
-    /**
-     * Compare-and-set DRAFT → ISSUED, ALSO writing the per-factory progress step (V184). Returns
-     * rows affected; 0 means someone else issued or superseded it first, and the caller must NOT
-     * treat that as success — the same guard {@code DepositNoticeRepository.issue} uses, and for the
-     * same reason: a second UPDATE would re-mint a number onto an already-issued controlled document.
-     *
-     * @param importStep on a FIRST issue for this (deal, factory), {@code ImportRequestStep.CONTACTED}
-     *                   with {@code importStepAt}=today and the issuing actor; on a REVISION issue,
-     *                   the predecessor's own current step fields, copied forward by the caller (which
-     *                   must have locked that predecessor row — see {@link #lockIssuedPredecessor}
-     *                   — before calling this, so the two writes are consistent within one
-     *                   transaction).
-     * @param firstIssuedDate (REVIEW ROUND 1, S7) today on a FIRST issue, or the predecessor's own
-     *                   {@code firstIssuedDate} carried forward unchanged on a revision — the caller
-     *                   decides which, same discipline as {@code importStep}.
-     * @param requiredByNote (REVIEW ROUND 2, S-F) this form's OWN "กำหนดวันที่ต้องการของ", set
-     *                   UNCONDITIONALLY (not COALESCE) — the caller ({@code
-     *                   ImportRequestService#issue}) has already resolved it to either the draft's
-     *                   own already-typed value or a fresh re-snapshot from the deal, so there is no
-     *                   "leave alone" case for this write to support.
-     * @param emailTo/emailSubject/emailBody the order-email draft (owner decision 09-18 #3 §B),
-     *                   (re)generated by the caller ({@code ImportRequestService#buildEmailDraft})
-     *                   at every issue — a revision's issue REPLACES the previous draft rather than
-     *                   carrying it forward, since the line/date detail it quotes may have changed.
-     */
+    /** Compare-and-set DRAFT → ISSUED, ALSO writing the per-factory progress step (V184). */
     public int issue(long id, String docNumber, LocalDate issueDate, long actorId, String actorName,
                      String actorEmail, String importStep, LocalDate importStepAt, Long importStepById,
                      String importStepByName, String importStepNote, LocalDate firstIssuedDate,
@@ -425,18 +339,8 @@ public class ImportRequestRepository {
                                   Long importStepById, String importStepByName, String importStepNote,
                                   LocalDate firstIssuedDate) {}
 
-    /**
-     * Locks — {@code FOR UPDATE}, for the remainder of the caller's transaction — the currently
-     * ISSUED row for this (deal, factory), if any, and returns its step fields to carry forward onto
-     * a revision. The lock is what makes "read the predecessor's step, then supersede it, then issue
-     * the replacement with the copied step" safe against a concurrent {@code advanceStep} on the same
-     * predecessor row racing in between — without it, a step advance landing between the read and the
-     * supersede would be silently lost (the same race V154's own {@code issue} Javadoc already
-     * documents for the number-minting half of this same method, now also covering the step half).
-     *
-     * <p>Empty when this is the FIRST issue for this (deal, factory) — nothing to lock or copy, and
-     * the caller sets {@code CONTACTED} instead.
-     */
+    /** Locks — FOR UPDATE, for the remainder of the caller's transaction — the currently ISSUED row for this (deal,
+     * factory), if any, and returns its step fields to carry forward onto a revision. */
     public Optional<PredecessorStep> lockIssuedPredecessor(long ticketId, long factoryId) {
         return jdbc.query("""
             SELECT import_request_id, import_step, import_step_at, import_step_by_id,
@@ -456,13 +360,7 @@ public class ImportRequestRepository {
             });
     }
 
-    /**
-     * Compare-and-set step advance: only succeeds {@code WHERE status = 'ISSUED' AND import_step =
-     * :expected}. 0 rows means either the row is not the live ISSUED version (SUPERSEDED/DRAFT —
-     * advancing a superseded row must 409, not silently do nothing) or another caller already moved
-     * the step past what this caller last saw — both are legitimate 409s, not successes, matching
-     * every other compare-and-set in this class ({@link #issue}, {@link #supersede}).
-     */
+    /** Compare-and-set step advance: only succeeds WHERE status = 'ISSUED' AND import_step = :expected. */
     public int advanceStep(long id, String expectedCurrentStep, String targetStep,
                            LocalDate eventDate, long actorId, String actorName, String note) {
         return jdbc.update("""
@@ -489,14 +387,9 @@ public class ImportRequestRepository {
                 rs.getLong("import_request_id"), rs.getLong("factory_id"), rs.getString("import_step")));
     }
 
-    /**
-     * Next {@code IR<yy><nnn>} for the Buddhist year, from the shared {@code sales.document_sequence}
-     * V29 deliberately kept generic. Format mirrors the owner's own IR69068 = IR + 2569 + 068, and
-     * the mechanism mirrors {@code DepositNoticeRepository.nextDocNumber} exactly.
-     *
-     * <p>Must be called INSIDE the issuing transaction so a refused issue rolls the number back
-     * rather than burning it — the same property that method documents.
-     */
+    /** Next IR<yy><nnn> for the Buddhist year, from the shared sales.document_sequence V29 deliberately kept
+     * generic. Must be called INSIDE the issuing transaction so a refused issue rolls the number back rather than
+     * burning it — the same property that method documents. */
     public String nextDocNumber(int yearTh) {
         jdbc.update("""
             INSERT INTO sales.document_sequence (doc_type, year_th, last_seq)
@@ -527,18 +420,8 @@ public class ImportRequestRepository {
         return Boolean.TRUE.equals(found);
     }
 
-    /**
-     * Edits the drafted order-email (owner decision 09-18 #3 §B) — allowed while it has not yet been
-     * marked sent. COALESCE semantics match {@link #updateFooter}: an absent field is left alone.
-     *
-     * <p><b>Cheap nit (REVIEW ROUND 2):</b> the {@code WHERE} clause now ALSO states {@code status =
-     * 'ISSUED' AND email_sent_at IS NULL} — the same two conditions the service already checks
-     * before calling this, restated here as a backstop rather than relied on solely at the service
-     * layer, matching {@link #advanceStep}'s/{@link #issue}'s own compare-and-set discipline: a race
-     * that marks the draft sent (or supersedes/re-drafts the row) between the service's check and
-     * this write now loses 0 rows here instead of silently overwriting a draft that is no longer the
-     * one the caller thought they were editing.
-     */
+    /** Edits the drafted order-email (owner decision 09-18 #3 §B) — allowed while it has not yet been marked sent.
+     * COALESCE semantics match #updateFooter: an absent field is left alone. */
     public int updateEmailDraft(long id, String emailTo, String emailSubject, String emailBody) {
         return jdbc.update("""
             UPDATE sales.import_request
@@ -552,16 +435,8 @@ public class ImportRequestRepository {
                 .addValue("emailBody", emailBody));
     }
 
-    /**
-     * Compare-and-set mark-sent: only succeeds {@code WHERE email_sent_at IS NULL}, so a second call
-     * 409s (idempotent, per owner decision 09-18 #3 §B) rather than silently re-stamping who/when.
-     *
-     * <p><b>Cheap nit (REVIEW ROUND 2):</b> {@code AND status = 'ISSUED'} added alongside the
-     * pre-existing {@code email_sent_at IS NULL} — the service already refuses a non-ISSUED row
-     * before calling this, but restating it here means a row superseded by a concurrent revision
-     * between that check and this write also loses 0 rows here rather than stamping "sent" onto a
-     * row that is no longer the live version.
-     */
+    /** Compare-and-set mark-sent: only succeeds WHERE email_sent_at IS NULL, so a second call 409s (idempotent, per
+     * owner decision 09-18 #3 §B) rather than silently re-stamping who/when. */
     public int markEmailSent(long id, long actorId, String actorName) {
         return jdbc.update("""
             UPDATE sales.import_request

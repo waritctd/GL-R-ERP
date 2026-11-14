@@ -39,9 +39,9 @@ function groupOf(action) {
 }
 
 function WorklistRow({ deal, action, followUp, muted, onClick }) {
-  // DESIGN.md §15: tone says whose move it is. Every rep-actionable bucket (the slice-2 direct
-  // SUBMIT/CONFIRM included) falls through to warning; AWAIT_DIRECT_APPROVAL is waiting on
-  // ผจก.ขาย/CEO, so it reads neutral like the other not-mine-yet row.
+  // DESIGN.md §15: tone says whose move it is. Every rep-actionable bucket (the slice-2 direct SUBMIT/CONFIRM
+  // included) falls through to warning; AWAIT_DIRECT_APPROVAL is waiting on ผจก.ขาย/CEO, so it reads neutral
+  // like the other not-mine-yet row.
   const badgeTone = action.followUp === 'overdue'
     ? 'danger'
     : action.key === SALES_ACTION.LOG_ACTIVITY || action.key === SALES_ACTION.AWAIT_DIRECT_APPROVAL
@@ -98,20 +98,17 @@ export function SalesOverview({ user, employee }) {
     queryKey: queryKeys.pricingRequestQueue({}),
     queryFn: () => api.pricingRequests.queue({}).then((response) => response.items ?? []),
   });
-  // Server-computed monthly commission estimate (CommissionService#monthlySummary) — never
-  // re-derived client-side, so this can never drift from a DB tier-config change the way the
-  // former client-side re-implementation could (see CLAUDE.md's V81 note). Also lighter than the
-  // former api.commissions.list() call it replaces: the panel needs only two totals, not every
-  // record for the month.
+  // Server-computed monthly commission estimate (CommissionService#monthlySummary) — never re-derived
+  // client-side, so this can never drift from a DB tier-config change the way the former client-side
+  // re-implementation could (see CLAUDE.md's V81 note).
   const commissionSummaryQuery = useQuery({
     queryKey: ['commissions', 'monthly-summary', payrollMonth],
     queryFn: () => api.commissions.monthlySummary({ payrollMonth }).then((response) => response.summary),
   });
 
-  // useMemo (not a bare `?? []`) so the fallback empty array is referentially
-  // stable across renders while a query is still loading — otherwise every
-  // render would hand the useMemo hooks below a "new" array and defeat their
-  // memoization (same convention as TicketListPage's `allDeals`).
+  // useMemo (not a bare `?? []`) so the fallback empty array is referentially stable across renders while a
+  // query is still loading — otherwise every render would hand the useMemo hooks below a "new" array and defeat
+  // their memoization (same convention as TicketListPage's `allDeals`).
   const deals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const pricingRequests = useMemo(() => pricingRequestsQuery.data ?? [], [pricingRequestsQuery.data]);
   const loading = ticketsQuery.isLoading || pricingRequestsQuery.isLoading;

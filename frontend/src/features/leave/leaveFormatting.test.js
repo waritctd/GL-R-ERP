@@ -2,37 +2,32 @@ import { describe, expect, it } from 'vitest';
 
 import { LEAVE_HOURS_PER_DAY, formatDays, formatDaysOrDash } from './leaveFormatting.js';
 
-// LeaveService's own literal, TRANSCRIBED rather than imported from the module under test.
-//
-// This matters and was caught by mutation-checking, not by reading: the first cut of this file
-// derived the fixture from `LEAVE_HOURS_PER_DAY`, so flipping that constant to 9 moved BOTH sides
-// of the round trip and the suite still passed 88 of 96 cases -- the mock-mirrors-the-computation
-// failure shape CLAUDE.md records for `computeDraftEtag`. Hardcoded, a wrong workday length fails
-// all 96. If LeaveService's STANDARD_WORKDAY_MINUTES ever changes, this line changes by hand.
+// LeaveService's own literal, TRANSCRIBED rather than imported from the module under test. Hardcoded, a wrong
+// workday length fails all 96. If LeaveService's STANDARD_WORKDAY_MINUTES ever changes, this line changes by
+// hand.
 const BACKEND_WORKDAY_MINUTES = 8 * 60;
 
-// Mirrors LeaveService#computeTotalDays' sub-day branch: `minutes / STANDARD_WORKDAY_MINUTES`,
-// HALF_UP to 2dp. The round trip below is therefore measured against what the backend actually
-// stores, not against this module's own arithmetic run backwards.
+// Mirrors LeaveService#computeTotalDays' sub-day branch: `minutes / STANDARD_WORKDAY_MINUTES`, HALF_UP to 2dp.
+// The round trip below is therefore measured against what the backend actually stores, not against this
+// module's own arithmetic run backwards.
 function storeAsDayCount(minutes) {
   const exact = (minutes / BACKEND_WORKDAY_MINUTES) * 100;
-  // HALF_UP, not JS `Math.round` -- they differ on negatives, and a value landing exactly on .5 is
-  // where a naive round drifts. Day counts here are positive, but the mirror should be the
-  // backend's rule rather than a coincidence that happens to agree with it.
+  // HALF_UP, not JS `Math.round` -- they differ on negatives, and a value landing exactly on .5 is where a naive
+  // round drifts. Day counts here are positive, but the mirror should be the backend's rule rather than a
+  // coincidence that happens to agree with it.
   return Math.floor(exact + 0.5) / 100;
 }
 
-// Every expectation below is written with ordinary spaces and run through `d`, which re-glues each
-// number to its unit with the no-break space `formatDays` uses. So the assertions stay readable AND
-// stay exact about WHERE the string may wrap -- which is half the point of the change. Losing the
-// glue fails every one of them, not just the one test that mentions it.
+// Every expectation below is written with ordinary spaces and run through `d`, which re-glues each number to
+// its unit with the no-break space `formatDays` uses. So the assertions stay readable AND stay exact about
+// WHERE the string may wrap -- which is half the point of the change.
 const NB = '\u00A0';
 const d = (text) => text.replace(/(\d) /g, `$1${NB}`);
 
 describe('formatDays', () => {
   it('glues each number to its unit with a no-break space, and only there', () => {
-    // The wrap contract, spelled out once without the `d` helper in the way: break opportunities
-    // exist BETWEEN units and nowhere else, so "6 วัน / 3 ชั่วโมง" can happen and "6 / วัน" cannot.
+    // The wrap contract, spelled out once without the `d` helper in the way: break opportunities exist BETWEEN
+    // units and nowhere else, so "6 วัน / 3 ชั่วโมง" can happen and "6 / วัน" cannot.
     expect(formatDays(6.37)).toBe(`6${NB}วัน 3${NB}ชั่วโมง`);
     expect(formatDays(6.37).split(' ')).toEqual([`6${NB}วัน`, `3${NB}ชั่วโมง`]);
     expect(formatDays(7)).toBe(`7${NB}วัน`);
@@ -47,8 +42,8 @@ describe('formatDays', () => {
   });
 
   it('renders the reported row: 0.38 used, 6.37 remaining', () => {
-    // The exact pair from the bug report ("0.38 วัน · เหลือ 6.37 วัน") -- a flat three-hour ลากิจ
-    // against a 7-day quota. 0.38 IS three hours; 6.37 is six days and three hours.
+    // The exact pair from the bug report ("0.38 วัน · เหลือ 6.37 วัน") -- a flat three-hour ลากิจ against a 7-day
+    // quota. 0.38 IS three hours; 6.37 is six days and three hours.
     expect(formatDays(0.38)).toBe(d('3 ชั่วโมง'));
     expect(formatDays(6.37)).toBe(d('6 วัน 3 ชั่วโมง'));
   });
@@ -71,16 +66,12 @@ describe('formatDays', () => {
     expect(formatDays(6.37)).not.toContain('นาที');
   });
 
-  // THE derivation test. `DISPLAY_MINUTE_STEP = 5` is only defensible if a five-minute leave
-  // survives the trip through the backend's 2dp day storage and back -- otherwise the readout
-  // invents or loses minutes the requester actually entered. All 96 possible five-minute leaves
-  // (0:05 .. 8:00, which subsumes every quarter- and half-hour) are asserted, not a sample.
-  //
-  // Mutation-checked, measured not assumed: DISPLAY_MINUTE_STEP = 1 fails this on 76 of the 96
-  // cases (7 of the file's 10 tests go red), and LEAVE_HOURS_PER_DAY = 9 fails it on all 96.
+  // THE derivation test. `DISPLAY_MINUTE_STEP = 5` is only defensible if a five-minute leave survives the trip
+  // through the backend's 2dp day storage and back -- otherwise the readout invents or loses minutes the
+  // requester actually entered.
   it('round-trips every five-minute leave through 2dp day storage', () => {
-    // Guards the transcription above: LEAVE_HOURS_PER_DAY is what `formatDays` divides by, and this
-    // suite is only evidence about the backend's day counts while the two agree.
+    // Guards the transcription above: LEAVE_HOURS_PER_DAY is what `formatDays` divides by, and this suite is only
+    // evidence about the backend's day counts while the two agree.
     expect(LEAVE_HOURS_PER_DAY * 60).toBe(BACKEND_WORKDAY_MINUTES);
     const failures = [];
     for (let minutes = 5; minutes <= BACKEND_WORKDAY_MINUTES; minutes += 5) {
@@ -111,8 +102,8 @@ describe('formatDays', () => {
   });
 
   it('accepts the string day counts the API actually returns', () => {
-    // NUMERIC(5,2) arrives over JSON as a string in some client paths; the old implementation
-    // coerced too, so this pins that it still does.
+    // NUMERIC(5,2) arrives over JSON as a string in some client paths; the old implementation coerced too, so this
+    // pins that it still does.
     expect(formatDays('6.37')).toBe(d('6 วัน 3 ชั่วโมง'));
     expect(formatDays('0.38')).toBe(d('3 ชั่วโมง'));
   });

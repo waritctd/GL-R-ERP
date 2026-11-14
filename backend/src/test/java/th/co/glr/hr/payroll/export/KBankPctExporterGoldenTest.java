@@ -10,12 +10,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Pins the KBank PCT formatter to a real GL&amp;R export file byte-for-byte. The test parses the golden
- * file's own field values back into {@link PayrollExportRow}s and asserts the formatter reproduces the
- * exact bytes — so any drift in a field offset, padding rule, satang conversion, or the CP874 encoding
- * fails the build. This is the file that actually moves salary money, so it gets the strictest test.
- */
+/** Pins the KBank PCT formatter to a real GL&R export file byte-for-byte. This is the file that actually moves
+ * salary money, so it gets the strictest test. */
 class KBankPctExporterGoldenTest {
     private final KBankPctExporter exporter = new KBankPctExporter();
 

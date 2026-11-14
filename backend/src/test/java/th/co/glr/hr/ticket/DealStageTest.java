@@ -6,27 +6,15 @@ import java.util.List;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 
-/**
- * The pure stage decisions: the pipeline ORDER after {@code QUOTE_OWNER} was inserted (Part B), and
- * {@link DealStage#requiresJustification} (Part C). {@code DealStageRouteIntegrationTest} proves the
- * same rules survive into {@code TicketService.updateStage} against a real row; this class pins the
- * function itself, where every route can be enumerated cheaply.
- *
- * <p>The Part C tests are written from the owner's four real routes. The assertion that matters is
- * the "needs NO note" one: the old rule ({@code indexOf(to) - indexOf(from) > 1}) demanded a written
- * justification for three of those four routes, i.e. friction on the default path.
- */
+/** The pure stage decisions: the pipeline ORDER after QUOTE_OWNER was inserted (Part B), and
+ * DealStage#requiresJustification (Part C). The Part C tests are written from the owner's four real routes. */
 class DealStageTest {
 
     // ── Part B: QUOTE_OWNER inserted, nothing else moved ─────────────────────
 
-    /**
-     * Pinned in full rather than spot-checked. {@code ORDER}'s positions are mirrored by the V50
-     * CHECK constraint (as widened by V143), the uat seeds, the frontend stage metadata and every
-     * historical {@code sales_stage} value, so a reordering is a data-compatibility break, not a
-     * refactor. QUOTE_OWNER goes between QUOTE_DESIGN_SIDE (S4) and OWNER_SIGNOFF (S6); everything
-     * else keeps the index it had.
-     */
+    /** Pinned in full rather than spot-checked. ORDER's positions are mirrored by the V50 CHECK constraint (as
+     * widened by V143), the uat seeds, the frontend stage metadata and every historical sales_stage value, so a
+     * reordering is a data-compatibility break, not a refactor. */
     @Test
     void orderIsTheFifteenStagePipelineWithQuoteOwnerBetweenS4AndS6() {
         assertThat(DealStage.ORDER).containsExactly(
@@ -45,11 +33,9 @@ class DealStageTest {
 
     // ── Part C: the four real routes need no written justification ───────────
 
-    /**
-     * Case A, the full designer → owner → contractor route, hop by hop:
-     * S1→S2→S4→S3→S5→S6→S7→S8→S9→S10→S11→S12…S17→S18→S19→S20. Note S4→S3, which is backward in
-     * {@code ORDER} and is nevertheless the everyday path.
-     */
+    /** Case A, the full designer → owner → contractor route, hop by hop:
+     * S1→S2→S4→S3→S5→S6→S7→S8→S9→S10→S11→S12…S17→S18→S19→S20. Note S4→S3, which is backward in ORDER and is
+     * nevertheless the everyday path. */
     @Test
     void caseA_theFullRoute_neverAsksForANote() {
         assertNoNoteAlongPath(List.of(
@@ -70,10 +56,8 @@ class DealStageTest {
             DealStage.DELIVERED, DealStage.CLOSED_PAID));
     }
 
-    /**
-     * Case C — a contractor arrives holding a BOQ and a spec, so the deal starts at S8. A ticket is
-     * always created at LEAD_APPROACH, so this shows up as one seven-stage jump.
-     */
+    /** Case C — a contractor arrives holding a BOQ and a spec, so the deal starts at S8. A ticket is always created
+     * at LEAD_APPROACH, so this shows up as one seven-stage jump. */
     @Test
     void caseC_contractorArrivesAtS8_needsNoNoteForTheSevenStagesBefore() {
         assertThat(DealStage.requiresJustification(DealStage.LEAD_APPROACH, DealStage.QUOTE_BUYER))
@@ -102,10 +86,8 @@ class DealStageTest {
 
     // ── …and the relaxation stops at the mandatory stages ────────────────────
 
-    /**
-     * Wrong-way-round half of Part C: the five stages every route has in common. Stepping OVER one
-     * of them is a genuine exception and still costs a sentence.
-     */
+    /** Wrong-way-round half of Part C: the five stages every route has in common. Stepping OVER one of them is a
+     * genuine exception and still costs a sentence. */
     @Test
     void skippingAMandatoryStage_stillRequiresANote() {
         // over NEGOTIATION (S9)
@@ -126,18 +108,15 @@ class DealStageTest {
         assertThat(DealStage.requiresJustification(DealStage.QUOTE_DESIGN_SIDE, DealStage.NEGOTIATION)).isFalse();
         assertThat(DealStage.requiresJustification(DealStage.LEAD_APPROACH, DealStage.NEGOTIATION)).isFalse();
         assertThat(DealStage.requiresJustification(DealStage.QUOTE_OWNER, DealStage.NEGOTIATION)).isFalse();
-        // …but one stage further IS a skip, because NEGOTIATION is then stepped over rather than
-        // landed on. This is the boundary the rule turns on.
+        // …but one stage further IS a skip, because NEGOTIATION is then stepped over rather than landed on. This is
+        // the boundary the rule turns on.
         assertThat(DealStage.requiresJustification(DealStage.QUOTE_OWNER, DealStage.ORDER_RECEIVED)).isTrue();
     }
 
     // ── backward moves are unchanged ─────────────────────────────────────────
 
-    /**
-     * The one allowlisted pair, and nothing else. In particular Part B did NOT widen it: S5 is
-     * reached going forward from S3 in the real route, so no {@code QUOTE_OWNER ->} backward move
-     * became routine.
-     */
+    /** The one allowlisted pair, and nothing else. In particular Part B did NOT widen it: S5 is reached going
+     * forward from S3 in the real route, so no QUOTE_OWNER -> backward move became routine. */
     @Test
     void onlyQuoteDesignSideBackToSpecApproved_isARoutineBackwardMove() {
         assertThat(DealStage.requiresJustification(DealStage.QUOTE_DESIGN_SIDE, DealStage.SPEC_APPROVED))
@@ -169,10 +148,8 @@ class DealStageTest {
 
     // ── degenerate inputs ────────────────────────────────────────────────────
 
-    /**
-     * {@code updateStage} rejects an unknown code (400) and a no-op move (409) before it ever asks,
-     * so the predicate must not second-guess either — it answers false and lets those guards speak.
-     */
+    /** updateStage rejects an unknown code (400) and a no-op move (409) before it ever asks, so the predicate must
+     * not second-guess either — it answers false and lets those guards speak. */
     @Test
     void unknownCodesAndNoOpMovesAreNotJustifiable() {
         assertThat(DealStage.requiresJustification("NOT_A_STAGE", DealStage.DELIVERED)).isFalse();
@@ -184,19 +161,10 @@ class DealStageTest {
         }
     }
 
-    // ── Part D: the catalog served to clients ────────────────────────────────
-    //
-    // Every assertion below covers a field the frontend used to declare for itself in
-    // features/tickets/stageMeta.js. That copy silently stopped at fourteen stages when V143 added
-    // QUOTE_OWNER, so these are not decoration: they are the guard the deleted copy never had.
+    // Part D: the catalog served to clients ──────────────────────────────── Every assertion below covers a field
+    // the frontend used to declare for itself in features/tickets/stageMeta.js.
 
-    /**
-     * The three write-gate sets partition {@code ORDER} exactly. This is what makes
-     * {@link DealStage#gateOf} total and unambiguous, and it is also a live authz property:
-     * {@code TicketService.requireStageWriteAccess} runs an if/else-if chain over these sets and
-     * falls through to 403, so a stage in none of them would be unreachable by every role except
-     * ceo, and a stage in two would silently take the first branch's gate.
-     */
+    /** The three write-gate sets partition ORDER exactly. */
     @Test
     void theThreeWriteGateSetsPartitionThePipelineExactly() {
         assertThat(DealStage.SALES_TARGET_STAGES).hasSize(12);
@@ -213,8 +181,8 @@ class DealStageTest {
             assertThat(DealStage.gateOf(stage)).as("gate of %s", stage)
                 .isIn(DealStage.GATE_SALES, DealStage.GATE_ACCOUNT, DealStage.GATE_IMPORT);
         }
-        // No set may reach outside the pipeline either — a stray code there would be a gate on a
-        // stage that cannot exist.
+        // No set may reach outside the pipeline either — a stray code there would be a gate on a stage that cannot
+        // exist.
         assertThat(DealStage.SALES_TARGET_STAGES).isSubsetOf(DealStage.ORDER);
         assertThat(DealStage.ACCOUNT_TARGET_STAGES).isSubsetOf(DealStage.ORDER);
         assertThat(DealStage.IMPORT_TARGET_STAGES).isSubsetOf(DealStage.ORDER);
@@ -236,12 +204,7 @@ class DealStageTest {
         assertThat(DealStage.phaseOf("NOT_A_STAGE")).isZero();
     }
 
-    /**
-     * The display sequence and the owner's S-sheet number are different things, and this pins
-     * exactly how. Both are served because neither can be computed from the other: PROCUREMENT is
-     * one pipeline stage spanning six sheet steps, and V143 shifted the display numbers after S4
-     * while leaving every sheet number alone.
-     */
+    /** The display sequence and the owner's S-sheet number are different things, and this pins exactly how. */
     @Test
     void displayNumberAndBusinessCodeAreBothTotalAndDeliberatelyDifferent() {
         for (int i = 0; i < DealStage.ORDER.size(); i++) {

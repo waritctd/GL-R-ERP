@@ -7,17 +7,8 @@ import { CommissionPage } from './CommissionPage.jsx';
 import { api } from '../../api/index.js';
 
 // Issue #422 B5: after CommissionPage's approve/reject/clawback/createFromDeal/
-// createManualCommission/updateDeductions mutations succeed, they must also invalidate the
-// ['payroll'] query-key prefix -- payroll figures (line.commissionPay) are fed by commission
-// approvals, and PayrollPage now reads through react-query (B1), so an open PayrollPage tab
-// should be able to pick the change up on its own next poll/focus refetch instead of only via a
-// manual reload.
-//
-// Kept in its own file rather than folded into CommissionPage.test.jsx (issue #405's incentive/
-// stock-bonus coverage, which landed on main while this branch was in review): that suite mocks
-// only api.commissions.list/payrollReady, whereas these cases need the mutation methods too, and
-// the two concerns are unrelated. Same one-concern-per-file convention as
-// PayrollPage.inputDraft.test.jsx / PayrollPage.carryForward.test.jsx.
+// createManualCommission/updateDeductions mutations succeed, they must also invalidate the ['payroll']
+// query-key prefix.
 
 globalThis.React = React;
 
@@ -35,9 +26,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         createFromDeal: vi.fn(),
         createManualCommission: vi.fn(),
         updateDeductions: vi.fn(),
-        // salesManagerUser below satisfies canCreateManual, which fires this on mount regardless
-        // of what this file's own tests exercise -- default empty so it resolves rather than
-        // throwing on an unconfigured vi.fn(). Issue #737.
+        // salesManagerUser below satisfies canCreateManual, which fires this on mount regardless of what this file's
+        // own tests exercise -- default empty so it resolves rather than throwing on an unconfigured vi.fn(). Issue
+        // #737.
         reps: vi.fn().mockResolvedValue({ reps: [] }),
         // The approval page's queue (sales_manager/ceo) and per-rep summary table read these.
         pendingApproval: vi.fn(),
@@ -53,9 +44,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 const salesManagerUser = { role: 'sales_manager', employeeId: 42, name: 'ผู้จัดการฝ่ายขาย' };
 
-// SUBMITTED + sales_manager satisfies CommissionPage's own canReviewRecord (record.status ===
-// 'SUBMITTED' && user.role === 'sales_manager'), and `kind: 'SALE'` (not one of the
-// MANUAL_KIND_LABELS keys) exercises the invoiceDetails-bearing render/confirm path.
+// SUBMITTED + sales_manager satisfies CommissionPage's own canReviewRecord (record.status === 'SUBMITTED' &&
+// user.role === 'sales_manager'), and `kind: 'SALE'` (not one of the MANUAL_KIND_LABELS keys) exercises the
+// invoiceDetails-bearing render/confirm path.
 const submittedRecord = {
   id: 501,
   kind: 'SALE',

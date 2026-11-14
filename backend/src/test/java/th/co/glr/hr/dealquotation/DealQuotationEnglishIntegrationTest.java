@@ -72,8 +72,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
     private CustomerRepository customers;
     private DealQuotationRepository quotationRepository;
     private DealQuotationService quotationService;
-    // Fields rather than setUp locals so a test can build a SECOND service with the bank block
-    // configured — see #theConfiguredBankBlock_reachesTheEnglishDocumentThroughTheService.
+    // Fields rather than setUp locals so a test can build a SECOND service with the bank block configured — see
+    // #theConfiguredBankBlock_reachesTheEnglishDocumentThroughTheService.
     private NotificationRepository notifications;
     private ContactRepository contacts;
     private EmployeeAuthRepository employeeAuth;
@@ -104,17 +104,17 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         quotationRepository = new DealQuotationRepository(jdbc, new CatalogRepository(jdbc));
         NotificationEmailService approvalMailer = new NotificationEmailService(
             new NoOpMailer(), new BrandAssets(), "", "", "https://portal.test");
-        // The default (LibreOffice) PDF engine deliberately: this test never renders a PDF, only
-        // the XLS the PDF is drawn from, so no soffice/Chromium precondition is introduced.
+        // The default (LibreOffice) PDF engine deliberately: this test never renders a PDF, only the XLS the PDF is
+        // drawn from, so no soffice/Chromium precondition is introduced.
         quotationService = new DealQuotationService(quotationRepository, tickets, customers, contacts,
             notifications, approvalMailer, new QuotationRenderer(), employeeAuth,
             new EmployeeSignatureRepository(jdbc), new CatalogRepository(jdbc), "https://portal.test",
-            // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
-            // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
+            // app.quotation.bank-block-line1..3 — empty here, so the English document prints the proforma-invoice line.
+            // DealQuotationEnglishFormTest covers the configured block.
             "", "", "");
 
-        // ⚠️ Both employees carry REAL first_name_en/last_name_en — that is the point of the
-        // signature assertions below. #createEmployeeWithoutEnglishName covers the fallback.
+        // ⚠️ Both employees carry REAL first_name_en/last_name_en — that is the point of the signature assertions
+        // below. #createEmployeeWithoutEnglishName covers the fallback.
         salesRepId = createEmployee(employees, "เจนเนตร หลงสกุล", "Jennet Longsakul",
             "sales-en@glr.co.th", "SALES", "ฝ่ายขาย", null);
         salesManagerId = createEmployee(employees, "ราม อิฐรัตน์", "Rarm Itarat",
@@ -136,10 +136,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
     // ── the end-to-end acceptance run ──────────────────────────────────────────────────────
 
-    /**
-     * Create → submit → approve → render an EN/USD quotation, asserting at every step that the
-     * language and currency survived and that the VAT is ZERO throughout.
-     */
+    /** Create → submit → approve → render an EN/USD quotation, asserting at every step that the language and
+     * currency survived and that the VAT is ZERO throughout. */
     @Test
     void englishQuotation_createsSubmitsApprovesAndRendersWithNoVat() throws Exception {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -148,20 +146,20 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(created.documentLanguage()).isEqualTo("EN");
         assertThat(created.currency()).isEqualTo("USD");
         assertThat(created.subtotalAmount()).isEqualByComparingTo("1000.00");
-        // ⚠️ The whole point of the language flag on the money side: a Thai document of the same
-        // items reads 70.00 / 1070.00 here (see #thaiQuotationOnTheSameDeal_stillCarriesItsVat).
+        // ⚠️ The whole point of the language flag on the money side: a Thai document of the same items reads 70.00 /
+        // 1070.00 here (see #thaiQuotationOnTheSameDeal_stillCarriesItsVat).
         assertThat(created.vatAmount()).isEqualByComparingTo("0.00");
         assertThat(created.grandTotal()).isEqualByComparingTo("1000.00");
 
-        // V169's columns actually hold it — read straight out of the table, not off the DTO that
-        // just came back from the same mapping code that wrote it.
+        // V169's columns actually hold it — read straight out of the table, not off the DTO that just came back from
+        // the same mapping code that wrote it.
         Map<String, Object> stored = jdbc.getJdbcOperations().queryForMap(
             "SELECT document_language, currency FROM sales.quotation WHERE quotation_id = "
                 + created.id());
         assertThat(stored.get("document_language")).isEqualTo("EN");
         assertThat(stored.get("currency")).isEqualTo("USD");
-        // And the per-item vat column follows the document, rather than stamping 7% on the rows of
-        // a document that charges none.
+        // And the per-item vat column follows the document, rather than stamping 7% on the rows of a document that
+        // charges none.
         assertThat(jdbc.getJdbcOperations().queryForObject(
             "SELECT SUM(vat) FROM sales.quotation_item WHERE quotation_id = " + created.id(),
             BigDecimal.class)).isEqualByComparingTo("0.00");
@@ -179,10 +177,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         // The rendered document, through the real service's own render path.
         Sheet sheet = renderSheet(approved.id());
         assertThat(str(sheet, 0, 7).strip()).isEqualTo("QUOTATION");
-        assertThat(str(sheet, 3, 1)).matches("[A-Z][a-z]+ \\d{1,2}, 20\\d\\d");   // English month, CE year
-        // no BE year leaked (e.g. "September 8, 2569"). Assert against the actual BE year of the
-        // rendered (today's) date, not the bare substring "25" -- "25" collided with day-of-month
-        // (e.g. the 25th of a month, or the year 2025), failing this test on those dates for no reason.
+        assertThat(str(sheet, 3, 1)).matches("[A-Z][a-z]+ \\d{1,2}, 20\\d\\d");   // English month, CE year no BE year leaked (e.g. "September 8, 2569"). Assert against the actual BE year of
+        // the rendered (today's) date, not the bare substring "25" -- "25" collided with day-of-month (e.g. the 25th
+        // of a month, or the year 2025), failing this test on those dates for no reason.
         assertThat(str(sheet, 3, 1)).doesNotContain(String.valueOf(java.time.Year.now().getValue() + 543));
         assertThat(str(sheet, 6, 8)).isEqualTo("Amount (USD)");
         assertThat(str(sheet, 6, 1)).isEqualTo("Description & Conditions");
@@ -193,8 +190,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(str(sheet, 2, 8)).as("I3 — no department").isEmpty();
         assertThat(str(sheet, 3, 7)).isEqualTo("Ref.");
         assertThat(str(sheet, 33, 4)).isEqualTo("Grand Total (USD)");             // TOTAL_ROW 40-7
-        assertThat(str(sheet, 40, 8)).isEqualTo("F-SM-008 (01)");                 // FORM_TAG 47-7
-        // English signature labels AND the employees' real English names, from hr.employee.
+        assertThat(str(sheet, 40, 8)).isEqualTo("F-SM-008 (01)");                 // FORM_TAG 47-7 English signature labels AND the employees' real English names, from hr.employee.
         assertThat(str(sheet, 37, 0))
             .contains("Printed by").contains("Quoted by").contains("Approved by").contains("Ordered by");
         assertThat(str(sheet, 38, 0))
@@ -255,12 +251,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
     // ── English per-sqm pricing (Option A) ──────────────────────────────────────────────────────
 
-    /**
-     * The owner's QN6900933 reproduced exactly through the real service and real Postgres:
-     * 120 boxes × 0.6 = 72.00 SQM × 64 = 4,608.00; 30 × 0.6 = 18.00 × 36 = 648.00;
-     * 114 × 0.495 = 56.43 × 64 = 3,611.52; Grand Total 8,867.52 with no VAT. The figures are the
-     * PRINTED sample's, typed in — not computed by the code under test.
-     */
+    /** The owner's QN6900933 reproduced exactly through the real service and real Postgres: 120 boxes × 0.6 = 72.00
+     * SQM × 64 = 4,608.00; 30 × 0.6 = 18.00 × 36 = 648.00; 114 × 0.495 = 56.43 × 64 = 3,611.52; Grand Total
+     * 8,867.52 with no VAT. */
     @Test
     void englishPerSqm_reproducesTheOwnersQN6900933() throws Exception {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -296,13 +289,13 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
                 + " WHERE quotation_id = " + created.id() + " ORDER BY seq", String.class))
             .containsExactly("3360|0.600000|SQM", "1800|0.600000|SQM", "7524|0.495000|SQM");
 
-        // The rendered English sheet: Qty in sqm, Unit SQM, Unit price and Net price the USD/sqm,
-        // Disc. "Net", the box sub-line, Grand Total 8,867.52.
+        // The rendered English sheet: Qty in sqm, Unit SQM, Unit price and Net price the USD/sqm, Disc. "Net", the box
+        // sub-line, Grand Total 8,867.52.
         Sheet sheet = renderSheet(created.id());
         int row = rowWithText(sheet, 1, "Tile Model Model A");
         assertThat(sheet.getRow(row).getCell(2).getNumericCellValue()).isEqualTo(72.00);
-        // Printed to 2dp: the template's whole-number format showed 56.43 as "56" (caught on the
-        // rendered PDF). DataFormatter applies the cell's own format, as Excel/LibreOffice do.
+        // Printed to 2dp: the template's whole-number format showed 56.43 as "56" (caught on the rendered PDF).
+        // DataFormatter applies the cell's own format, as Excel/LibreOffice do.
         org.apache.poi.ss.usermodel.DataFormatter shown = new org.apache.poi.ss.usermodel.DataFormatter(java.util.Locale.US);
         assertThat(shown.formatCellValue(sheet.getRow(row).getCell(2))).isEqualTo("72.00");
         int fango = rowWithText(sheet, 1, "Tile Model Model A", row + 1);
@@ -382,8 +375,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
      * sqmPerPiece instead of boxes × sqmPerBox — accepted on create, update AND the preview. */
     @Test
     void englishPerSqm_noBoxArea_piecesPerBoxFilled_isNowAccepted_onCreateUpdateAndPreview() throws Exception {
-        // 3,360 pcs / 28 per box = 120 exactly (no box rounding needed) — sqmPerPiece 0.36 (tileItem's
-        // fixed value): qty = 3,360 × 0.36 = 1,209.60; amount = 1,209.60 × 64 = 77,414.40.
+        // 3,360 pcs / 28 per box = 120 exactly (no box rounding needed) — sqmPerPiece 0.36 (tileItem's fixed value):
+        // qty = 3,360 × 0.36 = 1,209.60; amount = 1,209.60 × 64 = 77,414.40.
         ItemInput row = perSqmItem(3360, 28, null, "64");
         DealQuotationDto created = quotationService.create(ticketId,
             englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(row)), salesActor);
@@ -406,8 +399,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
                 + " WHERE quotation_id = " + created.id(), String.class))
             .isEqualTo("3360|true");
 
-        // RELOAD through the repository mapping (DealQuotationRepository#mapItemColumns), not just
-        // the create response — proves the sqmPerPiece thread reaches the READ path too.
+        // RELOAD through the repository mapping (DealQuotationRepository#mapItemColumns), not just the create response
+        // — proves the sqmPerPiece thread reaches the READ path too.
         var reread = quotationService.get(created.id(), salesActor).items().get(0);
         assertThat(reread.quantity()).isEqualByComparingTo("1209.60");
         assertThat(reread.lineAmount()).isEqualByComparingTo("77414.40");
@@ -425,8 +418,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.submit(created.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.PENDING_APPROVAL);
 
-        // update: the same combination onto an existing (NET) document. (Slice 2's N6: the deal
-        // already holds the live quotation above — see LegacyDirectQuotationFixtures.)
+        // update: the same combination onto an existing (NET) document. (Slice 2's N6: the deal already holds the live
+        // quotation above — see LegacyDirectQuotationFixtures.)
         DealQuotationDto net = LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId,
             englishRequest(List.of(tileItem("100.00", 10))), salesActor);
         DealQuotationDto updated = quotationService.update(net.id(),
@@ -458,14 +451,13 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(item.calculationLine()).isEqualTo("(Quantity 3,360 pcs)");
     }
 
-    /** Blank box area, แผ่น/กล่อง filled, "sell loose pieces" ticked: quantity derives from the
-     * EXACT wastage-adjusted piece count (unrounded), never the box-rounded one — the combination
-     * {@code englishPerSqm_withRoundToFullBoxFalse_isRefusedWithABoxArea} below still refuses when
-     * a box area IS present. */
+    /** Blank box area, แผ่น/กล่อง filled, "sell loose pieces" ticked: quantity derives from the EXACT
+     * wastage-adjusted piece count (unrounded), never the box-rounded one — the combination
+     * englishPerSqm_withRoundToFullBoxFalse_isRefusedWithABoxArea below still refuses when a box area IS present. */
     @Test
     void englishPerSqm_noBoxArea_loosePieces_isNowAccepted_derivesSqmFromExactPieces() {
-        // 3,357 pcs / 10 per box = 335 boxes + 7 loose pcs; qty = 3,357 × 0.36 = 1,208.52 (NOT the
-        // box-rounded 3,360 × 0.36 = 1,209.60).
+        // 3,357 pcs / 10 per box = 335 boxes + 7 loose pcs; qty = 3,357 × 0.36 = 1,208.52 (NOT the box-rounded 3,360 ×
+        // 0.36 = 1,209.60).
         ItemInput row = withRoundToFullBox(perSqmItem(3357, 10, null, "64"), false);
         DealQuotationDto created = quotationService.create(ticketId,
             englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM, List.of(row)), salesActor);
@@ -480,10 +472,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .isEqualByComparingTo("1208.52");
     }
 
-    /** Wrong-way-round, unchanged from before Option B: a box area PRESENT with แผ่น/กล่อง blank is
-     * a partially-filled pair — you cannot count boxes without pieces per box, so it is still
-     * refused, on create, update and the preview. This is the ONE combination Option B leaves
-     * refused. */
+    /** Wrong-way-round, unchanged from before Option B: a box area PRESENT with แผ่น/กล่อง blank is a
+     * partially-filled pair — you cannot count boxes without pieces per box, so it is still refused, on create,
+     * update and the preview. This is the ONE combination Option B leaves refused. */
     @Test
     void englishPerSqm_boxAreaFilledButPiecesPerBoxBlank_isStillRefused_onCreateUpdateAndPreview() {
         ItemInput partial = withBoxes(perSqmItem(3360, 28, "0.6", "64"), null);
@@ -502,9 +493,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .hasMessageContaining("แผ่นต่อกล่อง");
         assertThat(quotationService.get(created.id(), salesActor).priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_NET);
 
-        // The lenient preview skips #requireItemComplete (rowNumber is null there), so it is the
-        // OTHER per-sqm-specific check (#requireBoxDataForPerSqm) that catches this combination —
-        // a different message ("แผ่น/กล่อง"), same refusal.
+        // The lenient preview skips #requireItemComplete (rowNumber is null there), so it is the OTHER
+        // per-sqm-specific check (#requireBoxDataForPerSqm) that catches this combination — a different message
+        // ("แผ่น/กล่อง"), same refusal.
         assertThatThrownBy(() -> quotationService.calculateLine(partial, "EN", salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
@@ -541,11 +532,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST)
             .hasMessageContaining("ปัดขึ้นเต็มกล่อง");
-        // ...while the same box/pricing data previewed as a THAI ราคาพิเศษ is perfectly legal —
-        // the refusal is specific to the English PER-SQM combination, not to a TILE row in
-        // general (withSqmPerPiece's `copy` helper does not thread roundToFullBox through, so
-        // this leg does not itself prove roundToFullBox=false is accepted in Thai mode — see
-        // WastageCalculatorTest/DealQuotationLinesTest for that).
+        // ...while the same box/pricing data previewed as a THAI ราคาพิเศษ is perfectly legal — the refusal is
+        // specific to the English PER-SQM combination, not to a TILE row in general.
         assertThat(quotationService.calculateLine(withSqmPerPiece(loose, "0.36"), null, salesActor).unit())
             .isEqualTo("แผ่น");
     }
@@ -569,9 +557,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         DealQuotationDto created = quotationService.create(ticketId,
             englishRequestWithMode(WastageCalculator.PRICE_MODE_SPECIAL_SQM,
                 List.of(perSqmItem(3360, 28, "0.6", "64"))), salesActor);
-        // Straight through jdbc, bypassing create/update's own requireItemComplete gate -- proves
-        // the combination is caught EVEN when it reaches storage some other way (a legacy row from
-        // before this rule, or a direct DB edit), not merely refused at write time.
+        // Straight through jdbc, bypassing create/update's own requireItemComplete gate -- proves the combination is
+        // caught EVEN when it reaches storage some other way (a legacy row from before this rule, or a direct DB
+        // edit), not merely refused at write time.
         jdbc.update("""
             UPDATE sales.quotation_item SET pieces_per_box = NULL
              WHERE quotation_id = :id
@@ -639,8 +627,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .isInstanceOf(ApiException.class).hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
     }
 
-    /** A revision of an English per-sqm quotation copies the PIECE count into qty (not the sqm
-     * figure the DTO prints) and keeps sqm_per_box, so its printed qty and amount are unchanged. */
+    /** A revision of an English per-sqm quotation copies the PIECE count into qty (not the sqm figure the DTO
+     * prints) and keeps sqm_per_box, so its printed qty and amount are unchanged. */
     @Test
     void revisingAnEnglishPerSqmQuotation_keepsQtyAmountAndSqmPerBox() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -659,8 +647,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             .isEqualTo(7524);
     }
 
-    /** Wrong-way-round: the THAI SPECIAL_SQM is unchanged — a VAT-inclusive baht/ตร.ม. turned into a
-     * per-piece net, quantity in pieces — even when the row carries a sqm/box. */
+    /** Wrong-way-round: the THAI SPECIAL_SQM is unchanged — a VAT-inclusive baht/ตร.ม. turned into a per-piece net,
+     * quantity in pieces — even when the row carries a sqm/box. */
     @Test
     void specialSqmOnAThaiDocument_isStillAccepted() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -691,11 +679,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
     private static final java.util.regex.Pattern THAI = java.util.regex.Pattern.compile("[\\u0E00-\\u0E7F]");
 
-    /**
-     * Through the real repository mapping: an English quotation's tile lines, tile unit and
-     * ส่วนลดพิเศษ text come back in English, while the STORED description/raw_unit columns keep the
-     * Thai write-time values — proving the translation is read-time, not a data rewrite.
-     */
+    /** Through the real repository mapping: an English quotation's tile lines, tile unit and ส่วนลดพิเศษ text come
+     * back in English, while the STORED description/raw_unit columns keep the Thai write-time values — proving the
+     * translation is read-time, not a data rewrite. */
     @Test
     void englishQuotation_itemLinesUnitAndDiscountTextAreEnglish_storedColumnsUntouched() throws Exception {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -718,8 +704,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(jdbc.getJdbcOperations().queryForList(
             "SELECT COALESCE(raw_unit, '') || '|' || COALESCE(description, '') FROM sales.quotation_item"
                 + " WHERE quotation_id = " + created.id() + " ORDER BY seq", String.class))
-            // The write path stores the THAI tile description and unit, and the Thai discount text,
-            // whatever the document language — the English above is produced on read.
+            // The write path stores the THAI tile description and unit, and the Thai discount text, whatever the document
+            // language — the English above is produced on read.
             .containsExactly("แผ่น|กระเบื้อง รุ่น Model A สี White ผิว Matte",
                 "|ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569");
 
@@ -743,12 +729,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(sheet.getRow(32).getZeroHeight()).isTrue();
     }
 
-    /**
-     * Ruling 5 — EXISTING documents, no migration: a quotation written as Thai and then flipped to
-     * English directly in the table (standing in for any English row already in the database) reads
-     * back in English with nothing re-saved. And the Thai read of the very same rows, before the
-     * flip, is the Thai text.
-     */
+    /** Ruling 5 — EXISTING documents, no migration: a quotation written as Thai and then flipped to English
+     * directly in the table (standing in for any English row already in the database) reads back in English with
+     * nothing re-saved. */
     @Test
     void anExistingRowReadsInTheDocumentsCurrentLanguage_withNoRewrite() {
         DealQuotationDto thai = quotationService.create(ticketId,
@@ -832,13 +815,7 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
 
     // ── the English-name fallback, against real hr.employee rows ───────────────────────────
 
-    /**
-     * An employee with no {@code first_name_en} prints their THAI name on the English document,
-     * not a blank slot. Asserted against a REAL employee row rather than a hand-built DTO, because
-     * the null this depends on is produced by {@code baseSelect}'s
-     * {@code NULLIF(TRIM(CONCAT_WS(...)))} — a blank-string employee would come back as "" from a
-     * naive CONCAT and defeat the fallback entirely.
-     */
+    /** An employee with no first_name_en prints their THAI name on the English document, not a blank slot. */
     @Test
     void anEmployeeWithNoEnglishName_printsTheThaiNameNotABlankSlot() throws Exception {
         EmployeeRepository employees = new EmployeeRepository(
@@ -951,9 +928,9 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             null, priceMode, language, currency, items).withRecipientType("OWNER");
     }
 
-    /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more;
-     * see DealQuotationService#resolveSqmPerPiece's Javadoc), piecesPerBox 1 (box rounding a
-     * no-op), 30-45 day lead time. */
+    /** 60x60 -> 0.36 ตร.ม./แผ่น (explicit -- ตร.ม./แผ่น is never derived from sizeText any more; see
+     * DealQuotationService#resolveSqmPerPiece's Javadoc), piecesPerBox 1 (box rounding a no-op), 30-45 day lead
+     * time. */
     private ItemInput tileItem(String unitPrice, int pieces) {
         return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
             new BigDecimal("10"), new BigDecimal("0.36"),
@@ -1012,8 +989,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             b.sqmPerPiece(), b.piecesPerBox(), new BigDecimal(sqmPerBox));
     }
 
-    /** V182 "sell loose pieces" — {@code copy} has no roundToFullBox parameter (it predates this
-     * feature), so this goes through the full canonical constructor directly instead. */
+    /** V182 "sell loose pieces" — copy has no roundToFullBox parameter (it predates this feature), so this goes
+     * through the full canonical constructor directly instead. */
     private ItemInput withRoundToFullBox(ItemInput b, Boolean roundToFullBox) {
         return new ItemInput(b.locationLabel(), b.catalogPriceId(), b.productCode(), b.brand(), b.model(),
             b.color(), b.texture(), b.sizeText(), b.thicknessMm(), b.sqmPerPiece(), b.quantityMode(),
@@ -1066,9 +1043,8 @@ class DealQuotationEnglishIntegrationTest extends AbstractPostgresIntegrationTes
             new BigDecimal(directNet), null, null, null);
     }
 
-    /** {@code nameEn} is split into {@code first_name_en}/{@code last_name_en} by
-     * {@code EmployeeRepository#splitName}; passing null leaves BOTH null, which is exactly the
-     * state {@link #anEmployeeWithNoEnglishName_printsTheThaiNameNotABlankSlot} needs. */
+    /** nameEn is split into first_name_en/last_name_en by EmployeeRepository#splitName; passing null leaves BOTH
+     * null, which is exactly the state #anEmployeeWithNoEnglishName_printsTheThaiNameNotABlankSlot needs. */
     private long createEmployee(EmployeeRepository employees, String nameTh, String nameEn,
                                 String email, String divisionSourceCode,
                                 String divisionNameTh, String positionTh) {

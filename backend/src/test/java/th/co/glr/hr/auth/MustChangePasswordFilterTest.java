@@ -11,16 +11,8 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.mock.web.MockHttpSession;
 
-/**
- * The decision half of the forced-password-change gate: given a session principal, does
- * {@link MustChangePasswordFilter} let the request through or 403 it?
- *
- * <p>Deliberately written wrong-way-round — the assertions that matter are the ones proving a
- * must-change session <em>cannot</em> reach the API, not that a normal session can. The enforcement
- * half (that this filter is actually mounted in the real chain, in front of the real controllers)
- * is pinned by {@code SecurityAuthorizationIntegrationTest}; a passing test here says nothing about
- * whether the filter is wired in at all.
- */
+/** The decision half of the forced-password-change gate: given a session principal, does
+ * MustChangePasswordFilter let the request through or 403 it? */
 class MustChangePasswordFilterTest {
 
     private final MustChangePasswordFilter filter = new MustChangePasswordFilter();
@@ -39,8 +31,8 @@ class MustChangePasswordFilterTest {
         "GET,    /api/dashboard/summary",
         "GET,    /api/profile-requests",
         "GET,    /api/tickets",
-        // Same namespace as the allowlist, but not on it: proving the match is per-endpoint and
-        // not a lazy `/api/auth/**` prefix that would hand the whole auth surface over.
+        // Same namespace as the allowlist, but not on it: proving the match is per-endpoint and not a lazy
+        // `/api/auth/**` prefix that would hand the whole auth surface over.
         "POST,   /api/auth/reset-password",
     })
     void mustChangeSessionIsBlockedFromTheApi(String method, String path) throws Exception {
@@ -112,8 +104,8 @@ class MustChangePasswordFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();
 
-        // No session at all — e.g. the device agent's POST /api/attendance/punch, or any
-        // unauthenticated call that SecurityConfig's default-deny should 401 further down.
+        // No session at all — e.g. the device agent's POST /api/attendance/punch, or any unauthenticated call that
+        // SecurityConfig's default-deny should 401 further down.
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/attendance/punch");
 
         filter.doFilter(request, response, chain);
@@ -127,8 +119,8 @@ class MustChangePasswordFilterTest {
         MockHttpServletResponse response = new MockHttpServletResponse();
         MockFilterChain chain = new MockFilterChain();
 
-        // The SPA's own static assets are served from the same origin; a must-change user still
-        // has to be able to load the app that renders the change-password modal.
+        // The SPA's own static assets are served from the same origin; a must-change user still has to be able to load
+        // the app that renders the change-password modal.
         filter.doFilter(request("GET", "/index.html", sessionWith(true)), response, chain);
 
         assertThat(chain.getRequest()).isNotNull();

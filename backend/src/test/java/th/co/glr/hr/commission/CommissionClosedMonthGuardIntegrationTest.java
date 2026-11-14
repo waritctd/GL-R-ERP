@@ -29,35 +29,8 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Commission-closed-month guard (fix/commission-closed-month-guard, stacked on V114's {@code
- * hr.payroll_seed_coverage}) — real-DB, wrong-way-round acceptance coverage.
- *
- * <p>Background: {@link CommissionService#createManualCommission} took a free-form {@code
- * payrollMonth} and the SALE path ({@link CommissionService#submit}/{@link
- * CommissionService#createFromDeal}) derived its month from a caller-supplied, backdatable {@code
- * invoiceDate} — either way a commission could land in a payroll month that can never be paid
- * (already {@code PROCESSED}, or paid outside the ERP and seed-covered per V114), silently
- * distorting {@link CommissionService#payrollReadySummary}. Owner decision: REFUSE (409), never
- * roll forward — rolling forward would change which month the commission is attributed to, which
- * is attribution logic, not a write guard. Review pass (findings F2/F3) widened the scope from the
- * three creation paths to all SIX sites that write or advance {@code sales.commission_record}:
- * {@link CommissionService#createManualCommission}, {@link CommissionService#submit}, {@link
- * CommissionService#createFromDeal}, {@link CommissionService#createClawback} (a fourth INSERT
- * path, easy to miss because it always targets the CURRENT month rather than a caller-supplied
- * one), and the two approval stages reachable through {@link CommissionService#approve} (manager-
- * then CEO-approve) — a commission created while its month was open can still be approved after
- * that month closes underneath it.
- *
- * <p>Mockito cannot prove this: a mocked {@link CommissionRepository} happily "passes" while the
- * guard SQL ({@code payrollMonthProcessed}/{@code payrollMonthSeedCovered}) checks nothing. Every
- * guard case here is written wrong-way-round — the write must be REFUSED and ZERO rows persisted
- * in real Postgres, not merely a 409 status code. {@link AuditService} and {@link
- * NotificationService} are mocked deliberately (side effects of an already-decided outcome, same
- * rationale as every other commission integration test in this package); every collaborator that
- * participates in the guard decision or its persistence (real {@link CommissionRepository}, real
- * {@link TicketRepository}, real {@link AttachmentRepository}) is real.
- */
+/** Commission-closed-month guard (fix/commission-closed-month-guard, stacked on V114's
+ * hr.payroll_seed_coverage) — real-DB, wrong-way-round acceptance coverage. */
 class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final int TAX_YEAR = 2026;
 
@@ -96,9 +69,7 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         salesRepId = createEmployee(employees, "พนักงานขาย งวดปิด", "sales-closedmonth@glr.co.th", "SA", "แผนกขาย");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // createManualCommission — cases 1 & 2 from the plan.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void manualCommission_intoSeedCoveredMonth_isRefused_zeroRowsWritten() {
@@ -135,10 +106,8 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // createFromDeal (SALE path) — case 3. invoiceDate derives via saleCommissionPayrollMonth
-    // (M+1): a 2026-05-15 invoice derives to payroll month 2026-06-01, inside coverage.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // createFromDeal (SALE path) — case 3. invoiceDate derives via saleCommissionPayrollMonth (M+1): a 2026-05-15
+    // invoice derives to payroll month 2026-06-01, inside coverage.
 
     @Test
     void createFromDeal_derivingIntoSeedCoveredMonth_isRefused_nothingWritten() {
@@ -147,9 +116,9 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         int beforeCommissions = countCommissionRecords();
         int beforeInvoices = countInvoiceDetails();
 
-        // createFromDeal throws CONFLICT for a DIFFERENT reason too (hasActiveCommissionForTicket)
-        // -- assert the distinguishing Thai substring, not just the status, so a fixture change
-        // could never make this pass for the wrong reason (reviewer finding F5).
+        // createFromDeal throws CONFLICT for a DIFFERENT reason too (hasActiveCommissionForTicket) -- assert the
+        // distinguishing Thai substring, not just the status, so a fixture change could never make this pass for the
+        // wrong reason (reviewer finding F5).
         assertThatThrownBy(() -> commissionService.createFromDeal(
                 ticketId, "INV-GUARD-CFD-" + UUID.randomUUID().toString().substring(0, 8),
                 LocalDate.of(2026, 5, 15), new BigDecimal("10000.00"),
@@ -162,8 +131,8 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
 
         assertThat(countCommissionRecords()).isEqualTo(beforeCommissions);
         assertThat(countInvoiceDetails()).isEqualTo(beforeInvoices);
-        // The guard runs before the invoice upload also flips the ticket's invoiceOnFile flag --
-        // a refused create must leave the ticket's close gate untouched too.
+        // The guard runs before the invoice upload also flips the ticket's invoiceOnFile flag -- a refused create must
+        // leave the ticket's close gate untouched too.
         assertThat(tickets.hasInvoiceAttachment(ticketId)).isFalse();
     }
 
@@ -189,10 +158,8 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(tickets.hasInvoiceAttachment(ticketId)).isFalse();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // submit (SALE path, unlinked) — case 4. sourceTicketId is null, so resolveDealLinkage's
-    // CLOSED_PAID check never runs -- proves the guard fires independently of deal linkage.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // submit (SALE path, unlinked) — case 4. sourceTicketId is null, so resolveDealLinkage's CLOSED_PAID check
+    // never runs -- proves the guard fires independently of deal linkage.
 
     @Test
     void submit_derivingIntoSeedCoveredMonth_isRefused_nothingWritten() {
@@ -229,21 +196,15 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(countCommissionRecords()).isEqualTo(beforeCommissions);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // createClawback (reviewer finding F2) — a FOURTH insert path into sales.commission_record,
-    // guarded on currentPayrollMonth() (always the CURRENT month, never a caller-supplied one).
-    // Simulates the real prod incident: the current month gets marked PROCESSED mid-month (23 Jul
-    // 2026), which an unguarded clawback would otherwise land in undetected -- a clawback is a
-    // NEGATIVE adjustment, so a refused one is the financially-safe direction (the correction is
-    // blocked, not silently absorbed into a processed month's tier base).
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // createClawback (reviewer finding F2) — a FOURTH insert path into sales.commission_record, guarded on
+    // currentPayrollMonth() (always the CURRENT month, never a caller-supplied one).
 
     @Test
     void createClawback_intoAlreadyProcessedCurrentMonth_isRefused_noClawbackRowWritten() {
         LocalDate currentMonth = LocalDate.now(ZoneId.of("Asia/Bangkok")).withDayOfMonth(1);
         long originalId = seedApprovedTierCommission(salesRepId, currentMonth, new BigDecimal("100000.00"));
-        // The month closes AFTER the original SALE commission was already created and approved --
-        // exactly the prod sequence (created while open, month marked PROCESSED mid-month).
+        // The month closes AFTER the original SALE commission was already created and approved -- exactly the prod
+        // sequence (created while open, month marked PROCESSED mid-month).
         insertProcessedPeriod(currentMonth);
         int before = countCommissionRecords();
 
@@ -257,11 +218,9 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Approval stages (reviewer finding F3) — a commission created while its payroll month was
-    // still open can still reach manager- or CEO-approval AFTER that month closes underneath it.
-    // Guards on the RECORD's own payrollMonth, not today's date.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Approval stages (reviewer finding F3) — a commission created while its payroll month was still open can
+    // still reach manager- or CEO-approval AFTER that month closes underneath it. Guards on the RECORD's own
+    // payrollMonth, not today's date.
 
     @Test
     void managerApprove_refusedOnceThePayrollMonthClosesUnderneath_statusUnchanged() {
@@ -283,8 +242,8 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
     void ceoApprove_refusedOnceThePayrollMonthClosesUnderneath_statusUnchanged() {
         LocalDate month = LocalDate.of(2026, 4, 1);
         long commissionId = seedSubmittedTierCommission(salesRepId, month, new BigDecimal("50000.00"));
-        commissionService.approve(commissionId, managerActor); // -> MANAGER_APPROVED, month still open
-        // The month closes AFTER manager approval, while the request waits for the CEO.
+        commissionService.approve(commissionId, managerActor); // -> MANAGER_APPROVED, month still open The month closes AFTER manager approval, while the request waits for
+        // the CEO.
         insertProcessedPeriod(month);
 
         assertThatThrownBy(() -> commissionService.approve(commissionId, ceoActor))
@@ -296,10 +255,8 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(commissions.findById(commissionId).orElseThrow().status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Boundary — case 5: the guard does not over-reach. Given coverage through 2026-06-01, a
-    // June invoice derives (M+1) to July, the first OPEN month, and must succeed.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Boundary — case 5: the guard does not over-reach. Given coverage through 2026-06-01, a June invoice derives
+    // (M+1) to July, the first OPEN month, and must succeed.
 
     @Test
     void createManualCommission_intoFirstOpenMonthPastCoverage_succeeds() {
@@ -324,16 +281,13 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(created.payrollMonth()).isEqualTo(LocalDate.of(2026, 7, 1));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Data-driven, not hardcoded — case 6: with NO coverage row at all (UAT's shape today), a
-    // month that would otherwise be covered succeeds. Proves the guard reads real coverage data
-    // rather than a baked-in date.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Data-driven, not hardcoded — case 6: with NO coverage row at all (UAT's shape today), a month that would
+    // otherwise be covered succeeds. Proves the guard reads real coverage data rather than a baked-in date.
 
     @Test
     void createManualCommission_withNoCoverageRowAtAll_succeedsEvenForAnOldMonth() {
-        // No insertSeedCoverage call -- hr.payroll_seed_coverage starts empty in every fresh test
-        // database, exactly UAT's current shape (no payroll_year_to_date_seed rows to derive from).
+        // No insertSeedCoverage call -- hr.payroll_seed_coverage starts empty in every fresh test database, exactly
+        // UAT's current shape (no payroll_year_to_date_seed rows to derive from).
         CommissionRecord created = commissionService.createManualCommission(
             salesRepId, CommissionKind.ADJUSTMENT, new BigDecimal("1000.00"),
             "no coverage row exists anywhere", LocalDate.of(2026, 1, 1), managerActor);
@@ -341,9 +295,7 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         assertThat(created.payrollMonth()).isEqualTo(LocalDate.of(2026, 1, 1));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private SubmitCommissionRequest unlinkedRequest(long salesRepId, LocalDate invoiceDate, String invoiceNumber) {
         return new SubmitCommissionRequest(
@@ -352,13 +304,8 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
             BigDecimal.ZERO, BigDecimal.ZERO);
     }
 
-    /**
-     * Writes a real SUBMITTED SALE commission directly through the repository (bypassing {@code
-     * submit()}'s own create-time guard entirely, deliberately -- this is fixture setup, not the
-     * thing under test) at exactly {@code payrollMonth}, for the approval-stage guard tests: they
-     * need a record whose month is still OPEN at creation time and only closes afterward, under
-     * the test's control.
-     */
+    /** Writes a real SUBMITTED SALE commission directly through the repository (bypassing submit's own create-time
+     * guard entirely, deliberately. */
     private long seedSubmittedTierCommission(long salesRepId, LocalDate payrollMonth, BigDecimal actualReceived) {
         SubmitCommissionRequest request = new SubmitCommissionRequest(
             null, salesRepId, "INV-GUARD-SEED-" + UUID.randomUUID().toString().substring(0, 8),
@@ -372,12 +319,9 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         return commissions.createCommissionRecord(invoiceId, null, salesRepId, salesRepId, payrollMonth, calculation);
     }
 
-    /**
-     * Same as {@link #seedSubmittedTierCommission} but carried all the way through the real
-     * manager- and CEO-approve chain while the month is still open, so the resulting record is a
-     * genuine APPROVED SALE commission -- the only kind/status {@link
-     * CommissionService#createClawback} accepts.
-     */
+    /** Same as #seedSubmittedTierCommission but carried all the way through the real manager- and CEO-approve chain
+     * while the month is still open, so the resulting record is a genuine APPROVED SALE commission -- the only
+     * kind/status CommissionService#createClawback accepts. */
     private long seedApprovedTierCommission(long salesRepId, LocalDate payrollMonth, BigDecimal actualReceived) {
         long commissionId = seedSubmittedTierCommission(salesRepId, payrollMonth, actualReceived);
         commissionService.approve(commissionId, managerActor);
@@ -389,9 +333,9 @@ class CommissionClosedMonthGuardIntegrationTest extends AbstractPostgresIntegrat
         return new MockMultipartFile("invoiceAttachment", "invoice.pdf", "application/pdf", "pdf".getBytes());
     }
 
-    /** Direct SQL, not the full 8-step ticket->deal fixture -- the guard is date-math, not deal
-     * state, and every other test in this class only needs a ticket that already reads back as
-     * CLOSED_PAID with a known owner, exactly what {@code createFromDeal} looks up. */
+    /** Direct SQL, not the full 8-step ticket->deal fixture -- the guard is date-math, not deal state, and every
+     * other test in this class only needs a ticket that already reads back as CLOSED_PAID with a known owner,
+     * exactly what createFromDeal looks up. */
     private long createClosedPaidTicket(long createdBy) {
         return jdbc.queryForObject("""
             INSERT INTO sales.ticket (code, title, status, created_by, sales_stage)

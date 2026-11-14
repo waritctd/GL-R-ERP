@@ -84,9 +84,9 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(direct.lineAmount()).isEqualByComparingTo("5311.60");
     }
 
-    /** THE property (see the class comment). For each mode the same row is saved twice — alone on
-     * a single-mode document, and inside a MIXED one beside rows of the other two modes — and
-     * everything the engine computes or prints for it must come out identical. */
+    /** THE property (see the class comment). For each mode the same row is saved twice — alone on a single-mode
+     * document, and inside a MIXED one beside rows of the other two modes — and everything the engine computes or
+     * prints for it must come out identical. */
     @Test
     void eachRowOfAMixedDocument_comesOutExactlyAsOnASingleModeDocumentOfThatMode() {
         DealQuotationDto mixed = quotationService.create(deal(salesActor),
@@ -113,8 +113,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         }
     }
 
-    /** "make sure the ยอดรวม in final is correct" applies here as much as anywhere: รวมเป็นเงิน is the
-     * sum of the lines whatever mode each was priced in, and VAT is taken once, on that. */
+    /** "make sure the ยอดรวม in final is correct" applies here as much as anywhere: รวมเป็นเงิน is the sum of the
+     * lines whatever mode each was priced in, and VAT is taken once, on that. */
     @Test
     void theFootOfAMixedDocument_isTheSumOfItsLines_withVatTakenOnce() {
         DealQuotationDto quotation = quotationService.create(deal(salesActor),
@@ -143,17 +143,17 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(reread.priceMode()).isEqualTo(MIXED);
         assertThat(reread.items()).extracting(DealQuotationItemDto::priceMode)
             .containsExactly(NET, SPECIAL_SQM, DIRECT_NET, null);
-        // …and the figures survive the round trip through the row mapper, which prices nothing
-        // itself but decides each row's printed lines from its mode.
+        // …and the figures survive the round trip through the row mapper, which prices nothing itself but decides each
+        // row's printed lines from its mode.
         assertThat(reread.items().get(1).netUnitPrice()).isEqualByComparingTo("531.16");
         assertThat(reread.items().get(1).specialPriceLine()).isEqualTo(created.items().get(1).specialPriceLine())
             .isNotBlank();
         assertThat(reread.items().get(0).specialPriceLine()).as("a NET row prints no ราคาพิเศษ line").isNull();
     }
 
-    /** Wrong-way-round, and the guard for every document that is NOT mixed: a row's own mode is
-     * ignored there. The document below says NET; its one row claims SPECIAL_SQM and carries a
-     * ราคาพิเศษ — it is priced off its list price, as NET, and nothing is stored on the row. */
+    /** Wrong-way-round, and the guard for every document that is NOT mixed: a row's own mode is ignored there. The
+     * document below says NET; its one row claims SPECIAL_SQM and carries a ราคาพิเศษ — it is priced off its list
+     * price, as NET, and nothing is stored on the row. */
     @Test
     void onASingleModeDocument_aRowsOwnMode_changesNothingAndIsNotStored() {
         ItemInput claimsSpecial = specialRow().withPriceMode(SPECIAL_SQM);
@@ -171,10 +171,9 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(storedRowModes(withClaim.id())).containsExactly((String) null);
     }
 
-    /** The READ path's own half of that guard. The write path stores no row mode on a single-mode
-     * document — but a value could still be sitting there (a hand-run SQL fix, a future bug), and
-     * it must be inert: not served as if it meant something, and not allowed to change what the
-     * row prints. Forced in with SQL here precisely because nothing else can put it there. */
+    /** The READ path's own half of that guard. The write path stores no row mode on a single-mode document — but a
+     * value could still be sitting there (a hand-run SQL fix, a future bug), and it must be inert: not served as
+     * if it meant something, and not allowed to change what the row prints. */
     @Test
     void aStrayRowModeOnASingleModeDocument_isNeitherServedNorActedOn() {
         DealQuotationDto created = quotationService.create(deal(salesActor),
@@ -192,8 +191,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
 
     // ── refusals ────────────────────────────────────────────────────────────────────────────
 
-    /** No silent default: on a MIXED document a tile row that does not say how it is priced is
-     * refused, naming the row — never quietly priced as NET off whatever fields it carries. */
+    /** No silent default: on a MIXED document a tile row that does not say how it is priced is refused, naming the
+     * row — never quietly priced as NET off whatever fields it carries. */
     @Test
     void aMixedDocument_withATileRowThatStatesNoMode_isRefused() {
         long ticket = deal(salesActor);
@@ -204,8 +203,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(quotationCount(ticket)).isZero();
     }
 
-    /** The English form prices per ตร.ม. with the quantity itself in square metres — a different
-     * document shape per row. Mixing is a Thai-document feature (what sales asked for). */
+    /** The English form prices per ตร.ม. with the quantity itself in square metres — a different document shape per
+     * row. Mixing is a Thai-document feature (what sales asked for). */
     @Test
     void aMixedDocument_inEnglish_isRefused() {
         long ticket = deal(salesActor);
@@ -221,9 +220,9 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
 
     // ── editing ─────────────────────────────────────────────────────────────────────────────
 
-    /** The editor saves a draft's rows WITH their ids, which takes the in-place UPDATE path — a
-     * different statement from the INSERT. Changing one row's mode must reprice THAT row, leave
-     * the others alone, and rewrite the stored mode. */
+    /** The editor saves a draft's rows WITH their ids, which takes the in-place UPDATE path — a different statement
+     * from the INSERT. Changing one row's mode must reprice THAT row, leave the others alone, and rewrite the
+     * stored mode. */
     @Test
     void changingOneRowsMode_onASavedDraft_repricesThatRowOnly() {
         DealQuotationDto created = quotationService.create(deal(salesActor),
@@ -242,9 +241,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(storedRowModes(created.id())).containsExactly(NET, SPECIAL_SQM);
     }
 
-    /** Back to one mode for the whole document: every row is priced in it, and the per-row modes
-     * are CLEARED — a leftover would otherwise sit unseen until the document was switched to
-     * MIXED again, and then decide a price. */
+    /** Back to one mode for the whole document: every row is priced in it, and the per-row modes are CLEARED — a
+     * leftover would otherwise sit unseen until the document was switched to MIXED again, and then decide a price. */
     @Test
     void switchingAMixedDocumentToOneMode_pricesEveryRowInIt_andClearsTheRowModes() {
         DealQuotationDto created = quotationService.create(deal(salesActor),
@@ -277,9 +275,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(updated.items()).extracting(DealQuotationItemDto::priceMode).containsExactly(NET, DIRECT_NET);
     }
 
-    /** A save that does not name the document's mode keeps the stored one (the long-standing
-     * "missing keeps stored" rule) — and on a MIXED document that means the rows must still say
-     * theirs. */
+    /** A save that does not name the document's mode keeps the stored one (the long-standing "missing keeps stored"
+     * rule) — and on a MIXED document that means the rows must still say theirs. */
     @Test
     void anUpdateThatOmitsTheDocumentsMode_keepsItMixed() {
         DealQuotationDto created = quotationService.create(deal(salesActor),
@@ -315,8 +312,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         }
     }
 
-    /** The whole life of the document: a mixed draft submits and approves like any other. Submit
-     * re-checks the STORED rows for completeness, which is its own path through the mode. */
+    /** The whole life of the document: a mixed draft submits and approves like any other. Submit re-checks the
+     * STORED rows for completeness, which is its own path through the mode. */
     @Test
     void aMixedDocument_submitsAndApproves_likeAnyOther() {
         DealQuotationDto created = quotationService.create(deal(salesActor),
@@ -333,9 +330,9 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
 
     // ── the live preview ────────────────────────────────────────────────────────────────────
 
-    /** calculate-line has no document. On a mixed document the editor says which mode the row is
-     * in; that must win over guessing from the fields, or a row switched to NET would go on
-     * previewing off the ราคาพิเศษ still sitting in its hidden box. */
+    /** calculate-line has no document. On a mixed document the editor says which mode the row is in; that must win
+     * over guessing from the fields, or a row switched to NET would go on previewing off the ราคาพิเศษ still
+     * sitting in its hidden box. */
     @Test
     void thePreview_usesTheModeTheRowStates_overWhatItsFieldsSuggest() {
         ItemInput staleSpecialButNet = tile(null, "20", "790", "1800", null)
@@ -357,9 +354,9 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
 
     // ── what the customer's document prints ─────────────────────────────────────────────────
 
-    /** The ส่วนลด cell is the visible sign of a row's mode: "20%" for ราคาตั้ง − ส่วนลด, "พิเศษ" for a
-     * ราคาพิเศษ row (with its sub-line) and for a ราคาสุทธิ row whose net differs from its list
-     * price, "Net" for one whose net IS its list price. Row by row, on one document. */
+    /** The ส่วนลด cell is the visible sign of a row's mode: "20%" for ราคาตั้ง − ส่วนลด, "พิเศษ" for a ราคาพิเศษ
+     * row (with its sub-line) and for a ราคาสุทธิ row whose net differs from its list price, "Net" for one whose
+     * net IS its list price. Row by row, on one document. */
     @Test
     void thePrintedDocument_labelsEachRowByItsOwnMode() throws Exception {
         DealQuotationDto created = quotationService.create(deal(salesActor),
@@ -384,8 +381,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
 
     // ── "has special pricing" — decided row by row ──────────────────────────────────────────
 
-    /** ยืนราคา by DATE is offered only on a document with special pricing. On a mixed document that
-     * is true as soon as ONE row has it — here the ราคาพิเศษ row, beside a NET row at 0%. */
+    /** ยืนราคา by DATE is offered only on a document with special pricing. On a mixed document that is true as soon
+     * as ONE row has it — here the ราคาพิเศษ row, beside a NET row at 0%. */
     @Test
     void aMixedDocument_hasSpecialPricing_whenAnyOneRowDoes() {
         LocalDate until = LocalDate.now(BANGKOK).plusDays(30);
@@ -396,10 +393,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(quotation.validityUntil()).isEqualTo(until);
     }
 
-    /** Wrong-way-round: a mixed document whose rows each have NOTHING special by their own mode's
-     * rule — NET at 0%, ราคาสุทธิ equal to its list price — has none, and a DATE is refused. Read
-     * by the document-level rule this would be undecidable ("MIXED" is neither ราคาพิเศษ nor
-     * ราคาสุทธิ) and the ราคาสุทธิ row below would be judged as NET. */
+    /** Wrong-way-round: a mixed document whose rows each have NOTHING special by their own mode's rule — NET at 0%,
+     * ราคาสุทธิ equal to its list price — has none, and a DATE is refused. */
     @Test
     void aMixedDocument_hasNoSpecialPricing_whenNoRowDoes() {
         long ticket = deal(salesActor);
@@ -411,8 +406,8 @@ class DealQuotationMixedPriceModeIntegrationTest extends AbstractDealDirectQuota
         assertThat(quotationCount(ticket)).isZero();
     }
 
-    /** …and the ราคาสุทธิ row alone is enough when its net DOES differ from its list price —
-     * rule (b), applied to the row's own mode rather than the document's. */
+    /** …and the ราคาสุทธิ row alone is enough when its net DOES differ from its list price — rule (b), applied to
+     * the row's own mode rather than the document's. */
     @Test
     void aDirectNetRowBelowItsListPrice_isSpecialPricing_onAMixedDocument() {
         LocalDate until = LocalDate.now(BANGKOK).plusDays(30);

@@ -87,20 +87,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Composition UAT for the ENTIRE sales pricing chain (Steps 1-4), driven end to end on a single
- * deal through the real services — no mocks at all. Factory RFQ email is manual-only
- * ({@code FactoryQuoteService#send} just records that a human sent it — see the class javadoc),
- * so there is no mail-provider collaborator left to mock here. Every
- * state transition below is produced by calling the real service that owns it; nothing is
- * hand-rolled via SQL to skip a step. The point of this file is NOT to re-prove any single
- * step's own business rules (unit-conversion math, idempotency, concurrency, etc. — all
- * already covered by {@code PricingRequestFlowIntegrationTest},
- * {@code PricingFactoryQuoteCostingIntegrationTest}, {@code PricingDecisionIntegrationTest} and
- * {@code CustomerQuotationIntegrationTest}); it is to catch a bug where one step writes a field
- * the next step reads differently — a class of bug the four isolated per-step tests cannot see
- * because each one only ever hand-builds its OWN precondition.
- */
+/** Composition UAT for the ENTIRE sales pricing chain (Steps 1-4), driven end to end on a single deal through
+ * the real services — no mocks at all. Every state transition below is produced by calling the real service
+ * that owns it; nothing is hand-rolled via SQL to skip a step. */
 class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -152,8 +141,8 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         factoryQuoteRepository = factoryQuotes;
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         LandedCostCalculator landedCostCalculator = new LandedCostCalculator(factoryQuotes, pricingRequests,
             fxRates, new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
         factoryQuoteService = new FactoryQuoteService(factoryQuotes, pricingRequests, tickets,
@@ -161,8 +150,8 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             landedCostCalculator);
 
         costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         decisionRepository = new PricingDecisionRepository(jdbc);
@@ -188,10 +177,8 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         accountActor = actor(accountUserId, "account");
         salesManagerActor = actor(salesManagerUserId, "sales_manager");
 
-        // Two DIFFERENT factories, both country 'Thailand' (a real, non-all-zero
-        // price_calc_config row already seeded by V26 — see that migration), so the chain
-        // exercises real freight/insurance/duty/inland arithmetic end to end, not the all-zero
-        // shortcut some per-step tests use for isolating unit-conversion math.
+        // Two DIFFERENT factories, both country 'Thailand', so the chain exercises real freight/insurance/duty/inland
+        // arithmetic end to end, not the all-zero shortcut some per-step tests use for isolating unit-conversion math.
         catalogProductIdFactoryA = insertCatalogProduct(FACTORY_A, "IT", "TEST-CHAIN-A-001",
             new BigDecimal("100.00"), "THB", "per_piece");
         catalogProductIdFactoryB = insertCatalogProduct(FACTORY_B, "IT", "TEST-CHAIN-B-001",
@@ -207,9 +194,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The full chain: Steps 1 -> 2 -> 3 -> 4, one deal, two factories, mixed unit basis.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void fullPricingChain_stepOneThroughStepFour_composesWithoutShortcuts() {
@@ -227,14 +212,9 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             List.of(
                 pricingItemPerPiece(FACTORY_A, catalogProductIdFactoryA, "SCG", "Tile Chain A", new BigDecimal("10")),
                 pricingItemPerBox(FACTORY_B, catalogProductIdFactoryB, "Cotto", "Tile Chain B", new BigDecimal("5"))));
-        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces
-        // every item's requestedUnitBasis to PER_PIECE, which would make it impossible to construct
-        // the PER_BOX requestedUnitBasis this "mixed unit basis" test exists to exercise (see the
-        // requestedUnitBasis assertions below). PricingRequestRepository.create performs the exact
-        // same DB write createDraft would (persistence only, per that class's own header Javadoc) --
-        // but createDraft ALSO records the PRICING_REQUEST_CREATED event itself (not the
-        // repository's create()), so this fixture replays that one extra call to keep
-        // assertEventCount(..., PRICING_REQUEST_CREATED, 1) below accurate.
+        // V185: bypasses PricingRequestService.createDraft on purpose -- that method now forces every item's
+        // requestedUnitBasis to PER_PIECE, which would make it impossible to construct the PER_BOX requestedUnitBasis
+        // this "mixed unit basis" test exists to exercise.
         long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), createRequest, salesRepId);
         pricingRequests.addEvent(pricingRequestId, ticketId, salesRepId, salesActor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
@@ -271,16 +251,15 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
-        // Factory A responds first: multi-factory progression must NOT jump ahead while Factory
-        // B is still pending.
+        // Factory A responds first: multi-factory progression must NOT jump ahead while Factory B is still pending.
         FactoryQuoteDto responseA = factoryQuoteService.receive(draftA.id(),
             responsePerPiece("REF-CHAIN-A", "100.00", itemAId), importActor);
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         factoryQuoteService.markReadyForCosting(responseA.id(), importActor);
-        // ── Step 2: Factory A alone being ready must not advance the request while Factory B
-        // is still pending — V141 ("CEO owns costing") auto-advances only once the LAST item's
-        // factory quote resolves (LandedCostCalculator.isFullyResolvable). ──────────────────────
+        // Step 2: Factory A alone being ready must not advance the request while Factory B is still pending — V141
+        // ("CEO owns costing") auto-advances only once the LAST item's factory quote resolves
+        // (LandedCostCalculator.isFullyResolvable).
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
@@ -289,14 +268,14 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
         factoryQuoteService.markReadyForCosting(responseB.id(), importActor);
-        // The LAST factory quote becoming ready auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW — there is no Import-driven costing draft/submit step any more
-        // (PricingCostingService is read-only; see its own javadoc).
+        // The LAST factory quote becoming ready auto-advances the request straight to READY_FOR_CEO_REVIEW — there is
+        // no Import-driven costing draft/submit step any more (PricingCostingService is read-only; see its own
+        // javadoc).
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
-        // ── Step 3: CEO selling-price decision (real PricingDecisionService) — computes +
-        // persists the costing itself, in the SAME action that creates the decision ───────────
+        // Step 3: CEO selling-price decision (real PricingDecisionService) — computes + persists the costing itself,
+        // in the SAME action that creates the decision
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         assertThat(decision.status()).isEqualTo(PricingDecisionStatus.DRAFT);
@@ -311,8 +290,8 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             .isEqualTo(PricingRequestStatus.CEO_REVIEWING);
         assertThat(decision.items()).hasSize(2);
 
-        // Composition proof: the decision's frozen per-piece cost must trace back BYTE-FOR-BYTE
-        // to the submitted costing item's own landed-cost-per-piece figure, not a recomputation.
+        // Composition proof: the decision's frozen per-piece cost must trace back BYTE-FOR-BYTE to the submitted
+        // costing item's own landed-cost-per-piece figure, not a recomputation.
         PricingDecisionItemDto rawItemA = decisionItemFor(decision, itemAId);
         PricingDecisionItemDto rawItemB = decisionItemFor(decision, itemBId);
         assertThat(rawItemA.frozenLandedCostPerPieceThb())
@@ -341,10 +320,9 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         PricingDecisionItemDto approvedItemA = decisionItemFor(approved, itemAId);
         PricingDecisionItemDto approvedItemB = decisionItemFor(approved, itemBId);
-        // V152 (V109 engine wiring), rounding rule replaced by owner ruling 2026-09-19 (Phase 2
-        // CEO pricing): selling price is cost x (1+margin) x selling_buffer, rounded HALF_UP to
-        // 2dp — see formulaSellingPrice's own javadoc — no longer rounded UP to the nearest ฿10,
-        // and not the original bare cost x (1+margin) either.
+        // V152, rounding rule replaced by owner ruling 2026-09-19: selling price is cost x x selling_buffer, rounded
+        // HALF_UP to 2dp — see formulaSellingPrice's own javadoc — no longer rounded UP to the nearest ฿10, and not
+        // the original bare cost x either.
         BigDecimal expectedApprovedA = formulaSellingPrice(
             approvedItemA.frozenLandedCostPerRequestedUnitThb(), approvedItemA.approvedMarginPct());
         BigDecimal expectedApprovedB = formulaSellingPrice(
@@ -377,8 +355,8 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
 
         CustomerQuotationItemDto quoteItemA = quotationItemFor(draftQuotation, itemAId);
         CustomerQuotationItemDto quoteItemB = quotationItemFor(draftQuotation, itemBId);
-        // Trace-back proof: the quotation's approved price is EXACTLY the CEO-approved price for
-        // that exact item — not a recomputation, not a different item's price.
+        // Trace-back proof: the quotation's approved price is EXACTLY the CEO-approved price for that exact item — not
+        // a recomputation, not a different item's price.
         assertThat(quoteItemA.approvedUnitPrice()).isEqualByComparingTo(approvedItemA.approvedSellingPricePerRequestedUnit());
         assertThat(quoteItemB.approvedUnitPrice()).isEqualByComparingTo(approvedItemB.approvedSellingPricePerRequestedUnit());
         assertThat(quoteItemA.finalUnitPrice()).isEqualByComparingTo(quoteItemA.approvedUnitPrice());
@@ -459,11 +437,9 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(lifecycleAfter).isEqualTo(DealLifecycle.ACTIVE);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // The cost-affecting return loop (design correction 4, V141 "CEO owns costing"): CEO_REVIEWING
-    // -> returnToImport -> AWAITING_FACTORY_RESPONSE -> Import renegotiates + re-marks ready ->
-    // new costing version (computed fresh by the CEO's second startReview) -> CEO approves v2.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // The cost-affecting return loop (design correction 4, V141 "CEO owns costing"): CEO_REVIEWING ->
+    // returnToImport -> AWAITING_FACTORY_RESPONSE -> Import renegotiates + re-marks ready -> new costing version
+    // (computed fresh by the CEO's second startReview) -> CEO approves v2.
 
     @Test
     void costAffectingReturnLoop_composesThroughANewCostingVersionAndASecondDecision() {
@@ -476,14 +452,14 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         PricingDecisionDto returned = decisionService.returnToImport(decisionV1.id(),
             new ReturnPricingDecisionRequest("ราคาต้นทุนคลาดเคลื่อน กรุณาคำนวณใหม่"), ceoActor);
         assertThat(returned.status()).isEqualTo(PricingDecisionStatus.RETURNED);
-        // V141: there is no COSTING_REVISION_REQUIRED any more — a returned request goes straight
-        // back to AWAITING_FACTORY_RESPONSE.
+        // V141: there is no COSTING_REVISION_REQUIRED any more — a returned request goes straight back to
+        // AWAITING_FACTORY_RESPONSE.
         assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
             .isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
 
-        // Both quotes are already READY_FOR_COSTING (unchanged by returnToImport — it never
-        // touches factory quotes) — markReady only accepts a RESPONSE_RECEIVED/NEGOTIATING quote,
-        // so Import must submit a fresh revision on EACH before either can be re-marked ready.
+        // Both quotes are already READY_FOR_COSTING (unchanged by returnToImport — it never touches factory quotes) —
+        // markReady only accepts a RESPONSE_RECEIVED/NEGOTIATING quote, so Import must submit a fresh revision on EACH
+        // before either can be re-marked ready.
         FactoryQuoteDto currentA = factoryQuoteRepository.findCurrentByFactory(fixture.pricingRequestId(), FACTORY_A)
             .orElseThrow();
         FactoryQuoteDto currentB = factoryQuoteRepository.findCurrentByFactory(fixture.pricingRequestId(), FACTORY_B)
@@ -491,15 +467,13 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         FactoryQuoteDto revisedA = factoryQuoteService.receive(currentA.id(),
             responsePerPiece("REF-LOOP-A-v2", "95.00", fixture.itemAId()), importActor);
         factoryQuoteService.markReadyForCosting(revisedA.id(), importActor);
-        // Factory B's CURRENT quote was never touched by the revise-A-only step above, so it is
-        // still READY_FOR_COSTING from the original driveToReadyForCeoReview() pass — meaning
-        // EVERY item already resolves the moment A alone is re-marked ready, and the request
-        // auto-advances straight back to READY_FOR_CEO_REVIEW without needing B revised too.
+        // Factory B's CURRENT quote was never touched by the revise-A-only step above, so it is still
+        // READY_FOR_COSTING from the original driveToReadyForCeoReview pass.
         assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
-        // Revise B as well anyway, so the SECOND decision's cost genuinely differs from the
-        // first on BOTH lines, not just A — this pulls the request back down to
-        // AWAITING_FACTORY_RESPONSE again (B's fresh revision is RESPONSE_RECEIVED, not ready).
+        // Revise B as well anyway, so the SECOND decision's cost genuinely differs from the first on BOTH lines, not
+        // just A — this pulls the request back down to AWAITING_FACTORY_RESPONSE again (B's fresh revision is
+        // RESPONSE_RECEIVED, not ready).
         FactoryQuoteDto revisedB = factoryQuoteService.receive(currentB.id(),
             responsePerBox("REF-LOOP-B-v2", "950.00", fixture.itemBId(), new BigDecimal("5")), importActor);
         assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
@@ -509,8 +483,8 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(pricingRequestService.get(fixture.pricingRequestId(), importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
-        // CEO starts a SECOND decision version — computing a FRESH costing from the revised
-        // factory prices — and approves it.
+        // CEO starts a SECOND decision version — computing a FRESH costing from the revised factory prices — and
+        // approves it.
         PricingDecisionDto decisionV2 = decisionService.startReview(fixture.pricingRequestId(),
             new StartPricingDecisionRequest(new BigDecimal("0.15"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         assertThat(decisionV2.decisionVersionNo()).isEqualTo(2);
@@ -534,23 +508,21 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             SELECT COUNT(*) FROM sales.pricing_decision WHERE pricing_request_id = :id AND status = 'APPROVED'
             """, Map.of("id", fixture.pricingRequestId()), Long.class)).isEqualTo(1L);
 
-        // The approved decision now composes into a customer quotation exactly as the main
-        // chain test proves — the returned/superseded v1 leaves no trace in the final price.
+        // The approved decision now composes into a customer quotation exactly as the main chain test proves — the
+        // returned/superseded v1 leaves no trace in the final price.
         CustomerQuotationDto quotation = quotationService.create(fixture.pricingRequestId(),
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
         assertThat(quotation.pricingDecisionId()).isEqualTo(approvedV2.id());
         assertThat(quotation.items()).hasSize(2);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private record PricingChainFixture(long pricingRequestId, long itemAId, long itemBId) {}
 
-    /** Drives Steps 1 and the 1->2 handoff and Step 2 to READY_FOR_CEO_REVIEW, exactly the way
-     * the main chain test does it above — used by the return-loop test so it starts from a real,
-     * fully-driven precondition rather than a hand-rolled SQL shortcut. */
+    /** Drives Steps 1 and the 1->2 handoff and Step 2 to READY_FOR_CEO_REVIEW, exactly the way the main chain test
+     * does it above — used by the return-loop test so it starts from a real, fully-driven precondition rather than
+     * a hand-rolled SQL shortcut. */
     private PricingChainFixture driveToReadyForCeoReview() {
         PricingRequestRequests.CreatePricingRequestRequest createRequest = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),
@@ -558,9 +530,9 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             List.of(
                 pricingItemPerPiece(FACTORY_A, catalogProductIdFactoryA, "SCG", "Tile Chain A", new BigDecimal("10")),
                 pricingItemPerBox(FACTORY_B, catalogProductIdFactoryB, "Cotto", "Tile Chain B", new BigDecimal("5"))));
-        // V185: see the identical comment in fullPricingChain_stepOneThroughStepFour_composesWithoutShortcuts
-        // above -- bypasses createDraft so item B keeps its real PER_BOX requestedUnitBasis, and
-        // replays createDraft's own PRICING_REQUEST_CREATED event write for parity.
+        // V185: see the identical comment in fullPricingChain_stepOneThroughStepFour_composesWithoutShortcuts above --
+        // bypasses createDraft so item B keeps its real PER_BOX requestedUnitBasis, and replays createDraft's own
+        // PRICING_REQUEST_CREATED event write for parity.
         long pricingRequestId = pricingRequests.create(ticketId, pricingRequests.nextRequestCode(), createRequest, salesRepId);
         pricingRequests.addEvent(pricingRequestId, ticketId, salesRepId, salesActor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
@@ -585,9 +557,9 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
         FactoryQuoteDto responseB = factoryQuoteService.receive(draftB.id(),
             responsePerBox("REF-LOOP-B", "1000.00", itemBId, new BigDecimal("5")), importActor);
         factoryQuoteService.markReadyForCosting(responseB.id(), importActor);
-        // V141 ("CEO owns costing"): the LAST factory quote becoming ready auto-advances the
-        // request straight to READY_FOR_CEO_REVIEW — there is no Import-driven costing
-        // draft/submit step any more (PricingCostingService is read-only).
+        // V141 ("CEO owns costing"): the LAST factory quote becoming ready auto-advances the request straight to
+        // READY_FOR_CEO_REVIEW — there is no Import-driven costing draft/submit step any more (PricingCostingService
+        // is read-only).
         assertThat(pricingRequestService.get(pricingRequestId, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
 
@@ -612,9 +584,9 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             SELECT requested_unit_basis FROM sales.quotation_item
              WHERE pricing_request_item_id = :itemId AND quotation_id = :quotationId
             """, Map.of("itemId", pricingRequestItemId, "quotationId", quotationId), String.class)).isEqualTo(expectedBasis);
-        // Sanity: the request-id chain used to scope the costing/decision queries above is
-        // itself the one this test drove — guards against a stray row from a different request
-        // in this same schema silently satisfying the query.
+        // Sanity: the request-id chain used to scope the costing/decision queries above is itself the one this test
+        // drove — guards against a stray row from a different request in this same schema silently satisfying the
+        // query.
         assertThat(jdbc.queryForObject("""
             SELECT pricing_request_id FROM sales.pricing_request_item WHERE pricing_request_item_id = :id
             """, Map.of("id", pricingRequestItemId), Long.class)).isEqualTo(pricingRequestId);
@@ -633,14 +605,9 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             .findFirst().orElseThrow();
     }
 
-    /**
-     * V109 selling-price formula (V152) hand-reimplemented independently of
-     * {@link th.co.glr.hr.pricingcosting.PricingFormulaEngine#sellingPrice}: {@code cost x
-     * (1+margin) x selling_buffer}, rounded HALF_UP to 2dp — owner ruling 2026-09-19 (Phase 2 CEO
-     * pricing) replaced the old "round UP to the nearest selling_price_round_up_to" rule this
-     * helper used to reimplement. Buffer (1.07) matches V109's seeded default, unchanged by this
-     * fixture; {@code selling_price_round_up_to} is no longer consulted at all.
-     */
+    /** V109 selling-price formula hand-reimplemented independently of
+     * th.co.glr.hr.pricingcosting.PricingFormulaEngine#sellingPrice: cost x x selling_buffer, rounded HALF_UP to
+     * 2dp. */
     private BigDecimal formulaSellingPrice(BigDecimal costPerRequestedUnitThb, BigDecimal marginPct) {
         BigDecimal raw = costPerRequestedUnitThb.multiply(BigDecimal.ONE.add(marginPct)).multiply(new BigDecimal("1.07"));
         return raw.setScale(2, RoundingMode.HALF_UP);
@@ -652,13 +619,7 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             .findFirst().orElseThrow();
     }
 
-    /**
-     * No-op now — kept, empty, as a call-site marker. It used to drive the async outbox worker's
-     * claim/send/finalize loop to completion after {@code FactoryQuoteService.send()} only
-     * enqueued a dispatch row; that worker was deleted when factory RFQ email became manual-only
-     * (owner decision — see {@code FactoryQuoteService#send}'s javadoc), and {@code send()} itself
-     * is now synchronous, so there is nothing left to drain.
-     */
+    /** No-op now — kept, empty, as a call-site marker. */
     private void drainDispatches() {
         // Intentionally empty — see javadoc above.
     }
@@ -676,8 +637,8 @@ class PricingChainEndToEndIntegrationTest extends AbstractPostgresIntegrationTes
             UUID.randomUUID().toString());
     }
 
-    /** PER_BOX factory response (20 pieces/box); {@code sqmPerUnit} is required regardless of
-     * unit basis because freight/insurance/inland are always computed per sqm of PHYSICAL piece. */
+    /** PER_BOX factory response (20 pieces/box); sqmPerUnit is required regardless of unit basis because
+     * freight/insurance/inland are always computed per sqm of PHYSICAL piece. */
     private ReceiveFactoryQuoteRequest responsePerBox(String ref, String pricePerBox, long pricingRequestItemId,
                                                       BigDecimal quotedBoxes) {
         return new ReceiveFactoryQuoteRequest(ref, "THB", "30 days", "45 days",

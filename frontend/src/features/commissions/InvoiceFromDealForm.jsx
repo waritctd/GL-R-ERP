@@ -1,7 +1,6 @@
-/* Hallmark · component: invoice form · genre: modern-minimal · theme: project system (Sarabun + indigo, owner-locked) · redesign
- * states: default · hover · focus-visible · active · disabled · loading · error · success
- * Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V3 (component scope: no macrostructure; two labelled groups, document fields then amounts/deductions)
- */
+/* Hallmark · component: invoice form · genre: modern-minimal · theme: project system · redesign states:
+ * default · hover · focus-visible · active · disabled · loading · error · success Hallmark · pre-emit
+ * critique: P4 H4 E4 S4 R4 V3. */
 import { useId } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { FileUploadField } from '../../components/common/FileUploadField.jsx';
@@ -21,8 +20,8 @@ const DEDUCTIONS = [
   ['overpayment', 'รับเงินเกิน'],
 ];
 
-// Control states the global input reset does not draw: hover, disabled and invalid. Default and
-// :focus come from index.css's `@layer base` (border + indigo focus ring), so they are not repeated.
+// Control states the global input reset does not draw: hover, disabled and invalid. Default and :focus come
+// from index.css's `@layer base` (border + indigo focus ring), so they are not repeated.
 const CONTROL_STATES = [
   'hover:border-border-muted',
   'disabled:cursor-not-allowed disabled:bg-surface-subtle disabled:text-text-muted',
@@ -53,16 +52,8 @@ function FieldError({ id, message }) {
   );
 }
 
-/**
- * The tax-invoice fields for POST /api/commissions/from-deal, shared by CommissionPage's account
- * flow and the finance deal page. Controlled: the caller owns `form` (see emptyInvoiceForm) and the
- * submit handler. `fileInputKey` remounts the file field to clear it after a successful save.
- *
- * Two groups: the document (เลขที่ / วันที่ / ไฟล์), then the amounts and deductions.
- * Optional presentation props: `error` (form-level message), `success` (form-level message) and
- * `fieldErrors` ({ fieldName: message }) mark controls invalid; callers that pass none see the
- * form exactly as before. `saving` disables every control and shows the button's loading state.
- */
+/** The tax-invoice fields for POST /api/commissions/from-deal, shared by CommissionPage's account flow and the
+ * finance deal page. Controlled: the caller owns `form` (see emptyInvoiceForm) and the submit handler. */
 export function InvoiceFromDealForm({
   form, onChange, onSubmit, saving = false, disabled = false, fileInputKey = 0,
   fileInputId = 'invoice-file', submitLabel, onCancel, error, success, fieldErrors = {},
@@ -76,11 +67,9 @@ export function InvoiceFromDealForm({
   });
   const errorFor = (name) => <FieldError id={`${fileInputId}-${name}-error`} message={fieldErrors[name]} />;
   return (
-    // allowSubmitterlessSubmit: the file input carries a native `required`, and jsdom does not run
-    // real constraint validation on it after a synthetic change, so the tests dispatch a
-    // submitter-less submit straight on the form. INERT in a real browser: the submit button below
-    // is always rendered (only `disabled` varies), so `submitter` is never null for a genuine
-    // keypress. See the original note in SafeForm.jsx's header.
+    // allowSubmitterlessSubmit: the file input carries a native `required`, and jsdom does not run real constraint
+    // validation on it after a synthetic change, so the tests dispatch a submitter-less submit straight on the
+    // form.
     <SafeForm onSubmit={onSubmit} allowSubmitterlessSubmit>
       <div className="grid gap-6">
         <fieldset disabled={saving} className="m-0 grid min-w-0 gap-6 border-0 p-0">

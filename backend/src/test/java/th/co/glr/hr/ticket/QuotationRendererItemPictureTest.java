@@ -31,18 +31,9 @@ import th.co.glr.hr.ticket.QuotationRenderModel.ItemPicture;
 import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 
-/**
- * GLA-75 — per-item pictures in the quotation XLS (the one row plan both the LibreOffice PDF and
- * the Chromium/HTML PDF print). Owner, 2026-09-10: "attach image like the reference photo make sure
- * the sizing appropriate like the reference picture". Two placements:
- * <ul>
- *   <li>BELOW — large, under the description, scaled to column B's width, aspect kept, height
- *       capped; the item's rows GROW so the next item (or the remark box) starts below it;</li>
- *   <li>BESIDE — a thumbnail at the right of the description cell, at most two rows, never over the
- *       จำนวน column.</li>
- * </ul>
- * An item with NO picture is covered by {@link QuotationRendererNoPictureGoldenTest}.
- */
+/** GLA-75 — per-item pictures in the quotation XLS (the one row plan both the LibreOffice PDF and the
+ * Chromium/HTML PDF print). Owner, 2026-09-10: "attach image like the reference photo make sure the sizing
+ * appropriate like the reference picture". */
 class QuotationRendererItemPictureTest {
     private static final int ITEM_START_ROW = 9;
     private static final int COL_B = 1;
@@ -72,11 +63,8 @@ class QuotationRendererItemPictureTest {
             double heightPt = anchorHeightPt(sh, a);
             assertThat(heightPt / widthPt).as("aspect ratio kept").isCloseTo(0.5, within(0.01));
             // BELOW is sized to column B's width UNLESS that would exceed the 60 mm height cap
-            // (QuotationRenderer#BELOW_MAX_HEIGHT_MM). Which one binds depends on the machine's
-            // Thai font: column B is measured in font units, and CI's fonts-thai-tlwg makes it
-            // ~530 pt where licensed Cordia New makes it ~360 pt — so in CI this 2:1 picture hits
-            // the height cap (340 pt wide) and locally it fills the column. Either is correct; a
-            // picture that does neither (shrunk for no reason) is the bug this guards against.
+            // (QuotationRenderer#BELOW_MAX_HEIGHT_MM). Either is correct; a picture that does neither (shrunk for no
+            // reason) is the bug this guards against.
             double columnPt = columnBWidthPt(wb, sh);
             double capPt = 60.0 / 25.4 * 72.0;
             assertThat(widthPt > 0.9 * columnPt || Math.abs(heightPt - capPt) < 1.0)
@@ -181,8 +169,8 @@ class QuotationRendererItemPictureTest {
                 HSSFClientAnchor a = anchorOf(sh, pictures.get(i));
                 int main = mainRow(sh, i + 1);
                 for (int b : breaks) {
-                    // setRowBreak(b) starts a new page at row b + 1: a break inside [main, row2)
-                    // would put the item's first row and its picture's bottom on different pages.
+                    // setRowBreak(b) starts a new page at row b + 1: a break inside [main, row2) would put the item's first row
+                    // and its picture's bottom on different pages.
                     assertThat(b >= main && b < a.getRow2())
                         .as("page break after row %d splits item %d (rows %d..%d)", b, i + 1, main, a.getRow2())
                         .isFalse();
@@ -190,10 +178,8 @@ class QuotationRendererItemPictureTest {
             }
             assertRemarkBoxIntact(sh);
         }
-        // Manual breaks alone are not the whole pagination: a block judged to fit that does NOT fit
-        // is split by the engine's own AUTOMATIC break, which getRowBreaks() never shows. The HTML
-        // engine's page plan (the Chromium path) is the real page assignment, so check against it:
-        // each item's first row, and its picture's first and last rows, sit on ONE page.
+        // Manual breaks alone are not the whole pagination: a block judged to fit that does NOT fit is split by the
+        // engine's own AUTOMATIC break, which getRowBreaks() never shows.
         var rendered = QuotationHtmlDocument.rendered(xls, model);
         assertThat(rendered.pageCount()).as("fixture must actually paginate").isGreaterThan(1);
         try (Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
@@ -206,8 +192,8 @@ class QuotationRendererItemPictureTest {
                 assertThat(pageOf(rendered.plan(), a.getRow2())).as("item %d picture bottom", i + 1).isEqualTo(page);
             }
         }
-        // A picture whose rows fell on two pages would be dropped by the HTML engine
-        // (SheetHtmlRenderer#anchorY returns null) — so all must be present, each exactly once.
+        // A picture whose rows fell on two pages would be dropped by the HTML engine (SheetHtmlRenderer#anchorY
+        // returns null) — so all must be present, each exactly once.
         assertThat(countOccurrences(rendered.html(), "class=\"p item-image\"")).isEqualTo(pictures.size());
     }
 

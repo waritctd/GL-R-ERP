@@ -109,19 +109,12 @@ import { loginAs } from './helpers/auth.js';
 const DECLARATIONS_ME_PATH = '/api/payroll/tax-allowances/declarations/me';
 const CAPS_PATH = '/api/payroll/tax-allowances/caps';
 
-// A declaration's raw backend `status` stops being "the employee's current standing" once it is
-// SUPERSEDED or WITHDRAWN — mirrors taxAllowanceStatus.js's NON_CURRENT_STATUSES /
-// selectCurrentDeclaration. Cited rather than imported: this file deliberately imports no
-// application source, so everything it asserts is observable the same way a real user or the real
-// API sees it, not coupled to an internal module staying import-compatible.
+// A declaration's raw backend `status` stops being "the employee's current standing" once it is SUPERSEDED or
+// WITHDRAWN — mirrors taxAllowanceStatus.js's NON_CURRENT_STATUSES / selectCurrentDeclaration.
 const NON_CURRENT_DECLARATION_STATUSES = new Set(['SUPERSEDED', 'WITHDRAWN']);
 
-/**
- * The status of "the employee's current standing" for a tax year — the most recently submitted
- * non-terminal row, or 'NONE' if every row is terminal or there are none. See
- * NON_CURRENT_DECLARATION_STATUSES above for why SUPERSEDED/WITHDRAWN are excluded from
- * "current" before this even looks at submittedAt.
- */
+/** The status of "the employee's current standing" for a tax year — the most recently submitted non-terminal
+ * row, or 'NONE' if every row is terminal or there are none. */
 function currentDeclarationStatus(items = []) {
   const candidates = items.filter((item) => !NON_CURRENT_DECLARATION_STATUSES.has(item.status));
   if (candidates.length === 0) return 'NONE';
@@ -130,12 +123,8 @@ function currentDeclarationStatus(items = []) {
   )[0].status;
 }
 
-/**
- * Navigates to /tax-allowance and waits for the declarations fetch that decides whether the form
- * is editable — the same call TaxAllowancePage.jsx's own declarationsQuery makes
- * (getMyTaxAllowanceDeclarations). Waiting for it (rather than `page.goto` and hoping) is what
- * makes the editability checks below deterministic instead of racing the query.
- */
+/** Navigates to /tax-allowance and waits for the declarations fetch that decides whether the form is editable —
+ * the same call TaxAllowancePage.jsx's own declarationsQuery makes (getMyTaxAllowanceDeclarations). */
 async function openTaxAllowancePage(page) {
   const [response] = await Promise.all([
     page.waitForResponse((candidate) =>
@@ -148,19 +137,9 @@ async function openTaxAllowancePage(page) {
   return response;
 }
 
-/**
- * Gets the form into its editable state, regardless of which editable status produced it. NONE
- * starts editable automatically (TaxAllowancePage.jsx's effect:
- * `setEditing(statusInfo.key === 'NONE' && isCurrentYear)`); REJECTED/EXPIRED need
- * "แก้ไข / ยื่นฉบับใหม่" clicked first. Callers must already know — via the `beforeAll` editability
- * check below — that one of NONE/REJECTED/EXPIRED applies, or this hangs waiting for a field that
- * will never enable.
- *
- * The edit button's own visibility is awaited with a bounded timeout (not a snapshot check) so
- * this is correct in BOTH directions: it waits out the query-settling window for REJECTED/EXPIRED
- * (where the button appears only once `declarationsQuery` resolves), and still resolves promptly
- * for NONE (where the button never appears at all, because editing already started true).
- */
+/** Gets the form into its editable state, regardless of which editable status produced it. Callers must already
+ * know — via the `beforeAll` editability check below — that one of NONE/REJECTED/EXPIRED applies, or this
+ * hangs waiting for a field that will never enable. */
 async function enterEditMode(page) {
   const editButton = page.getByRole('button', { name: 'แก้ไข / ยื่นฉบับใหม่' });
   const editButtonAppeared = await editButton
@@ -220,15 +199,15 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
     const declarationsResponse = await openTaxAllowancePage(page);
     expect(declarationsResponse.status(), 'GET .../declarations/me').toBe(200);
 
-    // The other background fetch this page always makes (field-cap captions). Waited for
-    // explicitly, with its own bounded timeout, so a 5xx from it specifically is not missed by
-    // the assertion below racing ahead of the response arriving.
+    // The other background fetch this page always makes (field-cap captions). Waited for explicitly, with its own
+    // bounded timeout, so a 5xx from it specifically is not missed by the assertion below racing ahead of the
+    // response arriving.
     await page
       .waitForResponse((r) => new URL(r.url()).pathname === CAPS_PATH, { timeout: 5_000 })
       .catch(() => {});
 
-    // ErrorBoundary's DefaultErrorFallback text — the same locator route-coverage.spec.js uses to
-    // detect a route that crashed while rendering.
+    // ErrorBoundary's DefaultErrorFallback text — the same locator route-coverage.spec.js uses to detect a route
+    // that crashed while rendering.
     await expect(page.getByText('โหลดหน้านี้ไม่สำเร็จ')).toHaveCount(0);
     expect(serverErrors, '5xx responses while loading /tax-allowance').toEqual([]);
   });
@@ -241,10 +220,7 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
     await enterEditMode(page);
 
     // ข้อ 7 · เบี้ยประกันชีวิตที่จ่ายภายในปีภาษี — one field, kind 'money', id `ta-lifeInsuranceAllowance`
-    // (taxAllowanceSchema.js LOR_YOR_01_SECTIONS, section key 'item7'). Starts collapsed:
-    // CollapsibleSection's `id` prop is `ta-section-item7`, which becomes `ta-section-item7-header`
-    // on the toggle <button> and `ta-section-item7-body` on the body — the <section> itself carries
-    // no bare id, only those two derived ones (CollapsibleSection.jsx).
+    // (taxAllowanceSchema.js LOR_YOR_01_SECTIONS, section key 'item7').
     const header = page.locator('#ta-section-item7-header');
     const field = page.locator('#ta-lifeInsuranceAllowance');
 
@@ -262,8 +238,8 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
 
     await header.click(); // re-expand
     await expect(field).toBeVisible();
-    // THE assertion: the value is back, even though the <input> was just unmounted and remounted.
-    // Only true because react-hook-form defaults shouldUnregister:false — see file header.
+    // THE assertion: the value is back, even though the <input> was just unmounted and remounted. Only true
+    // because react-hook-form defaults shouldUnregister:false — see file header.
     await expect(field).toHaveValue('12345');
   });
 
@@ -274,10 +250,9 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
     await openTaxAllowancePage(page);
     await enterEditMode(page);
 
-    // Deliberately BEFORE any signed-form file is staged: canSubmit (and therefore the submit
-    // button) is false/disabled in this state, which is exactly what makes this the safest test in
-    // the file — see the file header's safety note for why that does not make it a vacuous test of
-    // the OBSERVABLE behaviour that actually matters.
+    // Deliberately BEFORE any signed-form file is staged: canSubmit is false/disabled in this state, which is
+    // exactly what makes this the safest test in the file — see the file header's safety note for why that does
+    // not make it a vacuous test of the OBSERVABLE behaviour that actually matters.
     const submitButton = page.locator('form#tax-allowance-form button[type="submit"]');
     await expect(submitButton).toBeDisabled();
 
@@ -293,21 +268,15 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
     await taxpayerId.fill('1234567890123');
     await taxpayerId.press('Enter');
 
-    // Field 2 — a SECOND, independently-rendered text field elsewhere in the same <form>. The
-    // historical bug's own shape was "more than one blocking field until a redesign narrowed it to
-    // one" (SafeForm.jsx) — worth showing the invariant holds for more than just the first field on
-    // the page. ข้อ 15's "ระบุ" is a plain type="text" input (taxAllowanceSchema.js, field key
-    // `lorYor01.otherDonationNote` → id `ta-lorYor01-otherDonationNote`).
+    // Field 2 — a SECOND, independently-rendered text field elsewhere in the same <form>.
     await page.locator('#ta-section-item15-header').click();
     const donationNote = page.locator('#ta-lorYor01-otherDonationNote');
     await expect(donationNote).toBeVisible();
     await donationNote.fill('e2e: must not submit on Enter');
     await donationNote.press('Enter');
 
-    // A bounded wait for the SPECIFIC bad thing (not an arbitrary sleep): resolves immediately if
-    // either Enter press above wrongly triggered a POST, otherwise times out harmlessly. This is
-    // what actually proves the negative — the passive listener above only has something to report
-    // once whatever async work a wrongly-fired submit would kick off has had a real chance to run.
+    // A bounded wait for the SPECIFIC bad thing (not an arbitrary sleep): resolves immediately if either Enter
+    // press above wrongly triggered a POST, otherwise times out harmlessly.
     await page
       .waitForRequest(
         (request) =>
@@ -317,9 +286,9 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
       .catch(() => {});
 
     expect(postedSubmissions, 'Enter in a text field POSTed the declaration').toEqual([]);
-    // Corroborating DOM signal, independent of the network assertion above: a real submission's
-    // onSuccess calls `setEditing(false)`, which would disable every field, this one included.
-    // Still enabled == still editing == no submission went through.
+    // Corroborating DOM signal, independent of the network assertion above: a real submission's onSuccess calls
+    // `setEditing(false)`, which would disable every field, this one included. Still enabled == still editing ==
+    // no submission went through.
     await expect(taxpayerId).toBeEnabled();
     await expect(taxpayerId).toHaveValue('1234567890123');
     await expect(page.getByText('ยื่นแบบแจ้งเรียบร้อย', { exact: false })).toHaveCount(0);
@@ -337,14 +306,12 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
     await expect(submitButton).toBeVisible();
     await expect(submitButton).toBeDisabled();
 
-    // "ตรวจทาน ลงนาม และยื่น" starts collapsed (TaxAllowanceForm.jsx: defaultOpen={false}) — expand
-    // it to reach the signed-form evidence panel's file input.
+    // "ตรวจทาน ลงนาม และยื่น" starts collapsed (TaxAllowanceForm.jsx: defaultOpen={false}) — expand it to reach
+    // the signed-form evidence panel's file input.
     await page.locator('#ta-section-sign-header').click();
 
     // id = `tax-allowance-evidence-file-${sectionKey ?? 'general'}` with sectionKey="signed_form"
-    // (TaxAllowanceEvidencePanel.jsx / FileUploadField.jsx). Visually sr-only but a real, attached
-    // <input type="file"> — setInputFiles only requires "attached", not visible, so no click on the
-    // styled label it sits behind is needed.
+    // (TaxAllowanceEvidencePanel.jsx / FileUploadField.jsx).
     const signedFormInput = page.locator('#tax-allowance-evidence-file-signed_form');
     await expect(signedFormInput).toBeAttached();
 
@@ -357,22 +324,20 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
       buffer: Buffer.from('%PDF-1.4\ne2e stub — staged client-side only, never uploaded\n'),
     });
 
-    // Staged, not uploaded: TaxAllowanceEvidencePanel's 'staging' mode holds the file in
-    // TaxAllowancePage's React state (`stagedEvidence`) rather than POSTing it anywhere. "รอส่ง"
-    // ("pending send") only ever renders on a STAGED item, never on FileUploadField's own picked-
-    // filename echo — a precise signal that the staging path specifically ran, not merely that the
-    // native file input changed.
+    // Staged, not uploaded: TaxAllowanceEvidencePanel's 'staging' mode holds the file in TaxAllowancePage's React
+    // state rather than POSTing it anywhere. "รอส่ง" only ever renders on a STAGED item, never on
+    // FileUploadField's own picked- filename echo.
     await expect(page.getByText('รอส่ง')).toBeVisible();
     await expect(page.getByText('แนบแบบที่ลงนามแล้ว')).toBeVisible();
 
-    // THE assertion: the exact same button that was disabled above is now enabled, driven purely by
-    // the file just staged (TaxAllowancePage's `signedFormAttached` → TaxAllowanceForm's
-    // `canSubmit`) — nothing else about the page changed.
+    // THE assertion: the exact same button that was disabled above is now enabled, driven purely by the file just
+    // staged (TaxAllowancePage's `signedFormAttached` → TaxAllowanceForm's `canSubmit`) — nothing else about the
+    // page changed.
     await expect(submitButton).toBeEnabled();
 
-    // Deliberately never clicked. `submitMutation` only fires on a real click/submit, and
-    // TaxAllowancePage only flushes staged evidence from that mutation's `onSuccess` — so stopping
-    // here means nothing was ever sent to the server, and there is nothing to clean up.
+    // Deliberately never clicked. `submitMutation` only fires on a real click/submit, and TaxAllowancePage only
+    // flushes staged evidence from that mutation's `onSuccess` — so stopping here means nothing was ever sent to
+    // the server, and there is nothing to clean up.
   });
 
   /**
@@ -421,9 +386,9 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
     await taxpayerId.fill('1234567890123');
     await taxpayerId.press('Enter');
 
-    // Enter reaches the gate, not the API. The dialog is the observable proof that the submit event
-    // really did fire — without it this test could pass simply because Enter did nothing at all,
-    // which would make it evidence about the wrong thing entirely.
+    // Enter reaches the gate, not the API. The dialog is the observable proof that the submit event really did
+    // fire — without it this test could pass simply because Enter did nothing at all, which would make it evidence
+    // about the wrong thing entirely.
     const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('ส่งให้ฝ่ายบุคคลตรวจสอบ');
@@ -438,8 +403,8 @@ test.describe('ล.ย.01 tax-allowance form — real browser (jsdom cannot see 
       .catch(() => {});
     expect(postedSubmissions, 'Enter filed the declaration instead of asking first').toEqual([]);
 
-    // Dismiss, and confirm the page is exactly where it was — still editable, nothing sent. This is
-    // also what keeps the shared database clean; see the block comment above.
+    // Dismiss, and confirm the page is exactly where it was — still editable, nothing sent. This is also what
+    // keeps the shared database clean; see the block comment above.
     await dialog.getByRole('button', { name: 'ตรวจทานอีกครั้ง' }).click();
     await expect(dialog).toBeHidden();
     expect(postedSubmissions, 'dismissing the confirmation still filed something').toEqual([]);

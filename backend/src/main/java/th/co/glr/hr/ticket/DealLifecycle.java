@@ -2,11 +2,8 @@ package th.co.glr.hr.ticket;
 
 import java.util.Set;
 
-/**
- * Deal lifecycle is separate from sales_stage. ON_HOLD and DORMANT are reopenable
- * pauses, CLOSED_LOST carries lost_reason/lost_at, and COMPLETED is reached only
- * through the close() ticket flow.
- */
+/** Deal lifecycle is separate from sales_stage. ON_HOLD and DORMANT are reopenable pauses, CLOSED_LOST carries
+ * lost_reason/lost_at, and COMPLETED is reached only through the close() ticket flow. */
 public final class DealLifecycle {
     public static final String ACTIVE      = "ACTIVE";
     public static final String ON_HOLD     = "ON_HOLD";

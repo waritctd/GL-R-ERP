@@ -35,9 +35,9 @@ public class PricingDecisionRepository {
         return "PCD-" + Year.now() + "-" + String.format("%04d", seq == null ? 0 : seq);
     }
 
-    /** Serializes every mutating operation on a given pricing request against every other one
-     * (create-review, approve, return-to-import, and — via the same key — Step 2's own
-     * costing/customer-revision advisory locks) for the lifetime of the caller's transaction. */
+    /** Serializes every mutating operation on a given pricing request against every other one (create-review,
+     * approve, return-to-import, and — via the same key — Step 2's own costing/customer-revision advisory locks)
+     * for the lifetime of the caller's transaction. */
     public void lockPricingRequest(long pricingRequestId) {
         jdbc.query("SELECT pg_advisory_xact_lock(:pricingRequestId)",
             Map.of("pricingRequestId", pricingRequestId), (rs, rowNum) -> 0);
@@ -45,8 +45,8 @@ public class PricingDecisionRepository {
 
     public record CreateDecisionResult(long decisionId, boolean created) {}
 
-    /** Caller must hold {@link #lockPricingRequest} for the current transaction before calling
-     * this — mirrors {@code PricingCostingRepository.createDraft}'s own contract. */
+    /** Caller must hold #lockPricingRequest for the current transaction before calling this — mirrors
+     * PricingCostingRepository.createDraft's own contract. */
     public CreateDecisionResult createDraft(long pricingRequestId, long pricingCostingId, BigDecimal defaultMarginPct,
                                             String currency, BigDecimal fxRateUsed, String fxSource,
                                             LocalDate fxEffectiveDate, String ceoNote, String clientRequestId,
@@ -95,9 +95,9 @@ public class PricingDecisionRepository {
     }
 
     public record WriteItem(
-        // Slice 1 scaffolding (V194): boxed so a STOCK line - which has no factory quote and hence no
-        // costing row - can be written with a NULL link (the DB trigger allows that only for a stock
-        // line). Every existing caller passes a primitive long and autoboxes.
+        // Slice 1 scaffolding (V194): boxed so a STOCK line - which has no factory quote and hence no costing row -
+        // can be written with a NULL link (the DB trigger allows that only for a stock line). Every existing caller
+        // passes a primitive long and autoboxes.
         long pricingRequestItemId, Long pricingCostingItemId, String requestedUnitBasis,
         BigDecimal requestedQuantity, BigDecimal normalizedQuantityPieces,
         BigDecimal frozenLandedCostPerPieceThb, BigDecimal frozenLandedCostPerRequestedUnitThb,
@@ -149,9 +149,9 @@ public class PricingDecisionRepository {
         return updateDecisionHeader(id, ceoNote, null);
     }
 
-    /** Phase 2 (V187): {@code priceMode} joins {@code ceoNote} under the same COALESCE
-     * ("omit/null = unchanged") semantics — chosen once, then left alone on every later call that
-     * does not pass it again. DRAFT-only, same guard as every other mutation here. */
+    /** Phase 2 (V187): priceMode joins ceoNote under the same COALESCE ("omit/null = unchanged") semantics — chosen
+     * once, then left alone on every later call that does not pass it again. DRAFT-only, same guard as every other
+     * mutation here. */
     public int updateDecisionHeader(long id, String ceoNote, String priceMode) {
         return jdbc.update("""
             UPDATE sales.pricing_decision
@@ -199,15 +199,8 @@ public class PricingDecisionRepository {
         }
     }
 
-    /** Returns the number of rows actually touched — the caller compares this against the
-     * requested item count to detect an itemId that does not belong to this decision.
-     *
-     * <p>{@code manual_selling_price_per_requested_unit} cannot use the same plain
-     * {@code COALESCE(:param, column)} shape every other column here uses, because "omit" and
-     * "explicitly clear to NULL" both look like a null parameter to COALESCE — the CASE
-     * expression is what gives {@link ItemUpdate#clearSellingPriceOverride()} a real clear path
-     * distinct from "this call did not touch the override at all" (see
-     * {@link PricingDecisionRequests.UpdatePricingDecisionItemRequest}'s own Javadoc for why). */
+    /** Returns the number of rows actually touched — the caller compares this against the requested item count to
+     * detect an itemId that does not belong to this decision. */
     public int updateItems(long decisionId, List<ItemUpdate> updates) {
         if (updates.isEmpty()) {
             return 0;
@@ -348,17 +341,9 @@ public class PricingDecisionRepository {
         return total;
     }
 
-    /**
-     * {@code minimumSellingPrice} is written here unconditionally (never COALESCE'd against the
-     * existing value) — the caller ({@link PricingDecisionService#approve}) has already resolved
-     * it to either the CEO's explicitly-set floor (still settable via {@link #updateItems}, kept
-     * for compatibility) or a fallback equal to {@code approvedSellingPrice} itself, so by the
-     * time this method runs there is always exactly one correct value to write, not two to merge.
-     * Phase 1 UI simplification: this is what keeps
-     * {@code CustomerQuotationService}'s three null-guarded minimum-price checks load-bearing now
-     * that ราคาขั้นต่ำ is no longer a CEO input — see {@code PricingDecisionService#approve}'s own
-     * doc comment for the full reasoning.
-     */
+    /** minimumSellingPrice is written here unconditionally — the caller has already resolved it to either the CEO's
+     * explicitly-set floor or a fallback equal to approvedSellingPrice itself, so by the time this method runs
+     * there is always exactly one correct value to write, not two to merge. */
     public record ApprovedItem(
         long itemId, BigDecimal approvedMarginPct, BigDecimal approvedSellingPrice,
         BigDecimal minimumSellingPrice) {}
@@ -387,13 +372,7 @@ public class PricingDecisionRepository {
             """, batch);
     }
 
-    /**
-     * Compare-and-set DRAFT -&gt; APPROVED. Rowcount 0 means either the decision was not DRAFT
-     * (already approved/returned by a concurrent caller, or this is a stale id) — the caller
-     * (service), inside the same advisory-lock-held transaction, is responsible for
-     * distinguishing "already approved by me" (idempotent replay via
-     * {@code approveClientRequestId}) from a genuine conflict.
-     */
+    /** Compare-and-set DRAFT -> APPROVED. */
     public int approve(long id, long actorId, String ceoNote, String approveClientRequestId) {
         return jdbc.update("""
             UPDATE sales.pricing_decision
@@ -590,9 +569,9 @@ public class PricingDecisionRepository {
     private PricingDecisionItemDto mapItem(ResultSet rs) throws SQLException {
         BigDecimal proposedSellingPrice = rs.getBigDecimal("proposed_selling_price_per_requested_unit");
         BigDecimal manualSellingPrice = rs.getBigDecimal("manual_selling_price_per_requested_unit");
-        // Mirrors PricingCostingRepository#mapItem's effectiveLandedCostPerUnitThb exactly: a
-        // straight passthrough of whichever of the two is active, recomputed on every read so it
-        // can never drift out of sync with the row it describes.
+        // Mirrors PricingCostingRepository#mapItem's effectiveLandedCostPerUnitThb exactly: a straight passthrough of
+        // whichever of the two is active, recomputed on every read so it can never drift out of sync with the row it
+        // describes.
         BigDecimal effectiveSellingPrice = manualSellingPrice != null ? manualSellingPrice : proposedSellingPrice;
         return new PricingDecisionItemDto(
             rs.getLong("pricing_decision_item_id"),

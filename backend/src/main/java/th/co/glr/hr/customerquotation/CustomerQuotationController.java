@@ -27,14 +27,9 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRequests.IssueCustomerQuo
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.RecordQuotationOutcomeRequest;
 import th.co.glr.hr.customerquotation.CustomerQuotationRequests.UpdateCustomerQuotationRequest;
 
-/**
- * Endpoints for Step 4 (Customer Quotation Generation and Issuance): create/get/list keyed by
- * pricing request (mirrors {@code PricingDecisionController}'s own split), everything else keyed
- * by the quotation's own id under {@code /api/customer-quotations/...}. Detail-shaped responses
- * are wrapped as {@code {quotation: ...}}, list-shaped as {@code {items: [...]}} — the same
- * envelope convention {@code PricingDecisionController} already uses, so the frontend's
- * {@code apiRequest} unwrapping stays uniform across both.
- */
+/** Endpoints for Step 4 (Customer Quotation Generation and Issuance): create/get/list keyed by pricing request
+ * (mirrors PricingDecisionController's own split), everything else keyed by the quotation's own id under
+ * /api/customer-quotations/.... */
 @RestController
 @RequestMapping("/api")
 public class CustomerQuotationController {

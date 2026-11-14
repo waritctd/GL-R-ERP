@@ -8,16 +8,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.importrequest.ImportRequestDtos.ImportRequestDto;
 
-/**
- * Plain unit test (no DB) for {@link ImportRequestFormAssembler#fromStored(ImportRequestDto,
- * boolean)} — OWNER DECISION 09-19 #2, extended by REVIEW ROUND 3 item 5: the FACTORY copy of a
- * stored ใบขอซื้อ must not show the customer name ("สั่งมาให้"), the deposit-received date
- * ("วันที่ได้รับมัดจำ"), OR the project name — a project name often identifies the customer just
- * as surely as their name would. The INTERNAL copy (the pre-existing default, {@code
- * factoryCopy=false}) keeps all three. Every OTHER field is identical between the two copies —
- * pinned here so a future field addition to {@code ImportRequestDto} does not silently start
- * leaking through the factory copy without a test noticing.
- */
+/** Plain unit test for ImportRequestFormAssembler#fromStored. The INTERNAL copy (the pre-existing default,
+ * factoryCopy=false) keeps all three. */
 class ImportRequestFormAssemblerFactoryCopyTest {
 
     @Test

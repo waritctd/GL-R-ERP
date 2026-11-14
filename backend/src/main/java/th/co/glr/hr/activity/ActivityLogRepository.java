@@ -40,14 +40,8 @@ public class ActivityLogRepository {
             """, batch);
     }
 
-    /**
-     * Newest-first activity across every employee, optionally narrowed to one of them.
-     *
-     * <p>{@code limit} is applied by this repository and is caller-supplied but clamped by
-     * {@link ActivityLogService}; the ORDER BY is part of the contract, not a detail — the same
-     * limit under a different sort truncates a different set of rows, which is the bug shape
-     * CLAUDE.md's mock-contract section calls out. Mirror both if this is ever mocked.
-     */
+    /** Newest-first activity across every employee, optionally narrowed to one of them. Mirror both if this is ever
+     * mocked. */
     public List<ActivityLogEntryDto> findRecent(OffsetDateTime from, OffsetDateTime to,
                                                 Long employeeId, int limit) {
         Map<String, Object> params = Map.of(
@@ -106,16 +100,9 @@ public class ActivityLogRepository {
                 rs.getObject("last_seen", OffsetDateTime.class)));
     }
 
-    /**
-     * Semantic actions from {@code hr.audit_log} — who requested what, who approved what.
-     *
-     * <p>Joins twice on purpose: {@code actor} is who performed the action, and {@code subject} is
-     * the employee the row is ABOUT when the entity is an employee-scoped one. Without the second
-     * join an approval reads "ฟ้าใส approved request 7", which is not the question anyone asks.
-     * {@code before_json}/{@code after_json} are deliberately NOT selected — they can hold salary
-     * and other payroll detail, and this endpoint exists to show activity, not to become a second
-     * way to read compensation.
-     */
+    /** Semantic actions from hr.audit_log — who requested what, who approved what. Joins twice on purpose: actor is
+     * who performed the action, and subject is the employee the row is ABOUT when the entity is an employee-scoped
+     * one. */
     public List<AuditEventDto> findAuditEvents(OffsetDateTime from, OffsetDateTime to,
                                                Long employeeId, int limit) {
         Map<String, Object> params = Map.of(
@@ -149,10 +136,7 @@ public class ActivityLogRepository {
                 rs.getObject("at", OffsetDateTime.class)));
     }
 
-    /**
-     * Inserts one batch of application events. Called only from {@link AppEventWriter}'s single
-     * writer thread.
-     */
+    /** Inserts one batch of application events. Called only from AppEventWriter's single writer thread. */
     public void insertAppEvents(List<AppEvent> events) {
         if (events.isEmpty()) {
             return;
@@ -181,12 +165,9 @@ public class ActivityLogRepository {
             """, batch);
     }
 
-    /**
-     * WARN/ERROR events and job runs, newest first, optionally narrowed to one kind.
-     *
-     * <p>Selects {@code first_frame} but never a full trace, because no full trace is stored —
-     * see V159. If a column ever appears here holding one, that is a data-exposure change.
-     */
+    /** WARN/ERROR events and job runs, newest first, optionally narrowed to one kind. Selects first_frame but never
+     * a full trace, because no full trace is stored — see V159. If a column ever appears here holding one, that is
+     * a data-exposure change. */
     public List<AppEventDto> findAppEvents(OffsetDateTime from, OffsetDateTime to,
                                            String kind, int limit) {
         Map<String, Object> params = Map.of(
@@ -217,19 +198,13 @@ public class ActivityLogRepository {
                 rs.getObject("duration_ms", Integer.class)));
     }
 
-    /**
-     * Live read of the admin capability.
-     *
-     * <p>Deliberately not cached on {@link th.co.glr.hr.auth.UserPrincipal}: the principal is
-     * built once at login and lives in the session, so a cached copy would keep a revoked admin
-     * privileged until they happened to log out. One extra query on admin-only endpoints is a
-     * cheap price for revocation taking effect immediately.
-     */
+    /** Live read of the admin capability. Deliberately not cached on th.co.glr.hr.auth.UserPrincipal: the principal
+     * is built once at login and lives in the session, so a cached copy would keep a revoked admin privileged
+     * until they happened to log out. */
     public boolean isAdmin(long employeeId) {
-        // EXISTS rather than SELECT is_admin ... WHERE employee_id = :id, because the latter
-        // throws EmptyResultDataAccessException for a deleted or deactivated employee — turning
-        // "not an admin" into a 500. EXISTS always returns exactly one row, so the deny is a
-        // plain false.
+        // EXISTS rather than SELECT is_admin ... WHERE employee_id = :id, because the latter throws
+        // EmptyResultDataAccessException for a deleted or deactivated employee — turning "not an admin" into a 500.
+        // EXISTS always returns exactly one row, so the deny is a plain false.
         Boolean admin = jdbc.queryForObject("""
             SELECT EXISTS (
                 SELECT 1 FROM hr.employee

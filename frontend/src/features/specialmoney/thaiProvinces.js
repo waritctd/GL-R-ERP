@@ -1,17 +1,6 @@
-// Domestic per-diem province picker for TRAVEL_PER_DIEM / TRAVEL_LODGING.
-//
-// The backend matches `detail.province` against `hr.special_money_excluded_province`
-// by EXACT string equality (SpecialMoneyPolicyEvaluator.evaluateTravelPerDiem), so a
-// free-text box would silently break the exclusion rule on any typo/spacing
-// difference — this list exists so the dropdown value always matches what the
-// server compares against. THAI_PROVINCES is the standard 77-province list (76
-// provinces + Bangkok); EXCLUDED_PROVINCES is copied verbatim from the seed in
+// Domestic per-diem province picker for TRAVEL_PER_DIEM / TRAVEL_LODGING. THAI_PROVINCES is the standard
+// 77-province list (76 provinces + Bangkok); EXCLUDED_PROVINCES is copied verbatim from the seed in
 // V66__special_money_request_schema.sql (backend/src/main/resources/db/migration/).
-//
-// Note: the seed's excluded list includes "ลาดกระบัง" (a Bangkok district, not a
-// province) alongside the six real Greater-Bangkok provinces it treats as "local
-// commuting" — that is how the migration was authored, not a typo introduced here,
-// so it is kept as its own selectable entry to match the server's exact-string check.
 export const THAI_PROVINCES = [
   'กรุงเทพมหานคร',
   'กระบี่',

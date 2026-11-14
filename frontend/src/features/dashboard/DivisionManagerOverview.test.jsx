@@ -7,10 +7,9 @@ import { DivisionManagerOverview } from './DivisionManagerOverview.jsx';
 
 globalThis.React = React;
 
-// vi.mock factories are hoisted above imports/top-level consts, so the mock
-// fns they close over must themselves be created via vi.hoisted (plain
-// top-level `const overtimeList = vi.fn()` would still be in the TDZ when
-// the hoisted factory runs).
+// vi.mock factories are hoisted above imports/top-level consts, so the mock fns they close over must
+// themselves be created via vi.hoisted (plain top-level `const overtimeList = vi.fn()` would still be in the
+// TDZ when the hoisted factory runs).
 const { overtimeList, leaveList, attendanceDaily, navigateMock } = vi.hoisted(() => ({
   overtimeList: vi.fn(),
   leaveList: vi.fn(),
@@ -38,11 +37,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const manager = { employeeId: 100, name: 'ผู้จัดการ ทดสอบ', role: 'employee', manager: true };
 const employee = { nameTh: 'ผู้จัดการ ทดสอบ', positionTh: 'ผู้จัดการฝ่าย', divisionTh: 'ฝ่ายคลังสินค้า' };
 
-// Manager-scoped worklist data: the API already scopes to what this caller may
-// review (division-wide for OT, direct-report FK for leave — see mockApi's
-// canReviewOvertime/canReviewLeave), including the caller's OWN pending OT
-// request (employeeId 100 === manager.employeeId) — the component must drop
-// that one since a manager cannot self-approve.
+// Manager-scoped worklist data: the API already scopes to what this caller may review, including the caller's
+// OWN pending OT request — the component must drop that one since a manager cannot self-approve.
 const otRequests = [
   {
     id: 1,
@@ -119,10 +115,9 @@ describe('DivisionManagerOverview', () => {
     renderOverview();
     await waitFor(() => expect(overtimeList).toHaveBeenCalled());
 
-    // StatCard renders as a <button> here (every pulse card has an onClick) —
-    // closest('button') is the whole card; label/value are sibling <div>s inside it.
-    // Only the non-self OT request (id 1) counts — the manager's own request
-    // (id 2, employeeId === manager.employeeId) is excluded (no self-approval).
+    // StatCard renders as a <button> here (every pulse card has an onClick) — closest('button') is the whole card;
+    // label/value are sibling <div>s inside it. Only the non-self OT request (id 1) counts — the manager's own
+    // request (id 2, employeeId === manager.employeeId) is excluded (no self-approval).
     const otCard = (await screen.findByText('รออนุมัติ OT')).closest('button');
     expect(within(otCard).getByText('1')).not.toBeNull();
 
@@ -141,19 +136,15 @@ describe('DivisionManagerOverview', () => {
     const worklist = (await screen.findByText('คำขอที่รอคุณอนุมัติ')).closest('section');
     const scoped = within(worklist);
 
-    // Only the reviewable rows: สมชาย (OT) and สมหญิง (leave). The manager's
-    // own pending OT request must not appear here. `findByText` (not
-    // `getByText`): the panel title renders before the mocked list()/list()
-    // queries resolve, so the row content lands asynchronously.
+    // Only the reviewable rows: สมชาย (OT) and สมหญิง (leave). The manager's own pending OT request must not
+    // appear here. `findByText` (not `getByText`): the panel title renders before the mocked list()/list() queries
+    // resolve, so the row content lands asynchronously.
     expect(await scoped.findByText('สมชาย ใจดี')).not.toBeNull();
     expect(scoped.getByText('สมหญิง ใจงาม')).not.toBeNull();
     expect(scoped.queryAllByText('ผู้จัดการ ทดสอบ')).toHaveLength(0);
 
-    // Chain badges: OT is 3-step (employee -> manager -> CEO); leave is
-    // 2-step/terminal at the manager in this codebase (no CEO stage — see
-    // LeavePage.canReviewRequest / mockApi canReviewLeave). The narrower
-    // "คุณ (ตอนนี้)" match (not bare /คุณ/) avoids also matching the panel
-    // title "คำขอที่รอคุณอนุมัติ", which contains "คุณ" as a substring.
+    // Chain badges: OT is 3-step (employee -> manager -> CEO); leave is 2-step/terminal at the manager in this
+    // codebase (no CEO stage — see LeavePage.canReviewRequest / mockApi canReviewLeave).
     expect(scoped.getAllByText('CEO')).toHaveLength(1);
     expect(scoped.getAllByText(/คุณ \(ตอนนี้\)/)).toHaveLength(2);
 
@@ -166,9 +157,8 @@ describe('DivisionManagerOverview', () => {
     fireEvent.click(approveButtons[1]);
     expect(navigateMock).toHaveBeenCalledWith('/leave');
 
-    // No inline approve/reject mutation wiring exists on this page — api.overtime
-    // and api.leave only expose `list` in this test's mock, so a call to any
-    // approve/reject method would throw "not a function" and fail the test.
+    // No inline approve/reject mutation wiring exists on this page — api.overtime and api.leave only expose `list`
+    // in this test's mock, so a call to any approve/reject method would throw "not a function" and fail the test.
   });
 
   it('shows an empty state when there is nothing to approve', async () => {

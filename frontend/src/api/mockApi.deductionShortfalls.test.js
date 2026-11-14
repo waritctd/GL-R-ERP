@@ -2,15 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
 // Guards `payroll.getDeductionShortfalls()` against PayrollDeductionShortfallController +
-// PayrollDeductionShortfallService (issue #376): the role gate, the employeeId/kind filters, and
-// the repository's ORDER BY.
-//
-// Employee codes below follow the demo dataset's own scheme (demoData.js: `code = GLR-${1001 +
-// index}`) and were verified directly against `createDemoDatabase()` rather than assumed, since
-// the ORDER BY assertion depends on their exact lexicographic order:
-//   employees[2]  -> id 3,  GLR-1003
-//   employees[19] -> id 20, GLR-1020
-//   employees[24] -> id 25, GLR-1025
+// PayrollDeductionShortfallService (issue #376): the role gate, the employeeId/kind filters, and the
+// repository's ORDER BY.
 
 describe('mock getDeductionShortfalls', () => {
   it('hr and ceo can both read the ledger', async () => {
@@ -21,8 +14,8 @@ describe('mock getDeductionShortfalls', () => {
     }
   });
 
-  // Mirrors PayrollDeductionShortfallService.VIEW_ROLES = Set.of("hr", "ceo") exactly — every
-  // other seeded role must be refused, not just "some other role".
+  // Mirrors PayrollDeductionShortfallService.VIEW_ROLES = Set.of("hr", "ceo") exactly — every other seeded role
+  // must be refused, not just "some other role".
   it('rejects every role outside hr/ceo with the exact backend message', async () => {
     for (const role of ['employee', 'sales', 'sales_manager', 'import', 'account']) {
       await api.auth.login({ role });
@@ -34,8 +27,8 @@ describe('mock getDeductionShortfalls', () => {
     await api.auth.login({ role: 'hr' });
     const { items } = await api.payroll.getDeductionShortfalls();
 
-    // Pins the exact sequence, not just "sorted" against itself — a fixture edit that keeps the
-    // same SET of rows but changes their order would otherwise slip through unnoticed.
+    // Pins the exact sequence, not just "sorted" against itself — a fixture edit that keeps the same SET of rows
+    // but changes their order would otherwise slip through unnoticed.
     expect(items.map((row) => `${row.payrollMonth} ${row.employeeCode}`)).toEqual([
       '2026-07-01 GLR-1003',
       '2026-07-01 GLR-1020',

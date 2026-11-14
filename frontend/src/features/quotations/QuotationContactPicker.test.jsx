@@ -117,8 +117,8 @@ describe('QuotationContactPicker — the field and its list', () => {
   });
 });
 
-// ── "ใช้ชื่อเดียวกับลูกค้า" (owner testing feedback, 2026-09-11): "when the customer and the
-// purchaser are the same person, let the rep reuse the customer name instead of retyping it". ──
+// "ใช้ชื่อเดียวกับลูกค้า" (owner testing feedback, 2026-09-11): "when the customer and the purchaser are the
+// same person, let the rep reuse the customer name instead of retyping it".
 describe('QuotationContactPicker — ใช้ชื่อเดียวกับลูกค้า', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -320,18 +320,14 @@ describe('QuotationContactPicker — ไม่เติม "คุณ" หน้
   });
 });
 
-// Bug fix (owner re-report 2026-09-16, "แก้หรือเพิ่ม Email ผู้สั่งซื้อภายหลังไม่ได้"): a
-// quotation-grant holder who cannot load the ticket has `customerId` (== `contactCustomerId` on
-// the editor page) stay null even though the quotation's own frozen snapshot already seeded a
-// SELECTED contact with a real phone/email -- editing either field used to return silently: no
-// request, no toast, the rep left to guess why nothing happened.
+// Bug fix: a quotation-grant holder who cannot load the ticket has `customerId` stay null even though the
+// quotation's own frozen snapshot already seeded a SELECTED contact with a real phone/email.
 describe('QuotationContactPicker — missing customerId (owner re-report 2026-09-16)', () => {
   const SELECTED_CONTACT = { id: 42, customerId: 1, firstName: 'วิภา', lastName: 'สมิทธ์', phone: '081-000-0000', email: 'wipa@example.com' };
 
-  // Resets call history AND any lingering mockRejectedValue/mockResolvedValue configuration from
-  // an earlier describe block's tests (e.g. "edit-in-place โทร./อีเมล"'s own updateContact stubs) —
-  // without this, `expect(api.customers.updateContact).not.toHaveBeenCalled()` below could see a
-  // PREVIOUS test's call still in the mock's history.
+  // Resets call history AND any lingering mockRejectedValue/mockResolvedValue configuration from an earlier
+  // describe block's tests — without this, `expect.not.toHaveBeenCalled` below could see a PREVIOUS test's call
+  // still in the mock's history.
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -348,8 +344,8 @@ describe('QuotationContactPicker — missing customerId (owner re-report 2026-09
       'error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของดีลนี้',
     ));
     expect(api.customers.updateContact).not.toHaveBeenCalled();
-    // No request was ever sent, so there is nothing to roll back -- the typed value stays exactly
-    // as the rep left it (unlike the "rolls back" case above, which DID send a request).
+    // No request was ever sent, so there is nothing to roll back -- the typed value stays exactly as the rep left
+    // it (unlike the "rolls back" case above, which DID send a request).
     expect(emailInput.value).toBe('new@example.com');
   });
 });

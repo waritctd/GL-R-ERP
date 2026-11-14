@@ -17,28 +17,9 @@ import th.co.glr.hr.notification.EmailRecipient;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
 
-/**
- * Assembles and sends the auto-generated leave-submission email (2026-09 HR request). Pressing
- * "ยื่นคำขอลา" in the portal now mails the ใบลา F-HR-020 form (rendered by {@link LeaveFormRenderer})
- * to the shared HR inbox, CC'ing the requester and their manager, so staff no longer fill and email a
- * leave form by hand.
- *
- * <p><b>Routing (owner decisions, 2026-09-25):</b>
- * <ul>
- *   <li>TO: the shared HR inbox {@code app.leave.submission-inbox}.</li>
- *   <li>CC: the requester's own address, plus their reports-to (manager) address when one exists.
- *       When the employee has no manager on file, only the requester is CC'd (no HR-wide CC) - the
- *       shared inbox is already the primary recipient.</li>
- *   <li>Attachments: the generated ใบลา PDF always; the request's supporting document (e.g. a medical
- *       certificate) when one was uploaded.</li>
- * </ul>
- *
- * <p>This is a self-contained collaborator so {@link LeaveService} gains exactly one new dependency
- * for the whole email concern (its unit-test constructor wires none, leaving submit email-free under
- * mocks). Delivery itself is deferred to after-commit and run @Async by
- * {@link NotificationEmailService}; a mail failure is logged there, never thrown, so it cannot fail a
- * committed leave submission.
- */
+/** Assembles and sends the auto-generated leave-submission email (2026-09 HR request). When the employee has no
+ * manager on file, only the requester is CC'd (no HR-wide CC) - the shared inbox is already the primary
+ * recipient. */
 @Component
 public class LeaveSubmissionMailer {
     private static final Logger log = LoggerFactory.getLogger(LeaveSubmissionMailer.class);
@@ -62,16 +43,8 @@ public class LeaveSubmissionMailer {
         this.inboxAddress = inboxAddress == null ? "" : inboxAddress.trim();
     }
 
-    /**
-     * Sends the submission email for a just-created SUBMITTED request. {@code formData} carries the
-     * form fields {@link LeaveService} assembled (it owns the balance math the year-to-date history
-     * needs); this method renders the PDF, pulls any supporting document, resolves the CC recipients,
-     * and hands the finished message to {@link NotificationEmailService#sendLeaveSubmission}.
-     *
-     * <p>{@code @Async}: the Chromium PDF render is the slow step, so it runs off the request thread
-     * (the caller schedules this after the submit transaction commits). Best-effort — a failure here
-     * never reaches the committed submission.
-     */
+    /** Sends the submission email for a just-created SUBMITTED request. Best-effort — a failure here never reaches
+     * the committed submission. */
     @Async
     public void send(LeaveRequestDto request, LeaveFormData formData) {
         List<Mailer.Attachment> attachments = new ArrayList<>();
@@ -88,13 +61,9 @@ public class LeaveSubmissionMailer {
             body(request, formData), PORTAL_LINK, attachments);
     }
 
-    /**
-     * Emails the employee their completed ใบลา after a manual decision -- the same F-HR-020, now
-     * carrying the ticked ความเห็นผู้บังคับบัญชา / HR-receipt boxes ({@code formData} already reflects
-     * the decision, assembled post-commit by {@link LeaveService#buildLeaveForm}). TO the employee
-     * ONLY (owner decision 2026-09-26); a no-op when they have no address on file. Reuses the
-     * attachment-carrying {@code sendLeaveSubmission} transport with the employee as the sole TO.
-     */
+    /** Emails the employee their completed ใบลา after a manual decision -- the same F-HR-020, now carrying the
+     * ticked ความเห็นผู้บังคับบัญชา / HR-receipt boxes (formData already reflects the decision, assembled
+     * post-commit by LeaveService#buildLeaveForm). */
     @Async
     public void sendDecision(LeaveRequestDto request, LeaveFormData formData) {
         String to = notifications.findEmployeeRecipient(request.employeeId())
@@ -151,8 +120,8 @@ public class LeaveSubmissionMailer {
             .ifPresent(cc::add);
     }
 
-    // Subject: [รหัสพนักงาน][ชื่อเล่น] ส่งใบลา[ประเภท] เหตุ: [เหตุผล] [วันที่]. The type name is used
-    // WITHOUT its leading "ลา" after "ใบลา"/"แจ้งลา" so it reads "ส่งใบลาป่วย", not "ส่งใบลาลาป่วย".
+    // Subject: [รหัสพนักงาน][ชื่อเล่น] ส่งใบลา[ประเภท] เหตุ: [เหตุผล] [วันที่]. The type name is used WITHOUT its
+    // leading "ลา" after "ใบลา"/"แจ้งลา" so it reads "ส่งใบลาป่วย", not "ส่งใบลาลาป่วย".
     private String subject(LeaveRequestDto request, LeaveFormData formData) {
         return "[" + nn(request.employeeCode()) + "][" + nn(formData.nickName()) + "] ส่งใบลา"
             + leaveWord(request.leaveTypeNameTh()) + " เหตุ: " + nn(request.reason()) + " "
@@ -173,12 +142,9 @@ public class LeaveSubmissionMailer {
             + nn(formData.nickName());
     }
 
-    /**
-     * The leave span for the email. A multi-day TIMED request binds each clock time to its own date --
-     * "ตั้งแต่ X เวลา t1 น. ถึง Y เวลา t2 น." -- so it cannot be misread as "t1-t2 on each day" (the
-     * leave runs continuously from t1 on the first day to t2 on the last). Whole-day and
-     * single-day-timed requests keep the plain date range; durationLabel carries any single-day times.
-     */
+    /** The leave span for the email. A multi-day TIMED request binds each clock time to its own date -- "ตั้งแต่ X
+     * เวลา t1 น. ถึง Y เวลา t2 น." -- so it cannot be misread as "t1-t2 on each day" (the leave runs continuously
+     * from t1 on the first day to t2 on the last). */
     private String dateSpan(LeaveRequestDto request) {
         boolean timed = request.startTime() != null && request.endTime() != null;
         boolean multiDay = request.endDate() != null && !request.endDate().equals(request.startDate());
@@ -192,8 +158,8 @@ public class LeaveSubmissionMailer {
     private String durationLabel(LeaveRequestDto request) {
         boolean multiDay = request.endDate() != null && !request.endDate().equals(request.startDate());
         if (request.startTime() != null && request.endTime() != null) {
-            // A multi-day timed span's "duration" is the total leave, not the single day's clock window
-            // (that window is now shown per-date on the วันที่ลา line above).
+            // A multi-day timed span's "duration" is the total leave, not the single day's clock window (that window is
+            // now shown per-date on the วันที่ลา line above).
             if (multiDay) {
                 return LeaveDayMath.formatDuration(request.totalDays());
             }
@@ -235,9 +201,8 @@ public class LeaveSubmissionMailer {
         return value == null || value.isBlank() ? "-" : value.trim();
     }
 
-    /** The leave-type name for use right after "ใบลา"/"แจ้งลา": drops a leading "ลา" so the type does
-     * not double it (ลาป่วย -> "ใบลาป่วย", not "ใบลาลาป่วย"). Types that do not start with "ลา" are
-     * returned unchanged. */
+    /** The leave-type name for use right after "ใบลา"/"แจ้งลา": drops a leading "ลา" so the type does not double it
+     * (ลาป่วย -> "ใบลาป่วย", not "ใบลาลาป่วย"). Types that do not start with "ลา" are returned unchanged. */
     private String leaveWord(String typeNameTh) {
         String name = nn(typeNameTh);
         return name.startsWith("ลา") && name.length() > 2 ? name.substring(2) : name;

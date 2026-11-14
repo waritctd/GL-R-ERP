@@ -22,13 +22,9 @@ import th.co.glr.hr.notification.EmailRecipient;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.notification.NotificationRepository;
 
-/**
- * Routing tests for the auto-generated leave-submission email (owner decisions, 2026-09-25): TO the
- * shared HR inbox, CC the requester and their manager (requester only when there is no manager),
- * attaching the ใบลา PDF plus any supporting document, with the subject/body following the requested
- * Thai template. Written wrong-way-round where it matters: the shared inbox is the TO and the people
- * are the CC, never the reverse.
- */
+/** Routing tests for the auto-generated leave-submission email: TO the shared HR inbox, CC the requester and
+ * their manager, attaching the ใบลา PDF plus any supporting document, with the subject/body following the
+ * requested Thai template. */
 class LeaveSubmissionMailerTest {
     private static final String INBOX = "jobs.glr.co.th@gmail.com";
     private static final byte[] FORM_PDF = "%PDF-form".getBytes();
@@ -127,11 +123,11 @@ class LeaveSubmissionMailerTest {
         verify(emailService).sendLeaveSubmission(eq("emp@glr.co.th"), cc.capture(), subject.capture(),
             any(), eq("/leave"), attachments.capture());
 
-        // Owner decision: the decision email goes TO the employee only -- nobody is CC'd, and it never
-        // goes to the shared HR inbox (which is the submission email's TO).
+        // Owner decision: the decision email goes TO the employee only -- nobody is CC'd, and it never goes to the
+        // shared HR inbox (which is the submission email's TO).
         assertThat(cc.getValue()).isEmpty();
-        // "] อนุมัติ" (not merely "อนุมัติ", which is a substring of "ไม่อนุมัติ" too) so an
-        // approve/reject wording swap in the subject would fail this.
+        // "] อนุมัติ" (not merely "อนุมัติ", which is a substring of "ไม่อนุมัติ" too) so an approve/reject wording
+        // swap in the subject would fail this.
         assertThat(subject.getValue()).contains("EMP001").contains("] อนุมัติใบลา")
             .doesNotContain("ไม่อนุมัติ");
         assertThat(attachments.getValue()).hasSize(1);

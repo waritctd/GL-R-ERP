@@ -26,11 +26,9 @@ import {
 import { acceptOutcomeConfirmCopy, dealQuotationStatusLabel, dropOutcomeKey, generateClientRequestId, outcomeKeyFor, outcomeReasonConfirmCopy, shownCustomerQuotation } from '../quotations/quotationMeta.js';
 import { buttonVariants } from '../../components/common/Button.jsx';
 
-// The customer-quotation tail only ever exists once a PricingRequest reaches
-// APPROVED_FOR_QUOTATION (canCreateCustomerQuotation's own gate) — earlier
-// statuses have nothing to surface here, only on PricingRequestDetailPage.
-// Among the requests that DO qualify, the most recently created one is the
-// one this deal is currently working — ties broken by id (creation order).
+// The customer-quotation tail only ever exists once a PricingRequest reaches APPROVED_FOR_QUOTATION
+// (canCreateCustomerQuotation's own gate) — earlier statuses have nothing to surface here, only on
+// PricingRequestDetailPage.
 const QUOTATION_TAIL_STATUSES = new Set(['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'QUOTATION_ACCEPTED']);
 
 function pickRelevantPricingRequest(pricingRequests = []) {
@@ -178,9 +176,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
 
   return (
     <Panel flush data-testid="deal-quotation-panel">
-      {/* Explicit Panel.Header, not title/actions: this header's gap is 8px,
-          not Panel's default 14px, and title/actions has no way to pass a
-          className through to the header row it builds. */}
+      {/* Explicit Panel.Header, not title/actions: this header's gap is 8px, not Panel's default 14px, and
+       * title/actions has no way to pass a className through to the header row it builds. */}
       <Panel.Header bordered className="gap-2">
         <h2 className="m-0 min-w-0 text-lg break-words">ราคาและใบเสนอราคา</h2>
         <div className="flex items-center gap-2">
@@ -241,8 +238,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
                 <Icon name="fileText" size={12} /> {downloadingFormat === 'xlsx' ? 'กำลังดาวน์โหลด…' : 'Excel'}
               </Button>
               {isCustomerQuotationEditable(current) && canManageCustomerQuotation(user, pr) ? (
-                // Not a <Button>: react-router's <Link> renders an <a> for
-                // client-side navigation, which Button (a <button>) can't do.
+                // Not a <Button>: react-router's <Link> renders an for client-side navigation, which Button (a <button>) can't
+                // do.
                 <Link to={`/pricing-requests/${pr.id}`} className={buttonVariants({ variant: 'secondary' })}>
                   แก้ไขรายละเอียด/ส่วนลด →
                 </Link>
@@ -290,10 +287,8 @@ export const DealQuotationPanel = forwardRef(function DealQuotationPanel({
           <div className="flex flex-col gap-2 rounded-md border border-border bg-surface p-3">
             <strong className="text-sm">ยืนยันคำสั่งซื้อ</strong>
             {canConfirmOrder(user, pr) ? (
-              // The "ยืนยันคำสั่งซื้อ" button itself lives solely on the
-              // sticky header now (FIX 2, see this component's own doc
-              // comment) — this explains the section instead of duplicating
-              // the CTA.
+              // The "ยืนยันคำสั่งซื้อ" button itself lives solely on the sticky header now (FIX 2, see this component's own
+              // doc comment) — this explains the section instead of duplicating the CTA.
               <p className="text-sm text-text-muted">
                 ลูกค้ายอมรับใบเสนอราคาแล้ว — กดปุ่ม “ยืนยันคำสั่งซื้อ” บนแถบด้านบนของหน้าเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า
               </p>

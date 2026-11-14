@@ -28,34 +28,7 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * V148 (per-item stock-commission weighting) — real-DB enforcement coverage for {@link
- * TicketService#setItemWeightMultipliers}'s gate, the required evidence under CLAUDE.md's
- * "permission changes must ship evidence": a role gate needs a real-DB integration test through
- * the real service AND the real repository, because Mockito cannot reach this — a mocked {@link
- * TicketRepository} passes happily while the {@code UPDATE} does something else entirely.
- *
- * <p><b>Written wrong-way-round on purpose.</b> The tests that matter are the refusals, and each
- * one re-reads {@code sales.ticket_item.weight_multiplier} straight out of Postgres afterwards to
- * prove nothing moved — "the manager can set it" is necessary but is not the evidence.
- *
- * <p><b>A DIFFERENT role set from {@code STOCK_DECLARATION_ROLES}, deliberately.</b> {@code
- * reserveStock} (the sibling per-item write on this exact table) is gated to {@code {sales-owner,
- * import, ceo}} — the rep DECLARES their own stock coverage. This endpoint is the opposite
- * direction: a manager APPROVES a weight against a rep's commission input, gated to {@code
- * {sales_manager, ceo}} instead. This suite proves BOTH halves of that separation: the deal's own
- * owner (a {@code sales} role, who legitimately may call {@code reserveStock} on this exact
- * ticket) is REFUSED here, and {@code import} (who may also call {@code reserveStock}) is REFUSED
- * here too — the two endpoints do not share an authorization boundary just because they share a
- * table.
- *
- * <p>Mirrors {@code th.co.glr.hr.ticket.StockDeclarationAuthzIntegrationTest} and {@code
- * th.co.glr.hr.attendance.AttendanceScopeIntegrationTest}. Note the suite-wide trap documented on
- * {@link AbstractPostgresIntegrationTest}: services are hand-wired with {@code new}, so {@code
- * @Transactional} is inert here and no rollback is ever exercised — nothing below asserts one. The
- * "unmoved" assertions hold because the guard throws before any write, not because a transaction
- * rolled back.
- */
+/** Verifies per-item commission-weight permissions through the real service and repository. */
 class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -76,9 +49,9 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
 
-        // Same collaborator-mocking rationale as StockDeclarationAuthzIntegrationTest:
-        // setItemWeightMultipliers never calls PricingRequestService. The stub on
-        // cancelOpenForTicket only guards against a future edit routing through markLost/cancel.
+        // Same collaborator-mocking rationale as StockDeclarationAuthzIntegrationTest: setItemWeightMultipliers never
+        // calls PricingRequestService. The stub on cancelOpenForTicket only guards against a future edit routing
+        // through markLost/cancel.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -101,12 +74,9 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
 
     // ── the refusals: these are the evidence ─────────────────────────────────
 
-    /**
-     * The case this gate exists for: {@code reserveStock}'s own authorized declarer — the deal's
-     * OWNER, a {@code sales} role — must NOT also be able to approve this deal's commission weight.
-     * The two decisions (declare quantity vs. approve weight) are deliberately held by different
-     * people.
-     */
+    /** The case this gate exists for: reserveStock's own authorized declarer — the deal's OWNER, a sales role —
+     * must NOT also be able to approve this deal's commission weight. The two decisions (declare quantity vs.
+     * approve weight) are deliberately held by different people. */
     @Test
     void dealOwner_salesRole_isRefused_andTheRowIsUnmoved() {
         long ticketId = createTicketWithOneItem();
@@ -132,11 +102,8 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertNothingMoved(itemId);
     }
 
-    /**
-     * {@code import} holds the identical {@code reserveStock} ability owner/ceo do, and must be
-     * refused here just as certainly — the same "declare vs. approve" separation this whole gate
-     * exists for.
-     */
+    /** import holds the identical reserveStock ability owner/ceo do, and must be refused here just as certainly —
+     * the same "declare vs. approve" separation this whole gate exists for. */
     @Test
     void importRole_isRefused_andTheRowIsUnmoved() {
         long ticketId = createTicketWithOneItem();
@@ -165,11 +132,9 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertNothingMoved(itemId);
     }
 
-    /**
-     * The coarse pre-filter's own reason to exist: a role that can never set this must be refused
-     * BEFORE the ticket is read, so this endpoint cannot become a "does ticket N exist?" probe —
-     * 403, never 404 — for every non-{@code sales_manager}/{@code ceo} role, sales/owner included.
-     */
+    /** The coarse pre-filter's own reason to exist: a role that can never set this must be refused BEFORE the
+     * ticket is read, so this endpoint cannot become a "does ticket N exist?" probe — 403, never 404 — for every
+     * non-sales_manager/ceo role, sales/owner included. */
     @Test
     void roleThatCanNeverSetWeight_isRefusedBeforeTheTicketIsRead() {
         long neverCreated = 9_999_998L;
@@ -183,11 +148,9 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
         }
     }
 
-    /**
-     * A refusal is not enough on its own: this drives the refusal AFTER a legitimate manager
-     * approval, so the assertion is that the stranger's attempt did not overwrite the manager's
-     * decision — a stronger check than "still the default", which a no-op would also satisfy.
-     */
+    /** A refusal is not enough on its own: this drives the refusal AFTER a legitimate manager approval, so the
+     * assertion is that the stranger's attempt did not overwrite the manager's decision — a stronger check than
+     * "still the default", which a no-op would also satisfy. */
     @Test
     void refusedAttempt_doesNotOverwriteTheWeightAlreadyOnFile() {
         long ticketId = createTicketWithOneItem();
@@ -215,9 +178,9 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertThat(weightMultiplier(itemId)).isEqualTo(2);
     }
 
-    /** {@code ceo} may also set it — the existing record-level fallback setter ({@code
-     * CommissionService#updateDeductions}) is manager-or-CEO, and this task's brief asks the more
-     * granular per-item control to be no MORE restrictive than the coarser one it complements. */
+    /** ceo may also set it — the existing record-level fallback setter (CommissionService#updateDeductions) is
+     * manager-or-CEO, and this task's brief asks the more granular per-item control to be no MORE restrictive than
+     * the coarser one it complements. */
     @Test
     void ceo_setsTheWeight_andTheRowIsActuallyWritten() {
         long ticketId = createTicketWithOneItem();
@@ -228,10 +191,9 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
         assertThat(weightMultiplier(itemId)).isEqualTo(3);
     }
 
-    /** {@link TicketService#actions} must advertise {@code SET_ITEM_WEIGHT_MULTIPLIER} for a
-     * sales_manager and must NOT advertise it for the deal's own owner — the same "one predicate
-     * drives both the gate and the advertisement" discipline {@code canReserveStock} documents,
-     * proven here rather than merely asserted in a comment. */
+    /** TicketService#actions must advertise SET_ITEM_WEIGHT_MULTIPLIER for a sales_manager and must NOT advertise
+     * it for the deal's own owner — the same "one predicate drives both the gate and the advertisement" discipline
+     * canReserveStock documents, proven here rather than merely asserted in a comment. */
     @Test
     void actionsAdvertisement_matchesTheGate_forManagerAndOwner() {
         long ticketId = createTicketWithOneItem();
@@ -255,11 +217,8 @@ class ItemWeightMultiplierAuthzIntegrationTest extends AbstractPostgresIntegrati
         return new ItemWeightMultiplierRequest(List.of(new ItemWeightMultiplierRequest.Line(itemId, weightMultiplier)));
     }
 
-    /** Same fixture shape as {@code StockDeclarationAuthzIntegrationTest#createTicketWithOneItem}:
-     * a deal parked at {@link DealStage#ORDER_RECEIVED} with exactly one item. This gate carries
-     * no stage floor of its own (see {@code TicketService#setItemWeightMultipliers}'s Javadoc), so
-     * the stage choice here is only for fixture parity with its sibling suite, not a precondition
-     * under test. */
+    /** Same fixture shape as StockDeclarationAuthzIntegrationTest#createTicketWithOneItem: a deal parked at
+     * DealStage#ORDER_RECEIVED with exactly one item. */
     private long createTicketWithOneItem() {
         CreateTicketRequest request = new CreateTicketRequest(
             "ดีลทดสอบน้ำหนัก", "NORMAL", "ลูกค้าทดสอบน้ำหนัก", null, null, null, null, null,

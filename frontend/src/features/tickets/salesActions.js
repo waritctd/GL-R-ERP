@@ -63,8 +63,8 @@ export const SALES_ACTION = {
 const ACTION_LABEL = {
   [SALES_ACTION.SUBMIT_DIRECT_QUOTATION]: 'ส่งขออนุมัติใบเสนอราคา',
   [SALES_ACTION.AWAIT_DIRECT_APPROVAL]: 'รออนุมัติใบเสนอราคา',
-  // The same words as CONFIRM_ORDER below on purpose (IA §8): to the rep it is the same real-world
-  // act — the customer ordered — whichever route priced the deal.
+  // The same words as CONFIRM_ORDER below on purpose (IA §8): to the rep it is the same real-world act — the
+  // customer ordered — whichever route priced the deal.
   [SALES_ACTION.CONFIRM_ORDER_DIRECT]: 'ยืนยันคำสั่งซื้อ',
   [SALES_ACTION.CREATE_PCR]: 'สร้างคำขอราคา',
   // Generic for the worklist; the deal page names the next stage (เลื่อนไป: 2. นำเสนอสินค้า).
@@ -75,17 +75,10 @@ const ACTION_LABEL = {
   [SALES_ACTION.CREATE_REMAINING_INVOICE]: 'สร้างใบแจ้งหนี้',
   [SALES_ACTION.CHOOSE_PROCUREMENT_SOURCE]: 'จัดซื้อสินค้า',
   [SALES_ACTION.CREATE_IMPORT_REQUEST]: 'ออกใบขอซื้อ (IR)',
-  // "Record the quotation outcome" — deliberately not "ติดตามผล"/"ติดตามลูกค้า" (that's
-  // FOLLOW_UP's own label, a nudge to go chase the customer): by the time this bucket fires, the
-  // quotation is already out and canRecordCustomerQuotationOutcome's own gate is what the button
-  // opens, so the verb is the recording action itself, matching CREATE_PCR/ISSUE_QUOTATION/
-  // CONFIRM_ORDER's terse imperative-verb tone (2-4 words, no subject, no punctuation).
+  // "Record the quotation outcome".
   [SALES_ACTION.RECORD_QUOTATION_OUTCOME]: 'บันทึกผลใบเสนอราคา',
-  // Same wording IMPORT_ACTION_LABELS.recordDelivery (importActions.js) already uses for the
-  // identical real-world action. Deliberately NOT imported from there: the two labels live in two
-  // independent cascades (this module's SALES_ACTION vs. import's fulfilment codes), and this
-  // module has no other reason to depend on IMPORT_ACTION_LABELS — see nextFulfilmentActionCode's
-  // own import below for the one piece of import's module this file DOES intentionally share.
+  // Same wording IMPORT_ACTION_LABELS.recordDelivery (importActions.js) already uses for the identical
+  // real-world action.
   [SALES_ACTION.RECORD_DELIVERY]: 'บันทึกส่งมอบ',
   [SALES_ACTION.FOLLOW_UP]: 'ติดตามลูกค้า',
   [SALES_ACTION.LOG_ACTIVITY]: 'บันทึกกิจกรรม',
@@ -122,13 +115,9 @@ const ACTION_RANK = {
   [SALES_ACTION.LOG_ACTIVITY]: 7,
 };
 
-/**
- * Whether `deal.nextFollowUpAt` is due today or already overdue, compared in
- * Asia/Bangkok (see CLAUDE.md/memory note on the timezone-flake class of bug —
- * a bare `new Date()` comparison would disagree with the server about "today"
- * near the UTC day boundary). Returns 'overdue' | 'today' | null (not due yet,
- * or no follow-up date set at all).
- */
+/** Whether `deal.nextFollowUpAt` is due today or already overdue, compared in Asia/Bangkok (see
+ * CLAUDE.md/memory note on the timezone-flake class of bug — a bare `new Date()` comparison would disagree
+ * with the server about "today" near the UTC day boundary). */
 export function followUpStatus(deal, todayIso = bangkokTodayIso()) {
   if (!deal?.nextFollowUpAt) return null;
   const followUpDate = String(deal.nextFollowUpAt).slice(0, 10);
@@ -456,10 +445,9 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
     return { key: SALES_ACTION.FOLLOW_UP, label: ACTION_LABEL[SALES_ACTION.FOLLOW_UP], followUp };
   }
 
-  // 7. No activity logged in STALE_ACTIVITY_DAYS days — `deal.stale` is
-  //    already computed server/mock-side (mirrors TicketRepository.enrichSummary,
-  //    see dealTrackingMeta.js's computeStale) and included on every
-  //    api.tickets.list() row, so it is reused here rather than recomputed.
+  // 7. No activity logged in STALE_ACTIVITY_DAYS days — `deal.stale` is already computed server/mock-side
+  // (mirrors TicketRepository.enrichSummary, see dealTrackingMeta.js's computeStale) and included on every
+  // api.tickets.list() row, so it is reused here rather than recomputed.
   if (deal.stale) {
     return { key: SALES_ACTION.LOG_ACTIVITY, label: ACTION_LABEL[SALES_ACTION.LOG_ACTIVITY] };
   }
@@ -495,8 +483,8 @@ function importRequestAction(deal, importRequests, items, procurementSource) {
 
 export const REVISE_STAGES = new Set(['QUOTE_OWNER', 'QUOTE_BUYER']);
 
-/** `target` = { quotationId, number, openDraftId? }. With an open revision draft the action points
- * at it (`to`) instead of minting a second one. */
+/** `target` = { quotationId, number, openDraftId? }. With an open revision draft the action points at it (`to`)
+ * instead of minting a second one. */
 export function reviseAction(target) {
   const action = {
     key: SALES_ACTION.REVISE_QUOTATION,
@@ -518,8 +506,8 @@ const DIRECT_QUOTATION_BUCKET = {
 };
 
 /** The bucket a live direct quotation puts its deal in, or null. Every action names the quotation
- * (`quotationId`/`quotationNumber`) so the caller can route to it or name it in a banner; SUBMIT
- * also carries `to`, because its real control (ส่งขออนุมัติ) lives on the quotation editor. */
+ * (`quotationId`/`quotationNumber`) so the caller can route to it or name it in a banner; SUBMIT also carries
+ * `to`, because its real control (ส่งขออนุมัติ) lives on the quotation editor. */
 function liveDirectQuotationAction(live) {
   const key = live ? DIRECT_QUOTATION_BUCKET[live.docStatus] : null;
   if (!key) return null;
@@ -539,12 +527,9 @@ function directQuoteNextPartyAction(deal, offRouteParties) {
   return quoteNextPartyAction(live.recipientType, parties, { anchorDeclined: false, direct: true, skipBuyer: live.recipientType === 'OWNER', quotationId: live.id, quotationNumber: live.number });
 }
 
-/**
- * Sorts `{ deal, action }` worklist rows overdue-first: an overdue follow-up
- * always leads regardless of what other deals' actions are, then rows are
- * grouped by ACTION_RANK, then (within the same action) the longest-waiting
- * deal (oldest stageUpdatedAt) sorts first. Does not mutate `items`.
- */
+/** Sorts `{ deal, action }` worklist rows overdue-first: an overdue follow-up always leads regardless of what
+ * other deals' actions are, then rows are grouped by ACTION_RANK, then (within the same action) the
+ * longest-waiting deal (oldest stageUpdatedAt) sorts first. Does not mutate `items`. */
 export function sortWorklist(items) {
   return [...items].sort((a, b) => {
     const overdueA = a.action.followUp === 'overdue' ? 0 : 1;

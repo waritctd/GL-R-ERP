@@ -8,23 +8,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import org.junit.jupiter.api.Test;
 
-/**
- * feat/pending-approver-info: unit tests for {@link LeaveRepository#resolvePendingApproverRole}/
- * {@link LeaveRepository#resolvePendingApproverName} -- plain Mockito-on-a-mocked-{@link ResultSet}
- * tests, not a real-DB integration test. This is deliberate and within scope per CLAUDE.md's authz
- * evidence rule: these two methods are READ-ONLY informational resolvers (they describe who the
- * real gate -- {@code LeaveService#approve}/{@code #reject}, {@code REVIEW_ALL_ROLES}, {@code
- * isDirectManager} -- would accept; they never themselves decide who may act), so this is not an
- * authorization change and does not require {@code AbstractPostgresIntegrationTest}. The SQL text
- * (nickname fallback, single-active-match ambiguity resolution in {@code PendingApproverSql}) is
- * not exercised here -- that is plain SQL, not branching Java logic, and is covered by the class
- * Javadoc's "stay in lockstep with DivisionAccessPolicy" contract instead; a follow-up
- * integration test against real Postgres would be a reasonable addition if a reviewer wants one.
- *
- * <p>{@link LeaveRepository} is instantiated with a null {@code NamedParameterJdbcTemplate} and
- * other null collaborators -- both methods under test never touch the constructor-injected fields,
- * only the {@link ResultSet} argument, so this is safe (no NPE reachable from these two methods).
- */
+/** feat/pending-approver-info: unit tests for LeaveRepository#resolvePendingApproverRole/
+ * LeaveRepository#resolvePendingApproverName -- plain Mockito-on-a-mocked-ResultSet tests, not a real-DB
+ * integration test. */
 class LeaveRepositoryPendingApproverTest {
 
     private final LeaveRepository repository = new LeaveRepository(null);
@@ -64,10 +50,9 @@ class LeaveRepositoryPendingApproverTest {
 
     @Test
     void submittedWithInactiveManager_fallsBackToHrGenericRole() throws SQLException {
-        // A stored reports_to_employee_id whose target is no longer active is NOT a live reviewer.
-        // Deliberately a DIFFERENT check from LeaveService#isDirectManager's own active flag (that
-        // one reads the REQUESTER's active status, not the manager's) -- see
-        // LeaveRepository#resolvePendingApproverRole's javadoc.
+        // A stored reports_to_employee_id whose target is no longer active is NOT a live reviewer. Deliberately a
+        // DIFFERENT check from LeaveService#isDirectManager's own active flag (that one reads the REQUESTER's active
+        // status, not the manager's) -- see LeaveRepository#resolvePendingApproverRole's javadoc.
         ResultSet rs = resultSet("SUBMITTED", 99L, false, "เอ็ม (inactive)", "สมศรี");
 
         assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("hr");
@@ -76,10 +61,9 @@ class LeaveRepositoryPendingApproverTest {
 
     @Test
     void hrRoleWithMultipleActiveHrEmployees_omitsNameButKeepsRole() throws SQLException {
-        // Ambiguity case: PendingApproverSql#SINGLE_ACTIVE_HR_NAME_SQL resolves to SQL NULL when
-        // more than one active hr-role employee exists -- this test stands in for that by having
-        // the (mocked) SQL layer already report null, and asserts the Java side does not invent a
-        // name when the column comes back null.
+        // Ambiguity case: PendingApproverSql#SINGLE_ACTIVE_HR_NAME_SQL resolves to SQL NULL when more than one active
+        // hr-role employee exists -- this test stands in for that by having the (mocked) SQL layer already report
+        // null, and asserts the Java side does not invent a name when the column comes back null.
         ResultSet rs = resultSet("SUBMITTED", null, false, null, null);
 
         assertThat(repository.resolvePendingApproverRole(rs)).isEqualTo("hr");

@@ -3,29 +3,9 @@ import { REAL_ROLES } from './helpers/accounts.js';
 import { apiSessionsFor, apiWrite, disposeSessions } from './helpers/api.js';
 import { writeEndpointsWithId } from './helpers/surface.js';
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WRITE-SIDE BREADTH — every resource-scoped write endpoint, every role.
-//
-// write-overtime.spec.js goes deep on one workflow. This goes wide: it takes every write
-// endpoint in API_ROUTES that addresses a resource by id (98 of them, across POST/PUT/PATCH/
-// DELETE) and calls each one as each of the six seeded roles — 588 requests — asserting a
-// single property:
-//
-//     NO ROLE EVER GETS A 2xx FROM A WRITE AGAINST A RESOURCE THAT DOES NOT EXIST.
-//
-// That is a real correctness property, not a tautology. A 2xx here would mean an endpoint
-// mutating (or creating) something without first establishing that the thing it was asked to
-// act on exists — the shape of bug where `POST /api/x/{id}/approve` on a bogus id quietly
-// writes a row, or an upsert-by-id invents a record with an attacker-chosen key.
-//
-// WHY THIS IS SAFE TO RUN AGAINST A SHARED DATABASE. The id is a placeholder that matches no
-// row, and the set is deliberately restricted to resource-scoped writes (see
-// surface.js#writeEndpointsWithId). Collection-level writes — POST /api/employees, POST
-// /api/overtime — are excluded precisely because those CAN create something: sweeping them
-// across six roles would mean writing rows into a shared database in order to discover who is
-// allowed to write rows. The measured result of the whole sweep is 0 × 2xx, which is both the
-// assertion and the evidence that nothing was mutated.
-// ─────────────────────────────────────────────────────────────────────────────
+// WRITE-SIDE BREADTH — every resource-scoped write endpoint, every role. write-overtime.spec.js goes deep on
+// one workflow. That is a real correctness property, not a tautology. WHY THIS IS SAFE TO RUN AGAINST A SHARED
+// DATABASE.
 
 const WRITE_ENDPOINTS = writeEndpointsWithId();
 
@@ -54,8 +34,8 @@ test.describe('write endpoints refuse a resource that does not exist', () => {
   });
 
   test('the swept set is substantial and covers every write verb', () => {
-    // A guard on the derivation itself. If the verb parser in surface.js broke, this set would
-    // collapse toward empty and the sweep below would pass while testing nothing.
+    // A guard on the derivation itself. If the verb parser in surface.js broke, this set would collapse toward
+    // empty and the sweep below would pass while testing nothing.
     expect(WRITE_ENDPOINTS.length).toBeGreaterThan(70);
     const verbs = new Set(WRITE_ENDPOINTS.map((endpoint) => endpoint.verb));
     expect([...verbs].sort()).toEqual(['DELETE', 'PATCH', 'POST', 'PUT']);
@@ -78,8 +58,8 @@ test.describe('write endpoints refuse a resource that does not exist', () => {
         } else if (status >= 500) {
           serverErrors.push(`${role} ${verb} ${path}`);
         }
-        // 400 (empty body fails validation), 403 (role gate) and 404 (no such row) are all
-        // correct answers here — each means the request was understood and refused.
+        // 400 (empty body fails validation), 403 (role gate) and 404 (no such row) are all correct answers here — each
+        // means the request was understood and refused.
       }
     }
 

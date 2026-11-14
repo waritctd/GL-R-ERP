@@ -16,18 +16,9 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/**
- * Stateless CSRF protection using the OWASP double-submit cookie pattern.
- *
- * <p>A non-HttpOnly {@code XSRF-TOKEN} cookie is issued to every API caller. The SPA reads that
- * cookie and echoes it back in an {@code X-XSRF-TOKEN} header on every state-changing request. A
- * forged cross-site request cannot read the cookie (same-origin policy) and therefore cannot supply
- * the matching header, so the request is rejected with 403.
- *
- * <p>This deliberately avoids pulling in {@code spring-boot-starter-security}, which would reshape
- * the existing manual session/CORS layer. If we later adopt the full security starter we can swap
- * this filter for {@code CookieCsrfTokenRepository} with no client change.
- */
+/** Stateless CSRF protection using the OWASP double-submit cookie pattern. A forged cross-site request cannot
+ * read the cookie (same-origin policy) and therefore cannot supply the matching header, so the request is
+ * rejected with 403. */
 @Component
 @Order(0)
 public class CsrfCookieFilter extends OncePerRequestFilter {
@@ -35,10 +26,9 @@ public class CsrfCookieFilter extends OncePerRequestFilter {
     static final String CSRF_HEADER_NAME = "X-XSRF-TOKEN";
 
     private static final Set<String> SAFE_METHODS = Set.of("GET", "HEAD", "OPTIONS", "TRACE");
-    // Login must succeed before the client has a token; CSRF on login itself is low impact. The
-    // same reasoning covers the two self-service forgot-password endpoints: a client landing
-    // fresh on /forgot-password, or arriving via an emailed /reset-password?token=... link, has
-    // made no prior /api/** call and so holds no CSRF cookie/header pair yet either.
+    // Login must succeed before the client has a token; CSRF on login itself is low impact. The same reasoning
+    // covers the two self-service forgot-password endpoints: a client landing fresh on /forgot-password, or
+    // arriving via an emailed /reset-password?token=...
     private static final Set<String> EXEMPT_PATHS = Set.of(
         "/api/auth/login",
         "/api/auth/forgot-password",

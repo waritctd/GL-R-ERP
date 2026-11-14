@@ -13,13 +13,7 @@ import java.util.Set;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.attendance.schedule.WorkSchedule;
 
-/**
- * Pure unit tests for the late/early/missing/overtime rules — no Spring, no Mockito, no database.
- *
- * <p>The grace-boundary cases are the ones that matter most: "grace is a threshold, not an
- * allowance" is the rule most likely to be silently re-implemented wrong, and under Thai Labour
- * Protection Act §76 an inflated late figure is exactly the number that must not exist.
- */
+/** Pure unit tests for the late/early/missing/overtime rules — no Spring, no Mockito, no database. */
 class AttendanceDailyCalculatorTest {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
@@ -37,10 +31,8 @@ class AttendanceDailyCalculatorTest {
                DayOfWeek.THURSDAY, DayOfWeek.FRIDAY)
     );
 
-    /**
-     * V117: SALES_5D — identical hours/workdays/grace to {@link #SCHEDULE} (OFFICE_5D) but
-     * {@code requiresCheckOut = false}, per §4's ฝ่ายขาย scan-in-only exemption.
-     */
+    /** V117: SALES_5D — identical hours/workdays/grace to #SCHEDULE (OFFICE_5D) but requiresCheckOut = false, per
+     * §4's ฝ่ายขาย scan-in-only exemption. */
     private static final WorkSchedule SALES_SCHEDULE = new WorkSchedule(
         BANGKOK,
         LocalTime.of(8, 30),
@@ -140,11 +132,9 @@ class AttendanceDailyCalculatorTest {
         assertThat(record.totalMinutes()).isNull();
     }
 
-    /**
-     * §4's ฝ่ายขาย scan-in-only exemption (V117): on SALES_5D, a lone morning punch is a complete,
-     * compliant day — no MISSING_CHECK_OUT, no fabricated early-leave, no fabricated total, but
-     * lateness is still evaluated normally from the check-in.
-     */
+    /** §4's ฝ่ายขาย scan-in-only exemption (V117): on SALES_5D, a lone morning punch is a complete, compliant day —
+     * no MISSING_CHECK_OUT, no fabricated early-leave, no fabricated total, but lateness is still evaluated
+     * normally from the check-in. */
     @Test
     void salesScheduleLoneMorningPunchIsNotMissingCheckOut() {
         AttendanceDailyRecord record = calculator.calculate(
@@ -161,10 +151,8 @@ class AttendanceDailyCalculatorTest {
         assertThat(record.totalMinutes()).isNull();
     }
 
-    /**
-     * A sales employee who DOES scan out is unaffected by the exemption: the ordinary two-punch
-     * path applies unchanged, including early-leave.
-     */
+    /** A sales employee who DOES scan out is unaffected by the exemption: the ordinary two-punch path applies
+     * unchanged, including early-leave. */
     @Test
     void salesScheduleWithBothPunchesBehavesLikeAnyOtherSchedule() {
         AttendanceDailyRecord record = calculator.calculate(
@@ -181,13 +169,8 @@ class AttendanceDailyCalculatorTest {
         assertThat(record.totalMinutes()).isNotNull();
     }
 
-    /**
-     * Assert BOTH sides on ONE fixture (CLAUDE.md's testing rule): the identical lone-morning-punch
-     * day is MISSING_CHECK_OUT under OFFICE_5D and NOT missing under SALES_5D. A one-sided assertion
-     * ("SALES_5D is not missing") would also pass if the calculator secretly ignored
-     * {@code requiresCheckOut} entirely and simply never flagged anyone — checking the exact same
-     * punch under OFFICE_5D still flags rules that out.
-     */
+    /** Assert BOTH sides on ONE fixture (CLAUDE.md's testing rule): the identical lone-morning-punch day is
+     * MISSING_CHECK_OUT under OFFICE_5D and NOT missing under SALES_5D. */
     @Test
     void sameLoneMorningPunchIsMissingCheckOutUnderOfficeScheduleButNotUnderSalesSchedule() {
         List<PunchRecord> punches = List.of(punch(1, WEDNESDAY, 8, 47));
@@ -204,10 +187,8 @@ class AttendanceDailyCalculatorTest {
         assertThat(salesRecord.flags()).doesNotContain(AttendanceDayFlag.MISSING_CHECK_OUT);
     }
 
-    /**
-     * The exemption is check-out only: a sales employee's lone AFTERNOON punch is still
-     * MISSING_CHECK_IN even on SALES_5D — §4 never relaxes the arrival scan.
-     */
+    /** The exemption is check-out only: a sales employee's lone AFTERNOON punch is still MISSING_CHECK_IN even on
+     * SALES_5D — §4 never relaxes the arrival scan. */
     @Test
     void salesScheduleLoneAfternoonPunchIsStillMissingCheckIn() {
         AttendanceDailyRecord record = calculator.calculate(
@@ -218,10 +199,8 @@ class AttendanceDailyCalculatorTest {
         assertThat(record.flags()).contains(AttendanceDayFlag.MISSING_CHECK_IN);
     }
 
-    /**
-     * The case that motivates the midpoint rule: treating this as an arrival would report someone
-     * turning up at 17:25 and fabricate ~535 late minutes.
-     */
+    /** The case that motivates the midpoint rule: treating this as an arrival would report someone turning up at
+     * 17:25 and fabricate ~535 late minutes. */
     @Test
     void loneAfternoonPunchIsACheckOutWithNoCheckIn() {
         AttendanceDailyRecord record = calculate(List.of(punch(1, WEDNESDAY, 17, 25)));

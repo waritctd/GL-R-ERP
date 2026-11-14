@@ -6,31 +6,9 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { CONSENT_APPLICABLE_DEDUCTION_KINDS, payrollDeductionKindLabel } from '../../utils/format.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-/**
- * Record/edit one written-consent row (issue #376's write half, exposed for #744).
- *
- * ── THE CONTROL MUST NOT READ AS AN APPROVAL ─────────────────────────────────
- * This is the screen where an HR user ticks a box next to an employee's name and a deduction, so it
- * is the single most likely place in the app to be misread as authorising that deduction. It does
- * not: `PayrollCalculator` never reads `consent_on_file`, and no payroll figure changes as a result
- * of anything submitted here. The wording is chosen to keep that true to a reader:
- *   - the checkbox is phrased as a FILING FACT ("มีหนังสือ...เก็บไว้ในแฟ้มแล้ว"), not a permission
- *     ("อนุญาตให้หัก"), and carries its own inline note that ticking it changes no deduction;
- *   - the submit verb is "บันทึก" (record), never "อนุมัติ" (approve) or "ยืนยันสิทธิ์";
- *   - the dialog repeats the non-consequence rather than relying on the reader having read the
- *     page behind it, since a modal covers that explanation while it is open.
- *
- * ── EMPLOYEE + KIND ARE THE PRIMARY KEY, SO EDIT LOCKS THEM ──────────────────
- * `hr.deduction_written_consent` is UNIQUE (employee_id, deduction_kind) and the endpoint is an
- * UPSERT on exactly that pair (V107 / DeductionWrittenConsentRepository#upsert). Editing a row and
- * changing either field would therefore not rename anything — it would silently write a DIFFERENT
- * row and leave the original untouched. Both are read-only in edit mode for that reason, the same
- * shape as HolidayFormModal locking its date.
- *
- * Only the four CONSENT_APPLICABLE_DEDUCTION_KINDS are offered. That is not a client-side rule
- * inventing a constraint: the server 400s on anything else, so offering more would build a picker
- * whose options are rejected on submit.
- */
+/** Record/edit one written-consent row. ── THE CONTROL MUST NOT READ AS AN APPROVAL
+ * ───────────────────────────────── This is the screen where an HR user ticks a box next to an employee's name
+ * and a deduction, so it is the single most likely place in the app to be misread as authorising that deduction. */
 export function DeductionConsentFormModal({
   mode, // 'create' | 'edit'
   row, // the existing row, in edit mode
@@ -54,8 +32,8 @@ export function DeductionConsentFormModal({
   function handleSubmit(event) {
     event.preventDefault();
     let hasError = false;
-    // Both are @NotNull on DeductionWrittenConsentUpsertRequest — caught here so a missing pick is
-    // named on the field rather than coming back as a generic 400.
+    // Both are @NotNull on DeductionWrittenConsentUpsertRequest — caught here so a missing pick is named on the
+    // field rather than coming back as a generic 400.
     if (!employeeId) {
       setEmployeeError('กรุณาเลือกพนักงาน');
       hasError = true;
@@ -74,8 +52,8 @@ export function DeductionConsentFormModal({
       employeeId: Number(employeeId),
       deductionKind,
       consentOnFile,
-      // Trimmed to null rather than '': the columns are nullable TEXT, and an empty string would
-      // record "" as though it were a real document reference.
+      // Trimmed to null rather than '': the columns are nullable TEXT, and an empty string would record "" as though
+      // it were a real document reference.
       consentDocumentReference: consentDocumentReference.trim() || null,
       consentDate: consentDate || null,
       notes: notes.trim() || null,
@@ -103,8 +81,8 @@ export function DeductionConsentFormModal({
             id="consent-employee"
             value={employeeId}
             onChange={(event) => setEmployeeId(event.target.value)}
-            // Locked on edit: (employee, kind) is the row's primary key, so changing it here would
-            // write a different row rather than edit this one.
+            // Locked on edit: (employee, kind) is the row's primary key, so changing it here would write a different row
+            // rather than edit this one.
             disabled={isEdit || employeesLoading}
           >
             <option value="">{employeesLoading ? 'กำลังโหลดรายชื่อ...' : 'เลือกพนักงาน'}</option>
@@ -130,8 +108,8 @@ export function DeductionConsentFormModal({
           </select>
         </FormField>
 
-        {/* A tonal inset, not a nested card (DESIGN.md §4's one-panel-deep rule): this groups the
-            consent fact with the note about what it does not do, so the two are read together. */}
+        {/* A tonal inset, not a nested card (DESIGN.md §4's one-panel-deep rule): this groups the consent fact with the
+         * note about what it does not do, so the two are read together. */}
         <div className="grid gap-2 rounded-md bg-surface-subtle p-3">
           <label htmlFor="consent-on-file" className="flex items-start gap-2.5 text-sm font-bold text-text">
             <input
@@ -144,10 +122,8 @@ export function DeductionConsentFormModal({
             มีหนังสือยินยอมของพนักงานเก็บไว้ในแฟ้มแล้ว
           </label>
           <p className="m-0 text-xs text-text-secondary leading-normal">
-            {/* Explicit {' '} before and after: JSX strips the whitespace between a text line and an
-                element on the next line, which would run two Thai SENTENCES together. Thai has no
-                inter-word spaces but does separate clauses this way, so losing it costs the reader
-                the sentence boundary — on the one sentence that carries the no-effect guarantee. */}
+            {/* Explicit {' '} before and after: JSX strips the whitespace between a text line and an element on the next
+             * line, which would run two Thai SENTENCES together. */}
             เป็นการบันทึกว่าฝ่ายบุคคลได้เอกสารมาเก็บไว้แล้วหรือยัง{' '}
             <strong>การติ๊กหรือไม่ติ๊กช่องนี้ไม่มีผลต่อการหักเงิน</strong>{' '}
             และไม่เปลี่ยนสลิปเงินเดือนของพนักงาน

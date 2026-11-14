@@ -56,10 +56,9 @@ export function awaitingGoodsForFinalPayment(ticket) {
   return accountOwesStep(ticket) && nextAccountAction(ticket) == null && finalPaymentDue(ticket);
 }
 
-// Mirrors TicketService#requireClosePrerequisites (the predicate behind
-// closeReady()/canConfirmClose): dual-track deals need FULLY_PAID + a fully
-// delivered fulfilment status + no outstanding balance + the invoice on
-// file; legacy (pre-dual-track) deals only need to be fully paid.
+// Mirrors TicketService#requireClosePrerequisites (the predicate behind closeReady()/canConfirmClose):
+// dual-track deals need FULLY_PAID + a fully delivered fulfilment status + no outstanding balance + the
+// invoice on file; legacy (pre-dual-track) deals only need to be fully paid.
 function closePrerequisitesMet(ticket) {
   const outstanding = ticket.amountOutstanding != null && Number(ticket.amountOutstanding) > 0;
   if (outstanding) return false;
@@ -72,64 +71,23 @@ function closePrerequisitesMet(ticket) {
   return dualTrackOk || legacyOk;
 }
 
-// Mirrors TicketService#canConfirmClose's own lifecycle/closeConfirmedAt gates
-// (the CLOSE_CONFIRM_ROLES role check itself is enforced server-side and by
-// canConfirmPayments — this helper is never the authority on WHO may act).
+// Mirrors TicketService#canConfirmClose's own lifecycle/closeConfirmedAt gates (the CLOSE_CONFIRM_ROLES role
+// check itself is enforced server-side and by canConfirmPayments — this helper is never the authority on WHO
+// may act).
 function closeReady(ticket) {
   const active = ticket.lifecycle == null || ticket.lifecycle === 'ACTIVE';
   return active && ticket.closeConfirmedAt == null && closePrerequisitesMet(ticket);
 }
 
-/**
- * The one money action ฝ่ายบัญชี should take on `ticket` right now, or `null`
- * if none of account's steps apply (nothing pending, or the deal isn't in
- * account's world at all).
- *
- * Checked in priority order — overdue first (money already late outranks a
- * routine confirmation), matching the money-worklist's own overdue-first
- * sort:
- *   1. overdue balance                              -> "ติดตามชำระ"
- *   2. DEPOSIT_NOTICE_ISSUED                          -> "ยืนยันรับมัดจำ"
- *   3. final payment due (DEPOSIT_PAID/AWAITING_FINAL_PAYMENT/deposit-bypassed)
- *                                                      -> "รับชำระส่วนที่เหลือ"
- *   4. close-ready (fully paid + fully delivered, not yet confirmed)
- *                                                      -> "ยืนยันพร้อมปิดงาน"
- *   5. CLOSED_PAID, commission not yet recorded
- *                                                      -> "บันทึกใบกำกับ" (recorded on the finance deal page)
- *
- * Step 5 is gated on `!ticket.commissionRecorded`. The flag is now served by the backend
- * (TicketSummaryDto.commissionRecorded, issue #736) and answers the exact same question
- * CommissionService.createFromDeal's duplicate guard (hasActiveCommissionForTicket) asks — so the
- * worklist and the create-from-deal form can never disagree about whether a CLOSED_PAID deal still
- * needs a commission. The create form's ticketId uniqueness (a genuine duplicate 409s) remains the
- * real, authoritative duplicate guard; this flag only stops the worklist from over-suggesting a
- * step that's already done.
- *
- * `commissionRecorded` may be absent on an old/hand-built row (e.g. a stale cached object) —
- * `!ticket.commissionRecorded` naturally treats `undefined` the same as `false` ("not recorded"),
- * which is the safe default: it never hides a step that might still be needed.
- *
- * `to` is the finance deal page (`/finance/deals/:id`) for every viewer role. The commission step
- * always goes to `/commissions?ticketId=`.
- *
- * @param {string} [viewerRole] GLA-118 (owner ruling 2026-09-20, part A): steps 2 and 3 both
- *   record a payment (ยืนยันรับมัดจำ = confirmDepositPaid, รับชำระส่วนที่เหลือ = confirmFinalPayment),
- *   which is account ONLY now — the CEO fallback is gone. The CEO can still reach this page
- *   (canConfirmPayments/`/finance` nav are unchanged, still ['account','ceo']), so without this
- *   parameter the worklist would offer the CEO a CTA the server now refuses with 403. When
- *   omitted, steps 2/3 are OFFERED (the caller is asserting an account
- *   viewer — workState.js's `role === 'account' ? nextAccountAction(deal) ...`); any other passed
- *   role skips them and the resolver falls through to whichever later step applies, mirroring
- *   TicketService's PAYMENT_RECORD_ROLES. Every caller that does not already know the viewer is
- *   account must pass the viewer's role. The server gate is the authority either way.
- */
+/** The one money action ฝ่ายบัญชี should take on `ticket` right now, or `null` if none of account's steps apply (nothing pending, or the deal isn't in account's world at all). overdue balance -> "ติดตามชำระ" 2.
+ * @param {string} [viewerRole] GLA-118 (owner ruling 2026-09-20, part A): steps 2 and 3 both */
 export function nextAccountAction(ticket, viewerRole) {
   if (!ticket) return null;
   const outstanding = ticket.amountOutstanding != null && Number(ticket.amountOutstanding) > 0;
   const canRecordPayments = viewerRole === undefined || viewerRole === 'account';
-  // H1 lockdown: account is refused on the /tickets deal routes and works a deal on the finance page.
-  // The CEO reaches /finance too (owner ruling), so every viewer of this worklist helper lands on the
-  // finance deal page. (dealHref, used by the ticket list, still sends the ceo to /tickets/:id.)
+  // H1 lockdown: account is refused on the /tickets deal routes and works a deal on the finance page. The CEO
+  // reaches /finance too (owner ruling), so every viewer of this worklist helper lands on the finance deal page.
+  // (dealHref, used by the ticket list, still sends the ceo to /tickets/:id.)
   const dealPath = `/finance/deals/${ticket.id}`;
 
   if (ticket.overdue && outstanding) {

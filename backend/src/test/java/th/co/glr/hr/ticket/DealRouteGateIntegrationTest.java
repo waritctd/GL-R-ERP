@@ -32,31 +32,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketResponses.StageDecisionDto;
 
-/**
- * Real-Postgres proof that a deal's {@link EntryChannel} route (rung 6 of the stage-move
- * precedence ladder, design §12.1) is ENFORCED by the real {@code TicketService} against a real
- * {@code sales.ticket} row — not merely decided by {@link DealRoute}.
- *
- * <p>Authorization-adjacent (rung 6 decides which manual stage writes are accepted), so per
- * CLAUDE.md this goes through the real service and repository. <b>Nothing here may be inferred from
- * {@code mockApi.js}.</b>
- *
- * <p><b>Written wrong-way-round.</b> Each part leads with what a caller CANNOT reach — an
- * owner-direct deal refused a designer quote, a buyer-direct deal refused four stages — and every
- * refusal re-reads the row to prove it did not move and no {@code STAGE_CHANGED} event was written.
- * The two safety properties (design §13.1c / §13.2) get their own tests: an UNSPECIFIED deal is
- * refused NOTHING (the unrecoverable-brick case), and neither is a DESIGNER_LED deal.
- *
- * <p><b>The single most important detail (design §12.1): the gate tests the TARGET only, never the
- * current stage.</b> A deal may legitimately be SITTING on an off-route stage — it got there before
- * the channel was corrected — and gating the current stage would strand it with no legal move.
- *
- * <p>Trap, per {@link AbstractPostgresIntegrationTest}: services are hand-wired with {@code new},
- * so {@code @Transactional} is inert and no rollback is exercised. The "did not move" assertions
- * hold because the guard throws before any write.
- *
- * <p>Modelled on {@link StageDecisionIntegrationTest} and {@link SalesRouteWalkIntegrationTest}.
- */
+/** Real-Postgres proof that a deal's EntryChannel route (rung 6 of the stage-move precedence ladder, design
+ * §12.1) is ENFORCED by the real TicketService against a real sales.ticket row — not merely decided by
+ * DealRoute. */
 class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -144,11 +122,9 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part B — the two safety properties: nothing is refused ═══════════════
 
-    /**
-     * Design §13.1c — the unrecoverable-brick case. Pre-V144 rows and quotation-first ghosts carry
-     * UNSPECIFIED and GLA-156 removed the in-portal way to correct it, so a gate on it would brick
-     * those deals. Every party stage must be reachable, actually moved into, one after another.
-     */
+    /** Design §13.1c — the unrecoverable-brick case. Pre-V144 rows and quotation-first ghosts carry UNSPECIFIED and
+     * GLA-156 removed the in-portal way to correct it, so a gate on it would brick those deals. Every party stage
+     * must be reachable, actually moved into, one after another. */
     @Test
     void unspecified_isRefusedNothing_everyStageStillReachable() {
         long ticketId = dealAt(EntryChannel.UNSPECIFIED, DealStage.PRESENTATION);
@@ -237,18 +213,13 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part D — the ladder: earlier rungs speak first ═══════════════════════
 
-    /**
-     * Rung 5 (fact gate) reports the FACT, not the route. Honest limit: because
-     * {@link DealRoute#ROUTE_VARIABLE} keeps every fact-gated stage on EVERY route, no target can be
-     * both off-route and fact-gated today, so this cannot distinguish the two orderings — it pins
-     * that a missing deposit on an owner-direct deal never surfaces as a route message.
-     */
+    /** Rung 5 (fact gate) reports the FACT, not the route. */
     @Test
     void aMissingDeposit_reportsTheFactGate_notTheRoute() {
         long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.NEGOTIATION);
 
-        // H1: account's money-stage moves go through the finance route now (and only in its list scope), so the
-        // /tickets stage path is exercised with the CEO, who keeps it and meets the same fact-gate ladder.
+        // account's money-stage moves go through the finance route now (and only in its list scope), so the /tickets
+        // stage path is exercised with the CEO, who keeps it and meets the same fact-gate ladder.
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.DEPOSIT_RECEIVED, "เหตุผล", ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
@@ -280,11 +251,9 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part E — stageDecisions / GET /api/tickets/{id}/actions ══════════════
 
-    /**
-     * The decisions are produced by running the real gate and catching, so an off-route target
-     * arrives {@code allowed=false}, {@code onRoute=false} and carrying the refusal's own message —
-     * and is therefore never advertised as an ADVANCE_STAGE action.
-     */
+    /** The decisions are produced by running the real gate and catching, so an off-route target arrives
+     * allowed=false, onRoute=false and carrying the refusal's own message — and is therefore never advertised as
+     * an ADVANCE_STAGE action. */
     @Test
     void stageDecisions_markOffRouteTargetsNotAllowed_withOnRouteFalse() {
         long ticketId = dealAt(EntryChannel.BUYER_DIRECT, DealStage.PRESENTATION);
@@ -314,11 +283,9 @@ class DealRouteGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Part F — auto-advance precedence: silent no-op on an off-route target ═
 
-    /**
-     * Design §5 Flow 10 — owner-direct deal at QUOTE_OWNER, then a DESIGNER quotation (target S4).
-     * Stays put and throws nothing. (Backward, so monotonicity would also hold it: the next test is
-     * the one that isolates the route guard.)
-     */
+    /** Design §5 Flow 10 — owner-direct deal at QUOTE_OWNER, then a DESIGNER quotation (target S4). Stays put and
+     * throws nothing. (Backward, so monotonicity would also hold it: the next test is the one that isolates the
+     * route guard.) */
     @Test
     void autoAdvance_towardTheDesignerQuote_leavesAnOwnerDirectDealAtQuoteOwner_andThrowsNothing() {
         long ticketId = dealAt(EntryChannel.OWNER_DIRECT, DealStage.QUOTE_OWNER);

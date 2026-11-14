@@ -28,17 +28,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * V128: approved สวัสดิการ reaching payroll, end to end, against real Postgres.
- *
- * <p>Modelled on {@code RetroactiveOvertimeReachesPayrollIntegrationTest} — the same shape of claim:
- * money approved in one module has to arrive, correctly, in another. V66 built the welfare model in
+/** V128: approved สวัสดิการ reaching payroll, end to end, against real Postgres. V66 built the welfare model in
  * 2018 and said outright that approved amounts do NOT flow into payroll; nothing consumed
- * {@code hr.special_money_request} until now, and welfare was keyed in by hand.
- *
- * <p>Every assertion reads the DATABASE or the computed line, not just a status code — the failure
- * mode that matters here is a figure that is silently wrong, not a request that visibly errors.
- */
+ * hr.special_money_request until now, and welfare was keyed in by hand. */
 class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final BigDecimal SALARY = new BigDecimal("30000.00");
@@ -83,10 +75,8 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
         staff = insertEmployee("S001");
     }
 
-    /**
-     * The headline case: ฿5,000 of approved funeral aid for this payroll month must appear on the
-     * line, be included in gross, and persist to its own column.
-     */
+    /** The headline case: ฿5,000 of approved funeral aid for this payroll month must appear on the line, be
+     * included in gross, and persist to its own column. */
     @Test
     void approvedWelfareReachesTheLineAndGross() {
         insertApprovedWelfare(staff, "AID_FUNERAL", new BigDecimal("5000.00"), PAYROLL_MONTH);
@@ -94,23 +84,14 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
         PayrollLineDto line = previewLineFor(staff);
 
         assertThat(line.welfarePay()).isEqualByComparingTo("5000.00");
-        // Gross must actually carry it -- a figure shown on the line but missing from gross is
-        // money the employee is told about and never paid.
+        // Gross must actually carry it -- a figure shown on the line but missing from gross is money the employee is
+        // told about and never paid.
         assertThat(line.grossEarnings()).isEqualByComparingTo(SALARY.add(new BigDecimal("5000.00")));
     }
 
-    /**
-     * Only APPROVED money is paid.
-     *
-     * <p>This fixture deliberately gives the non-approved rows a {@code payroll_month}, which the
-     * services CANNOT currently produce -- the month is assigned only at CEO approval, in the same
-     * statement that sets the status. That is exactly why it is written this way: with a NULL month
-     * (the realistic shape) the month filter alone excludes those rows, so the test passes whether
-     * or not the status filter exists, and mutation-checking proved it did. The status filter is
-     * defence-in-depth against a state no module produces TODAY; pinning it here keeps "only
-     * approved money is paid" true on its own terms instead of by borrowing another module's
-     * invariant.
-     */
+    /** Only APPROVED money is paid. This fixture deliberately gives the non-approved rows a payroll_month, which
+     * the services CANNOT currently produce -- the month is assigned only at CEO approval, in the same statement
+     * that sets the status. */
     @Test
     void onlyApprovedClaimsArePaid() {
         insertApprovedWelfare(staff, "AID_FUNERAL", new BigDecimal("5000.00"), PAYROLL_MONTH);
@@ -128,11 +109,8 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(previewLineFor(staff).welfarePay()).isEqualByComparingTo("0.00");
     }
 
-    /**
-     * The cutover guard. Welfare used to be keyed into พิเศษ 9 by hand; now it is automatic, so a
-     * month carrying both figures would pay it twice — invisibly, because both look like ordinary
-     * earnings on the payslip.
-     */
+    /** The cutover guard. Welfare used to be keyed into พิเศษ 9 by hand; now it is automatic, so a month carrying
+     * both figures would pay it twice — invisibly, because both look like ordinary earnings on the payslip. */
     @Test
     void bothAutoWelfareAndAManualSpecialPay9IsRefused() {
         insertApprovedWelfare(staff, "AID_FUNERAL", new BigDecimal("5000.00"), PAYROLL_MONTH);
@@ -146,8 +124,8 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
 
     @Test
     void aManualSpecialPay9AloneIsStillAccepted() {
-        // พิเศษ 9 is a general เงินรางวัล slot, not a welfare-only one. Refusing it outright would
-        // break every legitimate use; the guard must fire only on the genuine collision.
+        // พิเศษ 9 is a general เงินรางวัล slot, not a welfare-only one. Refusing it outright would break every
+        // legitimate use; the guard must fire only on the genuine collision.
         PayrollLineDto line = previewWithSpecialPay9(staff, new BigDecimal("1500.00"));
 
         assertThat(line.welfarePay()).isEqualByComparingTo("0.00");
@@ -158,9 +136,8 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
     void welfareIsOutsideTheSsoWageBase() {
         insertApprovedWelfare(staff, "AID_FUNERAL", new BigDecimal("5000.00"), PAYROLL_MONTH);
 
-        // ค่าจ้าง under พ.ร.บ.ประกันสังคม ม.5 is money paid in return for WORK. Welfare is not, so it
-        // must not inflate the contribution base -- V128 seeds is_included = FALSE and the
-        // calculator's SSO loop honours it.
+        // ค่าจ้าง under พ.ร.บ.ประกันสังคม ม.5 is money paid in return for WORK. Welfare is not, so it must not inflate
+        // the contribution base -- V128 seeds is_included = FALSE and the calculator's SSO loop honours it.
         PayrollLineDto withWelfare = previewLineFor(staff);
         BigDecimal ssoBaseWithWelfare = withWelfare.ssoWageBase();
 
@@ -177,14 +154,12 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
 
         payrollService.process(new ProcessPayrollRequest(PAYROLL_MONTH, List.of()), hrActor());
 
-        // included_period_id has existed since V66 and was never written, because nothing consumed
-        // these rows. Without it there is no way to answer "which payslip paid this claim".
+        // included_period_id has existed since V66 and was never written, because nothing consumed these rows. Without
+        // it there is no way to answer "which payslip paid this claim".
         assertThat(includedPeriodOf(requestId)).isNotNull();
     }
 
-    // ---------------------------------------------------------------------
     // Fixtures
-    // ---------------------------------------------------------------------
 
     private PayrollLineDto previewLineFor(long employeeId) {
         return payrollService.preview(new ProcessPayrollRequest(PAYROLL_MONTH, List.of()), hrActor()).lines().stream()
@@ -236,11 +211,9 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
         return insertWelfare(employeeId, type, amount, payrollMonth, "APPROVED");
     }
 
-    /**
-     * A non-approved row that nonetheless carries a payroll_month and an approved_amount -- the
-     * shape a future void/revert path could create, and the only shape that can tell the status
-     * filter apart from the month filter. See onlyApprovedClaimsArePaid's javadoc.
-     */
+    /** A non-approved row that nonetheless carries a payroll_month and an approved_amount -- the shape a future
+     * void/revert path could create, and the only shape that can tell the status filter apart from the month
+     * filter. See onlyApprovedClaimsArePaid's javadoc. */
     private long insertWelfareWithMonthAndStatus(
             long employeeId, BigDecimal amount, LocalDate payrollMonth, String status) {
         Map<String, Object> params = new HashMap<>();
@@ -264,8 +237,8 @@ class WelfareReachesPayrollIntegrationTest extends AbstractPostgresIntegrationTe
         params.put("employeeId", employeeId);
         params.put("type", type);
         params.put("amount", amount);
-        // Only an APPROVED row carries a payroll_month in production (it is assigned at CEO
-        // approval); mirror that so a non-approved fixture cannot pass for the wrong reason.
+        // Only an APPROVED row carries a payroll_month in production (it is assigned at CEO approval); mirror that so
+        // a non-approved fixture cannot pass for the wrong reason.
         params.put("payrollMonth", "APPROVED".equals(status) ? payrollMonth : null);
         params.put("approvedAmount", "APPROVED".equals(status) ? amount : null);
         params.put("status", status);

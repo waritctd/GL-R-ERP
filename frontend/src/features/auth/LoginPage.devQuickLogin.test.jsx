@@ -20,12 +20,8 @@ function renderLoginPage(props) {
 
 afterEach(() => vi.unstubAllEnvs());
 
-// The real-backend quick-login row: one-click sign-in as each account the backend's `demo`
-// profile seeds (db/migration-demo V21 + V139, shared password Demo@2026). It exists so a dev
-// running `npm run dev` against a local backend can switch persona without typing credentials.
-//
-// It must be a DEV-SERVER-ONLY affordance. `import.meta.env.DEV` is false in `vite build`, so the
-// gate is what keeps a committed showcase password out of every deployed bundle.
+// The real-backend quick-login row: one-click sign-in as each account the backend's `demo` profile seeds
+// (db/migration-demo V21 + V139, shared password Demo@2026). It must be a DEV-SERVER-ONLY affordance.
 const DEMO_EMAILS = [
   'demo.employee@demo.invalid',
   'demo.hr@demo.invalid',

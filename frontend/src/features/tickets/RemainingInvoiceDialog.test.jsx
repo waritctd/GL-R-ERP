@@ -84,9 +84,8 @@ function renderDialog(props = {}) {
   return { onClose };
 }
 
-// This project does not wire up jest-dom's matchers (see LoginPage.test.jsx's own note) —
-// assertions below read plain DOM properties (.value/.checked/.disabled) rather than
-// toHaveValue/toBeChecked/toBeDisabled.
+// This project does not wire up jest-dom's matchers (see LoginPage.test.jsx's own note) — assertions below
+// read plain DOM properties (.value/.checked/.disabled) rather than toHaveValue/toBeChecked/toBeDisabled.
 
 describe('RemainingInvoiceDialog — no live stored document (create flow)', () => {
   beforeEach(() => {
@@ -288,16 +287,15 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
         { id: 2, text: 'หมายเหตุ 2', defaultSelected: false, sortOrder: 2 },
       ],
     });
-    // P7 (GLA-99 step 2 review-round-2): DraftEditor now queries this endpoint too, for the
-    // deposit-reference DATALIST only — see that test below for the "never overwrites the stored
-    // value" invariant this default keeps out of every other test's way.
+    // DraftEditor now queries this endpoint too, for the deposit-reference DATALIST only — see that test below for
+    // the "never overwrites the stored value" invariant this default keeps out of every other test's way.
     api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions() });
   });
 
   it('prefills every FIELD VALUE from the stored draft row, never from the stateless preview', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
-    // A deliberately DIFFERENT preview shape — if the editor's field values ever leaked from this
-    // response instead of the stored draft, this test would show it immediately.
+    // A deliberately DIFFERENT preview shape — if the editor's field values ever leaked from this response instead
+    // of the stored draft, this test would show it immediately.
     api.tickets.remainingInvoiceOptions.mockResolvedValue({
       options: baseOptions({ defaultReference: 'SHOULD-NOT-APPEAR', defaultDepositReference: 'SHOULD-NOT-APPEAR-EITHER' }),
     });
@@ -310,10 +308,8 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     expect(screen.queryByDisplayValue('SHOULD-NOT-APPEAR-EITHER')).toBeNull();
   });
 
-  // P7 (Opus review, GLA-99 step 2 review-round-2): the deposit-reference suggestion list review-
-  // round-1 had dropped as "not cheap" is restored — a NON-BLOCKING query feeding a <datalist>
-  // only, same pattern as the reference field's own `list=` attribute. This pins BOTH halves: the
-  // endpoint IS called now (for the datalist), and it still never overwrites the field's own value.
+  // the deposit-reference suggestion list review- round-1 had dropped as "not cheap" is restored — a
+  // NON-BLOCKING query feeding a <datalist> only, same pattern as the reference field's own `list=` attribute.
   it('P7: offers a datalist of matched deposit-reference suggestions without ever overwriting the stored value', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
     api.tickets.remainingInvoiceOptions.mockResolvedValue({
@@ -556,10 +552,9 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     await waitFor(() => expect(api.storedRemainingInvoices.deleteDraft).toHaveBeenCalledWith(900));
   });
 
-  // R2 (Opus review, GLA-99 step 2 review-round-1): editing a field then clicking "ออกใบแจ้งหนี้"
-  // directly (WITHOUT clicking "บันทึก" first) must not silently discard the edit — issue() on the
-  // backend freezes whatever was LAST SAVED, and only re-snapshots the COMPUTED content (O3), never
-  // the dialog fields. The dialog itself must therefore save the pending edit before issuing.
+  // editing a field then clicking "ออกใบแจ้งหนี้" directly must not silently discard the edit — issue on the
+  // backend freezes whatever was LAST SAVED, and only re-snapshots the COMPUTED content, never the dialog
+  // fields. The dialog itself must therefore save the pending edit before issuing.
   it('ออกใบแจ้งหนี้ saves a pending (unsaved) edit before issuing, in that order', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
     api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: docRow({ reference: 'PO-NEVER-SAVED' }) });
@@ -584,12 +579,9 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     expect(updateOrder).toBeLessThan(issueOrder);
   });
 
-  // P4 (Opus review, GLA-99 step 2 review-round-2, 2026-09-20): before this fix, `draft &&
-  // canWrite` won the main render slot outright and the live ISSUED predecessor — plus its own
-  // download button — disappeared entirely while a revision DRAFT was open (RemainingInvoiceService
-  // #revise's own Javadoc: "the form being corrected STAYS ISSUED until the replacement is
-  // actually issued"). A caller mid-revision could not download the very document they were about
-  // to replace.
+  // before this fix, `draft && canWrite` won the main render slot outright and the live ISSUED predecessor —
+  // plus its own download button — disappeared entirely while a revision DRAFT was open. A caller mid-revision
+  // could not download the very document they were about to replace.
   it('P4: keeps the live ISSUED document (and its download) visible in version history while a revision DRAFT is open', async () => {
     const issuedRow = docRow({ id: 900, status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001', version: 1 });
     const revisionDraft = docRow({ id: 901, status: 'DRAFT', docNumber: null, baseNumber: null, version: 1 });
@@ -598,13 +590,13 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
 
     // The revision draft's own editor wins the main slot.
     expect(await screen.findByTestId('remaining-invoice-draft-editor')).not.toBeNull();
-    // But the predecessor's own ISSUED row, and its download, must still be reachable via the
-    // version history — it is still the live document until this revision is itself issued.
+    // But the predecessor's own ISSUED row, and its download, must still be reachable via the version history — it
+    // is still the live document until this revision is itself issued.
     const history = screen.getByTestId('remaining-invoice-history');
     expect(within(history).getByText('GLR6900001-1')).not.toBeNull();
     expect(screen.getByTestId('remaining-invoice-download-version-900')).not.toBeNull();
-    // The read-only ISSUED summary panel itself is not ALSO shown — the draft editor still wins
-    // the main slot; only the history list carries the live document alongside it.
+    // The read-only ISSUED summary panel itself is not ALSO shown — the draft editor still wins the main slot;
+    // only the history list carries the live document alongside it.
     expect(screen.queryByTestId('remaining-invoice-issued-summary')).toBeNull();
   });
 });
@@ -621,8 +613,8 @@ describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
     renderDialog();
 
     const summary = await screen.findByTestId('remaining-invoice-issued-summary');
-    // This ONE live row also appears a second time, in the version-history list below (ISSUED
-    // rows are listed there too, per plan) — scope to the summary panel specifically.
+    // This ONE live row also appears a second time, in the version-history list below (ISSUED rows are listed
+    // there too, per plan) — scope to the summary panel specifically.
     expect(within(summary).getByText('GLR6900001-1')).not.toBeNull();
 
     fireEvent.click(screen.getByTestId('remaining-invoice-download'));
@@ -644,11 +636,9 @@ describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
   });
 });
 
-// R4 (Opus review, GLA-99 step 2 review-round-1): write actions (create/save/issue/revise/delete)
-// hidden unless the viewer is the deal's OWNING sales rep — mirrors
-// RemainingInvoiceService#requireDepositNoticeIssueGate exactly (no CEO carve-out for THIS
-// document either — see that class's own Javadoc). `canWrite={false}` is what a caller passes for
-// every other role (account/ceo/sales_manager/a different sales rep/import).
+// write actions (create/save/issue/revise/delete) hidden unless the viewer is the deal's OWNING sales rep —
+// mirrors RemainingInvoiceService#requireDepositNoticeIssueGate exactly (no CEO carve-out for THIS document
+// either — see that class's own Javadoc).
 describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sales rep)', () => {
   beforeEach(() => {
     vi.clearAllMocks();

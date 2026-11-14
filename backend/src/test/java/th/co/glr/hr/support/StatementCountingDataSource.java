@@ -17,35 +17,8 @@ import java.util.Map;
 import java.util.logging.Logger;
 import javax.sql.DataSource;
 
-/**
- * A {@link DataSource} wrapper that records every SQL statement executed through it, so a test can
- * assert how many round trips a service call makes — and, more usefully, that it makes no statement
- * <em>twice</em>.
- *
- * <p><strong>Why this exists rather than a Spring hook.</strong> Every integration test in this
- * suite hand-wires its services with {@code new} (see {@link AbstractPostgresIntegrationTest}), so
- * there is no application context, no AOP, and nothing to attach a JDBC interceptor to. Counting
- * has to happen at the only seam the hand-wired object graph shares: the {@link DataSource} the
- * repositories' {@code NamedParameterJdbcTemplate} sits on. Wrap the datasource, hand the wrapped
- * one to the repositories under measurement, and every {@code execute*} they cause is recorded —
- * whichever repository issued it, and whether or not the caller knew about it.
- *
- * <p><strong>What is counted.</strong> One entry per {@code Statement.execute*} invocation, keyed
- * by the SQL text. For a {@link PreparedStatement} that is the SQL handed to
- * {@code Connection.prepareStatement}; for a plain {@link Statement} it is the SQL handed to the
- * {@code execute} call itself. {@code executeBatch()} counts as <em>one</em> entry — it is one
- * round trip, and treating it as N would make a batched write look like an N+1 when it is the
- * opposite. Statement <em>preparation</em> is deliberately not counted: a driver is free to cache
- * and reuse a prepared statement, so preparation count is an implementation detail while execution
- * count is the round trip that costs.
- *
- * <p><strong>Not thread-safe by design of use.</strong> The recording list is synchronized so a
- * stray background statement cannot corrupt it, but {@link #reset()}/{@link #total()} around a
- * concurrent call would still be meaningless. Measure single-threaded.
- *
- * <p><strong>Test-scope only.</strong> Nothing in {@code src/main} knows this exists; it wraps a
- * datasource a test already owns. Do not reach for it to instrument production.
- */
+/** A DataSource wrapper that records every SQL statement executed through it, so a test can assert how many
+ * round trips a service call makes — and, more usefully, that it makes no statement twice. Test-scope only. */
 public final class StatementCountingDataSource implements DataSource {
 
     private final DataSource delegate;
@@ -74,13 +47,8 @@ public final class StatementCountingDataSource implements DataSource {
         }
     }
 
-    /**
-     * How many times each distinct SQL string was executed, in first-execution order.
-     *
-     * <p>This is the shape an N+1 has: one SQL text with a count far above 1. A test asserting
-     * "no statement ran twice" reads straight off this map, and its failure message names the
-     * offending query instead of merely reporting a number that grew.
-     */
+    /** How many times each distinct SQL string was executed, in first-execution order. This is the shape an N+1
+     * has: one SQL text with a count far above 1. */
     public Map<String, Integer> executionsBySql() {
         Map<String, Integer> counts = new LinkedHashMap<>();
         for (String sql : statements()) {
@@ -140,8 +108,8 @@ public final class StatementCountingDataSource implements DataSource {
                 }
                 Object result = invoke(connection, method, args);
                 if (result instanceof Statement statement) {
-                    // prepareStatement/prepareCall carry the SQL as the first argument;
-                    // createStatement carries none and the SQL arrives at execute() instead.
+                    // prepareStatement/prepareCall carry the SQL as the first argument; createStatement carries none and the SQL
+                    // arrives at execute() instead.
                     String sql = args != null && args.length > 0 && args[0] instanceof String s ? s : null;
                     return wrapStatement(statement, sql);
                 }
@@ -172,12 +140,9 @@ public final class StatementCountingDataSource implements DataSource {
 
     private static final Object NOT_HANDLED = new Object();
 
-    /**
-     * {@code equals}/{@code hashCode}/{@code toString} must not be forwarded to the delegate:
-     * {@code delegate.equals(proxy)} is false for every proxy, which would make a proxied
-     * connection unequal to itself. Identity semantics on the proxy are what a pooled connection
-     * already provides.
-     */
+    /** equals/hashCode/toString must not be forwarded to the delegate: delegate.equals(proxy) is false for every
+     * proxy, which would make a proxied connection unequal to itself. Identity semantics on the proxy are what a
+     * pooled connection already provides. */
     private static Object handleObjectMethod(Object proxy, Object delegate, Method method, Object[] args) {
         return switch (method.getName()) {
             case "equals" -> args != null && args.length == 1 && proxy == args[0];

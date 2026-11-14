@@ -18,13 +18,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
-/**
- * Issue #388 — {@code GET /api/factory-configs} gated on authentication alone, so any session could
- * read the supplier directory (who the company buys from, the quoting email, the billing currency).
- *
- * <p>This class proves the DECISION; {@code CatalogPricingReadAuthzIntegrationTest} proves the
- * ENFORCEMENT on real Postgres through the real repository. Cases are written the wrong way round.
- */
+/** Issue #388 — GET /api/factory-configs gated on authentication alone, so any session could read the supplier
+ * directory (who the company buys from, the quoting email, the billing currency). Cases are written the wrong
+ * way round. */
 class FactoryConfigControllerTest {
     private static final List<String> DENIED_ROLES =
         List.of("employee", "warehouse", "qc", "hr", "sales", "sales_manager", "account");

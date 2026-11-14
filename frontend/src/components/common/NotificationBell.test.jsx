@@ -62,9 +62,8 @@ describe('NotificationBell', () => {
     fireEvent.click(item);
 
     await waitFor(() => expect(api.notifications.markRead).toHaveBeenCalledWith(1));
-    // Invalidating queryKeys.notifications() triggers a background refetch —
-    // this is the same key the bell polls with refetchInterval, and the key
-    // other pages' mutations invalidate to live-update the bell.
+    // Invalidating queryKeys.notifications() triggers a background refetch — this is the same key the bell polls
+    // with refetchInterval, and the key other pages' mutations invalidate to live-update the bell.
     await waitFor(() => expect(api.notifications.list).toHaveBeenCalledTimes(2));
   });
 

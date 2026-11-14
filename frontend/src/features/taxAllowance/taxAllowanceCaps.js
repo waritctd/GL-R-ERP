@@ -1,11 +1,6 @@
-// Cap-presentation helpers for the ล.ย.01 declaration UI (issue #387).
-//
-// Every number surfaced here is read straight off `GET /api/payroll/tax-allowances/caps`
-// (`TaxAllowanceCapEntry` — backend/.../declaration/TaxAllowanceDeclarationDtos.java). Nothing in
-// this file invents a threshold: nulls stay nulls, and the only arithmetic performed is summing the
-// EMPLOYEE'S OWN declared baht amounts for a shared-ceiling progress bar (decision #1's "shared
-// groups get a group-level consumption bar, because a shared ceiling is invisible otherwise") —
-// never Thai withholding-tax math, which stays server-side in PayrollCalculator/PayrollService.
+// Cap-presentation helpers for the ล.ย.01 declaration UI (issue #387). Every number surfaced here is read
+// straight off `GET /api/payroll/tax-allowances/caps` (`TaxAllowanceCapEntry` —
+// backend/.../declaration/TaxAllowanceDeclarationDtos.java).
 import { formatMoney } from '../../utils/format.js';
 
 export function capMapFrom(caps = []) {
@@ -45,9 +40,9 @@ const GROUP_LABELS = {
   donation: 'เงินบริจาคสถานศึกษา + เงินบริจาคทั่วไป',
 };
 
-// Consumption order for the shared retirement ceiling — decision #1's "consumed RMF -> SSF ->
-// pension, in that order" — used only to order the stacked bar segments, not to compute an
-// authoritative capped figure (the backend does that at submit time).
+// Consumption order for the shared retirement ceiling — decision #1's "consumed RMF -> SSF -> pension, in that
+// order" — used only to order the stacked bar segments, not to compute an authoritative capped figure (the
+// backend does that at submit time).
 const GROUP_FIELD_ORDER = {
   life_health: [
     { field: 'lifeInsuranceAllowance', category: 'life_insurance' },
@@ -60,12 +55,9 @@ const GROUP_FIELD_ORDER = {
   ],
 };
 
-/**
- * Declared-total vs shared groupCap, for the consumption bars on the ประกัน/การออมฯ sections.
- * Returns `{ groupId, label, total, cap, segments }[]`. `cap` is whatever `groupCap` the catalogue
- * returned (never a literal here); `total` is the plain sum of what the employee typed into the
- * fields belonging to that group.
- */
+/** Declared-total vs shared groupCap, for the consumption bars on the ประกัน/การออมฯ sections. `cap` is
+ * whatever `groupCap` the catalogue returned (never a literal here); `total` is the plain sum of what the
+ * employee typed into the fields belonging to that group. */
 export function computeGroupUsage(caps, values) {
   const byCategory = capMapFrom(caps);
   return Object.entries(GROUP_FIELD_ORDER)

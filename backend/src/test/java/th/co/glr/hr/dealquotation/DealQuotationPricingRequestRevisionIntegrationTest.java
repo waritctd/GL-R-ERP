@@ -78,18 +78,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Real-DB coverage for PR B: a sales rep REVISES a PRICING_REQUEST-origin quotation (ISSUED or
- * REVISION_REQUESTED), repeatedly, through the real DealQuotationService + DealQuotationRepository
- * on real Postgres. The revision is a new DRAFT that keeps origin / pricing_request_id /
- * pricing_decision_id / item decision links, continues the {base}-{n} number family, may change the
- * recipient (owner / buyer), and supersedes its parent when it is itself issued. Only the OWNING
- * sales rep may create one (same gate as recordOutcome, narrower than update/submit/cancel).
- *
- * <p>Fixture is a copy of DealQuotationPricingRequestApprovalIntegrationTest (same reason that file
- * gives for duplicating rather than sharing). The approval step lives in ONE helper
- * ({@link #approveToIssued}) so a change to the approval rule touches one place.
- */
+/** Real-DB coverage for PR B: a sales rep REVISES a PRICING_REQUEST-origin quotation (ISSUED or
+ * REVISION_REQUESTED), repeatedly, through the real DealQuotationService + DealQuotationRepository on real
+ * Postgres. */
 class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgresIntegrationTest {
     private PricingRequestRepository pricingRequests;
     private PricingRequestService pricingRequestService;
@@ -116,8 +107,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
     private long ticketId;
     private long catalogProductIdFactoryA;
     private long catalogProductIdFactoryB;
-    // Real signature upload/read, mirrors DealQuotationApproverSnapshotIntegrationTest's identical
-    // wiring — used by the "approval freezes a signature" parity test below.
+    // Real signature upload/read, mirrors DealQuotationApproverSnapshotIntegrationTest's identical wiring — used
+    // by the "approval freezes a signature" parity test below.
     private EmployeeSignatureRepository signatureRepository;
     private EmployeeSignatureService signatureService;
 
@@ -176,8 +167,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         th.co.glr.hr.customerquotation.CustomerQuotationRepository customerQuotationRepository =
             new th.co.glr.hr.customerquotation.CustomerQuotationRepository(jdbc);
         quotationService.wirePricingRequestDependencies(pricingRequests, decisionRepository, customerQuotationRepository);
-        // GLA-123 slice S2's own wiring — S1's suite never needed this (issuing is this slice's
-        // job). See DealQuotationService#ticketService's own Javadoc for why this is a setter.
+        // GLA-123 slice S2's own wiring — S1's suite never needed this (issuing is this slice's job). See
+        // DealQuotationService#ticketService's own Javadoc for why this is a setter.
         quotationService.wireTicketService(ticketService);
 
         salesRepId = createEmployee(employees, "พนักงานขาย S2", "sales-s2@glr.co.th", "SALES", "แผนกขาย");
@@ -213,10 +204,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // AUTHZ FIRST — wrong-way-round. Only the OWNING sales rep may revise. Every case uses an
-    // ISSUED source, so the 403 can only come from the role/owner gate, never the status gate.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // AUTHZ FIRST — wrong-way-round. Only the OWNING sales rep may revise. Every case uses an ISSUED source, so
+    // the 403 can only come from the role/owner gate, never the status gate.
 
     @Test
     void createRevision_byCeo_forbidden_nothingWritten() {
@@ -225,8 +214,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
 
     @Test
     void createRevision_bySalesManager_forbidden_nothingWritten() {
-        // sales_manager may edit/submit/cancel ANY deal's PR-origin quotation, but revising is the
-        // owning rep's act (like recordOutcome) — the manager's job is to approve the result.
+        // sales_manager may edit/submit/cancel ANY deal's PR-origin quotation, but revising is the owning rep's act
+        // (like recordOutcome) — the manager's job is to approve the result.
         assertRefusedWith403(issuedQuotation(), salesManagerActor);
     }
 
@@ -243,9 +232,7 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertRefusedWith403(issued, qcActor);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Which statuses may be revised: ISSUED and REVISION_REQUESTED, nothing else.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createRevision_ofIssued_createsDraftChild_keepingOriginPricingLinksItemLinksAndNumberFamily() {
@@ -263,8 +250,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertThat(revision.number()).isNotEqualTo(source.number());
         // pricing_decision_id is frozen on the row (not on the DTO) — read it straight from the table.
         assertThat(decisionIdOf(revision.id())).isNotNull().isEqualTo(decisionIdOf(source.id()));
-        // Items copied verbatim, WITH their pricing-request/decision item links — a revision that
-        // dropped the links would silently turn off the CEO-price comparison.
+        // Items copied verbatim, WITH their pricing-request/decision item links — a revision that dropped the links
+        // would silently turn off the CEO-price comparison.
         assertThat(revision.items()).hasSameSizeAs(source.items());
         assertThat(itemLinkPairs(revision.id())).isNotEmpty().isEqualTo(itemLinkPairs(source.id()));
         assertThat(revision.items()).allSatisfy(item -> assertThat(item.priceChangedFromCeo()).isFalse());
@@ -360,9 +347,9 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertConflictNothingWritten(submittedQuotation(), 1);
     }
 
-    /** ACCEPTED is deliberately NOT revisable: it is the deal's finalized quotation (R8, and
-     * recordOutcome's ACCEPTED already advanced the pricing request to QUOTATION_ACCEPTED and fed
-     * order confirmation) — revising it would fork a deal the customer already said yes to. */
+    /** ACCEPTED is deliberately NOT revisable: it is the deal's finalized quotation (R8, and recordOutcome's
+     * ACCEPTED already advanced the pricing request to QUOTATION_ACCEPTED and fed order confirmation) — revising
+     * it would fork a deal the customer already said yes to. */
     @Test
     void createRevision_ofAccepted_conflict() {
         DealQuotationDto source = issuedQuotation();
@@ -371,8 +358,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertConflictNothingWritten(source, 1);
     }
 
-    /** REJECTED / EXPIRED already have their own recovery path (createFromPricingRequest — a fresh
-     * quotation continuing the number family), so they are not revisable. */
+    /** REJECTED / EXPIRED already have their own recovery path (createFromPricingRequest — a fresh quotation
+     * continuing the number family), so they are not revisable. */
     @Test
     void createRevision_ofRejected_conflict() {
         DealQuotationDto source = issuedQuotation();
@@ -390,9 +377,7 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertConflictNothingWritten(source, 1);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // One open child at a time
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createRevision_whileAChildIsDraftOrPending_conflict_andNoSecondRowMinted() {
@@ -424,9 +409,7 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertThat(second.number()).isNotEqualTo(first.number());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Issuing the revision: parent SUPERSEDED, PR status not regressed, outcome on the right row
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void issuingTheRevision_supersedesTheParent_andLeavesThePricingRequestAtQuotationIssued() {
@@ -589,10 +572,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
             Integer.class);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // APPROVAL of a revision: ONE approval, by EITHER the sales_manager OR the CEO, issues it via
-    // the existing single compare-and-set. A revision NEVER auto-issues on submit.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // APPROVAL of a revision: ONE approval, by EITHER the sales_manager OR the CEO, issues it via the existing
+    // single compare-and-set. A revision NEVER auto-issues on submit.
 
     @Test
     void revision_submit_leavesItPendingApproval_neverAutoIssues() {
@@ -660,14 +641,9 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertThat(resubmitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
     }
 
-    /**
-     * ⚠️ OPEN USER RULING — pins TODAY's behaviour: requireCeoApprovalIfChanged still applies to a
-     * revision. If a revision's prices/lines differ from the CEO's decision, a sales_manager gets 403
-     * and ONLY the CEO can issue it. This sits in tension with "either the CEO or the sales manager
-     * may approve a revision"; the user has NOT yet ruled whether "either" overrides it. If they
-     * rule that it does, this test is the one that flips (manager approval of a changed revision
-     * would issue it).
-     */
+    /** ⚠️ OPEN USER RULING — pins TODAY's behaviour: requireCeoApprovalIfChanged still applies to a revision. If a
+     * revision's prices/lines differ from the CEO's decision, a sales_manager gets 403 and ONLY the CEO can issue
+     * it. */
     @Test
     void revision_withPricesChangedFromCeoDecision_salesManagerForbidden_onlyCeoIssues_PENDING_USER_RULING() {
         DealQuotationDto source = issuedQuotation();
@@ -686,12 +662,10 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Test-local helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** The ONE place that says how a PENDING_APPROVAL PR-origin quotation becomes ISSUED: a single
-     * sales_manager approval (the CEO could equally do it when prices are unchanged). */
+    /** The ONE place that says how a PENDING_APPROVAL PR-origin quotation becomes ISSUED: a single sales_manager
+     * approval (the CEO could equally do it when prices are unchanged). */
     private DealQuotationDto approveToIssued(DealQuotationDto submitted) {
         return quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
     }
@@ -768,9 +742,7 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         assertThat(prOriginRowCount()).isEqualTo(before).isEqualTo(expectedRowsOnTicket);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithValidityDays(DealQuotationDto quotation, int days) {
         List<DealQuotationRequests.ItemInput> items = quotation.items().stream()
@@ -778,9 +750,9 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         return baseUpsert(quotation, days, items);
     }
 
-    /** Changes the FIRST item's discount away from the CEO's own decision — triggers
-     * {@code priceChangedFromCeo} on that line (and, at the header, nothing — priceMode itself is
-     * unchanged; see {@link #upsertWithDirectNetMode} for that trigger instead). */
+    /** Changes the FIRST item's discount away from the CEO's own decision — triggers priceChangedFromCeo on that
+     * line (and, at the header, nothing — priceMode itself is unchanged; see #upsertWithDirectNetMode for that
+     * trigger instead). */
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithChangedDiscount(DealQuotationDto quotation, int days) {
         DealQuotationItemDto first = quotation.items().get(0);
         BigDecimal changedDiscount = (first.discountPct() == null ? BigDecimal.ZERO : first.discountPct())
@@ -793,9 +765,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
         return baseUpsert(quotation, days, items);
     }
 
-    /** Switches the header price mode from NET (this fixture's decision) to DIRECT_NET —
-     * triggers {@code priceModeChangedFromCeo}. Every item needs a {@code directNetPrice} once in
-     * this mode. */
+    /** Switches the header price mode from NET (this fixture's decision) to DIRECT_NET — triggers
+     * priceModeChangedFromCeo. Every item needs a directNetPrice once in this mode. */
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithDirectNetMode(DealQuotationDto quotation) {
         List<DealQuotationRequests.ItemInput> items = quotation.items().stream()
             .map(item -> directNetTileItem(item, item.netUnitPrice())).toList();
@@ -807,8 +778,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
             quotation.omitContactHonorific(), quotation.fullPaymentTerm(), items);
     }
 
-    /** Drops every item after the first — the fixture's decision links TWO items, so this leaves
-     * exactly one CEO-linked line dropped, triggering {@code itemsRemovedFromCeoCount > 0}. */
+    /** Drops every item after the first — the fixture's decision links TWO items, so this leaves exactly one
+     * CEO-linked line dropped, triggering itemsRemovedFromCeoCount > 0. */
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithOnlyFirstItem(DealQuotationDto quotation, int days) {
         List<DealQuotationRequests.ItemInput> items = List.of(existingTileInput(quotation.items().get(0)));
         return baseUpsert(quotation, days, items);
@@ -856,9 +827,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
 
     private DealQuotationDto submittedQuotation() {
         DealQuotationDto draft = quotationService.createFromPricingRequest(approvedDecision().pricingRequestId(), salesActor);
-        // MAJOR-4 fix (Opus re-review, 2026-09-20): submit now REQUIRES a validity (D5's own
-        // expiry sweep needs validity_date to ever fire) — this fixture's synthetic pricing
-        // request carries no GLA-125 validityDays header term, so every test built on this shared
+        // submit now REQUIRES a validity (D5's own expiry sweep needs validity_date to ever fire) — this fixture's
+        // synthetic pricing request carries no GLA-125 validityDays header term, so every test built on this shared
         // helper must set one explicitly.
         DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30), salesActor);
         return quotationService.submit(withValidity.id(), salesActor);
@@ -951,8 +921,8 @@ class DealQuotationPricingRequestRevisionIntegrationTest extends AbstractPostgre
             true, LocalDate.now(), false, null, false);
     }
 
-    // ── Signature rendering helpers — mirrors DealQuotationApproverSnapshotIntegrationTest's own
-    // identically-named private helpers (that class's own Javadoc explains each step). ─────────
+    // Signature rendering helpers — mirrors DealQuotationApproverSnapshotIntegrationTest's own identically-named
+    // private helpers (that class's own Javadoc explains each step).
 
     private byte[] render(DealQuotationDto q) {
         return quotationService.renderXlsx(q.id(), salesActor);

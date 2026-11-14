@@ -78,50 +78,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Evidence for the <b>cancel cutoff</b> (owner ruling 2026-08-13): a pricing request is cancellable
- * up to and including {@code APPROVED_FOR_QUOTATION}, and <b>refused from {@code QUOTATION_ISSUED}
- * onward</b>.
- *
- * <p>Before this change {@link PricingRequestStatus}'s map declared CANCELLED from only DRAFT,
- * SUBMITTED, IMPORT_REVIEWING and AWAITING_FACTORY_RESPONSE, so a deal that died while the CEO held
- * the request — or after the CEO had approved a price but before anything reached the customer —
- * could not be cancelled at all. The widening and the refusal are one ruling and are tested as one.
- *
- * <p><b>Every guard here is written wrong-way-round</b>, asserting what a caller CANNOT do, because
- * "the happy path still works" is what a green suite proves whether or not any guard exists. Two
- * separate guards are pinned:
- *
- * <ol>
- *   <li><b>The status cutoff</b> — cancel is refused from QUOTATION_ISSUED and QUOTATION_ACCEPTED,
- *       with the row re-read afterwards to prove nothing moved.</li>
- *   <li><b>The role gate</b> — cancel is refused for a sales rep who does not own the deal and for
- *       Import, who drives the request's whole middle life and might plausibly be assumed to own
- *       it. Both re-read the row. The CEO override is asserted too, because it is a deliberate
- *       divergence from {@code TicketService.cancel} (owner-only, no CEO override) and an
- *       "obviously wrong" reading of the code would remove it.</li>
- * </ol>
- *
- * <p>The cascade half matters as much as the cutoff: every status the cutoff newly admits owns
- * CHILDREN, and cancelling a parent whose children stay live is worse than not cancelling at all. A
- * request cancelled from APPROVED_FOR_QUOTATION must take its factory quote, its costing, its
- * pricing decision and any DRAFT quotation with it — and must leave the chain's already-terminal
- * quotes exactly as they are.
- *
- * <p>Driven end to end through the real services against real Postgres, never hand-rolled SQL for
- * anything under test: the cutoff lives in a Java map but the cascade lives entirely in SQL
- * predicates, and a mocked repository "passes" while the {@code WHERE} clause does something else.
- * Even the terminal factory quote in the cascade test is produced the way production produces one
- * (a second {@code receive} supersedes the first), not inserted. No mocks at all — factory RFQ
- * email is manual-only ({@code FactoryQuoteService#send} just records that a human sent it), so
- * there is no mail-provider collaborator left to mock.
- *
- * <p><b>No assertion here depends on a rollback.</b> {@link AbstractPostgresIntegrationTest} builds
- * no Spring context, so services are hand-wired with {@code new} and {@code @Transactional} is
- * inert. Where this file re-reads a row after a rejected call, the call is rejected BEFORE it
- * writes anything — which is the property actually worth pinning, and the one a rollback assertion
- * would only appear to test.
- */
+/** Evidence for the cancel cutoff (owner ruling 2026-08-13): a pricing request is cancellable up to and
+ * including APPROVED_FOR_QUOTATION, and refused from QUOTATION_ISSUED onward. The widening and the refusal are
+ * one ruling and are tested as one. */
 class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String FACTORY = "Factory Cancel-Cutoff";
@@ -192,16 +151,10 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Guard 1 — the cutoff itself, wrong-way-round. This is the point of the change.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The line in the sand. Once a quotation has been issued the customer holds an offer, and
-     * retracting an offer already made is a different commercial act from abandoning internal work.
-     * It goes through the DEAL (markLost/cancel, whose cascade uses the {@code cancelForDeadDeal}
-     * bypass) or through a customer-change revision — never through this endpoint.
-     */
+    /** The line in the sand. It goes through the DEAL (markLost/cancel, whose cascade uses the cancelForDeadDeal
+     * bypass) or through a customer-change revision — never through this endpoint. */
     @Test
     void cancel_fromQuotationIssued_isRefused_andTheRequestStaysExactlyWhereItWas() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -212,20 +165,15 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        // Re-read from the DB, not from a returned DTO: the refusal is only worth anything if the
-        // ROW did not move. cancelled_at/cancelled_by are checked too — a guard that returned 409
-        // after already stamping the row would pass a status-only assertion.
+        // Re-read from the DB, not from a returned DTO: the refusal is only worth anything if the ROW did not move.
+        // cancelled_at/cancelled_by are checked too — a guard that returned 409 after already stamping the row would
+        // pass a status-only assertion.
         assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
         assertThat(isCancelStamped(pricingRequestId)).isFalse();
     }
 
-    /**
-     * The CEO cannot buy their way past the cutoff either. The CEO override in
-     * {@code PricingRequestService.cancel} is a ROLE gate — it decides WHO may cancel, and says
-     * nothing about WHEN. Testing only the sales rep would leave a reading of the code in which the
-     * override doubles as a status bypass, which is exactly the kind of privilege creep an
-     * "admin can do anything" instinct produces.
-     */
+    /** The CEO cannot buy their way past the cutoff either. The CEO override in PricingRequestService.cancel is a
+     * ROLE gate — it decides WHO may cancel, and says nothing about WHEN. */
     @Test
     void cancel_fromQuotationIssued_isRefusedForTheCeoToo_soTheOverrideIsRoleOnly() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -239,11 +187,9 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(isCancelStamped(pricingRequestId)).isFalse();
     }
 
-    /**
-     * QUOTATION_ACCEPTED is terminal and stays terminal. Once the customer has accepted, the deal is
-     * moving to PO and fulfilment; unwinding it is an ORDER amendment and must not re-enter the
-     * pricing chain — the same ruling that denies this status a SUPERSEDED edge.
-     */
+    /** QUOTATION_ACCEPTED is terminal and stays terminal. Once the customer has accepted, the deal is moving to PO
+     * and fulfilment; unwinding it is an ORDER amendment and must not re-enter the pricing chain — the same ruling
+     * that denies this status a SUPERSEDED edge. */
     @Test
     void cancel_fromQuotationAccepted_isRefused_andTheAcceptedDealStaysAccepted() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -262,26 +208,10 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ACCEPTED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Guard 2 — the role gate, wrong-way-round.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Ownership is the gate. Another sales rep — same role, same division, no relationship to this
-     * deal — must not be able to cancel it. Asserted at APPROVED_FOR_QUOTATION specifically: that is
-     * a status the cutoff NEWLY admits, so this is where a widened map could quietly widen who may
-     * act as well as when.
-     *
-     * <p><b>What this test does and does not pin, established by mutation-check.</b> Deleting the
-     * ownership half of {@code PricingRequestService.cancel}'s own gate leaves this test GREEN: a
-     * {@code sales} actor who does not own the ticket is already refused one step earlier, by
-     * {@code requireViewable}'s own-deals-only scope filter. So this asserts the observable rule
-     * (defence in depth — two independent guards agree) but is NOT evidence about cancel()'s gate.
-     * {@link #cancel_byImport_isRefused_eventThoughImportDrivesTheRequestsWholeMiddleLife} is the
-     * test that pins that line, because Import passes {@code requireViewable} and only the
-     * ownership check stops them. Keep both: if the scope filter is ever relaxed, this one starts
-     * carrying real weight, and the pair documents which guard is load-bearing today.
-     */
+    /** Ownership is the gate. Another sales rep — same role, same division, no relationship to this deal — must not
+     * be able to cancel it. What this test does and does not pin, established by mutation-check. */
     @Test
     void cancel_byASalesRepWhoDoesNotOwnTheDeal_isRefused_andTheRequestIsUntouched() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -294,11 +224,9 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(isCancelStamped(pricingRequestId)).isFalse();
     }
 
-    /**
-     * Import drives this request's entire middle life — pickup, the factory conversation, marking it
-     * ready — so "Import may cancel it" is the plausible-sounding wrong answer, not a strawman. They
-     * may not: cancelling is the deal owner's call (or the CEO's).
-     */
+    /** Import drives this request's entire middle life — pickup, the factory conversation, marking it ready — so
+     * "Import may cancel it" is the plausible-sounding wrong answer, not a strawman. They may not: cancelling is
+     * the deal owner's call (or the CEO's). */
     @Test
     void cancel_byImport_isRefused_eventThoughImportDrivesTheRequestsWholeMiddleLife() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -311,11 +239,9 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(isCancelStamped(pricingRequestId)).isFalse();
     }
 
-    /**
-     * The recorded deliberate divergence, pinned so it cannot be "tidied away" into consistency with
-     * {@code TicketService.cancel} (owner-only, no CEO override). A manager must be able to unwind an
-     * abandoned request without the original rep's session.
-     */
+    /** The recorded deliberate divergence, pinned so it cannot be "tidied away" into consistency with
+     * TicketService.cancel (owner-only, no CEO override). A manager must be able to unwind an abandoned request
+     * without the original rep's session. */
     @Test
     void cancel_byTheCeoWhoDoesNotOwnTheDeal_isAllowed_theDeliberateDivergenceFromTicketCancel() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -325,9 +251,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.CANCELLED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The widening — the three statuses that could not be cancelled at all before.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void cancel_fromReadyForCeoReview_isNowAllowed() {
@@ -339,11 +263,9 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(statusOf(pricingRequestId)).isEqualTo(PricingRequestStatus.CANCELLED);
     }
 
-    /**
-     * The status this gap hurt most: the CEO has the request open, the customer walks away, and
-     * before this change there was nothing the deal owner could do about it short of killing the
-     * whole ticket. The CEO's open DRAFT decision must go with it.
-     */
+    /** The status this gap hurt most: the CEO has the request open, the customer walks away, and before this change
+     * there was nothing the deal owner could do about it short of killing the whole ticket. The CEO's open DRAFT
+     * decision must go with it. */
     @Test
     void cancel_fromCeoReviewing_isNowAllowed_andRetiresTheCeosOpenDraftDecision() {
         long pricingRequestId = readyForCeoReviewPricingRequest(new BigDecimal("10"));
@@ -358,21 +280,11 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(decisionStatusOf(pricingRequestId)).isEqualTo("SUPERSEDED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The cascade — every child the newly-admitted statuses can own.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The cascade gap the widening would otherwise have opened. At APPROVED_FOR_QUOTATION the
-     * request's factory quote is {@code READY_FOR_COSTING} — a status the old
-     * {@code ('DRAFT','REQUESTED')} predicate did not match — so cancelling would have left a live,
-     * {@code is_current = TRUE} quote hanging off a CANCELLED request.
-     *
-     * <p>The SUPERSEDED quote in the same chain is the control: a cascade that cancelled everything
-     * indiscriminately would destroy the record of what the factory first quoted. It is produced the
-     * way production produces one (a second {@code receive} creates a revision and supersedes its
-     * predecessor), not inserted, so the fixture cannot be more convenient than reality.
-     */
+    /** The cascade gap the widening would otherwise have opened. It is produced the way production produces one (a
+     * second receive creates a revision and supersedes its predecessor), not inserted, so the fixture cannot be
+     * more convenient than reality. */
     @Test
     void cancel_cancelsTheLiveFactoryQuote_andLeavesAnAlreadyTerminalOneAlone() {
         long pricingRequestId = approvedPricingRequestWithASupersededQuote();
@@ -385,23 +297,17 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(quoteCountAt(pricingRequestId, FactoryQuoteStatus.CANCELLED)).isEqualTo(1L);
         // Untouched, not swept up: the superseded revision is history, and history is not cancelled.
         assertThat(quoteCountAt(pricingRequestId, FactoryQuoteStatus.SUPERSEDED)).isEqualTo(1L);
-        // chk_factory_quote_current_terminal permits is_current = FALSE only for SUPERSEDED/
-        // CANCELLED, and uq_factory_quote_current_factory keys on it — so a cancelled quote that
-        // stayed current would both misrepresent the row and block a later quote to the same
-        // factory. The UPDATE sets both columns; this asserts it actually did.
+        // chk_factory_quote_current_terminal permits is_current = FALSE only for SUPERSEDED/ CANCELLED, and
+        // uq_factory_quote_current_factory keys on it — so a cancelled quote that stayed current would both
+        // misrepresent the row and block a later quote to the same factory.
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.factory_quote
              WHERE pricing_request_id = :id AND status = 'CANCELLED' AND is_current = TRUE
             """, Map.of("id", pricingRequestId), Long.class)).isZero();
     }
 
-    /**
-     * The other two children of a late cancel, and the one that is easiest to get wrong. V141 moved
-     * costing to the CEO and {@code PricingCostingRepository} now inserts rows born directly at
-     * {@code SUBMITTED} — so the cascade's historical {@code ('DRAFT','CALCULATED')} predicate
-     * matched nothing a current system produces. That is a no-op invisible by construction: the
-     * rows it was meant to catch never appear in the statuses it looked for.
-     */
+    /** The other two children of a late cancel, and the one that is easiest to get wrong. That is a no-op invisible
+     * by construction: the rows it was meant to catch never appear in the statuses it looked for. */
     @Test
     void cancel_fromApprovedForQuotation_retiresTheSubmittedCostingAndTheApprovedDecision() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -414,19 +320,9 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         assertThat(decisionStatusOf(pricingRequestId)).isEqualTo("SUPERSEDED");
     }
 
-    /**
-     * The customer-facing hole the cutoff would otherwise have opened, and the reason {@code DRAFT}
-     * is in the quotation cascade's predicate.
-     *
-     * <p>A quotation may be created (as DRAFT) only while the request sits at
-     * APPROVED_FOR_QUOTATION — a status cancel now admits. {@code CustomerQuotationService.issue}
-     * gates on the QUOTATION's own {@code doc_status} and only moves the pricing request
-     * {@code if} it is still APPROVED_FOR_QUOTATION — an {@code if}, not an assertion. So a DRAFT
-     * quotation orphaned on a CANCELLED request would still ISSUE cleanly, silently skipping the
-     * transition, and put a live offer in front of a customer whose deal was cancelled. Retiring
-     * the draft in the cascade is what makes that unreachable, and this test asserts the
-     * consequence rather than the mechanism.
-     */
+    /** The customer-facing hole the cutoff would otherwise have opened, and the reason DRAFT is in the quotation
+     * cascade's predicate. A quotation may be created (as DRAFT) only while the request sits at
+     * APPROVED_FOR_QUOTATION — a status cancel now admits. */
     @Test
     void cancel_retiresADraftQuotation_soItCanNeverBeIssuedToTheCustomerAfterwards() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -643,9 +539,7 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         mailer.assertBellRecipients("FACTORY_NOT_AVAILABLE", salesActor.id(), ceoRoleId);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixtures — every precondition is driven through the real services, never SQL
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** Drives a fresh single-item pricing request from DRAFT to APPROVED_FOR_QUOTATION. */
     private long approvedPricingRequest(BigDecimal quantity) {
@@ -673,12 +567,8 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
         return pricingRequestId;
     }
 
-    /**
-     * An APPROVED_FOR_QUOTATION request whose factory-quote chain contains BOTH a live
-     * READY_FOR_COSTING quote and an already-SUPERSEDED one. The second {@code receive} is the
-     * production path for a factory sending a revised price: it supersedes the previous revision and
-     * pulls the request back to AWAITING_FACTORY_RESPONSE, which is then re-marked ready.
-     */
+    /** An APPROVED_FOR_QUOTATION request whose factory-quote chain contains BOTH a live READY_FOR_COSTING quote and
+     * an already-SUPERSEDED one. */
     private long approvedPricingRequestWithASupersededQuote() {
         BigDecimal quantity = new BigDecimal("10");
         long pricingRequestId = readyForCeoReviewPricingRequest(quantity);
@@ -751,10 +641,9 @@ class PricingRequestCancelCutoffIntegrationTest extends AbstractPostgresIntegrat
             """, Map.of("id", pricingRequestId, "status", status), Long.class);
     }
 
-    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-    // quantity are now required on every item PricingRequestService#createDraft persists —
-    // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-    // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
+    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+    // required on every item PricingRequestService#createDraft persists —
+    // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
     private PricingRequestRequests.PricingRequestItemRequest pricingItem(BigDecimal quantity) {
         return new PricingRequestRequests.PricingRequestItemRequest(null, catalogProductId, null, "SCG",
             "Tile Cancel", "SCG Tile Cancel", "White", "Matte", "60x60", FACTORY, null, null, null, null,

@@ -21,40 +21,13 @@ import org.junit.jupiter.api.io.TempDir;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.env.Environment;
 
-/**
- * Before this fix, {@code hasProfile(environment, "demo")} short-circuited {@link
- * ProductionReadinessConfig#validate} with a bare {@code return} -- silently, no log line -- which
- * is why Render (which runs {@code prod,demo}, per render.yaml) has had no disk and an unset {@code
- * APP_UPLOADS_DIR} for as long as the guard existed, without ever tripping it. These cases pin the
- * new behavior: real prod (no demo) still hard-fails unchanged; prod+demo now WARNS instead of
- * silently passing.
- *
- * <p>2026-08: {@code #validate} now also collects several DEGRADED-classified properties (payroll
- * employer fields, BOT tokens) -- see {@link #environment} for why the six original tests below
- * still pass unchanged, and the block below them for the new coverage of that extension.
- *
- * <p>2026-08 (Resend mail port): {@code app.mail.from} / {@code app.mail.app-base-url} /
- * {@code app.mail.resend-api-key} joined as REQUIRED, conditionally on {@code app.mail.provider} --
- * see the "app.mail.* REQUIRED-when-provider" block below. The MAIL_USERNAME/MAIL_PASSWORD DEGRADED
- * entries this class used to check are retired outright (not merely renamed): nothing reads
- * {@code spring.mail.username}/{@code spring.mail.password} once NotificationEmailService/
- * FactoryEmailService moved onto {@code th.co.glr.hr.mail.Mailer}.
- *
- * <p>2026-08 (#782): {@code app.mail.override-to} joined the same REQUIRED-when-provider-sends-real-mail
- * gate too, inverted -- a problem when SET, not when blank -- see the "app.mail.override-to
- * REQUIRED-when-set-under-prod" block below.
- */
+/** Before this fix, hasProfile short-circuited ProductionReadinessConfig#validate with a bare return --
+ * silently, no log line -- which is why Render has had no disk and an unset APP_UPLOADS_DIR for as long as the
+ * guard existed, without ever tripping it. */
 class ProductionReadinessConfigTest {
 
-    /**
-     * A REAL, writable directory for every "good uploads dir" case below. These tests used to pass
-     * the literal {@code "/var/lib/glr-hr/uploads"}, which stopped meaning "good" the moment
-     * {@code uploadsDirProblem} began rehearsing the actual write: that path is absolute (so it
-     * still clears the two spelling checks) but is not creatable on a dev machine or a CI runner,
-     * so all eighteen of them would have started reporting the very problem they assert the absence
-     * of. Swapping in a temp dir keeps each test's original intent and makes "good" mean what the
-     * production check now means -- writable.
-     */
+    /** A REAL, writable directory for every "good uploads dir" case below. Swapping in a temp dir keeps each test's
+     * original intent and makes "good" mean what the production check now means -- writable. */
     @TempDir
     Path writableUploadsDir;
 
@@ -141,14 +114,9 @@ class ProductionReadinessConfigTest {
 
     // ---- 2026-08: collect-every-problem + REQUIRED/DEGRADED severity coverage ----------------
 
-    /**
-     * Drives {@link ProductionReadinessConfig#applyPolicy} directly with a synthetic problem list,
-     * independent of how {@link ProductionReadinessConfig#validate} classifies any real property --
-     * that's exactly why {@code applyPolicy} is package-private. The real classification CAN produce
-     * multiple REQUIRED problems in one throw now (see {@code resendProviderRequiresFromAppBaseUrlAndApiKey}
-     * below, which does exactly that through {@code #validate} itself), but this synthetic-list test
-     * still earns its place: it pins the aggregation policy in isolation from property classification.
-     */
+    /** Drives ProductionReadinessConfig#applyPolicy directly with a synthetic problem list, independent of how
+     * ProductionReadinessConfig#validate classifies any real property -- that's exactly why applyPolicy is
+     * package-private. */
     @Test
     void multipleRequiredProblemsAreAllListedInOneThrow() {
         assertThatThrownBy(() -> ProductionReadinessConfig.applyPolicy(
@@ -162,9 +130,9 @@ class ProductionReadinessConfigTest {
     void degradedOnlyGapWarnsAndDoesNotThrowInRealProd() {
         Environment environment = environment("prod");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
-        // A DEGRADED gap: environment() below stubs a non-blank default for every property this
-        // method reads, so overriding just this one back to blank isolates it the same way the
-        // pre-2026-08-Resend-port version of this test isolated spring.mail.username.
+        // A DEGRADED gap: environment() below stubs a non-blank default for every property this method reads, so
+        // overriding just this one back to blank isolates it the same way the pre-2026-08-Resend-port version of this
+        // test isolated spring.mail.username.
         when(environment.getProperty("app.payroll.employer.company-name-th", "")).thenReturn("");
 
         ProductionReadinessConfig.validate(environment); // must not throw
@@ -183,8 +151,8 @@ class ProductionReadinessConfigTest {
         assertThatThrownBy(() -> ProductionReadinessConfig.validate(environment))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("APP_UPLOADS_DIR must be set");
-        // The REQUIRED throw must not swallow the DEGRADED gap's own WARN -- the two severities are
-        // independent facts about the environment, so both still get their say.
+        // The REQUIRED throw must not swallow the DEGRADED gap's own WARN -- the two severities are independent facts
+        // about the environment, so both still get their say.
         assertThat(appender.list)
             .as("a REQUIRED throw must not suppress a DEGRADED gap's own WARN")
             .hasSize(1);
@@ -192,14 +160,8 @@ class ProductionReadinessConfigTest {
         assertThat(appender.list.get(0).getFormattedMessage()).contains("BOT_FX_API_TOKEN is not set");
     }
 
-    // ---- app.mail.* REQUIRED-when-provider coverage (2026-08 Resend mail port) ----------------
-    //
-    // Owner decision this locks in: neither a production From address nor a production portal URL
-    // is invented anywhere in this repo (see application.yml's app.mail.from/app-base-url comments
-    // -- both default to blank, not a literal fallback). A deployment that sets
-    // app.mail.provider=resend/smtp without also setting these must refuse to boot in real prod
-    // rather than silently send from Resend's sandbox sender (which 403s on any real recipient) or
-    // link every notification/payslip email at the wrong host.
+    // app.mail.* REQUIRED-when-provider coverage ---------------- Owner decision this locks in: neither a
+    // production From address nor a production portal URL is invented anywhere in this repo.
 
     @Test
     void resendProviderRequiresFromAppBaseUrlAndApiKey() {
@@ -220,9 +182,8 @@ class ProductionReadinessConfigTest {
 
     @Test
     void smtpProviderRequiresFromAndAppBaseUrlButNotAResendApiKey() {
-        // provider=smtp authenticates via app.mail.smtp.* (SmtpMailer's own constructor already
-        // hard-fails on a blank app.mail.smtp.host) -- app.mail.resend-api-key is meaningless here
-        // and must not be demanded.
+        // provider=smtp authenticates via app.mail.smtp.* (SmtpMailer's own constructor already hard-fails on a blank
+        // app.mail.smtp.host) -- app.mail.resend-api-key is meaningless here and must not be demanded.
         Environment environment = environment("prod");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("smtp");
@@ -238,8 +199,8 @@ class ProductionReadinessConfigTest {
 
     @Test
     void logProviderDoesNotRequireAnyMailProperty() {
-        // provider=log (the repo-wide default) never contacts a real inbox, so a blank
-        // From/base-url/API key must not block boot -- dev/CI has no mail credentials at all.
+        // provider=log (the repo-wide default) never contacts a real inbox, so a blank From/base-url/API key must not
+        // block boot -- dev/CI has no mail credentials at all.
         Environment environment = environment("prod");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("log");
@@ -251,9 +212,9 @@ class ProductionReadinessConfigTest {
 
     @Test
     void unsetProviderDefaultsToLogAndDoesNotRequireAnyMailProperty() {
-        // The property() helper treats a Mockito mock's unstubbed null the same as "absent" (see
-        // its own Javadoc) -- this is the same path a real, unconfigured deployment takes, where
-        // application.yml's ${APP_MAIL_PROVIDER:log} default applies.
+        // The property() helper treats a Mockito mock's unstubbed null the same as "absent" (see its own Javadoc) --
+        // this is the same path a real, unconfigured deployment takes, where application.yml's
+        // ${APP_MAIL_PROVIDER:log} default applies.
         Environment environment = environment("prod");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
 
@@ -278,10 +239,9 @@ class ProductionReadinessConfigTest {
 
     @Test
     void demoProfileWarnsRatherThanThrowsOnAMissingMailFrom() {
-        // Matches the existing app.uploads-dir precedent (see the six original tests above): this
-        // Render service runs prod,demo (render.yaml), so a REQUIRED gap there WARNs at boot
-        // instead of crash-looping the showcase; real on-prem prod (no demo profile) still
-        // hard-fails on the identical gap, per resendProviderRequiresFromAppBaseUrlAndApiKey above.
+        // Matches the existing app.uploads-dir precedent: this Render service runs prod,demo, so a REQUIRED gap there
+        // WARNs at boot instead of crash-looping the showcase; real on-prem prod still hard-fails on the identical
+        // gap, per resendProviderRequiresFromAppBaseUrlAndApiKey above.
         Environment environment = environment("prod", "demo");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
@@ -296,15 +256,8 @@ class ProductionReadinessConfigTest {
         assertThat(appender.list.get(0).getFormattedMessage()).contains("APP_MAIL_FROM is not set");
     }
 
-    // ---- app.mail.override-to REQUIRED-when-set-under-prod coverage (#782) --------------------
-    //
-    // Deliberate NEW behaviour, not present before #782: app.mail.override-to exists to redirect
-    // every outbound email to one test inbox (see OverrideRedirectingMailer) - if that were left set
-    // on the one profile that actually reaches real inboxes, every real employee's notification and
-    // every real factory's quote mail would be silently redirected, with nothing in the logs
-    // distinguishing that from normal operation. Same REQUIRED-when-provider-sends-real-mail gating,
-    // same real-prod-hard-fails / prod+demo-warns policy as app.mail.from/app-base-url above - this is
-    // the inverse shape (a problem when the property IS set, not when it's blank), not a new policy.
+    // app.mail.override-to REQUIRED-when-set-under-prod coverage -------------------- Deliberate NEW behaviour,
+    // not present before #782: app.mail.override-to exists to redirect every outbound email to one test inbox.
 
     @Test
     void resendProviderUnderRealProdHardFailsWhenOverrideToIsSet() {
@@ -319,8 +272,8 @@ class ProductionReadinessConfigTest {
         assertThatThrownBy(() -> ProductionReadinessConfig.validate(environment))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("APP_MAIL_OVERRIDE_TO must not be set")
-            // The exception message is a fixed, reviewable string - it must not echo the configured
-            // inbox address into logs/exceptions at boot time (see mailOverrideActiveProblem).
+            // The exception message is a fixed, reviewable string - it must not echo the configured inbox address into
+            // logs/exceptions at boot time (see mailOverrideActiveProblem).
             .hasMessageNotContaining("qa-inbox@example.com");
         assertThat(appender.list).isEmpty();
     }
@@ -341,8 +294,8 @@ class ProductionReadinessConfigTest {
 
     @Test
     void prodPlusDemoWarnsRatherThanThrowsWhenOverrideToIsSet() {
-        // Same policy as demoProfileWarnsRatherThanThrowsOnAMissingMailFrom above: the Render showcase
-        // must not crash-loop, but the gap must still be visible in the logs.
+        // Same policy as demoProfileWarnsRatherThanThrowsOnAMissingMailFrom above: the Render showcase must not
+        // crash-loop, but the gap must still be visible in the logs.
         Environment environment = environment("prod", "demo");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("resend");
@@ -360,9 +313,9 @@ class ProductionReadinessConfigTest {
 
     @Test
     void logProviderIgnoresOverrideToEvenUnderRealProd() {
-        // provider=log never contacts a real inbox (see LogMailer) - a stray override-to left set is
-        // inert there, not dangerous, and must not block boot. Mirrors logProviderDoesNotRequireAnyMailProperty
-        // above for the same reason.
+        // provider=log never contacts a real inbox (see LogMailer) - a stray override-to left set is inert there, not
+        // dangerous, and must not block boot. Mirrors logProviderDoesNotRequireAnyMailProperty above for the same
+        // reason.
         Environment environment = environment("prod");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
         when(environment.getProperty("app.mail.provider", "")).thenReturn("log");
@@ -388,26 +341,8 @@ class ProductionReadinessConfigTest {
         assertThat(appender.list).isEmpty();
     }
 
-    /**
-     * The six original tests above were all written back when {@code app.uploads-dir} was the only
-     * property {@link ProductionReadinessConfig#validate} ever read. Now that it also reads six
-     * DEGRADED-classified properties, a plain {@code mock(Environment.class)} would return null for
-     * every one of them here (Mockito's default answer for an unstubbed String-returning call,
-     * regardless of the "default" argument the real {@code Environment} would honour) -- #validate
-     * treats null the same as blank/unset (see its {@code property} helper), so without this,
-     * EVERY real-prod/prod+demo test above would trip unrelated DEGRADED WARNs and fail their
-     * {@code appender.list}-emptiness assertions. Pre-stub every such key to a non-blank dummy value
-     * here, via {@code lenient()} since not every test cares about every key; each test's own later
-     * stubs (including the app.mail.* ones above) still win over these generic defaults --
-     * Mockito resolves a mock invocation against the most-recently-registered matching stub.
-     *
-     * <p>Deliberately does NOT stub {@code app.mail.provider} (or any other {@code app.mail.*}
-     * key): the unstubbed-null-becomes-blank behaviour described above already resolves it to
-     * {@code ""}, which is neither {@code resend} nor {@code smtp} -- exactly application.yml's own
-     * {@code ${APP_MAIL_PROVIDER:log}} default-to-safe behaviour -- so every test above that never
-     * mentions {@code app.mail.*} is implicitly proving the "unconfigured deployment" case rather
-     * than skipping it by accident.
-     */
+    /** The six original tests above were all written back when app.uploads-dir was the only property
+     * ProductionReadinessConfig#validate ever read. */
     private static Environment environment(String... profiles) {
         Environment environment = mock(Environment.class);
         when(environment.getActiveProfiles()).thenReturn(profiles);
@@ -426,12 +361,7 @@ class ProductionReadinessConfigTest {
 
     // ---- 2026-08-31: set-and-absolute is not the same as USABLE -------------------------------
 
-    /**
-     * A directory whose PARENT is a regular file. {@code Files.createDirectories} fails on it for
-     * EVERY user including root, which is the point: the obvious fixture -- {@code chmod} a
-     * directory read-only -- is satisfiable by privilege, so it would quietly stop testing anything
-     * the moment the suite ran as root in a container. This one cannot.
-     */
+    /** A directory whose PARENT is a regular file. This one cannot. */
     private Path uncreatableDir() throws IOException {
         Path blocker = writableUploadsDir.resolve("not-a-directory");
         Files.writeString(blocker, "x");
@@ -443,8 +373,8 @@ class ProductionReadinessConfigTest {
         Environment environment = environment("prod");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn(uncreatableDir().toString());
 
-        // The production failure this exists to catch: /var/data/uploads on Render is absolute and
-        // non-blank, so it cleared both existing checks and then failed every upload at runtime.
+        // The production failure this exists to catch: /var/data/uploads on Render is absolute and non-blank, so it
+        // cleared both existing checks and then failed every upload at runtime.
         assertThatThrownBy(() -> ProductionReadinessConfig.validate(environment))
             .isInstanceOf(IllegalStateException.class)
             .hasMessageContaining("APP_UPLOADS_DIR")
@@ -458,18 +388,16 @@ class ProductionReadinessConfigTest {
 
         ProductionReadinessConfig.validate(environment);
 
-        // Render runs prod,demo -- so this is the branch that would actually have fired, and it
-        // must reach the boot log rather than crash-looping the live service.
+        // Render runs prod,demo -- so this is the branch that would actually have fired, and it must reach the boot
+        // log rather than crash-looping the live service.
         assertThat(appender.list).hasSize(1);
         assertThat(appender.list.get(0).getLevel()).isEqualTo(Level.WARN);
         assertThat(appender.list.get(0).getFormattedMessage()).contains("is not writable");
     }
 
-    /**
-     * The check must not require the directory to exist ALREADY -- {@code FileStorageService#store}
-     * creates it on first use, so demanding it up front would report a problem where there is none
-     * (a fresh volume, a first boot). It creates the path itself and reports nothing.
-     */
+    /** The check must not require the directory to exist ALREADY -- FileStorageService#store creates it on first
+     * use, so demanding it up front would report a problem where there is none (a fresh volume, a first boot). It
+     * creates the path itself and reports nothing. */
     @Test
     void anAbsentButCreatableUploadsDirIsNotAProblemAndIsCreated() {
         Path notYetThere = writableUploadsDir.resolve("nested/uploads");

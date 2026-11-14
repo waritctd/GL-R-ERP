@@ -11,28 +11,16 @@ import { bangkokMonthStartIso, formatMoney, formatThaiDate, greetingName } from 
 import { isManualKind } from '../commissions/commissionRecord.js';
 import { Figure, WorklistGroup, WorklistTotal, failed } from './dashboardParts.jsx';
 
-/**
- * CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md
- * "6. CEO"). CEO keeps every existing sales surface + nav item unchanged —
- * this component only adds a role-shaped `/` landing that pulls the
- * cross-domain decisions only the CEO can make into one worklist, instead of
- * making the CEO hunt across คำขอราคา / รายการดีล / ค่าคอมมิชชัน / คำขอ / ลา.
- *
- * Every row here deep-links to the real page that owns the mutation — this
- * component never calls an approve/verify/decide endpoint itself (see
- * docs/role-scoped-views.md "never duplicate a mutation").
- */
+/** CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md "6. Every row here deep-links to
+ * the real page that owns the mutation — this component never calls an approve/verify/decide endpoint itself
+ * (see docs/role-scoped-views.md "never duplicate a mutation"). */
 
-// Step 3 (CEO Selling Price Decision): a pricing request is CEO-actionable in
-// either of these two statuses — see pricingRequestMeta.js's ALLOWED_TRANSITIONS.
-// NOTE: mockApi's queue({status}) whitelist is missing 'CEO_REVIEWING' (a
-// pre-existing gap noted in pricingRequestMeta.js), so this fetches the whole
-// active queue and filters client-side rather than calling queue() per status.
+// Step 3 (CEO Selling Price Decision): a pricing request is CEO-actionable in either of these two statuses —
+// see pricingRequestMeta.js's ALLOWED_TRANSITIONS.
 const CEO_PRICE_STATUSES = ['READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'];
 
-// Mirrors CommissionPage.jsx's local `kindLabel` (not exported) — duplicated
-// here in miniature since the worklist row only needs a short label, not the
-// full calc-breakdown view.
+// Mirrors CommissionPage.jsx's local `kindLabel` (not exported) — duplicated here in miniature since the
+// worklist row only needs a short label, not the full calc-breakdown view.
 const COMMISSION_KIND_LABELS = {
   SALE: 'ค่าคอมขาย',
   ADJUSTMENT: 'ปรับปรุง/รับช่วงงาน',
@@ -74,10 +62,9 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   const navigate = useNavigate();
   const onOpen = useCallback((to) => navigate(to), [navigate]);
 
-  // Shares the same cache entries PricingRequestQueuePage
-  // already populate for a CEO session — one company-wide fetch each, no
-  // per-row detail calls (see the tickets.list() mock-parity note below for
-  // why that matters for the close-verify worklist).
+  // Shares the same cache entries PricingRequestQueuePage already populate for a CEO session — one company-wide
+  // fetch each, no per-row detail calls (see the tickets.list() mock-parity note below for why that matters for
+  // the close-verify worklist).
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}).then((r) => (Array.isArray(r) ? r : (r?.tickets ?? []))),
@@ -101,8 +88,8 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
     // The month's records as returned (this key is "every record for the month"); filtered below.
     queryFn: () => api.commissions.list({ payrollMonth: thisMonth }).then((r) => r.commissions ?? []),
   });
-  // Two bounded, status-filtered fetches (both params are real/optional on
-  // OvertimeController) instead of one unbounded all-history fetch.
+  // Two bounded, status-filtered fetches (both params are real/optional on OvertimeController) instead of one
+  // unbounded all-history fetch.
   const otManagerApprovedQuery = useQuery({
     queryKey: queryKeys.overtimeRequests({ status: 'MANAGER_APPROVED' }),
     queryFn: () => api.overtime.list({ status: 'MANAGER_APPROVED' }).then((r) => r.requests ?? []),
@@ -134,10 +121,9 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   // ── ราคา: PricingRequest at READY_FOR_CEO_REVIEW / CEO_REVIEWING ──────────
   const priceApprovalRows = useMemo(() => pricingQueue?.filter((pr) => CEO_PRICE_STATUSES.includes(pr.status)), [pricingQueue]);
 
-  // ── ปิดงาน: ฝ่ายบัญชี already confirmed close-ready, CEO has not verified ──
-  // Mirrors TicketService.verifyClose's own precondition (closeConfirmedAt !=
-  // null, deal still ACTIVE/not yet closed) — see the mock-parity comment on
-  // tickets.list() in mockApi.js for why this field is safe to read here.
+  // ปิดงาน: ฝ่ายบัญชี already confirmed close-ready, CEO has not verified ── Mirrors TicketService.verifyClose's
+  // own precondition (closeConfirmedAt != null, deal still ACTIVE/not yet closed) — see the mock-parity comment
+  // on tickets.list() in mockApi.js for why this field is safe to read here.
   const closeVerifyRows = useMemo(
     () => tickets?.filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.status !== 'closed' && t.closeConfirmedAt),
     [tickets],
@@ -146,29 +132,15 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   // ── ค่าคอม: MANAGER_APPROVED, awaiting the CEO's own final step ───────────
   const commissionRows = commissions;
 
-  // ── OT: MANAGER_APPROVED (normal 2-step chain) PLUS SUBMITTED requests with
-  // no manager stage at all — the employee's ฝ่าย has no ผู้จัดการ, or they are
-  // one themselves. Keyed off the server's own `hasManagerApprover`, which is
-  // the same expression OvertimeService.approve() routes on.
-  //
-  // This previously approximated the case as "reports_to points at the CEO",
-  // which is wrong in BOTH directions now that approval is division-only: it
-  // missed manager-less requests whose reports_to is someone else (the CEO
-  // never saw work only they could clear), and it listed requests whose ฝ่าย
-  // does have a ผู้จัดการ, where the CEO would just get a 403.
+  // OT: MANAGER_APPROVED (normal 2-step chain) PLUS SUBMITTED requests with no manager stage at all — the
+  // employee's ฝ่าย has no ผู้จัดการ, or they are one themselves. Keyed off the server's own
+  // `hasManagerApprover`, which is the same expression OvertimeService.approve() routes on.
   const otDirectToCeo = useMemo(() => otSubmitted?.filter((r) => r.hasManagerApprover === false), [otSubmitted]);
   const otRows = useMemo(() => (otManagerApproved && otDirectToCeo ? [...otManagerApproved, ...otDirectToCeo] : null), [otManagerApproved, otDirectToCeo]);
 
-  // ── ลา: SUBMITTED, all of it. This used to filter to `managerEmployeeId ===
-  // user.employeeId` on the premise that canReviewLeave only ever granted hr, or the
-  // employee's literal FK manager -- so a CEO-reviewable leave request was by definition one
-  // whose manager FK was the CEO. CEO leave-approval reach (2026-09-01 owner ruling,
-  // LeaveService.REVIEW_ALL_ROLES gaining "ceo") invalidates exactly that premise: the CEO can
-  // now review EVERY ใบลา, not just requests whose FK manager happens to be them. leaveSubmitted
-  // itself already comes back company-wide for this actor (api.leave.list is server-scoped by
-  // VIEW_ALL_ROLES, which has included ceo since before this change), so every row here is one
-  // this CEO may act on -- no further client-side filter needed. This component only ever renders
-  // for user.role === 'ceo' (see App.jsx), so there is no other-role case to guard against. ─────
+  // ลา: SUBMITTED, all of it. This used to filter to `managerEmployeeId === user.employeeId` on the premise that
+  // canReviewLeave only ever granted hr, or the employee's literal FK manager -- so a CEO-reviewable leave
+  // request was by definition one whose manager FK was the CEO.
   const leaveRows = leaveSubmitted;
 
   // ── ผลบริษัทเดือนนี้: เงินรับแล้ว / ค้างรับ / ยอดคาดการณ์ come from /api/dashboard/summary (server

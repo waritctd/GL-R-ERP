@@ -16,8 +16,8 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 // list is UnitBasis's four codes.
 const REQUEST_CURRENCY_OPTIONS = ['THB', 'EUR', 'USD', 'CNY'];
 
-// price_catalog.price_unit -> UnitBasis. 'unknown' (or anything else) is NOT guessed: the unit stays
-// blank and required, so a wrong basis can never be pre-filled silently.
+// price_catalog.price_unit -> UnitBasis. 'unknown' (or anything else) is NOT guessed: the unit stays blank and
+// required, so a wrong basis can never be pre-filled silently.
 const CATALOG_PRICE_UNIT_TO_BASIS = {
   per_sqm: 'PER_SQM',
   per_piece: 'PER_PIECE',
@@ -118,8 +118,8 @@ const DEFAULT_QUANTITY_TYPE = 'ESTIMATE';
  * still sees whatever notes Sales left.
  */
 function emptyItemFromTicketItem(ticketItem) {
-  // Mirrors TicketDetailPage's own qtyDisplay logic: an SQM-basis line quotes its sqm quantity in
-  // AREA mode; a PIECE-basis line quotes its piece count in PIECES mode.
+  // Mirrors TicketDetailPage's own qtyDisplay logic: an SQM-basis line quotes its sqm quantity in AREA mode; a
+  // PIECE-basis line quotes its piece count in PIECES mode.
   const quantityMode = ticketItem?.unitBasis === 'SQM' ? 'AREA' : 'PIECES';
   // A catalogue-linked deal line brings the catalogue's thickness / pieces-per-box / factory
   // country along (TicketItemDto.catalog* via TicketRepository#findItemsByTicketId), and the origin
@@ -130,9 +130,9 @@ function emptyItemFromTicketItem(ticketItem) {
   const seededLeadTime = defaultLeadTimeForOrigin(seededOrigin);
   return {
     clientId: newItemClientId(),
-    // V110: seed the catalog link the deal-creation catalog picker already resolved (see
-    // TicketCreateModal.jsx's applyCatalogItem), so this row doesn't need a re-search. Null for a
-    // hand-typed ("custom") deal line, or a line created before V110 existed.
+    // V110: seed the catalog link the deal-creation catalog picker already resolved (see TicketCreateModal.jsx's
+    // applyCatalogItem), so this row doesn't need a re-search. Null for a hand-typed ("custom") deal line, or a
+    // line created before V110 existed.
     sourceTicketItemId: ticketItem?.id ?? null,
     catalogPriceId: ticketItem?.catalogPriceId ?? null,
     // Carried through unchanged: this row has no UI for either field, but a ticket_item that
@@ -176,8 +176,8 @@ function emptyItemFromTicketItem(ticketItem) {
     leadTimeMaxDays: seededLeadTime.leadTimeMaxDays,
     // Maps to the wire `productDescription` — see this file's own module Javadoc above.
     itemNotes: '',
-    // No longer user-editable — see DEFAULT_QUANTITY_TYPE above. Carried so buildPayload keeps
-    // satisfying PricingRequestItemRequest unchanged.
+    // No longer user-editable — see DEFAULT_QUANTITY_TYPE above. Carried so buildPayload keeps satisfying
+    // PricingRequestItemRequest unchanged.
     quantityType: DEFAULT_QUANTITY_TYPE,
     targetDeliveryDate: '',
     deliveryLocation: '',
@@ -230,8 +230,8 @@ function legacySeededQuantity(item) {
   return { quantityMode: 'AREA', areaSqm: '', piecesInput: '', legacyQuantityNote: null };
 }
 
-// Edit mode seeds its rows from a persisted PricingRequestItemDto instead of a ticket_item.
-// Existing catalog identity is preserved so editing a draft does not erase its product snapshot.
+// Edit mode seeds its rows from a persisted PricingRequestItemDto instead of a ticket_item. Existing catalog
+// identity is preserved so editing a draft does not erase its product snapshot.
 function itemFromExisting(item) {
   const quantitySeed = legacySeededQuantity(item);
   // A legacy PER_PIECE row has no sqmPerPiece either, but it can be reconstructed:
@@ -333,21 +333,17 @@ function generateClientRequestId() {
  * revision. */
 function pricingRequestItemInputFromRow(item) {
   return {
-    // No `id` field: unlike the direct-deal quotation's ItemInput, PricingRequestItemRequest has
-    // no stable-item-id concept — PricingRequestRepository.replaceItems always deletes and
-    // re-inserts every item on create/update/createCustomerChangeRevision, generating fresh ids
-    // every time. Sending one here would be inert on the real backend (an unknown JSON property,
-    // ignored) but is actively wrong against the mock's createCustomerChangeRevision handler,
-    // which spreads `...item` AFTER a freshly generated `id:` — a stray `id: null` in the payload
-    // would silently overwrite that generated id.
+    // No `id` field: unlike the direct-deal quotation's ItemInput, PricingRequestItemRequest has no stable-item-id
+    // concept — PricingRequestRepository.replaceItems always deletes and re-inserts every item on
+    // create/update/createCustomerChangeRevision, generating fresh ids every time.
     sourceTicketItemId: item.sourceTicketItemId ?? null,
     productId: item.catalogPriceId ?? null,
     variantId: item.variantId ?? null,
     factory: item.factory ?? null,
     brand: item.brand?.trim() || null,
     model: item.model?.trim() || null,
-    // See this file's own module Javadoc: the หมายเหตุรายการ input is productDescription on the
-    // wire, not a dedicated "รายละเอียดสินค้า" box.
+    // See this file's own module Javadoc: the หมายเหตุรายการ input is productDescription on the wire, not a
+    // dedicated "รายละเอียดสินค้า" box.
     productDescription: item.itemNotes?.trim() || null,
     color: item.color?.trim() || null,
     texture: item.texture?.trim() || null,
@@ -416,9 +412,8 @@ export function PricingRequestCreateModal({
 }) {
   const isEdit = mode === 'edit';
   const isRevision = mode === 'revision';
-  // Both edit and revision mode seed every field from a PERSISTED request (edit's own DRAFT,
-  // or revision's current/parent request); only plain create mode seeds from the deal's raw
-  // ticket_item rows instead.
+  // Both edit and revision mode seed every field from a PERSISTED request (edit's own DRAFT, or revision's
+  // current/parent request); only plain create mode seeds from the deal's raw ticket_item rows instead.
   const seedsFromExisting = isEdit || isRevision;
   const initialSummary = initialValue?.summary ?? null;
   // The backend (requireUnchangedRecipientType) 409s any recipientType change on a revision child,
@@ -433,9 +428,9 @@ export function PricingRequestCreateModal({
       ? (initialSummary?.recipientLabel ?? '')
       : recipientLabelForDeal(deal, seededRecipientType)
   ));
-  // Tracks whether the user has hand-edited ผู้รับ's free-text label — once true, switching the
-  // ผู้รับ chip must never overwrite what they typed (see the effect below). Stays false forever
-  // in edit/revision mode since nothing ever writes recipientLabel from `deal` there.
+  // Tracks whether the user has hand-edited ผู้รับ's free-text label — once true, switching the ผู้รับ chip must
+  // never overwrite what they typed (see the effect below). Stays false forever in edit/revision mode since
+  // nothing ever writes recipientLabel from `deal` there.
   const [recipientLabelTouched, setRecipientLabelTouched] = useState(false);
   // ผู้ติดต่อ: the SAME `QuotationContactPicker` as the direct-deal quotation editor, bound to the
   // existing `recipientContactId` wire field (V59). Deliberately SEPARATE from ผู้รับคำขอราคา
@@ -478,9 +473,9 @@ export function PricingRequestCreateModal({
   const validityDays = initialSummary?.validityDays != null ? String(initialSummary.validityDays) : '';
   const printedByDisplayId = initialSummary?.printedByDisplayId != null ? String(initialSummary.printedByDisplayId) : '';
   const salesRepDisplayId = initialSummary?.salesRepDisplayId != null ? String(initialSummary.salesRepDisplayId) : '';
-  // unitCode doubles as the ผู้ออกแบบ picker's target, exactly as on the direct-deal form (V173) —
-  // a designer pick is a frontend convenience that writes this SAME free-text field, never a
-  // separate column; the designer's own name never reaches it, only the code does.
+  // unitCode doubles as the ผู้ออกแบบ picker's target, exactly as on the direct-deal form (V173) — a designer
+  // pick is a frontend convenience that writes this SAME free-text field, never a separate column; the
+  // designer's own name never reaches it, only the code does.
   const unitCode = initialSummary?.unitCode ?? '';
   const [omitContactHonorific, setOmitContactHonorific] = useState(() => initialSummary?.omitContactHonorific ?? false);
   const [revisionReason, setRevisionReason] = useState('');
@@ -494,11 +489,9 @@ export function PricingRequestCreateModal({
       : [emptyItemFromTicketItem(null)];
   });
 
-  // Re-fills recipientLabel from the deal whenever the ผู้รับ chip changes — create mode only,
-  // and only until the user types over it. Also runs once on mount, harmlessly recomputing the
-  // same value the useState initializer above already seeded. deal/seedsFromExisting/
-  // recipientLabelTouched are read here, not depended on: this must re-run ONLY when the user
-  // switches the ผู้รับ chip, never merely because `deal` re-rendered with the same identity.
+  // Re-fills recipientLabel from the deal whenever the ผู้รับ chip changes — create mode only, and only until
+  // the user types over it. Also runs once on mount, harmlessly recomputing the same value the useState
+  // initializer above already seeded.
   useEffect(() => {
     if (seedsFromExisting || recipientLabelTouched) return;
     setRecipientLabel(recipientLabelForDeal(deal, recipientType));
@@ -506,14 +499,11 @@ export function PricingRequestCreateModal({
   }, [recipientType]);
 
   const [error, setError] = useState('');
-  // Informational (non-error) banner — currently only used by the create-mode
-  // duplicate-draft guard below, to tell the user a retry is reusing the
-  // draft it already created rather than making a second one.
+  // Informational (non-error) banner — currently only used by the create-mode duplicate-draft guard below, to
+  // tell the user a retry is reusing the draft it already created rather than making a second one.
   const [info, setInfo] = useState('');
-  // Per-row field errors (required แผ่น/ตร.ม./ความหนา/etc — quotationMeta's own
-  // validateQuotationItem, `skipPricing: true` since this form has no price inputs), shown once
-  // the user has attempted to save/submit. Keyed by row index, same convention
-  // QuotationEditorPage uses for the direct-deal form's own itemErrorsByRow.
+  // Per-row field errors (required แผ่น/ตร.ม./ความหนา/etc — quotationMeta's own validateQuotationItem,
+  // `skipPricing: true` since this form has no price inputs), shown once the user has attempted to save/submit.
   const [itemFieldErrors, setItemFieldErrors] = useState({});
   const [saving, setSaving] = useState(false);
   // Once createFn has succeeded, its id is held here so a retry (create succeeded, then submitFn
@@ -521,14 +511,9 @@ export function PricingRequestCreateModal({
   // calling createFn again and orphaning a duplicate. Always null in edit mode.
   const [createdId, setCreatedId] = useState(null);
 
-  // Pricing Request attachments (V69, review remediation COMMIT 4): Sales may optionally attach
-  // supporting files while the request is a DRAFT (also true in edit mode, since editing a
-  // pricing request only ever happens while it is still DRAFT). Zero attachments remains valid —
-  // there is no gate anywhere requiring at least one. Files can only be attached to a PERSISTED
-  // request, so in create/revision mode this stays disabled until the first successful save
-  // (createdId) exists; in edit mode initialSummary.id is already known. Revision mode never
-  // uses initialSummary.id here — that id belongs to the PARENT request being revised, not the
-  // new DRAFT this modal creates, and attachments must never be attributed to the wrong request.
+  // Pricing Request attachments (V69, review remediation COMMIT 4): Sales may optionally attach supporting files
+  // while the request is a DRAFT (also true in edit mode, since editing a pricing request only ever happens
+  // while it is still DRAFT).
   const attachablePricingRequestId = isEdit ? initialSummary?.id ?? null : createdId;
   const [attachments, setAttachments] = useState([]);
   const [attachmentsError, setAttachmentsError] = useState('');
@@ -678,11 +663,8 @@ export function PricingRequestCreateModal({
     return '';
   }
 
-  // Per-row field completeness — mirrors PricingRequestService#requireItemFieldsComplete
-  // (รุ่น/สี/ผิว/ขนาด/ความหนา/แผ่น-ตร.ม./แผ่น-กล่อง/จำนวน), reusing quotationMeta's own
-  // validateQuotationItem with `skipPricing: true` rather than a parallel copy of the rule (this
-  // form has no price mode of its own, so `priceMode`/`documentLanguage` are just the harmless
-  // NET/TH defaults — skipPricing means neither is actually consulted for a price check).
+  // Per-row field completeness — mirrors PricingRequestService#requireItemFieldsComplete, reusing
+  // quotationMeta's own validateQuotationItem with `skipPricing: true` rather than a parallel copy of the rule.
   // Separate from validate() above: reports per-row, not as a single form-level message.
   function validateItemFields() {
     const next = {};

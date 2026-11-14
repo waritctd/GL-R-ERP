@@ -20,29 +20,9 @@ import th.co.glr.hr.ticket.TicketResponses.TicketActionDto;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * Finance-only deal read and money actions (H1, owner decisions A2 + part 2). Roles: {@code account}
- * and {@code ceo} only -- NOT {@code TicketAccessPolicy.VIEWER_ROLES}, so a deal's own sales rep,
- * sales_manager, import, hr and employee are all refused. {@code account} is further limited to the
- * same list scope as {@code GET /api/tickets} ({@link TicketRepository#isInAccountScope}); {@code ceo}
- * reads any deal.
- *
- * <p><b>Actions delegate.</b> Every write below calls the EXISTING {@link TicketService} business method
- * (payment / close / billing / stage logic is neither duplicated nor changed) and then returns the
- * finance view. Each business method keeps TODAY's role gate for that action -- deposit-paid,
- * final-payment, payments and close-confirm are account only (a ceo caller is 403); billing,
- * close-revoke, stage and comments are account + ceo -- and enforces the account row scope itself, so
- * the scope holds for any caller of those methods, not only this class. This class adds the up-front
- * role check, the 404, and the finance-shaped response.
- *
- * <p>The payload is built field by field from finance-safe sources. It never touches {@code TicketDto}
- * (events, tracking), pricing requests, factory quotes or costing.
- *
- * <p><b>Attachment mapping (a choice the owner did not specify):</b> {@code INVOICE} -&gt; taxInvoices,
- * {@code PO} -&gt; purchaseOrders, and {@code SIGNED_QUOTATION} plus {@code OTHER} -&gt; contracts, because
- * the UI's own uploader files a contract under the default {@code OTHER} type (only a filename
- * containing "po" becomes {@code PO}), so a contract genuinely lives under both.
- */
+/** Finance-only deal read and money actions (H1, owner decisions A2 + part 2). Roles: account and ceo only --
+ * NOT TicketAccessPolicy.VIEWER_ROLES, so a deal's own sales rep, sales_manager, import, hr and employee are
+ * all refused. */
 @Service
 public class FinanceDealService {
     private static final Set<String> ALLOWED_ROLES = Set.of("account", "ceo");
@@ -206,11 +186,9 @@ public class FinanceDealService {
             items, money, documents, finance.findComments(ticketId), availableActions(ticketId, actor, s), finance.findCommissionInvoice(ticketId).orElse(null));
     }
 
-    /**
-     * The money actions this caller can take right now: the ticket action list ({@code TicketService.
-     * financeActions} -- the same gate/readiness logic, not a second copy) narrowed to money actions, and to
-     * ADVANCE_STAGE / UPDATE_STAGE only for the two money stages.
-     */
+    /** The money actions this caller can take right now: the ticket action list (TicketService. financeActions --
+     * the same gate/readiness logic, not a second copy) narrowed to money actions, and to ADVANCE_STAGE /
+     * UPDATE_STAGE only for the two money stages. */
     private List<FinanceDealDto.Action> availableActions(long ticketId, UserPrincipal actor, TicketSummaryDto s) {
         // Scope was enforced up front (requireFinanceAccess); an authorised action may have moved the deal out of it.
         var all = ticketService.financeActionsAlreadyScoped(ticketId, actor).availableActions();
@@ -226,8 +204,8 @@ public class FinanceDealService {
                 || ("UPDATE_STAGE".equals(a.action()) && anyMoneyStage))
             .map(FinanceDealService::toAction)
             .toList());
-        // Recording the invoice goes through CommissionService#createFromDeal, which is account-only and
-        // needs CLOSED_PAID with no active commission -- so never offered to ceo.
+        // Recording the invoice goes through CommissionService#createFromDeal, which is account-only and needs
+        // CLOSED_PAID with no active commission -- so never offered to ceo.
         if ("account".equals(actor.role()) && DealStage.CLOSED_PAID.equals(s.salesStage())
                 && !s.commissionRecorded()) {
             actions.add(new FinanceDealDto.Action("RECORD_INVOICE", "บันทึกใบกำกับ", null, List.of()));
@@ -244,17 +222,7 @@ public class FinanceDealService {
             MoneyMilestone.isSkipped(step, depositPolicy), current);
     }
 
-    /**
-     * Points at the existing download endpoint for the quotation's chain; that endpoint enforces its own authz.
-     * The link must open the document the CUSTOMER received:
-     * <ul>
-     *   <li>{@code origin} DEAL_DIRECT / PRICING_REQUEST -&gt; the deal-quotation PDF;</li>
-     *   <li>{@code origin} NULL with a {@code pricing_request_id} -&gt; the PCR-generated customer quotation
-     *       ({@code CustomerQuotationService}; that chain never sets origin, which is why NULL alone is
-     *       ambiguous);</li>
-     *   <li>{@code origin} NULL and no pricing request -&gt; a genuine legacy ticket-native quotation.</li>
-     * </ul>
-     */
+    /** Points at the existing download endpoint for the quotation's chain; that endpoint enforces its own authz. */
     private static String quotationPath(long ticketId, FinanceDealRepository.QuotationHeader q) {
         if (q.origin() != null) {
             return "/api/deal-quotations/" + q.id() + "/file?format=pdf";

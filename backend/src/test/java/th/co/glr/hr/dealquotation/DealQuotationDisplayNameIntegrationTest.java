@@ -41,16 +41,9 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * V179 (owner feedback #4, 2026-09-14) — the ผู้พิมพ์/พนักงานขาย print-name override. Real
- * Postgres, through the real {@link DealQuotationService}/{@link DealQuotationRepository}. See
- * that migration and {@code DealQuotationDtos}' Javadoc for the feature's shape.
- *
- * <p>Written wrong-way-round where it matters: {@link
- * #settingSalesRepDisplayId_doesNotChangeOwnershipAccessOrCommissionAttribution} asserts the real
- * {@code salesRepId} and the edit-access decision are UNCHANGED by the display override — this is
- * a print-only feature, not a re-assignment of the deal.
- */
+/** V179 (owner feedback #4, 2026-09-14) — the ผู้พิมพ์/พนักงานขาย print-name override. Real Postgres, through
+ * the real DealQuotationService/DealQuotationRepository. See that migration and DealQuotationDtos' Javadoc for
+ * the feature's shape. */
 class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegrationTest {
     private DealQuotationRepository quotationRepository;
     private DealQuotationService quotationService;
@@ -99,8 +92,8 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
             new QuotationRenderer(), new EmployeeAuthRepository(jdbc), new EmployeeSignatureRepository(jdbc),
             new CatalogRepository(jdbc), "https://portal.test", "", "", "");
 
-        // Real sales-division code ("SA"), matching DivisionAccessPolicy.SALES_DIVISION_CODE —
-        // NOT the "SALES" literal some older fixtures in this package use, which does not match.
+        // Real sales-division code ("SA"), matching DivisionAccessPolicy.SALES_DIVISION_CODE — NOT the "SALES" literal
+        // some older fixtures in this package use, which does not match.
         salesDivisionRepId = createEmployee(employees, "พนักงานขาย ดิสเพลย์", "sales-display@glr.co.th",
             "SA", "ฝ่ายขาย", null);
         otherSalesRepId = createEmployee(employees, "พนักงานขาย อื่นดิสเพลย์", "sales-other-display@glr.co.th",
@@ -129,9 +122,7 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
             customer.id(), project.id(), contact.id(), null, null, null), salesActor).summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Repository — the eligible union itself
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void findEligibleOptions_includesSalesDivisionAndGrantHolder_excludesIneligibleAndInactive() {
@@ -157,9 +148,7 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
         assertThat(quotationRepository.isEligibleQuotationDisplayName(inactiveEligibleId, sa)).isFalse();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Service — create/update validation
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void create_withSalesDivisionDisplayId_succeedsAndRoundTrips() {
@@ -246,17 +235,10 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
         assertThat(revision.salesRepDisplayName()).isEqualTo("พนักงานขาย ดิสเพลย์");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Wrong-way-round: this is PRINT-ONLY — ownership/access/commission are untouched
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The owner's explicit boundary: setting {@code salesRepDisplayId} must NOT change who owns
-     * the deal (real {@code salesRepId}/{@code createdById}), and must NOT let the display-named
-     * employee edit a deal they otherwise could not. {@code otherSalesActor} owns a DIFFERENT
-     * ticket — being NAMED as the sales-rep display on {@code salesActor}'s quotation must not
-     * grant them edit access to it.
-     */
+    /** The owner's explicit boundary: setting salesRepDisplayId must NOT change who owns the deal (real
+     * salesRepId/createdById), and must NOT let the display-named employee edit a deal they otherwise could not. */
     @Test
     void settingSalesRepDisplayId_doesNotChangeOwnershipAccessOrCommissionAttribution() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -266,18 +248,15 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
         assertThat(created.salesRepId()).isEqualTo(salesDivisionRepId);
         assertThat(created.createdById()).isEqualTo(salesDivisionRepId);
 
-        // otherSalesActor is now the DISPLAYED sales rep on this document, but does not own the
-        // deal (ticket.createdBy is salesDivisionRepId) and holds no grant — requireEditAccess
-        // must still refuse them.
+        // otherSalesActor is now the DISPLAYED sales rep on this document, but does not own the deal (ticket.createdBy
+        // is salesDivisionRepId) and holds no grant — requireEditAccess must still refuse them.
         assertThatThrownBy(() -> quotationService.update(created.id(),
             upsertRequest(null, otherSalesRepId), otherSalesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Options endpoint gate
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void findQuotationDisplayNameOptions_listsTheEligibleUnion_forAnEditRoleActor() {
@@ -309,9 +288,7 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
             .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private UpsertDealQuotationRequest upsertRequest(Long printedByDisplayId, Long salesRepDisplayId) {
         ItemInput item = new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",

@@ -32,17 +32,9 @@ import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.RemittanceLedgerR
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Real-Postgres coverage of the payroll-engine wiring for issue #373: the monthly figure derived
- * from a {@code hr.deduction_obligation} row (not retyped), the draw-down clamp (final instalment =
- * the remainder), the auto-stop at {@code instructedTotal}, the HR override resuming deduction, and
- * -- the part a mocked repository cannot demonstrate -- that reprocessing the SAME payroll month
- * self-corrects the remittance ledger instead of double-counting.
- *
- * <p>Driven exclusively through the real {@link PayrollService#process}/{@code #preview} and {@link
- * DeductionObligationService}, per CLAUDE.md's requirement for a business-logic change: "a mocked
- * repository happily 'passes' while the SQL does something else."
- */
+/** Real-Postgres coverage of the payroll-engine wiring for issue #373: the monthly figure derived from a
+ * hr.deduction_obligation row, the draw-down clamp, the auto-stop at instructedTotal, the HR override resuming
+ * deduction, and. */
 class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -109,8 +101,8 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         BigDecimal feb = processAndDeduction(LocalDate.of(2026, 2, 1), employeeId);
         assertThat(feb).isEqualByComparingTo("1000.00");
 
-        // 2,000 remitted so far; 640 left -- the final instalment must be exactly the remainder, never
-        // the full 1,000 (which would overshoot the instructed total).
+        // 2,000 remitted so far; 640 left -- the final instalment must be exactly the remainder, never the full 1,000
+        // (which would overshoot the instructed total).
         BigDecimal mar = processAndDeduction(LocalDate.of(2026, 3, 1), employeeId);
         assertThat(mar).isEqualByComparingTo("640.00");
         assertThat(obligationRepository.findById(obligationId).orElseThrow().status())
@@ -127,8 +119,8 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
 
         // Paid-to-date is a real SUM over the ledger, matching every period actually deducted.
         assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("3640.00");
-        // Jan/Feb/Mar/May each moved real money -- April deducted ZERO (auto-stop) and is NOT a
-        // remittance, so it must not appear in the ledger (see recordOne's zero-amount delete path).
+        // Jan/Feb/Mar/May each moved real money -- April deducted ZERO (auto-stop) and is NOT a remittance, so it must
+        // not appear in the ledger (see recordOne's zero-amount delete path).
         assertThat(obligationRepository.findLedger(obligationId)).hasSize(4);
         assertThat(obligationRepository.findLedger(obligationId))
             .extracting(RemittanceLedgerRowDto::payrollMonth)
@@ -137,16 +129,9 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
                 LocalDate.of(2026, 3, 1), LocalDate.of(2026, 5, 1));
     }
 
-    /**
-     * D1 fix (Opus review): reproduces the exact probe from the review -- process the completing
-     * month, then re-process it (and a third time), asserting the SAME ฿640 final instalment every
-     * time. Before the fix, {@code resolveMonthlyAmount} trusted the STORED {@code status} column
-     * (written by the previous run) instead of recomputing the remaining balance from the ledger
-     * excluding this month, so the second run saw "COMPLETED" and returned 0, silently deleting the
-     * final instalment (the obligation's status even bounced back to ACTIVE as a result). A
-     * single-run test cannot catch this -- the bug only appears on RE-processing the month that
-     * causes completion.
-     */
+    /** D1 fix (Opus review): reproduces the exact probe from the review -- process the completing month, then
+     * re-process it (and a third time), asserting the SAME ฿640 final instalment every time. A single-run test
+     * cannot catch this -- the bug only appears on RE-processing the month that causes completion. */
     @Test
     void theCompletingMonthYieldsTheSameFinalInstalmentOnEveryReprocess() {
         long employeeId = seedEmployee("OBL-REPROCESS-FINAL", new BigDecimal("30000.00"));
@@ -177,14 +162,9 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         assertThat(obligationRepository.findLedger(obligationId)).hasSize(3); // Jan, Feb, Mar -- never duplicated
     }
 
-    /**
-     * D2 fix (Opus review): an obligation recorded with a start_date AFTER the payroll month being
-     * processed must not drive that month's deduction at all -- it must behave exactly as if no
-     * obligation existed (falls back to the HR-typed/absent manual figure), and must record no
-     * ledger row. Before the fix, {@code findDrivingObligation} filtered only on employee/kind/status,
-     * so an obligation entered ahead of its instructed start date (or a fat-fingered year) deducted
-     * for every month before the authority actually said to.
-     */
+    /** D2 fix (Opus review): an obligation recorded with a start_date AFTER the payroll month being processed must
+     * not drive that month's deduction at all -- it must behave exactly as if no obligation existed (falls back to
+     * the HR-typed/absent manual figure), and must record no ledger row. */
     @Test
     void anObligationWithAFutureStartDateDoesNotDeductBeforeItStarts() {
         long employeeId = seedEmployee("OBL-FUTURESTART", new BigDecimal("30000.00"));
@@ -205,16 +185,8 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("1000.00");
     }
 
-    /**
-     * Off-by-one-month fix (Opus re-review): {@code payrollMonth} is always normalised to the 1st,
-     * but an authority's document is rarely dated the 1st. Before this fix, comparing the raw dates
-     * (`start_date &lt;= payrollMonth`) made {@code 2026-01-15 <= 2026-01-01} false, so a document
-     * dated 15 Jan silently skipped its own start month -- the most common real case (any document
-     * not dated the 1st), and with no {@code instructedTotal} that skipped instalment is never
-     * recovered (the clamp has nothing to make it up against). Fixed by truncating {@code
-     * start_date} to its own month-start before comparing. A control obligation started on the 1st
-     * proves the fix did not just widen the window indiscriminately.
-     */
+    /** Off-by-one-month fix (Opus re-review): payrollMonth is always normalised to the 1st, but an authority's
+     * document is rarely dated the 1st. Fixed by truncating start_date to its own month-start before comparing. */
     @Test
     void aMidMonthStartDateStillDeductsInItsOwnStartingMonth() {
         long midMonthEmployee = seedEmployee("OBL-MIDMONTH", new BigDecimal("30000.00"));
@@ -230,18 +202,16 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         BigDecimal midMonthJanuary = processAndDeduction(LocalDate.of(2026, 1, 1), midMonthEmployee);
         BigDecimal controlJanuary = processAndDeduction(LocalDate.of(2026, 1, 1), controlEmployee);
 
-        // The document is dated mid-January, but it still drives the WHOLE of January -- not zero,
-        // and not deferred to February.
+        // The document is dated mid-January, but it still drives the WHOLE of January -- not zero, and not deferred to
+        // February.
         assertThat(midMonthJanuary).isEqualByComparingTo("1000.00");
         assertThat(controlJanuary).isEqualByComparingTo("1000.00");
         assertThat(obligationRepository.sumRemittanceTotal(midMonthObligationId)).isEqualByComparingTo("1000.00");
     }
 
-    /**
-     * The core "must survive a re-run" requirement: reprocessing the SAME month upserts that period's
-     * own ledger row instead of inserting a second one. A mocked repository cannot demonstrate this --
-     * it would happily "insert" twice and the test would still pass against the mock.
-     */
+    /** The core "must survive a re-run" requirement: reprocessing the SAME month upserts that period's own ledger
+     * row instead of inserting a second one. A mocked repository cannot demonstrate this -- it would happily
+     * "insert" twice and the test would still pass against the mock. */
     @Test
     void reprocessingTheSameMonthSelfCorrectsTheLedgerInsteadOfDoubleCounting() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -254,9 +224,9 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("1000.00");
         assertThat(obligationRepository.findLedger(obligationId)).hasSize(1);
 
-        // Reprocess the SAME month three more times (e.g. HR re-runs after an unrelated correction,
-        // as this system's payroll routinely does -- see PayrollRepository#saveProcessedPeriod's
-        // delete-then-insert). The ledger must stay at exactly one row for this month, not four.
+        // Reprocess the SAME month three more times (e.g. HR re-runs after an unrelated correction, as this system's
+        // payroll routinely does -- see PayrollRepository#saveProcessedPeriod's delete-then-insert). The ledger must
+        // stay at exactly one row for this month, not four.
         payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
         payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
         payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
@@ -265,13 +235,8 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         assertThat(obligationRepository.sumRemittanceTotal(obligationId)).isEqualByComparingTo("1000.00");
     }
 
-    /**
-     * Composition with the ALREADY-enforced ป.วิ.พ. ม.302 garnishment cap (PayrollCalculator
-     * #garnishmentDeduction, PayrollGarnishmentType.SALARY: 30% of gross taxable income). Case 1: the
-     * obligation's own instructed monthly figure is so large the STATUTORY cap binds tighter -- the
-     * persisted deduction must be capped well below the instructed figure, and the ledger must record
-     * the REDUCED (actually remitted) amount, not the raw instruction.
-     */
+    /** Composition with the ALREADY-enforced ป.วิ.พ. ม.302 garnishment cap (PayrollCalculator
+     * #garnishmentDeduction, PayrollGarnishmentType.SALARY: 30% of gross taxable income). */
     @Test
     void theStatutoryGarnishmentCapCanBindTighterThanTheObligationsOwnMonthlyFigure() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -283,8 +248,8 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         PayrollPeriodDto period = payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
         PayrollLineDto line = lineFor(period, employeeId);
 
-        // 30% of a ~30,000 gross taxable income is far below the instructed 20,000/month -- the
-        // statutory cap, not this obligation's own (uncapped) clamp, must be what actually bound.
+        // 30% of a ~30,000 gross taxable income is far below the instructed 20,000/month -- the statutory cap, not
+        // this obligation's own (uncapped) clamp, must be what actually bound.
         assertThat(line.legalExecutionDeduction()).isLessThan(new BigDecimal("20000.00"));
         BigDecimal capByRate = line.grossTaxableIncome().multiply(new BigDecimal("0.30"));
         assertThat(line.legalExecutionDeduction()).isLessThanOrEqualTo(capByRate);
@@ -304,8 +269,8 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
         PayrollPeriodDto period = payrollService.process(new ProcessPayrollRequest(month, List.of()), hr());
         PayrollLineDto line = lineFor(period, employeeId);
 
-        // Far below any statutory cap for a ฿30,000 salary -- this obligation's own remaining balance
-        // (50.00 total, nothing remitted yet) is what actually bound.
+        // Far below any statutory cap for a ฿30,000 salary -- this obligation's own remaining balance (50.00 total,
+        // nothing remitted yet) is what actually bound.
         assertThat(line.legalExecutionDeduction()).isEqualByComparingTo("50.00");
         assertThat(obligationRepository.findById(obligationId).orElseThrow().status())
             .isEqualTo(DeductionObligationStatus.COMPLETED);
@@ -338,9 +303,9 @@ class DeductionObligationPayrollEngineIntegrationTest extends AbstractPostgresIn
             """,
             Map.of("code", code, "salary", salary),
             Long.class);
-        // Mirrors PayrollWithholdingTaxOverrideIntegrationTest#seedEmployee: real production
-        // SSO-inclusion defaults so socialSecurity/grossTaxableIncome come out non-zero and realistic.
-        // SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless).
+        // Mirrors PayrollWithholdingTaxOverrideIntegrationTest#seedEmployee: real production SSO-inclusion defaults so
+        // socialSecurity/grossTaxableIncome come out non-zero and realistic. SALARY needs no tax-treatment seed
+        // (locked to REGULAR_REPROJECT regardless).
         payrollRepository.seedSsoInclusionDefaults(employeeId, 2026, employeeId);
         return employeeId;
     }

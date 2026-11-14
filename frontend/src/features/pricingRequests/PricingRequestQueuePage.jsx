@@ -99,13 +99,8 @@ function buildColumns(user) {
       header: 'เลขที่คำขอราคา',
       sortable: true,
       searchAccessor: (row) => row.requestCode,
-      // A Link (not the whole-row `onRowClick` DataTable optionally offers) so
-      // this table can carry a pickup <button> per row without nesting one
-      // interactive element inside another — `onRowClick`'s own
-      // interactive-target guard would let the button work fine, but this page
-      // still opts out of it: with a per-row link *and* a per-row pickup
-      // button already doing double duty, adding a third, whole-row target
-      // would just be a redundant way to reach the same place.
+      // A Link so this table can carry a pickup <button> per row without nesting one interactive element inside
+      // another.
       render: (row) => <Link to={`/pricing-requests/${row.id}`} className="text-xs text-info underline"><code>{row.requestCode}</code></Link>,
     },
     {
@@ -256,9 +251,8 @@ export function PricingRequestQueuePage({ user, showToast }) {
 
   const filter = STATUS_FILTERS.find((f) => f.key === filterKey) ?? STATUS_FILTERS[0];
 
-  // One status -> the API filters it server-side. Zero (ทั้งหมด) or two
-  // (เจรจาราคากับโรงงาน) -> fetch everything and narrow below; see STATUS_FILTERS
-  // for why the two-status chip cannot be pushed down to the query.
+  // One status -> the API filters it server-side. Zero (ทั้งหมด) or two (เจรจาราคากับโรงงาน) -> fetch everything
+  // and narrow below; see STATUS_FILTERS for why the two-status chip cannot be pushed down to the query.
   const queryStatus = filter.statuses.length === 1 ? filter.statuses[0] : undefined;
   const allTabActive = !hasTaskTabs || activeTab === 'ALL';
 
@@ -268,14 +262,9 @@ export function PricingRequestQueuePage({ user, showToast }) {
     enabled: allTabActive,
   });
 
-  // Import's งานของฉัน: the endpoint only takes one `status`, so this fetches
-  // everything assigned to the current user and narrows to the three
-  // still-open Import statuses client-side. `enabled: hasTaskTabs` (not
-  // `activeTab === 'MY_WORK'`) is what keeps the badge counting while another
-  // tab is active. The assignedImportId check is re-asserted client-side too
-  // (cheap, and defence-in-depth against a mock/backend that returned more
-  // than this exact filter asked for — CLAUDE.md's "mock more permissive than
-  // production" is the direction that only ever surfaces in prod).
+  // Import's งานของฉัน: the endpoint only takes one `status`, so this fetches everything assigned to the current
+  // user and narrows to the three still-open Import statuses client-side. `enabled: hasTaskTabs` (not `activeTab
+  // === 'MY_WORK'`) is what keeps the badge counting while another tab is active.
   const myWorkQuery = useQuery({
     queryKey: queryKeys.pricingRequestQueue({ assignedImportId: user.id, activeOnly: true }),
     queryFn: () => api.pricingRequests.queue({ assignedImportId: user.id, activeOnly: true }).then((r) => r.items ?? []),
@@ -287,10 +276,9 @@ export function PricingRequestQueuePage({ user, showToast }) {
     [myWorkQuery.data, user.id],
   );
 
-  // ceo's รอฉันพิจารณา: fetches everything (same params CeoOverview's own
-  // price-approval card uses — queryKeys.pricingRequestQueue({ activeOnly: true })
-  // — so the two share one cache entry) and narrows to the two "waiting on the
-  // CEO" statuses client-side.
+  // ceo's รอฉันพิจารณา: fetches everything (same params CeoOverview's own price-approval card uses —
+  // queryKeys.pricingRequestQueue({ activeOnly: true }) — so the two share one cache entry) and narrows to the
+  // two "waiting on the CEO" statuses client-side.
   const myReviewQuery = useQuery({
     queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
     queryFn: () => api.pricingRequests.queue({ activeOnly: true }).then((r) => r.items ?? []),
@@ -318,9 +306,9 @@ export function PricingRequestQueuePage({ user, showToast }) {
     enabled: hasTaskTabs && user.role === 'import',
   });
 
-  // Only the prompt button (below) sets this — a real tab click already keeps/receives focus
-  // via the browser's own click handling, so this effect only needs to act on the ONE
-  // navigation path that does not originate from clicking the tab itself.
+  // Only the prompt button (below) sets this — a real tab click already keeps/receives focus via the browser's
+  // own click handling, so this effect only needs to act on the ONE navigation path that does not originate from
+  // clicking the tab itself.
   const focusUnclaimedTabRef = useRef(false);
   useEffect(() => {
     if (activeTab !== 'UNCLAIMED' || !focusUnclaimedTabRef.current) return;
@@ -339,9 +327,9 @@ export function PricingRequestQueuePage({ user, showToast }) {
   }
 
   const badgeRows = user.role === 'import' ? myWorkRows : myReviewRows;
-  // The query backing whichever tab currently doubles as the badge (myWorkQuery for import,
-  // myReviewQuery for ceo) — used both for the badge's own loading/success gating below and,
-  // when that tab is the active one, for isLoading/isError in the branch further down.
+  // The query backing whichever tab currently doubles as the badge (myWorkQuery for import, myReviewQuery for
+  // ceo) — used both for the badge's own loading/success gating below and, when that tab is the active one, for
+  // isLoading/isError in the branch further down.
   const badgeQuery = user.role === 'import' ? myWorkQuery : myReviewQuery;
   const activeTabMeta = taskTabs?.find((t) => t.key === activeTab);
 
@@ -360,17 +348,17 @@ export function PricingRequestQueuePage({ user, showToast }) {
     isError = unclaimedQuery.isError;
     emptyTitle = activeTabMeta?.emptyTitle ?? emptyTitle;
   } else {
-    // ทั้งหมด tab, or a role with no task tabs at all — today's chip behaviour, API order
-    // preserved (no byOldestFirst here — this is a browse view, not a worklist).
+    // ทั้งหมด tab, or a role with no task tabs at all — today's chip behaviour, API order preserved (no
+    // byOldestFirst here — this is a browse view, not a worklist).
     const items = allQuery.data ?? [];
     rows = filter.statuses.length < 2 ? items : items.filter((row) => filter.statuses.includes(row.status));
     isLoading = allQuery.isLoading;
     isError = allQuery.isError;
     emptyTitle = activeTabMeta?.emptyTitle ?? emptyTitle;
   }
-  // A failed fetch reading as confident "nothing is yours"/"ทั้งหมด is empty" is worse than no
-  // rows at all (review finding) — override the tab's own empty copy and icon, and never show
-  // stale/partial rows underneath an error banner.
+  // A failed fetch reading as confident "nothing is yours"/"ทั้งหมด is empty" is worse than no rows at all
+  // (review finding) — override the tab's own empty copy and icon, and never show stale/partial rows underneath
+  // an error banner.
   if (isError) {
     rows = [];
     emptyTitle = ERROR_EMPTY_TITLE;
@@ -399,8 +387,8 @@ export function PricingRequestQueuePage({ user, showToast }) {
       id: tab.key,
       label: tab.label,
       badge: count ?? undefined,
-      // Read as "<label> N รายการ" instead of the ambiguous "<label>N" a bare number would produce
-      // — see Tabs.jsx's own badgeLabel doc.
+      // Read as "<label> N รายการ" instead of the ambiguous "<label>N" a bare number would produce — see Tabs.jsx's
+      // own badgeLabel doc.
       badgeLabel: count != null ? `${count} รายการ` : undefined,
     };
   }) ?? [];
@@ -467,12 +455,9 @@ export function PricingRequestQueuePage({ user, showToast }) {
       ) : null}
 
       {showEmptyWorkPrompt ? (
-        // Not DataTable's own emptyState (EmptyState.jsx has no action/button slot, and this is
-        // one specific page's prompt, not a case for widening a shared component) — a small local
-        // block reusing the same visual rhythm (icon + heading + sub-line) instead.
-        // `role="status"` (implicit aria-live="polite") announces it — a screen-reader user who
-        // just cleared their last claimed request should hear "ไม่มีงานค้าง · มี N คำขอรอรับเรื่อง"
-        // instead of silence.
+        // Not DataTable's own emptyState (EmptyState.jsx has no action/button slot, and this is one specific page's
+        // prompt, not a case for widening a shared component) — a small local block reusing the same visual rhythm
+        // (icon + heading + sub-line) instead.
         <div role="status" className="grid min-h-[220px] place-items-center content-center gap-2 rounded-md border border-border bg-surface p-6 text-center">
           <Icon name="badgeCheck" size={34} className="text-text-faint" />
           <strong className="text-text">ไม่มีงานค้าง</strong>
@@ -533,8 +518,8 @@ export function PricingRequestQueuePage({ user, showToast }) {
           <Tabs
             items={tabItems}
             value={activeTab}
-            // A plain tab click still needs the same on-entry refetch-if-stale as the prompt's
-            // button — both are ways to land on รอรับเรื่อง — so only that one id is special-cased.
+            // A plain tab click still needs the same on-entry refetch-if-stale as the prompt's button — both are ways to
+            // land on รอรับเรื่อง — so only that one id is special-cased.
             onChange={(tabId) => (tabId === 'UNCLAIMED' ? goToUnclaimed() : setActiveTab(tabId))}
             ariaLabel="งานที่ต้องทำ"
             idPrefix="pcr-queue-tasks"

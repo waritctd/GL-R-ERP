@@ -187,13 +187,7 @@ function CommentsSection({ deal, onPosted }) {
   );
 }
 
-/**
- * /finance/deals/:id — one deal as finance sees it. Everything on the page comes from the
- * finance-only read model (GET /api/finance/deals/:id, FinanceDealDto): its `milestoneTrack` is the
- * page's structure, its `availableActions` are the only money actions offered, and every money
- * write returns the refreshed `{ deal }`, which replaces the cached view. Presentation only — the
- * server enforces every gate.
- */
+/** /finance/deals/:id — one deal as finance sees it. Presentation only — the server enforces every gate. */
 export function FinanceDealPage() {
   const { id } = useParams();
   const queryClient = useQueryClient();
@@ -308,8 +302,8 @@ export function FinanceDealPage() {
     actionMutation.mutate({ call });
   }
 
-  // ConfirmDialog-driven actions: every one is a financial write that cannot be undone, so each
-  // asks first (the sanctioned exception to undo-over-confirm).
+  // ConfirmDialog-driven actions: every one is a financial write that cannot be undone, so each asks first (the
+  // sanctioned exception to undo-over-confirm).
   function confirmConfig(a) {
     switch (a.action) {
       case 'DEPOSIT_PAID':
@@ -343,14 +337,14 @@ export function FinanceDealPage() {
 
   const activeAction = flow?.action;
   const confirm = activeAction ? confirmConfig(activeAction) : null;
-  // Mirrors TicketDetailPage's openPaymentModal (something already paid -> BALANCE), plus a skipped
-  // deposit (nothing to collect up front, so the first payment is the balance).
+  // Mirrors TicketDetailPage's openPaymentModal (something already paid -> BALANCE), plus a skipped deposit
+  // (nothing to collect up front, so the first payment is the balance).
   const defaultPaymentKind = (Number(deal.money.amountPaid) > 0 || deal.milestoneTrack.some((step) => step.skipped)) ? 'BALANCE' : 'DEPOSIT';
 
   return (
     <div className="grid w-full min-w-0 max-w-[1200px] items-start gap-x-6 gap-y-4 grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)] nav-drawer:grid-cols-[minmax(0,1fr)]">
-      {/* Sticky identity + money pane: the figures and the primary action stay in view while the five
-          milestones scroll past. Below the nav-drawer breakpoint it is an ordinary first block. */}
+      {/* Sticky identity + money pane: the figures and the primary action stay in view while the five milestones
+       * scroll past. Below the nav-drawer breakpoint it is an ordinary first block. */}
       <aside className="grid min-w-0 gap-4 self-start rounded-md border border-border bg-surface p-5 sticky top-4 nav-drawer:static mobile:p-4">
         <header className="grid gap-2">
           <BackLink />

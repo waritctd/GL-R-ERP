@@ -9,17 +9,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Quotation ↔ deal linking, slice 1 (IA §7, owner decision 2026-09-30): the GLA-136 "hide a
- * quotation-first deal" rule is REVERSED. A deal created from {@code /quotations/new}
- * ({@code sales.ticket.quotation_only = TRUE}, V193 — now provenance only) is a real pipeline deal,
- * so every dashboard ticket figure COUNTS it, in every scope. Real SQL against real Postgres: the
- * figures come from {@code DashboardRepository#whereTicketScope}'s WHERE root, which only the
- * database can evaluate.
- *
- * <p>Each scope holds one ordinary draft and one quotation-first draft by the same rep in the same
- * division; the assertion is that BOTH are counted (the GLA-136 version asserted 1).
- */
+/** Quotation ↔ deal linking, slice 1 (IA §7, owner decision 2026-09-30): the GLA-136 "hide a quotation-first
+ * deal" rule is REVERSED. Real SQL against real Postgres: the figures come from
+ * DashboardRepository#whereTicketScope's WHERE root, which only the database can evaluate. */
 class DashboardQuotationFirstDealCountsIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate MONTH_START = LocalDate.of(2026, 9, 1);
     private static final OffsetDateTime OVERDUE_BEFORE = OffsetDateTime.parse("2026-09-27T09:00:00+07:00");

@@ -7,7 +7,7 @@ public record FactoryConfigDto(
     String currency,
     String unit,
     String country,
-    /** Free-text country name, set only when {@link #country} is {@code 'ZZ'} (อื่นๆ / "other").
-     * Null for every other country — see V184's paired CHECKs on {@code price_catalog.factories}. */
+    /** Free-text country name, set only when #country is 'ZZ' (อื่นๆ / "other"). Null for every other country — see
+     * V184's paired CHECKs on price_catalog.factories. */
     String countryOther
 ) {}

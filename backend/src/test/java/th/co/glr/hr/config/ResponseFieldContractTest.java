@@ -31,77 +31,17 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.context.WebApplicationContext;
 import th.co.glr.hr.support.SpringdocContractSupport;
 
-/**
- * Pins the response FIELD NAMES the frontend reads, and fails when the API stops serving one.
- *
- * <p><b>The gap this closes.</b> {@link ApiSurfaceContractTest} pins which operations exist —
- * verb and path. {@code contract.test.js} pins mockApi against hrApi — method names and parameter
- * counts. {@code serverContract.test.js} pins hrApi's paths against the controllers. Between them,
- * nothing looked <i>inside</i> a response. Rename {@code TicketSummaryDto.ticketCode} to
- * {@code dealCode} and every one of those guards stays green: the operation still exists, the
- * method still takes one argument, the path still resolves. The frontend reads
- * {@code deal.ticketCode}, gets {@code undefined}, and renders a blank cell in production. Under
- * {@code VITE_USE_MOCKS=true} it renders correctly forever, because mockApi never learned about the
- * rename — the same unguarded-mirror family as {@code WIN_PROBABILITY_DEFAULTS} and
- * {@code stageMeta.js}, one level further in.
- *
- * <p><b>The source of truth is springdoc's {@code /v3/api-docs}</b>, read over the real
- * {@code SecurityFilterChain} exactly as {@link ApiSurfaceContractTest} does. Reading the generated
- * document rather than parsing Java means Jackson's own serialization decides the names, so
- * {@code @JsonProperty} is honoured for free. That is not a nicety: 84 fields on this API serialize
- * under a name different from their Java record component — {@code badgeCardNo} goes on the wire as
- * {@code badge_card_no} — and a source parse that compares Java names makes whole attendance DTOs
- * look dead. Only RESPONSE schemas are collected (see {@link #liveResponseFields()}); request
- * bodies are a separate contract and are deliberately out of scope.
- *
- * <p><b>What is committed is the intersection, not the schema.</b>
- * {@code docs/api/response-fields.json} holds only the field names that BOTH appear in a response
- * schema AND are read by application code under {@code frontend/src}. That choice is what keeps
- * this guard quiet: a backend field ADDED by an unrelated PR does not appear in the file, so the
- * file does not churn, so nobody is trained to regenerate it without reading the diff. This is the
- * same reasoning {@link ApiSurfaceContractTest} gives for committing a digest rather than the whole
- * 237KB OpenAPI document, applied one level down.
- *
- * <p><b>The assertion is deliberately one-directional:</b> every pinned field must still exist.
- *
- * <ul>
- *   <li>Backend ADDS a field → live set grows, pinned set unchanged → <b>passes</b>. No churn.</li>
- *   <li>Backend REMOVES or RENAMES a field the frontend reads → <b>fails</b>. This is the bug.</li>
- *   <li>Frontend starts reading a field that was never pinned → not caught until someone
- *       regenerates. Stated plainly here rather than papered over; the completeness half needs a
- *       frontend-side scan on every run, which is a cost this guard does not pay.</li>
- * </ul>
- *
- * <p><b>When this test fails</b>, do not reflexively regenerate — the failure is the signal.
- * Decide which happened:
- *
- * <ol>
- *   <li><b>A field was renamed.</b> Update the frontend readers too, then regenerate. Regenerating
- *       alone silences the guard and ships the blank cell.</li>
- *   <li><b>A field was deliberately dropped.</b> Remove its frontend readers, then regenerate, and
- *       say so in the PR body.</li>
- * </ol>
- *
- * <pre>cd backend &amp;&amp; ./mvnw -Dtest=ResponseFieldContractTest -Dresponse.fields.update=true test</pre>
- *
- * <p>Update mode rewrites the file from scratch: it re-scans {@code frontend/src} and re-reads the
- * live schema, so it both drops fields the API no longer serves and picks up fields the frontend
- * has started reading. Regeneration is therefore the one place the completeness gap above is
- * closed, which is why the command is documented here rather than buried.
- */
+/** Pins the response FIELD NAMES the frontend reads, and fails when the API stops serving one. Under
+ * VITE_USE_MOCKS=true it renders correctly forever, because mockApi never learned about the rename — the same
+ * unguarded-mirror family as WIN_PROBABILITY_DEFAULTS and stageMeta.js, one level further in. */
 class ResponseFieldContractTest extends SpringdocContractSupport {
 
     /** Set {@code -Dresponse.fields.update=true} to rewrite the committed pin instead of asserting. */
     private static final String UPDATE_PROPERTY = "response.fields.update";
 
-    /**
-     * Frontend files whose field references are NOT evidence that the application consumes a field.
-     *
-     * <p>{@code mockApi.js} declares the shape it invents, {@code hrApi.js} and {@code routes.js}
-     * compose requests, and a test fixture asserts whatever it was written to assert. Pinning any
-     * of those would let the mock's own imagination hold the backend contract in place — the exact
-     * inversion CLAUDE.md warns about under "Mock API contract".
-     */
+    /** Frontend files whose field references are NOT evidence that the application consumes a field. mockApi.js
+     * declares the shape it invents, hrApi.js and routes.js compose requests, and a test fixture asserts whatever
+     * it was written to assert. */
     private static final List<String> NOT_APP_CODE =
         List.of("/api/mockApi", "/api/hrApi", "/api/routes", "/api/apiSurface", ".test.", "/test/");
 
@@ -122,9 +62,9 @@ class ResponseFieldContractTest extends SpringdocContractSupport {
     void everyPinnedResponseFieldIsStillServed() throws Exception {
         Set<String> live = liveResponseFields();
 
-        // An empty or tiny live set means the fetch or the schema walk broke, not that the API
-        // serves no fields. Without this, "every pinned field is present" would hold vacuously
-        // against a rewritten-empty pin and the guard would be gone while staying green.
+        // An empty or tiny live set means the fetch or the schema walk broke, not that the API serves no fields.
+        // Without this, "every pinned field is present" would hold vacuously against a rewritten-empty pin and the
+        // guard would be gone while staying green.
         assertThat(live)
             .as("springdoc returned almost no response fields — the fetch or the schema walk is"
                 + " broken, not the app")
@@ -156,23 +96,9 @@ class ResponseFieldContractTest extends SpringdocContractSupport {
             .containsAll(pinned);
     }
 
-    /**
-     * Every {@code "SchemaName.fieldName"} reachable from a RESPONSE schema, as Jackson serializes it.
-     *
-     * <p>Walks {@code paths.*.<verb>.responses.*.content.*.schema} to the set of schemas that can
-     * appear in a response, then closes transitively over {@code $ref}, {@code items} and
-     * {@code additionalProperties} so nested DTOs count too. Request bodies are never entered, so a
-     * name that exists only on a {@code *Request} record is correctly absent.
-     *
-     * <p><b>Qualified by schema, and that is load-bearing.</b> An earlier draft pinned bare field
-     * names and a mutation-check proved it could not fail: renaming
-     * {@code NotificationDto.ticketCode} to {@code dealCode} on the wire left the guard green,
-     * because {@code PricingRequestSummaryDto} and {@code FactoryPurchaseOrderDto} also declare a
-     * {@code ticketCode} and the flat name set still contained one. Any field name shared by two
-     * DTOs was unfalsifiable — and shared names are the norm here ({@code ticketCode},
-     * {@code employeeName}, {@code createdAt}). Qualifying costs nothing in accuracy: springdoc
-     * already reports which schema each property belongs to, so no guess is involved.
-     */
+    /** Every "SchemaName.fieldName" reachable from a RESPONSE schema, as Jackson serializes it. Request bodies are
+     * never entered, so a name that exists only on a *Request record is correctly absent. Qualified by schema, and
+     * that is load-bearing. */
     private Set<String> liveResponseFields() throws Exception {
         JsonNode root = apiDocs();
         JsonNode schemas = root.path("components").path("schemas");
@@ -226,13 +152,9 @@ class ResponseFieldContractTest extends SpringdocContractSupport {
         }
     }
 
-    /**
-     * Identifiers application code READS — property access, bracket access, destructuring.
-     *
-     * <p>Object literal KEYS are deliberately not collected. A key is the frontend declaring a
-     * shape of its own; only a read is evidence that the frontend depends on the backend sending
-     * something. Files in {@link #NOT_APP_CODE} are skipped for the same reason.
-     */
+    /** Identifiers application code READS — property access, bracket access, destructuring. A key is the frontend
+     * declaring a shape of its own; only a read is evidence that the frontend depends on the backend sending
+     * something. */
     private Set<String> appReadIdentifiers() throws IOException {
         Path source = repositoryRoot().resolve("frontend/src");
         Set<String> read = new HashSet<>();
@@ -258,8 +180,8 @@ class ResponseFieldContractTest extends SpringdocContractSupport {
                     }
                 });
         }
-        // A scanner that silently matched nothing would regenerate an empty pin, which the
-        // emptiness assertion above would then have to catch on the NEXT run. Fail here instead.
+        // A scanner that silently matched nothing would regenerate an empty pin, which the emptiness assertion above
+        // would then have to catch on the NEXT run. Fail here instead.
         assertThat(read)
             .as("scanned %s and found almost no property reads — the scanner is broken", source)
             .hasSizeGreaterThan(1_000);
@@ -272,22 +194,8 @@ class ResponseFieldContractTest extends SpringdocContractSupport {
         }
     }
 
-    /**
-     * The pinned set: {@code Schema.field} entries whose field is read by application code and is
-     * distinctive enough to carry signal.
-     *
-     * <p>"Distinctive" means a camelCase hump or an underscore — {@code ticketCode},
-     * {@code badge_card_no}. Bare single words are dropped because they carry no signal: every
-     * frontend file reads {@code .id}, {@code .status} and {@code .name} off local view models, so
-     * pinning {@code SomeDto.id} on the strength of that would assert a field nothing was shown to
-     * depend on, and would turn every unrelated DTO tidy-up into a failure.
-     *
-     * <p>A field is pinned on EVERY schema that declares it, because a read of {@code .ticketCode}
-     * cannot be attributed to one DTO by static analysis. That over-pins slightly — renaming
-     * {@code ticketCode} on a DTO whose readers do not exist still fails — and that is the
-     * deliberate direction: a wire rename should make a human look, and the alternative
-     * (pin nothing shared) is what the mutation-check showed to be no guard at all.
-     */
+    /** The pinned set: Schema.field entries whose field is read by application code and is distinctive enough to
+     * carry signal. "Distinctive" means a camelCase hump or an underscore — ticketCode, badge_card_no. */
     private List<String> intersect(Set<String> live, Set<String> read) {
         return live.stream()
             .filter(qualified -> {
@@ -331,12 +239,8 @@ class ResponseFieldContractTest extends SpringdocContractSupport {
         return repositoryRoot().resolve("docs/api/response-fields.json");
     }
 
-    /**
-     * The repository root, found by walking up for the marker rather than hardcoding {@code ../}.
-     *
-     * <p>Surefire runs with {@code backend/} as the working directory but some IDEs run from the
-     * repo root, and a relative path that silently resolves somewhere else would scan nothing and
-     * write the pin where nothing reads it. Same idiom as {@code ApiSurfaceContractTest}.
-     */
+    /** The repository root, found by walking up for the marker rather than hardcoding ../. Surefire runs with
+     * backend/ as the working directory but some IDEs run from the repo root, and a relative path that silently
+     * resolves somewhere else would scan nothing and write the pin where nothing reads it. */
 
 }

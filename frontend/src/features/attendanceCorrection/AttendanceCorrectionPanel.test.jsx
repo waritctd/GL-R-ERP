@@ -58,12 +58,9 @@ const submittedRequest = {
 };
 
 
-// The section is collapsed by default for every role (owner, 2026-08-10) — it is a correction
-// workflow, rare for an employee and batched for the CEO, and expanded it put a stat strip, a
-// filter bar and a full table between the attendance table and the bottom of the page.
-// CollapsibleSection UNMOUNTS its body when collapsed, so every assertion about the list below
-// has to open it first. This helper is the disclosure click, not a workaround: if the default
-// ever flips back to open, `findByRole` here still resolves and nothing silently rots.
+// The section is collapsed by default for every role (owner, 2026-08-10) — it is a correction workflow, rare
+// for an employee and batched for the CEO, and expanded it put a stat strip, a filter bar and a full table
+// between the attendance table and the bottom of the page.
 async function expandSection() {
   const header = await screen.findByRole('button', { name: /คำขอแก้ไขเวลาเข้า-ออกงาน/ });
   if (header.getAttribute('aria-expanded') === 'false') fireEvent.click(header);
@@ -84,9 +81,9 @@ describe('AttendanceCorrectionPanel — own request list', () => {
     await expandSection();
 
     expect(await screen.findByText('ลืมสแกนนิ้ว')).not.toBeNull();
-    // "รอ CEO" also appears as a status-filter <option>, AND the collapsed-section header now
-    // carries its own pending-count StatusBadge ("รอพิจารณา N") — so a document-wide
-    // `.status-badge` lookup returns the header's, not this row's. Scope to the row.
+    // "รอ CEO" also appears as a status-filter <option>, AND the collapsed-section header now carries its own
+    // pending-count StatusBadge ("รอพิจารณา N") — so a document-wide `.status-badge` lookup returns the header's,
+    // not this row's. Scope to the row.
     expect(document.querySelector('.data-row .status-badge')?.textContent).toBe('รอ CEO');
   });
 });
@@ -97,13 +94,9 @@ describe('AttendanceCorrectionPanel — CEO review affordance', () => {
     api.attendanceCorrection.approve.mockResolvedValue({ request: { id: 5, status: 'APPROVED' } });
   });
 
-  // Split from the former "does not render the submit form for the CEO" (submit-flow) test --
-  // the submit FORM moved to AttendanceCorrectionRequestModal.jsx
-  // (fix/attendance-correction-on-attendance-page), so this panel never renders one for ANY
-  // role any more. That made the old queryByLabelText(/วันที่ที่ต้องการแก้ไข/) assertion pass
-  // regardless of who was signed in -- a tautology, unable to fail (adversarial review N1) --
-  // so it was dropped along with the rename. What this test actually proves: the review queue
-  // (its own empty state) renders for the CEO.
+  // Split from the former "does not render the submit form for the CEO" (submit-flow) test -- the submit FORM
+  // moved to AttendanceCorrectionRequestModal.jsx (fix/attendance-correction-on-attendance-page), so this panel
+  // never renders one for ANY role any more.
   it('renders the review queue (empty state) for the CEO', async () => {
     api.attendanceCorrection.list.mockResolvedValue({ requests: [] });
     renderPanel(ceoUser);
@@ -127,11 +120,9 @@ describe('AttendanceCorrectionPanel — CEO review affordance', () => {
     await waitFor(() => expect(api.attendanceCorrection.approve).toHaveBeenCalledWith(5, { reviewerNote: null }));
   });
 
-  // Regression coverage for the deliberate invalidation change this branch makes
-  // (fix/attendance-correction-on-attendance-page): approving now writes a real punch
-  // (AttendanceCorrectionService#approve -> AttendanceDailyService#applyManualCorrection,
-  // backend), and this list sits on the same page as the attendance day table now, so an
-  // approval must invalidate BOTH query prefixes or the table above keeps showing stale data.
+  // Regression coverage for the deliberate invalidation change this branch makes: approving now writes a real
+  // punch, and this list sits on the same page as the attendance day table now, so an approval must invalidate
+  // BOTH query prefixes or the table above keeps showing stale data.
   it('invalidates both attendanceCorrection and attendance on approve', async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },

@@ -15,30 +15,13 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleAssignmentRepository;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage of two things this branch is specifically about, wired through the real
- * {@code AttendanceDailyService}/{@code AttendanceDailyRepository}/{@code TieredWorkScheduleResolver}
- * chain rather than mocks:
- *
- * <ol>
- *   <li>recalculation genuinely picking up a schedule change (the point of
- *       {@code recalculateAllHistory}/{@code recalculateRange} existing at all — see this branch's
- *       task description), and that the cache added alongside it is what makes that possible without
- *       a restart;
- *   <li>a regression this investigation found: {@code AttendanceDailyService#toDto} (the read path)
- *       did not consult {@code schedule.requiresCheckOut()} the way {@code
- *       AttendanceDailyCalculator#statusOf} (the write path) already did, so a V117 sales employee's
- *       compliant lone check-in re-flagged as MISSING_CHECK_OUT on every read even though the stored
- *       row was computed correctly.
- * </ol>
- */
+/** Verifies schedule-aware attendance recalculation and resolver cache expiry against PostgreSQL. */
 class AttendanceDailyScheduleAwareRecalculationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     // 2026-08-05 is a Wednesday (a SALES_5D/OFFICE_5D/OPS_6D workday for all three).
     private static final LocalDate WEDNESDAY = LocalDate.of(2026, 8, 5);
-    // 2026-08-08 is a Saturday: a non-workday under the company-wide Mon-Fri default, but a
-    // workday under OPS_6D.
+    // 2026-08-08 is a Saturday: a non-workday under the company-wide Mon-Fri default, but a workday under OPS_6D.
     private static final LocalDate SATURDAY = LocalDate.of(2026, 8, 8);
 
     private AttendanceDailyRepository repository;
@@ -49,12 +32,9 @@ class AttendanceDailyScheduleAwareRecalculationIntegrationTest extends AbstractP
         calculator = new AttendanceDailyCalculator();
     }
 
-    /**
-     * The regression: before the fix, this assertion failed because {@code toDto} flagged
-     * MISSING_CHECK_OUT unconditionally whenever {@code checkOut} was null, ignoring
-     * {@code schedule.requiresCheckOut()}. The write path already knew better (V117); the read path
-     * did not agree with it. See {@code AttendanceDailyService#toDto}'s javadoc for the fix.
-     */
+    /** The regression: before the fix, this assertion failed because toDto flagged MISSING_CHECK_OUT
+     * unconditionally whenever checkOut was null, ignoring schedule.requiresCheckOut(). The write path already
+     * knew better (V117); the read path did not agree with it. */
     @Test
     void aSalesEmployeesLoneCheckInAgreesBetweenTheWriteAndReadPaths() {
         wire();
@@ -81,12 +61,8 @@ class AttendanceDailyScheduleAwareRecalculationIntegrationTest extends AbstractP
             .doesNotContain(AttendanceDayFlag.MISSING_CHECK_OUT);
     }
 
-    /**
-     * A sales employee who DOES scan out is unaffected by the fix — the ordinary two-punch path
-     * applies unchanged on both read and write. Asserted on the SAME schedule as the test above so a
-     * resolver bug that always returned {@code requiresCheckOut = false} (rather than reading it from
-     * the assignment) could not make both tests pass for the wrong reason.
-     */
+    /** A sales employee who DOES scan out is unaffected by the fix — the ordinary two-punch path applies unchanged
+     * on both read and write. */
     @Test
     void aSalesEmployeeWhoDoesScanOutIsUnaffected() {
         wire();
@@ -106,14 +82,7 @@ class AttendanceDailyScheduleAwareRecalculationIntegrationTest extends AbstractP
         assertThat(dto.checkOut()).isNotNull();
     }
 
-    /**
-     * Recalculation correctness at the numeric-output level: the SAME employee-day's stored
-     * {@code late_minutes} genuinely differs before and after a real schedule assignment change, and
-     * the TTL cache added to {@code TieredWorkScheduleResolver} is what lets the second
-     * {@code recalculateRange} call see that change without recreating the resolver bean (i.e.
-     * without an application restart) — exactly the scenario Problem 1 and Problem 2 in this branch's
-     * task both describe.
-     */
+    /** Checks that cache expiry lets recalculation reflect a changed schedule without restarting the application. */
     @Test
     void recalculationReflectsARealScheduleChangeOnceTheCacheHasExpired() throws InterruptedException {
         wire();
@@ -133,8 +102,8 @@ class AttendanceDailyScheduleAwareRecalculationIntegrationTest extends AbstractP
                 + "so late/early are left at their zero default rather than measured")
             .isZero();
 
-        // The department is moved onto OPS_6D (Mon-Sat) — a real assignment change, the same shape
-        // V121 made for real departments.
+        // The department is moved onto OPS_6D (Mon-Sat) — a real assignment change, the same shape V121 made for real
+        // departments.
         assignDepartment(dept, "OPS_6D", LocalDate.of(2024, 10, 1), null);
         Thread.sleep(200); // comfortably outlive the 20ms TTL
 

@@ -11,12 +11,8 @@ import th.co.glr.hr.importdeal.ImportDealDtos.ImportDealDto;
 import th.co.glr.hr.importdeal.ImportDealDtos.ImportDealItemDto;
 import th.co.glr.hr.importdeal.ImportDealDtos.ImportDealResponse;
 
-/**
- * Plain unit test (no DB): the import per-deal view must be structurally incapable of carrying a
- * price, cost, margin, discount, commission or weighting field. Inspects the record components by
- * reflection, so a future field addition cannot violate the rule without going red — the same
- * technique {@code ImportRequestDtosNoPricingFieldsTest} uses for the IR DTOs.
- */
+/** Plain unit test (no DB): the import per-deal view must be structurally incapable of carrying a price, cost,
+ * margin, discount, commission or weighting field. */
 class ImportDealDtoNoPricingFieldsTest {
 
     private static final List<String> FORBIDDEN = List.of(

@@ -79,12 +79,8 @@ public class FxRateController {
         return Map.of("fxRate", result);
     }
 
-    /**
-     * Trigger the BOT FX fetch on demand instead of waiting for the 18:00 schedule. CEO-only, the
-     * same gate as {@link #upsert} — this WRITES rates (via {@code BotFxFetchService.fetchNow}).
-     * Returns what changed so the console can report "อัปเดต N/5 สกุล"; a missing token surfaces as
-     * the service's own 503, not a silent no-op.
-     */
+    /** Trigger the BOT FX fetch on demand instead of waiting for the 18:00 schedule. CEO-only, the same gate as
+     * #upsert — this WRITES rates (via BotFxFetchService.fetchNow). */
     @PostMapping("/fetch-now")
     Map<String, BotFxFetchService.FxFetchResult> fetchNow(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);

@@ -154,13 +154,8 @@ public class AttachmentController {
         }
     }
 
-    /**
-     * Attaching or removing a document is strictly narrower than reading one — notably {@code
-     * account} may read every deal's documents but may NOT upload here, because the tax invoice
-     * has exactly one entry point ({@code CommissionService#createFromDeal}) and a second one
-     * would satisfy the close gate's {@code invoiceOnFile} check without ever creating the rep's
-     * commission. See {@link TicketAccessPolicy#DOCUMENT_WRITER_ROLES}.
-     */
+    /** Attaching or removing a document is strictly narrower than reading one. See
+     * TicketAccessPolicy#DOCUMENT_WRITER_ROLES. */
     private void requireTicketWriteAccess(long ticketId, UserPrincipal actor) {
         if (!TicketAccessPolicy.canManageDocuments(requireTicketSummary(ticketId), actor)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");

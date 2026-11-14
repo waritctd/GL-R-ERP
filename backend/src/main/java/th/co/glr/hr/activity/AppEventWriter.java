@@ -12,20 +12,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
-/**
- * Attaches {@link DatabaseLogAppender} to the root logger and drains {@link AppEventBuffer} into
- * {@code hr.app_event} on a single background thread.
- *
- * <p>Same shape as {@link ActivityLogRecorder} and for the same reason — the database is a network
- * hop away, so nothing on a request or a scheduler thread waits for it.
- *
- * <p><strong>This class must not report its own failures through slf4j.</strong> It sits on the
- * consuming end of the log pipeline: a {@code log.warn} here would be captured by the very appender
- * it installs, pushed back onto the buffer, and retried into a database that is — by hypothesis —
- * already failing. That is the feedback loop this design exists to avoid, so its own errors go to
- * {@code System.err}, which no appender reads. Note this asymmetry is intentional and is the one
- * place in the codebase where {@code System.err} is the correct choice.
- */
+/** Attaches DatabaseLogAppender to the root logger and drains AppEventBuffer into hr.app_event on a single
+ * background thread. This class must not report its own failures through slf4j. That is the feedback loop this
+ * design exists to avoid, so its own errors go to System.err, which no appender reads. */
 @Component
 public class AppEventWriter {
 
@@ -56,15 +45,9 @@ public class AppEventWriter {
         worker.start();
     }
 
-    /**
-     * Adds the appender to the ROOT logger in code.
-     *
-     * <p>Deliberately not via a {@code logback-spring.xml}: this project has none, and creating one
-     * purely to register an appender would make every existing console log line depend on getting
-     * that file right. If the logging backend is not logback (a test running slf4j-simple, say),
-     * this quietly does nothing rather than failing startup — losing this capture is never worth
-     * refusing to boot.
-     */
+    /** Adds the appender to the ROOT logger in code. If the logging backend is not logback (a test running
+     * slf4j-simple, say), this quietly does nothing rather than failing startup — losing this capture is never
+     * worth refusing to boot. */
     private void attachAppender() {
         ILoggerFactory factory = LoggerFactory.getILoggerFactory();
         if (!(factory instanceof LoggerContext context)) {
@@ -93,9 +76,8 @@ public class AppEventWriter {
                 Thread.currentThread().interrupt();
                 return;
             } catch (RuntimeException e) {
-                // System.err, NOT a logger — see the class javadoc. A failed batch is dropped
-                // rather than retried; retrying a structurally bad write would spin forever, and
-                // this thread must survive to give the next batch a chance.
+                // System.err, NOT a logger — see the class javadoc. A failed batch is dropped rather than retried; retrying a
+                // structurally bad write would spin forever, and this thread must survive to give the next batch a chance.
                 System.err.println("[app-event] dropped a batch: " + e);
             }
         }
@@ -105,8 +87,7 @@ public class AppEventWriter {
     void shutdown() {
         running = false;
         if (appender != null) {
-            // Detach first, so shutdown logging from other beans cannot enqueue into a buffer
-            // that no longer has a drain.
+            // Detach first, so shutdown logging from other beans cannot enqueue into a buffer that no longer has a drain.
             ILoggerFactory factory = LoggerFactory.getILoggerFactory();
             if (factory instanceof LoggerContext context) {
                 context.getLogger(Logger.ROOT_LOGGER_NAME).detachAppender(appender);

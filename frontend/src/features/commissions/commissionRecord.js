@@ -1,12 +1,8 @@
 // Pure helpers shared by the commission page's receipt ledger, receipt chain and review table.
-// Nothing here recomputes a commission: the only arithmetic is the DISPLAY-ONLY "เข้าฐาน"
-// contribution (ex-VAT amount × the weight payroll actually uses), and the page says in words that
-// a single sale has no baht commission of its own because the ladder is marginal over the month.
 
-// Manual commission entries (feat/commission-manual-adjustments): ALL FOUR kinds are hand-typed
-// for now — owner decision: manual across the UI until the CEO-confirmed auto-config lands to
-// prefill suggestions for specific ones later (not implemented here, no auto-computation exists
-// anywhere in this form). Mirrors backend/.../commission/CommissionKind.java's four constants.
+// Manual commission entries: ALL FOUR kinds are hand-typed for now — owner decision: manual across the UI
+// until the CEO-confirmed auto-config lands to prefill suggestions for specific ones later. Mirrors
+// backend/.../commission/CommissionKind.java's four constants.
 export const MANUAL_KIND_LABELS = {
   ADJUSTMENT: 'ปรับปรุง/รับช่วงงาน',
   MANAGER: 'ค่าคอมผู้จัดการ/ทีม',
@@ -28,12 +24,8 @@ export function kindLabel(kind) {
   return 'ขาย';
 }
 
-// V148 (per-item stock-commission weighting): a record's weight has two possible sources — the
-// frozen, blended per-item weight (effectiveWeightMultiplier, non-null only for a SALE/CLAWBACK
-// whose ticket had priced, stock-covered items at creation time) when one exists, else the plain
-// manager-set weightMultiplier fallback. When the frozen weight is present it is authoritative for
-// payroll (CommissionRepository#sumActiveWeightedActualReceived's COALESCE), so every figure on the
-// page uses `recordWeight`, never weightMultiplier directly.
+// V148: a record's weight has two possible sources — the frozen, blended per-item weight when one exists, else
+// the plain manager-set weightMultiplier fallback.
 const hasItemDerivedWeight = (record) => record?.effectiveWeightMultiplier !== null && record?.effectiveWeightMultiplier !== undefined;
 
 export function recordWeight(record) {
@@ -53,14 +45,14 @@ export function weightExplanation(record) {
   return null;
 }
 
-// Does this record put anything into the month's base? A rejected or voided receipt never does, and a
-// manual entry never does (it is added on top of the ladder, not run through it). The API gives the
-// status, so this is a display rule, not a computation.
+// Does this record put anything into the month's base? A rejected or voided receipt never does, and a manual
+// entry never does (it is added on top of the ladder, not run through it). The API gives the status, so this
+// is a display rule, not a computation.
 const NON_COUNTING_STATUSES = ['REJECTED', 'VOID'];
 export const countsTowardBase = (record) => !isManualKind(record?.kind) && !NON_COUNTING_STATUSES.includes(record?.status);
 
-// Display-only: what this receipt puts into the month's base. Rounded to satang per receipt, which
-// is why the ledger carries a note that the column's sum can differ from ฐานคิดค่าคอม by a few satang.
+// Display-only: what this receipt puts into the month's base. Rounded to satang per receipt, which is why the
+// ledger carries a note that the column's sum can differ from ฐานคิดค่าคอม by a few satang.
 export function baseContribution(record) {
   return Math.round(Number(record.commissionableBase || 0) * recordWeight(record) * 100) / 100;
 }

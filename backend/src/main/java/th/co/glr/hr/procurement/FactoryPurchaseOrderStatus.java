@@ -2,14 +2,9 @@ package th.co.glr.hr.procurement;
 
 import java.util.Set;
 
-/**
- * Deliberately a short, linear status (OPEN -&gt; SHIPPING -&gt; RECEIVED, or CANCELLED from either
- * of the first two) — NOT a duplicate of {@link th.co.glr.hr.ticket.FulfilmentStatus}'s 5-value
- * IR_ISSUED/IR_SENT/SHIPPING/CUSTOMS_CLEARANCE/GOODS_RECEIVED sequence. The PO's own {@code
- * customs_status} is a free-text field, not a status value, on purpose — see {@code
- * ProcurementService}'s class Javadoc ("do not over-engineer") for why this table does not
- * reimplement the ticket-level fulfillment machinery.
- */
+/** Deliberately a short, linear status (OPEN -> SHIPPING -> RECEIVED, or CANCELLED from either of the first
+ * two) — NOT a duplicate of th.co.glr.hr.ticket.FulfilmentStatus's 5-value
+ * IR_ISSUED/IR_SENT/SHIPPING/CUSTOMS_CLEARANCE/GOODS_RECEIVED sequence. */
 public final class FactoryPurchaseOrderStatus {
     public static final String OPEN = "OPEN";
     public static final String SHIPPING = "SHIPPING";

@@ -1,22 +1,11 @@
-/**
- * The mock's `onRoute` mirror of TicketService#stageDecisions / DealRoute.
- *
- * ⚠️ Why this file exists. Until the mock emitted `onRoute`, every stage came back on-route under
- * `VITE_USE_MOCKS=true` — so the whole route feature was INVISIBLE in mock mode, and any
- * mock-driven test of it passed while proving nothing. That is the third failure shape in
- * CLAUDE.md's table ("mock OMITS a field the feature keys on"), and the one that only surfaces in
- * prod. These tests pin the field so it cannot silently regress.
- *
- * This is plumbing evidence only. Authorization and route ENFORCEMENT are proved against the real
- * Java service (DealRouteGateIntegrationTest), never here.
- */
+/** The mock's `onRoute` mirror of TicketService#stageDecisions / DealRoute. ⚠️ Why this file exists. That is
+ * the third failure shape in CLAUDE.md's table ("mock OMITS a field the feature keys on"), and the one that
+ * only surfaces in prod. */
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-/**
- * A DISTINCT deal per case. `setEntryChannel` mutates the shared mock store, so reusing one deal
- * leaks the previous test's channel into the next — that is how the UNSPECIFIED case first "failed".
- */
+/** A DISTINCT deal per case. `setEntryChannel` mutates the shared mock store, so reusing one deal leaks the
+ * previous test's channel into the next — that is how the UNSPECIFIED case first "failed". */
 async function candidates() {
   await api.auth.login({ role: 'ceo' });
   const { tickets } = await api.tickets.list();
@@ -53,8 +42,8 @@ describe('mockStageDecisions — onRoute mirrors DealRoute', () => {
     const off = decisions.filter((d) => d.onRoute === false);
     expect(off.map((d) => d.stage)).toEqual(['QUOTE_DESIGN_SIDE']);
     expect(off[0].allowed).toBe(false);
-    // The route reason only surfaces when an EARLIER rung hasn't already claimed it: rung 4
-    // (target === current stage) fires first, exactly as in TicketService's ladder.
+    // The route reason only surfaces when an EARLIER rung hasn't already claimed it: rung 4 (target === current
+    // stage) fires first, exactly as in TicketService's ladder.
     if (salesStage !== 'QUOTE_DESIGN_SIDE') {
       expect(off[0].blockedReason).toContain('แก้ช่องทางดีล');
       expect(off[0].blockedReason).toContain('ขั้นที่ 4');
@@ -73,8 +62,8 @@ describe('mockStageDecisions — onRoute mirrors DealRoute', () => {
   });
 
   it('never marks an operational stage off-route, whatever the channel', async () => {
-    // Mirrors DealRoute.ROUTE_VARIABLE: only S4–S8 may ever vary by route. If an auto-advanced
-    // stage could go off-route, a confirmed order would silently fail to move the deal.
+    // Mirrors DealRoute.ROUTE_VARIABLE: only S4–S8 may ever vary by route. If an auto-advanced stage could go
+    // off-route, a confirmed order would silently fail to move the deal.
     const channels = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT', 'UNSPECIFIED'];
     for (let slot = 0; slot < channels.length; slot += 1) {
       const { decisions } = await decisionsWithChannel(channels[slot], slot);

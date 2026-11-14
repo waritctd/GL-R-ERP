@@ -10,31 +10,22 @@ import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 
-/**
- * html-fidelity-spec.md §5 measurement tool: rasterises a PDF page (PDFBox, no external
- * binary) and extracts every ruled line — position, extent and stroke — from the pixels, so two
- * renders of the same sheet can be compared as the owner sees them, not as their vectors claim.
- *
- * <p>A rule is a dark, axis-aligned, strictly contiguous run at least {@link #MIN_RUN_MM} long:
- * Thai text never sustains an unbroken dark run that long, a border always does. Position and
- * stroke are ink-weighted (the coverage profile across the line integrated per row/column), so a
- * 0.54 pt line rendered as two half-grey pixels measures 0.54 pt whatever its sub-pixel phase —
- * a plain "count the dark pixels" width flips between 1 and 2 px on a 0.15 px shift, which is
- * exactly the noise a fidelity gate must not have.
- */
+/** html-fidelity-spec.md §5 measurement tool: rasterises a PDF page (PDFBox, no external binary) and extracts
+ * every ruled line — position, extent and stroke — from the pixels, so two renders of the same sheet can be
+ * compared as the owner sees them, not as their vectors claim. */
 public final class RuleScanner {
     private RuleScanner() {}
 
     public static final int DPI = 110;
     public static final double PX_TO_MM = 25.4 / DPI;
     public static final double PX_TO_PT = 72.0 / DPI;
-    /** Detection threshold on the grey value (0 = black): 200 catches the faint half-pixel edges
-     * of a sub-pixel line, and still rejects paper. */
+    /** Detection threshold on the grey value (0 = black): 200 catches the faint half-pixel edges of a sub-pixel
+     * line, and still rejects paper. */
     public static final int DARK = 200;
     public static final double MIN_RUN_MM = 12.0;
 
-    /** A detected rule. {@code pos} is the perpendicular coordinate (x for a vertical rule, y for
-     * a horizontal one), {@code from}/{@code to} the extent along the rule, all in px. */
+    /** A detected rule. pos is the perpendicular coordinate (x for a vertical rule, y for a horizontal one),
+     * from/to the extent along the rule, all in px. */
     public record Rule(boolean horizontal, double pos, double from, double to, double strokePx) {
         public double posMm() { return pos * PX_TO_MM; }
         public double fromMm() { return from * PX_TO_MM; }
@@ -55,11 +46,7 @@ public final class RuleScanner {
         }
     }
 
-    /** Raw grey samples. NOT {@code getRGB}: on a TYPE_BYTE_GRAY image that converts the linear
-     * grey to sRGB and brightens every anti-aliased half-covered pixel (96 → 165), so a line
-     * spread over two pixels would measure barely half the ink of the same line snapped to one
-     * solid pixel — which is exactly how PDFBox draws LibreOffice's stroked lines versus
-     * Chromium's filled rects. Raw samples keep the two comparable. */
+    /** Read raw grayscale samples so sRGB conversion does not distort anti-aliased line thickness comparisons. */
     public static int[][] gray(BufferedImage img) {
         int w = img.getWidth();
         int h = img.getHeight();
@@ -107,8 +94,8 @@ public final class RuleScanner {
                     ink[d + 3] = s / (y1 - y0 + 1);
                 }
                 double[] cs = centroidAndStroke(ink, x - 3);
-                // every column of the bump that formed this rule is spoken for — a two-pixel line's
-                // fainter half (ink 0.29) must not be scanned again as a second, identical rule
+                // every column of the bump that formed this rule is spoken for — a two-pixel line's fainter half (ink 0.29)
+                // must not be scanned again as a second, identical rule
                 for (int i = (int) cs[2]; i <= (int) cs[3]; i++) if (i >= 0 && i < w) taken[i] = true;
                 out.add(new Rule(false, cs[0], y0, y1 + 1, cs[1]));
             }
@@ -142,11 +129,8 @@ public final class RuleScanner {
         return out;
     }
 
-    /** EVERY strictly contiguous run of dark pixels longer than {@code minRun} along column x
-     * (vertical) or row y, as [start, end] pairs in scan order. All of them, not the longest: a
-     * signature-label row carries four equal underscore runs, and reporting only the longest
-     * made each engine's pick depend on a one-pixel length difference, so the comparison paired
-     * ผู้พิมพ์'s underscores in one render with ผู้สั่งซื้อ's in the other. */
+    /** EVERY strictly contiguous run of dark pixels longer than minRun along column x (vertical) or row y, as
+     * [start, end] pairs in scan order. */
     private static List<int[]> runs(int[][] g, int idx, boolean vertical, int n, int minRun) {
         List<int[]> out = new ArrayList<>();
         int start = -1;
@@ -162,10 +146,9 @@ public final class RuleScanner {
         return out;
     }
 
-    /** Ink-weighted centroid (px, pixel-centre convention +0.5), integrated stroke width (px) and
-     * the bump's first/last absolute index, from a 7-sample coverage profile whose first sample
-     * is at {@code firstIndex}. Only the connected bump containing the peak counts, so a
-     * neighbouring rule 3 px away is excluded. */
+    /** Ink-weighted centroid (px, pixel-centre convention +0.5), integrated stroke width (px) and the bump's
+     * first/last absolute index, from a 7-sample coverage profile whose first sample is at firstIndex. Only the
+     * connected bump containing the peak counts, so a neighbouring rule 3 px away is excluded. */
     private static double[] centroidAndStroke(double[] ink, int firstIndex) {
         int peak = 0;
         for (int i = 1; i < ink.length; i++) if (ink[i] > ink[peak]) peak = i;

@@ -1,18 +1,6 @@
-// Mirrors th.co.glr.hr.ticket.MoneyMilestone
-//
-// The five money milestones finance tracks a deal through, derived from `salesStage`. This exists
-// ONLY for the /finance list, whose rows (TicketSummaryDto) carry salesStage but no milestone. The
-// deal page must NOT use it: FinanceDealDto ships `milestoneTrack` / `moneyMilestone` already
-// computed by the server, and that is what it renders.
-//
-//   1 ORDER_RECEIVED    S10        ได้รับคำสั่งซื้อ
-//   2 DEPOSIT_RECEIVED  S11        ได้รับมัดจำ            (skipped when the deposit policy bypasses the notice)
-//   3 PROCUREMENT       S12-S17    รอสินค้า / นำเข้า
-//   4 DELIVERY          S18-S19    ส่งมอบ — รอชำระส่วนที่เหลือ
-//   5 CLOSED_PAID       S20        ชำระครบ ปิดงาน
-//
-// A stage below ORDER_RECEIVED has no money milestone yet. moneyMilestone.test.js pins this table
-// against every stage in the pipeline order.
+// Mirrors th.co.glr.hr.ticket.MoneyMilestone The five money milestones finance tracks a deal through, derived
+// from `salesStage`. This exists ONLY for the /finance list, whose rows (TicketSummaryDto) carry salesStage
+// but no milestone.
 
 export const MONEY_TRACK = Object.freeze([
   { key: 'ORDER_RECEIVED', index: 1, label: 'ได้รับคำสั่งซื้อ' },

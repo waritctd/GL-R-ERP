@@ -19,52 +19,9 @@ import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Is {@link PayrollService#process} atomic? It is the highest-consequence write in the codebase —
- * it is what turns a preview into money owed — and it mutates <b>three different tables in three
- * different directions</b> before it returns:
- *
- * <ol>
- *   <li>INSERT/UPDATE {@code hr.payroll_period} to {@code PROCESSED}, and INSERT one
- *       {@code hr.payroll_line} per employee ({@link PayrollRepository#saveProcessedPeriod},
- *       itself a delete-then-insert),</li>
- *   <li>UPDATE the rows that fed it — {@code hr.leave_payroll_correction} resolved against this
- *       period, {@code hr.special_money_request.included_period_id} attributed to it, deduction
- *       remittances recorded,</li>
- *   <li>DELETE {@code hr.payroll_input_draft} for the month, so a stale draft can never resurrect
- *       over the processed values.</li>
- * </ol>
- *
- * <p>A torn {@code process} is the worst state this system can reach: a {@code PROCESSED} period
- * whose input draft was destroyed and whose audit row was never written is a payroll run nobody can
- * reconstruct or explain. So the question this class answers is narrow and worth answering
- * precisely — <b>when the transaction rolls back, does every one of those three go back too?</b>
- *
- * <p><b>Why this needs the proxy, and why the existing payroll suite cannot answer it.</b>
- * {@link AbstractPostgresIntegrationTest} runs with no Spring context: every integration test here
- * hand-wires its services with {@code new}, so there is no AOP proxy and a bare
- * {@code @Transactional} does nothing whatsoever. The 188 {@code @Transactional} methods in this
- * backend are, in this suite, 188 methods with no transaction. A rollback test written the obvious
- * way would roll nothing back and pass for reasons unrelated to the code under test. Both
- * assertions below therefore run through {@link AbstractPostgresIntegrationTest#transactional}
- * (PR #695), which builds a REAL transactional proxy from
- * {@link org.springframework.transaction.annotation.AnnotationTransactionAttributeSource} — so the
- * transaction genuinely comes from {@code PayrollService#process}'s own annotation. Delete that
- * annotation and {@link #processRollsBackThePeriodTheLinesAndTheDraftDeleteTogether()} goes red.
- *
- * <p>{@link #processWithoutTheProxyLeavesTornPayrollState()} is the vacuity control, and it is also
- * the clearest statement of what the annotation is buying: identical injected failure, raw
- * un-proxied service, and the result is a PROCESSED period with payroll lines, an input draft
- * already deleted, and no audit row — every one of the three writes above committed independently.
- *
- * <p>The Mockito {@link AuditService} is a <b>fault injector</b>, not the system under test.
- * {@code auditService.record} is the last write {@code process} performs (the
- * {@code auditPayrollAccess} call just above it only writes to a logger), so by the time it throws,
- * every period row, every payroll line and the draft deletion have really happened against real
- * Postgres. Everything asserted below is real state, read back with fresh queries.
- *
- * <p>Computes nothing about payroll itself: no figure is asserted here, only whether rows exist.
- */
+/** Is PayrollService#process atomic? A torn process is the worst state this system can reach: a PROCESSED
+ * period whose input draft was destroyed and whose audit row was never written is a payroll run nobody can
+ * reconstruct or explain. */
 class PayrollProcessRollbackIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate MONTH = LocalDate.of(2026, 8, 1);
 
@@ -109,8 +66,8 @@ class PayrollProcessRollbackIntegrationTest extends AbstractPostgresIntegrationT
 
         service.process(new ProcessPayrollRequest(MONTH, List.of(input(employeeId, "1234.00"))), hr());
 
-        // Without this, the rollback test above would pass just as happily if process() had been
-        // broken into writing nothing at all.
+        // Without this, the rollback test above would pass just as happily if process() had been broken into writing
+        // nothing at all.
         assertThat(processedPeriods()).as("the month really does process when nothing fails").isOne();
         assertThat(payrollLines()).isOne();
         assertThat(payrollRepository.findInputDrafts(MONTH))
@@ -119,16 +76,9 @@ class PayrollProcessRollbackIntegrationTest extends AbstractPostgresIntegrationT
             .isEmpty();
     }
 
-    /**
-     * The vacuity control. Identical injected failure, but the RAW un-proxied service — how every
-     * other integration test in this suite drives its services. With no proxy {@code @Transactional}
-     * is inert, so each write auto-commits on its own and the failure strands the rest.
-     *
-     * <p>This asserts today's harness defect, not a desired outcome. Its job is to prove the test
-     * above is discriminating: if this one ever starts finding zero processed periods, the proxy is
-     * no longer what makes the difference and the rollback evidence above has quietly become
-     * vacuous. Delete it the day this harness runs inside a real Spring context with proxied beans.
-     */
+    /** The vacuity control. Identical injected failure, but the RAW un-proxied service — how every other
+     * integration test in this suite drives its services. With no proxy @Transactional is inert, so each write
+     * auto-commits on its own and the failure strands the rest. */
     @Test
     void processWithoutTheProxyLeavesTornPayrollState() {
         long employeeId = seedEmployee("PR-RB-003", "ไม่มีพรอกซี", "สภาพฉีกขาด");
@@ -152,13 +102,9 @@ class PayrollProcessRollbackIntegrationTest extends AbstractPostgresIntegrationT
 
     // ── wiring ────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Same wiring as {@link PayrollInputDraftClearedOnProcessIntegrationTest}: real
-     * {@link PayrollRepository}, real {@link PayrollCalculator}, real {@link LeaveRepository} and a
-     * real {@code DeductionObligationService} on the same {@code jdbc}, so every write
-     * {@code process} performs is a real write against real Postgres. Only the collaborators that
-     * do not write payroll state ({@code CommissionService}, {@code PayslipRenderer}) are mocked.
-     */
+    /** Same wiring as PayrollInputDraftClearedOnProcessIntegrationTest: real PayrollRepository, real
+     * PayrollCalculator, real LeaveRepository and a real DeductionObligationService on the same jdbc, so every
+     * write process performs is a real write against real Postgres. */
     private PayrollService payrollService(AuditService audit) {
         CommissionService commissionService = mock(CommissionService.class);
         when(commissionService.payrollCommissionTotalsByEmployee(any())).thenReturn(Map.of());
@@ -181,11 +127,9 @@ class PayrollProcessRollbackIntegrationTest extends AbstractPostgresIntegrationT
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * Fails {@code process}'s LAST write. {@code auditPayrollAccess} immediately above it only
-     * writes to a logger, so this is genuinely the final DB write of the method — everything the
-     * assertions look at has already landed when it throws.
-     */
+    /** Fails process's LAST write. auditPayrollAccess immediately above it only writes to a logger, so this is
+     * genuinely the final DB write of the method — everything the assertions look at has already landed when it
+     * throws. */
     private AuditService failingAudit() {
         AuditService audit = mock(AuditService.class);
         doThrow(new IllegalStateException("injected failure after the payroll period was written"))

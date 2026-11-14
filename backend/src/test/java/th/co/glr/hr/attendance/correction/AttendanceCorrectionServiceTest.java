@@ -90,10 +90,8 @@ class AttendanceCorrectionServiceTest {
         verify(repository, never()).create(anyLong(), anyLong(), any());
     }
 
-    // --- submit: CHECK-constraint-consistency validated in Java, before the DB ever sees it -------
-    // Mirrors chk_attendance_correction_fields_match_type (V135) -- see
-    // AttendanceCorrectionService#validateRequestShape's javadoc for why this must reject with a
-    // clear 400 rather than surface the constraint violation as an opaque 500.
+    // submit: CHECK-constraint-consistency validated in Java, before the DB ever sees it ------- Mirrors
+    // chk_attendance_correction_fields_match_type.
 
     @Test
     void checkInTypeWithNullRequestedCheckInIsRejectedBeforeTheDatabase() {
@@ -199,12 +197,8 @@ class AttendanceCorrectionServiceTest {
         verify(repository, never()).cancel(anyLong());
     }
 
-    // --- notification deep links (adversarial review F1) ------------------------------------------
-    // notificationService was already mocked above (line ~32) but no test here ever verified a
-    // single notify() call -- exactly how all three call sites drifted to the pre-move
-    // "/employee-requests" link after the feature's review UI moved onto /attendance. Assertion
-    // style copied from SpecialMoneyServiceTest, which already pins its own equivalent link:
-    // backend/src/test/java/th/co/glr/hr/specialmoney/SpecialMoneyServiceTest.java:82.
+    // notification deep links ------------------------------------------ notificationService was already mocked
+    // above but no test here ever verified a single notify call.
 
     @Test
     void approvingNotifiesTheEmployeeAtTheAttendancePageLink() {

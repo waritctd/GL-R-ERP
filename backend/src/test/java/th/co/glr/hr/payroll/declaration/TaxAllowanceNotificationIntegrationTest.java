@@ -32,59 +32,13 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceReviewRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * The ล.ย.01 workflow emitted no notifications at all: HR approving, HR rejecting and the yearly
- * expiry sweep were each invisible to the employee, who could only discover them by opening a page
- * nothing pointed at. This class covers the rows those three transitions now write.
- *
- * <p>Written wrong-way-round, like {@code TaxAllowanceDeclarationScopeIntegrationTest} beside it:
- * the assertion that matters is that a notification about one employee's tax affairs lands ONLY in
- * that employee's inbox — never the reviewing HR user's, and never a bystander's. A notification
- * body carries the rejection reason and the tax year, so mis-targeting one leaks the same personal
- * material the register's evidence column is careful to withhold.
- *
- * <p>Goes through the real service and a real {@link NotificationRepository} against real Postgres
- * — a mocked repository would "pass" while the INSERT wrote a different employee_id.
- *
- * <h2>2026-08-31 extension: mail dispatch, HR's submit-side gap, and two more decision points</h2>
- *
- * The class above pre-dates this change and only ever proved the IN-APP row. This class now also
- * covers three more things, and each is scoped to a different subset of the tests below:
- *
- * <ol>
- *   <li>{@code notifyOwner} switched from a bare {@code NotificationRepository#insert} to {@link
- *       NotificationService#notify}, which also queues mail. {@code employeeRepository} is now a
- *       REAL {@link EmployeeRepository} (not mocked, unlike before) — needed for the HR-submission
- *       "who filed" text below, and proven harmless for the pre-existing approve/reject/expire tests
- *       by inspection: {@code promoteHeaderToEmployeeMaster} (called inside {@code #approve}) only
- *       reaches {@code EmployeeRepository} when {@code existing.lorYor01().address() != null}, and
- *       every declaration this class submits carries a null {@code lorYor01}, so that branch is
- *       never entered here. {@code emailService} is a Mockito mock — this class wires NO real Mailer/SMTP
- *       — so {@code approvalAlsoDispatchesEmailWithTheSameSubjectAndBody} below is genuine evidence
- *       that {@code NotificationService#notify} was invoked with the right recipient/subject/body/
- *       link and {@code sendEmail=true}; it is NOT evidence that mail was actually delivered.</li>
- *   <li>{@code submitOwn} now notifies HR via {@link NotificationRepository#notifyHrAt}, the same
- *       {@code "hr"} division fan-out {@code ProfileRequestNotificationIntegrationTest} (#860)
- *       exercises for profile-change requests. The {@code submitting*} tests below seed a REAL
- *       {@code hr.division}/{@code hr.employee} pair the same way that class does, for the same
- *       reason: a mocked repository would "pass" a predicate that matched the wrong division, or
- *       every division.</li>
- *   <li>Two more decision points that plainly should notify the employee, found while auditing this
- *       class's full state machine, are covered too: {@code createOnBehalf} (HR creates AND
- *       approves in one action — the employee was never told either half happened) and {@code
- *       reverify} (EXPIRED -> APPROVED — the mirror image of the expiry sweep's notification, which
- *       had no reverse). Both reuse the {@code TAX_ALLOWANCE_APPROVED} type rather than inventing a
- *       new one: the fact that matters to the employee is identical to a regular {@code #approve},
- *       so the frontend's existing type-to-icon mapping already renders both correctly untouched.</li>
- * </ol>
- */
+/** The ล.ย.01 workflow emitted no notifications at all: HR approving, HR rejecting and the yearly expiry sweep
+ * were each invisible to the employee, who could only discover them by opening a page nothing pointed at. */
 class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    /**
-     * Mocked, not a real Mailer/SMTP — see the class Javadoc's point 1. Verifying calls against this
-     * is genuine wiring evidence (it proves {@code NotificationService#notify} reached the mail
-     * layer with the right arguments); it is not evidence of delivery.
-     */
+    /** Mocked, not a real Mailer/SMTP — see the class Javadoc's point 1. Verifying calls against this is genuine
+     * wiring evidence (it proves NotificationService#notify reached the mail layer with the right arguments); it
+     * is not evidence of delivery. */
     private final NotificationEmailService emailService = mock(NotificationEmailService.class);
 
     private TaxAllowanceDeclarationRepository repository;
@@ -101,16 +55,16 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         service = new TaxAllowanceDeclarationService(
             repository,
             new PayrollRepository(jdbc),
-            // REAL, unlike before this class's 2026-08-31 extension — see the class Javadoc's point 1
-            // for why this is safe for the pre-existing approve/reject/expire tests below, and why it
-            // is now required for the HR-submission "who filed" text.
+            // REAL, unlike before this class's 2026-08-31 extension — see the class Javadoc's point 1 for why this is safe
+            // for the pre-existing approve/reject/expire tests below, and why it is now required for the HR-submission
+            // "who filed" text.
             new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc)),
             new TaxAllowanceCapCatalog(),
             mock(AuditService.class),
             mock(FileStorageService.class),
             mock(PayrollService.class),
-            // Real, not mocked: the whole point is which employee_id reaches the INSERT, and (now)
-            // which division the HR fan-out actually selects.
+            // Real, not mocked: the whole point is which employee_id reaches the INSERT, and (now) which division the HR
+            // fan-out actually selects.
             notifications,
             new NotificationService(notifications, emailService),
             new AppProperties(), new LorYor01Renderer());
@@ -180,8 +134,8 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         assertThat(notificationTypesFor(employeeA))
             .containsExactly("TAX_ALLOWANCE_APPROVED", "TAX_ALLOWANCE_EXPIRED");
 
-        // A second sweep matches zero rows (the conditional UPDATE already fired), so it must not
-        // notify again — otherwise a stuck scheduler would refill the employee's inbox hourly.
+        // A second sweep matches zero rows (the conditional UPDATE already fired), so it must not notify again —
+        // otherwise a stuck scheduler would refill the employee's inbox hourly.
         assertThat(service.expireOverdueVerifications()).isEqualTo(0);
         assertThat(notificationTypesFor(employeeA))
             .containsExactly("TAX_ALLOWANCE_APPROVED", "TAX_ALLOWANCE_EXPIRED");
@@ -196,10 +150,7 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         approveSigned(declaration.declarationId());
 
         // emailService is a mock (no real Mailer/SMTP in this class) — this verifies the WIRING
-        // (NotificationService#notify was reached with sendEmail=true and the right arguments), not
-        // delivery. `to`/`recipientName` are left loose: employeeA (seeded by the bare seedEmployee
-        // helper below) has no email/first_name_th on file, so both arrive null, and that is not
-        // what this test is about.
+        // (NotificationService#notify was reached with sendEmail=true and the right arguments), not delivery.
         verify(emailService).send(eq(employeeA), any(), any(),
             eq("แบบแจ้ง ล.ย.01 ได้รับการอนุมัติ"),
             eq("ฝ่ายบุคคลอนุมัติแบบแจ้งค่าลดหย่อนภาษีปี 2026 แล้ว มีผลกับการหักภาษี ณ ที่จ่ายตลอดทั้งปีภาษีนี้"),
@@ -223,12 +174,8 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
         assertThat(row.get("message")).isEqualTo("นายภาคภูมิ ศรีสุข (GLR-1009) ยื่นแบบ ล.ย.01 ปีภาษี 2026");
     }
 
-    /**
-     * Wrong-way-round, per CLAUDE.md's "ask the question the wrong way round" discipline: this is
-     * the case that actually proves the {@code "hr"} division predicate FILTERS, rather than merely
-     * that HR happens to receive a row. A predicate mutated to match every division would still pass
-     * the test above — only this case catches it. (Mutation-checked: see the session report.)
-     */
+    /** Wrong-way-round, per CLAUDE.md's "ask the question the wrong way round" discipline: this is the case that
+     * actually proves the "hr" division predicate FILTERS, rather than merely that HR happens to receive a row. */
     @Test
     void submittingDoesNotNotifyANonHrEmployee() {
         long salesDivision = insertDivision("SLS", "ฝ่ายขาย");
@@ -241,8 +188,8 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
 
     @Test
     void createOnBehalfDoesNotAlsoNotifyHrOfASubmission() {
-        // createOnBehalf never leaves a PENDING row for HR to see — it inserts and auto-approves
-        // within the same transaction, so notifyHrOfSubmission (submitOwn-only) must not fire here.
+        // createOnBehalf never leaves a PENDING row for HR to see — it inserts and auto-approves within the same
+        // transaction, so notifyHrOfSubmission (submitOwn-only) must not fire here.
         long hrDivision = insertDivision("HR", "HR-บุคคล");
         long hrRecipient = insertEmployeeInDivision("OBHR", hrDivision);
         long employeeId = seedEmployee("TAN-OB1");
@@ -287,12 +234,8 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
 
     // --- 2026-08-31: copy guard ----------------------------------------------------------------
 
-    /**
-     * Regression guard for the TRAVEL_PER_DIEM class of defect that CLAUDE.md records: a raw machine
-     * code reaching a human-facing message. Drives every transition this class touches — submit,
-     * approve, reject, expire, reverify, createOnBehalf — in one pass and scans every title/message
-     * {@code hr.notification} now holds. (Mutation-checked: see the session report.)
-     */
+    /** Regression guard for the TRAVEL_PER_DIEM class of defect that CLAUDE.md records: a raw machine code reaching
+     * a human-facing message. */
     @Test
     void noNotificationMessageOrTitleEverContainsARawTypeCode() {
         TaxAllowanceDeclarationDto toApprove = submit(employeeA, 2026);
@@ -384,11 +327,9 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             """, Map.of("code", code, "name", name), Long.class);
     }
 
-    /**
-     * A division-linked employee with no name — enough for the HR fan-out's SQL predicate (which
-     * reads {@code hr.employee}/{@code hr.division}/{@code hr.position} directly, never {@link
-     * EmployeeRepository}), and this class never asserts on a recipient's own name.
-     */
+    /** A division-linked employee with no name — enough for the HR fan-out's SQL predicate (which reads
+     * hr.employee/hr.division/hr.position directly, never EmployeeRepository), and this class never asserts on a
+     * recipient's own name. */
     private long insertEmployeeInDivision(String code, long divisionId) {
         return jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, division_id, is_active)
@@ -396,12 +337,9 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             """, Map.of("code", code, "divisionId", divisionId), Long.class);
     }
 
-    /**
-     * A named employee, for the "who filed" text — {@code title_id} via {@link
-     * EmployeeReferenceRepository#ensureTitle}, the same find-or-create helper {@code
-     * EmployeeRepository#create} itself uses, so this does not depend on {@code hr.title} already
-     * holding the row.
-     */
+    /** A named employee, for the "who filed" text — title_id via EmployeeReferenceRepository#ensureTitle, the same
+     * find-or-create helper EmployeeRepository#create itself uses, so this does not depend on hr.title already
+     * holding the row. */
     private long insertEmployeeWithTitleAndName(String code, String titleTh, String firstNameTh, String lastNameTh) {
         long titleId = new EmployeeReferenceRepository(jdbc).ensureTitle(titleTh);
         return jdbc.queryForObject("""
@@ -423,11 +361,9 @@ class TaxAllowanceNotificationIntegrationTest extends AbstractPostgresIntegratio
             LocalDate.now(), false, null, false);
     }
 
-    /**
-     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
-     * The failure cases below deliberately do NOT use this — they assert on the role and status
-     * checks, which both run before the signed-form check and so are unaffected by it.
-     */
+    /** Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3). The failure
+     * cases below deliberately do NOT use this — they assert on the role and status checks, which both run before
+     * the signed-form check and so are unaffected by it. */
     private void approveSigned(long declarationId) {
         TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
         service.approve(declarationId, null, hrActor());

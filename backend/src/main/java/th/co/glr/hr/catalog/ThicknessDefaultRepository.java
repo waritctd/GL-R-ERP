@@ -8,16 +8,8 @@ import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * Reads and writes {@code price_catalog.collection_thickness_default} (V152).
- *
- * <p>Four of the nine factory workbooks carry no thickness column at all, so 9,411 catalogue rows
- * have none and cannot resolve a freight band. Thickness is not recoverable from the source files;
- * it has to be supplied. This is the surface that supplies it.
- *
- * <p>Shaped for bulk entry rather than row-at-a-time: 244 (factory, collection) pairs cover every
- * gap, and the CEO fills them in one sitting.
- */
+/** Reads and writes price_catalog.collection_thickness_default (V152). Four of the nine factory workbooks carry
+ * no thickness column at all, so 9,411 catalogue rows have none and cannot resolve a freight band. */
 @Repository
 public class ThicknessDefaultRepository {
 
@@ -27,13 +19,9 @@ public class ThicknessDefaultRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Every (factory, collection) that has at least one ACTIVE-version row lacking its own
-     * thickness, with the default currently covering it (if any) and how many rows it governs.
-     *
-     * <p>Ordered by affected row count descending: the CEO's first entry should be the one that
-     * unblocks the most products. Vives ALTEA alone covers hundreds.
-     */
+    /** Every (factory, collection) that has at least one ACTIVE-version row lacking its own thickness, with the
+     * default currently covering it (if any) and how many rows it governs. Ordered by affected row count
+     * descending: the CEO's first entry should be the one that unblocks the most products. */
     public List<ThicknessDefaultDtos.ThicknessGapDto> listGaps() {
         return jdbc.query("""
             SELECT f.factory_id,
@@ -62,19 +50,9 @@ public class ThicknessDefaultRepository {
                 rs.getBoolean("has_size_level_override")));
     }
 
-    /**
-     * Upserts collection-level defaults in one transaction.
-     *
-     * <p>A null or blank thickness CLEARS that collection's default rather than storing a zero --
-     * the CHECK constraint forbids a non-positive thickness, and a zero would silently pick the
-     * lowest freight band. Clearing returns those rows to NO_THICKNESS, which is the honest state.
-     *
-     * <p>Only ever touches {@code size_norm IS NULL} rows: size-level overrides are the escape
-     * hatch for a collection whose trim differs from its field tile, and a bulk collection-level
-     * save must not wipe them.
-     *
-     * @return number of rows inserted, updated or deleted
-     */
+    /** Upserts collection-level defaults in one transaction. Only ever touches size_norm IS NULL rows: size-level
+     * overrides are the escape hatch for a collection whose trim differs from its field tile, and a bulk
+     * collection-level save must not wipe them. */
     @Transactional
     public int saveAll(List<ThicknessDefaultRequests.ThicknessDefaultEntry> entries, Long updatedBy) {
         int touched = 0;

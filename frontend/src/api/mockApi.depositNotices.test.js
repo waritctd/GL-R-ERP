@@ -206,8 +206,8 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
     expect(depositNotice.items[0].qty).toBe(quotation.items[0].requestedQuantity);
     expect(depositNotice.items[0].netUnitPrice).toBe(quotation.items[0].finalUnitPrice);
 
-    // Header: customerTaxId/customerAddress from the customer master via ticket.customerId,
-    // projectName from the ticket's own project.
+    // Header: customerTaxId/customerAddress from the customer master via ticket.customerId, projectName from the
+    // ticket's own project.
     expect(depositNotice.customerTaxId).toBe(customer.taxId);
     expect(depositNotice.customerAddress).toBe(`${customer.address} ${customer.branch}`);
     expect(depositNotice.projectName).toBe(project.name);
@@ -216,9 +216,9 @@ describe('mockApi.depositNotices.createDraft autofill (branch fix: deposit-notic
   it('createDepositNoticeFromQuotation also autofills the header the same way', async () => {
     const { customer, project, quotation } = await driveTicketToAcceptedQuotation();
 
-    // driveTicketToAcceptedQuotation already ran confirmOrder, so this call exercises the
-    // SAME createDraft header-autofill path OrderConfirmationService.createDepositNoticeFromQuotation
-    // delegates to — this endpoint itself never passes a customer/project explicitly.
+    // driveTicketToAcceptedQuotation already ran confirmOrder, so this call exercises the SAME createDraft
+    // header-autofill path OrderConfirmationService.createDepositNoticeFromQuotation delegates to — this endpoint
+    // itself never passes a customer/project explicitly.
     const prId = (await api.pricingRequests.listForTicket(quotation.ticketId)).items
       .find((pr) => pr.status === 'QUOTATION_ACCEPTED').id;
     // A typed percent is ignored here too: the legacy branch bills its PDF's 50%.
@@ -391,8 +391,8 @@ describe('mockApi.depositNotices.issue hasPdf/hasXlsx (issue #752: mock reproduc
     expect(draft.hasPdf).toBe(false);
     expect(draft.hasXlsx).toBe(false);
 
-    // Advances the payment track to CUSTOMER_CONFIRMED — the precondition depositNotices.issue
-    // checks (mirrors TicketService.confirmCustomer).
+    // Advances the payment track to CUSTOMER_CONFIRMED — the precondition depositNotices.issue checks (mirrors
+    // TicketService.confirmCustomer).
     await api.tickets.confirmCustomer(ticketId);
 
     const { depositNotice: issued } = await api.depositNotices.issue(draft.id);

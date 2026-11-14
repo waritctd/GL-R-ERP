@@ -25,21 +25,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.DealQuotationRepository;
 
-// Audit gap #1 (writes): customer/contact/project CREATE endpoints were authenticated-only, so
-// any role (incl. employee) could write customer rows straight through the repository. Gated to
-// the sales role (the deal-entry flow) below.
-//
-// P0 fix (reads): the three GETs were ALSO authenticated-only — sessions.requireUser and nothing
-// else — so any role, including employee/warehouse/qc (no sales access anywhere else in the
-// system), could read the customer master (taxId/address/phone) and every contact's name/email/
-// phone. Unlike CatalogController's GET /api/catalog and /api/catalog/prices (#205, #388 ruling),
-// there was never a recorded product-owner decision that these reads should stay open — the old
-// docstring here just asserted it. Reads are now gated in CustomerService to the audience derived
-// from every real caller (TicketCreateModal's picker — sales only; DepositNoticePage's customer
-// search — the full canViewTickets audience): sales/import/ceo/account/sales_manager, the same
-// set as canViewCatalog/canViewTickets/TicketAccessPolicy.VIEWER_ROLES. This class unit-tests that
-// DECISION with a mocked repository (cheap, fast); CustomerReadAuthzIntegrationTest proves the
-// ENFORCEMENT survives into the real SQL on real Postgres — Mockito cannot reach that part.
+// Audit gap #1 (writes): customer/contact/project CREATE endpoints were authenticated-only, so any role (incl.
+// employee) could write customer rows straight through the repository. Gated to the sales role (the deal-entry
+// flow) below.
 class CustomerControllerTest {
     private static final List<String> VIEWER_ROLES =
         List.of("sales", "import", "ceo", "account", "sales_manager");
@@ -49,13 +37,13 @@ class CustomerControllerTest {
     private final CustomerRepository customers = mock(CustomerRepository.class);
     private final ContactRepository contacts = mock(ContactRepository.class);
     private final ProjectRepository projects = mock(ProjectRepository.class);
-    // Unstubbed -> canCreateQuotation() defaults to false (Mockito), so a role reaches an endpoint
-    // here only via its OWN role (sales/sales_manager) or an explicit per-test stub — never a
-    // phantom grant. grantedQcCanCreateCustomer below stubs it true for the one test that needs it.
+    // Unstubbed -> canCreateQuotation() defaults to false (Mockito), so a role reaches an endpoint here only via
+    // its OWN role (sales/sales_manager) or an explicit per-test stub — never a phantom grant.
+    // grantedQcCanCreateCustomer below stubs it true for the one test that needs it.
     private final EmployeeAuthRepository employeeAuth = mock(EmployeeAuthRepository.class);
-    // Unstubbed -> refreshDraftContactSnapshot returns 0 (Mockito default for int), which is all
-    // #updateContact needs from it; no test here exercises the DRAFT-snapshot-refresh behaviour
-    // itself (see ContactUpdateRefreshesDraftQuotationsIntegrationTest for that, real-DB).
+    // Unstubbed -> refreshDraftContactSnapshot returns 0 (Mockito default for int), which is all #updateContact
+    // needs from it; no test here exercises the DRAFT-snapshot-refresh behaviour itself (see
+    // ContactUpdateRefreshesDraftQuotationsIntegrationTest for that, real-DB).
     private final DealQuotationRepository dealQuotations = mock(DealQuotationRepository.class);
     private final CustomerService customerService = new CustomerService(customers, contacts, projects, employeeAuth, dealQuotations);
     private final MockMvc mvc = MockMvcBuilders
@@ -133,10 +121,8 @@ class CustomerControllerTest {
 
     @Test
     void salesManagerCanCreateCustomer() throws Exception {
-        // DealEntryAccess (owner ruling 2026-09-10): deal-entry create was widened from
-        // sales-only to sales/sales_manager/canCreateQuotation-grant. sales_manager stays
-        // read+comment oversight everywhere ELSE on the ticket surface (TicketService.SALES_ROLES
-        // is untouched) — this is deliberately the one exception, on the deal-entry flow only.
+        // DealEntryAccess (owner ruling 2026-09-10): deal-entry create was widened from sales-only to
+        // sales/sales_manager/canCreateQuotation-grant.
         when(customers.create(any(), any(), any(), any(), any()))
             .thenReturn(new CustomerDto(1L, "ACME", null, null, "สำนักงานใหญ่", null));
         mvc.perform(post("/api/customers").session(session("sales_manager"))
@@ -181,8 +167,8 @@ class CustomerControllerTest {
 
     @Test
     void createCustomerWithoutBranchDefaultsToHeadOffice() throws Exception {
-        // branch is NOT NULL with a DB default; an explicit null bypasses the default and
-        // used to 500. The controller now coalesces a blank branch to 'สำนักงานใหญ่'.
+        // branch is NOT NULL with a DB default; an explicit null bypasses the default and used to 500. The controller
+        // now coalesces a blank branch to 'สำนักงานใหญ่'.
         when(customers.create(any(), any(), any(), any(), any()))
             .thenReturn(new CustomerDto(1L, "ACME", null, null, "สำนักงานใหญ่", null));
         mvc.perform(post("/api/customers").session(session("sales"))
@@ -192,12 +178,8 @@ class CustomerControllerTest {
     }
 
     // ── update customer (F7): the SAME DealEntryAccess gate as create ─────
-    /**
-     * Owner feedback F7 (2026-09-10): the deal card can now correct a selected customer's
-     * เลขที่ผู้เสียภาษี / โทร. in place. Unit-level decision coverage only — the real-DB enforcement
-     * evidence CLAUDE.md requires is {@code DealEntryAccessIntegrationTest}'s update cases, which
-     * run the real controller/repository against real Postgres.
-     */
+    /** Owner feedback F7 (2026-09-10): the deal card can now correct a selected customer's เลขที่ผู้เสียภาษี / โทร.
+     * in place. */
     @Test
     void updateCustomerIsForbiddenForEveryRoleOutsideTheDealEntryGate() throws Exception {
         for (String role : List.of("import", "account", "employee", "hr", "warehouse", "qc")) {
@@ -273,15 +255,9 @@ class CustomerControllerTest {
             .andExpect(status().is2xxSuccessful());
     }
 
-    /**
-     * 2026-09-16 fix: {@code @Email} on {@code UpdateContactRequest.email} used to carry no
-     * {@code message=}, so {@code ApiExceptionHandler#fieldMessage} surfaced Jakarta's built-in
-     * English default ("must be a well-formed email address") to the picker verbatim. Proves the
-     * Thai literal now added to the annotation reaches the response body — `@Valid` runs during
-     * argument resolution, before the controller body (and therefore before
-     * `DealEntryAccess.requireCanEnterDeal`/`customerService.updateContact`) ever executes, so
-     * `contacts`/`dealQuotations` are correctly never touched.
-     */
+    /** 2026-09-16 fix: @Email on UpdateContactRequest.email used to carry no message=, so
+     * ApiExceptionHandler#fieldMessage surfaced Jakarta's built-in English default ("must be a well-formed email
+     * address") to the picker verbatim. */
     @Test
     void updateContactWithMalformedEmail_isBadRequestWithThaiMessage() throws Exception {
         mvc.perform(put("/api/customers/1/contacts/1").session(session("sales"))

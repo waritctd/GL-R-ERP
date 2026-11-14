@@ -95,13 +95,13 @@ public class TicketRepository {
     // which prove the widening did not become "import sees everything".
     private static final List<String> IMPORT_STAGE_SCOPE =
         DealStage.ORDER.subList(DealStage.indexOf(DealStage.ORDER_RECEIVED), DealStage.ORDER.size());
-    // Mirrors th.co.glr.hr.pricingrequest.PricingRequestStatus's three terminal values.
-    // Not imported directly to avoid a new ticket-package -> pricingrequest-package
-    // repository dependency for three literals; keep in sync if that enum changes.
+    // Mirrors th.co.glr.hr.pricingrequest.PricingRequestStatus's three terminal values. Not imported directly to
+    // avoid a new ticket-package -> pricingrequest-package repository dependency for three literals; keep in sync
+    // if that enum changes.
     private static final List<String> PRICING_REQUEST_TERMINAL_STATUSES =
         List.of("CANCELLED", "SUPERSEDED", "QUOTATION_ACCEPTED");
-    // account: a deposit or final-payment confirmation is awaited, or the deal is
-    // overdue on an outstanding balance. Mirrors TicketEventKind's payment-status values.
+    // account: a deposit or final-payment confirmation is awaited, or the deal is overdue on an outstanding
+    // balance. Mirrors TicketEventKind's payment-status values.
     private static final List<String> ACCOUNT_PENDING_PAYMENT_STATUSES =
         List.of("DEPOSIT_NOTICE_ISSUED", "AWAITING_FINAL_PAYMENT");
     // account: every live order from ORDER_RECEIVED (S10) through CLOSED_PAID (S20), by stage
@@ -187,18 +187,9 @@ public class TicketRepository {
         return total == null ? 0 : total;
     }
 
-    /**
-     * Is this deal inside the import role's list scope — i.e. would {@code GET /api/tickets} return
-     * it to an {@code import} caller? Runs the list's OWN predicate ({@link #appendRoleScope} with
-     * {@code "import"}) against a single id rather than restating it, so the by-id read and the
-     * worklist can never disagree about what import may see. A missing deal is simply "not in
-     * scope" (false).
-     *
-     * <p>The former {@code quotation_only = FALSE} filter was dropped when the deal-route-staging
-     * rework removed it from the list paths too (the flag is now cleared on promote to a real deal,
-     * so a quotation-only container never reaches import's stage/PCR scope anyway). This stays in
-     * lock-step with {@code findSummaries}/{@code countSummaries}: predicate = id + appendRoleScope.
-     */
+    /** Is this deal inside the import role's list scope — i.e. would GET /api/tickets return it to an import
+     * caller? Runs the list's OWN predicate (#appendRoleScope with "import") against a single id rather than
+     * restating it, so the by-id read and the worklist can never disagree about what import may see. */
     public boolean isInImportScope(long ticketId) {
         StringBuilder sql = new StringBuilder(
             "SELECT COUNT(*) FROM sales.ticket t WHERE t.ticket_id = :ticketId");
@@ -250,12 +241,7 @@ public class TicketRepository {
         params.addValue("accountPendingStatuses", ACCOUNT_PENDING_PAYMENT_STATUSES);
     }
 
-    /**
-     * Is this deal inside the account role's list scope? The single-deal twin of the list
-     * predicate: it runs the SAME {@link #appendRoleScope} fragment (and, like the list since the
-     * deal-route-staging rework, no quotation_only filter -- see {@link #isInImportScope}), so the
-     * finance deal read can never disagree with the list about what account may see.
-     */
+    /** Is this deal inside the account role's list scope? */
     public boolean isInAccountScope(long ticketId) {
         // Trailing space is load-bearing: the account fragment appended below is a text block that starts
         // flush with "AND (", so without it the SQL reads ":idAND".
@@ -383,11 +369,8 @@ public class TicketRepository {
     public long create(CreateTicketRequest request, String code, long ownerId, long actorId, String actorName) {
         String priority = (request.priority() != null && !request.priority().isBlank())
             ? request.priority() : Priority.DEFAULT;
-        // Every deal begins as a DRAFT at the lead stage, regardless of whether
-        // products were attached at creation time. Items attached here are
-        // preliminary deal products only — pricing does not start until a
-        // PricingRequest is created and submitted against this ticket
-        // (see th.co.glr.hr.pricingrequest.PricingRequestService).
+        // Every deal begins as a DRAFT at the lead stage, regardless of whether products were attached at creation
+        // time.
         boolean hasItems = request.items() != null && !request.items().isEmpty();
         String status = TicketStatus.DRAFT;
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
@@ -411,16 +394,13 @@ public class TicketRepository {
                 .addValue("projectId", request.projectId())
                 .addValue("contactId", request.contactId())
                 .addValue("note", request.note())
-                // Null stays legal (a draft may genuinely not have a date yet); it simply leaves
-                // the deal un-advanceable until one is set, which is the pre-existing behaviour.
+                // Null stays legal (a draft may genuinely not have a date yet); it simply leaves the deal un-advanceable until
+                // one is set, which is the pre-existing behaviour.
                 .addValue("nextFollowUpAt", request.nextFollowUpAt())
                 // Only the quotation editor's inline create sends TRUE; null/false (every
                 // other caller) is an ordinary pipeline deal. See CreateTicketRequest#quotationOnly.
                 .addValue("quotationOnly", Boolean.TRUE.equals(request.quotationOnly()))
                 // V144: an omitted channel lands UNSPECIFIED ("not stated"), not DESIGNER_LED.
-                // Defaulting to a real route made every unattended row assert one, so a deliberate
-                // DESIGNER_LED was indistinguishable from silence — see EntryChannel's Javadoc and
-                // V144__ticket_entry_channel_unspecified.sql for the pre-V144 data cutoff.
                 .addValue("entryChannel", request.entryChannel() != null && !request.entryChannel().isBlank()
                     ? request.entryChannel() : EntryChannel.UNSPECIFIED),
             keyHolder, new String[]{"ticket_id"});
@@ -452,10 +432,8 @@ public class TicketRepository {
             itemSnapshotJson, null, null);
     }
 
-    /**
-     * Record an event AND the document it produced (V58), so "which receipt did
-     * this payment event write" is a query rather than a timestamp match.
-     */
+    /** Record an event AND the document it produced (V58), so "which receipt did this payment event write" is a
+     * query rather than a timestamp match. */
     public void addEventWithDocument(long ticketId, long actorId, String actorName,
                                      String kind, String fromStatus, String toStatus,
                                      String message, String documentType, Long documentId) {
@@ -577,12 +555,9 @@ public class TicketRepository {
                 .addValue("stockNote", item.stockNote())
                 .addValue("catalogPriceId", item.catalogPriceId())
                 .addValue("catalogProductCode", item.catalogProductCode())
-                // V148: this DELETE+re-INSERT gives every edited item a brand-new item_id (the
-                // column is GENERATED ALWAYS AS IDENTITY), so the LOGICAL weight a sales_manager
-                // set survives an edit only because TicketService.mergeEditedItemsPreservingPricing
-                // carries item.weightMultiplier() forward from the prior row -- this repository
-                // method just persists whatever it was handed, exactly like every other
-                // pricing-adjacent field above (approvedPrice/calcedCost/manualPrice/...).
+                // V148: this DELETE+re-INSERT gives every edited item a brand-new item_id, so the LOGICAL weight a
+                // sales_manager set survives an edit only because TicketService.mergeEditedItemsPreservingPricing carries
+                // item.weightMultiplier forward from the prior row.
                 .addValue("weightMultiplier", item.weightMultiplier())
                 // V183: unlike weightMultiplier (guarded, "prior always wins"), sourcedFromStock is
                 // sales-writable -- TicketService.mergeEditedItemsPreservingPricing resolves it from the
@@ -665,8 +640,8 @@ public class TicketRepository {
             Integer.class);
         int nextVersion = (maxVersion == null ? 0 : maxVersion) + 1;
 
-        // generateQuotation() issues and transitions the ticket to QUOTATION_ISSUED in one
-        // step (no separate draft phase like deposit notices), so the row starts ISSUED.
+        // generateQuotation() issues and transitions the ticket to QUOTATION_ISSUED in one step (no separate draft
+        // phase like deposit notices), so the row starts ISSUED.
         jdbc.update("""
             INSERT INTO sales.quotation
                 (ticket_id, number, issued_by, total_amount, currency, quotation_version, doc_status,
@@ -723,17 +698,15 @@ public class TicketRepository {
 
     // --- quotation snapshot (V49: freeze issued quotations at issue time) ---
 
-    // Frozen customer/project header for an issued quotation. All fields nullable —
-    // pre-V49 quotations have no header snapshot and the caller must fall back to a
-    // live customer/ticket lookup.
+    // Frozen customer/project header for an issued quotation. All fields nullable — pre-V49 quotations have no
+    // header snapshot and the caller must fall back to a live customer/ticket lookup.
     public record QuotationHeaderSnapshot(String customerName, String customerAddress,
                                           String customerTaxId, String customerPhone,
                                           String projectName) {}
 
-    // Called once, in the same transaction as createQuotation, from
-    // TicketService.generateQuotation. Only priced items (approvedPrice != null) are
-    // snapshotted — unpriced items never contribute to the rendered quotation, mirroring
-    // the total-amount calculation in TicketService.generateQuotation itself.
+    // Called once, in the same transaction as createQuotation, from TicketService.generateQuotation. Only priced
+    // items (approvedPrice != null) are snapshotted — unpriced items never contribute to the rendered quotation,
+    // mirroring the total-amount calculation in TicketService.generateQuotation itself.
     public void insertQuotationItems(long quotationId, List<TicketItemDto> items) {
         List<TicketItemDto> priced = items.stream().filter(it -> it.approvedPrice() != null).toList();
         if (priced.isEmpty()) {
@@ -788,8 +761,8 @@ public class TicketRepository {
                 .addValue("id", quotationId));
     }
 
-    // Empty list = no snapshot exists for this quotation (either it predates V49, or
-    // generateQuotation ran with zero priced items) — the caller falls back to live data.
+    // Empty list = no snapshot exists for this quotation (either it predates V49, or generateQuotation ran with
+    // zero priced items) — the caller falls back to live data.
     public List<TicketItemDto> findQuotationItemsByQuotationId(long quotationId, long ticketId) {
         return jdbc.query("""
             SELECT quotation_item_id, seq, brand, model, color, texture, size,
@@ -1187,8 +1160,8 @@ public class TicketRepository {
         if (items.isEmpty()) {
             return;
         }
-        // Single batched round-trip instead of one INSERT per item; the datasource has
-        // reWriteBatchedInserts=true so this collapses into one multi-row statement (issue #29).
+        // Single batched round-trip instead of one INSERT per item; the datasource has reWriteBatchedInserts=true so
+        // this collapses into one multi-row statement (issue #29).
         MapSqlParameterSource[] batch = new MapSqlParameterSource[items.size()];
         for (int i = 0; i < items.size(); i++) {
             TicketItemRequest item = items.get(i);
@@ -1391,11 +1364,8 @@ public class TicketRepository {
             s.keyedById());
     }
 
-    /**
-     * An INVOICE document is on file. The invoice is produced by an external
-     * system and uploaded here, so its presence — not its contents — is what the
-     * close gate can check.
-     */
+    /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its
+     * presence — not its contents — is what the close gate can check. */
     public boolean hasInvoiceAttachment(long ticketId) {
         Boolean value = jdbc.queryForObject("SELECT " + hasInvoiceAttachmentSql(":id"),
             Map.of("id", ticketId), Boolean.class);
@@ -1430,18 +1400,9 @@ public class TicketRepository {
             """.formatted(ticketIdRef);
     }
 
-    /**
-     * Backs {@link TicketSummaryDto#commissionRecorded} — a DELIBERATE second copy of {@code
-     * CommissionRepository.hasActiveCommissionForTicket}'s predicate, not a re-derivation.
-     * {@code TicketRepository} is hand-wired as {@code new TicketRepository(jdbc)} in ~40 places
-     * (services, controllers, tests), so injecting {@code CommissionRepository} here to call the
-     * real method would break every one of them for the sake of one boolean.
-     *
-     * <p>The copy is guarded instead of re-derived: {@code CommissionRecordedFlagIntegrationTest}
-     * asserts, against real Postgres, that this method and {@code CommissionRepository
-     * .hasActiveCommissionForTicket} always agree. If you change one predicate you MUST change the
-     * other, and that test is what catches it if you forget.
-     */
+    /** Backs TicketSummaryDto#commissionRecorded — a DELIBERATE second copy of
+     * CommissionRepository.hasActiveCommissionForTicket's predicate, not a re-derivation. If you change one
+     * predicate you MUST change the other, and that test is what catches it if you forget. */
     public static String hasRecordedCommission(String ticketIdRef) {
         return """
             EXISTS(
@@ -1523,15 +1484,7 @@ public class TicketRepository {
     /** Live (non-CANCELLED) PO counts for one deal — the raw input to the import-status rollup. */
     public record PurchaseOrderRollup(int live, int received, int pastOpen) {}
 
-    /**
-     * One query, three filtered counts — everything {@link #deriveImportStatus} needs from {@code
-     * sales.factory_purchase_order}. CANCELLED is excluded from every count: a cancelled PO is how
-     * Import backs out of a factory order, so it must behave as if it never existed for rollup
-     * purposes (see {@link #deriveImportStatus}'s own Javadoc for the all-cancelled-deal decision
-     * this feeds). {@code received}/{@code pastOpen} need no explicit {@code <> 'CANCELLED'} of
-     * their own — {@code RECEIVED} and {@code SHIPPING} are already disjoint from {@code
-     * CANCELLED}, so the extra predicate would be redundant, not merely omitted by oversight.
-     */
+    /** One query, three filtered counts — everything #deriveImportStatus needs from sales.factory_purchase_order. */
     public PurchaseOrderRollup purchaseOrderRollup(long ticketId) {
         return jdbc.queryForObject("""
             SELECT COUNT(*) FILTER (WHERE status <> 'CANCELLED')              AS live,
@@ -1544,28 +1497,8 @@ public class TicketRepository {
                 rs.getInt("live"), rs.getInt("received"), rs.getInt("past_open")));
     }
 
-    /**
-     * Rolls this deal's live (non-CANCELLED) factory purchase orders up into a single import-axis
-     * {@link FulfilmentStatus} value, or {@code null} when the POs assert nothing about where the
-     * import journey currently stands:
-     *
-     * <ul>
-     *   <li>no live POs at all (none ever created, or every one CANCELLED) -&gt; {@code null}</li>
-     *   <li>every live PO is RECEIVED -&gt; {@link FulfilmentStatus#GOODS_RECEIVED}</li>
-     *   <li>at least one live PO has moved past OPEN (SHIPPING or RECEIVED), but not every one is
-     *       RECEIVED yet -&gt; {@link FulfilmentStatus#SHIPPING}</li>
-     *   <li>every live PO is still OPEN -&gt; {@code null} (the ticket keeps whatever IR_ISSUED /
-     *       IR_SENT flag it already carries — the POs have not started shipping yet)</li>
-     * </ul>
-     *
-     * <p><strong>All-cancelled deal, deliberately treated identically to zero POs.</strong>
-     * Cancelling every PO on a deal is how Import backs out of a factory order entirely — e.g.
-     * re-sourcing from a different factory. Returning {@code null} here (rather than inventing a
-     * terminal "cancelled" import status) hands control back to the ticket-level {@code
-     * TicketService#markShipping}/{@code #markGoodsReceived} flow, so the deal is not stranded
-     * with no way to progress. Leaving the deal frozen at whatever import-axis status it last had
-     * would be a worse outcome than trusting the ticket-level setters again.
-     */
+    /** Derives import fulfilment from live purchase orders; cancelled orders are excluded and no live orders yields
+     * null. */
     public String deriveImportStatus(long ticketId) {
         PurchaseOrderRollup r = purchaseOrderRollup(ticketId);
         if (r.live() == 0) {
@@ -1580,13 +1513,9 @@ public class TicketRepository {
         return null;
     }
 
-    /**
-     * Whether this deal is PO-tracked at all (&gt;= 1 live, non-CANCELLED PO) — the refusal guard
-     * {@code TicketService#markShipping}/{@code #markGoodsReceived} use to refuse a ticket-level
-     * write that would bypass the per-factory PO record. Implemented via {@link
-     * #purchaseOrderRollup}'s own {@code live} count rather than a second, independent query, so
-     * this and {@link #deriveImportStatus} can never see a different PO snapshot from one another.
-     */
+    /** Whether this deal is PO-tracked at all (>= 1 live, non-CANCELLED PO) — the refusal guard
+     * TicketService#markShipping/#markGoodsReceived use to refuse a ticket-level write that would bypass the
+     * per-factory PO record. */
     public boolean hasLivePurchaseOrders(long ticketId) {
         return purchaseOrderRollup(ticketId).live() > 0;
     }
@@ -1607,13 +1536,7 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
-    /**
-     * Locks {@code sales.ticket}'s own row {@code FOR UPDATE} for the remainder of the caller's
-     * transaction. Used by {@code ImportRequestService#advanceStep} before its own "is every factory
-     * now RECEIVED" re-check, so two concurrent "last factory reached RECEIVED" advances on the same
-     * deal serialize instead of both reading a stale pre-rollup state and both firing {@code
-     * TicketService#applyImportRequestRollup}.
-     */
+    /** Locks sales.ticket's own row FOR UPDATE for the remainder of the caller's transaction. */
     public void lockTicketForUpdate(long ticketId) {
         jdbc.query("SELECT 1 FROM sales.ticket WHERE ticket_id = :id FOR UPDATE",
             Map.of("id", ticketId), (rs, n) -> 0);
@@ -1854,13 +1777,9 @@ public class TicketRepository {
             + " ORDER BY ri.issued_at DESC, ri.id DESC LIMIT 1),";
     }
 
-    /**
-     * Full "amount payable" SELECT statement, correlated on {@code ticketIdRef} (either a bind
-     * parameter like {@code ":ticketId"} for a standalone query, or an outer-query column
-     * reference like {@code "t.ticket_id"} for use as a parenthesized scalar subquery inside a
-     * bigger SQL statement — see {@link #appendRoleScope}). Single source of truth so the two
-     * contexts can never drift apart; this is the exact SQL {@link #payableAmount} always ran.
-     */
+    /** Full "amount payable" SELECT statement, correlated on ticketIdRef (either a bind parameter like ":ticketId"
+     * for a standalone query, or an outer-query column reference like "t.ticket_id" for use as a parenthesized
+     * scalar subquery inside a bigger SQL statement — see #appendRoleScope). */
     public static String payableAmountSelect(String ticketIdRef) {
         return payableAmountSelect(ticketIdRef, true);
     }
@@ -1870,22 +1789,15 @@ public class TicketRepository {
         return payableAmountSelect(ticketIdRef, false);
     }
 
-    /**
-     * The VAT rate every quotation document applies (Thai documents; an EN document has none). Read from
-     * {@link th.co.glr.hr.dealquotation.WastageCalculator} -- the same constant the quotation's own
-     * grand total uses -- never a second "0.07" here.
-     */
+    /** The VAT rate every quotation document applies (Thai documents; an EN document has none). Read from
+     * th.co.glr.hr.dealquotation.WastageCalculator -- the same constant the quotation's own grand total uses --
+     * never a second "0.07" here. */
     private static final String THAI_VAT_RATE =
         th.co.glr.hr.dealquotation.WastageCalculator.vatRateFor(
             th.co.glr.hr.dealquotation.WastageCalculator.DOCUMENT_LANGUAGE_TH).toPlainString();
 
-    /**
-     * Every branch is made VAT-inclusive the same way the quotation DTOs compute their grand total:
-     * {@code total_amount} is the persisted SUBTOTAL for every origin (DEAL_DIRECT, the PCR customer quotation
-     * and legacy ticket quotations alike), VAT = round2(subtotal x rate), rate 0 for an EN document
-     * ({@code document_language}; NULL = TH, V169). A deposit notice's {@code total_payable} is already VAT
-     * inclusive; the ticket-item fallback is a pre-VAT sum and takes the Thai rate.
-     */
+    /** Every branch is made VAT-inclusive the same way the quotation DTOs compute their grand total: total_amount
+     * is the persisted SUBTOTAL for every origin, VAT = round2, rate 0 for an EN document. */
     private static String payableAmountSelect(String ticketIdRef, boolean inclVat) {
         String quotationAmount = inclVat
             ? "q.total_amount + ROUND(q.total_amount * CASE WHEN q.document_language = 'EN' THEN 0 ELSE " + THAI_VAT_RATE + " END, 2)"
@@ -2096,13 +2008,9 @@ public class TicketRepository {
             """, batch);
     }
 
-    /**
-     * V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
-     * {@link #reserveStock} above -- same absolute-SET-keyed-on-(ticket_id,item_id) shape, this is
-     * the only production writer of {@code sales.ticket_item.weight_multiplier}. Authorization
-     * lives entirely in {@link TicketService#setItemWeightMultipliers}; this method trusts its
-     * caller completely, exactly as {@link #reserveStock} does.
-     */
+    /** V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to #reserveStock
+     * above -- same absolute-SET-keyed-on-(ticket_id,item_id) shape, this is the only production writer of
+     * sales.ticket_item.weight_multiplier. */
     @Transactional
     public void updateItemWeightMultipliers(long ticketId, List<ItemWeightMultiplierRequest.Line> lines) {
         MapSqlParameterSource[] batch = new MapSqlParameterSource[lines.size()];
@@ -2244,13 +2152,9 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
-    /**
-     * Whether the deal's imported goods ever physically reached OUR warehouse — a
-     * permanent fact from the GOODS_RECEIVED event, NOT the current fulfillment_status
-     * (which gets overwritten to PARTIALLY_DELIVERED/FULLY_DELIVERED once deliveries
-     * start). Used to gate WAREHOUSE-source deliveries so a stock-first partial
-     * delivery on an imported deal can't lock out the warehouse remainder (Case 8).
-     */
+    /** Whether the deal's imported goods ever physically reached OUR warehouse — a permanent fact from the
+     * GOODS_RECEIVED event, NOT the current fulfillment_status (which gets overwritten to
+     * PARTIALLY_DELIVERED/FULLY_DELIVERED once deliveries start). */
     public boolean hasReceivedGoods(long ticketId) {
         Boolean value = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -2262,31 +2166,9 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
-    /**
-     * Validated ticket-status transition — the ONE way {@code sales.ticket.status} is written
-     * (ticket creation's INSERT sets the initial {@code draft} and is not a transition). Mirrors
-     * {@code PricingRequestRepository.transition} and {@link #advancePaymentStatus}:
-     *
-     * <ol>
-     *   <li>the edge is asserted against {@link TicketStatus#canTransition} BEFORE any SQL runs,
-     *       throwing {@link IllegalStateException} — an undeclared {@code expected -> next} pair
-     *       means the CALLING CODE asked for a transition the machine does not recognise, a
-     *       programming error to catch at the source, not a user-visible race;
-     *   <li>the UPDATE is a compare-and-set on {@code status = :expected}, so a 0 rowcount means a
-     *       concurrent writer moved the row between the caller's read and this write. The SERVICE
-     *       must turn that into a 409 — never re-SELECT to build a nicer message, which would
-     *       reintroduce the very race the {@code WHERE} clause closes.
-     * </ol>
-     *
-     * <p>Single-hop only, deliberately: unlike the payment track there is no multi-state walk to
-     * perform, because every write site knows both ends of its own transition.
-     *
-     * <p>{@code closed_at} is NOT set here — it is written by {@link #addEventInternal} for every
-     * CLOSED/CANCELLED event, exactly as it was before the status write was separated out, so the
-     * two halves together produce byte-for-byte the same row as the old single statement.
-     *
-     * @return the rowcount (0 or 1).
-     */
+    /** Validated ticket-status transition — the ONE way sales.ticket.status is written (ticket creation's INSERT
+     * sets the initial draft and is not a transition). The SERVICE must turn that into a 409 — never re-SELECT to
+     * build a nicer message, which would reintroduce the very race the WHERE clause closes. */
     public int transitionStatus(long ticketId, String expected, String next) {
         if (!TicketStatus.canTransition(expected, next)) {
             throw new IllegalStateException(
@@ -2477,38 +2359,12 @@ public class TicketRepository {
         return Boolean.TRUE.equals(value);
     }
 
-    /**
-     * Validated payment-track advance. Walks EVERY hop from {@code expected} to {@code next}
-     * through {@link PaymentTrack#stepsBetween}, so an illegal edge throws {@link
-     * IllegalStateException} BEFORE any SQL runs (mirrors {@code
-     * PricingRequestRepository.transition}). The final UPDATE is a compare-and-set on {@code
-     * payment_status = :expected}; a 0 rowcount means a concurrent writer moved the row and the
-     * SERVICE must turn that into a 409 — do NOT re-SELECT to build a nicer message (same
-     * discipline as {@code PricingRequestRepository.transition}'s own Javadoc).
-     *
-     * <p>Multi-hop is a WALK, not a SKIP: intermediate states are traversed and validated by
-     * {@link PaymentTrack#stepsBetween}, never jumped over. The whole walk is inside the caller's
-     * transaction, so no observer ever sees an intermediate value — the UPDATE below still moves
-     * the row straight from {@code expected} to {@code next} in one statement; only the
-     * VALIDATION is multi-hop.
-     *
-     * <p>{@code IS NOT DISTINCT FROM}, not a plain {@code =}: {@code expected == null} is the
-     * entry case ({@code null -> CUSTOMER_CONFIRMED}), and a plain {@code = :expected} never
-     * matches a NULL column value.
-     *
-     * @return the rowcount (0 or 1) — 0 means the compare-and-set lost a race; never re-SELECT to
-     *     build a nicer error, per the discipline above.
-     */
+    /** Validated payment-track advance. Multi-hop is a WALK, not a SKIP: intermediate states are traversed and
+     * validated by PaymentTrack#stepsBetween, never jumped over. */
     public int advancePaymentStatus(long ticketId, String policy, String expected, String next) {
-        // stepsBetween throws IllegalStateException for an illegal edge, BEFORE any SQL runs.
-        // The design intent is "a programming error to catch at the source", which is right — but
-        // IllegalStateException is unmapped in ApiExceptionHandler, so anything that does reach it
-        // surfaces as an opaque HTTP 500 rather than something a caller can act on. Adversarial
-        // review found three legacy-data routes that reached it. Those are fixed at source (the
-        // gate in reconcilePaymentStatus, and V142's backfill), so this is defence in depth:
-        // convert to a 409 so a residual illegal edge is a legible conflict, not a 500.
-        // Deliberately NOT a global @ExceptionHandler(IllegalStateException) — that would swallow
-        // genuine programming errors across the whole app.
+        // stepsBetween throws IllegalStateException for an illegal edge, BEFORE any SQL runs. Adversarial review found
+        // three legacy-data routes that reached it. Deliberately NOT a global @ExceptionHandler(IllegalStateException)
+        // — that would swallow genuine programming errors across the whole app.
         try {
             PaymentTrack.stepsBetween(policy, expected, next);
         } catch (IllegalStateException e) {
@@ -2547,14 +2403,9 @@ public class TicketRepository {
         return rows;
     }
 
-    /**
-     * Test-seed / migration use only — bypasses {@link PaymentTrack} entirely (a blind, unguarded
-     * UPDATE: no compare-and-set, no validated edge, no {@code updated_at} touch). No production
-     * code may call this; every real write goes through {@link #advancePaymentStatus}. Renamed
-     * from the original unqualified {@code updatePaymentStatus} — kept because {@code
-     * TicketScopeIntegrationTest} seeds {@code payment_status} directly to build fixture state
-     * without driving it through the state machine.
-     */
+    /** Test-seed / migration use only — bypasses PaymentTrack entirely (a blind, unguarded UPDATE: no
+     * compare-and-set, no validated edge, no updated_at touch). No production code may call this; every real write
+     * goes through #advancePaymentStatus. */
     public void updatePaymentStatusUnchecked(long ticketId, String paymentStatus) {
         jdbc.update(
             "UPDATE sales.ticket SET payment_status = :s WHERE ticket_id = :id",
@@ -2600,28 +2451,8 @@ public class TicketRepository {
     // once before any delivery machinery (reserveStock/completeDelivery, both keyed on this same
     // qty column) becomes reachable for the deal.
 
-    /**
-     * Reconciles ONE existing ticket_item row's {@code qty}/{@code qty_sqm} to whatever the
-     * pricing-request chain actually settled on. Scoped to {@code ticketId} as a defense-in-depth
-     * check — {@code sourceTicketItemId} is already validated to belong to the same ticket at
-     * pricing-request-item creation time (see {@code PricingRequestService
-     * .validateSourceItemsBelongToTicket}), so this should never filter anything out in practice.
-     *
-     * <p>Relies on the EXISTING {@code chk_ticket_item_qty_delivered}/
-     * {@code chk_ticket_item_qty_from_stock} CHECK constraints (V54) to refuse — via a thrown
-     * {@link org.springframework.dao.DataIntegrityViolationException} — a downward reconciliation
-     * that would drop {@code qty} below already-recorded {@code qty_delivered}/
-     * {@code qty_from_stock}. The caller converts that into a clean 409; this method never
-     * suppresses or works around it.
-     *
-     * @return true if a row was found AND its qty genuinely changed (the caller uses this only to
-     *         decide whether a "quantities were reconciled" event is worth logging, never for
-     *         correctness — a false return with zero rows updated is not itself an error, since a
-     *         same-ticket item id is guaranteed to exist by the FK on
-     *         {@code pricing_request_item.source_ticket_item_id} once V59 is applied... except
-     *         that FK does not exist (source_ticket_item_id is a plain nullable BIGINT, not an FK
-     *         — see V59's own column definition), so this IS defensive, not merely decorative).
-     */
+    /** Reconciles ONE existing ticket_item row's qty/qty_sqm to whatever the pricing-request chain actually settled
+     * on. The caller converts that into a clean 409; this method never suppresses or works around it. */
     public boolean reconcileItemQty(long ticketId, long itemId, BigDecimal qty, BigDecimal qtySqm,
                                     BigDecimal qtyFromStock) {
         // qty_from_stock moves in the same statement as qty so chk_ticket_item_qty_from_stock never sees a
@@ -2702,14 +2533,8 @@ public class TicketRepository {
                 .addValue("currentId", currentPricingRequestId));
     }
 
-    /**
-     * Inserts a brand-new ticket_item row for a pricing_request_item that has NO
-     * {@code sourceTicketItemId} — a line added entirely within a customer-change revision, with
-     * no original ticket_item to reconcile against. {@code brand} is NOT NULL on this table (V8);
-     * the caller is responsible for a non-blank fallback (see
-     * OrderConfirmationService#resolveBrand) since a pricing-request item's own brand is
-     * optional (it may be identified only by {@code productId}/{@code productDescription}).
-     */
+    /** Inserts a brand-new ticket_item row for a pricing_request_item that has NO sourceTicketItemId — a line added
+     * entirely within a customer-change revision, with no original ticket_item to reconcile against. */
     public long insertReconciledItem(long ticketId, String brand, String model, String color, String texture,
                                      String size, String factory, BigDecimal qty, BigDecimal qtySqm,
                                      String unitBasis, BigDecimal qtyFromStock) {
@@ -2840,15 +2665,8 @@ public class TicketRepository {
             ));
     }
 
-    /**
-     * The stage-advance gate's second half (the first is {@code next_follow_up_at IS NOT NULL},
-     * checked in {@code TicketService.updateStage} directly off the summary already in hand):
-     * at least one {@code deal_activity} row logged (by {@code created_at}, not the possibly
-     * backdated {@code activity_date}) at/after the ticket's most recent {@code STAGE_CHANGED}
-     * event. A ticket that has never had a stage change yet (e.g. its very first manual advance)
-     * falls back to the ticket's own {@code created_at} as the baseline, so a brand-new deal isn't
-     * exempted just because no STAGE_CHANGED row exists.
-     */
+    /** The stage-advance gate's second half: at least one deal_activity row logged at/after the ticket's most
+     * recent STAGE_CHANGED event. */
     public boolean hasActivitySinceLastStageChange(long ticketId) {
         Boolean value = jdbc.queryForObject("""
             SELECT EXISTS (

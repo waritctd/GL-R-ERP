@@ -44,8 +44,8 @@ function row(overrides = {}) {
   };
 }
 
-// Prints the current search string so a test can assert the tab actually travels in the URL
-// (owner feedback F5: "driven by the URL (`?status=`)") rather than only in component state.
+// Prints the current search string so a test can assert the tab actually travels in the URL (owner feedback
+// F5: "driven by the URL (`?status=`)") rather than only in component state.
 function LocationProbe() {
   const location = useLocation();
   return <p data-testid="location-search">{location.search}</p>;
@@ -71,10 +71,8 @@ describe('QuotationListPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.list.mockResolvedValue({ items: [row()] });
-    // BARE, no `{ counts: ... }` envelope — DealQuotationController#counts returns the
-    // DealQuotationCountsDto record itself (review finding MED-3). This fixture wrapped it while
-    // the page still read `r?.counts ?? r`, so it passed on the tolerance rather than on the
-    // contract; with the tolerance gone the fixture has to match the controller.
+    // BARE, no `{ counts: ... }` envelope — DealQuotationController#counts returns the DealQuotationCountsDto
+    // record itself (review finding MED-3). This fixture wrapped it while the page still read `r?.counts ??
     api.dealQuotations.counts.mockResolvedValue({ all: 7, pendingApproval: 2, needsRework: 3, cancelled: 1, approved: 4 });
   });
 
@@ -105,8 +103,8 @@ describe('QuotationListPage', () => {
 
     const labels = screen.getAllByRole('tab').map((tab) => tab.textContent.replace(/\d+$/, ''));
     expect(labels).toEqual(['ทั้งหมด', 'รออนุมัติ', 'ฉบับแก้', 'ยกเลิก', 'อนุมัติแล้ว']);
-    // Owner rewording (2026-09-15): the SUPERSEDED status label is now "ฉบับที่ไม่ได้ใช้แล้ว" --
-    // still no tab of its own (unchanged decision; see QuotationListPage.jsx's own comment).
+    // Owner rewording (2026-09-15): the SUPERSEDED status label is now "ฉบับที่ไม่ได้ใช้แล้ว" -- still no tab of
+    // its own (unchanged decision; see QuotationListPage.jsx's own comment).
     expect(screen.queryByRole('tab', { name: /ฉบับที่ไม่ได้ใช้แล้ว/ })).toBeNull();
   });
 
@@ -191,9 +189,9 @@ describe('QuotationListPage', () => {
     await waitFor(() => expect(api.dealQuotations.list).toHaveBeenCalledWith({ status: 'PENDING_APPROVAL' }));
   });
 
-  // Regression: an approver's default tab is รออนุมัติ, and "no ?status=" MEANS that default —
-  // so ทั้งหมด has to write its own key. Clearing the param instead bounced the CEO straight back
-  // to รออนุมัติ, making ทั้งหมด unreachable for the one role whose default is not it.
+  // Regression: an approver's default tab is รออนุมัติ, and "no ?status=" MEANS that default — so ทั้งหมด has to
+  // write its own key. Clearing the param instead bounced the CEO straight back to รออนุมัติ, making ทั้งหมด
+  // unreachable for the one role whose default is not it.
   it('lets an approver actually reach ทั้งหมด, writing status=all to the URL', async () => {
     renderListPage(ceoUser);
     await screen.findByText('QD69-0001');
@@ -215,9 +213,9 @@ describe('QuotationListPage', () => {
     expect(screen.getByText('ร่าง')).not.toBeNull();
   });
 
-  // Owner ruling 2026-09-24: only sales_manager/ceo (whose global list already contains every
-  // deal) get a rep filter — everyone else's rows are already scoped to their own deals
-  // server-side, so a per-rep filter over one rep's own rows is pointless chrome.
+  // Owner ruling 2026-09-24: only sales_manager/ceo (whose global list already contains every deal) get a rep
+  // filter — everyone else's rows are already scoped to their own deals server-side, so a per-rep filter over
+  // one rep's own rows is pointless chrome.
   it('sales_manager sees the rep dropdown and selecting a rep narrows the rows', async () => {
     api.dealQuotations.list.mockResolvedValue({
       items: [
@@ -662,26 +660,9 @@ describe('QuotationListPage — contractor bids from before the recipient was re
 });
 
 describe('QuotationListPage column floors (responsive review, 2026-09-10)', () => {
-  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. jsdom does no grid layout and no text measurement, so it
-  // cannot observe the defect this pins: at a 721px viewport the six `minmax(0, …)` tracks were
-  // shrunk below their own text and the cells clip rather than overflow, so `QT-2026-0005-2`
-  // rendered `QT-2026-000…` — losing the `-N` suffix that is the only thing distinguishing a
-  // revision from the document it replaces. That was measured in a real browser and can only be
-  // RE-measured in one. This is a TEXT guard on the decisions that fix it:
-  //
-  //   1. FIXED floors on the four columns that cannot wrap (เลขที่, ยอดรวม, สถานะ, วันที่) plus a
-  //      smaller one on พนักงานขาย. Fixed, never `min-content` — the head row and each data row are
-  //      separate grid containers, so `min-content` sizes each row from its own content and the
-  //      columns stagger row to row.
-  //   2. ลูกค้า / โครงการ keeps `minmax(0, …)` and stays the SECOND track: it is the designated
-  //      absorber, the one column of free text that can give up width without losing anything.
-  //   3. Both free-text cells render a <span> wrapper, because styles.css's wrap escape hatch
-  //      (`.data-row > td > strong | small | span`) reaches nothing else — a <div> child, or a bare
-  //      string with no child element at all, inherits the cell's `nowrap` and is truncated.
-  //
-  // The MAGNITUDES are pinned literally, not merely counted. Shrinking every floor, or permuting
-  // them so ยอดรวม inherits สถานะ's, would keep any count-based assertion green while silently
-  // clipping the money again — that exact escape was found on the sibling page's guard.
+  // ⚠️ WHAT THIS CAN AND CANNOT PROVE. That was measured in a real browser and can only be RE-measured in one.
+  // FIXED floors on the four columns that cannot wrap (เลขที่, ยอดรวม, สถานะ, วันที่) plus a smaller one on
+  // พนักงานขาย.
   function gridClasses(el, what) {
     expect(el, `no ${what} to read the grid classes from`).toBeTruthy();
     return el.className;
@@ -692,9 +673,9 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
     const { container } = renderListPage(salesUser);
     await screen.findByText('QD69-0001');
 
-    // Asserted on the head row AND a data row. They share one constant today, so this cannot
-    // diverge — but splitting the grid and flooring only one is exactly how the header would stop
-    // lining up with the body, and a guard that reads only the head row would stay green.
+    // Asserted on the head row AND a data row. They share one constant today, so this cannot diverge — but
+    // splitting the grid and flooring only one is exactly how the header would stop lining up with the body, and a
+    // guard that reads only the head row would stay green.
     for (const [el, what] of [
       [container.querySelector('.table-head'), '.table-head'],
       [container.querySelector('.data-row'), '.data-row'],
@@ -705,17 +686,14 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
       expect(classes, `${what}: min-content floors stagger the columns row to row`)
         .not.toContain('min-content');
 
-      // Two shrinkable tracks — ลูกค้า / โครงการ and พนักงานขาย, the two free-text columns that
-      // wrap — and they are tracks TWO and THREE.
+      // Two shrinkable tracks — ลูกค้า / โครงการ and พนักงานขาย, the two free-text columns that wrap — and they are
+      // tracks TWO and THREE.
       const shrinkable = classes.match(/minmax\(0,/g) ?? [];
       expect(shrinkable, `${what}: only the two free-text columns may shrink below their content`)
         .toHaveLength(2);
 
-      // The whole track list, pinned literally. The values are each column's widest realistic
-      // value measured in the live cell typography and rounded up; ยอดรวม and วันที่ are sized
-      // against the FALLBACK font, not Sarabun, because Sarabun is swap-loaded from Google Fonts
-      // and absent entirely on an on-prem host that cannot reach them. Re-measure before changing
-      // any of these — see the source comment beside LIST_TABLE_GRID.
+      // The whole track list, pinned literally. Re-measure before changing any of these — see the source comment
+      // beside LIST_TABLE_GRID.
       expect(classes).toContain(
         'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(0,1.3fr)'
         + '_minmax(8.25rem,1.1fr)_minmax(4.75rem,1fr)_minmax(6.5rem,1fr)]',
@@ -724,20 +702,9 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
   });
 
   it('keeps LIST_TABLE_GRID as ONE unbroken literal so Tailwind can see it', () => {
-    // Reading this component's own SOURCE, not its rendered output, and that is the point.
-    // Tailwind's scanner matches whole class strings in the source text; splitting the literal
-    // across a `+` concatenation — which looks like a harmless tidy-up, and is exactly what the
-    // assertion above does to itself — leaves the arbitrary value unseen, so the rule is NEVER
-    // EMITTED. `grid-template-columns` then goes unset, `.table-head`/`.data-row` supply
-    // `display:grid` with no columns of their own, and every row collapses to one implicit track
-    // (measured: 63.5px tall becomes 242px, all six cells stacked).
-    //
-    // Nothing else catches it: lint passes, this suite passes, `npm run build` exits 0 with no
-    // warning, and the dev server keeps rendering correctly from Tailwind's cache. The only
-    // evidence is that `dist/assets/*.css` stops containing the value. A source-text assertion is
-    // the cheapest guard that fails in CI instead.
-    // `import.meta.url` is not a file: URL under vitest's transform, so resolve from the runner's
-    // root (frontend/) instead.
+    // Reading this component's own SOURCE, not its rendered output, and that is the point. The only evidence is
+    // that `dist/assets/*.css` stops containing the value. A source-text assertion is the cheapest guard that
+    // fails in CI instead.
     const source = readFileSync(
       resolve(process.cwd(), 'src/features/quotations/QuotationListPage.jsx'), 'utf8',
     );
@@ -754,11 +721,8 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
   });
 
   it('pins the COLUMNS order the track list is measured against', async () => {
-    // The grid string and the COLUMNS array are two halves of one contract, and pinning only the
-    // string leaves the other half free. Swapping the ยอดรวม and สถานะ entries in COLUMNS, with the
-    // grid untouched, puts a grand total in the 76px status track: measured at 721px,
-    // `฿600,616.00` breaks across two lines mid-number while สถานะ sits in 132px. That is the same
-    // defect the permuted-floors mutation covers, reached from the other side.
+    // The grid string and the COLUMNS array are two halves of one contract, and pinning only the string leaves the
+    // other half free. That is the same defect the permuted-floors mutation covers, reached from the other side.
     api.dealQuotations.list.mockResolvedValue({ items: [row()] });
     const { container } = renderListPage(salesUser);
     await screen.findByText('QD69-0001');
@@ -779,8 +743,8 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
 
     const cells = [...container.querySelector('.data-row').children];
 
-    // ลูกค้า / โครงการ — the wrapper must be a <span>. A <div> here inherits the cell's nowrap,
-    // which is what stopped the absorber absorbing anything.
+    // ลูกค้า / โครงการ — the wrapper must be a <span>. A <div> here inherits the cell's nowrap, which is what
+    // stopped the absorber absorbing anything.
     const customerCell = cells[1];
     const customerWrapper = customerCell.firstElementChild;
     expect(customerWrapper?.tagName, 'ลูกค้า / โครงการ wrapper must be a <span>, not a <div>')

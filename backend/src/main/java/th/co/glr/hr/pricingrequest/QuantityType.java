@@ -2,11 +2,8 @@ package th.co.glr.hr.pricingrequest;
 
 import java.util.Set;
 
-/**
- * How firm a pricing-request item's requested quantity is. This is an
- * independent property of the line item and must NOT be inferred from the
- * request's {@link PricingRequestRecipient}.
- */
+/** How firm a pricing-request item's requested quantity is. This is an independent property of the line item
+ * and must NOT be inferred from the request's PricingRequestRecipient. */
 public final class QuantityType {
     /** Standard reference quantity, e.g. 1 sqm for a designer quote. */
     public static final String REFERENCE = "REFERENCE";

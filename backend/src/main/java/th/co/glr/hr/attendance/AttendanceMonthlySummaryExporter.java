@@ -30,26 +30,8 @@ import th.co.glr.hr.attendance.daily.AttendanceDayStatus;
 import th.co.glr.hr.attendance.daily.EmployeeDay;
 import th.co.glr.hr.common.ThaiText;
 
-/**
- * Builds the monthly attendance summary workbook (xlsx): {@code สรุปรายเดือน} (one row per
- * employee) and {@code รายวัน} (one row per employee per day). Every cell here is copied verbatim
- * from an already-computed {@link AttendanceMonthlySummaryResult} -- no aggregation happens in this
- * class; see {@code AttendanceMonthlySummaryService}'s javadoc for the rules that decided what a
- * cell contains. Follows {@code th.co.glr.hr.payroll.export.PayrollDetailExporter}'s structure (a
- * {@code Column} record of header + extractor, styles built once, {@code ByteArrayOutputStream}) --
- * generalised to a type parameter here because this workbook has two sheets with two different
- * row shapes, where that class only ever had one.
- *
- * <p>Thai text in xlsx needs no embedded font -- that is a PDF concern only ({@code
- * th.co.glr.hr.deposit}/{@code th.co.glr.hr.ticket} renderers), and PDF is explicitly out of scope
- * for this report (owner decision, 2026-08-30: Excel only).
- *
- * <h2>§76</h2>
- * late/early figures are for reporting only -- Thai Labour Protection Act §76 forbids deducting
- * wages as a penalty for lateness or absence (see {@code AttendanceDayFlag}'s own javadoc). This
- * class carries that warning into the workbook itself as a footer line on Sheet 1, so a reader who
- * never opens the source code still sees it before turning a column into a deduction.
- */
+/** Builds the monthly attendance summary workbook (xlsx): สรุปรายเดือน (one row per employee) and รายวัน (one
+ * row per employee per day). */
 @Component
 public class AttendanceMonthlySummaryExporter {
     private static final String SUMMARY_SHEET_NAME = "สรุปรายเดือน";
@@ -59,20 +41,16 @@ public class AttendanceMonthlySummaryExporter {
     private static final DateTimeFormatter GENERATED_AT_FORMAT = DateTimeFormatter.ofPattern("d MMM uuuu HH:mm");
     private static final DateTimeFormatter TIME_FORMAT = DateTimeFormatter.ofPattern("HH:mm");
 
-    /** No shared Thai day-of-week label exists elsewhere in the backend (only date formatters, e.g.
-     * {@link ThaiText#date}) -- this stays local to Sheet 2's วัน column. Index 0 = Monday, matching
-     * {@link java.time.DayOfWeek#getValue()}'s 1-based Monday-first numbering minus one. */
+    /** No shared Thai day-of-week label exists elsewhere in the backend (only date formatters, e.g. ThaiText#date)
+     * -- this stays local to Sheet 2's วัน column. Index 0 = Monday, matching java.time.DayOfWeek#getValue()'s
+     * 1-based Monday-first numbering minus one. */
     private static final String[] THAI_WEEKDAY = {
         "จันทร์", "อังคาร", "พุธ", "พฤหัสบดี", "ศุกร์", "เสาร์", "อาทิตย์"
     };
 
-    /**
-     * Mirrors {@code frontend/src/utils/format.js#attendanceStatusLabel} -- Sheet 2's สถานะ column
-     * and the day-view page's status badge should read as the same vocabulary to an HR user who has
-     * both open, so this is a deliberate copy of that map's labels, not an independent wording
-     * choice. {@link AttendanceDayStatus#NO_RECORD} is intentionally absent: the day-view page
-     * renders it as a bare "-" with no badge at all, which {@link #statusLabel} falls back to below.
-     */
+    /** Mirrors frontend/src/utils/format.js#attendanceStatusLabel -- Sheet 2's สถานะ column and the day-view page's
+     * status badge should read as the same vocabulary to an HR user who has both open, so this is a deliberate
+     * copy of that map's labels, not an independent wording choice. */
     private static final Map<AttendanceDayStatus, String> STATUS_LABEL = Map.of(
         AttendanceDayStatus.PRESENT, "ปกติ",
         AttendanceDayStatus.LATE, "มาสาย",
@@ -87,9 +65,9 @@ public class AttendanceMonthlySummaryExporter {
         "หมายเหตุ: ตัวเลขสาย/ออกก่อนเวลาข้างต้นมีไว้เพื่อการรายงานเท่านั้น "
         + "ห้ามนำไปใช้หักค่าจ้างพนักงานตามมาตรา 76 แห่งพระราชบัญญัติคุ้มครองแรงงาน";
 
-    /** One column: a header label plus how to pull its cell value out of a row's context. Generic
-     * (unlike {@code PayrollDetailExporter}'s single-shape {@code Column}) because this workbook has
-     * two sheets with two different row types. */
+    /** One column: a header label plus how to pull its cell value out of a row's context. Generic (unlike
+     * PayrollDetailExporter's single-shape Column) because this workbook has two sheets with two different row
+     * types. */
     private record Column<T>(String header, Function<T, Object> extract) {}
 
     public byte[] export(AttendanceMonthlySummaryResult result) {
@@ -130,52 +108,38 @@ public class AttendanceMonthlySummaryExporter {
                 writeCell(row, c + 1, columns.get(c).extract().apply(summaryRow), numberStyle, dateStyle);
             }
         }
-        // Captured before the footer's own rowIdx++ below, so this is the last row that actually
-        // holds employee data -- zero summary rows leaves rowIdx unmoved from the loop, which
-        // collapses this back to headerRowIdx itself rather than running past it.
+        // Captured before the footer's own rowIdx++ below, so this is the last row that actually holds employee data
+        // -- zero summary rows leaves rowIdx unmoved from the loop, which collapses this back to headerRowIdx itself
+        // rather than running past it.
         int lastDataRowIdx = rowIdx - 1;
 
-        // A totals row is deliberately NOT built here rather than half-built: most of these
-        // columns (e.g. ตำแหน่ง, or a ครั้ง count) do not sum meaningfully across employees the way
-        // payroll's money columns do, and a row that totals only some of them invites misreading.
+        // A totals row is deliberately NOT built here rather than half-built: most of these columns (e.g. ตำแหน่ง, or
+        // a ครั้ง count) do not sum meaningfully across employees the way payroll's money columns do, and a row that
+        // totals only some of them invites misreading.
         rowIdx++; // blank line before the footer, so it reads as a note rather than a data row
         Cell footerCell = sheet.createRow(rowIdx).createCell(0);
         footerCell.setCellValue(SECTION_76_FOOTER);
         footerCell.setCellStyle(footerStyle);
 
         // Rows only, per the plan ("freeze panes below the header row") -- no column freeze, unlike
-        // PayrollDetailExporter's createFreezePane(1, 1): that report reads left-to-right against one
-        // pinned identity column; this one is read mostly top-to-bottom per employee.
+        // PayrollDetailExporter's createFreezePane(1, 1): that report reads left-to-right against one pinned identity
+        // column; this one is read mostly top-to-bottom per employee.
         sheet.createFreezePane(0, headerRowIdx + 1);
-        // 9 rather than the 6 this column carried before the autofilter below: Excel draws the
-        // filter dropdown INSIDE the header cell, overlaying its right edge, and at 6 characters
-        // that button covers most of "ลำดับ". Widened here alone and NOT inside columnWidth --
-        // every other column on both sheets is already sized well past its rendered Thai width
-        // (that helper's length()*2 counts zero-advance-width combining marks as full characters,
-        // so a 23-unit header like "วันทำงานตามปฏิทิน (วัน)" already clamps at the ceiling), which
-        // leaves the button overlapping whitespace there. This is the one header it can crowd.
+        // 9 rather than the 6 this column carried before the autofilter below: Excel draws the filter dropdown INSIDE
+        // the header cell, overlaying its right edge, and at 6 characters that button covers most of "ลำดับ".
         sheet.setColumnWidth(0, 9 * 256);
         for (int c = 0; c < columns.size(); c++) {
             sheet.setColumnWidth(c + 1, columnWidth(columns.get(c).header()));
         }
 
-        // Header through lastDataRowIdx ONLY -- deliberately stops short of the blank spacer and the
-        // §76 footer below. An Excel autofilter can only ever hide rows *inside* its own range, never
-        // outside it, so leaving the footer out of the range (rather than merely leaving it unstyled)
-        // is what guarantees the legal warning in this class's javadoc ("§76") survives every filter
-        // state a user can put the sheet in. Zero summary rows makes lastDataRowIdx equal
-        // headerRowIdx, which CellRangeAddress accepts as a one-row range -- not an error case.
-        //
-        // Column 0 (ลำดับ) is deliberately INSIDE the range rather than left as a pinned rail: it
-        // holds a plain 1..n sequence, so sorting by it from its own dropdown is the only way back
-        // to the sheet's natural order once a reader has sorted by some other column. The accepted
-        // cost is that ลำดับ reads out of order while another sort is applied -- it numbers the
-        // export, it was never a rank, and no other cell on either sheet refers to it.
+        // Header through lastDataRowIdx ONLY -- deliberately stops short of the blank spacer and the §76 footer below.
+        // The accepted cost is that ลำดับ reads out of order while another sort is applied -- it numbers the export,
+        // it was never a rank, and no other cell on either sheet refers to it.
         sheet.setAutoFilter(new CellRangeAddress(headerRowIdx, lastDataRowIdx, 0, columns.size()));
     }
 
-    /** Writes the title/filter/generated-at lines above the header row and returns the row index the
-     * header itself belongs on. */
+    /** Writes the title/filter/generated-at lines above the header row and returns the row index the header itself
+     * belongs on. */
     private int writeSummaryTitleBlock(Sheet sheet, AttendanceMonthlySummaryResult result, CellStyle titleStyle) {
         Cell titleCell = sheet.createRow(0).createCell(0);
         titleCell.setCellValue("สรุปเวลาทำงานประจำเดือน " + ThaiText.monthYear(result.month()));
@@ -250,9 +214,9 @@ public class AttendanceMonthlySummaryExporter {
             sheet.setColumnWidth(c, columnWidth(columns.get(c).header()));
         }
 
-        // Same header-through-last-data-row shape as Sheet 1's autofilter above, without that
-        // sheet's footer to protect -- there is no trailing note row here, so the range can simply
-        // run to this sheet's own last column instead of stopping short of anything.
+        // Same header-through-last-data-row shape as Sheet 1's autofilter above, without that sheet's footer to
+        // protect -- there is no trailing note row here, so the range can simply run to this sheet's own last column
+        // instead of stopping short of anything.
         sheet.setAutoFilter(new CellRangeAddress(0, lastDataRowIdx, 0, columns.size() - 1));
     }
 
@@ -268,9 +232,9 @@ public class AttendanceMonthlySummaryExporter {
         columns.add(new Column<>("รวม (ชม.)", day -> day.totalMinutes() == null ? null : toHours(day.totalMinutes())));
         columns.add(new Column<>("สาย (นาที)", day -> day.lateMinutes() > 0 ? day.lateMinutes() : null));
         columns.add(new Column<>("ออกก่อนเวลา (นาที)", day -> day.earlyLeaveMinutes() > 0 ? day.earlyLeaveMinutes() : null));
-        // Gated on the SAME AttendanceDayFlag#OVERTIME_APPROVED flag AttendanceMonthlySummaryService's
-        // OT-hours aggregate uses (see that class's javadoc, "OT hours") -- so this column can never
-        // show a minutes value Sheet 1's OT hours total did not also count.
+        // Gated on the SAME AttendanceDayFlag#OVERTIME_APPROVED flag AttendanceMonthlySummaryService's OT-hours
+        // aggregate uses (see that class's javadoc, "OT hours") -- so this column can never show a minutes value Sheet
+        // 1's OT hours total did not also count.
         columns.add(new Column<>("OT (นาที)",
             day -> day.flags().contains(AttendanceDayFlag.OVERTIME_APPROVED) ? day.overtimeMinutes() : null));
         columns.add(new Column<>("ลา",
@@ -279,8 +243,8 @@ public class AttendanceMonthlySummaryExporter {
         return columns;
     }
 
-    /** {@code หมายเหตุ}: the stored note, plus a marker when HR hand-corrected the row -- so a
-     * reader can tell an ordinary scanner-derived day from one someone had to intervene on. */
+    /** หมายเหตุ: the stored note, plus a marker when HR hand-corrected the row -- so a reader can tell an ordinary
+     * scanner-derived day from one someone had to intervene on. */
     private String notesFor(AttendanceDailyDto day) {
         if (!day.manualOverride()) {
             return day.notes();
@@ -289,10 +253,9 @@ public class AttendanceMonthlySummaryExporter {
         return day.notes() == null || day.notes().isBlank() ? marker : (day.notes() + " " + marker);
     }
 
-    /** One date's ลา cell: every {@link LeaveContribution} covering it, joined -- normally exactly
-     * one, but see {@link LeaveContribution}'s own javadoc for why this handles more than one rather
-     * than silently keeping only the first. The Thai label always comes from the ledger (ultimately
-     * {@code hr.leave_type.name_th}), never a hardcoded string here. */
+    /** One date's ลา cell: every LeaveContribution covering it, joined -- normally exactly one, but see
+     * LeaveContribution's own javadoc for why this handles more than one rather than silently keeping only the
+     * first. */
     private String leaveLabel(List<LeaveContribution> contributions) {
         if (contributions == null || contributions.isEmpty()) {
             return null;
@@ -311,9 +274,9 @@ public class AttendanceMonthlySummaryExporter {
         return STATUS_LABEL.getOrDefault(status, "-");
     }
 
-    /** Bangkok local time as "HH:mm" -- explicitly re-zoned rather than trusting the stored offset,
-     * the same defensive choice {@code frontend/src/utils/format.js#formatBangkokTime} makes by
-     * pinning {@code timeZone: 'Asia/Bangkok'} in its own Intl formatter. */
+    /** Bangkok local time as "HH:mm" -- explicitly re-zoned rather than trusting the stored offset, the same
+     * defensive choice frontend/src/utils/format.js#formatBangkokTime makes by pinning timeZone: 'Asia/Bangkok' in
+     * its own Intl formatter. */
     private String formatTime(OffsetDateTime value) {
         if (value == null) {
             return "-";

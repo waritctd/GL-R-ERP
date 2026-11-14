@@ -32,10 +32,7 @@ function multiplierDisplay(val) {
   return val != null ? Number(val).toString() : '-';
 }
 
-// Bands are HALF-OPEN [min, max) -- min inclusive, max EXCLUSIVE, null max = +infinity (see
-// V109__pricing_formula_config.sql's BAND CONVENTION note). "min-max" would read as max being
-// included, which is wrong once max is exclusive -- e.g. a [101,451) band must not look like it
-// stops at 451 sqm. "<" makes the exclusive boundary explicit; "≥" labels the open-ended top band.
+// Bands are HALF-OPEN [min, max).
 function qtyBandLabel(min, max) {
   return max == null ? `≥${min} ตร.ม.` : `${min} – <${max} ตร.ม.`;
 }
@@ -91,8 +88,7 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
       insurancePerSqm: String(config.insurancePerSqm),
       inlandFactoryToPortPerSqm: String(config.inlandFactoryToPortPerSqm),
       inlandPortToWarehousePerSqm: String(config.inlandPortToWarehousePerSqm),
-      // NON-NEGOTIABLE (pricing round-trip): stored fraction -> displayed
-      // percent. Do not change this scaling.
+      // NON-NEGOTIABLE (pricing round-trip): stored fraction -> displayed percent. Do not change this scaling.
       importDutyPct: String(Number(config.importDutyPct) * 100),
       marginPct: String(Number(config.marginPct) * 100),
     },
@@ -107,9 +103,8 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
       insurancePerSqm: Number(values.insurancePerSqm),
       inlandFactoryToPortPerSqm: Number(values.inlandFactoryToPortPerSqm),
       inlandPortToWarehousePerSqm: Number(values.inlandPortToWarehousePerSqm),
-      // NON-NEGOTIABLE (pricing round-trip): displayed percent -> stored
-      // fraction. Do not change this scaling, the payload key names, or
-      // api.priceCalcConfigs.update's shape.
+      // NON-NEGOTIABLE (pricing round-trip): displayed percent -> stored fraction. Do not change this scaling, the
+      // payload key names, or api.priceCalcConfigs.update's shape.
       importDutyPct: Number(values.importDutyPct) / 100,
       marginPct: Number(values.marginPct) / 100,
     };
@@ -134,13 +129,9 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
         <div className="grid gap-3">
           {CONFIG_FIELDS.map(({ key, label, suffix }) => (
             <FormField key={key} label={label} htmlFor={`cfg-${key}`} error={errors[key]?.message}>
-              {/*
-                FormField's automatic aria-invalid/aria-describedby wiring
-                only augments a DIRECT child whose id matches htmlFor — the
-                input here is nested inside a wrapper div (to sit next to
-                the unit suffix), so it's wired by hand instead, same as
-                FormField's other manual-wiring callers.
-              */}
+              {/* FormField's automatic aria-invalid/aria-describedby wiring only augments a DIRECT child whose id matches
+               * htmlFor — the input here is nested inside a wrapper div (to sit next to the unit suffix), so it's wired by
+               * hand instead, same as FormField's other manual-wiring callers. */}
               <div className="flex items-center gap-1.5">
                 <input
                   id={`cfg-${key}`}
@@ -172,9 +163,9 @@ function ConfigEditModal({ config, saving, onClose, onSubmit }) {
 // price. See V109__pricing_formula_config.sql for the formula.
 // ---------------------------------------------------------------------------
 
-// Scalar fields on the parent config row. `isPercent: true` is the ONLY thing that triggers the
-// *100 (display) / /100 (save) round-trip -- every other field here is a RAW MULTIPLIER or a THB
-// amount and must be edited/displayed as-is. Get this wrong and every deal is mispriced by 100x.
+// Scalar fields on the parent config row. `isPercent: true` is the ONLY thing that triggers the 100 (display)
+// / /100 (save) round-trip -- every other field here is a RAW MULTIPLIER or a THB amount and must be
+// edited/displayed as-is. Get this wrong and every deal is mispriced by 100x.
 const FORMULA_SCALAR_FIELDS = [
   { key: 'insuranceValueFactor', label: 'ตัวคูณมูลค่าสินค้าเพื่อประกันภัย', hint: 'ตัวคูณดิบ (ค่าเริ่มต้น 1.15) — ห้ามกรอกเป็น %', schema: numberFieldSchema },
   { key: 'insuranceRate', label: 'อัตราค่าประกันภัย', hint: 'ตัวคูณดิบ (ค่าเริ่มต้น 0.0045) — ห้ามกรอกเป็น %', schema: numberFieldSchema },
@@ -196,8 +187,8 @@ const dutyRateRowSchema = z.object({
 
 const clearanceFeeRowSchema = z.object({
   qtyMinSqm: numberFieldSchema,
-  // Blank = open-ended top band (qty_max_sqm IS NULL), NOT zero -- distinct from numberFieldSchema
-  // which forbids blank, because here blank is a legitimate, meaningful value.
+  // Blank = open-ended top band (qty_max_sqm IS NULL), NOT zero -- distinct from numberFieldSchema which forbids
+  // blank, because here blank is a legitimate, meaningful value.
   qtyMaxSqm: z.string().refine((value) => value === '' || !Number.isNaN(Number(value)), 'กรอกตัวเลข หรือเว้นว่างไว้สำหรับไม่จำกัด'),
   amountThb: numberFieldSchema,
 });
@@ -233,15 +224,13 @@ function buildFormulaDefaultValues(config) {
   return values;
 }
 
-// Freight is stored as a flat list of (origin_country, thickness band, qty band) rows; this
-// derives the matrix shape (countries x thickness bands x qty bands) from whichever rows the
-// current config actually has, and a lookup from (country, thickness band, qty band) -> row. A
-// combination with no row is a deliberately blank cell (see V109's seed comment) -- it renders
-// as a non-editable placeholder, never a zero-amount input, so it can never be silently saved as 0.
+// Freight is stored as a flat list of (origin_country, thickness band, qty band) rows; this derives the matrix
+// shape (countries x thickness bands x qty bands) from whichever rows the current config actually has, and a
+// lookup from (country, thickness band, qty band) -> row.
 function buildFreightMatrixDims(freightRates) {
   const bandKey = (min, max) => `${min}-${max ?? 'inf'}`;
-  // Keyed by ISO code (originCountryCode) because that is what joins price_catalog.factories;
-  // originCountryName is display only, resolved server-side from price_catalog.country.
+  // Keyed by ISO code (originCountryCode) because that is what joins price_catalog.factories; originCountryName
+  // is display only, resolved server-side from price_catalog.country.
   const countries = [...new Set(freightRates.map((rate) => rate.originCountryCode))].sort();
   const countryName = new Map(freightRates.map((rate) => [rate.originCountryCode, rate.originCountryName]));
   const thicknessBands = [...new Map(freightRates.map((rate) =>
@@ -472,8 +461,8 @@ const addFreightRateSchema = z.object({
   thicknessMinMm: numberFieldSchema,
   thicknessMaxMm: numberFieldSchema,
   qtyMinSqm: numberFieldSchema,
-  // Blank = open-ended top band (qty_max_sqm IS NULL), same "blank is meaningful, not rejected"
-  // idiom as clearanceFeeRowSchema above -- must send null, never '' and never coerced to 0.
+  // Blank = open-ended top band (qty_max_sqm IS NULL), same "blank is meaningful, not rejected" idiom as
+  // clearanceFeeRowSchema above -- must send null, never '' and never coerced to 0.
   qtyMaxSqm: z.string().refine((value) => value === '' || !Number.isNaN(Number(value)), 'กรอกตัวเลข หรือเว้นว่างไว้สำหรับไม่จำกัด'),
   amountThb: numberFieldSchema,
 }).refine(
@@ -484,19 +473,8 @@ const addFreightRateSchema = z.object({
   { message: 'ช่วงจำนวนต้องเรียงจากน้อยไปมาก (ตั้งแต่ < ถึง)', path: ['qtyMaxSqm'] },
 );
 
-/**
- * `prefill` seeds the form from a clicked blank cell's coordinates (country + both bands) so the
- * CEO only has to type the amount; the header's own "+ เพิ่มค่าขนส่ง" button opens this with an
- * empty `prefill` instead. Every field stays editable either way — a misclicked cell is not a
- * dead end.
- *
- * Client-side validation covers only what is LOCAL and unambiguous: required fields, non-negative,
- * and min < max on each axis (both via addFreightRateSchema above). The overlap rule
- * (PricingFormulaConfigController#validate, run against the WHOLE resulting matrix, not just this
- * row) is deliberately NOT reimplemented here -- mirroring it would be a second implementation
- * with nothing guarding it against drifting from the real one. Its 400 surfaces verbatim through
- * the existing showToast('error', ...) path below.
- */
+/** `prefill` seeds the form from a clicked blank cell's coordinates (country + both bands) so the CEO only has
+ * to type the amount; the header's own "+ เพิ่มค่าขนส่ง" button opens this with an empty `prefill` instead. */
 function AddFreightRateModal({ prefill, availableCountries, saving, onClose, onSubmit }) {
   const {
     register,
@@ -677,9 +655,8 @@ export function CeoSettingsPage({ showToast }) {
   const queryClient = useQueryClient();
 
   // FX rate inline edit: currency → draftRate string
-  const [editFx, setEditFx] = useState({});          // currency → string
-  // UX-03: per-currency inline validation error, keyed the same way so one
-  // row's error can never bleed onto another row.
+  const [editFx, setEditFx] = useState({});          // currency → string UX-03: per-currency inline validation error, keyed the same way so one row's error can
+  // never bleed onto another row.
   const [fxErrors, setFxErrors] = useState({});       // currency → message
 
   // Config edit modal state
@@ -757,16 +734,16 @@ export function CeoSettingsPage({ showToast }) {
     if (fxCooldownUntil && fxCooldownSecondsLeft <= 0) setFxCooldownUntil(null);
   }, [fxCooldownSecondsLeft, fxCooldownUntil]);
 
-  // Trigger the BOT FX fetch on demand instead of waiting for the 18:00 schedule
-  // (POST /api/fx-rates/fetch-now — CEO-only, same gate as the manual upsert above).
+  // Trigger the BOT FX fetch on demand instead of waiting for the 18:00 schedule (POST /api/fx-rates/fetch-now —
+  // CEO-only, same gate as the manual upsert above).
   const fetchFxNowMutation = useMutation({
     mutationFn: () => api.fxRates.fetchNow(),
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.fxRates() });
       const r = data?.result;
       if (r && r.updated === 0) {
-        // Never a success toast for a 0/N no-op -- the exact same failure shape HolidaysTab
-        // guards against for its own BOT fetcher (HTTP 200, nothing actually updated).
+        // Never a success toast for a 0/N no-op -- the exact same failure shape HolidaysTab guards against for its own
+        // BOT fetcher (HTTP 200, nothing actually updated).
         showToast('info', `ดึงเรตจาก BOT แล้ว แต่ยังไม่มีอัตราใหม่ (ณ ${r.asOf}) — ธปท. อาจยังไม่ประกาศเรตของวันนี้ ลองใหม่อีกครั้งหลัง 18:00`);
       } else if (r) {
         showToast('success', `ดึงเรตจาก BOT แล้ว — อัปเดต ${r.updated}/${r.total} สกุล (${r.asOf})`);
@@ -780,10 +757,8 @@ export function CeoSettingsPage({ showToast }) {
         const now = Date.now();
         setFxCooldownMessage(e.message || '');
         setFxCooldownUntil(now + seconds * 1000);
-        // fxNowTick's initial value is only set once, at mount -- by the time this error lands it
-        // can be arbitrarily stale (however long the request took), which would inflate the very
-        // first countdown render. Reset it here so the first render is accurate instead of
-        // waiting a tick for the interval above to correct it.
+        // fxNowTick's initial value is only set once, at mount -- by the time this error lands it can be arbitrarily
+        // stale (however long the request took), which would inflate the very first countdown render.
         setFxNowTick(now);
         return;
       }
@@ -791,9 +766,8 @@ export function CeoSettingsPage({ showToast }) {
     },
   });
 
-  // A single shared mutation acts on whichever currency row is being saved —
-  // this reads the in-flight variables back out to know which row's button
-  // should show a busy state (there's no per-row mutation instance).
+  // A single shared mutation acts on whichever currency row is being saved — this reads the in-flight variables
+  // back out to know which row's button should show a busy state (there's no per-row mutation instance).
   function isSavingFx(currency) {
     return saveFxRateMutation.isPending && saveFxRateMutation.variables?.currency === currency;
   }
@@ -927,8 +901,8 @@ export function CeoSettingsPage({ showToast }) {
               const fxError = fxErrors[fx.currency];
               const fxInputId = `fx-rate-${fx.currency}`;
               const fxErrorId = `${fxInputId}-error`;
-              // THB never needs a sales.fx_rates row at all (FxResolver.resolve short-circuits it
-              // to rate 1) — only a non-THB row can ever hit the staleness refusal.
+              // THB never needs a sales.fx_rates row at all (FxResolver.resolve short-circuits it to rate 1) — only a
+              // non-THB row can ever hit the staleness refusal.
               const stale = fx.currency !== 'THB' && isFxRateStale(fx.effectiveDate);
               return (
                 <tr key={fx.currency} className={`border-b border-surface-subtle${stale ? ' bg-warning-bg-soft' : ''}`}>
@@ -978,10 +952,9 @@ export function CeoSettingsPage({ showToast }) {
                     <div className="flex flex-col items-start gap-1">
                       <span>{fx.effectiveDate}</span>
                       {stale ? (
-                        // whitespace-nowrap: this table's wrapper already scrolls horizontally
-                        // (overflow-x-auto) at narrow widths — without it, the browser's default
-                        // table layout wraps this longer badge one word per line into a tall
-                        // stack instead, which is worse than the horizontal scroll.
+                        // whitespace-nowrap: this table's wrapper already scrolls horizontally (overflow-x-auto) at narrow widths —
+                        // without it, the browser's default table layout wraps this longer badge one word per line into a tall stack
+                        // instead, which is worse than the horizontal scroll.
                         <span
                           className="inline-flex items-center gap-1 whitespace-nowrap rounded-[10px] bg-warning-bg px-2 py-0.5 text-2xs font-semibold text-warning-dark"
                           title={`อัตรานี้มีผลมาแล้วเกิน ${FX_RATE_MAX_AGE_DAYS} วัน — ระบบจะปฏิเสธการคำนวณต้นทุนด้วยอัตรานี้จนกว่าจะปรับปรุงวันที่มีผล`}
@@ -1160,10 +1133,9 @@ export function CeoSettingsPage({ showToast }) {
                                   {rate ? (
                                     <span className="flex items-center gap-1.5 whitespace-nowrap">
                                       <span>{moneyDisplay(rate.amountThb)}</span>
-                                      {/* Always visible, not hover-only — hover does not exist on
-                                          touch. Deletability (edge rows only) is NOT computed here;
-                                          see validateRemovalLeavesNoInteriorGap's mirror in
-                                          mockApi.js and the confirm modal's own comment for why. */}
+                                      {/* Always visible, not hover-only — hover does not exist on touch. Deletability (edge rows only) is NOT
+                                       * computed here; see validateRemovalLeavesNoInteriorGap's mirror in mockApi.js and the confirm modal's own
+                                       * comment for why. */}
                                       <Button
                                         type="button"
                                         variant="secondary"

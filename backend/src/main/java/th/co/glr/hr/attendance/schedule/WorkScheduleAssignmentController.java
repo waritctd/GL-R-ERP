@@ -10,18 +10,8 @@ import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
-/**
- * HR/CEO write path over {@code hr.work_schedule_assignment}: assign a schedule to an
- * employee/department/division scope, end an assignment, list what is currently configured. See
- * {@link WorkScheduleAssignmentAdminService} for the back-dating and overlap policies this
- * delegates to, and for why {@link
- * th.co.glr.hr.attendance.schedule.TieredWorkScheduleResolver#invalidate()} is called after every
- * successful write.
- *
- * <p>This is a new authorization surface, so it ships with a real-Postgres integration test through
- * this exact controller ({@code WorkScheduleAssignmentControllerIntegrationTest}) proving the wrong
- * roles get 403 for every handler — see CLAUDE.md "Permission changes must ship evidence".
- */
+/** HR/CEO write path over hr.work_schedule_assignment: assign a schedule to an employee/department/division
+ * scope, end an assignment, list what is currently configured. */
 @RestController
 @RequestMapping("/api/work-schedule-assignments")
 public class WorkScheduleAssignmentController {

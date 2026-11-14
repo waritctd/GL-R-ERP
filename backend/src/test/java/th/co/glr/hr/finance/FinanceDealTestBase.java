@@ -34,11 +34,9 @@ import th.co.glr.hr.ticket.TicketController;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Shared real-Postgres wiring for the finance deal tests: the REAL TicketService + repositories and the
- * REAL FinanceDealService/Controller and TicketController behind MockMvc (so a removed route is observed
- * as a missing route, not assumed). Nothing here is mocked.
- */
+/** Shared real-Postgres wiring for the finance deal tests: the REAL TicketService + repositories and the REAL
+ * FinanceDealService/Controller and TicketController behind MockMvc (so a removed route is observed as a
+ * missing route, not assumed). Nothing here is mocked. */
 abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
 
     /** Any JSON key containing one of these (case-insensitive) is a cost/pricing/tracking/list-price leak. */
@@ -77,8 +75,8 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
         remainingInvoices = new RemainingInvoiceRepository(jdbc);
         attachments = new AttachmentRepository(jdbc);
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
-        // pricingRequests (dead-deal cascade only) is never reached by the paths under test -- null is safe,
-        // exactly as DealEntryAccessIntegrationTest's own wiring already does.
+        // pricingRequests (dead-deal cascade only) is never reached by the paths under test -- null is safe, exactly
+        // as DealEntryAccessIntegrationTest's own wiring already does.
         ticketService = new TicketService(tickets, notifications, new ObjectMapper(), new CustomerRepository(jdbc),
             new QuotationRenderer(), (th.co.glr.hr.pricingrequest.PricingRequestService) null,
             new EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
@@ -130,8 +128,8 @@ abstract class FinanceDealTestBase extends AbstractPostgresIntegrationTest {
             String lower = key.toLowerCase(Locale.ROOT);
             if (SANCTIONED_COMMENTS_KEY.equals(key)) continue;
             if (lower.contains("comment")) { bad.add(key); continue; }
-            // "ceo" is matched as a WORD (leading, or a camel-case / snake-case word), never as a substring:
-            // the legitimate key "invoiceOnFile" contains the letters c-e-O.
+            // "ceo" is matched as a WORD (leading, or a camel-case / snake-case word), never as a substring: the
+            // legitimate key "invoiceOnFile" contains the letters c-e-O.
             if (key.startsWith("ceo") || key.contains("Ceo") || lower.contains("_ceo")) { bad.add(key); continue; }
             for (String fragment : FORBIDDEN_KEY_FRAGMENTS) {
                 if (lower.contains(fragment)) { bad.add(key); break; }

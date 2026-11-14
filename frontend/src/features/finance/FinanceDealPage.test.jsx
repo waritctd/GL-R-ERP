@@ -230,8 +230,8 @@ describe('FinanceDealPage', () => {
       expect(section(/^4 ส่งมอบ/).getAttribute('aria-current')).toBe('step');
       expect(section(/^4 ส่งมอบ/).getAttribute('data-state')).toBe('current');
       expect(section(/^3 รอสินค้า/).getAttribute('aria-current')).toBeNull();
-      // milestone 5 is upcoming and holds no data: collapsed to the one-liner
-      // upcoming with no data: header row only — the status text says it, there is no body at all
+      // milestone 5 is upcoming and holds no data: collapsed to the one-liner upcoming with no data: header row only
+      // — the status text says it, there is no body at all
       expect(section(/^5 ชำระครบ/).getAttribute('data-state')).toBe('upcoming');
       expect(within(section(/^5 ชำระครบ/)).getByText('ยังไม่ถึง')).not.toBeNull();
       expect(section(/^5 ชำระครบ/).querySelector('[data-panel-body]')).toBeNull();
@@ -432,8 +432,8 @@ describe('FinanceDealPage', () => {
       fireEvent.change(screen.getByLabelText(/หัก ณ ที่จ่าย/), { target: { value: '3000' } });
       fireEvent.change(screen.getByLabelText(/รับเงินเกิน/), { target: { value: '5' } });
       const callsBefore = api.finance.getDeal.mock.calls.length;
-      // submit the form directly: jsdom does not treat a synthetic file change as satisfying `required`
-      // (same reason CommissionPage.test.jsx dispatches submit on the form).
+      // submit the form directly: jsdom does not treat a synthetic file change as satisfying `required` (same reason
+      // CommissionPage.test.jsx dispatches submit on the form).
       fireEvent.submit(screen.getByLabelText(/เลขที่ใบกำกับ/).closest('form'));
 
       await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));

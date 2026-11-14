@@ -6,11 +6,9 @@ import { Sidebar } from './Sidebar.jsx';
 
 globalThis.React = React;
 
-// Phase 4A gave every nav item an `aria-label`. Because aria-label REPLACES the
-// accessible name, the unread-count badge rendered inside the same link stopped
-// being announced — a screen-reader user silently lost information that sighted
-// users can see. No seeded mock role carries a badge, so this is covered here
-// (where the count can be injected) rather than in the browser suite.
+// Phase 4A gave every nav item an `aria-label`. Because aria-label REPLACES the accessible name, the
+// unread-count badge rendered inside the same link stopped being announced — a screen-reader user silently
+// lost information that sighted users can see.
 const ITEMS = [
   {
     path: '/requests',
@@ -78,9 +76,9 @@ describe('Sidebar nav item accessible names', () => {
   });
 });
 
-// `exact` exists because /payroll/deduction-shortfalls is a SIBLING nav item, not a detail page of
-// /payroll. Default prefix matching would light both rows at once and the nav would claim two
-// current locations at the same time.
+// `exact` exists because /payroll/deduction-shortfalls is a SIBLING nav item, not a detail page of /payroll.
+// Default prefix matching would light both rows at once and the nav would claim two current locations at the
+// same time.
 describe('Sidebar active-item matching', () => {
   const NESTED_ITEMS = [
     { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', show: true, exact: true },

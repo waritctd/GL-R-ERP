@@ -10,58 +10,15 @@ import {
 import { assertStageLabelsComplete, AUTO_STAGE_HINT, GATE_LABEL } from './stageMeta.js';
 import { MOCK_FACT_GATED_STAGES } from '../../api/mockApi.js';
 
-/**
- * THE GUARD THIS CHANGE EXISTS TO ADD.
- *
- * The frontend used to declare the deal pipeline for itself. Nothing compared that declaration to
- * the backend's, so when V143 split QUOTE_OWNER out of QUOTE_DESIGN_SIDE the frontend simply kept
- * fourteen stages: a deal on the new stage rendered with no label, no number, no phase and no
- * gate, and the whole suite stayed green. That is what blocked #704 from being deployed.
- *
- * The declaration is gone — the catalog is served by GET /api/meta/deal-stages — but two mirrors
- * necessarily remain on this side, and both are guarded here against the Java source itself:
- *
- *   1. `data/dealStageCatalog.js`, the canned payload mockApi answers with. A fixture, but a
- *      fixture that has to keep matching the real endpoint's contents or mock-mode QA is testing a
- *      pipeline the backend does not have.
- *   2. the Thai LABEL maps, which stay client-side by owner ruling. A code the backend serves with
- *      no label here is the exact QUOTE_OWNER defect.
- *
- * Reading DealStage.java from the source tree is unusual, and it is the point: a test that
- * re-declared the fifteen stages in JavaScript would be a third copy, and would go stale with the
- * other two. Every extraction asserts a non-trivial count first, so a parse that silently matched
- * nothing fails instead of vacuously passing.
- *
- * ── WIDENED FOR ISSUE #742 ──────────────────────────────────────────────────────────────────
- *
- * This guard used to read only `ORDER` and the three `*_TARGET_STAGES` sets. It asserted the
- * catalog's codes, order, `gate` and `no` — and NOT `auto`, `phase` (beyond monotonicity) or
- * `businessCode` at all. `auto` is the field that matters most, because it is what mockApi's
- * fact-gate stub keyed off:
- *
- *   DealStage.AUTO_ADVANCED  = ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID
- *   requireStageFactsHold    = ORDER_RECEIVED, DEPOSIT_RECEIVED, DELIVERED,   CLOSED_PAID
- *
- * Two different sets, differing in BOTH directions. The mock's own comment claimed its stub was
- * "STRICTER than production, never looser" — for DELIVERED that was false: a manual stage move to
- * DELIVERED on an undelivered deal was ALLOWED in mock mode while production answers 409
- * ยังส่งมอบสินค้าไม่ครบ. More permissive than production is the dangerous direction CLAUDE.md names.
- *
- * So this file now parses four more things: AUTO_ADVANCED, PHASE, BUSINESS_CODE, and
- * TicketService.requireStageFactsHold's own target list — the last one guarding the mock stub
- * against the method that actually enforces it, rather than against an unrelated set.
- */
+/** THE GUARD THIS CHANGE EXISTS TO ADD. The mock's own comment claimed its stub was "STRICTER than production,
+ * never looser" — for DELIVERED that was false: a manual stage move to DELIVERED on an undelivered deal was
+ * ALLOWED in mock mode while production answers 409 ยังส่งมอบสินค้าไม่ครบ. */
 
 const JAVA_RELATIVE_PATH = 'backend/src/main/java/th/co/glr/hr/ticket/DealStage.java';
 const TICKET_SERVICE_RELATIVE_PATH = 'backend/src/main/java/th/co/glr/hr/ticket/TicketService.java';
 const DEAL_ROUTE_RELATIVE_PATH = 'backend/src/main/java/th/co/glr/hr/ticket/DealRoute.java';
 
-/**
- * Walk up from the working directory to the repo root and read the Java. Deliberately THROWS when
- * the file cannot be found rather than skipping: a guard that quietly disables itself when the
- * layout moves is the same silent failure it was written to prevent.
- * (`import.meta.url` is not a file: URL under Vite's transform, hence the walk.)
- */
+/** Walk up from the working directory to the repo root and read the Java. */
 function readBackendJava(relativePath) {
   let dir = process.cwd();
   for (let depth = 0; depth < 8; depth += 1) {
@@ -154,8 +111,8 @@ function javaQuoteRecipientStages() {
  */
 function javaFactGatedStages() {
   const method = ticketServiceSource.match(
-    // The closing `\n {4}\}` is the method's own dedented brace at four-space indentation —
-    // that is what bounds the body, so an `equals(targetStage)` later in the file cannot leak in.
+    // The closing `\n {4}\}` is the method's own dedented brace at four-space indentation — that is what bounds
+    // the body, so an `equals(targetStage)` later in the file cannot leak in.
     /private void requireStageFactsHold\([^)]*\)\s*\{([\s\S]*?)\n {4}\}/,
   );
   if (!method) throw new Error('could not find requireStageFactsHold in TicketService.java');
@@ -181,16 +138,15 @@ const javaFactGated = javaFactGatedStages();
 
 describe('DealStage.java is the pipeline, and this side must not disagree with it', () => {
   it('parsed the Java at all — a vacuous parse must fail, not pass', () => {
-    // Without this, deleting the ORDER block (or a regex that stopped matching) would make every
-    // assertion below trivially true against an empty list.
+    // Without this, deleting the ORDER block (or a regex that stopped matching) would make every assertion below
+    // trivially true against an empty list.
     expect(javaOrder.length).toBeGreaterThanOrEqual(15);
     expect(javaOrder).toContain('QUOTE_OWNER');
     expect(javaSalesGate.length).toBeGreaterThanOrEqual(12);
     expect(javaAccountGate.length).toBeGreaterThanOrEqual(2);
     expect(javaImportGate.length).toBeGreaterThanOrEqual(1);
-    // #742's four additions get the same anti-vacuity floor. Without these an empty parse would
-    // make every new assertion below trivially true — which is the failure this whole file exists
-    // to make impossible.
+    // #742's four additions get the same anti-vacuity floor. Without these an empty parse would make every new
+    // assertion below trivially true — which is the failure this whole file exists to make impossible.
     expect(javaAutoAdvanced.length).toBeGreaterThanOrEqual(4);
     expect(Object.keys(javaPhase).length).toBeGreaterThanOrEqual(15);
     expect(Object.keys(javaBusinessCode).length).toBeGreaterThanOrEqual(15);
@@ -235,31 +191,28 @@ describe('DealStage.java is the pipeline, and this side must not disagree with i
   // ── #742: the three fields this guard did not check ────────────────────────────────────────
 
   it('`auto` is exactly DealStage.AUTO_ADVANCED — in both directions', () => {
-    // The pre-existing auto assertion only checked that each `auto: true` stage HAS a hint. It
-    // could not notice a stage wrongly marked auto, nor an AUTO_ADVANCED stage the fixture had
-    // left false. Both matter: `auto` drives whether the UI offers a one-click advance at all.
+    // The pre-existing auto assertion only checked that each `auto: true` stage HAS a hint. It could not notice a
+    // stage wrongly marked auto, nor an AUTO_ADVANCED stage the fixture had left false. Both matter: `auto` drives
+    // whether the UI offers a one-click advance at all.
     expect(
       DEAL_STAGE_CATALOG.stages.filter((stage) => stage.auto).map((stage) => stage.code).sort(),
     ).toEqual([...javaAutoAdvanced].sort());
-    // DELIVERY_SCHEDULING is deliberately NOT auto although recordDelivery/reserveStock advance
-    // into it — the rep also reaches it by hand as a normal part of the flow. Named explicitly so
-    // a future "surely this belongs in AUTO_ADVANCED" edit has to argue with the Javadoc.
+    // DELIVERY_SCHEDULING is deliberately NOT auto although recordDelivery/reserveStock advance into it — the rep
+    // also reaches it by hand as a normal part of the flow. Named explicitly so a future "surely this belongs in
+    // AUTO_ADVANCED" edit has to argue with the Javadoc.
     expect(javaAutoAdvanced).not.toContain('DELIVERY_SCHEDULING');
   });
 
   it('`phase` is exactly DealStage.PHASE, not merely non-decreasing', () => {
-    // The old check only asserted phases never go BACKWARDS, which every wrong-but-sorted
-    // assignment also satisfies: shifting the whole phase-2 block into phase 1 stays monotonic.
+    // The old check only asserted phases never go BACKWARDS, which every wrong-but-sorted assignment also
+    // satisfies: shifting the whole phase-2 block into phase 1 stays monotonic.
     for (const stage of DEAL_STAGE_CATALOG.stages) {
       expect(stage.phase, `phase of ${stage.code}`).toBe(javaPhase[stage.code]);
     }
   });
 
   it('`businessCode` is exactly DealStage.BUSINESS_CODE — the CEO\'s S-numbers', () => {
-    // Never checked at all before. It is the identifier the business itself uses when discussing a
-    // deal ("we are at S12"), and it is deliberately NOT derivable from `no`: PROCUREMENT covers
-    // six sheet steps (S12–S17), so the sheet runs to S20 while the pipeline has 15 entries, and
-    // V143's QUOTE_OWNER insertion moved every later display number without moving any S-number.
+    // Never checked at all before.
     for (const stage of DEAL_STAGE_CATALOG.stages) {
       expect(stage.businessCode, `businessCode of ${stage.code}`).toBe(javaBusinessCode[stage.code]);
     }
@@ -267,33 +220,18 @@ describe('DealStage.java is the pipeline, and this side must not disagree with i
   });
 });
 
-/**
- * THE TRIPWIRE #742 IS ACTUALLY ABOUT.
- *
- * mockApi's fact-gate stub derived its closed-stage set from the catalog's `auto` field. That was
- * the wrong source, and not by a little: `DealStage.AUTO_ADVANCED` and the stages
- * `TicketService.requireStageFactsHold` actually gates differ in BOTH directions —
- *
- *   AUTO_ADVANCED         ORDER_RECEIVED, DEPOSIT_RECEIVED, PROCUREMENT, CLOSED_PAID
- *   requireStageFactsHold ORDER_RECEIVED, DEPOSIT_RECEIVED, DELIVERED,   CLOSED_PAID
- *
- * so mock mode ALLOWED a manual move to DELIVERED on an undelivered deal (production: 409
- * ยังส่งมอบสินค้าไม่ครบ) and REFUSED a manual move to PROCUREMENT that production permits. The
- * mock's own comment asserted the stub was "STRICTER than production, never looser" and named this
- * as "the exact hazard CLAUDE.md names" — for DELIVERED that claim was simply false.
- *
- * Fixing the derivation without this test would just move the mirror. This asserts the stub
- * against the METHOD THAT ENFORCES IT.
- */
+/** THE TRIPWIRE #742 IS ACTUALLY ABOUT. The mock's own comment asserted the stub was "STRICTER than production,
+ * never looser" and named this as "the exact hazard CLAUDE.md names" — for DELIVERED that claim was simply
+ * false. */
 describe('the mock fact-gate stub tracks TicketService.requireStageFactsHold', () => {
   it('closes exactly the stages the real service refuses a manual move into', () => {
     expect([...MOCK_FACT_GATED_STAGES].sort()).toEqual(javaFactGated);
   });
 
   it('is not the AUTO_ADVANCED set — the two genuinely differ, in both directions', () => {
-    // Wrong-way-round, and the assertion that would have gone red the day the stub was written.
-    // If a future change makes these sets coincide this test fails LOUDLY rather than quietly
-    // blessing a derivation that happens to work; read requireStageFactsHold before deleting it.
+    // Wrong-way-round, and the assertion that would have gone red the day the stub was written. If a future change
+    // makes these sets coincide this test fails LOUDLY rather than quietly blessing a derivation that happens to
+    // work; read requireStageFactsHold before deleting it.
     expect(javaFactGated).toContain('DELIVERED');
     expect(javaAutoAdvanced).not.toContain('DELIVERED');
     expect(javaAutoAdvanced).toContain('PROCUREMENT');
@@ -318,8 +256,8 @@ describe('the label guard', () => {
   });
 
   it('lost and cancel reason codes all have labels', () => {
-    // The code sets come from the backend (DealLostReason.ORDER / DealCancelReason.ORDER); only
-    // the wording is ours, so this is the same guard applied to the other two code sets.
+    // The code sets come from the backend (DealLostReason.ORDER / DealCancelReason.ORDER); only the wording is
+    // ours, so this is the same guard applied to the other two code sets.
     const stageMeta = { LOST: DEAL_STAGE_CATALOG.lostReasons, CANCEL: DEAL_STAGE_CATALOG.cancelReasons };
     expect(stageMeta.LOST.length).toBeGreaterThan(0);
     expect(stageMeta.CANCEL.length).toBeGreaterThan(0);
@@ -353,14 +291,9 @@ describe('catalog lookups', () => {
   });
 });
 
-/**
- * Route-aware lookups (deal-route-staging). The backend serves `onRoute` per stage on
- * GET /api/tickets/{id}/actions (StageDecisionDto); these helpers only READ it.
- *
- * ⚠️ The decisions below are built here and passed in DIRECTLY. mockApi.js does not emit `onRoute`,
- * so a mock-driven test would see every stage on-route and pass vacuously — the "mock omits a field
- * the feature keys on" failure mode CLAUDE.md documents.
- */
+/** Route-aware lookups (deal-route-staging). The backend serves `onRoute` per stage on GET
+ * /api/tickets/{id}/actions (StageDecisionDto); these helpers only READ it. ⚠️ The decisions below are built
+ * here and passed in DIRECTLY. */
 describe('route-aware lookups', () => {
   const catalog = DEAL_STAGE_CATALOG;
   const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
@@ -482,12 +415,9 @@ describe('route-aware lookups', () => {
   });
 });
 
-// ── The served route: GET /api/meta/deal-stages -> `routes` ────────────────────────────────────
-// The backend serves each entry channel's route (DealStageMetaController -> DealRoute.path) so a
-// deal LIST row, which has `deal.entryChannel` but no per-deal decision payload, can print its
-// position on its own route. Serving it is only safer than mirroring it if the fixture that stands
-// in for the endpoint cannot drift from DealRoute.java — so the guard below reads DealRoute's
-// off-route tables out of the Java source and compares.
+// The served route: GET /api/meta/deal-stages -> `routes` ──────────────────────────────────── The backend
+// serves each entry channel's route so a deal LIST row, which has `deal.entryChannel` but no per-deal decision
+// payload, can print its position on its own route.
 
 /** Stage identifiers named inside a Java fragment, in order: `DealStage.X` -> X. */
 function dealStageNames(fragment) {
@@ -498,8 +428,8 @@ function dealStageNames(fragment) {
 function javaOffRouteTable() {
   const match = dealRouteSource.match(/OFF_ROUTE\s*=\s*Map\.of\(([\s\S]*?)\)\);/);
   if (!match) throw new Error('could not find OFF_ROUTE in DealRoute.java');
-  // The lazy match stops at the `));` that closes `Map.of(`, which consumes the LAST `Set.of(`'s own
-  // closing paren — restore it, or the final channel's entry silently fails to parse.
+  // The lazy match stops at the `));` that closes `Map.of(`, which consumes the LAST `Set.of(`'s own closing
+  // paren — restore it, or the final channel's entry silently fails to parse.
   const body = `${match[1].replace(/\/\/[^\n]*/g, '')})`;
   const table = {};
   for (const entry of body.matchAll(/EntryChannel\.([A-Z_]+)\s*,\s*Set\.of\(([^)]*)\)/g)) {

@@ -117,8 +117,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
     private long ticketId;
     private long catalogProductIdFactoryA;
     private long catalogProductIdFactoryB;
-    // Real signature upload/read, mirrors DealQuotationApproverSnapshotIntegrationTest's identical
-    // wiring — used by the "approval freezes a signature" parity test below.
+    // Real signature upload/read, mirrors DealQuotationApproverSnapshotIntegrationTest's identical wiring — used
+    // by the "approval freezes a signature" parity test below.
     private EmployeeSignatureRepository signatureRepository;
     private EmployeeSignatureService signatureService;
 
@@ -213,9 +213,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Submit
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void submit_movesDraftToPendingApproval() {
@@ -240,9 +238,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(submitted.validityDays()).isEqualTo(30);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // ONE approval issues the document — either role, no changes from the CEO's decision.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void approve_bySalesManager_whenUnchanged_issues() {
@@ -295,11 +291,9 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // The CEO-required-when-changed gate: a sales_manager may approve an UNCHANGED quotation,
-    // but a quotation that no longer matches the CEO's decision (price/discount, price mode, or a
-    // removed CEO-linked line) may ONLY be approved by the CEO.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // The CEO-required-when-changed gate: a sales_manager may approve an UNCHANGED quotation, but a quotation that
+    // no longer matches the CEO's decision (price/discount, price mode, or a removed CEO-linked line) may ONLY be
+    // approved by the CEO.
 
     @Test
     void approve_bySalesManager_whenLinePriceChanged_forbidden_nothingWritten() {
@@ -368,9 +362,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Wrong-way-round role refusals — unrelated to the CEO gate, plain requireApproveAccess.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void approve_bySalesRep_forbidden_nothingWritten() {
@@ -401,9 +393,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Reject — a single approver (either role) clears the document back to DRAFT with a reason.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void reject_bySalesManager_returnsToDraftWithReason() {
@@ -455,9 +445,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(resubmitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Issue hooks: PR status, stage advance, ticket event, validity date
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
      * The stage moves at CREATION, not approval ({@code .design/quote-stage-gates} D-2).
@@ -503,20 +491,11 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         DealQuotationDto submitted = submittedQuotation();
         DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
-        // Bare LocalDate.now() uses the JVM default zone. DealQuotationService computes the
-        // approval date (and so validityDate) with an explicit LocalDate.now(Asia/Bangkok) — see
-        // its own BANGKOK constant — so a CI runner whose default zone is UTC disagrees with this
-        // assertion for roughly the first 7 hours of each Bangkok day (already tomorrow in
-        // Bangkok, still today in UTC). Match the same zone the code under test actually uses.
+        // Bare LocalDate.now() uses the JVM default zone. Match the same zone the code under test actually uses.
         assertThat(issued.validityDate()).isEqualTo(LocalDate.now(ZoneId.of("Asia/Bangkok")).plusDays(30));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // V175 approver snapshot — reused verbatim from DEAL_DIRECT's own #approve, one row, whoever
-    // approved. Full signature-survives-a-later-change coverage already lives in
-    // DealQuotationApproverSnapshotIntegrationTest for the SAME shared mechanism; this is a
-    // parity confirmation that a PRICING_REQUEST-origin row gets one too.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // V175 approver snapshot — reused verbatim from DEAL_DIRECT's own #approve, one row, whoever approved.
 
     @Test
     void approve_freezesTheApproverSnapshot() throws Exception {
@@ -532,9 +511,9 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(count).isEqualTo(1);
         assertThat(signatureBytes(render(issued))).isEqualTo(originalSignature);
 
-        // The approver replaces their signature AFTER the document already issued -- the ISSUED
-        // document must still print the OLD (frozen) signature. Same V175 discipline DEAL_DIRECT's
-        // own suite already covers at length; this is a one-shot parity check for this origin.
+        // The approver replaces their signature AFTER the document already issued -- the ISSUED document must still
+        // print the OLD (frozen) signature. Same V175 discipline DEAL_DIRECT's own suite already covers at length;
+        // this is a one-shot parity check for this origin.
         signatureService.upload(salesManagerId, png(zigZagSignaturePng()), salesManagerActor);
         DealQuotationDto reread = quotationService.get(issued.id(), salesActor);
         assertThat(signatureBytes(render(reread))).isEqualTo(originalSignature);
@@ -628,11 +607,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         DealQuotationDto expired = quotationService.get(issued.id(), salesActor);
         assertThat(expired.docStatus()).isEqualTo(QuotationStatus.EXPIRED);
 
-        // The PR status bookkeeping decision this fix made: NOT rolled back to
-        // APPROVED_FOR_QUOTATION -- create() TOLERATES QUOTATION_ISSUED instead (see that
-        // method's own comment for why: PricingRequestStatus's forward-only transition graph is
-        // SHARED with the legacy customerquotation engine, and adding a backward edge there would
-        // risk that flow's own semantics for a one-line gain here).
+        // The PR status bookkeeping decision this fix made: NOT rolled back to APPROVED_FOR_QUOTATION -- create
+        // TOLERATES QUOTATION_ISSUED instead.
         assertThat(pricingRequests.findSummary(pricingRequestId).orElseThrow().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
 
@@ -664,9 +640,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         long pricingRequestId = decision.pricingRequestId();
         DealQuotationDto draft = quotationService.createFromPricingRequest(pricingRequestId, salesActor);
         DealQuotationDto withValidity = quotationService.update(draft.id(), upsertWithValidityDays(draft, 30), salesActor);
-        // Submitted -- PENDING_APPROVAL, past the idempotent-DRAFT replay check, and the PR's own
-        // status is STILL APPROVED_FOR_QUOTATION (it only moves at actual issue) -- exactly the
-        // gap this fix closes.
+        // Submitted -- PENDING_APPROVAL, past the idempotent-DRAFT replay check, and the PR's own status is STILL
+        // APPROVED_FOR_QUOTATION (it only moves at actual issue) -- exactly the gap this fix closes.
         DealQuotationDto submitted = quotationService.submit(withValidity.id(), salesActor);
         assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
 
@@ -825,9 +800,7 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             java.util.Map.of("t", ticketId), Long.class);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private DealQuotationDto issuedRound() {
         return quotationService.approve(submittedQuotation().id(), new ApproveRequest(null), salesManagerActor);
@@ -872,9 +845,9 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         return baseUpsert(quotation, days, items);
     }
 
-    /** Changes the FIRST item's discount away from the CEO's own decision — triggers
-     * {@code priceChangedFromCeo} on that line (and, at the header, nothing — priceMode itself is
-     * unchanged; see {@link #upsertWithDirectNetMode} for that trigger instead). */
+    /** Changes the FIRST item's discount away from the CEO's own decision — triggers priceChangedFromCeo on that
+     * line (and, at the header, nothing — priceMode itself is unchanged; see #upsertWithDirectNetMode for that
+     * trigger instead). */
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithChangedDiscount(DealQuotationDto quotation, int days) {
         DealQuotationItemDto first = quotation.items().get(0);
         BigDecimal changedDiscount = (first.discountPct() == null ? BigDecimal.ZERO : first.discountPct())
@@ -887,9 +860,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         return baseUpsert(quotation, days, items);
     }
 
-    /** Switches the header price mode from NET (this fixture's decision) to DIRECT_NET —
-     * triggers {@code priceModeChangedFromCeo}. Every item needs a {@code directNetPrice} once in
-     * this mode. */
+    /** Switches the header price mode from NET (this fixture's decision) to DIRECT_NET — triggers
+     * priceModeChangedFromCeo. Every item needs a directNetPrice once in this mode. */
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithDirectNetMode(DealQuotationDto quotation) {
         List<DealQuotationRequests.ItemInput> items = quotation.items().stream()
             .map(item -> directNetTileItem(item, item.netUnitPrice())).toList();
@@ -901,8 +873,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             quotation.omitContactHonorific(), quotation.fullPaymentTerm(), items);
     }
 
-    /** Drops every item after the first — the fixture's decision links TWO items, so this leaves
-     * exactly one CEO-linked line dropped, triggering {@code itemsRemovedFromCeoCount > 0}. */
+    /** Drops every item after the first — the fixture's decision links TWO items, so this leaves exactly one
+     * CEO-linked line dropped, triggering itemsRemovedFromCeoCount > 0. */
     private DealQuotationRequests.UpsertDealQuotationRequest upsertWithOnlyFirstItem(DealQuotationDto quotation, int days) {
         List<DealQuotationRequests.ItemInput> items = List.of(existingTileInput(quotation.items().get(0)));
         return baseUpsert(quotation, days, items);
@@ -1108,8 +1080,8 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
             true, LocalDate.now(), false, null, false);
     }
 
-    // ── Signature rendering helpers — mirrors DealQuotationApproverSnapshotIntegrationTest's own
-    // identically-named private helpers (that class's own Javadoc explains each step). ─────────
+    // Signature rendering helpers — mirrors DealQuotationApproverSnapshotIntegrationTest's own identically-named
+    // private helpers (that class's own Javadoc explains each step).
 
     private byte[] render(DealQuotationDto q) {
         return quotationService.renderXlsx(q.id(), salesActor);

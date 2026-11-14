@@ -22,17 +22,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Verifies {@code GET /api/payroll/suggested-inputs} (special-pay carry-forward, 2026-07-23) on top of
- * the real {@code SecurityFilterChain}: HR and CEO reach it (200), any other role is rejected (403).
- * Written wrong-way-round — the assertions that matter are the roles that must NOT reach it.
- *
- * <p>New test class, mirroring {@link th.co.glr.hr.config.SecurityAuthorizationIntegrationTest}'s
- * pattern exactly (real filter chain, real Postgres via {@link PostgresTestSupport}), rather than
- * adding cases to that file directly — a concurrent branch
- * ({@code feat/payroll-statutory-export-files}) edits {@code SecurityAuthorizationIntegrationTest}
- * at the same time.
- */
+/** Verifies GET /api/payroll/suggested-inputs (special-pay carry-forward, 2026-07-23) on top of the real
+ * SecurityFilterChain: HR and CEO reach it (200), any other role is rejected (403). Written wrong-way-round —
+ * the assertions that matter are the roles that must NOT reach it. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")

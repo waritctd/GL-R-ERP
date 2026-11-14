@@ -1,8 +1,7 @@
 import imageCompression from 'browser-image-compression';
 
-// Shared by every caller of api.commissions.createFromDeal (CommissionPage's account flow and the
-// finance deal page's RECORD_INVOICE form), so the form state, file handling and payload keys
-// cannot drift between the two.
+// Shared by every caller of api.commissions.createFromDeal (CommissionPage's account flow and the finance deal
+// page's RECORD_INVOICE form), so the form state, file handling and payload keys cannot drift between the two.
 
 export function emptyInvoiceForm(grossAmount = '') {
   return {
@@ -31,12 +30,9 @@ export async function prepareInvoiceAttachment(file) {
   if (!['application/pdf', 'image/jpeg', 'image/png'].includes(file.type)) {
     throw new Error('รองรับเฉพาะไฟล์ PDF, JPG หรือ PNG');
   }
-  // imageCompression() returns a plain Blob, not a File -- it does not carry `file.name`
-  // through, so the FormData part built from it defaults to the literal filename "blob" per the
-  // Fetch/FormData spec. This matters here more than most: createFromDeal dual-writes this as
-  // the ticket's tax invoice attachment, so an unwrapped Blob would corrupt the filename of the
-  // actual document that gates CONFIRM_CLOSE, not just a cosmetic display name. Re-wrapping in a
-  // File restores the original name. PDFs skip compression entirely. See #498/#504.
+  // imageCompression() returns a plain Blob, not a File -- it does not carry `file.name` through, so the
+  // FormData part built from it defaults to the literal filename "blob" per the Fetch/FormData spec. Re-wrapping
+  // in a File restores the original name.
   if (!file.type.startsWith('image/')) return file;
   return new File(
     [await imageCompression(file, {

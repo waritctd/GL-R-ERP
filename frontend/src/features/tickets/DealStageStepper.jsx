@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
 
-// Per-phase accents (design tokens --color-phase-N, from the user's Claude
-// Design prototype). Static map — Tailwind needs full class names in source.
+// Per-phase accents (design tokens --color-phase-N, from the user's Claude Design prototype). Static map —
+// Tailwind needs full class names in source.
 const PHASE_FILL = {
   1: 'bg-phase-1',
   2: 'bg-phase-2',
@@ -17,9 +17,8 @@ import {
 } from './stageCatalog.js';
 import { GATE_LABEL } from './stageMeta.js';
 
-// The Thai names of the five phases. The phase LIST (which ids exist, and which stages sit in
-// each) comes from the backend catalog; only the wording is ours. See stageMeta.js's header for
-// the split.
+// The Thai names of the five phases. The phase LIST (which ids exist, and which stages sit in each) comes from
+// the backend catalog; only the wording is ours. See stageMeta.js's header for the split.
 const PHASE_NAME = {
   1: { name: 'การเข้าถึงโครงการ', helper: 'Lead' },
   2: { name: 'งานสเปค', helper: 'Specification' },
@@ -50,11 +49,9 @@ function RouteRibbon({ path, currentIdx, catalog, lost, skipped }) {
       <div className="mb-2 text-xs font-bold text-text-muted">เส้นทางของดีลนี้ ({path.length} ขั้น)</div>
       <ol data-testid="route-ribbon" className="m-0 flex list-none flex-wrap gap-1.5 p-0">
         {path.map((step, position) => {
-          // Owner ruling 2026-09-30: the pip carries the ROUTE'S ordinal (1..N), NOT step.no (the
-          // business S-number). On a buyer-direct deal S8 is the 4th of 11 steps, and a pip reading
-          // "8" beside a line reading "ขั้นที่ 4 จาก 11" made the rep stop and reconcile two numbers.
-          // The business number still identifies the stage in the header, list and แก้ไขสถานะ modal;
-          // here the question is "how far along am I", so position wins.
+          // Owner ruling 2026-09-30: the pip carries the ROUTE'S ordinal (1..N), NOT step.no (the business S-number). On
+          // a buyer-direct deal S8 is the 4th of 11 steps, and a pip reading "8" beside a line reading "ขั้นที่ 4 จาก
+          // 11" made the rep stop and reconcile two numbers.
           const ordinal = position + 1;
           const idx = stageIndexIn(catalog, step.code);
           const skip = skipped.has(step.code);
@@ -107,12 +104,8 @@ export function skippedStageCodes(catalog, currentIdx, events) {
   );
 }
 
-/**
- * The stages this deal's route does NOT visit, each with the server's own reason. Follows
- * UpdateStageModal's blocked list: an off-route stage is explained, not hidden and not silently
- * dead. `blockedReason` is rendered verbatim (DealRoute.refusalMessage) so what a rep reads here is
- * exactly what the server would answer if they tried to move there.
- */
+/** The stages this deal's route does NOT visit, each with the server's own reason. Follows UpdateStageModal's
+ * blocked list: an off-route stage is explained, not hidden and not silently dead. */
 function OffRouteGroup({
   stages, decisionByCode, salesStage, channel, entryChannelAction, onSetEntryChannel, disabled,
 }) {
@@ -139,8 +132,8 @@ function OffRouteGroup({
                 {decisionByCode.get(step.code)?.blockedReason
                   ?? 'ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน'}
               </span>
-              {/* The remedy for the sentence above, where it is read. Renders nothing unless the
-                  server advertised SET_ENTRY_CHANNEL (and a handler is wired). */}
+              {/* The remedy for the sentence above, where it is read. Renders nothing unless the server advertised
+               * SET_ENTRY_CHANNEL (and a handler is wired). */}
               <EntryChannelFix
                 entryChannel={channel}
                 action={entryChannelAction}
@@ -156,22 +149,9 @@ function OffRouteGroup({
   );
 }
 
-/**
- * Phase accordion for the deal pipeline. Only the current phase starts expanded so the page never
- * shows every stage at once; completed phases collapse behind a ✓ header.
- *
- * The stage list is the backend's (`catalog`), not this file's — it was a hardcoded 14-entry array
- * until V143 added a fifteenth stage and this component silently kept rendering fourteen.
- *
- * Route-aware: `stageDecisions` carries the server's per-stage `onRoute`. Only on-route stages get
- * a row in the phase list and a pip in the ribbon; the rest are listed once, with the server's
- * reason, in the off-route group. With no decisions (or none carrying `onRoute`) every stage is
- * on-route and this renders exactly the full pipeline.
- *
- * `entryChannelAction` / `onSetEntryChannel` carry the "แก้ช่องทางดีล" remedy for the off-route
- * group's refusals (see EntryChannelFix): the server's own SET_ENTRY_CHANNEL advertisement and the
- * parent's handler. With either absent the rows render exactly as before.
- */
+/** Phase accordion for the deal pipeline. Only the current phase starts expanded so the page never shows every
+ * stage at once; completed phases collapse behind a ✓ header. Route-aware: `stageDecisions` carries the
+ * server's per-stage `onRoute`. */
 export function DealStageStepper({
   catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false, stageDecisions = [], entryChannel,
   entryChannelAction, onSetEntryChannel, actionLoading = false, events = [],
@@ -195,8 +175,8 @@ export function DealStageStepper({
       {catalog.phases.map((phaseId) => {
         const phaseStages = stagesInPhase(catalog, phaseId);
         if (phaseStages.length === 0) return null;
-        // Phase done/current is judged over ALL of the phase's stages, so a deal sitting on an
-        // off-route stage still lights its own phase. Only the ROWS and the count are route-filtered.
+        // Phase done/current is judged over ALL of the phase's stages, so a deal sitting on an off-route stage still
+        // lights its own phase. Only the ROWS and the count are route-filtered.
         const firstIdx = stageIndexIn(catalog, phaseStages[0].code);
         const lastIdx = stageIndexIn(catalog, phaseStages[phaseStages.length - 1].code);
         const steps = phaseStages.filter((step) => onRouteCodes.has(step.code));
@@ -228,18 +208,9 @@ export function DealStageStepper({
                 {allSkipped ? '–' : isDone ? <Icon name="check" size={13} /> : phaseId}
               </span>
               <span className="min-w-0 flex-1">
-                {/* WCAG AA fix (fix/ui-contrast-tokens): a PHASE_TEXT map used to apply
-                    --color-phase-N directly to this label. As text-on-white (11px/800,
-                    not "large text") three of the five phase colors fail the 4.5:1
-                    floor — phase-1 4.47, phase-2 2.77, phase-5 3.77 — only phase-3
-                    (6.29) and phase-4 (5.47) happened to pass. Rather than mint five
-                    new text-safe phase variants for this one call site, the label now
-                    always uses the app's normal text tokens; the fill bar directly
-                    below already carries the full phase hue, so the phase-specific
-                    color isn't lost, just moved off text onto the decorative element
-                    that can safely carry it. Applied uniformly across all 5 phases for
-                    consistency (no phase looks different from its siblings depending
-                    on whether it happened to pass). */}
+                {/* WCAG AA fix (fix/ui-contrast-tokens): a PHASE_TEXT map used to apply --color-phase-N directly to this label.
+                 * Applied uniformly across all 5 phases for consistency (no phase looks different from its siblings depending
+                 * on whether it happened to pass). */}
                 <span className={`block text-sm font-extrabold ${isCurrent && !lost ? 'text-text' : 'text-text-muted'}`}>
                   เฟส {phaseId} · {phaseName(phaseId)}
                 </span>
@@ -313,9 +284,7 @@ export function DealStageStepper({
   );
 }
 
-/**
- * Horizontal phase tracker. Lost projects render an empty track.
- */
+/** Horizontal phase tracker. Lost projects render an empty track. */
 export function PhaseTracker({ catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false }) {
   const currentIdx = stageIndexIn(catalog, salesStage);
   return (
@@ -350,11 +319,9 @@ export function PhaseTracker({ catalog = EMPTY_STAGE_CATALOG, salesStage, lost =
   );
 }
 
-/**
- * One-line "where are we" for the default deal view: "เฟส 4 จาก 5 · <phase name>" over a single-colour
- * bar. PhaseTracker's five hues and five labels encode nothing a user decides on, so it now lives
- * only inside the expanded stepper.
- */
+/** One-line "where are we" for the default deal view: "เฟส 4 จาก 5 · <phase name>" over a single-colour bar.
+ * PhaseTracker's five hues and five labels encode nothing a user decides on, so it now lives only inside the
+ * expanded stepper. */
 export function PhaseSummary({
   catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false, stageDecisions = [],
 }) {
@@ -366,8 +333,8 @@ export function PhaseSummary({
       && currentIdx <= stageIndexIn(catalog, steps[steps.length - 1].code);
   });
   if (currentPhase == null || lost) return null;
-  // The denominator is THIS deal's route, not the catalog: a buyer-direct deal at S8 is step 4 of
-  // 11, and the bar fills 4/11. `catalog.stages.length` said 8 of 15 for it.
+  // The denominator is THIS deal's route, not the catalog: a buyer-direct deal at S8 is step 4 of 11, and the
+  // bar fills 4/11. `catalog.stages.length` said 8 of 15 for it.
   const { position, total } = routePosition(catalog, salesStage, stageDecisions);
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
@@ -382,17 +349,9 @@ export function PhaseSummary({
   );
 }
 
-/**
- * Compact per-row progress bar for the list page (one proportional segment per phase).
- *
- * Route-aware: with an `entryChannel` each phase's segment counts only the stages that channel's
- * route visits (`catalog.routes`, served by the backend — see routeForChannel), so it reads the
- * same as the list's "ขั้นตอน 4/11" instead of contradicting it with a catalog-wide 15-stage
- * graphic. A phase with no on-route stage has no segment. `entryChannel` is optional: absent,
- * UNSPECIFIED, unknown or no served route is every stage on-route, i.e. the bar as it always was.
- * Fill counts the on-route stages up to and including the current one, the same rule as
- * routePositionForChannel, so a deal sitting on a since-off-route stage never over-fills.
- */
+/** Compact per-row progress bar for the list page (one proportional segment per phase). Fill counts the
+ * on-route stages up to and including the current one, the same rule as routePositionForChannel, so a deal
+ * sitting on a since-off-route stage never over-fills. */
 export function StageProgressBar({
   catalog = EMPTY_STAGE_CATALOG, salesStage, lost = false, entryChannel,
 }) {

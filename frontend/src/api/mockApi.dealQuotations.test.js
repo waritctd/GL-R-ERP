@@ -25,10 +25,7 @@ async function createOn18(payload) {
   return api.dealQuotations.create(18, { recipientType: 'BUYER', ...payload });
 }
 
-// Mirrors th.co.glr.hr.dealquotation (Quotation v2, QUOTATION-V2-PLAN.md). See
-// quotationMeta.test.js for the shared status/authz predicates this file imports rather than
-// re-deriving; this file pins the parts that live only in the MOCK'S OWN persistence/number
-// generation, which quotationMeta.js knows nothing about.
+// Mirrors th.co.glr.hr.dealquotation (Quotation v2, QUOTATION-V2-PLAN.md).
 
 const salesUser = { role: 'sales' }; // id 6, owns ticket 18's rows (demoData.js)
 
@@ -181,8 +178,8 @@ describe('mock dealQuotations -- mixed price modes (V192.5)', () => {
     expect(quotation.priceMode).toBe('MIXED');
     expect(quotation.items.map((it) => it.priceMode)).toEqual(['NET', 'SPECIAL_SQM', 'DIRECT_NET', null]);
     expect(quotation.items[0]).toMatchObject({ unitPrice: 1210.25, discountPct: 20, netUnitPrice: 968.2, lineAmount: 9682 });
-    // ราคาพิเศษ: the rule is mirrored (the row keeps its ราคาพิเศษ and its sub-line, no percent);
-    // its net is the server's to compute and is null here, as on any mock ราคาพิเศษ document.
+    // ราคาพิเศษ: the rule is mirrored (the row keeps its ราคาพิเศษ and its sub-line, no percent); its net is the
+    // server's to compute and is null here, as on any mock ราคาพิเศษ document.
     expect(quotation.items[1]).toMatchObject({ specialPriceSqm: 790, discountPct: null, netUnitPrice: null });
     expect(quotation.items[1].specialPriceLine).toContain('ราคาพิเศษ 790');
     expect(quotation.items[2]).toMatchObject({ directNetPriceSqm: 790, netUnitPrice: 531.16, lineAmount: 5311.6, discountPct: null });
@@ -572,8 +569,8 @@ describe('mock dealQuotations revision numbering -- #M10', () => {
 
     await api.auth.login(salesUser);
     const revision3 = await api.dealQuotations.createRevision(revision2.quotation.id, {});
-    // The bug this guards: naively appending onto the SOURCE's own number (rather than
-    // recovering the ORIGINAL base first) would produce "{root}-2-3" here.
+    // The bug this guards: naively appending onto the SOURCE's own number (rather than recovering the ORIGINAL
+    // base first) would produce "{root}-2-3" here.
     expect(revision3.quotation.number).toBe(`${baseNumber}-${rootRevisionNo + 2}`);
     expect(revision3.quotation.revisionNo).toBe(rootRevisionNo + 2);
   });
@@ -636,8 +633,8 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     expect((await api.dealQuotations.get(approved.quotation.id)).quotation.docStatus).toBe('APPROVED');
 
     await api.dealQuotations.submit(reorder.id);
-    // Still APPROVED while the clone is only PENDING_APPROVAL -- not superseded until the clone
-    // itself actually reaches APPROVED.
+    // Still APPROVED while the clone is only PENDING_APPROVAL -- not superseded until the clone itself actually
+    // reaches APPROVED.
     expect((await api.dealQuotations.get(approved.quotation.id)).quotation.docStatus).toBe('APPROVED');
 
     // The moment of truth: approve the CLONE and confirm the source is NOW superseded.
@@ -672,11 +669,9 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     expect(reloadedFirst.quotation.docStatus).toBe('SUPERSEDED');
   });
 
-  /** A revision of the ORIGINAL source is approved while a CLONE of that same source is still
-   * DRAFT -- then the clone is approved too. Exactly one APPROVED row must remain (the clone,
-   * being the LAST one approved); the revision must be SUPERSEDED. Pins that the sweep applies
-   * uniformly regardless of WHICH lineage (ancestor-chain revision vs. derivedFrom clone) a
-   * sibling belongs to. */
+  /** A revision of the ORIGINAL source is approved while a CLONE of that same source is still DRAFT -- then the
+   * clone is approved too. Exactly one APPROVED row must remain (the clone, being the LAST one approved); the
+   * revision must be SUPERSEDED. */
   it('a revision of the source approved while a clone is DRAFT, then the clone approved: exactly one APPROVED remains (the clone), the revision is SUPERSEDED', async () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
@@ -714,8 +709,8 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
     expect((await api.dealQuotations.get(revision.id)).quotation.docStatus).toBe('SUPERSEDED');
   });
 
-  /** A quotation on a DIFFERENT ticket must never be touched by this ticket's sweep -- the sweep
-   * is scoped to `ticketId`, not global. */
+  /** A quotation on a DIFFERENT ticket must never be touched by this ticket's sweep -- the sweep is scoped to
+   * `ticketId`, not global. */
   it('a quotation on a DIFFERENT deal is untouched by this deal\'s approval sweep', async () => {
     await api.auth.login(salesUser);
     const { customer } = await api.customers.create({
@@ -797,14 +792,14 @@ describe('mock dealQuotations.createReorder -- GLA-74 part 1', () => {
 });
 
 describe('mock dealQuotations authz -- #H4 canCreateQuotation grant', () => {
-  // employee@glr.co.th (id 4, demoData.js) carries canCreateQuotation: true on a plain
-  // `employee` role -- not sales/sales_manager, and not in DEAL_QUOTATION_VIEWER_ROLES at all.
+  // employee@glr.co.th (id 4, demoData.js) carries canCreateQuotation: true on a plain `employee` role -- not
+  // sales/sales_manager, and not in DEAL_QUOTATION_VIEWER_ROLES at all.
   const grantedEmployee = { role: 'employee' };
 
   it('list() 403s a plain employee with NO grant', async () => {
-    // id 10 (warehouse.manager@glr.co.th) is also role `employee` but carries no
-    // canCreateQuotation field at all -- logged in by email, not role, since `login({role})`
-    // always resolves the FIRST matching row (id 4, the granted one).
+    // id 10 (warehouse.manager@glr.co.th) is also role `employee` but carries no canCreateQuotation field at all
+    // -- logged in by email, not role, since `login({role})` always resolves the FIRST matching row (id 4, the
+    // granted one).
     await api.auth.login({ email: 'warehouse.manager@glr.co.th', password: 'demo1234' });
     await expect(api.dealQuotations.list()).rejects.toThrow('ไม่มีสิทธิ์เข้าถึงรายการนี้');
   });
@@ -812,10 +807,9 @@ describe('mock dealQuotations authz -- #H4 canCreateQuotation grant', () => {
   it('a canCreateQuotation-granted employee sees ONLY quotations on deals they created on the global list (owner ruling 2026-09-24: the grant no longer widens LIST scope)', async () => {
     await api.auth.login(grantedEmployee);
     const { items } = await api.dealQuotations.list();
-    // The grant-holder created none of the seeded ticket-18 rows, so the global list is empty
-    // for them -- the grant still lets them create on / get an individual deal (next two tests),
-    // it just no longer shows EVERY deal here. Mirrors DealQuotationService.listOwnerScope and
-    // DealQuotationIntegrationTest#grantHolder_search_seesOnlyOwnDeals_butCanStillGetAnotherRepsQuotationIndividually.
+    // The grant-holder created none of the seeded ticket-18 rows, so the global list is empty for them -- the
+    // grant still lets them create on / get an individual deal (next two tests), it just no longer shows EVERY
+    // deal here.
     expect(items).toHaveLength(0);
   });
 
@@ -830,8 +824,8 @@ describe('mock dealQuotations authz -- #H4 canCreateQuotation grant', () => {
     await expect(api.dealQuotations.get(1)).resolves.toBeDefined();
   });
 
-  // Wrong-way-round: the employee WITHOUT the grant must be refused create access too, not just
-  // list access -- the same deal (18) the granted employee reaches above.
+  // Wrong-way-round: the employee WITHOUT the grant must be refused create access too, not just list access --
+  // the same deal (18) the granted employee reaches above.
   it('a plain employee with NO grant cannot create on a deal they do not own either', async () => {
     await api.auth.login({ email: 'warehouse.manager@glr.co.th', password: 'demo1234' });
     await expect(createOn18({ items: [ONE_ITEM] })).rejects.toThrow('ไม่มีสิทธิ์เข้าถึงรายการนี้');
@@ -900,8 +894,8 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     const approved = await api.dealQuotations.list({ status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] });
     const rework = await api.dealQuotations.list({ needsRework: true });
 
-    // The failure this guards: a count computed over a LOOSER set than the list it labels, so a
-    // tab promises rows the list then refuses to show.
+    // The failure this guards: a count computed over a LOOSER set than the list it labels, so a tab promises rows
+    // the list then refuses to show.
     expect(counts.all).toBe(all.items.length);
     expect(counts.pendingApproval).toBe(pending.items.length);
     expect(counts.cancelled).toBe(cancelled.items.length);
@@ -943,8 +937,8 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     rework = await api.dealQuotations.list({ needsRework: true });
     expect(rework.items.some((q) => q.id === id)).toBe(true);
 
-    // Resubmitting mints a NEW revision (a different id) and leaves the REJECTED row's own note
-    // untouched -- it stays in แก้, the new revision does not join it (PENDING_APPROVAL is not แก้).
+    // Resubmitting mints a NEW revision (a different id) and leaves the REJECTED row's own note untouched -- it
+    // stays in แก้, the new revision does not join it (PENDING_APPROVAL is not แก้).
     const { quotation: revision } = await api.dealQuotations.submit(id);
     expect(revision.id).not.toBe(id);
     expect(revision.docStatus).toBe('PENDING_APPROVAL');
@@ -955,9 +949,9 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(rework.items.some((q) => q.id === revision.id)).toBe(false);
   });
 
-  /** Mirrors DealQuotationRepository#supersede's own widened WHERE clause -- a DRAFT (rejected)
-   * parent becomes SUPERSEDED the SAME way and at the SAME time an APPROVED parent already does:
-   * only once its OWN revision reaches APPROVED, not before. */
+  /** Mirrors DealQuotationRepository#supersede's own widened WHERE clause -- a DRAFT (rejected) parent becomes
+   * SUPERSEDED the SAME way and at the SAME time an APPROVED parent already does: only once its OWN revision
+   * reaches APPROVED, not before. */
   it('submit after rejection: the rejected row becomes SUPERSEDED only once the revision is approved', async () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
@@ -980,8 +974,8 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     expect(rejected.docStatus).toBe('SUPERSEDED');
   });
 
-  /** Mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap on "ส่งใหม่" must
-   * not silently mint two revisions of the same rejected draft. */
+  /** Mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap on "ส่งใหม่" must not silently
+   * mint two revisions of the same rejected draft. */
   it('submit after rejection: resubmitting the SAME rejected row twice is a 409, not a second revision', async () => {
     await api.auth.login(salesUser);
     const created = await createOn18({ items: [ONE_ITEM] });
@@ -996,8 +990,8 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     await expect(api.dealQuotations.submit(id)).rejects.toMatchObject({ status: 409 });
   });
 
-  /** Numbering must chain off the ORIGINAL base through multiple reject/resubmit cycles -- never
-   * "{base}-1-2-3" -- the mock's own mirror of
+  /** Numbering must chain off the ORIGINAL base through multiple reject/resubmit cycles -- never "{base}-1-2-3"
+   * -- the mock's own mirror of
    * DealQuotationIntegrationTest#submit_afterRejection_numberingChainsThroughMultipleRejectCycles. */
   it('submit after rejection: numbering chains through multiple reject cycles', async () => {
     await api.auth.login(salesUser);
@@ -1079,8 +1073,8 @@ describe('mock dealQuotations counts / needsRework -- owner feedback F5', () => 
     await api.auth.login({ role: 'sales_manager' });
     await api.dealQuotations.reject(revision2.id, { reason: 'รอบ 2' });
 
-    // revision2 is DRAFT again -- cancel it instead of resubmitting it, freeing the original
-    // (originalId) to be resubmitted a SECOND time (hasOpenRevision no longer sees an open child).
+    // revision2 is DRAFT again -- cancel it instead of resubmitting it, freeing the original (originalId) to be
+    // resubmitted a SECOND time (hasOpenRevision no longer sees an open child).
     await api.auth.login(salesUser);
     await api.dealQuotations.cancel(revision2.id, {});
 
@@ -1145,8 +1139,8 @@ describe('mock dealQuotations ผู้สั่งซื้อ snapshot -- owne
     });
   });
 
-  // Wrong-way-round: a contact belonging to a DIFFERENT customer must be refused, not silently
-  // snapshotted onto this customer's document.
+  // Wrong-way-round: a contact belonging to a DIFFERENT customer must be refused, not silently snapshotted onto
+  // this customer's document.
   it('refuses a contact that does not belong to the deal\'s customer', async () => {
     await api.auth.login(salesUser);
     await expect(createOn18({ contactId: 1, items: [ONE_ITEM] }))
@@ -1586,10 +1580,9 @@ describe('mock dealQuotations.create/update -- hideProjectName (V192.1)', () => 
     expect(reread.projectName).toBe('บ้านเอกมัย ซอย 5');
   });
 
-  // DELIBERATELY the opposite of omitContactHonorific just above ("an update that omits it clears
-  // it"). A browser tab still running the bundle from before this field existed sends no
-  // hideProjectName at all; treating that as false would silently start PRINTING a project name a
-  // rep had chosen to hide. Missing means "say nothing", so the stored choice stands.
+  // DELIBERATELY the opposite of omitContactHonorific just above ("an update that omits it clears it"). A
+  // browser tab still running the bundle from before this field existed sends no hideProjectName at all;
+  // treating that as false would silently start PRINTING a project name a rep had chosen to hide.
   it('an update that omits it KEEPS a previously-set true', async () => {
     await api.auth.login(salesUser);
     const { quotation: created } = await createOn18({ hideProjectName: true, items: [ONE_ITEM] });
@@ -1642,8 +1635,8 @@ describe('mock dealQuotations.create/update -- fullPaymentTerm (V181, "ไม่
     expect(quotation.fullPaymentTerm).toBe('ON_DELIVERY');
   });
 
-  // Wrong-way-round: a rep who unticks "ไม่รับมัดจำ" (an ordinary percentage) can never leave a
-  // stale term attached, EVEN IF the request still sends one.
+  // Wrong-way-round: a rep who unticks "ไม่รับมัดจำ" (an ordinary percentage) can never leave a stale term
+  // attached, EVEN IF the request still sends one.
   it('a non-zero depositPercent forces fullPaymentTerm null even if the request sends one', async () => {
     await api.auth.login(salesUser);
     const { quotation } = await createOn18({
@@ -1688,8 +1681,8 @@ describe('mock dealQuotations.create/update -- fullPaymentTerm (V181, "ไม่
     expect(updated.fullPaymentTerm).toBe('BEFORE_DELIVERY');
   });
 
-  // Wrong-way-round: a zero-deposit DRAFT is saveable with no term chosen yet (create/update
-  // above never refuse it) -- submit() is the one gate.
+  // Wrong-way-round: a zero-deposit DRAFT is saveable with no term chosen yet (create/update above never refuse
+  // it) -- submit() is the one gate.
   it('submit refuses a zero-deposit document with no term chosen', async () => {
     await api.auth.login(salesUser);
     const { quotation: created } = await createOn18({

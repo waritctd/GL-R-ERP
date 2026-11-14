@@ -1,19 +1,6 @@
-// ── client-side deal drafts (no server draft entity — see handoff 107) ──────
-//
-// Every localStorage access in this module is wrapped so it can NEVER throw — draft persistence
-// is a nice-to-have, never a reason to break the create-deal form (private browsing, a full quota,
-// or a locked-down browser all throw synchronously on getItem/setItem/removeItem in some engines).
-// Callers get back a result object instead ({ ok: false, reason }) and decide what, if anything, to
-// tell the rep.
-//
-// Storage shape (GLA-19 — "อยากให้ร่างทิ้งไว้หลายอันได้"):
-//   glr:draft-deal:<id>   — one full snapshot per draft, plus its own `id` + `savedAt`.
-//   glr:deal-drafts:index — a lightweight array of { id, savedAt, label } for listing without
-//                           reading every draft. Treated as a cache, not the source of truth: if
-//                           it's missing or corrupt, listDrafts() rebuilds it by scanning keys.
-//   glr:draft-deal        — the OLD single-draft key (pre-GLA-19). migrateLegacyDraft() converts
-//                           it to an id'd draft exactly once, removing it only after that write
-//                           has actually landed.
+// client-side deal drafts ────── Every localStorage access in this module is wrapped so it can NEVER throw —
+// draft persistence is a nice-to-have, never a reason to break the create-deal form. glr:deal-drafts:index — a
+// lightweight array of { id, savedAt, label } for listing without reading every draft.
 const LEGACY_KEY = 'glr:draft-deal';
 const INDEX_KEY = 'glr:deal-drafts:index';
 const DRAFT_KEY_PREFIX = 'glr:draft-deal:';
@@ -36,10 +23,8 @@ function safeRandomId() {
 }
 
 function classifyStorageError(err) {
-  // DOMException QuotaExceededError (Chrome/Firefox), code 22, or Firefox's NS_ERROR_DOM_QUOTA_REACHED
-  // (code 1014 on old Firefox) — anything else (private-mode Safari throws a plain SecurityError,
-  // a locked-down environment may throw on the .localStorage getter itself) is reported as
-  // 'unavailable' rather than guessed at.
+  // DOMException QuotaExceededError, code 22, or Firefox's NS_ERROR_DOM_QUOTA_REACHED — anything else is
+  // reported as 'unavailable' rather than guessed at.
   if (err && (err.name === 'QuotaExceededError' || err.code === 22 || err.code === 1014 || err.name === 'NS_ERROR_DOM_QUOTA_REACHED')) {
     return 'quota';
   }
@@ -137,14 +122,8 @@ function rebuildIndexEntries() {
   return entries;
 }
 
-/**
- * Index entries whose draft key still actually exists — prunes any that don't (a draft key
- * removed directly, or a write that landed on the draft but not the index) and best-effort
- * persists the prune back to storage. This is what saveDraft()'s cap check counts against: without
- * it, a stale index entry for a draft that no longer exists on disk would count toward MAX_DRAFTS
- * forever, so the picker shows fewer real drafts than the cap thinks exist and a rep can hit
- * 'limit' with nothing they can actually see to delete.
- */
+/** Index entries whose draft key still actually exists — prunes any that don't (a draft key removed directly,
+ * or a write that landed on the draft but not the index) and best-effort persists the prune back to storage. */
 function readLiveIndexEntries() {
   const entries = readIndexSafe();
   if (entries.length === 0) return entries;
@@ -161,15 +140,13 @@ function readLiveIndexEntries() {
   return live;
 }
 
-/**
- * Every saved draft, newest first. Tolerant of a missing/corrupt index (rebuilds by scanning) and
- * of individual corrupt/missing draft entries (skipped rather than thrown).
- */
+/** Every saved draft, newest first. Tolerant of a missing/corrupt index (rebuilds by scanning) and of
+ * individual corrupt/missing draft entries (skipped rather than thrown). */
 export function listDrafts() {
   let entries = readLiveIndexEntries();
   if (entries.length === 0) {
-    // Could genuinely be zero drafts, or the index could be missing/corrupt — either way,
-    // scanning is cheap and self-corrects the second case for free.
+    // Could genuinely be zero drafts, or the index could be missing/corrupt — either way, scanning is cheap and
+    // self-corrects the second case for free.
     entries = rebuildIndexEntries();
   }
   const result = [];
@@ -202,20 +179,17 @@ export function loadDraft(id) {
   }
 }
 
-/**
- * Save (create or update) a draft. Pass `id: null` to create a new one — the cap only applies to
- * that case; updating an existing draft is always allowed, so a rep who is actively working never
- * loses ground to the cap. Returns `{ ok: true, id, savedAt }` or `{ ok: false, reason }` where
- * reason is 'unavailable' | 'quota' | 'limit'.
- */
+/** Save (create or update) a draft. Pass `id: null` to create a new one — the cap only applies to that case;
+ * updating an existing draft is always allowed, so a rep who is actively working never loses ground to the
+ * cap. */
 export function saveDraft(id, snapshot) {
-  // A draft counts as "existing" if either the index or the draft key itself already has it — the
-  // index is a cache and can lag a successful draft write if its own write failed.
+  // A draft counts as "existing" if either the index or the draft key itself already has it — the index is a
+  // cache and can lag a successful draft write if its own write failed.
   const isExisting = Boolean(id) && (readIndexSafe().some((e) => e.id === id) || loadDraft(id) != null);
   if (!isExisting) {
-    // readLiveIndexEntries (not readIndexSafe) — counting stale entries whose draft key is
-    // already gone would let the cap block a NEW draft while the picker shows fewer real drafts
-    // than 10, with nothing visible for the rep to delete to free a slot.
+    // readLiveIndexEntries (not readIndexSafe) — counting stale entries whose draft key is already gone would let
+    // the cap block a NEW draft while the picker shows fewer real drafts than 10, with nothing visible for the rep
+    // to delete to free a slot.
     if (readLiveIndexEntries().length >= MAX_DRAFTS) {
       return { ok: false, reason: 'limit' };
     }
@@ -250,13 +224,8 @@ export function deleteDraft(id) {
   return removed.ok ? { ok: true } : { ok: false, reason: removed.reason };
 }
 
-/**
- * One-time conversion of the pre-GLA-19 single `glr:draft-deal` key into a proper id'd draft.
- * Idempotent: the legacy key is removed ONLY once its replacement has actually been written, so a
- * failed write (storage unavailable, or already at MAX_DRAFTS) leaves the legacy draft in place to
- * retry on the next mount instead of losing it. A corrupt legacy value is left untouched (nothing
- * to migrate, nothing lost) rather than deleted.
- */
+/** One-time conversion of the pre-GLA-19 single `glr:draft-deal` key into a proper id'd draft. A corrupt legacy
+ * value is left untouched (nothing to migrate, nothing lost) rather than deleted. */
 export function migrateLegacyDraft() {
   const legacy = getItemSafe(LEGACY_KEY);
   if (!legacy.ok || !legacy.value) return { ok: true, migrated: false };
@@ -279,11 +248,9 @@ export function migrateLegacyDraft() {
   return { ok: true, migrated: true, id: result.id, savedAt: result.savedAt };
 }
 
-/**
- * True when a snapshot carries something a rep actually typed/picked, as opposed to only the
- * form's own defaults (priority defaults to NORMAL, nextFollowUpAt defaults to +14 days — neither
- * is "real data" on its own). No draft is ever created for a snapshot that fails this.
- */
+/** True when a snapshot carries something a rep actually typed/picked, as opposed to only the form's own
+ * defaults (priority defaults to NORMAL, nextFollowUpAt defaults to +14 days — neither is "real data" on its
+ * own). No draft is ever created for a snapshot that fails this. */
 export function hasMeaningfulDraftData(snapshot) {
   if (!snapshot) return false;
   const title = (snapshot.dealTitle || '').trim();

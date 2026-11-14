@@ -12,18 +12,9 @@ import org.springframework.stereotype.Repository;
 @Repository
 public class NotificationRepository {
     private final NamedParameterJdbcTemplate jdbc;
-    /**
-     * Sales-pipeline notifications are emailed as well as shown in-app, and these four {@code
-     * notify*} methods are the only route every one of them takes — see {@link
-     * SalesNotificationMailer} for why the dispatch hangs off the repository rather than the nine
-     * sales services. This collaborator decides nothing about mailboxes; it is told what was
-     * written and routes from there.
-     *
-     * <p>There is deliberately <b>no</b> single-argument constructor. Wiring
-     * {@link SalesNotificationMailer#NO_OP} is how a test says "in-app only", and it has to say so
-     * out loud at the wiring site — a convenience constructor would let a test assert "no mail was
-     * sent" against a collaborator that can never send, which is a green test that proves nothing.
-     */
+    /** Sales-pipeline notifications are emailed as well as shown in-app, and these four notify* methods are the
+     * only route every one of them takes — see SalesNotificationMailer for why the dispatch hangs off the
+     * repository rather than the nine sales services. */
     private final SalesNotificationMailer salesMailer;
 
     public NotificationRepository(NamedParameterJdbcTemplate jdbc, SalesNotificationMailer salesMailer) {
@@ -122,19 +113,18 @@ public class NotificationRepository {
         }
     }
 
-    // Ticket-event types are short machine codes (e.g. "PRICE_PROPOSED"); hr.notification.title is
-    // NOT NULL and human-facing, so map each to a short Thai label. Unmapped types (new ticket event
-    // kinds added later) fall back to a generic title rather than failing the insert.
+    // Ticket-event types are short machine codes (e.g. "PRICE_PROPOSED"); hr.notification.title is NOT NULL and
+    // human-facing, so map each to a short Thai label. Unmapped types (new ticket event kinds added later) fall
+    // back to a generic title rather than failing the insert.
     private static final Map<String, String> TICKET_EVENT_TITLES = Map.ofEntries(
         Map.entry("SUBMITTED", "มีคำขอราคาใหม่"),
         Map.entry("PRICE_PROPOSED", "รอการอนุมัติราคา"),
         Map.entry("APPROVED", "ราคาได้รับการอนุมัติ"),
         Map.entry("REJECTED", "ราคาถูกตีกลับ"),
         Map.entry("REVISION_REQUESTED", "ขอแก้ไขเอกสาร"),
-        // PricingRequestService.submit()/pickup() — added distinct from the
-        // legacy "SUBMITTED" entry above (which collides with
-        // TicketEventKind.SUBMITTED) so a pricing-request notification is no
-        // longer indistinguishable from a ticket-submitted one.
+        // PricingRequestService.submit()/pickup() — added distinct from the legacy "SUBMITTED" entry above (which
+        // collides with TicketEventKind.SUBMITTED) so a pricing-request notification is no longer indistinguishable
+        // from a ticket-submitted one.
         Map.entry("PRICING_REQUEST_SUBMITTED", "มีคำขอราคาใหม่"),
         Map.entry("PRICING_REQUEST_REVISED", "คำขอราคามีรอบแก้ไขใหม่"),
         Map.entry("PICKED_UP", "คำขอราคาถูกรับเรื่องแล้ว"),
@@ -175,9 +165,9 @@ public class NotificationRepository {
         // is also used for the ticket-history event log entry (tickets.addEvent) -- an unrelated
         // table that shares only the string.
         Map.entry("DEPOSIT_NOTICE_ISSUED", "ออกใบแจ้งมัดจำแล้ว — รอยืนยันรับชำระ"),
-        // TicketService.reserveStock — a rep declaring stock coverage on their OWN deal. Without
-        // an entry here it would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as
-        // routine pipeline noise; the whole point of this notification is that it is not.
+        // TicketService.reserveStock — a rep declaring stock coverage on their OWN deal. Without an entry here it
+        // would fall through to the generic "อัปเดตสถานะคำขอราคา", which reads as routine pipeline noise; the whole
+        // point of this notification is that it is not.
         Map.entry("STOCK_RESERVED", "พนักงานขายประกาศสินค้าจากสต็อกเอง"),
         // profile/ProfileRequestService#create — the HR-facing submit notification only.
         // The employee-facing approve/reject notification does NOT read this map: routing it through
@@ -234,16 +224,9 @@ public class NotificationRepository {
         notifyEmployeeAt(employeeId, type, message, "/pricing-requests/" + pricingRequestId);
     }
 
-    /**
-     * Quotation v2 (direct deal quotation): {@link #notifyEmployee}/{@link #notifyByRole} both hard-
-     * code their own link shape ({@code /tickets/{id}}), which is wrong for a notification about a
-     * document that lives at its own URL ({@code /quotations/{id}}). Public so
-     * {@code th.co.glr.hr.dealquotation.DealQuotationService} can route there without a second
-     * ticket-shaped link. Deliberately named distinctly from the private single-employee overload
-     * below (which this delegates to) rather than overloading on parameter count, since a caller
-     * passing a bare link vs. a ticketId at the same position would otherwise be an easy transposition
-     * bug to make invisible.
-     */
+    /** Quotation v2 (direct deal quotation): #notifyEmployee/#notifyByRole both hard- code their own link shape
+     * (/tickets/{id}), which is wrong for a notification about a document that lives at its own URL
+     * (/quotations/{id}). */
     public void notifyEmployeeAtLink(long employeeId, String type, String message, String link) {
         notifyEmployeeAt(employeeId, type, message, link);
     }
@@ -263,11 +246,9 @@ public class NotificationRepository {
             Arrays.stream(excludeEmployeeIds).boxed().toList());
     }
 
-    /**
-     * {@link #notifyByRoleForPricingRequest} that skips {@code excludeEmployeeId}: the person who did
-     * the thing (e.g. the CEO marking a factory contacted) is not told about their own action. Other
-     * members of the role still are. The role mailbox is only mailed when somebody else received a row.
-     */
+    /** #notifyByRoleForPricingRequest that skips excludeEmployeeId: the person who did the thing (e.g. the CEO
+     * marking a factory contacted) is not told about their own action. Other members of the role still are. The
+     * role mailbox is only mailed when somebody else received a row. */
     public void notifyByRoleForPricingRequestExcluding(String role, long pricingRequestId, String type,
                                                        String message, long excludeEmployeeId) {
         notifyByRoleInternal(role, type, message, "/pricing-requests/" + pricingRequestId,
@@ -276,10 +257,8 @@ public class NotificationRepository {
 
     private void notifyEmployeeAt(long employeeId, String type, String message, String link) {
         String title = insertEmployeeNotification(employeeId, type, message, link);
-        // The Thai TITLE, never `type`. `type` is a machine code (PRICING_DECISION_APPROVED) and
-        // mailing it would put a raw enum in a subject line at real people — the exact defect a
-        // previous round shipped when TRAVEL_PER_DIEM reached employees. Passing the same string the
-        // in-app row stores also means the bell and the inbox can never disagree about what happened.
+        // The Thai TITLE, never `type`. Passing the same string the in-app row stores also means the bell and the
+        // inbox can never disagree about what happened.
         salesMailer.emailForEmployee(employeeId, title, message, link);
     }
 
@@ -386,24 +365,18 @@ public class NotificationRepository {
                 """;
             case "sales"  -> "d.source_code ILIKE 'SA%'";
             // The one recipient here that is NOT a whole ฝ่าย. Deliberately identical to
-            // CommissionRepository#findSalesManagerApproverEmployeeIds — the same people who
-            // already sign a rep's commission off are the ones who supervise a rep's commission
-            // INPUTS (TicketService.reserveStock). Two different answers to "who is the sales
-            // manager" is the drift worth avoiding; if that predicate ever moves, move this one
-            // with it. Note "sales" above would fan out to the reps themselves, including the one
-            // who just declared, so it is not a substitute.
+            // CommissionRepository#findSalesManagerApproverEmployeeIds — the same people who already sign a rep's
+            // commission off are the ones who supervise a rep's commission INPUTS (TicketService.reserveStock).
             case "sales_manager" -> "d.source_code ILIKE 'SA%' AND p.name_th LIKE '%ผู้จัดการ%'";
             default -> null;
         };
-        // An unrecognised role writes nothing and mails nothing — the two channels stay in step even
-        // on the do-nothing path.
+        // An unrecognised role writes nothing and mails nothing — the two channels stay in step even on the do-nothing
+        // path.
         if (divisionFilter == null) return;
 
         String title = ticketEventTitle(type);
-        // RETURNING, so the mail router is handed the employees that ACTUALLY received a row rather
-        // than a second query's guess at them. The `sales`/`sales_manager` branches read the ids
-        // (each delivers per recipient); import/account/ceo route to a fixed address and
-        // deliberately mail even when this comes back empty — see SalesNotificationMailRouter.
+        // RETURNING, so the mail router is handed the employees that ACTUALLY received a row rather than a second
+        // query's guess at them.
         List<Long> notified = jdbc.queryForList("""
             INSERT INTO hr.notification (employee_id, type, title, message, link)
             SELECT e.employee_id, :type, :title, :message, :link

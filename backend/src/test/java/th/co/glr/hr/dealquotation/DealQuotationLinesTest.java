@@ -22,8 +22,8 @@ class DealQuotationLinesTest {
             .isEqualTo("กระเบื้อง รุ่น Marvel Pro");
     }
 
-    /** layout-spec §2 / plan §"Printed lines" item 6: no thickness → size goes INLINE on the
-     * description line, before "No.{productCode}", and there is no separate ขนาด row at all. */
+    /** layout-spec §2 / plan §"Printed lines" item 6: no thickness → size goes INLINE on the description line,
+     * before "No.{productCode}", and there is no separate ขนาด row at all. */
     @Test
     void descriptionLine_noThickness_sizeGoesInlineBeforeProductCode() {
         assertThat(DealQuotationLines.descriptionLine("Reverso Cement", "Grigio", null, "BS66R13GP",
@@ -45,8 +45,8 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
-    /** Trailing ".0" must never appear -- "60 cm", never "60.0 cm" -- even though width_mm/
-     * height_mm/thicknessMm are BigDecimal and could easily carry a trailing zero. */
+    /** Trailing ".0" must never appear -- "60 cm", never "60.0 cm" -- even though width_mm/ height_mm/thicknessMm
+     * are BigDecimal and could easily carry a trailing zero. */
     @Test
     void sizeLine_catalogueDimensions_noTrailingPointZero() {
         assertThat(DealQuotationLines.sizeLine(null, new BigDecimal("9.00"),
@@ -111,8 +111,8 @@ class DealQuotationLinesTest {
             .doesNotContain("60 cm x 60 cm");
     }
 
-    /** Typed in millimetres, exactly matching the catalogue's own mm figures -- still prints the
-     * catalogue's (identical) centimetre conversion, same as always. */
+    /** Typed in millimetres, exactly matching the catalogue's own mm figures -- still prints the catalogue's
+     * (identical) centimetre conversion, same as always. */
     @Test
     void sizeLine_typedSizeMatchesCatalogueInMillimetres_printsCatalogueCentimetres() {
         assertThat(DealQuotationLines.sizeLine("600x600", new BigDecimal("20"),
@@ -136,8 +136,8 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 60 cm x 60 cm x 20 mm (ขนาดโดยประมาณ)");
     }
 
-    /** Order-insensitive: "120x60" (rep wrote width/height swapped) still matches a 600x1200mm
-     * catalogue row -- printed as the catalogue states it, width first. */
+    /** Order-insensitive: "120x60" (rep wrote width/height swapped) still matches a 600x1200mm catalogue row --
+     * printed as the catalogue states it, width first. */
     @Test
     void sizeLine_typedSizeMatchesCatalogue_orderInsensitive_120x60_vs600x1200() {
         assertThat(DealQuotationLines.sizeLine("120x60", new BigDecimal("9"),
@@ -145,8 +145,8 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
-    /** A decimal pair, matched against the catalogue's own millimetre figures converted to
-     * centimetres (60mm/246mm -> 6cm/24.6cm) -- exercises BigDecimal#compareTo, not float. */
+    /** A decimal pair, matched against the catalogue's own millimetre figures converted to centimetres (60mm/246mm
+     * -> 6cm/24.6cm) -- exercises BigDecimal#compareTo, not float. */
     @Test
     void sizeLine_typedSizeMatchesCatalogue_decimalPair_6x24point6_vs60x246mm() {
         assertThat(DealQuotationLines.sizeLine("6x24.6", new BigDecimal("9"),
@@ -154,8 +154,8 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 6 cm x 24.6 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
-    /** Unparseable typed text with catalogue dimensions present is unchanged behaviour: the
-     * catalogue wins, exactly as it did before this refinement. */
+    /** Unparseable typed text with catalogue dimensions present is unchanged behaviour: the catalogue wins, exactly
+     * as it did before this refinement. */
     @Test
     void sizeLine_unparseableTypedText_withCatalogueDimensions_stillPrintsCatalogue() {
         assertThat(DealQuotationLines.sizeLine("รูปทรงอิสระ", new BigDecimal("9"),
@@ -310,10 +310,9 @@ class DealQuotationLinesTest {
         assertParsed("30 x 60", "30", "60", null); // thin space
         assertParsed("30 x 60", "30", "60", null); // narrow no-break space
         assertParsed("﻿30x60", "30", "60", null); // BOM / ZWNBSP
-        assertParsed("30x60 ", "30", "60", null); // line separator
-        // The OTHER direction: a bare control byte, which String.trim() has ALWAYS stripped (it
-        // strips anything <= U+0020) -- this was never broken on the Java side, but is pinned here
-        // so the two vector tables stay byte-for-byte identical.
+        assertParsed("30x60 ", "30", "60", null); // line separator The OTHER direction: a bare control byte, which String.trim() has ALWAYS stripped (it strips
+        // anything <= U+0020) -- this was never broken on the Java side, but is pinned here so the two vector tables
+        // stay byte-for-byte identical.
         assertParsed("30x60", "30", "60", null);
         assertParsed("30x60", "30", "60", null);
     }
@@ -337,8 +336,8 @@ class DealQuotationLinesTest {
 
     @Test
     void parseTwoDimensions_pathologicalWhitespace_248chars_doesNotCatastrophicallyBacktrack() {
-        // The reviewer's own reported shape (measured pre-fix at 12,238ms on the reviewer's code,
-        // 5,026ms on this machine).
+        // The reviewer's own reported shape (measured pre-fix at 12,238ms on the reviewer's code, 5,026ms on this
+        // machine).
         String attack = "30" + " ".repeat(80) + "x60" + " ".repeat(80) + "x1" + " ".repeat(80) + "!";
         assertThat(attack).hasSize(248);
         long start = System.nanoTime();
@@ -351,9 +350,9 @@ class DealQuotationLinesTest {
 
     @Test
     void parseTwoDimensions_longerThanTheLengthGuard_isRejectedOutright_evenForAGenuineShape() {
-        // 65 chars of otherwise-perfectly-parseable text (the padding is INTERNAL, between the first
-        // number and the separator, so String.trim() cannot shrink it away) -- proves the length
-        // guard itself, not just the regex fix, independent of any pathological shape.
+        // 65 chars of otherwise-perfectly-parseable text (the padding is INTERNAL, between the first number and the
+        // separator, so String.trim() cannot shrink it away) -- proves the length guard itself, not just the regex
+        // fix, independent of any pathological shape.
         String genuineButLong = "30" + " ".repeat(60) + "x60";
         assertThat(genuineButLong.length()).isEqualTo(65);
         assertUnparsed(genuineButLong);
@@ -377,14 +376,14 @@ class DealQuotationLinesTest {
     // falls back to also trying the other unit the way the unspecified-unit rule always has. ─────
     @Test
     void sizeLine_explicitMmUnit_differsFromCatalogueEvenThoughCmReadingWouldMatch() {
-        // Catalogue is 60x60cm (600x600mm). Typed "600x600mm" is an explicit mm reading that DOES
-        // match the catalogue's own mm figures, so this still prints the catalogue (unaffected).
+        // Catalogue is 60x60cm (600x600mm). Typed "600x600mm" is an explicit mm reading that DOES match the
+        // catalogue's own mm figures, so this still prints the catalogue (unaffected).
         assertThat(DealQuotationLines.sizeLine("600x600mm", new BigDecimal("9"),
             new BigDecimal("600"), new BigDecimal("600")))
             .isEqualTo("ขนาด 60 cm x 60 cm x 9 mm (ขนาดโดยประมาณ)");
-        // Catalogue is 60x60cm (600x600mm). Typed "300x600mm" is explicitly millimetres -- a
-        // genuinely different (smaller) tile -- and must print as typed even though nothing here
-        // would ever coincidentally equal the catalogue's cm reading either.
+        // Catalogue is 60x60cm (600x600mm). Typed "300x600mm" is explicitly millimetres -- a genuinely different
+        // (smaller) tile -- and must print as typed even though nothing here would ever coincidentally equal the
+        // catalogue's cm reading either.
         assertThat(DealQuotationLines.sizeLine("300x600mm", new BigDecimal("9"),
             new BigDecimal("600"), new BigDecimal("600")))
             .isEqualTo("ขนาด 300x600mm x 9 mm (ขนาดโดยประมาณ)")
@@ -466,8 +465,7 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 60 cm x 120 cm x 9 mm (ขนาดโดยประมาณ)");
     }
 
-    /** A blank face size, with no catalogue dimensions either, prints only the thickness -- no
-     * dangling separator. */
+    /** A blank face size, with no catalogue dimensions either, prints only the thickness -- no dangling separator. */
     @Test
     void sizeLine_blankFaceSize_noCatalogueDimensions_printsOnlyTheThickness() {
         assertThat(DealQuotationLines.sizeLine(null, new BigDecimal("9"), null, null))
@@ -476,9 +474,9 @@ class DealQuotationLinesTest {
             .isEqualTo("ขนาด 9 mm (ขนาดโดยประมาณ)");
     }
 
-    /** layout-spec §2: no thickness → null (not a blank/dangling line) — the size already went
-     * inline on {@link DealQuotationLines#descriptionLine} instead, so there is no separate row.
-     * Holds regardless of whether catalogue dimensions are available. */
+    /** layout-spec §2: no thickness → null (not a blank/dangling line) — the size already went inline on
+     * DealQuotationLines#descriptionLine instead, so there is no separate row. Holds regardless of whether
+     * catalogue dimensions are available. */
     @Test
     void sizeLine_noThickness_returnsNull_noSeparateRow() {
         assertThat(DealQuotationLines.sizeLine("60x60", null, null, null)).isNull();
@@ -650,9 +648,8 @@ class DealQuotationLinesTest {
         assertThat(line).doesNotContain("ปัดขึ้น").doesNotContain("= 20 แผ่น");
     }
 
-    /** Wastage that lands exactly on a whole box count:
-     * {@code (จำนวน 18 แผ่น + เผื่อ 2 แผ่น = 20 แผ่น = 2 กล่อง) (บรรจุ 10 แผ่น/กล่อง)} -- the
-     * wastage-adjusted total STILL prints (it is new information over quantityPart's own "18
+    /** Wastage that lands exactly on a whole box count: (จำนวน 18 แผ่น + เผื่อ 2 แผ่น = 20 แผ่น = 2 กล่อง) (บรรจุ
+     * 10 แผ่น/กล่อง) -- the wastage-adjusted total STILL prints (it is new information over quantityPart's own "18
      * แผ่น"), but the rounding phrase does not (box rounding itself was a no-op). */
     @Test
     void calculationLine_wastageLandsOnWholeBoxes_printsTotalAndBoxCount_noRoundingPhrase() {
@@ -664,8 +661,7 @@ class DealQuotationLinesTest {
         assertThat(line).doesNotContain("ปัดขึ้น");
     }
 
-    /** AREA mode, already whole boxes: {@code (พื้นที่ … รวม 26 แผ่น = 2 กล่อง) (บรรจุ 13
-     * แผ่น/กล่อง)}. */
+    /** AREA mode, already whole boxes: (พื้นที่ … รวม 26 แผ่น = 2 กล่อง) (บรรจุ 13 แผ่น/กล่อง). */
     @Test
     void calculationLine_areaMode_alreadyWholeBoxes_printsBoxCount_noRoundingPhrase() {
         String line = recomputedLine(
@@ -1015,11 +1011,9 @@ class DealQuotationLinesTest {
         });
     }
 
-    /**
-     * ⚠️ The Thai regression: every language-aware overload called with TH (and with null) returns
-     * EXACTLY what the pre-existing Thai-only method returns, across the variant matrix. The legacy
-     * methods' own expected strings above are unchanged by this branch.
-     */
+    /** ⚠️ The Thai regression: every language-aware overload called with TH (and with null) returns EXACTLY what
+     * the pre-existing Thai-only method returns, across the variant matrix. The legacy methods' own expected
+     * strings above are unchanged by this branch. */
     @Test
     void thai_languageAwareOverloadsAreByteIdenticalToTheLegacyMethods() {
         for (String lang : new String[] {TH, null, "XX"}) {
@@ -1127,8 +1121,8 @@ class DealQuotationLinesTest {
         assertThat(p.subLine()).isEqualTo(DealQuotationLines.specialPriceLine(new BigDecimal("1350")));
     }
 
-    /** A hand-edited English per-sqm row with NO box area AND no resolved sqmPerPiece either prints
-     * pieces — it never invents an area with nothing to derive one from. */
+    /** A hand-edited English per-sqm row with NO box area AND no resolved sqmPerPiece either prints pieces — it
+     * never invents an area with nothing to derive one from. */
     @Test
     void tilePrint_englishPerSqmWithoutBoxDataOrSqmPerPiece_printsPieces() {
         DealQuotationLines.TilePrint p = recomputedTilePrint(EN, "SPECIAL_SQM",
@@ -1140,9 +1134,8 @@ class DealQuotationLinesTest {
 
     // ── ตร.ม./กล่อง is OPTIONAL for English per-sqm ──────────────────────────────────────────────
 
-    /** Blank box area, no แผ่น/กล่อง either: quantity = round2(piecesFinal × sqmPerPiece), the
-     * ordinary English piece-based calculation line (no box wording at all since hasBox is false),
-     * and no box sub-line. */
+    /** Blank box area, no แผ่น/กล่อง either: quantity = round2(piecesFinal × sqmPerPiece), the ordinary English
+     * piece-based calculation line (no box wording at all since hasBox is false), and no box sub-line. */
     @Test
     void tilePrint_englishPerSqm_noBoxArea_noPiecesPerBox_derivesSqmFromPieces() {
         DealQuotationLines.TilePrint p = recomputedTilePrint(EN, "SPECIAL_SQM",
@@ -1160,13 +1153,13 @@ class DealQuotationLinesTest {
         assertThat(p.subLine()).isNull();
     }
 
-    /** Blank box area, แผ่น/กล่อง FILLED, full-box rounding: quantity derives from the box-rounded
-     * piecesFinal (not the pre-rounding piece count), and the ordinary English box-rounding wording
-     * prints (no "= N boxes" tail — that only exists on the box-AREA branch). */
+    /** Blank box area, แผ่น/กล่อง FILLED, full-box rounding: quantity derives from the box-rounded piecesFinal (not
+     * the pre-rounding piece count), and the ordinary English box-rounding wording prints (no "= N boxes" tail —
+     * that only exists on the box-AREA branch). */
     @Test
     void tilePrint_englishPerSqm_noBoxArea_piecesPerBoxFilled_roundsToFullBox() {
-        // boxes = 3 (floor(30 / 10)) — WastageCalculator#calculate always sets boxes from
-        // piecesPerBox alone, regardless of whether a box AREA is present; realistic stored data.
+        // boxes = 3 (floor(30 / 10)) — WastageCalculator#calculate always sets boxes from piecesPerBox alone,
+        // regardless of whether a box AREA is present; realistic stored data.
         DealQuotationLines.TilePrint p = recomputedTilePrint(EN, "SPECIAL_SQM",
             WastageCalculator.QUANTITY_MODE_PIECES, null, new BigDecimal("0.36"), null, 25,
             WastageCalculator.WASTAGE_MODE_NONE, null, 30, 10, 3, null, new BigDecimal("30"), "SQM",
@@ -1177,9 +1170,9 @@ class DealQuotationLinesTest {
         assertThat(p.subLine()).isNull();
     }
 
-    /** Blank box area, แผ่น/กล่อง filled, loose pieces (roundToFullBox=false): quantity derives from
-     * the EXACT wastage-adjusted piece count (unrounded), and the loose-pieces phrasing prints —
-     * proving English per-sqm can now reach that branch, unlike before Option B. */
+    /** Blank box area, แผ่น/กล่อง filled, loose pieces (roundToFullBox=false): quantity derives from the EXACT
+     * wastage-adjusted piece count (unrounded), and the loose-pieces phrasing prints — proving English per-sqm can
+     * now reach that branch, unlike before Option B. */
     @Test
     void tilePrint_englishPerSqm_noBoxArea_loosePieces_derivesSqmFromExactPieces() {
         // boxes = 3 (floor(32 / 10)) — same realism note as the full-box test above.
@@ -1195,9 +1188,9 @@ class DealQuotationLinesTest {
 
     // ── "sell loose pieces" ────────────────────────────────────────────────────────────────────
 
-    /** The headline Thai example from the design: no wastage, so the intermediate "= N แผ่น"
-     * clause is skipped entirely (it would just restate quantityPart's own 32) and the line goes
-     * straight from quantityPart to the box/loose split. */
+    /** The headline Thai example from the design: no wastage, so the intermediate "= N แผ่น" clause is skipped
+     * entirely (it would just restate quantityPart's own 32) and the line goes straight from quantityPart to the
+     * box/loose split. */
     @Test
     void calculationLine_thaiLoosePieces_noWastage_skipsRedundantIntermediateClause() {
         String line = recomputedLine(TH,
@@ -1219,9 +1212,9 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(จำนวน 32 แผ่น = 3 กล่อง + 2 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
     }
 
-    /** The headline Thai example WITH wastage: the intermediate "= 29 แผ่น" clause DOES print
-     * (piecesFinal differs from the quantityPart's own 28 because of the 5% allowance), followed
-     * by the box/loose split — both clauses, not either alone. */
+    /** The headline Thai example WITH wastage: the intermediate "= 29 แผ่น" clause DOES print (piecesFinal differs
+     * from the quantityPart's own 28 because of the 5% allowance), followed by the box/loose split — both clauses,
+     * not either alone. */
     @Test
     void calculationLine_thaiLoosePieces_withAreaAndWastage_printsBothClauses() {
         String line = recomputedLine(TH,
@@ -1252,8 +1245,8 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(จำนวน 7 แผ่น) (บรรจุ 10 แผ่น/กล่อง)");
     }
 
-    /** full boxes = 0, WITH wastage: the intermediate "= N แผ่น" clause DOES print, because
-     * wastage moved piecesFinal away from quantityPart's own count -- it is not a duplicate. */
+    /** full boxes = 0, WITH wastage: the intermediate "= N แผ่น" clause DOES print, because wastage moved
+     * piecesFinal away from quantityPart's own count -- it is not a duplicate. */
     @Test
     void calculationLine_thaiLoosePieces_fullBoxesIsZero_withWastage_printsTheAdjustedTotal() {
         String line = recomputedLine(TH,
@@ -1262,8 +1255,8 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(จำนวน 15 แผ่น + เผื่อ 5% = 16 แผ่น) (บรรจุ 26 แผ่น/กล่อง)");
     }
 
-    /** PIECES-mode wastage variant of the "both clauses" case, so the intermediate-clause rule is
-     * pinned for both wastage modes, not only PERCENT. */
+    /** PIECES-mode wastage variant of the "both clauses" case, so the intermediate-clause rule is pinned for both
+     * wastage modes, not only PERCENT. */
     @Test
     void calculationLine_thaiLoosePieces_piecesWastage_printsBothClauses() {
         String line = recomputedLine(TH,
@@ -1335,8 +1328,8 @@ class DealQuotationLinesTest {
         assertThat(line).isEqualTo("(Quantity 7 pcs) (10 pcs/box)");
     }
 
-    /** Singular "box"/"pc" at exactly 1 — the one shape none of the Thai tests can pin, since Thai
-     * has no singular/plural distinction. */
+    /** Singular "box"/"pc" at exactly 1 — the one shape none of the Thai tests can pin, since Thai has no
+     * singular/plural distinction. */
     @Test
     void calculationLine_englishLoosePieces_singularBoxAndPcAtExactlyOne() {
         // 1 box + 1 loose pc.
@@ -1407,9 +1400,8 @@ class DealQuotationLinesTest {
             7, WastageCalculator.WASTAGE_MODE_NONE, null, 7, 10, false)).doesNotContain("= 7 pcs)");
     }
 
-    /** {@code tilePrint} threads roundToFullBox into the ordinary (non-per-sqm) branch — proven
-     * once at that layer so a regression there (e.g. a dropped argument) is caught even if
-     * {@code calculationLine} itself stays correct. */
+    /** tilePrint threads roundToFullBox into the ordinary (non-per-sqm) branch — proven once at that layer so a
+     * regression there (e.g. a dropped argument) is caught even if calculationLine itself stays correct. */
     @Test
     void tilePrint_threadsRoundToFullBoxIntoTheOrdinaryBranch() {
         DealQuotationLines.TilePrint p = recomputedTilePrint(TH, "NET",

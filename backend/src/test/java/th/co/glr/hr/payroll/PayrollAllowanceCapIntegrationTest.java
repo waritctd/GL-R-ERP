@@ -24,16 +24,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
-     * A run-body entry must leave the per-head cap alone.
-     *
-     * <p>WAS a defect pin: headCountFor resolved the amount through firstNonNull to the STORED
-     * ฿300,000, derived 10 heads from it, and allowed the lot — the cap computed from the figure it
-     * constrains, triggered by any unrelated run-body field, silent, in the direction of
-     * UNDER-withholding. Net effect was ฿270,000 of unlawful ค่าลดหย่อน. Now fixed: a count is derived
-     * only from a non-null RUN-BODY amount and only when no stored count exists, so this asserts the
-     * cap holds and the discarded amount is named on the payslip.
-     */
+/** A run-body entry must leave the per-head cap alone. Now fixed: a count is derived only from a non-null
+ * RUN-BODY amount and only when no stored count exists, so this asserts the cap holds and the discarded amount
+ * is named on the payslip. */
 class PayrollAllowanceCapIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -69,33 +62,16 @@ class PayrollAllowanceCapIntegrationTest extends AbstractPostgresIntegrationTest
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * A stored ล.ย.01 declaring ONE child and ฿300,000 of ค่าลดหย่อนบุตร. The law allows ฿30,000 for
-     * one child (฿60,000 only for a second-or-later child born from พ.ศ. 2561, which a first child
-     * cannot be), and {@code PayrollCalculator#childAllowanceCap} computes exactly that.
-     *
-     * <p>With NO run-body entry the cap binds and ฿30,000 is allowed — {@code mergeAllowances}
-     * returns the stored declaration untouched.
-     *
-     * <p>With a run-body entry that says nothing whatsoever about allowances (only a ฿500 พิเศษ 1,
-     * which the payroll UI pre-fills by default), {@code firstNonNull(input.childAllowance(),
-     * base.childAllowance())} resolves to the STORED ฿300,000, {@code headCountFor} raises the count
-     * from 1 to {@code CEILING(300000/30000) = 10}, and the whole ฿300,000 is allowed. No warning
-     * fires either: after the raise {@code declared == cap}, so {@code appendClampWarning} returns
-     * early.
-     *
-     * <p>Net effect: ฿270,000 of unlawful ค่าลดหย่อน, switched on by an unrelated field, silently.
-     */
+    /** A stored ล.ย.01 declaring ONE child and ฿300,000 of ค่าลดหย่อนบุตร. The law allows ฿30,000 for one child
+     * (฿60,000 only for a second-or-later child born from พ.ศ. 2561, which a first child cannot be), and
+     * PayrollCalculator#childAllowanceCap computes exactly that. */
     @Test
     @DisplayName("a run-body entry must not disturb the per-head บุตร cap")
     void aRunBodyEntryMustNotDisturbThePerHeadChildAllowanceCap() {
         LocalDate month = LocalDate.of(2026, 1, 1);
         long employeeId = seedEmployee("CAP-001", "เกินเพดาน", "บุตร", new BigDecimal("200000.00"));
-        // Post-118 rebase: onlyASpecialPay() below puts ฿500 in SPECIAL_PAY_1, which
-        // calculateClassified now REJECTS unless HR has classified it (the gate this branch added).
-        // seedSsoIncluded is needed too -- a raw SQL-inserted employee (bypassing EmployeeService) gets
-        // no SSO-inclusion rows at all, so without this the 10,500 SSO allowance this test expects is
-        // silently zero.
+        // Post-118 rebase: onlyASpecialPay() below puts ฿500 in SPECIAL_PAY_1, which calculateClassified now REJECTS
+        // unless HR has classified it (the gate this branch added).
         seedRegularTaxTreatment(employeeId, 2026, PayrollComponent.SPECIAL_PAY_1);
         seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
         jdbc.update("""
@@ -115,12 +91,9 @@ class PayrollAllowanceCapIntegrationTest extends AbstractPostgresIntegrationTest
             .as("no run-body entry: the per-head cap binds, as V93 intends")
             .isEqualByComparingTo(personalPlusSso.add(new BigDecimal("30000.00")));
 
-        // REGRESSION GUARD (converted 2026-07-29). This began as a defect pin written by review: an
-        // unrelated run-body entry used to make the ONE-child cap stop binding, because headCountFor
-        // fell back to the STORED amount and raised the head count until it covered it. The cap was
-        // being computed from the very amount it exists to constrain, and the error ran toward
-        // UNDER-withholding. headCountFor now derives ONLY from a non-null run-body amount, and only
-        // when there is no stored count at all.
+        // REGRESSION GUARD (converted 2026-07-29). headCountFor now derives ONLY from a non-null run-body amount, and
+        // only when there is no stored count at all. The cap was being computed from the very amount it exists to
+        // constrain, and the error ran toward UNDER-withholding.
         assertThat(withRunBody.taxAllowanceTotal())
             .as("an unrelated run-body entry must not disturb the per-head cap")
             .isEqualByComparingTo(personalPlusSso.add(new BigDecimal("30000.00")));
@@ -134,9 +107,8 @@ class PayrollAllowanceCapIntegrationTest extends AbstractPostgresIntegrationTest
             .contains("WARNING")
             .contains("ค่าลดหย่อนบุตร");
 
-        // The run body adds 500 of พิเศษ 1, which is income, so withholding legitimately RISES.
-        // What must not happen is the 270,000 of unlawful allowance pushing it DOWN — that was the
-        // defect's signature.
+        // The run body adds 500 of พิเศษ 1, which is income, so withholding legitimately RISES. What must not happen
+        // is the 270,000 of unlawful allowance pushing it DOWN — that was the defect's signature.
         assertThat(withRunBody.withholdingTax())
             .as("an extra 500 of income must not somehow reduce the tax")
             .isGreaterThanOrEqualTo(withoutRunBody.withholdingTax());

@@ -4,14 +4,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Assumptions;
 
-/**
- * The gate every Chromium-dependent test stands behind. Locally it is the repo's usual
- * {@code Assumptions.assumeTrue} idiom — skip, never fail, when the tool is absent. In CI
- * ({@code REQUIRE_CHROMIUM=1}, set by {@code .github/workflows/backend-ci.yml}) a missing browser
- * FAILS the test instead: a fidelity gate that silently skips is a gate that goes green by
- * absence, which is exactly the thing this repo has been bitten by before (CLAUDE.md, "a test can
- * pass because the interesting state was never built").
- */
+/** The gate every Chromium-dependent test stands behind. Locally it is the repo's usual Assumptions.assumeTrue
+ * idiom — skip, never fail, when the tool is absent. */
 public final class ChromiumTestGate {
     private ChromiumTestGate() {}
 
@@ -33,9 +27,9 @@ public final class ChromiumTestGate {
         }
     }
 
-    /** Both engines must be present (the fidelity gate compares them): skip locally when either
-     * is missing, fail under {@code REQUIRE_CHROMIUM=1} — LibreOffice's absence would let the
-     * gate go green by absence just as surely as Chromium's. */
+    /** Both engines must be present (the fidelity gate compares them): skip locally when either is missing, fail
+     * under REQUIRE_CHROMIUM=1 — LibreOffice's absence would let the gate go green by absence just as surely as
+     * Chromium's. */
     public static void requireBothOrSkip() {
         boolean libreOffice = LibreOfficePdfConverter.isAvailable();
         if (required()) {

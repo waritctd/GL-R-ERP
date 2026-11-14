@@ -10,17 +10,8 @@ import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
-/**
- * The pure route definition: which stages are OFF each entry channel's route. The gate that
- * enforces it is proved against a real row in {@code DealRouteGateIntegrationTest}; this class pins
- * the tables themselves, where every channel can be enumerated cheaply.
- *
- * <p>The assertion that matters most is the emptiness one. {@code DESIGNER_LED} (and every stage
- * of {@code UNSPECIFIED}/unknown/null) having NO off-route stage is what makes the gate a no-op for
- * the entire pre-V144 back catalogue (design §13.2) and what stops a deal with no stated channel
- * being bricked (design §13.1c). A test that only checked "owner-direct excludes S4" would stay
- * green if someone "helpfully" gave the default route an opinion.
- */
+/** The pure route definition: which stages are OFF each entry channel's route. A test that only checked
+ * "owner-direct excludes S4" would stay green if someone "helpfully" gave the default route an opinion. */
 class DealRouteTest {
 
     private static final int ALL_STAGES = DealStage.ORDER.size();
@@ -62,11 +53,8 @@ class DealRouteTest {
 
     // ── the absence of a route: everything reachable ─────────────────────────
 
-    /**
-     * A safety requirement, not politeness: pre-V144 rows and quotation-first ghosts can carry
-     * UNSPECIFIED and GLA-156 removed the in-portal way to correct it, so gating it would brick
-     * those deals with no remedy.
-     */
+    /** A safety requirement, not politeness: pre-V144 rows and quotation-first ghosts can carry UNSPECIFIED and
+     * GLA-156 removed the in-portal way to correct it, so gating it would brick those deals with no remedy. */
     @Test
     void unspecified_unknownAndNull_haveAllFifteenStagesOnRoute() {
         for (String channel : new String[] {EntryChannel.UNSPECIFIED, "SOMETHING_NEW", "", null}) {
@@ -106,13 +94,8 @@ class DealRouteTest {
 
     // ── the structural invariant: a route may only ever vary the PARTY axis ───
 
-    /**
-     * {@code autoAdvanceStage} returns silently on an off-route target. That is right for a
-     * quotation recipient pointing at a stage the deal's route does not visit, and catastrophic for
-     * an OPERATIONAL advance: were any auto-advanced stage off-route, {@code confirmCustomer} would
-     * set {@code payment_status=CUSTOMER_CONFIRMED} and leave the stage behind with no error at all.
-     * So the set of stages a route may ever exclude is pinned, explicitly, to the five party stages.
-     */
+    /** autoAdvanceStage returns silently on an off-route target. So the set of stages a route may ever exclude is
+     * pinned, explicitly, to the five party stages. */
     @Test
     void routeVariable_isExactlyTheFivePartyStages() {
         assertThat(DealRoute.ROUTE_VARIABLE).containsExactlyInAnyOrder(
@@ -128,11 +111,9 @@ class DealRouteTest {
         }
     }
 
-    /**
-     * Enumerated explicitly rather than derived: the test must still fail if someone edits a table
-     * (or {@code DealStage.MANDATORY}) in a way that puts an operational stage off a route.
-     * "On-route" means PERMITTED, not visited — Case C never visits S1-S3 and must still be allowed.
-     */
+    /** Enumerated explicitly rather than derived: the test must still fail if someone edits a table (or
+     * DealStage.MANDATORY) in a way that puts an operational stage off a route. "On-route" means PERMITTED, not
+     * visited — Case C never visits S1-S3 and must still be allowed. */
     @Test
     void everyOperationalAndMandatoryStage_isOnRouteForEveryChannel() {
         List<String> alwaysOnRoute = List.of(
@@ -170,8 +151,8 @@ class DealRouteTest {
     @Test
     void refusalMessage_namesChannelStageAndRemedy_perChannel() {
         String owner = DealRoute.refusalMessage(EntryChannel.OWNER_DIRECT, DealStage.QUOTE_DESIGN_SIDE);
-        // The stage is named by DISPLAY NUMBER, never by its code: this string is shown verbatim to
-        // a Thai-speaking rep, so a raw Java constant must never appear in it.
+        // The stage is named by DISPLAY NUMBER, never by its code: this string is shown verbatim to a Thai-speaking
+        // rep, so a raw Java constant must never appear in it.
         assertThat(owner).contains("เจ้าของติดต่อโดยตรง")
             .contains(DealRoute.stagePhrase(DealStage.QUOTE_DESIGN_SIDE))
             .doesNotContain(DealStage.QUOTE_DESIGN_SIDE)

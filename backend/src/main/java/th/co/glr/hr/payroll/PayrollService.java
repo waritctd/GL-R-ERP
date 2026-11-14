@@ -175,8 +175,7 @@ public class PayrollService {
                     base.nonTaxableIncome(), base.studentLoanDeduction(), base.legalExecutionDeduction(),
                     unpaidLeaveDaysByEmployee.getOrDefault(employeeId, BigDecimal.ZERO),
                     pendingCorrectionsByEmployee.getOrDefault(employeeId, BigDecimal.ZERO),
-                    // Carry the per-run withholding override typed last run (nullable; the leave overlay
-                    // above never touches it).
+                    // Carry the per-run withholding override typed last run (nullable; the leave overlay above never touches it).
                     base.withholdingTaxOverride()
                 );
             })
@@ -204,11 +203,8 @@ public class PayrollService {
         // read (same WHERE-shape, same transaction) and idempotent across re-processing this month.
         leaveRepository.resolvePendingCorrections(periodId);
         // V128: attribute each approved welfare claim to the period that actually paid it.
-        // hr.special_money_request.included_period_id has existed since V66 and was never written,
-        // because nothing consumed these rows. Only fills NULLs, so re-processing this month does
-        // not re-point a claim that an earlier run already attributed -- the same idempotency
-        // guarantee saveProcessedPeriod's delete-then-insert gives hr.payroll_line. Never called
-        // from #preview, which must stay side-effect-free.
+        // hr.special_money_request.included_period_id has existed since V66 and was never written, because nothing
+        // consumed these rows.
         payrollRepository.markWelfareIncludedInPeriod(month, periodId);
         // Deduction obligation tracking: record what was ACTUALLY deducted this period
         // (post every other cap) against each employee's driving obligation, then re-derive
@@ -326,10 +322,9 @@ public class PayrollService {
                 "มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว กรุณาโหลดข้อมูลใหม่ก่อนบันทึกอีกครั้ง");
         }
         payrollRepository.saveInputDrafts(month, safeInputs(request.inputs()), actor.employeeId());
-        // One read for the response, same as #getInputDraft -- not a correctness requirement here
-        // (the advisory lock already rules out a concurrent writer for the rest of this
-        // transaction, so two separate reads would still agree), just consistent with the pattern
-        // and one fewer round trip.
+        // One read for the response, same as #getInputDraft -- not a correctness requirement here (the advisory lock
+        // already rules out a concurrent writer for the rest of this transaction, so two separate reads would still
+        // agree), just consistent with the pattern and one fewer round trip.
         List<PayrollRepository.DraftRow> rows = payrollRepository.findInputDraftRows(month);
         List<PayrollEmployeeInputRequest> drafts = rows.stream().map(PayrollRepository.DraftRow::input).toList();
         String newETag = PayrollDraftETag.compute(rows.stream().map(PayrollRepository.DraftRow::version).toList());
@@ -445,9 +440,9 @@ public class PayrollService {
                 auditFields = "national_id,tax_id,gross_taxable_income,withholding_tax";
             }
             case SSO -> {
-                // The workbook carries no employer/period/rate fields (the e-service knows those
-                // from the account it is uploaded under), so unlike the .txt it replaced this needs
-                // neither payrollMonth nor payDate -- only the fallback branch off `employer`.
+                // The workbook carries no employer/period/rate fields (the e-service knows those from the account it is
+                // uploaded under), so unlike the .txt it replaced this needs neither payrollMonth nor payDate -- only the
+                // fallback branch off `employer`.
                 content = ssoExporter.export(payrollRepository.findExportRows(periodId), employer);
                 auditFields = "national_id,title,name,sso_wage_gross,social_security";
             }
@@ -552,40 +547,24 @@ public class PayrollService {
     private static final String DETAIL_EXPORT_AUDIT_FIELDS =
         "employee_name,department_name,bank_account,base_salary,special_pays,gross_earnings,deductions,net_pay";
 
-    /**
-     * Builds the detail workbook from a fully-computed {@code period} (its {@code lines()} plus its
-     * own {@code periodStart}/{@code periodEnd}, which {@link PayrollDetailExporter} needs for the
-     * "เงินเดือนใหม่ this month" rule) -- NOT just a bare line list, so every call site (processed,
-     * recomputed-from-VOID, and pure preview) reports the correct period window.
-     */
+    /** Builds the detail workbook from a fully-computed period (its lines plus its own periodStart/periodEnd, which
+     * PayrollDetailExporter needs for the "เงินเดือนใหม่ this month" rule) -- NOT just a bare line list, so every
+     * call site reports the correct period window. */
     private byte[] buildDetailContent(PayrollPeriodDto period) {
         List<PayrollLineDto> lines = period.lines();
         Set<Long> employeeIds = lines.stream().map(PayrollLineDto::employeeId).collect(Collectors.toSet());
         Map<Long, PayrollDetailIdentityDto> identities = payrollRepository.findDetailIdentity(employeeIds);
-        // The workbook's การคำนวณภาษี tab needs each employee's YTD cumulative income/withholding
-        // (see PayrollDetailExporter's Ctx#cumulativeIncomeBeforeThisPeriod) -- the same
-        // findYearToDateByEmployee lookup #calculateLine already uses for the live annual projection,
-        // reused here purely for display so the export never re-derives it a second way.
+        // The workbook's การคำนวณภาษี tab needs each employee's YTD cumulative income/withholding -- the same
+        // findYearToDateByEmployee lookup #calculateLine already uses for the live annual projection, reused here
+        // purely for display so the export never re-derives it a second way.
         Map<Long, PayrollYearToDate> yearToDateByEmployee =
             payrollRepository.findYearToDateByEmployee(period.payrollMonth());
         return payrollDetailExporter.export(lines, identities, period, yearToDateByEmployee);
     }
 
-    /**
-     * Reverses a persisted (possibly stale) {@link PayrollLineDto} back into the input shape {@link
-     * #preview}/{@link #process} take, so a VOID period's already-typed HR inputs (special pays,
-     * meal/per-diem, days worked, ...) survive a fresh recompute instead of being discarded. The 16
-     * tax-allowance fields (spouse/child/parent-care/...) and {@code parentCareCount} are NOT
-     * reconstructable from a payroll_line row (only their already-summed {@code
-     * taxAllowanceTotal} is persisted, not the per-type breakdown) -- left {@code null}, which is
-     * "no per-run override", so the recompute falls back to the EMPLOYEE'S CURRENT standing
-     * tax-allowance declaration. That is the more correct answer, not a lesser one: it reflects
-     * whatever HR has on file today rather than replaying a historical override that may since have
-     * been corrected. {@code customerReturnDeduction} is read from {@code
-     * customerReturnRequested} (what HR actually typed) rather than {@code
-     * customerReturnDeduction} (the post-tax bookkeeping figure, which is 0 in the unearned path --
-     * see that field's own javadoc on {@link PayrollLineDto}).
-     */
+    /** Reverses a persisted (possibly stale) PayrollLineDto back into the input shape #preview/#process take, so a
+     * VOID period's already-typed HR inputs (special pays, meal/per-diem, days worked, ...) survive a fresh
+     * recompute instead of being discarded. */
     private PayrollEmployeeInputRequest reconstructInputRequest(PayrollLineDto line) {
         return new PayrollEmployeeInputRequest(
             line.employeeId(),
@@ -737,37 +716,9 @@ public class PayrollService {
         "ค่าประมาณการนี้คำนวณจากข้อมูลปัจจุบัน (ยอดสะสม โบนัส คอมมิชชั่น ณ วันที่ประมาณการ) "
             + "ตัวเลขจริงเมื่อประมวลผลเงินเดือนอาจเปลี่ยนแปลงได้";
 
-    /**
-     * Tax-allowance declaration plan, decision #4 ("estimated 'what this saves me'"). Runs the REAL
-     * calculator TWICE for a single employee/month — baseline (the employee's current standing
-     * declaration, exactly what {@link #preview} would resolve via {@code
-     * findTaxAllowancesByEmployee}) vs proposed (the declaration under review, not yet applied) —
-     * and reports the withholding-tax delta. Reuses the EXACT collaborators {@link #preview}
-     * assembles for every other employee ({@code findActiveEmployees} filtered to one, {@code
-     * findYearToDateByEmployee}, {@link #treatmentsFor}, {@link #ssoInclusionFor}, {@code
-     * findApprovedOvertimePayByEmployee}, {@link #commissionPayByEmployee}) so there is no second
-     * calculation path to silently disagree with a real run.
-     *
-     * <p>{@code employeeId} is supplied by the CALLER (the controller/service boundary resolves it
-     * from {@code actor.employeeId()} — see {@code TaxAllowanceDeclarationService#estimateOwn} —
-     * never from an HTTP parameter; there is no employeeId field on the estimate endpoint's request
-     * body at all). This method still requires {@code actor} to be a real authenticated employee, the
-     * same shape of guard {@link #ownPayslipPdf} uses, so it can never be called with no actor.
-     *
-     * <p>{@code input} is deliberately {@code null} for both calculations: an estimate has no
-     * per-run HR-typed corrections to layer on, only the standing declaration (baseline) or the
-     * declaration under review (proposed) — see {@link #mergeAllowances}, which returns its {@code
-     * stored} argument completely unchanged when {@code input == null}. This is exactly what makes
-     * the anti-drift pinning test hold: applying the proposed declaration and then previewing the
-     * same month for real also calls {@code calculateLine} with {@code input == null} for an
-     * employee nobody typed a per-run correction for, so the two paths merge allowances identically.
-     *
-     * <p>leaveRefundDays is fixed at zero here — deliberately narrower than {@link #preview}'s own
-     * {@code leaveRepository.findRefundableUnpaidDaysByEmployee} lookup, which needs an
-     * {@code existingPeriodId} an estimate has no reason to resolve. An estimate is advisory, not a
-     * persisted figure, and a cancel-after-close leave refund is edge-case enough that omitting it
-     * here (never silently reintroducing it wrong) is the safer choice.
-     */
+    /** Tax-allowance declaration plan, decision #4 ("estimated 'what this saves me'"). This method still requires
+     * actor to be a real authenticated employee, the same shape of guard #ownPayslipPdf uses, so it can never be
+     * called with no actor. */
     public PayrollAllowanceEstimateResult estimateAllowanceEffect(
         long employeeId, int taxYear, int effectiveMonth,
         PayrollTaxAllowanceInput proposedAllowances, UserPrincipal actor
@@ -786,9 +737,9 @@ public class PayrollService {
             return unavailableAllowanceEstimate(taxYear, effectiveMonth,
                 "ไม่พบข้อมูลพนักงานที่พร้อมประมวลผลเงินเดือนสำหรับการประมาณการนี้");
         }
-        // Failure mode (b): a daily-rate employee has no daysWorked outside a real run, so
-        // grossSalaryComponent would compute to ฿0 (see #calculateLine's dailyRatePay branch) — not
-        // a meaningful estimate. Reported honestly rather than showing a fabricated ฿0 saving.
+        // Failure mode (b): a daily-rate employee has no daysWorked outside a real run, so grossSalaryComponent would
+        // compute to ฿0 (see #calculateLine's dailyRatePay branch) — not a meaningful estimate. Reported honestly
+        // rather than showing a fabricated ฿0 saving.
         if (employee.dailyRatePay()) {
             return unavailableAllowanceEstimate(taxYear, effectiveMonth,
                 "พนักงานรายวันยังไม่มีจำนวนวันทำงานของงวดนี้ ระบบจึงไม่สามารถประมาณการผลของค่าลดหย่อนต่อภาษีได้ล่วงหน้า "
@@ -814,10 +765,8 @@ public class PayrollService {
         PayrollTaxAllowanceInput baselineAllowances = storedAllowancesByEmployee.get(employeeId);
 
         try {
-            // Welfare deliberately ZERO here: this is the tax-allowance what-if estimator, and both
-            // sides of the comparison must differ ONLY by the allowance change. Feeding real welfare
-            // in would move both figures by the same amount and change the delta the employee is
-            // shown, for a reason that has nothing to do with their allowance declaration.
+            // Welfare deliberately ZERO here: this is the tax-allowance what-if estimator, and both sides of the
+            // comparison must differ ONLY by the allowance change.
             BigDecimal welfarePay = BigDecimal.ZERO;
             PayrollLineDto baselineLine = calculateLine(employee, null, overtimePay, commissionPay, welfarePay,
                 yearToDate, baselineAllowances, BigDecimal.ZERO, payrollMonth, treatments, ssoInclusion);
@@ -830,11 +779,9 @@ public class PayrollService {
                 baselineLine.taxAllowanceTotal(), proposedLine.taxAllowanceTotal(),
                 ALLOWANCE_ESTIMATE_DISCLAIMER);
         } catch (ApiException e) {
-            // Failure mode (a): calculateClassified 409s (CONFLICT) when a non-zero non-SALARY
-            // component has no stored tax treatment anywhere for this employee/year. Caught here and
-            // reported honestly -- never synthesize a treatment just to force an estimate out. Any
-            // OTHER status (there is none today, but defensively) is a genuine error, not an
-            // unavailability, and must propagate.
+            // Failure mode (a): calculateClassified 409s (CONFLICT) when a non-zero non-SALARY component has no stored tax
+            // treatment anywhere for this employee/year. Caught here and reported honestly -- never synthesize a treatment
+            // just to force an estimate out.
             if (e.getStatus() == HttpStatus.CONFLICT) {
                 return unavailableAllowanceEstimate(taxYear, effectiveMonth,
                     "มีรายรับบางประเภทที่ยังไม่ได้กำหนดประเภทภาษีสำหรับพนักงานคนนี้ "
@@ -1067,8 +1014,8 @@ public class PayrollService {
                 continue;
             }
             if (stored != null && stored.containsKey(component)) {
-                // Present -- may be a real treatment or an explicit "not yet classified" null; HR's
-                // stored intent always wins over a synthesized default, in either direction.
+                // Present -- may be a real treatment or an explicit "not yet classified" null; HR's stored intent always wins
+                // over a synthesized default, in either direction.
                 merged.put(component, stored.get(component));
             } else {
                 merged.put(component, PayrollRepository.defaultTaxTreatment(component));
@@ -1155,10 +1102,7 @@ public class PayrollService {
                     + " กรุณาเลือกฐานก่อนประมวลผลเงินเดือน");
         }
 
-        // ลูกค้าคืนสินค้า earned/unearned flag (handoff section 6): not yet earned reduces the
-        // commission earning itself, PRE-TAX -- netted into COMMISSION_PAY here, before it ever
-        // reaches PayrollCalculator, so the calculator only ever sees a single already-net commission
-        // figure and applies the deduction a second time only for the already-earned clawback case.
+        // ลูกค้าคืนสินค้า earned/unearned flag: not yet earned reduces the commission earning itself, PRE-TAX.
         boolean customerReturnAlreadyEarned = input != null && Boolean.TRUE.equals(input.customerReturnAlreadyEarned());
         BigDecimal customerReturnDeduction = input == null ? BigDecimal.ZERO : safe(input.customerReturnDeduction());
         BigDecimal effectiveCommissionPay = commissionPay == null ? BigDecimal.ZERO : commissionPay;
@@ -1195,10 +1139,8 @@ public class PayrollService {
             ? employee.baseSalary().multiply(enteredDaysWorked == null ? BigDecimal.ZERO : enteredDaysWorked)
             : employee.baseSalary();
         // The employee's TRUE per-day rate, passed to the calculator so unpaidLeaveDeduction/
-        // leaveDeductionRefund/hourlyRate are derived from it directly instead of from
-        // grossSalaryComponent/30 (see PayrollClassifiedCalculationDtos#dailyRateOverride's own
-        // javadoc for why that division would be wrong the moment daysWorked != 30). Null for a
-        // monthly employee reproduces the pre-existing baseSalary/30 derivation exactly.
+        // leaveDeductionRefund/hourlyRate are derived from it directly instead of from grossSalaryComponent/30. Null
+        // for a monthly employee reproduces the pre-existing baseSalary/30 derivation exactly.
         BigDecimal dailyRateOverride = dailyRatePay ? employee.baseSalary() : null;
 
         List<BigDecimal> specialPays = input == null ? List.of() : input.specialPays();
@@ -1215,17 +1157,9 @@ public class PayrollService {
         componentAmounts.put(PayrollComponent.SPECIAL_PAY_9, amountAt(specialPays, 8));
         componentAmounts.put(PayrollComponent.OVERTIME_PAY, overtimePay == null ? BigDecimal.ZERO : overtimePay);
 
-        // ⚠️ DOUBLE-PAY GUARD (V128 cutover). Until this change, welfare was keyed into payroll by
-        // hand -- the welfare document §2.2 instructs exactly that ("รวบรวมข้อมูลการเบิก...ก่อนวันที่ 25
+        // ⚠️ DOUBLE-PAY GUARD (V128 cutover). Until this change, welfare was keyed into payroll by hand -- the welfare
+        // document §2.2 instructs exactly that ("รวบรวมข้อมูลการเบิก...ก่อนวันที่ 25
         // เพื่อคีย์ข้อมูลเข้าในระบบเงินเดือน"), and พิเศษ 9 (เงินรางวัล/เงินช่วยเหลืออื่นๆ) is where it went.
-        // Now that approved claims feed WELFARE_PAY automatically, a month carrying BOTH figures for
-        // the same employee pays that welfare twice.
-        //
-        // Refused loudly, naming the employee and both amounts, rather than trusting a process
-        // change to stick: this is real money leaving the company, and the failure is invisible on
-        // the payslip because both figures are legitimate-looking earnings lines. HR clears the
-        // manual พิเศษ 9 entry, or -- if the พิเศษ 9 amount is genuinely something else (it is a
-        // general เงินรางวัล slot) -- records it in another slot for this month.
         BigDecimal resolvedWelfarePay = welfarePay == null ? BigDecimal.ZERO : welfarePay;
         BigDecimal manualSpecialPay9 = amountAt(specialPays, 8);
         if (resolvedWelfarePay.signum() > 0 && manualSpecialPay9.signum() > 0) {
@@ -1244,11 +1178,9 @@ public class PayrollService {
         componentAmounts.put(PayrollComponent.BONUS_PAY, input == null ? BigDecimal.ZERO : safe(input.bonusPay()));
         componentAmounts.put(PayrollComponent.OTHER_ONE_OFF_PAY, input == null ? BigDecimal.ZERO : safe(input.otherOneOffPay()));
         componentAmounts.put(PayrollComponent.DIRECTOR_REMUNERATION, employee.directorRemuneration());
-        // The มาตรา 42 exempt slice of เบี้ยเลี้ยง joins NON_TAXABLE_INCOME rather than getting its own
-        // component: it is outside the tax base AND the ประกันสังคม wage base, which is exactly what
-        // NON_TAXABLE_INCOME already means. Giving it a component would oblige HR to classify a ป.96
-        // treatment for money that is never taxed. It stays visible as its own figure on the line and
-        // the payslip -- only the tax/SSO arithmetic pools it here.
+        // The มาตรา 42 exempt slice of เบี้ยเลี้ยง joins NON_TAXABLE_INCOME rather than getting its own component: it
+        // is outside the tax base AND the ประกันสังคม wage base, which is exactly what NON_TAXABLE_INCOME already
+        // means.
         componentAmounts.put(PayrollComponent.NON_TAXABLE_INCOME,
             input == null ? BigDecimal.ZERO : safe(input.nonTaxableIncome()).add(safe(input.perDiemExempt())));
 
@@ -1345,20 +1277,13 @@ public class PayrollService {
             calculation.otherPretaxDeduction(),
             calculation.leaveRefundDays(),
             calculation.leaveDeductionRefund(),
-            // Persist the PER-RUN typed override only (nullable). Deliberately NOT the resolved
-            // effective override: the standing employee value re-applies from the employee record every
-            // run, so storing it on the line and carrying it forward would double-apply it. When HR
-            // relied on the standing value this stays null and next month's carry-forward is empty --
-            // exactly the desired "standing keeps applying, per-run field starts blank" behaviour.
+            // Persist the PER-RUN typed override only (nullable). Deliberately NOT the resolved effective override: the
+            // standing employee value re-applies from the employee record every run, so storing it on the line and
+            // carrying it forward would double-apply it.
             perRunWithholdingOverride,
             // ป.96/2543 limbs (V92, regular/variable 2-limb): calculateLine now runs exclusively through
-            // calculateClassified (V96, regular/known/cumulative 3-limb -- see PayrollClassifiedCalculation
-            // below), which has no concept of this older 2-limb split at all. Backfilled the same way
-            // PayrollLineDto's own 40-arg legacy constructor already backfills the NEW limb fields for a
-            // caller with no limb concept: everything attributed to the regular limb (grossTaxableIncome /
-            // withholdingTax in full), nothing to the variable limb. These four columns are therefore
-            // vestigial for every line processed from this rebase forward -- kept only so historical rows
-            // written by the pre-task-2 engine still round-trip through this record's shape.
+            // calculateClassified (V96, regular/known/cumulative 3-limb -- see PayrollClassifiedCalculation below), which
+            // has no concept of this older 2-limb split at all.
             calculation.grossTaxableIncome(),
             BigDecimal.ZERO,
             calculation.withholdingTax(),
@@ -1378,10 +1303,9 @@ public class PayrollService {
             calculation.customerReturnAlreadyEarned(),
             calculation.garnishmentType().name(),
             calculation.mealAllowance(),
-            // perDiemExempt/perDiemBasis never reach the calculator: perDiemExempt is folded into
-            // NON_TAXABLE_INCOME above (it has no ป.96 treatment to classify -- see PayrollComponent's
-            // javadoc), and perDiemBasis is pure metadata with no arithmetic role at all. Both are
-            // passed straight through from the request so they are still persisted on the line.
+            // perDiemExempt/perDiemBasis never reach the calculator: perDiemExempt is folded into NON_TAXABLE_INCOME above
+            // (it has no ป.96 treatment to classify -- see PayrollComponent's javadoc), and perDiemBasis is pure metadata
+            // with no arithmetic role at all.
             input == null ? BigDecimal.ZERO : safe(input.perDiemExempt()),
             calculation.perDiemTaxable(),
             input == null || input.perDiemBasis() == null ? null : input.perDiemBasis().name(),
@@ -1398,17 +1322,16 @@ public class PayrollService {
             // survives a reload.
             enteredDaysWorked,
             employee.payType(),
-            // V123 (defect-2 fix): the uncapped SSO wage base the calculator already computed --
-            // see PayrollLineDto#ssoWageGross's own javadoc. NOT calculation.ssoWageBase(), which
-            // stays the capped figure tax/contribution math uses, unchanged.
+            // V123 (defect-2 fix): the uncapped SSO wage base the calculator already computed -- see
+            // PayrollLineDto#ssoWageGross's own javadoc. NOT calculation.ssoWageBase(), which stays the capped figure
+            // tax/contribution math uses, unchanged.
             calculation.ssoWageBaseRaw(),
             // The EXACT figure this run resolved and fed to
             // PayrollCalculator as garnishmentRequested -- see PayrollLineDto#legalExecutionRequested's
             // own javadoc for why this must be carried out here rather than re-derived later.
             resolvedLegalExecutionRequested,
-            // V128: the welfare figure this run pulled in, carried out so it persists to
-            // payroll_line.welfare_pay. Already in gross via componentAmounts above; this is what
-            // keeps the breakdown readable after the period is re-read.
+            // V128: the welfare figure this run pulled in, carried out so it persists to payroll_line.welfare_pay. Already
+            // in gross via componentAmounts above; this is what keeps the breakdown readable after the period is re-read.
             resolvedWelfarePay
         );
     }
@@ -1449,52 +1372,24 @@ public class PayrollService {
             firstNonNull(input.educationDonation(), base.educationDonation()),
             firstNonNull(input.generalDonation(), base.generalDonation()),
             firstNonNull(input.politicalDonation(), base.politicalDonation()),
-            // Head counts come from the stored ล.ย.01 declaration -- standing facts about the
-            // employee's household, recorded with evidence, not something a payroll operator retypes.
-            //
-            // EXCEPT when the run body supplies an AMOUNT the stored declaration cannot support. The
-            // amount and the count travel separately, so an employee with no stored row for whom HR
-            // types childAllowance = 60,000 would otherwise meet a cap of zero and lose the whole
-            // allowance silently. Deriving a count from the supplied amount in exactly that case is the
-            // same decision taken in PayrollTaxAllowanceInput's legacy constructor and V93's backfill:
-            // the amount is the only evidence there is, and reading it as an overstatement would delete
-            // a real declaration.
+            // Head counts come from the stored ล.ย.01 declaration -- standing facts about the employee's household,
+            // recorded with evidence, not something a payroll operator retypes. EXCEPT when the run body supplies an
+            // AMOUNT the stored declaration cannot support.
             headCountFor(base.childCount(), input.childAllowance(), "30000"),
             base.childCountDouble(),
             headCountFor(base.disabledCareCount(), input.disabledCareAllowance(), "60000"),
             base.disabilityCardHolder(),
             input.parentCareCount() != null ? input.parentCareCount() : (base.parentCareCount() == null ? 0 : base.parentCareCount()),
-            // ข้อ 9 (V137) comes from the STORED declaration only -- PayrollEmployeeInputRequest
-            // carries no providentFundAllowance field, so there is deliberately no in-run override
-            // for it. Adding one would widen the payroll-run API contract (and mockApi's mirror of
-            // it) for a figure HR can already correct through the tax-allowance editor, which writes
-            // employee_tax_allowance directly. Known limitation, not an oversight.
+            // ข้อ 9 (V137) comes from the STORED declaration only -- PayrollEmployeeInputRequest carries no
+            // providentFundAllowance field, so there is deliberately no in-run override for it. Known limitation, not an
+            // oversight.
             base.providentFundAllowance()
         );
     }
 
-    /**
-     * The head count to apply when the stored ล.ย.01 declaration has NONE and this run supplies an
-     * amount: the smallest count that would permit that amount. A stored count always wins outright.
-     *
-     * <p>Deliberately narrow, and narrowed twice. It exists for exactly one case — an employee with no
-     * stored declaration for whom HR types an allowance in the run body, who would otherwise meet a
-     * cap of zero and lose it silently. It must NOT do more than that:
-     *
-     * <ul>
-     *   <li>An earlier version took {@code max(declaredCount, impliedCount)} so a STALE count would be
-     *       raised too. Review showed that destroyed the cap entirely: the amount fell back to the
-     *       STORED figure when the run body omitted the field, so the count was raised to cover the
-     *       very amount it exists to constrain, and a ฿300,000 declaration against one child was
-     *       allowed in full. Direction of error was UNDER-withholding.</li>
-     *   <li>So a stale or too-small count now CLAMPS, and {@code PayrollCalculator#clampedAllowanceNote}
-     *       says so on the payslip. Clamp-and-warn is the correct answer to a declaration the head
-     *       count cannot support; silently raising the cap is not.</li>
-     * </ul>
-     *
-     * <p>{@code runBodyAmount} must be the request-body value ONLY, never the stored one — falling
-     * back to stored is precisely the hole described above.
-     */
+    /** The head count to apply when the stored ล.ย.01 declaration has NONE and this run supplies an amount: the
+     * smallest count that would permit that amount. It must NOT do more than that: An earlier version took
+     * max(declaredCount, impliedCount) so a STALE count would be raised too. */
     private int headCountFor(int storedCount, BigDecimal runBodyAmount, String perHead) {
         if (storedCount > 0 || runBodyAmount == null || runBodyAmount.signum() <= 0) {
             return storedCount;

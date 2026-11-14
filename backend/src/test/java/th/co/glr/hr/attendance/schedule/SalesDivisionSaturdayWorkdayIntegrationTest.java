@@ -17,22 +17,9 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage of V160 — ฝ่ายขาย moving to a six-day week (Saturday becomes a scheduled
- * working day) effective 2026-09-01.
- *
- * <p>Same technique as {@link OrgNormalizationScheduleIntegrationTest}: V160's own SQL text is read
- * verbatim from the classpath and replayed against fixture rows carrying the real production
- * source_codes ('SA', 'SATM', 'SALES', ...) that a freshly-migrated golden-template database does
- * not have — so every INSERT ... SELECT in the shipped migration no-ops at migrate time and this
- * class exercises the ACTUAL shipped statements rather than a hand-typed re-implementation.
- *
- * <p>Assertions are deliberately written wrong-way-round wherever the change could pass for the
- * wrong reason: every "Saturday is now a workday" claim is paired, on the SAME date and in the SAME
- * fixture, with something that must NOT have moved — a Saturday before the effective date, a
- * Sunday, or a non-sales division. A one-sided test here would stay green if V160 made every day a
- * workday for everybody.
- */
+/** Real-Postgres coverage of V160 — ฝ่ายขาย moving to a six-day week (Saturday becomes a scheduled working day)
+ * effective 2026-09-01. SELECT in the shipped migration no-ops at migrate time and this class exercises the
+ * ACTUAL shipped statements rather than a hand-typed re-implementation. */
 class SalesDivisionSaturdayWorkdayIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** The date the owner request was actually about: a ทีมขาย employee could not file leave for it. */
@@ -66,8 +53,8 @@ class SalesDivisionSaturdayWorkdayIntegrationTest extends AbstractPostgresIntegr
         long salesDivision = insertDivision("SA", "ฝ่ายขาย (test)");
         long salesTeam = insertDepartment("SATM", "ทีมขาย (test)", salesDivision);
         long employee = insertEmployee("SATM-1", salesDivision, salesTeam);
-        // V117's shape: DIVISION 'SA' and DEPARTMENT 'SATM' both on SALES_5D. Seeded by hand because
-        // V115/V117's own INSERTs no-op on a golden-template DB that has no 'SA' division.
+        // V117's shape: DIVISION 'SA' and DEPARTMENT 'SATM' both on SALES_5D. Seeded by hand because V115/V117's own
+        // INSERTs no-op on a golden-template DB that has no 'SA' division.
         assignDivision(salesDivision, "SALES_5D", ANNOUNCEMENT_2567, null);
         assignDepartment(salesTeam, "SALES_5D", ANNOUNCEMENT_2567, null);
 
@@ -103,8 +90,8 @@ class SalesDivisionSaturdayWorkdayIntegrationTest extends AbstractPostgresIntegr
         assignDivision(salesDivision, "SALES_5D", ANNOUNCEMENT_2567, null);
         assignDepartment(salesSupport1, "OFFICE_5D", ANNOUNCEMENT_2567, null);
 
-        // A five-day division V160 must not touch, resolved on the SAME Saturday. Without this the
-        // test would still pass if V160 dropped the source_code filter and moved every scope.
+        // A five-day division V160 must not touch, resolved on the SAME Saturday. Without this the test would still
+        // pass if V160 dropped the source_code filter and moved every scope.
         long hrDivision = insertDivision("HR", "HR-ฝ่ายบุคคล (test)");
         long hrEmployee = insertEmployee("HR-1", hrDivision, null);
         assignDivision(hrDivision, "OFFICE_5D", ANNOUNCEMENT_2567, null);
@@ -128,8 +115,8 @@ class SalesDivisionSaturdayWorkdayIntegrationTest extends AbstractPostgresIntegr
     @Test
     void aSalesDepartmentWithNoDepartmentRowInheritsSaturdayFromTheDivisionTier() {
         long salesDivision = insertDivision("SA", "ฝ่ายขาย (test)");
-        // ออกแบบ has no DEPARTMENT-scope assignment in prod, so it resolves through DIVISION 'SA'.
-        // This is the case the division-tier row in Part C exists for.
+        // ออกแบบ has no DEPARTMENT-scope assignment in prod, so it resolves through DIVISION 'SA'. This is the case
+        // the division-tier row in Part C exists for.
         long designDept = insertDepartment("SADS", "ออกแบบ (test)", salesDivision);
         long designer = insertEmployee("SADS-1", salesDivision, designDept);
         assignDivision(salesDivision, "SALES_5D", ANNOUNCEMENT_2567, null);
@@ -148,9 +135,9 @@ class SalesDivisionSaturdayWorkdayIntegrationTest extends AbstractPostgresIntegr
 
     @Test
     void theBlockedLeaveDateNowCountsAsAWorkingDayThroughLeaveRepositorysOwnPredicate() {
-        // The user-facing outcome, asserted through the exact collaborator LeaveService#submit uses:
-        // LeaveService rejects a range whose working-day count is zero
-        // ("ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน"), and a lone Saturday counted zero under SALES_5D.
+        // The user-facing outcome, asserted through the exact collaborator LeaveService#submit uses: LeaveService
+        // rejects a range whose working-day count is zero ("ช่วงวันลาต้องมีวันทำงานอย่างน้อย 1 วัน"), and a lone
+        // Saturday counted zero under SALES_5D.
         long salesDivision = insertDivision("SA", "ฝ่ายขาย (test)");
         long salesTeam = insertDepartment("SATM", "ทีมขาย (test)", salesDivision);
         long employee = insertEmployee("SATM-LEAVE", salesDivision, salesTeam);
@@ -183,11 +170,8 @@ class SalesDivisionSaturdayWorkdayIntegrationTest extends AbstractPostgresIntegr
 
     @Test
     void replayingTheMigrationIsANoOp_becauseProductionGetsTheseRowsByHandFirst() {
-        // V160's rows were applied to prod by hand on 2026-09-01 (the Render backend does not
-        // auto-deploy), so Flyway will replay this file over a database that already has them. Every
-        // statement is written to be a no-op in that case; this test is what proves it, because a
-        // duplicate assignment row would not error — it would quietly create an overlapping
-        // last-write-wins pair that TieredWorkScheduleResolver resolves by SQL ORDER BY.
+        // V160's rows were applied to prod by hand on 2026-09-01 (the Render backend does not auto-deploy), so Flyway
+        // will replay this file over a database that already has them.
         long salesDivision = insertDivision("SA", "ฝ่ายขาย (test)");
         long salesTeam = insertDepartment("SATM", "ทีมขาย (test)", salesDivision);
         long salesSupport1 = insertDepartment("SALES", "ฝ่ายสนับสนุนการขาย 1 (test)", salesDivision);
@@ -223,11 +207,8 @@ class SalesDivisionSaturdayWorkdayIntegrationTest extends AbstractPostgresIntegr
 
     // --- helpers --------------------------------------------------------------------------------
 
-    /**
-     * Strips {@code --} line comments, then splits on {@code ;}. V160 contains no {@code $$} block,
-     * so the dollar-quote handling {@link OrgNormalizationScheduleIntegrationTest} needs for V121 is
-     * not repeated here.
-     */
+    /** Strips -- line comments, then splits on ;. V160 contains no $$ block, so the dollar-quote handling
+     * OrgNormalizationScheduleIntegrationTest needs for V121 is not repeated here. */
     private void executeStatements(String sql) {
         StringBuilder withoutComments = new StringBuilder();
         for (String line : sql.split("\n")) {

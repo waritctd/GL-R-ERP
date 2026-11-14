@@ -8,9 +8,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-// Locks in that ticket-event notifications land in hr.notification (the table the notification bell
-// and dashboard unread-count now read from) rather than the legacy sales.notification table, which
-// nothing reads anymore. See docs/agent-handoffs/34_feat-notification-email-backbone.md.
+// Locks in that ticket-event notifications land in hr.notification (the table the notification bell and
+// dashboard unread-count now read from) rather than the legacy sales.notification table, which nothing reads
+// anymore. See docs/agent-handoffs/34_feat-notification-email-backbone.md.
 class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private NotificationRepository repository;
 
@@ -52,12 +52,9 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(countLegacySalesNotifications()).isZero();
     }
 
-    // Review-remediation plan Commit D: PricingRequestService.submit() used to
-    // notify with type "SUBMITTED", identical to TicketEventKind.SUBMITTED — a
-    // pricing-request notification was indistinguishable from a ticket-submitted
-    // one. It now notifies as "PRICING_REQUEST_SUBMITTED" with its own title,
-    // and "PICKED_UP" (used by pickup()) gained a title of its own instead of
-    // falling through to the generic "อัปเดตสถานะคำขอราคา".
+    // Review-remediation plan Commit D: PricingRequestService.submit() used to notify with type "SUBMITTED",
+    // identical to TicketEventKind.SUBMITTED — a pricing-request notification was indistinguishable from a
+    // ticket-submitted one.
     @Test
     void pricingRequestSubmittedAndPickedUpGetTheirOwnTitles() {
         long importDivision = insertDivision("PCIM", "Import");
@@ -79,9 +76,9 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(salesRows.get(0).title()).isEqualTo("คำขอราคาถูกรับเรื่องแล้ว");
     }
 
-    // mail-copy wording fix: name is now FIRST NAME ONLY (was CONCAT_WS(first, last) before this
-    // change) -- it feeds only the "เรียน คุณ<name>," greeting, and a Thai greeting addresses someone
-    // by first name after คุณ, not by full name. See EmailRecipient's Javadoc.
+    // mail-copy wording fix: name is now FIRST NAME ONLY (was CONCAT_WS(first, last) before this change) -- it
+    // feeds only the "เรียน คุณ<name>," greeting, and a Thai greeting addresses someone by first name after คุณ,
+    // not by full name. See EmailRecipient's Javadoc.
     @Test
     void findEmployeeRecipientResolvesTheAddressAndTheFirstNameOnlyForTheGreeting() {
         long divisionId = insertDivision("SA", "Sales2");
@@ -95,12 +92,8 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(recipient.get().name()).isEqualTo("สมชาย");
     }
 
-    // Flipped from the old findEmployeeEmailIsEmptyWhenTheEmployeeHasAnEmptyStringEmailOnFile, which
-    // pinned the PRE-fix contract (empty Optional whenever the address was blank/missing). The
-    // employee row exists, so the new contract returns it present - but the email must still
-    // normalise from "" to null (not stay ""), since that null/non-null distinction is exactly what
-    // NotificationEmailService.send()'s isBlank() check relies on to decide whether app.mail
-    // .override-to is rescuing an addressless employee.
+    // Flipped from the old findEmployeeEmailIsEmptyWhenTheEmployeeHasAnEmptyStringEmailOnFile, which pinned the
+    // PRE-fix contract (empty Optional whenever the address was blank/missing).
     @Test
     void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasAnEmptyStringEmailOnFile() {
         long divisionId = insertDivision("SA", "Sales3");
@@ -113,12 +106,8 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(recipient.get().name()).isEqualTo("สมหญิง");
     }
 
-    // hr.employee.email is a nullable VARCHAR(255) - a real SQL NULL (as opposed to an empty
-    // string) is reachable in production and must pass through the same
-    // NULLIF(BTRIM(...), '') as the empty-string case above. Map.of() rejects null values, so this
-    // needs its own insert rather than reusing insertEmployeeWithNameAndEmail's "" coercion.
-    // Flipped from findEmployeeEmailIsEmptyWhenTheEmployeeHasATrueSqlNullEmail for the same reason as
-    // the empty-string case above.
+    // hr.employee.email is a nullable VARCHAR(255) - a real SQL NULL (as opposed to an empty string) is reachable
+    // in production and must pass through the same NULLIF(BTRIM(...), '') as the empty-string case above.
     @Test
     void findEmployeeRecipientIsPresentWithNullEmailWhenTheEmployeeHasATrueSqlNullEmail() {
         long divisionId = insertDivision("SA", "Sales4");
@@ -137,25 +126,16 @@ class NotificationRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(recipient.get().name()).isEqualTo("สมหญิง");
     }
 
-    // The only case left that returns empty under the new contract: no employee row at all. Had no
-    // coverage before this fix - the old findEmployeeEmail() conflated "no employee" with "no
-    // address" into the same empty Optional, so nothing distinguished them.
+    // The only case left that returns empty under the new contract: no employee row at all. Had no coverage before
+    // this fix - the old findEmployeeEmail() conflated "no employee" with "no address" into the same empty
+    // Optional, so nothing distinguished them.
     @Test
     void findEmployeeRecipientIsEmptyWhenTheEmployeeDoesNotExist() {
         assertThat(repository.findEmployeeRecipient(999_999_999L)).isEmpty();
     }
 
-    /**
-     * {@code sales_manager} is the one role here that is not a whole ฝ่าย: it is a strict SUBSET of
-     * {@code sales}, narrowed by position. Both directions are asserted, because getting either
-     * wrong is silent — too wide and a rep is told to supervise themselves
-     * ({@code TicketService.reserveStock}), too narrow and nobody is told anything.
-     *
-     * <p>The NULL-position rep is also the regression guard for the {@code LEFT JOIN hr.position}
-     * this branch needed: an inner join would have silently dropped every employee without a
-     * position from the three division-only branches, so this asserts they still receive
-     * {@code "sales"}.
-     */
+    /** sales_manager is the one role here that is not a whole ฝ่าย: it is a strict SUBSET of sales, narrowed by
+     * position. */
     @Test
     void notifyByRoleSalesManagerSelectsOnlyManagersWithinSalesAndNooneElse() {
         long salesDivision = insertDivision("SA", "ฝ่ายขาย");

@@ -97,8 +97,8 @@ describe('EmployeeDetailPage — ล.ย.01 section', () => {
     fireEvent.click(await screen.findByRole('button', { name: /ข้อมูลอ่อนไหว/ }));
 
     expect(await screen.findByText('ค่าลดหย่อนภาษี (ล.ย.01)')).not.toBeNull();
-    // The status comes from the shared taxAllowanceStatus helper, so this asserts the drill-down
-    // actually rendered rather than just the section heading.
+    // The status comes from the shared taxAllowanceStatus helper, so this asserts the drill-down actually rendered
+    // rather than just the section heading.
     expect(await screen.findByText(/ใช้กับเงินเดือนแล้ว ตั้งแต่เดือน 4/)).not.toBeNull();
   });
 
@@ -112,8 +112,8 @@ describe('EmployeeDetailPage — ล.ย.01 section', () => {
   });
 
   it('hides the whole sensitive tab — and with it ล.ย.01 — without canViewSensitiveEmployeeData', async () => {
-    // Component-level gating only: /employees/:id is already hr-only at the route
-    // (canViewEmployees), so this asserts the tab branch, not a route guard.
+    // Component-level gating only: /employees/:id is already hr-only at the route (canViewEmployees), so this
+    // asserts the tab branch, not a route guard.
     renderDetail({ role: 'employee', employeeId: 9 });
     // The name also appears in the breadcrumb, so anchor on the hero heading specifically.
     await screen.findByRole('heading', { name: 'สมชาย ใจดี' });
@@ -135,15 +135,15 @@ describe('EmployeeDetailPage — ตั้งรหัสผ่านชั่�
     api.employees.resetPassword.mockResolvedValue({ temporaryPassword: TEMP_PASSWORD });
   });
 
-  // The overflow item is role="menuitem" (OverflowMenu), while ConfirmDialog's confirm control is a
-  // real button carrying the same Thai label — so the roles are what keep the two apart here.
+  // The overflow item is role="menuitem" (OverflowMenu), while ConfirmDialog's confirm control is a real button
+  // carrying the same Thai label — so the roles are what keep the two apart here.
   async function openResetMenu() {
     fireEvent.click(await screen.findByRole('button', { name: /การดำเนินการเพิ่มเติม/ }));
     return screen.findByRole('menuitem', { name: 'ตั้งรหัสผ่านชั่วคราว' });
   }
 
-  // The control is HR-only client-side; EmployeeController#resetPassword is the enforcing gate.
-  // Written wrong-way-round: the case that matters is that a non-HR viewer is NOT offered it.
+  // The control is HR-only client-side; EmployeeController#resetPassword is the enforcing gate. Written
+  // wrong-way-round: the case that matters is that a non-HR viewer is NOT offered it.
   it.each(['employee', 'ceo', 'sales'])('does not offer the control to role=%s', async (role) => {
     renderDetail({ role, employeeId: 9 });
     await screen.findByRole('heading', { name: 'สมชาย ใจดี' });

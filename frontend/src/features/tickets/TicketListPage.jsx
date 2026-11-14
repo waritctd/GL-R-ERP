@@ -31,13 +31,12 @@ import {
 import { routeName } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
-// Same selector Modal.jsx traps on — kept identical so the two overlay
-// surfaces agree on what "focusable" means.
+// Same selector Modal.jsx traps on — kept identical so the two overlay surfaces agree on what "focusable"
+// means.
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
-// Role-scoped views, Phase A: roles whose list page distinguishes "my
-// worklist" from "every deal I may read" — everyone else (sales already only
-// ever receives its own deals from the API; ceo/sales_manager are oversight
+// Role-scoped views, Phase A: roles whose list page distinguishes "my worklist" from "every deal I may read" —
+// everyone else (sales already only ever receives its own deals from the API; ceo/sales_manager are oversight
 // and want the full list) has no such distinction, so no toggle is shown.
 const WORKLIST_ROLES = new Set(['import', 'account']);
 
@@ -108,14 +107,14 @@ function worklistReason(role, deal, catalog = EMPTY_STAGE_CATALOG) {
   return null;
 }
 
-// Thai phase names. The phase ID LIST is the backend catalog's (see stageCatalog.js); only the
-// wording is ours. Kept in step with DealStageStepper's own PHASE_NAME by the design system, not by
-// a shared constant — these are two different renderings of the same five words.
+// Thai phase names. The phase ID LIST is the backend catalog's (see stageCatalog.js); only the wording is
+// ours. Kept in step with DealStageStepper's own PHASE_NAME by the design system, not by a shared constant —
+// these are two different renderings of the same five words.
 const PHASE_NAME = { 1: 'การเข้าถึงโครงการ', 2: 'งานสเปค', 3: 'ประมูลและเจรจา', 4: 'คำสั่งซื้อและนำเข้า', 5: 'ส่งมอบและปิดงาน' };
 const phaseName = (id) => PHASE_NAME[id] ?? `เฟส ${id}`;
 
-// Per-phase dot accents. Static class map — Tailwind's scanner needs the full
-// class names in source, so no `bg-phase-${id}` interpolation.
+// Per-phase dot accents. Static class map — Tailwind's scanner needs the full class names in source, so no
+// `bg-phase-${id}` interpolation.
 const PHASE_STYLES = {
   1: { dot: 'bg-phase-1' },
   2: { dot: 'bg-phase-2' },
@@ -133,23 +132,17 @@ const LIFECYCLE_FILTERS = [
   { value: 'CANCELLED', label: dealLifecycleLabel('CANCELLED').label, tone: dealLifecycleLabel('CANCELLED').tone },
   { value: 'COMPLETED', label: dealLifecycleLabel('COMPLETED').label, tone: dealLifecycleLabel('COMPLETED').tone },
 ];
-// Statuses meaning "goods are in and delivery hasn't started" — deliberately a two-item SUBSET of
-// importActions.js's three-item delivery-ready list (DELIVERY_READY_FULFILMENT_STATUSES also
-// includes PARTIALLY_DELIVERED), not a reuse of that constant: PARTIALLY_DELIVERED already has its
-// own 'partial_delivery' flag below, and folding it into this one too would make the two filters
-// overlap instead of the crisp, non-overlapping pair this is meant to be. Not imported from
-// importActions.js either way — that list is module-private there, and this is a narrower,
-// page-local grouping for the list filter, not the fulfilment-chain decision itself.
+// Statuses meaning "goods are in and delivery hasn't started". Not imported from importActions.js either way —
+// that list is module-private there, and this is a narrower, page-local grouping for the list filter, not the
+// fulfilment-chain decision itself.
 const AWAITING_DELIVERY_STATUSES = ['GOODS_RECEIVED', 'FROM_STOCK'];
 const FLAG_FILTERS = [
   { value: 'overdue', label: overdueBadgeLabel(true).label, tone: overdueBadgeLabel(true).tone },
   {
     value: 'awaiting_delivery',
-    // 'รอส่งมอบ' is a literal label, not fulfilmentStatusLabel(...).label — that helper labels ONE
-    // status ('สินค้าถึงโกดังแล้ว' / 'สินค้าจากสต็อก'), but this filter groups TWO statuses under one
-    // "awaiting delivery" flag, so no single call to it produces the right words. The TONE is still
-    // borrowed from it ('success', shared by both matched statuses) for consistency with how
-    // GOODS_RECEIVED/FROM_STOCK already read everywhere else on this page.
+    // 'รอส่งมอบ' is a literal label, not fulfilmentStatusLabel(...).label — that helper labels ONE status
+    // ('สินค้าถึงโกดังแล้ว' / 'สินค้าจากสต็อก'), but this filter groups TWO statuses under one "awaiting delivery"
+    // flag, so no single call to it produces the right words.
     label: 'รอส่งมอบ',
     tone: fulfilmentStatusLabel('GOODS_RECEIVED').tone,
   },
@@ -207,15 +200,9 @@ function TrackingBadges({ deal }) {
   );
 }
 
-/**
- * Groups every deal the viewer may see into the three buckets that replace a
- * rep's weekly Excel report: won (stage ≥ ORDER_RECEIVED, still ACTIVE),
- * expected (ACTIVE, pre-order — the win-weighted forecast), and lost
- * (CLOSED_LOST). Paused (ON_HOLD/DORMANT) and terminal-but-not-lost
- * (CANCELLED/COMPLETED) deals are deliberately excluded from all three: they
- * are neither a live forecast nor a definitive loss, so folding them into
- * either bucket would misstate it.
- */
+/** Groups every deal the viewer may see into the three buckets that replace a rep's weekly Excel report: won
+ * (stage ≥ ORDER_RECEIVED, still ACTIVE), expected (ACTIVE, pre-order — the win-weighted forecast), and lost
+ * (CLOSED_LOST). */
 function groupDealsForPipeline(deals, catalog) {
   const won = [];
   const expected = [];
@@ -225,8 +212,8 @@ function groupDealsForPipeline(deals, catalog) {
     if (deal.lifecycle !== 'ACTIVE') continue;
     const idx = stageIndexIn(catalog, deal.salesStage);
     const orderReceivedIdx = stageIndexIn(catalog, 'ORDER_RECEIVED');
-    // orderReceivedIdx is -1 until the catalog loads; without the guard every deal would count as
-    // "won" for a frame, which would misstate the forecast on screen.
+    // orderReceivedIdx is -1 until the catalog loads; without the guard every deal would count as "won" for a
+    // frame, which would misstate the forecast on screen.
     (orderReceivedIdx >= 0 && idx >= orderReceivedIdx ? won : expected).push(deal);
   }
   const sumValue = (list) => list.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0);
@@ -283,12 +270,7 @@ function TeamPipelineSummary({ groups }) {
   );
 }
 
-// `showTracking` (sales_manager/ceo only) renders the "เงียบ" stale badge
-// here rather than in `ProgressCell`. It lives in the `stage` column, not
-// `progress`, specifically because the tablet band (721–1040px, see
-// styles.css) hides the `progress` column to fit the row — the stale flag
-// would otherwise silently disappear for a manager at that width even
-// though nothing about it stopped being true.
+// `showTracking` (sales_manager/ceo only) renders the "เงียบ" stale badge here rather than in `ProgressCell`.
 function WorkStageCell({ deal, role, catalog, showTracking = false }) {
   const reason = worklistReason(role, deal, catalog);
   return (
@@ -348,9 +330,9 @@ function ProgressCell({ deal, catalog }) {
   );
 }
 
-// NOTE: 'lost' keys on lifecycle, never on lostReason. Since V57 the reason
-// SURVIVES a reopen, so a live reopened deal still carries one — testing the
-// reason would render it as เสียงาน and drop it out of the phase counts.
+// NOTE: 'lost' keys on lifecycle, never on lostReason. Since V57 the reason SURVIVES a reopen, so a live
+// reopened deal still carries one — testing the reason would render it as เสียงาน and drop it out of the phase
+// counts.
 function DealStageCell({ deal, catalog }) {
   if (deal.lifecycle === 'CLOSED_LOST') {
     const lost = dealLostReasonLabel(deal.lostReason);
@@ -445,11 +427,8 @@ function DealCard({ deal, catalog, reason = null, showTracking = false, onOpen }
   );
 }
 
-/**
- * Account's money-worklist card: leads with the amount and the specific
- * pending money action instead of the pipeline stage (account doesn't act on
- * the pipeline stage directly — it acts on a payment).
- */
+/** Account's money-worklist card: leads with the amount and the specific pending money action instead of the
+ * pipeline stage (account doesn't act on the pipeline stage directly — it acts on a payment). */
 function MoneyWorklistCard({ deal, onOpen }) {
   const reason = worklistReason('account', deal);
   return (
@@ -551,9 +530,8 @@ export function TicketListPage({ user, showToast }) {
   const phaseFilter = searchParams.get('phase') ?? '';
   const lifecycleFilter = searchParams.get('life') ?? '';
   const flagFilter = searchParams.get('flag') ?? '';
-  // Role-scoped views, Phase A: import/account default to their own worklist
-  // (dealInScope) — ?inbox=0 opts back into every deal the role may read.
-  // sales/ceo/sales_manager have no such distinction (see WORKLIST_ROLES).
+  // Role-scoped views, Phase A: import/account default to their own worklist (dealInScope) — ?inbox=0 opts back
+  // into every deal the role may read. sales/ceo/sales_manager have no such distinction (see WORKLIST_ROLES).
   const hasWorklistDistinction = WORKLIST_ROLES.has(user.role);
   const inboxOnly = hasWorklistDistinction && searchParams.get('inbox') !== '0';
   const searchText = searchParams.get('q') ?? '';
@@ -576,9 +554,9 @@ export function TicketListPage({ user, showToast }) {
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
-  // The pipeline's shape (stage order, phases, gates), fetched once from GET /api/meta/deal-stages.
-  // Deliberately NOT folded into `loading` below: the deal list must still render if the
-  // enumeration is slow. Every lookup over it is written to answer safely for the empty catalog.
+  // The pipeline's shape (stage order, phases, gates), fetched once from GET /api/meta/deal-stages. Deliberately
+  // NOT folded into `loading` below: the deal list must still render if the enumeration is slow. Every lookup
+  // over it is written to answer safely for the empty catalog.
   const { catalog: stageCatalog } = useStageCatalog();
 
   const ticketsQuery = useQuery({
@@ -596,8 +574,8 @@ export function TicketListPage({ user, showToast }) {
     if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketsQuery.error, showToast]);
 
-  // Phase strip doubles as a compact filter — never a 14-stage tab bar.
-  // Lifecycle buckets live in the additional filters below, so phase counts stay active-only.
+  // Phase strip doubles as a compact filter — never a 14-stage tab bar. Lifecycle buckets live in the additional
+  // filters below, so phase counts stay active-only.
   const phaseCounts = useMemo(() => {
     const counts = {};
     for (const phaseId of stageCatalog.phases) counts[phaseId] = 0;
@@ -650,9 +628,9 @@ export function TicketListPage({ user, showToast }) {
   const deals = useMemo(() => {
     return allDeals.filter((deal) => {
       const lost = deal.lifecycle === 'CLOSED_LOST';
-      // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase
-      // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
-      // chips below. This keeps each phase card's count equal to the rows it filters to.
+      // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase filter matches on ACTIVE
+      // too — paused/terminal deals are reached via the lifecycle chips below. This keeps each phase card's count
+      // equal to the rows it filters to.
       const phaseOk = !phaseFilter
         || (deal.lifecycle === 'ACTIVE' && findStage(stageCatalog, deal.salesStage)?.phase === Number(phaseFilter));
       const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
@@ -676,11 +654,8 @@ export function TicketListPage({ user, showToast }) {
   const isMobile = useIsMobile();
   const mobileSheetOpen = showMoreFilters && isMobile;
 
-  // A lifecycle/flag filter becoming active reveals the sheet, so a deep link
-  // or an external filter change is never silently applied behind a closed
-  // panel. Toggling a chip from inside the sheet is a no-op here (already
-  // open), and closing the sheet by hand does not re-trigger this — the effect
-  // only fires on the false -> true transition.
+  // A lifecycle/flag filter becoming active reveals the sheet, so a deep link or an external filter change is
+  // never silently applied behind a closed panel.
   useEffect(() => {
     if (hasActiveMoreFilters) setMoreFiltersOpen(true);
   }, [hasActiveMoreFilters]);
@@ -781,9 +756,8 @@ export function TicketListPage({ user, showToast }) {
     restoreFocus(() => filterToggleRef.current?.focus());
   }, []);
 
-  // Escape closes the sheet at every width; Tab is only trapped when the sheet
-  // is the mobile modal. Mirrors the keyboard contract of Modal.jsx so the two
-  // overlay surfaces behave identically for a keyboard user.
+  // Escape closes the sheet at every width; Tab is only trapped when the sheet is the mobile modal. Mirrors the
+  // keyboard contract of Modal.jsx so the two overlay surfaces behave identically for a keyboard user.
   useEffect(() => {
     if (!showMoreFilters) return undefined;
 
@@ -799,9 +773,8 @@ export function TicketListPage({ user, showToast }) {
       if (items.length === 0) return;
       const first = items[0];
       const last = items[items.length - 1];
-      // Focus that has escaped the sheet (or never entered it) is pulled back
-      // in. `inert` already does this in browsers that support it; this keeps
-      // the trap correct where it does not.
+      // Focus that has escaped the sheet (or never entered it) is pulled back in. `inert` already does this in
+      // browsers that support it; this keeps the trap correct where it does not.
       if (!sheet?.contains(document.activeElement)) {
         event.preventDefault();
         first.focus();
@@ -820,8 +793,8 @@ export function TicketListPage({ user, showToast }) {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [showMoreFilters, mobileSheetOpen, closeMoreFilters]);
 
-  // Opening the modal sheet moves focus into it. Focus is restored to the
-  // toggle by closeMoreFilters, which every dismissal path routes through.
+  // Opening the modal sheet moves focus into it. Focus is restored to the toggle by closeMoreFilters, which
+  // every dismissal path routes through.
   useEffect(() => {
     if (!mobileSheetOpen) return;
     const sheet = filterSheetRef.current;
@@ -835,9 +808,8 @@ export function TicketListPage({ user, showToast }) {
       setCreating(false);
       showToast('success', 'สร้างดีลเรียบร้อย');
       invalidateTicketsList();
-      // Commit 6: a new deal starts as an empty DRAFT with no price-request
-      // flow of its own any more (see TicketService.create, commit 5) — land
-      // the user straight on the deal page, where PricingRequestPanel prompts
+      // Commit 6: a new deal starts as an empty DRAFT with no price-request flow of its own any more (see
+      // TicketService.create, commit 5) — land the user straight on the deal page, where PricingRequestPanel prompts
       // them to create the pricing request that actually starts pricing.
       const newTicketId = response?.ticket?.summary?.id;
       if (newTicketId != null) navigate(`/tickets/${newTicketId}`);
@@ -848,9 +820,8 @@ export function TicketListPage({ user, showToast }) {
     await createMutation.mutateAsync(payload);
   }
 
-  // The modal sheet is portalled to <body> so the page root itself can be
-  // marked inert while it is open — an ancestor cannot inert its own overlay.
-  // On desktop the sheet must stay in the page's normal flow (it is a
+  // The modal sheet is portalled to <body> so the page root itself can be marked inert while it is open — an
+  // ancestor cannot inert its own overlay. On desktop the sheet must stay in the page's normal flow (it is a
   // `.page-stack` child), so it renders in place there.
   function renderFilterSheet(sheet) {
     return mobileSheetOpen ? createPortal(sheet, document.body) : sheet;
@@ -987,9 +958,8 @@ export function TicketListPage({ user, showToast }) {
             ref={filterSheetRef}
             className="ticket-filter-sheet"
             aria-label="ตัวกรองเพิ่มเติม"
-            // Only the mobile bottom sheet is a modal dialog. On desktop the
-            // same node stays an inline labelled region, so announcing it as a
-            // dialog there would be a lie to a screen reader.
+            // Only the mobile bottom sheet is a modal dialog. On desktop the same node stays an inline labelled region, so
+            // announcing it as a dialog there would be a lie to a screen reader.
             role={mobileSheetOpen ? 'dialog' : 'region'}
             aria-modal={mobileSheetOpen ? 'true' : undefined}
             tabIndex={mobileSheetOpen ? -1 : undefined}

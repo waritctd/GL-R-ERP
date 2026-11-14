@@ -4,8 +4,8 @@ export const API_ROUTES = {
     logout: '/api/auth/logout',
     me: '/api/auth/me',
     changePassword: '/api/auth/change-password',
-    // Self-service "forgot password" (ลืมรหัสผ่าน). Both anonymous - no session exists yet when
-    // either is called. Mirrors AuthController#forgotPassword / #resetPassword.
+    // Self-service "forgot password" (ลืมรหัสผ่าน). Both anonymous - no session exists yet when either is called.
+    // Mirrors AuthController#forgotPassword / #resetPassword.
     forgotPassword: '/api/auth/forgot-password',
     resetPassword: '/api/auth/reset-password',
   },
@@ -27,10 +27,8 @@ export const API_ROUTES = {
     detail: (id) => `/api/employees/${id}`,
     // HR-only temporary-password issue. Mirrors EmployeeController#resetPassword.
     resetPassword: (id) => `/api/employees/${id}/reset-password`,
-    // Quotation v2's approver signature image (hr.employee_signature, V166) — self/ceo/admin
-    // write, everyone who may view the employee reads. Mirrors EmployeeSignatureController. `id`
-    // is the EMPLOYEE id (the signature is keyed to hr.employee, not the login account) — see
-    // QUOTATION-V2-PLAN.md's Data section.
+    // Quotation v2's approver signature image (hr.employee_signature, V166) — self/ceo/admin write, everyone who
+    // may view the employee reads. Mirrors EmployeeSignatureController.
     signature: (id) => `/api/employees/${id}/signature`,
   },
   profileRequests: {
@@ -49,9 +47,9 @@ export const API_ROUTES = {
     cardsBackfill: '/api/attendance/cards/backfill',
     importDat: '/api/attendance/imports/dat',
     devices: '/api/attendance/devices',
-    // HR monthly attendance summary export (xlsx) -- mirrors AttendanceController's
-    // GET /monthly-summary.xlsx exactly. No top-level role gate: AttendanceService.resolveScope
-    // (the same scope `daily` above already honours) decides what lands in the file.
+    // HR monthly attendance summary export (xlsx) -- mirrors AttendanceController's GET /monthly-summary.xlsx
+    // exactly. No top-level role gate: AttendanceService.resolveScope (the same scope `daily` above already
+    // honours) decides what lands in the file.
     monthlySummary: '/api/attendance/monthly-summary.xlsx',
   },
   holidays: {
@@ -116,20 +114,15 @@ export const API_ROUTES = {
     // Leave-request composer: dry-run gate-chain preview, writes nothing. See LeaveService#preview
     // for the FULL vs QUICK depth and nullable-dates contract.
     preview: '/api/leave/preview',
-    // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF the "กฎการลา" tab links to. Same
-    // path serves both GET (download) and HEAD (LeavePolicyBar.jsx's availability probe) -- see
+    // Leave-surface IA rebuild, Phase A3: the §5 announcement PDF the "กฎการลา" tab links to. Same path serves
+    // both GET (download) and HEAD (LeavePolicyBar.jsx's availability probe) -- see
     // LeaveController#policyDocument's Javadoc.
     policyDocument: '/api/leave/policy-document',
-    // Phase A4: the medical-certificate/leave-attachment download an approver (or the owning
-    // employee) opens from ReviewQueueTab.jsx / MyLeaveTab.jsx's expanded row. Mirrors
-    // specialMoney.attachmentDownload's naming above — same "attachment id, not request id"
-    // shape as LeaveController#downloadAttachment (GET /api/leave/attachments/{attachmentId}).
+    // Phase A4: the medical-certificate/leave-attachment download an approver (or the owning employee) opens from
+    // ReviewQueueTab.jsx / MyLeaveTab.jsx's expanded row.
     attachmentDownload: (attachmentId) => `/api/leave/attachments/${attachmentId}`,
-    // Leave-request composer, Phase C (#leave-calendar-context): the caller's OWN holiday +
-    // resolved work-schedule context for a date range, so step 2 can show which days in the
-    // selected range are non-working. Self-scoped only (no employeeId param) -- see
-    // LeaveController#calendarContext's Javadoc for why this is deliberately not
-    // HolidayController/WorkScheduleController (both stay hr/ceo-gated, untouched).
+    // Leave-request composer, Phase C (#leave-calendar-context): the caller's OWN holiday + resolved work-schedule
+    // context for a date range, so step 2 can show which days in the selected range are non-working.
     calendarContext: '/api/leave/calendar-context',
     // Printable leave-records report (รายงานสรุปใบลางาน): an employee's own history for a year/optional
     // month, or a manager's ONE grouped PDF for every direct report. Neither takes an employeeId:
@@ -152,8 +145,8 @@ export const API_ROUTES = {
     deliveries: (id) => `/api/tickets/${id}/deliveries`,
     reserveStock: (id) => `/api/tickets/${id}/reserve-stock`,
     procurementSource: (id) => `/api/tickets/${id}/procurement-source`,
-    // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
-    // reserveStock above.
+    // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to reserveStock
+    // above.
     itemWeightMultipliers: (id) => `/api/tickets/${id}/item-weight-multipliers`,
     completeDelivery: (id) => `/api/tickets/${id}/deliveries/complete`,
     action: (id, action) => `/api/tickets/${id}/${action}`,
@@ -225,14 +218,14 @@ export const API_ROUTES = {
     leadTime: (id) => `/api/import-requests/${id}/lead-time`,
     emailDraft: (id) => `/api/import-requests/${id}/email-draft`,
     markEmailSent: (id) => `/api/import-requests/${id}/mark-email-sent`,
-    // `copy`: 'factory' downloads the factory copy (no customer/project/deposit date); anything
-    // else (including omitted) downloads the internal copy. See ImportRequestController#storedFile.
+    // `copy`: 'factory' downloads the factory copy (no customer/project/deposit date); anything else (including
+    // omitted) downloads the internal copy. See ImportRequestController#storedFile.
     file: (id, copy) => `/api/import-requests/${id}/file${copy ? `?copy=${encodeURIComponent(copy)}` : ''}`,
     requiredByNote: (ticketId) => `/api/tickets/${ticketId}/required-by-note`,
   },
-  // The per-deal IMPORT view (ImportDealController) — the import-only projection of ONE deal
-  // (factories, per-factory ใบขอซื้อ rows, items WITHOUT prices, read-only delivery status, the
-  // COMMENTED thread). import is refused the whole-deal GET /api/tickets/{id}; this replaces it.
+  // The per-deal IMPORT view (ImportDealController) — the import-only projection of ONE deal (factories,
+  // per-factory ใบขอซื้อ rows, items WITHOUT prices, read-only delivery status, the COMMENTED thread). import is
+  // refused the whole-deal GET /api/tickets/{id}; this replaces it.
   importDeals: {
     get: (ticketId) => `/api/import/deals/${ticketId}`,
   },
@@ -282,8 +275,8 @@ export const API_ROUTES = {
     // trips.
     thicknessDefaults: '/api/catalog/thickness-defaults',
   },
-  // Mirrors DesignerController (designer/) — READ-ONLY ผู้ออกแบบ directory, V173. There is no
-  // write route here on purpose; see that controller's own doc comment.
+  // Mirrors DesignerController (designer/) — READ-ONLY ผู้ออกแบบ directory, V173. There is no write route here
+  // on purpose; see that controller's own doc comment.
   designers: {
     search: (q) => `/api/designers${q ? `?q=${encodeURIComponent(q)}` : ''}`,
     byCode: (code) => `/api/designers/${encodeURIComponent(code)}`,
@@ -341,9 +334,9 @@ export const API_ROUTES = {
     list: '/api/price-calc-configs',
     update: '/api/price-calc-configs',
   },
-  // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only).
-  // Mirrors PricingFormulaConfigController -- a NEW endpoint, distinct from priceCalcConfigs
-  // above (which keeps serving the separate catalog price calculator, untouched).
+  // BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only). Mirrors
+  // PricingFormulaConfigController -- a NEW endpoint, distinct from priceCalcConfigs above (which keeps serving
+  // the separate catalog price calculator, untouched).
   pricingFormulaConfig: {
     get: '/api/pricing-formula-config',
     update: '/api/pricing-formula-config',
@@ -376,8 +369,8 @@ export const API_ROUTES = {
     approve: (id) => `/api/commissions/${id}/approve`,
     reject: (id) => `/api/commissions/${id}/reject`,
     clawback: (id) => `/api/commissions/${id}/clawback`,
-    // Manual commission entries (feat/commission-manual-adjustments). Mirrors
-    // CommissionController's POST /api/commissions/manual.
+    // Manual commission entries (feat/commission-manual-adjustments). Mirrors CommissionController's POST
+    // /api/commissions/manual.
     manual: '/api/commissions/manual',
     // The manual-commission rep picker's data source: active employees in ฝ่ายขาย, the same list for
     // sales_manager and ceo. Mirrors CommissionController#reps.
@@ -416,8 +409,8 @@ export const API_ROUTES = {
       me: '/api/payroll/tax-allowances/declarations/me',
       // Tax-effect estimate. Same body shape as `me` (POST): no employeeId field, same self-scoping.
       estimate: '/api/payroll/tax-allowances/declarations/me/estimate',
-      // แบบ ล.ย.01 as a printable PDF. `form` renders a SAVED declaration; `formDraft` renders
-      // unsaved values, because the employee must sign the sheet before a declaration exists.
+      // แบบ ล.ย.01 as a printable PDF. `form` renders a SAVED declaration; `formDraft` renders unsaved values,
+      // because the employee must sign the sheet before a declaration exists.
       form: (declarationId) => `/api/payroll/tax-allowances/declarations/${declarationId}/form.pdf`,
       formDraft: '/api/payroll/tax-allowances/declarations/me/form.pdf',
       withdraw: (id) => `/api/payroll/tax-allowances/declarations/${id}`,
@@ -433,9 +426,8 @@ export const API_ROUTES = {
       attachments: (id) => `/api/payroll/tax-allowances/declarations/${id}/attachments`,
     },
     taxAllowanceCaps: '/api/payroll/tax-allowances/caps',
-    // Flat evidence-file routes, sibling of taxAllowances above -- mirrors
-    // PricingRequestController's flat `/pricing-request-attachments/{id}/file` + DELETE shape.
-    // TaxAllowanceAttachmentController.
+    // Flat evidence-file routes, sibling of taxAllowances above -- mirrors PricingRequestController's flat
+    // `/pricing-request-attachments/{id}/file` + DELETE shape. TaxAllowanceAttachmentController.
     taxAllowanceAttachmentFile: (attachmentId) => `/api/payroll/tax-allowance-attachments/${attachmentId}/file`,
     taxAllowanceAttachment: (attachmentId) => `/api/payroll/tax-allowance-attachments/${attachmentId}`,
     ytdSeed: '/api/payroll/ytd-seed',
@@ -471,8 +463,8 @@ export const API_ROUTES = {
   },
   priceImport: {
     factories: '/api/price-import/factories',
-    // PUT counterpart of factories above — updates one factory's master data (name/country/
-    // currency/email/unit). Mirrors PriceImportController.updateFactory.
+    // PUT counterpart of factories above — updates one factory's master data (name/country/ currency/email/unit).
+    // Mirrors PriceImportController.updateFactory.
     factory: (factoryId) => `/api/price-import/factories/${factoryId}`,
     // Country picker for the factory add/edit form (PriceImportController.countries,
     // PriceImportService.listCountries); replaces a free-text 2-letter input that 500'd on a
@@ -486,8 +478,8 @@ export const API_ROUTES = {
     commit: (versionId) => `/api/price-import/commit/${versionId}`,
     profile: (factoryId) => `/api/price-import/profile/${factoryId}`,
   },
-  // Mirrors PricingRequestController: ticket-scoped create/list live under
-  // /api/tickets/{ticketId}/..., everything else is its own /api/pricing-requests/... resource.
+  // Mirrors PricingRequestController: ticket-scoped create/list live under /api/tickets/{ticketId}/...,
+  // everything else is its own /api/pricing-requests/... resource.
   pricingRequests: {
     listForTicket: (ticketId) => `/api/tickets/${ticketId}/pricing-requests`,
     create: (ticketId) => `/api/tickets/${ticketId}/pricing-requests`,
@@ -499,9 +491,9 @@ export const API_ROUTES = {
       return `/api/pricing-requests${p.toString() ? `?${p}` : ''}`;
     },
     detail: (id) => `/api/pricing-requests/${id}`,
-    // Import fills in the factory on one line Sales left blank — mirrors
-    // PricingRequestController.setItemFactory. Shaped like the CEO's per-item overrides above
-    // (PUT .../items/{itemId}/...) because it writes exactly one field on one line.
+    // Import fills in the factory on one line Sales left blank — mirrors PricingRequestController.setItemFactory.
+    // Shaped like the CEO's per-item overrides above (PUT .../items/{itemId}/...) because it writes exactly one
+    // field on one line.
     itemFactory: (id, itemId) => `/api/pricing-requests/${id}/items/${itemId}/factory`,
     // CEO price-review fixes (PricingDecisionController): re-point a quote's factory, set a line's
     // origin country, rename a line. CEO only, open DRAFT decision only.
@@ -564,8 +556,8 @@ export const API_ROUTES = {
     pickup: (id) => `/api/pricing-requests/${id}/pickup`,
     customerChangeRevision: (id) => `/api/pricing-requests/${id}/customer-change-revision`,
     cancel: (id) => `/api/pricing-requests/${id}/cancel`,
-    // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation
-    // COMMIT 4) — distinct from the raw factory-quote attachments above.
+    // Sales-level supporting attachments on the Pricing Request itself (V69, review remediation COMMIT 4) —
+    // distinct from the raw factory-quote attachments above.
     attachments: (id) => `/api/pricing-requests/${id}/attachments`,
     attachmentFile: (id) => `/api/pricing-request-attachments/${id}/file`,
     attachment: (id) => `/api/pricing-request-attachments/${id}`,
@@ -601,8 +593,8 @@ export const API_ROUTES = {
       if (params.needsRework) p.set('needsRework', 'true');
       return `/api/deal-quotations${p.toString() ? `?${p}` : ''}`;
     },
-    // Per-status counts for the caller's OWN list scope, for the tab labels (F5). One request for
-    // all five numbers rather than five list fetches.
+    // Per-status counts for the caller's OWN list scope, for the tab labels (F5). One request for all five numbers
+    // rather than five list fetches.
     counts: '/api/deal-quotations/counts',
     // Options for the ผู้พิมพ์/พนักงานขาย print-name selectors: the union of active sales-division
     // employees and can_create_quotation grant holders. Mirrors DealQuotationController#displayNameOptions.
@@ -643,28 +635,25 @@ export const ROLE_PERMISSIONS = {
   canUseEmployeeExperience: ['employee', 'warehouse', 'qc'],
   canViewEmployees: ['hr'],
   canManageEmployees: ['hr'],
-  // Salary, salary history, and the "ข้อมูลอ่อนไหว" (sensitive) tab on the
-  // employee detail page. Mirrors EmployeeController's
-  // requireAnyRole(user, "hr") gate on every employee endpoint — this key
-  // does not grant anyone access they don't already have server-side.
+  // Salary, salary history, and the "ข้อมูลอ่อนไหว" (sensitive) tab on the employee detail page. Mirrors
+  // EmployeeController's requireAnyRole(user, "hr") gate on every employee endpoint — this key does not grant
+  // anyone access they don't already have server-side.
   canViewSensitiveEmployeeData: ['hr'],
   canReviewProfileRequests: ['hr'],
   canViewAllAttendance: ['hr', 'ceo'],
   canImportAttendance: ['hr', 'ceo'],
-  // CEO/HR "mark present" (stand-up / WFH roster). Mirrors AttendanceController's
-  // POST /api/attendance/daily/mark-present requireAnyRole(user, "ceo", "hr") exactly.
+  // CEO/HR "mark present" (stand-up / WFH roster). Mirrors AttendanceController's POST
+  // /api/attendance/daily/mark-present requireAnyRole(user, "ceo", "hr") exactly.
   canMarkAttendance: ['hr', 'ceo'],
   canViewAllOvertime: ['hr', 'ceo'],
-  // Mirrors SpecialMoneyService.VIEW_ALL_ROLES — hr/ceo see every welfare/special-money
-  // request; everyone else is scoped to self + managed employees, same shape as overtime.
+  // Mirrors SpecialMoneyService.VIEW_ALL_ROLES — hr/ceo see every welfare/special-money request; everyone else
+  // is scoped to self + managed employees, same shape as overtime.
   canViewAllSpecialMoney: ['hr', 'ceo'],
   canViewAllLeave: ['hr', 'ceo'],
   // CEO leave-approval reach; mirrors LeaveService.REVIEW_ALL_ROLES containing "ceo".
   canReviewLeave: ['hr', 'ceo'],
-  // Sales module
-  // sales_manager is read+comment oversight ONLY (a project-manager-style
-  // follow-up role for the sales team) — it must never be added to
-  // canCreateTickets/canPickupTickets/canProposePrices/canApproveReject/
+  // Sales module sales_manager is read+comment oversight ONLY (a project-manager-style follow-up role for the
+  // sales team) — it must never be added to canCreateTickets/canPickupTickets/canProposePrices/canApproveReject/
   // canGenerateQuotation/canConfirmPayments. Mirrors TicketService.VIEWER_ROLES.
   canViewTickets: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
   // Which roles may OPEN the whole-deal page (`/tickets/:id`, GET /api/tickets/{id}). `import` is
@@ -673,18 +662,12 @@ export const ROLE_PERMISSIONS = {
   // canViewTickets above still mirrors TicketService.VIEWER_ROLES for the list and the
   // import-readable sub-paths.
   canViewWholeDeal: ['sales', 'ceo', 'account', 'sales_manager'],
-  // Import's OWN per-deal page (ImportDealController: import + ceo). Presentation only — the
-  // endpoint enforces the real gate and the row scope.
+  // Import's OWN per-deal page (ImportDealController: import + ceo). Presentation only — the endpoint enforces
+  // the real gate and the row scope.
   canViewImportDeal: ['import', 'ceo'],
-  // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
-  // (list `/tickets`, the รายการดีล nav item, the SalesTabs deal-list tab) is
-  // narrower than ticket-detail read (canViewTickets above,
-  // unchanged) — only roles whose job IS the pipeline get it. Import and
-  // Account are deliberately excluded — their jobs are procurement→delivery
-  // and money-confirmation respectively, not browsing the whole deal list
-  // (see features/dashboard/ImportOverview.jsx / AccountOverview.jsx).
-  // Frontend-only presentation split; never narrows what
-  // TicketService.VIEWER_ROLES actually allows a read of.
+  // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER (list `/tickets`, the รายการดีล nav
+  // item, the SalesTabs deal-list tab) is narrower than ticket-detail read (canViewTickets above, unchanged) —
+  // only roles whose job IS the pipeline get it.
   canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
   // Sales/CRM tool: which roles get the catalog SCREENS, scoped to the same audience as
   // canViewTickets.
@@ -694,16 +677,12 @@ export const ROLE_PERMISSIONS = {
   // by product decision (including the supplier purchase price). Narrowing this list hides a
   // screen; it does not protect the data, and the data is not meant to be protected.
   canViewCatalog: ['sales', 'import', 'ceo', 'account', 'sales_manager'],
-  // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to
-  // ฝ่ายบัญชี, with CEO as fallback. Mirrors TicketService.ACCOUNT_ROLES.
+  // Money-receipt confirmations (รับยอดมัดจำ / รับชำระเต็มจำนวน) belong to ฝ่ายบัญชี, with CEO as fallback.
+  // Mirrors TicketService.ACCOUNT_ROLES.
   canConfirmPayments: ['account', 'ceo'],
-  // Who may READ a deal's documents (the เอกสาร panel) without being one of its participants.
-  // Mirrors TicketAccessPolicy.canViewDocuments' role half — deliberately NARROWER than
-  // canViewTickets: `sales` and `import` reach a deal's documents only on deals they participate
-  // in. AttachType spans {PO, SIGNED_QUOTATION, INVOICE, OTHER} and the list endpoint applies no
-  // type filter, so a document read hands over the countersigned quotation and the ใบกำกับภาษี —
-  // the approved customer price, which salesViewScope already hides from import and which the
-  // backend refuses it on the quotation file, the payment ledger and deposit notices.
+  // Who may READ a deal's documents (the เอกสาร panel) without being one of its participants. Mirrors
+  // TicketAccessPolicy.canViewDocuments' role half — deliberately NARROWER than canViewTickets: `sales` and
+  // `import` reach a deal's documents only on deals they participate in.
   canViewTicketDocuments: ['ceo', 'account', 'sales_manager'],
   // Who may ATTACH or REMOVE a deal's documents without being one of its participants (the deal's
   // own rep or whoever picked it up keep the ability regardless of role). Mirrors
@@ -717,16 +696,9 @@ export const ROLE_PERMISSIONS = {
   canManageTicketDocuments: ['sales_manager', 'ceo'],
   canCreateTickets: ['sales'],
   canPickupTickets: ['import'],
-  // งานนำเข้า (/fulfilment) — Import's cross-deal fulfilment workspace, which
-  // advances the four stage-12 transitions in place. Mirrors
-  // TicketService.FULFILMENT_ROLES = Set.of("import", "ceo") exactly — the gate
-  // on issueImportRequest / markIrSent / markShipping / markGoodsReceived.
-  //
-  // PRESENTATION ONLY, like every entry in this map: adding a role here would
-  // show it the page and earn it four 403s, not grant it anything. Deliberately
-  // NARROWER than canViewPricingRequestQueue (its nav neighbour, which includes
-  // sales_manager) — a sales_manager on this page would see rows whose every
-  // button the backend refuses.
+  // งานนำเข้า (/fulfilment) — Import's cross-deal fulfilment workspace, which advances the four stage-12
+  // transitions in place. PRESENTATION ONLY, like every entry in this map: adding a role here would show it the
+  // page and earn it four 403s, not grant it anything.
   canActOnFulfilment: ['import', 'ceo'],
   canProposePrices: ['import'],
   canApproveReject: ['ceo'],
@@ -736,19 +708,16 @@ export const ROLE_PERMISSIONS = {
   // here only so the route guard lets it in for the createFromDeal ("record invoice") flow; account
   // has NO route to GET /api/commissions (list()), see canListCommissionRecords below.
   canViewCommissions: ['sales', 'sales_manager', 'ceo', 'hr', 'account'],
-  // Mirrors CommissionController's GET /api/commissions PreAuthorize exactly (SALES,
-  // SALES_MANAGER, CEO only — NOT account, NOT hr). hr reads via canViewPayrollCommissions
-  // (payroll-ready) instead; account has no list access at all, only createFromDeal.
+  // Mirrors CommissionController's GET /api/commissions PreAuthorize exactly (SALES, SALES_MANAGER, CEO only —
+  // NOT account, NOT hr). hr reads via canViewPayrollCommissions (payroll-ready) instead; account has no list
+  // access at all, only createFromDeal.
   canListCommissionRecords: ['sales', 'sales_manager', 'ceo'],
   // Commission creation is the accountant's auto-create trigger (POST /api/commissions/from-deal)
   // at deal close; sales cannot. Mirrors CommissionService.CREATE_FROM_DEAL_ROLES exactly.
   canCreateCommissionFromDeal: ['account'],
   canApproveCommissions: ['sales_manager', 'ceo'],
   // Manual commission entries (feat/commission-manual-adjustments): a hand-typed ADJUSTMENT/
-  // MANAGER/STOCK_BONUS/INCENTIVE amount, no invoice/tier-calc involved. Mirrors
-  // CommissionController's POST /api/commissions/manual PreAuthorize + CommissionService
-  // .MANUAL_CREATE_ROLES exactly — same role set as canApproveCommissions today, but kept as
-  // its own key since the two gates are defined independently server-side.
+  // MANAGER/STOCK_BONUS/INCENTIVE amount, no invoice/tier-calc involved.
   canCreateManualCommission: ['sales_manager', 'ceo'],
   canViewPayrollCommissions: ['hr'],
   // View and manage are separate keys because the CEO has a deliberate backend read grant
@@ -766,11 +735,7 @@ export const ROLE_PERMISSIONS = {
   canReviewTaxAllowances: ['hr'],
   canManagePriceImport: ['ceo', 'import'],
   canManageCatalogProducts: ['ceo', 'import'],
-  // Import's PricingRequest queue (/pricing-requests). Mirrors
-  // PricingRequestService.VIEWER_ROLES minus 'sales'/'account' — this key is
-  // about who sees the cross-deal QUEUE page, not who may view/act on a single
-  // pricing request (sales still sees its own deal's requests via
-  // PricingRequestPanel, gated by ticket ownership, not this key).
+  // Import's PricingRequest queue (/pricing-requests).
   canViewPricingRequestQueue: ['import', 'ceo', 'sales_manager'],
   // Direct-deal quotation, the pricing-chain-BYPASS quotation. Route guard only, for `/quotations`:
   // mirrors the plan's Authz "view/list/download" role set exactly (sales scoped to its own deals

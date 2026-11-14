@@ -102,9 +102,9 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       await advanceStage(sessions, 'sales', deal.id, 'PRESENTATION', { note: null });
     });
 
-    // Neither the DESIGNER nor the OWNER chain's return value is needed again — only the auto
-    // stage-advance their `issue` call triggers matters here. Only the BUYER chain (below) is the
-    // one that goes on to accept + confirm-order, so only its result is captured.
+    // Neither the DESIGNER nor the OWNER chain's return value is needed again — only the auto stage-advance their
+    // `issue` call triggers matters here. Only the BUYER chain (below) is the one that goes on to accept +
+    // confirm-order, so only its result is captured.
     await test.step('S2 -> S4 (-> QUOTE_DESIGN_SIDE): auto, via the DESIGNER pricing-request chain issuing its quotation', async () => {
       await runPricingChainToIssue(sessions, deal.id, {
         factoryName: factory.factoryName,
@@ -147,8 +147,8 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
         PRICING_REQUEST_STATUS.QUOTATION_ACCEPTED
       );
 
-      // Re-READ rather than trust confirm-order's own response — see confirmOrder's own doc in
-      // helpers/sales.js on why. Without this bridge S10+ is unreachable at all.
+      // Re-READ rather than trust confirm-order's own response — see confirmOrder's own doc in helpers/sales.js on
+      // why. Without this bridge S10+ is unreachable at all.
       const ticket = await readDeal(sessions, 'sales', deal.id);
       expect(ticket.summary.status, 'ticket status (TicketStatus, lowercase)').toBe(
         TICKET_STATUS.QUOTATION_ISSUED
@@ -232,13 +232,12 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
           /* DELIVERED          -> CLOSED_PAID        */ AUTO_STAGE_MESSAGE,
         ]
       );
-      // The one stage every other hop of the full route touches but this concrete deal does not —
-      // "(S11 if a deposit is required)" in the route Javadoc, and this deal's is waived.
+      // The one stage every other hop of the full route touches but this concrete deal does not — "(S11 if a deposit
+      // is required)" in the route Javadoc, and this deal's is waived.
       expectNeverEntered(history, ['DEPOSIT_RECEIVED']);
 
-      // Headline assertion, restated explicitly: every MANUAL hop above was called with note: null
-      // and returned 200 (advanceStage would have failed the test at the call site otherwise) —
-      // five of them, none carrying a note.
+      // Headline assertion, restated explicitly: every MANUAL hop above was called with note: null and returned 200
+      // (advanceStage would have failed the test at the call site otherwise) — five of them, none carrying a note.
       const manualHops = history.filter((hop) => hop.message !== AUTO_STAGE_MESSAGE);
       expect(manualHops, 'the full route needs exactly five manual hops').toHaveLength(5);
       expect(
@@ -287,17 +286,9 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
         'target is never counted as "skipped" and no note is required. Checked against the SERVER, ' +
         'not just asserted: stageDecisions().requiresReason must independently read false too.',
       async () => {
-        // ⚠️ `allowed` IS TIME-DEPENDENT; `requiresReason` IS NOT. TicketService.stageDecisions
-        // computes `allowed` by running requireStageMoveAllowed AND requireStageAdvanceReadiness
-        // in a try/catch, so for a FORWARD target it folds in the readiness gate — which needs an
-        // activity newer than the last STAGE_CHANGED. Read straight after a stage change, every
-        // forward target reports allowed:false, correctly. `requiresReason` is
-        // DealStage.requiresJustification alone and is reported even for a blocked stage.
-        //
-        // The first version of this step read stageDecisions() before logging an activity and
-        // asserted allowed:true. It failed against UAT, and the SERVER was right: the hop really
-        // was unreachable at that instant. Log the activity first, so `allowed` answers "is this
-        // hop reachable" rather than "did the clock happen to be reset".
+        // ⚠️ `allowed` IS TIME-DEPENDENT; `requiresReason` IS NOT. Read straight after a stage change, every forward
+        // target reports allowed:false, correctly. `requiresReason` is DealStage.requiresJustification alone and is
+        // reported even for a blocked stage.
         await logActivity(sessions, deal.id, { note: 'satisfy readiness before reading decisions' });
 
         const decisions = await stageDecisions(sessions, 'sales', deal.id);
@@ -351,10 +342,9 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       return usable;
     });
 
-    // The six stages BUYER_DIRECT steps over, transcribed BY HAND from DealStage.ORDER (never
-    // derived from the expectedStages array below) — none of them MANDATORY, which is the whole
-    // reason "note: null must succeed" on a six-stage jump is the most counterintuitive result in
-    // the rule set.
+    // The six stages BUYER_DIRECT steps over, transcribed BY HAND from DealStage.ORDER (never derived from the
+    // expectedStages array below) — none of them MANDATORY, which is the whole reason "note: null must succeed" on
+    // a six-stage jump is the most counterintuitive result in the rule set.
     const STEPPED_OVER = [
       'PRESENTATION', 'SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER',
     ];
@@ -364,30 +354,29 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       created.push(deal.id);
       await setEntryChannel(sessions, deal.id, 'BUYER_DIRECT');
 
-      // The baseline that makes "starts at S8" falsifiable at all — without knowing this deal had
-      // ZERO stage history beforehand, a one-hop assertion below would be satisfied by a deal that
-      // had already moved before this test touched it.
+      // The baseline that makes "starts at S8" falsifiable at all — without knowing this deal had ZERO stage history
+      // beforehand, a one-hop assertion below would be satisfied by a deal that had already moved before this test
+      // touched it.
       const baseline = await stageHistory(sessions, 'sales', deal.id);
       expect(baseline, 'a freshly created deal must have no STAGE_CHANGED history').toEqual([]);
 
-      // No manual move needs inserting between issue and confirm-order for this route (unlike
-      // Cases A/B/D), so runPricingChainToOrder's own tail applies unmodified.
+      // No manual move needs inserting between issue and confirm-order for this route (unlike Cases A/B/D), so
+      // runPricingChainToOrder's own tail applies unmodified.
       await runPricingChainToOrder(sessions, deal.id, {
         factoryName: factory.factoryName,
         recipientType: 'BUYER',
       });
 
       const history = await stageHistory(sessions, 'sales', deal.id);
-      // The ONE hop the case is named for, index 0 -> 7: LEAD_APPROACH -> QUOTE_BUYER directly, no
-      // note anywhere, driven entirely by the system (both hops carry AUTO_STAGE_MESSAGE).
+      // The ONE hop the case is named for, index 0 -> 7: LEAD_APPROACH -> QUOTE_BUYER directly, no note anywhere,
+      // driven entirely by the system (both hops carry AUTO_STAGE_MESSAGE).
       expectRoute(
         history,
         ['LEAD_APPROACH', 'QUOTE_BUYER', 'ORDER_RECEIVED'],
         [AUTO_STAGE_MESSAGE, AUTO_STAGE_MESSAGE]
       );
-      // NEGOTIATION is skipped too here — a SECOND MANDATORY stage stepped over, this time by
-      // confirm-order's own auto-advance — because auto-advances never consult the note rule at
-      // all; only a manual POST /stage does.
+      // NEGOTIATION is skipped too here — a SECOND MANDATORY stage stepped over, this time by confirm-order's own
+      // auto-advance — because auto-advances never consult the note rule at all; only a manual POST /stage does.
       expectNeverEntered(history, [...STEPPED_OVER, 'NEGOTIATION']);
     });
 
@@ -456,8 +445,8 @@ test.describe('@uat-sales pipeline journeys — Cases A-D', () => {
       expect(result.pricingRequest.status).toBe(PRICING_REQUEST_STATUS.QUOTATION_ACCEPTED);
     });
 
-    // reserveStock is floored at ORDER_RECEIVED (TicketService:992) — this is exactly why the full
-    // chain above has to run FIRST, and stock only substitutes for the import request afterwards.
+    // reserveStock is floored at ORDER_RECEIVED (TicketService:992) — this is exactly why the full chain above has
+    // to run FIRST, and stock only substitutes for the import request afterwards.
 
     await test.step(
       'waive the deposit — so the declaration below is the only thing that changed on this deal ' +

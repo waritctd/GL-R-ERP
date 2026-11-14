@@ -13,9 +13,8 @@ function nextClientRequestId() {
   return crypto.randomUUID();
 }
 
-/** Creates one ticket with a single item, returning its id and the seeded item's id — shared by
- * every helper below so R8 tests can put two sibling pricing requests (designer/owner) on the
- * SAME deal. */
+/** Creates one ticket with a single item, returning its id and the seeded item's id — shared by every helper
+ * below so R8 tests can put two sibling pricing requests (designer/owner) on the SAME deal. */
 async function freshTicket() {
   await api.auth.login({ role: 'sales' });
   const { customer } = await api.customers.create({
@@ -41,10 +40,8 @@ async function freshTicket() {
   return { ticketId: created.summary.id, sourceItemId: created.items[0].id };
 }
 
-/** Drives one pricing request on the given ticket through factory quote / costing / an APPROVED
- * NET CEO decision. Mirrors mockApi.dealQuotationPricingRequestApproval.test.js's own
- * `draftPricingRequestQuotation` helper, generalised over ticket/recipient so R8 tests can call
- * it twice on the SAME ticket with two different recipients. */
+/** Drives one pricing request on the given ticket through factory quote / costing / an APPROVED NET CEO
+ * decision. */
 async function approvedDecisionOn(ticketId, sourceItemId, recipientType) {
   await api.auth.login({ role: 'sales' });
   const { pricingRequest: draftPr } = await api.pricingRequests.create(ticketId, {
@@ -209,16 +206,13 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
     expect(stillB.docStatus).toBe('ISSUED');
   }, 20000);
 
-  // A "different sales rep" case is NOT representable through this mock: login({role: 'sales'})
-  // always resolves to the ONE seeded sales demo account (mockApi.js's db.users), so there is no
-  // way to authenticate as a second, non-owning sales identity here. The real-DB coverage for
-  // this exact case (two distinct employees) is
-  // DealQuotationOutcomeIntegrationTest#recordOutcome_byNonOwningSales_refused_writesNothing —
-  // that is the authoritative evidence for this branch, not this file.
+  // A "different sales rep" case is NOT representable through this mock: login({role: 'sales'}) always resolves
+  // to the ONE seeded sales demo account (mockApi.js's db.users), so there is no way to authenticate as a
+  // second, non-owning sales identity here.
 
-  /** Deliberate divergence check: this origin's own EDIT_ROLES lets sales_manager edit ANY deal,
-   * but recordOutcome mirrors the LEGACY gate instead (sales, owner only) — sales_manager must be
-   * refused here too, same as the real service. */
+  /** Deliberate divergence check: this origin's own EDIT_ROLES lets sales_manager edit ANY deal, but
+   * recordOutcome mirrors the LEGACY gate instead (sales, owner only) — sales_manager must be refused here too,
+   * same as the real service. */
   it('sales_manager is refused, and nothing is written', async () => {
     const { ticketId, sourceItemId } = await freshTicket();
     const { quotationId } = await issuedNewOriginQuotation(ticketId, sourceItemId, 'DESIGNER');
@@ -264,8 +258,8 @@ describe('mockApi dealQuotations.recordOutcome (GLA-123 slice S3)', () => {
   // ── R8 — one finalized quotation per deal, across BOTH คำขอราคา origins ──────────────────────
 
   it('R8: refused when the LEGACY chain already has an ACCEPTED quotation on this ticket', async () => {
-    // Two full pricing-decision chains on one deal, sequentially — comfortably over the 5s
-    // default given mockApi's own 140ms delay() per round trip.
+    // Two full pricing-decision chains on one deal, sequentially — comfortably over the 5s default given mockApi's
+    // own 140ms delay() per round trip.
     const { ticketId, sourceItemId } = await freshTicket();
     const { quotationId: legacyId } = await issuedLegacyQuotation(ticketId, sourceItemId, 'DESIGNER');
     await api.auth.login({ role: 'sales' });

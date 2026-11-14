@@ -20,24 +20,12 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.SetItemFactoryRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 
-/**
- * Slice 1, stock lines: SUBMIT ROUTING, the one READINESS predicate, factory-quote skipping, submit
- * validation, and the lock on the source after submit. Real services + real repositories + real
- * Postgres (no HTTP - this slice is backend only).
- *
- * <p>Tests marked <b>[PIN]</b> pass BEFORE the feature exists on purpose: they pin existing
- * behaviour the feature must not regress (a wrong-way-round guard), and are not evidence that the
- * feature works. Everything else must be red until the behaviour is implemented.
- *
- * <p>Readiness (IA 1.2): a request may reach the CEO only when EVERY import line is resolvable
- * (its factory quote is READY_FOR_COSTING) AND EVERY IN_TRANSIT line has an ETA, re-checked after
- * markReadyForCosting and after each ETA save, so whichever finishes last advances it.
- */
+/** Slice 1, stock lines: SUBMIT ROUTING, the one READINESS predicate, factory-quote skipping, submit
+ * validation, and the lock on the source after submit. Real services + real repositories + real Postgres (no
+ * HTTP - this slice is backend only). */
 class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 1 - only สต็อกในไทย lines: straight to the CEO
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void onlyInThailandLines_submitGoesStraightToCeoReview_ceoNotified_importNotNotified_zeroFactoryQuotes() {
@@ -94,9 +82,7 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
         assertThat(status(id)).isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 2 - import + สต็อกในไทย: import path, quotes contain ONLY import lines
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void importPlusInThailand_submitGoesToImport_importNotified_notStraightToCeo_PIN() {
@@ -139,9 +125,7 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
             .isEqualTo(PricingRequestStatus.READY_FOR_CEO_REVIEW);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 5 - submit validation
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createDraft_aStockLine_isAcceptedWithoutFactoryOriginCountryOrLeadTime() {
@@ -288,9 +272,9 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
 
     @Test
     void mixedRequest_aStockLineIsExempt_butAnImportLineOnTheSameRequestIsStillRefused() {
-        // Row 1 is a stock line with none of the import inputs (fine); row 2 is an import line
-        // missing its origin country: the refusal must name ROW 2, proving the exemption is per
-        // line and not "this request has a stock line, skip validation".
+        // Row 1 is a stock line with none of the import inputs (fine); row 2 is an import line missing its origin
+        // country: the refusal must name ROW 2, proving the exemption is per line and not "this request has a stock
+        // line, skip validation".
         assertThatThrownBy(() -> pricingRequestService.createDraft(ticketId,
             requestOf(stockLine("Stock TH", IN_THAILAND, 10), importLineMissingOriginCountry("Imp", 5)),
             salesActor))
@@ -308,15 +292,13 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 6 - the source round-trips (create / update / read / customer-change revision)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createDraft_aStockSourceOnAnOtherwiseCompleteLine_isStored_notSilentlyDropped() {
-        // Isolates the plumbing from the validation relaxation: this line carries origin country and
-        // lead time, so today's validation accepts it - and today the source is dropped on the floor
-        // when PricingRequestService#resolveItem rebuilds the item.
+        // Isolates the plumbing from the validation relaxation: this line carries origin country and lead time, so
+        // today's validation accepts it - and today the source is dropped on the floor when
+        // PricingRequestService#resolveItem rebuilds the item.
         long id = pricingRequestService.createDraft(ticketId,
             requestOf(lineWithFullImportFields("Plumbing", IN_THAILAND, 10)), salesActor).summary().id();
 
@@ -357,9 +339,7 @@ class StockLineRoutingIntegrationTest extends AbstractStockLineIntegrationTest {
         assertThat(itemByModel(childId, "Rev Imp").stockSource()).isNull();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 7 - locked for sales after submit
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void afterSubmit_salesCannotChangeTheSource_PIN() {

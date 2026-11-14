@@ -42,16 +42,15 @@ public final class WastageCalculator {
     // ── Quotation v3 ──────────────────────────────────────
     /** A real tile: catalog link, wastage, ตร.ม./แผ่น, แผ่น/กล่อง, auto-composed description. */
     public static final String LINE_TYPE_TILE = "TILE";
-    /** Description + quantity + unit + unit price, and none of the tile machinery — freight,
-     * Mapei consumables, the cut service, sanitary-ware ชุด rows. */
+    /** Description + quantity + unit + unit price, and none of the tile machinery — freight, Mapei consumables, the
+     * cut service, sanitary-ware ชุด rows. */
     public static final String LINE_TYPE_PLAIN = "PLAIN";
     /** The ส่วนลดพิเศษ line: จำนวน −1, no unit, positive ราคา/คงเหลือ, negative เป็นเงิน. */
     public static final String LINE_TYPE_ADJUSTMENT = "ADJUSTMENT";
 
     /** Today's behaviour and the default: the rep types a list price and a discount percent. */
     public static final String PRICE_MODE_NET = "NET";
-    /** The rep types ราคาพิเศษ in บาท per ตร.ม. INCLUDING VAT — see
-     * {@link #netPerPieceFromSpecialSqm}. */
+    /** The rep types ราคาพิเศษ in บาท per ตร.ม. INCLUDING VAT — see #netPerPieceFromSpecialSqm. */
     public static final String PRICE_MODE_SPECIAL_SQM = "SPECIAL_SQM";
     /** The rep types the per-piece net price directly; the ราคา column still shows the list price. */
     public static final String PRICE_MODE_DIRECT_NET = "DIRECT_NET";
@@ -67,18 +66,8 @@ public final class WastageCalculator {
      */
     public static final String PRICE_MODE_MIXED = "MIXED";
 
-    /**
-     * The price mode ONE tile row is priced and printed in: the document's own, unless the
-     * document is {@link #PRICE_MODE_MIXED}, in which case it is the row's. THE one statement of
-     * that rule — the write path, the read path, the printed ส่วนลด cell and the "has special
-     * pricing" gate all ask here, so no two of them can decide differently.
-     *
-     * <p>A row's own mode is consulted ONLY on a MIXED document. On a single-mode document it is
-     * ignored even when present (and the write path stores none there), so nothing a client leaves
-     * on a row can reprice a document whose header names one mode. A MIXED document's row with no
-     * mode of its own reads as NET: unreachable through the write path, which refuses such a row,
-     * but a READ must never fail on a row it cannot place.
-     */
+    /** The price mode ONE tile row is priced and printed in: the document's own, unless the document is
+     * #PRICE_MODE_MIXED, in which case it is the row's. A row's own mode is consulted ONLY on a MIXED document. */
     public static String rowPriceMode(String documentPriceMode, String itemPriceMode) {
         if (!PRICE_MODE_MIXED.equals(documentPriceMode)) {
             return documentPriceMode;
@@ -105,9 +94,9 @@ public final class WastageCalculator {
     /** The rep types a whole number of days, counted from the document's own date. The
      * default (every pre-V178 row stores {@code validity_mode = 'DAYS'}). */
     public static final String VALIDITY_MODE_DAYS = "DAYS";
-    /** The rep types a specific calendar date ("ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่
-     * .../.../....") instead of a day count — for when a promotion or a factory allocation needs
-     * an exact deadline rather than "N days from now". */
+    /** The rep types a specific calendar date ("ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ .../.../....")
+     * instead of a day count — for when a promotion or a factory allocation needs an exact deadline rather than "N
+     * days from now". */
     public static final String VALIDITY_MODE_DATE = "DATE";
 
     // ── V181, "ไม่รับมัดจำ" — the three 100%-payment-term codes ─────────────
@@ -125,11 +114,9 @@ public final class WastageCalculator {
      * own "ก่อน...หรือเมื่อ..." phrasing, hence the code name ON_OR_BEFORE_DELIVERY. */
     public static final String FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY = "ON_OR_BEFORE_DELIVERY";
 
-    /**
-     * The currency a document defaults to from its language — TH→THB, EN→USD, so a rep picks ONE
-     * thing (ภาษาเอกสาร) and the rest follows. {@code DealQuotationService#resolveCurrency} lets an
-     * explicit request override it; this is only the default.
-     */
+    /** The currency a document defaults to from its language — TH→THB, EN→USD, so a rep picks ONE thing
+     * (ภาษาเอกสาร) and the rest follows. DealQuotationService#resolveCurrency lets an explicit request override
+     * it; this is only the default. */
     public static String defaultCurrencyFor(String documentLanguage) {
         return DOCUMENT_LANGUAGE_EN.equals(documentLanguage) ? CURRENCY_USD : CURRENCY_THB;
     }
@@ -153,8 +140,8 @@ public final class WastageCalculator {
 
     private static final BigDecimal VAT_RATE = new BigDecimal("0.07");
     private static final BigDecimal HUNDRED = BigDecimal.valueOf(100);
-    // H4 sanity bound: a resolved sqmPerPiece outside this range is almost certainly a unit
-    // mistake (a genuine tile is never smaller than 1000 mm² or larger than 10 sqm per piece).
+    // H4 sanity bound: a resolved sqmPerPiece outside this range is almost certainly a unit mistake (a genuine
+    // tile is never smaller than 1000 mm² or larger than 10 sqm per piece).
     private static final BigDecimal MIN_SQM_PER_PIECE = new BigDecimal("0.001");
     private static final BigDecimal MAX_SQM_PER_PIECE = BigDecimal.TEN;
     private static final String UNREASONABLE_SIZE_MESSAGE =
@@ -162,9 +149,9 @@ public final class WastageCalculator {
 
     /** One quotation line's inputs, exactly as Sales typed/autofilled them. */
     public record Input(
-        // Physical fact (from catalog, parsed from the size text, or typed by Sales) — nullable
-        // in PIECES quantity mode, where it is display-only (piecesPerSqm still computed for the
-        // printed line when present, but never required to derive piecesBeforeWastage).
+        // Physical fact (from catalog, parsed from the size text, or typed by Sales) — nullable in PIECES quantity
+        // mode, where it is display-only (piecesPerSqm still computed for the printed line when present, but never
+        // required to derive piecesBeforeWastage).
         BigDecimal sqmPerPiece,
         String quantityMode,
         BigDecimal areaSqm,
@@ -183,10 +170,9 @@ public final class WastageCalculator {
         // way.
         boolean roundToFullBox
     ) {
-        /** The pre-loose-pieces shape — every call site before this feature. Defaults
-         * {@code roundToFullBox} true, which is byte-for-byte the only behaviour that existed
-         * before it, so every existing caller (production and test) compiles and behaves
-         * unchanged. */
+        /** The pre-loose-pieces shape — every call site before this feature. Defaults roundToFullBox true, which is
+         * byte-for-byte the only behaviour that existed before it, so every existing caller (production and test)
+         * compiles and behaves unchanged. */
         public Input(BigDecimal sqmPerPiece, String quantityMode, BigDecimal areaSqm, Integer piecesInput,
                      String wastageMode, BigDecimal wastageValue, Integer piecesPerBox, BigDecimal unitPrice,
                      BigDecimal discountPct) {
@@ -195,16 +181,7 @@ public final class WastageCalculator {
         }
     }
 
-    /** Everything the server computed for one line — the client never supplies any of this.
-     *
-     * @param boxes the FULL box count when {@code piecesPerBox > 0} (exactly {@code piecesFinal /
-     *     piecesPerBox} either way — an EXACT quotient when {@code roundToFullBox} is true, since
-     *     {@code piecesFinal} is then itself a multiple of {@code piecesPerBox}); {@code null}
-     *     when there is no box multiple at all.
-     * @param loosePieces the remainder pieces that do not make a full box: always {@code 0} when
-     *     {@code roundToFullBox} is true (the whole point of rounding up), {@code piecesFinal %
-     *     piecesPerBox} when it is false, and {@code null} exactly when {@link #boxes} is null.
-     */
+    /** Everything the server computed for one line — the client never supplies any of this. */
     public record Result(
         BigDecimal piecesPerSqm,
         int piecesBeforeWastage,
@@ -380,8 +357,8 @@ public final class WastageCalculator {
         return perPieceFromSqm(perSqmIncVat, sqmPerPiece, "ราคาต่อ ตร.ม.", "a per-sqm price");
     }
 
-    /** The one computation behind both entry points above; {@code priceName}/{@code needFor} only
-     * word the refusal, so each keeps saying what it always said. */
+    /** The one computation behind both entry points above; priceName/needFor only word the refusal, so each keeps
+     * saying what it always said. */
     private static BigDecimal perPieceFromSqm(BigDecimal perSqmIncVat, BigDecimal sqmPerPiece,
                                               String priceName, String needFor) {
         if (perSqmIncVat == null || perSqmIncVat.signum() <= 0) {
@@ -534,9 +511,9 @@ public final class WastageCalculator {
         return vat(subtotal, DOCUMENT_LANGUAGE_TH);
     }
 
-    /** v3b: the document-level VAT for a quotation in {@code documentLanguage} — 7% on a TH
-     * document, ZERO on an EN one (see {@link #vatRateFor}). The one-argument overload above is
-     * the TH-only shape every pre-v3b caller keeps using unchanged. */
+    /** v3b: the document-level VAT for a quotation in documentLanguage — 7% on a TH document, ZERO on an EN one
+     * (see #vatRateFor). The one-argument overload above is the TH-only shape every pre-v3b caller keeps using
+     * unchanged. */
     public static BigDecimal vat(BigDecimal subtotal, String documentLanguage) {
         return round2((subtotal == null ? BigDecimal.ZERO : subtotal)
             .multiply(vatRateFor(documentLanguage)));

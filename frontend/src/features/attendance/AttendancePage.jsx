@@ -30,42 +30,32 @@ import { AttendanceCorrectionPanel } from '../attendanceCorrection/AttendanceCor
 import { AttendanceCorrectionRequestModal } from '../attendanceCorrection/AttendanceCorrectionRequestModal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-// Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit
-// needed); Layout.jsx's FilterBar only renders a <div> — same pattern established in
-// OvertimePage/LeavePage (docs/agent-handoffs/29_tw-convert-overtime-leave.md).
-//
-// `items-end`, not `items-center` — see MyLeaveTab.jsx's identical FILTER_BAR_CLASS
-// for the full explanation. Only reachable for HR/manager (`!isSelfView`), so it
-// never showed on the employee self-view, but it is the same defect and the same fix.
+// Reproduces `.filter-bar` for this page's native <form onSubmit> (Enter-to-submit needed); Layout.jsx's
+// FilterBar only renders a <div> — same pattern established in OvertimePage/LeavePage
+// (docs/agent-handoffs/29_tw-convert-overtime-leave.md).
 const FILTER_BAR_CLASS =
   'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
 
-// Earlier than any punch the scanners have produced (the oldest on record is Nov 2020), so a
-// backfill covers everything without needing to look up where history starts. The backend walks
-// only the days that actually have punches, so an over-wide start costs nothing.
+// Earlier than any punch the scanners have produced (the oldest on record is Nov 2020), so a backfill covers
+// everything without needing to look up where history starts. The backend walks only the days that actually
+// have punches, so an over-wide start costs nothing.
 const BACKFILL_START = '2015-01-01';
 
-/**
- * Which view of attendance this user gets. Mirrors `dashboardMode()` in EmployeeDashboard so the
- * two surfaces agree on who counts as a manager, and mirrors the backend's own three-way scope
- * (hr/ceo = everyone, ฝ่าย manager = their division, otherwise = self).
- */
+/** Which view of attendance this user gets. Mirrors `dashboardMode()` in EmployeeDashboard so the two surfaces
+ * agree on who counts as a manager, and mirrors the backend's own three-way scope (hr/ceo = everyone, ฝ่าย
+ * manager = their division, otherwise = self). */
 function attendanceMode(user) {
   if (hasPermission(user.role, 'canViewAllAttendance')) return 'company';
   if (user?.manager) return 'manager';
   return 'employee';
 }
 
-// How far back the date stepper/picker may browse. Deliberately NOT full history -- backfill
-// computes all of it, but presenting years of never-before-reviewed "late" days on day one would
-// be a personnel problem rather than a feature. Product decision (2026-08): widened from
-// "this month only" to a rolling 3-month window so a Bangkok-morning check on the 1st/2nd of a
-// month can still reach last month's tail end.
+// How far back the date stepper/picker may browse. Deliberately NOT full history -- backfill computes all of
+// it, but presenting years of never-before-reviewed "late" days on day one would be a personnel problem rather
+// than a feature.
 const BROWSABLE_MONTHS_BACK = 3;
 
-/**
- * The date window the page may show.
- */
+/** The date window the page may show. */
 function monthBounds() {
   return { start: bangkokMonthStartIso(undefined, BROWSABLE_MONTHS_BACK), today: bangkokTodayIso() };
 }
@@ -75,32 +65,28 @@ export function AttendancePage({ user, showToast }) {
   const isSelfView = mode === 'employee';
   const canImport = hasPermission(user.role, 'canImportAttendance');
   const canSeeUnmapped = hasPermission(user.role, 'canViewAllAttendance');
-  // CEO's 08:30 stand-up / WFH roster. Same audience as canViewAllAttendance (hr/ceo), so this is
-  // always reachable in 'company' mode — the roster it needs (employeeOptions) is already loaded
-  // below.
+  // CEO's 08:30 stand-up / WFH roster. Same audience as canViewAllAttendance (hr/ceo), so this is always
+  // reachable in 'company' mode — the roster it needs (employeeOptions) is already loaded below.
   const canMarkPresent = hasPermission(user.role, 'canMarkAttendance');
   const isCeo = user.role === 'ceo';
-  // Mirrors AttendanceCorrectionPanel's own (pre-existing) !isCeo gate on its submit form, plus
-  // the backend's requireEmployeeId(user) in AttendanceCorrectionService#submit -- a session with
-  // no employeeId would only reach a 400 there, so the button that opens the modal stays hidden
-  // rather than offering an action that can only fail.
+  // Mirrors AttendanceCorrectionPanel's own !isCeo gate on its submit form, plus the backend's requireEmployeeId
+  // in AttendanceCorrectionService#submit.
   const canRequestCorrection = !isCeo && !!user.employeeId;
-  // Same condition that already gates the ฝ่าย/พนักงาน filter bar below (`!isSelfView`): an
-  // employee looking at their own month has nothing to summarise that this page doesn't already
-  // show them a day at a time, and the button would just offer a report scoped to themselves alone.
+  // Same condition that already gates the ฝ่าย/พนักงาน filter bar below (`!isSelfView`): an employee looking at
+  // their own month has nothing to summarise that this page doesn't already show them a day at a time, and the
+  // button would just offer a report scoped to themselves alone.
   const canViewMonthlySummary = !isSelfView;
-  // Deliberately not memoized: `monthBounds()` is two Intl.DateTimeFormat calls, cheap enough to
-  // recompute on every render, and memoizing it with an empty dep array froze "today" at mount --
-  // a tab left open past Bangkok midnight would keep clamping the stepper/picker to the previous
-  // day's bounds.
+  // Deliberately not memoized: `monthBounds()` is two Intl.DateTimeFormat calls, cheap enough to recompute on
+  // every render, and memoizing it with an empty dep array froze "today" at mount -- a tab left open past
+  // Bangkok midnight would keep clamping the stepper/picker to the previous day's bounds.
   const { start: monthStart, today } = monthBounds();
 
-  // Employees read their own month at a glance; everyone else answers "who is late today", so
-  // they get a single day plus a stepper.
+  // Employees read their own month at a glance; everyone else answers "who is late today", so they get a single
+  // day plus a stepper.
   const [selectedDate, setSelectedDate] = useState(today);
   const [employeeId, setEmployeeId] = useState('');
-  // HR/CEO only. A ฝ่าย manager is already pinned to their own division server-side, so offering
-  // them this control would imply a reach they don't have.
+  // HR/CEO only. A ฝ่าย manager is already pinned to their own division server-side, so offering them this
+  // control would imply a reach they don't have.
   const [divisionId, setDivisionId] = useState('');
   const [employeeOptions, setEmployeeOptions] = useState([]);
   const [unmapped, setUnmapped] = useState([]);
@@ -122,18 +108,14 @@ export function AttendancePage({ user, showToast }) {
   const [devices, setDevices] = useState([]);
   const [importDeviceCode, setImportDeviceCode] = useState('');
 
-  // The self-view fetch is deliberately NOT widened along with the picker's 3-month browsable
-  // window: it has no date control to reach further back with (the whole filter bar is gated on
-  // !isSelfView below), and AttendanceDailyService.MAX_RANGE_DAYS caps any query at <92 days --
-  // a 3-month-back `from` combined with a late-month `today` can exceed that and 400. Kept at the
-  // current month, matching both the copy below ("...ในเดือนนี้") and the API's hard cap.
+  // The self-view fetch is deliberately NOT widened along with the picker's 3-month browsable window: it has no
+  // date control to reach further back with, and AttendanceDailyService.MAX_RANGE_DAYS caps any query at <92
+  // days.
   const range = isSelfView
     ? { from: bangkokMonthStartIso(), to: today }
     : { from: selectedDate, to: selectedDate };
 
-  // Issue #422 B2: onto react-query so this screen participates in the shared cache (an OT
-  // approval or a same-day recalculation elsewhere can now reach it via invalidation, and it gets
-  // a 60s poll + window-focus refetch, same as PayrollPage below) instead of the plain
+  // Issue #422 B2: onto react-query so this screen participates in the shared cache instead of the plain
   // useState+useEffect loader that made it a dead end for both.
   const daysQuery = useQuery({
     queryKey: queryKeys.attendanceDailyScoped(range.from, range.to, employeeId, divisionId),
@@ -147,38 +129,12 @@ export function AttendancePage({ user, showToast }) {
     refetchOnWindowFocus: true,
   });
   const days = daysQuery.data ?? [];
-  // `isLoading` (true only for the FIRST fetch of a given scope, i.e. no cached data yet) drives
-  // the table's loading skeleton AND (adversarial-review fix, P2) the รีเฟรช button's disabled
-  // state below -- `isFetching` (true for ANY fetch in flight, including the silent 60s poll) was
-  // used for the button originally, but that made it flicker disabled on every background poll
-  // with no user action involved. This does let a rapid multi-click on รีเฟรช fan out that many
-  // real `GET /attendance/daily` requests (measured: 3 clicks -> 4 calls total, incl. the mount
-  // fetch) -- TanStack Query v5's `refetch()` does NOT dedupe against other in-flight fetches for
-  // the same key by default (`cancelRefetch: true`), and this `queryFn` does not wire the
-  // `signal` argument through to `api.attendance.daily` to make cancellation possible either.
-  // Left as-is: the outcome is harmless (React Query still serialises the resulting STATE updates
-  // -- last response to resolve wins, same table either way), and wiring `signal` through would
-  // touch the shared `apiRequest` helper (and its mock counterpart) for every endpoint, not just
-  // this one. Worth doing if this page ever talks to a slow/rate-limited backend.
+  // `isLoading` drives the table's loading skeleton AND the รีเฟรช button's disabled state below -- `isFetching`
+  // was used for the button originally, but that made it flicker disabled on every background poll with no user
+  // action involved.
   const loading = daysQuery.isLoading;
 
-  // PR #426 (P0, adversarial review) introduced this showToastRef indirection because `showToast`
-  // (useToast()/App.jsx) used to be a plain, re-created-per-render function: with it in this
-  // effect's deps, calling it re-rendered App, which handed back a new `showToast` identity, which
-  // re-fired this effect for as long as `daysQuery.error` stayed non-null.
-  //
-  // The root cause is now fixed at the source -- useToast.js wraps showToast in useCallback([]),
-  // so it has a stable identity everywhere in production, and this ref is no longer load-bearing
-  // there. Kept anyway, deliberately, rather than deleted: this file's own regression test
-  // (AttendancePage.test.jsx, "does not call showToast more than once ... driven by an App-shaped
-  // (unstable) showToast") renders through a harness whose counting wrapper AROUND showToast is
-  // itself a fresh closure every render of that harness, independent of useToast.js's fix --
-  // removing this ref would put that still-locally-unstable wrapper directly in this effect's
-  // deps and fail that test, for a reason that has nothing to do with the bug this ref was
-  // written to fix. Still keyed on the error's MESSAGE (a primitive), not the Error object:
-  // `daysQuery` polls every 60s (refetchInterval above), and a repeated failure hands back a new
-  // Error instance each attempt even when the text is identical, which would otherwise re-toast
-  // the same message every poll.
+  // Read the latest toast callback through a ref so error effects do not repeat on callback identity changes.
   const showToastRef = useRef(showToast);
   useEffect(() => {
     showToastRef.current = showToast;
@@ -189,14 +145,14 @@ export function AttendancePage({ user, showToast }) {
   }, [daysQueryErrorMessage]);
 
   // A day's expanded punch-detail panel belongs to the scope the user is currently looking at
-  // (date/employee/division) -- reset only when THAT changes, not on every background poll of the
-  // same scope, or an open panel would silently collapse under someone reading it every 60s.
+  // (date/employee/division) -- reset only when THAT changes, not on every background poll of the same scope, or
+  // an open panel would silently collapse under someone reading it every 60s.
   useEffect(() => {
     setExpandedKey(null);
   }, [range.from, range.to, employeeId, divisionId]);
 
-  // A ฝ่าย manager's picker cannot come from the shared `employees` prop — that list is HR-only,
-  // so it holds exactly one entry for them. This endpoint returns their actual team.
+  // A ฝ่าย manager's picker cannot come from the shared `employees` prop — that list is HR-only, so it holds
+  // exactly one entry for them. This endpoint returns their actual team.
   useEffect(() => {
     if (isSelfView) return undefined;
     let cancelled = false;
@@ -212,8 +168,8 @@ export function AttendancePage({ user, showToast }) {
     };
   }, [isSelfView]);
 
-  // Unmapped scans can never appear in a day view (they have no employee), so surface them
-  // separately or someone's attendance goes missing with no signal at all.
+  // Unmapped scans can never appear in a day view (they have no employee), so surface them separately or
+  // someone's attendance goes missing with no signal at all.
   useEffect(() => {
     if (!canSeeUnmapped) return undefined;
     let cancelled = false;
@@ -250,8 +206,8 @@ export function AttendancePage({ user, showToast }) {
   const rowKey = useCallback((day) => `${day.employee_id}:${day.work_date}`, []);
 
   const toggleExpanded = useCallback(async (day) => {
-    // A day with no scans has nothing to reveal; opening an empty panel and firing a request for it
-    // is worse than not responding to the click.
+    // A day with no scans has nothing to reveal; opening an empty panel and firing a request for it is worse than
+    // not responding to the click.
     if (!day.punch_count) return;
     const key = rowKey(day);
     if (expandedKey === key) {
@@ -266,8 +222,8 @@ export function AttendancePage({ user, showToast }) {
         to: day.work_date,
         employeeId: day.employee_id,
       });
-      // The API returns punches oldest-first, which is the contract PunchDetail relies on to label
-      // index 0 as เข้า and the last index as ออก (see AttendanceRepository.findPunches).
+      // The API returns punches oldest-first, which is the contract PunchDetail relies on to label index 0 as เข้า
+      // and the last index as ออก (see AttendanceRepository.findPunches).
       setPunchesByKey((current) => ({ ...current, [key]: response.punches || [] }));
     } catch (error) {
       showToast('error', error.message || 'โหลดรายการสแกนไม่สำเร็จ');
@@ -275,27 +231,16 @@ export function AttendancePage({ user, showToast }) {
   }, [expandedKey, punchesByKey, rowKey, showToast]);
 
   function stepDay(deltaDays) {
-    // Pure YYYY-MM-DD calendar arithmetic -- NOT `new Date(...).toISOString()`. That round trip
-    // reads the UTC calendar day off a Bangkok-midnight instant, which is always one day behind
-    // the Bangkok date intended (Bangkok midnight is 17:00 UTC the previous day), netting a 2-day
-    // back-step and a stuck forward-step. See addDaysIso's comment in utils/format.js.
+    // Pure YYYY-MM-DD calendar arithmetic -- NOT `new Date(...).toISOString()`. See addDaysIso's comment in
+    // utils/format.js.
     const iso = addDaysIso(selectedDate, deltaDays);
     // Clamp to the browsable window in both directions — see monthBounds().
     if (iso < monthStart || iso > today) return;
     setSelectedDate(iso);
   }
 
-  /**
-   * Rolls existing punches up into daily rows.
-   *
-   * Needed because the roll-up only runs forward — on live punches and on import — so a database
-   * with historical scans shows nothing until this is run once. Recalculation is idempotent and
-   * skips rows HR has manually overridden, so it is safe to re-run after any .dat import or badge
-   * mapping fix.
-   *
-   * The range starts well before the oldest expected punch rather than being derived from the UI's
-   * current month, which is deliberately narrow.
-   */
+  /** Rolls existing punches up into daily rows. Needed because the roll-up only runs forward — on live punches
+   * and on import — so a database with historical scans shows nothing until this is run once. */
   async function runBackfill() {
     setRecalculating(true);
     try {
@@ -314,11 +259,9 @@ export function AttendancePage({ user, showToast }) {
     }
   }
 
-  /**
-   * The CEO/HR stand-up roster: marks everyone checked present for the chosen date with no punches
-   * (WFH). Resubmitting for the same date reconciles the roster — anyone left off is un-marked —
-   * so this is idempotent and safe to run again if someone was ticked off by mistake.
-   */
+  /** The CEO/HR stand-up roster: marks everyone checked present for the chosen date with no punches (WFH).
+   * Resubmitting for the same date reconciles the roster — anyone left off is un-marked — so this is idempotent
+   * and safe to run again if someone was ticked off by mistake. */
   async function submitMarkPresent({ date, employeeIds, notes }) {
     setMarkingPresent(true);
     try {
@@ -343,14 +286,8 @@ export function AttendancePage({ user, showToast }) {
     }
   }
 
-  /**
-   * สรุปรายเดือน export: an xlsx workbook for the chosen month, honouring the SAME ฝ่าย/พนักงาน
-   * filter (`employeeId`/`divisionId`) the day-view table above already applies -- camelCase query
-   * params, matching `daysQuery`'s own `api.attendance.daily(...)` call just above (a snake_case
-   * key here would silently miss `AttendanceController`'s `@RequestParam(value = "employeeId", ...)`
-   * binding and the filter would drop with no error, since a GET query string gets no
-   * snake_case-to-camelCase translation the way a POST JSON body does elsewhere in this codebase).
-   */
+  /** สรุปรายเดือน export: an xlsx workbook for the chosen month, honouring the SAME ฝ่าย/พนักงาน filter the
+   * day-view table above already applies. */
   async function downloadMonthlySummary({ month }) {
     setGeneratingSummary(true);
     try {
@@ -433,9 +370,8 @@ export function AttendancePage({ user, showToast }) {
     ];
   }, [expandedKey, isSelfView, rowKey, toggleExpanded]);
 
-  // Derived from the employees the caller may already see, so the filter can never offer a ฝ่าย
-  // whose people they cannot read. Sorted by name; unnamed divisions are dropped rather than
-  // rendered as a blank option.
+  // Derived from the employees the caller may already see, so the filter can never offer a ฝ่าย whose people
+  // they cannot read. Sorted by name; unnamed divisions are dropped rather than rendered as a blank option.
   const divisionOptions = useMemo(() => {
     const byId = new Map();
     employeeOptions.forEach((option) => {
@@ -459,12 +395,7 @@ export function AttendancePage({ user, showToast }) {
   );
 
   // Read-only description of the ฝ่าย/พนักงาน filter a สรุปรายเดือน export will carry, shown inside
-  // MonthlySummaryModal -- taken from the SAME divisionId/employeeId state the day-view filter bar
-  // above already reads (never from a separate copy the modal keeps itself), so there is no way for
-  // the dialog to promise a scope different from what the button that opened it is filtered to.
-  // Deliberately worded to echo AttendanceMonthlySummaryService#describeAppliedFilter's own "ฝ่าย: …
-  // · พนักงาน: … " / "ทุกฝ่าย (พนักงานทั้งหมด)" phrasing on the backend, so the modal's promise and
-  // the workbook's own title-block line read as the same sentence.
+  // MonthlySummaryModal.
   const summaryFilterLabel = useMemo(() => {
     const parts = [];
     if (divisionId) {
@@ -480,14 +411,8 @@ export function AttendancePage({ user, showToast }) {
 
   const unmappedTotal = unmapped.reduce((sum, badge) => sum + (badge.punch_count || 0), 0);
 
-  // Single element, reused at two possible positions below (never both at once) -- see the
-  // isCeo-conditional placement around <DataTable> for why the position itself depends on isCeo.
-  // Gate is deliberately broader than the ขอแก้ไขเวลา button above: a CEO has nothing to *submit*
-  // (canRequestCorrection is !isCeo) but still needs this section to *review* what everyone else
-  // submitted, and anyone with no employeeId has neither a request of their own to see nor a right
-  // to submit one. Moved here from RequestsPage.jsx's third tab
-  // (fix/attendance-correction-on-attendance-page) -- see that file's own header comment for where
-  // the tab used to be.
+  // Single element, reused at two possible positions below (never both at once) -- see the isCeo-conditional
+  // placement around <DataTable> for why the position itself depends on isCeo.
   const correctionPanel = isCeo || !!user.employeeId
     ? <AttendanceCorrectionPanel user={user} showToast={showToast} />
     : null;
@@ -496,9 +421,9 @@ export function AttendancePage({ user, showToast }) {
     <PageStack>
       <PageHeader
         title="เวลาทำงาน"
-        // The per-page `grid-cols-[minmax(180px,1fr)_auto]` override that used to sit here is gone:
-        // the title-column floor it added is now PageHeader's own default, so every page gets it.
-        // See PageHeader.jsx for the mechanism and the measurements.
+        // The per-page `grid-cols-[minmax(180px,1fr)_auto]` override that used to sit here is gone: the title-column
+        // floor it added is now PageHeader's own default, so every page gets it. See PageHeader.jsx for the mechanism
+        // and the measurements.
         subtitle={
           isSelfView
             ? 'เวลาเข้า-ออกงานของคุณในเดือนนี้'
@@ -517,22 +442,17 @@ export function AttendancePage({ user, showToast }) {
               </Button>
             ) : null}
             {canViewMonthlySummary ? (
-              // secondary, same reasoning as ขอแก้ไขเวลา below: canMarkPresent (hr/ceo) and
-              // canViewMonthlySummary (!isSelfView) overlap for HR/CEO, so this must not compete
-              // with ทำเครื่องหมายเข้างาน for the one primary-weight slot in this row.
+              // secondary, same reasoning as ขอแก้ไขเวลา below: canMarkPresent (hr/ceo) and canViewMonthlySummary
+              // (!isSelfView) overlap for HR/CEO, so this must not compete with ทำเครื่องหมายเข้างาน for the one
+              // primary-weight slot in this row.
               <Button variant="secondary" onClick={() => setSummaryOpen(true)}>
                 <Icon name="fileText" />
                 สรุปรายเดือน
               </Button>
             ) : null}
             {canRequestCorrection ? (
-              // secondary, not primary: canMarkPresent (hr/ceo) and canRequestCorrection
-              // (!isCeo) overlap for HR, who would otherwise see two solid primary-colored
-              // buttons competing in the same row. For the far more common audience -- an
-              // ordinary employee, who never sees ทำเครื่องหมายเข้างาน at all -- this is still a
-              // clearly bordered, full-weight button, just not the loudest one on the page; the
-              // page's own purpose (reviewing your attendance) doesn't need a filled CTA, and
-              // filing a correction is an occasional exception, not the primary reason to be here.
+              // secondary, not primary: canMarkPresent (hr/ceo) and canRequestCorrection (!isCeo) overlap for HR, who would
+              // otherwise see two solid primary-colored buttons competing in the same row.
               <Button variant="secondary" onClick={() => setCorrectionOpen(true)}>
                 <Icon name="plus" />
                 ขอแก้ไขเวลา
@@ -690,9 +610,9 @@ export function AttendancePage({ user, showToast }) {
       ) : null}
 
       {correctionOpen ? (
-        // No `user` prop -- AttendanceCorrectionRequestModal.jsx deliberately doesn't take one;
-        // see its own doc comment for why (this button's own canRequestCorrection gate is the
-        // only role check this feature needs on the frontend).
+        // No `user` prop -- AttendanceCorrectionRequestModal.jsx deliberately doesn't take one; see its own doc
+        // comment for why (this button's own canRequestCorrection gate is the only role check this feature needs on
+        // the frontend).
         <AttendanceCorrectionRequestModal
           showToast={showToast}
           onClose={() => setCorrectionOpen(false)}
@@ -700,12 +620,8 @@ export function AttendancePage({ user, showToast }) {
       ) : null}
 
       {summaryOpen ? (
-        // `today` (not `selectedDate`) is the max/default month: the date STEPPER above is clamped
-        // to the browsable window (monthBounds()), which can only ever reach the CURRENT month, but
-        // HR's main use for this report is LAST month, for payroll -- so this opens its own
-        // <input type="month">, independent of the day-view's own date state, defaulting to (and
-        // capped at) the current month rather than inheriting a stepper value that could not
-        // usefully address the month HR most wants anyway.
+        // `today` is the max/default month: the date STEPPER above is clamped to the browsable window (monthBounds),
+        // which can only ever reach the CURRENT month, but HR's main use for this report is LAST month, for payroll.
         <MonthlySummaryModal
           defaultMonth={today.slice(0, 7)}
           maxMonth={today.slice(0, 7)}
@@ -718,35 +634,12 @@ export function AttendancePage({ user, showToast }) {
 
       {!isSelfView ? (
         <div className={FILTER_BAR_CLASS}>
-          {/*
-            The stepper is ONE field, not three items in a row. It used to be a
-            `flex items-center gap-2` of [prev][bare <label> + date][next], which
-            put the label text "วันที่" inside the flex row — so the label sat
-            above the input only, indented to the input's left edge, while the
-            ฝ่าย/พนักงาน labels below started at the bar's left edge. Two label
-            x-positions in one bar is the misalignment this reads as. Wrapping
-            the whole control in FilterField puts the label back on the bar's
-            common left edge and lets the group shrink as one unit.
-          */}
-          {/*
-            This field holds THREE controls, so it needs both a wider basis than a plain field and
-            a shrinkable inner row. Regression fix (#638 introduced it, 2026-08-10):
-
-            FilterField gives every field a fixed `basis-[190px]`, which is right for one control.
-            Here the row is [prev 44px][date input][next 44px] plus two 8px gaps — 104px of
-            fixed-width furniture before the date is drawn at all. The inner row was a plain flex
-            container, i.e. a GRID ITEM at the default `min-width: auto`, so it could not shrink
-            below its own min-content and overflowed the field instead. Measured at 1440px: the
-            row rendered 250px inside a 190px field and the "วันถัดไป" button landed at x=521-565
-            while the field ended at 505 — 60px outside, painted on top of the ฝ่าย select beside
-            it. That is the overlapping arrow in the owner's screenshot.
-
-            `min-w-0` alone fixes the overlap (row 250 -> 190, escape 0) but squeezes the date
-            input to 86px, which Chromium renders without clipping and iOS Safari does not — the
-            same platform gap that caused the original bug. So both: `min-w-0` so the group can
-            never escape its field again, and a basis wide enough that it does not have to
-            (260px -> the input gets its natural 156px, measured).
-          */}
+          {/* The stepper is ONE field, not three items in a row. Two label x-positions in one bar is the misalignment
+           * this reads as. Wrapping the whole control in FilterField puts the label back on the bar's common left edge
+           * and lets the group shrink as one unit. */}
+          {/* This field holds THREE controls, so it needs both a wider basis than a plain field and a shrinkable inner
+           * row. So both: `min-w-0` so the group can never escape its field again, and a basis wide enough that it does
+           * not have to (260px -> the input gets its natural 156px, measured). */}
           <FilterField label="วันที่" htmlFor="attendance-selected-date" className="basis-[260px]">
             <div className="flex min-w-0 items-center gap-2">
               <Button
@@ -754,11 +647,9 @@ export function AttendancePage({ user, showToast }) {
                 onClick={() => stepDay(-1)}
                 disabled={loading || selectedDate <= monthStart}
                 aria-label="วันก่อนหน้า"
-                // Square, and at the mobile touch floor. These were 36px wide
-                // against a 44px-tall input — under WCAG 2.2 SC 2.5.8's 24px
-                // minimum in one axis only by luck, and visibly lighter than
-                // every other tappable thing on the page. `shrink-0` keeps them
-                // at that size while the date input absorbs the shrinking.
+                // Square, and at the mobile touch floor. These were 36px wide against a 44px-tall input — under WCAG 2.2 SC
+                // 2.5.8's 24px minimum in one axis only by luck, and visibly lighter than every other tappable thing on the
+                // page. `shrink-0` keeps them at that size while the date input absorbs the shrinking.
                 className="h-11 w-11 shrink-0 px-0"
               >
                 <Icon name="chevronLeft" />
@@ -791,8 +682,8 @@ export function AttendancePage({ user, showToast }) {
                 value={divisionId}
                 onChange={(event) => {
                   setDivisionId(event.target.value);
-                  // The chosen person may not belong to the new ฝ่าย; clearing avoids a filter pair
-                  // that silently matches nothing.
+                  // The chosen person may not belong to the new ฝ่าย; clearing avoids a filter pair that silently matches
+                  // nothing.
                   setEmployeeId('');
                 }}
               >
@@ -818,34 +709,16 @@ export function AttendancePage({ user, showToast }) {
         </div>
       ) : null}
 
-      {/* CEO: above the day table -- this section is actionable work (the review queue is why a
-          CEO comes to this page), so it should not sit below ~50 rows of company attendance
-          (adversarial review F2). Everyone else gets it below (see the placement after
-          </DataTable>) -- their own request history belongs after the attendance data it refers
-          to. */}
+      {/* CEO: above the day table -- this section is actionable work (the review queue is why a CEO comes to this
+       * page), so it should not sit below ~50 rows of company attendance (adversarial review F2). */}
       {isCeo ? correctionPanel : null}
 
       <DataTable
         columns={columns}
         rows={days}
         getRowKey={rowKey}
-        // The 840px floor below needs somewhere to scroll, or it is just clipped.
-        //
-        // `<Panel flush>` is `overflow-hidden` (it has to be — the flush body runs edge to edge, so
-        // the card's radius is what clips its corners). With the grid held at 840px inside a panel
-        // whose content box is narrower, the excess had no scroll region and simply vanished:
-        // measured at 768px, scrollWidth 840 vs clientWidth 702, with NO scrollable ancestor
-        // anywhere up the chain — 138px of table unreachable by any gesture.
-        //
-        // The casualty is the last column, which is the status column — i.e. exactly what the
-        // 840px floor was added to protect. The floor stopped the columns being *squeezed* and
-        // then the panel hid them anyway, so the badge was off-screen either way and the fix
-        // looked like it had worked. `panelClassName` exists for precisely this (see DataTable's
-        // own comment on the prop) and keeps the change on this page rather than altering the
-        // scroll model of every table in the app.
-        // Status is the reason this page exists, so it gets the widest share and the time columns
-        // are held narrow. Without this the status column was pushed off-screen at tablet width,
-        // which hid every late/early/OT badge on the page.
+        // The 840px floor below needs somewhere to scroll, or it is just clipped. `<Panel flush>` is `overflow-hidden`
+        // (it has to be — the flush body runs edge to edge, so the card's radius is what clips its corners).
         gridClassName={
           isSelfView
             ? 'grid-cols-[0.75fr_0.45fr_0.45fr_0.35fr_0.8fr_1.55fr_minmax(78px,0.7fr)] reflow-cards'
@@ -877,21 +750,15 @@ export function AttendancePage({ user, showToast }) {
         }}
       />
 
-      {/* Everyone but the CEO: below the day table -- their own request history, which belongs
-          after the attendance data it refers to. See correctionPanel's own definition above for
-          the gate, and the comment before <DataTable> for the CEO's (opposite) placement. */}
+      {/* Everyone but the CEO: below the day table -- their own request history, which belongs after the attendance
+       * data it refers to. See correctionPanel's own definition above for the gate, and the comment before
+       * <DataTable> for the CEO's (opposite) placement. */}
       {!isCeo ? correctionPanel : null}
     </PageStack>
   );
 }
 
-/**
- * The CEO/HR stand-up (WFH) roster picker. Everyone is pre-checked by default — most stand-up days
- * nobody is absent, so the caller just unchecks the no-shows instead of hunting for who attended —
- * and resubmitting for a date reconciles the roster server-side (see
- * `AttendanceDailyService#setWfhRoster`), so unchecking someone here and saving again removes an
- * earlier mark.
- */
+/** The CEO/HR stand-up (WFH) roster picker. */
 function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting, onClose, onSubmit }) {
   const [date, setDate] = useState(defaultDate);
   const [selected, setSelected] = useState(() => new Set(employees.map((employee) => employee.employee_id)));
@@ -1001,14 +868,9 @@ function MarkPresentModal({ employees, defaultDate, minDate, maxDate, submitting
   );
 }
 
-/**
- * The สรุปรายเดือน (monthly attendance summary) export dialog -- a single {@code <input
- * type="month">} plus a read-only recap of the ฝ่าย/พนักงาน filter that will be applied, so there is
- * no doubt about what lands in the downloaded file before generating it. `month` starts as
- * `defaultMonth` (the current month) and is capped at `maxMonth` (also the current month, passed by
- * the caller rather than computed here) -- HR can still type/pick any PAST month freely, only the
- * upper bound is fixed.
- */
+/** The สรุปรายเดือน (monthly attendance summary) export dialog -- a single <input type="month"> plus a
+ * read-only recap of the ฝ่าย/พนักงาน filter that will be applied, so there is no doubt about what lands in
+ * the downloaded file before generating it. */
 function MonthlySummaryModal({ defaultMonth, maxMonth, filterLabel, submitting, onClose, onSubmit }) {
   const [month, setMonth] = useState(defaultMonth);
 
@@ -1043,10 +905,8 @@ function MonthlySummaryModal({ defaultMonth, maxMonth, filterLabel, submitting, 
           onChange={(event) => setMonth(event.target.value || defaultMonth)}
         />
       </label>
-      {/* The native <input type="month"> picker renders its own locale-dependent label ("August
-          2026", "2026-08", …) depending on the browser, which is not necessarily how a Thai HR user
-          reads a เดือน — this line pins the same reading regardless of browser locale, so nobody
-          generates a file for the wrong month because the picker's own label looked ambiguous. */}
+      {/* The native <input type="month"> picker renders its own locale-dependent label depending on the browser,
+       * which is not necessarily how a Thai HR user reads a เดือน. */}
       <p className="mt-1.5 text-xs text-text-muted">{formatThaiMonthYearFromMonthInputValue(month)}</p>
 
       <div className="mt-4 rounded-md border border-border bg-surface-subtle p-3 text-sm">
@@ -1057,14 +917,9 @@ function MonthlySummaryModal({ defaultMonth, maxMonth, filterLabel, submitting, 
   );
 }
 
-/**
- * The raw scans behind a day — what settles "the system says 17:32, why?".
- *
- * <p>Someone may badge in and out several times a day (lunch, moving between sites). The first and
- * last scan are what became the เข้า/ออก columns, so they are labelled as such; everything between
- * is marked ระหว่างวัน. Without the labels this is just a list of times that silently repeats the
- * two values already shown on the row.
- */
+/** The raw scans behind a day — what settles "the system says 17:32, why?". Someone may badge in and out
+ * several times a day (lunch, moving between sites). The first and last scan are what became the เข้า/ออก
+ * columns, so they are labelled as such; everything between is marked ระหว่างวัน. */
 export function PunchDetail({ punches }) {
   if (!punches) {
     return <span className="text-xs text-text-muted">กำลังโหลดรายการสแกน…</span>;
@@ -1091,11 +946,9 @@ export function PunchDetail({ punches }) {
   );
 }
 
-/**
- * Which of the day's scans a punch is. A single scan is deliberately left unlabelled — the day row
- * already says which side is missing, and calling a lone punch "เข้า" would assert a direction the
- * data does not carry.
- */
+/** Which of the day's scans a punch is. A single scan is deliberately left unlabelled — the day row already
+ * says which side is missing, and calling a lone punch "เข้า" would assert a direction the data does not
+ * carry. */
 export function punchRole(index, total) {
   if (total === 1) return { label: '', muted: true };
   if (index === 0) return { label: 'เข้า', muted: false };
@@ -1120,9 +973,8 @@ function StatusCell({ day }) {
 }
 
 function AttendanceDayCard({ day, isSelfView, expanded, onToggle }) {
-  // A day with no scans should read as one quiet line, not as a card full of dashes — on a phone
-  // every empty day costs a full card, and "รวม - ชม." plus a bare "-" is three ways of saying
-  // "nothing happened".
+  // A day with no scans should read as one quiet line, not as a card full of dashes — on a phone every empty day
+  // costs a full card, and "รวม - ชม." plus a bare "-" is three ways of saying "nothing happened".
   const hasTimes = Boolean(day.check_in || day.check_out);
   return (
     <>
@@ -1174,11 +1026,9 @@ function AttendanceDayCard({ day, isSelfView, expanded, onToggle }) {
   );
 }
 
-/**
- * Marks days that hold more than the two scans already shown in the เข้า/ออก columns, so the ones
- * worth opening are findable without clicking rows at random. An ordinary in/out day stays clean —
- * which is what gives the chip its meaning.
- */
+/** Marks days that hold more than the two scans already shown in the เข้า/ออก columns, so the ones worth
+ * opening are findable without clicking rows at random. An ordinary in/out day stays clean — which is what
+ * gives the chip its meaning. */
 function MidDayPunchChip({ day }) {
   if (!day.punch_count || day.punch_count <= 2) return null;
   return (
@@ -1200,8 +1050,8 @@ const statusColumn = {
   ),
 };
 
-// Where the day's attendance came from: the scanner's site (Showroom / Warehouse) for punched days,
-// or WFH for a CEO/HR "marked present" day with no scans. Days with no record show "-".
+// Where the day's attendance came from: the scanner's site (Showroom / Warehouse) for punched days, or WFH for
+// a CEO/HR "marked present" day with no scans. Days with no record show "-".
 const sourceColumn = {
   key: 'source',
   header: 'สถานที่',

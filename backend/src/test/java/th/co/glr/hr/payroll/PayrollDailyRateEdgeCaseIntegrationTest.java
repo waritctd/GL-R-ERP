@@ -19,37 +19,9 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * REVIEWER-ADDED (Opus review of feat/payroll-daily-rate-support, 2026-07-30). Written against the
- * real {@link PayrollService} + real Postgres, not Mockito, for the reason CLAUDE.md gives: a mocked
- * repository "passes" while the SQL does something else.
- *
- * <p><b>Fixes-round update (2026-07-30):</b> this file originally PINNED three observed gaps rather
- * than endorsing them (the absent/zero {@code daysWorked} boundary -- two tests -- and the missing
- * upper bound -- one test). All three are now fixed ({@code
- * PayrollService#requireEveryDailyRateEmployeeHasDaysWorked} for the first two, the {@code
- * MAX_DAYS_WORKED} guard in {@code PayrollService#calculateLine} plus V103's tightened {@code
- * chk_payroll_line_days_worked_range} for the third), so those three tests were updated in place to
- * assert the refusal instead of the gap -- per this review's own instruction for the first two
- * ("it may assert the ฿0 behaviour, in which case update it to assert the refusal"), and by the same
- * logic for the third (Finding 4 necessarily changes what 45 days does; the old assertion could not
- * stay green and still mean anything). Nothing was deleted; every test still exercises the exact
- * scenario it was written for, just against the corrected outcome.
- *
- * <p>Two things the branch's own {@code PayrollDailyRateIntegrationTest} does not cover:
- *
- * <ol>
- *   <li><b>The absent/zero {@code daysWorked} boundary.</b> A daily-rate employee whose day count
- *       was never typed used to compute a ฿0 salary with no error at all. Note this is the exact
- *       production path: {@code PayrollPage.jsx#hasPayrollInput} does not submit an adjustment whose
- *       every numeric field is zero/blank, so "HR forgot the day count" reaches the service as NO
- *       input row for that employee at all, not as {@code daysWorked = 0}.</li>
- *   <li><b>The monthly /30 convention, pinned through a real unpaid-leave deduction.</b> The branch's
- *       own monthly test asserts {@code dailyRate} alone; nothing asserted that the figure DERIVED
- *       from it (unpaidLeaveDeduction / leaveDeductionRefund) is unchanged for a monthly employee,
- *       which is the silent-company-wide-regression risk. This is the mutation target for that claim.</li>
- * </ol>
- */
+/** REVIEWER-ADDED (Opus review of feat/payroll-daily-rate-support, 2026-07-30). A daily-rate employee whose day
+ * count was never typed used to compute a ฿0 salary with no error at all. Two things the branch's own
+ * PayrollDailyRateIntegrationTest does not cover: The absent/zero daysWorked boundary. */
 class PayrollDailyRateEdgeCaseIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final BigDecimal DAY_RATE = new BigDecimal("450.00");
     private static final LocalDate JULY = LocalDate.of(2026, 7, 1);
@@ -82,16 +54,9 @@ class PayrollDailyRateEdgeCaseIntegrationTest extends AbstractPostgresIntegratio
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * UPDATED (Finding 1 fix, Opus review of the review, 2026-07-30): this test originally PINNED the
-     * gap it describes -- a ฿0 payslip processing silently with no error. Per the review's own
-     * acceptance criteria for Finding 1 ("the reviewer's test goes GREEN without modification... it
-     * may assert the ฿0 behaviour, in which case update it to assert the refusal"), this test now
-     * asserts the fix: {@code PayrollService#requireEveryDailyRateEmployeeHasDaysWorked} refuses the
-     * PROCESS (409, naming the employee) instead of silently persisting a ฿0 payslip. Nothing is
-     * persisted -- {@code reloadedLineFor} would find no period at all, so this test no longer reads
-     * one back.
-     */
+    /** UPDATED (Finding 1 fix, Opus review of the review, 2026-07-30): this test originally PINNED the gap it
+     * describes -- a ฿0 payslip processing silently with no error. Per the review's own acceptance criteria for
+     * Finding 1 ("the reviewer's test goes GREEN without modification... */
     @Test
     void aDailyRateEmployeeWithNoInputRowAtAllProcessesSilentlyAtZeroPay() {
         long employeeId = seedEmployee("DRE-001", "ไม่กรอก", "วันทำงาน", DAY_RATE, "D");
@@ -107,11 +72,9 @@ class PayrollDailyRateEdgeCaseIntegrationTest extends AbstractPostgresIntegratio
             .isEmpty();
     }
 
-    /**
-     * UPDATED (Finding 1 fix, 2026-07-30): an explicitly typed zero is the same refusal as an omitted
-     * input row -- see the javadoc on the test above for why this assertion changed from pinning the
-     * ฿0 gap to asserting the fix.
-     */
+    /** UPDATED (Finding 1 fix, 2026-07-30): an explicitly typed zero is the same refusal as an omitted input row --
+     * see the javadoc on the test above for why this assertion changed from pinning the ฿0 gap to asserting the
+     * fix. */
     @Test
     void anExplicitZeroDaysWorkedIsTheSameSilentZeroPay() {
         long employeeId = seedEmployee("DRE-002", "ศูนย์วัน", "ทดสอบ", DAY_RATE, "D");
@@ -125,21 +88,9 @@ class PayrollDailyRateEdgeCaseIntegrationTest extends AbstractPostgresIntegratio
         assertThat(payrollRepository.findPeriodByMonth(JULY)).isEmpty();
     }
 
-    /**
-     * UPDATED (Finding 4 fix, 2026-07-30): this test originally PINNED the gap it describes -- 45
-     * days silently accepted and paid in full. Unlike the two tests above, the review did not name
-     * this one as a pre-authorized rewrite; it is updated anyway because the fix for Finding 4
-     * necessarily changes this exact outcome (the review's own Finding 4 asks for the bound that
-     * makes 45 unreachable), and leaving the old assertion in place would simply fail red with no
-     * useful signal. Reported explicitly in the PR body as a deviation from "verbatim", same
-     * disclosure standard as the two tests Finding 1 named directly.
-     *
-     * <p>45 is refused by {@code PayrollService#calculateLine}'s own {@code MAX_DAYS_WORKED} check
-     * (mirrors the per-diem-basis guard) -- a clean 400, not a bare {@code
-     * DataIntegrityViolationException} from V103's tightened {@code
-     * chk_payroll_line_days_worked_range} CHECK, though that CHECK still exists as the DB-level
-     * backstop for any path that reaches this table without going through the service.
-     */
+    /** UPDATED (Finding 4 fix, 2026-07-30): this test originally PINNED the gap it describes -- 45 days silently
+     * accepted and paid in full. Reported explicitly in the PR body as a deviation from "verbatim", same
+     * disclosure standard as the two tests Finding 1 named directly. */
     @Test
     void anImpossibleDayCountIsAcceptedAndPaidWithNoUpperBoundCheck() {
         long employeeId = seedEmployee("DRE-003", "สี่สิบห้า", "วัน", DAY_RATE, "D");
@@ -170,16 +121,9 @@ class PayrollDailyRateEdgeCaseIntegrationTest extends AbstractPostgresIntegratio
             .isEqualByComparingTo("21.5");
     }
 
-    /**
-     * DESIGN CONSTRAINT A, the company-wide regression risk, pinned through the DERIVED figures
-     * rather than the rate alone: for a MONTHLY employee the dailyRate must stay {@code baseSalary/30}
-     * and every figure computed off it must be byte-identical to the pre-change engine.
-     *
-     * <p>MUTATION TARGET: make {@code PayrollService#calculateLine}'s {@code dailyRateOverride}
-     * unconditional (drop the {@code dailyRatePay ?} test) and this test goes red on the ฿3,000
-     * deduction -- it becomes ฿90,000 (30,000/day). It is the test that proves the /30 convention did
-     * not move for the 29 monthly employees.
-     */
+    /** DESIGN CONSTRAINT A, the company-wide regression risk, pinned through the DERIVED figures rather than the
+     * rate alone: for a MONTHLY employee the dailyRate must stay baseSalary/30 and every figure computed off it
+     * must be byte-identical to the pre-change engine. */
     @Test
     void aMonthlyEmployeesUnpaidLeaveStillDeductsAtBaseSalaryOverThirty() {
         long employeeId = seedEmployee("DRE-005", "รายเดือน", "ลาไม่รับ", new BigDecimal("30000.00"), "M");
@@ -205,16 +149,14 @@ class PayrollDailyRateEdgeCaseIntegrationTest extends AbstractPostgresIntegratio
             .isEqualByComparingTo("27000.00");
     }
 
-    /**
-     * The mirror of the above for a DAILY employee: the refund limb must agree with the deduction
-     * limb, both at the TRUE ฿450 rate. A refund derived from gross/30 while the deduction used the
-     * true rate would leave a residue on every cancel-after-close correction.
-     */
+    /** The mirror of the above for a DAILY employee: the refund limb must agree with the deduction limb, both at
+     * the TRUE ฿450 rate. A refund derived from gross/30 while the deduction used the true rate would leave a
+     * residue on every cancel-after-close correction. */
     @Test
     void aDailyEmployeesLeaveRefundAgreesWithTheDeductionAtTheTrueRate() {
         long employeeId = seedEmployee("DRE-006", "คืนวันลา", "ทดสอบ", DAY_RATE, "D");
-        // 2 unpaid days this month; the leave-refund limb is fed from hr.leave_payroll_correction, so
-        // assert the two limbs share one rate by checking the deduction and the reported rate agree.
+        // 2 unpaid days this month; the leave-refund limb is fed from hr.leave_payroll_correction, so assert the two
+        // limbs share one rate by checking the deduction and the reported rate agree.
         payrollService.process(
             new ProcessPayrollRequest(JULY, List.of(dailyInput(employeeId, new BigDecimal("25"), new BigDecimal("2")))), hr());
 

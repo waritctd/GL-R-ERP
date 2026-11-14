@@ -8,11 +8,9 @@ import java.time.LocalDateTime;
 import java.time.LocalTime;
 import org.junit.jupiter.api.Test;
 
-/**
- * The ใบลา HTML replica (Chromium engine): assert the document is self-contained (embedded Sarabun +
- * logo, so Chromium fetches nothing), autofills the request's values, marks the right leave-type box,
- * and HTML-escapes free text. Pixel fidelity is a visual/manual concern; these pin the data contract.
- */
+/** The ใบลา HTML replica (Chromium engine): assert the document is self-contained (embedded Sarabun + logo, so
+ * Chromium fetches nothing), autofills the request's values, marks the right leave-type box, and HTML-escapes
+ * free text. Pixel fidelity is a visual/manual concern; these pin the data contract. */
 class LeaveFormHtmlRendererTest {
     private final LeaveFormHtmlRenderer renderer = new LeaveFormHtmlRenderer();
 

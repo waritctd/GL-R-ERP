@@ -54,17 +54,16 @@ describe('CompactStatRow', () => {
   });
 
   it('does not accept or render a tone/color signal on individual items', () => {
-    // A caller passing a leftover `tone` (copy-pasted from a StatCard call site)
-    // must not leak into any className — this component has no tone prop.
+    // A caller passing a leftover `tone` (copy-pasted from a StatCard call site) must not leak into any className
+    // — this component has no tone prop.
     const { container } = render(<CompactStatRow items={[{ label: 'ทดสอบ', value: 1, tone: 'rose' }]} />);
     expect(container.querySelector('[class*="stat-rose"]')).toBeNull();
     expect(container.querySelector('[class*="status-rose"]')).toBeNull();
   });
 
-  // FIX 2 (2026-07 review): `dt` used to be `truncate`d, which clips label AND helper
-  // onto one nowrap line -- at the ~150px columns this grid hits on a phone, a Thai
-  // label alone eats the column and the helper silently ellipses into nothing. `dt`
-  // must be free to wrap instead.
+  // FIX 2 (2026-07 review): `dt` used to be `truncate`d, which clips label AND helper onto one nowrap line -- at
+  // the ~150px columns this grid hits on a phone, a Thai label alone eats the column and the helper silently
+  // ellipses into nothing. `dt` must be free to wrap instead.
   it('never truncates the label/helper line (dt), even when it is long', () => {
     const { container } = render(
       <CompactStatRow
@@ -77,9 +76,8 @@ describe('CompactStatRow', () => {
     expect(dt.textContent).toBe('ฐานค่าคอมเดือนนี้· สถานะรอบเดือน: PAYROLL_READY (พร้อมนำเข้า)');
   });
 
-  // FIX 3: DESIGN.md §18 requires truncated content to carry a tooltip. `dd` (the
-  // value) is the only part of this component still allowed to truncate, so it must
-  // always carry a `title` with the full value.
+  // FIX 3: DESIGN.md §18 requires truncated content to carry a tooltip. `dd` (the value) is the only part of
+  // this component still allowed to truncate, so it must always carry a `title` with the full value.
   it('gives the still-truncating value (dd) a title tooltip with its full text', () => {
     const { container } = render(<CompactStatRow items={[{ key: 'net', label: 'ยอดโอนสุทธิ', value: '฿1,234,567.89' }]} />);
     const dd = container.querySelector('dl > div > dd');
@@ -87,10 +85,9 @@ describe('CompactStatRow', () => {
     expect(dd.getAttribute('title')).toBe('฿1,234,567.89');
   });
 
-  // FIX 4: the loading skeleton must use the same item gap as the loaded row so the
-  // strip does not change height (and shift whatever sits below it) the moment data
-  // lands. Before the fix, loading used `gap-2` (8px) against the loaded row's
-  // `gap-0.5` (2px).
+  // FIX 4: the loading skeleton must use the same item gap as the loaded row so the strip does not change height
+  // (and shift whatever sits below it) the moment data lands. Before the fix, loading used `gap-2` (8px) against
+  // the loaded row's `gap-0.5` (2px).
   it('uses the same inter-line gap in the loading skeleton as in the loaded row', () => {
     const loaded = render(<CompactStatRow items={ITEMS} />);
     const loadedGapClass = loaded.container.querySelector('dl > div').className.match(/gap-\S+/)[0];
@@ -101,9 +98,8 @@ describe('CompactStatRow', () => {
     expect(loadingGapClass).toBe(loadedGapClass);
   });
 
-  // FIX 5: Skeleton.jsx's own contract says the *caller* must label the aria-busy
-  // region. A caller that passes only `loading` (no aria-label) must still ship an
-  // announced busy region instead of a silent one.
+  // FIX 5: Skeleton.jsx's own contract says the *caller* must label the aria-busy region. A caller that passes
+  // only `loading` (no aria-label) must still ship an announced busy region instead of a silent one.
   it('gives the aria-busy loading region a default aria-label when the caller supplies none', () => {
     const { container } = render(<CompactStatRow items={[]} loading />);
     const busyRegion = container.querySelector('[aria-busy="true"]');

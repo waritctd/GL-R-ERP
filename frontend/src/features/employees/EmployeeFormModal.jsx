@@ -24,8 +24,8 @@ const employeeFormSchema = z.object({
   level: z.string(),
   salary: z.union([z.string(), z.number()]),
   directorRemuneration: z.union([z.string(), z.number()]),
-  // Standing withholding-tax override (V88). Blank string = "compute automatically" (sent as null);
-  // a typed value (including 0) is a fixed override.
+  // Standing withholding-tax override (V88). Blank string = "compute automatically" (sent as null); a typed
+  // value (including 0) is a fixed override.
   withholdingTaxOverride: z.union([z.string(), z.number()]),
   statusId: z.string(),
   hireDate: z.string(),
@@ -67,8 +67,8 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
       level: employee?.level || 'O2',
       salary: employee?.salary || '',
       directorRemuneration: employee?.directorRemuneration || '',
-      // `?? ''` not `|| ''`: a stored 0 is a real override (withhold nothing) and must show as "0",
-      // only null/undefined means "no override" -> blank.
+      // `?? ''` not `|| ''`: a stored 0 is a real override (withhold nothing) and must show as "0", only
+      // null/undefined means "no override" -> blank.
       withholdingTaxOverride: employee?.withholdingTaxOverride ?? '',
       statusId: employee?.statusId || 'ACT',
       hireDate: employee?.hireDate || '',
@@ -95,9 +95,9 @@ export function EmployeeFormModal({ employee, employees = [], onClose, onSubmit 
       divisionTh: division?.label,
       salary: Number(values.salary || 0),
       directorRemuneration: Number(values.directorRemuneration || 0),
-      // Blank -> null ("compute automatically"). A typed value (including 0) is a fixed override.
-      // Deliberately NOT `Number(x || 0)` like the fields above: that would turn a cleared field into a
-      // 0 override (force "withhold nothing") instead of restoring automatic computation.
+      // Blank -> null ("compute automatically"). A typed value (including 0) is a fixed override. Deliberately NOT
+      // `Number(x || 0)` like the fields above: that would turn a cleared field into a 0 override (force "withhold
+      // nothing") instead of restoring automatic computation.
       withholdingTaxOverride:
         values.withholdingTaxOverride === '' || values.withholdingTaxOverride == null
           ? null

@@ -8,22 +8,9 @@ import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.common.PdfDocumentWriter;
 
-/**
- * Auto-generated ใบลาหยุด (leave form F-HR-020) attached to the leave-submission email so HR receives
- * the same document staff used to fill and email by hand -- the whole point of the 2026-09 change is
- * that pressing "ยื่นคำขอลา" in the portal produces this form automatically instead.
- *
- * <p><b>Content-faithful, not a pixel copy (same ruling as {@link LeaveReportRenderer}, 2026-09-10).</b>
- * The paper F-HR-020 is a two-up bordered grid with underline fill-ins and signature boxes;
- * {@link PdfDocumentWriter} is a flowing text writer with no box/border primitive, so this prints one
- * A4-portrait form carrying every field of the original -- header, leave type, dates/times, reason,
- * the contact-during-leave block, this-year history, and the approval/HR-receipt sections left blank
- * for signature -- laid out for reading rather than tracing the grid. F-HR-020(01) is retained in the
- * footer so the document is still identifiable as that form.
- *
- * <p>This class only RENDERS. Every value comes off {@link LeaveFormData}; no query or leave-day math
- * happens here (see {@link LeaveService#buildLeaveForm}).
- */
+/** Auto-generated ใบลาหยุด (leave form F-HR-020) attached to the leave-submission email so HR receives the same
+ * document staff used to fill and email by hand -- the whole point of the 2026-09 change is that pressing
+ * "ยื่นคำขอลา" in the portal produces this form automatically instead. */
 @Component
 public class LeaveFormRenderer {
     private static final String COMPANY_NAME = "บริษัท จีแอลแอนด์อาร์แทปส์แอนด์ไทลส์ จำกัด";
@@ -41,12 +28,12 @@ public class LeaveFormRenderer {
     private static final float SUBTITLE_SIZE = 12f;
     private static final float BODY_SIZE = 11f;
     private static final float SMALL_SIZE = 9f;
-    // Extra vertical space added after each body row so the form reads less cramped. Local to this
-    // form -- deliberately NOT a change to PdfDocumentWriter.LINE_FACTOR, which every PDF shares.
+    // Extra vertical space added after each body row so the form reads less cramped. Local to this form --
+    // deliberately NOT a change to PdfDocumentWriter.LINE_FACTOR, which every PDF shares.
     private static final float ROW_GAP = 4f;
 
-    // ผู้รับ/ผู้บันทึก on the HR-receipt box: owner ruling (2026-09) that HR always records the ใบลา
-    // under this name. A constant, not data, precisely because it does not vary per request.
+    // ผู้รับ/ผู้บันทึก on the HR-receipt box: owner ruling (2026-09) that HR always records the ใบลา under this
+    // name. A constant, not data, precisely because it does not vary per request.
     private static final String HR_RECORDER = "ฟ้าใส อิฐรัตน์";
     private static final String SIG_BLANK = "..................................................";
     private static final String DATE_BLANK = "...........................";
@@ -83,8 +70,8 @@ public class LeaveFormRenderer {
             pdf.textAt(regular, BODY_SIZE, left + typeGap + 220f, checkbox("VACATION".equals(code)) + " ลาพักร้อน");
             pdf.newLine(BODY_SIZE);
             if (!isFormType(code)) {
-                // MATERNITY / MILITARY / ORDINATION / LEAVE_WITHOUT_PAY etc. have no box on the paper
-                // form; name the actual type so the document is never ambiguous about what was requested.
+                // MATERNITY / MILITARY / ORDINATION / LEAVE_WITHOUT_PAY etc. have no box on the paper form; name the actual
+                // type so the document is never ambiguous about what was requested.
                 line(pdf, regular, checkbox(true) + " อื่นๆ: " + nn(data.leaveTypeNameTh()));
             }
             pdf.gap(4);
@@ -113,18 +100,15 @@ public class LeaveFormRenderer {
                 + " · ลาป่วย " + days(data.usedSickDays()) + " วัน"
                 + " · พักร้อน " + days(data.usedVacationDays()) + " วัน)");
             pdf.gap(4);
-            // The applicant is known (this form is auto-generated from their own submission), so their
-            // name is printed on the ลงชื่อ line rather than left as a blank underline. The approver and
-            // HR-receipt ลงชื่อ lines below stay blank -- those are signed by hand.
+            // The applicant is known (this form is auto-generated from their own submission), so their name is printed on
+            // the ลงชื่อ line rather than left as a blank underline. The approver and HR-receipt ลงชื่อ lines below stay
+            // blank -- those are signed by hand.
             line(pdf, regular, "ลงชื่อ " + nn(data.employeeName()) + "  พนักงานผู้ยื่นใบลา");
             pdf.gap(12);
             pdf.rule(left, right);
             pdf.gap(10);
 
-            // --- Approval / HR receipt --------------------------------------------------------------
-            // Blank on the SUBMITTED form (a human signs the paper); auto-filled once a decision has
-            // stamped the DTO, so the copy re-rendered for the employee shows the ticked box, the
-            // ผู้อนุมัติ signature and the decision date/time. "เพราะ" is intentionally left blank.
+            // Leave approval fields blank on submitted forms; fill decision, signature, and timestamp after review.
             boolean approved = "APPROVED".equals(data.decision());
             boolean rejected = "REJECTED".equals(data.decision());
             boolean decided = approved || rejected;
@@ -185,13 +169,9 @@ public class LeaveFormRenderer {
         return "PERSONAL".equals(code) || "SICK".equals(code) || "VACATION".equals(code);
     }
 
-    /**
-     * The date/time span line. A multi-day TIMED request binds each clock time to its own date --
-     * "ตั้งแต่วันที่ X เวลา t1 น. ถึงวันที่ Y เวลา t2 น." -- so it can never be misread as
-     * "t1-t2 on each day" (the leave is continuous: t1 on the first day through t2 on the last).
-     * Whole-day and single-day-timed requests keep the compact "ระหว่างวันที่ ... ถึงวันที่ ..." form,
-     * where a single time window unambiguously belongs to the one day it is printed beside.
-     */
+    /** The date/time span line. A multi-day TIMED request binds each clock time to its own date -- "ตั้งแต่วันที่ X
+     * เวลา t1 น. ถึงวันที่ Y เวลา t2 น." -- so it can never be misread as "t1-t2 on each day" (the leave is
+     * continuous: t1 on the first day through t2 on the last). */
     private String dateTimeLine(LeaveFormData data) {
         boolean timed = data.startTime() != null && data.endTime() != null;
         boolean multiDay = data.endDate() != null && !data.endDate().equals(data.startDate());

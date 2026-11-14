@@ -6,9 +6,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// UX-03 slice 1/5: ProductFormModal migrated from hand-rolled useState +
-// single bottom-of-form error string to react-hook-form + zodResolver +
-// FormField, proving the pattern on the smallest sales-stack surface first.
+// UX-03 slice 1/5: ProductFormModal migrated from hand-rolled useState + single bottom-of-form error string to
+// react-hook-form + zodResolver + FormField, proving the pattern on the smallest sales-stack surface first.
 vi.mock('../../api/index.js', () => ({
   api: {
     catalog: {
@@ -54,9 +53,8 @@ describe('ProductFormModal validation (UX-03)', () => {
     describedIds.forEach((id) => {
       expect(document.getElementById(id)).not.toBeNull();
     });
-    // The error paragraph itself must be one of the referenced ids and carry
-    // the actual error text (proving real FormField <-> input association,
-    // not just a coincidentally-present aria attribute).
+    // The error paragraph itself must be one of the referenced ids and carry the actual error text (proving real
+    // FormField <-> input association, not just a coincidentally-present aria attribute).
     const errorEl = document.getElementById('pf-price-error');
     expect(errorEl).not.toBeNull();
     expect(errorEl.textContent).toBe('กรุณาใส่ราคา');

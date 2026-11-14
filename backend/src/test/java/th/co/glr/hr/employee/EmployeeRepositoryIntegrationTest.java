@@ -11,10 +11,8 @@ import th.co.glr.hr.payroll.PayrollEmployeeSnapshot;
 import th.co.glr.hr.payroll.PayrollRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Exercises EmployeeRepository's dynamic filter/pagination SQL and the create round-trip against a
- * real PostgreSQL database (issue #28).
- */
+/** Exercises EmployeeRepository's dynamic filter/pagination SQL and the create round-trip against a real
+ * PostgreSQL database (issue #28). */
 class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private EmployeeRepository repository;
 
@@ -38,23 +36,9 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(dto.salaryHistory()).isNotEmpty();
     }
 
-    /**
-     * Addresses are canonicalised on the way IN, so {@code hr.employee.email} holds one form per
-     * person no matter how HR happened to type it.
-     *
-     * <p>Logging in was never the problem — {@code EmployeeAuthRepository#findByEmail} folds case in
-     * SQL, so a single mixed-case row has always worked. The problem is <em>two</em> rows: {@code
-     * V11.1} and {@code V47} index {@code LOWER(btrim(email))} without making it unique, so nothing
-     * stopped a second employee being created as {@code Somchai@glr.co.th} beside an existing
-     * {@code somchai@glr.co.th}. Both satisfy the login predicate, and {@code ORDER BY
-     * e.is_active DESC, e.employee_id LIMIT 1} then picks one silently — so which password works
-     * depends on which row sorts first, which is exactly how "my email only works sometimes" gets
-     * reported. Normalising at the write keeps a duplicate visible as a duplicate.
-     *
-     * <p>Covers all three writes, because they are three separate call sites into the same column:
-     * {@code create}, {@code update}, and {@code updateEmail} — the last being how {@code
-     * ProfileRequestService} applies an employee's approved email change.
-     */
+    /** Addresses are canonicalised on the way IN, so hr.employee.email holds one form per person no matter how HR
+     * happened to type it. Logging in was never the problem — EmployeeAuthRepository#findByEmail folds case in
+     * SQL, so a single mixed-case row has always worked. */
     @Test
     void storesEmailLowercasedAndTrimmedHoweverItWasTyped() {
         long id = repository.create(
@@ -81,11 +65,9 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
             null, null, null, null, null, null);                        // hireDate..emergencyPhone
     }
 
-    /**
-     * The column, not just the constructor: asserts against {@code hr.employee.email} directly
-     * rather than through {@code findEmployeeById}, so a DTO-level tidy-up could not stand in for a
-     * value that actually landed mixed-case in the database.
-     */
+    /** The column, not just the constructor: asserts against hr.employee.email directly rather than through
+     * findEmployeeById, so a DTO-level tidy-up could not stand in for a value that actually landed mixed-case in
+     * the database. */
     private String readEmail(long id) {
         return jdbc.queryForObject(
             "SELECT email FROM hr.employee WHERE employee_id = :id",
@@ -162,8 +144,8 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void payrollAutoPollIncludesDirectorOnlyEmployeeWithZeroSalary() {
-        // A director-only person: base salary 0 but director remuneration > 0. Before this field had
-        // a write path, such a person was invisible to payroll. They must now appear as a payroll line.
+        // A director-only person: base salary 0 but director remuneration > 0. Before this field had a write path,
+        // such a person was invisible to payroll. They must now appear as a payroll line.
         long id = repository.create(req("ประธาน กรรมการ", "SALES", "chairman@glr.co.th",
             BigDecimal.ZERO, new BigDecimal("80000")));
 
@@ -178,13 +160,9 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(chairman.directorRemuneration()).isEqualByComparingTo("80000");
     }
 
-    /**
-     * The standing withholding-tax override (V88) is deliberately a FULL-REPLACE column, unlike every
-     * other field {@code update()} touches (which use "null = don't change" via {@code addSet}): the
-     * column is nullable and NULL is itself a meaningful state ("compute automatically"), so a skip-
-     * when-null write would let HR set the override but never clear it back to NULL. Proven
-     * wrong-way-round: after clearing, the column must actually BE NULL, not merely "unchanged".
-     */
+    /** The standing withholding-tax override is deliberately a FULL-REPLACE column, unlike every other field update
+     * touches: the column is nullable and NULL is itself a meaningful state, so a skip- when-null write would let
+     * HR set the override but never clear it back to NULL. */
     @Test
     void updateClearsStandingWithholdingOverrideBackToNullButZeroStaysZero() {
         long id = repository.create(req("ภาษี ทดสอบ", "SALES", "wht-clear@glr.co.th", new BigDecimal("25000")));
@@ -195,19 +173,19 @@ class EmployeeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride())
             .isEqualByComparingTo("3000.00");
 
-        // Explicit null clears it back to NULL -- this is the bug under test: an addSet-style update
-        // would leave 3000.00 untouched here instead of clearing it.
+        // Explicit null clears it back to NULL -- this is the bug under test: an addSet-style update would leave
+        // 3000.00 untouched here instead of clearing it.
         repository.update(id, withholdingOverrideRequest(null));
         assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride()).isNull();
 
-        // Zero is a distinct, meaningful override ("withhold nothing") and must NOT be conflated with
-        // clearing -- it must persist as exactly 0.00, not collapse to NULL.
+        // Zero is a distinct, meaningful override ("withhold nothing") and must NOT be conflated with clearing -- it
+        // must persist as exactly 0.00, not collapse to NULL.
         repository.update(id, withholdingOverrideRequest(BigDecimal.ZERO));
         assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride())
             .isEqualByComparingTo("0.00");
 
-        // And a subsequent explicit-null update clears it again, even from a stored 0 (0 -> NULL is a
-        // real transition, not a no-op).
+        // And a subsequent explicit-null update clears it again, even from a stored 0 (0 -> NULL is a real transition,
+        // not a no-op).
         repository.update(id, withholdingOverrideRequest(null));
         assertThat(repository.findEmployeeById(id, true).orElseThrow().withholdingTaxOverride()).isNull();
     }

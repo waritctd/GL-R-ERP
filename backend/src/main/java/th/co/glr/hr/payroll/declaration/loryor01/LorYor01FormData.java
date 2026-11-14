@@ -3,18 +3,8 @@ package th.co.glr.hr.payroll.declaration.loryor01;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 
-/**
- * Everything the official ล.ย.01 form can carry, in the order the form prints it.
- *
- * <p>This record is deliberately shaped like the paper, not like our database: one component per
- * printed slot, named after ข้อ N. That is what lets a reader hold the PDF next to this file and
- * check them off one by one, which is the whole point of the feature — see
- * {@link LorYor01Renderer} for the field-name mapping and the constraints the form itself imposes.
- *
- * <p>Nulls mean "left blank", which is a real answer on a paper form and is NOT the same as zero:
- * a blank amount box and a box containing ฿0 look different and mean different things to the
- * Revenue Department. The renderer prints nothing for null and "0" for BigDecimal.ZERO.
- */
+/** Everything the official ล.ย.01 form can carry, in the order the form prints it. This record is deliberately
+ * shaped like the paper, not like our database: one component per printed slot, named after ข้อ N. */
 public record LorYor01FormData(
         // ---- header block -------------------------------------------------------------------
         /** ชื่อหน่วยงานผู้มีหน้าที่หักภาษี ณ ที่จ่าย — the employer, not the employee. */
@@ -48,11 +38,9 @@ public record LorYor01FormData(
         BigDecimal childExtraAmount,
 
         // ---- ข้อ 4 ค่าอุปการะเลี้ยงดูบิดามารดา -------------------------------------------------
-        /**
-         * บิดา/มารดา ของผู้มีเงินได้. Independent, not exclusive: the form prints
-         * "หักได้คนละ 30,000 บาท", so supporting both parents ticks both boxes and doubles the
-         * amount. (The PDF miswires these two as one radio group — see {@link LorYor01Renderer}.)
-         */
+        /** บิดา/มารดา ของผู้มีเงินได้. Independent, not exclusive: the form prints "หักได้คนละ 30,000 บาท", so
+         * supporting both parents ticks both boxes and doubles the amount. (The PDF miswires these two as one radio
+         * group — see LorYor01Renderer.) */
         boolean ownFatherSupported,
         boolean ownMotherSupported,
         BigDecimal ownParentCareAmount,
@@ -85,11 +73,9 @@ public record LorYor01FormData(
         /** ข้อ 10 ค่าซื้อหน่วยลงทุนในกองทุนรวมเพื่อการเลี้ยงชีพ (RMF). */
         BigDecimal rmfAmount,
         String rmfSellerName,
-        /**
-         * ข้อ 11 ค่าซื้อหน่วยลงทุนในกองทุนรวมหุ้นระยะยาว (LTF). Present because the government's form
-         * prints it; LTF purchases stopped being deductible after tax year 2019, so in practice this
-         * stays null and the line prints blank.
-         */
+        /** ข้อ 11 ค่าซื้อหน่วยลงทุนในกองทุนรวมหุ้นระยะยาว (LTF). Present because the government's form prints it; LTF
+         * purchases stopped being deductible after tax year 2019, so in practice this stays null and the line prints
+         * blank. */
         BigDecimal ltfAmount,
         String ltfSellerName,
 

@@ -11,32 +11,9 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.catalog.CatalogRepository.CatalogPricingKey;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * F1 (2026-09 review): {@code CatalogRepository#findPricingKeys} is the batched seam
- * {@code LandedCostCalculator} now reads for BOTH thickness and origin country (P1b.2) — it
- * replaced the single-row {@code findThicknessMm} (deleted) and {@code findOriginCountryCode}
- * (deleted earlier) on the engine's hot path, and until this class existed it had NO test coverage
- * of its own at all: it was only reachable, indirectly, through
- * {@link ThicknessResolutionReachesTheEngineIntegrationTest}, which pins the thickness-resolution
- * behaviour that method shares with the deleted single-row lookup, but never touched this method's
- * OWN concerns — the origin-country pairing, the map's absent/duplicate-id semantics, or the
- * {@code PRICE_ID_CHUNK_SIZE} boundary. This class covers exactly those.
- *
- * <p><b>Mutation-checked (2026-09 review, F1).</b> Repointing the thickness SELECT below from
- * {@code price_catalog.v_priceable_product} to {@code price_catalog.product_prices} directly —
- * which drops BOTH the {@code collection_thickness_default} fallback chain AND the
- * {@code WHERE v.status = 'ACTIVE'} filter — was run against the full
- * {@code *Pricing*,*LandedCost*,*Fx*,*FactoryQuote*,*Catalog*,*Thickness*} surface (447 tests).
- * Exactly 4 went red, all for the two mechanisms this file exists to pin, and nothing else moved:
- * {@link #collectionThicknessDefaultFallbackChainResolvesThroughTheBatchedLookup} and
- * {@link #aNonActiveVersionYieldsNullThicknessButStillResolvesTheVersionAgnosticCountry} here,
- * plus {@code ThicknessResolutionReachesTheEngineIntegrationTest}'s
- * {@code aCeoSuppliedDefaultResolvesWhereTheFactoryPublishedNone} (same fallback-chain mechanism)
- * and {@code anArchivedPriceListVersionResolvesToEmptyEvenWithAThicknessStored} (same
- * ACTIVE-filter mechanism) — that class was repointed at this method by the same F1 fix, so it
- * independently pins the same two invariants. The mutation was reverted immediately after; this
- * class was green again (447/447) on the next run.
- */
+/** CatalogRepository#findPricingKeys is the batched seam LandedCostCalculator now reads for BOTH thickness and
+ * origin country. This class covers exactly those. Mutation-checked (2026-09 review, F1). The mutation was
+ * reverted immediately after; this class was green again (447/447) on the next run. */
 class CatalogRepositoryFindPricingKeysIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private CatalogRepository catalog() {
@@ -61,16 +38,8 @@ class CatalogRepositoryFindPricingKeysIntegrationTest extends AbstractPostgresIn
 
     // ── item 1: the collection_thickness_default fallback chain — the mutation-check target ────
 
-    /**
-     * The case F1 requires to go RED under the reviewer's mutation (repointing the thickness
-     * SELECT at {@code product_prices} directly, which drops the default-fallback LATERAL join).
-     * Asserted on ONE fixture, both sides, per CLAUDE.md's testing rule: nothing entered anywhere
-     * resolves null (never guessed, never a missing map entry), and a CEO-supplied default then
-     * resolves — the same pair {@code ThicknessResolutionReachesTheEngineIntegrationTest} already
-     * pins for the single-row method, repeated here through the BATCHED one, with origin country
-     * (which the single-row method never carried) asserted alongside on the same fixture to show
-     * the two fields resolve independently of each other.
-     */
+    /** The case F1 requires to go RED under the reviewer's mutation (repointing the thickness SELECT at
+     * product_prices directly, which drops the default-fallback LATERAL join). */
     @Test
     void collectionThicknessDefaultFallbackChainResolvesThroughTheBatchedLookup() {
         long id = insertCatalogProduct("PK F1", "ES", "PK-DEF-1",
@@ -100,14 +69,8 @@ class CatalogRepositoryFindPricingKeysIntegrationTest extends AbstractPostgresIn
 
     // ── item 2: the ACTIVE-filter asymmetry the two-query split exists to preserve ──────────────
 
-    /**
-     * The asymmetry {@code findPricingKeys}'s own Javadoc says the two-query split preserves: a
-     * price id on a non-ACTIVE version yields NULL thickness (matching the deleted
-     * {@code findThicknessMm}'s ACTIVE-only semantics, since thickness reads
-     * {@code v_priceable_product}) while its origin country still resolves (matching the deleted
-     * {@code findOriginCountryCode}'s version-agnostic semantics, since country reads the base
-     * tables with no version join at all). Both sides pinned on the SAME row.
-     */
+    /** The asymmetry findPricingKeys's own Javadoc says the two-query split preserves: a price id on a non-ACTIVE
+     * version yields NULL thickness while its origin country still resolves. Both sides pinned on the SAME row. */
     @Test
     void aNonActiveVersionYieldsNullThicknessButStillResolvesTheVersionAgnosticCountry() {
         long id = insertCatalogProduct("PK F2", "IT", "PK-ARCH-1",
@@ -127,14 +90,8 @@ class CatalogRepositoryFindPricingKeysIntegrationTest extends AbstractPostgresIn
 
     // ── item 3 + 5: absent id — a real map entry with BOTH fields null, never a thrown exception ──
 
-    /**
-     * Item 3: an absent {@code price_id} must still get a map entry (never a missing key), equal
-     * to what {@code Optional.empty().orElse(null)} gave the old per-item callers. Item 5: both
-     * fields null simultaneously must resolve cleanly, not throw — this is the one fixture where
-     * that combination arises naturally, since {@code price_catalog.factories.country} is
-     * {@code NOT NULL} (V151): a REAL linked row can never have a null country, only an absent one
-     * can have both fields null at once.
-     */
+    /** Item 3: an absent price_id must still get a map entry (never a missing key), equal to what
+     * Optional.empty().orElse(null) gave the old per-item callers. */
     @Test
     void anAbsentPriceIdStillGetsAMapEntryWithBothFieldsNullRatherThanThrowing() {
         long absentId = -987_654_321L;
@@ -163,17 +120,8 @@ class CatalogRepositoryFindPricingKeysIntegrationTest extends AbstractPostgresIn
 
     // ── item 6: PRICE_ID_CHUNK_SIZE = 500 crossed, without seeding 500 real catalog rows ─────────
 
-    /**
-     * Drives 501 DISTINCT ids through {@link CatalogRepository#findPricingKeys} — one more than
-     * {@code PRICE_ID_CHUNK_SIZE} — so the chunking loop runs twice. Chose "drive more than 500
-     * ids" over seeding 500 real catalog rows (disproportionate for what this pins) or touching
-     * the chunk-size constant's visibility: only 3 ids are real, placed exactly at the positions
-     * an off-by-one in the chunk slicing would corrupt — index 0 (first id of chunk 1), index 499
-     * (LAST id of chunk 1 — the boundary an off-by-one most often drops), and index 500 (the only
-     * id of chunk 2). The other 498 are fabricated NEGATIVE ids, guaranteed never to collide with
-     * a real (positive, IDENTITY-generated) {@code price_id} — they exist purely to push the input
-     * past the chunk boundary, and are asserted to resolve to null, same as the absent-id case.
-     */
+    /** Drives 501 DISTINCT ids through CatalogRepository#findPricingKeys — one more than PRICE_ID_CHUNK_SIZE — so
+     * the chunking loop runs twice. */
     @Test
     void moreThan500DistinctIdsCrossTheChunkBoundaryWithoutLosingOrCorruptingEitherSide() {
         long firstOfChunk1 = insertCatalogProduct("PK CHUNK A", "IT", "PK-CHUNK-1",

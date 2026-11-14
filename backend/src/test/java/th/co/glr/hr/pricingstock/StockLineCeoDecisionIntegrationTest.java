@@ -23,38 +23,12 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisio
 import th.co.glr.hr.pricingdecision.PricingDecisionStatus;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 
-/**
- * Slice 1, stock lines: what the CEO sees and does - {@code startReview}, {@code update},
- * {@code approve}, {@code returnToImport} - for STOCK lines, plus the authorization of the CEO's
- * price on a stock line.
- *
- * <p><b>Field choice for the CEO's ราคาตั้ง on a stock line (case 12):</b> a NEW field,
- * {@code UpdatePricingDecisionItemRequest.listUnitPrice}, NOT a reuse of
- * {@code sellingPriceOverride}. Reasons (all read from {@code PricingDecisionService}):
- * (1) {@code sellingPriceOverride} ("ปรับราคาเอง") demands a written reason on every touch and is
- * audited as a manual override of a COMPUTED price - a stock line has no computed price to override,
- * typing ราคาตั้ง is its normal input; (2) it is consulted ONLY under NET
- * ({@code computeNetUnitPrice} ignores it under SPECIAL_SQM/DIRECT_NET), so the number
- * {@code approve()} gates on would not be the number the CEO typed and {@code list_unit_price} (which
- * IA 1.3 says ราคาตั้ง "becomes") would never be written; (3) the owner correction of 2026-09-19
- * keeps {@code list_unit_price} server-maintained for COSTED lines, so the new field is refused (400)
- * on an import line (pinned below). It is set-only: a stock line cannot be un-priced.
- *
- * <p><b>How the fixtures isolate each test.</b> The three tests of {@code startReview} drive the real
- * {@code startReview}. Every test of {@code update}/{@code approve}/{@code returnToImport} on a
- * STOCK-ONLY request starts from {@link #seedStockOnlyDecision} (exactly the shape the
- * {@code startReview} tests assert), so it fails on its OWN assertion. Tests with an IMPORT line in
- * the decision must go through the real {@code startReview} (a costing row cannot be seeded without
- * a real factory quote) - those are marked <b>[via startReview]</b> and will stay red at
- * {@code startReview} until it supports stock lines, which is itself behaviour they cover.
- *
- * <p>Tests marked <b>[PIN]</b> pass before the feature exists on purpose.
- */
+/** Slice 1, stock lines: what the CEO sees and does - startReview, update, approve, returnToImport - for STOCK
+ * lines, plus the authorization of the CEO's price on a stock line. It is set-only: a stock line cannot be
+ * un-priced. */
 class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTest {
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 11 - startReview
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void startReview_onlyStockLines_succeeds_itemsCarrySourceAndEta_noCostingLink_noCost_noListPrice() {
@@ -130,9 +104,7 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 12 - CEO update: ราคาตั้ง on a stock line
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void update_ceoPriceOnAStockLine_becomesItsListUnitPrice_andTheNetModeDiscountApplies() {
@@ -183,9 +155,9 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         long decisionId = seedStockOnlyDecision(id);
         long th = itemId(id, "Stock TH");
         long decisionItemId = decisionItemId(decisionId, th);
-        // Positive control FIRST, on the same item: a valid price is accepted and stored. Without it a
-        // 400 here could just be "the decision cannot see its stock lines yet" (findItems inner-joins
-        // the costing row today), i.e. the test would pass for the wrong reason.
+        // Positive control FIRST, on the same item: a valid price is accepted and stored. Without it a 400 here could
+        // just be "the decision cannot see its stock lines yet" (findItems inner-joins the costing row today), i.e.
+        // the test would pass for the wrong reason.
         decisionService.update(decisionId, new UpdatePricingDecisionRequest(null, "NET", List.of(
             stockPrice(decisionItemId, "1000.00", null))), ceoActor);
         assertThat(storedListPrice(decisionItemId)).isEqualByComparingTo("1000.00");
@@ -221,9 +193,7 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
             .as("a costed line's list price stays server-maintained").isEqualByComparingTo(formulaPrice);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 13 - approve
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @ParameterizedTest
     @ValueSource(strings = {"missing", "zero"})
@@ -242,9 +212,8 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
-                // The existing 'ทุกรายการต้องมีต้นทุน' 422 would also be a 422; the NEW rule has its own
-                // message (IA 2: "รายการจากสต็อกต้องมีราคาตั้ง"), so a stock line failing for the OLD
-                // reason cannot pass this test.
+                // The existing 'ทุกรายการต้องมีต้นทุน' 422 would also be a 422; the NEW rule has its own message (IA 2:
+                // "รายการจากสต็อกต้องมีราคาตั้ง"), so a stock line failing for the OLD reason cannot pass this test.
                 assertThat(e.getMessage()).contains("ราคาตั้ง");
             });
 
@@ -338,9 +307,7 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         assertThat(storedDecisionStatus(decision.id())).isEqualTo(PricingDecisionStatus.DRAFT);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 14 - return-to-import
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void returnToImport_onARequestWithOnlyInThailandLines_isRefusedWith409_andNothingMoves() {
@@ -387,9 +354,7 @@ class StockLineCeoDecisionIntegrationTest extends AbstractStockLineIntegrationTe
         assertThat(status(id)).isEqualTo(PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Case 16 - authz, wrong way round: nobody but the CEO prices a stock line
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @ParameterizedTest
     @ValueSource(strings = {"salesOwner", "otherSales", "salesManager", "import", "account"})

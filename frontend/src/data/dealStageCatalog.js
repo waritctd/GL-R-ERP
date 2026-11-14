@@ -1,20 +1,6 @@
-// The canned GET /api/meta/deal-stages payload for VITE_USE_MOCKS=true.
-//
-// THIS IS A FIXTURE, NOT A RULE. It mirrors the SHAPE of what
-// th.co.glr.hr.ticket.DealStageMetaController serves, exactly as every other mock fixture mirrors
-// its DTO — the mock has to answer the request with something. What it deliberately does NOT do is
-// re-implement any decision: nothing here computes who may set a stage, or whether a move needs a
-// written reason. Those come from the ticket's own decision payload (TicketService.stageDecisions).
-//
-// Mirrors DealStage.ORDER / gateOf / phaseOf / displayNoOf / businessCodeOf / isAutoAdvanced, and
-// DealLostReason.ORDER / DealCancelReason.ORDER, and DealRoute.path(channel) for `routes`.
-//
-// ⚠️ A mirror with no guard is the exact defect this whole change exists to remove: the frontend's
-// previous copy of this list silently stopped at fourteen stages when V143 added QUOTE_OWNER.
-// features/tickets/stageCatalog.test.js therefore reads DealStage.java out of the backend source
-// tree and asserts this file's codes, order, gates and phases against it — and, for `routes`, parses
-// DealRoute.java's OFF_ROUTE table and asserts each channel's list against it. If you edit one, the
-// test tells you about the other.
+// The canned GET /api/meta/deal-stages payload for VITE_USE_MOCKS=true. THIS IS A FIXTURE, NOT A RULE. It
+// mirrors the SHAPE of what th.co.glr.hr.ticket.DealStageMetaController serves, exactly as every other mock
+// fixture mirrors its DTO — the mock has to answer the request with something.
 
 export const DEAL_STAGE_CATALOG = {
   stages: [
@@ -43,9 +29,9 @@ export const DEAL_STAGE_CATALOG = {
     'RELATIONSHIP', 'PROJECT_ON_HOLD', 'PROJECT_CANCELLED', 'ALREADY_PURCHASED',
   ],
   cancelReasons: ['OWNER_CANCELLED', 'PROJECT_SUSPENDED', 'BUDGET_CANCELLED', 'OTHER'],
-  // Stage CODES per entry channel, in DealStage.ORDER — what a deal LIST row reads to print its
-  // position on its own route (`4/11`) instead of the catalog-wide `8/15`. UNSPECIFIED is all
-  // fifteen: DealRoute gives it no off-route stage.
+  // Stage CODES per entry channel, in DealStage.ORDER — what a deal LIST row reads to print its position on its
+  // own route (`4/11`) instead of the catalog-wide `8/15`. UNSPECIFIED is all fifteen: DealRoute gives it no
+  // off-route stage.
   routes: {
     DESIGNER_LED: [
       'LEAD_APPROACH', 'PRESENTATION', 'SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER',

@@ -19,12 +19,9 @@ describe('EmptyState', () => {
     expect(container.querySelector('svg')).toBeTruthy();
   });
 
-  // FIX F10: a caller that already announces this same title text itself via
-  // its own `aria-live` region (DataTable's zero-row live region does
-  // exactly this) sets `titleAnnouncedElsewhere` so a linear screen-reader
-  // pass doesn't hear the title twice. It must hide ONLY the visible title
-  // from the accessibility tree — the description (never duplicated
-  // elsewhere) and the icon are untouched.
+  // FIX F10: a caller that already announces this same title text itself via its own `aria-live` region
+  // (DataTable's zero-row live region does exactly this) sets `titleAnnouncedElsewhere` so a linear
+  // screen-reader pass doesn't hear the title twice.
   it('hides only the title when titleAnnouncedElsewhere is set, leaving the description and icon unaffected', () => {
     const { container } = render(
       <EmptyState
@@ -44,8 +41,8 @@ describe('EmptyState', () => {
     expect(description.textContent).toBe('ลองเปลี่ยนตัวกรอง');
     expect(description.hasAttribute('aria-hidden')).toBe(false);
 
-    // The icon is decorative (always aria-hidden via Icon.jsx) regardless of
-    // this prop — asserting it is still rendered shows the prop didn't touch it.
+    // The icon is decorative (always aria-hidden via Icon.jsx) regardless of this prop — asserting it is still
+    // rendered shows the prop didn't touch it.
     expect(container.querySelector('svg')).toBeTruthy();
   });
 

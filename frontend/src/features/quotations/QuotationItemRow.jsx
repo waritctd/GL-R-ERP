@@ -490,8 +490,8 @@ export function QuotationItemRow({
                 )}
               </>
             ) : hideDuplicate ? null : (
-              // One location only: there is nowhere to move to and only one place to copy into,
-              // so the duplicate degrades to a plain button rather than a one-option dropdown.
+              // One location only: there is nowhere to move to and only one place to copy into, so the duplicate degrades to
+              // a plain button rather than a one-option dropdown.
               <Button variant="secondary" size="sm" onClick={() => onDuplicate?.(groupId)}>ทำซ้ำรายการ</Button>
             )}
             {/* No onRemove means nothing to remove (the PCR form's lone row), so no dead ✕. */}
@@ -1283,8 +1283,8 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
       : wireListSqm != null ? null
         : netStandsInForList ? directNet : unitPrice,
     listPriceSqm: isEnglishPerSqm(priceMode, documentLanguage) ? null : wireListSqm,
-    // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server
-    // nulls the stored percent in those modes anyway (DealQuotationService#buildTileItem).
+    // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server nulls the stored
+    // percent in those modes anyway (DealQuotationService#buildTileItem).
     discountPct: priceMode === 'NET' ? (item.discountPct ?? 0) : null,
     specialPriceSqm: priceMode === 'SPECIAL_SQM' && hasTypedPrice(item.specialPriceSqm)
       ? Number(item.specialPriceSqm) : null,
@@ -1359,11 +1359,8 @@ function tileInputFromRow(item) {
   };
 }
 
-/** The editor's own per-row key, distinct from the server `id` a saved row also carries (a row
- * that has never been saved has no server id at all). Exported so QuotationEditorPage's
- * "ทำซ้ำรายการ" can mint one for the copy without duplicating the fallback — and, incidentally,
- * so `crypto`/`Date`/`Math.random` stay out of a component body, where the react-hooks purity rule
- * (correctly) refuses to distinguish an event handler from render. */
+/** The editor's own per-row key, distinct from the server `id` a saved row also carries (a row that has never
+ * been saved has no server id at all). */
 export function newItemClientId() {
   return crypto.randomUUID?.() ?? `tmp-${Date.now()}-${Math.random()}`;
 }

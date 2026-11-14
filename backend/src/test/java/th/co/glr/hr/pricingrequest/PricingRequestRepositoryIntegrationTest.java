@@ -24,11 +24,9 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.CreateTicketRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Exercises PricingRequestRepository's create/transition/event SQL against a real
- * PostgreSQL database — Mockito cannot cover the CHECK constraints or the
- * compare-and-set transition() semantics this repository relies on.
- */
+/** Exercises PricingRequestRepository's create/transition/event SQL against a real PostgreSQL database —
+ * Mockito cannot cover the CHECK constraints or the compare-and-set transition() semantics this repository
+ * relies on. */
 class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private PricingRequestRepository requests;
     private TicketRepository tickets;
@@ -143,16 +141,14 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(unchanged.cancelledAt()).isNull();
     }
 
-    // Review remediation (COMMIT 5, P1 finding 1): PricingRequestStatus.ALLOWED used to be purely
-    // decorative — transition() persisted whatever (expected, next) pair it was given, regardless
-    // of whether the canonical map listed it. These two tests prove the map is now authoritative:
-    // an illegal pair is rejected loudly, BEFORE any row mutation, and a legal-but-previously-
-    // missing pair (the Costing v2 reopen path this commit also adds to the map) now succeeds.
+    // Review remediation (COMMIT 5, P1 finding 1): PricingRequestStatus.ALLOWED used to be purely decorative —
+    // transition() persisted whatever (expected, next) pair it was given, regardless of whether the canonical map
+    // listed it.
     @Test
     void transition_rejectsATransitionNotInTheCanonicalMap_andLeavesTheRowUnchanged() {
         long id = createDraft();
-        // DRAFT -> COSTING_IN_PROGRESS is not, and has never been, a real transition — no code
-        // path attempts it; it exists purely to prove the guard fires for a nonsense pair.
+        // DRAFT -> COSTING_IN_PROGRESS is not, and has never been, a real transition — no code path attempts it; it
+        // exists purely to prove the guard fires for a nonsense pair.
         assertThatThrownBy(() -> requests.transition(
             id, PricingRequestStatus.DRAFT, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null))
             .isInstanceOf(IllegalStateException.class)
@@ -166,14 +162,8 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
 
     @Test
     void transition_readyForCeoReviewToAwaitingFactoryResponse_isPermittedByTheCanonicalMap() {
-        // V141 ("CEO owns costing"): this exact edge existed once before (Costing v2 path, commit
-        // 5) and was removed because it let Import silently reopen a SUBMITTED costing with no
-        // CEO action. V141 reintroduces it for a different reason — there is no submitted-costing
-        // row sitting around any more for a factory-quote revision to mark "stale"
-        // (markOpenCostingsStale, deleted); FactoryQuoteService.receive()'s revision branch pulls
-        // the REQUEST back here instead when a revision arrives while READY_FOR_CEO_REVIEW.
-        // Repository-level proof that transition() actually persists this against a real Postgres
-        // row — PricingRequestStatusTest pins the same edge at the pure-function level.
+        // V141 ("CEO owns costing"): this exact edge existed once before (Costing v2 path, commit 5) and was removed
+        // because it let Import silently reopen a SUBMITTED costing with no CEO action.
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
             Map.of("status", PricingRequestStatus.READY_FOR_CEO_REVIEW, "id", id));
@@ -187,14 +177,8 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
 
     @Test
     void transition_ceoReviewingToAwaitingFactoryResponse_isPermittedByTheCanonicalMap() {
-        // V141 ("CEO owns costing"): the single named return-to-Import edge now
-        // (PricingDecisionService.returnToImport) — repository-level proof that transition()
-        // persists it, replacing the retired CEO_REVIEWING -> COSTING_REVISION_REQUIRED edge this
-        // test used to pin (COSTING_REVISION_REQUIRED itself is gone — see
-        // PricingRequestStatusTest#costingRevisionRequired_statusNoLongerExists). There is no
-        // standalone costing draft any more for Import to revise once returned here; its only
-        // remaining job is to renegotiate/re-mark a factory quote ready, and the CEO's next
-        // startReview recomputes the cost from scratch.
+        // V141: the single named return-to-Import edge now — repository-level proof that transition persists it,
+        // replacing the retired CEO_REVIEWING -> COSTING_REVISION_REQUIRED edge this test used to pin.
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
             Map.of("status", PricingRequestStatus.CEO_REVIEWING, "id", id));
@@ -208,18 +192,9 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
 
     @Test
     void cancelForDeadDeal_cancelsFromQuotationIssued_aStatusTheCanonicalMapForbidsANormalCancelFrom() {
-        // The one intentional bypass of PricingRequestStatus.canTransition: a dead-deal cascade must
-        // be able to cancel a pricing request from a status no live user action may cancel from.
-        //
-        // This test used to make that point with READY_FOR_CEO_REVIEW. The cancel cutoff (owner
-        // ruling 2026-08-13) made READY_FOR_CEO_REVIEW legitimately cancellable — cancel is now
-        // allowed everywhere up to and including APPROVED_FOR_QUOTATION — so that status no longer
-        // demonstrates a bypass of anything. QUOTATION_ISSUED replaces it, and is the stronger
-        // example: it is exactly where the two paths must diverge. A live user may NOT cancel a
-        // request whose quotation is in the customer's hands (retracting an offer is a commercial
-        // act, routed through the deal or through a revision) — but when the DEAL itself is marked
-        // lost, the cascade must still be able to close the request out. Both halves are asserted
-        // here, in that order.
+        // The one intentional bypass of PricingRequestStatus.canTransition: a dead-deal cascade must be able to cancel
+        // a pricing request from a status no live user action may cancel from. QUOTATION_ISSUED replaces it, and is
+        // the stronger example: it is exactly where the two paths must diverge.
         long id = createDraft();
         jdbc.update("UPDATE sales.pricing_request SET status = :status WHERE pricing_request_id = :id",
             Map.of("status", PricingRequestStatus.QUOTATION_ISSUED, "id", id));
@@ -246,10 +221,8 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
 
         assertThat(requests.findSummary(id).orElseThrow().assignedImportId()).isEqualTo(importA);
 
-        // A second Import user attempting to claim the request on a later transition;
-        // assignedImportId must NOT change to importB. V140 retired the MORE_INFO_REQUIRED
-        // round-trip this used to simulate, so it walks Import's real path instead — the subject
-        // is the first-writer-wins column, not which statuses it passes through.
+        // A second Import user attempting to claim the request on a later transition; assignedImportId must NOT change
+        // to importB.
         requests.transition(id, PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
         requests.transition(id, PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW, importB, null);
 
@@ -287,11 +260,9 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
                 List.of(item("Toyota", "1"))),
             otherSalesActorId);
 
-        // draftOversight=true / draftOwnerId=null throughout this test: it is
-        // exercising status/createdBy/activeDealsOnly filtering, not the DRAFT
-        // privacy clause (see findSummaries_hidesDraftUnlessOwnerOrOversight for
-        // that), so oversight=true keeps every row visible regardless of who
-        // created it, same as before that clause existed.
+        // draftOversight=true / draftOwnerId=null throughout this test: it is exercising
+        // status/createdBy/activeDealsOnly filtering, not the DRAFT privacy clause, so oversight=true keeps every row
+        // visible regardless of who created it, same as before that clause existed.
 
         // Default (status == null) excludes CANCELLED.
         List<PricingRequestSummaryDto> defaultQueue = requests.findSummaries(null, null, null, false, true, null);
@@ -320,17 +291,15 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
     void findSummaries_hidesDraftUnlessOwnerOrOversight() {
         long draftId = createDraft(); // owned by salesActorId
 
-        // Non-owner, non-oversight caller (e.g. import/account reading the queue):
-        // the draft is hidden, both with no status filter and with an explicit
-        // status='DRAFT' filter — the new clause applies regardless of how the
+        // Non-owner, non-oversight caller (e.g. import/account reading the queue): the draft is hidden, both with no
+        // status filter and with an explicit status='DRAFT' filter — the new clause applies regardless of how the
         // caller arrived at the row.
         assertThat(requests.findSummaries(null, null, null, false, false, 999L))
             .extracting(PricingRequestSummaryDto::id).doesNotContain(draftId);
         assertThat(requests.findSummaries(PricingRequestStatus.DRAFT, null, null, false, false, 999L))
             .extracting(PricingRequestSummaryDto::id).doesNotContain(draftId);
 
-        // The owner sees their own draft (draftOwnerId = salesActorId matches
-        // t.created_by), even with no oversight.
+        // The owner sees their own draft (draftOwnerId = salesActorId matches t.created_by), even with no oversight.
         assertThat(requests.findSummaries(null, null, null, false, false, salesActorId))
             .extracting(PricingRequestSummaryDto::id).contains(draftId);
 
@@ -338,8 +307,8 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(requests.findSummaries(null, null, null, false, true, 999L))
             .extracting(PricingRequestSummaryDto::id).contains(draftId);
 
-        // Once the request leaves DRAFT, the clause no longer applies — a
-        // non-owner, non-oversight caller can see it like any other status.
+        // Once the request leaves DRAFT, the clause no longer applies — a non-owner, non-oversight caller can see it
+        // like any other status.
         requests.transition(draftId, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
         assertThat(requests.findSummaries(null, null, null, false, false, 999L))
             .extracting(PricingRequestSummaryDto::id).contains(draftId);
@@ -364,15 +333,9 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    // NOTE: this test used to be named
-    // updateDraft_leavesNullFieldsUnchangedAndOnlyAppliesToDraftRows and asserted
-    // the OPPOSITE of what it asserts now: that a null field in the request left
-    // the existing column value in place (COALESCE(:x, col)). That was a
-    // deliberate product bug — there was no way for a client to ever clear a
-    // field via PUT (e.g. remove a target price or a note) — fixed by the
-    // review-remediation plan's Fix 2. PricingRequestRepository.updateDraft is
-    // now a full replacement of every editable scalar column, so this rewrite
-    // asserts the inverse: a null in the request DOES clear the column.
+    // NOTE: this test used to be named updateDraft_leavesNullFieldsUnchangedAndOnlyAppliesToDraftRows and asserted
+    // the OPPOSITE of what it asserts now: that a null field in the request left the existing column value in
+    // place (COALESCE(:x, col)).
     @Test
     void updateDraft_fullyReplacesEditableFields_includingClearingAFieldToNull_andOnlyAppliesToDraftRows() {
         long id = requests.create(ticketId, requests.nextRequestCode(),
@@ -380,13 +343,9 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
                 new BigDecimal("100.00"), "thb", "first note", clientRequestId("4"), List.of(item("Toyota", "1"))),
             salesActorId);
 
-        // Full replacement: recipientType actually changes (DESIGNER -> OWNER,
-        // no longer "untouched, left as-is by COALESCE"), recipientLabel is
-        // explicitly cleared to null even though the request also didn't touch
-        // it, and customerTargetPrice/note/items are overwritten as before.
-        // recipient_type is NOT NULL in the DB, so every UpdatePricingRequestRequest
-        // in this test supplies a real value for it (repository-level test — the
-        // "must not be blank" 400 guard lives in PricingRequestService, not here).
+        // Full replacement: recipientType actually changes (DESIGNER -> OWNER, no longer "untouched, left as-is by
+        // COALESCE"), recipientLabel is explicitly cleared to null even though the request also didn't touch it, and
+        // customerTargetPrice/note/items are overwritten as before.
         requests.updateDraft(id, new UpdatePricingRequestRequest(
             PricingRequestRecipient.OWNER, null, null, null, new BigDecimal("200.00"), null, "updated note",
             List.of(item("Honda", "9"))));
@@ -399,10 +358,9 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(afterFirstUpdate.note()).isEqualTo("updated note");
         assertThat(requests.findItems(id)).extracting(PricingRequestItemDto::model).containsExactly("9");
 
-        // A second update that clears customerTargetPrice and note to null (the
-        // exact "remove a target price / note" case the old COALESCE semantics
-        // could never express) — items omitted this time (null), proving items
-        // is the one field that keeps "omit to leave untouched" behavior.
+        // A second update that clears customerTargetPrice and note to null (the exact "remove a target price / note"
+        // case the old COALESCE semantics could never express) — items omitted this time (null), proving items is the
+        // one field that keeps "omit to leave untouched" behavior.
         requests.updateDraft(id, new UpdatePricingRequestRequest(
             PricingRequestRecipient.OWNER, null, null, null, null, null, null, null));
         PricingRequestSummaryDto afterClear = requests.findSummary(id).orElseThrow();
@@ -419,13 +377,9 @@ class PricingRequestRepositoryIntegrationTest extends AbstractPostgresIntegratio
 
     @Test
     void transition_pickup_neverWritesSalesTicketAssignedTo() {
-        // The landmine guard (see PricingRequestRepository's and TicketRepository's
-        // class-level Javadoc): TicketRepository.addEventInternal sets
-        // sales.ticket.assigned_to as a side-effect of any PICKED_UP event ON THE
-        // TICKET. PricingRequestRepository must never call TicketRepository, so a
-        // real pickup here (SUBMITTED -> IMPORT_REVIEWING with an assignImportId)
-        // must leave sales.ticket.assigned_to untouched — proven against a real
-        // Postgres row, not a mock that could silently miss a future regression.
+        // The landmine guard (see PricingRequestRepository's and TicketRepository's class-level Javadoc):
+        // TicketRepository.addEventInternal sets sales.ticket.assigned_to as a side-effect of any PICKED_UP event ON
+        // THE TICKET.
         long importId = createEmployee("นำเข้า ทดสอบ", "import-landmine@glr.co.th");
         long id = createDraft();
         requests.transition(id, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);

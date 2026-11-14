@@ -155,15 +155,9 @@ describe('mockApi.pricingRequests.create item validation', () => {
     expect(pricingRequest.items[0].productDescription).toBe('กระเบื้องพอร์ซเลน 60x60 สีขาว');
   });
 
-  // submit()'s own re-check against the persisted items (mirroring
-  // PricingRequestService.submit) is exercised on the backend
-  // (PricingRequestServiceTest#submit_rejectsPreExistingDraftWithUnidentifiedItem)
-  // — there is no way to reach that state through this mock's public API
-  // surface, since create()/update() both already reject an unidentified item
-  // and delay() structuredClone()s every response, so a returned item can't be
-  // mutated back into the mock's own store. That asymmetry is expected: the
-  // real-world scenario is a row that predates this rule in a persisted
-  // database, which a fresh in-memory mock session has no equivalent of.
+  // submit's own re-check against the persisted items is exercised on the backend. That asymmetry is expected:
+  // the real-world scenario is a row that predates this rule in a persisted database, which a fresh in-memory
+  // mock session has no equivalent of.
 
   // ── Zero-piece rejection ──────────────────────────────────────────────────────────────
   // Any fraction of a piece rounds UP, so a tiny positive area derives 1 piece instead of 0 and is
@@ -272,11 +266,9 @@ describe('mockApi.pricingRequests create idempotency', () => {
   });
 });
 
-// Review-remediation plan Commit D, part 1: the DB column is
-// `revision_no INTEGER NOT NULL DEFAULT 1` with
-// `CONSTRAINT chk_pricing_request_revision CHECK (revision_no >= 1)` (V58).
-// A mock starting the counter at 0 would produce a row production would
-// reject outright, not merely a cosmetic divergence.
+// Review-remediation plan Commit D, part 1: the DB column is `revision_no INTEGER NOT NULL DEFAULT 1` with
+// `CONSTRAINT chk_pricing_request_revision CHECK (revision_no >= 1)` (V58). A mock starting the counter at 0
+// would produce a row production would reject outright, not merely a cosmetic divergence.
 describe('mockApi.pricingRequests revisionNo', () => {
   it('create() starts a new pricing request at revisionNo 1, not 0', async () => {
     const ticket = await ownedActiveTicketWithItems();
@@ -285,9 +277,8 @@ describe('mockApi.pricingRequests revisionNo', () => {
   });
 });
 
-// Review-remediation plan Commit D, part 1: PricingRequestRepository.
-// normalizeCurrency trims + uppercases on both insert and update, blank ->
-// null. Mirrored here so the mock never stores a raw/mixed-case currency the
+// Review-remediation plan Commit D, part 1: PricingRequestRepository. normalizeCurrency trims + uppercases on
+// both insert and update, blank -> null. Mirrored here so the mock never stores a raw/mixed-case currency the
 // real column wouldn't have.
 describe('mockApi.pricingRequests targetCurrency normalisation', () => {
   it('create() normalises a lowercase/whitespace-padded currency to trimmed uppercase', async () => {
@@ -366,10 +357,9 @@ async function driveToApprovedForQuotation() {
     clientRequestId: nextNumberingUuid(),
     items: [{
       sourceTicketItemId: sourceItemId,
-      // productId 1 = mockProductPrices' seeded "Panaria SpA" line (factoryId 1), which has an
-      // ACTIVE mockPriceImportVersions row — submit()'s catalog gate requires every item to
-      // resolve against an active catalog entry (same precondition depositNotices' own driver
-      // relies on).
+      // productId 1 = mockProductPrices' seeded "Panaria SpA" line (factoryId 1), which has an ACTIVE
+      // mockPriceImportVersions row — submit()'s catalog gate requires every item to resolve against an active
+      // catalog entry (same precondition depositNotices' own driver relies on).
       productId: 1,
       brand: 'SCG',
       model: 'Tile Numbering Mock',
@@ -437,10 +427,8 @@ async function driveToApprovedForQuotation() {
   return prId;
 }
 
-// Mirrors mockApi.js's own quotationBaseNumber (~L4901): strips a source number's own
-// `-{sourceRevisionNo}` suffix to recover the base a revision chain shares. Re-implemented here
-// (rather than importing mockApi.js's non-exported helper) so this file keeps asserting only
-// through values the public `api` surface actually returns.
+// Mirrors mockApi.js's own quotationBaseNumber (~L4901): strips a source number's own `-{sourceRevisionNo}`
+// suffix to recover the base a revision chain shares.
 function quotationBase(number, revisionNo) {
   const suffix = `-${revisionNo}`;
   return number.endsWith(suffix) ? number.slice(0, -suffix.length) : number;
@@ -509,10 +497,9 @@ describe('mockApi.pricingRequests recipient guard (GLA-102)', () => {
   }
 
   it('createCustomerChangeRevision rejects a recipientType different from the parent\'s', async () => {
-    const { ticket, parentId } = await submittedParent(); // parent's recipientType is DESIGNER
-    // toMatchObject({ status: 409 }), not a bare toThrow(): a bare assertion would stay green if this
-    // path later started failing for an unrelated reason (a 400 on payload shape, say), and the test
-    // would silently stop pinning the guard it exists for. Same convention as mockApi.customers.test.js.
+    const { ticket, parentId } = await submittedParent(); // parent's recipientType is DESIGNER toMatchObject({ status: 409 }), not a bare toThrow(): a bare assertion
+    // would stay green if this path later started failing for an unrelated reason (a 400 on payload shape, say),
+    // and the test would silently stop pinning the guard it exists for.
     await expect(api.pricingRequests.createCustomerChangeRevision(parentId, revisionPayload(ticket, 'OWNER')))
       .rejects.toMatchObject({ status: 409 });
   });
@@ -536,10 +523,9 @@ describe('mockApi.pricingRequests recipient guard (GLA-102)', () => {
   });
 
   it('update() still allows changing recipientType on the ROOT pricing request (deliberate scope boundary)', async () => {
-    // A root has no parentPricingRequestId and, while still DRAFT (the only status update()
-    // reaches), can never yet own a customer-change-revision child — so there is nothing
-    // downstream for a recipient change to orphan. Mirrors the same scope decision made in
-    // PricingRequestService#updateDraft.
+    // A root has no parentPricingRequestId and, while still DRAFT (the only status update() reaches), can never
+    // yet own a customer-change-revision child — so there is nothing downstream for a recipient change to orphan.
+    // Mirrors the same scope decision made in PricingRequestService#updateDraft.
     const ticket = await ownedActiveTicketWithItems();
     const created = await api.pricingRequests.create(ticket.summary.id, validPayload(ticket.items[0]));
     const rootId = created.pricingRequest.summary.id;
@@ -580,9 +566,8 @@ describe('mockApi.pricingRequests header terms + customerId (second review pass,
         unitCode: 'D01',
         omitContactHonorific: true,
       });
-      // The ticket in ownedActiveTicketWithItems' fixture pool always has a customer behind it —
-      // asserting non-null (not a specific id) keeps this test from depending on which fixture
-      // ticket happened to be picked.
+      // The ticket in ownedActiveTicketWithItems' fixture pool always has a customer behind it — asserting non-null
+      // (not a specific id) keeps this test from depending on which fixture ticket happened to be picked.
       expect(summary.customerId).not.toBeNull();
     };
     expectHeaderTerms(created.summary);

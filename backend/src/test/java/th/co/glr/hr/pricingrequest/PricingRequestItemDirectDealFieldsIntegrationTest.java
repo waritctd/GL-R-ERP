@@ -134,8 +134,8 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
 
     @Test
     void createDraft_derivesRequestedQtyWithWastageAndLoosePieces() {
-        // 10 pieces + 10% wastage = 11 (HALF_UP), piecesPerBox=4, roundToFullBox=false ->
-        // stays 11 (no rounding), boxes=2, loose=3.
+        // 10 pieces + 10% wastage = 11 (HALF_UP), piecesPerBox=4, roundToFullBox=false -> stays 11 (no rounding),
+        // boxes=2, loose=3.
         PricingRequestDetailDto detail = pricingRequestService.createDraft(ticketId,
             createRequest(List.of(completeItem(b -> b
                 .quantityMode(WastageCalculator.QUANTITY_MODE_PIECES).piecesInput(10)
@@ -208,9 +208,9 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
 
     @Test
     void createDraft_clearsOriginCountryOtherWhenOriginCountryIsNotOther() {
-        // A caller that sends a stray originCountryOther alongside a NON-อื่นๆ origin_country
-        // (e.g. a rep switched away from อื่นๆ but the field somehow still carried a value) must
-        // not have it persisted -- PricingRequestService#resolveItem normalizes it away.
+        // A caller that sends a stray originCountryOther alongside a NON-อื่นๆ origin_country (e.g. a rep switched
+        // away from อื่นๆ but the field somehow still carried a value) must not have it persisted --
+        // PricingRequestService#resolveItem normalizes it away.
         PricingRequestDetailDto detail = pricingRequestService.createDraft(ticketId,
             createRequest(List.of(completeItem(b -> b.originCountry("ไทย-สต็อก").originCountryOther("เวียดนาม")))),
             salesActor);
@@ -278,8 +278,8 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(summary.unitCode()).isEqualTo("D01");
         assertThat(summary.omitContactHonorific()).isTrue();
 
-        // Re-read from the repository directly (not the same in-memory object createDraft
-        // returned) to prove these actually reached the database, not just the return value.
+        // Re-read from the repository directly (not the same in-memory object createDraft returned) to prove these
+        // actually reached the database, not just the return value.
         var reread = pricingRequests.findSummary(summary.id()).orElseThrow();
         assertThat(reread.paymentTermMode()).isEqualTo("CREDIT");
         assertThat(reread.creditDays()).isEqualTo(30);
@@ -479,8 +479,8 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         long id = pricingRequestService.createDraft(ticketId,
             createRequest(List.of(completeItem(b -> b))), salesActor).summary().id();
 
-        // Simulate a row written before V185 ever existed: blank out every new column directly,
-        // bypassing the service (which would now refuse to persist an incomplete item).
+        // Simulate a row written before V185 ever existed: blank out every new column directly, bypassing the service
+        // (which would now refuse to persist an incomplete item).
         jdbc.update("""
             UPDATE sales.pricing_request_item
                SET product_code = NULL, thickness_mm = NULL, sqm_per_piece = NULL,
@@ -501,11 +501,11 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(legacy.quantityMode()).isNull();
         assertThat(legacy.piecesPerBox()).isNull();
         assertThat(legacy.boxes()).isNull();
-        // round_to_full_box is NOT NULL DEFAULT TRUE (mirrors quotation_item's own V182 column) —
-        // a legacy row still reads true, never null.
+        // round_to_full_box is NOT NULL DEFAULT TRUE (mirrors quotation_item's own V182 column) — a legacy row still
+        // reads true, never null.
         assertThat(legacy.roundToFullBox()).isTrue();
-        // The original (pre-blank-out) requestedQty/Unit/Basis survive untouched — legacy data,
-        // not re-derived by this UPDATE.
+        // The original (pre-blank-out) requestedQty/Unit/Basis survive untouched — legacy data, not re-derived by this
+        // UPDATE.
         assertThat(legacy.requestedQty()).isNotNull();
         assertThat(legacy.requestedUnit()).isEqualTo("แผ่น");
     }
@@ -522,9 +522,9 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
 
     @Test
     void createCustomerChangeRevision_preservesImportAssignedFactoryAndVariantId() {
-        // A non-catalog line (no productId) is the case setItemFactory exists for -- Import
-        // gap-fills a factory Sales left blank. variantId is set from the start to prove it also
-        // survives, even though no editor UI writes it today.
+        // A non-catalog line (no productId) is the case setItemFactory exists for -- Import gap-fills a factory Sales
+        // left blank. variantId is set from the start to prove it also survives, even though no editor UI writes it
+        // today.
         long id = pricingRequestService.createDraft(ticketId,
             createRequest(List.of(completeItem(b -> b.variantId(4242L)))), salesActor).summary().id();
         pricingRequestService.submit(id, salesActor);
@@ -558,9 +558,9 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         assertThat(afterFactory.factory()).isEqualTo("โรงงาน กขค");
         assertThat(afterFactory.variantId()).isEqualTo(4242L);
 
-        // Sales revises the deal. The revision's item request is built the SAME way
-        // PricingRequestCreateModal.jsx's itemFromExisting + pricingRequestItemInputFromRow now
-        // build it: whatever the CURRENT persisted item holds is sent back, not omitted.
+        // Sales revises the deal. The revision's item request is built the SAME way PricingRequestCreateModal.jsx's
+        // itemFromExisting + pricingRequestItemInputFromRow now build it: whatever the CURRENT persisted item holds is
+        // sent back, not omitted.
         PricingRequestItemRequest revisionItem = completeItem(b -> b
             .factory(afterFactory.factory()).variantId(afterFactory.variantId()));
         PricingRequestDetailDto revision = pricingRequestService.createCustomerChangeRevision(id,
@@ -663,9 +663,9 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
-    /** A fully valid, complete new-form item — every owner-ruling-required field populated, no
-     * wastage, no box rounding, PIECES mode with 10 pieces. {@code customize} lets a test null out
-     * or override exactly the field(s) it cares about. */
+    /** A fully valid, complete new-form item — every owner-ruling-required field populated, no wastage, no box
+     * rounding, PIECES mode with 10 pieces. customize lets a test null out or override exactly the field(s) it
+     * cares about. */
     private PricingRequestItemRequest completeItem(java.util.function.UnaryOperator<ItemBuilder> customize) {
         ItemBuilder builder = new ItemBuilder()
             .brand("Toyota").model("Hilux").color("สี").texture("ผิว").size("60x60")
@@ -678,9 +678,8 @@ class PricingRequestItemDirectDealFieldsIntegrationTest extends AbstractPostgres
         return customize.apply(builder).build();
     }
 
-    /** Tiny fluent builder over {@link PricingRequestItemRequest}'s canonical (35-arg) constructor
-     * — a positional call site that long would be unreadable, and this file needs many small
-     * variations of it. */
+    /** Tiny fluent builder over PricingRequestItemRequest's canonical (35-arg) constructor — a positional call site
+     * that long would be unreadable, and this file needs many small variations of it. */
     private static final class ItemBuilder {
         private Long productId;
         private Long variantId;

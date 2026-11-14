@@ -6,23 +6,17 @@ import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 
 globalThis.React = React;
 
-// D5 (Opus review finding, see the branch's handoff): sales.ticket_event.created_at
-// defaults to Postgres now() (transaction_timestamp()), so every event written in
-// the same transaction — e.g. TicketService.confirmCustomer writes CUSTOMER_CONFIRMED
-// then STAGE_CHANGED in one transaction — shares one identical instant. The
-// repository's own tiebreak is `ORDER BY created_at ASC, event_id ASC`, and
-// Array#sort is stable, so a naive `b.ts - a.ts` comparator that returns 0 on a tie
-// lets that ascending sub-order survive inside this otherwise-descending
-// (newest-first) list — the two events render reversed.
+// D5: sales.ticket_event.created_at defaults to Postgres now (transaction_timestamp), so every event written
+// in the same transaction — e.g. TicketService.confirmCustomer writes CUSTOMER_CONFIRMED then STAGE_CHANGED in
+// one transaction — shares one identical instant.
 describe('DealHistoryPanel', () => {
   it('D5 regression: two events sharing one timestamp render newest-first by event id, not ticket_event query order', () => {
     const sameInstant = '2026-07-20T10:00:00.000Z';
     render(
       <DealHistoryPanel
         events={[
-          // Sent in the repository's own ORDER BY created_at ASC, event_id ASC —
-          // the exact order that used to leak straight through into the rendered
-          // list under the old comparator.
+          // Sent in the repository's own ORDER BY created_at ASC, event_id ASC — the exact order that used to leak
+          // straight through into the rendered list under the old comparator.
           { id: 10, kind: 'CUSTOMER_CONFIRMED', actorName: 'พนักงานขาย', createdAt: sameInstant },
           { id: 11, kind: 'STAGE_CHANGED', actorName: 'พนักงานขาย', createdAt: sameInstant },
         ]}
@@ -32,8 +26,8 @@ describe('DealHistoryPanel', () => {
 
     const items = screen.getAllByRole('listitem').map((li) => li.textContent);
     expect(items).toHaveLength(2);
-    // id 11 (STAGE_CHANGED) was written later in the same transaction, so it
-    // belongs first in a newest-first list — even though it was passed second.
+    // id 11 (STAGE_CHANGED) was written later in the same transaction, so it belongs first in a newest-first list
+    // — even though it was passed second.
     expect(items[0]).toContain('เปลี่ยนสถานะดีล');
     expect(items[1]).toContain('ลูกค้ายืนยันคำสั่งซื้อ');
   });
@@ -71,9 +65,8 @@ describe('DealHistoryPanel', () => {
       />,
     );
 
-    // Both rows have an unparseable timestamp — `toTimestamp` returns null for
-    // both, so neither is the two-events case the id tiebreak targets. No
-    // crash, and both still render (order unaffected by this fix).
+    // Both rows have an unparseable timestamp — `toTimestamp` returns null for both, so neither is the two-events
+    // case the id tiebreak targets. No crash, and both still render (order unaffected by this fix).
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
 
@@ -90,9 +83,9 @@ describe('DealHistoryPanel', () => {
     }
   });
 
-  // GLA-74 (Opus review finding, 2026-09-19): DEAL_QUOTATION_SUPERSEDED had no EVENT_KIND_LABEL
-  // entry, so a missing label falls through to the RAW kind string (`EVENT_KIND_LABEL[event.kind]
-  // ?? event.kind`) -- a rep would see "DEAL_QUOTATION_SUPERSEDED" verbatim in the deal history.
+  // GLA-74 (Opus review finding, 2026-09-19): DEAL_QUOTATION_SUPERSEDED had no EVENT_KIND_LABEL entry, so a
+  // missing label falls through to the RAW kind string (`EVENT_KIND_LABEL[event.kind] ?? event.kind`) -- a rep
+  // would see "DEAL_QUOTATION_SUPERSEDED" verbatim in the deal history.
   it('labels DEAL_QUOTATION_SUPERSEDED in Thai rather than falling through to the raw kind string', () => {
     render(
       <DealHistoryPanel
@@ -109,9 +102,9 @@ describe('DealHistoryPanel', () => {
     expect(item).not.toContain('DEAL_QUOTATION_SUPERSEDED');
   });
 
-  // Slice 2 (SLICE-2-FLOW-A.md §F, IA §8): the direct quotation's order confirmation is
-  // "ยืนยันคำสั่งซื้อ", not "สร้างดีล…" — under the linked design the deal already exists, so the
-  // event records the customer's order, and its history label says so.
+  // Slice 2 (SLICE-2-FLOW-A.md §F, IA §8): the direct quotation's order confirmation is "ยืนยันคำสั่งซื้อ", not
+  // "สร้างดีล…" — under the linked design the deal already exists, so the event records the customer's order,
+  // and its history label says so.
   it('labels DEAL_PROMOTED_FROM_QUOTATION as ยืนยันคำสั่งซื้อจากใบเสนอราคา', () => {
     render(
       <DealHistoryPanel

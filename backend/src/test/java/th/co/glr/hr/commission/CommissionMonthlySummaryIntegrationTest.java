@@ -25,28 +25,14 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Real-DB coverage for {@link CommissionService#monthlySummary} — {@code GET
- * /api/commissions/monthly-summary}, the new endpoint that replaces the frontend's former
- * client-side re-implementation of the commission tier math (the deleted
- * {@code commissionCalc.js}). Per CLAUDE.md, Mockito cannot prove any of this: the whole point is
- * that the tier config is read from {@code sales.tier_config} at call time, so a real Postgres row
- * update must be reflected in the very next call — a mocked repository would happily keep
- * returning whatever canned tiers the test wired in.
- *
- * <p>This is also a NEW authz surface (a new role gate plus a new row-scope), so per CLAUDE.md's
- * "permission changes must ship evidence" every authz case here is written the wrong-way-round:
- * "can rep A see rep B's figures" is the assertion that matters, not "can rep A see their own".
- * Wiring mirrors {@link CommissionListScopeIntegrationTest} / {@link
- * CommissionCalcRefineIntegrationTest} in this package: services are hand-wired with {@code new}
- * (no Spring context), {@code @Transactional} is inert here, so nothing below ever asserts on a
- * rollback.
- */
+/** Real-DB coverage for CommissionService#monthlySummary — GET /api/commissions/monthly-summary, the new
+ * endpoint that replaces the frontend's former client-side re-implementation of the commission tier math (the
+ * deleted commissionCalc.js). */
 class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate PAYROLL_MONTH = LocalDate.of(2026, 6, 1);
     private static final LocalDate INVOICE_DATE = LocalDate.of(2026, 6, 15);
-    // The V108 INCENTIVE ladder's first generation is effective 2026-08-01, so any case that
-    // needs a non-zero incentive must use a month at or after it.
+    // The V108 INCENTIVE ladder's first generation is effective 2026-08-01, so any case that needs a non-zero
+    // incentive must use a month at or after it.
     private static final LocalDate AUGUST_2026 = LocalDate.of(2026, 8, 1);
 
     private CommissionRepository commissions;
@@ -77,22 +63,20 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         ceoActor = principal(ceoEmployeeId, "ceo");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // 1. The V81 test: a DB tier-rate change changes the very next call's figure.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void tierRateChange_changesTheReturnedFigure_provingItFollowsTheDatabase() {
         wireService();
         long salesRepId = createEmployee("พนักงานขาย เปลี่ยนอัตรา", "tier-rate-change@glr.co.th", "SA", "แผนกขาย");
-        // 3,745,000.00 / 1.07 = 3,500,000.00 exactly -- comfortably past the tier-13 threshold
-        // (>3,000,000), no rounding ambiguity.
+        // 3,745,000.00 / 1.07 = 3,500,000.00 exactly -- comfortably past the tier-13 threshold (>3,000,000), no
+        // rounding ambiguity.
         seedCommissionRecord(salesRepId, new BigDecimal("3745000.00"));
 
         CommissionMonthlySummaryDto before = monthlySummaryAsSelf(salesRepId);
         assertThat(before.commissionableBase()).isEqualByComparingTo(new BigDecimal("3500000.00"));
-        // Tiers 1-12 (250k-wide bands, 0.25% step per tier) sum to 48,750.00; tier 13 (>3,000,000,
-        // V81-corrected to 3.25%) on the remaining 500,000.00 = 16,250.00.
+        // Tiers 1-12 (250k-wide bands, 0.25% step per tier) sum to 48,750.00; tier 13 (>3,000,000, V81-corrected to
+        // 3.25%) on the remaining 500,000.00 = 16,250.00.
         assertThat(before.tierCommission()).isEqualByComparingTo(new BigDecimal("65000.00"));
         assertThat(before.totalCommission()).isEqualByComparingTo(new BigDecimal("65000.00"));
 
@@ -107,9 +91,7 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(after.tierCommission()).isNotEqualByComparingTo(before.tierCommission());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // 2. Rows sum exactly to the total.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void tierRowsSumExactlyToTheTotal() {
@@ -126,10 +108,8 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(dto.tiers()).hasSize(13);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // 3. Matches the authoritative calculator directly -- proves the endpoint reports the
-    //    engine's own answer, not a parallel computation that happens to agree today.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // 3. Matches the authoritative calculator directly -- proves the endpoint reports the engine's own answer, not
+    // a parallel computation that happens to agree today.
 
     @Test
     void tierCommissionMatchesTheAuthoritativeCalculatorDirectly() {
@@ -145,17 +125,14 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(dto.tierCommission()).isEqualByComparingTo(expected);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // 4. Below floor: a positive base under the monthly floor -> belowFloor true, zero commission.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void belowFloor_returnsTrueAndZeroTierCommission() {
         wireService();
         long salesRepId = createEmployee("พนักงานขาย ต่ำกว่าเกณฑ์", "below-floor-monthlysummary@glr.co.th", "SA", "แผนกขาย");
-        // 10,000.00 / 1.07 = 9,345.79... -- a genuinely POSITIVE base, comfortably below the
-        // 50,000 monthly floor (proves belowFloor signals "positive but under floor", not merely
-        // "zero receipts").
+        // 10,000.00 / 1.07 = 9,345.79... -- a genuinely POSITIVE base, comfortably below the 50,000 monthly floor
+        // (proves belowFloor signals "positive but under floor", not merely "zero receipts").
         seedCommissionRecord(salesRepId, new BigDecimal("10000.00"));
 
         CommissionMonthlySummaryDto dto = monthlySummaryAsSelf(salesRepId);
@@ -166,9 +143,7 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(dto.totalCommission()).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // 5. Authz, wrong-way-round -- a NEW gate + a NEW row-scope, required per CLAUDE.md.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void salesActor_requestingAnotherRepsSalesRepId_isForbidden() {
@@ -186,8 +161,8 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         long repA = createEmployee("พนักงานขาย เอ ไม่รั่ว", "monthlysummary-leaka@glr.co.th", "SA", "แผนกขาย");
         long repB = createEmployee("พนักงานขาย บี ไม่รั่ว", "monthlysummary-leakb@glr.co.th", "SA", "แผนกขาย");
         seedCommissionRecord(repA, new BigDecimal("107000.00"));
-        // A huge receipt on a DIFFERENT rep -- if this leaked into repA's base the assertion below
-        // would obviously fail.
+        // A huge receipt on a DIFFERENT rep -- if this leaked into repA's base the assertion below would obviously
+        // fail.
         seedCommissionRecord(repB, new BigDecimal("5000000.00"));
 
         CommissionMonthlySummaryDto dto = commissionService.monthlySummary(null, PAYROLL_MONTH, principal(repA, "sales"));
@@ -201,9 +176,9 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
     void nonListViewerRoles_areForbidden() {
         wireService();
         long salesRepId = createEmployee("พนักงานขาย ทดสอบสิทธิ์", "monthlysummary-authz@glr.co.th", "SA", "แผนกขาย");
-        // Denied roles rejected at the role gate before any DB lookup -- synthetic ids, same
-        // pattern as CommissionListScopeIntegrationTest. hr reads via payroll-ready instead
-        // (PAYROLL_ROLES), account only ever does createFromDeal -- neither may call this.
+        // Denied roles rejected at the role gate before any DB lookup -- synthetic ids, same pattern as
+        // CommissionListScopeIntegrationTest. hr reads via payroll-ready instead (PAYROLL_ROLES), account only ever
+        // does createFromDeal -- neither may call this.
         List<UserPrincipal> denied = List.of(
             principal(999_101L, "hr"),
             principal(999_102L, "account"),
@@ -232,10 +207,8 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(ceoView.commissionableBase()).isEqualByComparingTo(new BigDecimal("3500000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // 6. Manual entries: an APPROVED manual ADJUSTMENT lands in manualTotal/totalCommission but
-    //    never commissionableBase; a MANAGER_APPROVED (not yet CEO-signed) one counts for neither.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // 6. Manual entries: an APPROVED manual ADJUSTMENT lands in manualTotal/totalCommission but never
+    // commissionableBase; a MANAGER_APPROVED (not yet CEO-signed) one counts for neither.
 
     @Test
     void approvedManualAdjustment_landsInManualTotalAndTotalCommission_notInCommissionableBase() {
@@ -272,15 +245,7 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(dto.totalCommission()).isEqualByComparingTo(dto.tierCommission().add(dto.incentiveAmount()));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // 7. The INCENTIVE limb. monthlySummary carries its OWN copy of the 2026-08-02 reworked
-    //    suppression rule (it does not call computeRepPayrollCommissions), so "the rule is proven
-    //    elsewhere" is not evidence for THIS method -- these two cases assert it directly, and
-    //    wrong-way-round: the case that matters is that a NEGATIVE manual entry does NOT suppress.
-    //    Both use AUGUST_2026 because the V108 ladder's effective_from is 2026-08-01; the
-    //    fix-forward gate itself (a July month sees an empty ladder -> zero) is proven for the
-    //    shared repository/calculator path by CommissionIncentiveStockBonusIntegrationTest.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Checks that positive approved manual incentives suppress automatic incentives while negative entries do not.
 
     @Test
     void positiveApprovedManualIncentive_suppressesTheAutoComputedLimb() {
@@ -314,8 +279,8 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         CommissionMonthlySummaryDto dto = commissionService.monthlySummary(
             salesRepId, AUGUST_2026, principal(salesRepId, "sales"));
 
-        // NOT suppressed -- a correction layers on top of the full auto limb. A "does one exist"
-        // guard would wrongly zero the 15,000 here and show the rep -5,000 instead of +10,000.
+        // NOT suppressed -- a correction layers on top of the full auto limb. A "does one exist" guard would wrongly
+        // zero the 15,000 here and show the rep -5,000 instead of +10,000.
         assertThat(dto.incentiveAmount()).isEqualByComparingTo(new BigDecimal("15000.00"));
         assertThat(dto.manualTotal()).isEqualByComparingTo(new BigDecimal("-5000.00"));
         assertThat(dto.totalCommission()).isEqualByComparingTo(
@@ -324,23 +289,15 @@ class CommissionMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
             .isNotEqualByComparingTo(dto.tierCommission().subtract(new BigDecimal("5000.00")));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private CommissionMonthlySummaryDto monthlySummaryAsSelf(long salesRepId) {
         return commissionService.monthlySummary(salesRepId, PAYROLL_MONTH, principal(salesRepId, "sales"));
     }
 
-    /**
-     * Seeds one active (SUBMITTED) commission_record with the given real-cash amount and no
-     * deductions (so {@code actualReceived == actualReceived} exactly) via the real repository --
-     * mirrors {@code CommissionCalcRefineIntegrationTest#seedCommissionRecord}, without needing the
-     * full ticket/deal/invoice-file fixture chain this endpoint doesn't touch. SUBMITTED (not
-     * approved) is enough: {@code sumActiveWeightedActualReceived}'s {@code NOT IN
-     * ('VOID','REJECTED')} filter already counts it, matching {@code monthlySummary}'s "live
-     * estimate" semantics (the same filter {@code simulate()} uses).
-     */
+    /** Seeds one active commission_record with the given real-cash amount and no deductions via the real repository
+     * -- mirrors CommissionCalcRefineIntegrationTest#seedCommissionRecord, without needing the full
+     * ticket/deal/invoice-file fixture chain this endpoint doesn't touch. */
     private long seedCommissionRecord(long salesRepId, BigDecimal actualReceived) {
         return seedCommissionRecord(salesRepId, actualReceived, PAYROLL_MONTH);
     }

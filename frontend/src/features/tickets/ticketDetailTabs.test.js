@@ -15,38 +15,23 @@ describe('visibleTicketDetailTabIds', () => {
     expect(visibleTicketDetailTabIds('sales_manager')).toEqual(visibleTicketDetailTabIds('sales'));
   });
 
-  // Slice D ("the เอกสาร document register") widens `documents` to
-  // `() => true` — account now sees the TAB (it is the intended,
-  // owner-authorised widening: account confirms money against the
-  // deposit-notice/attachment rows the register now lists) even though it
-  // still cannot reach a single quotation ROW inside it — see
-  // DealDocumentRegister's own per-row gates and
+  // Slice D widens `documents` to ` => true` — account now sees the TAB even though it still cannot reach a
+  // single quotation ROW inside it — see DealDocumentRegister's own per-row gates and
   // TicketDetailPage.test.jsx's content-level proof.
   it('account sees every one of the 6 tabs (documents included, since Slice D)', () => {
     const tabs = visibleTicketDetailTabIds('account');
     expect(tabs).toEqual(['deal', 'items', 'documents', 'money', 'fulfilment', 'history']);
   });
 
-  // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused —
-  // import still loses money. It now sees the `documents` TAB too (Slice D's
-  // `() => true` widening), but — per the KNOWN GAP this file's own header
-  // still documents — reaches zero quotation rows inside it, and (per
-  // DepositNoticeService#requireTicketViewer) zero deposit-notice/
-  // remaining-invoice rows either; only an attachments roll-up appears, and
-  // only once import is this deal's assignee. See
+  // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused — import still loses money. See
   // DealDocumentRegister.test.jsx for that content-level proof.
   it('import loses money but now sees documents too (Slice D widening) — keeps deal/items/documents/fulfilment/history', () => {
     const tabs = visibleTicketDetailTabIds('import');
     expect(tabs).toEqual(['deal', 'items', 'documents', 'fulfilment', 'history']);
   });
 
-  // deliveries_hrCannotReadDeliveries / overview_hrCannotReadTheTicket — hr
-  // never actually reaches this page (route-gated) but the function must not
-  // leak a section-gated tab to an unknown role if it somehow did. `history`
-  // and (since Slice D) `documents` join `deal`/`items` as role-unconditional
-  // tabs — hr/employee never reach this component in practice (the ticket
-  // fetch itself 403s them upstream), so this only pins that the FUNCTION
-  // itself degrades safely if it somehow were called for one.
+  // deliveries_hrCannotReadDeliveries / overview_hrCannotReadTheTicket — hr never actually reaches this page
+  // (route-gated) but the function must not leak a section-gated tab to an unknown role if it somehow did.
   it('an unknown/unreachable role (hr, employee) only gets the four ungated tabs', () => {
     expect(visibleTicketDetailTabIds('hr')).toEqual(['deal', 'items', 'documents', 'history']);
     expect(visibleTicketDetailTabIds('employee')).toEqual(['deal', 'items', 'documents', 'history']);
@@ -67,9 +52,8 @@ describe('TICKET_DETAIL_TABS display copy', () => {
     expect(TICKET_DETAIL_TABS.map(({ helper }) => helper)).toEqual([
       'ข้อมูลดีล',
       'รายการและราคา',
-      // Slice D: was "เอกสารลูกค้า" (customer documents) — the tab now also
-      // rolls up the deposit notice, remaining invoice, and internal
-      // attachments (PO/other), not just customer-facing quotations.
+      // Slice D: was "เอกสารลูกค้า" (customer documents) — the tab now also rolls up the deposit notice, remaining
+      // invoice, and internal attachments (PO/other), not just customer-facing quotations.
       'เอกสารของดีล',
       'ยอดชำระ',
       'นำเข้าและจัดส่ง',
@@ -82,8 +66,7 @@ describe('resolveTicketDetailTab', () => {
   it('keeps a tab id the role may see', () => {
     expect(resolveTicketDetailTab('items', 'sales')).toBe('items');
     expect(resolveTicketDetailTab('money', 'account')).toBe('money');
-    // "history" is role-unconditional (the follow-up-feed sub-gate moved
-    // inside the tab), so account keeps it too.
+    // "history" is role-unconditional (the follow-up-feed sub-gate moved inside the tab), so account keeps it too.
     expect(resolveTicketDetailTab('history', 'account')).toBe('history');
   });
 

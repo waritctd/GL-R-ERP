@@ -96,12 +96,9 @@ public class ImportRequestService {
     /** Read-only, no ownership scoping. {@code sales} also reads, but ownership-scoped — see {@link #canRead}. */
     private static final Set<String> READ_ONLY_ROLES = Set.of("import", "sales_manager");
 
-    /**
-     * The form's "Request date" is a Thai business date, so it is resolved in Bangkok explicitly —
-     * matching {@code AttendanceService.DEFAULT_WORK_DATE_ZONE}. A bare {@code LocalDate.now()}
-     * would take the JVM default and print yesterday's date on a UTC host for the first 7 hours of
-     * every Thai day.
-     */
+    /** The form's "Request date" is a Thai business date, so it is resolved in Bangkok explicitly — matching
+     * AttendanceService.DEFAULT_WORK_DATE_ZONE. A bare LocalDate.now() would take the JVM default and print
+     * yesterday's date on a UTC host for the first 7 hours of every Thai day. */
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
 
     private final ImportRequestQueryRepository repository;
@@ -140,13 +137,7 @@ public class ImportRequestService {
             .toList();
     }
 
-    /**
-     * Renders one brand's form.
-     *
-     * @param docNumber  "ReF. No." — supplied by the caller; blank leaves the rule empty to be
-     *                   written by hand, which is how the owner's own IR69068 carries it.
-     * @param requiredBy "กำหนดวันที่ต้องการของ" — free text ("Within 21/5/26"), sales-supplied.
-     */
+    /** Renders one brand's form. */
     public byte[] render(long ticketId, String brand, String docNumber, String requiredBy,
                          UserPrincipal actor) {
         requireRole(actor);
@@ -157,9 +148,9 @@ public class ImportRequestService {
         }
 
         List<BrandLines> groups = repository.brandLinesForTicket(ticketId);
-        // Refuse rather than print a form whose Brand header cannot be filled. A deal line with no
-        // brand is a data problem on the deal, and quietly bucketing it under the requested brand
-        // would put the wrong thing on a controlled document.
+        // Refuse rather than print a form whose Brand header cannot be filled. A deal line with no brand is a data
+        // problem on the deal, and quietly bucketing it under the requested brand would put the wrong thing on a
+        // controlled document.
         if (groups.stream().anyMatch(g -> g.brand() == null)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "มีรายการสินค้าที่ยังไม่ได้ระบุแบรนด์ — กรุณาระบุแบรนด์ให้ครบก่อนออกใบขอซื้อ");
@@ -176,8 +167,8 @@ public class ImportRequestService {
         try {
             return renderer.render(data);
         } catch (IOException e) {
-            // ApiException carries no cause, so the stack is logged here rather than swallowed —
-            // a template that fails to load must not surface as a bare 500 with nothing to debug.
+            // ApiException carries no cause, so the stack is logged here rather than swallowed — a template that fails to
+            // load must not surface as a bare 500 with nothing to debug.
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR,
                 "สร้างไฟล์ใบขอซื้อไม่สำเร็จ: " + e.getMessage());
         }
@@ -401,8 +392,8 @@ public class ImportRequestService {
             requirePrintedFooterWrite(actor);
         }
         if (!wantsBodyChange && !wantsFooterChange) {
-            // An entirely empty PATCH changes nothing, but must still be scoped to someone who may
-            // at least SEE this row — read access, the lowest bar any branch above already clears.
+            // An entirely empty PATCH changes nothing, but must still be scoped to someone who may at least SEE this row —
+            // read access, the lowest bar any branch above already clears.
             requireRead(existing.ticketId(), actor);
         }
         // Refuse on an inactive deal (LOST/ON_HOLD/DORMANT) like every legacy
@@ -550,13 +541,9 @@ public class ImportRequestService {
         return note != null && AUTO_VESSEL_ETA_PATTERN.matcher(note).matches();
     }
 
-    /**
-     * Cross-field check neither bean validation on {@link UpdateImportRequestRequest} (both
-     * optional, so {@code @Min}/{@code @Max} alone cannot enforce "both or neither") nor on {@link
-     * SetLeadTimeRequest} (both {@code @NotNull}, so "neither" cannot happen, but {@code min <= max}
-     * still needs a cross-field check) can express alone. Mirrors {@code
-     * chk_import_request_lead_time}'s own shape as a clean 400 instead of a raw DB CHECK violation.
-     */
+    /** Cross-field check neither bean validation on UpdateImportRequestRequest (both optional, so @Min/@Max alone
+     * cannot enforce "both or neither") nor on SetLeadTimeRequest (both @NotNull, so "neither" cannot happen, but
+     * min <= max still needs a cross-field check) can express alone. */
     private static void requireValidLeadTimePair(Integer min, Integer max) {
         if ((min == null) != (max == null)) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -567,34 +554,8 @@ public class ImportRequestService {
         }
     }
 
-    /**
-     * DRAFT → ISSUED: mints (or accepts) the number, stamps the date, sets/carries-forward the
-     * per-factory progress step, and supersedes the version this one replaces.
-     *
-     * <p>Order is load-bearing. The number is taken INSIDE this transaction so a refused issue rolls
-     * it back rather than burning a sequence value — the property
-     * {@code DepositNoticeRepository.nextDocNumber} documents. The compare-and-set is what actually
-     * decides: 0 rows means someone else issued or superseded this form first, and that is a 409, not
-     * a success.
-     *
-     * <p><b>Superseding happens BEFORE the issue, and that is forced</b> — same reasoning V154's own
-     * Javadoc gives at length: {@code ux_import_request_ticket_factory_issued} permits only ONE
-     * ISSUED row per (deal, factory), checked per statement, so the two versions cannot both be
-     * ISSUED even for the instant between the two writes.
-     *
-     * <p><b>Progress step (V184):</b> {@link ImportRequestRepository#lockIssuedPredecessor} both
-     * LOCKS the predecessor row ({@code FOR UPDATE}) and returns its step fields in one call — first
-     * issue for this (deal, factory) gets {@link ImportRequestStep#CONTACTED} with today's date and
-     * this actor; a revision's issue COPIES the predecessor's current step fields forward instead
-     * (import-request-per-factory-PLAN.md §3), so revising a form does not reset progress that has
-     * already been made.
-     *
-     * <p><b>Deal-level side effects</b> ({@link TicketService#requireImportRequestIssuable} — the
-     * deposit/status gate — and, after a successful issue, {@link
-     * TicketService#recordFirstImportRequestIssued}) are shared EXACTLY with the legacy one-shot
-     * {@code TicketService#issueImportRequest}, so the deal cannot tell which path raised its first
-     * import request.
-     */
+    /** DRAFT → ISSUED: mints (or accepts) the number, stamps the date, sets/carries-forward the per-factory
+     * progress step, and supersedes the version this one replaces. Order is load-bearing. */
     @Transactional
     public ImportRequestDto issue(long id, IssueImportRequestRequest request, UserPrincipal actor) {
         ImportRequestDto draft = requireStored(id);
@@ -644,9 +605,9 @@ public class ImportRequestService {
     private ImportRequestDto issueStoredDraft(ImportRequestDto draft, String override,
                                               TicketSnapshot dealSnapshot, UserPrincipal actor) {
         long id = draft.id();
-        // An override does NOT advance the sequence. A number typed ahead of the counter therefore
-        // cannot be minted a second time later — ux_import_request_doc_number refuses the duplicate —
-        // and this pre-check turns that race into a clear message instead of a constraint violation.
+        // An override does NOT advance the sequence. A number typed ahead of the counter therefore cannot be minted a
+        // second time later — ux_import_request_doc_number refuses the duplicate — and this pre-check turns that race
+        // into a clear message instead of a constraint violation.
         if (override != null && stored.docNumberExists(override)) {
             throw new ApiException(HttpStatus.CONFLICT, "เลขที่ใบขอซื้อ " + override + " ถูกใช้แล้ว");
         }
@@ -853,13 +814,9 @@ public class ImportRequestService {
             + (factoryCopy ? "" : "-internal") + ".pdf";
     }
 
-    /**
-     * Renders one numbered item block for {@link #buildEmailDraft} — a Brand/Model (Code) header,
-     * then a Colour/Surface/Size detail line, then Quantity, then the free-text note, each SKIPPED
-     * outright when blank (never a "-" placeholder, never the literal string "null"). Copies {@code
-     * FactoryQuoteService#appendItemBlock}'s shape rather than sharing code with it — see {@link
-     * #buildEmailDraft}'s Javadoc for why.
-     */
+    /** Renders one numbered item block for #buildEmailDraft — a Brand/Model (Code) header, then a
+     * Colour/Surface/Size detail line, then Quantity, then the free-text note, each SKIPPED outright when blank
+     * (never a "-" placeholder, never the literal string "null"). */
     private void appendItemBlock(StringBuilder body, int lineNo, ImportRequestDtos.ImportRequestItemDto item) {
         body.append(lineNo).append(". ").append(itemHeader(item.brand(), item.model(), item.code())).append("\n");
 
@@ -878,8 +835,8 @@ public class ImportRequestService {
         }
 
         if (item.qty() != null) {
-            // No trailing zeros -- "120" rather than "120.00", matching FactoryQuoteService's own
-            // formatQty for the same reason: a factory-facing quantity is read as a whole count.
+            // No trailing zeros -- "120" rather than "120.00", matching FactoryQuoteService's own formatQty for the same
+            // reason: a factory-facing quantity is read as a whole count.
             body.append("   Quantity: ").append(item.qty().stripTrailingZeros().toPlainString());
             if (item.unit() != null && !item.unit().isBlank()) {
                 body.append(" ").append(item.unit());
@@ -896,8 +853,8 @@ public class ImportRequestService {
         // (anything that is NOT exactly the derived sentence) is never skipped.
         String derivedNote = ImportRequestLinePrefill.buildColorSurfaceNote(item.color(), item.texture());
         if (item.note() != null && !item.note().isBlank() && !item.note().equals(derivedNote)) {
-            // Multi-line text stays indented inside this item's own block, matching
-            // FactoryQuoteService#appendItemBlock's specialRequirement handling.
+            // Multi-line text stays indented inside this item's own block, matching FactoryQuoteService#appendItemBlock's
+            // specialRequirement handling.
             body.append("   Note: ")
                 .append(item.note().replace("\r\n", "\n").replace('\r', '\n').replace("\n", "\n   "))
                 .append("\n");
@@ -985,9 +942,9 @@ public class ImportRequestService {
         } else if (storedDerived != null) {
             quotationChanged = storedDerived[0] != freshDerived.minDays() || storedDerived[1] != freshDerived.maxDays();
         } else {
-            // Nothing records what this IR was built from (pre-V198 rows, and IRs first built from the
-            // country default). Its live lead time only counts as a HAND edit if it differs from that
-            // country default; an unedited default must not shadow a quotation value forever.
+            // Nothing records what this IR was built from (pre-V198 rows, and IRs first built from the country default).
+            // Its live lead time only counts as a HAND edit if it differs from that country default; an unedited default
+            // must not shadow a quotation value forever.
             LeadTimeDefaults.Range countryDefault = LeadTimeDefaults.forCountry(
                 freshFactoryLookup(issued.factoryId()).map(FactoryConfigDto::country).orElse(null));
             boolean handEdited = issued.leadTimeMinDays() != null && issued.leadTimeMaxDays() != null
@@ -1025,12 +982,7 @@ public class ImportRequestService {
 
     // ── order-email draft ───────────────────────────────────────────────────────────────────────
 
-    /**
-     * Edits the drafted order-email — owning rep/CEO/import, while it has not yet been marked sent.
-     * {@link #FOOTER_ONLY_ROLES} (import) is reused here rather than a new role set: the email draft
-     * is, like the footer, filled in by hand after the form is raised, and the same three parties
-     * (owning rep, CEO, import) are the ones who would ever touch it.
-     */
+    /** Edits the drafted order-email. */
     @Transactional
     public ImportRequestDto updateEmailDraft(long id, ImportRequestRequests.UpdateEmailDraftRequest request,
             UserPrincipal actor) {
@@ -1289,12 +1241,12 @@ public class ImportRequestService {
         Map<Long, String> countryCodeById = new LinkedHashMap<>(factoriesById.entrySet().stream()
             .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().country())));
 
-        // LinkedHashMap: deterministic, deal-line-order grouping — matches how brandLinesForTicket's
-        // own LinkedHashMap keeps printed order.
+        // LinkedHashMap: deterministic, deal-line-order grouping — matches how brandLinesForTicket's own LinkedHashMap
+        // keeps printed order.
         Map<Long, List<LineFactoryCandidate>> byFactory = new LinkedHashMap<>();
-        // Phase 1: everything resolvable WITHOUT creating anything, plus the pending (needs-create)
-        // set, keyed by normalized name — grouping by normalized name here IS grouping by the
-        // factory-to-be, since normalization is exactly the matching function.
+        // Phase 1: everything resolvable WITHOUT creating anything, plus the pending (needs-create) set, keyed by
+        // normalized name — grouping by normalized name here IS grouping by the factory-to-be, since normalization is
+        // exactly the matching function.
         Map<String, List<LineFactoryCandidate>> pendingByNormalizedName = new LinkedHashMap<>();
         Map<String, String> pendingDisplayNames = new LinkedHashMap<>();
 
@@ -1306,10 +1258,9 @@ public class ImportRequestService {
             }
             if (c.directFactoryId() != null) {
                 long factoryId = c.directFactoryId();
-                // A direct id always comes from a real FK (pricing_request_item.resolved_factory_id or
-                // product_prices.factory_id), so it is guaranteed to exist -- but it may not be in the
-                // findAll() snapshot above if concurrently created between that read and here; fall
-                // back to a fresh lookup rather than risk a null name/country on the row.
+                // A direct id always comes from a real FK, so it is guaranteed to exist -- but it may not be in the findAll
+                // snapshot above if concurrently created between that read and here; fall back to a fresh lookup rather than
+                // risk a null name/country on the row.
                 resolvedNameById.computeIfAbsent(factoryId, fid -> freshFactoryLookup(fid)
                     .map(FactoryConfigDto::factoryName).orElse(null));
                 countryCodeById.computeIfAbsent(factoryId, fid -> freshFactoryLookup(fid)
@@ -1481,20 +1432,14 @@ public class ImportRequestService {
         return new ValidatedCountry(code, other);
     }
 
-    /**
-     * Matches {@code normalizedName} against the factory master ONE MORE TIME (a concurrent creator
-     * may have won the race since phase 1's read), or creates it with its now-validated country.
-     * Locks the normalized name first ({@link FactoryConfigRepository#lockFactoryName}) so two
-     * concurrent callers naming "the same" new factory in two different transactions cannot both
-     * create it — see that method's own Javadoc for why a lock was chosen over a unique index.
-     */
+    /** Matches normalizedName against the factory master ONE MORE TIME (a concurrent creator may have won the race
+     * since phase 1's read), or creates it with its now-validated country. */
     private long resolveOrCreateFactory(String normalizedName, String displayName, ValidatedCountry country,
             long actorId, Map<String, Long> normalizedNameToId, Map<Long, String> resolvedNameById,
             Map<Long, String> countryCodeById) {
         factories.lockFactoryName(normalizedName);
-        // Re-check AFTER the lock: another transaction may have created this exact factory while this
-        // one was waiting for the lock, and the caller's in-memory map (built before the lock) cannot
-        // see it.
+        // Re-check AFTER the lock: another transaction may have created this exact factory while this one was waiting
+        // for the lock, and the caller's in-memory map (built before the lock) cannot see it.
         Optional<FactoryConfigDto> recheck = factories.findAll().stream()
             .filter(f -> normalizedName.equals(normalizeFactoryName(f.factoryName())))
             .findFirst();
@@ -1529,15 +1474,8 @@ public class ImportRequestService {
 
     // ── rollup support ────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Does every factory this deal actually needs an import for now have an ISSUED row at {@link
-     * ImportRequestStep#RECEIVED}? Two conditions, both required (import-request-per-factory-PLAN.md
-     * §6): (a) every currently-ISSUED row for the deal is RECEIVED, and (b) every factory the deal's
-     * remaining lines resolve to — read-only, via {@link #requiredFactoryIds}, which does NOT create
-     * a factory on the fly (creation only ever happens from {@link #createDrafts}) — actually has an
-     * ISSUED row at all. (b) is what stops a rollup firing early just because the factories that DO
-     * have rows all happen to be RECEIVED, while another factory's lines have no IR yet at all.
-     */
+    /** Does every factory this deal actually needs an import for now have an ISSUED row at
+     * ImportRequestStep#RECEIVED? */
     private boolean allFactoriesReceived(long ticketId) {
         List<IssuedFactoryRow> issued = stored.findIssuedByTicket(ticketId);
         if (issued.isEmpty()) {
@@ -1551,16 +1489,8 @@ public class ImportRequestService {
         return issuedFactoryIds.containsAll(requiredFactoryIds(ticketId));
     }
 
-    /**
-     * Read-only mirror of {@link #resolveFactoryGroups}'s resolution cascade, WITHOUT creating a
-     * factory on the fly — the rollup must never mutate the factory master, only read it. A line that
-     * cannot be resolved to an EXISTING factory (a candidate name matching nothing yet) is excluded
-     * from the required set rather than treated as blocking: if it truly needs its own IR, {@code
-     * createDrafts} would have created (and thereby resolved) its factory already; a name that still
-     * matches nothing existing at rollup time can only be a NEW line added to the deal after drafts
-     * were raised, which {@code createDrafts} can be re-run to pick up — the rollup itself does not
-     * invent a factory to demand an IR for.
-     */
+    /** Read-only mirror of #resolveFactoryGroups's resolution cascade, WITHOUT creating a factory on the fly — the
+     * rollup must never mutate the factory master, only read it. */
     private Set<Long> requiredFactoryIds(long ticketId) {
         List<LineFactoryCandidate> candidates = repository.factoryResolutionCandidates(ticketId);
         if (candidates.isEmpty()) {

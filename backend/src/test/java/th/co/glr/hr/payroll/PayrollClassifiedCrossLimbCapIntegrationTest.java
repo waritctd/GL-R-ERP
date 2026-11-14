@@ -24,29 +24,9 @@ import th.co.glr.hr.payroll.PayrollClassificationDtos.ComponentTaxTreatmentUpser
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * REAL-DB coverage (fix, 2026-09-26) for the cross-limb withholding ceiling added to {@link
- * PayrollCalculator#calculateClassified}, driven through the real {@link PayrollService#process} and
- * {@link PayrollRepository} per CLAUDE.md's requirement for business-logic-changing fixes.
- *
- * <p>Reproduces the reported production defect: an employee whose REGULAR limb has already been
- * withheld for more than the year's entire liability (a large earlier-period HR withholding override,
- * standing in for "salary withholding that turned out to over-collect" -- the DOLLAR mechanism is
- * identical however the excess arose) must NOT be charged again in full when a later period pays a
- * commission-like {@code EXTRA_CUMULATIVE_ACTUAL} amount. Before the fix, {@code withholdCumulative}
- * only floored against ITS OWN prior cumulative-limb withholding (zero, here) and so charged the
- * commission's marginal tax in full even though the regular limb alone had already collected more than
- * the whole year could ever owe -- a real double charge, not a rounding artefact.
- *
- * <p>SPECIAL_PAY_7 classified {@code EXTRA_CUMULATIVE_ACTUAL} stands in for a commission payment here,
- * the same convention {@link PayrollClassifiedEngineIntegrationTest
- * #twelveMonthSimulationWithBothABonusAndCumulativeCommissionMatchesTheHandComputedLiability} and
- * {@link PayrollExcessWithheldClassifiedEngineIntegrationTest} already use -- driving the real
- * {@code COMMISSION_PAY} component would additionally require seeding approved rows through
- * {@code CommissionService}/{@code CommissionRepository}, machinery unrelated to what this test is
- * proving (the cross-limb arithmetic applies identically to any {@code EXTRA_CUMULATIVE_ACTUAL}
- * component; {@code PayrollCalculator} does not special-case COMMISSION_PAY).
- */
+/** REAL-DB coverage (fix, 2026-09-26) for the cross-limb withholding ceiling added to
+ * PayrollCalculator#calculateClassified, driven through the real PayrollService#process and PayrollRepository
+ * per CLAUDE.md's requirement for business-logic-changing fixes. */
 class PayrollClassifiedCrossLimbCapIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final int TAX_YEAR = 2026;
 
@@ -92,12 +72,9 @@ class PayrollClassifiedCrossLimbCapIntegrationTest extends AbstractPostgresInteg
                 employeeId, PayrollComponent.SPECIAL_PAY_7, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL)
         ), employeeId);
 
-        // January: an HR withholding override of ฿150,000 -- far more than this employee's entire
-        // year's tax could ever be (30,000/mo salary alone annualises to a liability of a few thousand
-        // baht; even with a later commission added, nowhere near six figures). The override is
-        // attributed entirely to the regular limb (PayrollCalculator#calculateClassified's own
-        // override branch), so it persists as January's withholding_tax_regular_limb and rolls forward
-        // into February's year-to-date exactly like organic over-withholding would.
+        // January: an HR withholding override of ฿150,000 -- far more than this employee's entire year's tax could
+        // ever be (30,000/mo salary alone annualises to a liability of a few thousand baht; even with a later
+        // commission added, nowhere near six figures).
         PayrollEmployeeInputRequest januaryInput = input(employeeId, BigDecimal.ZERO, new BigDecimal("150000.00"));
         PayrollPeriodDto januaryPeriod = payrollService.process(
             new ProcessPayrollRequest(LocalDate.of(2026, 1, 1), List.of(januaryInput)), hr());
@@ -105,18 +82,15 @@ class PayrollClassifiedCrossLimbCapIntegrationTest extends AbstractPostgresInteg
         assertThat(januaryLine.withholdingTax()).isEqualByComparingTo("150000.00");
         assertThat(januaryLine.withholdingTaxRegularLimb()).isEqualByComparingTo("150000.00");
 
-        // February: a ฿200,000 commission-like EXTRA_CUMULATIVE_ACTUAL payment. Before the fix, this
-        // would be taxed on its own marginal basis and charged in full regardless of January's
-        // over-withholding -- a genuine double charge, since the employee has already paid the RD far
-        // more than the whole year (salary + this commission) could ever owe.
+        // February: a ฿200,000 commission-like EXTRA_CUMULATIVE_ACTUAL payment.
         PayrollEmployeeInputRequest februaryInput = input(employeeId, new BigDecimal("200000.00"), null);
         PayrollPeriodDto februaryPeriod = payrollService.process(
             new ProcessPayrollRequest(LocalDate.of(2026, 2, 1), List.of(februaryInput)), hr());
         PayrollLineDto februaryLine = onlyLine(februaryPeriod, employeeId);
 
-        // The fix: February's total withholding must be capped at zero -- annualTax (the full-year
-        // liability given the commission) is far below the ฿150,000 already withheld in January, so
-        // collectableThisYear floors at zero and no more may be withheld in ANY limb this period.
+        // The fix: February's total withholding must be capped at zero -- annualTax (the full-year liability given the
+        // commission) is far below the ฿150,000 already withheld in January, so collectableThisYear floors at zero and
+        // no more may be withheld in ANY limb this period.
         assertThat(februaryLine.annualTax())
             .withFailMessage("test setup sanity: the full-year liability must genuinely be less than "
                 + "January's ฿150,000 override for this to be a real over-withholding scenario, was %s",
@@ -131,8 +105,8 @@ class PayrollClassifiedCrossLimbCapIntegrationTest extends AbstractPostgresInteg
             .withFailMessage("persisted limb columns must sum to the capped total")
             .isEqualByComparingTo(februaryLine.withholdingTax());
 
-        // Re-read straight from the DB (not the service's in-memory return value) -- confirms the fix
-        // actually reaches the INSERT, not just the in-memory calculation.
+        // Re-read straight from the DB (not the service's in-memory return value) -- confirms the fix actually reaches
+        // the INSERT, not just the in-memory calculation.
         PayrollLineDto reread = onlyLine(payrollRepository.findPeriodById(februaryPeriod.id()).orElseThrow(), employeeId);
         assertThat(reread.withholdingTax()).isEqualByComparingTo("0.00");
         assertThat(reread.withholdingTaxRegularLimb().add(reread.withholdingTaxCumulativeLimb()))
@@ -165,8 +139,8 @@ class PayrollClassifiedCrossLimbCapIntegrationTest extends AbstractPostgresInteg
         return employeeId;
     }
 
-    /** Salary + an optional SPECIAL_PAY_7 (commission stand-in) + an optional withholding override,
-     *  every other component zeroed/nulled. */
+    /** Salary + an optional SPECIAL_PAY_7 (commission stand-in) + an optional withholding override, every other
+     * component zeroed/nulled. */
     private PayrollEmployeeInputRequest input(long employeeId, BigDecimal specialPay7, BigDecimal withholdingTaxOverride) {
         BigDecimal zero = BigDecimal.ZERO;
         return new PayrollEmployeeInputRequest(

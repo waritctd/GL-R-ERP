@@ -1,19 +1,6 @@
-// Demo seed data for the sales/CRM PricingRequest chain (Ticket/Deal ->
-// PricingRequest -> FactoryQuote -> PricingCosting -> PricingDecision ->
-// CustomerQuotation -> DepositNotice -> FactoryPurchaseOrder), plus
-// DealActivity and sales attachments — the 100%-empty aggregate this seed
-// exists to fill (see chore/mock-demo-seed-state-matrix).
-//
-// Every record shape below mirrors the exact fields mockApi.js's own
-// create/transition handlers set — not just what the DTO projections read —
-// so a seeded row that claims to already be at a later status carries every
-// field that status implies (catalog snapshot on a SUBMITTED+ item,
-// assignedImportId on an IMPORT_REVIEWING+ request, etc).
-//
-// IDs are generated at module-eval time via local counters (not hand-typed),
-// so there is no risk of an accidental duplicate id inside this file. The
-// exported `nextSeq` object tells mockApi.js where its own counters must
-// resume so the first user-created row after boot never collides with these.
+// Demo seed data for the sales/CRM PricingRequest chain, plus DealActivity and sales attachments — the
+// 100%-empty aggregate this seed exists to fill. The exported `nextSeq` object tells mockApi.js where its own
+// counters must resume so the first user-created row after boot never collides with these.
 
 const TODAY = '2026-08-02';
 
@@ -212,8 +199,8 @@ export function buildDemoSalesSeed() {
     costingSeq += 1;
     const id = costingSeq;
     const items = status === 'DRAFT' ? [] : lines.map((line) => ({
-      // PricingCostingItemDto's own id (distinct from pricingRequestItemId below, which this row
-      // merely carries as a FK) — see makeDecision's pricingCostingItemId, which points at this.
+      // PricingCostingItemDto's own id (distinct from pricingRequestItemId below, which this row merely carries as a
+      // FK) — see makeDecision's pricingCostingItemId, which points at this.
       id: (costingItemSeq += 1),
       pricingRequestItemId: line.prItemId,
       factoryQuoteId: line.fqId, factoryQuoteItemId: line.fqItemId, factoryQuoteRevisionNo: 1,
@@ -224,13 +211,8 @@ export function buildDemoSalesSeed() {
       sqmPerUnit: line.sqmPerUnit ?? null, piecesPerBox: null, linearMPerUnit: null,
       goodsCostThb: line.rawUnitPrice, landedCostPerUnitThb: line.landedCostPerUnitThb,
       totalLandedCostThb: line.landedCostPerUnitThb * line.qty,
-      // V141 ("CEO owns costing") cost-override provenance — mirrors PricingCostingItemDto, same
-      // fields mockApi.js's own recalculateCosting seeds. fxRate is always 1 in mock mode (no BOT
-      // lookup here either). calculationConfigVersion is a literal 1, not a currentFormulaConfig()
-      // lookup: this seed module has no access to mockApi.js's formula-config state (a separate
-      // module, no circular import), and at the point this seed runs (module load, before any
-      // config write can possibly have happened) the live formula config IS version 1 — see
-      // mockApi.js's mockPricingFormulaConfigVersions seed.
+      // V141 ("CEO owns costing") cost-override provenance — mirrors PricingCostingItemDto, same fields mockApi.js's
+      // own recalculateCosting seeds. fxRate is always 1 in mock mode (no BOT lookup here either).
       fxRate: 1, fxSource: 'THB', calculationConfigVersion: 1,
       manualLandedCostPerUnitThb: null, overrideReason: null,
       overriddenBy: null, overriddenAt: null,
@@ -263,11 +245,8 @@ export function buildDemoSalesSeed() {
       return {
         id: decisionItemSeq, pricingDecisionId: id,
         // ci.id, NOT pricingRequestItemId — PricingDecisionItemDto.pricingCostingItemId is a FK to
-        // pricing_costing_item.id (see mockApi.js's startPricingDecision, fixed the same way, for
-        // the full explanation). Getting this wrong means the CEO cost-override UI's join
-        // (costing.items.find(ci => ci.id === decisionItem.pricingCostingItemId)) never matches
-        // against the seeded demo data, which is the ONLY fixture the feature can be seen on in a
-        // browser under VITE_USE_MOCKS=true.
+        // pricing_costing_item.id (see mockApi.js's startPricingDecision, fixed the same way, for the full
+        // explanation).
         pricingRequestItemId: ci.pricingRequestItemId, pricingCostingItemId: ci.id,
         brand: prItem?.brand ?? null, model: prItem?.model ?? null,
         productDescription: prItem?.productDescription ?? null,
@@ -369,12 +348,9 @@ export function buildDemoSalesSeed() {
       notes: ['ราคารวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขต กทม. แต่ไม่รวมค่าตัด/ติดตั้ง'],
       items, issuedByName: status === 'ISSUED' ? SALES1.name : null,
       preparerName: 'จินตนา หาญมนตรี',
-      // This is the post-render READ state (a seeded document is never "just issued" — it's
-      // already sitting there for demo purposes), NOT what depositNotices.issue's own response
-      // returns. DepositNoticeService.issue's renderAfterCommit means an issue() RESPONSE
-      // reports hasPdf/hasXlsx false even for a document that is otherwise fully ISSUED — see
-      // mockApi.js's depositNotices.issue and DepositNoticeDto.java (issue #752). Do not use
-      // this seed as a reference for what issue() itself returns.
+      // This is the post-render READ state (a seeded document is never "just issued" — it's already sitting there
+      // for demo purposes), NOT what depositNotices.issue's own response returns. Do not use this seed as a
+      // reference for what issue() itself returns.
       hasPdf: status === 'ISSUED', hasXlsx: status === 'ISSUED',
       createdAt, updatedAt: createdAt,
       subtotal, depositAmount, vatAmount,
@@ -404,11 +380,8 @@ export function buildDemoSalesSeed() {
     });
   }
 
-  // ══════════════════════════════════════════════════════════════════════
-  // New tickets: rep2's two deals (ownership/DRAFT-visibility demo) + a 3rd
-  // deal that hosts the extra downstream-status coverage this PR chain needs
-  // (see the report for exactly which statuses land where).
-  // ══════════════════════════════════════════════════════════════════════
+  // New tickets: rep2's two deals (ownership/DRAFT-visibility demo) + a 3rd deal that hosts the extra
+  // downstream-status coverage this PR chain needs (see the report for exactly which statuses land where).
   const tickets = [
     {
       id: 16, code: 'PR-2026-0016', type: 'PRICE_REQUEST',
@@ -422,12 +395,8 @@ export function buildDemoSalesSeed() {
       salesStage: 'LEAD_APPROACH', lostReason: null, lostAt: null,
       stageUpdatedAt: daysAgoIso(5),
       lifecycle: 'ACTIVE', tenderRequirement: 'UNKNOWN', depositPolicy: 'REQUIRED',
-      // UNSPECIFIED on purpose (issue #740). Every seeded deal used to hardcode DESIGNER_LED, so
-      // NO mock-mode deal ever showed the V144 stored default — which is precisely the state the
-      // ช่องทางรับงาน correction control exists for, and precisely why clicking through mocks did
-      // not reveal that no such control existed. A fresh lead nobody has classified yet is the
-      // honest place for it. Its channel is settable WITHOUT a reason (unstated), so this deal
-      // exercises the no-reason branch.
+      // UNSPECIFIED on purpose (issue #740). A fresh lead nobody has classified yet is the honest place for it. Its
+      // channel is settable WITHOUT a reason (unstated), so this deal exercises the no-reason branch.
       depositPolicyReason: null, entryChannel: 'UNSPECIFIED',
       paymentStatus: null, fulfillmentStatus: null,
       quotations: [], quotation: null,
@@ -468,22 +437,18 @@ export function buildDemoSalesSeed() {
       createdById: SALES1.id, createdByName: SALES1.name,
       assignedToId: IMPORT1.id, assignedToName: IMPORT1.name,
       customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด',
-      // The only seeded ticket carrying a customerId/contactId, added with owner feedback F2
-      // (2026-09-10): ผู้สั่งซื้อ is now REQUIRED on a ใบเสนอราคา, and this is the deal every
-      // seeded ใบเสนอราคา hangs off, so without these two ids the whole quotation surface would be
-      // unreachable in mock mode. They point at mockApi.js's `mockCustomers[5]` / `mockContacts[6]`
-      // — see that customer row's own comment for why it exists.
+      // The only seeded ticket carrying a customerId/contactId, added with owner feedback F2 (2026-09-10):
+      // ผู้สั่งซื้อ is now REQUIRED on a ใบเสนอราคา, and this is the deal every seeded ใบเสนอราคา hangs off, so
+      // without these two ids the whole quotation surface would be unreachable in mock mode.
       customerId: 5, contactId: 6,
       note: null,
       createdAt: '2026-06-25', updatedAt: daysAgoIso(2, '').slice(0, 10), closedAt: null,
       salesStage: 'QUOTE_BUYER', lostReason: null, lostAt: null,
       stageUpdatedAt: daysAgoIso(6),
       lifecycle: 'ACTIVE', tenderRequirement: 'UNKNOWN', depositPolicy: 'REQUIRED',
-      // BUYER_DIRECT, not the blanket DESIGNER_LED this used to carry: this deal SITS at
-      // QUOTE_BUYER (S8) with no earlier stage history, which is the owner's route C — a
-      // contractor arriving with a BOQ already in hand. Labelling it designer-led contradicted its
-      // own stage. It is also the one seeded deal with a STATED channel, so it exercises the
-      // reason-required branch of the ช่องทางรับงาน control (issue #740).
+      // BUYER_DIRECT, not the blanket DESIGNER_LED this used to carry: this deal SITS at QUOTE_BUYER (S8) with no
+      // earlier stage history, which is the owner's route C — a contractor arriving with a BOQ already in hand.
+      // Labelling it designer-led contradicted its own stage.
       depositPolicyReason: null, entryChannel: 'BUYER_DIRECT',
       paymentStatus: null, fulfillmentStatus: null,
       quotations: [], quotation: null,
@@ -500,74 +465,20 @@ export function buildDemoSalesSeed() {
     },
   ];
 
-  // ══════════════════════════════════════════════════════════════════════
-  // ฝ่ายบัญชี money-cycle deals (tickets 19-25)
-  //
-  // The account role's two screens — AccountOverview ("ภาพรวมการเงิน") and
-  // AccountFinancePage ("งานการเงิน") — bucket every deal through
-  // accountActions.js's five money steps. Before these rows the whole seed
-  // reached exactly two of them: ticket 6 (overdue credit customer) and
-  // ticket 13 (AWAITING_FINAL_PAYMENT). `DEPOSIT_NOTICE_ISSUED` — step 2,
-  // "ยืนยันรับมัดจำ", the half of ฝ่ายบัญชี's job that starts the money cycle —
-  // had ZERO rows anywhere, so the deposit-confirmation path could not be
-  // exercised in mock mode at all.
-  //
-  // One deal per bucket-and-branch, per the seed design rule (a state matrix,
-  // not bulk volume):
-  //
-  //   19  DEPOSIT_NOTICE_ISSUED, notice issued 6d ago   -> รอรับมัดจำ
-  //   20  DEPOSIT_NOTICE_ISSUED, larger + older         -> รอรับมัดจำ
-  //   21  AWAITING_FINAL_PAYMENT, deposit banked        -> รอชำระส่วนที่เหลือ
-  //   22  credit customer, no deposit, past due date    -> เกินกำหนด
-  //   23  AWAITING_FINAL_PAYMENT *and* past due date    -> เกินกำหนด (outranks
-  //                                                       its payment step —
-  //                                                       pins the priority
-  //                                                       order in
-  //                                                       nextAccountAction)
-  //   24  FULLY_PAID + FULLY_DELIVERED + invoice on file-> รอปิดงาน
-  //   25  CLOSED_PAID, close already confirmed,
-  //       no SALE commission yet                        -> บันทึกใบกำกับ
-  //
-  // ⚠️ 24 and 25 are deliberately OUTSIDE the account role's own list scope.
-  // accountListScopeIncludes() (mockApi.js) returns only deals with a pending
-  // payment status or an overdue balance, and both of these have
-  // amountOutstanding = 0 — so "รอปิดงาน"/"บันทึกใบกำกับ" still read 0 for the
-  // `account` persona. That scope is a reviewed authz decision, already
-  // documented as a known gap in AccountOverview.jsx's own doc comment, and
-  // widening it is explicitly out of scope for a seed change (CLAUDE.md).
-  // They are seeded anyway because they ARE reachable three other ways: the
-  // deal page itself (account may open /tickets/24 directly and gets the real
-  // "ยืนยันพร้อมปิดงาน" button), the ceo persona (unscoped), and the
-  // commission "Linked Deal" picker, which queries salesStage=CLOSED_PAID.
-  //
-  // Every deal below sets `salesStage` explicitly, which means mockApi.js's
-  // V50 backfill loop (`if (t.salesStage) continue`) skips them entirely — so
-  // each one must carry the fields that loop would otherwise have filled in:
-  // lifecycle / tenderRequirement / depositPolicy / depositPolicyReason /
-  // entryChannel, a pre-normalized `quotations` array plus its `quotation`
-  // alias, and per-item qtyDelivered / qtyFromStock / stockNote /
-  // weightMultiplier. The stage each one claims is the stage that backfill
-  // WOULD have derived from its payment/fulfilment pair, so the two agree.
-  // ══════════════════════════════════════════════════════════════════════
+  // ฝ่ายบัญชี money-cycle deals (tickets 19-25) The account role's two screens — AccountOverview
+  // ("ภาพรวมการเงิน") and AccountFinancePage ("งานการเงิน") — bucket every deal through accountActions.js's five
+  // money steps.
 
-  // Continue the hand-numbered id runs tickets 16-18 above use: items ended at
-  // 23, events at 96. Ticket-native quotations are their own id space (1-7 in
-  // demoData.js, plus the injected 101) — 201+ keeps a clear gap from both.
+  // Continue the hand-numbered id runs tickets 16-18 above use: items ended at 23, events at 96. Ticket-native
+  // quotations are their own id space (1-7 in demoData.js, plus the injected 101) — 201+ keeps a clear gap from
+  // both.
   let moneyItemSeq = 23;
   let moneyEventSeq = 96;
   let moneyQuotationSeq = 200;
 
   const ACCOUNT = { id: 11, name: 'คุณบัญชี การเงิน' };
 
-  /**
-   * A deal that has already sold and is somewhere in its money cycle.
-   *
-   * `timeline` is the event chain as [kind, isoTimestamp] pairs — every kind
-   * used below is one a real handler emits (TicketService/mockApi pushEvent),
-   * and `actor` follows who actually performs that step: the rep confirms the
-   * customer and issues the notice, ฝ่ายนำเข้า runs the fulfilment leg,
-   * ฝ่ายบัญชี banks the money and confirms the close.
-   */
+  /** A deal that has already sold and is somewhere in its money cycle. */
   function makeMoneyDeal({
     id, title, customerName, customerId = null, owner = SALES1, priority = 'NORMAL',
     paymentStatus, fulfillmentStatus = null, salesStage,
@@ -591,8 +502,8 @@ export function buildDemoSalesSeed() {
       pdfPath: null,
       totalAmount: quotationTotal,
       currency: 'THB',
-      // Pre-normalized: normalizeQuotation() only runs inside the backfill loop
-      // this deal skips, so these defaults have to be written out here.
+      // Pre-normalized: normalizeQuotation() only runs inside the backfill loop this deal skips, so these defaults
+      // have to be written out here.
       quotationVersion: 1,
       docStatus: quotationDocStatus,
       recipientType: 'OWNER',
@@ -631,9 +542,8 @@ export function buildDemoSalesSeed() {
           rawPrice: it.rawPrice, rawCurrency: 'THB', rawUnit: 'piece',
           proposedPrice: it.price, approvedPrice: it.price, currency: 'THB',
           sortOrder: idx,
-          // Same reason as the quotation above — item normalization lives in
-          // the skipped backfill loop. weightMultiplier mirrors
-          // sales.ticket_item.weight_multiplier's own DEFAULT 1 (V148).
+          // Same reason as the quotation above — item normalization lives in the skipped backfill loop. weightMultiplier
+          // mirrors sales.ticket_item.weight_multiplier's own DEFAULT 1 (V148).
           qtyDelivered: allDelivered ? it.qty : (it.qtyDelivered ?? 0),
           qtyFromStock: it.qtyFromStock ?? 0,
           stockNote: it.stockNote ?? null,
@@ -652,9 +562,8 @@ export function buildDemoSalesSeed() {
     };
   }
 
-  // The pre-sale half of the chain is identical on every one of these deals —
-  // they all sold the same way — so it is generated rather than retyped seven
-  // times. Only the money/fulfilment tail below differs per deal.
+  // The pre-sale half of the chain is identical on every one of these deals — they all sold the same way — so it
+  // is generated rather than retyped seven times. Only the money/fulfilment tail below differs per deal.
   const soldTimeline = (owner, { created, quoted, confirmed }) => [
     ['CREATED', `${created}T09:00:00Z`, owner],
     ['SUBMITTED', `${created}T09:30:00Z`, owner],
@@ -666,14 +575,14 @@ export function buildDemoSalesSeed() {
   ];
 
   const moneyDeals = [
-    // 19 — รอรับมัดจำ. Notice issued, nothing banked yet: the step-2 row that
-    // did not exist anywhere in the seed before.
+    // 19 — รอรับมัดจำ. Notice issued, nothing banked yet: the step-2 row that did not exist anywhere in the seed
+    // before.
     makeMoneyDeal({
       id: 19, title: 'สยามพารากอน ดีเวลลอปเมนท์',
       customerName: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด',
-      // customerId 6 (mockApi.js's own mockCustomers) — the ONE ISSUED-deposit-notice money-cycle
-      // deal linked to a real customer row, so mockApi.billingNotes.candidates() has at least one
-      // reachable REMAINING_INVOICE/DEPOSIT_NOTICE candidate in mock mode (GLA-129 review round 1).
+      // customerId 6 (mockApi.js's own mockCustomers) — the ONE ISSUED-deposit-notice money-cycle deal linked to a
+      // real customer row, so mockApi.billingNotes.candidates() has at least one reachable
+      // REMAINING_INVOICE/DEPOSIT_NOTICE candidate in mock mode (GLA-129 review round 1).
       customerId: 6,
       priority: 'HIGH',
       paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null,
@@ -688,9 +597,8 @@ export function buildDemoSalesSeed() {
       ],
     }),
 
-    // 20 — รอรับมัดจำ, larger and waiting longer. Two rows in this bucket is
-    // what makes the Overview's per-bucket ยอดรวม readable as a sum rather
-    // than as one deal's value.
+    // 20 — รอรับมัดจำ, larger and waiting longer. Two rows in this bucket is what makes the Overview's per-bucket
+    // ยอดรวม readable as a sum rather than as one deal's value.
     makeMoneyDeal({
       id: 20, title: 'ริชมอนด์ พร็อพเพอร์ตี้',
       customerName: 'บริษัท ริชมอนด์ พร็อพเพอร์ตี้ จำกัด',
@@ -729,9 +637,8 @@ export function buildDemoSalesSeed() {
       ],
     }),
 
-    // 22 — เกินกำหนด. A credit customer, so the deposit track is bypassed
-    // entirely (depositPolicy CREDIT_CUSTOMER + paymentStatus null is what
-    // depositBypassesNotice keys on) and the whole invoice is simply late.
+    // 22 — เกินกำหนด. A credit customer, so the deposit track is bypassed entirely (depositPolicy CREDIT_CUSTOMER
+    // + paymentStatus null is what depositBypassesNotice keys on) and the whole invoice is simply late.
     makeMoneyDeal({
       id: 22, title: 'ทวีทรัพย์ การช่าง',
       customerName: 'หจก. ทวีทรัพย์ การช่าง',
@@ -752,10 +659,9 @@ export function buildDemoSalesSeed() {
       ],
     }),
 
-    // 23 — เกินกำหนด while ALSO awaiting the balance. Pins nextAccountAction's
-    // documented priority order: overdue is checked first, so this row must
-    // lead with "ติดตามชำระ" and not "รับชำระส่วนที่เหลือ". Without it, the
-    // two branches are never observed competing.
+    // 23 — เกินกำหนด while ALSO awaiting the balance. Pins nextAccountAction's documented priority order: overdue
+    // is checked first, so this row must lead with "ติดตามชำระ" and not "รับชำระส่วนที่เหลือ". Without it, the two
+    // branches are never observed competing.
     makeMoneyDeal({
       id: 23, title: 'เดอะ ซีนเนอรี่ วิลล่า',
       customerName: 'บริษัท เดอะ ซีนเนอรี่ วิลล่า จำกัด',
@@ -781,11 +687,9 @@ export function buildDemoSalesSeed() {
       ],
     }),
 
-    // 24 — รอปิดงาน. Fully paid, fully delivered, tax invoice on file (added
-    // below), close not yet confirmed — the exact four-part predicate
-    // requireClosePrerequisites() enforces, so account's "ยืนยันพร้อมปิดงาน"
-    // button is live on this deal's page. Outside account's list scope; see
-    // the block comment above.
+    // 24 — รอปิดงาน. Fully paid, fully delivered, tax invoice on file (added below), close not yet confirmed — the
+    // exact four-part predicate requireClosePrerequisites() enforces, so account's "ยืนยันพร้อมปิดงาน" button is
+    // live on this deal's page. Outside account's list scope; see the block comment above.
     makeMoneyDeal({
       id: 24, title: 'แลนด์มาร์ค เรสซิเดนซ์',
       customerName: 'บริษัท แลนด์มาร์ค เรสซิเดนซ์ จำกัด',
@@ -809,11 +713,7 @@ export function buildDemoSalesSeed() {
       ],
     }),
 
-    // 25 — บันทึกใบกำกับ. Same shape as 24 but ฝ่ายบัญชี has already confirmed the
-    // close, which is what takes it PAST the close-ready branch (closeReady()
-    // requires closeConfirmedAt == null) and into the commission step. No SALE
-    // commission row exists for this ticket in demoPayroll.js, so
-    // hasRecordedCommission() is false and the step stays outstanding.
+    // This closed deal has no recorded sale commission, leaving the commission step outstanding.
     makeMoneyDeal({
       id: 25, title: 'ภูเก็ต เบย์ รีสอร์ท',
       customerName: 'บริษัท ภูเก็ต เบย์ รีสอร์ท จำกัด',
@@ -842,11 +742,8 @@ export function buildDemoSalesSeed() {
   ];
   tickets.push(...moneyDeals);
 
-  // ══════════════════════════════════════════════════════════════════════
-  // PricingRequest state matrix — hosted mostly on the existing 15 tickets,
-  // plus the 3 new ones above. See the handoff report for the full status ->
-  // ticket map.
-  // ══════════════════════════════════════════════════════════════════════
+  // PricingRequest state matrix — hosted mostly on the existing 15 tickets, plus the 3 new ones above. See the
+  // handoff report for the full status -> ticket map.
 
   // PR1 — ticket 1 — DRAFT
   const pr1 = makePr({
@@ -898,11 +795,9 @@ export function buildDemoSalesSeed() {
     createdAt: daysAgoIso(10),
   });
 
-  // PR5 — ticket 3 — AWAITING_FACTORY_RESPONSE (FactoryQuote RESPONSE_RECEIVED, Costing DRAFT).
-  // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE and dropped it from the DB
-  // constraint, so the seed moves with it — exactly what the migration does to a live row. The
-  // demo state this row exists to cover (a costing in DRAFT) is unchanged; only the status the
-  // request carries while that costing is open has.
+  // PR5 — ticket 3 — AWAITING_FACTORY_RESPONSE (FactoryQuote RESPONSE_RECEIVED, Costing DRAFT). The demo state
+  // this row exists to cover (a costing in DRAFT) is unchanged; only the status the request carries while that
+  // costing is open has.
   const pr5 = makePr({
     ticketId: 3, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการ XYZ',
     status: 'AWAITING_FACTORY_RESPONSE', requestedBy: SALES1, assignedImport: IMPORT1,
@@ -986,12 +881,8 @@ export function buildDemoSalesSeed() {
   });
   makeDecision(pr8, costing8, { status: 'APPROVED', createdAt: daysAgoIso(38), approvedAt: daysAgoIso(38) });
 
-  // PR9 — ticket 5 — the CEO returned the price to Import (Decision RETURNED).
-  // The request status is AWAITING_FACTORY_RESPONSE, not COSTING_REVISION_REQUIRED: V141 deleted
-  // that status from chk_pricing_request_status and PricingRequestStatus.VALUES, and
-  // PricingDecisionService.returnToImport now sends the request straight back to factory
-  // negotiation. Seeding the dead status made this fixture the ONE mock-mode deal rendering a
-  // state production can no longer produce (issue #741).
+  // PR9 — ticket 5 — the CEO returned the price to Import (Decision RETURNED). Seeding the dead status made this
+  // fixture the ONE mock-mode deal rendering a state production can no longer produce (issue #741).
   const pr9 = makePr({
     ticketId: 5, recipientType: 'BUYER', recipientLabel: 'ผู้จัดงาน Event Organizer',
     status: 'AWAITING_FACTORY_RESPONSE', requestedBy: SALES1, assignedImport: IMPORT1,
@@ -1016,10 +907,7 @@ export function buildDemoSalesSeed() {
     returnedAt: daysAgoIso(16), returnReason: 'มาร์จิ้นต่ำเกินไปเทียบราคาตลาด',
   });
 
-  // PR10 — ticket 5 — QUOTATION_ISSUED (Quotation history: SUPERSEDED -> ISSUED, a
-  // commercial revision — createCustomerQuotationRevision, mockApi.js, always leaves the
-  // source quotation SUPERSEDED once a revision exists; REJECTED is a terminal outcome that
-  // can never grow a revision, see D5 in the review report)
+  // PR10 — ticket 5 — QUOTATION_ISSUED.
   const pr10 = makePr({
     ticketId: 5, recipientType: 'DESIGNER', recipientLabel: 'ผู้ออกแบบ Event Organizer',
     status: 'QUOTATION_ISSUED', requestedBy: SALES1, assignedImport: IMPORT1,
@@ -1049,8 +937,8 @@ export function buildDemoSalesSeed() {
     quotationRevisionNo: 2, parentQuotationId: q10Old.id, discountPerItem: 5,
   });
 
-  // PR11 — ticket 7 — QUOTATION_ACCEPTED, 3 items/factories (full downstream: Quotation
-  // SUPERSEDED+ACCEPTED, DepositNotice SUPERSEDED+ISSUED, FPO OPEN+SHIPPING+RECEIVED)
+  // PR11 — ticket 7 — QUOTATION_ACCEPTED, 3 items/factories (full downstream: Quotation SUPERSEDED+ACCEPTED,
+  // DepositNotice SUPERSEDED+ISSUED, FPO OPEN+SHIPPING+RECEIVED)
   const pr11 = makePr({
     ticketId: 7, recipientType: 'OWNER', recipientLabel: 'เจ้าของโครงการสยามพารากอน',
     status: 'QUOTATION_ACCEPTED', requestedBy: SALES1, assignedImport: IMPORT1,
@@ -1090,17 +978,9 @@ export function buildDemoSalesSeed() {
   makeDepositNotice(ticket7, q11, { status: 'ISSUED', createdAt: daysAgoIso(18), issueDate: daysAgoIso(17), version: 2 });
   void dn11Old;
 
-  // PR12 — ticket 8 — IMPORT_REVIEWING.
-  //
-  // This row used to seed at MORE_INFO_REQUIRED. V140 retired that status: it is no longer in
-  // PricingRequestStatus.VALUES or the chk_pricing_request_status constraint, so a demo row
-  // sitting in it represented a state the real backend can no longer hold. IMPORT_REVIEWING is
-  // exactly where V140's data migration sends such a row when no resume_status was recorded,
-  // which is this row's case — so the seed now mirrors what the migration actually does.
-  //
-  // The MORE_INFO_REQUESTED event below is KEPT on purpose. V140 deliberately does not rewrite
-  // pricing_request_event history, and PricingRequestEventKind still accepts that kind, so a
-  // demo request whose timeline shows a question once asked is faithful, not stale.
+  // PR12 — ticket 8 — IMPORT_REVIEWING. This row used to seed at MORE_INFO_REQUIRED. V140 retired that status:
+  // it is no longer in PricingRequestStatus.VALUES or the chk_pricing_request_status constraint, so a demo row
+  // sitting in it represented a state the real backend can no longer hold.
   const pr12 = makePr({
     ticketId: 8, recipientType: 'DESIGNER', recipientLabel: 'ผู้ออกแบบ Siam Mall',
     status: 'IMPORT_REVIEWING', requestedBy: SALES1, assignedImport: IMPORT1,
@@ -1166,8 +1046,8 @@ export function buildDemoSalesSeed() {
   pushPrEvent(pr17, SALES2, 'PRICING_REQUEST_CREATED', null, 'DRAFT', null, daysAgoIso(2));
   pushPrEvent(pr17, SALES2, 'PRICING_REQUEST_SUBMITTED', 'DRAFT', 'SUBMITTED', null, daysAgoIso(1));
 
-  // PR18 — ticket 18 — APPROVED_FOR_QUOTATION; FactoryQuote revision chain
-  // (SUPERSEDED -> READY_FOR_COSTING); CustomerQuotation DRAFT + a separate CANCELLED attempt.
+  // PR18 — ticket 18 — APPROVED_FOR_QUOTATION; FactoryQuote revision chain (SUPERSEDED -> READY_FOR_COSTING);
+  // CustomerQuotation DRAFT + a separate CANCELLED attempt.
   const pr18 = makePr({
     ticketId: 18, recipientType: 'OWNER', recipientLabel: 'เจ้าของศูนย์การค้า Fashion Island',
     status: 'APPROVED_FOR_QUOTATION', requestedBy: SALES1, assignedImport: IMPORT1,
@@ -1189,8 +1069,7 @@ export function buildDemoSalesSeed() {
   makeQuotation(pr18, decision18, { docStatus: 'DRAFT', createdAt: daysAgoIso(6) });
   makeQuotation(pr18, decision18, { docStatus: 'CANCELLED', createdAt: daysAgoIso(19) });
 
-  // PR19 — ticket 18 — QUOTATION_ISSUED; FactoryQuote NEGOTIATING; CustomerQuotation
-  // REVISION_REQUESTED.
+  // PR19 — ticket 18 — QUOTATION_ISSUED; FactoryQuote NEGOTIATING; CustomerQuotation REVISION_REQUESTED.
   const pr19 = makePr({
     ticketId: 18, recipientType: 'DESIGNER', recipientLabel: 'ผู้ออกแบบ Fashion Island',
     status: 'QUOTATION_ISSUED', requestedBy: SALES1, assignedImport: IMPORT1,
@@ -1245,8 +1124,8 @@ export function buildDemoSalesSeed() {
   const quotation20 = makeQuotation(pr20, decision20, { docStatus: 'ACCEPTED', createdAt: daysAgoIso(10), issuedAt: daysAgoIso(10), sentAt: daysAgoIso(10), acceptedAt: daysAgoIso(9) });
   makeDepositNotice({ id: 18, customerName: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด' }, quotation20, { status: 'DRAFT', createdAt: daysAgoIso(4) });
 
-  // PR21 — ticket 18 — AWAITING_FACTORY_RESPONSE with a CALCULATED (not yet submitted) costing.
-  // Same V140 status merge as PR5 above.
+  // PR21 — ticket 18 — AWAITING_FACTORY_RESPONSE with a CALCULATED (not yet submitted) costing. Same V140 status
+  // merge as PR5 above.
   const pr21 = makePr({
     ticketId: 18, recipientType: 'OWNER', recipientLabel: 'เจ้าของศูนย์การค้า Fashion Island',
     status: 'AWAITING_FACTORY_RESPONSE', requestedBy: SALES1, assignedImport: IMPORT1,
@@ -1264,11 +1143,8 @@ export function buildDemoSalesSeed() {
     lines: [{ prItemId: pr21.items[0].id, fqId: fq21.id, fqItemId: fq21.items[0].id, factoryName: 'Panaria SpA', rawUnitPrice: 1400, unitBasis: 'PER_PIECE', unitLabel: 'แผ่น', qty: 120, landedCostPerUnitThb: 1610, sqmPerUnit: 0.72 }],
   });
 
-  // ══════════════════════════════════════════════════════════════════════
-  // Deal activities — independent of the PricingRequest chain (keyed by
-  // ticketId only). Covers every ACTIVITY_KINDS value and demonstrates the
-  // ready-to-advance / stale gates both ways.
-  // ══════════════════════════════════════════════════════════════════════
+  // Deal activities — independent of the PricingRequest chain (keyed by ticketId only). Covers every
+  // ACTIVITY_KINDS value and demonstrates the ready-to-advance / stale gates both ways.
   const followUpOverrides = [];
   function setNextFollowUp(ticketId, date) {
     followUpOverrides.push({ ticketId, nextFollowUpAt: date });
@@ -1278,11 +1154,10 @@ export function buildDemoSalesSeed() {
   addDealActivity(1, { kind: 'CALL', activityDate: daysAgoIso(2, '').slice(0, 10), note: 'โทรติดตามยืนยันสเปกสินค้ากับลูกค้า', createdBy: SALES1, at: daysAgoIso(2) });
   setNextFollowUp(1, daysAgoIso(-5, '').slice(0, 10));
 
-  // Ticket 2: no nextFollowUpAt, no activity -> NOT ready, STALE.
-  // (deliberately no rows)
+  // Ticket 2: no nextFollowUpAt, no activity -> NOT ready, STALE. (deliberately no rows)
 
-  // Ticket 3: nextFollowUpAt set + OLD activity (after last stage change, but >7 days ago)
-  // -> ready-to-advance AND stale at the same time.
+  // Ticket 3: nextFollowUpAt set + OLD activity (after last stage change, but >7 days ago) -> ready-to-advance
+  // AND stale at the same time.
   addDealActivity(3, { kind: 'MEETING', activityDate: daysAgoIso(20, '').slice(0, 10), note: 'นัดพบลูกค้าที่ไซต์งานเพื่อนำเสนอตัวอย่างกระเบื้อง', createdBy: SALES1, at: daysAgoIso(20) });
   setNextFollowUp(3, daysAgoIso(-3, '').slice(0, 10));
 
@@ -1297,16 +1172,16 @@ export function buildDemoSalesSeed() {
   addDealActivity(6, { kind: 'QUOTATION_FOLLOWUP', activityDate: daysAgoIso(2, '').slice(0, 10), note: 'ติดตามผลใบเสนอราคาที่ส่งไปเมื่อสัปดาห์ก่อน', createdBy: SALES1, at: daysAgoIso(2) });
   setNextFollowUp(6, daysAgoIso(-4, '').slice(0, 10));
 
-  // Ticket 15: already has a real STAGE_CHANGED event (2026-07-14). Activity logged
-  // after that stage change but > 7 days before "today" -> ready + stale.
+  // Ticket 15: already has a real STAGE_CHANGED event (2026-07-14). Activity logged after that stage change but
+  // > 7 days before "today" -> ready + stale.
   addDealActivity(15, { kind: 'MESSAGE', activityDate: '2026-07-20', note: 'ทักไลน์สอบถามความคืบหน้าการนำเสนอ', createdBy: SALES1, at: '2026-07-20T10:00:00Z' });
   setNextFollowUp(15, daysAgoIso(-2, '').slice(0, 10));
 
   // Ticket 16 (rep2, new): OTHER kind, recent -> not ready (no nextFollowUpAt), fresh.
   addDealActivity(16, { kind: 'OTHER', activityDate: daysAgoIso(4, '').slice(0, 10), note: 'ได้รับนามบัตรจากงานแสดงสินค้า บันทึกไว้ติดตามต่อ', createdBy: SALES2, at: daysAgoIso(4) });
 
-  // Ticket 18: multiple kinds, ready + fresh (no STAGE_CHANGED event yet -> anchor is
-  // ticket.createdAt, 2026-06-25, so any activity after that counts).
+  // Ticket 18: multiple kinds, ready + fresh (no STAGE_CHANGED event yet -> anchor is ticket.createdAt,
+  // 2026-06-25, so any activity after that counts).
   addDealActivity(18, { kind: 'CALL', activityDate: daysAgoIso(6, '').slice(0, 10), note: 'โทรแจ้งความคืบหน้าคำขอราคาให้ลูกค้าทราบ', createdBy: SALES1, at: daysAgoIso(6) });
   addDealActivity(18, { kind: 'EMAIL', activityDate: daysAgoIso(1, '').slice(0, 10), note: 'ส่งอีเมลแจ้งรายละเอียดใบเสนอราคาที่ปรับใหม่', createdBy: SALES1, at: daysAgoIso(1) });
   setNextFollowUp(18, daysAgoIso(-6, '').slice(0, 10));
@@ -1315,29 +1190,15 @@ export function buildDemoSalesSeed() {
   addAttachment(6, { fileName: 'tax-invoice-QT-2026-0001.pdf', attachType: 'INVOICE', uploadedBy: SALES1, at: daysAgoIso(30) });
   addAttachment(12, { fileName: 'purchase-order-terminal21.pdf', attachType: 'PO', uploadedBy: IMPORT1, at: daysAgoIso(25) });
   addAttachment(18, { fileName: 'site-photos-fashion-island.zip', attachType: 'OTHER', mimeType: 'application/zip', fileSize: 2048000, uploadedBy: SALES1, at: daysAgoIso(5) });
-  // Tickets 24/25 (ฝ่ายบัญชี money cycle): the INVOICE attachment is not
-  // decoration — hasInvoiceAttachment() IS the invoiceOnFile half of
-  // requireClosePrerequisites, so without these two rows neither deal is
-  // close-ready and both fall out of their intended bucket. Uploaded by the
-  // rep because canManageDocuments deliberately excludes `account` (see
-  // mockApi.js's AttachmentController comment) — ฝ่ายบัญชี's own INVOICE write
-  // path is CommissionService.createFromDeal, which is precisely the step
-  // ticket 25 still has outstanding.
+  // Tickets 24/25 (ฝ่ายบัญชี money cycle): the INVOICE attachment is not decoration — hasInvoiceAttachment() IS
+  // the invoiceOnFile half of requireClosePrerequisites, so without these two rows neither deal is close-ready
+  // and both fall out of their intended bucket.
   addAttachment(24, { fileName: 'tax-invoice-landmark-residence.pdf', attachType: 'INVOICE', uploadedBy: SALES1, at: '2026-08-08T11:00:00Z' });
   addAttachment(25, { fileName: 'tax-invoice-phuket-bay-resort.pdf', attachType: 'INVOICE', uploadedBy: SALES2, at: '2026-08-04T11:00:00Z' });
 
-  // ── Deposit notices for the two รอรับมัดจำ deals ─────────────────────────
-  // depositNotices.issue() is the ONLY thing that sets paymentStatus =
-  // DEPOSIT_NOTICE_ISSUED, so a deal claiming that status without an ISSUED
-  // notice is a state the handlers could not have produced — and step 2 of
-  // DealDepositPanel would render "ยังไม่ได้ออกใบแจ้งยอด" while the deal page
-  // simultaneously offered account the "รับมัดจำ" button.
-  //
-  // Both ticket and quotation are duck-typed to just the fields
-  // makeDepositNotice reads, the same way ticket 18's DRAFT notice above is
-  // built: these two deals are ticket-native (they carry a `quotations` array,
-  // not a PricingRequest -> CustomerQuotation chain), so there is no real
-  // CustomerQuotation row to hand it.
+  // Deposit notices for the two รอรับมัดจำ deals ───────────────────────── depositNotices.issue is the ONLY
+  // thing that sets paymentStatus = DEPOSIT_NOTICE_ISSUED, so a deal claiming that status without an ISSUED
+  // notice is a state the handlers could not have produced.
   makeDepositNotice(
     { id: 19, customerName: 'บริษัท สยามพารากอน ดีเวลลอปเมนท์ จำกัด' },
     { number: 'QT-2026-0201', items: [{ description: 'Cotto Marble Series ขาว มัน 60x120 ซม.', requestedQuantity: 600, requestedUnitBasis: 'PER_PIECE', approvedUnitPrice: 810, salesDiscount: 0, finalUnitPrice: 810 }] },

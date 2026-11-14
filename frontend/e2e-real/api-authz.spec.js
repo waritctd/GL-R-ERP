@@ -34,10 +34,9 @@ const GATES = [
     path: '/api/employees',
     allowed: ['hr'],
     denied: except('hr'),
-    // EmployeeController#list: sessions.requireAnyRole(user, "hr") — a single role, and
-    // notably NOT ceo. The most privileged persona in the system is refused here, which is
-    // exactly the kind of asymmetry a permissive mock would paper over. It is not an oversight:
-    // ROLE_PERMISSIONS.canViewEmployees is ['hr'] too, so frontend and backend agree.
+    // EmployeeController#list: sessions.requireAnyRole(user, "hr") — a single role, and notably NOT ceo. The most
+    // privileged persona in the system is refused here, which is exactly the kind of asymmetry a permissive mock
+    // would paper over.
     source: 'EmployeeController#list',
   },
   {
@@ -52,13 +51,10 @@ const GATES = [
     name: 'GET /api/tickets — the sales deal list',
     path: '/api/tickets',
     allowed: ['sales', 'sales_manager', 'import', 'ceo', 'account'],
-    // hr and employee are the interesting denials: hr is privileged over the whole HR half of
-    // this product and still has no business reading the sales pipeline.
+    // hr and employee are the interesting denials: hr is privileged over the whole HR half of this product and
+    // still has no business reading the sales pipeline.
     denied: except('sales', 'sales_manager', 'import', 'ceo', 'account'),
-    // TicketService gates on TicketAccessPolicy.VIEWER_ROLES =
-    // {sales, import, ceo, account, sales_manager}. This row now covers all five: `account` got
-    // its seeded persona in V139, and warehouse/qc got theirs at the same time, so the denial
-    // side is derived with except() rather than hand-listed and cannot fall behind a new role.
+    // TicketService gates on TicketAccessPolicy.VIEWER_ROLES = {sales, import, ceo, account, sales_manager}.
     source: 'TicketAccessPolicy.VIEWER_ROLES',
   },
   {
@@ -101,9 +97,9 @@ test.describe('backend authorization (real Java services)', () => {
   let sessions;
 
   test.beforeAll(async () => {
-    // One live session per persona, opened once. apiSessionFor throws if the backend resolves a
-    // different role than requested, so seed drift fails here rather than silently re-pointing
-    // every assertion below at the wrong persona.
+    // One live session per persona, opened once. apiSessionFor throws if the backend resolves a different role
+    // than requested, so seed drift fails here rather than silently re-pointing every assertion below at the wrong
+    // persona.
     sessions = await apiSessionsFor(ALL);
   });
 
@@ -140,9 +136,9 @@ test.describe('backend authorization (real Java services)', () => {
     try {
       for (const gate of GATES) {
         const response = await anon.get(gate.path);
-        // 401, never 403: SecurityConfig's `.anyRequest().authenticated()` rejects at the filter
-        // chain before any controller runs, so an anonymous caller cannot even learn whether the
-        // role gate behind it would have let someone in.
+        // 401, never 403: SecurityConfig's `.anyRequest().authenticated()` rejects at the filter chain before any
+        // controller runs, so an anonymous caller cannot even learn whether the role gate behind it would have let
+        // someone in.
         expect(response.status(), `${gate.path} without a session`).toBe(401);
       }
     } finally {
@@ -151,11 +147,9 @@ test.describe('backend authorization (real Java services)', () => {
   });
 
   test('the denied roles are refused, not silently served an empty list', async () => {
-    // The failure this guards against is a gate "fixed" by turning a 403 into a 200 with zero
-    // rows. That reads as safe and is not: an empty page is indistinguishable from "there is
-    // nothing to see", so a scope bug that leaks rows later would look like data appearing
-    // rather than a permission regression. Assert the refusal itself carries the service's
-    // message, i.e. it came from SessionContext#requireAnyRole and not from an empty query.
+    // The failure this guards against is a gate "fixed" by turning a 403 into a 200 with zero rows. That reads as
+    // safe and is not: an empty page is indistinguishable from "there is nothing to see", so a scope bug that
+    // leaks rows later would look like data appearing rather than a permission regression.
     const response = await sessions.ceo.get('/api/employees');
     expect(response.status()).toBe(403);
     expect(await response.text()).toContain('ไม่มีสิทธิ์เข้าถึงรายการนี้');

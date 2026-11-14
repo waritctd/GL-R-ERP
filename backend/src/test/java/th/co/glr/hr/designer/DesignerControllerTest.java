@@ -26,20 +26,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
-/**
- * ⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): this class used to be
- * titled "Read-only by construction" and its {@code thereIsNoWriteEndpointOnThisController} test
- * asserted POST/PUT/DELETE all 405. POST now exists (see {@link DesignerController#create}) --
- * {@link #thereIsNoUpdateOrDeleteEndpointOnThisController} below keeps pinning PUT/DELETE as 405
- * (still true -- only create was asked for), and the {@code create*} tests below cover the new
- * endpoint's authz gate and validation with a MOCKED repository (cheap, fast). Real-DB evidence for
- * the authz gate itself is {@code DesignerCreateAuthzIntegrationTest} -- Mockito cannot prove a
- * grant survives into the actual SQL/service call, per CLAUDE.md's "Permission changes must ship
- * evidence".
- *
- * <p>{@link #search}/{@link #getByCode} stay open to any authenticated role, same product decision
- * as {@code CatalogController.search} (#205) -- see {@link DesignerController}'s own Javadoc.
- */
+/** ⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): this class used to be titled
+ * "Read-only by construction" and its thereIsNoWriteEndpointOnThisController test asserted POST/PUT/DELETE all
+ * 405. */
 class DesignerControllerTest {
     private static final List<String> ALL_ROLES = List.of(
         "employee", "warehouse", "qc", "hr", "sales", "sales_manager", "import", "ceo", "account");
@@ -48,9 +37,9 @@ class DesignerControllerTest {
         "employee", "warehouse", "qc", "hr", "import", "ceo", "account");
 
     private final DesignerRepository designers = mock(DesignerRepository.class);
-    // Unstubbed -> canCreateQuotation() defaults to false (Mockito), so a role reaches create()
-    // here only via its OWN role (sales/sales_manager) or an explicit per-test stub -- never a
-    // phantom grant, mirroring CustomerControllerTest's own employeeAuth wiring.
+    // Unstubbed -> canCreateQuotation() defaults to false (Mockito), so a role reaches create() here only via its
+    // OWN role (sales/sales_manager) or an explicit per-test stub -- never a phantom grant, mirroring
+    // CustomerControllerTest's own employeeAuth wiring.
     private final EmployeeAuthRepository employeeAuth = mock(EmployeeAuthRepository.class);
     private final MockMvc mvc = MockMvcBuilders
         .standaloneSetup(new DesignerController(designers, new SessionContext(), employeeAuth))
@@ -78,9 +67,6 @@ class DesignerControllerTest {
         mvc.perform(get("/api/designers/A060").session(session("sales")))
             .andExpect(status().is2xxSuccessful())
             // The response DOES carry the name -- the picker needs it to show who is selected.
-            // The confidentiality guarantee is that this name never reaches a RENDERED document,
-            // pinned separately by DesignerNameNeverReachesRenderedQuotationTest, not that the
-            // read-only lookup API withholds it from the app that is building the picker UI.
             .andExpect(content().json("{\"code\":\"A060\",\"name\":\"ABACUS DESIGN CO.,LTD\",\"active\":false}"));
     }
 

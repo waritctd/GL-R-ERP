@@ -5,19 +5,8 @@ import {
   PLAIN_ROW_PRESETS, PLAIN_UNIT_OPTIONS, UNLABELLED_LOCATION_TEXT, formatQuotationMoney,
 } from './quotationMeta.js';
 
-/**
- * A PLAIN row of the ใบเสนอราคา editor — quotation v3 S2 (owner feedback pass 3, 2026-09-11):
- * freight, consumables, a cut service, sanitary ware. Description, quantity, unit, unit price and
- * NONE of the tile machinery (no wastage, no ตร.ม./แผ่น, no catalog link, no composed description)
- * — DealQuotationService#buildPlainItem computes `amount = quantity × net price` and nothing else.
- *
- * Least typing: หน่วย is a controlled list (PLAIN_UNIT_OPTIONS — the units the owner's documents
- * actually print, the current document language's first), and a blank row offers one-click presets
- * for the lines her documents repeat (ค่าขนส่ง / ค่าบริการตัดกระเบื้อง / Transportation Charges).
- *
- * Same parent contract as QuotationItemRow: it renders what it is given and reports field patches
- * upward; the live amount arrives on `item.lineAmount` from the parent's debounced calculate-line.
- */
+/** A PLAIN row of the ใบเสนอราคา editor — quotation v3 S2 (owner feedback pass 3, 2026-09-11): freight,
+ * consumables, a cut service, sanitary ware. */
 export function QuotationPlainItemRow({
   item, index, readOnly, errors = {}, onChange, onRemove,
   groupId = null, locationGroups = [], onMove, documentLanguage = 'TH', currency = 'THB',
@@ -25,9 +14,9 @@ export function QuotationPlainItemRow({
   const moveTargets = locationGroups.filter((group) => group.groupId !== groupId);
   const primaryUnits = PLAIN_UNIT_OPTIONS[documentLanguage] ?? PLAIN_UNIT_OPTIONS.TH;
   const otherUnits = documentLanguage === 'EN' ? PLAIN_UNIT_OPTIONS.TH : PLAIN_UNIT_OPTIONS.EN;
-  // A stored unit outside the list (a row saved by another client, or before the list changed)
-  // is kept as an extra option rather than silently blanked — blanking it would change the
-  // printed document on the next save without the rep having touched the field.
+  // A stored unit outside the list (a row saved by another client, or before the list changed) is kept as an
+  // extra option rather than silently blanked — blanking it would change the printed document on the next save
+  // without the rep having touched the field.
   const knownUnit = !item.unit || [...primaryUnits, ...otherUnits].includes(item.unit);
   const presets = PLAIN_ROW_PRESETS[documentLanguage] ?? [];
   const blank = !item.description && !item.unit;
@@ -46,9 +35,9 @@ export function QuotationPlainItemRow({
             {moveTargets.length ? (
               <>
                 <label htmlFor={`plain-move-${index}`} className="sr-only">ย้ายไปตำแหน่ง</label>
-                {/* Same width discipline as QuotationItemRow's move select, for the same measured
-                    reason: an option carries a user-typed label, so the control must be allowed to
-                    shrink (`min-w-0`) or it pushes the page wide on a phone. */}
+                {/* Same width discipline as QuotationItemRow's move select, for the same measured reason: an option carries a
+                 * user-typed label, so the control must be allowed to shrink (`min-w-0`) or it pushes the page wide on a
+                 * phone. */}
                 <select
                   id={`plain-move-${index}`}
                   className="h-8 max-sm:order-2 mobile:h-11 w-full min-w-0 py-0 text-2xs mobile:text-base sm:w-auto sm:min-w-[9.5rem] sm:max-w-[13rem]"
@@ -132,11 +121,9 @@ export function QuotationPlainItemRow({
             onChange={(e) => onChange({ discountPct: e.target.value === '' ? null : Number(e.target.value) })}
           />
         </FormField>
-        {/* D1 (owner decision, 2026-09-16): OPTIONAL — unlike a TILE row's own control
-            (QuotationItemRow's `lead-${index}`), nothing ever requires this for a PLAIN row
-            (DealQuotationService#requireEveryTileItemHasALeadTime only gates TILE rows), so a row
-            left blank here saves exactly as it always did. Mirrors that control's shape (same
-            labels, same sr-only max-field pattern) so the two read as one feature. */}
+        {/* D1 (owner decision, 2026-09-16): OPTIONAL — unlike a TILE row's own control (QuotationItemRow's `lead-${index}`),
+         * nothing ever requires this for a PLAIN row (DealQuotationService#requireEveryTileItemHasALeadTime only gates TILE
+         * rows), so a row left blank here saves exactly as it always did. */}
         <FormField
           label="ระยะเวลานำเข้า (วัน)" htmlFor={`plain-lead-${index}`} hint="ไม่บังคับ"
           error={errors.leadTimeMinDays}

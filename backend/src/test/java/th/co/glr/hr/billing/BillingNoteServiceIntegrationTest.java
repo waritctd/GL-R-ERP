@@ -207,8 +207,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         BillingNoteRepository racingRepository = new BillingNoteRepository(jdbc) {
             @Override
             public int updateDraftFields(long id, LocalDate date, String due, String note) {
-                // Commit issuance on another connection after the editor read DRAFT, but before
-                // its guarded UPDATE. Both calls run through real transactional service proxies.
+                // Commit issuance on another connection after the editor read DRAFT, but before its guarded UPDATE. Both calls
+                // run through real transactional service proxies.
                 java.util.concurrent.CompletableFuture.runAsync(() ->
                     billingNoteService.issue(id, employeeWithGrantActor))
                     .orTimeout(15, java.util.concurrent.TimeUnit.SECONDS).join();
@@ -287,9 +287,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         return new BillingNoteDraftRequest("FREIGHT", billDate, null, null, lines);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Candidates + outstanding computation
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void candidates_listsIssuedRemainingInvoiceAndDepositNoticeAcrossDeals_withFullOutstandingAmounts() {
@@ -337,9 +335,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(result.alreadyBilled()).isEmpty();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Lifecycle
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createDraft_thenIssue_mintsFirstVersionOfANewBase() {
@@ -415,9 +411,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // No double billing
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createDraft_sameSourceOnTwoDraftsForDifferentTypes_secondIsRefused() {
@@ -450,9 +444,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         });
     }
 
-    /** DB invariant, bypassing the service entirely — the direct-JDBC style V188's own tests use.
-     * Two LIVE (note_status DRAFT/ISSUED) lines for the same (source_type, source_id) must be
-     * refused by Postgres itself. */
+    /** DB invariant, bypassing the service entirely — the direct-JDBC style V188's own tests use. Two LIVE
+     * (note_status DRAFT/ISSUED) lines for the same (source_type, source_id) must be refused by Postgres itself. */
     @Test
     void v189_dbInvariant_noDoubleBilling_evenBypassingTheService() {
         CustomerDto customer = createCustomer("DbInvariant1");
@@ -503,8 +496,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(cycle1.status()).isEqualTo("ISSUED");
         assertThat(cycle2.status()).isEqualTo("ISSUED");
         assertThat(cycle1.baseNumber()).isNotEqualTo(cycle2.baseNumber());
-        // Both still read ISSUED on a fresh fetch — neither superseded the other (that would only
-        // happen within the SAME chain, via revise -> issue).
+        // Both still read ISSUED on a fresh fetch — neither superseded the other (that would only happen within the
+        // SAME chain, via revise -> issue).
         assertThat(billingNoteService.get(cycle1.id(), accountActor).status()).isEqualTo("ISSUED");
         assertThat(billingNoteService.get(cycle2.id(), accountActor).status()).isEqualTo("ISSUED");
     }
@@ -768,10 +761,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
                 List.of(lineFor("DEPOSIT_NOTICE", deal.depositNoticeId()))), employeeWithGrantActor).id(),
             employeeWithGrantActor);
 
-        // A second line referencing a REMAINING_INVOICE row that does not exist — billing_note_line
-        // carries NO FK to remaining_invoice/deposit_notice by design (V189's own header comment),
-        // so this is constructible directly; bypasses the service entirely, same direct-JDBC
-        // technique v189_dbInvariant_noDoubleBilling_evenBypassingTheService already uses.
+        // A second line referencing a REMAINING_INVOICE row that does not exist.
         jdbc.update("""
             INSERT INTO sales.billing_note_line
                 (billing_note_id, seq, source_type, source_id, ticket_id, doc_number, amount, note_status)
@@ -780,9 +770,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         payOffDepositNoticeInFull(deal, notice);
 
-        // Without the fix, the missing source's outstanding reads SQL NULL -> COALESCE(...,0) <= 0
-        // -> counted as "paid", settling the WHOLE note and releasing its real, still-live sibling
-        // claim — a double-billing path.
+        // Without the fix, the missing source's outstanding reads SQL NULL -> COALESCE(...,0) <= 0 -> counted as
+        // "paid", settling the WHOLE note and releasing its real, still-live sibling claim — a double-billing path.
         BillingNoteDocumentDto reread = billingNoteService.get(issued.id(), accountActor);
         assertThat(reread.status()).isEqualTo("ISSUED");
         assertThat(billingNoteRepository.findLiveClaim("DEPOSIT_NOTICE", deal.depositNoticeId())).isPresent();
@@ -810,9 +799,9 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
                 List.of(lineFor("DEPOSIT_NOTICE", deal.depositNoticeId()))), employeeWithGrantActor).id(),
             employeeWithGrantActor);
 
-        // Simulates "a concurrent cancel already committed by the time settle()'s own guarded
-        // UPDATE runs" deterministically: force the cancel to land first, then call the exact same
-        // guarded statement reconcile would have called with this note's id.
+        // Simulates "a concurrent cancel already committed by the time settle()'s own guarded UPDATE runs"
+        // deterministically: force the cancel to land first, then call the exact same guarded statement reconcile
+        // would have called with this note's id.
         billingNoteService.cancel(issued.id(), new BillingNoteCancelRequest("ยกเลิกก่อน settle แข่งกัน"), employeeWithGrantActor);
 
         assertThatNoException().isThrownBy(() -> billingNoteRepository.settle(List.of(issued.id())));
@@ -847,8 +836,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         billingNoteService.cancel(issued.id(), new BillingNoteCancelRequest("ออกผิดลูกค้า"), employeeWithGrantActor);
 
-        // The source is claimable again — a brand-new note (same type, since GOODS is now free
-        // again after cancellation) can pick it up.
+        // The source is claimable again — a brand-new note (same type, since GOODS is now free again after
+        // cancellation) can pick it up.
         BillingNoteDocumentDto rebill = billingNoteService.createDraft(customer.id(),
             new BillingNoteDraftRequest("GOODS", LocalDate.now(), null, null,
                 List.of(lineFor("DEPOSIT_NOTICE", deal.depositNoticeId()))), employeeWithGrantActor);
@@ -870,8 +859,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         BillingNoteDocumentDto revisionDraft = billingNoteService.revise(v1.id(), employeeWithGrantActor);
         assertThat(revisionDraft.status()).isEqualTo("DRAFT");
         assertThat(revisionDraft.lines()).hasSize(1);
-        // The predecessor's line released — same source is momentarily claimable by a NEW draft
-        // too (not asserted here, but the revision draft itself already holds it verbatim).
+        // The predecessor's line released — same source is momentarily claimable by a NEW draft too (not asserted
+        // here, but the revision draft itself already holds it verbatim).
 
         BillingNoteDocumentDto v2 = billingNoteService.issue(revisionDraft.id(), employeeWithGrantActor);
         assertThat(v2.baseNumber()).isEqualTo(v1.baseNumber());
@@ -894,8 +883,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         BillingNoteDocumentDto revisionDraft = billingNoteService.revise(v1.id(), employeeWithGrantActor);
         billingNoteService.deleteDraft(revisionDraft.id(), employeeWithGrantActor);
 
-        // v1 is still ISSUED and its line's claim was restored — a NEW draft for the SAME
-        // (customer, GOODS) trying to claim the same source is refused (still live under v1).
+        // v1 is still ISSUED and its line's claim was restored — a NEW draft for the SAME (customer, GOODS) trying to
+        // claim the same source is refused (still live under v1).
         assertThatThrownBy(() -> billingNoteService.createDraft(customer.id(),
             new BillingNoteDraftRequest("GOODS", LocalDate.now(), null, null,
                 List.of(lineFor("DEPOSIT_NOTICE", deal.depositNoticeId()))), employeeWithGrantActor))
@@ -913,12 +902,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
      * 409, not surface as an unmapped 500. */
     @Test
     void f3_deleteDraft_ofARevisionInProgress_mapsARestoreRaceTo409() {
-        // The race needs a genuine gap: revise() itself is atomic (release-then-reclaim inside ONE
-        // transaction, so a source is never actually free while the correction draft still holds
-        // it verbatim). The real opening is updateDraft DROPPING one of the correction draft's own
-        // lines — replaceLines DELETEs every old row and reinserts only the new selection, so a
-        // source the correction draft stops referencing becomes free EVEN THOUGH the original
-        // predecessor's own (RELEASED) line for it still exists and would be restored wholesale.
+        // The race needs a genuine gap: revise() itself is atomic (release-then-reclaim inside ONE transaction, so a
+        // source is never actually free while the correction draft still holds it verbatim).
         CustomerDto customer = createCustomer("F3Restore");
         DealFixture dealA = buildAcceptedDeal(customer, salesActor, "F3RestoreA");
         DealFixture dealB = buildAcceptedDeal(customer, salesActor, "F3RestoreB");
@@ -932,8 +917,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         BillingNoteDocumentDto revisionDraft = billingNoteService.revise(v1.id(), employeeWithGrantActor);
         assertThat(revisionDraft.lines()).hasSize(2);
 
-        // The corrector drops dealB's own line from the correction — dealB's document is now
-        // claimed by NOTHING (v1's own original line for it sits RELEASED, not restored).
+        // The corrector drops dealB's own line from the correction — dealB's document is now claimed by NOTHING (v1's
+        // own original line for it sits RELEASED, not restored).
         BillingNoteDocumentDto trimmed = billingNoteService.updateDraft(revisionDraft.id(),
             new BillingNoteDraftRequest(null, null, null, null,
                 List.of(lineFor("DEPOSIT_NOTICE", dealA.depositNoticeId()))), employeeWithGrantActor);
@@ -946,9 +931,9 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
                 List.of(lineFor("DEPOSIT_NOTICE", dealB.depositNoticeId()))), employeeWithGrantActor);
         assertThat(rival.lines()).hasSize(1);
 
-        // Abandoning the correction now tries to restore v1's ENTIRE original line set (dealA AND
-        // dealB) to ISSUED — but `rival` already holds a live (DRAFT) claim on dealB's document, so
-        // the restore itself collides with ux_billing_note_line_source_live.
+        // Abandoning the correction now tries to restore v1's ENTIRE original line set (dealA AND dealB) to ISSUED —
+        // but `rival` already holds a live (DRAFT) claim on dealB's document, so the restore itself collides with
+        // ux_billing_note_line_source_live.
         assertThatThrownBy(() -> billingNoteService.deleteDraft(revisionDraft.id(), employeeWithGrantActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
@@ -975,8 +960,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
 
         billingNoteService.deleteDraft(revisionDraft.id(), employeeWithGrantActor);
 
-        // Without the fix, deleteDraft blindly restores the (now-CANCELLED) predecessor's lines to
-        // 'ISSUED', permanently locking the referenced document from ever being billed again.
+        // Without the fix, deleteDraft blindly restores the (now-CANCELLED) predecessor's lines to 'ISSUED',
+        // permanently locking the referenced document from ever being billed again.
         BillingNoteDocumentDto predecessorReread = billingNoteService.get(issued.id(), accountActor);
         assertThat(predecessorReread.status()).isEqualTo("CANCELLED");
         assertThat(billingNoteRepository.findLiveClaim("DEPOSIT_NOTICE", deal.depositNoticeId())).isEmpty();
@@ -1006,10 +991,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
                 new BigDecimal("10.00"), null)));
 
         // Before the fix, writeLines' own catch (DataIntegrityViolationException e) swallowed EVERY
-        // DataIntegrityViolationException into the double-billing 409 — wrong here, since a
-        // value-too-long violation has nothing to do with double billing. Narrowed, this must now
-        // propagate the RAW exception instead (the generic DataAccessException handler reports it
-        // honestly as a 500, rather than a misleading double-billing 409).
+        // DataIntegrityViolationException into the double-billing 409 — wrong here, since a value-too-long violation
+        // has nothing to do with double billing.
         assertThatThrownBy(() -> billingNoteService.createDraft(customer.id(), req, employeeWithGrantActor))
             .isInstanceOf(org.springframework.dao.DataIntegrityViolationException.class)
             .isNotInstanceOf(ApiException.class);
@@ -1071,9 +1054,7 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(received.paymentAppointmentDate()).isEqualTo(LocalDate.now().plusDays(30));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // AUTHZ — written WRONG-WAY-ROUND (CLAUDE.md requirement)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void write_salesWithNoGrant_isForbidden_andNothingIsWritten() {
@@ -1254,10 +1235,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(billingNoteService.get(issued.id(), accountActor).status()).isEqualTo("ISSUED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Fixture helpers — adapted from RemainingInvoiceServiceIntegrationTest's own approach, but
-    // parameterised on an EXISTING customer so two deals can share one customer_id.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Fixture helpers — adapted from RemainingInvoiceServiceIntegrationTest's own approach, but parameterised on
+    // an EXISTING customer so two deals can share one customer_id.
 
     private record DealFixture(long ticketId, long pricingRequestId, long depositNoticeId) {}
 
@@ -1482,8 +1461,8 @@ class BillingNoteServiceIntegrationTest extends AbstractPostgresIntegrationTest 
         payOffDepositNoticeInFull(other, otherNotice);
         jdbc.update("DELETE FROM sales.payment_receipt WHERE deposit_notice_id = :id",
             Map.of("id", deal.depositNoticeId()));
-        // Remove the source document's own children before deleting the parent. Billing-note
-        // snapshots deliberately have no source FK and must survive the missing source.
+        // Remove the source document's own children before deleting the parent. Billing-note snapshots deliberately
+        // have no source FK and must survive the missing source.
         jdbc.update("DELETE FROM sales.deposit_notice_item WHERE deposit_notice_id = :id",
             Map.of("id", deal.depositNoticeId()));
         jdbc.update("DELETE FROM sales.deposit_notice WHERE deposit_notice_id = :id",

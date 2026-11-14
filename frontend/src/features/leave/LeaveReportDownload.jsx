@@ -23,18 +23,14 @@ const MONTH_OPTIONS = [
   { value: '12', label: 'ธันวาคม' },
 ];
 
-// How many years back the year select offers -- a report is a look-back document, so "this year
-// and the two before it" covers the overwhelming majority of real requests (a tax-year lookup, an
-// exit reconciliation) without an open-ended picker nobody needs.
+// How many years back the year select offers -- a report is a look-back document, so "this year and the two
+// before it" covers the overwhelming majority of real requests (a tax-year lookup, an exit reconciliation)
+// without an open-ended picker nobody needs.
 const YEAR_LOOKBACK = 2;
 
-/**
- * Printable leave-records report (รายงานสรุปใบลางาน, 2026-09) download control -- a year + optional
- * month picker and a download button, shared between MyLeaveTab.jsx (`scope="own"`, the employee's
- * own history) and TeamLeaveTab.jsx (`scope="team"`, one grouped PDF covering every direct report).
- * Neither call carries an employeeId -- see LeaveService#ownLeaveReport/#teamLeaveReport's Javadoc
- * for why the scope is entirely server-derived; this control only ever chooses WHEN, never WHO.
- */
+/** Printable leave-records report (รายงานสรุปใบลางาน, 2026-09) download control -- a year + optional month
+ * picker and a download button, shared between MyLeaveTab.jsx (`scope="own"`, the employee's own history) and
+ * TeamLeaveTab.jsx (`scope="team"`, one grouped PDF covering every direct report). */
 export function LeaveReportDownload({ scope, showToast }) {
   const currentYear = yearFrom();
   const [year, setYear] = useState(String(currentYear));

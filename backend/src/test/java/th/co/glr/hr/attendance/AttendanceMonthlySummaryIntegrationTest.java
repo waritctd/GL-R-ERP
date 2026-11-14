@@ -33,24 +33,9 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms the monthly summary EXPORT is scoped exactly like {@code AttendanceScopeIntegrationTest}
- * proves {@code /daily} is -- through the real {@link AttendanceMonthlySummaryService}, the real
- * {@link AttendanceService#resolveScope}, and a real workbook parsed back out with POI, against a
- * real Postgres. Mockito cannot prove a scope filter reaches the {@code WHERE} clause (the ~130
- * hand-wired services in this suite exist precisely because a mocked repository "passes" while the
- * SQL underneath does something else); this class exists because CLAUDE.md requires exactly that
- * proof for any change that touches who may read whose rows -- see this codebase's "Permission
- * changes must ship evidence" rule.
- *
- * <p>Every case here asks the question the wrong way round -- can this caller reach data they
- * should not -- rather than confirming they can reach their own, mirroring
- * {@link AttendanceScopeIntegrationTest}'s own stated design.
- *
- * <p>{@code @EnabledIf} is declared HERE, not inherited from {@link AbstractPostgresIntegrationTest}
- * -- JUnit's {@code @EnabledIf} is not {@code @Inherited}, so the annotation on the base class gates
- * nothing in any subclass (see that class's own javadoc, and CLAUDE.md).
- */
+/** Confirms the monthly summary EXPORT is scoped exactly like AttendanceScopeIntegrationTest proves /daily is
+ * -- through the real AttendanceMonthlySummaryService, the real AttendanceService#resolveScope, and a real
+ * workbook parsed back out with POI, against a real Postgres. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -85,10 +70,9 @@ class AttendanceMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
             new AttendanceDatParser(),
             properties,
             dailyService);
-        // No schedule-aware constructor needed: findApprovedLeaveOverlapping (the only method this
-        // test's dependency chain calls) is a plain overlap read, unaffected by which LeaveRepository
-        // constructor built it -- see that constructor's own javadoc for why the 1-arg form exists
-        // for exactly this situation.
+        // No schedule-aware constructor needed: findApprovedLeaveOverlapping (the only method this test's dependency
+        // chain calls) is a plain overlap read, unaffected by which LeaveRepository constructor built it -- see that
+        // constructor's own javadoc for why the 1-arg form exists for exactly this situation.
         LeaveRepository leaveRepository = new LeaveRepository(jdbc);
         monthlySummaryService = new AttendanceMonthlySummaryService(
             attendanceService, dailyService, leaveRepository, new AttendanceMonthlySummaryExporter());
@@ -128,12 +112,7 @@ class AttendanceMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(codes).doesNotContain(factoryStaffCode);
     }
 
-    /**
-     * The attack the {@code employeeId} parameter invites. A manager asking for a colleague OUTSIDE
-     * their division must get a workbook with ZERO employee rows -- not an error, and definitely not
-     * that colleague's attendance -- because {@code resolveScope} ANDs the requested id against the
-     * manager's own division rather than merging the two into a wider grant.
-     */
+    /** The attack the employeeId parameter invites. */
     @Test
     void aManagerAskingForAnOutOfDivisionEmployeeGetsAWorkbookWithNoEmployeeRows() {
         byte[] workbook = export(manager(salesManagerId, salesDivision), JULY_2026, factoryStaffId, null);
@@ -141,8 +120,8 @@ class AttendanceMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         assertThat(employeeCodesIn(workbook)).isEmpty();
     }
 
-    /** Same attack via the OTHER parameter: the division id must be ignored for a manager, not
-     * merged, so the request stays inside their own ฝ่าย instead of hopping to another. */
+    /** Same attack via the OTHER parameter: the division id must be ignored for a manager, not merged, so the
+     * request stays inside their own ฝ่าย instead of hopping to another. */
     @Test
     void aManagerCannotUseTheDivisionParameterToReachAnotherDivision() {
         List<String> codes =
@@ -174,14 +153,9 @@ class AttendanceMonthlySummaryIntegrationTest extends AbstractPostgresIntegratio
         return monthlySummaryService.export(user, month, employeeId, divisionId);
     }
 
-    /**
-     * Every {@code รหัสพนักงาน} on the "สรุปรายเดือน" sheet's data rows -- i.e. every employee the
-     * caller's scope let through, read back from the ACTUAL exported bytes (not the assembly step),
-     * so this proves the whole pipeline end to end. Walks from the header row (identified by its
-     * "ลำดับ" cell) to the first row lacking a code -- the blank separator / §76 footer row after the
-     * data -- rather than hardcoding row indices, so a future layout tweak to the title block does
-     * not need this test rewritten.
-     */
+    /** Every รหัสพนักงาน on the "สรุปรายเดือน" sheet's data rows -- i.e. every employee the caller's scope let
+     * through, read back from the ACTUAL exported bytes (not the assembly step), so this proves the whole pipeline
+     * end to end. */
     private static List<String> employeeCodesIn(byte[] xlsx) {
         try (XSSFWorkbook workbook = new XSSFWorkbook(new ByteArrayInputStream(xlsx))) {
             Sheet sheet = workbook.getSheet("สรุปรายเดือน");

@@ -34,16 +34,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestAt
 import th.co.glr.hr.pricingrequest.PricingRequestRequests.UpdatePricingRequestRequest;
 import th.co.glr.hr.pricingrequest.PricingRequestResponses.PricingRequestDetailResponse;
 
-/**
- * Endpoints for the PricingRequest aggregate: createDraft, get, listForTicket, list
- * (the Import queue), updateDraft, submit, pickup, cancel. {@code cancelOpenForTicket} is an internal cascade
- * invoked by {@code TicketService} and is deliberately NOT exposed here.
- *
- * <p>Routes straddle two prefixes, like the request shapes: ticket-scoped create
- * and list live under {@code /api/tickets/{ticketId}/...} (mirroring
- * {@code TicketController}), everything else lives under
- * {@code /api/pricing-requests/...} as its own resource.
- */
+/** Endpoints for the PricingRequest aggregate: createDraft, get, listForTicket, list (the Import queue),
+ * updateDraft, submit, pickup, cancel. cancelOpenForTicket is an internal cascade invoked by TicketService and
+ * is deliberately NOT exposed here. */
 @RestController
 @RequestMapping("/api")
 public class PricingRequestController {
@@ -111,13 +104,8 @@ public class PricingRequestController {
         return new PricingRequestDetailResponse(pricingRequests.pickup(id, user));
     }
 
-    /**
-     * Import fills in the factory on one line Sales left blank, so the factory-email step can route
-     * it — see {@code PricingRequestService#setItemFactory} for why this is Import's call and why
-     * it only ever fills a gap. Shaped like the CEO's own per-item overrides
-     * ({@code PUT /pricing-decisions/{id}/items/{itemId}/...}) rather than a PATCH of the whole
-     * request, because it writes exactly one field on one line.
-     */
+    /** Import fills in the factory on one line Sales left blank, so the factory-email step can route it — see
+     * PricingRequestService#setItemFactory for why this is Import's call and why it only ever fills a gap. */
     @PutMapping("/pricing-requests/{id}/items/{itemId}/factory")
     PricingRequestDetailResponse setItemFactory(
         @PathVariable long id,

@@ -3,8 +3,8 @@
 
 const THAI_SHORT_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
 
-/** Today's calendar date in Asia/Bangkok as YYYY-MM-DD — the same zone FactoryQuoteService uses to
- * decide whether a contacted-on date is "in the future", so the picker's `max` agrees with the 400. */
+/** Today's calendar date in Asia/Bangkok as YYYY-MM-DD — the same zone FactoryQuoteService uses to decide
+ * whether a contacted-on date is "in the future", so the picker's `max` agrees with the 400. */
 export function bangkokToday(now = new Date()) {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(now);
 }
@@ -36,17 +36,15 @@ export function isFactoryContacted(quote) {
   return Boolean(quote) && quote.status !== 'DRAFT';
 }
 
-/**
- * Who marked the factory contacted. FactoryQuoteDto carries only `contactedBy` (an id), so the name
- * is read off the request's own FACTORY_CONTACTED event (or the legacy FACTORY_EMAIL_SENT one) by the same actor.
- * Null when it cannot be resolved (the chip then simply omits "· โดย ...").
- */
+/** Who marked the factory contacted. FactoryQuoteDto carries only `contactedBy` (an id), so the name is read
+ * off the request's own FACTORY_CONTACTED event (or the legacy FACTORY_EMAIL_SENT one) by the same actor. Null
+ * when it cannot be resolved (the chip then simply omits "· โดย ..."). */
 export function contactedByName(quote, events = []) {
   if (!quote || quote.contactedBy == null) return null;
   const byActor = [...events].reverse().filter((event) => event?.actorId === quote.contactedBy);
   const names = (event) => (!quote.factoryName || String(event.message ?? '').includes(quote.factoryName));
-  // Newest evidence first: the CR-1 event for this factory, then — for a quote backfilled from the old
-  // "ส่งแล้ว" step (R4) — the legacy FACTORY_EMAIL_SENT event, by the same actor.
+  // Newest evidence first: the CR-1 event for this factory, then — for a quote backfilled from the old "ส่งแล้ว"
+  // step (R4) — the legacy FACTORY_EMAIL_SENT event, by the same actor.
   const hit = byActor.find((e) => e.eventKind === 'FACTORY_CONTACTED' && names(e))
     ?? byActor.find((e) => e.eventKind === 'FACTORY_EMAIL_SENT' && names(e))
     ?? byActor.find((e) => e.eventKind === 'FACTORY_EMAIL_SENT');

@@ -28,63 +28,9 @@ import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollSpecialPayDto;
 import th.co.glr.hr.payroll.PayrollYearToDate;
 
-/**
- * Builds the "รายละเอียดเงินเดือน" payroll workbook as a THREE-tab accountant-facing report --
- * {@code สรุปเงินเดือน} (per-employee pay/deduction summary), {@code การคำนวณภาษี} (the ป.96/2543
- * annual-projection withholding-tax detail behind each employee's WHT figure), and
- * {@code อัตราภาษีและหมายเหตุ} (the progressive tax-bracket table the SUMPRODUCT formula above reads,
- * plus notes and a reconciliation block). This replaced the prior single ~70-column
- * {@code รายละเอียดเงินเดือน} sheet (kept only as this class's historical name) because that layout
- * buried the withholding-tax derivation entirely off-sheet; this one puts it in view.
- *
- * <p><b>Every money column is the ACTUAL persisted figure; only the ป.96 projection columns on
- * {@code การคำนวณภาษี} are live formulas, and they are context, never read back into a money
- * column.</b> A payroll export must always agree with what was actually withheld and paid (the real
- * payslip and bank file) -- so:
- * <ul>
- *   <li>{@code การคำนวณภาษี}'s "ภาษีหัก ณ ที่จ่ายเดือนนี้ (ระบบ)" column is {@link
- *       PayrollLineDto#withholdingTax()} VERBATIM for every employee, director or not -- never the
- *       {@code (annualTax-ytdWithheld)/remainingPeriods} estimate the projection columns imply.
- *       {@link th.co.glr.hr.payroll.PayrollCalculator#calculateClassified}'s real
- *       regular/known/cumulative three-limb engine does not equal that simple estimate for an
- *       employee whose income varies month to month (commission earners especially).</li>
- *   <li>{@code สรุปเงินเดือน}'s เงินเดือน (col D) is {@link PayrollLineDto#baseSalary()} NET of
- *       {@code unpaidLeaveDeduction + otherPretaxDeduction - leaveDeductionRefund} -- the same
- *       adjustment {@link th.co.glr.hr.payroll.PayrollCalculator#calculateClassified}'s
- *       {@code regularSumAfterLeave} applies before the three limbs are summed into {@link
- *       PayrollLineDto#grossTaxableIncome()}. A cell comment states the full/adjustment breakdown
- *       whenever it is non-zero (e.g. a mid-month unpaid-leave day). Folding the adjustment into this
- *       one column (rather than adding a column this layout has no room for) is what makes
- *       {@code รวมรายได้ที่ต้องเสียภาษี} ({@code =SUM(D:Q)}) equal {@link
- *       PayrollLineDto#grossTaxableIncome()} for standard data.</li>
- *   <li>{@code สรุปเงินเดือน}'s ประกันสังคม (col S) is {@link PayrollLineDto#socialSecurity()}
- *       VERBATIM, not the standard 5%/1,650-17,500 formula the notes tab still documents for
- *       reference -- the real engine derives SSO from a per-component inclusion matrix a flat formula
- *       cannot always reproduce, so a formula here could silently disagree with what was actually
- *       withheld.</li>
- *   <li>{@code สรุปเงินเดือน}'s หักอื่น ๆ (col W) sums {@link PayrollLineDto#otherPostTaxDeductions()}
- *       + {@link PayrollLineDto#warningLetterDeduction()} + {@link
- *       PayrollLineDto#customerReturnDeduction()} -- every POST-TAX "other" category {@link
- *       th.co.glr.hr.payroll.PayrollCalculator}'s {@code totalDeductions} includes, combined because
- *       this layout has only one column for them (the previous version silently dropped two of the
- *       three).</li>
- * </ul>
- * With all four money columns above wired to the real figures, {@code รวมรายการหัก} ({@code
- * =SUM(S:W)}) and คงเหลือจ่ายสุทธิ ({@code =R-X}) foot to {@link PayrollLineDto#netPay()} for
- * STANDARD data. <b>The one remaining, deliberate, and VISIBLE residual gap:</b> a line whose income
- * includes {@link PayrollLineDto#bonusPay()}, {@link PayrollLineDto#otherOneOffPay()}, {@link
- * PayrollLineDto#welfarePay()}, {@link PayrollLineDto#perDiemTaxable()}, or {@link
- * PayrollLineDto#nonTaxableIncome()} is NOT itemized in R (this layout has no column for any of
- * them, by instruction -- do not add one), so คงเหลือจ่ายสุทธิ under- or over-states {@code
- * netPay()} by exactly that amount for such a line. This is not silent: {@code
- * อัตราภาษีและหมายเหตุ}'s reconciliation block sums every line's real {@link PayrollLineDto} totals
- * against the Sheet-1 SUM totals and surfaces any such difference directly, rather than hiding it.
- *
- * <p>The remaining projection columns on {@code การคำนวณภาษี} (เงินได้ทั้งปี, หักค่าใช้จ่าย,
- * ลดหย่อนรวม, เงินได้สุทธิทั้งปี, ภาษีทั้งปี ขั้นบันได, ภาษีคงเหลือทั้งปี) stay LIVE FORMULAS, because
- * they are legitimately informational: they show the ป.96/2543 annual basis the withholding figure
- * sits on top of, for HR/accountant review, and are never read back into a money column.
- */
+/** Builds the "รายละเอียดเงินเดือน" payroll workbook as a THREE-tab accountant-facing report -- สรุปเงินเดือน,
+ * การคำนวณภาษี, and อัตราภาษีและหมายเหตุ. A cell comment states the full/adjustment breakdown whenever it is
+ * non-zero (e.g. a mid-month unpaid-leave day). */
 @Component
 public class PayrollDetailExporter {
     private static final String SUMMARY_SHEET = "สรุปเงินเดือน";
@@ -131,16 +77,8 @@ public class PayrollDetailExporter {
             return line.withholdingTaxOverride() != null;
         }
 
-        /**
-         * Total ACTUAL (not annualised) taxable income already paid this tax year before the current
-         * period -- the sum of the three ป.96 limbs' own persisted cumulative figures. See
-         * PayrollYearToDate's javadoc: regularLimbTaxableIncome/cumulativeLimbTaxableIncome are each
-         * already a running total of what was actually paid on that limb in every prior period this
-         * year, and knownLimbTaxableIncome is the same running total for settled known-frequency
-         * payments. None of the three is itself annualised/projected, so their sum is exactly
-         * "เงินได้สะสม ม.ค.-ก่อนงวดนี้" -- distinct from projectedAnnualIncome, which reprojects the
-         * regular limb forward for the REST of the year.
-         */
+        /** Total ACTUAL (not annualised) taxable income already paid this tax year before the current period -- the sum
+         * of the three ป.96 limbs' own persisted cumulative figures. */
         BigDecimal cumulativeIncomeBeforeThisPeriod() {
             return nz(ytd.regularLimbTaxableIncome())
                 .add(nz(ytd.cumulativeLimbTaxableIncome()))
@@ -155,11 +93,8 @@ public class PayrollDetailExporter {
 
     public byte[] export(List<PayrollLineDto> lines, Map<Long, PayrollDetailIdentityDto> identities,
                          PayrollPeriodDto period, Map<Long, PayrollYearToDate> yearToDateByEmployee) {
-        // `identities` (hire date / last salary adjustment) has no column in this 3-tab format -- the
-        // accountant's reference workbook this replaces the old sheet with never showed it either.
-        // Kept as a parameter (unused here) rather than removed, so PayrollService's existing
-        // findDetailIdentity plumbing does not need to be torn out for a display concern that may
-        // return in a future tab.
+        // `identities` (hire date / last salary adjustment) has no column in this 3-tab format -- the accountant's
+        // reference workbook this replaces the old sheet with never showed it either.
         int n = lines.size();
         int summaryTotalsRow = SUMMARY_DATA_START_ROW + n;
         int taxTotalsRow = TAX_DATA_START_ROW + n;
@@ -167,9 +102,9 @@ public class PayrollDetailExporter {
         String prevMonthLabel = monthOfYear > 1 ? "ม.ค.–" + THAI_MONTH_ABBR[monthOfYear - 2] : "(เดือนแรกของปี)";
 
         try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
-            // Create every sheet up-front (empty) so cross-sheet formulas written below can resolve
-            // their target sheet immediately -- POI validates formula syntax (incl. sheet existence)
-            // at setCellFormula() time, unlike a plain-text writer.
+            // Create every sheet up-front (empty) so cross-sheet formulas written below can resolve their target sheet
+            // immediately -- POI validates formula syntax (incl. sheet existence) at setCellFormula() time, unlike a
+            // plain-text writer.
             XSSFSheet summarySheet = workbook.createSheet(SUMMARY_SHEET);
             XSSFSheet taxSheet = workbook.createSheet(TAX_SHEET);
             XSSFSheet rateSheet = workbook.createSheet(RATE_SHEET);
@@ -192,9 +127,7 @@ public class PayrollDetailExporter {
         }
     }
 
-    // =====================================================================================
     // Sheet 1 -- สรุปเงินเดือน
-    // =====================================================================================
 
     private static final String[] SUMMARY_HEADERS = {
         "รหัส", "ชื่อ - สกุล", "ฝ่าย", "เงินเดือน", "ค่าตอบแทน\nกรรมการ",
@@ -219,8 +152,8 @@ public class PayrollDetailExporter {
         }
 
         // Lazily created on first cell comment needed (สนั่น-style unpaid-leave adjustment) --
-        // Sheet#createDrawingPatriarch() replaces any existing drawing if called more than once per
-        // sheet, so it must be created at most once and reused for every comment on this sheet.
+        // Sheet#createDrawingPatriarch() replaces any existing drawing if called more than once per sheet, so it must
+        // be created at most once and reused for every comment on this sheet.
         Drawing<?> drawing = null;
 
         for (int i = 0; i < rows.size(); i++) {
@@ -233,14 +166,9 @@ public class PayrollDetailExporter {
             setText(row, styles, 0, line.employeeCode());
             setText(row, styles, 1, line.employeeName());
             setText(row, styles, 2, line.departmentName());
-            // Correctness requirement (net-pay fidelity): the real engine's grossTaxableIncome nets
-            // unpaidLeaveDeduction and otherPretaxDeduction OUT of (and leaveDeductionRefund back
-            // INTO) the regular limb -- see PayrollCalculator#calculateClassified's
-            // regularSumAfterLeave. Folding that same adjustment into เงินเดือน here (rather than a
-            // separate column this layout has no room for) is what makes SUM(D:Q) below equal
-            // grossTaxableIncome() for standard data, instead of silently overstating it by exactly
-            // this period's unpaid-leave/other-pretax deduction (net of any refund) -- e.g. สนั่น's
-            // ฿245 unpaid-leave case.
+            // Correctness requirement (net-pay fidelity): the real engine's grossTaxableIncome nets unpaidLeaveDeduction
+            // and otherPretaxDeduction OUT of (and leaveDeductionRefund back INTO) the regular limb -- see
+            // PayrollCalculator#calculateClassified's regularSumAfterLeave.
             BigDecimal baseSalary = ctx.nz(line.baseSalary());
             BigDecimal unpaidLeaveDeduction = ctx.nz(line.unpaidLeaveDeduction());
             BigDecimal otherPretaxDeduction = ctx.nz(line.otherPretaxDeduction());
@@ -264,21 +192,16 @@ public class PayrollDetailExporter {
             setBlue(row, styles, 15, ctx.nz(line.overtimePay()), M2);
             setBlue(row, styles, 16, ctx.nz(line.commissionPay()), M2);
             setFormula(row, styles, 17, "SUM(D" + rr + ":Q" + rr + ")", M2);
-            // ประกันสังคม: the ACTUAL persisted value, not a recomputed formula -- the real engine
-            // derives SSO from a per-component inclusion matrix (PayrollCalculator's SSO treatment
-            // table) that a flat "5% of gross-minus-director-minus-OT" formula cannot always
-            // reproduce (e.g. a component excluded from the SSO wage base for a reason this simple
-            // rule does not know). A formula here could silently disagree with what was actually
-            // withheld; the literal value cannot.
+            // ประกันสังคม: the ACTUAL persisted value, not a recomputed formula -- the real engine derives SSO from a
+            // per-component inclusion matrix that a flat "5% of gross-minus-director-minus-OT" formula cannot always
+            // reproduce.
             setBlue(row, styles, 18, ctx.nz(line.socialSecurity()), M2);
             setGreenFormula(row, styles, 19, "'" + TAX_SHEET + "'!L" + taxRow, M0);
             setBlue(row, styles, 20, ctx.nz(line.studentLoanDeduction()), M2);
             setBlue(row, styles, 21, ctx.nz(line.legalExecutionDeduction()), M2);
-            // หักอื่น ๆ: sums every POST-TAX "other" deduction category that has no column of its own
-            // (otherPostTaxDeductions, warningLetterDeduction, customerReturnDeduction) -- all three
-            // are added into PayrollCalculator's totalDeductions the same way, post-tax, so combining
-            // them here (rather than dropping two of the three, as the previous column did) is what
-            // makes รวมรายการหัก/คงเหลือจ่ายสุทธิ below foot to totalDeductions()/netPay().
+            // หักอื่น ๆ: sums every POST-TAX "other" deduction category that has no column of its own -- all three are
+            // added into PayrollCalculator's totalDeductions the same way, post-tax, so combining them here is what makes
+            // รวมรายการหัก/คงเหลือจ่ายสุทธิ below foot to totalDeductions/netPay.
             BigDecimal otherPostTax = ctx.nz(line.otherPostTaxDeductions())
                 .add(ctx.nz(line.warningLetterDeduction()))
                 .add(ctx.nz(line.customerReturnDeduction()));
@@ -325,9 +248,7 @@ public class PayrollDetailExporter {
         sheet.createFreezePane(3, SUMMARY_DATA_START_ROW - 1);
     }
 
-    // =====================================================================================
     // Sheet 2 -- การคำนวณภาษี
-    // =====================================================================================
 
     private void buildTaxSheet(XSSFSheet sheet, Styles styles, List<Ctx> rows, String prevMonthLabel,
                                 int totalsRow) {
@@ -370,14 +291,8 @@ public class PayrollDetailExporter {
                     + RATE_SHEET + "'!$A$4:$A$11)*'" + RATE_SHEET + "'!$D$4:$D$11)",
                 M2);
             setFormula(row, styles, 10, "MAX(0,J" + rr + "-E" + rr + ")", M2);
-            // Correctness requirement, not a style choice: a payroll export must ALWAYS agree with
-            // what was actually withheld (the real payslip/bank file). The K column above is
-            // informational context (the ป.96 annual-projection basis); the money cell here is
-            // PayrollLineDto#withholdingTax() verbatim for EVERY employee, director or not -- never a
-            // recomputed (annualTax-ytdWithheld)/remainingPeriods estimate, which the real
-            // regular/known/cumulative three-limb engine does not equal in general (commission earners
-            // especially). "ประเภท" still distinguishes an HR-typed fixed override from the engine's
-            // own figure, purely as metadata -- both are literal values now.
+            // Correctness requirement, not a style choice: a payroll export must ALWAYS agree with what was actually
+            // withheld (the real payslip/bank file).
             setBlue(row, styles, 11, ctx.nz(line.withholdingTax()), M0);
             setText(row, styles, 12, ctx.isDirector() ? "กรรมการ (คงที่)" : "คำนวณ");
         }
@@ -413,9 +328,7 @@ public class PayrollDetailExporter {
         sheet.createFreezePane(2, TAX_DATA_START_ROW - 1);
     }
 
-    // =====================================================================================
     // Sheet 3 -- อัตราภาษีและหมายเหตุ
-    // =====================================================================================
 
     private static final Object[][] BRACKETS = {
         {0, 150000, 0.0}, {150000, 300000, 0.05}, {300000, 500000, 0.10}, {500000, 750000, 0.15},
@@ -534,9 +447,7 @@ public class PayrollDetailExporter {
         }
     }
 
-    // =====================================================================================
     // Cell-writing helpers
-    // =====================================================================================
 
     private void writeTitle(XSSFSheet sheet, Styles styles, String text) {
         Row row = sheet.createRow(0);
@@ -642,9 +553,7 @@ public class PayrollDetailExporter {
         return sb.toString();
     }
 
-    // =====================================================================================
     // Styles
-    // =====================================================================================
 
     /** All cell styles used across the three sheets, built once per workbook. */
     private static final class Styles {

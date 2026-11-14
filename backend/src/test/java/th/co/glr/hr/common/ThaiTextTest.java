@@ -53,9 +53,9 @@ class ThaiTextTest {
 
     @Test
     void dateRangeAcrossYearsStillUsesTheOtherwiseFormAndOmitsTheFromYear() {
-        // Deliberate per the approved copy: a two-way split (same month+year vs. everything else),
-        // not a third cross-year case -- see ThaiText#dateRange's Javadoc. The FROM side never shows
-        // its own year in the "otherwise" branch, even when it differs from TO's year.
+        // Deliberate per the approved copy: a two-way split (same month+year vs. everything else), not a third
+        // cross-year case -- see ThaiText#dateRange's Javadoc. The FROM side never shows its own year in the
+        // "otherwise" branch, even when it differs from TO's year.
         assertThat(ThaiText.dateRange(LocalDate.of(2026, 12, 30), LocalDate.of(2027, 1, 2)))
             .isEqualTo("30 ธันวาคม – 2 มกราคม 2570");
     }
@@ -177,15 +177,14 @@ class ThaiTextTest {
         assertThat(ThaiText.bahtText(new BigDecimal("10000000.00"))).isEqualTo("สิบล้านบาทถ้วน");
     }
 
-    // ── F1 (Opus review, GLA-99 step 3 round 1): เอ็ด was wrong for every NON-FINAL ล้าน group's
-    // own ones digit, and a group two or more ล้าน-levels above the base only ever got ONE ล้าน
-    // regardless of how many it actually represented. Both fixed in ThaiText#readNumber/
-    // #appendGroup; these pin the exact regressions the review named. ─────────────────────────
+    // เอ็ด was wrong for every NON-FINAL ล้าน group's own ones digit, and a group two or more ล้าน-levels above
+    // the base only ever got ONE ล้าน regardless of how many it actually represented. Both fixed in
+    // ThaiText#readNumber/ #appendGroup; these pin the exact regressions the review named.
 
     @Test
     void bahtTextElevenMillionUsesEdForTheNonFinalGroupsOwnOnesDigit() {
-        // Before the fix: "สิบหนึ่งล้าน" -- the "11" group's own ones digit read หนึ่ง because the
-        // เอ็ด check only ever looked at the number's OWN FINAL six-digit group.
+        // Before the fix: "สิบหนึ่งล้าน" -- the "11" group's own ones digit read หนึ่ง because the เอ็ด check only
+        // ever looked at the number's OWN FINAL six-digit group.
         assertThat(ThaiText.bahtText(new BigDecimal("11000000.00"))).isEqualTo("สิบเอ็ดล้านบาทถ้วน");
     }
 
@@ -201,16 +200,16 @@ class ThaiTextTest {
 
     @Test
     void bahtTextOneTrillionRepeatsLanOncePerMagnitudeLevel() {
-        // Before the fix: "หนึ่งล้าน" -- a group two ล้าน-levels above the base (10^12) only ever
-        // got ONE ล้าน appended, the same as a group one level up, dropping a level whenever an
-        // intervening group (here, the 10^6..10^11 group) was entirely zero.
+        // Before the fix: "หนึ่งล้าน" -- a group two ล้าน-levels above the base (10^12) only ever got ONE ล้าน
+        // appended, the same as a group one level up, dropping a level whenever an intervening group (here, the
+        // 10^6..10^11 group) was entirely zero.
         assertThat(ThaiText.bahtText(new BigDecimal("1000000000000.00"))).isEqualTo("หนึ่งล้านล้านบาทถ้วน");
     }
 
     @Test
     void bahtTextMatchesTheOwnersSampleSheetExactly() {
-        // The exact figure and exact string the owner's ฟอร์มใบวางบิล.xls sample reads via its own
-        // BAHTTEXT formula cell -- the ground truth this whole method exists to reproduce in Java.
+        // The exact figure and exact string the owner's ฟอร์มใบวางบิล.xls sample reads via its own BAHTTEXT formula
+        // cell -- the ground truth this whole method exists to reproduce in Java.
         assertThat(ThaiText.bahtText(new BigDecimal("126977.20")))
             .isEqualTo("หนึ่งแสนสองหมื่นหกพันเก้าร้อยเจ็ดสิบเจ็ดบาทยี่สิบสตางค์");
     }
@@ -218,8 +217,8 @@ class ThaiTextTest {
     @Test
     void bahtTextRoundsToTwoDecimalPlacesHalfUp() {
         assertThat(ThaiText.bahtText(new BigDecimal("99.999"))).isEqualTo("หนึ่งร้อยบาทถ้วน");
-        // 1.005 -> HALF_UP -> 1.01: a lone satang digit of 1 reads "หนึ่ง", not "เอ็ด" -- the same
-        // "a lone 1 is never เอ็ด" rule bahtTextOfExactlyOneBahtDoesNotUseEd pins for the baht side.
+        // 1.005 -> HALF_UP -> 1.01: a lone satang digit of 1 reads "หนึ่ง", not "เอ็ด" -- the same "a lone 1 is never
+        // เอ็ด" rule bahtTextOfExactlyOneBahtDoesNotUseEd pins for the baht side.
         assertThat(ThaiText.bahtText(new BigDecimal("1.005"))).isEqualTo("หนึ่งบาทหนึ่งสตางค์");
     }
 }

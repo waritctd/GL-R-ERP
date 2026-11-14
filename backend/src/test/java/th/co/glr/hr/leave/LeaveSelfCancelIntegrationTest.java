@@ -16,27 +16,9 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres regression coverage for {@link LeaveRepository#cancel}, found via a live
- * click-through against a real backend (not mocks -- mocks never touch real SQL, and every
- * PRE-EXISTING real-Postgres test that calls {@code cancel(...)} does so as {@link #hr()}, never
- * as the owning employee -- see this class's own {@link #employeeCancellingTheirOwnRequestSucceeds}
- * for exactly the gap that let this ship).
- *
- * <p><b>The bug:</b> {@code cancel}'s SQL binds {@code :reviewedById} and {@code :reviewerNote}
- * ONLY inside {@code COALESCE(...)}/{@code CASE WHEN ... IS NULL} -- never in a context with an
- * inferable column type on their own, unlike {@link LeaveRepository#approve}/{@link
- * LeaveRepository#reject}, where {@code :reviewedById} binds directly into a typed assignment.
- * {@link LeaveService#cancel} passes {@code reviewedById = null} for the ONE caller who can
- * legitimately do that -- an employee cancelling their own SUBMITTED request (not a reviewer) --
- * and Postgres' extended query protocol cannot infer a type from that shape when the bound value is
- * also null: {@code ERROR: could not determine data type of parameter $2}. Fixed by giving both
- * ambiguous binds explicit {@code java.sql.Types} hints.
- *
- * <p>Asserts BOTH sides on the same shape of fixture -- self-cancel (reviewedById == null) AND
- * reviewer-cancel (reviewedById set) -- so a regression in either path fails this suite, not just
- * the one that shipped broken.
- */
+/** Real-Postgres regression coverage for LeaveRepository#cancel, found via a live click-through against a real
+ * backend (not mocks. The bug: cancel's SQL binds :reviewedById and :reviewerNote ONLY inside
+ * COALESCE(...)/CASE WHEN ... */
 class LeaveSelfCancelIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private LeaveRepository leaveRepository;
@@ -60,9 +42,9 @@ class LeaveSelfCancelIntegrationTest extends AbstractPostgresIntegrationTest {
         long employeeId = insertEmployee("CANC-SELF");
         long requestId = insertSubmittedLeaveRequest(employeeId);
 
-        // Before the fix: this threw (DataAccessException wrapping PSQLException "could not
-        // determine data type of parameter $2") for exactly this caller shape -- an employee
-        // cancelling their own request, so LeaveService#cancel passes reviewedById = null.
+        // Before the fix: this threw (DataAccessException wrapping PSQLException "could not determine data type of
+        // parameter $2") for exactly this caller shape -- an employee cancelling their own request, so
+        // LeaveService#cancel passes reviewedById = null.
         assertThatCode(() -> leaveService.cancel(requestId, new ReviewLeaveRequest(null), employee(employeeId)))
             .doesNotThrowAnyException();
 
@@ -70,8 +52,8 @@ class LeaveSelfCancelIntegrationTest extends AbstractPostgresIntegrationTest {
             "SELECT status, reviewed_by_id, reviewed_at, cancelled_at FROM hr.leave_request WHERE leave_request_id = :id",
             new MapSqlParameterSource("id", requestId));
         assertThat(row.get("status")).isEqualTo("CANCELLED");
-        // The employee is not a reviewer -- reviewed_by_id/reviewed_at must stay untouched (COALESCE
-        // preserving the pre-existing NULL), not attributed to the cancelling employee.
+        // The employee is not a reviewer -- reviewed_by_id/reviewed_at must stay untouched (COALESCE preserving the
+        // pre-existing NULL), not attributed to the cancelling employee.
         assertThat(row.get("reviewed_by_id")).isNull();
         assertThat(row.get("reviewed_at")).isNull();
         assertThat(row.get("cancelled_at")).isNotNull();

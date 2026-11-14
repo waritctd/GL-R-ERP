@@ -29,21 +29,9 @@ import th.co.glr.hr.activity.ActivityLogRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * Covers the upload-time defect fix this class exists for: {@code sniffImageMimeType} proves a
- * PNG/JPEG container and nothing else (not bit depth, colour type, interlacing, or JPEG colour
- * space), so a decodable-in-header-only file used to be stored as-is and only fail, silently,
- * months later at quotation render time ({@code QuotationRenderer#anchorApproverSignature}).
- * {@link EmployeeSignatureService#upload} now probes decodability with the shared
- * {@code th.co.glr.hr.common.ImageDecodability} check and re-encodes every accepted upload to a
- * canonical 8-bit ARGB PNG before it is stored.
- *
- * <p>The signature is drawn over a printed rule in the quotation template; the PNG's own alpha
- * channel is what keeps the rule visible on both sides of the ink
- * ({@code EmployeeSignatureService#encodeCanonicalPng}'s own Javadoc), so
- * {@link #aTransparentArgbPng_roundTripsWithAlphaIntact} is the test that guards against a silent
- * "white box over the signature line" regression.
- */
+/** Covers the upload-time defect fix this class exists for: sniffImageMimeType proves a PNG/JPEG container and
+ * nothing else, so a decodable-in-header-only file used to be stored as-is and only fail, silently, months
+ * later at quotation render time. */
 class EmployeeSignatureServiceTest {
 
     private final EmployeeSignatureRepository signatures = mock(EmployeeSignatureRepository.class);
@@ -52,10 +40,8 @@ class EmployeeSignatureServiceTest {
 
     @Test
     void aTransparentArgbPng_roundTripsWithAlphaIntact() throws IOException {
-        // Ink = (5,5) fully opaque red + (6,5) half-transparent red; everything else transparent.
-        // After the trim (ink bbox 2x1, margin 2 px) the output is 6x5 with the ink at (2,2)/(3,2).
-        // If the re-encode ever flattens alpha, the margin comes back opaque and the printed rule
-        // underneath it would be hidden by a solid box.
+        // Ink = (5,5) fully opaque red + (6,5) half-transparent red; everything else transparent. After the trim (ink
+        // bbox 2x1, margin 2 px) the output is 6x5 with the ink at (2,2)/(3,2).
         BufferedImage source = new BufferedImage(10, 10, BufferedImage.TYPE_INT_ARGB);
         source.setRGB(5, 5, new Color(200, 30, 30, 255).getRGB());
         source.setRGB(6, 5, new Color(200, 30, 30, 100).getRGB());
@@ -82,8 +68,8 @@ class EmployeeSignatureServiceTest {
 
     @Test
     void aPaddedPng_isCroppedToTheInkBoundingBoxPlusMargin() throws IOException {
-        // 400x200 canvas, ink 150x30 at (100,60): the owner's real file had exactly this shape of
-        // problem (ink ~32% x 20% of the frame). margin = max(2, round(150 * 0.02)) = 3.
+        // 400x200 canvas, ink 150x30 at (100,60): the owner's real file had exactly this shape of problem (ink ~32% x
+        // 20% of the frame). margin = max(2, round(150 * 0.02)) = 3.
         BufferedImage source = patternedInk(400, 200, 100, 60, 150, 30);
 
         upload(1L, "sig.png", "image/png", encode(source, "png"), selfActor(1L));
@@ -185,12 +171,9 @@ class EmployeeSignatureServiceTest {
         verify(signatures, never()).upsert(anyLong(), anyString(), any(byte[].class), anyLong());
     }
 
-    /**
-     * Review finding 1: the pixel cap runs on the HEADER, before any decode. The file is a crafted
-     * 45-byte PNG whose IHDR claims 8000x8000 with no image data at all — undecodable. Had the
-     * decode run first, the rejection would read "ไม่สามารถอ่านไฟล์รูปภาพนี้ได้"; getting the SIZE
-     * message instead proves the cap came first (and a real 8000x8000 decode is never attempted).
-     */
+    /** Review finding 1: the pixel cap runs on the HEADER, before any decode. Had the decode run first, the
+     * rejection would read "ไม่สามารถอ่านไฟล์รูปภาพนี้ได้"; getting the SIZE message instead proves the cap came
+     * first (and a real 8000x8000 decode is never attempted). */
     @Test
     void anOverLimitImage_isRejectedFromItsHeader_beforeAnyDecode() {
         byte[] bytes = pngHeaderOnly(8000, 8000);
@@ -219,8 +202,8 @@ class EmployeeSignatureServiceTest {
         assertThat(stored.getHeight()).isEqualTo(58);
     }
 
-    /** A PNG signature + a valid IHDR chunk (correct CRC) declaring {@code w x h}, 8-bit RGBA, and
-     * nothing else — ImageIO can read the size from it but cannot decode a pixel. */
+    /** A PNG signature + a valid IHDR chunk (correct CRC) declaring w x h, 8-bit RGBA, and nothing else — ImageIO
+     * can read the size from it but cannot decode a pixel. */
     private static byte[] pngHeaderOnly(int w, int h) {
         java.nio.ByteBuffer ihdr = java.nio.ByteBuffer.allocate(17);
         ihdr.put(new byte[]{'I', 'H', 'D', 'R'}).putInt(w).putInt(h)
@@ -234,8 +217,8 @@ class EmployeeSignatureServiceTest {
         return out.array();
     }
 
-    /** Transparent w x h canvas with an opaque ink rectangle whose colour varies per pixel, so a
-     * one-pixel misalignment of the copy is detectable. */
+    /** Transparent w x h canvas with an opaque ink rectangle whose colour varies per pixel, so a one-pixel
+     * misalignment of the copy is detectable. */
     private static BufferedImage patternedInk(int w, int h, int inkX, int inkY, int inkW, int inkH) {
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB);
         for (int y = 0; y < inkH; y++) {
@@ -277,10 +260,8 @@ class EmployeeSignatureServiceTest {
 
     @Test
     void anUndecodableFileWithValidPngMagic_isRejected_withTheThaiMessage_andNothingIsWritten() {
-        // Real 8-byte PNG signature (passes the magic-byte sniff) followed by garbage that is not
-        // a parseable PNG stream at all — ImageIO throws reading the header, which
-        // ImageDecodability.decode turns into null. This is the shape a 16-bit-depth PNG, an
-        // interlaced/APNG, or a CMYK JPEG take in practice: right container, undecodable body.
+        // Real 8-byte PNG signature (passes the magic-byte sniff) followed by garbage that is not a parseable PNG
+        // stream at all — ImageIO throws reading the header, which ImageDecodability.decode turns into null.
         byte[] bytes = new byte[64];
         byte[] magic = {(byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A};
         System.arraycopy(magic, 0, bytes, 0, magic.length);
@@ -313,10 +294,9 @@ class EmployeeSignatureServiceTest {
 
     @Test
     void theSizeLimitAppliesToTheStoredCanonicalPng_notJustTheUploadedFile() throws IOException {
-        // 600x600 random-noise pixels: as a lossy JPEG this compresses to ~210 KB (comfortably
-        // under the 1 MB input gate), but the same noise re-encoded as a lossless ARGB PNG is
-        // ~1.03 MB — OVER the cap. The upload must still be refused, even though the file the
-        // caller sent was well within the limit.
+        // 600x600 random-noise pixels: as a lossy JPEG this compresses to ~210 KB (comfortably under the 1 MB input
+        // gate), but the same noise re-encoded as a lossless ARGB PNG is ~1.03 MB — OVER the cap. The upload must
+        // still be refused, even though the file the caller sent was well within the limit.
         BufferedImage noise = new BufferedImage(600, 600, BufferedImage.TYPE_INT_RGB);
         Random random = new Random(42);
         for (int y = 0; y < 600; y++) {

@@ -85,11 +85,9 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(commissionRecordedOf(ticketId)).isFalse();
     }
 
-    /**
-     * VOID is unreachable through the application by design (see {@code CommissionStatus.VOID}'s
-     * own Javadoc: "the only writes in the tree are fixtures that bypass the service entirely") —
-     * this fixture is exactly that kind of bypass, inserted directly rather than via any service.
-     */
+    /** VOID is unreachable through the application by design (see CommissionStatus.VOID's own Javadoc: "the only
+     * writes in the tree are fixtures that bypass the service entirely") — this fixture is exactly that kind of
+     * bypass, inserted directly rather than via any service. */
     @Test
     void voidCommission_isNotRecorded() {
         long ticketId = closedPaidDeal();
@@ -98,11 +96,8 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(commissionRecordedOf(ticketId)).isFalse();
     }
 
-    /**
-     * Catches a missing {@code WHERE source_ticket_id} predicate: a live SALE commission exists,
-     * but against a DIFFERENT ticket, so the ticket under test must stay unrecorded while the
-     * other one correctly flips true.
-     */
+    /** Catches a missing WHERE source_ticket_id predicate: a live SALE commission exists, but against a DIFFERENT
+     * ticket, so the ticket under test must stay unrecorded while the other one correctly flips true. */
     @Test
     void aLiveCommissionOnADifferentTicket_leavesThisTicketNotRecorded() {
         long ticketId = closedPaidDeal();
@@ -113,10 +108,8 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(commissionRecordedOf(otherTicketId)).isTrue();
     }
 
-    /**
-     * Catches a missing {@code kind = 'SALE'} predicate: an ADJUSTMENT commission genuinely
-     * pointed at this ticket's id must not count as its (nonexistent) sale commission.
-     */
+    /** Catches a missing kind = 'SALE' predicate: an ADJUSTMENT commission genuinely pointed at this ticket's id
+     * must not count as its (nonexistent) sale commission. */
     @Test
     void aNonSaleKindAgainstThisTicket_isNotRecorded() {
         long ticketId = closedPaidDeal();
@@ -125,11 +118,8 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(commissionRecordedOf(ticketId)).isFalse();
     }
 
-    /**
-     * The flag must survive the LIST projection too, not just a single-ticket load — the account
-     * Overview worklist ({@code accountActions.js}) is built from {@code findSummaries} rows, not
-     * a per-ticket detail fetch.
-     */
+    /** The flag must survive the LIST projection too, not just a single-ticket load — the account Overview worklist
+     * (accountActions.js) is built from findSummaries rows, not a per-ticket detail fetch. */
     @Test
     void theFlagSurvivesTheListProjection() {
         long ticketId = closedPaidDeal();
@@ -146,13 +136,9 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
 
     // ═══ THE ANTI-DRIFT ASSERTION ══════════════════════════════════════════════════════════
 
-    /**
-     * Loops a fresh ticket for every fixture shape above (plus a CLAWBACK-kind row, a second
-     * non-SALE kind, and MANAGER_APPROVED, a third live status) and asserts {@code
-     * TicketRepository}'s flag equals {@code CommissionRepository#hasActiveCommissionForTicket}
-     * for every one of them. This — not the individual tests above — is what makes the duplicated
-     * SQL safe: change one predicate without the other and this goes red.
-     */
+    /** Loops a fresh ticket for every fixture shape above (plus a CLAWBACK-kind row, a second non-SALE kind, and
+     * MANAGER_APPROVED, a third live status) and asserts TicketRepository's flag equals
+     * CommissionRepository#hasActiveCommissionForTicket for every one of them. */
     @Test
     void neverDisagreesWithCommissionRepositoryAcrossEveryFixtureShape() {
         long noCommission = closedPaidDeal();
@@ -211,13 +197,8 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
         return tickets.create(request, tickets.nextTicketCode(), repId, "เซลล์ ทดสอบคอม");
     }
 
-    /**
-     * V102's {@code chk_invoice_details_evidence_present} requires every row to carry either a
-     * real attachment or a closed-vocabulary {@code evidence_provenance}. {@code
-     * PRE_ERP_PAPER_APPROVAL} is the value {@code DashboardRepositoryIntegrationTest} already uses
-     * for exactly this shape (attachment-less, reporting/read-only test data) — following the same
-     * precedent here rather than inventing a second one.
-     */
+    /** V102's chk_invoice_details_evidence_present requires every row to carry either a real attachment or a
+     * closed-vocabulary evidence_provenance. */
     private long insertInvoice() {
         String invoiceNumber = "COMMFLAG-" + System.nanoTime();
         return jdbc.queryForObject("""
@@ -229,12 +210,9 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
             Long.class);
     }
 
-    /**
-     * A SALE-kind commission row, inserted directly (not via {@link CommissionRepository}) so a
-     * status unreachable through the application ({@code VOID}) can still be fixtured, and so
-     * {@code REJECTED}/{@code APPROVED} don't need to be walked through the real manager/CEO
-     * approval chain just to set up a read-only assertion.
-     */
+    /** A SALE-kind commission row, inserted directly (not via CommissionRepository) so a status unreachable through
+     * the application (VOID) can still be fixtured, and so REJECTED/APPROVED don't need to be walked through the
+     * real manager/CEO approval chain just to set up a read-only assertion. */
     private long insertSaleCommission(long ticketId, String status) {
         long invoiceId = insertInvoice();
         return jdbc.queryForObject("""
@@ -254,11 +232,9 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
             Long.class);
     }
 
-    /**
-     * A CLAWBACK-kind commission — also invoice-backed per {@code chk_commission_manual_fields},
-     * so it doubles as a second "the kind predicate, not just the status one, is what excludes
-     * this row" fixture alongside {@link #insertManualCommission}.
-     */
+    /** A CLAWBACK-kind commission — also invoice-backed per chk_commission_manual_fields, so it doubles as a second
+     * "the kind predicate, not just the status one, is what excludes this row" fixture alongside
+     * #insertManualCommission. */
     private long insertClawbackCommission(long ticketId, String status) {
         long invoiceId = insertInvoice();
         return jdbc.queryForObject("""
@@ -278,13 +254,8 @@ class CommissionRecordedFlagIntegrationTest extends AbstractPostgresIntegrationT
             Long.class);
     }
 
-    /**
-     * A manual-kind commission ({@code ADJUSTMENT}/{@code MANAGER}/{@code STOCK_BONUS}/{@code
-     * INCENTIVE}) — no invoice, per {@code chk_commission_manual_fields}. {@code source_ticket_id}
-     * is free-form at the schema level regardless of kind (nothing forces it NULL for a manual
-     * row), so this can still be pointed at a real ticket to prove the {@code kind} predicate, not
-     * just the {@code status} one, is what keeps a manual entry from counting.
-     */
+    /** A manual-kind commission (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE) — no invoice, per
+     * chk_commission_manual_fields. */
     private long insertManualCommission(long ticketId, String kind, String status) {
         return jdbc.queryForObject("""
             INSERT INTO sales.commission_record

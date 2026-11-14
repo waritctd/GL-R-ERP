@@ -6,37 +6,9 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * The arithmetic LibreOffice Calc applies when it prints an XLS sheet to PDF — measured out of
- * LibreOffice's own PDF vectors (2026-09-10, {@code soffice --convert-to pdf} on the quotation
- * template), not taken from documentation. {@link SheetPlan} uses these so an HTML render of the
- * SAME workbook lands on the same page geometry as the LibreOffice render:
- *
- * <ul>
- *   <li><b>Column width</b>: an XLS column width is stored in 1/256ths of the workbook default
- *       font's widest digit. LibreOffice measures that advance in twips ({@link #charWidthTwips}) on
- *       the font the HOST resolves the family to (see {@link FontResolver}),
- *       then {@code trunc(units * charWidth / 256 - 0.5)} twips per column
- *       ({@code XclTools::GetScColumnWidth}). Verified to ±1/100 mm on nine columns at three zooms.
- *       Apache POI's own {@code getColumnWidthInPixels} uses a different constant (36.56 units/px)
- *       and lands ~3% wider — never use it for LibreOffice fidelity.</li>
- *   <li><b>Zoom</b>: LibreOffice IGNORED the explicit {@code PrintSetup.scale} in every file this
- *       repo produces (the SETUP record is flagged invalid) and fits to {@code fitWidth ×
- *       fitHeight} whenever either is nonzero — regardless of the WSBOOL fit-to-page flag POI's
- *       {@code Sheet#setFitToPage} toggles. The zoom is an integer percent, the largest that fits
- *       ({@code floor(100 * min(availableWidth/contentWidth, availableHeight/contentHeight))}),
- *       computed over the print area TRIMMED to the last row/column that has a value or a visible
- *       attribute (border/fill). With both fit counts zero LibreOffice prints at 100%.</li>
- *   <li><b>Scaled lengths</b> are truncated to 1/100 mm per row/column; page margins are NOT
- *       scaled; content is centred horizontally when the sheet's flag says so.</li>
- *   <li><b>Borders</b>: THIN = 0.75 pt, MEDIUM = 1.75 pt, THICK = 2.5 pt, HAIR = 0.05 pt (LO's
- *       twips mapping of the Excel styles), all multiplied by the zoom, drawn centred on the cell
- *       boundary and extended by half the stroke at both ends; collinear runs of equal weight are
- *       one path.</li>
- *   <li><b>Fonts</b>: rendered at {@code floor(pt * zoom)} integer points (the output device
- *       truncates the font height).</li>
- * </ul>
- */
+/** The arithmetic LibreOffice Calc applies when it prints an XLS sheet to PDF — measured out of LibreOffice's
+ * own PDF vectors (2026-09-10, soffice --convert-to pdf on the quotation template), not taken from
+ * documentation. */
 public final class LibreOfficeMetrics {
     private LibreOfficeMetrics() {}
 
@@ -55,17 +27,8 @@ public final class LibreOfficeMetrics {
     /** Fallback when the default font cannot be measured — LibreOffice's own default. */
     private static final int DEFAULT_CHAR_WIDTH_TWIPS = 110;
 
-    /**
-     * Width in twips of the workbook's default font's widest digit (font index 0), the unit an
-     * XLS column width is expressed in — measured on the font THIS HOST resolves that family to,
-     * not the family the workbook names. LibreOffice ({@code XclRoot::SetCharWidth}) sets its
-     * printer font to the default font by name, lets fontconfig substitute whatever the host
-     * has, and takes the widest of '0'..'9' in twips; on a host without the licensed Cordia New
-     * that is Garuda/Umpush's digit, ~50% wider, and every column, the fit zoom and every row
-     * height follow it. {@link FontResolver} answers the same fontconfig question and the digit
-     * is measured through AWT with fractional metrics, then rounded to whole twips exactly like
-     * LibreOffice's output device does. Cached per (family, size, weight) for the JVM's life.
-     */
+    /** Width in twips of the workbook's default font's widest digit (font index 0), the unit an XLS column width is
+     * expressed in — measured on the font THIS HOST resolves that family to, not the family the workbook names. */
     public static int charWidthTwips(Workbook wb) {
         try {
             Font f = wb.getFontAt(0);
@@ -111,14 +74,8 @@ public final class LibreOfficeMetrics {
         return Math.max(0, (int) scWidth);
     }
 
-    /**
-     * LibreOffice's fit-to-pages zoom: the largest integer percent at which the content fits
-     * {@code fitWidth} pages across and {@code fitHeight} pages down (a zero count leaves that
-     * axis unconstrained; both zero → 100%). The ONE place this arithmetic lives —
-     * {@code SheetPlan#computeZoom} reads the zoom of a finished sheet with it, and
-     * {@code QuotationRenderer#insertNoSplitPageBreaks} predicts the same zoom BEFORE it places
-     * the manual row breaks, so its page budget is the page LibreOffice will actually fill.
-     */
+    /** LibreOffice's fit-to-pages zoom: the largest integer percent at which the content fits fitWidth pages across
+     * and fitHeight pages down (a zero count leaves that axis unconstrained; both zero → 100%). */
     public static int fitZoomPercent(long contentWidthTwips, long contentHeightTwips,
                                      double availableWidthTwips, double availableHeightTwips,
                                      int fitWidth, int fitHeight) {

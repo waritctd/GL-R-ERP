@@ -4,11 +4,8 @@ import { useDialogFocus } from '../../hooks/useDialogFocus.js';
 import { Button } from './Button.jsx';
 import { cn } from '../../utils/cn.js';
 
-// Sizes carry their own width/height so exactly one w-[...]/max-h-[...] pair is ever present on
-// the panel — `.modal-panel`'s width/height are now Tailwind utilities too (Group C primitives
-// port), so a base pair PLUS an `lg` override pair would both land in the same `@layer utilities`
-// and rely on Tailwind's internal generated-stylesheet order (not className string order) to
-// arbitrate, which is unverified. One size's classes on the element at a time sidesteps that.
+// Sizes carry their own width/height so exactly one w-[...]/max-h-[...] pair is ever present on the panel. One
+// size's classes on the element at a time sidesteps that.
 const SIZE_CLASSNAMES = {
   md: 'w-[min(720px,100%)] max-h-[min(760px,calc(100dvh-40px))]',
   lg: 'w-[min(1040px,100%)] max-h-[calc(100dvh-40px)]',
@@ -18,12 +15,9 @@ export function Modal({
   title, subtitle, children, footer, onClose, testId, size = 'md', initialFocusRef,
 }) {
   const panelRef = useRef(null);
-  // Modal is only ever mounted while shown, so the trap is unconditionally active for its lifetime
-  // (see useDialogFocus.js -- the payroll detail panel is the other consumer, and gates this on its
-  // >=1280px side-by-side vs <1280px overlay mode instead).
-  // `initialFocusRef` (optional): see useDialogFocus.js's own comment on it -- this is what lets a
-  // caller focus a specific field (rather than the header's close button, the default first
-  // tabbable element) without racing a StrictMode remount for it.
+  // Modal is only ever mounted while shown, so the trap is unconditionally active for its lifetime (see
+  // useDialogFocus.js -- the payroll detail panel is the other consumer, and gates this on its >=1280px
+  // side-by-side vs <1280px overlay mode instead).
   useDialogFocus({ active: true, containerRef: panelRef, onClose, initialFocusRef });
 
   return (

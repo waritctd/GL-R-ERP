@@ -32,39 +32,14 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Regression coverage for the commission-payroll weighted-base + manual-entries fix (2026-07-23).
- *
- * <p>{@code PayrollService#commissionPayByEmployee} used to sum each APPROVED commission record's
- * already-2dp-rounded {@code commissionableBase} UNWEIGHTED, then run {@code progressiveCommission}
- * on that sum, and never added a rep's approved manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/
- * INCENTIVE, V84) at all. Both diverge from what HR sees in {@link
- * CommissionService#payrollReadySummary}, which uses the weighted, full-precision monthly tier base
- * ({@code SUM(actual_received * weight_multiplier) / 1.07}, rounded once) PLUS each rep's approved
- * manual-entry total -- see {@code CommissionCalcRefineIntegrationTest} for the owner-reconciled
- * weighted-tier reference figures this test reuses, and the real "jennet" June 2026 payroll
- * reconciliation (82,849.23 = weighted tier 67,849.23 + a 15,000 INCENTIVE) for the manual-entries
- * figure.
- *
- * <p>This drives the real chain end to end against real Postgres: seed two commission records for
- * one rep (one at the default 1x weight, one bumped to 2x through the real manager-review path,
- * {@link CommissionService#updateDeductions}), approve both through manager + CEO, then assert the
- * real {@link PayrollService}'s payroll preview pays the WEIGHTED owner-reconciled figure -- not
- * the old unweighted one -- and agrees exactly with {@link CommissionService#payrollReadySummary}
- * for the same rep/month. A further case adds an approved manual INCENTIVE entry on top and proves
- * it now reaches payroll too, still agreeing exactly with {@code payrollReadySummary}. Mockito
- * cannot reach this: the point under test is that the SQL aggregation and the two call paths
- * (payroll vs. payrollReadySummary) now compute the identical number, not that some mocked
- * collaborator returns a canned value.
- */
+/** Regression coverage for the commission-payroll weighted-base + manual-entries fix (2026-07-23). A further
+ * case adds an approved manual INCENTIVE entry on top and proves it now reaches payroll too, still agreeing
+ * exactly with payrollReadySummary. */
 class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate PAYROLL_MONTH = LocalDate.of(2026, 6, 1);
     private static final LocalDate INVOICE_DATE = LocalDate.of(2026, 6, 15);
 
-    // Owner-reconciled reference figures (2026-07-22), reused verbatim from
-    // CommissionCalcRefineIntegrationTest#jennet_withOneTwoXWeightedReceipt_aboveThreeMillionTier_reproducesWorkbookCommission:
-    // receipts 3,808,589.56 (1x) + 15,107.93 (2x) -> weighted monthly tier base 3,587,668.62,
-    // exercising the >3,000,000 @ 3.25% high-roller tier.
+    // Workbook reference: receipts 3,808,589.56 at 1x and 15,107.93 at 2x yield a 3,587,668.62 tier base.
     private static final BigDecimal FIRST_RECEIPT = new BigDecimal("3808589.56");
     private static final BigDecimal SECOND_RECEIPT = new BigDecimal("15107.93");
     private static final BigDecimal WEIGHTED_COMMISSION = new BigDecimal("67849.23");
@@ -75,13 +50,11 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
     // INTENDED consequence, not drift; the relationship is pinned in
     // #payrollCommissionPay_isTheWholeBahtRoundingOfThePayrollReadySummary.
     private static final BigDecimal WEIGHTED_COMMISSION_PAID = new BigDecimal("67849.00");
-    // The bug this test guards against: summing commissionableBase unweighted (i.e. as if the
-    // second receipt were never bumped to 2x) reproduces the OLD, wrong, lower figure instead.
+    // The bug this test guards against: summing commissionableBase unweighted (i.e. as if the second receipt were
+    // never bumped to 2x) reproduces the OLD, wrong, lower figure instead.
     private static final BigDecimal UNWEIGHTED_COMMISSION = new BigDecimal("67390.34");
-    // Real payroll reconciliation (June 2026, owner-confirmed 2026-07-23): a rep's full commission
-    // is the weighted tier commission PLUS their approved manual entries -- 67,849.23 + a 15,000
-    // INCENTIVE = 82,849.23. This is the exact "jennet" case that revealed the old code excluded
-    // manual entries from the payroll figure entirely.
+    // Real payroll reconciliation (June 2026, owner-confirmed 2026-07-23): a rep's full commission is the weighted
+    // tier commission PLUS their approved manual entries -- 67,849.23 + a 15,000 INCENTIVE = 82,849.23.
     private static final BigDecimal MANUAL_INCENTIVE_AMOUNT = new BigDecimal("15000.00");
     private static final BigDecimal WEIGHTED_PLUS_MANUAL_COMMISSION = new BigDecimal("82849.23");
     private static final BigDecimal WEIGHTED_PLUS_MANUAL_COMMISSION_PAID = new BigDecimal("82849.00");
@@ -110,9 +83,8 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             mock(NotificationService.class),
             mock(TicketRepository.class),
             mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
-        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix --
-        // PayrollService gained a LeaveRepository dependency for #suggestedInputs, unrelated to what
-        // this test exercises.
+        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix -- PayrollService
+        // gained a LeaveRepository dependency for #suggestedInputs, unrelated to what this test exercises.
         payrollService = new PayrollService(
             new PayrollRepository(jdbc),
             new PayrollCalculator(),
@@ -139,10 +111,8 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             "ceo", ceoEmployeeId, true, LocalDate.now(), false, null, false);
     }
 
-    /**
-     * The headline case: the payroll line's commissionPay must equal the weighted,
-     * owner-reconciled 67,849.23 -- not the old unweighted 67,390.34.
-     */
+    /** The headline case: the payroll line's commissionPay must equal the weighted, owner-reconciled 67,849.23 --
+     * not the old unweighted 67,390.34. */
     @Test
     void payrollPaysTheWeightedCommission_notTheOldUnweightedFigure() {
         wireRealCollaborators();
@@ -158,12 +128,8 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             .isNotEqualByComparingTo(UNWEIGHTED_COMMISSION.setScale(0, RoundingMode.HALF_UP));
     }
 
-    /**
-     * The two call paths must still agree to the baht: what payroll pays is exactly the whole-baht
-     * rounding of what HR sees in the payroll-ready summary, for the same rep/month. Before
-     * 2026-08-25 these were the identical number; commission rounding at the payroll boundary (2026-08-25) made
-     * payroll the rounded one, and this test now pins that as the only permitted difference.
-     */
+    /** The two call paths must still agree to the baht: what payroll pays is exactly the whole-baht rounding of
+     * what HR sees in the payroll-ready summary, for the same rep/month. */
     @Test
     void payrollCommissionPay_isTheWholeBahtRoundingOfThePayrollReadySummary() {
         wireRealCollaborators();
@@ -182,17 +148,15 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
 
         assertThat(line.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION_PAID);
         assertThat(repSummary.commissionAmount()).isEqualByComparingTo(WEIGHTED_COMMISSION);
-        // The two paths no longer produce the IDENTICAL number -- payroll rounds to whole baht and
-        // the commission module does not. Pin the RELATIONSHIP, so a future change on either side
-        // cannot widen the gap past that rounding without turning this red.
+        // The two paths no longer produce the IDENTICAL number -- payroll rounds to whole baht and the commission
+        // module does not. Pin the RELATIONSHIP, so a future change on either side cannot widen the gap past that
+        // rounding without turning this red.
         assertThat(line.commissionPay())
             .isEqualByComparingTo(repSummary.commissionAmount().setScale(0, RoundingMode.HALF_UP));
     }
 
-    /**
-     * The gross figure on the payroll line has to move with the fix too, not just an internal
-     * aggregate -- otherwise the corrected money never reaches the payslip.
-     */
+    /** The gross figure on the payroll line has to move with the fix too, not just an internal aggregate --
+     * otherwise the corrected money never reaches the payslip. */
     @Test
     void payrollGrossEarningsReflectTheWeightedCommission() {
         wireRealCollaborators();
@@ -204,20 +168,15 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
         PayrollLineDto after = previewLineFor(salesRepId);
 
         assertThat(after.commissionPay()).isEqualByComparingTo(WEIGHTED_COMMISSION_PAID);
-        // Gross moves by the ROUNDED commission -- the whole point of rounding at the boundary is
-        // that gross, the ป.96 limbs and net are all derived from the same single number.
+        // Gross moves by the ROUNDED commission -- the whole point of rounding at the boundary is that gross, the ป.96
+        // limbs and net are all derived from the same single number.
         assertThat(after.grossEarnings())
             .isEqualByComparingTo(beforeAnyCommission.grossEarnings().add(WEIGHTED_COMMISSION_PAID));
     }
 
-    /**
-     * Revision 1 headline case: real payroll pays each rep's FULL commission = weighted tier
-     * commission + approved manual entries, not just the tier portion. Proof figure is the real
-     * "jennet" June 2026 payroll reconciliation: 82,849.23 = weighted tier 67,849.23 + a 15,000
-     * INCENTIVE. Also proves the payroll and payrollReadySummary paths still agree exactly once the
-     * manual entry is in the mix, via the shared {@code CommissionService#payrollCommissionTotalsByEmployee}
-     * / {@code computeRepPayrollCommissions} aggregation both now build on.
-     */
+    /** Revision 1 headline case: real payroll pays each rep's FULL commission = weighted tier commission + approved
+     * manual entries, not just the tier portion. Proof figure is the real "jennet" June 2026 payroll
+     * reconciliation: 82,849.23 = weighted tier 67,849.23 + a 15,000 INCENTIVE. */
     @Test
     void payrollPaysWeightedTierPlusApprovedManualEntries_matchingPayrollReadySummary() {
         wireRealCollaborators();
@@ -248,11 +207,9 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
 
     // --- helpers ------------------------------------------------------------
 
-    /**
-     * Seeds the jennet reconciliation scenario (1x + 2x-weighted receipts, both approved through
-     * manager + CEO) for the given rep via the real repository/service -- identical inputs to
-     * {@code CommissionCalcRefineIntegrationTest}'s jennet test.
-     */
+    /** Seeds the jennet reconciliation scenario (1x + 2x-weighted receipts, both approved through manager + CEO)
+     * for the given rep via the real repository/service -- identical inputs to
+     * CommissionCalcRefineIntegrationTest's jennet test. */
     private void seedApprovedJennetScenario(long salesRepId) {
         long firstCommissionId = seedCommissionRecord(salesRepId, FIRST_RECEIPT);
         long secondCommissionId = seedCommissionRecord(salesRepId, SECOND_RECEIPT);
@@ -314,14 +271,8 @@ class PayrollCommissionWeightedBaseIntegrationTest extends AbstractPostgresInteg
             null, null, nameTh, null, null, null, null, null, null, null,
             email, null, divisionSourceCode, divisionNameTh, divisionNameTh,
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
-        // Task 2 (2026-07-29): this test drives real PayrollService#preview, which now rejects a
-        // non-zero COMMISSION_PAY component with no stored classification (handoff section 1). This
-        // helper creates managers/CEO too, who never carry commission, so seeding it here is harmless
-        // for them and required for the sales rep. REGULAR_REPROJECT is not the point under test
-        // (commission weighting is) -- any treatment would do since only one component/month is ever
-        // non-zero per employee in this scenario, so REGULAR_REPROJECT (matching the default the SSO
-        // inclusion default table treats commission the same as salary for) keeps this file focused on
-        // its actual subject.
+        // Task 2 (2026-07-29): this test drives real PayrollService#preview, which now rejects a non-zero
+        // COMMISSION_PAY component with no stored classification (handoff section 1).
         seedRegularTaxTreatment(employeeId, PAYROLL_MONTH.getYear(), PayrollComponent.COMMISSION_PAY);
         seedSsoIncluded(employeeId, PAYROLL_MONTH.getYear(), PayrollComponent.SALARY, PayrollComponent.COMMISSION_PAY);
         return employeeId;

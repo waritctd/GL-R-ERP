@@ -1,10 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// api.finance.getDeal mirrors th.co.glr.hr.finance.FinanceDealService (GET /api/finance/deals/{id}).
-// The mock's authorization is NEVER authoritative -- FinanceDealIntegrationTest (real Java service,
-// real Postgres) is the evidence. This pins that the mock is no MORE permissive than that service
-// and that its payload carries none of the forbidden (cost / pricing / tracking / activity) keys.
+// api.finance.getDeal mirrors th.co.glr.hr.finance.FinanceDealService (GET /api/finance/deals/{id}). The
+// mock's authorization is NEVER authoritative -- FinanceDealIntegrationTest (real Java service, real Postgres)
+// is the evidence.
 
 const FORBIDDEN_KEY_FRAGMENTS = [
   'pricingrequest', 'cost', 'landed', 'factory', 'fx', 'margin', 'winprobability', 'designer',

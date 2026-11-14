@@ -38,19 +38,16 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 const emptyItem = () => ({
   brand: '', model: '', color: '', texture: '', size: '', factory: '',
   unitBasis: 'PIECE', qty: 1, qtySqm: '', sqmPerPiece: null,
-  // source ('catalog' | 'custom') + the catalog's reference price/currency/priceUnit are UI-only
-  // — never sent in the onSubmit payload (see submit() below). They exist so the items view can
-  // badge a line "จากแคตตาล็อก" vs "custom" and show the catalog's own price in its own currency
-  // alongside a baht conversion (catalogPriceUnit names the unit that price is quoted per).
+  // source ('catalog' | 'custom') + the catalog's reference price/currency/priceUnit are UI-only — never sent in
+  // the onSubmit payload (see submit() below).
   source: 'custom', catalogPrice: null, catalogCurrency: null, catalogPriceUnit: null,
   // Padana's A01/A02 quality code, shown as a badge. NEVER written into ยี่ห้อ: `grade` is only
   // populated by factory Padana (values A01/A02), and the brand a rep means is the factory
   // (Padana, Vives, LEA, Bode…), which is why ยี่ห้อ and โรงงาน are one field.
   catalogGrade: null,
-  // catalogPriceId/catalogProductCode ARE sent (see submit()'s items map below) — the catalog
-  // identity picked here, persisted on ticket_item (V110) so PricingRequestCreateModal can seed
-  // its own catalog link without a re-search. Cleared by updateItem() below whenever the user
-  // hand-edits a descriptive field the link no longer accurately describes.
+  // catalogPriceId/catalogProductCode ARE sent (see submit()'s items map below) — the catalog identity picked
+  // here, persisted on ticket_item (V110) so PricingRequestCreateModal can seed its own catalog link without a
+  // re-search.
   catalogPriceId: null, catalogProductCode: '',
   // "จากสต็อก" is only a flag (walk 4): the CEO prices stock lines, so sales types no price here.
   sourcedFromStock: false,
@@ -63,9 +60,9 @@ const emptyItem = () => ({
 // DRAFT ticket status created on a real submit.
 
 function defaultNextFollowUpAt() {
-  // Lazy-computed (never at module scope): the stage-advance readiness gate refuses every forward
-  // move while next_follow_up_at is null, so a deal created without one could not be advanced at
-  // all. +14 days is a sensible starting point the rep can change on the รายละเอียดดีล step.
+  // Lazy-computed (never at module scope): the stage-advance readiness gate refuses every forward move while
+  // next_follow_up_at is null, so a deal created without one could not be advanced at all. +14 days is a
+  // sensible starting point the rep can change on the รายละเอียดดีล step.
   return new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10);
 }
 
@@ -92,9 +89,9 @@ const ENTRY_CHANNEL_OPTIONS = [
   { code: 'BUYER_DIRECT', label: 'ผู้ซื้อตรง', sub: 'Buyer-direct' },
 ];
 
-// CreateTicketRequest.priority is optional and mockApi already defaults it to
-// 'NORMAL' when absent — reusing the canonical labels from format.js keeps
-// this picker's wording identical to wherever priority is displayed later.
+// CreateTicketRequest.priority is optional and mockApi already defaults it to 'NORMAL' when absent — reusing
+// the canonical labels from format.js keeps this picker's wording identical to wherever priority is displayed
+// later.
 const PRIORITY_OPTIONS = ['LOW', 'NORMAL', 'HIGH'].map((code) => ({ code, label: ticketPriorityLabel(code).label }));
 
 // ── validation ──────────────────────────────────────────────────────
@@ -133,13 +130,8 @@ const projectRequiredSchema = z.any().refine((v) => v != null, 'กรุณา�
 // the entryChannel state below.
 const entryChannelRequiredSchema = z.any().refine((v) => v != null, 'กรุณาเลือกว่าดีลนี้เสนอแก่ใคร');
 
-/**
- * Validates the whole form and returns every invalid field, plus `order`:
- * those same keys in on-screen top-to-bottom order, so submit() can focus
- * the first one without depending on zod's internal issue ordering (a
- * root-level check runs after nested array elements are validated, which
- * would put item errors before customer/project if we relied on it).
- */
+/** Validates the whole form and returns every invalid field, plus `order`: those same keys in on-screen
+ * top-to-bottom order, so submit can focus the first one without depending on zod's internal issue ordering. */
 function validateTicketForm({ customer, project, entryChannel, items }) {
   const errors = {};
   const order = [];
@@ -150,9 +142,8 @@ function validateTicketForm({ customer, project, entryChannel, items }) {
     order.push('customer');
   }
 
-  // A project can only be chosen once a customer is selected (the picker
-  // doesn't even render before then) — like the original sequential checks,
-  // only flag it once the customer is valid.
+  // A project can only be chosen once a customer is selected (the picker doesn't even render before then) — like
+  // the original sequential checks, only flag it once the customer is valid.
   if (customerResult.success) {
     const projectResult = projectRequiredSchema.safeParse(project);
     if (!projectResult.success) {
@@ -161,8 +152,8 @@ function validateTicketForm({ customer, project, entryChannel, items }) {
     }
   }
 
-  // Unlike project, NOT nested inside `if (customerResult.success)` — the channel picker is
-  // reachable and answerable regardless of whether a customer is chosen yet.
+  // Unlike project, NOT nested inside `if (customerResult.success)` — the channel picker is reachable and
+  // answerable regardless of whether a customer is chosen yet.
   const entryChannelResult = entryChannelRequiredSchema.safeParse(entryChannel);
   if (!entryChannelResult.success) {
     errors.entryChannel = entryChannelResult.error.issues[0].message;
@@ -191,12 +182,8 @@ const SEARCH_SELECT_OPTIONS_MAX_HEIGHT = 380;
 
 function SearchSelect({ id, label, value, onSelect, placeholder, options, onSearch, searchValue, onSearchChange, loading, renderOption, renderValue, createNewLabel, onCreateNew, inputRef, error }) {
   const [open, setOpen] = useState(false);
-  // Hand-wired aria contract (no <FormField> here — the control renders
-  // either a value chip or a search input depending on state, which doesn't
-  // fit FormField's single-child-with-matching-id model). Same contract as
-  // FormField: aria-invalid + aria-describedby pointing at a role="alert"
-  // error paragraph, using the same `${id}-error` id convention via
-  // fieldErrorId so screen readers get field/error association (WCAG 3.3.1).
+  // Hand-wired aria contract (no <FormField> here — the control renders either a value chip or a search input
+  // depending on state, which doesn't fit FormField's single-child-with-matching-id model).
   const errorId = error && id ? fieldErrorId(id) : undefined;
   return (
     <div className="relative">
@@ -224,8 +211,8 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
             aria-describedby={errorId}
           />
           {open && (
-            // maxHeight stays inline: it's sourced from SEARCH_SELECT_OPTIONS_MAX_HEIGHT (a JS
-            // constant), which a static Tailwind arbitrary-value class can't reference.
+            // maxHeight stays inline: it's sourced from SEARCH_SELECT_OPTIONS_MAX_HEIGHT (a JS constant), which a static
+            // Tailwind arbitrary-value class can't reference.
             <div className="absolute left-0 right-0 top-full z-50 overflow-y-auto rounded-[6px] border border-border-subtle bg-surface shadow-[0_4px_16px_rgba(0,0,0,0.1)]" style={{ maxHeight: SEARCH_SELECT_OPTIONS_MAX_HEIGHT }}>
               {onCreateNew && (
                 // First and sticky, like DealCustomerCard's "+ เพิ่มลูกค้าใหม่": always reachable
@@ -259,8 +246,8 @@ function SearchSelect({ id, label, value, onSelect, placeholder, options, onSear
   );
 }
 
-// ItemFieldLabel/ItemField/CatalogOption/CatalogAutocompleteField moved to ticketItemFields.jsx
-// (imported above) — shared with TicketDetailPage's edit-items mode.
+// ItemFieldLabel/ItemField/CatalogOption/CatalogAutocompleteField moved to ticketItemFields.jsx (imported
+// above) — shared with TicketDetailPage's edit-items mode.
 
 /**
  * One accordion section (IA-deal-form.md). Same APG structure as CollapsibleSection — a heading
@@ -342,10 +329,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
   // restore.
   const [showPicker, setShowPicker] = useState(showPickerInitially);
   const [draftList, setDraftList] = useState(initialDraftList);
-  // The draft id this session is autosaving into — null until either a draft is restored
-  // (เปิดต่อ) or the first meaningful autosave creates one. Mirrored into currentDraftIdRef (see
-  // below) so the debounce timer and the beforeunload/close-confirm synchronous flush always read
-  // the LATEST id without depending on a stale render's closure.
+  // The draft id this session is autosaving into — null until either a draft is restored (เปิดต่อ) or the first
+  // meaningful autosave creates one.
   const [currentDraftId, setCurrentDraftId] = useState(null);
   const [draftDeleteTarget, setDraftDeleteTarget] = useState(null); // picker row pending ลบ confirmation
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false);
@@ -364,32 +349,28 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
   const [form, setForm] = useState({ note: '' });
   const [dealTitle, setDealTitle] = useState('');
   const [priority, setPriority] = useState('NORMAL');
-  // No default on purpose. A pre-selected channel meant a rep who never noticed this control
-  // silently recorded "designer-led", and because a value is ALWAYS sent the backend could not
-  // tell that apart from a deliberate choice — so no backend default could rescue it. A restored
-  // draft still pre-fills (via applyDraftToForm), because editing a draft is not the same as
-  // creating fresh.
+  // No default on purpose. A pre-selected channel meant a rep who never noticed this control silently recorded
+  // "designer-led", and because a value is ALWAYS sent the backend could not tell that apart from a deliberate
+  // choice — so no backend default could rescue it.
   const [entryChannel, setEntryChannel] = useState(null);
-  // Defaulted, not left blank, and this matters: the stage-advance readiness gate refuses EVERY
-  // forward move while next_follow_up_at is null, so a deal created without one could not be
-  // advanced at all — the rep met that refusal on their first action. A sensible default makes a
-  // new deal immediately workable, and the field below lets them change it.
+  // Defaulted, not left blank, and this matters: the stage-advance readiness gate refuses EVERY forward move
+  // while next_follow_up_at is null, so a deal created without one could not be advanced at all — the rep met
+  // that refusal on their first action.
   const [nextFollowUpAt, setNextFollowUpAt] = useState(() => defaultNextFollowUpAt());
-  // V50: a deal may start with NO items (lightweight lead-stage draft) — the
-  // price-request flow begins later once items are added and submitted.
+  // V50: a deal may start with NO items (lightweight lead-stage draft) — the price-request flow begins later
+  // once items are added and submitted.
   const [items, setItems] = useState(() => (initialItems?.length ? initialItems : []));
   const [editingItemIndex, setEditingItemIndex] = useState(null);
 
   const [loading, setLoading] = useState(false);
-  // Form-level: submit/API failures (สร้างคำขอราคาไม่สำเร็จ, สร้างโครงการไม่สำเร็จ,
-  // เพิ่มผู้ติดต่อไม่สำเร็จ). Kept separate from `fieldErrors` — those are two
-  // different kinds of problem and shouldn't share one string.
+  // Form-level: submit/API failures (สร้างคำขอราคาไม่สำเร็จ, สร้างโครงการไม่สำเร็จ, เพิ่มผู้ติดต่อไม่สำเร็จ).
+  // Kept separate from `fieldErrors` — those are two different kinds of problem and shouldn't share one string.
   const [error, setError] = useState('');
-  // Field-level: keyed 'customer' | 'project' | `items.<index>.<field>`.
-  // See validateTicketForm() above for how this is populated.
+  // Field-level: keyed 'customer' | 'project' | `items.<index>.<field>`. See validateTicketForm() above for how
+  // this is populated.
   const [fieldErrors, setFieldErrors] = useState({});
-  // DOM node per fieldErrors key, so submit() can scroll+focus the first
-  // invalid field on a form long enough that the error can be off-screen.
+  // DOM node per fieldErrors key, so submit() can scroll+focus the first invalid field on a form long enough
+  // that the error can be off-screen.
   const fieldRefs = useRef({});
   function clearFieldError(key) {
     setFieldErrors((prev) => {
@@ -411,8 +392,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
   const [newProjectName, setNewProjectName] = useState('');
   const [showNewProject, setShowNewProject] = useState(false);
 
-  // Client-only duplicate-deal warning (V50 has no server-side duplicate
-  // check) — dismissible, never blocks. Degrades silently on API failure.
+  // Client-only duplicate-deal warning (V50 has no server-side duplicate check) — dismissible, never blocks.
+  // Degrades silently on API failure.
   const [duplicateWarning, setDuplicateWarning] = useState(null);
   const [duplicateDismissed, setDuplicateDismissed] = useState(false);
 
@@ -420,9 +401,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
 
   // catalog autocomplete
   const [catalogResults, setCatalogResults] = useState([]);
-  // { index, field: 'brand' | 'model' } | null — tracking which field is
-  // focused (not just which item row) so the brand and model inputs for the
-  // same row don't both render the same catalogResults dropdown at once.
+  // { index, field: 'brand' | 'model' } | null — tracking which field is focused (not just which item row) so
+  // the brand and model inputs for the same row don't both render the same catalogResults dropdown at once.
   const [catalogFocus, setCatalogFocus] = useState(null);
 
   // เจ้าของงาน (2026-11-05): admin staff key deals for other reps. Same eligible-people list as the
@@ -465,19 +445,12 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
 
   // client-side draft persistence (debounced autosave)
   const [draftSavedAt, setDraftSavedAt] = useState(null);
-  // Non-blocking "autosave failed" notice — a dealDrafts.js reason code ('unavailable' | 'quota' |
-  // 'limit') or null. Shown beside the ร่างบันทึกแล้ว badge instead of it, never as a blocking
-  // error: a deal must stay fully creatable with drafts unavailable entirely (private mode, a
-  // locked-down browser, a full quota) — autosave is a convenience, not a dependency.
+  // Non-blocking "autosave failed" notice — a dealDrafts.js reason code ('unavailable' | 'quota' | 'limit') or
+  // null.
   const [draftSaveNotice, setDraftSaveNotice] = useState(null);
 
-  // Refs mirroring state that the debounce timer / beforeunload / close-confirm handlers need to
-  // read WITHOUT a stale closure — same shape as PayrollPage.jsx's draftDirtyRef/canSaveDraftRef
-  // pattern (~L1171). currentDraftIdRef especially: the debounce effect below closes over
-  // `currentDraftId` at schedule time, but by the time its setTimeout actually fires 1s later a
-  // LATER effect run may have already assigned a fresh id — reading the ref instead of the closed-
-  // over value keeps every save targeting the one true "current" draft rather than occasionally
-  // forking a second one.
+  // Refs mirroring state that the debounce timer / beforeunload / close-confirm handlers need to read WITHOUT a
+  // stale closure — same shape as PayrollPage.jsx's draftDirtyRef/canSaveDraftRef pattern (~L1171).
   const currentDraftIdRef = useRef(currentDraftId);
   useEffect(() => { currentDraftIdRef.current = currentDraftId; }, [currentDraftId]);
   // true once submit() has deleted the current draft on a successful create: the authoritative
@@ -485,11 +458,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
   // a real ticket. Checked by the timer's callback and implicitly by the autosave effect's
   // early-return once `loading` stays true post-submit.
   const submittedRef = useRef(false);
-  // true whenever there is a meaningful change not yet reflected in a successful saveDraft() call
-  // — read synchronously by the beforeunload handler (which cannot await a debounce) to decide
-  // whether a synchronous flush is even worth attempting. Derived from isSnapshotDirty() below,
-  // not from hasMeaningfulDraftData() alone — see lastPersistedSnapshotJsonRef's own comment for
-  // why "has data" and "has UNSAVED data" are different questions.
+  // true whenever there is a meaningful change not yet reflected in a successful saveDraft() call — read
+  // synchronously by the beforeunload handler (which cannot await a debounce) to decide whether a synchronous
+  // flush is even worth attempting.
   const dirtyRef = useRef(false);
   const autosaveTimerRef = useRef(null);
   // The JSON of the last snapshot actually written to storage (autosave, บันทึกร่าง, close-time
@@ -508,11 +479,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
       ownerEmployeeId,
     };
   }
-  // Kept fresh after every render (react-hooks/refs forbids writing a ref's `.current` directly
-  // during render — see QuotationEditorPage.jsx's dirtyRef for the same pattern) so the debounce
-  // timer's callback — which fires up to a second after the render that scheduled it — always
-  // saves the LATEST snapshot, not the one at schedule time. This is what makes rapid coalesced
-  // edits save once, with the final value, rather than once per keystroke with a stale one.
+  // Kept fresh after every render so the debounce timer's callback — which fires up to a second after the render
+  // that scheduled it — always saves the LATEST snapshot, not the one at schedule time.
   const draftSnapshotRef = useRef(buildDraftSnapshot());
   // The item editor's row, kept fresh the same way for closeItemEditor(): goToSection also runs
   // after an await (a late create), whose closure predates any editor the rep opened meanwhile.
@@ -545,8 +513,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
   // field buildDraftSnapshot() reads; other changes (search boxes, catalog dropdown, customer
   // projects) do not reschedule it.
   useEffect(() => {
-    // Nothing to save yet (picker showing, nothing restored/typed), a submit is already in
-    // flight, or one has already succeeded (submittedRef) — never autosave in any of those.
+    // Nothing to save yet (picker showing, nothing restored/typed), a submit is already in flight, or one has
+    // already succeeded (submittedRef) — never autosave in any of those.
     if (showPicker || loading || submittedRef.current) return undefined;
     const snapshot = draftSnapshotRef.current;
     if (!isSnapshotDirty(snapshot)) {
@@ -559,9 +527,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
       applyDraftSaveResult(saveDraft(currentDraftIdRef.current, draftSnapshotRef.current), draftSnapshotRef.current);
     }, 1000);
     autosaveTimerRef.current = timer;
-    // Re-running this effect on the NEXT change clears this timer (React runs the cleanup below
-    // before the next run) — that cancel-and-reschedule is the entire debounce mechanism: rapid
-    // edits coalesce into whichever one is still pending 1s after the last of them.
+    // Re-running this effect on the NEXT change clears this timer (React runs the cleanup below before the next
+    // run) — that cancel-and-reschedule is the entire debounce mechanism: rapid edits coalesce into whichever one
+    // is still pending 1s after the last of them.
     return () => clearTimeout(timer);
   }, [dealTitle, form.note, priority, entryChannel, nextFollowUpAt, selectedCustomer, selectedProject, items, ownerEmployeeId, showPicker, loading]);
 
@@ -585,14 +553,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, []);
 
-  /**
-   * Applies a restored draft (or `null` for a blank form) onto the already-mounted form state.
-   * Returns the normalized snapshot it just applied — same shape/key-order as buildDraftSnapshot()
-   * — so the caller can set that as the new "already persisted" baseline (see
-   * lastPersistedSnapshotJsonRef). Written field-by-field rather than reusing buildDraftSnapshot()
-   * directly because the defaulting rules differ subtly (e.g. a blank `nextFollowUpAt` becomes
-   * TODAY+14, not stays blank) and must match what setNextFollowUpAt() etc. below actually apply.
-   */
+  /** Applies a restored draft (or `null` for a blank form) onto the already-mounted form state. Returns the
+   * normalized snapshot it just applied — same shape/key-order as buildDraftSnapshot() — so the caller can set
+   * that as the new "already persisted" baseline (see lastPersistedSnapshotJsonRef). */
   function applyDraftToForm(draft) {
     const normalized = {
       dealTitle: draft?.dealTitle ?? '',
@@ -648,8 +611,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     setDraftSavedAt(null);
     setDraftSaveNotice(null);
     dirtyRef.current = false;
-    // A blank baseline — nothing is meaningful yet either, so this only matters once the rep
-    // types something for the first time.
+    // A blank baseline — nothing is meaningful yet either, so this only matters once the rep types something for
+    // the first time.
     lastPersistedSnapshotJsonRef.current = JSON.stringify(normalized);
     setShowPicker(false);
     goToSection(firstMissingSection(normalized));
@@ -660,10 +623,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     deleteDraft(draftDeleteTarget);
     const next = listDrafts();
     setDraftList(next);
-    // Deleting the draft this session is actively editing must not leave it silently autosaving
-    // into an id that no longer exists on disk — saveDraft() would just recreate it under the same
-    // id (its "existing" check would say no, so it'd also cost a cap slot again), which is not
-    // what ลบ means here.
+    // Deleting the draft this session is actively editing must not leave it silently autosaving into an id that no
+    // longer exists on disk — saveDraft() would just recreate it under the same id (its "existing" check would say
+    // no, so it'd also cost a cap slot again), which is not what ลบ means here.
     if (draftDeleteTarget === currentDraftIdRef.current) {
       currentDraftIdRef.current = null;
       setCurrentDraftId(null);
@@ -723,8 +685,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     onClose();
   }
 
-  /** ปิดโดยไม่บันทึก (the failed-flush branch's destructive option) — closes WITHOUT deleting any
-   * older, already-persisted copy; only the latest unsaved edits are given up. */
+  /** ปิดโดยไม่บันทึก (the failed-flush branch's destructive option) — closes WITHOUT deleting any older,
+   * already-persisted copy; only the latest unsaved edits are given up. */
   function handleCloseWithoutSaving() {
     submittedRef.current = true; // a still-pending timer must not resurrect/overwrite after this
     setCloseConfirmOpen(false);
@@ -748,9 +710,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     });
   }, [selectedCustomer]);
 
-  // Client-only duplicate-deal check: once a โครงการ is picked, see whether
-  // any existing deal already carries that projectId. Soft warning only —
-  // never blocks creation — and silently gives up on a failed fetch.
+  // Client-only duplicate-deal check: once a โครงการ is picked, see whether any existing deal already carries
+  // that projectId. Soft warning only — never blocks creation — and silently gives up on a failed fetch.
   useEffect(() => {
     setDuplicateDismissed(false);
     if (!selectedProject) { setDuplicateWarning(null); return undefined; }
@@ -778,11 +739,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     setPendingFocusKey(null);
   }, [pendingFocusKey, openSection, items, editingItemIndex]);
 
-  // Opening the ลูกค้า step lands the cursor in its search box, which also opens the results list
-  // (SearchSelect searches on focus). Without this the step arrives as one empty field in a tall
-  // panel — the company list, the only thing on the step, stays hidden behind a keystroke. Skipped
-  // while a validation jump is pending so the two never fight over focus, and once a customer is
-  // chosen (the field is then a value chip, not an input).
+  // Opening the ลูกค้า step lands the cursor in its search box, which also opens the results list (SearchSelect
+  // searches on focus). Without this the step arrives as one empty field in a tall panel — the company list, the
+  // only thing on the step, stays hidden behind a keystroke.
   useEffect(() => {
     if (openSection !== 'customer' || selectedCustomer || pendingFocusKey) return;
     fieldRefs.current.customer?.focus();
@@ -826,8 +785,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
 
   function updateItem(index, field, value) {
     clearFieldError(`items.${index}.${field}`);
-    // unitBasis flips which of qty/qtySqm is required — clear both so a
-    // stale error from the basis the user just left doesn't linger.
+    // unitBasis flips which of qty/qtySqm is required — clear both so a stale error from the basis the user just
+    // left doesn't linger.
     if (field === 'unitBasis') {
       clearFieldError(`items.${index}.qty`);
       clearFieldError(`items.${index}.qtySqm`);
@@ -870,8 +829,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     searchCatalog(value, setCatalogResults);
   }
 
-  // Focus-only: search-only, no row mutation. Safe to call on every focus, including a
-  // re-focus of a field the rep never actually retyped.
+  // Focus-only: search-only, no row mutation. Safe to call on every focus, including a re-focus of a field the
+  // rep never actually retyped.
   function onCatalogFieldFocus(index, field, value) {
     setCatalogFocus({ index, field });
     if (value) searchCatalog(value, setCatalogResults);
@@ -940,8 +899,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     }
   }
 
-  // Manual "บันทึกร่าง" — immediate, and cancels whatever autosave timer is pending so the two
-  // never race and write twice.
+  // Manual "บันทึกร่าง" — immediate, and cancels whatever autosave timer is pending so the two never race and
+  // write twice.
   function handleSaveDraft() {
     if (autosaveTimerRef.current) { clearTimeout(autosaveTimerRef.current); autosaveTimerRef.current = null; }
     const snapshot = draftSnapshotRef.current;
@@ -960,9 +919,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
     if (order.length > 0) {
       setFieldErrors(nextFieldErrors);
       setError('');
-      // Acceptance criterion: don't make the user hunt on a long form —
-      // jump straight to (and focus) the first invalid field, in the same
-      // top-to-bottom order validateTicketForm() reports them in.
+      // Acceptance criterion: don't make the user hunt on a long form — jump straight to (and focus) the first
+      // invalid field, in the same top-to-bottom order validateTicketForm() reports them in.
       jumpToField(order[0]);
       return;
     }
@@ -994,21 +952,15 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
           unitBasis: item.unitBasis || 'PIECE',
           qty: Number(item.qty) || 0,
           qtySqm: item.qtySqm !== '' && item.qtySqm != null ? Number(item.qtySqm) : null,
-          // Persisted (V110) so PricingRequestCreateModal can seed its own catalog link
-          // without a re-search — see emptyItem()'s comment.
+          // Persisted (V110) so PricingRequestCreateModal can seed its own catalog link without a re-search — see
+          // emptyItem()'s comment.
           catalogPriceId: item.catalogPriceId ?? null,
           catalogProductCode: item.catalogProductCode?.trim() || null,
           sourcedFromStock: Boolean(item.sourcedFromStock),
         })),
       });
-      // Server accepted the deal — the client-only draft has served its purpose and would
-      // otherwise resurrect stale state next time the modal opens. Order matters here: flag
-      // submittedRef and cancel the timer FIRST, synchronously, before touching any storage — a
-      // pending autosave timer scheduled just before this submit is still armed at this exact
-      // point, and its callback closes over currentDraftIdRef.current, which this block is about
-      // to null out. If that timer fired after the null-out but before this guard existed, it
-      // would call saveDraft(null, staleSnapshot) and silently resurrect the just-deleted draft
-      // under a brand new id (mutation-checked — removing either line makes exactly that happen).
+      // Server accepted the deal — the client-only draft has served its purpose and would otherwise resurrect stale
+      // state next time the modal opens.
       submittedRef.current = true;
       if (autosaveTimerRef.current) { clearTimeout(autosaveTimerRef.current); autosaveTimerRef.current = null; }
       if (currentDraftIdRef.current) deleteDraft(currentDraftIdRef.current);
@@ -1433,8 +1385,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
             />
           </ItemField>
 
-          {/* สี and เนื้อผิว are optional: the live catalog fills them on ~21% of active rows, so
-              requiring them made a rep invent a value on 4 of every 5 catalog picks. */}
+          {/* สี and เนื้อผิว are optional: the live catalog fills them on ~21% of active rows, so requiring them made a
+           * rep invent a value on 4 of every 5 catalog picks. */}
           <ItemField id={`item-${index}-color`} label={ITEM_FIELD_META.color.label} hint={ITEM_FIELD_META.color.hint}>
             <input
               id={`item-${index}-color`}
@@ -1542,9 +1494,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
           </p>
         </div>
 
-        {/* Catalog price: the factory's own figure in the currency it is quoted in, with a baht
-            conversion underneath. Replaces the ราคาตั้ง (ประมาณการ) block — see
-            catalogPriceDisplay.js for why a marked-up figure is no longer shown here. */}
+        {/* Catalog price: the factory's own figure in the currency it is quoted in, with a baht conversion underneath.
+         * Replaces the ราคาตั้ง (ประมาณการ) block — see catalogPriceDisplay.js for why a marked-up figure is no longer
+         * shown here. */}
         {catalogPrice ? (
           <div className="flex flex-col gap-1 rounded-md border border-border-input bg-surface-muted px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <span className="text-2xs font-bold text-icon-muted">
@@ -1611,10 +1563,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
                   {(item.unitBasis || 'PIECE') === 'SQM'
                     ? (item.qtySqm ? `${item.qtySqm} ตร.ม.` : '—')
                     : (item.qty ? `${item.qty} แผ่น` : '—')}
-                  {/* The catalog's own price, in its own currency plus baht. No row total and no
-                      grand total: a line's price unit (per_sqm / per_piece / per_box) does not
-                      always match the unit the rep is ordering in, and restating it needs a
-                      pieces-per-box factor the catalog has no column for. */}
+                  {/* The catalog's own price, in its own currency plus baht. No row total and no grand total: a line's price unit
+                   * (per_sqm / per_piece / per_box) does not always match the unit the rep is ordering in, and restating it
+                   * needs a pieces-per-box factor the catalog has no column for. */}
                   {item.catalogPrice != null ? (() => {
                     const price = formatCatalogPrice(item.catalogPrice, item.catalogCurrency, item.catalogPriceUnit, fxRatesByCurrency);
                     return (
@@ -1741,11 +1692,8 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
                 </div>
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {/* handleRestoreDraft writes currentDraftIdRef.current — but only ever from
-                    inside this real onClick handler, never during render. Same false-positive
-                    class as TicketDetailPage.jsx's overflowItems (react-hooks/refs's Compiler-
-                    oriented ruleset flags any ref-touching named function referenced from inside
-                    a render-time .map()). */}
+                {/* handleRestoreDraft writes currentDraftIdRef.current — but only ever from inside this real onClick handler,
+                 * never during render. */}
                 {/* eslint-disable-next-line react-hooks/refs */}
                 <Button variant="secondary" size="sm" onClick={() => handleRestoreDraft(draft.id)}>เปิดต่อ</Button>
                 <Button variant="icon" size="sm" aria-label={`ลบร่าง ${draft.label}`} className="text-danger" onClick={() => setDraftDeleteTarget(draft.id)}>
@@ -1855,10 +1803,9 @@ export function TicketCreateModal({ user, onClose, onSubmit, initialItems }) {
             <p className="confirm-dialog-message text-text-secondary leading-normal">
               {closeFlushFailed
                 ? (closeHasOlderCopy
-                  // A draft id already existed BEFORE this failed flush -- that older copy on
-                  // disk is untouched (saveDraft() never got to overwrite it), so only the
-                  // latest edits are actually at risk. Saying "everything will be lost" here
-                  // would be wrong and needlessly alarming.
+                  // A draft id already existed BEFORE this failed flush -- that older copy on disk is untouched (saveDraft()
+                  // never got to overwrite it), so only the latest edits are actually at risk. Saying "everything will be lost"
+                  // here would be wrong and needlessly alarming.
                   ? 'บันทึกการแก้ไขล่าสุดไม่สำเร็จ — ถ้าปิดตอนนี้เฉพาะการแก้ไขล่าสุดจะหายไป (ร่างที่เคยบันทึกไว้ก่อนหน้ายังอยู่)'
                   : 'บันทึกร่างอัตโนมัติไม่สำเร็จ — ถ้าปิดตอนนี้ข้อมูลที่กรอกไว้จะหายไปทั้งหมด')
                 : 'ร่างดีลนี้ถูกบันทึกไว้แล้ว ปิดหน้าต่างนี้ได้ แล้วกลับมาเปิดต่อได้ภายหลัง'}

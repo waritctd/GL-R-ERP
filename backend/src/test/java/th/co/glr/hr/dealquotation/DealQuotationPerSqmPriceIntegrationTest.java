@@ -67,9 +67,9 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(item.directNetPriceSqm()).isNull();
     }
 
-    /** The editor's row may still hold a per-แผ่น figure from before the rep retyped the price.
-     * When a per-ตร.ม. price is given it is the ONLY source; a per-แผ่น one beside it is not
-     * consulted, so the two can never disagree on the stored row. */
+    /** The editor's row may still hold a per-แผ่น figure from before the rep retyped the price. When a per-ตร.ม.
+     * price is given it is the ONLY source; a per-แผ่น one beside it is not consulted, so the two can never
+     * disagree on the stored row. */
     @Test
     void net_aPerPiecePriceSentAlongsideThePerSqmOne_isIgnored() {
         DealQuotationItemDto item = createOne(NET, item("60x120", "0.72", 2, "1.00", "0", null, "1800", null));
@@ -105,9 +105,9 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(item.lineAmount()).isEqualByComparingTo("5311.60");
     }
 
-    /** A rep who only has a net price leaves ราคาตั้ง blank; the editor then sends the net as the
-     * list price too (it always has, per แผ่น). Both derive to the same figure, which is what makes
-     * the document print "Net" in the ส่วนลด column. */
+    /** A rep who only has a net price leaves ราคาตั้ง blank; the editor then sends the net as the list price too
+     * (it always has, per แผ่น). Both derive to the same figure, which is what makes the document print "Net" in
+     * the ส่วนลด column. */
     @Test
     void directNet_whenTheListIsTheNet_bothComeOutEqual() {
         DealQuotationItemDto item = createOne(DIRECT_NET, perSqm("790", "790", null));
@@ -117,9 +117,9 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
 
     // ── what was typed is what comes back ────────────────────────────────────────────────────
 
-    /** On a 10×10 tile (100 แผ่น/ตร.ม.) 1,800 becomes 16.82 a piece — and 16.82 a piece is 1,799.74
-     * per ตร.ม. A figure recovered from the per-แผ่น price would hand the rep a number they never
-     * typed, so the typed one is stored and served verbatim. */
+    /** On a 10×10 tile (100 แผ่น/ตร.ม.) 1,800 becomes 16.82 a piece — and 16.82 a piece is 1,799.74 per ตร.ม. A
+     * figure recovered from the per-แผ่น price would hand the rep a number they never typed, so the typed one is
+     * stored and served verbatim. */
     @Test
     void theTypedPerSqmPriceIsServedBackVerbatim_notRecoveredFromThePerPieceOne() {
         ItemInput mosaic = item("10x10", "0.01", 100, null, "0", null, "1800", null);
@@ -131,8 +131,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(storedPrices(reread.id())).containsEntry("list_price_sqm", bd("1800.00"));
     }
 
-    /** GET → PUT of an untouched document is a no-op on every price. Sent the way the editor
-     * sends it — each saved row WITH its id — so this goes through the in-place rewrite. */
+    /** GET → PUT of an untouched document is a no-op on every price. Sent the way the editor sends it — each saved
+     * row WITH its id — so this goes through the in-place rewrite. */
     @Test
     void savingADraftBackUnchanged_movesNoPrice() {
         long ticket = deal(salesActor);
@@ -169,8 +169,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             .containsEntry("direct_net_price_sqm", null);
     }
 
-    /** A row repriced per แผ่น (the legacy path) must not keep showing a per-ตร.ม. figure that no
-     * longer has anything to do with its price. */
+    /** A row repriced per แผ่น (the legacy path) must not keep showing a per-ตร.ม. figure that no longer has
+     * anything to do with its price. */
     @Test
     void repricingARowPerPiece_clearsTheStoredPerSqmFigure() {
         long ticket = deal(salesActor);
@@ -185,12 +185,9 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(item.listPriceSqm()).isNull();
     }
 
-    // ── a save that reuses the row's id ──────────────────────────────────────────────────────
-    // The editor sends every row it has already saved WITH its id, and DealQuotationService#update
-    // then rewrites that row IN PLACE (DealQuotationRepository#updateItemsInPlace) rather than
-    // deleting and re-inserting it. That is a different SQL statement from the INSERT the tests
-    // above go through, with a column list of its own — so it is pinned on its own. Found by
-    // mutation: with both columns dropped from that UPDATE, everything above stayed green.
+    // a save that reuses the row's id ────────────────────────────────────────────────────── The editor sends
+    // every row it has already saved WITH its id, and DealQuotationService#update then rewrites that row IN PLACE
+    // (DealQuotationRepository#updateItemsInPlace) rather than deleting and re-inserting it.
 
     @Test
     void anInPlaceSave_writesAPerSqmPrice_ontoARowThatWasPricedPerPiece() {
@@ -230,8 +227,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             .containsEntry("direct_net_price_sqm", null);
     }
 
-    /** The printed document is untouched by this change: it shows the per-แผ่น list and net prices
-     * it always has. The per-ตร.ม. figure the rep typed is an INPUT, and appears nowhere on it. */
+    /** The printed document is untouched by this change: it shows the per-แผ่น list and net prices it always has.
+     * The per-ตร.ม. figure the rep typed is an INPUT, and appears nowhere on it. */
     @Test
     void thePrintedDocument_stillShowsPerPiecePrices_andNotThePerSqmFigure() {
         DealQuotationDto created = quotationService.create(deal(salesActor),
@@ -245,15 +242,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             .noneSatisfy(n -> assertThat(n).isEqualByComparingTo("1800"));
     }
 
-    // ── ยอดรวม: the foot of the document ─────────────────────────────────────────────────────
-    // Owner, 2026-10-06: "make sure the ยอดรวม in final is correct … calculated correctly". The
-    // price the rep keys is per ตร.ม. INCLUDING VAT; the document prices each line per แผ่น BEFORE
-    // VAT and adds 7% once, at its foot. So the VAT inside the keyed figure has to be taken out
-    // exactly once on the way in and put back exactly once on the way out — and the foot has to
-    // come back to what the keyed price says, give or take the satang lost rounding a price to
-    // two decimals per แผ่น.
-    //
-    // 28 แผ่น of the 60×120 throughout: 20 ตร.ม. at 1.39 แผ่น/ตร.ม. is 27.8, so 28 แผ่น = 14 กล่อง.
+    // ยอดรวม: the foot of the document ───────────────────────────────────────────────────── Owner, 2026-10-06:
+    // "make sure the ยอดรวม in final is correct … calculated correctly". The price the rep keys is per ตร.ม.
 
     @Test
     void theFootOfTheDocument_addsUp_forAPriceKeyedPerSqmIncludingVat() {
@@ -270,9 +260,9 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(reread.grandTotal()).isEqualByComparingTo("36259.09");
     }
 
-    /** The claim itself, written wrong-way-round: the foot comes back to (keyed price × the area
-     * the pieces cover), and NOT to either of the two ways to get VAT wrong — never taken out of
-     * the keyed price, so charged twice (≈ 38,797), or taken out and never put back (≈ 33,887). */
+    /** The claim itself, written wrong-way-round: the foot comes back to (keyed price × the area the pieces cover),
+     * and NOT to either of the two ways to get VAT wrong — never taken out of the keyed price, so charged twice (≈
+     * 38,797), or taken out and never put back (≈ 33,887). */
     @Test
     void theGrandTotal_carriesTheVatExactlyOnce_notTwiceAndNotNever() {
         BigDecimal grandTotal = quotationService.create(deal(salesActor),
@@ -300,8 +290,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             "14872.48", "1041.07", "15913.55", keyedPriceTimesArea("790", 28));
     }
 
-    /** More than one line: รวมเป็นเงิน is the sum of the lines, and VAT is taken on THAT (once, on
-     * the document), whatever unit each line's price was keyed in. */
+    /** More than one line: รวมเป็นเงิน is the sum of the lines, and VAT is taken on THAT (once, on the document),
+     * whatever unit each line's price was keyed in. */
     @Test
     void theSubtotalIsTheSumOfTheLines_andVatIsTakenOnce_onTheSubtotal() {
         DealQuotationDto quotation = quotationService.create(deal(salesActor),
@@ -325,23 +315,23 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             "CASH_ON_DELIVERY", 0, 30, null, NET, "EN", "USD",
             List.of(item("60x120", "0.72", 2, "15.00", "0", null, "1800", null))).withRecipientType("OWNER");
 
-        // The row ALSO states a perfectly good per-piece price, so nothing but the per-ตร.ม. figure
-        // can be what is refused here.
+        // The row ALSO states a perfectly good per-piece price, so nothing but the per-ตร.ม. figure can be what is
+        // refused here.
         assertThat(refusal(() -> quotationService.create(ticket, english, salesActor), HttpStatus.BAD_REQUEST))
             .hasMessageContaining("ใช้ได้กับใบเสนอราคาภาษาไทยเท่านั้น");
 
         assertThat(quotationCount(ticket)).isZero();
     }
 
-    /** No area per piece, no conversion — and never a silent fallback to reading 1,800 per ตร.ม.
-     * as 1,800 a piece. The message is asserted because a save is refused for an incomplete row
-     * anyway: only the wording says the PRICE was the reason. */
+    /** No area per piece, no conversion — and never a silent fallback to reading 1,800 per ตร.ม. as 1,800 a piece.
+     * The message is asserted because a save is refused for an incomplete row anyway: only the wording says the
+     * PRICE was the reason. */
     @Test
     void withNoAreaPerPiece_aPerSqmPriceIsRefused_notReadAsAPerPiecePrice() {
         long ticket = deal(salesActor);
         ItemInput noArea = item("60x120", null, 2, null, "0", null, "1800", null);
-        // The dangerous shape: the same figure sent as a per-piece price too. Were the per-ตร.ม.
-        // one quietly dropped, this row would be priced at 1,800 a PIECE.
+        // The dangerous shape: the same figure sent as a per-piece price too. Were the per-ตร.ม. one quietly dropped,
+        // this row would be priced at 1,800 a PIECE.
         ItemInput noAreaWithAPerPiecePriceBeside = item("60x120", null, 2, "1800", "0", null, "1800", null);
 
         for (ItemInput row : List.of(noArea, noAreaWithAPerPiecePriceBeside)) {
@@ -351,9 +341,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(quotationCount(ticket)).isZero();
     }
 
-    /** The live preview skips the completeness check (a half-typed row must still preview), so it
-     * is the one path where nothing else would stop the fallback above. It shows no number at all
-     * rather than 10 แผ่น × 1,800. */
+    /** The live preview skips the completeness check (a half-typed row must still preview), so it is the one path
+     * where nothing else would stop the fallback above. It shows no number at all rather than 10 แผ่น × 1,800. */
     @Test
     void thePreview_withNoAreaPerPiece_showsNoNumber_ratherThanThePerSqmPriceTimesThePieces() {
         ItemInput noAreaWithAPerPiecePriceBeside = item("60x120", null, 2, "1800", "0", null, "1800", null);
@@ -362,8 +351,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             HttpStatus.BAD_REQUEST)).hasMessageContaining("ขาด แผ่น/ตร.ม.");
     }
 
-    /** A per-ตร.ม. price that is present but not positive is refused AS SUCH — not skipped in
-     * favour of a per-piece price sent beside it. */
+    /** A per-ตร.ม. price that is present but not positive is refused AS SUCH — not skipped in favour of a per-piece
+     * price sent beside it. */
     @Test
     void aZeroOrNegativePerSqmPrice_isRefused() {
         long ticket = deal(salesActor);
@@ -383,8 +372,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(quotationCount(ticket)).isZero();
     }
 
-    /** ราคาสุทธิ/ตร.ม. belongs to ราคาสุทธิ mode only — exactly as ราคาพิเศษ is only read in its own
-     * mode. Sent under another mode it prices nothing and is not kept. */
+    /** ราคาสุทธิ/ตร.ม. belongs to ราคาสุทธิ mode only — exactly as ราคาพิเศษ is only read in its own mode. Sent
+     * under another mode it prices nothing and is not kept. */
     @Test
     void aNetPerSqm_outsideNetPriceMode_pricesNothingAndIsNotStored() {
         DealQuotationItemDto item = createOne(NET, perSqm("1800", "790", "0"));
@@ -427,9 +416,9 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
         assertThat(preview.listPriceSqm()).isEqualByComparingTo("1800");
     }
 
-    /** The preview has no quotation to read a price mode from; it infers one from the row. A net
-     * typed per ตร.ม. has to say "ราคาสุทธิ" just as a net typed per แผ่น does — otherwise the row
-     * previews as NET, off its list price, and shows the rep a number for a price nobody typed. */
+    /** The preview has no quotation to read a price mode from; it infers one from the row. A net typed per ตร.ม.
+     * has to say "ราคาสุทธิ" just as a net typed per แผ่น does — otherwise the row previews as NET, off its list
+     * price, and shows the rep a number for a price nobody typed. */
     @Test
     void thePreview_readsANetPerSqm_asNetPriceMode() {
         DealQuotationItemDto preview = quotationService.calculateLine(
@@ -460,8 +449,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────────
 
-    /** The owner's 60×120 (0.72 ตร.ม./แผ่น, 2 แผ่น/กล่อง), priced per ตร.ม. including VAT — the
-     * shape the editor sends since this change. */
+    /** The owner's 60×120 (0.72 ตร.ม./แผ่น, 2 แผ่น/กล่อง), priced per ตร.ม. including VAT — the shape the editor
+     * sends since this change. */
     private static ItemInput perSqm(String listPriceSqm, String directNetPriceSqm, String discountPct) {
         return item("60x120", "0.72", 2, null, discountPct, null, listPriceSqm, directNetPriceSqm);
     }
@@ -477,8 +466,8 @@ class DealQuotationPerSqmPriceIntegrationTest extends AbstractDealDirectQuotatio
             row.sqmPerBox(), row.roundToFullBox(), row.listPriceSqm(), row.directNetPriceSqm());
     }
 
-    /** What a customer works out from the price they were quoted: that price (per ตร.ม., including
-     * VAT) × the area the pieces cover at the 60×120's 1.39 แผ่น/ตร.ม. */
+    /** What a customer works out from the price they were quoted: that price (per ตร.ม., including VAT) × the area
+     * the pieces cover at the 60×120's 1.39 แผ่น/ตร.ม. */
     private static BigDecimal keyedPriceTimesArea(String perSqmIncVat, int pieces) {
         return new BigDecimal(perSqmIncVat).multiply(BigDecimal.valueOf(pieces))
             .divide(new BigDecimal("1.39"), 2, RoundingMode.HALF_UP);

@@ -15,11 +15,9 @@ import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrittenConsentListResponse;
 import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrittenConsentUpsertRequest;
 
-/**
- * HTTP surface for the written-consent record (issue #376). HR/CEO view, HR edit -- same idiom as
- * {@link DeductionObligationController}. No employee-facing route: this is HR's own bookkeeping of
- * what it holds on file, not something an employee reports about themselves.
- */
+/** HTTP surface for the written-consent record (issue #376). HR/CEO view, HR edit -- same idiom as
+ * DeductionObligationController. No employee-facing route: this is HR's own bookkeeping of what it holds on
+ * file, not something an employee reports about themselves. */
 @RestController
 @RequestMapping("/api/payroll/deduction-consents")
 public class DeductionWrittenConsentController {

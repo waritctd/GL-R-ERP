@@ -31,11 +31,8 @@ public class ProfileRequestController {
         return new ProfileRequestsResponse(profileRequestService.list(user));
     }
 
-    // Identity-gated, not role-gated. Under the SELF_SERVICE_ONLY lock every role reaches
-    // /profile and must be able to correct their own contact details, so a role allowlist here
-    // was refusing most of the company. ProfileRequestService#create already rejects an unlinked
-    // account (employeeId == null) with its own 400, and requireUser above still enforces
-    // authentication, so nothing needs to replace this check.
+    // Identity-gated, not role-gated. Under the SELF_SERVICE_ONLY lock every role reaches /profile and must be
+    // able to correct their own contact details, so a role allowlist here was refusing most of the company.
     @PostMapping
     ProfileRequestResponse create(@Valid @RequestBody CreateProfileRequestRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);

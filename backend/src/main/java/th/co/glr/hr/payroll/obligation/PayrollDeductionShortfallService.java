@@ -9,12 +9,7 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallDtos.PayrollDeductionShortfallDto;
 
-/**
- * HR/CEO read access to the shortfall ledger (issue #376). Read-only by design -- a shortfall row
- * is written exclusively by {@link DeductionObligationService#recordGarnishmentShortfalls} as a
- * side effect of {@code PayrollService#process}, never edited directly; correcting one means
- * reprocessing the payroll month that produced it.
- */
+/** HR/CEO read access to the shortfall ledger (issue #376). */
 @Service
 public class PayrollDeductionShortfallService {
     private static final Set<String> VIEW_ROLES = Set.of("hr", "ceo");

@@ -13,19 +13,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * Fast, DB-free unit tests for {@link FxResolver} — mirrors {@code PricingFormulaEngineTest}'s
- * convention (no Spring context, no Postgres: {@link FxRateRepository} is mocked, since {@link
- * FxResolver#resolve} takes it as an explicit argument and never constructs one itself).
- *
- * <p>Issue P0: before this class's fix, {@code resolve} refused ANY non-THB rate unless {@code
- * source} was exactly {@code "BOT"} with a non-null {@code fetchedAt} — a rule that was
- * unreachable in production (see {@link FxResolver}'s class Javadoc), so the CEO's own manual FX
- * entry was guaranteed to be refused. These tests pin the fix: a MANUAL rate is now accepted, the
- * staleness guard still applies to BOTH sources, and every refusal names a fix the CEO can act on.
- * Zero tests referenced {@link FxResolver} or the old BOT message before this file — confirmed by
- * grep across {@code backend/src/test/java} before writing it.
- */
+/** Fast, DB-free unit tests for FxResolver — mirrors PricingFormulaEngineTest's convention (no Spring context,
+ * no Postgres: FxRateRepository is mocked, since FxResolver#resolve takes it as an explicit argument and never
+ * constructs one itself). */
 class FxResolverTest {
     private static final String CURRENCY = "EUR";
 
@@ -60,8 +50,8 @@ class FxResolverTest {
         assertThat(resolved.rateToThb()).isEqualByComparingTo(manual.rateToThb());
     }
 
-    /** The direction that must NOT regress: a BOT-sourced rate was accepted before this fix and
-     * must stay accepted after it — only the BOT-ONLY requirement was removed, not BOT itself. */
+    /** The direction that must NOT regress: a BOT-sourced rate was accepted before this fix and must stay accepted
+     * after it — only the BOT-ONLY requirement was removed, not BOT itself. */
     @Test
     void botNonThbRate_recentEffectiveDate_isStillAccepted() {
         FxRateDto bot = fxRate(CURRENCY, "BOT", LocalDate.now(), Instant.now());
@@ -72,8 +62,8 @@ class FxResolverTest {
         assertThat(resolved.source()).isEqualTo("BOT");
     }
 
-    /** Currency matching must be case-insensitive on the way in — the controller/mock both
-     * normalise to upper case, but a caller passing lower case must still resolve. */
+    /** Currency matching must be case-insensitive on the way in — the controller/mock both normalise to upper case,
+     * but a caller passing lower case must still resolve. */
     @Test
     void currencyLookup_isCaseInsensitiveOnTheWayIn() {
         FxRateDto manual = fxRate(CURRENCY, "MANUAL", LocalDate.now(), null);
@@ -84,20 +74,16 @@ class FxResolverTest {
 
     // ── The staleness guard: UNCHANGED, and applies to BOTH sources — the mutation-check target ──
 
-    /**
-     * CLAUDE.md's testing rule: assert both sides (MANUAL and BOT) on ONE fixture (same currency,
-     * same stale date), rather than two independent tests that could each be individually broken
-     * without the other catching it. This is one of the two tests this task's mutation-check
-     * targets: breaking the staleness guard must turn THIS test red (both sub-assertions) and
-     * nothing else.
-     */
+    /** CLAUDE.md's testing rule: assert both sides (MANUAL and BOT) on ONE fixture (same currency, same stale
+     * date), rather than two independent tests that could each be individually broken without the other catching
+     * it. */
     @Test
     void staleRate_refusedForBothManualAndBotSources_sameFixtureExceptSource() {
         LocalDate staleDate = LocalDate.now().minusDays(8);
 
-        // F6 fix: derive the expected substring from FxResolver.MAX_RATE_AGE_DAYS rather than
-        // hardcoding "7", so this assertion and the production message cannot silently drift
-        // apart the way they used to (the constant changing used to leave a stale "7" behind).
+        // derive the expected substring from FxResolver.MAX_RATE_AGE_DAYS rather than hardcoding "7", so this
+        // assertion and the production message cannot silently drift apart the way they used to (the constant changing
+        // used to leave a stale "7" behind).
         String staleWording = "เก่าเกิน " + FxResolver.MAX_RATE_AGE_DAYS + " วัน";
 
         FxRateDto staleManual = fxRate(CURRENCY, "MANUAL", staleDate, null);
@@ -123,9 +109,9 @@ class FxResolverTest {
             });
     }
 
-    /** The band edge: exactly 7 days old is NOT yet stale (the guard is "more than 7 days", i.e.
-     * {@code isBefore(now - 7)}, not {@code isBefore(now - 6)}) — pins the boundary precisely so a
-     * future off-by-one does not silently tighten or loosen the window. */
+    /** The band edge: exactly 7 days old is NOT yet stale (the guard is "more than 7 days", i.e. isBefore(now - 7),
+     * not isBefore(now - 6)) — pins the boundary precisely so a future off-by-one does not silently tighten or
+     * loosen the window. */
     @Test
     void rateExactlySevenDaysOld_isStillAccepted_boundaryIsMoreThanSevenNotSevenOrMore() {
         FxRateDto exactlyAWeekOld = fxRate(CURRENCY, "MANUAL", LocalDate.now().minusDays(7), null);

@@ -4,16 +4,14 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatMoney } from '../../utils/format.js';
 
-// Rates arrive as a JSON number OR string (a server BigDecimal). The ladder's rates have two
-// decimals, the team-override rate has three (0.075%), so: never fewer than two, never more than
-// three — `toFixed(2)` would print 0.075 as 0.08.
+// Rates arrive as a JSON number OR string (a server BigDecimal). The ladder's rates have two decimals, the
+// team-override rate has three (0.075%), so: never fewer than two, never more than three — `toFixed(2)` would
+// print 0.075 as 0.08.
 const formatRate = (value) => `${Number(value).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 3 })}%`;
 const nonZero = (value) => value != null && Number(value) !== 0;
 
-/**
- * One line of the ledger. `testId` is the row's contract with its tests; `op` is the running-total
- * operator ("+" / "=") and is aria-hidden because the label already says what the line is.
- */
+/** One line of the ledger. `testId` is the row's contract with its tests; `op` is the running-total operator
+ * ("+" / "=") and is aria-hidden because the label already says what the line is. */
 function Row({ testId, op, label, hint, amount, tone, children, strong = false, headline = false }) {
   return (
     <div
@@ -42,10 +40,9 @@ function Row({ testId, op, label, hint, amount, tone, children, strong = false, 
   );
 }
 
-// Why a recipient's team row can read 0.00, derived ONLY from API fields (there is no suppression
-// flag): the company total is at or under the threshold, or -- when it cleared the bar -- a
-// hand-entered team commission (kind MANAGER) replaced the computed one. Returns null when the
-// amount is non-zero (nothing to explain) or the threshold is unknown (nothing to compare).
+// Why a recipient's team row can read 0.00, derived ONLY from API fields (there is no suppression flag): the
+// company total is at or under the threshold, or -- when it cleared the bar -- a hand-entered team commission
+// (kind MANAGER) replaced the computed one.
 function teamOverrideReason(summary) {
   if (Number(summary.teamOverrideAmount) !== 0 || summary.teamOverrideThresholdBase == null) return null;
   return Number(summary.companyCommissionableBase) <= Number(summary.teamOverrideThresholdBase)
@@ -75,15 +72,9 @@ function ReachedBands({ tiers }) {
   );
 }
 
-/**
- * "ค่าคอมของฉัน" — the month's commission as a vertical ledger that BUILDS the total, one line per
- * limb. Every figure is the server's (CommissionService#monthlySummary): nothing here adds,
- * multiplies or rounds; a limb that is zero is left out rather than shown as a zero, except the
- * three that define the statement (base, ladder, total). The total is labelled a PREVIEW because it
- * counts receipts still waiting for approval.
- *
- * Reused as-is by the sales_manager / CEO "สรุปรายคน" picker, with `heading` naming the rep.
- */
+/** "ค่าคอมของฉัน" — the month's commission as a vertical ledger that BUILDS the total, one line per limb. The
+ * total is labelled a PREVIEW because it counts receipts still waiting for approval. Reused as-is by the
+ * sales_manager / CEO "สรุปรายคน" picker, with `heading` naming the rep. */
 export function CommissionStatement({ summary, heading = 'ค่าคอมของฉัน' }) {
   const [bandsOpen, setBandsOpen] = useState(false);
   const bandsId = useId();
@@ -115,8 +106,8 @@ export function CommissionStatement({ summary, heading = 'ค่าคอมข�
           <Row testId="statement-raw" label="ยอดรับเงิน (ไม่รวม VAT)" amount={summary.rawCommissionableBase} />
         ) : null}
         {nonZero(summary.weightUpliftBase) ? (
-          // Negative when a weighted sale was clawed back in the month: a deduction, shown as a minus
-          // operator and a positive magnitude so the ledger still adds up by eye.
+          // Negative when a weighted sale was clawed back in the month: a deduction, shown as a minus operator and a
+          // positive magnitude so the ledger still adds up by eye.
           Number(summary.weightUpliftBase) < 0
             ? <Row testId="statement-uplift" op="−" label="ส่วนลดจากการหักคืนรายการสต็อก (2x/3x)" amount={Math.abs(Number(summary.weightUpliftBase))} />
             : <Row testId="statement-uplift" op="+" label="ส่วนเพิ่มจากสินค้าสต็อก (2x/3x)" amount={summary.weightUpliftBase} />

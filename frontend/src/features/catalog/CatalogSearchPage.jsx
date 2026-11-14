@@ -31,17 +31,13 @@ function debounce(fn, ms) {
   _debounce = setTimeout(fn, ms);
 }
 
-// ── mobile card ───────────────────────────────────────────────────────────────
-// The desktop table has 9 columns (factory/code/collection/name/color/surface/
-// size/price/edit); below 720px that crushes to unreadable stubs. This plain
-// `<table>` doesn't go through DataTable's mobileCard mechanism, so the
-// reflow is done by hand here, matching the same record-card styling.
+// mobile card ─────────────────────────────────────────────────────────────── The desktop table has 9 columns
+// (factory/code/collection/name/color/surface/ size/price/edit); below 720px that crushes to unreadable stubs.
 function ProductCard({ product, onEdit, canManage }) {
   return (
     <div className="mt-2.5 flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 first:mt-0">
-      {/* Factory is the identity anchor (it leads the desktop table and is always
-          present); productName is frequently empty in real price-list data, so
-          leading with it collapses the card's primary line to a dash. */}
+      {/* Factory is the identity anchor (it leads the desktop table and is always present); productName is frequently
+       * empty in real price-list data, so leading with it collapses the card's primary line to a dash. */}
       <div className="flex min-w-0 items-start justify-between gap-3">
         <strong className="min-w-0 truncate text-md font-extrabold text-text">
           {product.factoryName || product.productName || '—'}
@@ -135,8 +131,8 @@ export function CatalogSearchPage({ user, showToast }) {
     <PageStack>
       <PageHeader title="ค้นหาสินค้า" subtitle="ราคาจากรายการราคาที่ใช้งานล่าสุด" />
 
-      {/* Search bar — search is the primary interaction on this page, so it
-          leads with a full-width icon field; factory narrows the same query. */}
+      {/* Search bar — search is the primary interaction on this page, so it leads with a full-width icon field;
+       * factory narrows the same query. */}
       <Panel>
         <SafeForm onSubmit={handleSearch} className="flex flex-wrap gap-2.5 items-end">
           <div className="flex-1 min-w-[220px]">
@@ -224,9 +220,8 @@ export function CatalogSearchPage({ user, showToast }) {
                       key={p.priceId}
                       className="border-b border-border hover:bg-surface-hover transition-colors"
                     >
-                      {/* Factory (primary) + product code (secondary, muted mono)
-                          stacked in one cell — the identity anchor a user scans
-                          for first, per DESIGN.md's Ink Muted floor. */}
+                      {/* Factory (primary) + product code (secondary, muted mono) stacked in one cell — the identity anchor a user
+                       * scans for first, per DESIGN.md's Ink Muted floor. */}
                       <td className="px-3 py-2">
                         <span className="flex min-w-0 flex-col gap-0.5">
                           <strong className="block truncate font-medium text-text">{p.factoryName}</strong>

@@ -6,11 +6,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-/**
- * {@link Mailer} that logs instead of sending. Default provider ({@code app.mail.provider} unset or
- * {@code log}) so dev/CI/local boots and runs every business flow with no mail credentials and no
- * accidental outbound email.
- */
+/** Mailer that logs instead of sending. Default provider (app.mail.provider unset or log) so dev/CI/local boots
+ * and runs every business flow with no mail credentials and no accidental outbound email. */
 @Component
 @ConditionalOnProperty(name = "app.mail.provider", havingValue = "log", matchIfMissing = true)
 public class LogMailer implements Mailer {
@@ -23,9 +20,9 @@ public class LogMailer implements Mailer {
 
     @Override
     public void sendHtml(String to, String subject, String htmlBody, String textBody, List<InlineImage> inlineImages) {
-        // Log the text alternative, not the HTML - readable in a log line, and it's the same content
-        // the HTML renders (just without markup). Inline images are logged as a count only - the
-        // bytes aren't log-line material and there is no transport here to embed them into.
+        // Log the text alternative, not the HTML - readable in a log line, and it's the same content the HTML renders
+        // (just without markup). Inline images are logged as a count only - the bytes aren't log-line material and
+        // there is no transport here to embed them into.
         log.info("[LogMailer] HTML email NOT sent (provider=log). to={} subject={} textBody={} inlineImages={}",
             to, subject, textBody, inlineImages.size());
     }

@@ -41,9 +41,9 @@ public record EmployeeDto(
     BigDecimal salary,
     @JsonInclude(JsonInclude.Include.NON_NULL)
     BigDecimal directorRemuneration,
-    // Standing withholding-tax override (2026-07-24, V88). Sensitive/financial like salary &
-    // directorRemuneration: NON_NULL-serialized and nulled out for non-HR self-service viewers by
-    // withoutSensitiveSelfServiceFields() below. Nullable: null = no standing override.
+    // Standing withholding-tax override (2026-07-24, V88). Sensitive/financial like salary & directorRemuneration:
+    // NON_NULL-serialized and nulled out for non-HR self-service viewers by withoutSensitiveSelfServiceFields()
+    // below. Nullable: null = no standing override.
     @JsonInclude(JsonInclude.Include.NON_NULL)
     BigDecimal withholdingTaxOverride,
     LocalDate hireDate,

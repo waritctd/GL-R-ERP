@@ -1,16 +1,6 @@
 #!/usr/bin/env node
-// Starts the Spring Boot backend configured for the real-backend e2e suite.
-//
-// Deliberately NOT wired into playwright.real.config.js's webServer: the backend needs a
-// Postgres that this script cannot conjure, and burying that dependency inside a Playwright
-// webServer entry turns "your database is down" into an opaque 120s timeout. Run this in its
-// own terminal (or as a CI step) and let global-setup.js do the reachability check.
-//
-// Usage:
-//   node scripts/start-e2e-backend.mjs
-//
-// Env overrides: E2E_REAL_FRONTEND_PORT, SERVER_PORT, PGHOST, PGPORT, PGDATABASE, PGUSER,
-// PGPASSWORD, APP_UPLOADS_DIR.
+// Starts the Spring Boot backend configured for the real-backend e2e suite. Run this in its own terminal (or
+// as a CI step) and let global-setup.js do the reachability check.
 
 import { spawn } from 'node:child_process';
 import { connect } from 'node:net';
@@ -43,8 +33,8 @@ function findJar() {
         '  Run:  cd backend && ./mvnw -DskipTests package'
     );
   }
-  // Maven leaves the pre-repackage jar as *.jar.original, and sources/javadoc jars can sit
-  // alongside the boot jar; match only the executable artifact.
+  // Maven leaves the pre-repackage jar as *.jar.original, and sources/javadoc jars can sit alongside the boot
+  // jar; match only the executable artifact.
   const jars = entries.filter((name) => name.endsWith('.jar') && !name.includes('-sources'));
   if (jars.length === 0) {
     die(
@@ -80,23 +70,20 @@ if (!(await checkPostgres())) {
 
 const env = {
   ...process.env,
-  // The seed that creates the e2e logins. Without it the app starts perfectly and has no
-  // demo accounts in it — see global-setup.js, which checks for exactly that.
+  // The seed that creates the e2e logins. Without it the app starts perfectly and has no demo accounts in it —
+  // see global-setup.js, which checks for exactly that.
   SPRING_PROFILES_ACTIVE: 'demo',
   SPRING_DATASOURCE_URL: process.env.SPRING_DATASOURCE_URL
     || `jdbc:postgresql://${PGHOST}:${PGPORT}/${PGDATABASE}`,
   SPRING_DATASOURCE_USERNAME: process.env.PGUSER || process.env.SPRING_DATASOURCE_USERNAME || 'postgres',
   SPRING_DATASOURCE_PASSWORD: process.env.PGPASSWORD || process.env.SPRING_DATASOURCE_PASSWORD || 'postgres',
   SERVER_PORT,
-  // The suite runs over plain http; a Secure cookie would never be stored and every request
-  // after login would arrive session-less.
+  // The suite runs over plain http; a Secure cookie would never be stored and every request after login would
+  // arrive session-less.
   SERVER_SESSION_COOKIE_SECURE: 'false',
-  // REQUIRED, and the least obvious thing in this file. The dev server proxies /api, but the
-  // browser still sends its own Origin (http://127.0.0.1:<frontend port>) and Spring's CORS
-  // filter rejects an unlisted one with a bare 403 "Invalid CORS request" — which looks
-  // exactly like a failed login. The suite's port is not among application.yml's defaults
-  // (5173/5174), so it has to be added here. The stock dev origins are kept so running this
-  // does not break a `npm run dev` session pointed at the same backend.
+  // REQUIRED, and the least obvious thing in this file. The dev server proxies /api, but the browser still sends
+  // its own Origin (http://127.0.0.1:<frontend port>) and Spring's CORS filter rejects an unlisted one with a
+  // bare 403 "Invalid CORS request" — which looks exactly like a failed login.
   APP_CORS_ALLOWED_ORIGINS: [
     `http://127.0.0.1:${FRONTEND_PORT}`,
     `http://localhost:${FRONTEND_PORT}`,

@@ -19,12 +19,8 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrittenConsentUpsertRequest;
 
-/**
- * Unit-tests the DECISION: which role may view/edit the written-consent record, and which deduction
- * kinds are even eligible (issue #376 restricts this to the four ม.76-item(2)-(5)-shaped kinds).
- * Mockito proves the branch chosen; {@link DeductionWrittenConsentScopeIntegrationTest} proves it
- * survives into real SQL.
- */
+/** Unit-tests the DECISION: which role may view/edit the written-consent record, and which deduction kinds are
+ * even eligible (issue #376 restricts this to the four ม.76-item(2)-(5)-shaped kinds). */
 class DeductionWrittenConsentServiceTest {
     private final DeductionWrittenConsentRepository repository = mock(DeductionWrittenConsentRepository.class);
     private final EmployeeRepository employeeRepository = mock(EmployeeRepository.class);

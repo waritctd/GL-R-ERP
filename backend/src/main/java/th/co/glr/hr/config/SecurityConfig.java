@@ -30,30 +30,19 @@ public class SecurityConfig {
             .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
             .authorizeHttpRequests(authorize -> authorize
                 .requestMatchers(HttpMethod.OPTIONS, "/api/**").permitAll()          // CORS preflight (MVC CORS still enforces origins)
-                .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()      // no session yet; CSRF-exempt already
-                // Self-service forgot-password (ลืมรหัสผ่าน): both legs run before the caller has
-                // any session - a client landing fresh on /forgot-password, or arriving via an
-                // emailed /reset-password?token=... link, has made no prior /api/** call and holds
-                // no session cookie yet. Same reasoning as the login exemption above; CSRF-exempt
-                // already (see CsrfCookieFilter.EXEMPT_PATHS).
+                .requestMatchers(HttpMethod.POST, "/api/auth/login").permitAll()      // no session yet; CSRF-exempt already Self-service forgot-password (ลืมรหัสผ่าน): both legs run before the
+                // caller has any session - a client landing fresh on /forgot-password, or arriving via an emailed
+                // /reset-password?token=... link, has made no prior /api/** call and holds no session cookie yet.
                 .requestMatchers(HttpMethod.POST, "/api/auth/forgot-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/auth/reset-password").permitAll()
                 .requestMatchers(HttpMethod.POST, "/api/attendance/punch").permitAll()// device X-GLR-Agent-Token; no session
-                .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll() // LB/probe health only; no other actuator endpoint
-                // Scoped to /brand/** deliberately, NOT the whole /api/public/** namespace: a
-                // wildcard there would silently make every future controller placed under
-                // /api/public anonymous, which is how an accidental data leak gets introduced by
-                // someone who never read this line. Widen it only for another asset that genuinely
-                // must be fetched cookie-less.
-                .requestMatchers(HttpMethod.GET, "/api/public/brand/**").permitAll()   // logo embedded in notification email; fetched by mail clients / Gmail's image proxy with no session
-                // OpenAPI docs (/v3/api-docs, /swagger-ui) are intentionally NOT allowlisted: they
-                // fall under default-deny below, so reading the contract / enumerating endpoints
-                // requires an authenticated session rather than being anonymously accessible.
+                .requestMatchers(HttpMethod.GET, "/actuator/health", "/actuator/health/**").permitAll() // Allow anonymous health probes and brand assets only; never open the entire public API namespace.
+                .requestMatchers(HttpMethod.GET, "/api/public/brand/**").permitAll()   // Email logos need anonymous access; OpenAPI documentation still requires authentication.
                 .anyRequest().authenticated())
             .addFilterBefore(sessionSecurityFilter, AnonymousAuthenticationFilter.class)
-            // Must sit AFTER sessionSecurityFilter so the principal is already resolved, and
-            // inside this chain (not the plain servlet chain) so StrictHttpFirewall has already
-            // normalised the path its allowlist matches on. See MustChangePasswordFilter.
+            // Must sit AFTER sessionSecurityFilter so the principal is already resolved, and inside this chain (not the
+            // plain servlet chain) so StrictHttpFirewall has already normalised the path its allowlist matches on. See
+            // MustChangePasswordFilter.
             .addFilterAfter(mustChangePasswordFilter, SessionSecurityFilter.class)
             .addFilterAfter(viewAsReadOnlyFilter, MustChangePasswordFilter.class);
         return http.build();

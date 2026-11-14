@@ -5,8 +5,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
 
-// Issue #422 B1: PayrollPage now reads through react-query, so every render below needs a real
-// QueryClient in context.
+// Issue #422 B1: PayrollPage now reads through react-query, so every render below needs a real QueryClient in
+// context.
 function renderWithClient(ui) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -14,21 +14,9 @@ function renderWithClient(ui) {
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 
-// Payroll draft optimistic concurrency (issue #422 follow-up, Opus review finding F3): a NEW test
-// file (does not edit PayrollPage.test.jsx / PayrollPage.inputDraft.test.jsx / others), covering
-// the three things the plan required and that had ZERO coverage before this file existed:
-//   1. the ETag is threaded from load (GET) into the next save (PUT's If-Match)
-//   2. a 409 surfaces a persistent, visible conflict message (not just a toast that auto-dismisses)
-//   3. HR's typed values are NOT discarded on a 409 -- neither by saveDraft() itself, nor by the
-//      บันทึกร่าง button's composed saveDraft-then-preview flow (Opus review finding F4)
-// Also covers finding F8 (428 treated the same as 409, so the retry machinery stops hammering a
-// doomed headerless request) and the explicit "โหลดข้อมูลใหม่" conflict-resolution action.
-//
-// Every OTHER existing PayrollPage test file mocks getInputDraft/saveInputDraft with NO `etag`
-// field at all, so draftEtagRef.current stays undefined/null and hrApi's `headers: ifMatch ? ... :
-// {}` sends no If-Match whatsoever -- the entire rest of the suite exercises the headerless path,
-// not the threading. This file is the one place that actually sets an `etag` on every mock
-// response, so it is the only coverage of the real, header-bearing round trip.
+// Payroll draft optimistic concurrency (issue #422 follow-up, Opus review finding F3): a NEW test file (does
+// not edit PayrollPage.test.jsx / PayrollPage.inputDraft.test.jsx / others), covering the three things the
+// plan required and that had ZERO coverage before this file existed: 1.
 
 globalThis.React = React;
 
@@ -149,17 +137,14 @@ describe('PayrollPage optimistic concurrency (issue #422 follow-up)', () => {
     fireEvent.change(costOfLiving, { target: { value: '1234' } });
     fireEvent.blur(costOfLiving);
     await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
-    // Let the first save's resolution fully settle (draftDirtyRef/draftSaving reset) before
-    // triggering a second one -- otherwise the second blur can land while the first save is still
-    // between "mock resolved" and "component state updated," which autosaveDraft's own guards
-    // correctly treat as still-saving and skip.
+    // Let the first save's resolution fully settle before triggering a second one -- otherwise the second blur can
+    // land while the first save is still between "mock resolved" and "component state updated," which
+    // autosaveDraft's own guards correctly treat as still-saving and skip.
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว'));
 
-    // NOTE: GPRS (specialPay6) carries a ฿500 UAT demo default (see "uses Excel-based UAT
-    // defaults..." in PayrollPage.test.jsx), which is ALREADY the field's value on a fresh
-    // PREVIEW period -- setting it to '500' again would be a no-op from React's controlled-input
-    // value tracker's perspective (old === new), so no synthetic onChange would fire. Use a value
-    // that is genuinely different from the current one.
+    // NOTE: GPRS carries a ฿500 UAT demo default, which is ALREADY the field's value on a fresh PREVIEW period --
+    // setting it to '500' again would be a no-op from React's controlled-input value tracker's perspective, so no
+    // synthetic onChange would fire.
     const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
     fireEvent.change(gprs, { target: { value: '999' } });
     fireEvent.blur(gprs);
@@ -181,17 +166,17 @@ describe('PayrollPage optimistic concurrency (issue #422 follow-up)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/i }));
 
-    // Persistent conflict banner (role="alert", stays on screen -- unlike the toast, which
-    // auto-dismisses after 3.2s per useToast.js) with the server's own Thai message.
+    // Persistent conflict banner (role="alert", stays on screen -- unlike the toast, which auto-dismisses after
+    // 3.2s per useToast.js) with the server's own Thai message.
     const banner = await screen.findByRole('alert');
     expect(banner.textContent).toContain('มีผู้ใช้อื่นบันทึกร่างเงินเดือนของงวดนี้ไปแล้ว');
 
     // HR's typed value must still be sitting in the field -- not reverted, not blanked.
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('777');
 
-    // Opus review finding F4: preview() must NOT run after a 409 -- it calls applyPeriod directly,
-    // bypassing the dirty guard, and would repaint the form from a payload that (unlike
-    // draftPayload()) filters out anything that doesn't already qualify as a submittable input.
+    // Opus review finding F4: preview() must NOT run after a 409 -- it calls applyPeriod directly, bypassing the
+    // dirty guard, and would repaint the form from a payload that (unlike draftPayload()) filters out anything
+    // that doesn't already qualify as a submittable input.
     expect(api.payroll.preview).not.toHaveBeenCalled();
   });
 
@@ -209,9 +194,9 @@ describe('PayrollPage optimistic concurrency (issue #422 follow-up)', () => {
     await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(1));
     await screen.findByRole('alert');
 
-    // Opus review finding F8: without treating 428 like 409, autosaveDraft's guard never trips,
-    // so every further blur re-fires the identical doomed headerless PUT. Type into ANOTHER field
-    // and blur it -- if the guard is working, no second call happens.
+    // Opus review finding F8: without treating 428 like 409, autosaveDraft's guard never trips, so every further
+    // blur re-fires the identical doomed headerless PUT. Type into ANOTHER field and blur it -- if the guard is
+    // working, no second call happens.
     const gprs = screen.getByLabelText(/พิเศษ 6 \(ค่า GPRS\)/);
     fireEvent.change(gprs, { target: { value: '222' } });
     fireEvent.blur(gprs);
@@ -225,17 +210,8 @@ describe('PayrollPage optimistic concurrency (issue #422 follow-up)', () => {
     expect(gprs.value).toBe('222');
   });
 
-  /**
-   * Opus review finding NEW-1 (BLOCKER): a genuine sequence where a conflict is raised on a
-   * CLEAN form (the บันทึกร่าง button does not check dirty before submitting), so draftDirtyRef
-   * stays false throughout. The next ordinary background poll then takes the "data arrived"
-   * effect's CLEAN branch, adopts a fresh good token, and clears the visible banner -- but if
-   * draftConflictRef itself is not ALSO cleared there, autosaveDraft's `|| draftConflictRef.current`
-   * guard keeps returning early forever afterward, with no banner and no toast left to explain why
-   * nothing is saving. Exactly the silent-autosave-failure class issue #422/PR #426 exists to
-   * eliminate. Uses fake timers to advance past the real 60s refetchInterval so the "next poll" is
-   * genuine react-query behaviour, not a hand-simulated stand-in.
-   */
+  /** Opus review finding NEW-1 (BLOCKER): a genuine sequence where a conflict is raised on a CLEAN form (the
+   * บันทึกร่าง button does not check dirty before submitting), so draftDirtyRef stays false throughout. */
   it('an ordinary background refetch after a conflict on a clean form clears draftConflictRef too, not just the banner', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
@@ -248,21 +224,21 @@ describe('PayrollPage optimistic concurrency (issue #422 follow-up)', () => {
 
       renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);
 
-      // Click บันทึกร่าง WITHOUT typing anything first -- the button submits whatever is in the
-      // form regardless of dirty state, so this reaches the conflict branch with the form clean.
+      // Click บันทึกร่าง WITHOUT typing anything first -- the button submits whatever is in the form regardless of
+      // dirty state, so this reaches the conflict branch with the form clean.
       await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
       fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/i }));
       await screen.findByRole('alert');
       expect(screen.getByRole('status').textContent).toContain('มีการบันทึกที่ขัดแย้งกัน');
 
-      // Advance past the real 60s refetchInterval so react-query's own background poll fires --
-      // not a hand-simulated stand-in for one.
+      // Advance past the real 60s refetchInterval so react-query's own background poll fires -- not a hand-simulated
+      // stand-in for one.
       await vi.advanceTimersByTimeAsync(61_000);
       await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
       await waitFor(() => expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว'));
 
-      // The regression: type into a field and blur. If draftConflictRef was correctly cleared by
-      // the poll's clean path, this autosave actually fires; if not, it silently does nothing.
+      // The regression: type into a field and blur. If draftConflictRef was correctly cleared by the poll's clean
+      // path, this autosave actually fires; if not, it silently does nothing.
       const costOfLiving = screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
       fireEvent.change(costOfLiving, { target: { value: '321' } });
       fireEvent.blur(costOfLiving);

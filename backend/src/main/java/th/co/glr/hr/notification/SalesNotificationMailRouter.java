@@ -78,18 +78,13 @@ public class SalesNotificationMailRouter implements SalesNotificationMailer {
     static final String IMPORT_MAILBOX = "import@glr.co.th";
     /** Shared inbox for ฝ่ายบัญชี. Owner ruling 1 — replaces individual delivery. */
     static final String ACCOUNT_MAILBOX = "account@glr.co.th";
-    /**
-     * Owner ruling 2 — hardcoded for the sales pipeline only. Not read from {@code hr.employee}, not
-     * resolved through {@link CeoApproverRule}, and not configurable: a config key would reintroduce
-     * exactly the "one dashboard variable away from silence" failure this is meant to remove.
-     */
+    /** Owner ruling 2 — hardcoded for the sales pipeline only. Not read from hr.employee, not resolved through
+     * CeoApproverRule, and not configurable: a config key would reintroduce exactly the "one dashboard variable
+     * away from silence" failure this is meant to remove. */
     static final String CEO_MAILBOX = "rarm@glr.co.th";
 
-    /**
-     * No employee id to log against for a shared-box or CEO send. {@link NotificationEmailService}
-     * only uses the id for its log line, and this router logs the routing decision itself, so the
-     * sentinel is not load-bearing.
-     */
+    /** No employee id to log against for a shared-box or CEO send. NotificationEmailService only uses the id for
+     * its log line, and this router logs the routing decision itself, so the sentinel is not load-bearing. */
     private static final long NO_EMPLOYEE = 0L;
 
     private final NotificationEmailService emailService;
@@ -103,8 +98,8 @@ public class SalesNotificationMailRouter implements SalesNotificationMailer {
 
     @Override
     public void emailForRole(String role, List<Long> notifiedEmployeeIds, String title, String message, String link) {
-        // Deferred as one unit, lookups included: on a rollback nothing runs at all, so a rolled-back
-        // pricing request costs neither a mail nor a query. See AfterCommit.
+        // Deferred as one unit, lookups included: on a rollback nothing runs at all, so a rolled-back pricing request
+        // costs neither a mail nor a query. See AfterCommit.
         AfterCommit.run(() -> routeRole(role, notifiedEmployeeIds, title, message, link));
     }
 
@@ -115,18 +110,13 @@ public class SalesNotificationMailRouter implements SalesNotificationMailer {
 
     private void routeRole(String role, List<Long> notifiedEmployeeIds, String title, String message, String link) {
         switch (role) {
-            // The shared-box and CEO branches ignore notifiedEmployeeIds entirely, and that is the
-            // point of them: the mail goes out even when the in-app fan-out matched nobody. An
-            // import division with no active staff, or the CeoApproverRule empty set, would
-            // otherwise mean a pricing request sat waiting with no one told by any channel.
+            // The shared-box and CEO branches ignore notifiedEmployeeIds entirely, and that is the point of them: the mail
+            // goes out even when the in-app fan-out matched nobody.
             case "import" -> sendToMailbox(IMPORT_MAILBOX, role, title, message, link);
             case "account" -> sendToMailbox(ACCOUNT_MAILBOX, role, title, message, link);
             case "ceo" -> sendToMailbox(CEO_MAILBOX, role, title, message, link);
-            // Sales is the one role with no shared box — each rep who got an in-app row gets their
-            // own mail, on the same individual path (and the same manager fallback) as a
-            // directly-addressed notification. sales_manager reuses this exact path (ruling 4), and
-            // hr reuses it again (ruling 5): neither is a shared box, so each notified person is
-            // mailed individually.
+            // Sales is the one role with no shared box — each rep who got an in-app row gets their own mail, on the same
+            // individual path (and the same manager fallback) as a directly-addressed notification.
             case "sales", "sales_manager", "hr" ->
                 notifiedEmployeeIds.forEach(id -> routeEmployee(id, title, message, link));
             default -> log.warn("Sales notification email skipped: no mail routing for role={}", role);
@@ -141,8 +131,8 @@ public class SalesNotificationMailRouter implements SalesNotificationMailer {
 
     private void routeResolved(long employeeId, SalesMailRecipient recipient, String title, String message,
                                String link) {
-        // Ruling 1 again, on the individually-addressed path: an import/account person named by a
-        // notification is still reached only through their shared box.
+        // Ruling 1 again, on the individually-addressed path: an import/account person named by a notification is
+        // still reached only through their shared box.
         switch (recipient.routingRole()) {
             case "import" -> {
                 log.info("Sales notification email for employee={} routed to the shared import box", employeeId);
@@ -162,24 +152,23 @@ public class SalesNotificationMailRouter implements SalesNotificationMailer {
             return;
         }
         if (recipient.hasManagerEmail()) {
-            // Ruling 3: the manager is told on the rep's behalf, so the greeting names the MANAGER
-            // (the mail is landing in their inbox) while the log keeps the rep's id for traceability.
+            // Ruling 3: the manager is told on the rep's behalf, so the greeting names the MANAGER (the mail is landing in
+            // their inbox) while the log keeps the rep's id for traceability.
             log.warn("Sales notification email for employee={} has no address on file — falling back to their manager",
                 employeeId);
             emailService.send(employeeId, recipient.managerEmail(), recipient.managerName(), title, message, link);
             return;
         }
-        // Loudly, and once: ERROR because a notification the pipeline decided to raise is now
-        // reaching nobody by email. The in-app row still exists — this is a delivery gap, not a
-        // lost notification.
+        // Loudly, and once: ERROR because a notification the pipeline decided to raise is now reaching nobody by
+        // email. The in-app row still exists — this is a delivery gap, not a lost notification.
         log.error("Sales notification email DROPPED: employee={} has no email on file and no manager address to "
             + "fall back to — subject=\"{}\" link={}. Nobody was emailed; the in-app notification still stands.",
             employeeId, title, link);
     }
 
     private void sendToMailbox(String mailbox, String role, String title, String message, String link) {
-        // recipientName is null on purpose: a shared box is not a person, so the greeting falls back
-        // to NotificationEmailService's generic "เรียน ท่านผู้ใช้งาน,".
+        // recipientName is null on purpose: a shared box is not a person, so the greeting falls back to
+        // NotificationEmailService's generic "เรียน ท่านผู้ใช้งาน,".
         emailService.send(NO_EMPLOYEE, mailbox, null, title, message, link);
         log.info("Sales notification email routed to the shared {} box: to={} subject=\"{}\"", role, mailbox, title);
     }

@@ -44,11 +44,9 @@ export function DealTrackingPanel({
   const [editOpen, setEditOpen] = useState(false);
   const [draft, setDraft] = useState(null); // set on edit open
 
-  // The SERVER's number (TicketSummaryDto.effectiveWinProbability), not a re-derivation of it.
-  // This used to call dealTrackingMeta's effectiveWinProbability() against a hand-copied stage→%
-  // table; the backend had always computed the same value and simply never serialized it (issue
-  // #738). `?? 0` is for the pre-catalog first frame and for any caller-built summary that predates
-  // the field — the same 0 the old table returned for an unknown stage, so nothing renders NaN.
+  // The SERVER's number (TicketSummaryDto.effectiveWinProbability), not a re-derivation of it. This used to call
+  // dealTrackingMeta's effectiveWinProbability() against a hand-copied stage→% table; the backend had always
+  // computed the same value and simply never serialized it (issue #738).
   const effectiveWin = summary.effectiveWinProbability ?? 0;
   const hasOverride = summary.winProbabilityOverride != null;
 

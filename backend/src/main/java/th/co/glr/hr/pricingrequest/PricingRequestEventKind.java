@@ -7,15 +7,13 @@ public final class PricingRequestEventKind {
     public static final String PRICING_REQUEST_UPDATED    = "PRICING_REQUEST_UPDATED";
     public static final String PRICING_REQUEST_SUBMITTED  = "PRICING_REQUEST_SUBMITTED";
     public static final String PRICING_REQUEST_PICKED_UP  = "PRICING_REQUEST_PICKED_UP";
-    // Import named the factory on a line Sales left blank. Only ever raised for a line that had
-    // NO factory at all (neither the catalog snapshot nor free text) — see
-    // PricingRequestService#setItemFactory, which refuses to re-route a line that already has
-    // one. It is a routing decision, not metadata: it decides which factory gets asked for a
-    // price, so it belongs in the audit trail beside the pickup and the factory-email events.
+    // Import named the factory on a line Sales left blank. Only ever raised for a line that had NO factory at all
+    // (neither the catalog snapshot nor free text) — see PricingRequestService#setItemFactory, which refuses to
+    // re-route a line that already has one.
     public static final String PRICING_REQUEST_ITEM_FACTORY_SET = "PRICING_REQUEST_ITEM_FACTORY_SET";
-    // Stock lines (V194): import (or the CEO) confirmed / changed the ETA of an IN_TRANSIT line, and
-    // import switched an IN_TRANSIT line to สั่งนำเข้า (R13). Both change what the CEO will see, so
-    // both belong in the audit trail. No DB CHECK constrains event_kind (V141 note).
+    // Stock lines (V194): import (or the CEO) confirmed / changed the ETA of an IN_TRANSIT line, and import
+    // switched an IN_TRANSIT line to สั่งนำเข้า (R13). Both change what the CEO will see, so both belong in the
+    // audit trail. No DB CHECK constrains event_kind (V141 note).
     public static final String PRICING_REQUEST_ITEM_ETA_SET = "PRICING_REQUEST_ITEM_ETA_SET";
     public static final String PRICING_REQUEST_ITEM_CONVERTED_TO_IMPORT = "PRICING_REQUEST_ITEM_CONVERTED_TO_IMPORT";
     // CEO price-review fixes (PCR-2026-0005): re-point a typo'd factory quote to a master factory,
@@ -50,10 +48,8 @@ public final class PricingRequestEventKind {
     public static final String PRICING_DECISION_UPDATED   = "PRICING_DECISION_UPDATED";
     public static final String PRICING_DECISION_APPROVED  = "PRICING_DECISION_APPROVED";
     public static final String PRICING_DECISION_RETURNED  = "PRICING_DECISION_RETURNED";
-    // V141 ("CEO owns costing"): the CEO overrode (or cleared an override of) one line's landed
-    // cost on the costing bound to their in-review decision. The event trail carries the reason
-    // (mandatory in both directions — see PricingDecisionRequests.CostOverrideRequest) since an
-    // override is an input to price = cost x margin, not mere metadata.
+    // V141 ("CEO owns costing"): the CEO overrode (or cleared an override of) one line's landed cost on the
+    // costing bound to their in-review decision.
     public static final String PRICING_COSTING_ITEM_COST_OVERRIDDEN = "PRICING_COSTING_ITEM_COST_OVERRIDDEN";
     // Step 4: Customer Quotation Generation and Issuance.
     public static final String CUSTOMER_QUOTATION_CREATED  = "CUSTOMER_QUOTATION_CREATED";
@@ -67,11 +63,9 @@ public final class PricingRequestEventKind {
     public static final String CUSTOMER_QUOTATION_REVISION_REQUESTED = "CUSTOMER_QUOTATION_REVISION_REQUESTED";
     // Sweep-only (QuotationExpiryWorker) — never emitted by a client-driven recordOutcome call.
     public static final String CUSTOMER_QUOTATION_EXPIRED   = "CUSTOMER_QUOTATION_EXPIRED";
-    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). REQUESTED is
-    // raised by CustomerQuotationService the first time a below-CEO-minimum line is saved at a
-    // price nobody has asked for (or been granted) before; APPROVED/REJECTED are raised by
-    // DiscountApprovalService. See sales.quotation_item_discount_approval's own comment for the
-    // full per-line, price-bound state machine.
+    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155). REQUESTED is raised by
+    // CustomerQuotationService the first time a below-CEO-minimum line is saved at a price nobody has asked for
+    // (or been granted) before; APPROVED/REJECTED are raised by DiscountApprovalService.
     public static final String DISCOUNT_APPROVAL_REQUESTED  = "DISCOUNT_APPROVAL_REQUESTED";
     public static final String DISCOUNT_APPROVED             = "DISCOUNT_APPROVED";
     public static final String DISCOUNT_REJECTED              = "DISCOUNT_REJECTED";
@@ -85,8 +79,8 @@ public final class PricingRequestEventKind {
     public static final String FACTORY_PO_GOODS_RECEIVED      = "FACTORY_PO_GOODS_RECEIVED";
     public static final String FACTORY_PO_CANCELLED           = "FACTORY_PO_CANCELLED";
     // Step 8: Receiving, Inventory Allocation, and Delivery. Logged by
-    // OrderConfirmationService#reconcileTicketItems the first time confirmOrder actually has to
-    // change/add a sales.ticket_item row to match this pricing request's own settled quantities.
+    // OrderConfirmationService#reconcileTicketItems the first time confirmOrder actually has to change/add a
+    // sales.ticket_item row to match this pricing request's own settled quantities.
     public static final String TICKET_ITEMS_RECONCILED        = "TICKET_ITEMS_RECONCILED";
 
     public static final Set<String> VALUES = Set.of(

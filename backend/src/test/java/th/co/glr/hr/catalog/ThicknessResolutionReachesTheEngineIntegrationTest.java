@@ -9,23 +9,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * {@code CatalogRepository#findPricingKeys} is the seam through which the landed-cost engine now
- * learns a product's thickness (F1, 2026-09 review — it replaced the single-row
- * {@code findThicknessMm} this class used to call, once that method's only remaining caller was
- * its own test; {@code findThicknessMm} has since been deleted and this class repointed at
- * {@code findPricingKeys} instead). Thickness selects the freight band — a band that can differ by
- * ฿50,000 per shipment. These tests pin what that seam does and does not resolve; a SEPARATE test,
- * {@code CatalogRepositoryFindPricingKeysIntegrationTest}, covers the batched method's own concerns
- * that have no single-row analogue: the origin-country pairing/asymmetry, absent-id and
- * duplicate-id map semantics, and the {@code PRICE_ID_CHUNK_SIZE} boundary.
- *
- * <p>The interesting case is the middle one. Four of the nine factory workbooks carry no thickness
- * column at all, so 9,411 catalogue rows have a NULL {@code thickness_mm} that no parser can
- * recover. Before this change the engine read {@code product_prices} directly, so every one of
- * those rows failed costing permanently and no CEO entry could change that. Reading through
- * {@code v_priceable_product} is what makes the defaults table reach a price.
- */
+/** CatalogRepository#findPricingKeys is the seam through which the landed-cost engine now learns a product's
+ * thickness. Thickness selects the freight band — a band that can differ by ฿50,000 per shipment. */
 class ThicknessResolutionReachesTheEngineIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private CatalogRepository catalog() {
@@ -65,8 +50,8 @@ class ThicknessResolutionReachesTheEngineIntegrationTest extends AbstractPostgre
             VALUES (:f, 'X', 20)
             """, new MapSqlParameterSource().addValue("f", factoryOf(id)));
 
-        // isEqualByComparingTo, not contains(): Optional.contains uses BigDecimal.equals, which is
-        // SCALE-sensitive — 9 and 9.00 are unequal there, which would fail on a true value.
+        // isEqualByComparingTo, not contains(): Optional.contains uses BigDecimal.equals, which is SCALE-sensitive — 9
+        // and 9.00 are unequal there, which would fail on a true value.
         assertThat(resolvedThickness(id)).isEqualByComparingTo("9");
     }
 
@@ -101,11 +86,8 @@ class ThicknessResolutionReachesTheEngineIntegrationTest extends AbstractPostgre
         assertThat(resolvedThickness(id)).isNull();
     }
 
-    /**
-     * The behavioural narrowing the view brings: costing must not read a superseded price list's
-     * thickness. {@code PricingRequestService#submit}'s catalog gate already rejects a non-ACTIVE
-     * link, so this is defence in depth.
-     */
+    /** The behavioural narrowing the view brings: costing must not read a superseded price list's thickness.
+     * PricingRequestService#submit's catalog gate already rejects a non-ACTIVE link, so this is defence in depth. */
     @Test
     void anArchivedPriceListVersionResolvesToEmptyEvenWithAThicknessStored() {
         long id = insertCatalogProduct("TR F4", "IT", "ARCH-1",

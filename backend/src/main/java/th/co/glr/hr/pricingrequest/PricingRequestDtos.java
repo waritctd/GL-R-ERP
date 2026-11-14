@@ -15,8 +15,7 @@ public final class PricingRequestDtos {
         String ticketCode,
         String projectName,
         String customerName,
-        // Required for read-scoping: "sales" role may only see requests on
-        // tickets they created (commit 3).
+        // Required for read-scoping: "sales" role may only see requests on tickets they created (commit 3).
         long ticketCreatedById,
         String recipientType,
         Long recipientContactId,
@@ -69,9 +68,9 @@ public final class PricingRequestDtos {
         // panel already runs). Appended at the very end, after omitContactHonorific, so every
         // existing positional constructor call keeps compiling unchanged.
         Long customerId,
-        // The deal ticket's own legacy status (sales.ticket.status). The frontend gates
-        // "ยืนยันคำสั่งซื้อ" on it (OrderConfirmationService.isBridgeableTicketStatus) so a deal the
-        // bridge cannot handle never offers a button that can only 409.
+        // The deal ticket's own legacy status (sales.ticket.status). The frontend gates "ยืนยันคำสั่งซื้อ" on it
+        // (OrderConfirmationService.isBridgeableTicketStatus) so a deal the bridge cannot handle never offers a button
+        // that can only 409.
         String ticketStatus,
         // The deal ticket's payment track (sales.ticket.payment_status): null until the customer's order
         // is confirmed. Once set no new pricing round (customer-change revision / submit) can start, so the
@@ -184,11 +183,8 @@ public final class PricingRequestDtos {
         BigDecimal requestedQty,
         BigDecimal requestedQtySqm,
         String requestedUnit,
-        // Machine-readable basis for requestedQty/requestedUnit (V68, financial-integrity
-        // review Finding B) — one of UnitBasis's four canonical codes. requestedUnit stays
-        // free text for display/the factory email body; this is what PricingCostingService
-        // now uses to normalize the requested quantity onto the same basis as the quoted
-        // price before multiplying.
+        // Machine-readable basis for requestedQty/requestedUnit (V68, financial-integrity review Finding B) — one of
+        // UnitBasis's four canonical codes.
         String requestedUnitBasis,
         String quantityType,
         LocalDate targetDeliveryDate,
@@ -207,15 +203,13 @@ public final class PricingRequestDtos {
         String catalogCollection,
         String catalogModel,
         // V152 (V109 engine wiring): CEO override of the duty product_type used at costing time
-        // (sales.pricing_duty_rate.product_type). NULL = no override — LandedCostCalculator
-        // defaults to PricingFormulaEngine.DEFAULT_PRODUCT_TYPE ("TILE"). See
-        // PricingDecisionService#overrideItemProductType for who may set this and why it lives
-        // here rather than on pricing_decision_item.
+        // (sales.pricing_duty_rate.product_type). NULL = no override — LandedCostCalculator defaults to
+        // PricingFormulaEngine.DEFAULT_PRODUCT_TYPE ("TILE").
         String productTypeOverride,
 
-        // ── Direct-deal-form parity (V185) — see PricingRequestRequests.PricingRequestItemRequest's
-        // own class-level Javadoc and the migration header for the full rationale. Nullable: a
-        // legacy (pre-V185) item reads every one of these as null and the frontend renders "—".
+        // Direct-deal-form parity (V185) — see PricingRequestRequests.PricingRequestItemRequest's own class-level
+        // Javadoc and the migration header for the full rationale. Nullable: a legacy (pre-V185) item reads every one
+        // of these as null and the frontend renders "—".
         String productCode,
         BigDecimal thicknessMm,
         BigDecimal sqmPerPiece,
@@ -230,8 +224,8 @@ public final class PricingRequestDtos {
         Integer piecesBeforeWastage,
         Integer piecesAfterWastage,
         Integer boxes,
-        // Mirrors sales.quotation_item.round_to_full_box's own NOT NULL DEFAULT TRUE semantics —
-        // always non-null once read back (see PricingRequestRepository#mapItem).
+        // Mirrors sales.quotation_item.round_to_full_box's own NOT NULL DEFAULT TRUE semantics — always non-null once
+        // read back (see PricingRequestRepository#mapItem).
         boolean roundToFullBox,
         String originCountry,
         Integer leadTimeMinDays,
@@ -309,8 +303,8 @@ public final class PricingRequestDtos {
                 originCountry, leadTimeMinDays, leadTimeMaxDays, originCountryOther, null, null);
         }
 
-        /** The pre-V185 shape — kept so every existing construction site (tests, mostly) compiles
-         * unchanged. Defaults every new field to null/false, exactly what a legacy row reads as. */
+        /** The pre-V185 shape — kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
+         * every new field to null/false, exactly what a legacy row reads as. */
         public PricingRequestItemDto(
             long id, long pricingRequestId, Long sourceTicketItemId, Long productId, Long variantId,
             String brand, String model, String productDescription, String color, String texture,
@@ -361,23 +355,15 @@ public final class PricingRequestDtos {
                 sqmPerBox, piecesBeforeWastage, piecesAfterWastage, boxes, roundToFullBox,
                 originCountry, leadTimeMinDays, leadTimeMaxDays, null);
         }
-        /**
-         * The factory this line is routed to, or {@code null} when it has none — the price-catalog
-         * snapshot first, then Sales's own free text. This precedence was already written out by
-         * hand at three call sites (grouping the factory-email drafts, validating a factory
-         * response, and now filling a blank); it lives here so all three cannot drift apart.
-         */
+        /** The factory this line is routed to, or null when it has none — the price-catalog snapshot first, then
+         * Sales's own free text. */
         public String resolvedFactory() {
             return firstText(resolvedFactoryName, factory);
         }
 
-        /**
-         * The line's human-readable identity for an error or event message — the SAME fields, in
-         * the same precedence, that the pricing-request detail page prints on each row, so a
-         * message naming a line points at text the reader can actually see on screen. Lives on the
-         * DTO rather than in either service because both {@code PricingRequestService} and
-         * {@code FactoryQuoteService} need it and neither should depend on the other for it.
-         */
+        /** The line's human-readable identity for an error or event message — the SAME fields, in the same precedence,
+         * that the pricing-request detail page prints on each row, so a message naming a line points at text the
+         * reader can actually see on screen. */
         public String displayName() {
             String brand = firstText(catalogBrand, this.brand);
             String model = firstText(catalogModel, this.model);

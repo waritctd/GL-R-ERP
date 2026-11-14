@@ -46,8 +46,8 @@ const currentEmployee = {
   nameTh: 'พนักงาน ทดสอบ',
 };
 
-// Matches SpecialMoneyController's GET /types shape (thin subset covering
-// every category the type picker's groups render).
+// Matches SpecialMoneyController's GET /types shape (thin subset covering every category the type picker's
+// groups render).
 const TYPES = [
   { requestType: 'TRAVEL_PER_DIEM', thaiLabel: 'เบี้ยเลี้ยงเดินทาง', payrollBucket: 'PER_DIEM', evidenceRequired: false },
   { requestType: 'MEDICAL', thaiLabel: 'ค่ารักษาพยาบาล', payrollBucket: 'NON_TAXABLE', evidenceRequired: true },
@@ -60,8 +60,8 @@ const TYPES = [
 
 const TYPE_LABEL_BY_VALUE = Object.fromEntries(TYPES.map((type) => [type.requestType, type.thaiLabel]));
 
-// `showToast` defaults to a throwaway spy, so every existing call site is unchanged; pass one in
-// to assert on what the panel announced (e.g. that a filed request never raises an error toast).
+// `showToast` defaults to a throwaway spy, so every existing call site is unchanged; pass one in to assert on
+// what the panel announced (e.g. that a filed request never raises an error toast).
 function renderPanel(as = user, showToast = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -76,8 +76,8 @@ function renderPanel(as = user, showToast = vi.fn()) {
     </QueryClientProvider>,
   );
   // Exposed for tests that need to inspect the cache directly (e.g. counting distinct
-  // ['specialMoney','list',...] entries) rather than inferring cache-key separation from fetch
-  // call counts, which react-query's own staleness/refetch-on-mount behaviour can make unreliable.
+  // ['specialMoney','list',...] entries) rather than inferring cache-key separation from fetch call counts,
+  // which react-query's own staleness/refetch-on-mount behaviour can make unreliable.
   return { ...view, queryClient, showToast };
 }
 
@@ -269,9 +269,9 @@ describe('SpecialMoneyPanel', () => {
       api.specialMoney.employees.mockResolvedValue(rosterWithStaleSecondEntry());
       const { queryClient } = renderPanel();
 
-      // The display input shows user.name before GET /employees resolves, so waiting on it alone
-      // would assert against an empty roster and pass even with the old picker back in place.
-      // Wait until the two-entry roster is in the cache, then let React commit the re-render.
+      // The display input shows user.name before GET /employees resolves, so waiting on it alone would assert
+      // against an empty roster and pass even with the old picker back in place. Wait until the two-entry roster is
+      // in the cache, then let React commit the re-render.
       await waitFor(() => expect(queryClient.getQueryData(queryKeys.specialMoneyEmployees())).toHaveLength(2));
       await act(async () => {});
       await screen.findByDisplayValue('พนักงาน ทดสอบ');
@@ -281,8 +281,8 @@ describe('SpecialMoneyPanel', () => {
       expect(document.getElementById('smr-employee-display').disabled).toBe(true);
     });
 
-    // A regression pin, not proof of the picker's removal: the old select also defaulted to the
-    // caller's own id, so this passes on either code. The render test above is the one that can fail.
+    // A regression pin, not proof of the picker's removal: the old select also defaulted to the caller's own id,
+    // so this passes on either code. The render test above is the one that can fail.
     it('submits the viewer\'s own employeeId regardless of the extra roster entry', async () => {
       api.specialMoney.employees.mockResolvedValue(rosterWithStaleSecondEntry());
       renderPanel();
@@ -298,8 +298,8 @@ describe('SpecialMoneyPanel', () => {
     });
   });
 
-  // Backend contract trap (`detail` is Map<String,String> on the wire): every value sent, numeric
-  // or boolean, must already be a string by the time it reaches create()'s payload.
+  // Backend contract trap (`detail` is Map<String,String> on the wire): every value sent, numeric or boolean,
+  // must already be a string by the time it reaches create()'s payload.
   describe('detail payload string-typing per type', () => {
     it('sends TRAVEL_PER_DIEM detail values as strings', async () => {
       renderPanel();
@@ -464,8 +464,8 @@ describe('SpecialMoneyPanel', () => {
       });
       renderPanel(hrUser);
 
-      // The row must actually render before the absence of its buttons means anything -- otherwise
-      // this assertion would also pass if the row (or the whole panel) failed to render at all.
+      // The row must actually render before the absence of its buttons means anything -- otherwise this assertion
+      // would also pass if the row (or the whole panel) failed to render at all.
       await screen.findByText(/พนักงาน ทดสอบ ·/);
 
       expect(screen.queryByRole('button', { name: 'ยกเลิกคำขอ' })).toBeNull();
@@ -541,9 +541,9 @@ describe('SpecialMoneyPanel', () => {
       // with no name it carries nothing the badge cannot say: assert it is absent.
       expect(within(statusColumn).getByText('รอ CEO อนุมัติ')).not.toBeNull();
       expect(statusColumn.querySelector('small.text-text-muted')).toBeNull();
-      // Scoped to the note's own class deliberately: this fixture (AID_WEDDING, evidenceRequired,
-      // no attachment) still renders the separate `small.text-warning` evidence line in this same
-      // column, so "the column has no <small> at all" would be the wrong, over-tight assertion.
+      // Scoped to the note's own class deliberately: this fixture (AID_WEDDING, evidenceRequired, no attachment)
+      // still renders the separate `small.text-warning` evidence line in this same column, so "the column has no
+      // <small> at all" would be the wrong, over-tight assertion.
     });
   });
 
@@ -613,10 +613,9 @@ describe('SpecialMoneyPanel', () => {
       expect(screen.queryByText(/ลองเปลี่ยนช่วงเวลาเป็น/)).toBeNull();
     });
 
-    // historyPeriodYear must be DERIVED from historyWindow.from, not recomputed independently --
-    // otherwise a re-render that crosses the Bangkok New Year (with historyPeriod never touched,
-    // so historyWindow itself stays memoized/unchanged) can show a label year one year ahead of
-    // the window the query actually ran with.
+    // historyPeriodYear must be DERIVED from historyWindow.from, not recomputed independently -- otherwise a
+    // re-render that crosses the Bangkok New Year can show a label year one year ahead of the window the query
+    // actually ran with.
     it('keeps the empty-state year in sync with the actual query window across a re-render that crosses a Bangkok New Year, without touching the period selector', async () => {
       vi.useFakeTimers({ toFake: ['Date'] });
       try {
@@ -625,14 +624,13 @@ describe('SpecialMoneyPanel', () => {
         await waitFor(() => expect(api.specialMoney.list).toHaveBeenCalledTimes(1));
         expect(await screen.findByText('ยังไม่มีคำขอเงินสวัสดิการในปี 2569')).not.toBeNull();
 
-        // Cross the Bangkok New Year, then force a re-render WITHOUT changing the period
-        // selector -- e.g. typing in the unrelated "reason" field re-renders the whole panel via
-        // react-hook-form's watch.
+        // Cross the Bangkok New Year, then force a re-render WITHOUT changing the period selector -- e.g. typing in
+        // the unrelated "reason" field re-renders the whole panel via react-hook-form's watch.
         vi.setSystemTime(new Date('2026-12-31T18:00:00Z')); // 2027-01-01 01:00 Bangkok -- now 2027
         fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'x' } });
 
-        // Still 2569: the query never re-ran (historyPeriod, and therefore historyWindow, never
-        // changed), so the label describing it must not have silently jumped to 2570 either.
+        // Still 2569: the query never re-ran (historyPeriod, and therefore historyWindow, never changed), so the label
+        // describing it must not have silently jumped to 2570 either.
         expect(await screen.findByText('ยังไม่มีคำขอเงินสวัสดิการในปี 2569')).not.toBeNull();
         expect(screen.queryByText('ยังไม่มีคำขอเงินสวัสดิการในปี 2570')).toBeNull();
         expect(api.specialMoney.list).toHaveBeenCalledTimes(1);
@@ -650,11 +648,8 @@ describe('SpecialMoneyPanel', () => {
   // queryKeys.specialMoneyRequests() directly against the exact filter shapes SpecialMoneyPanel
   // constructs (see the comment on `filters` in SpecialMoneyPanel.jsx).
   describe('history/review-queue cache-key separation', () => {
-    // Documents the exact key shapes involved (pure, no render) -- pins that '' and `undefined`
-    // serialize differently at the `status` slot for every window shape the two queries can take.
-    // This alone does NOT catch a regression in SpecialMoneyPanel's own `filters` construction
-    // (e.g. someone "cleaning up" `status: statusFilter` to `status: statusFilter || undefined`)
-    // since it never touches the component -- see the real-wiring test below for that.
+    // Documents the exact key shapes involved (pure, no render) -- pins that '' and `undefined` serialize
+    // differently at the `status` slot for every window shape the two queries can take.
     it('keeps every historyPeriod x status combination distinct from the review queue key', () => {
       // Mirrors reviewQueueWindow's shape: no `status` property at all.
       const reviewQueueWindow = { from: '2016-08-03', to: '2027-08-03' };
@@ -669,8 +664,7 @@ describe('SpecialMoneyPanel', () => {
 
       for (const window of historyWindows) {
         for (const status of statuses) {
-          // Mirrors SpecialMoneyPanel's `filters` object exactly: bare `status`, never
-          // `status || undefined`.
+          // Mirrors SpecialMoneyPanel's `filters` object exactly: bare `status`, never `status || undefined`.
           const historyKey = JSON.stringify(queryKeys.specialMoneyRequests({ status, from: window.from, to: window.to }));
           expect(historyKey).not.toBe(reviewQueueKey);
         }
@@ -695,15 +689,14 @@ describe('SpecialMoneyPanel', () => {
 
       const specialMoneyListEntries = queryClient.getQueryCache()
         .findAll({ queryKey: ['specialMoney', 'list'] });
-      // THIS_YEAR (now stale/inactive but still cached), 'ALL'+no-status, and reviewQueueWindow --
-      // three distinct entries. If the history table's 'ALL' key had collided with
-      // reviewQueueWindow's, there would only be two.
+      // THIS_YEAR (now stale/inactive but still cached), 'ALL'+no-status, and reviewQueueWindow -- three distinct
+      // entries. If the history table's 'ALL' key had collided with reviewQueueWindow's, there would only be two.
       expect(specialMoneyListEntries).toHaveLength(3);
     });
   });
 
-  // Welfare is CEO-only in one stage. These pin the button gating, which is the half of that rule
-  // a user actually meets -- the server-side half is SpecialMoneyScopeIntegrationTest's job.
+  // Welfare is CEO-only in one stage. These pin the button gating, which is the half of that rule a user
+  // actually meets -- the server-side half is SpecialMoneyScopeIntegrationTest's job.
   describe('approval gating', () => {
     beforeEach(() => {
       api.specialMoney.list.mockResolvedValue({ requests: [submittedRequest()] });
@@ -732,8 +725,8 @@ describe('SpecialMoneyPanel', () => {
       expect(screen.queryByRole('button', { name: 'CEO อนุมัติ' })).toBeNull();
     });
 
-    // The redesign's core defect fix: the CEO must see evidence, and be warned before they can
-    // approve an evidence-required type with nothing attached.
+    // The redesign's core defect fix: the CEO must see evidence, and be warned before they can approve an
+    // evidence-required type with nothing attached.
     it('warns the CEO and disables approve when an evidence-required type has no attachment', async () => {
       api.specialMoney.list.mockResolvedValue({
         requests: [submittedRequest({ requestType: 'AID_WEDDING', attachmentCount: 0 })],
@@ -787,9 +780,9 @@ describe('SpecialMoneyPanel', () => {
   // capOverrideReason) to the CEO.
   describe('CEO approve dialog', () => {
     beforeEach(() => {
-      // attachmentCount: 1 -- AID_WEDDING is evidenceRequired (see TYPES fixture above), and the
-      // approve button is disabled without an attachment (unrelated "approval gating" coverage
-      // above); this dialog's own tests need it enabled.
+      // attachmentCount: 1 -- AID_WEDDING is evidenceRequired (see TYPES fixture above), and the approve button is
+      // disabled without an attachment (unrelated "approval gating" coverage above); this dialog's own tests need it
+      // enabled.
       api.specialMoney.list.mockResolvedValue({
         requests: [submittedRequest({ requestedAmount: 5000, attachmentCount: 1 })],
       });
@@ -808,10 +801,9 @@ describe('SpecialMoneyPanel', () => {
 
       const amountField = within(dialog).getByLabelText(/จำนวนเงินที่อนุมัติ/);
       expect(amountField.value).toBe('5000');
-      // Wired via Modal's `initialFocusRef` prop (see useDialogFocus.js), not a separate effect --
-      // jsdom alone can't reproduce the real-browser StrictMode race that motivated the fix (no
-      // React.StrictMode wrapper here, see main.jsx), but this still pins that the target reaches
-      // Modal and wins focus over the header's close button, its own default.
+      // Wired via Modal's `initialFocusRef` prop, not a separate effect -- jsdom alone can't reproduce the
+      // real-browser StrictMode race that motivated the fix, but this still pins that the target reaches Modal and
+      // wins focus over the header's close button, its own default.
       expect(document.activeElement).toBe(amountField);
 
       fireEvent.click(within(dialog).getByRole('button', { name: 'อนุมัติ' }));
@@ -958,8 +950,8 @@ describe('SpecialMoneyPanel', () => {
 
         const message = within(dialog).getByText('ระบุทศนิยมได้ไม่เกิน 2 ตำแหน่ง');
         expect(message).not.toBeNull();
-        // NOT role="alert": a live region on every keystroke would re-announce this to a screen
-        // reader on each digit typed, rather than only when the field itself is reached.
+        // NOT role="alert": a live region on every keystroke would re-announce this to a screen reader on each digit
+        // typed, rather than only when the field itself is reached.
         expect(message.getAttribute('role')).not.toBe('alert');
         expect(amountField.getAttribute('aria-invalid')).toBe('true');
         expect(amountField.getAttribute('aria-describedby')).toBe(message.id);
@@ -1053,9 +1045,9 @@ describe('SpecialMoneyPanel', () => {
     expect(screen.queryByText(/พ้นทดลองงาน; ต้องแนบ/)).toBeNull();
   });
 
-  // Violations describe the type that was submitted. Leaving them up after the employee switches
-  // type tells them they broke rules on a claim they are no longer making -- and the wedding
-  // violations below are impossible for MEDICAL, so they are not merely stale but wrong.
+  // Violations describe the type that was submitted. Leaving them up after the employee switches type tells them
+  // they broke rules on a claim they are no longer making -- and the wedding violations below are impossible for
+  // MEDICAL, so they are not merely stale but wrong.
   it('clears submit violations when the employee switches to a different request type', async () => {
     api.specialMoney.create.mockRejectedValueOnce(
       new Error('พนักงานยังไม่พ้นทดลองงาน; ต้องแนบเอกสารหลักฐาน'),
@@ -1067,8 +1059,8 @@ describe('SpecialMoneyPanel', () => {
     fireEvent.change(screen.getByLabelText(/เหตุผล/), { target: { value: 'ทดสอบระบบ' } });
     fireEvent.click(screen.getByRole('button', { name: /ส่งคำขอ/ }));
 
-    // Assert they were actually on screen first -- otherwise the disappearance below proves
-    // nothing, because they may never have rendered at all.
+    // Assert they were actually on screen first -- otherwise the disappearance below proves nothing, because they
+    // may never have rendered at all.
     expect(await screen.findByText('พนักงานยังไม่พ้นทดลองงาน')).not.toBeNull();
 
     await selectType('MEDICAL');
@@ -1115,8 +1107,8 @@ describe('SpecialMoneyPanel', () => {
       await submitWeddingWithEvidence();
       await screen.findByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/);
 
-      // Both halves matter: the notice says "ไม่ต้องส่งคำขอซ้ำ", and the form no longer holds the
-      // data that would make sending it again a single click.
+      // Both halves matter: the notice says "ไม่ต้องส่งคำขอซ้ำ", and the form no longer holds the data that would
+      // make sending it again a single click.
       expect(screen.getByText(/ไม่ต้องส่งคำขอซ้ำ/)).not.toBeNull();
       expect(screen.getByLabelText(/เหตุผล/).value).toBe('');
       expect(api.specialMoney.create).toHaveBeenCalledTimes(1);
@@ -1135,8 +1127,8 @@ describe('SpecialMoneyPanel', () => {
       await waitFor(() => expect(api.specialMoney.addAttachment).toHaveBeenCalledTimes(2));
       const [retriedId, retriedFile] = api.specialMoney.addAttachment.mock.calls[1];
       expect(retriedId).toBe(3001);
-      // The SAME file the employee already chose -- a retry that made them re-pick it is the
-      // reason re-filing the whole request looked like the shorter path.
+      // The SAME file the employee already chose -- a retry that made them re-pick it is the reason re-filing the
+      // whole request looked like the shorter path.
       expect(retriedFile.name).toBe('marriage-cert.pdf');
       // And no second request was filed to carry it.
       expect(api.specialMoney.create).toHaveBeenCalledTimes(1);
@@ -1154,8 +1146,8 @@ describe('SpecialMoneyPanel', () => {
       fireEvent.click(screen.getByRole('button', { name: /ลองแนบอีกครั้ง/ }));
 
       expect(await screen.findByText(/แต่แนบเอกสารหลักฐานไม่สำเร็จ: ไฟล์มีขนาดใหญ่เกินไป/)).not.toBeNull();
-      // The request-was-filed fact must survive a failed retry -- a toast alone disappears after
-      // 3.2s and leaves nothing on screen saying the request exists.
+      // The request-was-filed fact must survive a failed retry -- a toast alone disappears after 3.2s and leaves
+      // nothing on screen saying the request exists.
       expect(screen.getByText(/บันทึกคำขอเลขที่ 3001 เรียบร้อยแล้ว/)).not.toBeNull();
     });
 

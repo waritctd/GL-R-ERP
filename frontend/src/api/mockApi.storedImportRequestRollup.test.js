@@ -1,38 +1,22 @@
 import { describe, it, expect } from 'vitest';
 import { api, applyImportRequestRollupMock } from './mockApi.js';
 
-// PR-B REVIEW ROUND 1, S3 + S4: mockApi.storedImportRequests's own fidelity to
-// ImportRequestService — see mockRequiredFactoryIds/the issue() payment-gate comments in
-// mockApi.js for the code-level explanation of each fix. Drives a REAL ticket through the mock's
-// own pricing-request chain end to end (adapted from mockApi.depositNotices.test.js's
-// driveTicketToAcceptedQuotation, itself modeled on OrderConfirmationIntegrationTest), rather than
-// stubbing api.storedImportRequests directly the way DealFulfilmentPanel.test.jsx/
-// ImportFulfilmentPage.test.jsx do — those files pin the UI's OWN behaviour against a fake
-// api object; this file is the one that actually exercises mockApi.js's internal logic, which is
-// the thing S3/S4 changed.
-//
-// NOT authz evidence about production — CLAUDE.md is explicit that mock authz/behaviour is never
-// authoritative for the real backend. These only prove the MOCK matches its own intended mirror
-// (ImportRequestService#allFactoriesReceived / #requiredFactoryIds and
-// TicketService#requireImportRequestIssuable), which is what actually broke.
+// PR-B REVIEW ROUND 1, S3 + S4: mockApi.storedImportRequests's own fidelity to ImportRequestService — see
+// mockRequiredFactoryIds/the issue() payment-gate comments in mockApi.js for the code-level explanation of
+// each fix.
 
 let seq = 0;
-// NOT the '88888888-8888-4888-8888-…' prefix demoSales.js's own seed generator uses (collides
-// with real seeded pricing requests' clientRequestId, tripping the idempotency 409 on the very
-// first call) — a distinct prefix avoids that.
+// NOT the '88888888-8888-4888-8888-…' prefix demoSales.js's own seed generator uses (collides with real seeded
+// pricing requests' clientRequestId, tripping the idempotency 409 on the very first call) — a distinct prefix
+// avoids that.
 function uuid() {
   seq += 1;
   return `deadbeef-0000-4000-8000-${String(seq).padStart(12, '0')}`;
 }
 
-/**
- * Drives a ticket with TWO items on TWO DIFFERENT factories (Panaria SpA / productId 1,
- * REFIN / productId 4 — see mockProductPrices's own seed) all the way to an accepted,
- * order-confirmed quotation: status quotation_issued, paymentStatus CUSTOMER_CONFIRMED,
- * salesStage ORDER_RECEIVED. This is the floor createDrafts requires (dealStageIndex >=
- * ORDER_RECEIVED) — there is no shortcut around the real pricing/quotation chain, so this
- * mirrors driveTicketToAcceptedQuotation but generalises the single-item body to N items/quotes.
- */
+/** Drives a ticket with TWO items on TWO DIFFERENT factories (Panaria SpA / productId 1, REFIN / productId 4 —
+ * see mockProductPrices's own seed) all the way to an accepted, order-confirmed quotation: status
+ * quotation_issued, paymentStatus CUSTOMER_CONFIRMED, salesStage ORDER_RECEIVED. */
 async function driveTwoFactoryTicketToOrderReceived() {
   const n = seq + 1;
 
@@ -52,10 +36,9 @@ async function driveTwoFactoryTicketToOrderReceived() {
     customerName: customer.name,
     customerId: customer.id,
     projectId: project.id,
-    // `factory` set directly on the TICKET ITEM (not just the pricing-request item) —
-    // reconcileTicketItemsFromPricingRequest only reconciles qty, never factory/catalogPriceId
-    // back onto an existing ticket_item, so createDrafts's own resolution cascade
-    // (mockResolveFactoryGroups) needs it here to have anything to resolve against.
+    // `factory` set directly on the TICKET ITEM — reconcileTicketItemsFromPricingRequest only reconciles qty,
+    // never factory/catalogPriceId back onto an existing ticket_item, so createDrafts's own resolution cascade
+    // needs it here to have anything to resolve against.
     items: [
       { brand: 'Panaria', model: 'Ivory Lappato', qty: 10, currency: 'THB', factory: 'Panaria SpA' },
       { brand: 'REFIN', model: 'L-Trim', qty: 20, currency: 'THB', factory: 'REFIN' },
@@ -150,13 +133,9 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
     async () => {
       const { ticketId } = await driveTwoFactoryTicketToOrderReceived();
 
-      // Bypass the deposit-ready gate the cheap way: the owning rep sets a bypass policy,
-      // matching the owner-approved "no deposit required" path — this test is about the ROLLUP,
-      // not the payment gate (that is S4, covered separately below).
-      // GLA-118 (owner ruling 2026-09-17): deposit policy is set by the OWNING sales rep only now
-      // — driveTwoFactoryTicketToOrderReceived already leaves the session logged in as 'sales'
-      // (the ticket's creator, since login({role}) always resolves the same seed user for a
-      // given role), so this used to switch to 'ceo' for the call and is no longer allowed to.
+      // Bypass the deposit-ready gate the cheap way: the owning rep sets a bypass policy, matching the
+      // owner-approved "no deposit required" path — this test is about the ROLLUP, not the payment gate (that is S4,
+      // covered separately below).
       await api.tickets.setDepositPolicy(ticketId, { policy: 'NOT_REQUIRED', reason: 'ทดสอบ S3' });
 
       // 10-29: create also ISSUES, so both rows come back ISSUED.
@@ -174,13 +153,9 @@ describe('mockApi storedImportRequests — S3: rollup requires EVERY required fa
       }
       await api.storedImportRequests.advanceStep(panariaIssued.id, { targetStep: 'RECEIVED' });
 
-      // THE BUG THIS PINS: before S3, the rollup only checked "every ISSUED row is RECEIVED" —
-      // with REFIN never issued, `liveRows` was just [Panaria], all RECEIVED, so the old mock
-      // rolled the deal up here. The fixed mock must NOT, because REFIN is still a required
-      // factory with no ISSUED row at all.
-      // Read as import through ITS OWN per-deal view: the whole-deal GET /api/tickets/{id} is
-      // refused to import now (feat/import-own-page), and importDeals.get carries the same
-      // server-computed fulfillmentStatus rollup.
+      // THE BUG THIS PINS: before S3, the rollup only checked "every ISSUED row is RECEIVED" — with REFIN never
+      // issued, `liveRows` was just [Panaria], all RECEIVED, so the old mock rolled the deal up here. The fixed mock
+      // must NOT, because REFIN is still a required factory with no ISSUED row at all.
       const { deal: afterPanaria } = await api.importDeals.get(ticketId);
       expect(afterPanaria.fulfillmentStatus).not.toBe('GOODS_RECEIVED');
       expect(afterPanaria.fulfillmentStatus).toBe('IR_ISSUED');
@@ -216,12 +191,9 @@ describe('mockApi storedImportRequests — coverage names the uncovered factorie
 describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTLY CUSTOMER_CONFIRMED', () => {
   it('create (which now issues) succeeds once a bypass-policy deal is genuinely CUSTOMER_CONFIRMED', async () => {
     const { ticketId } = await driveTwoFactoryTicketToOrderReceived();
-    // driveTwoFactoryTicketToOrderReceived's own confirmOrder already leaves paymentStatus at
-    // CUSTOMER_CONFIRMED — setting a bypass policy on TOP of that is exactly the "bypass-policy
-    // deal that has actually reached CUSTOMER_CONFIRMED" case TicketService
-    // #requireImportRequestIssuable's own Javadoc describes as the only one that may issue.
-    // GLA-118: deposit policy is set by the OWNING sales rep only now -- see the matching note in
-    // the S3 test above for why this no longer switches to 'ceo' first.
+    // driveTwoFactoryTicketToOrderReceived's own confirmOrder already leaves paymentStatus at CUSTOMER_CONFIRMED.
+    // GLA-118: deposit policy is set by the OWNING sales rep only now -- see the matching note in the S3 test
+    // above for why this no longer switches to 'ceo' first.
     await api.tickets.setDepositPolicy(ticketId, { policy: 'WAIVED', reason: 'ทดสอบ S4' });
 
     const { importRequests: drafts } = await api.storedImportRequests.createDrafts(ticketId, {});
@@ -232,11 +204,7 @@ describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTL
 });
 
 // PR-B REVIEW ROUND 2, X5: applyImportRequestRollupMock's own firewall guards, mirroring
-// TicketService#applyImportRequestRollup (backend/src/main/java/th/co/glr/hr/ticket/
-// TicketService.java ~939-960) directly against a plain ticket-like object — see that exported
-// function's own header comment in mockApi.js for why FULLY_DELIVERED and "already
-// GOODS_RECEIVED" are not practical to reach end to end through storedImportRequests.advanceStep
-// (unlike S3/S4 above, which do drive a real fixture through the full chain).
+// TicketService#applyImportRequestRollup directly against a plain ticket-like object.
 function fakeRollupTicket(over = {}) {
   return {
     id: 999001,

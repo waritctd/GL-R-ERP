@@ -5,26 +5,9 @@ import { dealStageLabel } from '../../utils/format.js';
 import { goodsArrived, goodsNotArrivedWarning } from '../importProgress/importSteps.js';
 import { EntryChannelFix } from './EntryChannelFix.jsx';
 
-/**
- * Manual stage-change modal. **It renders a decision; it does not make one.**
- *
- * Every stage in `stageDecisions` arrives from the backend
- * (GET /api/tickets/{id}/actions → TicketService.stageDecisions) already carrying:
- *   • `allowed`        — would updateStage accept this move, for this user, on this deal?
- *   • `requiresReason` — would it additionally demand a written justification?
- *   • `blockedReason`  — if not allowed, the server's own message, verbatim.
- *
- * This component previously computed all three for itself, from a copy of the stage list, a copy
- * of TicketService.requireStageWriteAccess and a copy of the note rule. The note copy was the
- * pre-#704 version — `distance > 1` plus one hardcoded backward pair — so it demanded a written
- * reason for three of the business's four normal routes (an owner buying direct, a contractor
- * arriving with a BOQ at S8, an all-from-stock deal skipping procurement) that the backend had
- * already stopped requiring. There is now nothing here to disagree with.
- *
- * The blocked stages are SHOWN, not hidden. That is the point of the new payload: an option that
- * silently vanishes leaves the rep guessing, while "ยังไปไม่ได้ — ยังไม่ได้รับชำระมัดจำ" tells them
- * what to do next. The select still offers only what will actually be accepted.
- */
+/** Manual stage-change modal. **It renders a decision; it does not make one.** Every stage in `stageDecisions`
+ * arrives from the backend already carrying: • `allowed`. The select still offers only what will actually be
+ * accepted. */
 export function UpdateStageModal({
   deal, stageDecisions = [], onClose, onSubmit, submitting,
   entryChannelAction, onSetEntryChannel,
@@ -41,10 +24,8 @@ export function UpdateStageModal({
   const noteRequired = Boolean(selected?.requiresReason);
   const canSave = stage !== '' && (!noteRequired || note.trim() !== '') && !submitting;
 
-  // Direction is used ONLY to choose between two pieces of copy — never to decide whether the note
-  // is required, which is `requiresReason` above and nothing else. `no` is the backend's own
-  // display sequence, so comparing two of them is a lookup, not a rule. (The service picks between
-  // the same two messages the same way.)
+  // Direction is used ONLY to choose between two pieces of copy — never to decide whether the note is required,
+  // which is `requiresReason` above and nothing else.
   const current = stageDecisions.find((decision) => decision.stage === deal?.salesStage) ?? null;
   const backward = Boolean(selected && current && selected.no < current.no);
   // W3-09: leaving ขั้น 12 forward by hand while the goods have not all arrived.
@@ -140,15 +121,14 @@ export function UpdateStageModal({
                       <span className="block text-xs font-bold text-text-secondary">
                         {dealStageLabel(decision.stage, deal?.entryChannel).label}
                       </span>
-                      {/* The server's own refusal message, verbatim — so the tooltip a rep reads
-                          before clicking is exactly the error they would have got by clicking. */}
+                      {/* The server's own refusal message, verbatim — so the tooltip a rep reads before clicking is exactly the error
+                       * they would have got by clicking. */}
                       <span className="block text-2xs leading-snug text-text-muted [overflow-wrap:anywhere]">
                         {decision.blockedReason}
                       </span>
-                      {/* "…— แก้ช่องทางดีลก่อน" is the server's remedy; this is the control that does it,
-                          INLINE because this component is already a dialog. Only rows the server
-                          itself marked off-route: a row blocked for permission or a payment fact
-                          would be offered a remedy that cannot clear it. */}
+                      {/* "…— แก้ช่องทางดีลก่อน" is the server's remedy; this is the control that does it, INLINE because this
+                       * component is already a dialog. Only rows the server itself marked off-route: a row blocked for permission or
+                       * a payment fact would be offered a remedy that cannot clear it. */}
                       {decision.onRoute === false ? (
                         <EntryChannelFix
                           entryChannel={deal?.entryChannel}

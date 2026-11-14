@@ -22,17 +22,9 @@ import org.springframework.stereotype.Repository;
 import th.co.glr.hr.approval.PendingApproverSql;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * Modelled closely on {@code th.co.glr.hr.overtime.OvertimeRepository} -- same idioms
- * (text-block SQL, {@link MapSqlParameterSource}, a shared {@code baseSelect()}, a private row
- * mapper). Deliberately does not import anything from the {@code overtime} package, so the two
- * modules' rules can diverge without dragging each other along.
- *
- * <p>They now HAVE diverged, in the direction that matters: overtime scopes reads to a ผู้จัดการ's
- * ฝ่าย, welfare scopes them to the employee alone. {@link #findRequests} and
- * {@link #findEmployeeOptions} therefore no longer take a division at all -- see
- * {@link SpecialMoneyFilter}. Do not "restore the symmetry" with overtime here.
- */
+/** Modelled closely on th.co.glr.hr.overtime.OvertimeRepository -- same idioms (text-block SQL,
+ * MapSqlParameterSource, a shared baseSelect(), a private row mapper). Do not "restore the symmetry" with
+ * overtime here. */
 @Repository
 public class SpecialMoneyRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -56,11 +48,8 @@ public class SpecialMoneyRepository {
     }
 
     // findEmployeeAccess (employee -> division / reports-to) was deleted on 2026-08-10 along with
-    // SpecialMoneyService.managesEmployee, its only caller. It answered "does this ผู้จัดการ manage
-    // this employee?" -- exactly the question welfare must no longer ask, since hr/ceo are the only
-    // roles that may look at another employee's claim. Reinstating it is how the division-wide read
-    // comes back; overtime and leave keep their own copies for their own (still division-scoped)
-    // rules.
+    // SpecialMoneyService.managesEmployee, its only caller. Reinstating it is how the division-wide read comes
+    // back; overtime and leave keep their own copies for their own (still division-scoped) rules.
 
     public Optional<EmployeeEligibilitySnapshot> findEligibility(long employeeId, LocalDate today) {
         return jdbc.query("""
@@ -89,36 +78,9 @@ public class SpecialMoneyRepository {
             .findFirst();
     }
 
-    /**
-     * {@code year} is deliberately never {@code event_date}'s year -- see {@code
-     * SpecialMoneyService#usageYear}'s Javadoc for why that field cannot key an annual cap (it is
-     * employee-supplied and unbounded: {@link SubmitSpecialMoneyHttpRequest} marks it {@code
-     * @NotNull} only, V66 has no future-date check, and {@code evaluateMedical} does not even read
-     * it). The two queries below key on two DIFFERENT columns instead, because they run over
-     * different status sets and only one of those columns is populated for both:
-     *
-     * <ul>
-     *   <li><b>{@code approvedAmountThisYear}</b> -- {@code status = 'APPROVED'} only, so {@code
-     *       payroll_month} is always non-null ({@code chk_smr_approved_complete}) and is the exact
-     *       column that decides which calendar year's payroll actually pays this row -- V128's
-     *       {@code welfare_pay} is summed the same way. It is assigned by the server at approval
-     *       time ({@code SpecialMoneyService#ceoApproveFrom}) from {@code LocalDate.now(...)}, never
-     *       from client input.
-     *   <li><b>{@code activeCountThisYear}</b> -- also spans {@code SUBMITTED} /
-     *       {@code MANAGER_APPROVED}, which have no {@code payroll_month} yet (NULL until
-     *       approval), so it keys on {@code requested_at} instead: a server-stamped timestamp
-     *       ({@code DEFAULT now()}; {@link #create} never writes it explicitly and no method in
-     *       this class ever updates it afterwards) present on every row from the moment it is
-     *       created. Bangkok-zoned to match {@code SpecialMoneyService.BUSINESS_ZONE} -- this
-     *       connection has no session-level timezone configured, so a bare {@code EXTRACT(YEAR FROM
-     *       requested_at)} would extract whatever the server/session default (commonly UTC) says,
-     *       which can disagree with Bangkok's calendar date by up to 7 hours a day.
-     * </ul>
-     *
-     * <p>Both replacements are deliberately columns the employee never supplies on the request
-     * body, so neither can be walked back to "employee picks the year" the way {@code event_date}
-     * could.
-     */
+    /** year is deliberately never event_date's year -- see SpecialMoneyService#usageYear's Javadoc for why that
+     * field cannot key an annual cap. It is assigned by the server at approval time
+     * (SpecialMoneyService#ceoApproveFrom) from LocalDate.now(...), never from client input. */
     public UsageSnapshot findUsage(long employeeId, int year) {
         Map<SpecialMoneyType, BigDecimal> approvedAmountThisYear = new EnumMap<>(SpecialMoneyType.class);
         jdbc.query("""
@@ -139,9 +101,9 @@ public class SpecialMoneyRepository {
                 return null;
             });
 
-        // Counts include in-flight rows on purpose -- see UsageSnapshot's javadoc. Counting only
-        // APPROVED would let an employee file the same once-per-year claim twice before either was
-        // decided, and both would then be approvable.
+        // Counts include in-flight rows on purpose -- see UsageSnapshot's javadoc. Counting only APPROVED would let an
+        // employee file the same once-per-year claim twice before either was decided, and both would then be
+        // approvable.
         Map<SpecialMoneyType, Integer> activeCountLifetime = new EnumMap<>(SpecialMoneyType.class);
         jdbc.query("""
             SELECT request_type, COUNT(*) AS lifetime_count
@@ -180,9 +142,7 @@ public class SpecialMoneyRepository {
         return new UsageSnapshot(approvedAmountThisYear, activeCountLifetime, activeCountThisYear);
     }
 
-    // ---------------------------------------------------------------------
     // Evidence attachments (hr.special_money_request_attachment, V66)
-    // ---------------------------------------------------------------------
 
     public long addAttachment(
             long requestId, Long uploadedById, String fileName, String storagePath, String mimeType, Long sizeBytes) {
@@ -333,11 +293,9 @@ public class SpecialMoneyRepository {
             params.addValue("employeeId", filter.employeeId());
         }
         if (filter.ownEmployeeId() != null) {
-            // Own rows ONLY -- no division disjunct, no reports_to disjunct. Welfare is
-            // confidential to each employee (SpecialMoneyService's class Javadoc): hr/ceo read
-            // across it by leaving ownEmployeeId null, and everyone else, ผู้จัดการ included, is
-            // pinned to themselves. This clause used to read
-            // `(s.employee_id = :me OR e.division_id = :myDivision)`, which is the bug.
+            // Own rows ONLY -- no division disjunct, no reports_to disjunct. Welfare is confidential to each employee
+            // (SpecialMoneyService's class Javadoc): hr/ceo read across it by leaving ownEmployeeId null, and everyone
+            // else, ผู้จัดการ included, is pinned to themselves.
             sql.append(" AND s.employee_id = :ownEmployeeId");
             params.addValue("ownEmployeeId", filter.ownEmployeeId());
         }
@@ -354,15 +312,7 @@ public class SpecialMoneyRepository {
         return jdbc.query(sql.toString(), params, this::mapRequest);
     }
 
-    /**
-     * The live approval route: SUBMITTED straight to APPROVED. Welfare has no manager stage, so
-     * {@code manager_approved_by} / {@code manager_approved_at} stay NULL on every request approved
-     * from here — stamping the CEO into those columns would forge a review stage that never
-     * happened.
-     *
-     * <p>{@link #ceoApprove} is the same statement guarded on {@code MANAGER_APPROVED}, kept only to
-     * clear rows written before the manager stage was removed.
-     */
+    /** The live approval route: SUBMITTED straight to APPROVED. */
     public int ceoDirectApprove(
             long id,
             Long reviewedById,
@@ -472,17 +422,9 @@ public class SpecialMoneyRepository {
             .addValue("reviewerNote", cleanNote(reviewerNote)));
     }
 
-    /**
-     * The submit form's employee picker. <b>Not</b> {@code OvertimeRepository.findEmployeeOptions}'s
-     * shape any more: overtime offers a ผู้จัดการ their whole ฝ่าย because overtime really can be
-     * filed and approved for a team, whereas welfare is confidential per employee.
-     *
-     * <p>So there is no {@code managerDivisionId} parameter: {@code includeAll} (hr/ceo) returns
-     * every active employee as a LIST FILTER roster, and everyone else gets exactly themselves.
-     * That keeps the picker in step with {@link SpecialMoneyService#resolveTargetEmployee}, which
-     * refuses any target but the caller — offering a name here that submit would then 403 turns a
-     * picker choice into an error.
-     */
+    /** The submit form's employee picker. Not OvertimeRepository.findEmployeeOptions's shape any more: overtime
+     * offers a ผู้จัดการ their whole ฝ่าย because overtime really can be filed and approved for a team, whereas
+     * welfare is confidential per employee. */
     public List<SpecialMoneyEmployeeOption> findEmployeeOptions(Long actorEmployeeId, boolean includeAll) {
         StringBuilder sql = new StringBuilder("""
             SELECT e.employee_id,
@@ -508,9 +450,8 @@ public class SpecialMoneyRepository {
                 rs.getString("employee_name"),
                 rs.getString("department_name"),
                 actorEmployeeId != null && employeeId == actorEmployeeId,
-                // directReport is now ALWAYS false -- nobody may file for anybody. Kept on the DTO
-                // (rather than removed) so the wire shape and mockApi's mirror stay put; see
-                // SpecialMoneyEmployeeOption.
+                // directReport is now ALWAYS false -- nobody may file for anybody. Kept on the DTO (rather than removed) so
+                // the wire shape and mockApi's mirror stay put; see SpecialMoneyEmployeeOption.
                 false
             );
         });
@@ -576,9 +517,9 @@ public class SpecialMoneyRepository {
                    s.created_at,
                    s.updated_at,
                    """
-            // feat/pending-approver-info: read-only "who this is waiting on" -- welfare is
-            // CEO-only, single-stage (see SpecialMoneyService's class Javadoc), so the single
-            // generic lookup below is the only candidate this domain ever needs.
+            // feat/pending-approver-info: read-only "who this is waiting on" -- welfare is CEO-only, single-stage (see
+            // SpecialMoneyService's class Javadoc), so the single generic lookup below is the only candidate this domain
+            // ever needs.
             + PendingApproverSql.SINGLE_ACTIVE_CEO_NAME_SQL + " AS ceo_single_name"
             + """
 
@@ -636,22 +577,17 @@ public class SpecialMoneyRepository {
         );
     }
 
-    /**
-     * feat/pending-approver-info: welfare is CEO-only, single-stage (see {@code
-     * SpecialMoneyService}'s class Javadoc -- {@code MANAGER_APPROVED} survives only for legacy
-     * rows and {@code ceoApproveFrom} handles both the same way), so both pending statuses resolve
-     * to "ceo". Any other status (APPROVED/REJECTED/CANCELLED) has nobody left to wait on.
-     */
+    /** feat/pending-approver-info: welfare is CEO-only, single-stage (see SpecialMoneyService's class Javadoc --
+     * MANAGER_APPROVED survives only for legacy rows and ceoApproveFrom handles both the same way), so both
+     * pending statuses resolve to "ceo". */
     String resolvePendingApproverRole(ResultSet rs) throws SQLException {
         String status = rs.getString("status");
         return "SUBMITTED".equals(status) || "MANAGER_APPROVED".equals(status) ? "ceo" : null;
     }
 
-    /**
-     * feat/pending-approver-info: {@code null} whenever more than one active ceo-role employee
-     * exists -- see {@link PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL}'s Javadoc. Deliberate
-     * ambiguity handling, not a bug -- see this feature's PR body.
-     */
+    /** feat/pending-approver-info: null whenever more than one active ceo-role employee exists -- see
+     * PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL's Javadoc. Deliberate ambiguity handling, not a bug -- see
+     * this feature's PR body. */
     String resolvePendingApproverName(ResultSet rs) throws SQLException {
         return "ceo".equals(resolvePendingApproverRole(rs)) ? blankToNull(rs.getString("ceo_single_name")) : null;
     }

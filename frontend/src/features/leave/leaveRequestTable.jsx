@@ -55,20 +55,8 @@ export function leaveRequestRowKey(request) {
   return request.id;
 }
 
-/**
- * True when `viewer` IS the person this row is waiting on -- so the note below would spend a line
- * telling them their own name.
- *
- * Two ways to be that person, matching the two branches of the mock/Java
- * `resolvePendingApproverRole`: the row routes to a named direct manager and that manager is the
- * viewer, or it routes to the generic "hr" bucket and the viewer is in it (canReviewLeave is the
- * role-level hr permission -- see leaveSurfaceTabs.js's `review` tab comment for why that constant
- * is the coarse role signal and never the per-row gate).
- *
- * NOT simply "the viewer may act on this row": an hr actor may decide a request that is genuinely
- * waiting on someone else's division manager, and for them the note is the whole point -- it says
- * whose decision this normally is. Only the self-referential case is suppressed.
- */
+/** True when `viewer` IS the person this row is waiting on -- so the note below would spend a line telling them
+ * their own name. Only the self-referential case is suppressed. */
 function pendingOnViewer(request, viewer) {
   if (!viewer) return false;
   if (request.pendingApproverRole === 'manager') {
@@ -167,13 +155,8 @@ export function renderLeaveRequestExpanded(request) {
   );
 }
 
-/**
- * `expandedId`/`onToggleExpand` drive the dedicated expand-toggle column (same
- * convention CommissionPage.jsx already uses: a first, header-less column with an
- * `aria-expanded` icon button). `renderActions` lets each tab supply its own row
- * actions -- MyLeaveTab only ever shows a self-cancel button, ReviewQueueTab shows
- * approve/reject/cancel -- without this module needing to know which.
- */
+/** `expandedId`/`onToggleExpand` drive the dedicated expand-toggle column (same convention CommissionPage.jsx
+ * already uses: a first, header-less column with an `aria-expanded` icon button). */
 export function buildLeaveRequestColumns({
   expandedId, onToggleExpand, renderActions, actionsHeader = '', viewer,
 }) {

@@ -27,8 +27,8 @@ class QuotationRendererTest {
     private final QuotationRenderer renderer = new QuotationRenderer();
 
     private void requireLibreOffice() {
-        // toPdf() shells out to LibreOffice; skip (don't fail) where it isn't installed —
-        // same policy as the repo's Testcontainers-on-Docker gating. CI installs libreoffice-calc.
+        // toPdf() shells out to LibreOffice; skip (don't fail) where it isn't installed — same policy as the repo's
+        // Testcontainers-on-Docker gating. CI installs libreoffice-calc.
         Assumptions.assumeTrue(LibreOfficePdfConverter.isAvailable(),
             "LibreOffice (soffice) not installed — skipping PDF render test");
     }
@@ -41,19 +41,19 @@ class QuotationRendererTest {
 
         assertThat(new String(pdf, 0, 5)).isEqualTo("%PDF-");
         String text = strip(pdf);
-        // PDFBox's text extraction inserts stray spaces inside Thai glyph clusters (e.g.
-        // "จำกั ด") that don't reflect the real rendered document — flatten whitespace
-        // before asserting on any Thai substring per the project's PDF-test convention.
+        // PDFBox's text extraction inserts stray spaces inside Thai glyph clusters (e.g. "จำกั ด") that don't reflect
+        // the real rendered document — flatten whitespace before asserting on any Thai substring per the project's
+        // PDF-test convention.
         String flat = text.replaceAll("\\s+", "");
 
-        // Header block — the real template's company block is the full legal name
-        // (quotation_template.xls row 0 col 1), not the abbreviated name.
+        // Header block — the real template's company block is the full legal name (quotation_template.xls row 0 col
+        // 1), not the abbreviated name.
         assertThat(flat).contains("บริษัทจีแอลแอนด์อาร์แทปส์แอนด์ไทลส์จำกัด");
         assertThat(text).contains("ใบเสนอราคา");
         assertThat(text).contains("QT-2026-0042");
-        // Customer block — "เรียน" (A5) and the customer name (B5) are separate template
-        // cells; the PDF's text-extraction order does not keep them adjacent, so assert
-        // each independently rather than as one concatenated string.
+        // Customer block — "เรียน" (A5) and the customer name (B5) are separate template cells; the PDF's
+        // text-extraction order does not keep them adjacent, so assert each independently rather than as one
+        // concatenated string.
         assertThat(text).contains("เรียน");
         assertThat(text).contains("Test Customer Co., Ltd.");
         // B8 carries a literal double space before the colon in the real template.
@@ -70,8 +70,7 @@ class QuotationRendererTest {
         assertThat(text).contains("174,000.00");
         assertThat(text).contains("12,180.00");
         assertThat(text).contains("186,180.00");
-        // Signature block — real template label is "พนักงานขาย" (sales staff), not the
-        // invented "ผู้เสนอราคา".
+        // Signature block — real template label is "พนักงานขาย" (sales staff), not the invented "ผู้เสนอราคา".
         assertThat(text).contains("พนักงานขาย");
         assertThat(text).doesNotContain("?????");
     }
@@ -111,10 +110,9 @@ class QuotationRendererTest {
     @Test
     void pdfFlowsEveryItemAcrossPagesBeyondTheTemplateZone() throws Exception {
         requireLibreOffice();
-        // More than 4 items switches QuotationRenderer to the one-row-per-item flow layout: EVERY
-        // item renders (items past the template's item zone get cloned table styling), the footer
-        // relocates below the last item, and the quote paginates across pages. Items 12 and 20 sit
-        // well past the old 4-slot cap, so their presence proves the flow renders the overflow.
+        // More than 4 items switches QuotationRenderer to the one-row-per-item flow layout: EVERY item renders (items
+        // past the template's item zone get cloned table styling), the footer relocates below the last item, and the
+        // quote paginates across pages.
         List<TicketItemDto> items = new ArrayList<>();
         for (int i = 1; i <= 20; i++) {
             items.add(item(i, "Brand" + i, "Model" + i, BigDecimal.ONE, new BigDecimal("10.00")));
@@ -129,8 +127,8 @@ class QuotationRendererTest {
 
         assertThat(text).contains("Model1");
         assertThat(text).contains("Model12");   // past the old 4-item cap
-        assertThat(text).contains("Model20");   // last item still renders
-        // Subtotal reflects all 20 × 10.00 = 200.00, then +7% VAT → 214.00 grand total; no cell errors.
+        assertThat(text).contains("Model20");   // last item still renders Subtotal reflects all 20 × 10.00 = 200.00, then +7% VAT → 214.00 grand total; no
+        // cell errors.
         assertThat(text).contains("200.00");
         assertThat(text).contains("214.00");
         assertThat(text).doesNotContain("#VALUE!").doesNotContain("#REF!").doesNotContain("###");
@@ -140,8 +138,8 @@ class QuotationRendererTest {
     @Test
     void aQuoteWithinTheTemplateItemZoneStaysASinglePage() throws Exception {
         requireLibreOffice();
-        // Up to SINGLE_PAGE_CAPACITY (12) one-line items keep the footer at its anchored native
-        // rows and fit on one page — the "fills the page like Excel" layout.
+        // Up to SINGLE_PAGE_CAPACITY (12) one-line items keep the footer at its anchored native rows and fit on one
+        // page — the "fills the page like Excel" layout.
         List<TicketItemDto> items = new ArrayList<>();
         for (int i = 1; i <= 6; i++) {
             items.add(item(i, "Brand" + i, "Model" + i, new BigDecimal("10"), new BigDecimal("100.00")));
@@ -161,10 +159,9 @@ class QuotationRendererTest {
     @Test
     void aQuoteLargerThanOnePageOfItemsPaginatesWithTotalsOnTheLastPage() throws Exception {
         requireLibreOffice();
-        // Enough items that the quote must span multiple pages in ANY font environment — the exact
-        // page count is font-dependent (CI runs without the Thai fonts, which over-shrink), but 120
-        // one-line items cannot fit a single page even at maximum shrink. Every item renders and the
-        // grand total is correct.
+        // Enough items that the quote must span multiple pages in ANY font environment — the exact page count is
+        // font-dependent (CI runs without the Thai fonts, which over-shrink), but 120 one-line items cannot fit a
+        // single page even at maximum shrink. Every item renders and the grand total is correct.
         List<TicketItemDto> items = new ArrayList<>();
         for (int i = 1; i <= 120; i++) {
             items.add(item(i, "Brand" + i, "Model" + i, BigDecimal.ONE, new BigDecimal("10.00")));
@@ -186,13 +183,9 @@ class QuotationRendererTest {
 
     @Test
     void xlsxOutputIsRealBiff8OleBytesNotOoxmlZip() throws Exception {
-        // Pins the byte format and the advertised content type together: TicketController's
-        // quotationFile endpoint serves this exact output as "application/vnd.ms-excel" +
-        // ".xls". WorkbookFactory.create(templates/quotation_template.xls) returns an
-        // HSSFWorkbook, so wb.write(out) always emits OLE2/Compound File Binary bytes
-        // ([MS-CFB], BIFF8 .xls) — never the ZIP "PK\x03\x04" local-file-header magic an OOXML
-        // .xlsx would start with. If this ever drifts to XSSF, this assertion catches it before
-        // the response headers do (or don't).
+        // Pins the byte format and the advertised content type together: TicketController's quotationFile endpoint
+        // serves this exact output as "application/vnd.ms-excel" + ".xls". If this ever drifts to XSSF, this assertion
+        // catches it before the response headers do (or don't).
         byte[] xlsx = renderer.toXlsx(ticket(List.of(item(1, "Cotto", "Marble Series",
             BigDecimal.ONE, new BigDecimal("10.00")))), quotation(), customer(null));
 
@@ -219,11 +212,8 @@ class QuotationRendererTest {
 
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            // Flow layout: items occupy rows 9..(9+count-1); the footer block (whose subtotal sits
-            // at 0-based row 38 — SUBTOTAL_ROW, post-H3's permanent +1 row shift for line 3's new
-            // continuation row; see QuotationRenderer#FOOTER_END's own comment) is relocated by
-            // delta = (9 + count) - 22, so the subtotal lands at row 38 + delta = 25 + count.
-            // Col I → index 8.
+            // Flow layout: items occupy rows 9..; the footer block is relocated by delta = - 22, so the subtotal lands at
+            // row 38 + delta = 25 + count. Col I → index 8.
             int subtotalRow = 25 + count;
             double subtotalCell = sheet.getRow(subtotalRow).getCell(8).getNumericCellValue();
             assertThat(BigDecimal.valueOf(subtotalCell).setScale(2, RoundingMode.HALF_UP))
@@ -258,10 +248,8 @@ class QuotationRendererTest {
         assertThat(renderer.wrapItemLineToWidth(calcLine, 62)).containsExactly(calcLine);
     }
 
-    /** Genuinely over budget: prefers the ")"/"(" boundary between parenthesised groups, so the
-     * second group moves WHOLE to the next line rather than splitting its own words. The budget is
-     * DERIVED from the first group's own measured width (never a guessed magic number) — just
-     * enough for group 1 alone, not for the whole line. */
+    /** Genuinely over budget: prefers the ")"/"(" boundary between parenthesised groups, so the second group moves
+     * WHOLE to the next line rather than splitting its own words. */
     @Test
     void wrapItemLineToWidth_overBudget_breaksAtParentheticalGroupBoundary() {
         String group1 = "(จำนวน 5,560 แผ่น และปัดขึ้นเต็มกล่อง = 5,560 แผ่น)";
@@ -272,15 +260,15 @@ class QuotationRendererTest {
 
         List<String> wrapped = renderer.wrapItemLineToWidth(line, budget);
         assertThat(wrapped).containsExactly(group1, group2);
-        // Every wrapped line individually fits the budget, and re-joining them (with the single
-        // space the boundary regex consumed) reproduces the original text losslessly.
+        // Every wrapped line individually fits the budget, and re-joining them (with the single space the boundary
+        // regex consumed) reproduces the original text losslessly.
         wrapped.forEach(l -> assertThat(QuotationRenderer.visibleLength(l)).isLessThanOrEqualTo(budget));
         assertThat(String.join(" ", wrapped)).isEqualTo(line);
     }
 
-    /** A single group longer than the budget by itself has no boundary to break at, so it falls
-     * back to the plain greedy word wrap -- never splitting a single word, and every word here is
-     * individually well under the budget so the wrap actually has somewhere to break. */
+    /** A single group longer than the budget by itself has no boundary to break at, so it falls back to the plain
+     * greedy word wrap -- never splitting a single word, and every word here is individually well under the budget
+     * so the wrap actually has somewhere to break. */
     @Test
     void wrapItemLineToWidth_aSingleOverBudgetGroup_fallsBackToGreedyWordWrap() {
         String line = "(Alpha Bravo Charlie Delta Echo Foxtrot Golf Hotel)";
@@ -291,8 +279,8 @@ class QuotationRendererTest {
         assertThat(String.join(" ", wrapped)).isEqualTo(line);
     }
 
-    /** A line with no parenthesised groups at all (plain prose) has no boundary to prefer, so it
-     * falls straight to the greedy word wrap too. */
+    /** A line with no parenthesised groups at all (plain prose) has no boundary to prefer, so it falls straight to
+     * the greedy word wrap too. */
     @Test
     void wrapItemLineToWidth_aLineWithNoParenGroups_fallsBackToGreedyWordWrap() {
         String line = "Super Extra Premium Glazed Porcelain Large Format Tile with Anti-Slip Coating";
@@ -403,11 +391,8 @@ class QuotationRendererTest {
         String text = strip(pdf);
         String flat = text.replaceAll("\\s+", "");
 
-        // Heading printed exactly once even though two items share it — counted in the SHEET the
-        // PDF is printed from, not in the PDF's extracted text: LibreOffice's PDF export of a
-        // substituted Thai font (CI has only fonts-thai-tlwg) emits tone-mark variant glyphs
-        // with no ToUnicode mapping, so "หน้าบ้าน" came back from the PDF 0 times there while
-        // the page printed it once. The XLS cell is what decides how often it prints.
+        // Heading printed exactly once even though two items share it. The XLS cell is what decides how often it
+        // prints.
         assertThat(countCellsWithText(renderer.toXls(model), "หน้าบ้าน")).isEqualTo(1);
         // All three description lines of BOTH items survive.
         assertThat(flat).contains("รุ่นElegance");
@@ -493,8 +478,8 @@ class QuotationRendererTest {
             }
             assertThat(signature).as("approver signature picture should have been anchored").isNotNull();
 
-            // Row 44 (0-based, post-H3-shift LABELS_ROW) is now ONE merged A:I cell carrying all
-            // four labels in a single string, in order — not a per-label merged column range.
+            // Row 44 (0-based, post-H3-shift LABELS_ROW) is now ONE merged A:I cell carrying all four labels in a single
+            // string, in order — not a per-label merged column range.
             String labelsRowText = sheet.getRow(44).getCell(0).getStringCellValue();
             // The template's own original labels, not an invented ผู้ตรวจ/ผู้อนุมัติ pair.
             assertThat(labelsRowText).contains("ผู้พิมพ์", "พนักงานขาย", "ผู้จัดการฝ่ายขาย", "ผู้สั่งซื้อ");
@@ -506,16 +491,15 @@ class QuotationRendererTest {
             assertThat(idxChecked).isLessThan(idxApproved);
             assertThat(idxApproved).isLessThan(idxCustomer);
 
-            // Row 45 (SALESPERSON_FORMULA_ROW / names row) is likewise ONE merged A:I cell — the
-            // approver's name must land after the checked-by name.
+            // Row 45 (SALESPERSON_FORMULA_ROW / names row) is likewise ONE merged A:I cell — the approver's name must land
+            // after the checked-by name.
             String namesRowText = sheet.getRow(45).getCell(0).getStringCellValue();
             assertThat(namesRowText).contains("(A)", "(B)", "(ราม อิฐรัตน์)");
             assertThat(namesRowText.indexOf("(B)")).isLessThan(namesRowText.indexOf("(ราม อิฐรัตน์)"));
 
-            // The signature's absolute pixel start (col1/dx1 converted the same way
-            // #scaleSignaturePicture reads it back) must fall within the ผู้อนุมัติ slot — the
-            // third quarter of the A..I row (50%-75% of its total width) — strictly before the
-            // ผู้สั่งซื้อ slot that starts at 75%.
+            // The signature's absolute pixel start (col1/dx1 converted the same way #scaleSignaturePicture reads it back)
+            // must fall within the ผู้อนุมัติ slot — the third quarter of the A..I row (50%-75% of its total width) —
+            // strictly before the ผู้สั่งซื้อ slot that starts at 75%.
             double totalWidthPx = 0;
             for (int c = 0; c <= 8; c++) totalWidthPx += sheet.getColumnWidthInPixels(c);
             var anchor = signature.getClientAnchor();
@@ -586,12 +570,8 @@ class QuotationRendererTest {
         }
     }
 
-    /**
-     * The independent-per-slot half of the same contract: ผู้พิมพ์ has NO signature on file while
-     * พนักงานขาย and ผู้จัดการฝ่ายขาย both do. Only two pictures should be anchored — a slot with
-     * no image bytes must draw nothing (the text-only name stands alone), and the other two slots
-     * must be entirely unaffected by their neighbour's absence.
-     */
+    /** The independent-per-slot half of the same contract: ผู้พิมพ์ has NO signature on file while พนักงานขาย and
+     * ผู้จัดการฝ่ายขาย both do. */
     @Test
     void modelPath_slotWithNoSignatureOnFile_drawsNoPicture_otherSlotsUnaffected() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
@@ -660,8 +640,8 @@ class QuotationRendererTest {
         }
     }
 
-    /** A DRAFT-shaped model (no submitted/approved dates, no approver) keeps those slots dotted;
-     * the five-argument constructor (legacy shape) prints all four dotted. */
+    /** A DRAFT-shaped model (no submitted/approved dates, no approver) keeps those slots dotted; the five-argument
+     * constructor (legacy shape) prints all four dotted. */
     @Test
     void modelPath_signatureBlock_missingDatesAndNames_printPlaceholders() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
@@ -784,8 +764,8 @@ class QuotationRendererTest {
         return x + dx / 1024.0 * sheet.getColumnWidthInPixels(col);
     }
 
-    /** One anchor corner's offset in POINTS below {@code baseRow}'s TOP edge (the corner may sit
-     * above the base row, or — as the signature's bottom now deliberately does — below it). */
+    /** One anchor corner's offset in POINTS below baseRow's TOP edge (the corner may sit above the base row, or —
+     * as the signature's bottom now deliberately does — below it). */
     private double anchorYPoints(org.apache.poi.ss.usermodel.Sheet sheet, int baseRow, int row, int dy) {
         double y = 0;
         for (int r = Math.min(baseRow, row); r < Math.max(baseRow, row); r++) {
@@ -827,10 +807,7 @@ class QuotationRendererTest {
         String[] labels = {"ผู้พิมพ์", "พนักงานขาย", "ผู้จัดการฝ่ายขาย", "ผู้สั่งซื้อ"};
         var poiFont = sheet.getWorkbook().getFontAt(
             sheet.getRow(labelsRow).getCell(0).getCellStyle().getFontIndexAsInt());
-        // Resolve through FontResolver, exactly like QuotationRenderer#resolveSignatureFontMetrics
-        // now does — measuring with the raw template font NAME ("Angsana New"/"Cordia New") would
-        // silently diverge from the renderer's own (fixed) metrics on a host without those fonts,
-        // since java.awt.Font's own fallback ("Dialog") is not fontconfig's Thai-aware substitute.
+        // Resolve through FontResolver, exactly like QuotationRenderer#resolveSignatureFontMetrics now does.
         String resolvedFamily = FontResolver.resolve(poiFont.getFontName()).family();
         var awtFont = new java.awt.Font(resolvedFamily, java.awt.Font.PLAIN,
             (int) poiFont.getFontHeightInPoints());
@@ -893,18 +870,16 @@ class QuotationRendererTest {
             }
             assertThat(signature).as("approver signature picture should have been anchored").isNotNull();
             var anchor = signature.getClientAnchor();
-            // A 2000px-wide image left at natural size would span dozens of these columns (even
-            // the sheet's widest column, B, is well under 2000px); scaled to ~30mm it must stay
-            // within a handful of columns of its start.
+            // A 2000px-wide image left at natural size would span dozens of these columns (even the sheet's widest column,
+            // B, is well under 2000px); scaled to ~30mm it must stay within a handful of columns of its start.
             assertThat(anchor.getCol2() - anchor.getCol1())
                 .as("scaled signature should span only a few columns, not the whole natural width")
                 .isLessThanOrEqualTo(4);
         }
     }
 
-    /** A real, valid PNG at an arbitrary size — {@code Workbook#addPicture} and
-     * {@code Picture#getImageDimension()} both need genuine IHDR/IDAT/IEND bytes, not a
-     * placeholder. */
+    /** A real, valid PNG at an arbitrary size — Workbook#addPicture and Picture#getImageDimension() both need
+     * genuine IHDR/IDAT/IEND bytes, not a placeholder. */
     private byte[] realPng(int width, int height) throws Exception {
         var image = new java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB);
         var out = new java.io.ByteArrayOutputStream();
@@ -915,10 +890,9 @@ class QuotationRendererTest {
     @Test
     void modelPath_paginatesAndKeepsPageFooter_forManyItems() throws Exception {
         requireLibreOffice();
-        // 30, not 12: the layout-spec §3 remark compaction (REMARK_V2_COMPACT_SHIFT) shrank the
-        // footer by 7 rows, so a 12-item/36-row document now fits on ONE page at a scale still
-        // above MIN_SCALE (a real improvement — fewer documents need to paginate at all). Needs
-        // enough rows to still genuinely exceed one page after that shrink.
+        // 30, not 12: the layout-spec §3 remark compaction (REMARK_V2_COMPACT_SHIFT) shrank the footer by 7 rows, so a
+        // 12-item/36-row document now fits on ONE page at a scale still above MIN_SCALE (a real improvement — fewer
+        // documents need to paginate at all).
         List<QuotationRenderModel.RenderItem> items = new ArrayList<>();
         for (int i = 1; i <= 30; i++) {
             items.add(renderItem(null,
@@ -938,9 +912,9 @@ class QuotationRendererTest {
 
     @Test
     void modelPath_emittedRowCountMatchesThreeItemsThreeLinesTwoHeadings() throws Exception {
-        // 3 items x 3 description lines each = 9 rows, + 2 heading rows (items 1&2 share one
-        // heading, item 3 starts a new one) = 11 emitted rows -- within the native 13-row budget,
-        // so the footer stays anchored (no move) and rows past the emitted count get cleared.
+        // 3 items x 3 description lines each = 9 rows, + 2 heading rows (items 1&2 share one heading, item 3 starts a
+        // new one) = 11 emitted rows -- within the native 13-row budget, so the footer stays anchored (no move) and
+        // rows past the emitted count get cleared.
         QuotationRenderModel.RenderItem item1 = renderItem("โซนเอ", threeLines("A"), BigDecimal.ONE,
             BigDecimal.TEN, "Net", BigDecimal.TEN, BigDecimal.TEN);
         QuotationRenderModel.RenderItem item2 = renderItem("โซนเอ", threeLines("B"), BigDecimal.ONE,
@@ -966,8 +940,8 @@ class QuotationRendererTest {
             // Row 16: new heading "โซนบี" for item3.
             assertThat(sheet.getRow(16).getCell(1).getStringCellValue()).isEqualTo("โซนบี");
             assertThat(sheet.getRow(17).getCell(0).getNumericCellValue()).isEqualTo(3.0);
-            // Rows 20 (9 + 11 emitted) and 21 -- past the emitted content -- are cleared, not
-            // showing template placeholder leftovers.
+            // Rows 20 (9 + 11 emitted) and 21 -- past the emitted content -- are cleared, not showing template placeholder
+            // leftovers.
             assertThat(cellIsEmpty(sheet, 20, 1)).isTrue();
             assertThat(cellIsEmpty(sheet, 21, 1)).isTrue();
         }
@@ -1014,14 +988,9 @@ class QuotationRendererTest {
         }
     }
 
-    /**
-     * layout-spec §3 + html-fidelity-spec §8: every one of the 8 v2/full-remarks lines is written
-     * into a merged B..H range (not left as a plain column-B cell) — the remark box's width, so a
-     * composed line never needs to wrap; NOT B..I, which would swallow the H|I separator that is
-     * the box's right edge. Checks all 8 packed rows (REMARK_HEAD_ROWS[0]..+7 — the compaction
-     * leaves them consecutive, see REMARK_V2_COMPACT_SHIFT's Javadoc) and the "หมายเหตุ" label
-     * row above them, which is the first line inside the box.
-     */
+    /** layout-spec §3 + html-fidelity-spec §8: every one of the 8 v2/full-remarks lines is written into a merged
+     * B..H range (not left as a plain column-B cell) — the remark box's width, so a composed line never needs to
+     * wrap; NOT B..I, which would swallow the H|I separator that is the box's right edge. */
     @Test
     void modelPath_eachRemarkLine_isOneMergedRangeSpanningTheRemarkBox() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
@@ -1042,13 +1011,8 @@ class QuotationRendererTest {
         }
     }
 
-    /**
-     * html-fidelity-spec §8: the remark block is a closed box B..H — top rule on every cell B..H
-     * of the "หมายเหตุ" row (and on no cell of A or I: the rule stops at the เป็นเงิน column's
-     * left rule), left edge on B and right edge on H of every row down to line 8, and the
-     * covered cells hold no value (the template's per-row formulas would otherwise print through
-     * a merge in one engine and not the other).
-     */
+    /** html-fidelity-spec §8: the remark block is a closed box B..H — top rule on every cell B..H of the "หมายเหตุ"
+     * row, left edge on B and right edge on H of every row down to line 8, and the covered cells hold no value. */
     @Test
     void modelPath_remarkBox_hasTopRuleBtoH_andLeftRightEdgesOnEveryRow() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
@@ -1078,12 +1042,8 @@ class QuotationRendererTest {
         }
     }
 
-    /**
-     * layout-spec §3: the box must close DIRECTLY under the last remark line — no blank/bordered
-     * "phantom" row between line 8 and รวมเป็นเงิน. With the compaction in place the totals row
-     * sits immediately after the 8 packed remark rows (23..30), i.e. at row 31 (SUBTOTAL_ROW=38
-     * minus the 7-row compaction shift).
-     */
+    /** layout-spec §3: the box must close DIRECTLY under the last remark line — no blank/bordered "phantom" row
+     * between line 8 and รวมเป็นเงิน. */
     @Test
     void modelPath_noTrailingEmptyRow_betweenLastRemarkLineAndTotals() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
@@ -1102,12 +1062,9 @@ class QuotationRendererTest {
         }
     }
 
-    /**
-     * layout-spec §1: from the column-title row down to the last remark line there are ONLY
-     * vertical column lines and the outer box — no horizontal rule under any item/description/
-     * remark row. Spot-checks an interior item continuation row and an interior remark row both
-     * carry no bottom border.
-     */
+    /** layout-spec §1: from the column-title row down to the last remark line there are ONLY vertical column lines
+     * and the outer box — no horizontal rule under any item/description/ remark row. Spot-checks an interior item
+     * continuation row and an interior remark row both carry no bottom border. */
     @Test
     void modelPath_interiorItemAndRemarkRows_carryNoBottomBorder() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
@@ -1128,12 +1085,9 @@ class QuotationRendererTest {
         }
     }
 
-    /**
-     * layout-spec §5, REBUILT: each of the three signature rows (labels, names, dates) is now ONE
-     * merged A:I cell built from four equal-PIXEL-width text slots — not four discrete merged
-     * COLUMN ranges (git history: A:B/C:D/E:G/H:I, which put ผู้พิมพ์ alone behind column B, over
-     * half the page). Checked on all three rows the block writes.
-     */
+    /** layout-spec §5, REBUILT: each of the three signature rows (labels, names, dates) is now ONE merged A:I cell
+     * built from four equal-PIXEL-width text slots — not four discrete merged COLUMN ranges (git history:
+     * A:B/C:D/E:G/H:I, which put ผู้พิมพ์ alone behind column B, over half the page). */
     @Test
     void modelPath_signatureBlock_writesOneMergedAtoIRangePerRow_notFourDiscreteColumnRanges() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
@@ -1144,8 +1098,8 @@ class QuotationRendererTest {
         byte[] xlsx = renderer.toXls(model);
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            // LABELS_ROW=44, SALESPERSON_FORMULA_ROW(names)=45, DATE_ROW=46 -- footerShift=0 here
-            // ("1.x" is a single line, not the full 8-line v2 remark set).
+            // LABELS_ROW=44, SALESPERSON_FORMULA_ROW(names)=45, DATE_ROW=46 -- footerShift=0 here ("1.x" is a single line,
+            // not the full 8-line v2 remark set).
             for (int row : new int[]{44, 45, 46}) {
                 assertThat(mergedRange(sheet, row, 0))
                     .as("row " + row + " should be ONE merged A:I range, not four discrete ones")
@@ -1170,12 +1124,8 @@ class QuotationRendererTest {
         return mergedRange(sheet, row, 1);
     }
 
-    /**
-     * The template ALREADY carries embedded images (logo/certs) — a signature-image anchor must
-     * not corrupt the drawing layer they live in. Asserts the rendered workbook still has AT
-     * LEAST the template's original picture count (equal + 1 for the new signature, or equal if
-     * the (documented, logged) fallback path had to kick in — either way, nothing was lost).
-     */
+    /** The template ALREADY carries embedded images (logo/certs) — a signature-image anchor must not corrupt the
+     * drawing layer they live in. */
     @Test
     void modelPath_approverSignatureImage_survivesTemplatePictures() throws Exception {
         int originalPictureCount;
@@ -1256,21 +1206,9 @@ class QuotationRendererTest {
             .isGreaterThanOrEqualTo(3);
     }
 
-    /**
-     * Defect 2 root cause, pinned directly: {@code org.apache.poi.ss.util.ImageUtils
-     * #getImageDimension} (what {@link org.apache.poi.ss.usermodel.Picture#getImageDimension()}
-     * calls) SWALLOWS an image ImageIO has no reader for — an unsupported or corrupt format — and
-     * returns {@code Dimension(0, 0)} rather than throwing. Before the fix,
-     * {@code QuotationRenderer#anchorSlotSignature} still created a picture shape for such
-     * bytes and left it on its PROVISIONAL anchor, which is deliberately ZERO-WIDTH
-     * ({@code col1==col2}, {@code dx1==dx2}: same offset repeated, see the method's own comment).
-     * POI's model keeps a shape like that without complaint (which is exactly why a POI-only test
-     * would not have caught this), but LibreOffice's PDF export — and, by the same mechanism, a
-     * real Excel/Calc open of the .xls download — draws nothing for a zero-area shape. The fix
-     * must never let that shape exist in the first place: for bytes ImageIO cannot decode, the
-     * sheet ends up with exactly the template's own pictures, no phantom third one, degenerate or
-     * not.
-     */
+    /** Defect 2 root cause, pinned directly: org.apache.poi.ss.util.ImageUtils #getImageDimension (what
+     * org.apache.poi.ss.usermodel.Picture#getImageDimension() calls) SWALLOWS an image ImageIO has no reader for —
+     * an unsupported or corrupt format — and returns Dimension(0, 0) rather than throwing. */
     @Test
     void modelPath_undecodableApproverSignatureBytes_neverLeaveADegenerateAnchoredShape() throws Exception {
         QuotationRenderModel.RenderItem item = renderItem(null, threeLines("A"), BigDecimal.ONE,
@@ -1377,10 +1315,9 @@ class QuotationRendererTest {
             .map(Map.Entry::getValue).findFirst()
             .orElseThrow(() -> new AssertionError("signature labels row (long underscore run) not found in rendered PDF"));
 
-        // Both rows start at column A's left edge (S1 is A:I merged, left-aligned) — use the
-        // WIDER of the two observed left edges as the shared left reference, and the item row's
-        // right edge (the ราคา/เป็นเงิน columns' own content reaches furthest right) as the page
-        // reference; the signature row's own right edge is the thing under test.
+        // Both rows start at column A's left edge — use the WIDER of the two observed left edges as the shared left
+        // reference, and the item row's right edge as the page reference; the signature row's own right edge is the
+        // thing under test.
         double leftRef = Math.min(itemRow[0], signatureRow[0]);
         double tableSpan = itemRow[1] - leftRef;
         double signatureSpan = signatureRow[1] - leftRef;
@@ -1393,11 +1330,9 @@ class QuotationRendererTest {
             .isGreaterThan(0.80);
     }
 
-    /**
-     * Groups every real, positioned glyph LibreOffice drew into rows (by rounded Y), and returns
-     * each row's [minX, maxX] keyed by its own extracted text — used to find a specific row by
-     * stable ASCII content (see the width test above for why Thai text isn't a reliable key here).
-     */
+    /** Groups every real, positioned glyph LibreOffice drew into rows (by rounded Y), and returns each row's [minX,
+     * maxX] keyed by its own extracted text — used to find a specific row by stable ASCII content (see the width
+     * test above for why Thai text isn't a reliable key here). */
     private Map<String, double[]> rowSpansByAsciiContent(byte[] pdf) throws Exception {
         try (PDDocument doc = Loader.loadPDF(pdf)) {
             var byLine = new java.util.TreeMap<Integer, java.util.List<org.apache.pdfbox.text.TextPosition>>();
@@ -1428,8 +1363,8 @@ class QuotationRendererTest {
         }
     }
 
-    /** A minimal, real, valid 1×1 transparent PNG — magic bytes + a real IHDR/IDAT/IEND chain, not
-     * a placeholder string, so {@code Workbook#addPicture} has genuine image bytes to embed. */
+    /** A minimal, real, valid 1×1 transparent PNG — magic bytes + a real IHDR/IDAT/IEND chain, not a placeholder
+     * string, so Workbook#addPicture has genuine image bytes to embed. */
     private byte[] onePixelPng() {
         return Base64.getDecoder().decode(
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=");
@@ -1502,8 +1437,8 @@ class QuotationRendererTest {
                 "no measurable font for the I4 cell on this host -- cannot verify the fit");
             double neededPx = widthPt.getAsDouble() * 96.0 / 72.0; // pt -> 96dpi px
 
-            // Same POI-units -> twips -> pixel conversion #approverUnderscoreRun already uses for
-            // LibreOffice-fidelity assertions elsewhere in this file.
+            // Same POI-units -> twips -> pixel conversion #approverUnderscoreRun already uses for LibreOffice-fidelity
+            // assertions elsewhere in this file.
             int charWidthTwips = th.co.glr.hr.common.sheet.LibreOfficeMetrics.charWidthTwips(sheet.getWorkbook());
             int colTwips = th.co.glr.hr.common.sheet.LibreOfficeMetrics.columnTwips(
                 sheet.getColumnWidth(8), charWidthTwips);
@@ -1542,8 +1477,8 @@ class QuotationRendererTest {
         byte[] xls = renderer.toXls(model);
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            // H3/H5 = col 7 (SALES_LINE_COL) on rows 2/4 (DEPT_VALUE_ROW/UNIT_VALUE_ROW) — the
-            // template's own baked-in "ฝ่าย"/"หน่วยงาน" label text — must be cleared.
+            // H3/H5 = col 7 (SALES_LINE_COL) on rows 2/4 (DEPT_VALUE_ROW/UNIT_VALUE_ROW) — the template's own baked-in
+            // "ฝ่าย"/"หน่วยงาน" label text — must be cleared.
             assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label cleared when deptCode null").isTrue();
             assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 value stays blank").isEmpty();
             assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 หน่วยงาน label cleared when unitCode blank").isTrue();
@@ -1569,8 +1504,8 @@ class QuotationRendererTest {
             // ฝ่าย is gone even though this model carries "P003": no label, no value.
             assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label cleared although deptCode is filled").isTrue();
             assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 prints no department").isEmpty();
-            // หน่วยงาน is untouched: the Thai branch never writes H5 itself (it is the template's
-            // own baked-in text), and a filled value still prints beside it.
+            // หน่วยงาน is untouched: the Thai branch never writes H5 itself (it is the template's own baked-in text), and
+            // a filled value still prints beside it.
             assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 label untouched when unitCode filled").isFalse();
             assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).isEqualTo("D002");
         }
@@ -1644,8 +1579,8 @@ class QuotationRendererTest {
             assertThat(cellIsEmpty(sheet, 2, 7)).as("H3 ฝ่าย label cleared on a legacy render too").isTrue();
             assertThat(cellIsEmpty(sheet, 4, 7)).as("H5 หน่วยงาน label NOT cleared on legacy render").isFalse();
             assertThat(sheet.getRow(4).getCell(7).getStringCellValue()).isEqualTo("หน่วยงาน");
-            // The value cells (I3/I5) stay blank, exactly as they always have (nullSafe) — only the
-            // LABEL's untouched-ness is new coverage here.
+            // The value cells (I3/I5) stay blank, exactly as they always have (nullSafe) — only the LABEL's untouched-ness
+            // is new coverage here.
             assertThat(sheet.getRow(2).getCell(8).getStringCellValue()).as("I3 value blank").isEmpty();
             assertThat(sheet.getRow(4).getCell(8).getStringCellValue()).as("I5 value blank").isEmpty();
         }
@@ -1706,14 +1641,8 @@ class QuotationRendererTest {
     // proof that shrink-to-fit is actually honoured (and prints the full number, not "###") lives
     // in {@code #pdfNeverPrintsHashesForExtremeMagnitudeValues} below.
 
-    /**
-     * True if the cell at ({@code row}, {@code col}) is guaranteed not to clip to "###": either
-     * its column is already wide enough for the cell's OWN formatted text (LibreOffice's overflow
-     * rule), or the cell's style sets shrink-to-fit (which this suite's PDF probe proved
-     * LibreOffice also honours for a numeric cell — see the PR body). Uses the exact same
-     * FontResolver + LibreOfficeMetrics measurement {@code QuotationRenderer#fitColumnToText} and
-     * {@code #shrinkToFitIfOverflow} both use, so a false here is a false in the real renderer too.
-     */
+    /** True if the cell at is guaranteed not to clip to "###": either its column is already wide enough for the
+     * cell's OWN formatted text, or the cell's style sets shrink-to-fit. */
     private boolean cellNeverClips(org.apache.poi.ss.usermodel.Sheet sheet, int row, int col, String formattedText) {
         org.apache.poi.ss.usermodel.Cell cell = sheet.getRow(row).getCell(col);
         org.apache.poi.ss.usermodel.CellStyle style = cell.getCellStyle();
@@ -1752,12 +1681,8 @@ class QuotationRendererTest {
         }
     }
 
-    /**
-     * Companion/no-golden-regression check: an ORDINARY quantity must NEVER get shrink-to-fit —
-     * only the width check should ever make {@link #cellNeverClips} pass for it. If shrink-to-fit
-     * fired unconditionally, every existing document's style table (and therefore
-     * {@code QuotationRendererNoPictureGoldenTest}'s byte-hash pin) would change.
-     */
+    /** Companion/no-golden-regression check: an ORDINARY quantity must NEVER get shrink-to-fit — only the width
+     * check should ever make #cellNeverClips pass for it. */
     @Test
     void quantityColumn_ordinaryQuantityNeverGetsShrinkToFit_thai() throws Exception {
         QuotationRenderModel.RenderItem modestQty = renderItem(null, threeLines("A"),
@@ -1827,9 +1752,9 @@ class QuotationRendererTest {
 
     @Test
     void totalsColumn_neverClipsAGrandTotalAboveOneBillion_singlePageBranch_thai() throws Exception {
-        // Single item so this stays on the renderSinglePage branch, where VAT/TOTAL are left as
-        // the template's own Excel FORMULA cells (never overwritten by setNum) -- proves the
-        // shrink-to-fit guard still reaches a formula cell, not just a literal one.
+        // Single item so this stays on the renderSinglePage branch, where VAT/TOTAL are left as the template's own
+        // Excel FORMULA cells (never overwritten by setNum) -- proves the shrink-to-fit guard still reaches a formula
+        // cell, not just a literal one.
         BigDecimal amount = new BigDecimal("999990000.00"); // 1,000,000 x 999.99
         QuotationRenderModel.RenderItem hugeItem = renderItem(null, threeLines("A"),
             new BigDecimal("1000000"), new BigDecimal("999.99"), "Net",
@@ -1859,10 +1784,9 @@ class QuotationRendererTest {
 
     @Test
     void quantityAndTotalsColumns_neverClipOnAPaginatedMultiPageDocument_thai() throws Exception {
-        // 30 items x 3 description lines each, no heading, pushes this well past
-        // NATIVE_ITEM_CAPACITY into the layoutFlowing (multi-page) branch -- mirrors
-        // modelPath_paginatesAndKeepsPageFooter_forManyItems's own proven shape, just with large
-        // per-item values instead of modest ones.
+        // 30 items x 3 description lines each, no heading, pushes this well past NATIVE_ITEM_CAPACITY into the
+        // layoutFlowing (multi-page) branch -- mirrors modelPath_paginatesAndKeepsPageFooter_forManyItems's own proven
+        // shape, just with large per-item values instead of modest ones.
         List<QuotationRenderModel.RenderItem> items = new ArrayList<>();
         BigDecimal perItemAmount = new BigDecimal("99999999.99");
         for (int i = 1; i <= 30; i++) {
@@ -1886,16 +1810,16 @@ class QuotationRendererTest {
                 .as("first item's qty must not clip on page 1").isTrue();
             assertThat(cellNeverClips(sheet, 9, 8, String.format(java.util.Locale.US, "%,.2f", perItemAmount)))
                 .as("first item's amount must not clip on page 1").isTrue();
-            // Item 26 (index 25): row = 9 + 25*3 = 84 -- three description lines/item, no headings
-            // (label null) -- well past page 1's native capacity, proving a LATER page's cell is
-            // covered too, not just the first row #sizeMoneyColumns/#fitColumnToText already saw.
+            // Item 26 (index 25): row = 9 + 25*3 = 84 -- three description lines/item, no headings (label null) -- well
+            // past page 1's native capacity, proving a LATER page's cell is covered too, not just the first row
+            // #sizeMoneyColumns/#fitColumnToText already saw.
             int laterRow = 9 + 25 * 3;
             assertThat(cellNeverClips(sheet, laterRow, 2, "1,234,567"))
                 .as("a later item's qty (past page 1) must not clip").isTrue();
             assertThat(cellNeverClips(sheet, laterRow, 8, String.format(java.util.Locale.US, "%,.2f", perItemAmount)))
                 .as("a later item's amount (past page 1) must not clip").isTrue();
-            // Footer relocates by delta = (ITEM_START_ROW + emitted) - FOOTER_START.
-            // emitted = 30 items x 3 lines = 90; delta = (9 + 90) - 22 = 77.
+            // Footer relocates by delta = (ITEM_START_ROW + emitted) - FOOTER_START. emitted = 30 items x 3 lines = 90;
+            // delta = (9 + 90) - 22 = 77.
             int delta = (ITEM_START_ROW_FOR_TEST + 90) - FOOTER_START_FOR_TEST;
             assertThat(cellNeverClips(sheet, SUBTOTAL_ROW_FOR_TEST + delta, 8,
                 String.format(java.util.Locale.US, "%,.2f", subtotal))).as("subtotal must not clip").isTrue();
@@ -1908,8 +1832,8 @@ class QuotationRendererTest {
     }
 
     // Mirrors QuotationRenderer's own private row constants (ITEM_START_ROW/FOOTER_START/
-    // SUBTOTAL_ROW/VAT_ROW/TOTAL_ROW) -- kept here rather than reflectively read so a future
-    // relayout of the template shows up as a clear compile-time constant diff in review.
+    // SUBTOTAL_ROW/VAT_ROW/TOTAL_ROW) -- kept here rather than reflectively read so a future relayout of the
+    // template shows up as a clear compile-time constant diff in review.
     private static final int ITEM_START_ROW_FOR_TEST = 9;
     private static final int FOOTER_START_FOR_TEST = 22;
     private static final int SUBTOTAL_ROW_FOR_TEST = 38;
@@ -1972,9 +1896,8 @@ class QuotationRendererTest {
         String manyText = strip(manyPdf);
         assertThat(manyText).as("paginated Thai PDF must not show ### on any page").doesNotContain("###");
         assertThat(manyText).contains("1,234,567"); // per-item qty, repeated many times
-        assertThat(manyText).contains("99,999,999.99"); // per-item amount
-        // subtotal = 30 x 99,999,999.99 = 2,999,999,999.70; VAT 7% = 209,999,999.98 (HALF_UP);
-        // grand total = 3,209,999,999.68 -- comfortably above the ">1B" case from the brief.
+        assertThat(manyText).contains("99,999,999.99"); // per-item amount subtotal = 30 x 99,999,999.99 = 2,999,999,999.70; VAT 7% = 209,999,999.98 (HALF_UP); grand
+        // total = 3,209,999,999.68 -- comfortably above the ">1B" case from the brief.
         assertThat(manyText).contains("2,999,999,999.70");
         assertThat(manyText).contains("209,999,999.98");
         assertThat(manyText).contains("3,209,999,999.68");
@@ -1985,12 +1908,8 @@ class QuotationRendererTest {
     // forms/quotation_terms_and_conditions.pdf as the document's final page(s). See
     // QuotationRenderer#appendTermsAndConditionsPage / #appendPdf.
 
-    /**
-     * Fast unit test of the merge primitive itself: no LibreOffice, no Chromium, a bare one-page
-     * PDF built purely with PDFBox as {@code basePdf}. Calls {@link QuotationRenderer#appendPdf}
-     * directly (the package-private test seam) rather than going through {@code toPdf(model)}, so
-     * this stays cheap and independent of either rendering engine.
-     */
+    /** Fast unit test of the merge primitive itself: no LibreOffice, no Chromium, a bare one-page PDF built purely
+     * with PDFBox as basePdf. */
     @Test
     void appendPdf_appendsEveryPageOfTheTermsFormOntoAMinimalBasePdf() throws Exception {
         byte[] basePdf;
@@ -2018,24 +1937,14 @@ class QuotationRendererTest {
             lastPageOnly.setStartPage(doc.getNumberOfPages());
             lastPageOnly.setEndPage(doc.getNumberOfPages());
             String lastPageText = lastPageOnly.getText(doc);
-            // NOT the document's own Thai title: PDFBox's text extraction on this file's embedded
-            // fonts doesn't just insert stray spaces (as elsewhere in this file) — it reorders Thai
-            // tone-mark glyph clusters outright (checked directly: extracting this PDF prints
-            // "เงือ่นไขประกอบใบเสนอราคา", not "เงื่อนไขประกอบใบเสนอราคา"), so neither the raw nor the
-            // whitespace-flattened title text-matches reliably. "info@glr.co.th" is plain ASCII in
-            // the same header block and is reliably extractable — it distinctively identifies THIS
-            // document (the company's own e-mail, printed once, only on this form).
+            // NOT the document's own Thai title: PDFBox's text extraction on this file's embedded fonts doesn't just
+            // insert stray spaces.
             assertThat(lastPageText).contains("info@glr.co.th");
         }
     }
 
-    /**
-     * Integration-shaped test through the real {@code toPdf(model)} call site: the default
-     * ({@code xls}) engine, gated on LibreOffice exactly like every other PDF test in this file.
-     * Computes the "before" page count independently — {@code toXls(model)} converted straight by
-     * {@link LibreOfficePdfConverter}, the same two calls {@code toPdf(model)} makes internally,
-     * called directly so the terms merge is bypassed — rather than asserting a hardcoded number.
-     */
+    /** Integration-shaped test through the real toPdf(model) call site: the default (xls) engine, gated on
+     * LibreOffice exactly like every other PDF test in this file. */
     @Test
     void toPdf_model_appendsTermsPageAfterTheQuotationsOwnPages() throws Exception {
         requireLibreOffice();
@@ -2063,15 +1972,9 @@ class QuotationRendererTest {
         assertThat(totalPages).isEqualTo(quotationOnlyPages + termsPages);
     }
 
-    /**
-     * Wrong-way-round regression guard: {@code toPdf(model)} now does extra PDF-merge work AFTER
-     * {@code toXls(model)} builds the workbook, on the SAME (singleton-shaped) renderer instance
-     * production reuses (see {@code fillItems}'s own H1 comment on why that reuse matters here).
-     * Pins that the terms-page addition touches nothing about how {@code toXls} itself renders:
-     * byte-for-byte identical output whether or not {@code toPdf} was called first, and still real
-     * BIFF8/OLE bytes — the same format pin {@code xlsxOutputIsRealBiff8OleBytesNotOoxmlZip} makes
-     * for the legacy path — never an OOXML zip.
-     */
+    /** Wrong-way-round regression guard: toPdf(model) now does extra PDF-merge work AFTER toXls(model) builds the
+     * workbook, on the SAME (singleton-shaped) renderer instance production reuses (see fillItems's own H1 comment
+     * on why that reuse matters here). */
     @Test
     void toXls_model_isUnaffectedByTermsPageMerge_evenAfterToPdfRunsOnTheSameRenderer() throws Exception {
         requireLibreOffice();

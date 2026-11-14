@@ -21,12 +21,7 @@ import th.co.glr.hr.pricing.PricingFormulaConfigRequests.CreatePricingFormulaCon
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.DutyRateRequest;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.FreightRateRequest;
 
-/**
- * BRANCH 1: config storage only. See {@code V109__pricing_formula_config.sql} for the versioning
- * model -- one parent row owns three child lists; a new version always writes a full new parent
- * plus a full new set of children, and old versions (and their children) are retained for audit,
- * never UPDATEd or DELETEd.
- */
+/** BRANCH 1: config storage only. */
 @Repository
 public class PricingFormulaConfigRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -77,11 +72,7 @@ public class PricingFormulaConfigRepository {
              ORDER BY qty_min_sqm
             """, Map.of("formulaConfigId", formulaConfigId), (rs, i) -> mapClearanceFee(rs));
 
-        // Excludes 'ZZ' (V184's อื่นๆ/"other" catch-all, revised 09-18 from an earlier 'XX' draft --
-        // see V184's own comment) -- this feeds the CEO's own freight-rate origin-country picker, and
-        // a freight rate is tied to a real logistics route. "อื่นๆ" has none: V184's own comment notes
-        // a 'ZZ'-country factory carries no sales.pricing_freight_rate row by construction, so
-        // offering it here would let the CEO configure a rate that can never actually be looked up.
+        // Exclude unknown-country code ZZ from freight routes because it has no configured logistics rate.
         List<CountryDto> countries = jdbc.query("""
             SELECT country_code, name_en, name_th
               FROM price_catalog.country
@@ -100,8 +91,8 @@ public class PricingFormulaConfigRepository {
 
     @Transactional
     public PricingFormulaConfigDto createNewVersion(CreatePricingFormulaConfigRequest request, Long updatedBy) {
-        // Flip the existing current row (if any) to not-current -- never UPDATE its scalar values,
-        // never touch its children.
+        // Flip the existing current row (if any) to not-current -- never UPDATE its scalar values, never touch its
+        // children.
         jdbc.update("UPDATE sales.pricing_formula_config SET is_current = FALSE WHERE is_current = TRUE", Map.of());
 
         Integer maxVersion = jdbc.queryForObject(

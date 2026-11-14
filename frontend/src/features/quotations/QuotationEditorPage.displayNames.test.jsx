@@ -8,9 +8,9 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// V179 (owner feedback #4, 2026-09-14) — the ผู้พิมพ์/พนักงานขาย print-name override dropdowns.
-// A separate file from QuotationEditorPage.v3.test.jsx, same mounting pattern, scoped to just
-// this feature's own behaviour.
+// V179 (owner feedback #4, 2026-09-14) — the ผู้พิมพ์/พนักงานขาย print-name override dropdowns. A separate
+// file from QuotationEditorPage.v3.test.jsx, same mounting pattern, scoped to just this feature's own
+// behaviour.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -153,14 +153,9 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     expect(payload.printedByDisplayId).toBeNull();
   });
 
-  // Opus review nit N1 (2026-09-14): before this fix, the "ข้อมูลลูกค้าและผู้ขาย" read-only strip
-  // showed the REAL rep (salesRepName/salesRepPhone) under พนักงานขาย even when salesRepDisplayId
-  // was set, disagreeing with what QuotationDocumentView's preview and the printed PDF show for
-  // the exact same document. That strip is now the editable card select itself (bb5de447), so
-  // this test's own assertion changed with it -- see the corrected name and body below. Second
-  // Opus follow-up nit (2026-09-14): renamed from "the context strip shows the salesRepDisplay
-  // override, not the real rep, once one is set", which described the read-only strip's TEXT this
-  // test no longer checks and had come to overlap the twin-select-sync test further down.
+  // Opus review nit N1: before this fix, the "ข้อมูลลูกค้าและผู้ขาย" read-only strip showed the REAL rep under
+  // พนักงานขาย even when salesRepDisplayId was set, disagreeing with what QuotationDocumentView's preview and
+  // the printed PDF show for the exact same document.
   it('the เงื่อนไข select and the card select both reflect a saved salesRepDisplay override', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({
@@ -169,17 +164,14 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     });
     renderEditor('/quotations/5');
     await waitFor(() => expect(byId('salesRepDisplayId')?.value).toBe('9'));
-    // The override is what's SELECTED on the card's own twin select too -- not text-matched
-    // (a collapsed <select>'s other <option> labels are still in the DOM and would make a plain
-    // text search meaningless the moment the empty option ALSO carries text, per the fix just
-    // below this test).
+    // The override is what's SELECTED on the card's own twin select too -- not text-matched (a collapsed
+    // <select>'s other <option> labels are still in the DOM and would make a plain text search meaningless the
+    // moment the empty option ALSO carries text, per the fix just below this test).
     expect(byId('salesRepDisplayIdCard').value).toBe('9');
   });
 
-  // Opus review fix (2026-09-14): the card's own select's EMPTY option (value="") means "use the
-  // real name" -- its label must show the REAL rep even when an override is already saved, not
-  // the override itself (which would tell the rep the option that TURNS OFF the override is
-  // somehow the override's own name).
+  // Opus review fix: the card's own select's EMPTY option means "use the real name" -- its label must show the
+  // REAL rep even when an override is already saved, not the override itself.
   it('the card select\'s empty option always labels the REAL rep, even with an override saved', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({
@@ -198,10 +190,9 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
     expect(screen.getByText('คุณสมหมาย ขายดี · T.081-000-0000')).toBeTruthy();
   });
 
-  // Owner feedback 2026-09-14 ("keep both, add inline edit here too"): the card's own
-  // salesRepDisplayIdCard select is a SECOND control over the SAME terms.salesRepDisplayId the
-  // เงื่อนไข panel's own salesRepDisplayId select drives -- picking a value in either one must move
-  // the other.
+  // Owner feedback 2026-09-14 ("keep both, add inline edit here too"): the card's own salesRepDisplayIdCard
+  // select is a SECOND control over the SAME terms.salesRepDisplayId the เงื่อนไข panel's own salesRepDisplayId
+  // select drives -- picking a value in either one must move the other.
   it('the card select and the เงื่อนไข select stay in sync (either one moves the other)', async () => {
     renderEditor('/quotations/5');
     await waitFor(() => expect(byId('salesRepDisplayIdCard')).toBeTruthy());
@@ -216,8 +207,8 @@ describe('QuotationEditorPage — V179 ผู้พิมพ์/พนักง�
   });
 });
 
-// Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be able
-// to correct it") -- โครงการ was static text on this same card; now a real, saved field.
+// Owner feedback 2026-09-14 ("sometimes there's a typo in the ... project so they should be able to correct
+// it") -- โครงการ was static text on this same card; now a real, saved field.
 describe('QuotationEditorPage — โครงการ is editable on the summary card', () => {
   it('pre-fills from the quotation and sends an edit in the save payload', async () => {
     renderEditor('/quotations/5');

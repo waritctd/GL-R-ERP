@@ -30,17 +30,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Unit-tests the DECISION in {@link FactoryQuoteService#deleteAttachment} — which branch is
- * chosen for a given (deletedAt, pricing-request status, quote status, submitted-costing
- * reference) combination — with every collaborator mocked, no database involved.
- *
- * <p>This is deliberately the "resolveScope-style" half of the two-layer evidence CLAUDE.md
- * requires for an authorization change: it proves the branch, not that the branch's SQL actually
- * reaches Postgres correctly. {@code PricingFactoryQuoteCostingIntegrationTest}'s
- * {@code deleteAttachment*} tests are the other half — real Postgres, real repository, real
- * service — and are what a mocked repository here cannot substitute for.
- */
+/** Unit-tests the DECISION in FactoryQuoteService#deleteAttachment — which branch is chosen for a given
+ * (deletedAt, pricing-request status, quote status, submitted-costing reference) combination — with every
+ * collaborator mocked, no database involved. */
 class FactoryQuoteServiceAttachmentTest {
 
     private final FactoryQuoteRepository quotes = mock(FactoryQuoteRepository.class);
@@ -49,9 +41,9 @@ class FactoryQuoteServiceAttachmentTest {
     private final FactoryConfigRepository factoryConfigs = mock(FactoryConfigRepository.class);
     private final NotificationRepository notifications = mock(NotificationRepository.class);
     private final FileStorageService fileStorage = mock(FileStorageService.class);
-    // V141 ("CEO owns costing"): FactoryQuoteService now takes a LandedCostCalculator too (used
-    // only by markReadyForCosting's auto-advance check) — mocked, since no test in this
-    // deleteAttachment-only class ever calls markReadyForCosting.
+    // V141 ("CEO owns costing"): FactoryQuoteService now takes a LandedCostCalculator too (used only by
+    // markReadyForCosting's auto-advance check) — mocked, since no test in this deleteAttachment-only class ever
+    // calls markReadyForCosting.
     private final th.co.glr.hr.pricingcosting.LandedCostCalculator landedCosts =
         mock(th.co.glr.hr.pricingcosting.LandedCostCalculator.class);
     private final FactoryQuoteService service = new FactoryQuoteService(

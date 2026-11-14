@@ -9,15 +9,9 @@ import {
   saveDraft,
 } from './dealDrafts.js';
 
-/**
- * A real, full Storage implementation (getItem/setItem/removeItem/clear/key/length) backed by a
- * Map — NOT a partial mock. dealDrafts.js's listDrafts() rebuild path calls `.length`/`.key(i)` to
- * scan for `glr:draft-deal:*` keys when the index is missing, so a stub without those would make
- * every "corrupt/missing index" case pass for the wrong reason (nothing to scan, so "rebuilds to
- * empty" and "rebuilds correctly" would look identical). See TicketCreateModal.test.jsx's own
- * localStorage-stub comment for the sibling trap this avoids (a jsdom/Node global whose methods
- * exist but are not functions).
- */
+/** A real, full Storage implementation (getItem/setItem/removeItem/clear/key/length) backed by a Map — NOT a
+ * partial mock. See TicketCreateModal.test.jsx's own localStorage-stub comment for the sibling trap this
+ * avoids (a jsdom/Node global whose methods exist but are not functions). */
 function createMemoryStorage() {
   const store = new Map();
   return {
@@ -101,8 +95,8 @@ describe('saveDraft / loadDraft / listDrafts / deleteDraft', () => {
   });
 
   it('listDrafts sorts newest first', () => {
-    // savedAt is `new Date().toISOString()` at save time — fake timers make the ordering
-    // deterministic instead of racing real-clock millisecond resolution.
+    // savedAt is `new Date().toISOString()` at save time — fake timers make the ordering deterministic instead of
+    // racing real-clock millisecond resolution.
     vi.useFakeTimers();
     try {
       vi.setSystemTime(new Date('2026-09-17T10:00:00Z'));
@@ -177,10 +171,9 @@ describe('MAX_DRAFTS cap', () => {
     expect(listDrafts()).toHaveLength(MAX_DRAFTS);
   });
 
-  // Review fix: the cap used to count RAW index entries, including ones whose draft key had
-  // already been removed some other way (directly, or a delete whose index write failed) — so a
-  // rep could be told "limit" while the picker showed fewer than MAX_DRAFTS real rows, with
-  // nothing visible to delete to free a slot.
+  // Review fix: the cap used to count RAW index entries, including ones whose draft key had already been removed
+  // some other way — so a rep could be told "limit" while the picker showed fewer than MAX_DRAFTS real rows,
+  // with nothing visible to delete to free a slot.
   it('prunes a stale index entry (draft key gone) so the cap reflects only real drafts', () => {
     const ids = [];
     for (let i = 0; i < MAX_DRAFTS; i += 1) {

@@ -39,9 +39,9 @@ import th.co.glr.hr.ticket.QuotationRenderer;
  */
 class DealQuotationEnglishFormTest {
     private static final int TITLE_ROW = 6;
-    // The footer rows a SINGLE-PAGE render leaves at their native positions (post the renderer's
-    // own #insertLine3ContinuationRow +1 shift and its -7 v2 remark compaction, both of which the
-    // direct-deal path always applies): 38 - 7 = 31, and so on.
+    // The footer rows a SINGLE-PAGE render leaves at their native positions (post the renderer's own
+    // #insertLine3ContinuationRow +1 shift and its -7 v2 remark compaction, both of which the direct-deal path
+    // always applies): 38 - 7 = 31, and so on.
     private static final int V2_FOOTER_SHIFT = -7;
     private static final int SUBTOTAL_ROW = 38 + V2_FOOTER_SHIFT;
     private static final int VAT_ROW = 39 + V2_FOOTER_SHIFT;
@@ -59,9 +59,9 @@ class DealQuotationEnglishFormTest {
         Sheet sheet = renderEnglish();
         assertThat(str(sheet, 0, 7).strip()).isEqualTo("QUOTATION");
         assertThat(str(sheet, 0, 7)).doesNotContain("ใบเสนอราคา");
-        // "***" sits under the title at I2 and is COMMON to both forms — it is already in the
-        // template, so nothing writes it. Pinned anyway: the spec lists it as an English-form
-        // feature, and a future edit that blanked it would silently drop it from both documents.
+        // "***" sits under the title at I2 and is COMMON to both forms — it is already in the template, so nothing
+        // writes it. Pinned anyway: the spec lists it as an English-form feature, and a future edit that blanked it
+        // would silently drop it from both documents.
         assertThat(str(sheet, 1, VALUE_COL)).isEqualTo("***");
     }
 
@@ -69,8 +69,7 @@ class DealQuotationEnglishFormTest {
     void header_printsRefAndDCoRatherThanTheThaiLabels_andNoDeptLine() throws Exception {
         Sheet sheet = renderEnglish();
         assertThat(str(sheet, 3, 7)).isEqualTo("Ref.");     // H4 was เลขที่อ้างอิง
-        assertThat(str(sheet, 4, 7)).isEqualTo("D.Co.");    // H5 was หน่วยงาน
-        // The VALUES beside them are unchanged — same columns, same model fields.
+        assertThat(str(sheet, 4, 7)).isEqualTo("D.Co.");    // H5 was หน่วยงาน The VALUES beside them are unchanged — same columns, same model fields.
         assertThat(str(sheet, 3, VALUE_COL)).isEqualTo("QT-2026-0001");
         assertThat(str(sheet, 4, VALUE_COL)).isEqualTo("D002");
         // The quotation's deptCode ("P003" on this fixture) is not printed, and no "Dept." label
@@ -80,11 +79,9 @@ class DealQuotationEnglishFormTest {
         assertThat(blank(sheet, 2, VALUE_COL)).as("I3 — no department").isTrue();
     }
 
-    /**
-     * ⚠️ The single easiest thing to get wrong: an English month NAME and a <b>CE</b> year, where
-     * the Thai form prints the Buddhist era. 2026 CE is 2569 BE, so a copy of the Thai formatter
-     * would print "September 8, 2569" and this test is what catches it.
-     */
+    /** ⚠️ The single easiest thing to get wrong: an English month NAME and a CE year, where the Thai form prints
+     * the Buddhist era. 2026 CE is 2569 BE, so a copy of the Thai formatter would print "September 8, 2569" and
+     * this test is what catches it. */
     @Test
     void header_printsAnEnglishMonthNameAndACommonEraYear() throws Exception {
         Sheet sheet = renderEnglish();
@@ -115,8 +112,8 @@ class DealQuotationEnglishFormTest {
     void columnTitles_areTheEightEnglishHeadingsWithTheCurrencyOnAmount() throws Exception {
         Sheet sheet = renderEnglish();
         assertThat(str(sheet, TITLE_ROW, 0)).isEqualTo("Items");
-        // Column B carries NO heading on the Thai template — the English form labels it, so this
-        // is the one column title that is WRITTEN rather than replaced.
+        // Column B carries NO heading on the Thai template — the English form labels it, so this is the one column
+        // title that is WRITTEN rather than replaced.
         assertThat(str(sheet, TITLE_ROW, 1)).isEqualTo("Description & Conditions");
         assertThat(str(sheet, TITLE_ROW, 2)).isEqualTo("Qty");
         assertThat(str(sheet, TITLE_ROW, 3)).isEqualTo("Unit");
@@ -137,9 +134,8 @@ class DealQuotationEnglishFormTest {
         // The subtotal row: label and value both gone.
         assertThat(blank(sheet, SUBTOTAL_ROW, 7)).isTrue();
         assertThat(blank(sheet, SUBTOTAL_ROW, VALUE_COL)).isTrue();
-        // The VAT row: the ภาษีมูลค่าเพิ่ม label (E, merged E:G), the 0.07 rate (H) and the
-        // computed VAT (I). All three — a surviving bare "0.07" on an English page is the exact
-        // failure this asserts against.
+        // The VAT row: the ภาษีมูลค่าเพิ่ม label (E, merged E:G), the 0.07 rate (H) and the computed VAT (I). All
+        // three — a surviving bare "0.07" on an English page is the exact failure this asserts against.
         for (int c = 4; c <= VALUE_COL; c++) {
             assertThat(blank(sheet, VAT_ROW, c))
                 .as("VAT row column %d must be blank on an English document", c).isTrue();
@@ -162,12 +158,9 @@ class DealQuotationEnglishFormTest {
 
     // ── no blank bordered cells above Grand Total ────────────
 
-    /**
-     * The subtotal and VAT rows are emptied on an English document — and must not PRINT either. The
-     * template's own borders on those cells survived the clearing, which printed two empty boxes
-     * in column I between the table and Grand Total. Asserted on the single-page layout AND the
-     * flowing (multi-page) one, where the footer block has been relocated.
-     */
+    /** The subtotal and VAT rows are emptied on an English document — and must not PRINT either. The template's own
+     * borders on those cells survived the clearing, which printed two empty boxes in column I between the table
+     * and Grand Total. */
     @Test
     void totals_theEmptiedSubtotalAndVatRowsCarryNoBorderAndDoNotPrint_inBothLayouts() throws Exception {
         for (int extraTiles : new int[] {0, 14}) {
@@ -192,8 +185,8 @@ class DealQuotationEnglishFormTest {
                         .containsOnly(org.apache.poi.ss.usermodel.BorderStyle.NONE);
                 }
             }
-            // Grand Total sits DIRECTLY under the table box: the last visible row above it is the
-            // box's own closing row (remark line 8, bottom rule across A..I).
+            // Grand Total sits DIRECTLY under the table box: the last visible row above it is the box's own closing row
+            // (remark line 8, bottom rule across A..I).
             int above = total - 3;
             assertThat(sheet.getRow(above).getZeroHeight()).isFalse();
             assertThat(sheet.getRow(above).getCell(VALUE_COL).getCellStyle().getBorderBottom())
@@ -220,14 +213,9 @@ class DealQuotationEnglishFormTest {
 
     private static final java.util.regex.Pattern THAI = java.util.regex.Pattern.compile("[\\u0E00-\\u0E7F]");
 
-    /**
-     * Every string cell from the first item row through the Grand Total row of an English render
-     * is free of Thai script — tiles with and without thickness, AREA and PIECES, a DIRECT_NET row
-     * whose net differs from its list price (the discount word), a freight row, and a ส่วนลดพิเศษ row
-     * whose STORED description is the Thai write-time composition. Lines come from the real
-     * DealQuotationLines, units and the adjustment text from the same read-time helpers the
-     * repository mapping uses.
-     */
+    /** Every string cell from the first item row through the Grand Total row of an English render is free of Thai
+     * script. Lines come from the real DealQuotationLines, units and the adjustment text from the same read-time
+     * helpers the repository mapping uses. */
     @Test
     void englishItemAndTotalsZone_containsNoThaiCharacter_inBothLayouts() throws Exception {
         for (int extraTiles : new int[] {0, 14}) {
@@ -246,8 +234,8 @@ class DealQuotationEnglishFormTest {
                 }
             }
             assertThat(offending).as("layout %d", extraTiles).isEmpty();
-            // Positive landmarks too, so an EMPTY item zone cannot pass the scan above. The renderer
-            // word-wraps a long line across rows at whitespace, so column B is re-joined first.
+            // Positive landmarks too, so an EMPTY item zone cannot pass the scan above. The renderer word-wraps a long
+            // line across rows at whitespace, so column B is re-joined first.
             assertThat(joinedColumn(sheet, 1, 9, total))
                 .contains("Tile Model BIOARCH Color BARGE GRIGIA Finish ONDULATO No.APGBBK15")
                 .contains("Size 20 cm x 30.5 cm x 9 mm (approx.)")
@@ -328,11 +316,8 @@ class DealQuotationEnglishFormTest {
         assertThat(mixed.remarkLines().get(2)).isEqualTo("3.Delivery : item 1 approximately 30-45 days");
     }
 
-    /**
-     * ⚠️ The remark date is CE too. The Thai block prints 01/09/<b>2569</b> for the same offer
-     * date; getting this one wrong is invisible next to a correct header date, because it is
-     * buried mid-sentence.
-     */
+    /** ⚠️ The remark date is CE too. The Thai block prints 01/09/2569 for the same offer date; getting this one
+     * wrong is invisible next to a correct header date, because it is buried mid-sentence. */
     @Test
     void remarks_offerDateIsCommonEra() throws Exception {
         assertThat(str(renderEnglish(), 23, 1)).contains("01/09/2026").doesNotContain("2569");
@@ -349,8 +334,8 @@ class DealQuotationEnglishFormTest {
         assertThat(labels)
             .doesNotContain("ผู้พิมพ์").doesNotContain("พนักงานขาย")
             .doesNotContain("ผู้จัดการฝ่ายขาย").doesNotContain("ผู้สั่งซื้อ");
-        // The four labels stay in the SAME order as the Thai form's, so the approver's signature
-        // image still anchors on slot 3.
+        // The four labels stay in the SAME order as the Thai form's, so the approver's signature image still anchors
+        // on slot 3.
         assertThat(labels.indexOf("Printed by")).isLessThan(labels.indexOf("Quoted by"));
         assertThat(labels.indexOf("Quoted by")).isLessThan(labels.indexOf("Approved by"));
         assertThat(labels.indexOf("Approved by")).isLessThan(labels.indexOf("Ordered by"));
@@ -402,8 +387,8 @@ class DealQuotationEnglishFormTest {
         assertThat(names).contains("(จินตนา หาญมนตรี)").contains("(เจนเนตร หลงสกุล)").contains("(ราม อิฐรัตน์)");
     }
 
-    /** The signature dates are CE on the English form, and the empty ผู้สั่งซื้อ slot reads
-     * "Date ..../..../....", not "วันที่ ..../..../....". */
+    /** The signature dates are CE on the English form, and the empty ผู้สั่งซื้อ slot reads "Date ..../..../....",
+     * not "วันที่ ..../..../....". */
     @Test
     void signatureBlock_datesAreCommonEraAndThePlaceholderIsEnglish() throws Exception {
         String dates = str(renderEnglish(), DATES_ROW, 0);
@@ -436,22 +421,8 @@ class DealQuotationEnglishFormTest {
 
     // ── the regression that matters ────────────────────────────────────────────────────────
 
-    /**
-     * A TH document is identical whether or not {@code documentLanguage} is supplied: every cell is
-     * compared, one by one, against the SAME model built through the pre-v3b twelve-argument
-     * constructor — a model that has never heard of the field.
-     *
-     * <p>⚠️ <b>Read the name literally: this proves the FIELD is inert on the Thai path, NOT that
-     * the Thai document is unchanged by this branch.</b> Both sides of the comparison run through
-     * the SAME (post-change) renderer, so a defect that broke the Thai render outright would break
-     * both sides equally and this test would stay green — CLAUDE.md's "mock MIRRORS a backend
-     * computation" failure shape, in test form. Confirmed by mutation check: forcing
-     * {@code english = true} for every document leaves this test GREEN and reds
-     * {@link #thaiDocument_stillPrintsItsOwnLabelsTotalsAndBuddhistEraDate()} instead. That sibling
-     * — plus the ~50 pre-existing Thai renderer/adapter/HTML-fidelity tests this branch does not
-     * touch — is the real Thai regression evidence; this one covers the narrower question of
-     * whether adding the field changed anything.
-     */
+    /** A TH document is identical whether or not documentLanguage is supplied: every cell is compared, one by one,
+     * against the SAME model built through the pre-v3b twelve-argument constructor. */
     @Test
     void thaiDocument_isUnaffectedByWhetherTheLanguageFieldIsSuppliedAtAll() throws Exception {
         Sheet withLanguage = render(thaiQuotation());
@@ -468,13 +439,9 @@ class DealQuotationEnglishFormTest {
         }
     }
 
-    /**
-     * ⚠️ <b>The Thai regression that actually bites.</b> The whole-sheet equality test above cannot
-     * catch a defect that breaks BOTH of its sides; this one names the Thai landmarks positively,
-     * so a Thai document that started printing English labels, lost its VAT row or gained a form
-     * tag fails here. Mutation-checked: forcing every render into English mode reds exactly this
-     * test (and its real-DB twin), and nothing else in the file.
-     */
+    /** ⚠️ The Thai regression that actually bites. The whole-sheet equality test above cannot catch a defect that
+     * breaks BOTH of its sides; this one names the Thai landmarks positively, so a Thai document that started
+     * printing English labels, lost its VAT row or gained a form tag fails here. */
     @Test
     void thaiDocument_stillPrintsItsOwnLabelsTotalsAndBuddhistEraDate() throws Exception {
         Sheet sheet = render(thaiQuotation());
@@ -533,10 +500,9 @@ class DealQuotationEnglishFormTest {
         for (int r = 23; r <= 30; r++) {
             remarks.add(str(sheet, r, 1));
         }
-        // Still EXACTLY 8. REMARK_HEAD_ROWS has 8 slots and fewer falls back to a legacy 3-line
-        // layout that leaves the template's Thai continuation rows visible on an English page —
-        // so the bank block's three lines are paid for by merging two pairs of remarks, not by
-        // overflowing the box.
+        // Still EXACTLY 8. REMARK_HEAD_ROWS has 8 slots and fewer falls back to a legacy 3-line layout that leaves the
+        // template's Thai continuation rows visible on an English page — so the bank block's three lines are paid for
+        // by merging two pairs of remarks, not by overflowing the box.
         assertThat(remarks).hasSize(8);
         assertThat(remarks.get(2)).isEqualTo(BANK_BLOCK.get(0));
         assertThat(remarks.get(3)).isEqualTo(BANK_BLOCK.get(1));
@@ -556,8 +522,8 @@ class DealQuotationEnglishFormTest {
 
     @Test
     void remarks_fallBackToTheProformaLine_whenTheBankBlockIsMissingOrHalfFilled() throws Exception {
-        // Half a set of wire instructions is worse than none: a customer could act on a beneficiary
-        // name with no account number. Anything short of all three lines prints the honest line.
+        // Half a set of wire instructions is worse than none: a customer could act on a beneficiary name with no
+        // account number. Anything short of all three lines prints the honest line.
         for (List<String> partial : List.of(
                 List.<String>of(),
                 List.of(BANK_BLOCK.get(0)),
@@ -585,13 +551,9 @@ class DealQuotationEnglishFormTest {
 
     @Test
     void everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts() throws Exception {
-        // Each remark is ONE merged B..I cell that NEVER wraps, so an over-long line is CUT at the
-        // border rather than wrapped. Two merged lines at 145 and 151 characters printed
-        // "…within ISO and TIS toler" and "…not returnab" on the PDF while every content assertion
-        // here stayed green — the text in the cell was intact, it simply did not fit. Measured by
-        // review: the pre-existing 130-character line 1 fits in both LibreOffice and Chromium, and
-        // ~139 does not. Character count is a proxy for rendered width; for Latin text in this font
-        // it tracks the measurement closely, but tighten the cap if a line near it ever clips.
+        // Each remark is ONE merged B..I cell that NEVER wraps, so an over-long line is CUT at the border rather than
+        // wrapped. Measured by review: the pre-existing 130-character line 1 fits in both LibreOffice and Chromium,
+        // and ~139 does not.
         for (List<String> block : List.of(BANK_BLOCK, List.<String>of())) {
             Sheet sheet = renderEnglishWithBank(block);
             for (int r = 23; r <= 30; r++) {
@@ -635,8 +597,8 @@ class DealQuotationEnglishFormTest {
         assertThat(remarks.get(4)).isEqualTo("5.Special price for orders with deposit paid by 31/10/2026.");
     }
 
-    /** DAYS-mode output is byte-identical to before this change, in both layouts — regardless of
-     * special pricing (the gate only ever affects the DATE branch). */
+    /** DAYS-mode output is byte-identical to before this change, in both layouts — regardless of special pricing
+     * (the gate only ever affects the DATE branch). */
     @Test
     void remarks_daysModeValidity_isUnchanged_inBothLayouts() throws Exception {
         DealQuotationDto q = withValidity(englishQuotation(), WastageCalculator.VALIDITY_MODE_DAYS, null);
@@ -652,8 +614,8 @@ class DealQuotationEnglishFormTest {
         assertThat(noBankRemarks.get(4)).isEqualTo("5.Price validity : 30 days from the date of this quotation.");
     }
 
-    /** Same 130-character non-wrapping-cell guard as above, now also over the DATE-mode variant
-     * in both layouts — the fixed prose plus a formatted date must still fit. */
+    /** Same 130-character non-wrapping-cell guard as above, now also over the DATE-mode variant in both layouts —
+     * the fixed prose plus a formatted date must still fit. */
     @Test
     void everyEnglishRemarkLine_fitsItsNonWrappingCell_inBothLayouts_dateMode() throws Exception {
         LocalDate until = LocalDate.of(2026, 10, 31);
@@ -691,8 +653,8 @@ class DealQuotationEnglishFormTest {
             .isEqualTo("7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
     }
 
-    /** SPECIAL_SQM (rule a) — at least one TILE row is ALL rule (a) requires; {@link #tile()}'s
-     * own discountPct (null) is irrelevant. DATE mode prints the DATE line. */
+    /** SPECIAL_SQM (rule a) — at least one TILE row is ALL rule (a) requires; #tile()'s own discountPct (null) is
+     * irrelevant. DATE mode prints the DATE line. */
     @Test
     void remarks_dateModeValidity_specialSqm_printsSpecialPriceLine() throws Exception {
         LocalDate until = LocalDate.of(2026, 9, 30);
@@ -703,10 +665,7 @@ class DealQuotationEnglishFormTest {
             .isEqualTo("7.ราคาพิเศษสำหรับการสั่งซื้อและชำระมัดจำภายในวันที่ 30/09/2569");
     }
 
-    /** NET, every row at 0% discount, no adjustment row -> NO special pricing. Even a DATE-mode
-     * row (only reachable here by constructing the DTO directly, bypassing
-     * {@code DealQuotationService}'s own create/update refusal) must fall back to the ordinary
-     * days line — the render adapter's OWN gate is what this pins, independent of the service. */
+    /** NET, every row at 0% discount, no adjustment row -> NO special pricing. */
     @Test
     void remarks_dateModeValidity_netWithZeroDiscountAndNoAdjustment_fallsBackToDaysLine() throws Exception {
         LocalDate until = LocalDate.of(2026, 9, 30);
@@ -717,8 +676,8 @@ class DealQuotationEnglishFormTest {
         assertThat(str(sheet, 29, 1)).isEqualTo("7.กำหนดยืนยันราคา 30 วัน นับจากวันที่ในใบเสนอราคา");
     }
 
-    /** NET at 0% PLUS an ADJUSTMENT row (rule e) -> DOES have special pricing; the DATE line
-     * renders even though every priced TILE row itself carries no discount. */
+    /** NET at 0% PLUS an ADJUSTMENT row (rule e) -> DOES have special pricing; the DATE line renders even though
+     * every priced TILE row itself carries no discount. */
     @Test
     void remarks_dateModeValidity_netZeroDiscountPlusAdjustmentRow_printsSpecialPriceLine() throws Exception {
         LocalDate until = LocalDate.of(2026, 9, 30);
@@ -743,14 +702,14 @@ class DealQuotationEnglishFormTest {
     // line-drop-and-renumber must not disturb the DATE text, and the DATE text must survive being
     // renumbered down by one.
 
-    /** Thai: the DATE line was remark 7 (index 6); after the drop it renumbers to remark 6
-     * (index 5), text otherwise unchanged. */
+    /** Thai: the DATE line was remark 7 (index 6); after the drop it renumbers to remark 6 (index 5), text
+     * otherwise unchanged. */
     @Test
     void remarks_dateModeValidityAndNoLeadTime_compose_thai() throws Exception {
         LocalDate until = LocalDate.of(2026, 9, 30);
-        // V182: a TILE row (with no lead time of its own) alongside the ADJUSTMENT row keeps this a
-        // TILE document — see #tileNoLeadTime's own Javadoc — so it still exercises the tile remark
-        // set's DATE-mode/no-lead-time composition rather than becoming a non-tile document.
+        // V182: a TILE row (with no lead time of its own) alongside the ADJUSTMENT row keeps this a TILE document —
+        // see #tileNoLeadTime's own Javadoc — so it still exercises the tile remark set's DATE-mode/no-lead-time
+        // composition rather than becoming a non-tile document.
         DealQuotationDto q = withPriceModeAndValidity(
             withItems(thaiQuotation(), List.of(tileNoLeadTime(1), adjustmentRow(2))),
             WastageCalculator.PRICE_MODE_NET, WastageCalculator.VALIDITY_MODE_DATE, until);
@@ -766,8 +725,8 @@ class DealQuotationEnglishFormTest {
         assertThat(str(sheet, 30, 1)).isBlank(); // row 30 no longer part of the box
     }
 
-    /** English, both layouts: bank layout's DATE line was remark 4 (index 6), renumbers to 3
-     * (index 5); no-bank layout's was remark 5 (index 4), renumbers to 4 (index 3). */
+    /** English, both layouts: bank layout's DATE line was remark 4 (index 6), renumbers to 3 (index 5); no-bank
+     * layout's was remark 5 (index 4), renumbers to 4 (index 3). */
     @Test
     void remarks_dateModeValidityAndNoLeadTime_compose_english_bothLayouts() {
         LocalDate until = LocalDate.of(2026, 10, 31);
@@ -868,9 +827,7 @@ class DealQuotationEnglishFormTest {
     }
 
     /** The Thai twin of the test above, pinning the NON-TILE set's drop-and-renumber path — see
-     * {@code DealQuotationRenderAdapter#nonTileRemarkLines}/{@code #dropLeadTimeLineAndRenumber}.
-     * Neither {@code plainRow} carries a lead time, so remark 3 (ระยะเวลานำเข้า) drops entirely and
-     * the no-return line renumbers from "4." down to "3.". */
+     * DealQuotationRenderAdapter#nonTileRemarkLines/#dropLeadTimeLineAndRenumber. */
     @Test
     void remarks_anAllPlainThaiDocument_printsTheNonTileSet_withLeadTimeLineDropped() throws Exception {
         DealQuotationDto allPlain = withItems(thaiQuotation(), List.of(
@@ -956,8 +913,8 @@ class DealQuotationEnglishFormTest {
                 .as("row 26 col %d must carry the box's closing bottom rule", c)
                 .isNotEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
         }
-        // Row 27 must NOT be pulled inside the box's side borders -- the REMARK_V2_MIN_LINES(7)
-        // mutation above would leave the (unwritten) rows 27..29 sitting inside them.
+        // Row 27 must NOT be pulled inside the box's side borders -- the REMARK_V2_MIN_LINES(7) mutation above would
+        // leave the (unwritten) rows 27..29 sitting inside them.
         assertThat(borderLeftOrNone(sheet, 27, 1))
             .as("row 27 must not be inside the box's left border once it has shrunk to 4 lines")
             .isEqualTo(org.apache.poi.ss.usermodel.BorderStyle.NONE);
@@ -985,8 +942,8 @@ class DealQuotationEnglishFormTest {
         return cell == null ? org.apache.poi.ss.usermodel.BorderStyle.NONE : cell.getCellStyle().getBorderLeft();
     }
 
-    /** The English twin, in both bank-block layouts — same per-item grouping as the Thai twin
-     * above (both rows share one (30, 45) range and group into ONE "items 1-2" span). */
+    /** The English twin, in both bank-block layouts — same per-item grouping as the Thai twin above (both rows
+     * share one (30, 45) range and group into ONE "items 1-2" span). */
     @Test
     void remarks_aPlainOnlyEnglishDocumentWithLeadTime_printsAllFourNonTileLines_inBothLayouts() throws Exception {
         DealQuotationDto allPlain = englishQuotation(q -> withItems(q, List.of(
@@ -1064,12 +1021,9 @@ class DealQuotationEnglishFormTest {
                 + "is received.");
     }
 
-    /**
-     * V182: a non-tile document taking NO deposit ({@code depositPercent == 0}) drops just the
-     * "หลังจากได้รับมัดจำ...เรียบร้อยแล้ว" clause (naming a deposit that does not exist would be
-     * nonsensical) and keeps the lead-time claim itself — chosen deliberately over dropping the
-     * whole line, since the import lead time is still true regardless of deposit terms.
-     */
+    /** V182: a non-tile document taking NO deposit drops just the "หลังจากได้รับมัดจำ...เรียบร้อยแล้ว" clause and
+     * keeps the lead-time claim itself — chosen deliberately over dropping the whole line, since the import lead
+     * time is still true regardless of deposit terms. */
     @Test
     void remarks_nonTileNoDeposit_dropsOnlyTheDepositClause_keepsTheLeadTimeSentence() throws Exception {
         DealQuotationDto q = withDepositPercent(
@@ -1212,12 +1166,9 @@ class DealQuotationEnglishFormTest {
         throw new AssertionError("no row with \"" + text + "\" in column " + col);
     }
 
-    /**
-     * A DIRECT_NET quotation whose printed strings come from the REAL {@link DealQuotationLines}
-     * in {@code lang}: a BIOARCH tile with thickness (AREA, 5%, boxed), a PIECES tile with no
-     * thickness (inline size), {@code extraTiles} more tiles (14 pushes the render into the flowing
-     * layout), a freight row and a 3% ส่วนลดพิเศษ whose stored text is the Thai composition.
-     */
+    /** A DIRECT_NET quotation whose printed strings come from the REAL DealQuotationLines in lang: a BIOARCH tile
+     * with thickness, a PIECES tile with no thickness, extraTiles more tiles, a freight row and a 3% ส่วนลดพิเศษ
+     * whose stored text is the Thai composition. */
     private DealQuotationDto realLinesQuotation(String lang, int extraTiles) {
         List<DealQuotationItemDto> items = new ArrayList<>();
         String storedUnit = "แผ่น"; // what the write path stores on every TILE row
@@ -1326,9 +1277,8 @@ class DealQuotationEnglishFormTest {
             q.approverHasSignature(), items, q.createdAt(), q.updatedAt());
     }
 
-    /** V178 — this quotation with its validity mode/date set explicitly (the canonical
-     * constructor, since this is the ONE fixture that actually needs {@code validityMode}/
-     * {@code validityUntil} to be non-default). */
+    /** V178 — this quotation with its validity mode/date set explicitly (the canonical constructor, since this is
+     * the ONE fixture that actually needs validityMode/ validityUntil to be non-default). */
     private DealQuotationDto withValidity(DealQuotationDto q, String validityMode, LocalDate validityUntil) {
         return withPriceModeAndValidity(q, q.priceMode(), validityMode, validityUntil);
     }
@@ -1420,19 +1370,15 @@ class DealQuotationEnglishFormTest {
             q.approverHasSignature(), q.items(), q.createdAt(), q.updatedAt());
     }
 
-    /**
-     * One APPROVED tile-row quotation created on 8 September 2026 (2569 BE), the date the spec's
-     * own example prints. Item: 10 pieces at 100.00, lead time 30-45 days, so the computed remark
-     * lines and the 1,000.00 total are both predictable.
-     */
+    /** One APPROVED tile-row quotation created on 8 September 2026 (2569 BE), the date the spec's own example
+     * prints. Item: 10 pieces at 100.00, lead time 30-45 days, so the computed remark lines and the 1,000.00 total
+     * are both predictable. */
     private DealQuotationDto quotation(String documentLanguage, String currency) {
         BigDecimal subtotal = new BigDecimal("1000.00");
         boolean english = WastageCalculator.DOCUMENT_LANGUAGE_EN.equals(documentLanguage);
-        // Literals, NOT WastageCalculator.vat(...): a fixture that computes its expectation with
-        // the code under test is CLAUDE.md's "mock MIRRORS a backend computation" failure shape —
-        // it would stay green through any shared error. (These two DTO fields are not read by the
-        // renderer at all; the printed totals come from QuotationRenderer's own arithmetic. They
-        // are pinned here so the fixture still describes a document that could really exist.)
+        // Literals, NOT WastageCalculator.vat: a fixture that computes its expectation with the code under test is
+        // CLAUDE.md's "mock MIRRORS a backend computation" failure shape. They are pinned here so the fixture still
+        // describes a document that could really exist.)
         BigDecimal vat = english ? new BigDecimal("0.00") : new BigDecimal("70.00");
         BigDecimal grand = english ? new BigDecimal("1000.00") : new BigDecimal("1070.00");
         Instant createdAt = Instant.parse("2026-09-08T02:00:00Z");   // 09:00 Bangkok, 8 Sep 2026
@@ -1478,8 +1424,8 @@ class DealQuotationEnglishFormTest {
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
     }
 
-    /** V178 fixture — a DIRECT_NET tile whose net (85.00) genuinely differs from its list price
-     * (100.00): {@link DealQuotationRenderAdapter#hasSpecialPricing} rule (b). */
+    /** V178 fixture — a DIRECT_NET tile whose net (85.00) genuinely differs from its list price (100.00):
+     * DealQuotationRenderAdapter#hasSpecialPricing rule (b). */
     private DealQuotationItemDto discountedDirectNetTile() {
         return new DealQuotationItemDto(1L, 1, null, null, null, null, "A", null, null, "60x60",
             new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
@@ -1489,8 +1435,8 @@ class DealQuotationEnglishFormTest {
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
     }
 
-    /** V178 fixture — a NET tile with {@code discountPct} EXPLICITLY zero (never null), so no
-     * rule counts it as special pricing on its own. */
+    /** V178 fixture — a NET tile with discountPct EXPLICITLY zero (never null), so no rule counts it as special
+     * pricing on its own. */
     private DealQuotationItemDto netZeroDiscountTile(int seq) {
         return new DealQuotationItemDto((long) seq, seq, null, null, null, null, "A", null, null, "60x60",
             new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
@@ -1500,11 +1446,9 @@ class DealQuotationEnglishFormTest {
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
     }
 
-    /** V182 fixture — a plain TILE row (no discount, no special pricing of its own) with NO lead
-     * time set, used alongside {@link #adjustmentRow} so a "DATE-mode validity + no lead time"
-     * test keeps exercising the TILE remark set (a document needs at least one TILE line for that
-     * — see {@link DealQuotationRenderAdapter#hasAnyTileLine}) rather than becoming a non-tile
-     * document, whose remark set has no validity/DATE line at all. */
+    /** V182 fixture — a plain TILE row with NO lead time set, used alongside #adjustmentRow so a "DATE-mode
+     * validity + no lead time" test keeps exercising the TILE remark set rather than becoming a non-tile document,
+     * whose remark set has no validity/DATE line at all. */
     private DealQuotationItemDto tileNoLeadTime(int seq) {
         return new DealQuotationItemDto((long) seq, seq, null, null, null, null, "A", null, null, "60x60",
             new BigDecimal("2"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
@@ -1514,8 +1458,8 @@ class DealQuotationEnglishFormTest {
             WastageCalculator.LINE_TYPE_TILE, BigDecimal.TEN, "pcs.", null, null, null, null, null);
     }
 
-    /** V178 fixture — a bare ADJUSTMENT (ส่วนลดพิเศษ) row: rule (e) on its own, independent of
-     * every other row's price mode or discount. */
+    /** V178 fixture — a bare ADJUSTMENT (ส่วนลดพิเศษ) row: rule (e) on its own, independent of every other row's
+     * price mode or discount. */
     private DealQuotationItemDto adjustmentRow(int seq) {
         BigDecimal adj = new BigDecimal("30.00");
         LocalDate deadline = LocalDate.of(2026, 9, 20);

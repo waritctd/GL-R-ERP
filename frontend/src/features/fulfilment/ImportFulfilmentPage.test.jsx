@@ -9,12 +9,8 @@ import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
-// PR-B port of Yang's per-factory redesign (origin/feat/per-factory-import-tracking, 65dfe171)
-// onto the STORED aggregate PR-A shipped (api.storedImportRequests, our own six step codes —
-// see importSteps.js's header). No cross-deal list endpoint exists for the stored aggregate, so
-// this page reads api.tickets.list for candidates (fulfillmentStatus IR_ISSUED/GOODS_RECEIVED)
-// and fetches each candidate's rows via api.storedImportRequests.listForTicket — see the page's
-// own header comment for why this bounded N+1 is not a backend change.
+// PR-B port of Yang's per-factory redesign (origin/feat/per-factory-import-tracking, 65dfe171) onto the STORED
+// aggregate PR-A shipped (api.storedImportRequests, our own six step codes — see importSteps.js's header).
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -72,8 +68,8 @@ function ticket(over = {}) {
   };
 }
 
-// api.storedImportRequests.listForTicket(ticketId) is called once per candidate ticket; this
-// resolver keys a per-ticket row map so a test can supply different rows per deal.
+// api.storedImportRequests.listForTicket(ticketId) is called once per candidate ticket; this resolver keys a
+// per-ticket row map so a test can supply different rows per deal.
 function mockRowsByTicket(map) {
   api.storedImportRequests.listForTicket.mockImplementation((ticketId) =>
     Promise.resolve({ importRequests: map[Number(ticketId)] ?? [] }));
@@ -155,8 +151,8 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
       .toHaveBeenCalledWith(1, { targetStep: 'PICKED_UP' }));
   });
 
-  // Import has its own per-deal page (GET /api/import/deals/{id}); the whole-deal GET
-  // /api/tickets/{id} 403s import, so a link into /tickets/:id from this worklist is a dead end.
+  // Import has its own per-deal page (GET /api/import/deals/{id}); the whole-deal GET /api/tickets/{id} 403s
+  // import, so a link into /tickets/:id from this worklist is a dead end.
   it('links every deal to import\'s own page (/import/deals/:id), never the whole-deal page', async () => {
     renderPage();
     await screen.findByTestId('fulfilment-deal');
@@ -165,8 +161,8 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     expect(hrefs.filter((h) => h.startsWith('/tickets'))).toEqual([]);
   });
 
-  // SYNC: the same per-factory rows are shown on the import deal page, so an advance made here
-  // must refresh that page's cached copy too — otherwise a stale step shows until a hard reload.
+  // SYNC: the same per-factory rows are shown on the import deal page, so an advance made here must refresh that
+  // page's cached copy too — otherwise a stale step shows until a hard reload.
   it('refreshes the import deal page cache after advancing a factory (sync)', async () => {
     const { queryClient } = renderPage();
     const spy = vi.spyOn(queryClient, 'invalidateQueries');
@@ -178,9 +174,8 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
   });
 
   it('keeps an all-received deal in the done group, out of the active list', async () => {
-    // PR-B REVIEW ROUND 1, S2: "done" is keyed on the TICKET's own fulfillmentStatus
-    // (GOODS_RECEIVED — the server-computed rollup), not merely "every ISSUED row I can see is
-    // RECEIVED" — so this fixture's ticket must actually carry that status, matching what
+    // PR-B REVIEW ROUND 1, S2: "done" is keyed on the TICKET's own fulfillmentStatus, not merely "every ISSUED row
+    // I can see is RECEIVED" — so this fixture's ticket must actually carry that status, matching what
     // ImportRequestService#applyImportRequestRollup would have written server-side.
     api.tickets.list.mockResolvedValue({
       tickets: [ticket({ fulfillmentStatus: 'GOODS_RECEIVED' }), ticket({ id: 2, code: 'D-ACTIVE', customerName: 'ลูกค้าสอง', fulfillmentStatus: 'IR_ISSUED' })],
@@ -274,8 +269,8 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
       .toHaveBeenCalledWith(1, { leadTimeMinDays: 30, leadTimeMaxDays: 45 }));
   });
 
-  // PR-B REVIEW ROUND 1, nit: a rejected lead-time save must leave the editor OPEN, not vanish
-  // behind a save that never happened.
+  // PR-B REVIEW ROUND 1, nit: a rejected lead-time save must leave the editor OPEN, not vanish behind a save
+  // that never happened.
   it('LeadTimeInline stays open when the save is rejected (400), instead of closing on a failed save', async () => {
     api.storedImportRequests.setLeadTime.mockRejectedValue(Object.assign(new Error('ระยะเวลานำเข้าไม่ถูกต้อง'), { status: 400 }));
     renderPage();
@@ -325,15 +320,12 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     expect(within(modal).queryByRole('button', { name: 'บันทึก' })).toBeNull();
   });
 
-  // PR-B REVIEW ROUND 1, B3: advancing a step must reset the picker's default target, or a
-  // second advance in a row submits a STALE target (behind the row's real current step) and 409s.
+  // PR-B REVIEW ROUND 1, B3: advancing a step must reset the picker's default target, or a second advance in a
+  // row submits a STALE target (behind the row's real current step) and 409s.
   describe('B3 — advance twice in a row', () => {
     it('resets the picker default after the first advance so a second advance targets the NEW next step', async () => {
       mockRowsByTicket({ 1: [row({ id: 1, importStep: 'CONTACTED' })] });
-      // The mutation's own onSuccess invalidates storedImportRequests(1), which react-query
-      // refetches automatically — so the mock's OWN resolution is where "the server's state
-      // actually changed" belongs: by the time that refetch runs, listForTicket must already
-      // return the NEW step, exactly like a real advanceStep call landing before the GET does.
+      // The mutation's own onSuccess invalidates storedImportRequests, which react-query refetches automatically.
       api.storedImportRequests.advanceStep.mockImplementationOnce(async () => {
         mockRowsByTicket({ 1: [row({ id: 1, importStep: 'ORDERED' })] });
         return { importRequest: row({ importStep: 'ORDERED' }) };
@@ -345,22 +337,21 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
       await waitFor(() => expect(api.storedImportRequests.advanceStep)
         .toHaveBeenCalledWith(1, { targetStep: 'ORDERED' }));
 
-      // Wait for the bar to actually re-render at the NEW current step before the second click —
-      // this is the render FactoryProgressBar's own useEffect resets `target` on.
+      // Wait for the bar to actually re-render at the NEW current step before the second click — this is the render
+      // FactoryProgressBar's own useEffect resets `target` on.
       await screen.findByText(/S13/);
       api.storedImportRequests.advanceStep.mockClear();
       fireEvent.click(within(screen.getByTestId('fulfilment-deal')).getByTestId('advance-1'));
-      // Must target PICKED_UP (the step after the NEW current step ORDERED) — never ORDERED again,
-      // which the row's own forward-only guard would 409 on. This is exactly what used to fail
-      // before B3's fix: `target` state stayed at the FIRST render's default (ORDERED) forever.
+      // Must target PICKED_UP (the step after the NEW current step ORDERED) — never ORDERED again, which the row's
+      // own forward-only guard would 409 on. This is exactly what used to fail before B3's fix: `target` state
+      // stayed at the FIRST render's default (ORDERED) forever.
       await waitFor(() => expect(api.storedImportRequests.advanceStep)
         .toHaveBeenCalledWith(1, { targetStep: 'PICKED_UP' }));
     });
   });
 
-  // PR-B REVIEW ROUND 1, B4: widened candidate filter — PARTIALLY_DELIVERED (mixed stock+import,
-  // factories still in transit) must stay visible, and a legacy/untracked deal must show with a
-  // link rather than vanish.
+  // PR-B REVIEW ROUND 1, B4: widened candidate filter — PARTIALLY_DELIVERED (mixed stock+import, factories still
+  // in transit) must stay visible, and a legacy/untracked deal must show with a link rather than vanish.
   describe('B4 — widened candidate filter', () => {
     it('keeps a PARTIALLY_DELIVERED deal (mixed stock+import) visible with its factories', async () => {
       api.tickets.list.mockResolvedValue({
@@ -396,12 +387,9 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     });
   });
 
-  // PR-B REVIEW ROUND 2, X2: TicketService#applyImportRequestRollup (backend/.../TicketService.java
-  // ~942-948, Owner decision 3) writes ONLY the GOODS_RECEIVED event for an already
-  // PARTIALLY_DELIVERED deal (mixed stock+import, Case 8) — it never touches fulfillment_status,
-  // since a delivery already under way must not be disturbed. So unlike the GOODS_RECEIVED case,
-  // this page has no server-computed rollup to key "done" on for that status; it must derive it
-  // from its OWN rows (every ISSUED row RECEIVED).
+  // PR-B REVIEW ROUND 2, X2: TicketService#applyImportRequestRollup writes ONLY the GOODS_RECEIVED event for an
+  // already PARTIALLY_DELIVERED deal — it never touches fulfillment_status, since a delivery already under way
+  // must not be disturbed.
   describe('X2 — PARTIALLY_DELIVERED done-group rollup', () => {
     it('moves a PARTIALLY_DELIVERED deal into the done group once every issued row is RECEIVED', async () => {
       api.tickets.list.mockResolvedValue({
@@ -447,11 +435,9 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     });
   });
 
-  // PR-B REVIEW ROUND 2, X3: the legacy section is for the pre-V184 chain only
-  // (IR_ISSUED/IR_SENT/SHIPPING with no stored rows) — a deal that reached GOODS_RECEIVED or
-  // PARTIALLY_DELIVERED with zero stored rows got there via pure stock (FROM_STOCK / a
-  // stock-only mixed deal), which this page has nothing to show or link to. It must be dropped
-  // entirely, not shown as if it were still on the legacy import chain.
+  // PR-B REVIEW ROUND 2, X3: the legacy section is for the pre-V184 chain only — a deal that reached
+  // GOODS_RECEIVED or PARTIALLY_DELIVERED with zero stored rows got there via pure stock, which this page has
+  // nothing to show or link to.
   describe('X3 — legacy section scope', () => {
     it('does not list a pure-stock PARTIALLY_DELIVERED deal with no stored rows anywhere', async () => {
       api.tickets.list.mockResolvedValue({
@@ -493,14 +479,9 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
     });
   });
 
-  // PR-B REVIEW ROUND 2, X4: the completion toast used to claim "รับครบทุกโรงงาน" off a CLIENT-side
-  // guess — every row THIS PAGE already had loaded was RECEIVED — computed BEFORE the advance's
-  // own server-side rollup runs. That is wrong whenever the rollup declines to complete (a
-  // required factory never issued at all, so not even in the loaded row set — mirrors mockApi's
-  // own S3 fix), and it can never be right for PARTIALLY_DELIVERED at all, since
-  // TicketService#applyImportRequestRollup writes only an EVENT for that status, never
-  // fulfillment_status (Owner decision 3). The toast must instead be keyed on a FRESH read taken
-  // after the advance actually lands.
+  // PR-B REVIEW ROUND 2, X4: the completion toast used to claim "รับครบทุกโรงงาน" off a CLIENT-side guess —
+  // every row THIS PAGE already had loaded was RECEIVED — computed BEFORE the advance's own server-side rollup
+  // runs.
   describe('X4 — completion toast reflects the refetched ticket, not a client-side guess', () => {
     it('shows the ordinary step-advanced toast, never the "รับครบทุกโรงงาน" claim, when the refetched ticket is NOT GOODS_RECEIVED', async () => {
       api.importDeals.get.mockResolvedValue({ deal: { fulfillmentStatus: 'IR_ISSUED' } });

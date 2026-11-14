@@ -56,11 +56,9 @@ describe('LEAVE_SURFACE_TABS', () => {
 describe('visibleLeaveSurfaceTabIds', () => {
   it('a plain employee with no reports does not see "review" or "team"', () => {
     expect(visibleLeaveSurfaceTabIds(employee, [])).toEqual(['me']);
-    // Still hidden even with OTHER people's requests loaded -- none of them are this
-    // user's own reports.
+    // Still hidden even with OTHER people's requests loaded -- none of them are this user's own reports.
     expect(visibleLeaveSurfaceTabIds(employee, [submittedRequestUnderSomeoneElse])).toEqual(['me']);
-    // ...and even with employeeOptions unset (the default -- a caller that never wired the
-    // signal through at all).
+    // ...and even with employeeOptions unset (the default -- a caller that never wired the signal through at all).
     expect(visibleLeaveSurfaceTabIds(employee, [], selfOnlyEmployeeOptions)).toEqual(['me']);
   });
 
@@ -147,9 +145,9 @@ describe('visibleLeaveSurfaceTabIds', () => {
     });
 
     it('does NOT key off isDivisionManager-style user.manager -- a plain employee with reports in their employees() list still sees it', () => {
-      // Deliberately no `manager: true` on this fixture -- hasTeamMembers reads
-      // employeeOptions, never user.manager/role (aside from hr/ceo's own includeAll widening
-      // inside api.leave.employees() itself, which is opaque to this function).
+      // Deliberately no `manager: true` on this fixture -- hasTeamMembers reads employeeOptions, never
+      // user.manager/role (aside from hr/ceo's own includeAll widening inside api.leave.employees() itself, which is
+      // opaque to this function).
       const plainEmployeeWithReports = { role: 'employee', employeeId: 42 };
       expect(visibleLeaveSurfaceTabIds(plainEmployeeWithReports, [], selfPlusReportEmployeeOptions))
         .toEqual(['me', 'team']);
@@ -170,8 +168,8 @@ describe('resolveLeaveSurfaceTab', () => {
   });
 
   it('falls back to "me" for a user who requests ?tab=review but cannot currently see it', () => {
-    // e.g. a plain employee with no reports hand-editing the URL, or a stale deep link
-    // shared by a manager to someone who isn't one.
+    // e.g. a plain employee with no reports hand-editing the URL, or a stale deep link shared by a manager to
+    // someone who isn't one.
     expect(resolveLeaveSurfaceTab('review', ['me'])).toBe(DEFAULT_LEAVE_SURFACE_TAB_ID);
   });
 
@@ -272,9 +270,9 @@ describe('canReviewRequest / canManagerCancelRequest (ported from LeavePage.jsx)
   });
 
   it('canReviewRequest rejects a server-authoritative canReview=true on an already-decided request', () => {
-    // Mirrors LeaveService.withCanReviewFlag, which computes canReview independent of status by
-    // design -- callers must still gate on status themselves. Without this check, an
-    // already-decided (non-SUBMITTED) row would render Approve/Reject buttons in ReviewQueueTab.
+    // Mirrors LeaveService.withCanReviewFlag, which computes canReview independent of status by design -- callers
+    // must still gate on status themselves. Without this check, an already-decided (non-SUBMITTED) row would
+    // render Approve/Reject buttons in ReviewQueueTab.
     expect(canReviewRequest({ status: 'REJECTED', canReview: true }, employee, false)).toBe(false);
     expect(canReviewRequest({ status: 'APPROVED', canReview: true }, employee, false)).toBe(false);
     expect(canReviewRequest({ status: 'CANCELLED', canReview: true }, employee, false)).toBe(false);

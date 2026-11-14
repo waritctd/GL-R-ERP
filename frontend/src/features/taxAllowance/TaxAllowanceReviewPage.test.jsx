@@ -17,12 +17,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       payroll: {
         getTaxAllowanceCaps: vi.fn(),
         getTaxAllowanceDeclarations: vi.fn(),
-        // "register shows what payroll actually uses" (2026-08) — the second source
-        // TaxAllowanceReviewPage now joins in alongside getTaxAllowanceDeclarations above.
+        // "register shows what payroll actually uses" (2026-08) — the second source TaxAllowanceReviewPage now joins
+        // in alongside getTaxAllowanceDeclarations above.
         getTaxAllowances: vi.fn(),
         listTaxAllowanceAttachments: vi.fn(),
-        // F5 cache-invalidation coverage only — approve is the simplest of the five review
-        // mutations to drive end to end (no reason/effective-month input needed).
+        // F5 cache-invalidation coverage only — approve is the simplest of the five review mutations to drive end to
+        // end (no reason/effective-month input needed).
         approveTaxAllowanceDeclaration: vi.fn(),
       },
       employees: { list: vi.fn() },
@@ -47,8 +47,8 @@ const pendingDeclaration = {
   reviewerNote: null,
 };
 
-// An employee with no declaration at all — HR must see them as ยังไม่ได้ยื่น, CEO must not see
-// them at all (CEO cannot enumerate employees).
+// An employee with no declaration at all — HR must see them as ยังไม่ได้ยื่น, CEO must not see them at all
+// (CEO cannot enumerate employees).
 const employees = [
   { id: 9, code: 'EMP009', nameTh: 'สมชาย ใจดี', active: true },
   { id: 10, code: 'EMP010', nameTh: 'สมหญิง มีสุข', active: true },
@@ -78,9 +78,8 @@ describe('TaxAllowanceReviewPage', () => {
     vi.clearAllMocks();
     api.payroll.getTaxAllowanceCaps.mockResolvedValue({ caps: [] });
     api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [pendingDeclaration] });
-    // Empty by default so every PRE-EXISTING test below (none of which is about the payroll join)
-    // keeps its original behaviour: resolvePayrollAllowance([], ...) is always null, so
-    // taxAllowanceStatusInfo's new branches never fire and every row falls through to the same
+    // Empty by default so every PRE-EXISTING test below keeps its original behaviour: resolvePayrollAllowance is
+    // always null, so taxAllowanceStatusInfo's new branches never fire and every row falls through to the same
     // declaration-only logic as before this feature existed.
     api.payroll.getTaxAllowances.mockResolvedValue({ items: [] });
     api.payroll.listTaxAllowanceAttachments.mockResolvedValue({ items: [] });
@@ -173,10 +172,7 @@ describe('TaxAllowanceReviewPage', () => {
     it('sources every status chip label from taxAllowanceStatusShortLabel, not a page-local literal', async () => {
       renderPage({ user: hrUser, entry: '/tax-allowance-review?status=' });
       await screen.findByText('สมชาย ใจดี');
-      // Read from the same function TaxAllowanceReviewPage's STATUS_CHIPS calls to build its
-      // labels. If STATUS_CHIPS ever grows its own hardcoded literal again — the exact drift this
-      // PR fixes, where APPROVED_UNAPPLIED and EXPIRED read differently here than on the badge —
-      // a divergence makes this fail instead of passing on a lucky coincidence of matching text.
+      // Read from the same function TaxAllowanceReviewPage's STATUS_CHIPS calls to build its labels.
       for (const key of ['NONE', 'PENDING', 'APPROVED_UNAPPLIED', 'APPLIED', 'EXPIRED', 'REJECTED']) {
         expect(screen.getByRole('button', { name: taxAllowanceStatusShortLabel(key) })).not.toBeNull();
       }
@@ -200,8 +196,8 @@ describe('TaxAllowanceReviewPage', () => {
 
       // Long form (StatusBadge, on the row itself) keeps the full sentence.
       expect(await screen.findByText('หมดอายุ — ต้องยืนยันใหม่')).not.toBeNull();
-      // Short form (the filter chip) is the compact noun alone — a distinct DOM node, not a
-      // truncated rendering of the same text.
+      // Short form (the filter chip) is the compact noun alone — a distinct DOM node, not a truncated rendering of
+      // the same text.
       const chip = screen.getByRole('button', { name: 'หมดอายุ' });
       expect(chip.textContent).not.toContain('ต้องยืนยันใหม่');
     });
@@ -209,24 +205,24 @@ describe('TaxAllowanceReviewPage', () => {
 
   describe('empty state honesty', () => {
     it('does not claim "no data" when a status filter matches zero rows out of a non-empty table', async () => {
-      // Reachable today from any chip whose bucket happens to be empty for the year — the fixture
-      // has one PENDING and one NONE (no-declaration) employee, and zero REJECTED ones.
+      // Reachable today from any chip whose bucket happens to be empty for the year — the fixture has one PENDING
+      // and one NONE (no-declaration) employee, and zero REJECTED ones.
       renderPage({ user: hrUser, entry: '/tax-allowance-review?status=REJECTED' });
       // The honest, filter-aware message appears...
       expect(await screen.findByText('ไม่พบพนักงานที่ตรงกับตัวกรองนี้')).not.toBeNull();
       // ...naming the real (pre-filter) headcount, not the zero the filter produced.
       expect(screen.getByText('ลองเลือก "ทั้งหมด" เพื่อดูพนักงานทั้งหมด 2 คน')).not.toBeNull();
-      // ...and the old "there is no data at all" claim — false here, ~207 real employees exist in
-      // production — does not appear anywhere (not even doubled into the sr-only live region).
+      // ...and the old "there is no data at all" claim — false here, ~207 real employees exist in production — does
+      // not appear anywhere (not even doubled into the sr-only live region).
       expect(screen.queryByText('ไม่มีข้อมูลพนักงานในปีนี้')).toBeNull();
     });
 
     it('keeps the original "no data at all" message when the table is genuinely empty (no filter active)', async () => {
       api.payroll.getTaxAllowanceDeclarations.mockResolvedValue({ items: [] });
       api.employees.list.mockResolvedValue({ employees: [] });
-      renderPage({ user: hrUser }); // ทั้งหมด (no status filter) — this is not a filtered-empty case
-      // The text is duplicated into DataTable's `aria-live` sr-only region alongside the visible
-      // `<strong>` title (DataTable.jsx), so this asserts on the count rather than a single node.
+      renderPage({ user: hrUser }); // ทั้งหมด (no status filter) — this is not a filtered-empty case The text is duplicated into DataTable's
+      // `aria-live` sr-only region alongside the visible `` title (DataTable.jsx), so this asserts on the count
+      // rather than a single node.
       await waitFor(() => {
         expect(screen.getAllByText('ไม่มีข้อมูลพนักงานในปีนี้').length).toBeGreaterThan(0);
       });
@@ -253,9 +249,9 @@ describe('TaxAllowanceReviewPage', () => {
       };
     }
 
-    // `?status=` (ทั้งหมด) throughout: these tests are about menu CONTENT for a given row status,
-    // not which chip is selected — pinning ALL keeps the fixture's one row visible regardless of
-    // which status `declarationFor` below is given.
+    // `?status=` (ทั้งหมด) throughout: these tests are about menu CONTENT for a given row status, not which chip
+    // is selected — pinning ALL keeps the fixture's one row visible regardless of which status `declarationFor`
+    // below is given.
     async function openRowMenu() {
       renderPage({ entry: '/tax-allowance-review?status=' });
       fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการสำหรับ มานะ ตั้งใจ' }));
@@ -278,8 +274,8 @@ describe('TaxAllowanceReviewPage', () => {
       api.employees.list.mockResolvedValue({ employees: soloEmployee });
       renderPage({ entry: '/tax-allowance-review?status=' });
       await screen.findByText('มานะ ตั้งใจ');
-      // No actions at all remain for an applied declaration — the overflow trigger itself does not
-      // render (OverflowMenu returns null on an empty items array), not just a missing menu item.
+      // No actions at all remain for an applied declaration — the overflow trigger itself does not render
+      // (OverflowMenu returns null on an empty items array), not just a missing menu item.
       expect(screen.queryByRole('button', { name: 'การดำเนินการสำหรับ มานะ ตั้งใจ' })).toBeNull();
     });
 
@@ -318,10 +314,7 @@ describe('TaxAllowanceReviewPage', () => {
 
   // "Register shows what payroll actually uses" (2026-08): GET /api/payroll/tax-allowances
   // (hr.employee_tax_allowance) joined in by employeeId, alongside the declaration register above
-  // (hr.tax_allowance_declaration) — see TaxAllowanceReviewPage.jsx's own header comment. Every
-  // fixture here uses a DISTINCT declared/actual total (55,000 / 22,000 / 44,000 / 59,000 / 33,000)
-  // so `getByText('฿…')` on a formatted total is unambiguous without needing to scope every
-  // assertion — only one row in the whole suite can ever produce a given figure.
+  // (hr.tax_allowance_declaration) — see TaxAllowanceReviewPage.jsx's own header comment.
   describe('payroll-side allowance (hr.employee_tax_allowance, a second table)', () => {
     function blankAllowances(overrides = {}) {
       return {
@@ -338,8 +331,8 @@ describe('TaxAllowanceReviewPage', () => {
     function payrollAllowanceRow({ allowances, ...overrides }) {
       return {
         employeeId: null, employeeCode: null, employeeName: null,
-        // effectiveMonth 1: always qualifies under resolvePayrollAllowance regardless of which real
-        // calendar month the suite happens to run in (see that function's own comment).
+        // effectiveMonth 1: always qualifies under resolvePayrollAllowance regardless of which real calendar month the
+        // suite happens to run in (see that function's own comment).
         effectiveMonth: 1, documentReference: null, updatedAt: '2026-01-05T00:00:00.000Z',
         verificationStatus: 'VERIFIED', verifiedById: null, verifiedAt: null, verificationDeadline: null,
         allowances: blankAllowances(allowances),
@@ -368,8 +361,8 @@ describe('TaxAllowanceReviewPage', () => {
     // No declaration AND no payroll row at all — the control case for "genuinely nothing".
     const emptyEmployee = { id: 32, code: 'EMP032', nameTh: 'วิภา ไม่มีอะไรเลย', active: true };
 
-    // A declaration exists, but the payroll figure disagrees with it (44,000 declared vs 59,000
-    // actually applied) — models a legacy bulk-PUT edit made after the declaration was applied.
+    // A declaration exists, but the payroll figure disagrees with it (44,000 declared vs 59,000 actually applied)
+    // — models a legacy bulk-PUT edit made after the declaration was applied.
     const disagreementEmployee = { id: 40, code: 'EMP040', nameTh: 'อารีย์ ยอดไม่ตรง', active: true };
     const disagreementDeclaration = {
       declarationId: 90, employeeId: 40, employeeCode: 'EMP040', employeeName: 'อารีย์ ยอดไม่ตรง',
@@ -384,9 +377,8 @@ describe('TaxAllowanceReviewPage', () => {
       verificationStatus: 'GRANDFATHERED_UNVERIFIED',
     });
 
-    // A declaration exists AND the payroll figure agrees with it exactly (33,000 both sides) — the
-    // normal, correctly-wired path. The control case proving the disagreement flag is not just
-    // always-on.
+    // A declaration exists AND the payroll figure agrees with it exactly (33,000 both sides) — the normal,
+    // correctly-wired path. The control case proving the disagreement flag is not just always-on.
     const agreementEmployee = { id: 41, code: 'EMP041', nameTh: 'บุญมี ยอดตรงกัน', active: true };
     const agreementDeclaration = {
       declarationId: 91, employeeId: 41, employeeCode: 'EMP041', employeeName: 'บุญมี ยอดตรงกัน',
@@ -401,13 +393,7 @@ describe('TaxAllowanceReviewPage', () => {
       verificationStatus: 'VERIFIED',
     });
 
-    // F4 regression case: a declaration exists AND a payroll row exists, but that row is
-    // EXPIRED_UNVERIFIED -- the two totals plainly differ (70,000 declared vs 85,000 stored-but-
-    // expired), yet the disagreement flag must NOT fire anywhere: an expired row is excluded from
-    // withholding entirely (PayrollRepository's WHERE clause), so comparing its stale figure against
-    // the current declaration answers the wrong question. Before hasAllowanceDisagreement unified
-    // the two surfaces, the summary badge already got this right but the expanded panel did not, and
-    // nothing caught them disagreeing with EACH OTHER on this exact row.
+    // F4 regression case: a declaration exists AND a payroll row exists, but that row is EXPIRED_UNVERIFIED.
     const expiredDisagreesEmployee = { id: 42, code: 'EMP042', nameTh: 'ปรีชา ค่าเก่าหมดอายุ', active: true };
     const expiredDisagreesDeclaration = {
       declarationId: 92, employeeId: 42, employeeCode: 'EMP042', employeeName: 'ปรีชา ค่าเก่าหมดอายุ',
@@ -461,20 +447,19 @@ describe('TaxAllowanceReviewPage', () => {
       renderPage({ user: hrUser });
       await screen.findByText('มานี ไม่เคยยื่น');
       fireEvent.click(screen.getByRole('button', { name: 'ดูรายละเอียดค่าลดหย่อนของ มานี ไม่เคยยื่น เทียบเพดาน' }));
-      // F1 review remediation: relabelled from "ค่าลดหย่อนที่ระบบเงินเดือนใช้จริง" (what payroll
-      // ACTUALLY USES) -- this is the RAW stored total, before PayrollCalculator's caps, so claiming
-      // it is "actually used" overstates it. "บันทึกในระบบเงินเดือน" (recorded in the payroll
-      // system) makes no claim about the post-clamp deducted amount.
+      // F1 review remediation: relabelled from "ค่าลดหย่อนที่ระบบเงินเดือนใช้จริง" -- this is the RAW stored total,
+      // before PayrollCalculator's caps, so claiming it is "actually used" overstates it. "บันทึกในระบบเงินเดือน"
+      // makes no claim about the post-clamp deducted amount.
       expect(await screen.findByText('ค่าลดหย่อนที่บันทึกในระบบเงินเดือน')).not.toBeNull();
       expect(screen.queryByText('ค่าลดหย่อนที่ระบบเงินเดือนใช้จริง')).toBeNull();
       expect(screen.getByText('฿55,000.00')).not.toBeNull();
       expect(screen.getByText(payrollVerificationInfo('GRANDFATHERED_UNVERIFIED').label)).not.toBeNull();
-      // The relabelled panel must not claim the raw figure IS what payroll deducts, and must point
-      // the reader to where the real, post-clamp number lives instead.
+      // The relabelled panel must not claim the raw figure IS what payroll deducts, and must point the reader to
+      // where the real, post-clamp number lives instead.
       expect(screen.getByText(/ยังไม่ผ่านการตัดเพดาน/)).not.toBeNull();
       expect(screen.getByText(/ค่าลดหย่อนรวม/)).not.toBeNull();
-      // No declaration exists for this employee -- the expanded panel says so explicitly rather
-      // than silently omitting the declaration grid.
+      // No declaration exists for this employee -- the expanded panel says so explicitly rather than silently
+      // omitting the declaration grid.
       expect(screen.getByText(/ยังไม่มีแบบแจ้ง ล\.ย\.01 ผ่านระบบนี้/)).not.toBeNull();
     });
 
@@ -499,8 +484,8 @@ describe('TaxAllowanceReviewPage', () => {
 
       fireEvent.click(within(row).getByRole('button', { name: /ดูรายละเอียดค่าลดหย่อนของ ปรีชา ค่าเก่าหมดอายุ/ }));
       expect(await screen.findByText(/หมดอายุ — ไม่ใช้กับเงินเดือนแล้ว/)).not.toBeNull();
-      // Expanded panel: same two totals, same non-disagreement — this is the exact case the two
-      // surfaces used to answer DIFFERENTLY before hasAllowanceDisagreement unified them.
+      // Expanded panel: same two totals, same non-disagreement — this is the exact case the two surfaces used to
+      // answer DIFFERENTLY before hasAllowanceDisagreement unified them.
       expect(screen.queryByText(/ไม่ตรงกับยอดที่บันทึกในระบบเงินเดือน/)).toBeNull();
     });
 
@@ -516,10 +501,8 @@ describe('TaxAllowanceReviewPage', () => {
       expect(screen.queryByText('ปรีชา ค่าเก่าหมดอายุ')).toBeNull();
     });
 
-    // F6 review remediation: GRANDFATHERED_EXPIRED had no filter chip while GRANDFATHERED_APPLIED
-    // did -- HR needs to find people whose old allowance silently STOPPED applying at least as much
-    // as the reverse. `expiredEmployee`/`expiredRow` above (no declaration, EXPIRED_UNVERIFIED) is
-    // exactly the row this chip exists to surface.
+    // F6 review remediation: GRANDFATHERED_EXPIRED had no filter chip while GRANDFATHERED_APPLIED did -- HR needs
+    // to find people whose old allowance silently STOPPED applying at least as much as the reverse.
     it('F6: filters to the lapsed-grandfathered queue via the new GRANDFATHERED_EXPIRED chip', async () => {
       renderPage({ user: hrUser });
       await screen.findByText('มานี ไม่เคยยื่น');
@@ -534,14 +517,14 @@ describe('TaxAllowanceReviewPage', () => {
 
     it('CEO: unaffected where it should be -- no new exposure, no employee enumeration', async () => {
       renderPage({ user: ceoUser });
-      // CEO still sees the employees who HAVE a declaration, disagreement flag included (same
-      // authorized read as the rest of this register -- PayrollController#getTaxAllowances is
-      // hasAnyRole('HR','CEO'), identical to the declaration register's own gate).
+      // CEO still sees the employees who HAVE a declaration, disagreement flag included (same authorized read as the
+      // rest of this register -- PayrollController#getTaxAllowances is hasAnyRole('HR','CEO'), identical to the
+      // declaration register's own gate).
       const disagreeingRow = (await screen.findByText('อารีย์ ยอดไม่ตรง')).closest('tr');
       expect(within(disagreeingRow).getByText('ยอดไม่ตรงกัน')).not.toBeNull();
       expect(screen.getByText('บุญมี ยอดตรงกัน')).not.toBeNull();
-      // ...but never a no-declaration payroll-only row (cannot enumerate employees to synthesize
-      // one), and never the new chip, which -- like NONE -- can only ever match such a row.
+      // ...but never a no-declaration payroll-only row (cannot enumerate employees to synthesize one), and never the
+      // new chip, which -- like NONE -- can only ever match such a row.
       expect(screen.queryByText('มานี ไม่เคยยื่น')).toBeNull();
       expect(screen.queryByText('สมศักดิ์ หมดอายุ')).toBeNull();
       expect(screen.queryByRole('button', { name: taxAllowanceStatusShortLabel('GRANDFATHERED_APPLIED') })).toBeNull();
@@ -549,12 +532,9 @@ describe('TaxAllowanceReviewPage', () => {
     });
   });
 
-  // F5 review remediation: approving/applying/reverifying a declaration can write
-  // hr.employee_tax_allowance (see taxAllowanceStatus.js's comment on
-  // markTaxAllowanceVerified/expireTaxAllowanceVerification), which is exactly what
-  // `payrollAllowancesQuery` reads -- but that query used to be invalidated by NONE of the five
-  // review mutations, only the declaration register was. The panel kept showing pre-action data
-  // until a manual reload. Approve is the simplest of the five to drive end to end here.
+  // F5 review remediation: approving/applying/reverifying a declaration can write hr.employee_tax_allowance,
+  // which is exactly what `payrollAllowancesQuery` reads -- but that query used to be invalidated by NONE of the
+  // five review mutations, only the declaration register was.
   describe('cache invalidation after a mutation (F5)', () => {
     it('invalidates the payroll-side allowance query, not just the declaration register, after approving', async () => {
       const invalidateSpy = vi.spyOn(QueryClient.prototype, 'invalidateQueries');
@@ -574,8 +554,8 @@ describe('TaxAllowanceReviewPage', () => {
         const invalidatedRoots = invalidateSpy.mock.calls.map(([arg]) => arg?.queryKey?.[0]);
         expect(invalidatedRoots).toContain('taxAllowances');
       });
-      // The observable symptom the fix resolves: the panel actually refetches instead of sitting on
-      // pre-action data until a manual reload.
+      // The observable symptom the fix resolves: the panel actually refetches instead of sitting on pre-action data
+      // until a manual reload.
       await waitFor(() => {
         expect(api.payroll.getTaxAllowances.mock.calls.length).toBeGreaterThan(getTaxAllowancesCallsBeforeMutation);
       });

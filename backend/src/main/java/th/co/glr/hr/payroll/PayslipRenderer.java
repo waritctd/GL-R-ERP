@@ -10,22 +10,8 @@ import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.common.PdfDocumentWriter;
 
-/**
- * Employee-facing payslip PDF. The layout mirrors the company's HR payslip template (slip.xls): a
- * centered company header, employee-id/date and name/department rows, a borderless two-column
- * รายการได้ / รายการหัก layout with per-side totals, a bold เงินรับสุทธิ line, and a
- * ผู้รับเงิน / วันที่ signature line.
- *
- * <p>This class only <em>renders</em>. Every figure is read verbatim from the already-computed
- * {@link PayrollLineDto}; no payroll math happens here. The two printed totals are defined so the
- * columns always foot to net pay:
- * <ul>
- *   <li>รวมรายได้ = grossEarnings + nonTaxableIncome (every money-in component gets a row)</li>
- *   <li>รวมรายหัก = totalDeductions (every deduction gets a row; the leave-refund credit prints as a
- *       negative line so the column still sums to totalDeductions)</li>
- *   <li>เงินรับสุทธิ = รวมรายได้ − รวมรายหัก = netPay, exact by construction</li>
- * </ul>
- */
+/** Employee-facing payslip PDF. This class only renders. Every figure is read verbatim from the
+ * already-computed PayrollLineDto; no payroll math happens here. */
 @Component
 public class PayslipRenderer {
     private static final String COMPANY_NAME = "บริษัท จีแอลแอนด์อาร์แทปส์แอนด์ไทลส์ จำกัด";
@@ -211,13 +197,9 @@ public class PayslipRenderer {
         }
     }
 
-    /**
-     * Greedy word wrap to a pixel width, measured with the real font rather than guessed from a
-     * character count — Sarabun is proportional and Thai has no inter-word spaces, so a character
-     * budget would be wrong in both directions. A single token longer than the line (a very long
-     * reference, say) is emitted on its own line rather than dropped: overflowing one line beats
-     * losing the content.
-     */
+    /** Greedy word wrap to a pixel width, measured with the real font rather than guessed from a character count —
+     * Sarabun is proportional and Thai has no inter-word spaces, so a character budget would be wrong in both
+     * directions. */
     List<String> wrapToWidth(PdfDocumentWriter pdf, PDFont font, float size, float maxWidth, String text)
         throws IOException {
         List<String> lines = new ArrayList<>();

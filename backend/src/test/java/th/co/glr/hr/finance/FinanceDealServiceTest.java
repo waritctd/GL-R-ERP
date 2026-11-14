@@ -23,12 +23,8 @@ import th.co.glr.hr.ticket.TicketResponses.TicketActionsResponse;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * The scope-EXIT case, deterministically: an authorized, scoped account action that leaves the deal outside
- * account's list scope must still answer with the updated finance view. (A real deal cannot easily be driven out
- * of scope by a permitted action -- deposit-paid auto-advances the stage into scope -- so the scope predicate is
- * scripted here; the real-DB refusal side is FinanceDealLockdownIntegrationTest.)
- */
+/** The scope-EXIT case, deterministically: an authorized, scoped account action that leaves the deal outside
+ * account's list scope must still answer with the updated finance view. */
 class FinanceDealServiceTest {
 
     private final TicketRepository tickets = mock(TicketRepository.class);

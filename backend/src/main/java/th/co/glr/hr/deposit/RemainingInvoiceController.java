@@ -19,16 +19,7 @@ import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
-/**
- * The STORED ใบแจ้งหนี้ส่วนที่เหลือ (GLA-99 step 2) — DRAFT/ISSUED/SUPERSEDED lifecycle routes.
- * The pre-existing stateless preview route ({@code GET /tickets/{ticketId}/remaining-invoice/
- * options} on {@link DepositNoticeController}) is UNCHANGED and stays in place: it is still how a
- * caller previews what a NEW draft would snapshot before creating one, and remains the source this
- * class's own writes snapshot from — see {@link RemainingInvoiceService}'s own class Javadoc. Its
- * sibling stateless {@code .../remaining-invoice/file} route is GONE (owner ruling O1, GLA-99 step
- * 2 review-round-1, 2026-09-20) — only an ISSUED/SUPERSEDED STORED document is downloadable now,
- * via THIS class's own {@code GET /remaining-invoices/{id}/file} below.
- */
+/** The STORED ใบแจ้งหนี้ส่วนที่เหลือ (GLA-99 step 2) — DRAFT/ISSUED/SUPERSEDED lifecycle routes. */
 @RestController
 @RequestMapping("/api")
 public class RemainingInvoiceController {

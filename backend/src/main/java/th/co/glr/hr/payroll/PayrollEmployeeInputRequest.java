@@ -57,27 +57,27 @@ public record PayrollEmployeeInputRequest(
     // ค่าอาหาร and เบี้ยเลี้ยง (ตจว/ตปท) -- V97. Real columns in the accountant's ledger (2026.xlsx
     // cols K and P). HR-typed per run.
     @PositiveOrZero BigDecimal mealAllowance,
-    // เบี้ยเลี้ยง split per มาตรา 42 -- exemption is PARTIAL, so a single amount plus a flag cannot
-    // express it. HR makes the split against the rate that applied; the system cannot derive it
-    // without knowing destination and employee grade.
+    // เบี้ยเลี้ยง split per มาตรา 42 -- exemption is PARTIAL, so a single amount plus a flag cannot express it. HR
+    // makes the split against the rate that applied; the system cannot derive it without knowing destination and
+    // employee grade.
     @PositiveOrZero BigDecimal perDiemExempt,
     @PositiveOrZero BigDecimal perDiemTaxable,
-    // Which limb applied. Required whenever any per-diem is paid -- the two carry different evidence
-    // obligations, and an unattributable tax position is one nobody can defend later.
+    // Which limb applied. Required whenever any per-diem is paid -- the two carry different evidence obligations,
+    // and an unattributable tax position is one nobody can defend later.
     PerDiemBasis perDiemBasis,
     // Dedicated one-off pay (V94/V96). Both are ข้อ 2.5 เงินพิเศษ -- see PayrollCalculator.
     @PositiveOrZero BigDecimal bonusPay,
     @PositiveOrZero BigDecimal otherOneOffPay,
     // ลูกค้าคืนสินค้า earned/unearned flag (handoff section 6). false (default) = not yet earned, so
-    // customerReturnDeduction reduces the commission earning pre-tax; true = already earned and paid,
-    // so customerReturnDeduction is applied as a post-tax clawback instead.
+    // customerReturnDeduction reduces the commission earning pre-tax; true = already earned and paid, so
+    // customerReturnDeduction is applied as a post-tax clawback instead.
     Boolean customerReturnAlreadyEarned,
-    // Garnishment payment type (handoff section 7). Nullable: null defaults to SALARY, reproducing
-    // the pre-existing single 30%-plus-฿20,000-floor rule exactly.
+    // Garnishment payment type (handoff section 7). Nullable: null defaults to SALARY, reproducing the
+    // pre-existing single 30%-plus-฿20,000-floor rule exactly.
     PayrollGarnishmentType garnishmentType,
-    // Parent allowance per qualifying head, this run's in-run correction (handoff section 4).
-    // Nullable: null falls back to the stored standing declaration, same per-field-override pattern
-    // as every other allowance field (see PayrollService#mergeAllowances).
+    // Parent allowance per qualifying head, this run's in-run correction (handoff section 4). Nullable: null falls
+    // back to the stored standing declaration, same per-field-override pattern as every other allowance field (see
+    // PayrollService#mergeAllowances).
     @jakarta.validation.constraints.Min(0) @jakarta.validation.constraints.Max(4) Integer parentCareCount,
     // Daily-rate support: days worked THIS period, HR-typed, only meaningful for a
     // pay_type = 'D' employee (hr.employee.current_salary is that employee's PER-DAY rate, not a
@@ -162,12 +162,8 @@ public record PayrollEmployeeInputRequest(
         );
     }
 
-    /**
-     * Legacy constructor: the signature before EITHER พิเศษ 9 (V95) or the dedicated one-off pay
-     * fields (V94/task 2) existed -- branch 117's oldest call sites. specialPay9 defaults to zero
-     * (an empty slot contributes nothing); every task-2 field defaults the same way the newer legacy
-     * constructor below already does.
-     */
+    /** Legacy constructor: the signature before EITHER พิเศษ 9 (V95) or the dedicated one-off pay fields (V94/task
+     * 2) existed -- branch 117's oldest call sites. */
     public PayrollEmployeeInputRequest(
         Long employeeId,
         BigDecimal specialPay1, BigDecimal specialPay2, BigDecimal specialPay3, BigDecimal specialPay4,
@@ -197,13 +193,7 @@ public record PayrollEmployeeInputRequest(
         );
     }
 
-    /**
-     * Legacy constructor, kept so every call site written before the task-2 fields existed still
-     * compiles (mealAllowance/perDiemAllowance/bonusPay/otherOneOffPay default to zero,
-     * customerReturnAlreadyEarned defaults false,
-     * garnishmentType/parentCareCount default null -- "not typed this run", falling back to SALARY /
-     * the stored standing declaration respectively).
-     */
+    /** Legacy constructor, kept so every call site written before the task-2 fields existed still compiles. */
     public PayrollEmployeeInputRequest(
         Long employeeId,
         BigDecimal specialPay1,
@@ -250,10 +240,8 @@ public record PayrollEmployeeInputRequest(
             pensionInsuranceAllowance, thaiEsgAllowance, homeLoanInterestAllowance, educationDonation,
             generalDonation, politicalDonation, warningLetterDeduction, customerReturnDeduction,
             otherPretaxDeduction, withholdingTaxOverride,
-            // mealAllowance, perDiemAllowance (V97), then bonusPay, otherOneOffPay -- all default to
-            // zero at this legacy arity, which is a no-op on every downstream figure. daysWorked
-            // defaults to null ("not typed this run" -- a no-op for a monthly employee and "no gross
-            // computed this run" for a daily-rate one, same as an omitted field on any current call).
+            // mealAllowance, perDiemAllowance (V97), then bonusPay, otherOneOffPay -- all default to zero at this legacy
+            // arity, which is a no-op on every downstream figure.
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null,
             BigDecimal.ZERO, BigDecimal.ZERO, false, null, null, null
         );

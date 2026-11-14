@@ -12,19 +12,11 @@ import { cn } from '../../utils/cn.js';
 import { formatDays } from './leaveFormatting.js';
 import { EVERYDAY_LEAVE_TYPE_CODES } from './MyLeaveTab.jsx';
 
-// Manager team-quota summary (2026-09) -- owner ask: "there is no summary of like how much each
-// employee have left". Reads GET /api/leave/balances/team, which LeaveService#teamBalances scopes
-// to DIRECT REPORTS ONLY (owner ruling, not the whole division) -- see that method's own Javadoc
-// for why the SCOPE decision is deliberately reused from LeaveRepository#findEmployeeOptions
-// rather than restated. Nothing here re-checks or narrows that scope; whatever the API returns is
-// exactly what this component renders.
+// Manager team-quota summary (2026-09) -- owner ask: "there is no summary of like how much each employee have
+// left". Nothing here re-checks or narrows that scope; whatever the API returns is exactly what this component
+// renders.
 
-// Fluid `auto-fill` column count instead of a `sm:`/`lg:`/`xl:` breakpoint ladder, deliberately:
-// this repo's own tablet band (`tablet:`, 721-1040px, index.css) overlaps Tailwind's built-in
-// `lg:`/`xl:` MIN-width variants at 1024-1040px (see that custom-variant's own comment), and a
-// breakpoint-driven column count is exactly the shape of bug that has silently hidden data at that
-// overlap before. A card grid has no "hidden column" to lose in the first place -- it only ever
-// reflows -- so `auto-fill`/`minmax` sidesteps the trap rather than joining the ladder.
+// Use fluid columns to avoid overlapping tablet and Tailwind breakpoint rules.
 const CARD_GRID_CLASSNAME = 'grid grid-cols-[repeat(auto-fill,minmax(272px,1fr))] gap-3';
 
 const TONE_CLASSES = {
@@ -33,11 +25,8 @@ const TONE_CLASSES = {
   danger: 'border-danger-border bg-danger-bg text-danger',
 };
 
-// A manager scanning this is asking "can this person afford the leave they're about to request" --
-// so the chip's own color is the answer, not just the number. Danger at genuinely zero/negative
-// (over-quota happens: SUBMITTED + APPROVED can exceed annualQuotaDays, same as balanceFor allows
-// upstream); warning at a low-but-nonzero remainder (<=25% of quota, floor of 1 day so a small
-// quota type like a 3-day allowance still warns at 1 day left rather than never); success otherwise.
+// A manager scanning this is asking "can this person afford the leave they're about to request" -- so the
+// chip's own color is the answer, not just the number.
 function remainingTone(balance) {
   const remaining = Number(balance.remainingDays) || 0;
   const quota = Number(balance.annualQuotaDays) || 0;
@@ -69,12 +58,8 @@ function TeamMemberQuotaCard({ member }) {
     () => member.balances.filter((balance) => EVERYDAY_LEAVE_TYPE_CODES.has(balance.leaveTypeCode)),
     [member.balances],
   );
-  // Rare types (MATERNITY/MILITARY/ORDINATION) tucked behind an expand toggle rather than shown as
-  // chips up front -- same "everyday vs rare" split MyLeaveTab.jsx's own primary card uses, and for
-  // the same reason: MILITARY's annualQuotaDays is a 366 sentinel (see that file's own comment),
-  // not a real cap, so a chip reading "เหลือ 366 วัน" would be worse than not showing one. A
-  // QuotaBar renders nothing when cap == null, so this list still degrades safely if a future rare
-  // type ever ships with no quota at all.
+  // Rare types tucked behind an expand toggle rather than shown as chips up front. A QuotaBar renders nothing
+  // when cap == null, so this list still degrades safely if a future rare type ever ships with no quota at all.
   const otherBalances = useMemo(
     () => member.balances.filter((balance) => !EVERYDAY_LEAVE_TYPE_CODES.has(balance.leaveTypeCode)),
     [member.balances],
@@ -139,12 +124,7 @@ function TeamQuotaSummarySkeleton() {
   );
 }
 
-/**
- * "ลูกทีม" tab quota summary -- each direct report's remaining leave, by type, in one scannable
- * card grid. `title` is passed by the caller (TeamLeaveTab.jsx already computes the hr/ceo
- * "...พนักงานทั้งหมด" vs manager "...ทีม" copy split for its sibling panels; this mirrors that
- * split rather than recomputing it a second time).
- */
+/** "ลูกทีม" tab quota summary -- each direct report's remaining leave, by type, in one scannable card grid. */
 export function TeamQuotaSummary({
   title,
   emptyDescription = 'เมื่อมีพนักงานที่รายงานตรงต่อคุณ โควตาวันลาคงเหลือของแต่ละคนจะแสดงที่นี่',

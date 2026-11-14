@@ -22,10 +22,9 @@ import { cn } from '../../utils/cn.js';
 import { bangkokMonthStartIso, formatMoney, formatShortDate, formatThaiMonthYearFromMonthInputValue, payrollStatusLabel as statusInfo } from '../../utils/format.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-// Reproduces `.panel` for the detail sidebar, which must stay a real <aside>
-// element (semantic landmark) — Layout.jsx's Panel always renders a <section>
-// and has no `as` prop, so the exact utility string is duplicated here rather
-// than wrapping a <section> inside an <aside> or changing the shared primitive.
+// Reproduces `.panel` for the detail sidebar, which must stay a real <aside> element — Layout.jsx's Panel
+// always renders a <section> and has no `as` prop, so the exact utility string is duplicated here rather than
+// wrapping a <section> inside an <aside> or changing the shared primitive.
 const PANEL_CLASS = 'bg-surface border border-border rounded-md p-5';
 
 // The payroll export files HR can generate for a processed period. `value` is the backend export
@@ -266,9 +265,9 @@ const specialPayFields = [
 // K and P). Not พิเศษ slots: the workbook doesn't number them as พิเศษ either.
 const namedAllowanceFields = [
   { key: 'mealAllowance', label: 'ค่าอาหาร' },
-  // เบี้ยเลี้ยง is entered as two amounts because มาตรา 42 exempts it only PARTIALLY — the portion
-  // within the government rate is exempt, the excess is taxable. HR makes the split; the system
-  // can't, without knowing destination and employee grade.
+  // เบี้ยเลี้ยง is entered as two amounts because มาตรา 42 exempts it only PARTIALLY — the portion within the
+  // government rate is exempt, the excess is taxable. HR makes the split; the system can't, without knowing
+  // destination and employee grade.
   { key: 'perDiemExempt', label: 'เบี้ยเลี้ยง — ส่วนที่ยกเว้นภาษี (ม.42)' },
   { key: 'perDiemTaxable', label: 'เบี้ยเลี้ยง — ส่วนเกิน (เสียภาษี)' },
 ];
@@ -347,8 +346,8 @@ const TAX_TREATMENT_COMPONENTS = [
   { key: 'OTHER_ONE_OFF_PAY', label: 'เงินก้อนอื่นๆ (ครั้งเดียว)' },
   { key: 'DIRECTOR_REMUNERATION', label: 'ค่าตอบแทนกรรมการ' },
 ];
-// Values must match backend PayrollTaxTreatment's enum names exactly; '' means "not yet classified"
-// (submits as null, resetting the stored row per PayrollRepository#upsertComponentTaxTreatment).
+// Values must match backend PayrollTaxTreatment's enum names exactly; '' means "not yet classified" (submits
+// as null, resetting the stored row per PayrollRepository#upsertComponentTaxTreatment).
 const TAX_TREATMENT_OPTIONS = [
   { value: '', label: 'ยังไม่จัดประเภท' },
   { value: 'REGULAR_REPROJECT', label: 'ประจำ (ข้อ 1(4)) — คำนวณใหม่ทุกงวดจากยอดที่จ่ายจริง' },
@@ -380,9 +379,9 @@ function indexSuggestionsByEmployee(rows) {
   return map;
 }
 
-// A real carried figure from last month beats the hardcoded UAT demo default (500) below — the
-// carried value is an actual prior figure, the hardcoded one is only a guess for when nothing else
-// is known. Returns a numeric string, or null when there is nothing to carry for this key.
+// A real carried figure from last month beats the hardcoded UAT demo default (500) below — the carried value
+// is an actual prior figure, the hardcoded one is only a guess for when nothing else is known. Returns a
+// numeric string, or null when there is nothing to carry for this key.
 function suggestedFallback(suggestion, key) {
   if (!suggestion) return null;
   const amount = Number(suggestion[key] || 0);
@@ -539,8 +538,8 @@ function normalizedAdjustment(input) {
   return {
     employeeId: input.employeeId,
     ...Object.fromEntries(payrollInputKeys.map((key) => [key, parsePayrollNumber(input[key])])),
-    // Nullable: '' -> null ("compute/standing"), a number (incl. 0) -> that override. Kept separate
-    // from the numeric keys above precisely so a cleared field stays null instead of collapsing to 0.
+    // Nullable: '' -> null ("compute/standing"), a number (incl. 0) -> that override. Kept separate from the
+    // numeric keys above precisely so a cleared field stays null instead of collapsing to 0.
     withholdingTaxOverride: withholdingOverrideValue(input),
     // Nullable enum, like withholdingTaxOverride above.
     perDiemBasis: perDiemBasisValue(input),
@@ -552,8 +551,8 @@ function normalizedAdjustment(input) {
 }
 
 function hasPayrollInput(input) {
-  // An override-only adjustment must still be submitted -- especially an override of 0 (withhold
-  // nothing), which the numeric-key check below would treat as "no input" and drop.
+  // An override-only adjustment must still be submitted -- especially an override of 0 (withhold nothing), which
+  // the numeric-key check below would treat as "no input" and drop.
   if (withholdingOverrideValue(input) != null) return true;
   return payrollInputKeys.some((key) => parsePayrollNumber(input[key]) > 0);
 }
@@ -716,9 +715,9 @@ export function PayrollPage({ user, showToast }) {
   // retry machinery, which would just 409 again against the same stale token). See
   // draftConflictRef for why the synchronous gate lives in a ref.
   const [draftSaveStatus, setDraftSaveStatus] = useState('saved');
-  // The Thai message from the 409 response, shown in the persistent conflict banner below (unlike
-  // the transient toast, which auto-dismisses after 3.2s -- see useToast.js -- and is therefore
-  // not sufficient on its own for "another user saved this month's draft," which HR must not miss).
+  // The Thai message from the 409 response, shown in the persistent conflict banner below (unlike the transient
+  // toast, which auto-dismisses after 3.2s -- see useToast.js -- and is therefore not sufficient on its own for
+  // "another user saved this month's draft," which HR must not miss).
   const [draftConflictMessage, setDraftConflictMessage] = useState(null);
   const adjustmentsRef = useRef({});
   const draftDirtyRef = useRef(false);
@@ -827,9 +826,8 @@ export function PayrollPage({ user, showToast }) {
       let pendingSubmittedLeaveCount = 0;
       if (nextPeriod?.status === 'PREVIEW' && !nextPeriod?.id) {
         try {
-          // Optional chaining keeps this resilient if a caller's api.payroll mock predates this
-          // method (e.g. an older test double) — suggestions are a convenience pre-fill only and
-          // must never block payroll from loading.
+          // Optional chaining keeps this resilient if a caller's api.payroll mock predates this method (e.g. an older
+          // test double) — suggestions are a convenience pre-fill only and must never block payroll from loading.
           const suggestionResponse = await api.payroll.suggestedInputs?.({ payrollMonth: month });
           suggestionsByEmployee = indexSuggestionsByEmployee(suggestionResponse?.suggestions);
           pendingSubmittedLeaveCount = suggestionResponse?.pendingSubmittedLeaveCount || 0;
@@ -933,10 +931,8 @@ export function PayrollPage({ user, showToast }) {
       return;
     }
     applyPeriod(nextPeriod, { applyUatDefaults, suggestionsByEmployee: nextSuggestions, draftByEmployee });
-    // `undefined` (not `null`) means this data came from a manual cache seed that never carried
-    // draft info (preview()'s setQueryData) -- leave the last known-good token alone. `null` means
-    // a real query resolution whose draft fetch itself failed; adopting it is the safe default
-    // (the next save 428s with a clear "reload" message instead of risking a wrong/stale token).
+    // `undefined` (not `null`) means this data came from a manual cache seed that never carried draft info
+    // (preview()'s setQueryData) -- leave the last known-good token alone.
     if (draftEtag !== undefined) {
       draftEtagRef.current = draftEtag;
     }
@@ -949,10 +945,9 @@ export function PayrollPage({ user, showToast }) {
     setDraftSaveStatus('saved');
   }, [payrollQuery.data]);
 
-  // draftPayload() is declared here (above the month-change effect below, which references it)
-  // rather than down with payload() -- function declarations are hoisted either way, but this
-  // repo's lint config flags a hook body reading a value declared later in the same component as
-  // an ordering hazard, so the textual order is made to match the dependency.
+  // draftPayload is declared here rather than down with payload -- function declarations are hoisted either way,
+  // but this repo's lint config flags a hook body reading a value declared later in the same component as an
+  // ordering hazard, so the textual order is made to match the dependency.
   function draftPayload() {
     return {
       payrollMonth: `${month}-01`,
@@ -970,14 +965,14 @@ export function PayrollPage({ user, showToast }) {
   // differs from canSaveDraftRef/draftDirtyRef just below, which must be refs because they change
   // WITHOUT this effect re-running (its deps are `[month]` alone).
   useEffect(() => {
-    // Bumped here, in this effect's own body -- see monthVisitTokenRef's own comment above for
-    // why this exact spot (not a separate passive effect, not during render).
+    // Bumped here, in this effect's own body -- see monthVisitTokenRef's own comment above for why this exact spot
+    // (not a separate passive effect, not during render).
     monthVisitTokenRef.current += 1;
     setSelectedEmployeeId(null);
     setDetailOpen(false);
-    setPayDate(`${month}-26`); // default salary pay date is the 26th of the selected month
-    // A new month starts with a clean slate; any dirty tracking belongs to the OUTGOING month
-    // (flushed by this same effect's cleanup, below) and must not leak into the incoming one.
+    setPayDate(`${month}-26`); // default salary pay date is the 26th of the selected month A new month starts with a clean slate; any dirty
+    // tracking belongs to the OUTGOING month (flushed by this same effect's cleanup, below) and must not leak into
+    // the incoming one.
     draftDirtyRef.current = false;
     setDraftDirty(false);
     setDraftSaving(false);
@@ -1000,11 +995,7 @@ export function PayrollPage({ user, showToast }) {
         void api.payroll.saveInputDraft(draftPayload(), { ifMatch: draftEtagRef.current }).catch(() => {});
       }
     };
-    // draftPayload is deliberately NOT a dependency: it is a new function every render (not
-    // memoized), so listing it would make this effect re-run -- and flush a save attempt -- on
-    // every keystroke rather than only on an actual month change. It closes over the correct
-    // (outgoing) month by construction; see draftPayload's own comment above for why that is
-    // safe here, unlike the refs this same effect reads for canSaveDraft/draftDirty.
+    // Keep this targeted lint exception for the documented hook usage.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [month]);
 
@@ -1098,14 +1089,9 @@ export function PayrollPage({ user, showToast }) {
       // draftEtagRef now belongs to the month HR is looking at, and this response is for the one they
       // left.
       if (monthVisitTokenRef.current !== visitTokenAtStart) return;
-      // The server just wrote successfully -- its returned ETag is unconditionally the new truth
-      // for this month, regardless of whether draftVersionRef drifted further during the await
-      // (that drift is a SEPARATE "is there more to save" concern, handled by the branch below).
-      // Opus review finding F11: optional-chained -- apiRequest (client.js) returns `null` outright
-      // for a 204 response, and `response.etag` on `null` would throw a TypeError INSIDE this try
-      // block, getting caught by the catch below and reporting a write that actually SUCCEEDED as
-      // a failure (with the stale token left in place). This endpoint always returns 200 with a
-      // body today, but nothing about the shared `apiRequest` helper guarantees that stays true.
+      // The server just wrote successfully -- its returned ETag is unconditionally the new truth for this month,
+      // regardless of whether draftVersionRef drifted further during the await (that drift is a SEPARATE "is there
+      // more to save" concern, handled by the branch below).
       draftEtagRef.current = response?.etag;
       draftConflictRef.current = false;
       setDraftConflictMessage(null);
@@ -1160,10 +1146,8 @@ export function PayrollPage({ user, showToast }) {
   }
 
   function autosaveDraft() {
-    // draftConflictRef.current: see saveDraft's own comment -- do not let the silent blur-autosave
-    // spam repeated 409s once a conflict is showing. The explicit บันทึกร่าง button is NOT gated
-    // the same way; HR may still choose to retry it (it will 409 again, harmlessly) or use the
-    // conflict banner's "โหลดข้อมูลใหม่" action below.
+    // draftConflictRef.current: see saveDraft's own comment -- do not let the silent blur-autosave spam repeated
+    // 409s once a conflict is showing.
     if (!canSaveDraft || !draftDirtyRef.current || draftSaving || draftConflictRef.current) return;
     saveDraft({ quiet: true });
   }
@@ -1267,15 +1251,13 @@ export function PayrollPage({ user, showToast }) {
     if (isDetailKind ? !(period?.lineCount > 0) : !period?.id) return;
     setSaving(true);
     try {
-      // kbank/pnd1 return raw CP874 bytes; sso and payroll-detail return real xlsx workbooks.
-      // Either way the result is fetched as a binary blob so the bytes survive the download intact.
-      // payDate is the salary pay/transfer date (sso ignores it -- the workbook carries no dates --
-      // and payroll-detail just stamps it into the filename).
+      // kbank/pnd1 return raw CP874 bytes; sso and payroll-detail return real xlsx workbooks. Either way the result
+      // is fetched as a binary blob so the bytes survive the download intact.
       const blob = period?.id
         ? await api.payroll.exportFile(period.id, kind.value, payDate || undefined)
-        // No persisted period (a fresh, unprocessed month) -- POST the same payrollMonth/inputs
-        // payload the Preview/Process buttons already send, so the workbook's figures are
-        // guaranteed to equal whatever the on-screen preview shows for the same inputs.
+        // No persisted period (a fresh, unprocessed month) -- POST the same payrollMonth/inputs payload the
+        // Preview/Process buttons already send, so the workbook's figures are guaranteed to equal whatever the
+        // on-screen preview shows for the same inputs.
         : await api.payroll.exportPreviewFile(payload(), kind.value, payDate || undefined);
       downloadBlob(blob, `${kind.filePrefix}-${month}.${kind.extension}`);
       showToast('success', `ดาวน์โหลดไฟล์ ${kind.label} แล้ว`);
@@ -1400,9 +1382,9 @@ export function PayrollPage({ user, showToast }) {
       disabled: Boolean(disabledBecauseBusy || !hasProcessedPeriod),
       disabledReason: disabledBecauseBusy || (!hasSavedPeriod ? needsSavedPeriod : period?.status !== 'PROCESSED' ? needsProcessedPeriod : null),
     },
-    // POST /{periodId}/distribute is hasRole('HR') only -- omitted entirely for a read-only CEO
-    // session rather than shown disabled (nothing on this page lets CEO reach a state where it
-    // would ever become available, so a disabled entry would just be dead weight in the menu).
+    // POST /{periodId}/distribute is hasRole('HR') only -- omitted entirely for a read-only CEO session rather
+    // than shown disabled (nothing on this page lets CEO reach a state where it would ever become available, so a
+    // disabled entry would just be dead weight in the menu).
     ...(canManage ? [{
       key: 'email-payslips',
       label: 'ส่งอีเมลสลิปเงินเดือน',
@@ -1454,8 +1436,8 @@ export function PayrollPage({ user, showToast }) {
                   className="mobile:min-h-[44px]"
                 />
               </span>
-              {/* The native <input type="month"> always renders Gregorian and cannot show Buddhist
-                  era; this is a read-only display of the same value, not a second control. */}
+              {/* The native <input type="month"> always renders Gregorian and cannot show Buddhist era; this is a read-only
+               * display of the same value, not a second control. */}
               <small className="font-normal text-text-muted">({formatThaiMonthYearFromMonthInputValue(month)})</small>
             </label>
             {canSaveDraft && (
@@ -1551,10 +1533,9 @@ export function PayrollPage({ user, showToast }) {
               {canManage ? 'บันทึกร่าง' : 'คำนวณตัวอย่าง'}
             </Button>
 
-            {/* Phase A: the export format selector became four document menu actions, but the
-                effective date is still an explicit field because PayrollService uses it for KBank,
-                PND1, SSO, and payroll-detail filenames. Hiding it behind only the KBank action would
-                make the UI contradict the backend contract. */}
+            {/* Phase A: the export format selector became four document menu actions, but the effective date is still an
+             * explicit field because PayrollService uses it for KBank, PND1, SSO, and payroll-detail filenames. Hiding it
+             * behind only the KBank action would make the UI contradict the backend contract. */}
             <label className="m-0 inline-flex items-center gap-2 text-sm font-extrabold">
               วันที่เอกสาร
               <ThaiDateInput
@@ -1680,8 +1661,8 @@ export function PayrollPage({ user, showToast }) {
             // `cursor-pointer` at the call site; `.payroll-row.active`'s background/shadow stay in
             // styles.css (theme tokens).
             rowClassName={(line) => cn(
-              // `.payroll-row.active` uses box-shadow for the selection inset, so focus has to
-              // re-apply the shared ring token from the Tailwind utilities layer where it wins.
+              // `.payroll-row.active` uses box-shadow for the selection inset, so focus has to re-apply the shared ring
+              // token from the Tailwind utilities layer where it wins.
               'payroll-row cursor-pointer focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)] mobile:gap-y-2 mobile:p-3.5',
               Number(line.employeeId) === Number(selectedLine?.employeeId) && 'active',
             )}
@@ -1714,8 +1695,8 @@ export function PayrollPage({ user, showToast }) {
 
         <aside
           ref={detailPanelRef}
-          // tabIndex={-1}: lets the panel itself take focus programmatically (useDialogFocus falls
-          // back to it when the panel has no focusable children) without ever joining the Tab order.
+          // tabIndex={-1}: lets the panel itself take focus programmatically (useDialogFocus falls back to it when the
+          // panel has no focusable children) without ever joining the Tab order.
           tabIndex={-1}
           // `@container` (built into Tailwind v4) makes the panel a container-query context so the two
           // money-field grids below respond to the PANEL's width, not the viewport's: it is a sticky
@@ -2150,8 +2131,8 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast, canManage }) {
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
-  // employeeId -> { [component]: 'REGULAR_REPROJECT' | 'EXTRA_KNOWN_FREQUENCY' |
-  // 'EXTRA_CUMULATIVE_ACTUAL' | '' } — unsaved edits only; not yet reconciled into `items`.
+  // employeeId -> { [component]: 'REGULAR_REPROJECT' | 'EXTRA_KNOWN_FREQUENCY' | 'EXTRA_CUMULATIVE_ACTUAL' | ''
+  // } — unsaved edits only; not yet reconciled into `items`.
   const [edits, setEdits] = useState({});
 
   async function load() {
@@ -2297,8 +2278,8 @@ function TaxTreatmentMatrixSection({ payrollMonth, showToast, canManage }) {
           <Icon name="refresh" />
           รีเฟรช
         </Button>
-        {/* PUT /component-tax-treatments is hasRole('HR') only -- omitted for a read-only CEO
-            session (the selects above are disabled too, so there is never anything to save). */}
+        {/* PUT /component-tax-treatments is hasRole('HR') only -- omitted for a read-only CEO session (the selects
+         * above are disabled too, so there is never anything to save). */}
         {canManage && (
           <Button type="button" onClick={save} disabled={loading || saving || !hasEdits}>
             <Icon name="check" />

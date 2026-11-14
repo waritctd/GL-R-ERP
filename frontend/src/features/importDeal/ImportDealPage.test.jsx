@@ -9,10 +9,8 @@ import { queryKeys } from '../../api/queryKeys.js';
 
 globalThis.React = React;
 
-// ImportDealPage is import's OWN per-deal page: it reads GET /api/import/deals/{id}
-// (api.importDeals.get) instead of the whole-deal GET /api/tickets/{id}, which the backend now
-// refuses import. The DTO carries NO price/cost field, so this file also pins that the page never
-// renders one even if a stray field were present (defence in depth, not a claim about the server).
+// ImportDealPage is import's OWN per-deal page: it reads GET /api/import/deals/{id} (api.importDeals.get)
+// instead of the whole-deal GET /api/tickets/{id}, which the backend now refuses import.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -307,11 +305,8 @@ describe('ImportDealPage', () => {
     renderPage();
     expect(await screen.findByTestId('import-deal-no-ir')).not.toBeNull();
   });
-  // ── Legacy deal-level actions ────────────────────────────────────────────────────────────────
-  // A LEGACY deal is one that never started per-factory tracking: no live importRequests rows. For
-  // those, nextImportAction still routes issueImportRequest / markShipping / markGoodsReceived to
-  // THIS page (importActions.js), so this page must perform them — DealFulfilmentPanel, where they
-  // used to live, is closed to import (GET /api/tickets/{id} 403s it).
+  // Legacy deal-level actions ──────────────────────────────────────────────────────────────── A LEGACY deal is
+  // one that never started per-factory tracking: no live importRequests rows.
   describe('legacy deal-level actions (deal with no per-factory rows)', () => {
     const legacyDeal = (over = {}) => dealFixture({ importRequests: [], ...over });
     const legacyButtons = () => [

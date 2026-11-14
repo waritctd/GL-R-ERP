@@ -21,9 +21,9 @@
   border-bottom: 1px solid var(--color-surface-subtle);
 }
 
-/* `:first-child` matters: StatusBadge also renders a <span>, so an unscoped
-   `> span` made the badge flex too and stretched a "รออนุมัติ" pill across the
-   whole row. Only the leading text column should absorb the free space. */
+/* `:first-child` matters: StatusBadge also renders a <span>, so an unscoped `> span` made the badge flex too
+ * and stretched a "รออนุมัติ" pill across the whole row. Only the leading text column should absorb the free
+ * space. */
 .request-feed-item > span:first-child,
 .salary-history > div > span {
   min-width: 0;
@@ -137,13 +137,9 @@
 }
 
 .data-row > .status-badge,
-/* A StatusBadge nested one level deeper, inside a labelled `[data-label]`
-   cell (OT's "ขั้นอนุมัติ" column, Leave's "สถานะ" column — needed so the
-   mobile card gets the label prefix), would otherwise inherit the generic
-   `.data-row > span > span { display: block }` rule below and get stretched
-   into a full-width bar instead of staying a compact pill. `width: fit-content`
-   (not just `auto`) is required here: as a grid item this element stretches
-   to fill its track under the grid's default `justify-items: stretch`. */
+/* A StatusBadge nested one level deeper, inside a labelled `[data-label]` cell, would otherwise inherit the
+ * generic `.data-row > span > span { display: block }` rule below and get stretched into a full-width bar
+ * instead of staying a compact pill. */
 .data-row > span > .status-badge,
 .data-row > td > .status-badge {
   display: flex;
@@ -434,8 +430,8 @@
   overflow-wrap: anywhere;
 }
 
-/* PricingRequestQueuePage (commit 6): requestCode / deal / recipient / status /
-   itemCount / requiredDate / assignedImportName / pickup. */
+/* PricingRequestQueuePage (commit 6): requestCode / deal / recipient / status / itemCount / requiredDate /
+ * assignedImportName / pickup. */
 .pricing-request-queue-table {
   grid-template-columns: minmax(0,1fr) minmax(0,1.6fr) minmax(0,1.2fr) minmax(0,1.1fr) minmax(0,0.7fr) minmax(0,1fr) minmax(0,1fr) minmax(0,0.9fr);
 }
@@ -881,15 +877,9 @@
   color: var(--color-info);
 }
 
-/* Tablet band (721–1040px): the persistent sidebar is GONE — navigation is
-   the same off-canvas drawer used at ≤720px (Sidebar.jsx's `nav-drawer:`
-   utilities and AppShell.jsx's backdrop button, both gated on the ≤1040px
-   `@custom-variant nav-drawer` in index.css). This block only holds
-   what is left over for this band: content still renders in *table* mode
-   here (DataTable's card/table switch is driven by useIsMobile.js, which
-   stays at ≤720px — untouched by the nav change), but the ticket worklist
-   table needs its own column adjustments because the full viewport width at
-   this band is still narrower than the desktop 900px minimum. */
+/* Tablet band (721–1040px): the persistent sidebar is GONE — navigation is the same off-canvas drawer used at
+ * ≤720px (Sidebar.jsx's `nav-drawer:` utilities and AppShell.jsx's backdrop button, both gated on the ≤1040px
+ * `@custom-variant nav-drawer` in index.css). */
 @media (min-width: 721px) and (max-width: 1040px) {
   /* Ticket list tablet band: content is `viewport - 64`, so the generic 900px table minimum only
      clips the row from 721px to 964px. The progress column is dropped across the whole band
@@ -1110,10 +1100,9 @@
     font-size: var(--text-xs);
   }
 
-  /* Sits on the existing overlay ladder: above the nav drawer (40) and below
-     the modal layer (.modal-backdrop, 50), so a dialog always wins over the
-     filter sheet. 54/55 put it *above* modals. Scrim reuses the shared drawer
-     overlay token rather than inventing a third opacity. */
+  /* Sits on the existing overlay ladder: above the nav drawer (40) and below the modal layer (.modal-backdrop,
+   * 50), so a dialog always wins over the filter sheet. 54/55 put it *above* modals. Scrim reuses the shared
+   * drawer overlay token rather than inventing a third opacity. */
   .ticket-filter-backdrop {
     position: fixed;
     inset: 0;
@@ -1163,13 +1152,9 @@
   }
 }
 
-/* Phone-only content layout (≤720px, unchanged): the off-canvas nav drawer
-   (Sidebar.jsx's `nav-drawer:` utilities, gated on the same ≤1040px
-   `@custom-variant` in index.css) spans 721–1040px too, but these
-   table→card fallbacks are a *content* layout decision (same family as
-   useIsMobile.js / DataTable's card-vs-table switch), not a navigation one,
-   so they stay at the original ≤720px breakpoint — tablet keeps rendering
-   these as tables. */
+/* Phone-only content layout: the off-canvas nav drawer spans 721–1040px too, but these table→card fallbacks
+ * are a *content* layout decision, not a navigation one, so they stay at the original ≤720px breakpoint —
+ * tablet keeps rendering these as tables. */
 @media (max-width: 720px) {
   /* --- HR-core list card fallback (branch 2) ---
      Below 720px the six HR-core grid tables become stacked label→value cards
@@ -1200,9 +1185,8 @@
   .request-table.data-row,
   .reflow-cards.data-row {
     display: grid;
-    /* !important: overrides a Tailwind `grid-cols-[...]` arbitrary utility
-       carried by the same element for the desktop column layout; see note
-       above on the min-width override in this same media block. */
+    /* !important: overrides a Tailwind `grid-cols-[...]` arbitrary utility carried by the same element for the
+     * desktop column layout; see note above on the min-width override in this same media block. */
     grid-template-columns: 1fr !important;
     gap: 8px;
     width: 100%;
@@ -1246,8 +1230,8 @@
     min-width: 0;
   }
 
-  /* Show the column name as a small muted label above the value.
-     Only cells that carry a non-empty data-label get a label. */
+  /* Show the column name as a small muted label above the value. Only cells that carry a non-empty data-label
+   * get a label. */
   .request-table.data-row > span[data-label]:not([data-label=""])::before,
   .request-table.data-row > td[data-label]:not([data-label=""])::before,
   .payroll-table.data-row > span[data-label]:not([data-label=""])::before,
@@ -1282,11 +1266,9 @@
     display: none;
   }
 
-  /* !important is unavoidable here, and for a different reason than the
-     reflow-cards rules above: TicketDetailPage sets the desktop track list as
-     an INLINE style (style={{ gridTemplateColumns: itemsGridCols }}), and an
-     inline style beats every stylesheet rule that is not !important —
-     specificity and cascade layers cannot reach it. */
+  /* !important is unavoidable here, and for a different reason than the reflow-cards rules above:
+   * TicketDetailPage sets the desktop track list as an INLINE style, and an inline style beats every stylesheet
+   * rule that is not !important — specificity and cascade layers cannot reach it. */
   .ticket-items-table.data-row {
     display: grid;
     grid-template-columns: 1fr !important;

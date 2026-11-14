@@ -13,17 +13,8 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/**
- * Stamps every request with a correlation id so a single request can be traced across log lines
- * (P1-3 observability floor). The id is read from an inbound {@code X-Correlation-Id} header when
- * present (sanitized so a caller cannot inject control characters or an unbounded value into logs),
- * otherwise a fresh UUID is generated. The id is placed in SLF4J's MDC under {@code correlationId}
- * (picked up by the {@code logging.pattern.level} pattern in {@code application.yml}) and echoed
- * back on the {@code X-Correlation-Id} response header. {@code @Order(HIGHEST_PRECEDENCE)} ensures
- * it wraps the entire filter chain so the id is available for the whole request lifecycle, and the
- * MDC entry is always removed in a {@code finally} block — critical because servlet containers reuse
- * pooled threads, and a leaked MDC value would bleed into an unrelated later request's logs.
- */
+/** Stamps every request with a correlation id so a single request can be traced across log lines (P1-3
+ * observability floor). */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class CorrelationIdFilter extends OncePerRequestFilter {
@@ -51,10 +42,8 @@ public class CorrelationIdFilter extends OncePerRequestFilter {
         }
     }
 
-    /**
-     * Trims the inbound value, strips control/non-printable characters (log-injection defense),
-     * and caps the length so a malicious or malformed caller can't blow up log lines.
-     */
+    /** Trims the inbound value, strips control/non-printable characters (log-injection defense), and caps the
+     * length so a malicious or malformed caller can't blow up log lines. */
     private static String sanitize(String value) {
         if (value == null) {
             return null;

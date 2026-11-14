@@ -17,10 +17,7 @@ vi.mock('../../api/index.js', () => ({
   },
 }));
 
-// browser-image-compression genuinely returns a plain Blob with no `.name` -- this mock reproduces
-// that faithfully rather than a File, which is exactly the shape that exposed the bug: a mock that
-// quietly upgrades the library's real return type would make this test pass whether or not the
-// component re-wraps it.
+// browser-image-compression genuinely returns a plain Blob with no `.name`.
 vi.mock('browser-image-compression', () => ({
   default: vi.fn((file) => Promise.resolve(new Blob([file], { type: file.type }))),
 }));
@@ -34,11 +31,9 @@ function renderList(props = {}) {
   );
 }
 
-// Found live: uploading a real welfare evidence photo through the real Java backend stored
-// fileName "blob" instead of the photo's actual name. Root cause: imageCompression() returns a
-// Blob, and FormData.append('file', blob) has no name to send, so the multipart part's filename
-// defaults to the literal string "blob" per spec. Only JPG/PNG hit this -- PDFs skip compression
-// entirely, which is why the bug read as image-only.
+// Found live: uploading a real welfare evidence photo through the real Java backend stored fileName "blob"
+// instead of the photo's actual name. Only JPG/PNG hit this -- PDFs skip compression entirely, which is why
+// the bug read as image-only.
 describe('AttachmentList upload', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -56,9 +51,9 @@ describe('AttachmentList upload', () => {
     await waitFor(() => expect(api.specialMoney.addAttachment).toHaveBeenCalledTimes(1));
     const [, uploaded] = api.specialMoney.addAttachment.mock.calls[0];
 
-    // The regression this guards: without the File re-wrap, `uploaded.name` is undefined (a bare
-    // Blob has no `.name`), and FormData/fetch would send "blob" to the real backend -- exactly
-    // what a live upload against the real Java service produced before this fix.
+    // The regression this guards: without the File re-wrap, `uploaded.name` is undefined (a bare Blob has no
+    // `.name`), and FormData/fetch would send "blob" to the real backend -- exactly what a live upload against the
+    // real Java service produced before this fix.
     expect(uploaded.name).toBe('receipt-medical.jpg');
     expect(uploaded).toBeInstanceOf(File);
     expect(uploaded.type).toBe('image/jpeg');

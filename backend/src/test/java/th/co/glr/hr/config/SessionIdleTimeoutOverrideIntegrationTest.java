@@ -9,20 +9,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.context.ActiveProfiles;
 
-/**
- * The way back. Sessions never expiring is the DEFAULT (owner ruling 2026-10-06, sales feedback
- * #8 — see {@link SessionLifetimeIntegrationTest}); {@code APP_SESSION_TIMEOUT} is still read, so
- * setting it on the host restores an idle limit with no code change and no new image:
- *
- * <pre>APP_SESSION_TIMEOUT=30m</pre>
- *
- * <p>This class boots the application with exactly that and pins both halves — a session inside
- * the limit keeps working, one past it is refused. It is also what makes
- * {@link SessionLifetimeIntegrationTest}'s "idle for over a year and still accepted" mean
- * something: the SAME ageing ({@link AbstractRealSessionIntegrationTest#ageSession}) that leaves a
- * session alive there ends one here, so that test cannot be passing merely because ageing does
- * nothing.
- */
+/** Verifies APP_SESSION_TIMEOUT can restore idle expiry while sessions inside the limit remain valid. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")

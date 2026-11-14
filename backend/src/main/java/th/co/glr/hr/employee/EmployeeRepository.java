@@ -117,63 +117,9 @@ public class EmployeeRepository {
         }
     }
 
-    /**
-     * D2 (owner ruling): every active employee whose derived login role is EXACTLY {@code "hr"} per
-     * {@link th.co.glr.hr.auth.DivisionAccessPolicy#roleFor}.
-     *
-     * <p><b>S-3 review finding: the previous {@code d.source_code ILIKE 'HR%'} query did NOT mirror
-     * {@code roleFor} and the mismatch was latent, not theoretical.</b> {@code roleFor} is:
-     *
-     * <pre>
-     * public static String roleFor(EmployeeLoginRecord employee) {
-     *     String code = divisionCode(employee);
-     *     if ("md".equals(code) || isExecutive(employee)) {
-     *         return "ceo";
-     *     }
-     *     if ("hr".equals(code)) {
-     *         return "hr";
-     *     }
-     *     ...
-     * }
-     * private static String divisionCode(EmployeeLoginRecord employee) {
-     *     String source = firstText(employee.divisionCode(), prefix(employee.divisionName()));
-     *     return source == null ? "" : source.trim().toLowerCase(Locale.ROOT);
-     * }
-     * </pre>
-     *
-     * which the SQL below now reproduces exactly, in two respects {@code ILIKE 'HR%'} got wrong:
-     *
-     * <ol>
-     *   <li><b>Exact match, not prefix.</b> {@code roleFor} requires {@code "hr".equals(code)} --
-     *       an {@code HRD}-style {@code source_code} (Human Resources <em>Development</em>, say)
-     *       would satisfy {@code ILIKE 'HR%'} but does NOT equal {@code "hr"}, so {@code roleFor}
-     *       resolves such an employee to {@code "employee"}, never {@code "hr"}. The old query
-     *       would have wrongly notified them.</li>
-     *   <li><b>The {@code source_code IS NULL} fallback.</b> {@code hr.division.source_code} is
-     *       NULLABLE; when it is null or blank, {@code divisionCode()} falls back to the {@code
-     *       name_th} prefix before the first {@code '-'}. {@code d.source_code ILIKE 'HR%'} is
-     *       false for every NULL row regardless of {@code name_th}, so a division like {@code
-     *       name_th = 'HR-บุคคล'} with {@code source_code IS NULL} (a real, observed shape) was
-     *       silently excluded even though {@code roleFor} grants its employees the {@code "hr"}
-     *       role. The {@code CASE} below reproduces the fallback with {@code split_part(...,
-     *       '-', 1)}.</li>
-     * </ol>
-     *
-     * <p><b>Executive precedence, pinned.</b> {@code roleFor} checks {@code isExecutive} BEFORE
-     * {@code "hr".equals(code)} -- an employee whose position contains "กรรมการ" resolves to
-     * {@code "ceo"} even inside the HR division, and must therefore NOT be returned here. The
-     * {@code NOT LIKE '%กรรมการ%'} guard below (whitespace-stripped first, matching {@code
-     * DivisionAccessPolicy#contains}) reproduces that.
-     *
-     * <p>{@code 'HR'} (and the {@code name_th}-prefix {@code 'HR-...'} shape) is confirmed as this
-     * company's actual HR division coding by {@code V115__work_schedule_and_holiday_calendar.sql}'s
-     * OFFICE_5D seed -- not guessed from the "hr" role name.
-     *
-     * <p>This is a RECIPIENT-RESOLUTION query only -- it grants no access and enforces no
-     * permission. Nothing reads its result to decide who MAY do something; every employee it returns
-     * is already independently entitled (via their derived "hr" role) to see whatever this is used
-     * to notify them about. Do not repurpose this as an authorization check.
-     */
+    /** D2 (owner ruling): every active employee whose derived login role is EXACTLY "hr" per
+     * th.co.glr.hr.auth.DivisionAccessPolicy#roleFor. This is a RECIPIENT-RESOLUTION query only -- it grants no
+     * access and enforces no permission. */
     public List<Long> findHrEmployeeIds() {
         return jdbc.query("""
             SELECT e.employee_id
@@ -277,8 +223,8 @@ public class EmployeeRepository {
             .addValue("statusId", statusId)
             .addValue("salary", request.salary() == null ? BigDecimal.ZERO : request.salary())
             .addValue("directorRemuneration", request.directorRemuneration() == null ? BigDecimal.ZERO : request.directorRemuneration())
-            // Nullable standing override -- pass through null (NO coalesce): null = no standing override,
-            // distinct from a 0 override.
+            // Nullable standing override -- pass through null (NO coalesce): null = no standing override, distinct from a
+            // 0 override.
             .addValue("withholdingTaxOverride", request.withholdingTaxOverride())
             .addValue("hireDate", hireDate)
             .addValue("confirmDate", request.confirmationDate())
@@ -338,13 +284,8 @@ public class EmployeeRepository {
         addSet(sets, params, "marital_status", "maritalStatus", request.maritalStatus());
         addSet(sets, params, "current_salary", "salary", request.salary());
         addSet(sets, params, "director_remuneration", "directorRemuneration", request.directorRemuneration());
-        // Standing withholding override -- FULL-REPLACE, unlike every other field on this method (and
-        // unlike director_remuneration/current_salary, which are NOT NULL columns cleared via 0). This
-        // column is nullable and NULL is itself a meaningful state ("compute automatically"), so an
-        // addSet-style skip-when-null would make the override settable but never clearable back to
-        // NULL. Always emit the SET and bind the value even when null -- safe only because the employee
-        // edit form (EmployeeFormModal) always submits this field as part of a full-object payload
-        // (null when the input is blank), and it is the only caller of this update path.
+        // Standing withholding override -- FULL-REPLACE, unlike every other field on this method (and unlike
+        // director_remuneration/current_salary, which are NOT NULL columns cleared via 0).
         sets.add("withholding_tax_override = :withholdingTaxOverride");
         params.addValue("withholdingTaxOverride", request.withholdingTaxOverride());
         addSet(sets, params, "hire_date", "hireDate", request.hireDate());
@@ -649,11 +590,9 @@ public class EmployeeRepository {
             .addValue("from", from));
     }
 
-    /**
-     * Keeps the assignment timeline consistent with the employee's current org snapshot.
-     * When the snapshot moved, the open assignment is closed and a fresh current row is opened
-     * so {@code is_current} always reflects the live division/department/position/level/location/status.
-     */
+    /** Keeps the assignment timeline consistent with the employee's current org snapshot. When the snapshot moved,
+     * the open assignment is closed and a fresh current row is opened so is_current always reflects the live
+     * division/department/position/level/location/status. */
     private void syncCurrentAssignment(long employeeId) {
         Map<String, Object> snapshot = jdbc.queryForMap("""
             SELECT division_id, department_id, position_id, level_id, location_id, status_id
@@ -717,16 +656,8 @@ public class EmployeeRepository {
 
     // ---- ล.ย.01 header PREFILL (owner decision #4, the read half) -------------------------------
 
-    /**
-     * What the ล.ย.01 header block is seeded with, straight out of the employee master.
-     *
-     * <p>Deliberately a flat carrier rather than {@link EmployeeDto}: that record is a 45-component
-     * screen model whose {@code AddressDto} holds only four of the thirteen slots this form prints
-     * ({@code line1} is a CONCAT of house_no/building/soi/road and cannot be taken apart again), and
-     * whose {@code sensitive} block carries national ID, social-security number, bank details and
-     * salary — none of which belong anywhere near this path. Selecting exactly the sixteen values
-     * the form asks for is what keeps the blast radius equal to the feature.
-     */
+    /** What the ล.ย.01 header block is seeded with, straight out of the employee master. Selecting exactly the
+     * sixteen values the form asks for is what keeps the blast radius equal to the feature. */
     public record LorYor01HeaderSource(
         String taxId, String firstNameTh, String lastNameTh, String maritalStatus,
         String building, String roomNo, String floor, String village, String houseNo, String moo,
@@ -734,40 +665,9 @@ public class EmployeeRepository {
         String province, String postalCode
     ) {}
 
-    /**
-     * The identity block for ONE employee's own ล.ย.01, so they do not retype a 13-digit tax ID and
-     * a thirteen-part address on every filing.
-     *
-     * <p>⚠️ <b>This is the only self-service read of {@code hr_restricted.employee_pii} in the
-     * codebase.</b> Everywhere else that schema is reached, the caller is HR/CEO —
-     * {@code EmployeeService#get} joins it only when {@code canSeeSensitiveEmployeeFields}, and
-     * strips the whole {@code sensitive} block via {@code withoutSensitiveSelfServiceFields()} when
-     * an employee looks at their own row. So an employee cannot read their own tax ID through
-     * {@code GET /api/employees/{id}} today, and this method is a deliberate, narrow exception to
-     * that: the data subject reading the single restricted field they are required to write onto
-     * their own tax form. It selects {@code tax_id} and nothing else out of {@code employee_pii} —
-     * national ID, social-security number, ss_hospital and provident_fund_no stay unreachable.
-     *
-     * <p><b>Scoping is the caller's job and the caller has exactly one option.</b> The only caller is
-     * {@code TaxAllowanceDeclarationService#getOwn}, which passes {@code actor.employeeId()} — there
-     * is no employeeId anywhere in that endpoint's request. The {@code WHERE} clause below is what
-     * turns that into an enforced filter, and
-     * {@code TaxAllowanceDeclarationScopeIntegrationTest#employeeCannotObtainAnotherEmployeesTaxIdThroughTheHeaderPrefill}
-     * is what proves it against real Postgres rather than a mock.
-     *
-     * <p>Everything except {@code tax_id} here (names, สถานภาพ, the address) is already readable by
-     * the employee about themselves through {@code GET /api/employees/{id}} — {@code
-     * withoutSensitiveSelfServiceFields()} keeps {@code currentAddress} and {@code maritalStatus}.
-     * Only the tax ID is a new access path.
-     *
-     * <p>The address row is {@code address_type = 'CURRENT'}, matching what the write-back half
-     * ({@link #upsertCurrentAddressFromDeclaration}) targets — read and write must agree or an
-     * approved correction would not come back on the next filing.
-     *
-     * @return empty when the employee row does not exist; a record with null fields when it exists
-     *         but has no PII row and/or no CURRENT address (both are common — {@code employee_pii}
-     *         is populated only where PII was actually captured).
-     */
+    /** The identity block for ONE employee's own ล.ย.01, so they do not retype a 13-digit tax ID and a
+     * thirteen-part address on every filing. ⚠️ This is the only self-service read of hr_restricted.employee_pii
+     * in the codebase. */
     public Optional<LorYor01HeaderSource> findLorYor01HeaderSource(long employeeId) {
         List<LorYor01HeaderSource> rows = jdbc.query("""
             SELECT pii.tax_id,
@@ -795,28 +695,12 @@ public class EmployeeRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
-    // ---- ล.ย.01 master write-back (owner decision #4, 2026-08-08) ------------------------------
-    //
-    // Called ONLY from TaxAllowanceDeclarationService#approve, i.e. after HR has confirmed a
-    // declaration the employee signed. See that method for why approve and not apply.
-    //
-    // Every one of these preserves-on-null via COALESCE, matching #upsertCurrentAddress below: a
-    // blank box on the form means "not answered", never "erase what HR already has". The cost is
-    // that a genuine deletion (an employee who moved out of a named building) cannot be expressed
-    // through this path and has to be made in the employee editor -- deliberate, because silently
-    // destroying master data on a partially-filled form is the worse failure.
+    // ล.ย.01 master write-back (owner decision #4, 2026-08-08) ------------------------------ Called ONLY from
+    // TaxAllowanceDeclarationService#approve, i.e. after HR has confirmed a declaration the employee signed.
 
-    /**
-     * ที่อยู่ from an approved ล.ย.01 into the employee master, all 13 slots.
-     *
-     * <p>Targets {@code address_type = 'CURRENT'} because that is the row every reader already
-     * joins to -- {@code PayrollRepository#findExportRows} (the statutory KBank/PND1/SSO files),
-     * {@code EmployeeRepository#findById}, {@code LeaveRepository}. Writing 'REGISTERED' instead
-     * would leave the correction invisible to every one of them.
-     *
-     * <p>Widths are guaranteed by V138: building/soi/road were VARCHAR(120) against the
-     * declaration's VARCHAR(200) until then.
-     */
+    /** ที่อยู่ from an approved ล.ย.01 into the employee master, all 13 slots. Targets address_type = 'CURRENT'
+     * because that is the row every reader already joins to -- PayrollRepository#findExportRows (the statutory
+     * KBank/PND1/SSO files), EmployeeRepository#findById, LeaveRepository. */
     public void upsertCurrentAddressFromDeclaration(
         long employeeId, String houseNo, String building, String roomNo, String floor, String village,
         String moo, String soi, String junction, String road, String subDistrict, String district,
@@ -850,20 +734,9 @@ public class EmployeeRepository {
             .addValue("province", province).addValue("postalCode", postalCode));
     }
 
-    /**
-     * เลขประจำตัวผู้เสียภาษีอากร from an approved ล.ย.01.
-     *
-     * <p>⚠️ <b>This is the FIRST production write to {@code hr_restricted}.</b> Every other access
-     * to that schema in this codebase is a {@code LEFT JOIN} read
-     * ({@code PayrollRepository#findExportRows}, {@code EmployeeRepository#findById}). V1 sketched a
-     * separate {@code hr_app} role with no grant there, but those GRANT lines are COMMENTED OUT and
-     * no such role exists -- Flyway creates and alters {@code hr_restricted} tables using the same
-     * {@code spring.datasource} credentials the app runs under, so the app's role owns the schema.
-     *
-     * <p>An UPSERT, not an UPDATE: {@code employee_pii} has no row at all for many employees (it is
-     * populated only where PII was actually captured), so an UPDATE would silently affect zero rows
-     * and the tax ID would vanish with no error.
-     */
+    /** เลขประจำตัวผู้เสียภาษีอากร from an approved ล.ย.01. ⚠️ This is the FIRST production write to hr_restricted.
+     * Every other access to that schema in this codebase is a LEFT JOIN read (PayrollRepository#findExportRows,
+     * EmployeeRepository#findById). */
     public void upsertTaxIdFromDeclaration(long employeeId, String taxId) {
         if (taxId == null) {
             return;
@@ -992,29 +865,9 @@ public class EmployeeRepository {
         return hasText(value) ? value : fallback;
     }
 
-    /**
-     * Canonicalises an address on its way INTO {@code hr.employee.email} — trim, then lowercase.
-     *
-     * <p>Every write to that column goes through this class ({@link #create}, {@link #update} and
-     * {@link #updateEmail}, the last of which is how {@code ProfileRequestService} applies an
-     * approved email change), so normalising here covers the column rather than covering three call
-     * sites that each have to remember.
-     *
-     * <p><b>Why it matters, given reads already fold case.</b> {@code
-     * EmployeeAuthRepository#findByEmail} matches on {@code LOWER(btrim(e.email))}, so one row with
-     * a mixed-case address logs in fine. The hazard is <em>two</em> rows: {@code V11.1} and {@code
-     * V47} index {@code LOWER(btrim(email))} but do <b>not</b> make it unique, so nothing stopped HR
-     * creating {@code Somchai@glr.co.th} next to an existing {@code somchai@glr.co.th}. Both then
-     * satisfy the login predicate and {@code ORDER BY e.is_active DESC, e.employee_id LIMIT 1}
-     * silently picks one — so the password that works is whichever row happened to sort first, and
-     * the person reports that their email "only works sometimes". Storing one canonical form means
-     * the second row collides visibly at entry instead.
-     *
-     * <p>Blank is passed through unchanged rather than folded to {@code null}: {@code addSet} skips
-     * null values, so folding would quietly turn "clear this employee's email" into a no-op. {@code
-     * findByEmail} already excludes {@code btrim(e.email) = ''}, so an empty string is as good as
-     * absent for login either way.
-     */
+    /** Canonicalises an address on its way INTO hr.employee.email — trim, then lowercase. The hazard is two rows:
+     * V11.1 and V47 index LOWER(btrim(email)) but do not make it unique, so nothing stopped HR creating
+     * Somchai@glr.co.th next to an existing somchai@glr.co.th. */
     private static String normalizeEmail(String email) {
         return email == null ? null : email.trim().toLowerCase(Locale.ROOT);
     }

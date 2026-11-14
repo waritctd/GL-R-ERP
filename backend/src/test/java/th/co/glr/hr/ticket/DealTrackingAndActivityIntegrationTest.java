@@ -26,18 +26,9 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Slice B1 "kill the weekly report" (handoff 103): confirms the manual stage-advance gate, the
- * win% default/override, and the staleness computation against the real service and real SQL —
- * mirrors {@link th.co.glr.hr.attendance.AttendanceScopeIntegrationTest} and
- * {@link TicketScopeIntegrationTest}. Mockito cannot reach this: {@code updateStage}'s gate reads
- * {@code sales.deal_activity} and {@code sales.ticket_event} through real repository SQL, and a
- * mocked repository would happily "pass" while that SQL does something else.
- *
- * <p>The gate tests are written wrong-way-round on purpose: assert the caller CANNOT advance
- * without the required state, and that the deal's stage genuinely did not move, not merely that
- * the happy path works.
- */
+/** Slice B1 "kill the weekly report" (handoff 103): confirms the manual stage-advance gate, the win%
+ * default/override, and the staleness computation against the real service and real SQL — mirrors
+ * th.co.glr.hr.attendance.AttendanceScopeIntegrationTest and TicketScopeIntegrationTest. */
 class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -53,10 +44,7 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         CustomerRepository customers = new CustomerRepository(jdbc);
 
         // PricingRequestService is mocked: none of updateStage/addActivity/listActivities/
-        // updateTracking/confirmCustomer ever call it — only markLost/cancel reach
-        // PricingRequestService.cancelOpenForTicket (used by the staleness-on-lost-deal test
-        // below), which is stubbed to a real "nothing was open" result since Mockito's default
-        // null return for an object type would NPE inside markLost.
+        // updateTracking/confirmCustomer ever call it.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -117,29 +105,26 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
     }
 
-    /**
-     * The boundary the gate is actually checking: an activity logged BEFORE the most recent
-     * STAGE_CHANGED event does not satisfy a SUBSEQUENT advance attempt, even though it satisfied
-     * the one before it. Reusing the same activity across two stage changes must not be possible.
-     */
+    /** The boundary the gate is actually checking: an activity logged BEFORE the most recent STAGE_CHANGED event
+     * does not satisfy a SUBSEQUENT advance attempt, even though it satisfied the one before it. Reusing the same
+     * activity across two stage changes must not be possible. */
     @Test
     void activityLoggedBeforeTheLastStageChange_doesNotSatisfyTheNextAdvance() {
         long ticketId = createTicket();
         setNextFollowUp(ticketId, LocalDate.now().plusDays(3));
         logActivity(ticketId, DealActivityKind.CALL);
-        // First advance succeeds — this activity was logged before any STAGE_CHANGED event, so it
-        // satisfies the "since the last stage change" baseline (the ticket's own created_at).
+        // First advance succeeds — this activity was logged before any STAGE_CHANGED event, so it satisfies the "since
+        // the last stage change" baseline (the ticket's own created_at).
         ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
 
-        // Immediately try to advance again with NO new activity — the STAGE_CHANGED event just
-        // written now postdates the only activity on file, so this must be blocked.
+        // Immediately try to advance again with NO new activity — the STAGE_CHANGED event just written now postdates
+        // the only activity on file, so this must be blocked.
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
 
-        // Log a fresh activity now (after the PRESENTATION STAGE_CHANGED event) — the same advance
-        // now succeeds.
+        // Log a fresh activity now (after the PRESENTATION STAGE_CHANGED event) — the same advance now succeeds.
         logActivity(ticketId, DealActivityKind.MEETING);
         ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep);
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
@@ -164,9 +149,9 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         logActivity(ticketId, DealActivityKind.CALL);
         ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, salesRep);
 
-        // QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the routine backward move (DealStage
-        // .isRoutineBackwardMove) — no note required, and no tracking-field gate at all, even
-        // though the deal was just advanced with no fresh activity/follow-up date set since.
+        // QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the routine backward move (DealStage .isRoutineBackwardMove) — no note
+        // required, and no tracking-field gate at all, even though the deal was just advanced with no fresh
+        // activity/follow-up date set since.
         TicketDto result = ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep);
 
         assertThat(result.summary().salesStage()).isEqualTo(DealStage.SPEC_APPROVED);
@@ -180,9 +165,8 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         logActivity(ticketId, DealActivityKind.CALL);
         ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
 
-        // PRESENTATION -> LEAD_APPROACH is a genuine backward move (not the QUOTE_DESIGN_SIDE ->
-        // SPEC_APPROVED exception), so it needs a note but — unlike a forward move — no
-        // follow-up-date/activity state at all.
+        // PRESENTATION -> LEAD_APPROACH is a genuine backward move (not the QUOTE_DESIGN_SIDE -> SPEC_APPROVED
+        // exception), so it needs a note but — unlike a forward move — no follow-up-date/activity state at all.
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.LEAD_APPROACH, null, salesRep))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
 
@@ -190,18 +174,15 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(result.summary().salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
     }
 
-    /**
-     * autoAdvanceStage (system-driven, e.g. confirmCustomer's ORDER_RECEIVED advance) is a
-     * separate code path from updateStage and must never be gated by tracking fields — a deal
-     * missing both nextFollowUpAt and any activity must still auto-advance.
-     */
+    /** autoAdvanceStage (system-driven, e.g. confirmCustomer's ORDER_RECEIVED advance) is a separate code path from
+     * updateStage and must never be gated by tracking fields — a deal missing both nextFollowUpAt and any activity
+     * must still auto-advance. */
     @Test
     void autoAdvanceStage_confirmCustomer_isNotGatedByTrackingFields() {
         long ticketId = createTicket();
-        // Drive the deal to QUOTATION_ISSUED / paymentStatus=null directly — the mechanics of
-        // getting there are exercised elsewhere (e.g. TicketEventStatusIntegrationTest); here we
-        // only care that confirmCustomer's autoAdvanceStage(ORDER_RECEIVED) is unaffected by the
-        // complete absence of nextFollowUpAt/deal_activity.
+        // Drive the deal to QUOTATION_ISSUED / paymentStatus=null directly — the mechanics of getting there are
+        // exercised elsewhere; here we only care that confirmCustomer's autoAdvanceStage is unaffected by the complete
+        // absence of nextFollowUpAt/deal_activity.
         jdbc.update("UPDATE sales.ticket SET status = 'quotation_issued' WHERE ticket_id = :id",
             java.util.Map.of("id", ticketId));
 

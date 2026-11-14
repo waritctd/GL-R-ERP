@@ -28,16 +28,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
-/**
- * Standalone MockMvc test of {@link PayrollController}'s request binding, validation, session
- * enforcement (401), month parsing (400), and the day-1 normalization it applies before delegating.
- *
- * <p>Note: {@code @PreAuthorize} role gating (HR/CEO-only) is NOT enforced by standalone MockMvc
- * (no Spring Security filter chain). That authorization boundary — e.g. a wrong-role session getting
- * 403 on {@code GET /api/payroll} — is covered by
- * {@link th.co.glr.hr.config.SecurityAuthorizationIntegrationTest}, which boots the real
- * SecurityFilterChain. This test therefore focuses on the controller's own logic only.
- */
+/** Standalone MockMvc test of PayrollController's request binding, validation, session enforcement (401), month
+ * parsing (400), and the day-1 normalization it applies before delegating. Note: @PreAuthorize role gating
+ * (HR/CEO-only) is NOT enforced by standalone MockMvc (no Spring Security filter chain). */
 class PayrollControllerTest {
     private final PayrollService payrollService = mock(PayrollService.class);
     private final PayslipDistributionService payslipDistributionService = mock(PayslipDistributionService.class);
@@ -70,8 +63,8 @@ class PayrollControllerTest {
 
     @Test
     void blankPayrollMonthIsRejectedWith400() throws Exception {
-        // An empty value binds to "" (present param, so no MissingServletRequestParameter);
-        // parseMonth's blank guard rejects it with the "required" message.
+        // An empty value binds to "" (present param, so no MissingServletRequestParameter); parseMonth's blank guard
+        // rejects it with the "required" message.
         mvc.perform(get("/api/payroll?payrollMonth=").session(sessionFor("hr")))
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.message").value("ต้องระบุงวดเงินเดือน"));

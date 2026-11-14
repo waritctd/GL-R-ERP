@@ -24,30 +24,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * REVIEWER-authored, FOURTH pass. Real Postgres, real {@link PayrollService}, real
- * {@link PayrollRepository}.
- *
- * <p>The third pass found that {@code headCountFor} let the declared ค่าลดหย่อนบุตร amount set its
- * own cap, and the fourth pass narrowed it to fire only when the stored count is zero AND the amount
- * came from the run body. That closes the STORED route. These tests pin what is left of the RUN-BODY
- * route, which the narrowing keeps open by design — so that the residual is a recorded decision
- * rather than something a fifth reader has to rediscover.
- *
- * <p><b>Re-verified after the 118 classification/SSO-inclusion rebase (2026-07-29):</b> both tests
- * here failed post-rebase, but NOT because the run-body route closed. {@code
- * PayrollService#headCountFor} is untouched by branch 118 and still derives a count from the run-body
- * amount whenever the stored count is zero, so {@link #aRunBodyChildAllowanceStillSetsItsOwnCap()}
- * still pins the SAME open residual, unchanged, with its original ฿370,500 expectation. The actual
- * causes were incidental to 118: (1) a raw SQL-inserted employee gets no SSO-inclusion rows outside
- * {@code EmployeeService#create}, so the ฿10,500 SSO allowance both tests assume was silently zero
- * until {@code seedSsoIncluded} was added; and (2) {@code PayrollCalculator#calculateClassified} —
- * the only engine {@code PayrollService} calls since task 2 — never wired in {@code
- * clampedAllowanceNote}, so the WARNING {@link #theIdenticalAmountOnAStoredDeclarationClamps()}
- * checks for was missing from every payslip regardless of this residual; fixed at the source
- * ({@code PayrollCalculator#calculateClassified}'s {@code calculationNote} assembly). Do not read a
- * green suite here as evidence the run-body cap was ever closed — it was not.
- */
+/** REVIEWER-authored, FOURTH pass. The third pass found that headCountFor let the declared ค่าลดหย่อนบุตร
+ * amount set its own cap, and the fourth pass narrowed it to fire only when the stored count is zero AND the
+ * amount came from the run body. */
 class PayrollAllowanceCapResidualReviewTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -83,25 +62,16 @@ class PayrollAllowanceCapResidualReviewTest extends AbstractPostgresIntegrationT
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * RESIDUAL. No stored ล.ย.01 at all, and a payroll operator types ฿300,000 of ค่าลดหย่อนบุตร into
-     * the run body. {@code headCountFor} derives {@code CEILING(300000/30000) = 10} heads from that
-     * very figure, so the per-head cap resolves to exactly ฿300,000 and binds on nothing.
-     *
-     * <p>V93's stated purpose is that บุตร stops being "a free-typed baht amount the engine trusted
-     * without limit". On this path it still is one. It is also SILENT: after the derivation
-     * {@code declared == cap}, so {@code appendClampWarning} returns early and the payslip's
-     * calculation note says nothing. The direction of error is UNDER-withholding.
-     */
+    /** Documents the residual case where a request-body child allowance derives its own head-count cap without a
+     * warning. */
     @Test
     @DisplayName("RESIDUAL: a run-body บุตร amount still sets its own cap, with no warning")
     void aRunBodyChildAllowanceStillSetsItsOwnCap() {
         LocalDate month = LocalDate.of(2026, 1, 1);
         long employeeId = seedEmployee("CAPR-001", "ไม่มี", "ลย01", new BigDecimal("200000.00"));
         // Post-118 rebase: a raw SQL-inserted employee gets no SSO-inclusion rows (that seeding is an
-        // EmployeeService#create side effect this test's direct INSERT bypasses), so without this the
-        // 10,500 SSO allowance personalPlusSso assumes below is silently zero. Unrelated to the
-        // residual this test pins -- the per-head cap math is untouched by this call.
+        // EmployeeService#create side effect this test's direct INSERT bypasses), so without this the 10,500 SSO
+        // allowance personalPlusSso assumes below is silently zero.
         seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
         // No hr.employee_tax_allowance row whatsoever.
 
@@ -124,12 +94,8 @@ class PayrollAllowanceCapResidualReviewTest extends AbstractPostgresIntegrationT
             .doesNotContain("WARNING");
     }
 
-    /**
-     * The counterpart that makes the residual concrete: the SAME ฿300,000, declared properly on a
-     * ล.ย.01 row for one child, is clamped to ฿30,000 and warned about. Two employees with identical
-     * declared figures get allowances that differ by ฿270,000 depending only on whether the
-     * declaration was recorded or typed into the run.
-     */
+    /** The counterpart that makes the residual concrete: the SAME ฿300,000, declared properly on a ล.ย.01 row for
+     * one child, is clamped to ฿30,000 and warned about. */
     @Test
     @DisplayName("RESIDUAL contrast: the identical amount on a stored ล.ย.01 clamps to 30,000")
     void theIdenticalAmountOnAStoredDeclarationClamps() {

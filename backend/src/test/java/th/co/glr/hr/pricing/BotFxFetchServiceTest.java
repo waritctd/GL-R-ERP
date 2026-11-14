@@ -26,51 +26,36 @@ import org.springframework.web.client.RestClient;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Review fix (2026-09-28): {@link BotFxFetchService#fetchNow()} previously had no throttle at all,
- * so 20 CEO-console clicks could exhaust BOT's ~100-calls/hour-per-token budget and make the 18:00
- * {@link BotFxFetchService#fetchDailyRates()} 429 silently. This mirrors {@code
- * BotHolidayFetchServiceTest}'s cooldown/clock coverage exactly, against the sibling class's own
- * {@link BotFxFetchService#MANUAL_FETCH_COOLDOWN} and Bangkok-zoned {@link Clock} seam.
- *
- * <p>No real HTTP is used anywhere in this class: {@link RestClient} is mocked at every step of its
- * fluent chain (see {@link #mockRestClient}), so "no BOT call made" is provable by counting
- * invocations of the mock, not merely inferred from a blank token short-circuiting before the loop.
- */
+/** Review fix (2026-09-28): BotFxFetchService#fetchNow() previously had no throttle at all, so 20 CEO-console
+ * clicks could exhaust BOT's ~100-calls/hour-per-token budget and make the 18:00
+ * BotFxFetchService#fetchDailyRates() 429 silently. */
 class BotFxFetchServiceTest {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
 
-    /** A BOT response carrying a real, parseable rate for every currency queried (the mocked
-     * {@link RestClient} returns this same body regardless of which currency was requested — the
-     * URI itself, captured separately, is what proves which currency/date was actually asked for). */
+    /** A BOT response carrying a real, parseable rate for every currency queried (the mocked RestClient returns
+     * this same body regardless of which currency was requested — the URI itself, captured separately, is what
+     * proves which currency/date was actually asked for). */
     private static final String VALID_BOT_JSON = """
         {"result": {"data": {"data_detail": [{"currency_id": "USD", "selling": "36.5000"}]}}}
         """;
 
-    /**
-     * (a) — the case B1 exists for: a second manual call inside the 10-minute window must be
-     * refused with a 429 carrying the remaining-seconds message {@code
-     * frontend/src/features/attendanceCalendar/holidayFetch.js}'s {@code parseCooldownSeconds}
-     * parses (the pattern is generic — any Thai message containing "N วินาที" — but this also pins
-     * the exact wording), and — the part a blank-token-only test could never prove — must make
-     * <strong>no BOT call at all</strong> for that second, refused attempt. A real token and a fully
-     * mocked {@link RestClient} chain are used specifically so this is provable by counting
-     * invocations, not merely inferred from the token check short-circuiting.
-     */
+    /** — the case B1 exists for: a second manual call inside the 10-minute window must be refused with a 429
+     * carrying the remaining-seconds message frontend/src/features/attendanceCalendar/holidayFetch.js's
+     * parseCooldownSeconds parses, and. */
     @Test
     void cooldownBlocksASecondImmediateManualCallAndMakesNoBotCall() {
         MutableClock clock = new MutableClock(Instant.parse("2026-06-01T10:00:00Z"));
         MockedRestClient rest = mockRestClient(VALID_BOT_JSON);
         BotFxFetchService service = serviceWithClock(mock(FxRateRepository.class), rest.client, clock, "fake-token");
 
-        // First attempt: allowed through, and it does reach BOT (proves the mock is wired, not
-        // merely never called for an unrelated reason) -- one GET per TRACKED_CURRENCIES entry.
+        // First attempt: allowed through, and it does reach BOT (proves the mock is wired, not merely never called for
+        // an unrelated reason) -- one GET per TRACKED_CURRENCIES entry.
         service.fetchNow();
         verify(rest.client, times(5)).get();
 
-        // Second call, same instant: refused before any further BOT interaction, and the message
-        // carries the remaining-seconds figure holidayFetch.js's parseCooldownSeconds parses.
+        // Second call, same instant: refused before any further BOT interaction, and the message carries the
+        // remaining-seconds figure holidayFetch.js's parseCooldownSeconds parses.
         assertThatThrownBy(service::fetchNow)
             .isInstanceOf(ApiException.class)
             .extracting(ex -> ((ApiException) ex).getStatus())
@@ -96,13 +81,9 @@ class BotFxFetchServiceTest {
         verify(rest.client, times(10)).get(); // 5 currencies x 2 successful invocations
     }
 
-    /**
-     * (c) — the interaction B1 specifically calls out: {@link BotFxFetchService#fetchDailyRates()}
-     * must run its fetch logic even when a manual attempt happened moments earlier and would itself
-     * be well within {@link BotFxFetchService#MANUAL_FETCH_COOLDOWN}. Proven positively -- the
-     * scheduled call must still reach BOT (a real interaction count), not merely "did not throw",
-     * which could also be true of a silently-skipped no-op.
-     */
+    /** (c) — the interaction B1 specifically calls out: BotFxFetchService#fetchDailyRates() must run its fetch
+     * logic even when a manual attempt happened moments earlier and would itself be well within
+     * BotFxFetchService#MANUAL_FETCH_COOLDOWN. */
     @Test
     void scheduledFetchStillRunsEvenImmediatelyAfterAManualAttempt() {
         MutableClock clock = new MutableClock(Instant.parse("2026-06-01T10:00:00Z"));
@@ -118,13 +99,7 @@ class BotFxFetchServiceTest {
         verify(rest.client, times(10)).get();
     }
 
-    /**
-     * S3 — the Bangkok-date fix. A fixed instant of 2026-09-27T18:30:00Z is 2026-09-28 01:30
-     * Bangkok time (UTC+7): the requested BOT period AND the {@code effective_date} written via
-     * {@link FxRateRepository#upsertFromBot} must both be 2026-09-28, never 2026-09-27 (which is
-     * what {@code LocalDate.now()} under a UTC JVM default -- production's actual deployment, see
-     * CLAUDE.md -- would have produced).
-     */
+    /** the Bangkok-date fix. */
     @Test
     void aFetchAtOneThirtyAmBangkokTimeUsesTheBangkokCalendarDayNotTheUtcOne() {
         Instant fixedInstant = Instant.parse("2026-09-27T18:30:00Z");
@@ -148,10 +123,9 @@ class BotFxFetchServiceTest {
             anyString(), eq(new BigDecimal("36.5000")), eq(LocalDate.of(2026, 9, 28)));
     }
 
-    /** Missing/blank token still throws the pre-existing 503, and the cooldown attempt is still
-     * recorded even though the fetch itself never reached BOT -- mirrors {@code
-     * BotHolidayFetchServiceTest}'s equivalent case: a misconfigured token must not be a way to
-     * dodge the cooldown by retrying in a loop. */
+    /** Missing/blank token still throws the pre-existing 503, and the cooldown attempt is still recorded even
+     * though the fetch itself never reached BOT -- mirrors BotHolidayFetchServiceTest's equivalent case: a
+     * misconfigured token must not be a way to dodge the cooldown by retrying in a loop. */
     @Test
     void aMissingTokenStillThrowsAndStillCountsAsAManualAttempt() {
         MutableClock clock = new MutableClock(Instant.parse("2026-06-01T10:00:00Z"));
@@ -164,8 +138,8 @@ class BotFxFetchServiceTest {
             .isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
         verifyNoInteractions(restClient);
 
-        // The cooldown clock started on the attempt itself (before the token check), so an
-        // immediate second call is refused with 429, not another 503.
+        // The cooldown clock started on the attempt itself (before the token check), so an immediate second call is
+        // refused with 429, not another 503.
         assertThatThrownBy(service::fetchNow)
             .isInstanceOf(ApiException.class)
             .extracting(ex -> ((ApiException) ex).getStatus())
@@ -181,9 +155,9 @@ class BotFxFetchServiceTest {
         return new BotFxFetchService(repo, props, builder, new ObjectMapper(), clock);
     }
 
-    /** Bundles the mocked {@link RestClient} together with the URI-spec step of its fluent chain,
-     * since {@link #aFetchAtOneThirtyAmBangkokTimeUsesTheBangkokCalendarDayNotTheUtcOne} needs to
-     * capture the exact URI each currency was requested with. */
+    /** Bundles the mocked RestClient together with the URI-spec step of its fluent chain, since
+     * #aFetchAtOneThirtyAmBangkokTimeUsesTheBangkokCalendarDayNotTheUtcOne needs to capture the exact URI each
+     * currency was requested with. */
     private record MockedRestClient(RestClient client, RestClient.RequestHeadersUriSpec uriSpec) {}
 
     @SuppressWarnings({"unchecked", "rawtypes"})

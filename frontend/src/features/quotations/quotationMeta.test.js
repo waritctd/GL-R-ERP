@@ -379,8 +379,8 @@ describe('canApproveDealQuotation / canDecideDealQuotation', () => {
     expect(canApproveDealQuotation(hrUser)).toBe(false);
   });
 
-  // #H4: approve/reject stay sales_manager/ceo ONLY -- the canCreateQuotation grant does NOT
-  // extend to them (unlike create/edit/view, which treat the grant as "any deal").
+  // #H4: approve/reject stay sales_manager/ceo ONLY -- the canCreateQuotation grant does NOT extend to them
+  // (unlike create/edit/view, which treat the grant as "any deal").
   it('the canCreateQuotation grant does NOT make a qc user an approver', () => {
     expect(canApproveDealQuotation(qcWithGrant)).toBe(false);
     expect(canDecideDealQuotation(qcWithGrant, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
@@ -678,8 +678,8 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
   it('mirrors WastageCalculator#piecesPerSqm — round(1/x, 2, HALF_UP)', () => {
     expect(piecesPerSqmFromSqmPerPiece(0.72)).toBe(1.39);
     expect(piecesPerSqmFromSqmPerPiece(0.36)).toBe(2.78);
-    // The real disagreement this feature exists to route around: a 300x600 mesh sheet whose
-    // covered area is genuinely 0.135 sqm/piece, not the 0.18 width x height geometry would say.
+    // The real disagreement this feature exists to route around: a 300x600 mesh sheet whose covered area is
+    // genuinely 0.135 sqm/piece, not the 0.18 width x height geometry would say.
     expect(piecesPerSqmFromSqmPerPiece(0.135)).toBe(7.41);
   });
 
@@ -765,8 +765,8 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
   });
 
   it('returns null outside the WastageCalculator MIN/MAX_SQM_PER_PIECE bound (0.001-10 m² per piece) -- catches millimetres typed into the cm field', () => {
-    // "600x1200" parses as a clean number pair but reads as 72 m²/piece, ~100x a real tile --
-    // exactly the millimetres-in-a-cm-field mistake WastageCalculator.java:87-88 guards against.
+    // "600x1200" parses as a clean number pair but reads as 72 m²/piece, ~100x a real tile -- exactly the
+    // millimetres-in-a-cm-field mistake WastageCalculator.java:87-88 guards against.
     expect(sqmPerPieceFromSizeCm('600x1200')).toBeNull();
   });
 });
@@ -827,8 +827,7 @@ describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
     expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // thin space
     expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // narrow NBSP
     expect(parseSizeText('﻿30x60')).toEqual({ width: 30, height: 60, unit: null }); // BOM/ZWNBSP
-    expect(parseSizeText('30x60\u2028')).toEqual({ width: 30, height: 60, unit: null }); // line separator
-    // The OTHER direction: a bare control byte, which JS's own `\s`/`.trim()` never treated as
+    expect(parseSizeText('30x60\u2028')).toEqual({ width: 30, height: 60, unit: null }); // line separator The OTHER direction: a bare control byte, which JS's own `\s`/`.trim()` never treated as
     // whitespace (Java's `String.trim()` always stripped it -- this closes the gap from the JS side).
     expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
     expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
@@ -861,8 +860,8 @@ describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
   });
 
   it('longer than the 64-char length guard is rejected outright, even for an otherwise-genuine shape', () => {
-    // The padding is INTERNAL (between the first number and the separator), so no trimming step
-    // could shrink it away -- this pins the length guard itself, not just the regex fix.
+    // The padding is INTERNAL (between the first number and the separator), so no trimming step could shrink it
+    // away -- this pins the length guard itself, not just the regex fix.
     const genuineButLong = '30' + ' '.repeat(60) + 'x60';
     expect(genuineButLong.length).toBe(65);
     expect(parseSizeText(genuineButLong)).toBeNull();
@@ -879,9 +878,8 @@ describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on th
   });
 
   it('an explicit mm unit is trusted for area, not compared against the cm sanity bound', () => {
-    // 300mm x 600mm = 0.18 sqm/piece -- a real, small tile; the cm reading (300x600) would be 18
-    // sqm/piece and get rejected by the sanity bound, which is exactly the bug this unit-aware
-    // conversion avoids.
+    // 300mm x 600mm = 0.18 sqm/piece -- a real, small tile; the cm reading (300x600) would be 18 sqm/piece and get
+    // rejected by the sanity bound, which is exactly the bug this unit-aware conversion avoids.
     expect(sqmPerPieceFromSizeCm('300x600mm')).toBe(0.18);
   });
 
@@ -915,8 +913,8 @@ describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mi
   });
 
   it('matches when the typed size is the catalogue size in millimetres (the exact prod bug shape)', () => {
-    // catalogue was picked as 60x60 cm (a 600x600mm tile); the rep typed the mm figures straight
-    // into this cm-labelled field.
+    // catalogue was picked as 60x60 cm (a 600x600mm tile); the rep typed the mm figures straight into this
+    // cm-labelled field.
     expect(sizeTextMatchesCatalogFaceSize('600x600', '60x60')).toBe(true);
     expect(sizeTextMatchesCatalogFaceSize('600x1200', '60x120')).toBe(true);
     expect(sizeTextMatchesCatalogFaceSize('1200x600', '60x120')).toBe(true);
@@ -961,9 +959,9 @@ describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t 
     expect(sizeTextDiffersFromCatalogFaceSize('', '60x60')).toBe(false);
     expect(sizeTextDiffersFromCatalogFaceSize('3', '60x60')).toBe(false);
     expect(sizeTextDiffersFromCatalogFaceSize('30x', '60x60')).toBe(false);
-    // catalogSizeText itself unparseable (a catalogue row with no width/height, sizeTextFromCatalog's
-    // sizeRaw fallback) -- even a genuinely different-looking typed size must not read as "different"
-    // when there is nothing reliable to compare it against.
+    // catalogSizeText itself unparseable (a catalogue row with no width/height, sizeTextFromCatalog's sizeRaw
+    // fallback) -- even a genuinely different-looking typed size must not read as "different" when there is
+    // nothing reliable to compare it against.
     expect(sizeTextDiffersFromCatalogFaceSize('30x60', 'JOLLY COCO 60x120')).toBe(false);
     expect(sizeTextDiffersFromCatalogFaceSize(null, null)).toBe(false);
   });
@@ -1013,8 +1011,8 @@ describe('originCountryFromCode (F1 catalog autofill)', () => {
     expect(meta.originCountryFromCode(' it ')).toBe('อิตาลี');
   });
 
-  // Blank, not 'อื่นๆ': that option carries no lead time, so guessing it would look filled in
-  // while telling the customer nothing.
+  // Blank, not 'อื่นๆ': that option carries no lead time, so guessing it would look filled in while telling the
+  // customer nothing.
   it('returns "" for an unmapped, empty or absent code', () => {
     expect(meta.originCountryFromCode('PT')).toBe('');
     expect(meta.originCountryFromCode('')).toBe('');
@@ -1071,8 +1069,8 @@ describe('locationGroupsFromItems (F1)', () => {
     expect(items.map((it) => it.groupId)).toEqual([groups[0].groupId, groups[0].groupId, groups[1].groupId]);
   });
 
-  // Two SEPARATE runs of the same label are two groups — collecting them together would reorder
-  // items the rep arranged deliberately, and the document does not do that either.
+  // Two SEPARATE runs of the same label are two groups — collecting them together would reorder items the rep
+  // arranged deliberately, and the document does not do that either.
   it('does not merge non-adjacent runs of the same label', () => {
     const { groups } = meta.locationGroupsFromItems([item('ชั้น 1', 'A'), item('ชั้น 2', 'B'), item('ชั้น 1', 'C')]);
     expect(groups).toHaveLength(3);
@@ -2006,9 +2004,9 @@ describe('isEffectiveZeroDeposit', () => {
     expect(meta.isEffectiveZeroDeposit({ noDeposit: true, depositPercentCustom: false, depositPercent: 30 })).toBe(true);
   });
 
-  // The Opus review finding (F2): typing "0" into the custom "อื่นๆ" input while UNticked must be
-  // recognised identically to the checkbox — this is the exact gap that let a rep save/attempt to
-  // submit depositPercent = 0 with no fullPaymentTerm without ever ticking "ไม่รับมัดจำ".
+  // The Opus review finding (F2): typing "0" into the custom "อื่นๆ" input while UNticked must be recognised
+  // identically to the checkbox — this is the exact gap that let a rep save/attempt to submit depositPercent = 0
+  // with no fullPaymentTerm without ever ticking "ไม่รับมัดจำ".
   it('is true for a custom-typed "0" even with the checkbox unticked', () => {
     expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '0' })).toBe(true);
     expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: 0 })).toBe(true);

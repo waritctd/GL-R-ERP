@@ -18,8 +18,8 @@ import { dedupeById, rowAmount, useAccountTickets } from './accountTickets.js';
 import { findStage, useStageCatalog } from '../tickets/stageCatalog.js';
 import { MONEY_TRACK, moneyMilestoneOf } from './moneyMilestone.js';
 
-// The next-action filter. Keys are exactly nextAccountAction()'s own `action.key`, so filtering
-// never drifts from what a row's action column shows.
+// The next-action filter. Keys are exactly nextAccountAction()'s own `action.key`, so filtering never drifts
+// from what a row's action column shows.
 const ACTION_FILTERS = [
   { key: 'chaseOverdue', label: 'ติดตามชำระ (เกินกำหนด)' },
   { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ' },
@@ -80,15 +80,9 @@ function DealRow({ row, catalog }) {
   );
 }
 
-/**
- * งานการเงิน — the page IS the worklist. Default view "ต้องดำเนินการ" lists deals where
- * `nextAccountAction` (the single source of "what does ฝ่ายบัญชี do next", shared with the
- * Overview) says there is something to do; "ทั้งหมด" adds every other row the account list returns,
- * including closed-paid history. Each row is one link to /finance/deals/:id.
- *
- * Same data-scope note as before: which deals appear is decided server-side (account's list scope);
- * this page filters and orders what it is given.
- */
+/** งานการเงิน — the page IS the worklist. Each row is one link to /finance/deals/:id. Same data-scope note as
+ * before: which deals appear is decided server-side (account's list scope); this page filters and orders what
+ * it is given. */
 export function AccountFinancePage({ user, showToast }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const view = searchParams.get('view') === 'all' ? 'all' : 'todo';
@@ -113,8 +107,8 @@ export function AccountFinancePage({ user, showToast }) {
   const allRows = useMemo(() => {
     const tickets = dedupeById(scopedQuery.data ?? [], closedPaidQuery.data ?? []);
     return tickets
-      // GLA-118: pass the viewer's role so the CEO (who reaches this page too) is never offered
-      // confirmDeposit / confirmFinalPayment — see nextAccountAction's `viewerRole` Javadoc.
+      // GLA-118: pass the viewer's role so the CEO (who reaches this page too) is never offered confirmDeposit /
+      // confirmFinalPayment — see nextAccountAction's `viewerRole` Javadoc.
       .map((ticket) => ({
         ticket,
         action: nextAccountAction(ticket, user?.role),
@@ -266,8 +260,8 @@ export function AccountFinancePage({ user, showToast }) {
         </div>
       ) : (
         <div className="@container overflow-hidden rounded-md border border-border bg-surface">
-          {/* Column tracks are declared ONCE here; the header and every row are subgrids of them, so
-              each column (and the money figures' right edge) lines up down the whole list. */}
+          {/* Column tracks are declared ONCE here; the header and every row are subgrids of them, so each column (and the
+           * money figures' right edge) lines up down the whole list. */}
           <ul className="m-0 grid list-none grid-cols-[minmax(0,2.2fr)_minmax(0,1.8fr)_minmax(0,1.3fr)_minmax(7rem,auto)_minmax(7rem,auto)] gap-x-4 p-0 @max-[60rem]:grid-cols-[minmax(0,1fr)_auto]">
             <li
               aria-hidden="true"

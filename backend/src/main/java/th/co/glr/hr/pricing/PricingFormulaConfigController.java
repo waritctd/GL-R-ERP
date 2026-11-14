@@ -30,25 +30,9 @@ import th.co.glr.hr.pricing.PricingFormulaConfigRequests.CreatePricingFormulaCon
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.DutyRateRequest;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.FreightRateRequest;
 
-/**
- * BRANCH 1 of the sales pricing-formula redesign: config storage + CEO editing UI only. This
- * controller reads/writes {@code sales.pricing_formula_config} and its three child tables; it does
- * NOT calculate a selling price (that is later branches, on top of this config).
- *
- * <p>This is a NEW endpoint, not a change to any existing one -- it does not touch
- * {@code /api/price-calc-configs} (PriceCalcConfigController) or any of its authorization. The read
- * gate mirrors that endpoint's existing precedent (issue #388): {@code ceo}/{@code import} may read
- * this cost-model config, everyone else is denied, since it is itself the margin policy (freight,
- * duty, clearance amounts, and the margin/buffer constants). Writes stay CEO-only.
- *
- * <p>Endpoints:
- * <ul>
- *   <li>{@code GET  /api/pricing-formula-config} -- read the current version. {ceo, import}
- *   <li>{@code POST /api/pricing-formula-config} -- replace the whole config with a new version. {ceo}
- *   <li>{@code POST /api/pricing-formula-config/freight-rates} -- add one freight row (#436). {ceo}
- *   <li>{@code DELETE /api/pricing-formula-config/freight-rates/{id}} -- remove one freight row (#436). {ceo}
- * </ul>
- */
+/** BRANCH 1 of the sales pricing-formula redesign: config storage + CEO editing UI only. Writes stay CEO-only.
+ * This controller reads/writes sales.pricing_formula_config and its three child tables; it does NOT calculate
+ * a selling price (that is later branches, on top of this config). */
 @RestController
 @RequestMapping("/api/pricing-formula-config")
 public class PricingFormulaConfigController {
@@ -82,30 +66,12 @@ public class PricingFormulaConfigController {
         return Map.of("formulaConfig", result);
     }
 
-    // ============================================================================================
-    // Freight-row add / remove (issue #436).
-    //
-    // Before this, the freight matrix was editable in AMOUNT ONLY through the whole-config POST
-    // above: the CEO could change a number in an existing row but had no way to add a row or drop
-    // one, so V109's six deliberately-blank cells were unfillable and a new origin country needed a
-    // Flyway migration -- a developer and a deploy for what is a business-data edit. That defeats
-    // the point of putting the formula in config at all.
-    //
-    // These two endpoints are strictly additive: they do not change the whole-config POST, its
-    // request shape, or its validation. They keep V109's versioning model intact -- neither one
-    // UPDATEs or DELETEs a stored row. Each derives the full freight list from the CURRENT version,
-    // applies the single add/remove, and writes a complete NEW version through the same
-    // createNewVersion() path, so the previous generation stays on disk for audit exactly as before.
-    //
-    // Write gate is unchanged in shape: {ceo} only, same requireCeoRole() as the POST above.
-    // ============================================================================================
+    // Freight-row add / remove (issue #436). These two endpoints are strictly additive: they do not change the
+    // whole-config POST, its request shape, or its validation. Write gate is unchanged in shape: {ceo} only, same
+    // requireCeoRole() as the POST above.
 
-    /**
-     * Adds one freight row and stores the result as a new config version. The added row goes
-     * through EXACTLY the same {@link #validate} pass as the whole-config POST -- band ordering and
-     * the country-level overlap check -- against the full resulting matrix, not just against
-     * itself. A row that would overlap an existing one is a 400, never a silent save.
-     */
+    /** Adds one freight row and stores the result as a new config version. A row that would overlap an existing one
+     * is a 400, never a silent save. */
     @PostMapping("/freight-rates")
     Map<String, PricingFormulaConfigDto> addFreightRate(
         @Valid @RequestBody FreightRateRequest request,
@@ -123,13 +89,9 @@ public class PricingFormulaConfigController {
         return Map.of("formulaConfig", formulaConfigs.createNewVersion(full, user.id()));
     }
 
-    /**
-     * Removes one freight row (identified by its id in the CURRENT version) and stores the result
-     * as a new config version.
-     *
-     * <p>The id must belong to the current version: passing a historical version's row id is a 404,
-     * not a silent no-op. Old versions are audit records and stay untouched.
-     */
+    /** Removes one freight row (identified by its id in the CURRENT version) and stores the result as a new config
+     * version. The id must belong to the current version: passing a historical version's row id is a 404, not a
+     * silent no-op. Old versions are audit records and stay untouched. */
     @DeleteMapping("/freight-rates/{freightRateId}")
     Map<String, PricingFormulaConfigDto> deleteFreightRate(
         @PathVariable("freightRateId") long freightRateId,
@@ -144,9 +106,9 @@ public class PricingFormulaConfigController {
             .findFirst()
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบค่าขนส่งที่ต้องการลบในสูตรปัจจุบัน"));
 
-        // The request record forbids an empty freight list (@NotEmpty), and a config with no
-        // freight matrix at all can price nothing. Enforce it here too, since this path builds the
-        // request programmatically and so never passes through bean validation.
+        // The request record forbids an empty freight list (@NotEmpty), and a config with no freight matrix at all can
+        // price nothing. Enforce it here too, since this path builds the request programmatically and so never passes
+        // through bean validation.
         if (current.freightRates().size() == 1) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องมีค่าขนส่งอย่างน้อย 1 รายการ");
         }
@@ -161,34 +123,8 @@ public class PricingFormulaConfigController {
         return Map.of("formulaConfig", formulaConfigs.createNewVersion(full, user.id()));
     }
 
-    /**
-     * "Deleting a row must not open a gap that makes a real order unpriceable" (#436).
-     *
-     * <p>Every deletion removes coverage, so the rule cannot be "no order may become unpriceable" --
-     * that would forbid deleting anything. The distinction that matters is between TRIMMING the
-     * matrix and PUNCHING A HOLE in it:
-     *
-     * <ul>
-     *   <li>Trimming an edge band is how the V109 seed is already shaped. Italy [12,17)mm stops at
-     *       801 sqm and Italy [17,21)mm stops at 451 sqm -- those are the deliberately-blank cells,
-     *       and every existing hole in the seed is a trailing one. An order past the top of a
-     *       ladder fails loudly in the engine, which is the intended behaviour.
-     *   <li>Removing a MIDDLE band is always a mistake. Orders on either side of the hole still
-     *       price fine, so nothing looks broken until one order lands in the hole -- exactly the
-     *       silent-mis-coverage failure V109's contiguity convention exists to prevent.
-     * </ul>
-     *
-     * <p>So a row is deletable only if it sits at an EDGE of its ladder. Two ladders apply:
-     * quantity bands within a (country, thickness-band) group, and -- when the row is the last one
-     * left in its thickness band, so deleting it empties that band -- thickness bands within the
-     * country.
-     *
-     * <p>Deliberately NOT applied to the whole-config POST. That endpoint already accepts
-     * non-contiguous ladders (its own tests save [1,100) alongside [101,450), which leaves a
-     * [100,101) hole), and retro-tightening it would reject configs that save today. This is a
-     * constraint on the new single-row delete only; widening it to the bulk path is a separate,
-     * larger decision about existing data.
-     */
+    /** "Deleting a row must not open a gap that makes a real order unpriceable" (#436). Every deletion removes
+     * coverage, so the rule cannot be "no order may become unpriceable" -- that would forbid deleting anything. */
     private void validateRemovalLeavesNoInteriorGap(List<PricingFreightRateDto> all, PricingFreightRateDto target) {
         List<PricingFreightRateDto> sameThicknessBand = all.stream()
             .filter(rate -> rate.originCountryCode().equals(target.originCountryCode()))
@@ -198,8 +134,8 @@ public class PricingFormulaConfigController {
             .toList();
 
         if (sameThicknessBand.size() > 1) {
-            // Compare by id, not by value: two rows can share a qtyMinSqm only if they overlap,
-            // which validate() already rejects, but an id comparison cannot be fooled either way.
+            // Compare by id, not by value: two rows can share a qtyMinSqm only if they overlap, which validate() already
+            // rejects, but an id comparison cannot be fooled either way.
             long lowestId = sameThicknessBand.get(0).freightRateId();
             long highestId = sameThicknessBand.get(sameThicknessBand.size() - 1).freightRateId();
             if (target.freightRateId() != lowestId && target.freightRateId() != highestId) {
@@ -212,8 +148,8 @@ public class PricingFormulaConfigController {
             return;
         }
 
-        // The row is the last one in its thickness band, so removing it empties that band. Apply
-        // the same edge-only rule one level up, across the country's thickness ladder.
+        // The row is the last one in its thickness band, so removing it empties that band. Apply the same edge-only
+        // rule one level up, across the country's thickness ladder.
         TreeSet<BigDecimal> thicknessMins = new TreeSet<>();
         for (PricingFreightRateDto rate : all) {
             if (rate.originCountryCode().equals(target.originCountryCode())) {
@@ -245,12 +181,7 @@ public class PricingFormulaConfigController {
         return requests;
     }
 
-    /**
-     * Rebuilds the whole-config request from the current version, swapping in a new freight list.
-     * Every other field -- the buffers, the margin, the duty rates, the clearance fees, and
-     * effectiveFrom -- is carried across verbatim: adding or removing a freight row amends the
-     * current policy, it does not re-date it or reset anything else.
-     */
+    /** Rebuilds the whole-config request from the current version, swapping in a new freight list. */
     private CreatePricingFormulaConfigRequest withFreightRates(
         PricingFormulaConfigDto current,
         List<FreightRateRequest> freightRates
@@ -270,18 +201,10 @@ public class PricingFormulaConfigController {
             freightRates, dutyRates, clearanceFees);
     }
 
-    /**
-     * Bean validation (@NotNull/@DecimalMin/etc. on the request record) already covers per-field
-     * bounds. This covers the cross-field/cross-row checks a single-field annotation can't express:
-     * band ordering and overlap. Overlapping bands make the lookup this config feeds ambiguous
-     * (branches 3-5 would have to silently pick one), so they are rejected here as a 400 rather
-     * than allowed to reach storage.
-     */
+    /** Bean validation (@NotNull/@DecimalMin/etc. on the request record) already covers per-field bounds. This
+     * covers the cross-field/cross-row checks a single-field annotation can't express: band ordering and overlap. */
     private void validate(CreatePricingFormulaConfigRequest request) {
-        // Bands are half-open [min, max) -- see V109's BAND CONVENTION note. min == max would be
-        // an empty band that can never match anything, so it is rejected here too, not just
-        // min > max (mirrors the DB CHECK constraints, but as a clean 400 instead of a raw SQL
-        // constraint violation surfacing at insert time).
+        // Bands are half-open [min, max) -- see V109's BAND CONVENTION note.
         for (FreightRateRequest freight : request.freightRates()) {
             if (freight.thicknessMinMm().compareTo(freight.thicknessMaxMm()) >= 0) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -292,16 +215,9 @@ public class PricingFormulaConfigController {
                     "ช่วงจำนวน (ตร.ม.) ไม่ถูกต้อง: " + freight.originCountryCode() + " " + freight.thicknessMinMm() + "-" + freight.thicknessMaxMm());
             }
         }
-        // Overlap check within the same origin_country: two freight rows conflict when BOTH their
-        // thickness ranges AND their quantity ranges overlap -- that is the real ambiguity
-        // condition for the freight lookup, regardless of whether the two rows happen to share the
-        // exact same thickness band. Grouping by (country, thickness) and only comparing quantity
-        // bands within an identical thickness band (the old approach) missed the case of two
-        // DIFFERENT, overlapping thickness bands for the same country (e.g. Italy [3,8) and Italy
-        // [5,10)) -- those never landed in the same group and so were never compared. A single
-        // pairwise pass across all of a country's rows catches both: two rows with the identical
-        // thickness band always have thicknessOverlap == true (a band overlaps itself), so the
-        // same-thickness case is still covered.
+        // Overlap check within the same origin_country: two freight rows conflict when BOTH their thickness ranges AND
+        // their quantity ranges overlap -- that is the real ambiguity condition for the freight lookup, regardless of
+        // whether the two rows happen to share the exact same thickness band.
         Map<String, List<FreightRateRequest>> byCountry = new java.util.LinkedHashMap<>();
         for (FreightRateRequest freight : request.freightRates()) {
             byCountry.computeIfAbsent(freight.originCountryCode(), k -> new ArrayList<>()).add(freight);
@@ -348,14 +264,9 @@ public class PricingFormulaConfigController {
         }
     }
 
-    /**
-     * Bands are HALF-OPEN [min, max) -- min inclusive, max exclusive, NULL max = +infinity (see
-     * V109's BAND CONVENTION note). Two half-open bands overlap iff a.min < b.max AND b.min <
-     * a.max. This is deliberately a strict {@code <}, not {@code <=}: under the old closed-interval
-     * test, contiguous bands like [1,101) and [101,451) would have been reported as overlapping
-     * (1 <= 451 and 101 <= 101 -- both true), which is wrong once max is exclusive. They must NOT
-     * be flagged, since 101 belongs to the second band only.
-     */
+    /** Bands are HALF-OPEN [min, max) -- min inclusive, max exclusive, NULL max = +infinity (see V109's BAND
+     * CONVENTION note). They must NOT be flagged, since 101 belongs to the second band only. Two half-open bands
+     * overlap iff a.min < b.max AND b.min < a.max. */
     private boolean bandsOverlap(BigDecimal aMin, BigDecimal aMax, BigDecimal bMin, BigDecimal bMax) {
         boolean aMinLtBMax = bMax == null || aMin.compareTo(bMax) < 0;
         boolean bMinLtAMax = aMax == null || bMin.compareTo(aMax) < 0;

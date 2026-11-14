@@ -9,26 +9,9 @@ import java.util.Base64;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Component;
 
-/**
- * Builds a self-contained HTML document for the ใบลาหยุด (F-HR-020) leave form, laid out to mirror the
- * paper/Excel form, for headless-Chromium PDF rendering ({@link th.co.glr.hr.common.ChromiumPdfPrinter},
- * the same engine the direct-deal quotation uses). Owner request 2026-09-25: the attached form must
- * look like the reference form and carry the GL&R logo.
- *
- * <p>Why not render the reference {@code .xls} through {@code SheetHtmlRenderer} (as the quotation does
- * its POI sheet): that sheet's logo is a ~7.4&nbsp;MB EMF (Windows metafile) which Chromium cannot
- * render, and its fillable fields are dotted runs inside single text cells rather than structured
- * value cells, so autofill would be brittle and the logo would not appear. A hand-built HTML replica
- * renders the real PNG logo, embeds Sarabun (so Thai is correct regardless of host fonts), and fills
- * every field deterministically.
- *
- * <p><b>Layout:</b> a single A4 page — the bordered box fills the full printable area (footer pinned
- * to the bottom), and every field row is flex with {@code flex-wrap}, so a long value grows into the
- * available width and never pushes the box past the right margin (which had clipped the box's right
- * border). Everything is inlined as {@code data:} URIs (logo + Sarabun regular/bold) so Chromium
- * fetches nothing. Pure renderer: all values come off {@link LeaveFormData}; no query or leave-day
- * math here.
- */
+/** Builds a self-contained HTML document for the ใบลาหยุด (F-HR-020) leave form, laid out to mirror the
+ * paper/Excel form, for headless-Chromium PDF rendering (th.co.glr.hr.common.ChromiumPdfPrinter, the same
+ * engine the direct-deal quotation uses). */
 @Component
 public class LeaveFormHtmlRenderer {
     private static final String[] THAI_MONTHS_ABBR = {
@@ -36,8 +19,8 @@ public class LeaveFormHtmlRenderer {
         "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."
     };
 
-    // ผู้รับ/ผู้บันทึก on the HR-receipt box: owner ruling (2026-09) that HR always records the ใบลา
-    // under this name. A constant, not data, precisely because it does not vary per request.
+    // ผู้รับ/ผู้บันทึก on the HR-receipt box: owner ruling (2026-09) that HR always records the ใบลา under this
+    // name. A constant, not data, precisely because it does not vary per request.
     private static final String HR_RECORDER = "ฟ้าใส อิฐรัตน์";
 
     private final String fontRegularBase64 = base64("fonts/Sarabun-Regular.ttf");
@@ -82,8 +65,8 @@ public class LeaveFormHtmlRenderer {
         }
         h.append("</div>");
 
-        // Dates / times. A multi-day TIMED request binds each time to its own date so it cannot be
-        // misread as "t1-t2 on each day"; whole-day and single-day-timed keep the compact grid.
+        // Dates / times. A multi-day TIMED request binds each time to its own date so it cannot be misread as "t1-t2
+        // on each day"; whole-day and single-day-timed keep the compact grid.
         boolean timed = d.startTime() != null && d.endTime() != null;
         boolean multiDay = d.endDate() != null && !d.endDate().equals(d.startDate());
         if (timed && multiDay) {
@@ -127,9 +110,9 @@ public class LeaveFormHtmlRenderer {
             .append("</div>");
         h.append("</div>");
 
-        // Approval / HR receipt. Blank on the SUBMITTED form (HR signs it); auto-filled once a decision
-        // has stamped the DTO, so the copy re-rendered for the employee shows the ticked box, the
-        // ผู้อนุมัติ signature and the decision date/time. "เพราะ" is intentionally left blank.
+        // Approval / HR receipt. Blank on the SUBMITTED form (HR signs it); auto-filled once a decision has stamped
+        // the DTO, so the copy re-rendered for the employee shows the ticked box, the ผู้อนุมัติ signature and the
+        // decision date/time. "เพราะ" is intentionally left blank.
         boolean approved = "APPROVED".equals(d.decision());
         boolean rejected = "REJECTED".equals(d.decision());
         boolean decided = approved || rejected;
@@ -172,10 +155,9 @@ public class LeaveFormHtmlRenderer {
     private String css() {
         return "@font-face{font-family:'Sarabun';font-weight:400;src:url(data:font/ttf;base64," + fontRegularBase64 + ") format('truetype');}"
             + "@font-face{font-family:'Sarabun';font-weight:700;src:url(data:font/ttf;base64," + fontBoldBase64 + ") format('truetype');}"
-            // A4 WIDTH with a fixed height sized to the form (~161 mm of content + 8 mm margins), so the
-            // PDF is a single page snug to the content with no awkward blank A4 tail. A valid two-length
-            // size is required — `size: <w> auto` is invalid CSS and silently falls back to the default
-            // page. Chromium honours this because ChromiumPdfPrinter prints with preferCSSPageSize=true.
+            // A4 WIDTH with a fixed height sized to the form (~161 mm of content + 8 mm margins), so the PDF is a single
+            // page snug to the content with no awkward blank A4 tail. A valid two-length size is required — `size: <w>
+            // auto` is invalid CSS and silently falls back to the default page.
             + "@page{size:210mm 200mm;margin:8mm;}"
             + "*{box-sizing:border-box;}"
             + "body{margin:0;font-family:'Sarabun',sans-serif;font-size:12.5px;color:#000;}"
@@ -185,8 +167,8 @@ public class LeaveFormHtmlRenderer {
             + ".logo{height:48px;width:auto;}"
             + ".title{flex:1;text-align:center;font-weight:700;font-size:23px;letter-spacing:1px;}"
             + ".filed{font-size:12px;white-space:nowrap;}"
-            // Every field row is a wrapping flex line, so a long value grows into the free width and
-            // NEVER overflows the box (which used to clip the right border).
+            // Every field row is a wrapping flex line, so a long value grows into the free width and NEVER overflows the
+            // box (which used to clip the right border).
             + ".line{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 8px;margin:11px 0;}"
             + ".row{display:flex;flex-wrap:wrap;gap:4px 20px;margin:11px 0;}"
             + ".cell{flex:1 1 240px;display:flex;align-items:baseline;gap:6px;min-width:0;}"

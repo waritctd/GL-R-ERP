@@ -15,8 +15,8 @@ function renderPanel(summary) {
   );
 }
 
-// Built through the real status helper rather than hand-written statusInfo objects, so a change to
-// the status vocabulary surfaces here instead of passing against a stale fixture.
+// Built through the real status helper rather than hand-written statusInfo objects, so a change to the status
+// vocabulary surfaces here instead of passing against a stale fixture.
 function summaryFor(declaration, extra = {}) {
   return {
     statusInfo: taxAllowanceStatusInfo(declaration),

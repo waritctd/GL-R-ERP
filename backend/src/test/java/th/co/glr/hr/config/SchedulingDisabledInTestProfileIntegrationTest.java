@@ -16,18 +16,9 @@ import org.springframework.test.context.DynamicPropertySource;
 import th.co.glr.hr.customerquotation.QuotationExpiryWorker;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Guards the fix for the {@code PricingChainEndToEndIntegrationTest} CI flake: {@code @Scheduled}
- * background workers must NOT run inside a {@code @SpringBootTest} context, because that context is
- * cached across the surefire JVM and shares the Testcontainers Postgres with the non-Spring
- * integration tests — a leaked worker thread would poll and mutate their rows mid-test (it did:
- * the factory-email outbox worker — since deleted, factory RFQ email is manual-only now, see
- * {@code FactoryQuoteService#send} — stole a test's own dispatches and failed to send them).
- *
- * <p>{@code @EnableScheduling} lives in {@link SchedulingConfig} gated on {@code @Profile("!test")},
- * so with the {@code test} profile active no scheduled task is registered at all. This asserts that
- * — and that the worker BEANS still exist, so tests can drive their logic directly.
- */
+/** Guards the fix for the PricingChainEndToEndIntegrationTest CI flake: @Scheduled background workers must NOT
+ * run inside a @SpringBootTest context, because that context is cached across the surefire JVM and shares the
+ * Testcontainers Postgres with the non-Spring integration tests. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -60,10 +51,9 @@ class SchedulingDisabledInTestProfileIntegrationTest {
 
     @Test
     void theOutboxWorkerBeanStillExistsSoTestsCanDriveItsLogicDirectly() {
-        // FactoryQuoteEmailDispatchWorker (the original subject of this test) was deleted when
-        // factory RFQ email became manual-only; QuotationExpiryWorker is the same shape of
-        // @Scheduled bean and pins the same property — @Profile("!test") disabling the SCHEDULE
-        // must not also prevent the bean itself from being created.
+        // FactoryQuoteEmailDispatchWorker was deleted when factory RFQ email became manual-only; QuotationExpiryWorker
+        // is the same shape of @Scheduled bean and pins the same property — @Profile disabling the SCHEDULE must not
+        // also prevent the bean itself from being created.
         assertThat(context.getBeanNamesForType(QuotationExpiryWorker.class))
             .as("the worker bean must still be created — only its timer is disabled in tests")
             .isNotEmpty();

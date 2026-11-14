@@ -42,15 +42,8 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.ticket.AttachType;
 import th.co.glr.hr.ticket.DealStage;
 
-/**
- * The finance page records the commission invoice through the EXISTING
- * {@code CommissionService#createFromDeal} (no new write endpoint) and reads it back on the finance
- * deal DTO. Real Postgres, real services and repositories, real controller behind MockMvc; only the
- * outbound email transport is a Mockito mock (delivery is not covered -- "queued" is).
- *
- * <p>The finance payload must carry the invoice and its approval status and NEVER a commission
- * amount, weight, tier, payroll month or rep.
- */
+/** The finance page records the commission invoice through the EXISTING CommissionService#createFromDeal (no
+ * new write endpoint) and reads it back on the finance deal DTO. */
 class FinanceDealCommissionInvoiceIntegrationTest extends FinanceDealTestBase {
     private static final LocalDate INVOICE_DATE = LocalDate.of(2026, 6, 15); // -> payroll month 2026-07-01 (open)
 

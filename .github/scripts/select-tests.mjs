@@ -1,33 +1,6 @@
-// Selective test picker for PR CI.
-//
-// On a pull_request the workflows run only the tests plausibly affected by the diff; on a
-// push to develop/main they run everything (the safety net). The decision logic lives in the
-// two pure functions below — no fs, no child_process — so `node --test` can pin it with
-// fixtures (select-tests.test.mjs). The CLI at the bottom is the only thing that touches git
-// and the filesystem, and it fails SAFE: any exception prints `mode=full`.
-//
-// Design rules worth knowing before editing:
-//   * Unknown backend paths escalate to FULL. Selection is an allow-list of shapes we
-//     understand; anything else is treated as "could affect anything".
-//   * A PR whose base branch is `main` is always FULL on both sides (owner ruling
-//     2026-10-01): merging to main deploys the frontend, so a PR into main earns no shortcut.
-//   * Reverse dependencies are followed ONE level, by matching the fully qualified package
-//     prefix `th.co.glr.hr.<pkg>.` (explicit and wildcard imports, FQN references) AND the
-//     slash form `th/co/glr/hr/<pkg>` followed by `/`, a quote, whitespace or end-of-text —
-//     tests such as attendance/daily/LatenessNeverAffectsPayrollTest read other packages'
-//     SOURCE FILES by path with no import at all. The terminator matters: `pricing` must not
-//     match `pricingrequest`. Same-package use needs no import and is covered because the
-//     changed package itself is always selected.
-//   * `-Dtest=` REPLACES surefire's default includes, so the pattern restates them per
-//     package. Keep SUREFIRE_INCLUDES in step with maven-surefire's defaults.
-//   * Frontend: `vitest --changed` follows the import graph only. Tests that read source or
-//     CSS through fs are invisible to it, so they are always appended, and any non-JS change
-//     under frontend/ (CSS, HTML, assets) goes FULL. Some of them read BACKEND Java files
-//     (stageCatalog.test.js parses DealStage.java), so a changed backend/src/main/java file
-//     also pulls in every fs-reading test whose content mentions that file's path or basename.
-//   * serverContract.test.js is always added whenever frontend code changed (it scans every
-//     screen via apiSurface.js), and any docs/api/** change is a FULL trigger (status-catalog
-//     and api-surface are read through helpers no heuristic can attribute to a test).
+// Selective test picker for PR CI. On a pull_request the workflows run only the tests plausibly affected by
+// the diff; on a push to develop/main they run everything (the safety net). The terminator matters: `pricing`
+// must not match `pricingrequest`.
 
 const HR_MAIN = 'backend/src/main/java/th/co/glr/hr/';
 const HR_TEST = 'backend/src/test/java/th/co/glr/hr/';
@@ -129,8 +102,8 @@ export function selectBackendTests({ changedFiles, javaSources, isPullRequest, l
     return { mode: 'none', reason: 'no backend-relevant files in the diff', packages: [], testPattern: '' };
   }
 
-  // One level of reverse dependencies: any source referencing a changed package (dotted or
-  // slash form) pulls in its own top-level package.
+  // One level of reverse dependencies: any source referencing a changed package (dotted or slash form) pulls in
+  // its own top-level package.
   const dependants = new Set();
   for (const { path, content } of javaSources) {
     const pkg = backendPackageOf(path);
@@ -155,17 +128,16 @@ const FRONTEND_CODE_EXT = /\.(js|jsx|ts|tsx|json)$/;
 function isFrontendFullTrigger(path) {
   if (path === '.github/workflows/frontend-ci.yml') return true;
   if (path.startsWith('.github/scripts/')) return true;
-  // docs/api/** is read by several tests through helpers (statusCatalog.js, apiSurface.js)
-  // that the fs-reading heuristic cannot attribute to a test file, so it is FULL, not a
-  // targeted pick (PR #1099 review).
+  // docs/api/** is read by several tests through helpers (statusCatalog.js, apiSurface.js) that the fs-reading
+  // heuristic cannot attribute to a test file, so it is FULL, not a targeted pick (PR #1099 review).
   if (path.startsWith('docs/api/')) return true;
   if (!path.startsWith('frontend/')) return false;
   if (path === 'frontend/package.json' || path === 'frontend/package-lock.json') return true;
   if (path.startsWith('frontend/vite.config.') || path.startsWith('frontend/vitest.config.')) return true;
   if (path.startsWith('frontend/src/test/')) return true;
   if (path.startsWith('frontend/.env')) return true;
-  // Non-code files (CSS, HTML, assets) are read by tests through fs, which the import graph
-  // `vitest --changed` follows cannot see.
+  // Non-code files (CSS, HTML, assets) are read by tests through fs, which the import graph `vitest --changed`
+  // follows cannot see.
   if (!FRONTEND_CODE_EXT.test(path)) return true;
   return false;
 }
@@ -177,11 +149,9 @@ function isServerContractTrigger(path) {
 
 const BACKEND_MAIN_JAVA = 'backend/src/main/java/';
 
-/**
+/** Selects affected frontend tests, including readers outside the import graph.
  * @param {object} input
- * @param {{path: string, content: string}[]} input.testFilesReadingFs
- *        fs-reading test files, paths relative to frontend/, WITH their content (F9)
- */
+ * @param {{path: string, content: string}[]} input.testFilesReadingFs */
 export function selectFrontendTests({ changedFiles, testFilesReadingFs, isPullRequest, labels, baseRef }) {
   const full = (reason) => ({ mode: 'full', reason, extraTestFiles: [] });
   const universal = universalReason({ isPullRequest, labels, baseRef });
@@ -203,11 +173,11 @@ export function selectFrontendTests({ changedFiles, testFilesReadingFs, isPullRe
     return { mode: 'none', reason: 'no frontend-relevant files in the diff', extraTestFiles: [] };
   }
 
-  // Every fs reader when frontend code changed (the import graph cannot see them); otherwise
-  // only the readers tied to the changed backend files.
+  // Every fs reader when frontend code changed (the import graph cannot see them); otherwise only the readers
+  // tied to the changed backend files.
   const extras = frontendChanged ? testFilesReadingFs.map(({ path }) => path) : [...javaReaders];
-  // serverContract.test.js scans every screen through apiSurface.js's readdirSync, so ANY
-  // frontend change can break it — the scan sits in a helper the fs-reading heuristic misses.
+  // serverContract.test.js scans every screen through apiSurface.js's readdirSync, so ANY frontend change can
+  // break it — the scan sits in a helper the fs-reading heuristic misses.
   if (contractTriggered || frontendChanged) extras.push(SERVER_CONTRACT_TEST);
   return {
     mode: 'changed',
@@ -218,14 +188,7 @@ export function selectFrontendTests({ changedFiles, testFilesReadingFs, isPullRe
   };
 }
 
-// ── CLI ─────────────────────────────────────────────────────────────────────────────────
-//
-//   node .github/scripts/select-tests.mjs --side backend|frontend --base <sha> \
-//        --event <github.event_name> [--base-ref <branch>] [--labels a,b] \
-//        [--changed-files p1,p2] [--repo <dir>]
-//
-// Prints key=value lines for $GITHUB_OUTPUT. `--changed-files` bypasses `git diff` (for local
-// smoke tests). Any exception → `mode=full` so a broken picker can never skip tests.
+// Parses test-picker CLI options; failures select the full suite rather than skipping tests.
 
 function parseArgs(argv) {
   const out = {};
@@ -276,8 +239,8 @@ async function main(argv) {
     changedFiles = csv(args['changed-files']);
   } else {
     if (!args.base) throw new Error('--base <sha> is required (or --changed-files)');
-    // --no-renames: a move out of config/ or common/ must list the SOURCE path too, so the
-    // full-suite triggers see it. quotePath=false: non-ASCII paths come back unescaped.
+    // --no-renames: a move out of config/ or common/ must list the SOURCE path too, so the full-suite triggers see
+    // it. quotePath=false: non-ASCII paths come back unescaped.
     const diff = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--no-renames', '--name-only', args.base, 'HEAD'],
       { cwd: repo, encoding: 'utf8' });
     changedFiles = diff.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -316,9 +279,8 @@ async function main(argv) {
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 
-// Compare REAL paths: `node some/symlink.mjs` gives argv[1] as the symlink while
-// import.meta.url is the resolved target, so a plain string compare would silently
-// never run main() (F3).
+// Compare REAL paths: `node some/symlink.mjs` gives argv[1] as the symlink while import.meta.url is the
+// resolved target, so a plain string compare would silently never run main() (F3).
 async function isInvokedDirectly() {
   if (typeof process === 'undefined' || !process.argv[1]) return false;
   const [{ realpathSync }, { fileURLToPath }] = await Promise.all([import('node:fs'), import('node:url')]);

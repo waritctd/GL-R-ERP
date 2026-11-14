@@ -5,18 +5,8 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { leadTimeRangeText } from './factoryContactMeta.js';
 
-/**
- * CR-1 (GLA-167) R2 / R10 — what the OWNING sales rep (or a sales manager) sees when import has
- * asked to change a factory's ระยะเวลานำเข้า: ONE banner per pending request, listing the whole
- * request (factory, reason, every line old -> new), decided once, as a whole.
- *
- *   อนุมัติ        — the new values become the lines' lead times.
- *   ไม่อนุมัติ     — the old values stay; a reason is REQUIRED (import sees it).
- *
- * Both send the `version` this banner loaded (`expectedVersion`): if import edited the request in
- * the meantime the server answers 409 and the page says so and refetches (handled by the caller).
- * Who may see this at all (owning rep / sales_manager — NOT the CEO, B-R3) is decided by the caller.
- */
+/** Lets sales approve or reject a complete factory lead-time change; rejection requires a reason and decisions
+ * carry the loaded version. */
 export function LeadTimeChangeBanner({ change, factoryName, lineNames, pending, onApprove, onReject }) {
   const [rejecting, setRejecting] = useState(false);
   const [reason, setReason] = useState('');

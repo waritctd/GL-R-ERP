@@ -8,10 +8,9 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 
-// UX-03: the only validation rule this form has ever had — price is required
-// and must be > 0. Every other field is genuinely optional; do not add
-// required-ness here without an explicit product decision, it would block
-// legitimate saves (many catalog rows are missing grade/collection/etc).
+// UX-03: the only validation rule this form has ever had — price is required and must be > 0. Every other
+// field is genuinely optional; do not add required-ness here without an explicit product decision, it would
+// block legitimate saves (many catalog rows are missing grade/collection/etc).
 const productFormSchema = z.object({
   productCode: z.string(),
   grade: z.string(),
@@ -54,9 +53,8 @@ export function ProductFormModal({ product, factoryId, onClose, onSaved }) {
 
   async function submit(values) {
     setSubmitError('');
-    // Payload shape is an API contract detail — preserved byte-identical to
-    // the pre-migration hand-rolled version: every text field normalises
-    // '' -> null, price becomes a Number, currency/priceUnit pass through.
+    // Payload shape is an API contract detail — preserved byte-identical to the pre-migration hand-rolled version:
+    // every text field normalises '' -> null, price becomes a Number, currency/priceUnit pass through.
     const payload = {
       productCode: values.productCode || null,
       grade:       values.grade       || null,

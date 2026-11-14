@@ -56,12 +56,7 @@ public class PriceImportService {
         return uploadAndStage(factoryId, originalFilename, fileStream, null, label, uploadedBy);
     }
 
-    /**
-     * @param thicknessSidecarStream the SEPARATE thickness workbook a profile with {@code
-     *        thickness_sidecar} configured requires (Vives) — {@code null} for every other
-     *        profile. Threaded straight through to {@code ImportEngine#parse}; see that method's
-     *        Javadoc for the loud failure when a sidecar-configured profile receives none.
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     @Transactional
     public UploadReport uploadAndStage(
         long factoryId,
@@ -197,10 +192,8 @@ public class PriceImportService {
             p.addValue("sizeUnit", r.sizeUnitDeclared());
             p.addValue("sqmProv",  r.sqmProvenance());
             p.addValue("sqmLinM",  r.sqmPerLinearM());
-            // Quarantined rows (reconciliation mismatch) are staged WITH import_error already set,
-            // so they are excluded from commit and visible in the staging report exactly like a
-            // duplicate-code row is — never dropped silently. Non-quarantined rows insert NULL here,
-            // same as before; validate() may still flag them for other reasons (e.g. duplicates).
+            // Quarantined rows (reconciliation mismatch) are staged WITH import_error already set, so they are excluded
+            // from commit and visible in the staging report exactly like a duplicate-code row is — never dropped silently.
             p.addValue("qerr",     r.quarantineReason());
             p.addValue("thicknessUnit", r.thicknessUnitDeclared());
             p.addValue("thicknessProv", r.thicknessProvenance());
@@ -522,14 +515,9 @@ public class PriceImportService {
 
     // ── helper ────────────────────────────────────────────────────────────────
 
-    // Guards both POST /validate/{versionId} and POST /commit/{versionId}. An unknown version id
-    // used to escape as EmptyResultDataAccessException and surface as a 500 from
-    // handleDataAccess, so "this version does not exist" and "the server broke" were
-    // indistinguishable to the caller — the write half of the same defect fixed in
-    // getRawProfile above, recorded in frontend/e2e-real/write-authz.spec.js.
-    //
-    // The 404 is deliberately raised before the DRAFT check: a missing row is not a status
-    // conflict, and answering 409 for it would be a different wrong answer.
+    // Guards both POST /validate/{versionId} and POST /commit/{versionId}. The 404 is deliberately raised before
+    // the DRAFT check: a missing row is not a status conflict, and answering 409 for it would be a different wrong
+    // answer.
     private void requireDraft(long versionId) {
         String status;
         try {
@@ -567,9 +555,9 @@ public class PriceImportService {
     ) {}
 
     public List<Map<String, Object>> listFactories() {
-        // V163: email/unit are folded onto this table from the now-dropped sales.factory_config
-        // (see FactoryConfigRepository's class javadoc) — surfaced here too so the factory-list UI
-        // that this endpoint feeds can show and edit them without a second round trip.
+        // V163: email/unit are folded onto this table from the now-dropped sales.factory_config (see
+        // FactoryConfigRepository's class javadoc) — surfaced here too so the factory-list UI that this endpoint feeds
+        // can show and edit them without a second round trip.
         return jdbc.query(
             "SELECT factory_id, name, country, country_other, default_currency, email, unit"
                 + " FROM price_catalog.factories ORDER BY name",
@@ -590,11 +578,8 @@ public class PriceImportService {
 
     // ── C4: profile management ────────────────────────────────────────────────
 
-    // Same lookup as loadProfile above, and now the same missing-row behaviour. It used to let
-    // EmptyResultDataAccessException escape, which handleDataAccess turns into a 500 — so an
-    // unknown factory id reported a server fault on GET /api/price-import/profile/{factoryId}
-    // while the identical query one method up correctly answered 404. Recorded against this
-    // endpoint in frontend/e2e-real/api-surface.spec.js (KNOWN_SERVER_ERRORS).
+    // Same lookup as loadProfile above, and now the same missing-row behaviour. Recorded against this endpoint in
+    // frontend/e2e-real/api-surface.spec.js (KNOWN_SERVER_ERRORS).
     public String getRawProfile(long factoryId) {
         try {
             return jdbc.queryForObject(
@@ -636,27 +621,18 @@ public class PriceImportService {
         int parsedRows,
         int errorCount,
         List<String> errors,
-        // Reconciliation mismatches (item 6, catalogue accuracy 2026-09): these rows ARE staged
-        // (parsedRows includes them) but excluded from commit until reviewed — see
-        // ImportResult#quarantined's javadoc. Distinct from errorCount/errors above, which are
-        // rows dropped entirely before staging.
+        // Reconciliation mismatches (item 6, catalogue accuracy 2026-09): these rows ARE staged (parsedRows includes
+        // them) but excluded from commit until reviewed — see ImportResult#quarantined's javadoc. Distinct from
+        // errorCount/errors above, which are rows dropped entirely before staging.
         int quarantinedCount,
         List<ImportResult.QuarantinedRow> quarantined
     ) {}
 
     // ── C5: create factory ────────────────────────────────────────────────────
 
-    /**
-     * Was BROKEN: {@code country = null} on a blank input, but V151 made
-     * {@code price_catalog.factories.country} NOT NULL + FK to {@code price_catalog.country}, so a
-     * blank or unseeded country raised a {@code DataAccessException} that {@code
-     * ApiExceptionHandler.handleDataAccess} turned into a bare 500 — "cannot add a factory" with no
-     * useful message. Country is now REQUIRED and validated against {@code price_catalog.country}
-     * up front ({@link #requireValidCountry}), so a bad value is a clean Thai 400 instead. Also now
-     * accepts the optional {@code email}/{@code unit} RFQ fields V163 added to this table, and (V184,
-     * owner decision 09-18) {@code countryOther} — required when {@code country} is {@code 'ZZ'}
-     * (อื่นๆ), forbidden otherwise; see {@link #requireValidCountryOther}.
-     */
+    /** Was BROKEN: country = null on a blank input, but V151 made price_catalog.factories.country NOT NULL + FK to
+     * price_catalog.country, so a blank or unseeded country raised a DataAccessException that
+     * ApiExceptionHandler.handleDataAccess turned into a bare 500. */
     @Transactional
     public Map<String, Object> createFactory(String name, String country, String countryOther,
                                              String defaultCurrency, String email, String unit) {
@@ -698,12 +674,9 @@ public class PriceImportService {
         return m;
     }
 
-    /**
-     * Updates name/country/currency/email/unit/countryOther on an existing factory. 404 if {@code
-     * factoryId} is unknown, 400 on an invalid country or countryOther pairing (same rules as {@link
-     * #createFactory}), 409 on a duplicate name (the UNIQUE constraint on {@code
-     * price_catalog.factories.name}) rather than a 500.
-     */
+    /** Updates name/country/currency/email/unit/countryOther on an existing factory. 404 if factoryId is unknown,
+     * 400 on an invalid country or countryOther pairing (same rules as #createFactory), 409 on a duplicate name
+     * (the UNIQUE constraint on price_catalog.factories.name) rather than a 500. */
     @Transactional
     public Map<String, Object> updateFactory(long factoryId, String name, String country, String countryOther,
                                              String defaultCurrency, String email, String unit) {
@@ -715,15 +688,8 @@ public class PriceImportService {
         String trimmedName = name.strip();
         String cur = normalizeCurrency(defaultCurrency);
         String cty = requireValidCountry(country);
-        // REVIEW ROUND 1, S6: when the caller sends NO countryOther and the country is UNCHANGED
-        // from what is already stored, keep the stored value rather than re-validating a blank one
-        // as if the caller meant to clear it. Without this, a ZZ (อื่นๆ) factory could never be
-        // edited from today's UI at all: the current country picker has no text input for
-        // countryOther yet (PR-B adds it), so every edit request from it omits the field, and
-        // requireValidCountryOther would otherwise refuse every such request with "กรุณาระบุชื่อ
-        // ประเทศเมื่อเลือก อื่นๆ" even though the row already has one on file. A caller that DOES
-        // send a countryOther (present, even blank-to-clear) or that CHANGES the country still goes
-        // through the normal validation below — this only fills in what was silently omitted.
+        // REVIEW ROUND 1, S6: when the caller sends NO countryOther and the country is UNCHANGED from what is already
+        // stored, keep the stored value rather than re-validating a blank one as if the caller meant to clear it.
         String ctyOther;
         if (blankToNull(countryOther) == null && "ZZ".equals(cty) && cty.equals(existing.country())) {
             ctyOther = existing.countryOther();
@@ -760,11 +726,8 @@ public class PriceImportService {
         return m;
     }
 
-    /**
-     * {@code price_catalog.country} options, so the factory editor can offer a select instead of
-     * the free-text field that used to make an unseeded/typo'd country 500 (see {@link
-     * #createFactory}).
-     */
+    /** price_catalog.country options, so the factory editor can offer a select instead of the free-text field that
+     * used to make an unseeded/typo'd country 500 (see #createFactory). */
     public List<Map<String, Object>> listCountries() {
         List<Map<String, Object>> out = new ArrayList<>();
         for (FactoryConfigRepository.CountryOptionDto c : factoryConfigs.listCountries()) {
@@ -788,17 +751,9 @@ public class PriceImportService {
         return code;
     }
 
-    /**
-     * V184 / owner decision 09-18: {@code 'ZZ'} (อื่นๆ) REQUIRES a typed {@code countryOther} — a
-     * human said "I don't know the real code, but here is what I mean" — and every other country
-     * FORBIDS one, so a stray value from a stale form field cannot silently attach to a real
-     * country. Mirrors {@link th.co.glr.hr.importrequest.ImportRequestService
-     * #requireValidNewFactoryCountry}'s identical rule for the ใบขอซื้อ auto-create path, and backs
-     * {@code price_catalog.factories}' own paired CHECK constraints (V184) with a clean Thai 400
-     * instead of a raw DB error.
-     *
-     * @param validatedCountryCode already validated/upper-cased by {@link #requireValidCountry}.
-     */
+    /** V184 / owner decision 09-18: 'ZZ' (อื่นๆ) REQUIRES a typed countryOther — a human said "I don't know the
+     * real code, but here is what I mean" — and every other country FORBIDS one, so a stray value from a stale
+     * form field cannot silently attach to a real country. */
     private String requireValidCountryOther(String validatedCountryCode, String countryOther) {
         String other = blankToNull(countryOther);
         if ("ZZ".equals(validatedCountryCode) && other == null) {
@@ -811,17 +766,7 @@ public class PriceImportService {
         return other;
     }
 
-    /**
-     * Review remediation (MEDIUM 5): uppercasing/trimming alone left the length unchecked, and
-     * {@code default_currency} is {@code CHAR(3)} (V40) — {@code "EURO"} sailed past this method,
-     * hit Postgres as a 22001 ("value too long for type character(3)"), and {@code
-     * ApiExceptionHandler.handleDataAccess} turned that into a bare 500: the exact defect class
-     * this whole change (clean 400s instead of a raw SQL error) set out to remove, just on a
-     * different column than {@link #requireValidCountry} already guards. The check is exact
-     * equality, not just an upper bound: {@code CHAR(3)} BLANK-PADS a shorter value rather than
-     * rejecting it, so a 2-character code (e.g. a typo'd "TH") would otherwise be silently stored
-     * as {@code "TH "} with a trailing space that nothing downstream expects.
-     */
+    /** Review remediation: uppercasing/trimming alone left the length unchecked, and default_currency is CHAR. */
     private String normalizeCurrency(String defaultCurrency) {
         String cur = defaultCurrency != null && !defaultCurrency.isBlank()
             ? defaultCurrency.strip().toUpperCase() : "EUR";
@@ -835,18 +780,8 @@ public class PriceImportService {
         return value != null && !value.isBlank() ? value.strip() : null;
     }
 
-    /**
-     * Review remediation (MEDIUM 5): the same "clean 400, not a 500 from Postgres" gap {@link
-     * #normalizeCurrency} closes for currency, for {@code price_catalog.factories.email}
-     * ({@code VARCHAR(200)}) and {@code .unit} ({@code VARCHAR(30)}, both V163). Without this, an
-     * over-length value of either sailed through {@link #blankToNull} untouched and hit a 22001
-     * ("value too long for type character varying(n)") at the {@code INSERT}/{@code UPDATE},
-     * turned into a bare 500 by {@code ApiExceptionHandler.handleDataAccess} — {@code max} must be
-     * kept in sync with the real column width or this either over-rejects or under-protects.
-     * {@code null} (the blank case, already normalized by {@link #blankToNull}) always passes:
-     * blank/absent is legal for both fields (see the class-level Javadoc on {@link
-     * #createFactory}).
-     */
+    /** Review remediation (MEDIUM 5): the same "clean 400, not a 500 from Postgres" gap #normalizeCurrency closes
+     * for currency, for price_catalog.factories.email (VARCHAR(200)) and .unit (VARCHAR(30), both V163). */
     private void requireMaxLength(String value, int max, String fieldLabel) {
         if (value != null && value.length() > max) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -864,8 +799,7 @@ public class PriceImportService {
         return uploadAndCommit(factoryId, originalFilename, fileStream, null, label, uploadedBy);
     }
 
-    /** @param thicknessSidecarStream see {@link #uploadAndStage(long, String, InputStream,
-     *        InputStream, String, long)}'s Javadoc — identical contract. */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     @Transactional
     public UploadCommitResult uploadAndCommit(
         long factoryId, String originalFilename,
@@ -889,10 +823,8 @@ public class PriceImportService {
 
         List<String> errors = new ArrayList<>(result.errors());
         int skipped = result.rows().size() - cr.committed();
-        // "Skipped" now conflates two DIFFERENT reasons a staged row's import_error got set: a
-        // duplicate code within the file (validate()) and a reconciliation mismatch quarantined at
-        // parse time (bulkInsertStaging) — say so rather than blaming duplicates for both, and
-        // point at the quarantine list below for the reconciliation half specifically.
+        // "Skipped" now conflates two DIFFERENT reasons a staged row's import_error got set: a duplicate code within
+        // the file (validate) and a reconciliation mismatch quarantined at parse time.
         if (skipped > 0) {
             errors.add(skipped + " แถวถูกข้ามเพราะไม่ผ่านการตรวจสอบ (รหัสซ้ำในไฟล์ หรือขนาดกับข้อมูลกล่องไม่ตรงกัน — ดูรายการ quarantined)");
         }

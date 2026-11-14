@@ -84,8 +84,8 @@ public class DashboardRepository {
         long overtime = visibility.overtime()
             ? countOvertime(employeeScope)
             : 0;
-        // leaveScope is deliberately NOT employeeScope -- see countLeave below and
-        // DashboardService#leaveScope for why leave review authority does not follow division_id.
+        // leaveScope is deliberately NOT employeeScope -- see countLeave below and DashboardService#leaveScope for why
+        // leave review authority does not follow division_id.
         long leave = visibility.leave()
             ? countLeave(leaveScope)
             : 0;
@@ -521,14 +521,8 @@ public class DashboardRepository {
             return " AND " + employeeAlias + ".division_id = :divisionId";
         }
         if (scope.isOwnOrDirectReports()) {
-            // Own row OR an ACTIVE direct report -- mirrors the /leave LIST predicate
-            // (LeaveRepository's `lr.employee_id = :me OR e.reports_to_employee_id = :me`) plus the
-            // is_active guard countReviewableSubmitted also requires. Deliberately NOT
-            // countReviewableSubmitted's reviewer-only shape (which excludes own) -- see
-            // DashboardService#leaveScope and DashboardQueryScope#ownOrDirectReports for why. The
-            // join that supplies employeeAlias already equates its employee_id to the request row's
-            // own employee_id (see countLeave/countEmployeeScoped below), so employeeAlias.employee_id
-            // here IS the request owner's id, not merely the joined employee's.
+            // Own row OR an ACTIVE direct report -- mirrors the /leave LIST predicate (LeaveRepository's `lr.employee_id =
+            // :me OR e.reports_to_employee_id = :me`) plus the is_active guard countReviewableSubmitted also requires.
             params.addValue("callerId", scope.employeeId());
             return " AND (" + employeeAlias + ".employee_id = :callerId OR ("
                 + employeeAlias + ".reports_to_employee_id = :callerId AND "

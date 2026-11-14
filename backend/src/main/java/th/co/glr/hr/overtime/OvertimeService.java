@@ -31,30 +31,12 @@ public class OvertimeService {
     private static final int ATTENDANCE_LOOKAROUND_HOURS = 16;
     /** A backdated request has to say why it is backdated, not just "OT". */
     private static final int BACKDATED_REASON_MIN_LENGTH = 20;
-    /**
-     * Prefix marking a {@code calculation_note} as the day-type-unverified flag {@link
-     * #resolveDayTypeSubmitNote} wrote at submit time, rather than an ordinary approval-time
-     * calculation note. Used by {@link #preserveDayTypeClaimFlag} to decide whether an
-     * approval-time note must be appended to, rather than allowed to overwrite, whatever is
-     * already stored.
-     *
-     * <p>Kept short deliberately: {@code calculation_note} renders untruncated in a narrow
-     * {@code <small>} table cell ({@code OvertimePanel.jsx}'s "เหตุผล" column), so the full note
-     * (this prefix plus {@link #resolveDayTypeSubmitNote}'s message) targets roughly 80 characters
-     * total rather than reproducing the work date, which the same table row already shows in its
-     * own column.
-     */
+    /** Prefix marking a calculation_note as the day-type-unverified flag #resolveDayTypeSubmitNote wrote at submit
+     * time, rather than an ordinary approval-time calculation note. */
     private static final String DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX = "[รอตรวจสอบ] ";
-    /**
-     * Prefix marking a {@code calculation_note} as the claim-vs-suggestion DISAGREEMENT flag {@link
-     * #resolveDayTypeSubmitNote} writes at submit time when the employee's claim does not match
-     * {@link #suggestDayType} -- a distinct condition from {@link
-     * #DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX} (that one is about the CALENDAR being unloaded; this
-     * one is about the CLAIM disagreeing with an already-resolvable suggestion). Both are
-     * recognised by {@link #isDayTypeFlagNote}, which {@link #preserveDayTypeClaimFlag} uses to
-     * decide whether an approval-time note must be appended to, rather than allowed to overwrite,
-     * whatever is already stored -- see that method's Javadoc.
-     */
+    /** Prefix marking a calculation_note as the claim-vs-suggestion DISAGREEMENT flag #resolveDayTypeSubmitNote
+     * writes at submit time when the employee's claim does not match #suggestDayType -- a distinct condition from
+     * #DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX. */
     private static final String DAY_TYPE_CLAIM_DISAGREEMENT_NOTE_PREFIX = "[ไม่ตรงกับที่ระบบแนะนำ] ";
 
     private final OvertimeRepository overtimeRepository;
@@ -128,17 +110,9 @@ public class OvertimeService {
         return attachSuggestions(requests, effectiveFrom, effectiveTo);
     }
 
-    /**
-     * Attaches {@link OvertimeRequestDto#suggestedDayType} to every row in ONE pass, batch-loading
-     * division/department (via {@link OvertimeRepository#findDivisionIdsByEmployee}/{@link
-     * OvertimeRepository#findDepartmentIdsByEmployee}) and the range's holidays ONCE rather than
-     * once per row -- exactly the pattern {@code AttendanceDailyService#list} already uses for the
-     * identical division/department/holiday triad.
-     *
-     * <p>{@code holidays} is bounded to exactly {@code [fromDate, toDate]}: every row {@link
-     * OvertimeRepository#findRequests} can return already has {@code work_date BETWEEN :fromDate
-     * AND :toDate} (see {@link OvertimeFilter}), so a wider read would only waste the query.
-     */
+    /** Attaches OvertimeRequestDto#suggestedDayType to every row in ONE pass, batch-loading division/department and
+     * the range's holidays ONCE rather than once per row -- exactly the pattern AttendanceDailyService#list
+     * already uses for the identical division/department/holiday triad. */
     private List<OvertimeRequestDto> attachSuggestions(
             List<OvertimeRequestDto> requests, LocalDate fromDate, LocalDate toDate) {
         if (requests.isEmpty()) {
@@ -209,32 +183,26 @@ public class OvertimeService {
         OvertimeRequestDto existing = requireRequest(id);
         OvertimeStatus status = parseStatus(existing.status());
         if (status == OvertimeStatus.SUBMITTED) {
-            // No manager stage exists for this employee (manager-less ฝ่าย, or the requester is a
-            // ผู้จัดการ) -- the CEO is the only approver, and approving takes the request all the
-            // way to APPROVED rather than parking it in a MANAGER_APPROVED nobody would clear.
+            // No manager stage exists for this employee (manager-less ฝ่าย, or the requester is a ผู้จัดการ) -- the CEO is
+            // the only approver, and approving takes the request all the way to APPROVED rather than parking it in a
+            // MANAGER_APPROVED nobody would clear.
             if (!hasManagerStage(existing.employeeId())) {
                 return ceoDirectApprove(id, request, user, actorEmployeeId, existing);
             }
             return managerApprove(id, request, user, actorEmployeeId, existing);
         }
         if (status == OvertimeStatus.MANAGER_APPROVED) {
-            // Freeze point does not move: ceoApprove() below never reads request.dayType() -- see
-            // its own comment and ApproveOvertimeRequest's Javadoc. The manager (or, on the
-            // manager-less route, the CEO acting at the FIRST stage above) already made that call.
+            // Freeze point does not move: ceoApprove() below never reads request.dayType() -- see its own comment and
+            // ApproveOvertimeRequest's Javadoc. The manager (or, on the manager-less route, the CEO acting at the FIRST
+            // stage above) already made that call.
             return ceoApprove(id, request, user, actorEmployeeId, existing);
         }
         throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
     }
 
-    /**
-     * Whether a manager stage exists for this employee at all. Read inside the approving
-     * transaction, so it reflects the org chart as at the moment of the decision.
-     *
-     * <p>Not folded into the {@code UPDATE ... WHERE} guard: reassigning a division's ผู้จัดการ
-     * between this read and the write would, at worst, let the CEO approve in one step something
-     * they were entitled to approve in two a moment earlier. The CEO outranks the manager stage, so
-     * the race costs a review step, never an unauthorized approval.
-     */
+    /** Whether a manager stage exists for this employee at all. The CEO outranks the manager stage, so the race
+     * costs a review step, never an unauthorized approval. Read inside the approving transaction, so it reflects
+     * the org chart as at the moment of the decision. */
     private boolean hasManagerStage(long employeeId) {
         return managerApproverRepository.hasManagerApprover(employeeId);
     }
@@ -248,10 +216,7 @@ public class OvertimeService {
         requireManager(existing.employeeId(), user);
         requirePayrollMonthOpen(existing.workDate());
 
-        // The approver's DECISION -- see ApproveOvertimeRequest's Javadoc. Parsed (and, for a
-        // malformed non-blank value, rejected with 400) BEFORE requireManager's authorization could
-        // ever be bypassed by a caller who is not this request's manager -- requireManager already
-        // ran above, so this line only executes for an actor already authorized to approve.
+        // The approver's DECISION -- see ApproveOvertimeRequest's Javadoc.
         OvertimeDayType approverDayType = parseOvertimeDayType(request == null ? null : request.dayType());
         OvertimeCalculation calculation = calculate(existing, approverDayType);
         BigDecimal salaryBasis = overtimeRepository.findSalaryBasisAsOf(existing.employeeId(), existing.workDate());
@@ -265,14 +230,8 @@ public class OvertimeService {
         return after;
     }
 
-    /**
-     * SUBMITTED straight to APPROVED, for a request with no manager stage.
-     *
-     * <p>Does the manager step's work as well as the CEO's: the attendance-derived calculation and
-     * the salary basis are what {@link #managerApprove} writes in the two-step flow, and payroll
-     * reads them off an APPROVED row whichever route produced it. Skipping them here would approve
-     * an overtime request worth zero minutes at a zero salary basis.
-     */
+    /** SUBMITTED straight to APPROVED, for a request with no manager stage. Skipping them here would approve an
+     * overtime request worth zero minutes at a zero salary basis. */
     private OvertimeRequestDto ceoDirectApprove(
             long id,
             ApproveOvertimeRequest request,
@@ -282,8 +241,8 @@ public class OvertimeService {
         requireCeoForManagerlessRequest(user);
         requirePayrollMonthOpen(existing.workDate());
 
-        // See managerApprove's identical comment -- same authorized-decision treatment for the
-        // manager-less route, which is this class's one-step equivalent of that same stage.
+        // See managerApprove's identical comment -- same authorized-decision treatment for the manager-less route,
+        // which is this class's one-step equivalent of that same stage.
         OvertimeDayType approverDayType = parseOvertimeDayType(request == null ? null : request.dayType());
         OvertimeCalculation calculation = calculate(existing, approverDayType);
         BigDecimal salaryBasis = overtimeRepository.findSalaryBasisAsOf(existing.employeeId(), existing.workDate());
@@ -324,14 +283,8 @@ public class OvertimeService {
         return after;
     }
 
-    /**
-     * Re-derives the attendance day so its overtime minutes and badge match the request's new state.
-     *
-     * <p>Called only where a request enters or leaves {@code APPROVED} — CEO approval and
-     * cancellation. Rejection needs no sync: a request can only be rejected from SUBMITTED or
-     * MANAGER_APPROVED, neither of which ever contributed minutes, so the stored figure is already
-     * correct.
-     */
+    /** Re-derives the attendance day so its overtime minutes and badge match the request's new state. Called only
+     * where a request enters or leaves APPROVED — CEO approval and cancellation. */
     private void syncAttendanceDay(OvertimeRequestDto request) {
         attendanceDailyService.recalculate(
             new EmployeeDay(request.employeeId(), request.workDate()));
@@ -343,8 +296,8 @@ public class OvertimeService {
         OvertimeRequestDto existing = requireRequest(id);
         OvertimeStatus status = parseStatus(existing.status());
         if (status == OvertimeStatus.SUBMITTED) {
-            // Symmetric with approve(): whoever is the only possible reviewer must be able to
-            // refuse as well as accept, or a manager-less request can only ever be approved.
+            // Symmetric with approve(): whoever is the only possible reviewer must be able to refuse as well as accept, or
+            // a manager-less request can only ever be approved.
             if (!hasManagerStage(existing.employeeId())) {
                 return ceoDirectReject(id, request, user, actorEmployeeId, existing);
             }
@@ -363,8 +316,8 @@ public class OvertimeService {
             Long actorEmployeeId,
             OvertimeRequestDto existing) {
         requireCeoForManagerlessRequest(user);
-        // reject() is already guarded on status = 'SUBMITTED' and writes no approver columns, so it
-        // is the correct statement for this path; only the audit action distinguishes the route.
+        // reject() is already guarded on status = 'SUBMITTED' and writes no approver columns, so it is the correct
+        // statement for this path; only the audit action distinguishes the route.
         int updated = overtimeRepository.reject(id, actorEmployeeId, note(request));
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ได้รับการพิจารณาไปแล้ว");
@@ -442,10 +395,9 @@ public class OvertimeService {
             throw new ApiException(HttpStatus.CONFLICT, "ยกเลิกได้เฉพาะคำขอทำงานล่วงเวลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น");
         }
 
-        // A CEO cancelling via ceoActingForManagerlessEmployee is acting in the (nonexistent)
-        // manager's stead, not as the requester -- record the actor as the canceller like an
-        // ordinary manager-cancel would, not null (null is reserved for the employee's own
-        // self-cancel).
+        // A CEO cancelling via ceoActingForManagerlessEmployee is acting in the (nonexistent) manager's stead, not as
+        // the requester -- record the actor as the canceller like an ordinary manager-cancel would, not null (null is
+        // reserved for the employee's own self-cancel).
         int updated = overtimeRepository.cancel(id, actingAsManager ? actorEmployeeId : null, note(request));
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอทำงานล่วงเวลานี้ไม่สามารถยกเลิกได้แล้ว");
@@ -572,12 +524,9 @@ public class OvertimeService {
         return suggestDayType(employeeId, workDate, holiday, divisionId, departmentId);
     }
 
-    /**
-     * Bulk-load-friendly overload of {@link #suggestDayType(long, LocalDate)} -- {@code holiday}
-     * and the division/department ids are supplied by the caller (see {@code attachSuggestions})
-     * rather than looked up per call, so a list of N requests costs 2 batch queries total instead
-     * of up to 2N.
-     */
+    /** Bulk-load-friendly overload of #suggestDayType(long, LocalDate) -- holiday and the division/department ids
+     * are supplied by the caller (see attachSuggestions) rather than looked up per call, so a list of N requests
+     * costs 2 batch queries total instead of up to 2N. */
     private OvertimeDayType suggestDayType(
             long employeeId, LocalDate workDate, boolean holiday, Long divisionId, Long departmentId) {
         if (holiday) {
@@ -632,9 +581,9 @@ public class OvertimeService {
         OvertimeDayType claimedDayType = parseOvertimeDayType(claim);
         StringBuilder note = new StringBuilder();
         if (suggested == OvertimeDayType.WORKDAY && !holidayCalendar.hasHolidaysForYear(workDate.getYear())) {
-            // Short and scannable on purpose -- see DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX's
-            // Javadoc. Deliberately says nothing about what was claimed: the work date itself is
-            // also omitted, since the same table row already shows it in a separate column.
+            // Short and scannable on purpose -- see DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX's Javadoc. Deliberately says
+            // nothing about what was claimed: the work date itself is also omitted, since the same table row already shows
+            // it in a separate column.
             note.append(DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX)
                 .append("ปฏิทินวันหยุดปี ").append(workDate.getYear())
                 .append(" ยังไม่ได้โหลด อัตรา OT อาจไม่ถูกต้อง โปรดตรวจสอบ");
@@ -655,24 +604,9 @@ public class OvertimeService {
         return dayType == OvertimeDayType.HOLIDAY ? "วันหยุด (3x)" : "วันทำงานปกติ (1.5x)";
     }
 
-    /**
-     * Parses {@code value} as an {@link OvertimeDayType}, or {@code null} for "nothing supplied"
-     * (blank/{@code null} input) — same shape as {@link #parseStatus}. Throws 400 for anything
-     * non-blank that isn't a recognised {@link OvertimeDayType} name.
-     *
-     * <p>Pure syntax parsing — it grants no semantic authority by itself. Two call sites share it
-     * with very different trust, and the trust boundary lives at the CALL SITE, not here:
-     *
-     * <ul>
-     *   <li>{@link #resolveDayTypeSubmitNote} uses it on {@code SubmitOvertimeRequest.dayType}, an
-     *       unauthenticated REQUEST that must never reach {@code pay_rate_multiplier};
-     *   <li>{@link #managerApprove}/{@link #ceoDirectApprove} use it on {@code
-     *       ApproveOvertimeRequest.dayType}, from an actor who has already passed THIS request's own
-     *       approve authorization, where the parsed result IS trusted as the pay input.
-     * </ul>
-     *
-     * Do not add a shortcut here that lets one caller's input reach the other's effect.
-     */
+    /** Parses value as an OvertimeDayType, or null for "nothing supplied" (blank/null input) — same shape as
+     * #parseStatus. Do not add a shortcut here that lets one caller's input reach the other's effect. Throws 400
+     * for anything non-blank that isn't a recognised OvertimeDayType name. */
     private OvertimeDayType parseOvertimeDayType(String value) {
         if (value == null || value.isBlank()) {
             return null;
@@ -684,16 +618,8 @@ public class OvertimeService {
         }
     }
 
-    /**
-     * Appends -- never replaces -- a day-type flag {@link #resolveDayTypeSubmitNote} wrote into
-     * {@code calculation_note} at submit time (either the calendar-unverified flag or the
-     * claim-disagreement flag, see {@link #isDayTypeFlagNote}). {@link
-     * OvertimeRepository#managerApprove} / {@link OvertimeRepository#ceoDirectApprove} overwrite
-     * {@code calculation_note} wholesale with whatever this method's caller ({@link #calculate})
-     * returns, so if a flag is present in {@code request.calculationNote()} it must be folded into
-     * the new approval-time text here, or approval silently erases the flag the approver was
-     * supposed to review.
-     */
+    /** Appends -- never replaces -- a day-type flag #resolveDayTypeSubmitNote wrote into calculation_note at submit
+     * time (either the calendar-unverified flag or the claim-disagreement flag, see #isDayTypeFlagNote). */
     private String preserveDayTypeClaimFlag(OvertimeRequestDto request, String approvalCalculationNote) {
         String submitTimeNote = request.calculationNote();
         if (isDayTypeFlagNote(submitTimeNote)) {
@@ -702,14 +628,7 @@ public class OvertimeService {
         return approvalCalculationNote;
     }
 
-    /**
-     * True when {@code note} is a submit-time day-type flag this class wrote -- either the
-     * calendar-unverified flag ({@link #DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX}) or the
-     * claim-disagreement flag ({@link #DAY_TYPE_CLAIM_DISAGREEMENT_NOTE_PREFIX}). {@link
-     * #resolveDayTypeSubmitNote} always puts one of these two prefixes FIRST when it produces any
-     * note at all (even when both conditions fire, the unverified prefix leads), so checking the
-     * start of the string is sufficient to recognise either one.
-     */
+    /** True when note is a submit-time day-type flag this class wrote. */
     private boolean isDayTypeFlagNote(String note) {
         return note != null
             && (note.startsWith(DAY_TYPE_CLAIM_UNVERIFIED_NOTE_PREFIX)
@@ -740,11 +659,9 @@ public class OvertimeService {
         if (!startWorkDate.equals(request.workDate())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ทำงานต้องตรงกับวันที่เริ่มต้นตามแผน");
         }
-        // A2 (OT UAT defect #3): the redesigned submit form offers only two date pickers (วันที่ทำ
-        // OT / วันที่สิ้นสุด), which together can express at most a next-day window -- so the API
-        // must refuse anything longer, or a caller bypassing the form could still submit a
-        // multi-day window the UI can never produce. Checked in BUSINESS_ZONE, matching how
-        // startWorkDate is derived just above.
+        // the redesigned submit form offers only two date pickers (วันที่ทำ OT / วันที่สิ้นสุด), which together can
+        // express at most a next-day window -- so the API must refuse anything longer, or a caller bypassing the form
+        // could still submit a multi-day window the UI can never produce.
         LocalDate endWorkDate = request.plannedEndAt().atZoneSameInstant(BUSINESS_ZONE).toLocalDate();
         if (endWorkDate.isAfter(request.workDate().plusDays(1))) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เวลาสิ้นสุดการทำงานล่วงเวลาต้องอยู่ในวันที่ทำงานหรือวันถัดไปเท่านั้น");
@@ -778,24 +695,8 @@ public class OvertimeService {
         }
     }
 
-    /**
-     * Refuses to touch a work date whose payroll month is closed, for either of two distinct
-     * reasons -- an HR reader needs to tell them apart, so each gets its own Thai message:
-     *
-     * <ol>
-     *   <li><b>Already processed in this system.</b> Payroll derives overtime by {@code
-     *       payroll_month} and a processed period is inserted once, so a request that lands in a
-     *       processed month is approved and then never paid -- silently.
-     *   <li><b>Seed-covered.</b> The month was paid outside the ERP and is already reflected in
-     *       {@code hr.payroll_year_to_date_seed} (PND1 filed) -- see V114. It is never {@code
-     *       PROCESSED} here (a DB trigger refuses that, to avoid double-counting year-to-date
-     *       withholding), so checking {@link OvertimeRepository#payrollMonthProcessed(LocalDate)}
-     *       alone would report such a month as open.
-     * </ol>
-     *
-     * <p>This runs at submit and again at each approval stage, because a request filed before a
-     * month closes -- by either route -- can still be approved after it does.
-     */
+    /** Refuses to touch a work date whose payroll month is closed, for either of two distinct reasons -- an HR
+     * reader needs to tell them apart, so each gets its own Thai message: Already processed in this system. */
     private void requirePayrollMonthOpen(LocalDate workDate) {
         LocalDate payrollMonth = workDate.withDayOfMonth(1);
         if (overtimeRepository.payrollMonthProcessed(payrollMonth)) {
@@ -826,15 +727,13 @@ public class OvertimeService {
         }
     }
 
-    /**
-     * Same role gate as {@link #requireCeo}, different message: on this path there is no manager
-     * stage to have passed, so telling the caller the request is "waiting for a manager" would send
-     * them looking for an approver who does not exist.
-     */
+    /** Same role gate as #requireCeo, different message: on this path there is no manager stage to have passed, so
+     * telling the caller the request is "waiting for a manager" would send them looking for an approver who does
+     * not exist. */
     private void requireCeoForManagerlessRequest(UserPrincipal user) {
         if (user == null || !"ceo".equals(user.role())) {
-            // A3 (OT UAT defect #4): state the outcome positively -- who must review this -- rather
-            // than naming the missing stage. Mirrored verbatim in mockApi.js.
+            // state the outcome positively -- who must review this -- rather than naming the missing stage. Mirrored
+            // verbatim in mockApi.js.
             throw new ApiException(HttpStatus.FORBIDDEN, "คำขอนี้ต้องให้ CEO พิจารณาเท่านั้น");
         }
     }
@@ -880,30 +779,15 @@ public class OvertimeService {
             .orElse(false);
     }
 
-    /**
-     * Single choke point for reading one request back out of the repository -- every mutation
-     * method (submit/approve/reject/cancel) routes its "before"/"after" DTOs through here, which is
-     * what makes it the right place to attach {@link OvertimeRequestDto#suggestedDayType} (see
-     * {@link #withSuggestedDayType}): every DTO this class hands to a controller or an audit record
-     * carries a freshly-computed suggestion, never a stale one.
-     */
+    /** Single choke point for reading one request back out of the repository. */
     private OvertimeRequestDto requireRequest(long id) {
         OvertimeRequestDto request = overtimeRepository.findById(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอทำงานล่วงเวลานี้"));
         return withSuggestedDayType(request, suggestDayType(request.employeeId(), request.workDate()));
     }
 
-    /**
-     * Reconstructs {@code request} with {@link OvertimeRequestDto#suggestedDayType} attached.
-     * {@link OvertimeRepository#mapRequest} cannot compute the suggestion itself -- it is a plain
-     * SQL row mapper with no {@link WorkScheduleResolver} -- so this class attaches it to every DTO
-     * leaving here instead (see {@link #requireRequest}, {@link #attachSuggestions}).
-     *
-     * <p>A plain field-by-field copy: {@link OvertimeRequestDto} is a record with no generated
-     * "with"-style mutator. Keep this in sync if a field is ever added to that record -- the
-     * compiler will refuse to build this method as soon as the constructor arity disagrees, which
-     * is the intended safety net for an otherwise easy field to drop by accident.
-     */
+    /** Reconstructs request with OvertimeRequestDto#suggestedDayType attached. A plain field-by-field copy:
+     * OvertimeRequestDto is a record with no generated "with"-style mutator. */
     private OvertimeRequestDto withSuggestedDayType(OvertimeRequestDto request, OvertimeDayType suggested) {
         return new OvertimeRequestDto(
             request.id(),
@@ -966,10 +850,9 @@ public class OvertimeService {
             managerApproverRepository.findManagerApproverEmployeeIds(request.employeeId());
         boolean goesToCeo = managerApprovers.isEmpty();
 
-        // A3 (OT UAT defect #4): neither message names the missing manager stage anymore -- the
-        // employee/CEO need to know who holds the request, not that a stage is absent. The title
-        // on the CEO notification below already says "รอ CEO อนุมัติ", so the body needs nothing
-        // extra to make that point.
+        // neither message names the missing manager stage anymore -- the employee/CEO need to know who holds the
+        // request, not that a stage is absent. The title on the CEO notification below already says "รอ CEO อนุมัติ",
+        // so the body needs nothing extra to make that point.
         String title = "ส่งคำขอ OT แล้ว";
         String message = "คำขอ OT วันที่ " + request.workDate()
             + (goesToCeo ? " ถูกส่งให้ CEO พิจารณาแล้ว" : " ถูกส่งให้ผู้จัดการตรวจสอบแล้ว");

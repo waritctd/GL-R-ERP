@@ -14,26 +14,9 @@ import org.springframework.dao.DataIntegrityViolationException;
 import th.co.glr.hr.pricingdecision.PricingDecisionRepository.WriteItem;
 import th.co.glr.hr.pricingrequest.UnitBasis;
 
-/**
- * Slice 1, stock lines: the SCHEMA half of the rules (V194) - what the database itself refuses
- * regardless of which service is (or is not) in front of it.
- *
- * <p><b>Every test in this class is a [SCHEMA PIN]: it passes as soon as the V194 scaffold exists,
- * BEFORE any service behaviour is built, by design</b> - the migration is part of the scaffold the
- * task allows. They are still worth having: they are the only thing that catches an implementer who
- * weakens/renames a constraint, and the last two pin the two implementation traps the constraints
- * create for {@code convertInTransitToImport} and {@code startReview}. To mutation-check one, drop
- * the matching constraint/trigger in a scratch DB and expect exactly that test red.
- *
- * <p><b>How "NULL costing link only for a stock line" is modelled (case 17).</b> A CHECK cannot see
- * another table, and a composite FK onto {@code pricing_request_item(id, stock_source)} would make
- * {@code convertInTransitToImport} (which CLEARS {@code stock_source} on the request item) fail
- * whenever a RETURNED decision still references the line. So it is a BEFORE INSERT/UPDATE trigger on
- * {@code pricing_decision_item}: checked when the decision item is written, history left alone (see
- * {@link #convertingAStockLine_afterADecisionItemWasWrittenForIt_isNotBlockedByThatDecisionItem}).
- * Not modelled: the reverse ("a stock line must have NO costing link") - that is enforced by
- * {@code startReview} never creating one, not by the schema.
- */
+/** Slice 1, stock lines: the SCHEMA half of the rules (V194) - what the database itself refuses regardless of
+ * which service is (or is not) in front of it. How "NULL costing link only for a stock line" is modelled (case
+ * 17). */
 class StockLineSchemaIntegrationTest extends AbstractStockLineIntegrationTest {
 
     // ── pricing_request_item: ETA only on an in-transit row ─────────────────────────────────
@@ -120,8 +103,8 @@ class StockLineSchemaIntegrationTest extends AbstractStockLineIntegrationTest {
 
     @Test
     void convertingAStockLine_afterADecisionItemWasWrittenForIt_isNotBlockedByThatDecisionItem() {
-        // A RETURNED decision keeps its items; import may then convert the in-transit line to
-        // import. No FK may make that UPDATE fail, and the old decision item stays editable.
+        // A RETURNED decision keeps its items; import may then convert the in-transit line to import. No FK may make
+        // that UPDATE fail, and the old decision item stays editable.
         long id = persistDraft(stockLine("Stock TR", IN_TRANSIT, 4));
         long decisionId = emptyDecisionFor(id);
         decisionRepository.insertItems(decisionId, List.of(nullLinkItem(itemId(id, "Stock TR"))));

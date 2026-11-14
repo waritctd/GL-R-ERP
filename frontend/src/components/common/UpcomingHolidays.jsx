@@ -14,27 +14,9 @@ function formatHolidayDate(value) {
   }).format(date);
 }
 
-/**
- * Shared "which of the next few days are company holidays" panel -- reads
- * `GET /api/leave/calendar-context` (`LeaveController#calendarContext` / `api.leave.calendarContext`),
- * the ONLY holiday read every employee (not just HR/CEO) may call: `/api/holidays`
- * (`HolidayController`) is HR/CEO-only admin CRUD. `holidays` here is therefore
- * `{ holidayDate, nameTh }` only -- no `source` (BANK/COMPANY is an admin-CRUD distinction,
- * matching `LeaveCalendarHolidayDto`'s own narrower shape, not `HolidayDto`'s).
- *
- * Feature-agnostic by design: `OvertimePanel.jsx` (#ot-holiday-visibility, PR 2) is the first
- * caller; the leave-request composer's own follow-up PR reuses this instead of growing a second
- * copy of the same read. Do not add anything here that only makes sense for one caller.
- *
- * Renders a genuinely distinct state for every outcome -- loading, a real network/HTTP error, and
- * a range that truly has zero holidays all resolve to their OWN visible `EmptyState`, never a
- * blank panel or a spinner nothing ever replaces. That distinction is the entire point of the PR
- * this panel ships in: an employee who sees nothing here cannot tell "the calendar has not loaded
- * yet" from "there really are no holidays coming up" -- the exact ambiguity
- * `OvertimeService#validateDayTypeClaim` (backend, PR 1) exists to stop an OT claim from silently
- * riding on. See that method's decision table for the "loaded-but-empty" vs "never loaded"
- * distinction this panel's copy deliberately echoes.
- */
+/** Shared "which of the next few days are company holidays" panel -- reads `GET /api/leave/calendar-context`,
+ * the ONLY holiday read every employee may call: `/api/holidays` is HR/CEO-only admin CRUD. Do not add
+ * anything here that only makes sense for one caller. */
 export function UpcomingHolidays({ from, to, title = 'วันหยุดที่จะถึง', limit = 8 }) {
   const enabled = Boolean(from && to);
   const query = useQuery({
@@ -60,37 +42,9 @@ export function UpcomingHolidays({ from, to, title = 'วันหยุดท�
       ) : holidays.length === 0 ? (
         <EmptyState icon="calendar" title="ยังไม่มีข้อมูลวันหยุด" description="ไม่มีวันหยุดบริษัทในช่วงที่แสดงนี้" />
       ) : (
-        // A two-column GRID, not a flex row, and each name clamped to one line. Both are about the
-        // same fact: `hr.holiday.name_th` carries the OFFICIAL Bank of Thailand record, not a label.
-        // Production names average 35 characters and reach 149 -- e.g. 12 Aug is
-        // "วันเฉลิมพระชนมพรรษาสมเด็จพระนางเจ้าสิริกิติ์ พระบรมราชินีนาถ พระบรมราชชนนีพันปีหลวง และวันแม่แห่งชาติ".
-        //
-        // Under the previous `flex flex-wrap`, measured at 360px: a 101-char name wrapped onto its
-        // own line starting at x=50 while short names stayed inline at x=132, and row heights ran
-        // 44px / 71px / 127px. The column read as ragged and the panel dwarfed the form it was
-        // meant to support. A fixed date column plus `truncate` makes every row exactly one line
-        // and every name start at the same x, whatever the calendar happens to contain.
-        //
-        // The full record is one hover away via `title` and is never lost -- and HR keeps the
-        // unabridged value in the admin surface (`attendanceCalendar/HolidaysTab.jsx`), which is
-        // the role that actually needs it. An employee picking an OT date needs to know THAT the
-        // day is a holiday, not to read a royal title.
-        //
-        // ── ...BUT THE `title` FALLBACK DOES NOT EXIST ON A PHONE (2026-08-10) ──────────────
-        // The paragraph above is still right at tablet and desktop, where the name column is wide
-        // and a hover recovers the rest. It does not hold at ≤720px, and that is where this panel
-        // is read most. Measured at 390px: the name column is 158px against a 551px name, so 71%
-        // of it is hidden -- the visible stub is "วันเฉลิมพระชนมพรรษาสมเด็จ...", which is the
-        // GENERIC opening of every royal-birthday holiday. Two different holidays render as the
-        // same string, so the row stops answering "which one?" -- and `title` is a hover
-        // affordance, so on touch there is no way to recover it at all. The one-line rule was
-        // trading legibility for tidiness against a fallback that only desktop users have.
-        //
-        // At ≤720px the row therefore stacks: date on its own line, name beneath it across the
-        // full card width. Every name still starts at the same x (that was the real complaint
-        // about the old `flex flex-wrap` -- names starting at x=50 or x=132 depending on length),
-        // and `line-clamp-3` keeps even the 149-char worst case from running away, while showing
-        // roughly six times more of it than `truncate` did. Above 720px nothing changes.
+        // A two-column GRID, not a flex row, and each name clamped to one line. The full record is one hover away via
+        // `title` and is never lost -- and HR keeps the unabridged value in the admin surface
+        // (`attendanceCalendar/HolidaysTab.jsx`), which is the role that actually needs it.
         <ul className="m-0 grid list-none gap-1.5 p-0">
           {holidays.map((holiday) => (
             <li
@@ -98,19 +52,8 @@ export function UpcomingHolidays({ from, to, title = 'วันหยุดท�
               className="grid grid-cols-[7.5rem_1fr] items-baseline gap-x-3 rounded-md border border-border bg-surface px-3 py-2 mobile:grid-cols-1 mobile:items-start mobile:gap-y-0.5"
             >
               <strong className="text-sm tabular-nums text-text">{formatHolidayDate(holiday.holidayDate)}</strong>
-              {/*
-                Clamped by LINES, not by `truncate`. `truncate` is
-                `white-space: nowrap` + ellipsis, so it can only ever show ONE line's worth
-                whatever room the column has — measured at 768px it showed 504px of a 551px name,
-                cutting the last 8%, which is "และวันแม่แห่งชาติ": the only part of that string a
-                reader recognises. Losing 8% is worse than losing 71%, not better, because it looks
-                complete.
-
-                A line clamp uses whatever width is there: at desktop the name column is wide
-                enough for one line and nothing changes, at tablet it takes the second line it
-                needs, and on mobile the row stacks (below) so the name gets the full card width
-                and three lines — enough for the 149-char worst case in production.
-              */}
+              {/* Clamped by LINES, not by `truncate`. Losing 8% is worse than losing 71%, not better, because it looks
+               * complete. */}
               <span
                 className="overflow-hidden text-xs text-text-muted [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] mobile:[-webkit-line-clamp:3]"
                 title={holiday.nameTh}

@@ -4,29 +4,25 @@ import { PRODUCT_MARK, PRODUCT_NAME, PRODUCT_PORTAL_LABEL } from '../../app/prod
 import { cn } from '../../utils/cn.js';
 import { Icon } from '../common/Icon.jsx';
 
-// Shared with .nav-group-header below (Tailwind port of the legacy
-// `.nav-item:focus-visible, .nav-group-header:focus-visible` rule): a solid
-// 2px ring tuned for the dark sidebar surface, see styles.css's removed
-// comment for why --color-teal-focus (not the app-wide indigo ring) is used
-// here.
+// Shared with .nav-group-header below (Tailwind port of the legacy `.nav-item:focus-visible,
+// .nav-group-header:focus-visible` rule): a solid 2px ring tuned for the dark sidebar surface, see
+// styles.css's removed comment for why --color-teal-focus (not the app-wide indigo ring) is used here.
 const SIDEBAR_FOCUS_RING = 'focus-visible:outline-none focus-visible:shadow-[0_0_0_2px_var(--color-sidebar-bg),0_0_0_4px_var(--color-teal-focus)]';
 
 const NAV_GROUPS = [
   { key: 'sales', label: 'งานขาย', helper: 'Sales' },
   { key: 'hr', label: 'บุคคล', helper: 'HR' },
   { key: 'finance', label: 'การเงิน', helper: 'Finance & Payroll' },
-  // Division-manager (non-sales) landing: approvals/roster/team-attendance for
-  // the manager's own division. Distinct from 'self' below, which stays the
-  // manager's own personal self-service (same as every other role).
+  // Division-manager (non-sales) landing: approvals/roster/team-attendance for the manager's own division.
+  // Distinct from 'self' below, which stays the manager's own personal self-service (same as every other role).
   { key: 'team', label: 'ทีมของฉัน', helper: 'Team' },
   { key: 'self', label: 'บุคคลของฉัน', helper: 'Self-service' },
 ];
 
 function isItemActive(item, pathname) {
-  // `exact` opts an item OUT of prefix matching. It exists for the case where a SIBLING nav item
-  // lives at a nested path — /payroll and /payroll/deduction-shortfalls — where prefix matching
-  // would light both up at once and the nav would claim two current locations. The default stays
-  // prefix-matching, which is what keeps /employees lit on /employees/123.
+  // `exact` opts an item OUT of prefix matching. It exists for the case where a SIBLING nav item lives at a
+  // nested path — /payroll and /payroll/deduction-shortfalls — where prefix matching would light both up at once
+  // and the nav would claim two current locations.
   if (item.exact) return pathname === item.path;
   return pathname === item.path
     || pathname.startsWith(`${item.path}/`)
@@ -34,9 +30,9 @@ function isItemActive(item, pathname) {
 }
 
 function NavItemLink({ item, pathname }) {
-  // aria-label REPLACES the accessible name, so the unread badge rendered below
-  // would otherwise stop being announced — a screen-reader user would lose the
-  // count that sighted users can see. Fold it into the label instead.
+  // aria-label REPLACES the accessible name, so the unread badge rendered below would otherwise stop being
+  // announced — a screen-reader user would lose the count that sighted users can see. Fold it into the label
+  // instead.
   const accessibleLabel = [
     item.label,
     item.helper ? `(${item.helper})` : '',
@@ -53,9 +49,8 @@ function NavItemLink({ item, pathname }) {
         'grid min-h-12 w-full min-w-0 grid-cols-[22px_1fr_auto] items-center gap-[11px] rounded-md',
         'border-l-2 border-transparent py-2 pl-2 pr-2.5 text-left text-sidebar-text no-underline',
         SIDEBAR_FOCUS_RING,
-        // `active` is a plain marker token (no CSS of its own left in
-        // styles.css) kept only because AppShell.test.jsx pins the active
-        // route highlight by asserting the link's className contains it.
+        // `active` is a plain marker token (no CSS of its own left in styles.css) kept only because AppShell.test.jsx
+        // pins the active route highlight by asserting the link's className contains it.
         active && 'active border-indigo-ring bg-indigo-ring/15 text-surface',
       )}
       aria-label={accessibleLabel}
@@ -80,8 +75,8 @@ function NavItemLink({ item, pathname }) {
 
 export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
   const { pathname } = useLocation();
-  // Collapsed groups are the exception (default = expanded), so absence from
-  // this set means "open" — nothing to persist for the common case.
+  // Collapsed groups are the exception (default = expanded), so absence from this set means "open" — nothing to
+  // persist for the common case.
   const [collapsedGroups, setCollapsedGroups] = useState(() => new Set());
   const toggleGroup = (key) => setCollapsedGroups((prev) => {
     const next = new Set(prev);
@@ -94,9 +89,8 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
     .map((group) => ({ ...group, items: items.filter((item) => item.group === group.key) }))
     .filter((group) => group.items.length > 0);
 
-  // If navigation lands on an item whose group is collapsed (a notification
-  // deep-link, browser back/forward, the active-route highlight would
-  // otherwise be hidden behind a closed section — force that one group open.
+  // If navigation lands on an item whose group is collapsed (a notification deep-link, browser back/forward, the
+  // active-route highlight would otherwise be hidden behind a closed section — force that one group open.
   useEffect(() => {
     const activeGroup = grouped.find((group) => group.items.some((item) => isItemActive(item, pathname)));
     if (activeGroup && collapsedGroups.has(activeGroup.key)) {
@@ -106,8 +100,8 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
         return next;
       });
     }
-    // Only re-run when the route changes — expanding a group the user just
-    // collapsed by hand (no route change involved) would fight their click.
+    // Only re-run when the route changes — expanding a group the user just collapsed by hand (no route change
+    // involved) would fight their click.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
@@ -116,9 +110,8 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
       id={id}
       ref={drawerRef}
       className={cn(
-        // `sidebar`/`is-mobile-drawer-open` carry no CSS of their own — kept
-        // only because e2e/shared-shell.spec.js selects the drawer via
-        // `.sidebar.is-mobile-drawer-open` and asserts its absence when closed.
+        // `sidebar`/`is-mobile-drawer-open` carry no CSS of their own — kept only because e2e/shared-shell.spec.js
+        // selects the drawer via `.sidebar.is-mobile-drawer-open` and asserts its absence when closed.
         'sidebar',
         'flex w-[260px] flex-none flex-col pt-5 px-[14px] pb-[14px] bg-sidebar-bg text-sidebar-text',
         'nav-drawer:fixed nav-drawer:inset-y-0 nav-drawer:left-0 nav-drawer:right-auto nav-drawer:z-40',
@@ -154,11 +147,9 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
         ))}
 
         {grouped.map((group) => {
-          // No width-specific special case here: at ≤1040px this component
-          // renders inside the off-canvas drawer (see AppShell/styles.css),
-          // which is a full-width surface with room for a real, clickable
-          // group header — same expand/collapse state as desktop >1040px.
-          // There is no longer a persistent tablet rail to special-case.
+          // No width-specific special case here: at ≤1040px this component renders inside the off-canvas drawer (see
+          // AppShell/styles.css), which is a full-width surface with room for a real, clickable group header — same
+          // expand/collapse state as desktop >1040px.
           const isCollapsed = collapsedGroups.has(group.key);
           const panelId = `nav-group-panel-${group.key}`;
           return (
@@ -183,10 +174,9 @@ export function Sidebar({ id, drawerRef, isDrawerOpen = false, items }) {
                   className={cn('ml-auto flex-none transition-transform duration-150 ease-[ease] motion-reduce:transition-none', isCollapsed && '-rotate-90')}
                 />
               </button>
-              {/* Conditional render, not the `hidden` attribute: a sibling
-                  `display` utility would silently out-specificity `[hidden]`
-                  (this bit the first version of this component). Matches how
-                  CollapsibleSection.jsx already unmounts its collapsed body. */}
+              {/* Conditional render, not the `hidden` attribute: a sibling `display` utility would silently out-specificity
+               * `[hidden]` (this bit the first version of this component). Matches how CollapsibleSection.jsx already
+               * unmounts its collapsed body. */}
               {!isCollapsed ? (
                 <div id={panelId} role="group" aria-label={group.label} className="grid gap-1">
                   {group.items.map((item) => (

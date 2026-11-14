@@ -149,8 +149,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
@@ -159,8 +159,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             landedCostCalculator);
 
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         PricingDecisionRepository decisionRepository = new PricingDecisionRepository(jdbc);
@@ -197,17 +197,12 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     private void insertFactory(String name) {
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // THE CENTRAL QUESTION — does ticket_item.qty drift from the pricing-request chain's own
-    // settled quantity?
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // THE CENTRAL QUESTION — does ticket_item.qty drift from the pricing-request chain's own settled quantity?
 
     @Test
     void confirmOrder_reconcilesTicketItemQty_fromTicketCreationStubToFirstPricingRequestQty() {
-        // ticketItem() below creates the ticket_item with qty=1 — the SAME stub value every
-        // prior step's own fixture uses (see ProcurementServiceIntegrationTest#ticketItem).
-        // Nothing in Steps 1-6 keeps this in sync with the pricing request's own requestedQty —
-        // this is the drift confirmed even WITHOUT any revision.
+        // ticketItem() below creates the ticket_item with qty=1 — the SAME stub value every prior step's own fixture
+        // uses (see ProcurementServiceIntegrationTest#ticketItem).
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("10"));
 
         assertThat(ticketItemQty(deal.ticketItemId)).isEqualByComparingTo("1");
@@ -237,8 +232,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         orderConfirmation.confirmOrder(revisedPricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
 
-        // The answer to the central question: ticket_item.qty reflects Y (15), not X (10) and
-        // not the original ticket-creation stub (1).
+        // The answer to the central question: ticket_item.qty reflects Y (15), not X (10) and not the original
+        // ticket-creation stub (1).
         assertThat(ticketItemQty(deal.ticketItemId)).isEqualByComparingTo("15");
     }
 
@@ -273,9 +268,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         assertThatThrownBy(() -> createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("15")))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several
-                // services that can each 409 for their own reasons, and a bare status assertion
-                // would be satisfied by any of them.
+                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several services that can each 409
+                // for their own reasons, and a bare status assertion would be satisfied by any of them.
                 assertThat(e.getMessage()).contains("ลูกค้ายอมรับใบเสนอราคาแล้ว");
             });
 
@@ -285,11 +279,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             .isEqualTo("QUOTATION_ACCEPTED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // reserveStock / completeDelivery compose correctly against the RECONCILED (not stale)
-    // quantity, and the hard constraint — "a Deal must not be marked delivered when open
-    // quantities remain" — holds on a real, reconciled deal.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // reserveStock / completeDelivery compose correctly against the RECONCILED (not stale) quantity, and the hard
+    // constraint — "a Deal must not be marked delivered when open quantities remain" — holds on a real, reconciled
+    // deal.
 
     @Test
     void fullChain_reserveStockAndCompleteDelivery_operateAgainstReconciledQty_notStaleTicketCreationQty() {
@@ -306,13 +298,13 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         DepositNoticeDto issuedNotice = depositNoticeService.issue(draftNotice.id(), salesActor);
         assertThat(issuedNotice.status()).isEqualTo("ISSUED");
         ticketService.confirmDepositPaid(deal.ticketId, accountActor);
-        // Deliberately no issueImportRequest here — a deal fully coverable from stock never
-        // enters the import track at all (see reserveStock's own "no import journey" comment);
-        // reserveStock advances DEPOSIT_RECEIVED straight to DELIVERY_SCHEDULING itself.
+        // Deliberately no issueImportRequest here — a deal fully coverable from stock never enters the import track at
+        // all (see reserveStock's own "no import journey" comment); reserveStock advances DEPOSIT_RECEIVED straight to
+        // DELIVERY_SCHEDULING itself.
 
-        // Declaring the FULL 15 units from stock must be accepted — proving reserveStock reads
-        // qty=15 (the reconciled figure), not the stale ticket-creation stub (1) or the
-        // pre-revision quantity (10), both of which would have rejected "15" as over-declaring.
+        // Declaring the FULL 15 units from stock must be accepted — proving reserveStock reads qty=15 (the reconciled
+        // figure), not the stale ticket-creation stub (1) or the pre-revision quantity (10), both of which would have
+        // rejected "15" as over-declaring.
         TicketDto afterReserve = ticketService.reserveStock(deal.ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(deal.ticketItemId, new BigDecimal("15"), "จองครบจากสต็อก"))),
@@ -334,8 +326,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         // Must NOT have auto-advanced to DELIVERED — 6 of the reconciled 15 units are still open.
         assertThat(afterPartial.summary().salesStage()).isEqualTo(DealStage.DELIVERY_SCHEDULING);
 
-        // completeDelivery ships exactly the remaining 6 (15 - 9), computed against the
-        // RECONCILED qty — and only THEN does the deal reach DELIVERED.
+        // completeDelivery ships exactly the remaining 6 (15 - 9), computed against the RECONCILED qty — and only THEN
+        // does the deal reach DELIVERED.
         TicketDto afterComplete = ticketService.completeDelivery(deal.ticketId,
             new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), salesActor);
         assertThat(afterComplete.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
@@ -350,9 +342,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void completeDelivery_rejectsWhenNothingOutstanding_ratherThanRedeclaringDelivered() {
-        // Wrong-way-round on the OTHER side of the same hard constraint: once every reconciled
-        // unit is already delivered, completeDelivery must refuse (409), not silently succeed a
-        // second time — "must not be marked delivered" also means "cannot be re-marked."
+        // Wrong-way-round on the OTHER side of the same hard constraint: once every reconciled unit is already
+        // delivered, completeDelivery must refuse (409), not silently succeed a second time — "must not be marked
+        // delivered" also means "cannot be re-marked."
         Deal deal = createDealAndDriveFirstPricingRequestToQuotationAccepted(new BigDecimal("4"));
         orderConfirmation.confirmOrder(deal.pricingRequestId,
             new ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor);
@@ -373,10 +365,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Reconciliation safety net: a downward reconciliation that would drop qty below an
-    // already-delivered quantity is refused, not silently applied.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Reconciliation safety net: a downward reconciliation that would drop qty below an already-delivered quantity
+    // is refused, not silently applied.
 
     /**
      * Same structural reason as {@code confirmOrder_thenACustomerChangeRevision_isRefused_...}:
@@ -414,32 +404,25 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             salesActor);
         assertThat(ticketItemQtyDelivered(deal.ticketItemId)).isEqualByComparingTo("6");
 
-        // A revision now asks for only 3 — below the 6 already physically delivered. It is refused
-        // at creation, so the dangerous state is never constructed in the first place.
+        // A revision now asks for only 3 — below the 6 already physically delivered. It is refused at creation, so the
+        // dangerous state is never constructed in the first place.
         assertThatThrownBy(() -> createRevisionAndDriveToQuotationAccepted(deal, new BigDecimal("3")))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several
-                // services that can each 409 for their own reasons, and a bare status assertion
-                // would be satisfied by any of them.
+                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several services that can each 409
+                // for their own reasons, and a bare status assertion would be satisfied by any of them.
                 assertThat(e.getMessage()).contains("ลูกค้ายอมรับใบเสนอราคาแล้ว");
             });
 
-        // ticket_item.qty must be untouched (still 10, not silently dropped to 3 or left corrupt),
-        // and the delivery history must be intact.
+        // ticket_item.qty must be untouched (still 10, not silently dropped to 3 or left corrupt), and the delivery
+        // history must be intact.
         assertThat(ticketItemQty(deal.ticketItemId)).isEqualByComparingTo("10");
         assertThat(ticketItemQtyDelivered(deal.ticketItemId)).isEqualByComparingTo("6");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Bug found on review, fixed in the same step (not deferred): a pricing-request line DROPPED
-    // entirely by a customer-change revision left its ticket_item row's stale qty untouched —
-    // reconcileTicketItems only ever reconciled items still PRESENT in the current revision.
-    // TicketService.completeDelivery/reserveStock iterate ALL of a ticket's items unconditionally,
-    // so a stale row with qty > qtyDelivered created a phantom, permanently-undeliverable open
-    // balance: the deal could NEVER reach FulfilmentStatus.FULLY_DELIVERED. See
-    // TicketRepository#closeOutDroppedChainItems's own Javadoc for the fix.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Bug found on review, fixed in the same step (not deferred): a pricing-request line DROPPED entirely by a
+    // customer-change revision left its ticket_item row's stale qty untouched — reconcileTicketItems only ever
+    // reconciled items still PRESENT in the current revision.
 
     @Test
     void confirmOrder_revisionDropsALineEntirely_closesItsTicketItemSoItStopsBlockingDelivery() {
@@ -456,11 +439,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             new BigDecimal("10"), new BigDecimal("5"));
         assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("1");
 
-        // The revision keeps item A (qty unchanged) but DROPS item B entirely — only A is listed.
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService's resolveItems persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=10 keeps the derived requestedQty byte-identical to the original 10.
+        // The revision keeps item A (qty unchanged) but DROPS item B entirely — only A is listed. roundToFullBox=false
+        // + piecesInput=10 keeps the derived requestedQty byte-identical to the original 10.
         PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
             deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -486,8 +466,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         // A is untouched by the closeout (it's still current).
         assertThat(ticketItemQty(deal.ticketItemAId)).isEqualByComparingTo("10");
 
-        // The deal can now actually reach fully-delivered — proving this isn't just a data-shape
-        // assertion but the real, previously-blocking behavior.
+        // The deal can now actually reach fully-delivered — proving this isn't just a data-shape assertion but the
+        // real, previously-blocking behavior.
         DepositNoticeDto draftNotice = orderConfirmation.createDepositNoticeFromQuotation(revisedPricingRequestId,
             new CreateDepositNoticeFromQuotationRequest(null), salesActor);
         depositNoticeService.issue(draftNotice.id(), salesActor);
@@ -542,10 +522,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             salesActor);
         assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
 
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService's resolveItems persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=10 keeps the derived requestedQty byte-identical to the original 10.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService's resolveItems persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest revisedItemA = new PricingRequestRequests.PricingRequestItemRequest(
             deal.ticketItemAId, deal.catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -562,14 +541,13 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             deal.pricingRequestId, revisionRequest, salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
-                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several
-                // services that can each 409 for their own reasons, and a bare status assertion
-                // would be satisfied by any of them.
+                // Pinned to the QUOTATION_ACCEPTED refusal specifically: this walk touches several services that can each 409
+                // for their own reasons, and a bare status assertion would be satisfied by any of them.
                 assertThat(e.getMessage()).contains("ลูกค้ายอมรับใบเสนอราคาแล้ว");
             });
 
-        // B keeps both its reconciled quantity and its real delivery history — the refusal happens
-        // before anything is written, so there is nothing half-applied to clean up.
+        // B keeps both its reconciled quantity and its real delivery history — the refusal happens before anything is
+        // written, so there is nothing half-applied to clean up.
         assertThat(ticketItemQty(deal.ticketItemBId)).isEqualByComparingTo("5");
         assertThat(ticketItemQtyDelivered(deal.ticketItemBId)).isEqualByComparingTo("2");
     }
@@ -884,24 +862,22 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             "/finance/deals/" + deal.ticketId, accountId);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private record Deal(long ticketId, long ticketItemId, long pricingRequestId, long catalogProductId) {}
 
     private record TwoItemDeal(long ticketId, long ticketItemAId, long ticketItemBId,
                                long pricingRequestId, long catalogProductIdA, long catalogProductIdB) {}
 
-    /** Same shape as {@link #createDealAndDriveFirstPricingRequestToQuotationAccepted}, but with
-     * TWO items on the same factory, so a subsequent revision can drop one of them entirely
-     * (the "dropped line" bug fix tests) while keeping the other. */
+    /** Same shape as #createDealAndDriveFirstPricingRequestToQuotationAccepted, but with TWO items on the same
+     * factory, so a subsequent revision can drop one of them entirely (the "dropped line" bug fix tests) while
+     * keeping the other. */
     private TwoItemDeal createTwoItemDealAndDriveToQuotationAccepted(BigDecimal qtyA, BigDecimal qtyB) {
         return createTwoItemDeal(qtyA, qtyB, true);
     }
 
     /** Stops at QUOTATION_ISSUED, so a revision may still be created — see
-     * {@link #createDealAndDriveFirstPricingRequestToQuotationIssued}. */
+     * #createDealAndDriveFirstPricingRequestToQuotationIssued. */
     private TwoItemDeal createTwoItemDealAndDriveToQuotationIssued(BigDecimal qtyA, BigDecimal qtyB) {
         return createTwoItemDeal(qtyA, qtyB, false);
     }
@@ -926,10 +902,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         long ticketItemAId = created.items().get(0).id();
         long ticketItemBId = created.items().get(1).id();
 
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=qty keeps the derived requestedQty byte-identical to `qtyA`/`qtyB`.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest itemA = new PricingRequestRequests.PricingRequestItemRequest(
             ticketItemAId, catalogProductIdA, null, "SCG", "Tile A", "SCG Tile A",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -957,9 +932,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         return new TwoItemDeal(ticketId, ticketItemAId, ticketItemBId, pricingRequestId, catalogProductIdA, catalogProductIdB);
     }
 
-    /** Same as {@link #driveDraftPricingRequestToQuotationAccepted} but responds to EVERY item on
-     * the (single, same-factory) draft rather than assuming exactly one — both items share
-     * {@link #FACTORY}, so {@code generateDrafts} produces exactly one draft covering both. */
+    /** Same as #driveDraftPricingRequestToQuotationAccepted but responds to EVERY item on the (single,
+     * same-factory) draft rather than assuming exactly one — both items share #FACTORY, so generateDrafts produces
+     * exactly one draft covering both. */
     private void driveTwoItemDraftToQuotationIssued(long pricingRequestId) {
         pricingRequestService.submit(pricingRequestId, salesActor);
         pricingRequestService.pickup(pricingRequestId, importActor);
@@ -981,10 +956,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             responseItems, UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
-        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
-        // computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the (only, here) factory quote is ready — Import no longer creates/recalculates/submits a costing
+        // of its own; the CEO's startReview below computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -1012,10 +986,8 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             "SELECT qty_delivered FROM sales.ticket_item WHERE item_id = :id", Map.of("id", itemId), BigDecimal.class);
     }
 
-    /** Creates a brand-new deal (ticket_item stub qty=1, per every prior step's own fixture
-     * convention) and drives its FIRST pricing request, requesting {@code quantity}, all the way
-     * to QUOTATION_ACCEPTED via the real Steps 1-5 services — deliberately stopping there
-     * (confirmOrder is left to the caller, since some tests need to withhold it). */
+    /** Creates a brand-new deal and drives its FIRST pricing request, requesting quantity, all the way to
+     * QUOTATION_ACCEPTED via the real Steps 1-5 services — deliberately stopping there. */
     private Deal createDealAndDriveFirstPricingRequestToQuotationAccepted(BigDecimal quantity) {
         return createDealAndDriveFirstPricingRequest(quantity, true);
     }
@@ -1050,10 +1022,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         long ticketId = created.summary().id();
         long ticketItemId = created.items().get(0).id();
 
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             ticketItemId, catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -1073,21 +1044,13 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
         return new Deal(ticketId, ticketItemId, pricingRequestId, catalogProductId);
     }
 
-    /**
-     * Creates a customer-change revision on {@code deal}'s ticket item, requesting the NEW
-     * {@code quantity}, and drives IT to QUOTATION_ACCEPTED.
-     *
-     * <p>The parent must be at QUOTATION_ISSUED — see
-     * {@link #createDealAndDriveFirstPricingRequestToQuotationIssued}. Called with a parent at
-     * QUOTATION_ACCEPTED it throws a 409 on the very first call, which is exactly what two tests
-     * in this file now assert (a confirmed or delivered order cannot be revised); it is a
-     * fixture in one direction and the subject under test in the other.
-     */
+    /** Creates a customer-change revision on deal's ticket item, requesting the NEW quantity, and drives IT to
+     * QUOTATION_ACCEPTED. The parent must be at QUOTATION_ISSUED — see
+     * #createDealAndDriveFirstPricingRequestToQuotationIssued. */
     private long createRevisionAndDriveToQuotationAccepted(Deal deal, BigDecimal newQuantity) {
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item resolveItems persists — requestedQty/
-        // requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=newQuantity keeps the derived requestedQty byte-identical to `newQuantity`.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item resolveItems persists — requestedQty/ requestedUnit/requestedUnitBasis are derived
+        // instead.
         PricingRequestRequests.PricingRequestItemRequest revisedItem = new PricingRequestRequests.PricingRequestItemRequest(
             deal.ticketItemId, deal.catalogProductId, null, "SCG", "Tile Inventory", "SCG Tile Inventory",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -1147,10 +1110,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
-        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
-        // computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the (only, here) factory quote is ready — Import no longer creates/recalculates/submits a costing
+        // of its own; the CEO's startReview below computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -1169,10 +1131,9 @@ class InventoryDeliveryFulfilmentIntegrationTest extends AbstractPostgresIntegra
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

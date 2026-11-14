@@ -18,17 +18,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
-/**
- * HTTP-level proof that the boundary enforces "a new deal must state a real ช่องทางดีล":
- * {@code POST /api/tickets} with {@code entryChannel} absent or blank is a 400 and the service is
- * never reached. {@link CreateTicketRequestValidationTest} proves the annotation resolves; THIS
- * proves {@code @Valid} is actually wired on {@code TicketController.create}.
- *
- * <p>Standalone MockMvc (same harness as {@code AttendanceControllerTest}): no Spring context, no
- * DB. The service is a Mockito mock, so the positive cases only prove the request got PAST
- * validation to the service -- what the service then does with the value is
- * {@code TicketServiceTest}'s job.
- */
+/** HTTP-level proof that the boundary enforces "a new deal must state a real ช่องทางดีล": POST /api/tickets
+ * with entryChannel absent or blank is a 400 and the service is never reached. Standalone MockMvc (same
+ * harness as AttendanceControllerTest): no Spring context, no DB. */
 class TicketControllerCreateValidationTest {
 
     private final TicketService ticketService = mock(TicketService.class);

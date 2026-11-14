@@ -27,23 +27,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceReviewRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms the tax-allowance declaration workflow's authorization against the real service and the
- * real SQL — the gap Mockito-based unit tests cannot cover (issue #28), same reasoning as {@code
- * AttendanceScopeIntegrationTest}, which this class is modelled on directly.
- *
- * <p>This is the FIRST time employees gain self-read/self-write on their own tax data (decision #2
- * of the plan) — every case below is written wrong-way-round: can a caller reach data or an action
- * they should not, never "can they reach their own". {@code
- * TaxAllowanceApplySeamIntegrationTest} (sibling class) covers the decision-#2 payroll-isolation
- * guarantee specifically; this class covers who may read, write, approve, reject and apply.
- *
- * <p>Calls the SERVICE directly (no MockMvc / no HTTP filter chain) so this exercises {@link
- * TaxAllowanceDeclarationService}'s OWN {@code requireRole}/{@code requireEmployeeActor} checks —
- * the doubled, belt-and-braces half of the authorization, distinct from the
- * {@code @PreAuthorize} half {@code SecurityAuthorizationIntegrationTest} exercises over the real
- * filter chain.
- */
+/** Confirms the tax-allowance declaration workflow's authorization against the real service and the real SQL —
+ * the gap Mockito-based unit tests cannot cover (issue #28), same reasoning as AttendanceScopeIntegrationTest,
+ * which this class is modelled on directly. */
 import th.co.glr.hr.config.AppProperties;
 
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
@@ -65,54 +51,38 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
         service = new TaxAllowanceDeclarationService(
             repository,
             payrollRepository,
-            // A mock is enough for what THIS class asserts. Three methods now reach EmployeeRepository
-            // -- createOnBehalf, getOwn's ล.ย.01 header prefill, and (2026-08-31) submitOwn's
-            // HR-submission notification text -- and none is exercised for its EmployeeRepository
-            // content here: a Mockito mock answers Optional.empty() for all three, so every getOwn
-            // call below sees an empty header block (exactly the state these declaration-scoping
-            // assertions want) and every submitOwn's HR notification falls back to the declaration's
-            // own (title-less) employeeName/employeeCode rather than NPE-ing. The prefill's own
-            // scoping cannot be tested through a mock at all (CLAUDE.md: a mocked repository passes
-            // while the SQL does something else), so it has its own class against real Postgres --
-            // TaxAllowanceHeaderPrefillIntegrationTest. The HR-submission notification's own SQL fan-
-            // out has its own class the same way -- TaxAllowanceNotificationIntegrationTest.
+            // A mock is enough for what THIS class asserts. The prefill's own scoping cannot be tested through a mock at
+            // all (CLAUDE.md: a mocked repository passes while the SQL does something else), so it has its own class
+            // against real Postgres -- TaxAllowanceHeaderPrefillIntegrationTest.
             mock(EmployeeRepository.class),
             new TaxAllowanceCapCatalog(),
             mock(AuditService.class),
             // Evidence upload/estimate are not exercised by this scope test (that is
-            // TaxAllowanceAttachmentScopeIntegrationTest's and the estimate tests' job) — mocks are
-            // enough here.
+            // TaxAllowanceAttachmentScopeIntegrationTest's and the estimate tests' job) — mocks are enough here.
             mock(FileStorageService.class),
             mock(PayrollService.class),
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
-            // Not under test here — every submitOwn call in this file writes a real
-            // TAX_ALLOWANCE_SUBMITTED row that nothing in this class asserts on.
+            // Not under test here — every submitOwn call in this file writes a real TAX_ALLOWANCE_SUBMITTED row that
+            // nothing in this class asserts on.
             mock(NotificationService.class),
             new AppProperties(), new LorYor01Renderer());
 
         employeeA = seedEmployee("TAD-A");
         employeeB = seedEmployee("TAD-B");
-        // reviewed_by_id/applied_by_id/submitted_by_id are real FKs onto hr.employee — the HR/CEO
-        // actors below need a real backing row, not just an arbitrary UserPrincipal id.
+        // reviewed_by_id/applied_by_id/submitted_by_id are real FKs onto hr.employee — the HR/CEO actors below need a
+        // real backing row, not just an arbitrary UserPrincipal id.
         hrEmployeeId = seedEmployee("TAD-HR");
         ceoEmployeeId = seedEmployee("TAD-CEO");
     }
 
     // --- read/write scoping ---------------------------------------------------------------------
 
-    /**
-     * The rendered ล.ย.01 is at least as sensitive as the evidence behind it — it carries the
-     * employee's 13-digit tax ID, home address and every declared amount on one page. Wrong-way-round
-     * per CLAUDE.md: assert the caller who should NOT reach it gets nothing.
-     */
-    /**
-     * The signed ล.ย.01 is a real precondition, not just a UI courtesy (owner decision #3).
-     *
-     * <p>Wrong-way-round per CLAUDE.md: every other fixture in this package now attaches the form
-     * via {@code approveSigned}, so without THIS test the guard could be deleted and the whole suite
-     * would still pass. The declaration must also survive as PENDING — a refused approval that
-     * quietly advanced the status would be worse than no guard at all.
-     */
+    /** The rendered ล.ย.01 is at least as sensitive as the evidence behind it — it carries the employee's 13-digit
+     * tax ID, home address and every declared amount on one page. Wrong-way-round per CLAUDE.md: assert the caller
+     * who should NOT reach it gets nothing. */
+    /** The signed ล.ย.01 is a real precondition, not just a UI courtesy (owner decision #3). The declaration must
+     * also survive as PENDING — a refused approval that quietly advanced the status would be worse than no guard
+     * at all. */
     @Test
     void hrCannotApproveADeclarationWithNoSignedFormAttached() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
@@ -157,11 +127,9 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
             .as("the owner prints and signs it").isNotEmpty();
     }
 
-    /**
-     * The draft endpoint takes a request body and no employee id, so the only thing stopping it
-     * becoming a read of someone else's ข้อ 13 SSO figure is that it always resolves the ACTOR. There
-     * is no id in the body to assert on — this pins that the rendered document is the caller's own.
-     */
+    /** The draft endpoint takes a request body and no employee id, so the only thing stopping it becoming a read of
+     * someone else's ข้อ 13 SSO figure is that it always resolves the ACTOR. There is no id in the body to assert
+     * on — this pins that the rendered document is the caller's own. */
     @Test
     void theDraftFormAlwaysRendersForTheCallerNotAnyoneElse() {
         byte[] pdf = service.renderLorYor01Draft(
@@ -207,13 +175,9 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
             .isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
     }
 
-    /**
-      * Written against a declaration HR has NOT approved, so the allowance table is genuinely empty
-      * when the employee tries: since approval promotes on its own (whole-year ruling, 2026-08-31),
-      * approving first would leave a row that says nothing about whether the employee's own call was
-      * refused. The role check runs before the APPROVED/applied_at status checks, so a PENDING
-      * declaration still exercises exactly the gate under test.
-      */
+    /** Written against a declaration HR has NOT approved, so the allowance table is genuinely empty when the
+     * employee tries: since approval promotes on its own (whole-year ruling, 2026-08-31), approving first would
+     * leave a row that says nothing about whether the employee's own call was refused. */
     @Test
     void employeeCannotApplyAndTheAllowanceTableStaysEmpty() {
         TaxAllowanceDeclarationDto declaration = submit(employeeA, 2026, new BigDecimal("60000"));
@@ -237,9 +201,9 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
         assertThat(repository.findById(declaration.declarationId()).orElseThrow().status())
             .isEqualTo(TaxAllowanceDeclarationStatus.PENDING);
 
-        // Left PENDING on purpose — same reasoning as employeeCannotApplyAndTheAllowanceTableStaysEmpty
-        // above: HR approving here would write the allowance row itself, so a non-empty table
-        // afterwards would no longer be evidence about what the CEO's call did.
+        // Left PENDING on purpose — same reasoning as employeeCannotApplyAndTheAllowanceTableStaysEmpty above: HR
+        // approving here would write the allowance row itself, so a non-empty table afterwards would no longer be
+        // evidence about what the CEO's call did.
         assertThatThrownBy(() -> service.apply(declaration.declarationId(), ceoActor()))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThat(countEmployeeTaxAllowanceRows(employeeA)).isZero();
@@ -305,11 +269,9 @@ class TaxAllowanceDeclarationScopeIntegrationTest extends AbstractPostgresIntegr
         return new UserPrincipal(ceoEmployeeId, "ceo@glr.co.th", "CEO", "ceo", ceoEmployeeId, true, LocalDate.now(), false, null, false);
     }
 
-    /**
-     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
-     * The failure cases below deliberately do NOT use this — they assert on the role and status
-     * checks, which both run before the signed-form check and so are unaffected by it.
-     */
+    /** Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3). The failure
+     * cases below deliberately do NOT use this — they assert on the role and status checks, which both run before
+     * the signed-form check and so are unaffected by it. */
     private void approveSigned(long declarationId) {
         TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
         service.approve(declarationId, null, hrActor());

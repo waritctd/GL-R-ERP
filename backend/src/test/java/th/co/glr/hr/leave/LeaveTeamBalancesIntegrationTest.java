@@ -17,22 +17,9 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * GET /api/leave/balances/team (manager team-quota summary, 2026-09): real-Postgres coverage of
- * {@link LeaveService#teamBalances}'s scope -- direct reports only, never the whole division, and
- * never a colleague's team.
- *
- * <p>Written wrong-way-round throughout (CLAUDE.md's "Permission changes must ship evidence"): every
- * case here asserts an employee the actor should NOT see is genuinely ABSENT from the response, not
- * merely that the actor's own reports are present. {@link #teamBalances} deliberately reuses {@link
- * LeaveRepository#findEmployeeOptions} -- the SAME method {@link LeaveService#employeeOptions} (GET
- * /api/leave/employees) already calls -- for the scope decision, so this class is also the
- * mutation-check target: dropping the reused call in favour of a second, independently-written
- * predicate is exactly the {@code managesEmployee}-three-restatements defect this codebase has
- * already been bitten by once. See PR body for the mutation-check run (temporarily widen the scope
- * to every active employee, confirm {@link #managerCannotSeeAnotherManagersReport} and only that
- * test goes red, then restore by hand).
- */
+/** GET /api/leave/balances/team (manager team-quota summary, 2026-09): real-Postgres coverage of
+ * LeaveService#teamBalances's scope -- direct reports only, never the whole division, and never a colleague's
+ * team. */
 class LeaveTeamBalancesIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private LeaveService leaveService;
@@ -64,11 +51,9 @@ class LeaveTeamBalancesIntegrationTest extends AbstractPostgresIntegrationTest {
             .allSatisfy(balance -> assertThat(balance.leaveTypeCode()).isNotBlank());
     }
 
-    /**
-     * The test that matters (CLAUDE.md: "wrong-way-round"). Two managers, each with their own
-     * report. Calling as manager1 must return manager1's report and must NOT return manager2's --
-     * asserting absence, not just that manager1's own report is present.
-     */
+    /** The test that matters (CLAUDE.md: "wrong-way-round"). Two managers, each with their own report. Calling as
+     * manager1 must return manager1's report and must NOT return manager2's -- asserting absence, not just that
+     * manager1's own report is present. */
     @Test
     void managerCannotSeeAnotherManagersReport() {
         long manager1 = insertEmployee("TQ-MGR-B1", null, true);

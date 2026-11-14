@@ -30,11 +30,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      // The pipeline enumeration (GET /api/meta/deal-stages). Served here as the SAME canned
-      // payload mockApi serves — data/dealStageCatalog.js, which stageCatalog.test.js pins against
-      // DealStage.java — so this fixture cannot quietly describe a pipeline the backend does not
-      // have. A fixture more populated (or differently shaped) than production is the failure mode
-      // CLAUDE.md names; reusing the guarded one is how that is avoided.
+      // The pipeline enumeration (GET /api/meta/deal-stages). Served here as the SAME canned payload mockApi serves
+      // — data/dealStageCatalog.js, which stageCatalog.test.js pins against DealStage.java — so this fixture cannot
+      // quietly describe a pipeline the backend does not have.
       meta: {
         dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG),
       },
@@ -141,9 +139,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         deleteDraft: vi.fn(),
         download: vi.fn(),
       },
-      // The items table converts a foreign-currency factory price to baht. Mocked because an
-      // unmocked namespace makes every fxRates.list() call throw (api.fxRates is undefined),
-      // which would silently leave the baht line absent rather than exercising it.
+      // The items table converts a foreign-currency factory price to baht. Mocked because an unmocked namespace
+      // makes every fxRates.list() call throw (api.fxRates is undefined), which would silently leave the baht line
+      // absent rather than exercising it.
       fxRates: {
         list: vi.fn(),
       },
@@ -187,9 +185,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 });
 
 const ceoUser = { id: 9, employeeId: 9, name: 'CEO ทดสอบ', role: 'ceo' };
-// Quotation issuing (can.generateQuotation) requires role 'sales' AND
-// isOwner (user.id === summary.createdById) — buildTicket()'s default
-// summary.createdById is 1, so this user matches it out of the box.
+// Quotation issuing (can.generateQuotation) requires role 'sales' AND isOwner (user.id ===
+// summary.createdById) — buildTicket()'s default summary.createdById is 1, so this user matches it out of the
+// box.
 const salesOwnerUser = { id: 1, employeeId: 1, name: 'พนักงานขาย', role: 'sales' };
 const accountUser = { id: 5, employeeId: 5, name: 'ฝ่ายบัญชี', role: 'account' };
 
@@ -299,8 +297,8 @@ async function stickyInputsSettled() {
 describe('TicketDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: no brands. Tests that care about the ใบขอซื้อ block set their own — a default with
-    // brands would make the block appear in unrelated assertions.
+    // Default: no brands. Tests that care about the ใบขอซื้อ block set their own — a default with brands would
+    // make the block appear in unrelated assertions.
     api.importRequests.brands.mockResolvedValue({ brands: [] });
     api.importRequests.pages.mockResolvedValue({ pageCount: 1 });
     api.tickets.get.mockResolvedValue({ ticket: buildTicket() });
@@ -323,16 +321,16 @@ describe('TicketDetailPage', () => {
     api.tickets.listPayments.mockResolvedValue({ items: [] });
     api.tickets.listDeliveries.mockResolvedValue({ items: [] });
     api.tickets.comment.mockResolvedValue({ ticket: buildTicket() });
-    // H1: recordPayment/confirmFinalPayment/confirmCloseReady are re-pointed at the finance routes and
-    // return the finance view `{ deal }`, NOT `{ ticket }` (see hrApi.js `tickets.recordPayment`).
+    // recordPayment/confirmFinalPayment/confirmCloseReady are re-pointed at the finance routes and return the
+    // finance view `{ deal }`, NOT `{ ticket }` (see hrApi.js `tickets.recordPayment`).
     api.tickets.recordPayment.mockResolvedValue({ deal: { id: 701 } });
     api.tickets.reserveStock.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.revision.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
-    // Default: no catalog matches. Tests that exercise the edit-items brand/model autocomplete
-    // set their own — see the "edit-items required fields" describe block below.
+    // Default: no catalog matches. Tests that exercise the edit-items brand/model autocomplete set their own — see
+    // the "edit-items required fields" describe block below.
     api.catalog.prices.mockResolvedValue({ items: [] });
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
@@ -346,9 +344,9 @@ describe('TicketDetailPage', () => {
     // DealDepositPanel mounts for every role that isn't 'import' (sections.depositNotice), so its list
     // query needs a default resolve or every test above would reject.
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
-    // FX rates back the baht companion beside a foreign-currency factory price. Defaults to an
-    // empty table — no rate, so no conversion — which keeps every unrelated test's item rows
-    // showing exactly one figure; the conversion test below supplies real rates itself.
+    // FX rates back the baht companion beside a foreign-currency factory price. Defaults to an empty table — no
+    // rate, so no conversion — which keeps every unrelated test's item rows showing exactly one figure; the
+    // conversion test below supplies real rates itself.
     api.fxRates.list.mockResolvedValue({ fxRates: [] });
   });
 
@@ -576,8 +574,8 @@ describe('TicketDetailPage', () => {
   // ราคาตั้ง (ประมาณการ) estimate column.
   describe('factory price in baht (ราคาตั้ง estimate removed)', () => {
     it('shows the factory price in its own currency with a baht conversion beside it', async () => {
-      // The suite-wide default is an empty rate table (no conversion possible); this test is
-      // specifically about the converted figure, so it supplies the real prod USD rate.
+      // The suite-wide default is an empty rate table (no conversion possible); this test is specifically about the
+      // converted figure, so it supplies the real prod USD rate.
       api.fxRates.list.mockResolvedValue({
         fxRates: [{ currency: 'THB', rateToThb: 1 }, { currency: 'USD', rateToThb: 35.2 }],
       });
@@ -655,10 +653,9 @@ describe('TicketDetailPage', () => {
       // The banner is present...
       expect(screen.getByTestId('items-pricing-chain-banner')).not.toBeNull();
       expect(screen.getByText(/รายการจากใบเสนอราคา/)).not.toBeNull();
-      // ...and the edit affordance (the only entry point to edit mode / the add-item control)
-      // is gone, even though the actions() response advertises EDIT_ITEMS and the role/status/
-      // ownership gate would otherwise allow it — proves the fallback-specific guard, not just
-      // the pre-existing role gate.
+      // ...and the edit affordance (the only entry point to edit mode / the add-item control) is gone, even though
+      // the actions() response advertises EDIT_ITEMS and the role/status/ ownership gate would otherwise allow it —
+      // proves the fallback-specific guard, not just the pre-existing role gate.
       expect(screen.queryByRole('button', { name: 'แก้ไขรายการสินค้า' })).toBeNull();
     });
 
@@ -758,9 +755,8 @@ describe('TicketDetailPage', () => {
 
     const peopleHeading = screen.getByRole('heading', { level: 2, name: /ผู้เกี่ยวข้อง/ });
     const peopleSection = peopleHeading.closest('section');
-    // สมชาย ใจดี is also named in DealStateHeader's "สร้างโดย" line (always on
-    // screen) — assert presence in THIS section specifically, not page-wide
-    // uniqueness.
+    // สมชาย ใจดี is also named in DealStateHeader's "สร้างโดย" line (always on screen) — assert presence in THIS
+    // section specifically, not page-wide uniqueness.
     expect(within(peopleSection).getByText('สมชาย ใจดี')).not.toBeNull();
     expect(within(peopleSection).getByText('ยังไม่มีคำขอราคา')).not.toBeNull();
     // Wrong-way-round: the deal shows no ผู้ติดต่อ (the contact is picked per quotation). FieldRow
@@ -968,21 +964,16 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
     // DealStateHeader's "มูลค่าดีล" chip also renders amountPayable — assert presence, not uniqueness.
     expect(screen.getAllByText('฿1,000.00').length).toBeGreaterThan(0);
-    // Scoped to the "ชำระแล้ว"/"คงเหลือ" summary tiles specifically: by the
-    // time this async assertion runs, the receipt-history row below (also
-    // ฿400.00, same receipt) has settled in too — dom-testing-library's default
-    // text matcher only looks at an element's own direct text children, so
-    // the receipt row's outer wrapper (a bare "฿400.00" text node next to a
-    // sibling <small>) matches the same string as the summary tile. A bare
-    // `getByText('฿400.00')` is therefore genuinely ambiguous on this page, not
-    // a test bug to paper over with getAllByText/greaterThan(0).
+    // Scoped to the "ชำระแล้ว"/"คงเหลือ" summary tiles specifically: by the time this async assertion runs, the
+    // receipt-history row below has settled in too. A bare `getByText('฿400.00')` is therefore genuinely ambiguous
+    // on this page, not a test bug to paper over with getAllByText/greaterThan(0).
     const paidTile = screen.getByText('ชำระแล้ว').parentElement;
     expect(within(paidTile).getByText('฿400.00')).not.toBeNull();
     const outstandingTile = screen.getByText('คงเหลือ').parentElement;
     expect(within(outstandingTile).getByText('฿600.00')).not.toBeNull();
     expect((await screen.findByText(/คุณบัญชี/)).closest('li').textContent).toContain('มัดจำ');
-    // The receipt row itself really did render (not just the tile) — proves
-    // the scoped assertion above didn't accidentally start passing vacuously.
+    // The receipt row itself really did render (not just the tile) — proves the scoped assertion above didn't
+    // accidentally start passing vacuously.
     expect(screen.getByText(/คุณบัญชี/)).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
   });
@@ -1112,9 +1103,8 @@ describe('TicketDetailPage', () => {
     // The single click must NOT call the mutation directly: it only opens the confirm dialog.
     expect(api.tickets.confirmFinalPayment).not.toHaveBeenCalled();
 
-    // The dialog states the real outstanding amount, sourced from the same
-    // summary.amountOutstanding the payment panel's "คงเหลือ" tile renders
-    // (not a separately-computed figure).
+    // The dialog states the real outstanding amount, sourced from the same summary.amountOutstanding the payment
+    // panel's "คงเหลือ" tile renders (not a separately-computed figure).
     expect(await screen.findByText('ยืนยันการรับชำระครบถ้วน')).not.toBeNull();
     expect(screen.getAllByText('฿32,500.00').length).toBeGreaterThan(0);
 
@@ -1123,8 +1113,8 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.confirmFinalPayment).toHaveBeenCalledWith(701));
     // Dialog closes after a successful confirm.
     await waitFor(() => expect(screen.queryByText('ยืนยันการรับชำระครบถ้วน')).toBeNull());
-    // A `{ deal }` response carries no ticket: the page re-reads the ticket instead of writing
-    // `undefined` into the detail cache (which would blank the page).
+    // A `{ deal }` response carries no ticket: the page re-reads the ticket instead of writing `undefined` into
+    // the detail cache (which would blank the page).
     await waitFor(() => expect(api.tickets.get.mock.calls.length).toBeGreaterThanOrEqual(2));
     expect(screen.getAllByText(/PR-2026-0701/).length).toBeGreaterThan(0);
   });
@@ -1179,10 +1169,9 @@ describe('TicketDetailPage', () => {
 
   it('comment posts and invalidates the tickets-list/dashboard/notifications caches', async () => {
     const { queryClient } = renderTicketDetailPage();
-    // Seed cache entries so invalidateQueries has something to mark stale —
-    // an invalidate against a key with no existing entry is a no-op we can't
-    // observe, so this mirrors a real session where those queries are (or
-    // were) mounted elsewhere in the app.
+    // Seed cache entries so invalidateQueries has something to mark stale — an invalidate against a key with no
+    // existing entry is a no-op we can't observe, so this mirrors a real session where those queries are (or were)
+    // mounted elsewhere in the app.
     queryClient.setQueryData(['tickets', 'list', ''], []);
     queryClient.setQueryData(queryKeys.dashboardSummary(), {});
     queryClient.setQueryData(queryKeys.notifications(), []);
@@ -1228,10 +1217,9 @@ describe('TicketDetailPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระเงิน' }));
     const dialog = await screen.findByRole('dialog', { name: 'บันทึกรับชำระเงิน' });
 
-    // buildTicket()'s default amountOutstanding is 0, so openPaymentModal()
-    // leaves the amount field blank (its own suggested-amount logic only
-    // fills in a value when amountOutstanding > 0) — submitting right away
-    // exercises the "empty amount" branch of the guard.
+    // buildTicket()'s default amountOutstanding is 0, so openPaymentModal() leaves the amount field blank (its own
+    // suggested-amount logic only fills in a value when amountOutstanding > 0) — submitting right away exercises
+    // the "empty amount" branch of the guard.
     const amountInput = within(dialog).getByLabelText('จำนวนเงิน');
     expect(amountInput.value).toBe('');
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
@@ -1273,9 +1261,8 @@ describe('TicketDetailPage', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการส่งสินค้า' }));
     const dialog = await screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
 
-    // openDeliveryModal() prefills each line with its remaining qty (here
-    // 10), so the "no line has qty > 0" rule only fires once every line is
-    // explicitly zeroed out — this is the single-item case.
+    // openDeliveryModal() prefills each line with its remaining qty (here 10), so the "no line has qty > 0" rule
+    // only fires once every line is explicitly zeroed out — this is the single-item case.
     const qtyInput = within(dialog).getByLabelText('จำนวนส่งมอบ SCG A1');
     fireEvent.change(qtyInput, { target: { value: '0' } });
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
@@ -1556,9 +1543,9 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(salesOwnerUser);
       await openTab(/สินค้าและราคา/);
       fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
-      // Confirms edit mode has actually mounted before a test starts poking at row fields — the
-      // save button is unique (unlike the per-row ยี่ห้อ label/placeholder, which repeats once per
-      // row and would make findByLabelText/findByPlaceholderText throw on "multiple elements").
+      // Confirms edit mode has actually mounted before a test starts poking at row fields — the save button is
+      // unique (unlike the per-row ยี่ห้อ label/placeholder, which repeats once per row and would make
+      // findByLabelText/findByPlaceholderText throw on "multiple elements").
       await screen.findByRole('button', { name: 'บันทึกการแก้ไข' });
     }
 
@@ -1722,16 +1709,16 @@ describe('TicketDetailPage', () => {
       await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: '', sqmPerPiece: null });
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
 
-      // The real missingQtyMessage output, not a hand-typed copy of it — this is exactly the
-      // string the save handler must produce for row 1 in SQM basis.
+      // The real missingQtyMessage output, not a hand-typed copy of it — this is exactly the string the save handler
+      // must produce for row 1 in SQM basis.
       expect(await screen.findByText(missingQtyMessage('SQM', 1))).toBeTruthy();
       expect(api.tickets.editItems).not.toHaveBeenCalled();
     });
   });
 
   it('revise form: opens as a modal, the confirm button is disabled on a blank reason (pre-existing guard, unchanged), and submits once filled', async () => {
-    // can.revise has no hasAction() gate — only status + role + isOwner — so
-    // no availableActions entry is needed for this button to appear.
+    // can.revise has no hasAction() gate — only status + role + isOwner — so no availableActions entry is needed
+    // for this button to appear.
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
     });
@@ -1744,8 +1731,8 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    // ขอแก้ไข collapsed into the header's "⋯" overflow menu
-    // (ticket-detail IA rebuild Phase 1) — open the menu, then its item.
+    // ขอแก้ไข collapsed into the header's "⋯" overflow menu (ticket-detail IA rebuild Phase 1) — open the menu,
+    // then its item.
     fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /ขอแก้ไข/ }));
 
@@ -1768,8 +1755,8 @@ describe('TicketDetailPage', () => {
     fireEvent.click(confirmButton);
     await waitFor(() => expect(api.tickets.revision).toHaveBeenCalledWith(701, { scope: 'QTY_OR_NOTE', reason: 'ลูกค้าขอเปลี่ยนจำนวน' }));
     expect(screen.queryByRole('alert')).toBeNull();
-    // Success closes the modal (resetActionDrafts sets showReviseForm false),
-    // same as every other action modal on this page.
+    // Success closes the modal (resetActionDrafts sets showReviseForm false), same as every other action modal on
+    // this page.
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ขอแก้ไข' })).toBeNull());
   });
 
@@ -1868,9 +1855,8 @@ describe('TicketDetailPage', () => {
       fireEvent.click(stickyButtons[0]);
 
       expect(await screen.findByRole('dialog')).not.toBeNull();
-      // Still exactly one "สร้างคำขอราคา" trigger even with the modal open —
-      // the modal's own title text uses the same string, so this scopes to
-      // buttons only (not headings) to keep proving "no duplicate button".
+      // Still exactly one "สร้างคำขอราคา" trigger even with the modal open — the modal's own title text uses the
+      // same string, so this scopes to buttons only (not headings) to keep proving "no duplicate button".
       expect(screen.getAllByRole('button', { name: /สร้างคำขอราคา/ })).toHaveLength(1);
     });
   });
@@ -3144,9 +3130,8 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByRole('heading', { level: 2, name: 'การติดตามดีล' })).toBeNull();
       expect(api.tickets.listActivities).not.toHaveBeenCalled();
 
-      // "ประวัติ" tab: the plain audit trail (this ticket's one seeded
-      // SUBMITTED event) still renders — proves the tab isn't a shell with
-      // nothing in it.
+      // "ประวัติ" tab: the plain audit trail (this ticket's one seeded SUBMITTED event) still renders — proves the
+      // tab isn't a shell with nothing in it.
       expect(screen.queryByRole('tab', { name: /ประวัติ/ })).not.toBeNull();
       await openTab(/ประวัติ/);
       expect(await screen.findByRole('heading', { level: 2, name: 'ประวัติดีล' })).not.toBeNull();
@@ -3191,8 +3176,8 @@ describe('TicketDetailPage', () => {
       // Present-but-disabled, not reachable: clicking it must not fire the mutation.
       fireEvent.click(advanceItem);
       expect(api.tickets.updateStage).not.toHaveBeenCalled();
-      // Same reason it's a no-op still applies (list, not just its own gate) — see
-      // the DealStagePanel-side openAdvance() re-check tests for the pure gate.
+      // Same reason it's a no-op still applies (list, not just its own gate) — see the DealStagePanel-side
+      // openAdvance() re-check tests for the pure gate.
     });
 
     it('lists เลื่อนไป enabled with no disabled reason once ready, and it actually advances the stage', async () => {
@@ -3244,15 +3229,14 @@ describe('TicketDetailPage', () => {
       fireEvent.click(await screen.findByTestId('deal-stage-advance'));
       await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledTimes(1));
 
-      // Reopen the menu while the first request is still pending (actionLoading
-      // is true) and click "เลื่อนไป" again.
+      // Reopen the menu while the first request is still pending (actionLoading is true) and click "เลื่อนไป" again.
       fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
       const advanceItemAgain = await screen.findByTestId('deal-stage-advance');
       expect(advanceItemAgain.getAttribute('aria-disabled')).toBe('true');
       fireEvent.click(advanceItemAgain);
 
-      // Still exactly one request — both the item's own disabled state and
-      // openAdvance()'s actionLoading re-check block the second click.
+      // Still exactly one request — both the item's own disabled state and openAdvance()'s actionLoading re-check
+      // block the second click.
       expect(api.tickets.updateStage).toHaveBeenCalledTimes(1);
 
       resolveUpdateStage({ ticket: buildTicket() });
@@ -3306,11 +3290,7 @@ describe('TicketDetailPage', () => {
   });
 
   // Ticket-detail IA rebuild Phase 1: the header overflow menu recomputes
-  // canEditStage/canHoldDeal/canDormantDeal/canLostDeal itself (it can't
-  // read them off DealStagePanel's ref during the parent's own render), so
-  // it must mirror DealStagePanel's full gate — including the IMPLICIT
-  // "only while lifecycle is plain ACTIVE" the panel enforced via which JSX
-  // branch rendered those buttons, not just the bare `hasAction(...)` calls.
+  // canEditStage/canHoldDeal/canDormantDeal/canLostDeal itself, so it must mirror DealStagePanel's full gate.
   describe('header overflow menu / danger zone (ON_HOLD lifecycle regression)', () => {
     it('does not duplicate "พัก dormant" when the deal is ON_HOLD (DealStagePanel already offers it in its own banner)', async () => {
       api.tickets.get.mockResolvedValue({
@@ -3318,11 +3298,9 @@ describe('TicketDetailPage', () => {
       });
       api.tickets.actions.mockResolvedValue({
         currentState: { lifecycle: 'ON_HOLD', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
-        // Mirrors the real service: an ON_HOLD deal's availableActions only
-        // ever include RESUME/MARK_DORMANT (see DealStagePanel's own
-        // ON_HOLD banner) — MARK_DORMANT being present here is exactly what
-        // makes the header menu's naive `hasAction('MARK_DORMANT')` check
-        // insufficient on its own.
+        // Mirrors the real service: an ON_HOLD deal's availableActions only ever include RESUME/MARK_DORMANT (see
+        // DealStagePanel's own ON_HOLD banner) — MARK_DORMANT being present here is exactly what makes the header
+        // menu's naive `hasAction('MARK_DORMANT')` check insufficient on its own.
         availableActions: [{ action: 'RESUME' }, { action: 'MARK_DORMANT' }],
       });
 
@@ -3331,9 +3309,8 @@ describe('TicketDetailPage', () => {
       // DealStagePanel's own ON_HOLD banner renders one "พัก dormant" button.
       expect(await screen.findAllByText('พัก dormant')).toHaveLength(1);
 
-      // The header overflow trigger must not even offer a second copy —
-      // either it doesn't render at all (no other items available either),
-      // or its menu doesn't contain "พัก dormant".
+      // The header overflow trigger must not even offer a second copy — either it doesn't render at all (no other
+      // items available either), or its menu doesn't contain "พัก dormant".
       const trigger = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
       if (trigger) {
         fireEvent.click(trigger);
@@ -3658,9 +3635,8 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
       await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused —
-      // both money sub-reads deny import, so the whole tab is absent (see
-      // ticketDetailTabs.js's "money" gate), not just this one section.
+      // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused — both money sub-reads deny import,
+      // so the whole tab is absent (see ticketDetailTabs.js's "money" gate), not just this one section.
       expect(screen.queryByRole('tab', { name: /การเงิน/ })).toBeNull();
       expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
     });
@@ -3707,8 +3683,8 @@ describe('TicketDetailPage', () => {
         scrolledIds.push(this.id);
       };
       try {
-        // lifecycle ACTIVE is required: resolveWorkState returns no action without it, so the
-        // sticky bar would never render and this test would pass vacuously.
+        // lifecycle ACTIVE is required: resolveWorkState returns no action without it, so the sticky bar would never
+        // render and this test would pass vacuously.
         api.tickets.get.mockResolvedValue({
           ticket: buildTicket({
             summary: {
@@ -3730,10 +3706,9 @@ describe('TicketDetailPage', () => {
 
         fireEvent.click(sticky);
 
-        // The in-page branch ran and landed on the fulfilment panel specifically. Asserting the
-        // scroll target rather than "did not navigate" because a MemoryRouter with no /fulfilment
-        // route renders blank either way, so a negative navigation assertion would itself be
-        // vacuous.
+        // The in-page branch ran and landed on the fulfilment panel specifically. Asserting the scroll target rather
+        // than "did not navigate" because a MemoryRouter with no /fulfilment route renders blank either way, so a
+        // negative navigation assertion would itself be vacuous.
         await waitFor(() => expect(scrolledIds).toContain('deal-fulfilment-panel'));
       } finally {
         Element.prototype.scrollIntoView = original;
@@ -3803,9 +3778,8 @@ describe('TicketDetailPage', () => {
           { target: { value: 'IR69068' } });
         fireEvent.click(section.getByTestId('deal-fulfilment-ir-download-Padana'));
 
-        // requiredBy is null on purpose: it is SALES's field and nothing stores it yet, so the form
-        // prints it blank. If this ever starts passing a value, the panel has begun filling in
-        // another department's field.
+        // requiredBy is null on purpose: it is SALES's field and nothing stores it yet, so the form prints it blank.
+        // If this ever starts passing a value, the panel has begun filling in another department's field.
         await waitFor(() => expect(api.importRequests.download)
           .toHaveBeenCalledWith(701, 'Padana', 'IR69068', null));
       });
@@ -3819,19 +3793,17 @@ describe('TicketDetailPage', () => {
         expect(await section.findByText('2 แผ่น')).toBeTruthy();
       });
 
-      /**
-       * ImportRequestService.IR_ROLES is {import, ceo}, so rendering this for sales would offer a
-       * control that 403s. Sales DOES see the rest of this panel (read-only), which is why the gate
-       * has to be on the block rather than the tab.
-       */
+      /** ImportRequestService.IR_ROLES is {import, ceo}, so rendering this for sales would offer a control that 403s.
+       * Sales DOES see the rest of this panel (read-only), which is why the gate has to be on the block rather than
+       * the tab. */
       it('is absent for sales, which may read this panel but not the document', async () => {
         api.importRequests.brands.mockResolvedValue({ brands: ['Padana'] });
         renderTicketDetailPage(salesOwnerUser);
         const section = await fulfilmentSection();
 
         expect(section.queryByTestId('deal-fulfilment-import-request')).toBeNull();
-        // And the query is not even issued — a 403 in the console for every sales viewer of this
-        // tab would be noise, so `enabled` carries the same gate as the markup.
+        // And the query is not even issued — a 403 in the console for every sales viewer of this tab would be noise,
+        // so `enabled` carries the same gate as the markup.
         expect(api.importRequests.brands).not.toHaveBeenCalled();
       });
     });
@@ -3970,8 +3942,8 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(ceoUser);
       const section = await fulfilmentSection();
 
-      // findAllByText: the from-stock label appears twice on purpose — once as the
-      // fulfilmentStatus badge, once as the single chip of the from-stock path.
+      // findAllByText: the from-stock label appears twice on purpose — once as the fulfilmentStatus badge, once as
+      // the single chip of the from-stock path.
       expect((await section.findAllByText('สินค้าจากสต็อก')).length).toBeGreaterThan(0);
       for (const label of ['ออกใบขอซื้อ (IR) แล้ว', 'สั่งซื้อไปยังผู้ผลิตแล้ว', 'สินค้าอยู่ระหว่างเดินทาง', 'สินค้าถึงโกดังแล้ว']) {
         expect(section.queryByText(label)).toBeNull();
@@ -4183,11 +4155,8 @@ describe('TicketDetailPage', () => {
     // confirms deposit/final-payment receipts against these files, and hiding it would hide the
     // backend fix. A `sales` rep on someone else's deal is still refused: that one 403s for real.
     it('the panel follows canViewDocumentsTab; the "ประวัติ" tab itself never disappears', async () => {
-      // Presence of the panel's own heading is the READ signal — it renders
-      // for all four roles below regardless of `canManageDocuments` (account
-      // reads every document but may not upload one; see the dedicated
-      // "offers NO upload control to account" test for that narrower WRITE
-      // gate, which `#ticket-attachment-file` alone would conflate with here).
+      // Presence of the panel's own heading is the READ signal — it renders for all four roles below regardless of
+      // `canManageDocuments`.
       for (const user of [ceoUser, salesOwnerUser, accountUser,
         { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }]) {
         const { unmount } = renderTicketDetailPage(user);
@@ -4221,8 +4190,8 @@ describe('TicketDetailPage', () => {
       expect(importContainer.querySelector('#ticket-attachment-file')).toBeNull();
       unmountImport();
 
-      // The participant grant is per-instance, for import and sales alike: whoever picked the
-      // deal up (assignedToId) reaches its documents regardless of role.
+      // The participant grant is per-instance, for import and sales alike: whoever picked the deal up (assignedToId)
+      // reaches its documents regardless of role.
       api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { assignedToId: 7 } }) });
       const { container: assigneeContainer, unmount: unmountAssignee } = renderTicketDetailPage(nonAssigneeImport);
       await openTab(/ประวัติ/);
@@ -4271,8 +4240,8 @@ describe('TicketDetailPage', () => {
 
       expect(container.querySelector('#ticket-invoice-file')).toBeNull();
       expect(screen.queryByText('แนบใบกำกับภาษี')).toBeNull();
-      // The generic attachment control (PO / signed docs) must survive — this is a
-      // targeted removal, not a gutting of the panel.
+      // The generic attachment control (PO / signed docs) must survive — this is a targeted removal, not a gutting
+      // of the panel.
       expect(container.querySelector('#ticket-attachment-file')).not.toBeNull();
     });
 
@@ -4309,16 +4278,16 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth
-  // for which tab is open (TicketListPage.jsx's own filter-param convention).
+  // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth for which tab is open
+  // (TicketListPage.jsx's own filter-param convention).
   describe('?tab= URL state', () => {
     it('opens the tab named by ?tab= on first load, when this role may see it', async () => {
       renderTicketDetailPageAtRoute(['/tickets/701?tab=items'], salesOwnerUser);
 
       const itemsTab = await screen.findByRole('tab', { name: /สินค้าและราคา/ });
       await waitFor(() => expect(itemsTab.getAttribute('aria-selected')).toBe('true'));
-      // "ดีล"-only content (วันสำคัญ) is absent — proves the panel actually
-      // swapped, not just that the tab button LOOKS selected.
+      // "ดีล"-only content (วันสำคัญ) is absent — proves the panel actually swapped, not just that the tab button
+      // LOOKS selected.
       expect(screen.queryByRole('heading', { level: 2, name: /วันสำคัญ/ })).toBeNull();
       expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ })).not.toBeNull();
     });
@@ -4366,9 +4335,8 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Ticket-detail IA rebuild Phase 2: the merged กิจกรรม timeline
-  // (DealHistoryPanel — its own test file covers the id-tiebreak sort in
-  // isolation; this proves TicketDetailPage actually feeds it BOTH streams).
+  // Ticket-detail IA rebuild Phase 2: the merged กิจกรรม timeline (DealHistoryPanel — its own test file covers
+  // the id-tiebreak sort in isolation; this proves TicketDetailPage actually feeds it BOTH streams).
   describe('merged กิจกรรม history (events + activities)', () => {
     it('renders both the ticket-events audit trail and the rep activity log in one list, in the ประวัติ tab', async () => {
       api.tickets.get.mockResolvedValue({
@@ -4388,16 +4356,15 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(ceoUser);
       await openTab(/ประวัติ/);
 
-      // The audit event (from `events`) and the rep activity (from
-      // `activities`) both show up, in the same "ประวัติดีล" panel — not two
-      // separate histories any more.
+      // The audit event (from `events`) and the rep activity (from `activities`) both show up, in the same
+      // "ประวัติดีล" panel — not two separate histories any more.
       expect(await screen.findByText('สร้างดีล')).not.toBeNull();
       expect(screen.getByText('โทรติดตามลูกค้า')).not.toBeNull();
     });
   });
 
-  // Finding 6 (both entry points must open the dialog, not download directly): this is one of
-  // the two entry points — DealDocumentRegister.test.jsx pins the other.
+  // Finding 6 (both entry points must open the dialog, not download directly): this is one of the two entry
+  // points — DealDocumentRegister.test.jsx pins the other.
   describe('remaining invoice download entry point (docActions button)', () => {
     afterEach(() => { api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] }); });
     it('clicking "ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ" opens the RemainingInvoiceDialog rather than downloading directly', async () => {
@@ -5553,8 +5520,8 @@ describe('TicketDetailPage', () => {
 
     it('a first correction needs no note: it calls the API, then the route refreshes without a reload', async () => {
       const group = await openSteps([FIRST]);
-      // What the server answers once the channel is corrected: the new ticket, and — on the refetch —
-      // a route with nothing off it.
+      // What the server answers once the channel is corrected: the new ticket, and — on the refetch — a route with
+      // nothing off it.
       api.tickets.setEntryChannel.mockResolvedValue({
         ticket: buildTicket({ summary: { salesStage: 'SPEC_APPROVED', entryChannel: 'DESIGNER_LED', nextFollowUpAt: '2026-07-15' } }),
       });

@@ -18,11 +18,8 @@ import {
   searchCatalog,
 } from './ticketItemFields.jsx';
 
-// fix/ticket-edit-items-required-markers: TicketCreateModal.jsx and TicketDetailPage.jsx both used
-// to carry byte-identical (create) or hand-rolled/drifted (edit) copies of this logic. This file
-// pins the pure pieces that were lifted out — required fields, the qty/qtySqm basis rule, and the
-// catalog-pick/hand-edit row mappings — plus a source-text guard (bottom of the file) that neither
-// surface re-inlines its own copy.
+// fix/ticket-edit-items-required-markers: TicketCreateModal.jsx and TicketDetailPage.jsx both used to carry
+// byte-identical (create) or hand-rolled/drifted (edit) copies of this logic.
 
 describe('REQUIRED_ITEM_FIELD_LABELS', () => {
   it('is exactly brand/model/size — สี and เนื้อผิว are deliberately excluded', () => {
@@ -248,10 +245,7 @@ describe('applyDescriptiveFieldEdit', () => {
   });
 });
 
-// Review round 2 (NIT, cheap-only): a stale-response guard on searchCatalog's fetch — the catalog
-// endpoint has no ordering guarantee, so two searches issued close together can each fire their own
-// fetch, and a slower EARLIER one resolving after a faster LATER one must not overwrite the fresher
-// dropdown results with stale ones.
+// Review round 2: a stale-response guard on searchCatalog's fetch.
 describe('searchCatalog — stale-response guard', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -269,17 +263,17 @@ describe('searchCatalog — stale-response guard', () => {
       .mockImplementationOnce(() => secondResponse);
 
     const onResults = vi.fn();
-    // Two searches spaced further apart than the 280ms debounce, so BOTH actually fire their own
-    // fetch instead of the second's debounce simply cancelling the first's timer.
+    // Two searches spaced further apart than the 280ms debounce, so BOTH actually fire their own fetch instead of
+    // the second's debounce simply cancelling the first's timer.
     searchCatalog('first query', onResults);
     await vi.advanceTimersByTimeAsync(280);
     searchCatalog('second query', onResults);
     await vi.advanceTimersByTimeAsync(280);
     expect(pricesSpy).toHaveBeenCalledTimes(2);
 
-    // Timers are done — the rest is plain promise resolution, deliberately in NETWORK-REORDERED
-    // order: the second (later-issued) request's response arrives first, then the first
-    // (earlier-issued) one arrives last, simulating exactly the reordering that motivated the guard.
+    // Timers are done — the rest is plain promise resolution, deliberately in NETWORK-REORDERED order: the second
+    // (later-issued) request's response arrives first, then the first (earlier-issued) one arrives last,
+    // simulating exactly the reordering that motivated the guard.
     vi.useRealTimers();
     resolveSecond({ items: [{ priceId: 2, factoryName: 'Second (fresh)' }] });
     await Promise.resolve();
@@ -288,20 +282,16 @@ describe('searchCatalog — stale-response guard', () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    // Only the second (latest-issued) request's results may ever reach the callback — the first's
-    // late-arriving response must be dropped, not appended or allowed to overwrite it.
+    // Only the second (latest-issued) request's results may ever reach the callback — the first's late-arriving
+    // response must be dropped, not appended or allowed to overwrite it.
     expect(onResults).toHaveBeenCalledTimes(1);
     expect(onResults).toHaveBeenCalledWith([{ priceId: 2, factoryName: 'Second (fresh)' }]);
   });
 });
 
-// ── shared-module usage pin ─────────────────────────────────────────────────
-// The bug this branch fixes was exactly this: TicketCreateModal.jsx had ItemFieldLabel/ItemField/
-// CatalogOption/CatalogAutocompleteField/REQUIRED_ITEM_FIELD_LABELS, and TicketDetailPage.jsx had
-// none of it — its own hand-rolled fields, no asterisks. A source-text guard is what stops the two
-// surfaces re-diverging the next time someone "quickly" adds a field inline instead of touching the
-// shared module — a behavioural test could not catch that regression (the page would still render;
-// it just would have silently forked the labels/rules again).
+// shared-module usage pin ───────────────────────────────────────────────── The bug this branch fixes was
+// exactly this: TicketCreateModal.jsx had ItemFieldLabel/ItemField/
+// CatalogOption/CatalogAutocompleteField/REQUIRED_ITEM_FIELD_LABELS, and TicketDetailPage.jsx had none of it.
 describe('shared usage pin — TicketCreateModal.jsx and TicketDetailPage.jsx both import from here, neither re-inlines', () => {
   function readSource(relativePath) {
     return readFileSync(resolve(process.cwd(), relativePath), 'utf8');
@@ -314,14 +304,8 @@ describe('shared usage pin — TicketCreateModal.jsx and TicketDetailPage.jsx bo
 
   for (const [name, source] of Object.entries(files)) {
     it(`${name} imports CatalogAutocompleteField, ITEM_FIELD_META and REQUIRED_ITEM_FIELD_LABELS from ticketItemFields.jsx`, () => {
-      // A single import statement is not required — just that these names are pulled in from the
-      // shared module somewhere in the file's import section. ITEM_FIELD_META is required
-      // alongside the components: a reviewer found that importing CatalogAutocompleteField alone
-      // does NOT stop someone hand-typing a wrong literal into its `label` prop (the component
-      // itself accepts any string) — see the rendered-label assertions in
-      // TicketDetailPage.test.jsx's "edit-items required fields" describe block, which is the
-      // guard that actually catches that class of regression; this import check is necessary but
-      // not sufficient on its own.
+      // A single import statement is not required — just that these names are pulled in from the shared module
+      // somewhere in the file's import section.
       const importBlockMatch = source.match(/import\s*\{([\s\S]*?)\}\s*from\s*'\.\/ticketItemFields\.jsx';/);
       expect(importBlockMatch, `${name} has no import from ./ticketItemFields.jsx`).toBeTruthy();
       const importedNames = importBlockMatch[1];
@@ -332,9 +316,9 @@ describe('shared usage pin — TicketCreateModal.jsx and TicketDetailPage.jsx bo
     });
 
     it(`${name} does not locally define/re-declare ItemFieldLabel/ItemField/CatalogOption/CatalogAutocompleteField/REQUIRED_ITEM_FIELD_LABELS`, () => {
-      // function/const/let/class — not just `function`. A local `const ItemFieldLabel = (...) =>`
-      // or `const REQUIRED_ITEM_FIELD_LABELS = {...}` re-inlines exactly as effectively as a
-      // `function` declaration would, and the earlier version of this guard only caught the latter.
+      // function/const/let/class — not just `function`. A local `const ItemFieldLabel = (...) =>` or `const
+      // REQUIRED_ITEM_FIELD_LABELS = {...}` re-inlines exactly as effectively as a `function` declaration would, and
+      // the earlier version of this guard only caught the latter.
       const localRedeclaration = /(?:function|const|let|class)\s+(ItemFieldLabel|ItemField|CatalogOption|CatalogAutocompleteField|REQUIRED_ITEM_FIELD_LABELS)\b/;
       const match = source.match(localRedeclaration);
       expect(match, `${name} re-declares ${match?.[1]} locally`).toBeNull();

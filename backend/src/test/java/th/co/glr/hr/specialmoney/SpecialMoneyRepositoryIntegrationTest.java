@@ -14,11 +14,9 @@ import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.DataIntegrityViolationException;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage for the dynamic SQL and the DB-enforced invariants a Mockito unit test
- * cannot reach: effective-dated policy lookups, calendar-year usage aggregation, the once-per-
- * lifetime race guard, and the approved-must-have-payroll-month constraint.
- */
+/** Real-Postgres coverage for the dynamic SQL and the DB-enforced invariants a Mockito unit test cannot reach:
+ * effective-dated policy lookups, calendar-year usage aggregation, the once-per- lifetime race guard, and the
+ * approved-must-have-payroll-month constraint. */
 class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private SpecialMoneyRepository repository;
 
@@ -29,9 +27,9 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
 
     @Test
     void findPolicyAmountsReadsBothAmountAndTextValueForTheEffectiveDatedRows() {
-        // A made-up request_type (special_money_policy.request_type carries no FK/check to
-        // SpecialMoneyType) so this test's rows never collide with the real V66 seed data.
-        // A superseded row (effective_to set) must not be picked up.
+        // A made-up request_type (special_money_policy.request_type carries no FK/check to SpecialMoneyType) so this
+        // test's rows never collide with the real V66 seed data. A superseded row (effective_to set) must not be
+        // picked up.
         jdbc.update("""
             INSERT INTO hr.special_money_policy (request_type, policy_key, amount, effective_from, effective_to, version)
             VALUES ('TEST_POLICY_TYPE', 'cap', 4000, DATE '2015-01-01', DATE '2017-12-31', 1)
@@ -52,30 +50,23 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(amounts.version()).isEqualTo(2);
     }
 
-    /**
-     * P0 fix (fix/welfare-cap-year-bypass): {@code findUsage}'s year filter used to be {@code
-     * EXTRACT(YEAR FROM event_date)} for both the amount and the count query -- {@code event_date}
-     * is employee-supplied and {@code SubmitSpecialMoneyHttpRequest} places no bound on it, so an
-     * annual cap keyed on it could always be defeated by filing against a year nothing had been
-     * approved against yet. This fixture is deliberately adversarial about it: every row's {@code
-     * event_date} is set to a year that would give the OPPOSITE answer under the old
-     * event_date-keyed query, so a regression back to keying on event_date fails this test instead
-     * of passing it by coincidence.
-     */
+    /** findUsage's year filter used to be EXTRACT for both the amount and the count query -- event_date is
+     * employee-supplied and SubmitSpecialMoneyHttpRequest places no bound on it, so an annual cap keyed on it
+     * could always be defeated by filing against a year nothing had been approved against yet. */
     @Test
     void findUsageKeysTheAmountSumOnPayrollMonthAndTheCountOnRequestedAt() {
         long employeeId = insertEmployee("SMR-USG");
-        // APPROVED, payroll_month in 2026 (so it belongs to 2026's cap under the fix) but
-        // event_date claims 2099 -- must still be COUNTED for year 2026.
+        // APPROVED, payroll_month in 2026 (so it belongs to 2026's cap under the fix) but event_date claims 2099 --
+        // must still be COUNTED for year 2026.
         insertRequest(employeeId, "MEDICAL", LocalDate.of(2099, 1, 1), "1500", "APPROVED", "1500",
             LocalDate.of(2026, 4, 1), OffsetDateTime.parse("2026-03-15T10:00:00+07:00"));
-        // APPROVED, payroll_month in 2025 (belongs to 2025's cap) but event_date claims 2026 -- must
-        // be EXCLUDED from 2026, even though the old, buggy query would have included it.
+        // APPROVED, payroll_month in 2025 (belongs to 2025's cap) but event_date claims 2026 -- must be EXCLUDED from
+        // 2026, even though the old, buggy query would have included it.
         insertRequest(employeeId, "MEDICAL", LocalDate.of(2026, 12, 1), "800", "APPROVED", "800",
             LocalDate.of(2025, 12, 1), OffsetDateTime.parse("2025-12-20T10:00:00+07:00"));
-        // SUBMITTED (no payroll_month yet), requested_at in 2026, event_date claims 2099 -- must be
-        // excluded from the APPROVED amount sum (not yet approved) but counted in the in-flight
-        // per-year count for 2026, keyed on requested_at.
+        // SUBMITTED (no payroll_month yet), requested_at in 2026, event_date claims 2099 -- must be excluded from the
+        // APPROVED amount sum (not yet approved) but counted in the in-flight per-year count for 2026, keyed on
+        // requested_at.
         insertRequest(employeeId, "MEDICAL", LocalDate.of(2099, 6, 1), "500", "SUBMITTED", null, null,
             OffsetDateTime.parse("2026-06-01T09:00:00+07:00"));
 
@@ -83,12 +74,12 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
 
         // Only the first row: payroll_month 2026, regardless of its 2099 event_date.
         assertThat(usage.approvedAmountThisYear(SpecialMoneyType.MEDICAL)).isEqualByComparingTo("1500");
-        // Lifetime count is NOT year-scoped by design (it backs the once-per-lifetime AID gate,
-        // which must see every prior claim regardless of year): all 3 rows count.
+        // Lifetime count is NOT year-scoped by design (it backs the once-per-lifetime AID gate, which must see every
+        // prior claim regardless of year): all 3 rows count.
         assertThat(usage.activeCountLifetime(SpecialMoneyType.MEDICAL)).isEqualTo(3);
-        // requested_at in 2026: rows 1 and 3 (row 2's requested_at is 2025). Deliberately different
-        // from both the lifetime count (3) and the approved-only amount-bearing count (1), so an
-        // implementation that keys this off the wrong column/map fails here rather than by luck.
+        // requested_at in 2026: rows 1 and 3 (row 2's requested_at is 2025). Deliberately different from both the
+        // lifetime count (3) and the approved-only amount-bearing count (1), so an implementation that keys this off
+        // the wrong column/map fails here rather than by luck.
         assertThat(usage.activeCountThisYear(SpecialMoneyType.MEDICAL)).isEqualTo(2);
     }
 
@@ -129,12 +120,9 @@ class SpecialMoneyRepositoryIntegrationTest extends AbstractPostgresIntegrationT
         insertRequest(employeeId, requestType, eventDate, requestedAmount, status, approvedAmount, payrollMonth, null);
     }
 
-    /**
-     * {@code requestedAt} lets a test pin the one column {@code findUsage}'s in-flight count now
-     * keys on ({@code EXTRACT(YEAR FROM requested_at AT TIME ZONE 'Asia/Bangkok')}) to a
-     * deterministic value instead of whatever {@code DEFAULT now()} produces at test-run time --
-     * required to exercise year boundaries on demand. {@code null} keeps the column's own default.
-     */
+    /** requestedAt lets a test pin the one column findUsage's in-flight count now keys on (EXTRACT(YEAR FROM
+     * requested_at AT TIME ZONE 'Asia/Bangkok')) to a deterministic value instead of whatever DEFAULT now()
+     * produces at test-run time -- required to exercise year boundaries on demand. */
     private void insertRequest(
             long employeeId,
             String requestType,

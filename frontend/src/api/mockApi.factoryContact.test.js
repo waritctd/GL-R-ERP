@@ -1,11 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// CR-1 (GLA-167) mock coverage: the factory-contact step ("ติดต่อโรงงานแล้ว", replaces send), the
-// locked currency/price unit, and the lead-time change flow. Mirrors FactoryQuoteService#markContacted,
-// #receive and LeadTimeChangeService. This proves the mock's PLUMBING and DTO shapes only — authz in
-// mockApi is not authoritative (see CLAUDE.md "Mock API contract"); the real checks are the Java
-// integration tests for those two services.
+// CR-1 (GLA-167) mock coverage: the factory-contact step ("ติดต่อโรงงานแล้ว", replaces send), the locked
+// currency/price unit, and the lead-time change flow. Mirrors FactoryQuoteService#markContacted, #receive and
+// LeadTimeChangeService.
 
 const todayBangkok = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' }).format(new Date());
 const tomorrowBangkok = () => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Bangkok' })

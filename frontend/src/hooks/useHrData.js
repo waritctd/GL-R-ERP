@@ -31,8 +31,8 @@ export function useHrData({ user, showToast }) {
     enabled: canViewEmployees,
   });
 
-  // Users without canViewEmployees never run the list query; their "employees"
-  // is derived from their own record, preserving the pre-Query behavior.
+  // Users without canViewEmployees never run the list query; their "employees" is derived from their own record,
+  // preserving the pre-Query behavior.
   const derivedEmployees = useMemo(
     () => (currentEmployee ? [currentEmployee] : []),
     [currentEmployee],
@@ -55,20 +55,12 @@ export function useHrData({ user, showToast }) {
   });
   const dashboardSummary = dashboardSummaryQuery.data ?? null;
 
-  // Tax-allowance profile summary (issue #387 screen 4) — fetched once here and passed down as a
-  // prop, matching `profileRequests`'s own pattern, rather than ProfilePage fetching it itself.
+  // Tax-allowance profile summary (issue #387 screen 4) — fetched once here and passed down as a prop, matching
+  // `profileRequests`'s own pattern, rather than ProfilePage fetching it itself.
   const currentTaxYear = new Date().getFullYear();
-  // ⚠️ Caches the WHOLE `/declarations/me` envelope, not `.items`. `TaxAllowancePage` registers a
-  // query under this SAME key, and React Query keeps one cache entry per key — whichever queryFn
-  // resolves first is the shape BOTH consumers then read. This hook mounts at the shell, so it wins
-  // the race on every visit to /tax-allowance. Returning a bare array here while that page expected
-  // `{ items, headerPrefill }` made the page read `undefined.items`, conclude the year had never
-  // been filed, and offer an employee with a live declaration a second filing that 409s.
-  //
-  // This is the same defect the `taxAllowanceEvidenceQuery` comment below already records, in the
-  // same file, one query later. Two queryFns under one key must return the same shape — and the
-  // shape is now the envelope, because `headerPrefill` rides on it (owner decision #4).
-  // `useHrData.test.js` pins the agreement.
+  // ⚠️ Caches the WHOLE `/declarations/me` envelope, not `.items`. Returning a bare array here while that page
+  // expected `{ items, headerPrefill }` made the page read `undefined.items`, conclude the year had never been
+  // filed, and offer an employee with a live declaration a second filing that 409s.
   const taxAllowanceDeclarationsQuery = useQuery({
     queryKey: queryKeys.taxAllowanceDeclarationsMe(currentTaxYear),
     queryFn: () => api.payroll.getMyTaxAllowanceDeclarations(currentTaxYear),
@@ -78,12 +70,9 @@ export function useHrData({ user, showToast }) {
     () => selectCurrentDeclaration(taxAllowanceDeclarationsQuery.data?.items ?? []),
     [taxAllowanceDeclarationsQuery.data],
   );
-  // Same queryKey/queryFn shape (an array of attachment rows) as TaxAllowanceEvidencePanel.jsx's
-  // own attachments query for this declaration — sharing one cache entry, not colliding under the
-  // same key with a differently-shaped one. This query used to return a bare count instead of the
-  // array, which crashed TaxAllowanceEvidencePanel's `(attachmentsQuery.data ?? []).filter(...)`
-  // with "filter is not a function" the moment both queries were active for the same declaration
-  // (e.g. viewing /tax-allowance right after this hook had already populated the profile summary).
+  // Same queryKey/queryFn shape (an array of attachment rows) as TaxAllowanceEvidencePanel.jsx's own attachments
+  // query for this declaration — sharing one cache entry, not colliding under the same key with a
+  // differently-shaped one.
   const taxAllowanceEvidenceQuery = useQuery({
     queryKey: queryKeys.taxAllowanceAttachments(currentTaxAllowanceDeclaration?.declarationId ?? null),
     queryFn: () => api.payroll
@@ -96,8 +85,8 @@ export function useHrData({ user, showToast }) {
     declaredTotal: declaredAllowanceTotal(currentTaxAllowanceDeclaration),
     evidenceCount: (taxAllowanceEvidenceQuery.data ?? []).filter((item) => !item.deletedAt).length,
     expiresOn: currentTaxAllowanceDeclaration?.expiresOn ?? null,
-    // The row itself, so a landing page can sort a ล.ย.01 entry into its "คำขอของฉัน" feed by
-    // `submittedAt` alongside leave/OT/profile requests. Null when nothing has been filed.
+    // The row itself, so a landing page can sort a ล.ย.01 entry into its "คำขอของฉัน" feed by `submittedAt`
+    // alongside leave/OT/profile requests. Null when nothing has been filed.
     declaration: currentTaxAllowanceDeclaration,
   }), [currentTaxAllowanceDeclaration, taxAllowanceEvidenceQuery.data]);
 
@@ -139,17 +128,8 @@ export function useHrData({ user, showToast }) {
   });
 
   function resetData() {
-    // Drop the WHOLE cache on logout, not an enumerated list of HR keys.
-    //
-    // Query keys are scoped by entity id, never by user, so any cached response
-    // computed for the previous session is served verbatim to the next one. The
-    // enumerated version of this function missed every sales/ticket key, which
-    // meant a CEO logging in after an accountant was shown the ACCOUNTANT's
-    // availableActions for the same deal — role-dependent data leaking across a
-    // logout, and the wrong workflow buttons rendered.
-    //
-    // Keep this a blanket clear: an allowlist has to be updated every time a
-    // query is added, and forgetting is silent.
+    // Drop the WHOLE cache on logout, not an enumerated list of HR keys. Query keys are scoped by entity id, never
+    // by user, so any cached response computed for the previous session is served verbatim to the next one.
     queryClient.clear();
   }
 

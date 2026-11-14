@@ -12,11 +12,9 @@ public class CommissionCalculator {
     private static final BigDecimal VAT_DIVISOR = new BigDecimal("1.07");
     private static final BigDecimal ONE_HUNDRED = new BigDecimal("100");
     private static final int MONEY_SCALE = 2;
-    // V148 (per-item stock-commission weighting): storage precision for the frozen blended
-    // weight -- see sales.commission_record.effective_weight_multiplier's migration comment
-    // (NUMERIC(9,6)) for why a fractional weight needs more than 2dp. Rounded ONLY at the very
-    // end of itemDerivedWeight, matching this class's existing "round once, at the final figure"
-    // discipline (monthlyTierBase/progressiveCommission never round an intermediate).
+    // V148 (per-item stock-commission weighting): storage precision for the frozen blended weight -- see
+    // sales.commission_record.effective_weight_multiplier's migration comment (NUMERIC(9,6)) for why a fractional
+    // weight needs more than 2dp.
     private static final int ITEM_WEIGHT_SCALE = 6;
     private static final BigDecimal ONE = BigDecimal.ONE;
     private static final BigDecimal THREE = new BigDecimal("3");
@@ -26,10 +24,8 @@ public class CommissionCalculator {
     // 8-decimal rate scale without ever being the limiting precision.
     private static final int TIER_BASE_SCALE = 10;
 
-    // Commission redesign Slice A1: real policy Excel pays nothing when a rep's monthly
-    // commissionable base is below this floor, even though tier 1 technically starts at 0.
-    // Tier bounds/rates below the floor are unchanged — a base at or above the floor is taxed
-    // exactly as before, from THB 0 up through the tiers.
+    // Commission redesign Slice A1: real policy Excel pays nothing when a rep's monthly commissionable base is
+    // below this floor, even though tier 1 technically starts at 0.
     private static final BigDecimal MONTHLY_FLOOR = new BigDecimal("50000");
 
     /**
@@ -184,15 +180,9 @@ public class CommissionCalculator {
         return blocks.multiply(config.bonusPerBlock()).setScale(MONEY_SCALE, RoundingMode.HALF_UP);
     }
 
-    /**
-     * Manager TEAM OVERRIDE (V199): {@code (companyBase - thresholdBase) x ratePercent / 100},
-     * HALF_UP to 2dp, where {@code companyBase} is the company-wide, UNWEIGHTED ex-VAT receipts
-     * ({@link #monthlyTierBase} of {@link CommissionRepository#sumCompanyActualReceived}) at full
-     * precision -- rounded once, at the final figure, like every other limb here. Mirrors the
-     * accountant's workbook (sheet อัตราค่าคอม K2): (ยอดรับเงินไม่รวม Vat - 3 ล้าน) x 0.075%.
-     * ZERO at 2dp when {@code config} is null or disabled, the base is null/non-positive, or the
-     * base is at or below the threshold.
-     */
+    /** Manager TEAM OVERRIDE: x ratePercent / 100, HALF_UP to 2dp, where companyBase is the company-wide,
+     * UNWEIGHTED ex-VAT receipts at full precision -- rounded once, at the final figure, like every other limb
+     * here. */
     public BigDecimal teamOverride(BigDecimal companyCommissionableBase, TeamOverrideConfig config) {
         BigDecimal zero = BigDecimal.ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         if (config == null || !config.enabled()
@@ -331,14 +321,9 @@ public class CommissionCalculator {
         return Optional.of(clamped);
     }
 
-    /**
-     * {@code approvedPrice} is nullable on {@code sales.ticket_item} (the column has always
-     * allowed NULL); {@code proposedPrice} is the chosen fallback for THIS task ("decide and
-     * document the fallback" per the brief) -- an item that reached stock declaration without ever
-     * having a price approved still usually has the import-proposed one. Both null: price 0, so
-     * the item contributes nothing to either the numerator or denominator of {@link
-     * #itemDerivedWeight}.
-     */
+    /** approvedPrice is nullable on sales.ticket_item; proposedPrice is the chosen fallback for THIS task -- an
+     * item that reached stock declaration without ever having a price approved still usually has the
+     * import-proposed one. */
     private BigDecimal itemPrice(ItemStockWeightInput item) {
         if (item.approvedPrice() != null) {
             return item.approvedPrice();
@@ -349,20 +334,9 @@ public class CommissionCalculator {
         return BigDecimal.ZERO;
     }
 
-    /**
-     * Minimal, decoupled input shape for {@link #itemDerivedWeight} -- deliberately NOT {@code
-     * th.co.glr.hr.ticket.TicketItemDto} (a 34-field record from a different package), so this
-     * calculator stays dependency-free and trivially unit-testable with plain constructed values.
-     * {@code qty} is ALWAYS the piece-count quantity, regardless of {@code unitBasis} ('PIECE' vs
-     * 'SQM') -- deliberately never {@code qtySqm} -- the same convention {@link
-     * CommissionRepository#sumActiveStockActualReceived}'s own {@code
-     * SUM(qty_from_stock)/SUM(qty)} and the V54 {@code qty_from_stock <= qty} CHECK already use
-     * for this exact ratio; this does not invent a second, diverging quantity convention for the
-     * same table.
-     *
-     * @param weightMultiplier the item's own 1/2/3 stock-commission weight
-     *                         ({@code sales.ticket_item.weight_multiplier}, V148)
-     */
+    /** Minimal, decoupled input shape for #itemDerivedWeight -- deliberately NOT th.co.glr.hr.ticket.TicketItemDto
+     * (a 34-field record from a different package), so this calculator stays dependency-free and trivially
+     * unit-testable with plain constructed values. */
     public record ItemStockWeightInput(
         BigDecimal qty,
         BigDecimal qtyFromStock,

@@ -14,11 +14,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.customerquotation.DiscountApprovalDtos.DiscountApprovalDto;
 import th.co.glr.hr.customerquotation.DiscountApprovalRequests.RejectDiscountApprovalRequest;
 
-/**
- * Endpoints for the CEO discount-approval workflow (Phase 2). Mirrors {@code
- * CustomerQuotationController}'s own envelope convention ({@code {items: [...]}} /
- * {@code {approval: ...}}) so the frontend's {@code apiRequest} unwrapping stays uniform.
- */
+/** Endpoints for the CEO discount-approval workflow (Phase 2). Mirrors CustomerQuotationController's own
+ * envelope convention ({items: [...]} / {approval: ...}) so the frontend's apiRequest unwrapping stays
+ * uniform. */
 @RestController
 @RequestMapping("/api")
 public class DiscountApprovalController {

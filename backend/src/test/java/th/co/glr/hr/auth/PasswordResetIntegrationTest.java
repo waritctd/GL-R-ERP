@@ -34,18 +34,9 @@ import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.notification.NotificationEmailService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage for the self-service forgot-password flow
- * ({@code POST /api/auth/forgot-password} / {@code POST /api/auth/reset-password}), through the
- * real {@link PasswordResetService}, {@link PasswordResetTokenRepository} and
- * {@link EmployeeAuthRepository} — same shape as {@link LoginEmailNormalizationIntegrationTest}:
- * hand-wired real collaborators against a real database, no mocks.
- *
- * <p>The test cannot intercept a real email, so it captures the rendered mail via a
- * {@link CapturingMailer} (same double {@code DepositNoticeAccountNotificationIntegrationTest}
- * uses) and pulls the raw token back out of the emailed reset link — exactly what a real employee
- * would click through, minus the mail transport.
- */
+/** Real-Postgres coverage for the self-service forgot-password flow, through the real PasswordResetService,
+ * PasswordResetTokenRepository and EmployeeAuthRepository — same shape as
+ * LoginEmailNormalizationIntegrationTest: hand-wired real collaborators against a real database, no mocks. */
 class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String ORIGINAL_PASSWORD = "OldStr0ngPass!";
@@ -89,8 +80,8 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
         MessageResponse resetResponse = service.resetPassword(new ResetPasswordRequest(rawToken, "BrandNewPass1!"));
         assertThat(resetResponse.message()).isNotBlank();
 
-        // password_hash changed and must_change_password stayed/became false (updatePassword's
-        // contract - see EmployeeAuthRepository#updatePassword).
+        // password_hash changed and must_change_password stayed/became false (updatePassword's contract - see
+        // EmployeeAuthRepository#updatePassword).
         Map<String, Object> row = jdbc.queryForMap(
             "SELECT password_hash, must_change_password FROM hr.employee WHERE employee_id = :id",
             Map.of("id", id));
@@ -110,8 +101,8 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
         MessageResponse existingResponse = service.forgotPassword(new ForgotPasswordRequest("reset.exists@glr.co.th"));
         MessageResponse unknownResponse = service.forgotPassword(new ForgotPasswordRequest("reset.nobody-here@glr.co.th"));
 
-        // Wrong-way-round on purpose: the failure mode that matters is the response shape leaking
-        // whether an address matched, not merely that both calls "succeed".
+        // Wrong-way-round on purpose: the failure mode that matters is the response shape leaking whether an address
+        // matched, not merely that both calls "succeed".
         assertThat(unknownResponse).isEqualTo(existingResponse);
 
         // And no token/email was produced for the address that does not exist.
@@ -129,8 +120,8 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
         service.forgotPassword(new ForgotPasswordRequest("reset.expired@glr.co.th"));
         String rawToken = extractToken(mailer.lastSentTo("reset.expired@glr.co.th"));
 
-        // Force the issued token into the past rather than waiting 30 real minutes or threading a
-        // fixed Clock through - the row is the one thing that actually gates resetPassword.
+        // Force the issued token into the past rather than waiting 30 real minutes or threading a fixed Clock through
+        // - the row is the one thing that actually gates resetPassword.
         jdbc.update("UPDATE hr.password_reset_token SET expires_at = now() - interval '1 minute' "
             + "WHERE token_hash = :hash", Map.of("hash", PasswordResetTokenCodec.hash(rawToken)));
 
@@ -153,30 +144,9 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
             .satisfies(ex -> assertThat(((ApiException) ex).getStatus().value()).isEqualTo(400));
     }
 
-    /**
-     * The race {@link #aTokenAlreadyUsedCannotBeUsedAgain} does NOT cover: that test reuses a
-     * token strictly SEQUENTIALLY, which only proves {@code used_at} sticks after a commit — it
-     * says nothing about two requests that both read the token as still-open BEFORE either writes.
-     * Without {@link PasswordResetTokenRepository#markUsedIfUnused}'s conditional {@code UPDATE
-     * ... WHERE used_at IS NULL}, that window (hundreds of milliseconds wide once a real BCrypt
-     * hash sits between the read and the write) lets both callers pass and both overwrite {@code
-     * password_hash} — a lost update with no error to either side.
-     *
-     * <p>{@code service} is hand-wired with {@code new} (see {@link #wireRealCollaborators}), so
-     * {@code PasswordResetService#resetPassword}'s own {@code @Transactional} is INERT without a
-     * Spring AOP proxy — same caveat {@code PayrollDraftOptimisticConcurrencyIntegrationTest}
-     * documents. Each racing call is instead wrapped in its own explicit {@link TransactionTemplate}
-     * bound to the same {@code DataSource} {@code jdbc} uses, so two GENUINELY concurrent Postgres
-     * transactions race the same row — proving the atomicity comes from {@code
-     * markUsedIfUnused}'s single conditional statement (true with or without the annotation), not
-     * from an application-level lock this test would otherwise only be pretending to exercise.
-     *
-     * <p>{@code @RepeatedTest}: the race is only forced when both threads happen to read the
-     * still-open row before either commits its consume — a genuine timing race, not a deterministic
-     * ordering (same rationale {@code PayrollDraftOptimisticConcurrencyIntegrationTest} states for
-     * its own {@code @RepeatedTest(20)}). Fewer repeats here since the window this specific race
-     * needs is wide (a real BCrypt hash, not a comparatively fast Postgres round trip).
-     */
+    /** The race #aTokenAlreadyUsedCannotBeUsedAgain does NOT cover: that test reuses a token strictly SEQUENTIALLY,
+     * which only proves used_at sticks after a commit — it says nothing about two requests that both read the
+     * token as still-open BEFORE either writes. */
     @RepeatedTest(10)
     void exactlyOneOfTwoConcurrentResetsWithTheSameTokenWinsAndTheLoserIsRejected() throws Exception {
         long id = insertEmployeeWithEmail("RESET-007", "reset.race@glr.co.th", "EMP007", ORIGINAL_PASSWORD);
@@ -218,8 +188,8 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(failures.get(0)).isInstanceOfSatisfying(ApiException.class,
             e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
 
-        // The stored hash must match EXACTLY the winner's password - never the loser's, and never
-        // some artifact of both writes interleaving.
+        // The stored hash must match EXACTLY the winner's password - never the loser's, and never some artifact of
+        // both writes interleaving.
         String hash = jdbc.queryForObject(
             "SELECT password_hash FROM hr.employee WHERE employee_id = :id", Map.of("id", id), String.class);
         assertThat(encoder.matches(successes.get(0), hash))
@@ -235,8 +205,8 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void newPasswordEqualToTheEmployeesOwnCodeIsRejectedWithTheSharedMessage() {
-        // The code itself becomes the attempted new password, so it must clear ResetPasswordRequest's
-        // own @Size(min = 8) - "EMP-00005" does.
+        // The code itself becomes the attempted new password, so it must clear ResetPasswordRequest's own @Size(min =
+        // 8) - "EMP-00005" does.
         String employeeCode = "EMP-00005";
         insertEmployeeWithEmail("RESET-005", "reset.owncode@glr.co.th", employeeCode, ORIGINAL_PASSWORD);
 
@@ -255,8 +225,8 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
         service.forgotPassword(new ForgotPasswordRequest("reset.cooldown@glr.co.th"));
         service.forgotPassword(new ForgotPasswordRequest("reset.cooldown@glr.co.th"));
 
-        // The cooldown guard must have skipped issuing (and emailing) a second token: exactly one
-        // row exists for this employee, not two.
+        // The cooldown guard must have skipped issuing (and emailing) a second token: exactly one row exists for this
+        // employee, not two.
         Integer tokenCount = jdbc.queryForObject(
             "SELECT count(*) FROM hr.password_reset_token WHERE employee_id = :id",
             Map.of("id", id), Integer.class);
@@ -295,11 +265,8 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
             """, params, Long.class);
     }
 
-    /**
-     * Same double {@code DepositNoticeAccountNotificationIntegrationTest} uses: captures the full
-     * rendered mail so the raw reset token can be pulled back out of the body, since the test has
-     * no real mail transport to intercept.
-     */
+    /** Same double DepositNoticeAccountNotificationIntegrationTest uses: captures the full rendered mail so the raw
+     * reset token can be pulled back out of the body, since the test has no real mail transport to intercept. */
     private static final class CapturingMailer implements Mailer {
         private final List<SentMail> sent = new ArrayList<>();
 

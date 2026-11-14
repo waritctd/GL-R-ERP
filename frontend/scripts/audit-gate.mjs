@@ -1,24 +1,7 @@
 #!/usr/bin/env node
-// CI dependency-audit gate.
-//
-// Replaces a bare `npm audit --audit-level=moderate`. Same threshold, same scope
-// (prod AND dev) -- the only difference is that advisories explicitly reviewed and
-// recorded in audit-allowlist.json are subtracted, and each of those carries a hard
-// reviewBy deadline.
-//
-// Fails (exit 1) when:
-//   - any advisory at or above the threshold is NOT allowlisted
-//   - any allowlist entry is past its reviewBy date
-//   - the allowlist is malformed, or `npm audit` could not be run
-//
-// Warns (exit 0) when an allowlist entry no longer matches anything -- that means
-// upstream shipped a fix, which is good news; the entry just wants deleting.
-//
-// Why an allowlist and not `--audit-level=critical` or `--omit=dev`: raising the
-// threshold would stop gating every future high-severity production advisory, and
-// --omit=dev would permanently stop gating build-tooling (it is what caught the
-// postcss path-traversal fixed on this branch). Both trade a broad blind spot for a
-// narrow problem. See docs/agent-handoffs/114_fix-frontend-audit-advisories.md.
+// CI dependency-audit gate. Same threshold, same scope (prod AND dev) -- the only difference is that
+// advisories explicitly reviewed and recorded in audit-allowlist.json are subtracted, and each of those
+// carries a hard reviewBy deadline.
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -27,9 +10,9 @@ import { fileURLToPath } from 'node:url';
 
 const FRONTEND_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 
-// Both overridable so the gate's own behaviour can be exercised against fixture
-// reports (scripts/audit-gate.test.js) rather than whatever the registry happens to
-// be serving today. Unset in CI, which audits the real tree.
+// Both overridable so the gate's own behaviour can be exercised against fixture reports
+// (scripts/audit-gate.test.js) rather than whatever the registry happens to be serving today. Unset in CI,
+// which audits the real tree.
 const ALLOWLIST_PATH = process.env.AUDIT_ALLOWLIST_FILE
   ? resolve(process.env.AUDIT_ALLOWLIST_FILE)
   : resolve(FRONTEND_DIR, 'audit-allowlist.json');
@@ -72,9 +55,9 @@ if (malformed.length > 0) {
   process.exit(1);
 }
 
-// reviewBy is compared as a string, which is only sound for zero-padded ISO dates.
-// "2026-9-01" would sort AFTER "2026-10-23" and so never expire -- a typo would silently
-// grant a permanent waiver. Reject anything that is not a real, zero-padded YYYY-MM-DD.
+// reviewBy is compared as a string, which is only sound for zero-padded ISO dates. "2026-9-01" would sort
+// AFTER "2026-10-23" and so never expire -- a typo would silently grant a permanent waiver. Reject anything
+// that is not a real, zero-padded YYYY-MM-DD.
 const badDates = allowlist.allow.filter((e) => {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(e.reviewBy)) return true;
   const parsed = new Date(`${e.reviewBy}T00:00:00Z`);
@@ -100,8 +83,8 @@ if (REPORT_FILE) {
     process.exit(1);
   }
 } else {
-  // `npm audit` exits non-zero whenever it finds anything, so the exit code is not a
-  // failure signal here -- only unparseable stdout is.
+  // `npm audit` exits non-zero whenever it finds anything, so the exit code is not a failure signal here -- only
+  // unparseable stdout is.
   const audit = spawnSync('npm', ['audit', '--json'], {
     cwd: FRONTEND_DIR,
     encoding: 'utf8',
@@ -131,12 +114,9 @@ if (report.error) {
 
 const vulnerabilities = report.vulnerabilities || {};
 
-// ------------------------------------------------- resolve root advisory ids
-//
-// npm reports a chain: `react-router-dom` is vulnerable "via" `react-router`,
-// which is vulnerable "via" an advisory object. Allowlisting has to key on the
-// root advisory so one reviewed entry clears its whole dependency chain rather
-// than needing a line per affected package.
+// resolve root advisory ids npm reports a chain: `react-router-dom` is vulnerable "via" `react-router`, which
+// is vulnerable "via" an advisory object. Allowlisting has to key on the root advisory so one reviewed entry
+// clears its whole dependency chain rather than needing a line per affected package.
 
 /** @returns {Set<string>} GHSA ids that make `name` vulnerable. */
 function rootAdvisories(name, seen = new Set()) {
@@ -161,15 +141,15 @@ const suppressed = [];
 const matchedAllowIds = new Set();
 
 for (const [name, vuln] of Object.entries(vulnerabilities)) {
-  // An absent or unrecognised severity must NOT be read as "below threshold" -- that
-  // would let a record npm labels in some new way slip through unexamined. Unknown
-  // severity is treated as in-scope and therefore requires review.
+  // An absent or unrecognised severity must NOT be read as "below threshold" -- that would let a record npm
+  // labels in some new way slip through unexamined. Unknown severity is treated as in-scope and therefore
+  // requires review.
   const rank = SEVERITY_ORDER.indexOf(vuln.severity);
   if (rank !== -1 && rank < thresholdRank) continue;
 
   const ids = [...rootAdvisories(name)];
-  // Only cleared when EVERY root cause has been reviewed. A package vulnerable
-  // through both a known and an unknown advisory must still fail.
+  // Only cleared when EVERY root cause has been reviewed. A package vulnerable through both a known and an
+  // unknown advisory must still fail.
   const unreviewed = ids.filter((id) => !allowedById.has(id));
 
   if (ids.length > 0 && unreviewed.length === 0) {

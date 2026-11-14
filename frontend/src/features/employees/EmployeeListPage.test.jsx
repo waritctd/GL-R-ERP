@@ -9,8 +9,7 @@ globalThis.React = React;
 
 const user = { employeeId: 1, name: 'HR ทดสอบ', role: 'hr', manager: false };
 
-// One of each status. ACT and PRB are both "currently employed"; RSG is the only
-// one the default view hides.
+// One of each status. ACT and PRB are both "currently employed"; RSG is the only one the default view hides.
 const employees = [
   {
     id: 1,
@@ -96,9 +95,8 @@ function rowNames(container) {
 }
 
 describe('EmployeeListPage search normalisation', () => {
-  // The shipped bug: `query` was trimmed for nameEn/code but nameTh and nickName
-  // were matched against the raw input, so a trailing space returned nothing
-  // while the search box still showed text.
+  // The shipped bug: `query` was trimmed for nameEn/code but nameTh and nickName were matched against the raw
+  // input, so a trailing space returned nothing while the search box still showed text.
   it('matches Thai names when the query has surrounding whitespace', () => {
     renderPage('/employees?q=%20%E0%B8%AA%E0%B8%A1%E0%B8%8A%E0%B8%B2%E0%B8%A2%20');
 
@@ -287,9 +285,9 @@ describe('EmployeeListPage mobile cards', () => {
   });
 });
 
-// HR-visible missing-nickname flag: read-only visibility only -- never auto-populates or invents a
-// nickname. A separate, LOCAL fixture (not the shared module-level `employees`) so the row-count
-// assertions in the describe blocks above stay unaffected by adding a missing-nickname row.
+// HR-visible missing-nickname flag: read-only visibility only -- never auto-populates or invents a nickname. A
+// separate, LOCAL fixture (not the shared module-level `employees`) so the row-count assertions in the
+// describe blocks above stay unaffected by adding a missing-nickname row.
 const employeesWithMissingNickname = [
   employees[0],
   { ...employees[1], nickName: '' },
@@ -309,8 +307,8 @@ describe('EmployeeListPage missing-nickname flag', () => {
   it('does not invent or auto-populate a nickname -- the row just shows the flag, never a fabricated value', () => {
     renderPage('/employees', employeesWithMissingNickname);
 
-    // นภาพร's nickname was blanked in the fixture ('แนน' would have shown otherwise, per the
-    // search-normalisation describe block above using the same name for the real nickname).
+    // นภาพร's nickname was blanked in the fixture ('แนน' would have shown otherwise, per the search-normalisation
+    // describe block above using the same name for the real nickname).
     expect(screen.queryByText('แนน')).toBeNull();
   });
 

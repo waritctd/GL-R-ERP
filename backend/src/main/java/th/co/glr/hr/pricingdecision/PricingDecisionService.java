@@ -81,8 +81,8 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 @Service
 public class PricingDecisionService {
     private static final Set<String> CEO_ROLES = Set.of("ceo");
-    /** Design correction 2: the ONLY roles that may ever see cost/margin. Sales/sales_manager
-     * must go through {@link #salesView}, which never touches this set's data. */
+    /** Design correction 2: the ONLY roles that may ever see cost/margin. Sales/sales_manager must go through
+     * #salesView, which never touches this set's data. */
     private static final Set<String> RAW_DECISION_ROLES = Set.of("import", "ceo");
     private static final Set<String> SALES_VIEW_ROLES = Set.of("sales", "sales_manager", "ceo", "import");
     private static final BigDecimal MINUS_ONE = BigDecimal.valueOf(-1);
@@ -122,14 +122,9 @@ public class PricingDecisionService {
         String clientRequestId = validateUuid(request.clientRequestId());
         decisions.lockPricingRequest(pricingRequestId);
 
-        // Re-read UNDER the lock — the check above is racy. Without this, the costing INSERT
-        // below (createComputed) would run for the LOSER of a concurrent double-submit before it
-        // discovers it lost, leaving an orphan sales.pricing_costing row. The explicit
-        // clientRequestId replay lookup MUST come before the status re-check (not after): a
-        // genuine retry of an already-succeeded call finds the pricing request has already moved
-        // to CEO_REVIEWING, and a bare status re-check would wrongly 409 an idempotent retry
-        // instead of returning its result — exactly the ordering approve() already uses for its
-        // own clientRequestId check, below.
+        // Re-read UNDER the lock — the check above is racy. Without this, the costing INSERT below (createComputed)
+        // would run for the LOSER of a concurrent double-submit before it discovers it lost, leaving an orphan
+        // sales.pricing_costing row.
         summary = requirePricingRequest(pricingRequestId);
         if (clientRequestId != null) {
             Optional<PricingDecisionDto> replay = decisions.findByClientRequestId(actor.id(), clientRequestId);
@@ -145,19 +140,9 @@ public class PricingDecisionService {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ยังไม่พร้อมส่งให้ CEO พิจารณา");
         }
 
-        // V141 ("CEO owns costing"): the cost is computed HERE, once, deterministically, from
-        // whichever factory quote is current right now — Import no longer submits a costing of
-        // its own. 422s (via LandedCostCalculator.resolveSources) if any request item's factory
-        // quote is not READY_FOR_COSTING — should not happen, since
-        // FactoryQuoteService.markReadyForCosting only advances the pricing request to
-        // READY_FOR_CEO_REVIEW once every item resolves, but THIS check, not that one, is the
-        // authoritative gate for whether a costing can actually be computed.
-        //
-        // Stock lines (V194, R3): they are never costed. A request with NO import line (only stock
-        // lines) skips the calculation entirely - there is nothing to cost, and pricing_decision
-        // still needs a costing row to hang off (pricing_costing_id stays NOT NULL), so it gets an
-        // EMPTY one (total 0). A mixed request costs its import lines exactly as before
-        // (LandedCostCalculator#resolveSources skips the stock lines).
+        // V141 ("CEO owns costing"): the cost is computed HERE, once, deterministically, from whichever factory quote
+        // is current right now — Import no longer submits a costing of its own. Stock lines (V194, R3): they are never
+        // costed.
         List<PricingRequestItemDto> requestItems = pricingRequests.findItems(pricingRequestId);
         List<PricingRequestItemDto> stockItems = requestItems.stream()
             .filter(item -> item.stockSource() != null).toList();
@@ -197,14 +182,12 @@ public class PricingDecisionService {
 
         List<WriteItem> writeItems = new ArrayList<>();
         for (PricingCostingItemDto item : submittedCosting.items()) {
-            // Frozen from the EFFECTIVE cost, not the raw computed one, so an override flows into
-            // price = cost x margin exactly like the computed figure would have (see
+            // Frozen from the EFFECTIVE cost, not the raw computed one, so an override flows into price = cost x margin
+            // exactly like the computed figure would have (see
             // PricingCostingItemDto.effectiveLandedCostPerUnitThb/effectiveTotalLandedCostThb).
             BigDecimal frozenPerPiece = item.effectiveLandedCostPerUnitThb();
-            // V156: an UNCOSTABLE line has no effective cost at all (no freight lookup was
-            // possible and no override exists yet), so it freezes as null and carries no proposed
-            // price. It still becomes a decision item — that is the whole point: the CEO has to
-            // see the line to resolve it, and approve() refuses while it stays this way.
+            // V156: an UNCOSTABLE line has no effective cost at all (no freight lookup was possible and no override exists
+            // yet), so it freezes as null and carries no proposed price.
             BigDecimal frozenPerRequestedUnit = item.effectiveTotalLandedCostThb() == null
                 ? null
                 : money4(item.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
@@ -223,9 +206,9 @@ public class PricingDecisionService {
                 currency, defaultMarginPct, proposedSellingPrice, listUnitPrice));
         }
         for (PricingRequestItemDto stockItem : stockItems) {
-            // A stock line has no factory quote (so no costing link), no cost, no margin and no
-            // proposed/list price: the CEO types its ราคาตั้ง (update() -> listUnitPrice). The
-            // decision item is still written so the CEO sees the line and approve() can price it.
+            // A stock line has no factory quote (so no costing link), no cost, no margin and no proposed/list price: the
+            // CEO types its ราคาตั้ง (update() -> listUnitPrice). The decision item is still written so the CEO sees the
+            // line and approve() can price it.
             writeItems.add(new WriteItem(stockItem.id(), null, stockItem.requestedUnitBasis(),
                 stockItem.requestedQty(), stockItem.requestedQty(), null, null,
                 currency, null, null, null));
@@ -365,15 +348,8 @@ public class PricingDecisionService {
             .allMatch(item -> UnitBasis.PER_PIECE.equals(item.requestedUnitBasis()) && item.sqmPerPiece() != null);
     }
 
-    /**
-     * V141 ("CEO owns costing"): recomputes the bound costing IN PLACE (same {@code
-     * pricing_costing_id} — a new FX rate or a factory-quote change since {@code startReview}
-     * would otherwise leave the decision frozen on a stale price), preserving any existing
-     * per-line override ({@link PricingCostingRepository#replaceItemsPreservingOverrides}), then
-     * re-derives every decision item's frozen cost + proposed selling price from the (possibly
-     * still-overridden) effective cost. DRAFT decisions only — {@link #requireOpenDecisionForMutation}
-     * enforces that, same as every other CEO-editing action here.
-     */
+    /** V141: recomputes the bound costing IN PLACE, preserving any existing per-line override, then re-derives
+     * every decision item's frozen cost + proposed selling price from the effective cost. */
     @Transactional
     public PricingDecisionDto recalculateCost(long decisionId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -633,17 +609,8 @@ public class PricingDecisionService {
             .map(String::trim).collect(java.util.stream.Collectors.joining(" "));
     }
 
-    /**
-     * V141 ("CEO owns costing"): the only genuinely new behaviour — a per-line manual cost
-     * override sitting BESIDE the computed figure, which is never destroyed. {@code itemId} is
-     * the {@code pricing_decision_item} id (a sub-resource of this decision), resolved here to
-     * its bound {@code pricing_costing_item_id}. {@code reason} is mandatory in BOTH directions —
-     * clearing (manualLandedCostPerUnitThb == null) is money-affecting too, mirroring {@link
-     * #returnToImport}'s own mandatory-reason check. Writing a value stamps {@code
-     * override_fx_rate}/{@code override_calc_config_version} from THIS item's CURRENT computed
-     * values — re-confirming the same value after a recalculate re-stamps them to whatever is
-     * current then, which is how staleness clears (the CEO's escape hatch). DRAFT decisions only.
-     */
+    /** V141 ("CEO owns costing"): the only genuinely new behaviour — a per-line manual cost override sitting BESIDE
+     * the computed figure, which is never destroyed. DRAFT decisions only. */
     @Transactional
     public PricingDecisionDto overrideItemCost(long decisionId, long itemId, CostOverrideRequest request, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -690,14 +657,12 @@ public class PricingDecisionService {
             costings.clearOverride(costingItem.id(), actor.id());
         }
 
-        // landed_cost_per_unit_thb/normalized_quantity_pieces are untouched by an override write,
-        // so re-deriving the effective figures from the ALREADY-fetched costingItem (rather than
-        // re-querying) is safe and matches PricingCostingRepository#mapItem's own formula exactly.
+        // landed_cost_per_unit_thb/normalized_quantity_pieces are untouched by an override write, so re-deriving the
+        // effective figures from the ALREADY-fetched costingItem (rather than re-querying) is safe and matches
+        // PricingCostingRepository#mapItem's own formula exactly.
         BigDecimal effectivePerPiece = roundedManualCost != null ? roundedManualCost : costingItem.landedCostPerUnitThb();
-        // V156: CLEARING an override on an UNCOSTABLE line returns it to having no cost at all —
-        // landedCostPerUnitThb is null there (the freight table could not be looked up), so the
-        // derivation below must not run. The line goes back to needing the CEO's input, and
-        // approve() blocks on it again, which is the correct end state rather than an NPE.
+        // V156: CLEARING an override on an UNCOSTABLE line returns it to having no cost at all — landedCostPerUnitThb
+        // is null there (the freight table could not be looked up), so the derivation below must not run.
         BigDecimal effectiveTotal = effectivePerPiece == null
             ? null
             : money4(effectivePerPiece.multiply(costingItem.normalizedQuantityPieces()));
@@ -744,15 +709,12 @@ public class PricingDecisionService {
         }
         requireActiveDeal(summary.ticketId());
 
-        // V141: refuse while ANY line of the bound costing carries a stale override (its FX rate
-        // or calc-config version moved since the CEO entered the manual value) — approving one
-        // would freeze a selling price built on a cost the CEO never actually confirmed against
-        // current conditions. recalculateCost (re-derives every line, preserving overrides) or
-        // re-confirming the SAME override value (which re-stamps its provenance, clearing
-        // staleness) are the two ways past this.
+        // V141: refuse while ANY line of the bound costing carries a stale override (its FX rate or calc-config
+        // version moved since the CEO entered the manual value) — approving one would freeze a selling price built on
+        // a cost the CEO never actually confirmed against current conditions.
         PricingCostingDto costing = requireCosting(decision.pricingCostingId());
-        // Stock lines (V194) have no costing link (read back as 0) - several of them would collide
-        // on that key and Collectors.toMap would throw, so only costed lines are keyed.
+        // Stock lines (V194) have no costing link (read back as 0) - several of them would collide on that key and
+        // Collectors.toMap would throw, so only costed lines are keyed.
         Map<Long, Long> decisionItemIdByCostingItemId = decision.items().stream()
             .filter(item -> item.stockSource() == null)
             .collect(java.util.stream.Collectors.toMap(PricingDecisionItemDto::pricingCostingItemId, PricingDecisionItemDto::id));
@@ -838,9 +800,9 @@ public class PricingDecisionService {
                     "ทุกรายการต้องมีราคาตามวิธีกรอกราคาที่เลือกก่อนอนุมัติ — รายการที่ยังไม่มีราคา: " + missingPrice);
             }
         } else {
-            // Phase 1 UI simplification: an item with an active "ปรับราคาเอง" override needs no
-            // margin at all — its price is fixed directly, the formula (and therefore margin)
-            // never drives it. Only a NON-overridden item without a margin blocks approval now.
+            // Phase 1 UI simplification: an item with an active "ปรับราคาเอง" override needs no margin at all — its price
+            // is fixed directly, the formula (and therefore margin) never drives it. Only a NON-overridden item without a
+            // margin blocks approval now.
             List<Long> missingMargin = decision.items().stream()
                 .filter(item -> item.proposedMarginPct() == null && item.manualSellingPricePerRequestedUnit() == null)
                 .map(PricingDecisionItemDto::id)
@@ -914,9 +876,9 @@ public class PricingDecisionService {
         notifications.notifyEmployeeForPricingRequest(summary.requestedById(), summary.id(),
             PricingRequestEventKind.PRICING_DECISION_APPROVED,
             "คำขอราคา " + summary.requestCode() + " ได้รับอนุมัติราคาขายแล้ว");
-        // V141: notify Import too — approval means the deal is moving on to quotation, useful
-        // context for whoever has been renegotiating with the factory. Mirrors returnToImport's
-        // own targeting (assignedImportId, else role broadcast "import").
+        // V141: notify Import too — approval means the deal is moving on to quotation, useful context for whoever has
+        // been renegotiating with the factory. Mirrors returnToImport's own targeting (assignedImportId, else role
+        // broadcast "import").
         if (summary.assignedImportId() != null) {
             notifications.notifyEmployeeForPricingRequest(summary.assignedImportId(), summary.id(),
                 PricingRequestEventKind.PRICING_DECISION_APPROVED,
@@ -935,15 +897,15 @@ public class PricingDecisionService {
         if (request.returnReason() == null || request.returnReason().isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเหตุผลการตีกลับ");
         }
-        // Same lock-then-re-read discipline as approve(): return and approve are the two
-        // mutually-exclusive terminal exits from DRAFT, so both must serialize against each
-        // other (a CEO returning in one tab while approving in another must not let both win).
+        // Same lock-then-re-read discipline as approve(): return and approve are the two mutually-exclusive terminal
+        // exits from DRAFT, so both must serialize against each other (a CEO returning in one tab while approving in
+        // another must not let both win).
         PricingDecisionDto preview = requireDecision(decisionId);
         decisions.lockPricingRequest(preview.pricingRequestId());
         PricingDecisionDto decision = requireOpenDecisionForMutation(decisionId);
         PricingRequestSummaryDto summary = requirePricingRequest(decision.pricingRequestId());
-        // Stock lines (V194, R4): a request made only of สต็อกในไทย lines never went through Import
-        // (no quote, no ETA), so there is nothing to send back to it.
+        // Stock lines (V194, R4): a request made only of สต็อกในไทย lines never went through Import (no quote, no
+        // ETA), so there is nothing to send back to it.
         List<PricingRequestItemDto> returnItems = pricingRequests.findItems(summary.id());
         if (!returnItems.isEmpty() && returnItems.stream().allMatch(i -> th.co.glr.hr.pricingrequest.PricingRequestService.STOCK_IN_THAILAND.equals(i.stockSource()))) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -954,10 +916,8 @@ public class PricingDecisionService {
         if (returnedRows == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "มติราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
-        // V141: sends the request to AWAITING_FACTORY_RESPONSE, not a dedicated "revise the
-        // costing" status — there is no standalone costing draft any more for Import to revise.
-        // Import's only remaining job is to renegotiate/re-mark the factory quote(s) ready; the
-        // CEO's next startReview recomputes the cost from scratch.
+        // V141: sends the request to AWAITING_FACTORY_RESPONSE, not a dedicated "revise the costing" status — there is
+        // no standalone costing draft any more for Import to revise.
         int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.CEO_REVIEWING,
             PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
         if (transitioned == 0) {
@@ -1001,11 +961,7 @@ public class PricingDecisionService {
      * numeric-overflow 500 instead of a clean 400 — e.g. {@code 1e15} exceeds even this column's
      * own bound before the derived selling price is ever computed. */
     private static final BigDecimal MAX_COST_18_4 = new BigDecimal("99999999999999.9999");
-    /** NUMERIC(9,6) upper bound — {@code proposed_margin_pct}/{@code approved_margin_pct} (V72). A
-     * margin this large produces a derived selling price that overflows {@code list_unit_price}'s
-     * NUMERIC(14,2) column long before it would overflow this one — {@link #deriveListAndNet}'s own
-     * bound check is what actually catches that multiplicative case; this one exists so the RAW
-     * margin itself never reaches the column as an overflowing 500 either. */
+    /** NUMERIC(9,6) upper bound — proposed_margin_pct/approved_margin_pct (V72). */
     private static final BigDecimal MAX_MARGIN_PCT = new BigDecimal("999.999999");
 
     /**
@@ -1041,9 +997,9 @@ public class PricingDecisionService {
                 continue;
             }
 
-            // "ปรับราคาเอง" (Phase 1 UI simplification) — mirrors overrideItemCost's own check
-            // ORDER exactly: reason (mandatory in BOTH directions) before the negative-amount
-            // check, before anything else. Set and clear are mutually exclusive in one call.
+            // "ปรับราคาเอง" (Phase 1 UI simplification) — mirrors overrideItemCost's own check ORDER exactly: reason
+            // (mandatory in BOTH directions) before the negative-amount check, before anything else. Set and clear are
+            // mutually exclusive in one call.
             if (req.sellingPriceOverride() != null && req.clearSellingPriceOverride()) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
                     "ระบุราคาที่ปรับพร้อมกับล้างค่าที่ปรับในคำขอเดียวกันไม่ได้");
@@ -1077,11 +1033,8 @@ public class PricingDecisionService {
             boolean marginTouched = marginPct != null;
             if (marginTouched) {
                 requireValidMargin(marginPct);
-                // V156: a margin on an UNCOSTABLE line has nothing to apply to — the frozen cost
-                // is null until the CEO supplies one. The margin is still stored (it becomes
-                // meaningful the moment a cost override lands, which recomputes the price via
-                // overrideItemCost); only the derived price stays null, and approve() blocks
-                // until the cost exists.
+                // V156: a margin on an UNCOSTABLE line has nothing to apply to — the frozen cost is null until the CEO
+                // supplies one.
                 sellingPrice = item.frozenLandedCostPerRequestedUnitThb() == null
                     ? null
                     : computeSellingPrice(item.frozenLandedCostPerRequestedUnitThb(), marginPct,
@@ -1174,9 +1127,9 @@ public class PricingDecisionService {
         }
     }
 
-    /** {@code touched} = an explicit set on THIS request; {@code cleared} = an explicit clear;
-     * neither = leave the item's stored value as-is. The one place every price-mode field's
-     * tri-state collapses to a single "what value does the derivation actually use" answer. */
+    /** touched = an explicit set on THIS request; cleared = an explicit clear; neither = leave the item's stored
+     * value as-is. The one place every price-mode field's tri-state collapses to a single "what value does the
+     * derivation actually use" answer. */
     private BigDecimal resolveTriState(boolean touched, boolean cleared, BigDecimal newValue, BigDecimal storedValue) {
         if (cleared) {
             return null;
@@ -1243,10 +1196,9 @@ public class PricingDecisionService {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุราคาพิเศษ บาท/ตร.ม. (โหมดราคาพิเศษ)");
             }
             if (sqmPerPiece == null) {
-                // Defence in depth: requireNewFormEligible already guarantees every item on a
-                // mode-bearing decision has sqm_per_piece, but this guards the field individually
-                // too, per the phase spec's explicit ask ("SPECIAL_SQM requires sqm_per_piece on
-                // the item, Phase 1 makes it required, but guard anyway").
+                // Defence in depth: requireNewFormEligible already guarantees every item on a mode-bearing decision has
+                // sqm_per_piece, but this guards the field individually too, per the phase spec's explicit ask ("SPECIAL_SQM
+                // requires sqm_per_piece on the item, Phase 1 makes it required, but guard anyway").
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                     "รายการนี้ไม่มี ตร.ม./แผ่น จึงคำนวณราคาพิเศษ บาท/ตร.ม. ไม่ได้");
             }
@@ -1360,13 +1312,8 @@ public class PricingDecisionService {
         return recomputed;
     }
 
-    /**
-     * Shared by {@link #recalculateCost} and {@link #overrideItemProductType}: recomputes the
-     * bound costing IN PLACE (same {@code pricing_costing_id}, preserving any existing per-line
-     * cost override — {@link PricingCostingRepository#replaceItemsPreservingOverrides}) and
-     * re-derives every decision item's frozen cost + proposed selling price from the (possibly
-     * still-overridden) effective cost.
-     */
+    /** Shared by #recalculateCost and #overrideItemProductType: recomputes the bound costing IN PLACE and
+     * re-derives every decision item's frozen cost + proposed selling price from the effective cost. */
     private PricingDecisionDto recomputeCostingInPlace(PricingDecisionDto decision, UserPrincipal actor) {
         LandedCostCalculator.CalculationResult calc =
             landedCost.calculate(requirePricingRequest(decision.pricingRequestId()));
@@ -1387,8 +1334,8 @@ public class PricingDecisionService {
                 continue;
             }
             BigDecimal frozenPerPiece = costingItem.effectiveLandedCostPerUnitThb();
-            // V156: same as startReview — a recalculation that leaves a line uncostable refreezes
-            // it as null rather than dividing by nothing.
+            // V156: same as startReview — a recalculation that leaves a line uncostable refreezes it as null rather than
+            // dividing by nothing.
             BigDecimal frozenPerRequestedUnit = costingItem.effectiveTotalLandedCostThb() == null
                 ? null
                 : money4(costingItem.effectiveTotalLandedCostThb().divide(item.requestedQuantity(), 8, RoundingMode.HALF_UP));
@@ -1403,9 +1350,8 @@ public class PricingDecisionService {
         return requireDecision(decision.id());
     }
 
-    /** Small carrier for {@link #deriveListAndNet}'s two derived values — not persisted as its own
-     * DTO, just a same-call-site pairing so the two callers below don't each hand-roll a
-     * two-element return. */
+    /** Small carrier for #deriveListAndNet's two derived values — not persisted as its own DTO, just a
+     * same-call-site pairing so the two callers below don't each hand-roll a two-element return. */
     private record ListAndNet(BigDecimal listUnitPrice, BigDecimal netUnitPrice) {}
 
     /**
@@ -1527,8 +1473,8 @@ public class PricingDecisionService {
     }
 
     /** sales.pricing_decision_item's Phase 2 price columns are NUMERIC(14,2)/(12,2), mirroring
-     * sales.quotation_item's own price columns (V49/V168) — 2dp, not this class's usual 4dp
-     * money4 (used only for the pre-existing THB landed-cost/margin-formula figures). */
+     * sales.quotation_item's own price columns (V49/V168) — 2dp, not this class's usual 4dp money4 (used only for
+     * the pre-existing THB landed-cost/margin-formula figures). */
     private BigDecimal money2(BigDecimal value) {
         return value.setScale(2, RoundingMode.HALF_UP);
     }

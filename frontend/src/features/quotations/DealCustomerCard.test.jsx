@@ -41,9 +41,9 @@ const testCustomer = { id: 1, name: 'บริษัท ก้าวหน้า
 const testProject = { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' };
 const testContact = { id: 1, customerId: 1, firstName: 'วิภา', lastName: 'สมิทธ์' };
 
-// The card calls useQueryClient() (F7 invalidates the cached customer searches after a successful
-// customer edit), so every render here needs a provider -- as it has in the app, where this card
-// only ever renders inside QuotationEditorPage.
+// The card calls useQueryClient() (F7 invalidates the cached customer searches after a successful customer
+// edit), so every render here needs a provider -- as it has in the app, where this card only ever renders
+// inside QuotationEditorPage.
 function wrap(ui) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return <QueryClientProvider client={client}>{ui}</QueryClientProvider>;
@@ -282,8 +282,8 @@ describe('DealCustomerCard', () => {
       fireEvent.blur(taxIdField);
 
       await waitFor(() => expect(api.customers.update).toHaveBeenCalledTimes(1));
-      // ONLY taxId -- not the whole record, so a one-field correction cannot clobber a phone
-      // number some other session changed in the meantime (the endpoint is PATCH-shaped).
+      // ONLY taxId -- not the whole record, so a one-field correction cannot clobber a phone number some other
+      // session changed in the meantime (the endpoint is PATCH-shaped).
       expect(api.customers.update).toHaveBeenCalledWith(withPhone.id, { taxId: '0105565099999' });
       await waitFor(() => expect(screen.getByText('(0105565099999)')).not.toBeNull());
     });

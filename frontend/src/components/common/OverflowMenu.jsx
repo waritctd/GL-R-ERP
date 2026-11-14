@@ -5,48 +5,12 @@ import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { Button } from './Button.jsx';
 import { Icon } from './Icon.jsx';
 
-/**
- * Generic "⋯" overflow trigger + menu (ticket-detail IA rebuild Phase 1 —
- * see docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md,
- * "Action bar (sticky)" / Secondary actions). Proper menu semantics:
- * `button[aria-haspopup="menu"][aria-expanded]` trigger, `role="menu"` panel,
- * `role="menuitem"` items, ArrowDown/ArrowUp (wrapping) plus Home/End cycle
- * focus between items, Escape closes and returns focus to the trigger, and
- * a click outside the menu also closes it. Same Escape/focus-return
- * convention as Modal.jsx, scaled down for a non-modal popover (no focus
- * trap — a menu doesn't own the whole page the way a dialog does).
- *
- * The open panel renders via `createPortal` to `document.body`, positioned
- * from the trigger's live `getBoundingClientRect()` instead of CSS
- * `absolute`. A plain descendant menu got silently clipped by any ancestor
- * with `overflow-hidden` (e.g. TicketDetailPage's rounded sticky-chrome
- * card — a regression from PR #523 that hid every item but the first on
- * `/tickets/:id`). Position is recomputed on open and on every scroll/
- * resize while open, so the menu keeps tracking the trigger the way a DOM
- * descendant would for free.
- *
- * `items`: `{ key, label, icon?, tone?: 'default' | 'danger', onSelect,
- * disabled?, disabledReason?, testId? }[]`. Callers filter out items that
- * shouldn't appear AT ALL themselves (same responsibility split as every
- * other `can.*`-gated button on this page — the menu never decides whether
- * an action exists, only presents what it's handed). `disabled` is a
- * different thing: an item the caller DOES want listed, but whose own
- * precondition isn't met right now (e.g. a stage-advance gate) — it renders
- * present-but-inert with `disabledReason` shown inline, per the IA rule that
- * an unavailable action must say why, never just vanish. `aria-disabled`
- * (not the native `disabled` attribute) is used so the item stays in the
- * roving-focus set below instead of being skipped by keyboard navigation.
- */
-// Mirrors the old absolute-positioning classes (`top-full`/`mt-1`,
-// `mobile:top-auto mobile:bottom-full mobile:mb-1`, `right-0`/`left-0`) as
-// viewport-relative fixed coordinates. `+ 4` reproduces the old `mt-1`/
-// `mb-1` (0.25rem) gap. `flipUp` is decided by the caller via `useIsMobile`
-// rather than a `matchMedia` call in here, so this stays a plain, testable
-// function of its arguments. `documentElement.client*` (not
-// `window.inner*`) because a `position: fixed` element's containing block
-// is sized excluding the scrollbar; the two only diverge when the document
-// itself scrolls, which it doesn't here (`.content-scroll` owns scrolling),
-// but the correct one costs nothing.
+/** Generic "⋯" overflow trigger + menu (ticket-detail IA rebuild Phase 1 — see
+ * docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md, "Action bar (sticky)" /
+ * Secondary actions). */
+// Mirrors the old absolute-positioning classes (`top-full`/`mt-1`, `mobile:top-auto mobile:bottom-full
+// mobile:mb-1`, `right-0`/`left-0`) as viewport-relative fixed coordinates. `+ 4` reproduces the old `mt-1`/
+// `mb-1` (0.25rem) gap.
 function computeMenuPosition(triggerEl, { align, flipUp }) {
   const rect = triggerEl.getBoundingClientRect();
   const viewportWidth = document.documentElement.clientWidth;
@@ -82,15 +46,8 @@ export function OverflowMenu({
   const menuRef = useRef(null);
   const isMobile = useIsMobile();
 
-  // Position lives in state, computed from the trigger's live rect — not
-  // read from `triggerRef.current` during render (React refs must only be
-  // read in effects/handlers). `useLayoutEffect` (not `useEffect`) so the
-  // first paint after opening already has the right coordinates instead of
-  // flashing at (0,0) for a frame. As a portaled `position: fixed` node the
-  // menu no longer scrolls with the trigger for free the way a plain
-  // `absolute` descendant would, so this also re-measures on every scroll
-  // (capture: true catches scroll on nested containers too, e.g. a table's
-  // own overflow-x wrapper, not just window) and resize while open.
+  // Position lives in state, computed from the trigger's live rect — not read from `triggerRef.current` during
+  // render (React refs must only be read in effects/handlers).
   const [menuPosition, setMenuPosition] = useState(null);
   const flipUp = mobilePlacement === 'up' && isMobile;
   useLayoutEffect(() => {
@@ -111,14 +68,9 @@ export function OverflowMenu({
     };
   }, [open, align, flipUp]);
 
-  // Gated on `menuMounted` (whether the portal has actually committed a menu
-  // node), not the raw `open` flag: `open` flips true a render before the
-  // position effect above supplies coordinates and the portal mounts, so
-  // gating on `open` here raced `menuRef.current` — it was still null when
-  // this ran, silently dropping the focus-first-item behaviour. `menuMounted`
-  // only flips once per open/close (unlike `menuPosition`, which is a new
-  // object on every scroll-driven reposition), so this doesn't re-steal
-  // focus back to the first item while the user is arrow-keying around.
+  // Gated on `menuMounted`, not the raw `open` flag: `open` flips true a render before the position effect above
+  // supplies coordinates and the portal mounts, so gating on `open` here raced `menuRef.current` — it was still
+  // null when this ran, silently dropping the focus-first-item behaviour.
   const menuMounted = menuPosition !== null;
   useLayoutEffect(() => {
     if (!menuMounted) return undefined;
@@ -133,14 +85,8 @@ export function OverflowMenu({
         triggerRef.current?.focus({ preventScroll: true });
         return;
       }
-      // Tab/Shift+Tab: close the menu and let the browser's own default Tab
-      // behaviour carry focus onward — every item below has `tabIndex={-1}`
-      // (out of the normal Tab order, reachable only via Arrow/Home/End),
-      // so without this the currently-focused item was the only one
-      // reachable by Tab at all, and leaving the menu OPEN while focus moved
-      // past it into the page behind left an orphaned, still-interactive
-      // popover on screen. Not preventDefault()'d — the point is to let Tab
-      // do its normal thing, just with the menu no longer in the way.
+      // Tab/Shift+Tab: close the menu and let the browser's own default Tab behaviour carry focus onward. Not
+      // preventDefault()'d — the point is to let Tab do its normal thing, just with the menu no longer in the way.
       if (event.key === 'Tab') {
         setOpen(false);
         return;
@@ -175,10 +121,9 @@ export function OverflowMenu({
 
   return (
     <div className="relative inline-block">
-      {/* Two distinct render paths, not one <Button> with a conditional
-          variant: the labeled path's classes are a hand-rolled style that
-          predates Button.jsx and isn't built from the icon-button legacy
-          class, so it's left untouched rather than guessed into a variant. */}
+      {/* Two distinct render paths, not one <Button> with a conditional variant: the labeled path's classes are a
+       * hand-rolled style that predates Button.jsx and isn't built from the icon-button legacy class, so it's left
+       * untouched rather than guessed into a variant. */}
       {triggerLabel ? (
         <button
           {...triggerProps}
@@ -219,14 +164,9 @@ export function OverflowMenu({
           role="menu"
           aria-label={label}
           style={{ position: 'fixed', ...menuPosition }}
-          // `max-w`: shrink-to-fit now resolves against the viewport (fixed
-          // positioning, see computeMenuPosition's doc comment) instead of
-          // the old narrow `relative inline-block` trigger wrapper, so an
-          // unlucky long label/disabledReason could otherwise balloon the
-          // panel toward full viewport width instead of wrapping the way it
-          // already did under the 12rem floor. `calc(100vw-2rem)` is the
-          // floor's own floor, so a narrow phone still gets a 1rem margin on
-          // each side rather than edge-to-edge or horizontal overflow.
+          // `max-w`: shrink-to-fit now resolves against the viewport instead of the old narrow `relative inline-block`
+          // trigger wrapper, so an unlucky long label/disabledReason could otherwise balloon the panel toward full
+          // viewport width instead of wrapping the way it already did under the 12rem floor.
           className={`z-20 min-w-[12rem] max-w-[min(20rem,calc(100vw-2rem))] rounded-lg border border-border bg-surface py-1 shadow-lg ${
             mobilePlacement === 'up' ? 'mobile:max-h-[calc(100dvh-7rem)] mobile:overflow-y-auto' : ''
           }`}
@@ -236,13 +176,8 @@ export function OverflowMenu({
               key={item.key}
               type="button"
               role="menuitem"
-              // Roving tabindex: items are reachable only via ArrowUp/
-              // ArrowDown/Home/End (handled above through `.focus()`, which
-              // works regardless of tabIndex on a natively-focusable
-              // <button>) — tabIndex={-1} keeps every item OUT of the normal
-              // page Tab order, so Tab from a focused item skips straight to
-              // whatever follows this component in the DOM instead of
-              // stopping on each item in turn.
+              // Roving tabindex: items are reachable only via ArrowUp/ ArrowDown/Home/End (handled above through `.focus`,
+              // which works regardless of tabIndex on a natively-focusable <button>).
               tabIndex={-1}
               data-testid={item.testId}
               aria-disabled={item.disabled || undefined}

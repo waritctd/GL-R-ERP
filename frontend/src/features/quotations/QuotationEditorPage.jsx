@@ -67,19 +67,19 @@ function todayIso() {
 }
 
 // Computed-only fields calculate-line ever returns (DealQuotationDtos.ItemDto's own tail, per
-// QUOTATION-V2-PLAN.md). #H2: merging the response into a row must pick ONLY these -- never an
-// input field (the response echoes the request's inputs back), and never `id`/`seq`.
+// QUOTATION-V2-PLAN.md). #H2: merging the response into a row must pick ONLY these -- never an input field
+// (the response echoes the request's inputs back), and never `id`/`seq`.
 const CALCULATED_ITEM_FIELDS = [
   'piecesPerSqm', 'piecesBeforeWastage', 'piecesAfterWastage', 'piecesFinal', 'boxes',
   'netUnitPrice', 'lineAmount', 'descriptionLine', 'sizeLine', 'calculationLine',
-  // v3: the ราคาพิเศษ sub-line a SPECIAL_SQM tile prints. NOT `quantity`/`unit`: on a PLAIN row
-  // those are rep-typed INPUTS the response merely echoes, so merging them would be #H2's clobber.
+  // v3: the ราคาพิเศษ sub-line a SPECIAL_SQM tile prints. NOT `quantity`/`unit`: on a PLAIN row those are
+  // rep-typed INPUTS the response merely echoes, so merging them would be #H2's clobber.
   'specialPriceLine',
 ];
 
-// A stable empty-object reference for an untouched row's `errors` prop -- avoids handing
-// QuotationItemRow a fresh `{}` literal every render (new reference each time otherwise, though
-// this component doesn't rely on it for memoisation today; cheap to keep stable regardless).
+// A stable empty-object reference for an untouched row's `errors` prop -- avoids handing QuotationItemRow a
+// fresh `{}` literal every render (new reference each time otherwise, though this component doesn't rely on it
+// for memoisation today; cheap to keep stable regardless).
 const EMPTY_ITEM_ERRORS = {};
 
 // Autosave debounce: long enough that it never fires mid-word, short enough that a rep who closes
@@ -131,10 +131,8 @@ function withoutPreviewedMoney(row) {
   };
 }
 
-// `defaults` is readQuotationDefaults()'s own return value (quotationPrefs.js) -- the rep's last
-// saved terms, or null. Only ever seeds a BRAND-NEW quotation; an existing one always loads its
-// own stored values (see the init effect below), so a remembered default can never overwrite what
-// is on the server. วันที่ is deliberately never remembered: it is always today.
+// `defaults` is readQuotationDefaults()'s own return value (quotationPrefs.js) -- the rep's last saved terms,
+// or null.
 function emptyTerms(defaults = null) {
   const depositPercent = defaults?.depositPercent ?? '';
   // noDeposit must NEVER be seeded from a remembered default, unlike depositPercent/validityMode
@@ -152,8 +150,8 @@ function emptyTerms(defaults = null) {
     remainderMode: defaults?.remainderMode ?? '',
     creditDays: defaults?.creditDays ?? '',
     validityDays: defaults?.validityDays ?? '',
-    // V178: the MODE remembers (see quotationPrefs.js); validityUntil never does — a brand-new
-    // quotation always starts with no date typed, even when it starts in DATE mode.
+    // V178: the MODE remembers (see quotationPrefs.js); validityUntil never does — a brand-new quotation always
+    // starts with no date typed, even when it starts in DATE mode.
     validityMode: defaults?.validityMode ?? 'DAYS',
     validityUntil: '',
     customerNotes: '',
@@ -191,19 +189,8 @@ function defaultDocSettings() {
   return { priceMode: 'NET', documentLanguage: 'TH' };
 }
 
-/**
- * ใบเสนอราคา editor -- Quotation v2 (QUOTATION-V2-PLAN.md). One route (`/quotations/new?ticket=`
- * or `/quotations/:id`) that renders either the editable form (DRAFT + the viewer may edit) or a
- * read-only document summary (QuotationDocumentView) otherwise, with the action set the plan
- * specifies for the current status/role. Route-guarded by PATH_GUARDS' '/quotations' entry;
- * per-action gates below are quotationMeta.js predicates, re-checked server-side regardless.
- *
- * DEVIATION (less typing for sales, per the implementation brief): a brand-new quotation has no
- * id until the first "บันทึกร่าง" -- submit/approve/download are unavailable on /quotations/new
- * until that save creates the row and this page redirects to /quotations/:id. This is a plumbing
- * necessity (submit needs an id to act on), not an extra step: the very first click a sales rep
- * makes ("บันทึกร่าง") is the one that would have been required anyway.
- */
+/** ใบเสนอราคา editor -- Quotation v2 (QUOTATION-V2-PLAN.md). Route-guarded by PATH_GUARDS' '/quotations' entry;
+ * per-action gates below are quotationMeta.js predicates, re-checked server-side regardless. */
 export function QuotationEditorPage({ user, showToast }) {
   const { id } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -211,19 +198,16 @@ export function QuotationEditorPage({ user, showToast }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
-  // #M8: an approver's screen can go stale while they're reading it -- another approver (or the
-  // same one, in another tab) may decide it first. `isApprover` is the ROLE-only gate
-  // (canApproveDealQuotation, sales_manager/ceo) rather than canDecideDealQuotation, which also
-  // needs a docStatus this query itself is what supplies -- refetchInterval's function form reads
-  // the query's own last-known data instead, so this stays a plain boolean here.
+  // #M8: an approver's screen can go stale while they're reading it -- another approver (or the same one, in
+  // another tab) may decide it first.
   const isApprover = canApproveDealQuotation(user);
   const quotationQuery = useQuery({
     queryKey: queryKeys.dealQuotationDetail(id),
     queryFn: () => api.dealQuotations.get(id).then((r) => r.quotation),
     enabled: !!id,
     refetchOnWindowFocus: isApprover,
-    // Poll every ~30s ONLY while there is a live decision to make (PENDING_APPROVAL) and this
-    // user could be the one making it -- not on every quotation, and not once it's decided.
+    // Poll every ~30s ONLY while there is a live decision to make (PENDING_APPROVAL) and this user could be the
+    // one making it -- not on every quotation, and not once it's decided.
     refetchInterval: (query) => (isApprover && query.state.data?.docStatus === 'PENDING_APPROVAL' ? 30000 : false),
   });
   const quotation = quotationQuery.data ?? null;
@@ -309,8 +293,8 @@ export function QuotationEditorPage({ user, showToast }) {
       const res = await api.customers.search(recordCustomerName ?? '');
       return (res?.customers ?? []).find((c) => Number(c.id) === Number(recordCustomerId)) ?? null;
     },
-    // `ticket` is null on the inline-create path (DealCustomerCard holds the full record there), so
-    // this only ever runs on the ?ticket= and editable-draft paths.
+    // `ticket` is null on the inline-create path (DealCustomerCard holds the full record there), so this only ever
+    // runs on the ?ticket= and editable-draft paths.
     enabled: Boolean(recordCustomerId) && (!id || quotation?.docStatus === 'DRAFT'),
   });
   // What the rep just saved through CustomerDetailsFields, until the refetch catches up.
@@ -376,9 +360,9 @@ export function QuotationEditorPage({ user, showToast }) {
   const [recipientType, setRecipientType] = useState('');
   const { catalog: stageCatalog, isLoading: stageCatalogLoading } = useStageCatalog();
   const recipientTouchedRef = useRef(false);
-  // Once-per-ticket seed guards for the ?ticket= path (โครงการ and ผู้รับ — see their effects below).
-  // Declared here, ABOVE the main seeding effect, because that effect clears them when the rep picks
-  // a different deal through DealPicker.
+  // Once-per-ticket seed guards for the ?ticket= path (โครงการ and ผู้รับ — see their effects below). Declared
+  // here, ABOVE the main seeding effect, because that effect clears them when the rep picks a different deal
+  // through DealPicker.
   const projectNameSeededForTicket = useRef(null);
   const recipientSeededForTicket = useRef(null);
   function changeRecipient(code) {
@@ -387,9 +371,9 @@ export function QuotationEditorPage({ user, showToast }) {
     setDirty(true);
   }
 
-  // The rep's own remembered defaults / recent picks (quotationPrefs.js). Read ONCE, lazily, so a
-  // browser that throws on `localStorage` (private window, blocked site data) throws inside the
-  // module's own try/catch during the initial state computation and never on a later render.
+  // The rep's own remembered defaults / recent picks (quotationPrefs.js). Read ONCE, lazily, so a browser that
+  // throws on `localStorage` (private window, blocked site data) throws inside the module's own try/catch during
+  // the initial state computation and never on a later render.
   const [storedDefaults] = useState(() => readQuotationDefaults(user?.id));
   const [recentPicks, setRecentPicks] = useState(() => readRecentCatalogPicks(user?.id));
 
@@ -445,8 +429,8 @@ export function QuotationEditorPage({ user, showToast }) {
   const [contact, setContact] = useState(null);
   const contactPickerRef = useRef(null);
   function updateDealForm(patch) {
-    // The ดีล card reports ผู้รับ through the same patch-upward channel; it is quotation state, not
-    // deal-form state, so it is split out to its own setter.
+    // The ดีล card reports ผู้รับ through the same patch-upward channel; it is quotation state, not deal-form
+    // state, so it is split out to its own setter.
     const { recipientType: nextRecipient, ...dealPatch } = patch;
     if (nextRecipient !== undefined) changeRecipient(nextRecipient);
     // On the new-deal card the channel pre-fills ผู้รับ (DESIGNER_LED → ผู้ออกแบบ, OWNER_DIRECT →
@@ -489,24 +473,20 @@ export function QuotationEditorPage({ user, showToast }) {
   const [attachedPartyIds, setAttachedPartyIds] = useState({});
 
   const [items, setItems] = useState([]);
-  // v3: ส่วนลดพิเศษ rows live in their OWN ordered list, not in `items`. They always print LAST
-  // (DealQuotationService#buildItems moves every ADJUSTMENT to the end), and they belong to no
-  // ตำแหน่งติดตั้ง group — keeping them out of `items` means the group contiguity invariant above
-  // never has to reason about a row with no group, and the payload is simply items + adjustments,
-  // which is already the server's printed order.
+  // v3: ส่วนลดพิเศษ rows live in their OWN ordered list, not in `items`.
   const [adjustments, setAdjustments] = useState([]);
   // Files picked in the เอกสารแนบ panel before the quotation has ever been saved (File[]).
   const [pendingAttachments, setPendingAttachments] = useState([]);
   const [docSettings, setDocSettings] = useState(defaultDocSettings);
-  // A mode/currency change the rep did not directly choose (e.g. SPECIAL_SQM moved off when the
-  // document became English) is SAID, persistently, until the next settings change.
+  // A mode/currency change the rep did not directly choose (e.g. SPECIAL_SQM moved off when the document became
+  // English) is SAID, persistently, until the next settings change.
   const [settingsNotice, setSettingsNotice] = useState(null);
   // V192.5 — leaving "ผสมหลายวิธี" for one mode re-prices every row that is in another, so the rep
   // is asked first. `{ priceMode, count }` while the question is up (count = rows it would
   // re-price), null otherwise. See #changePriceMode.
   const [leaveMixedConfirm, setLeaveMixedConfirm] = useState(null);
-  // The last save's refusal, kept on screen (a toast vanishes). A 400 like "ยอดรวมหลังหักส่วนลด
-  // พิเศษติดลบ" is exactly the kind of error that must not be swallowed or scroll away.
+  // The last save's refusal, kept on screen (a toast vanishes). A 400 like "ยอดรวมหลังหักส่วนลด พิเศษติดลบ" is
+  // exactly the kind of error that must not be swallowed or scroll away.
   const [saveError, setSaveError] = useState(null);
   // The live direct quotation a refused create named, if any.
   const [saveErrorLiveQuotationId, setSaveErrorLiveQuotationId] = useState(null);
@@ -539,10 +519,8 @@ export function QuotationEditorPage({ user, showToast }) {
     () => hasSpecialPricing(docSettings.priceMode, [...items, ...adjustments]),
     [docSettings.priceMode, items, adjustments],
   );
-  // If a discount is cleared, an adjustment row removed, or the price mode changed so the
-  // document no longer has special pricing WHILE ระบุวันที่ is selected, switch back to
-  // จำนวนวัน automatically — so the next save sends validityMode DAYS rather than 400ing on a
-  // mode the document no longer qualifies for.
+  // If a discount is cleared, an adjustment row removed, or the price mode changed so the document no longer has
+  // special pricing WHILE ระบุวันที่ is selected, switch back to จำนวนวัน automatically.
   useEffect(() => {
     if (!docHasSpecialPricing && terms.validityMode === 'DATE') {
       setTerms((t) => ({ ...t, validityMode: 'DAYS' }));
@@ -567,10 +545,7 @@ export function QuotationEditorPage({ user, showToast }) {
   // reflects every row, since it explains the disabled บันทึกร่าง/ส่งขออนุมัติ buttons.
   const [touchedRowIds, setTouchedRowIds] = useState(() => new Set());
   const calcTimers = useRef({});
-  // #H2: a per-row request sequence. Bumped once per `updateItem` call (i.e. once per debounce
-  // restart, not once per fired request); a response is applied only if it still matches the
-  // LATEST sequence issued for that row at the time it settles, so an older, slower response
-  // arriving after a newer one can never clobber it -- see the response handler below.
+  // #H2: a per-row request sequence.
   const calcSeq = useRef({});
 
   // Seeds local editable state from the server exactly once per quotation/ticket; after that the
@@ -709,20 +684,17 @@ export function QuotationEditorPage({ user, showToast }) {
 
   function updateItem(clientId, patch) {
     setDirty(true);
-    // First real edit of this row -- flip on its inline red hints (see touchedRowIds' own comment
-    // above). A no-op setState once already touched (Set membership check first) rather than a
-    // fresh Set on every keystroke.
+    // First real edit of this row -- flip on its inline red hints (see touchedRowIds' own comment above). A no-op
+    // setState once already touched (Set membership check first) rather than a fresh Set on every keystroke.
     setTouchedRowIds((prev) => (prev.has(clientId) ? prev : new Set(prev).add(clientId)));
     // The setItems updater is a PURE `prev.map(...)`: React StrictMode double-invokes updaters to
     // catch impurity, and scheduling the debounced calculate-line call from inside it could schedule
     // it twice.
     setItems((prev) => prev.map((it) => (it.clientId === clientId ? { ...it, ...patch, calcPending: true } : it)));
 
-    // Read the row's current (already-patched) input fields from the `items` closure -- by the
-    // time this synchronous call returns, the setItems above has been applied (React 18 does not
-    // defer a synchronous updater's application past this line in an event handler), so `items`
-    // here is stale-by-one-render at worst and the merge below reconstructs the exact patched
-    // shape anyway.
+    // Read the row's current input fields from the `items` closure -- by the time this synchronous call returns,
+    // the setItems above has been applied, so `items` here is stale-by-one-render at worst and the merge below
+    // reconstructs the exact patched shape anyway.
     const currentItem = items.find((it) => it.clientId === clientId);
     if (!currentItem) return; // row was removed (e.g. by a fast double-click on ลบรายการ)
     const target = { ...currentItem, ...patch };
@@ -731,10 +703,9 @@ export function QuotationEditorPage({ user, showToast }) {
       isMixedPriceMode(docSettings.priceMode));
   }
 
-  /** The debounced calculate-line call for one row, in the price mode THAT ROW is in (which
-   * decides which mode-specific price itemInputFromRow sends — see its ⚠️ note): the quotation's,
-   * or on a mixed document the row's own, in which case `mixed` makes the request STATE it. Split
-   * out of updateItem so a price-mode switch can re-preview every tile row through the same path. */
+  /** The debounced calculate-line call for one row, in the price mode THAT ROW is in (which decides which
+   * mode-specific price itemInputFromRow sends — see its ⚠️ note): the quotation's, or on a mixed document the
+   * row's own, in which case `mixed` makes the request STATE it. */
   function scheduleCalc(clientId, target, priceMode, documentLanguage, mixed = false) {
     clearTimeout(calcTimers.current[clientId]);
     const seq = (calcSeq.current[clientId] = (calcSeq.current[clientId] ?? 0) + 1);
@@ -866,9 +837,9 @@ export function QuotationEditorPage({ user, showToast }) {
     applyPriceMode(priceMode);
   }
 
-  /** One row's own "วิธีคิดราคา" on a mixed document: that row, and only that row, moves to
-   * `priceMode` exactly as every row does on a whole-document switch, and is re-previewed stating
-   * its mode. Marked touched so the new mode's still-missing price shows its hint at once. */
+  /** One row's own "วิธีคิดราคา" on a mixed document: that row, and only that row, moves to `priceMode` exactly
+   * as every row does on a whole-document switch, and is re-previewed stating its mode. Marked touched so the
+   * new mode's still-missing price shows its hint at once. */
   function changeRowPriceMode(clientId, priceMode) {
     const current = items.find((it) => it.clientId === clientId);
     if (!current || rowPriceMode(PRICE_MODE_MIXED, current) === priceMode) return;
@@ -916,11 +887,11 @@ export function QuotationEditorPage({ user, showToast }) {
 
   function addAdjustment() {
     setDirty(true);
-    // Prefilled with the ยืนราคา end date, so the normal case — "3% if ordered within the offer
-    // period" — is one typed number. Blank when no ยืนราคา is chosen yet; the date is optional.
+    // Prefilled with the ยืนราคา end date, so the normal case — "3% if ordered within the offer period" — is one
+    // typed number. Blank when no ยืนราคา is chosen yet; the date is optional.
     const from = quotation?.quotationDate || todayIso();
-    // V178: in DATE mode the ยืนราคา end date IS terms.validityUntil already — no arithmetic
-    // needed (and none would be right, since a rep-typed date has no relation to `from`).
+    // V178: in DATE mode the ยืนราคา end date IS terms.validityUntil already — no arithmetic needed (and none
+    // would be right, since a rep-typed date has no relation to `from`).
     const deadline = terms.validityMode === 'DATE'
       ? (terms.validityUntil || '')
       : (terms.validityDays ? addDaysIso(from, Number(terms.validityDays)) : '');
@@ -983,9 +954,9 @@ export function QuotationEditorPage({ user, showToast }) {
   // group order. `insertIntoGroup` is the single place that decides WHERE a row lands, so add / move
   // / duplicate can't drift apart on that.
 
-  /** Splices `row` in immediately after the LAST item already in `targetGroupId` (or, for a group
-   * with no items yet, after the last item of the nearest preceding non-empty group) so the array
-   * stays grouped in `groups` order without ever sorting it. */
+  /** Splices `row` in immediately after the LAST item already in `targetGroupId` (or, for a group with no items
+   * yet, after the last item of the nearest preceding non-empty group) so the array stays grouped in `groups`
+   * order without ever sorting it. */
   function insertIntoGroup(list, row, targetGroupId, afterClientId = null) {
     const next = [...list];
     if (afterClientId) {
@@ -1046,8 +1017,8 @@ export function QuotationEditorPage({ user, showToast }) {
     setGroups((prev) => prev.map((g) => (g.groupId === groupId ? { ...g, label } : g)));
   }
 
-  /** Only ever offered for an EMPTY group (see the render below): removing a group that still
-   * holds items would silently delete them, and "ลบตำแหน่ง" does not read like "ลบรายการ". */
+  /** Only ever offered for an EMPTY group (see the render below): removing a group that still holds items would
+   * silently delete them, and "ลบตำแหน่ง" does not read like "ลบรายการ". */
   function removeGroup(groupId) {
     setDirty(true);
     setGroups((prev) => (prev.length <= 1 ? prev : prev.filter((g) => g.groupId !== groupId)));
@@ -1062,10 +1033,8 @@ export function QuotationEditorPage({ user, showToast }) {
     });
   }
 
-  /** "ทำซ้ำรายการ" — within this group (lands directly under the original) or into another one
-   * (lands at that group's end). The copy is a genuinely new row: fresh clientId, no server `id`,
-   * and already TOUCHED, because a duplicate of an incomplete row should show what it is still
-   * missing immediately rather than pretending to be a pristine blank. */
+  /** "ทำซ้ำรายการ" — within this group (lands directly under the original) or into another one (lands at that
+   * group's end). */
   function duplicateItem(clientId, targetGroupId) {
     setDirty(true);
     const copyId = newItemClientId();
@@ -1079,9 +1048,9 @@ export function QuotationEditorPage({ user, showToast }) {
     setTouchedRowIds((prev) => new Set(prev).add(copyId));
   }
 
-  /** One click on a "ใช้ล่าสุด" chip or a typeahead result records the row for next time. Purely
-   * best-effort: quotationPrefs swallows a storage throw and simply returns a list this component
-   * still renders, so the chips degrade rather than the editor breaking. */
+  /** One click on a "ใช้ล่าสุด" chip or a typeahead result records the row for next time. Purely best-effort:
+   * quotationPrefs swallows a storage throw and simply returns a list this component still renders, so the chips
+   * degrade rather than the editor breaking. */
   function handleCatalogPicked(cat) {
     setRecentPicks(pushRecentCatalogPick(user?.id, cat));
   }
@@ -1090,9 +1059,9 @@ export function QuotationEditorPage({ user, showToast }) {
     setDirty(true);
     setItems((prev) => prev.filter((it) => it.clientId !== clientId));
     clearTimeout(calcTimers.current[clientId]);
-    // #H2 cleanup: a removed row's timer/sequence entries are otherwise never freed for the
-    // life of the page -- a long editing session that adds and removes many rows leaks one
-    // object-map entry per removed clientId in each ref.
+    // #H2 cleanup: a removed row's timer/sequence entries are otherwise never freed for the life of the page -- a
+    // long editing session that adds and removes many rows leaks one object-map entry per removed clientId in each
+    // ref.
     delete calcTimers.current[clientId];
     delete calcSeq.current[clientId];
     setTouchedRowIds((prev) => {
@@ -1103,8 +1072,8 @@ export function QuotationEditorPage({ user, showToast }) {
     });
   }
 
-  // Every pending debounce belongs to this component instance -- clear them all on unmount so a
-  // calculate-line response can never land (and call setItems) after the page has navigated away.
+  // Every pending debounce belongs to this component instance -- clear them all on unmount so a calculate-line
+  // response can never land (and call setItems) after the page has navigated away.
   useEffect(() => () => {
     Object.values(calcTimers.current).forEach((timer) => clearTimeout(timer));
   }, []);
@@ -1145,8 +1114,8 @@ export function QuotationEditorPage({ user, showToast }) {
   const isEnglish = docSettings.documentLanguage === 'EN';
   const provisionalVat = Math.round(provisionalSubtotal * vatRateForLanguage(docSettings.documentLanguage) * 100) / 100;
   const provisionalGrand = provisionalSubtotal + provisionalVat;
-  // The server's own adjustment rows, in order, once the editor is clean — what each
-  // QuotationAdjustmentRow shows instead of its estimate.
+  // The server's own adjustment rows, in order, once the editor is clean — what each QuotationAdjustmentRow
+  // shows instead of its estimate.
   const serverAdjustments = useMemo(
     () => (quotation?.items ?? []).filter((it) => lineTypeOf(it) === LINE_TYPE_ADJUSTMENT),
     [quotation],
@@ -1179,8 +1148,8 @@ export function QuotationEditorPage({ user, showToast }) {
     [submitItemErrorsByRow],
   );
   const hasMissingLeadTimes = missingLeadTimeSeqs.length > 0;
-  // The EXACT wording DealQuotationService#requireEveryTileItemHasALeadTime's 400 uses, so a rep
-  // sees the same sentence whether the client or the server catches it.
+  // The EXACT wording DealQuotationService#requireEveryTileItemHasALeadTime's 400 uses, so a rep sees the same
+  // sentence whether the client or the server catches it.
   const leadTimeBlockMessage = hasMissingLeadTimes
     ? missingLeadTimeMessage(missingLeadTimeSeqs) : null;
 
@@ -1220,8 +1189,8 @@ export function QuotationEditorPage({ user, showToast }) {
     ? {
       id: recordCustomerId,
       name: quotation?.customerName ?? recordCustomerName,
-      // Raw from the DTO: a real one always carries these (null when empty); `undefined` on
-      // anything else reads as "unknown" and raises no warning.
+      // Raw from the DTO: a real one always carries these (null when empty); `undefined` on anything else reads as
+      // "unknown" and raises no warning.
       ...(quotation ? { address: quotation.customerAddress, taxId: quotation.customerTaxId, phone: quotation.customerPhone } : {}),
     }
     : null;
@@ -1299,20 +1268,9 @@ export function QuotationEditorPage({ user, showToast }) {
   // across several `await`s and must never act on a value that went stale while suspended.
   const hasValidationErrorsRef = useRef(hasValidationErrors);
   useEffect(() => { hasValidationErrorsRef.current = hasValidationErrors; }, [hasValidationErrors]);
-  /**
-   * Whether to SHOW that checklist — separate from whether it exists, which still gates the save
-   * buttons exactly as before.
-   *
-   * A pristine /quotations/new greeted the rep with four red-flagged failures ("ต้องเลือกลูกค้า",
-   * "ต้องเลือกโครงการ", "กรุณาระบุผู้สั่งซื้อ", "ต้องมีรายการสินค้าอย่างน้อย 1 รายการ") before a
-   * single keystroke — telling someone off for not yet having done what they just arrived to do.
-   * The item rows already got this right via `touchedRowIds`; this is the page-level equivalent.
-   *
-   * `dirty || Boolean(quotation)` deliberately, not `dirty` alone: an EXISTING draft — the
-   * sent-back-for-correction case, where the checklist is the whole point — must still show its
-   * gaps the moment it loads, before the rep touches anything. Only the brand-new, untouched
-   * editor is silenced.
-   */
+  /** Whether to SHOW that checklist — separate from whether it exists, which still gates the save buttons exactly
+   * as before. Only the brand-new, untouched editor is silenced. The item rows already got this right via
+   * `touchedRowIds`; this is the page-level equivalent. */
   const showValidationSummary = hasValidationErrors && (dirty || Boolean(quotation));
 
   // useCallback so the autosave effect's backoff check can list it as a dependency with a STABLE
@@ -1342,15 +1300,13 @@ export function QuotationEditorPage({ user, showToast }) {
     creditDays: terms.noDeposit ? null : (terms.creditDays === '' ? null : Number(terms.creditDays)),
     fullPaymentTerm: terms.noDeposit ? (terms.fullPaymentTerm || null) : null,
     validityDays: terms.validityDays === '' ? null : Number(terms.validityDays),
-    // V178: validityDays is ALWAYS sent, in both modes (the days select keeps its last value even
-    // while ระบุวันที่ is showing — see the toggle below) so DAYS mode has a real number to fall
-    // back to the moment the rep switches back, or the moment special pricing is lost and this
-    // editor auto-switches them back (see the effect near the toggle).
+    // V178: validityDays is ALWAYS sent, in both modes so DAYS mode has a real number to fall back to the moment
+    // the rep switches back, or the moment special pricing is lost and this editor auto-switches them back.
     validityMode: terms.validityMode || null,
     validityUntil: terms.validityMode === 'DATE' ? (terms.validityUntil || null) : null,
     customerNotes: terms.customerNotes || null,
-    // v3/v3b: ALWAYS explicit — see defaultDocSettings. currency is derived from the language
-    // (the server refuses any other pairing), sent so the request states what the rep saw.
+    // v3/v3b: ALWAYS explicit — see defaultDocSettings. currency is derived from the language (the server refuses
+    // any other pairing), sent so the request states what the rep saw.
     priceMode: docSettings.priceMode,
     documentLanguage: docSettings.documentLanguage,
     currency: currencyForLanguage(docSettings.documentLanguage),
@@ -1474,8 +1430,8 @@ export function QuotationEditorPage({ user, showToast }) {
     if (editSeqRef.current === sentSeq) setDirty(false);
   }
 
-  // "บันทึกอัตโนมัติแล้ว HH:mm" — set by an autosave, cleared by any later manual save so the two
-  // indicators never contradict each other.
+  // "บันทึกอัตโนมัติแล้ว HH:mm" — set by an autosave, cleared by any later manual save so the two indicators
+  // never contradict each other.
   const [autoSavedAt, setAutoSavedAt] = useState(null);
 
   /** The rep's own terms become the starting point for their NEXT new quotation. Best-effort by
@@ -1489,8 +1445,8 @@ export function QuotationEditorPage({ user, showToast }) {
       remainderMode: terms.remainderMode,
       creditDays: terms.creditDays,
       validityDays: terms.validityDays,
-      // V178: the MODE is remembered (a rep who dates their validity keeps starting there); the
-      // DATE itself never is — see quotationPrefs.js's own comment on DEFAULT_TERM_FIELDS.
+      // V178: the MODE is remembered (a rep who dates their validity keeps starting there); the DATE itself never is
+      // — see quotationPrefs.js's own comment on DEFAULT_TERM_FIELDS.
       validityMode: terms.validityMode,
       originCountry: items[items.length - 1]?.originCountry ?? '',
     });
@@ -1549,9 +1505,9 @@ export function QuotationEditorPage({ user, showToast }) {
   // บันทึกร่าง never consults this ref: it always attempts and always toasts.
   const lastFailedAutoPayloadRef = useRef(null);
 
-  // `variables.auto` marks an AUTOSAVE (see the debounce effect below): same request, same
-  // invalidation, but no toast — a toast every two seconds while typing would be noise, and the
-  // "บันทึกอัตโนมัติแล้ว HH:mm" line in the header is the quieter signal that replaces it.
+  // `variables.auto` marks an AUTOSAVE (see the debounce effect below): same request, same invalidation, but no
+  // toast — a toast every two seconds while typing would be noise, and the "บันทึกอัตโนมัติแล้ว HH:mm" line in
+  // the header is the quieter signal that replaces it.
   const updateMutation = useMutation({
     // The request and its edit-seq/clientId snapshot are built TOGETHER inside mutationFn (never
     // onMutate), read off the same instant (see buildSaveRequest).
@@ -1586,10 +1542,9 @@ export function QuotationEditorPage({ user, showToast }) {
         showToast('success', 'บันทึกร่างแล้ว');
       }
     },
-    // An autosave failure is reported exactly like a manual one. Staying silent would be worse:
-    // the rep would keep typing believing their work is safe. It does NOT clear `dirty`, so the
-    // next edit simply schedules another attempt (unless that edit reproduces the SAME payload —
-    // see the backoff ref above).
+    // An autosave failure is reported exactly like a manual one. Staying silent would be worse: the rep would keep
+    // typing believing their work is safe. It does NOT clear `dirty`, so the next edit simply schedules another
+    // attempt (unless that edit reproduces the SAME payload — see the backoff ref above).
     onError: (error) => {
       setSaveError(error.message || 'บันทึกไม่สำเร็จ');
       showToast('error', error.message || 'บันทึกไม่สำเร็จ');
@@ -1607,9 +1562,8 @@ export function QuotationEditorPage({ user, showToast }) {
   // beside submitMutation's own onError), which submit's silent, atomic save-then-submit UX doesn't
   // want. So `pendingSaveRef` covers every PUT this page issues, but not exclusively `runSave`'s.
   const pendingSaveRef = useRef(null);
-  // The autosave debounce's own pending timer, if any — cleared by the download flush so a stale
-  // debounce firing mid-download can never race it (a second concurrent PUT while the flush's own
-  // save is already in flight).
+  // The autosave debounce's own pending timer, if any — cleared by the download flush so a stale debounce firing
+  // mid-download can never race it (a second concurrent PUT while the flush's own save is already in flight).
   const autosaveTimerRef = useRef(null);
   const { mutateAsync: runUpdateAsync } = updateMutation;
   const runSave = useCallback((auto) => {
@@ -1651,13 +1605,9 @@ export function QuotationEditorPage({ user, showToast }) {
       await contactPickerRef.current?.flushPendingContactSave();
       if (dirty) {
         const { payload, sentSeq, sentClientIds } = buildSaveRequest();
-        // D3 fix (Opus review 2026-09-16): tracked in `pendingSaveRef` by hand, the same
-        // self-clearing shape `runSave` uses — purely so a download flush racing this pre-save
-        // sees it via `pendingSaveRef.current` and awaits it instead of firing a second, overlapping
-        // PUT (DealQuotationService#resolveContact reads live state, so two concurrent writes can
-        // otherwise race each other into Postgres in either order). Deliberately NOT routed
-        // through `runSave`/`updateMutation` itself — see `pendingSaveRef`'s own comment above for
-        // why that would change submit's toasts.
+        // D3 fix: tracked in `pendingSaveRef` by hand, the same self-clearing shape `runSave` uses — purely so a
+        // download flush racing this pre-save sees it via `pendingSaveRef.current` and awaits it instead of firing a
+        // second, overlapping PUT.
         const savePromise = api.dealQuotations.update(id, payload);
         pendingSaveRef.current = savePromise;
         savePromise.catch(() => {}).finally(() => {
@@ -1671,14 +1621,9 @@ export function QuotationEditorPage({ user, showToast }) {
       return api.dealQuotations.submit(id);
     },
     onSuccess: (res) => {
-      // Owner clarification (2026-09-15): submit() on a ตีกลับ'd draft now mints a NEW revision
-      // instead of resubmitting the SAME row (DealQuotationService#submit's own status-machine
-      // comment) -- res.quotation.id can differ from this page's OWN `id` now, where it never
-      // could before. Mirrors reviseMutation's own onSuccess just below (the createRevision
-      // button already had to solve this exact "server minted a different id" case): navigate
-      // there instead of caching the NEW quotation's data under the OLD id's query key, which
-      // would leave the rep looking at this page's stale route while the cache silently disagreed
-      // with it (and a refresh would then re-fetch the OLD, now-superseded-in-waiting row).
+      // Owner clarification (2026-09-15): submit() on a ตีกลับ'd draft now mints a NEW revision instead of
+      // resubmitting the SAME row (DealQuotationService#submit's own status-machine comment) -- res.quotation.id can
+      // differ from this page's OWN `id` now, where it never could before.
       if (String(res.quotation.id) !== id) {
         queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
         invalidateDealViews();
@@ -2659,8 +2604,8 @@ export function QuotationEditorPage({ user, showToast }) {
                       </button>
                     ))}
                   </div>
-                  {/* Not rendered where it cannot be chosen (an English document, a quotation from
-                      a คำขอราคา) — the same "not merely disabled" rule as SPECIAL_SQM above. */}
+                  {/* Not rendered where it cannot be chosen (an English document, a quotation from a คำขอราคา) — the same "not
+                   * merely disabled" rule as SPECIAL_SQM above. */}
                   {mixedPriceModeAvailable(docSettings.documentLanguage, quotation?.origin) ? (
                     <>
                       <span className="text-2xs font-bold text-text-muted">หรือให้แต่ละรายการเลือกเอง</span>
@@ -2772,9 +2717,8 @@ export function QuotationEditorPage({ user, showToast }) {
                           action on the group itself (remove it, when empty). */}
                       <div className="flex min-w-0 flex-wrap items-center gap-2">
                         <span className="text-2xs font-bold text-text-muted">{groupItems.length} รายการ</span>
-                        {/* Only for an EMPTY group, and never for the last one standing — see
-                            removeGroup. Removing a group that still holds items would delete
-                            them, which this label does not say. */}
+                        {/* Only for an EMPTY group, and never for the last one standing — see removeGroup. Removing a group that still
+                         * holds items would delete them, which this label does not say. */}
                         {groups.length > 1 && groupItems.length === 0 ? (
                           <Button variant="icon" size="sm" className="mobile:min-h-[44px] mobile:w-11" onClick={() => removeGroup(group.groupId)} title="ลบตำแหน่งนี้" aria-label={`ลบตำแหน่งติดตั้งที่ ${groupIndex + 1}`}>
                             <Icon name="close" size={16} />
@@ -2792,8 +2736,8 @@ export function QuotationEditorPage({ user, showToast }) {
                     ) : (
                       <ul className="m-0 grid list-none gap-3 pl-0">
                         {groupItems.map((item) => {
-                          // The FLAT index — what "รายการที่ N" in the validation summary counts,
-                          // and the order the document prints — never the index within the group.
+                          // The FLAT index — what "รายการที่ N" in the validation summary counts, and the order the document prints —
+                          // never the index within the group.
                           const index = items.indexOf(item);
                           if (lineTypeOf(item) === LINE_TYPE_PLAIN) {
                             return (

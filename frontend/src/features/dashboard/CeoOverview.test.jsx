@@ -12,14 +12,9 @@ import {
 
 globalThis.React = React;
 
-// This component reads five endpoints the CEO already has full access to
-// (see routes.js: canViewTickets/canViewCommissions/canViewPricingRequestQueue/
-// canViewAllOvertime/canViewAllLeave all include 'ceo') and never calls a
-// mutation itself — every row's CTA is a route change, asserted below via a
-// real MemoryRouter navigation, not a mocked useNavigate. Per CLAUDE.md, this
-// is UI-level only: it proves the component derives the right rows/routes
-// from a given API response shape, not that the Java service enforces
-// anything — there is no authz change in this branch to verify.
+// This component reads five endpoints the CEO already has full access to and never calls a mutation itself —
+// every row's CTA is a route change, asserted below via a real MemoryRouter navigation, not a mocked
+// useNavigate.
 vi.mock('../../api/index.js', () => ({
   api: {
     tickets: { list: vi.fn() },
@@ -116,12 +111,12 @@ function mockAllData() {
     if (params.status === 'SUBMITTED') {
       return Promise.resolve({
         requests: [
-          // No manager stage at all -> the CEO reviews it directly. Note reports_to (55) is NOT the
-          // CEO: under the old reports_to-based rule this row was invisible to them, which is the
-          // regression the server-side routing change would otherwise have left in place.
+          // No manager stage at all -> the CEO reviews it directly. Note reports_to (55) is NOT the CEO: under the old
+          // reports_to-based rule this row was invisible to them, which is the regression the server-side routing change
+          // would otherwise have left in place.
           { id: 202, employeeName: 'พนักงาน ไม่มีผู้จัดการ', workDate: '2026-07-21', managerEmployeeId: 55, hasManagerApprover: false },
-          // Has a ผู้จัดการ, so it is the manager's to review first — must stay off the CEO's list
-          // even though reports_to happens to point straight at the CEO.
+          // Has a ผู้จัดการ, so it is the manager's to review first — must stay off the CEO's list even though
+          // reports_to happens to point straight at the CEO.
           { id: 203, employeeName: 'พนักงาน มีผู้จัดการอื่น', workDate: '2026-07-21', managerEmployeeId: 999, hasManagerApprover: true },
         ],
       });
@@ -175,9 +170,8 @@ function renderOverview(summary = dashboardSummary) {
   );
 }
 
-// No @testing-library/jest-dom in this project (see src/test/setup.js) — plain
-// .textContent assertions instead of toHaveTextContent, matching every other
-// test file in this repo.
+// No @testing-library/jest-dom in this project (see src/test/setup.js) — plain .textContent assertions instead
+// of toHaveTextContent, matching every other test file in this repo.
 function probeText() {
   return screen.getByTestId('location-probe').textContent;
 }

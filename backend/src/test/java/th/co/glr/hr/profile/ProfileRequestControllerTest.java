@@ -52,10 +52,9 @@ class ProfileRequestControllerTest {
 
     @Test
     void nonEmployeeRoleWithAnEmployeeIdReachesTheServiceRatherThanBeing403d() throws Exception {
-        // The gate is deliberately identity-based now (see ProfileRequestController#create), so a
-        // role that is not "employee" must reach the service layer instead of being refused here
-        // at the controller -- ProfileRequestService#create is what actually enforces employeeId
-        // != null.
+        // The gate is deliberately identity-based now (see ProfileRequestController#create), so a role that is not
+        // "employee" must reach the service layer instead of being refused here at the controller --
+        // ProfileRequestService#create is what actually enforces employeeId != null.
         ProfileRequestDto stub = new ProfileRequestDto(1L, 10L, "phone", "เบอร์โทรศัพท์",
             "02-000-0000", "089-999-9999", "sales", LocalDate.now(), "pending", null, null);
         when(profileRequestService.create(any(), any())).thenReturn(stub);

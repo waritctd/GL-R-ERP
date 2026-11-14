@@ -74,14 +74,8 @@ public class EmployeeAuthRepository {
         }
     }
 
-    /**
-     * Whether this employee holds the admin capability, for the UI hint on {@link AuthResponse}.
-     *
-     * <p>Intentionally duplicated by {@code ActivityLogRepository#isAdmin} rather than shared. That
-     * one is the security gate and must not depend on the auth module; this one only decides
-     * whether a nav item renders. Both read the same column with the same predicate, and the gate
-     * is what actually protects the data.
-     */
+    /** Whether this employee holds the admin capability, for the UI hint on AuthResponse. That one is the security
+     * gate and must not depend on the auth module; this one only decides whether a nav item renders. */
     public boolean isAdmin(long employeeId) {
         Boolean admin = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -149,11 +143,9 @@ public class EmployeeAuthRepository {
             """, Map.of("id", employeeId, "hash", passwordHash));
     }
 
-    /**
-     * Admin reset: overwrites the password with a freshly issued temporary hash and forces a
-     * change on next login. Unlike {@link #backfillTemporaryPassword} there is NO {@code IS NULL}
-     * guard — an HR reset is an intentional overwrite of whatever password the row currently has.
-     */
+    /** Admin reset: overwrites the password with a freshly issued temporary hash and forces a change on next login.
+     * Unlike #backfillTemporaryPassword there is NO IS NULL guard — an HR reset is an intentional overwrite of
+     * whatever password the row currently has. */
     public void setTemporaryPassword(long employeeId, String passwordHash) {
         jdbc.update("""
             UPDATE hr.employee
@@ -164,11 +156,8 @@ public class EmployeeAuthRepository {
             """, Map.of("id", employeeId, "hash", passwordHash));
     }
 
-    /**
-     * Seeds a temporary password hash for a row that has none, leaving
-     * must_change_password = TRUE. The {@code IS NULL} guard makes it idempotent and
-     * race-safe so it never overwrites a password a user has already set.
-     */
+    /** Seeds a temporary password hash for a row that has none, leaving must_change_password = TRUE. The IS NULL
+     * guard makes it idempotent and race-safe so it never overwrites a password a user has already set. */
     public void backfillTemporaryPassword(long employeeId, String passwordHash) {
         jdbc.update("""
             UPDATE hr.employee

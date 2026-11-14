@@ -102,10 +102,7 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(eventCount(ticket, TicketEventKind.STAGE_CHANGED)).isEqualTo(1);
     }
 
-    /** A revision or reorder copies every header field verbatim — the recipient included. Before
-     * slice 2 the copy hard-coded 'UNSPECIFIED' (harmless while every direct row was UNSPECIFIED);
-     * now it would silently drop the rep's choice from the document the deal advertises as live.
-     * (mockApi's mintDealQuotationRevision/Reorder structuredClone the source, recipient and all.) */
+    /** A revision or reorder copies every header field verbatim — the recipient included. */
     @Test
     void revisionAndReorder_carryTheSourceRecipientAndLabel() {
         long ticket = deal(salesActor, "DESIGNER_LED");
@@ -189,9 +186,9 @@ class DealQuotationRecipientIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(recipientColumns(approved.id())).containsEntry("recipient_type", "OWNER");
     }
 
-    /** A PRICING_REQUEST row's recipient belongs to its คำขอราคา — ANY value is refused, even a
-     * well-formed one, and even the one already stored. (Omitting it is the pre-existing path, pinned
-     * by PricingRequestQuotationIntegrationTest's own update tests, whose requests carry none.) */
+    /** A PRICING_REQUEST row's recipient belongs to its คำขอราคา — ANY value is refused, even a well-formed one,
+     * and even the one already stored. (Omitting it is the pre-existing path, pinned by
+     * PricingRequestQuotationIntegrationTest's own update tests, whose requests carry none.) */
     @Test
     void update_recipientOnAPricingRequestOriginQuotation_is409_evenForTheStoredValue() {
         long ticket = deal(salesActor);

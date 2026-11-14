@@ -4,14 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-/**
- * Plain unit tests (no DB) for the F-SM-001 line-prefill fallback chain (owner decision 09-18 #3
- * §A). {@link ImportRequestQueryRepository#factoryResolutionCandidates} and {@code
- * ImportRequestService#resolveFactoryGroups} are exercised end-to-end, against real Postgres, by
- * {@code ImportRequestFactoryResolutionIntegrationTest}'s prefill tests — these pin the pure
- * cascade logic itself in isolation, which is what makes the mutation-check in this branch's PR
- * description possible without a database in the loop.
- */
+/** Plain unit tests (no DB) for the F-SM-001 line-prefill fallback chain (owner decision 09-18 #3 §A). */
 class ImportRequestLinePrefillTest {
 
     // ── firstNonBlank (the code cascade AND the color/texture cascade share this) ────────────────

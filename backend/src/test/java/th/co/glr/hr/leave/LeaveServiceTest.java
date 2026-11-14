@@ -183,12 +183,9 @@ class LeaveServiceTest {
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
         when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        // NOTE: paidDays/unpaidDays are matched with BigDecimal.ZERO/BigDecimal.ONE below (scale 0),
-        // NOT "0.00"/"1.00" -- a single-day request's totalDays (LeaveDayMath's ONE_DAY constant) is
-        // itself scale-0, and every arithmetic step downstream (min/subtract) preserves that scale
-        // when both operands share it. Mockito's eq() uses BigDecimal#equals, which is
-        // SCALE-SENSITIVE ("0.00" != "0") -- verified empirically (not guessed) before writing this
-        // stub, since guessing scale here is exactly the kind of thing that silently breaks a mock.
+        // NOTE: paidDays/unpaidDays are matched with BigDecimal.ZERO/BigDecimal.ONE below (scale 0), NOT "0.00"/"1.00"
+        // -- a single-day request's totalDays (LeaveDayMath's ONE_DAY constant) is itself scale-0, and every
+        // arithmetic step downstream (min/subtract) preserves that scale when both operands share it.
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ONE), eq(request.startDate().getYear()),
             eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
@@ -267,8 +264,8 @@ class LeaveServiceTest {
         LeaveRequestDto allowed = leaveService.submit(request, user("employee", 10L));
         assertThat(allowed.status()).isEqualTo("SUBMITTED");
 
-        // Side 2: 3 occasions already used this month -> the 4th -> REJECTED. Re-stub the SAME
-        // repository mock, same request, only the occasion count changes.
+        // Side 2: 3 occasions already used this month -> the 4th -> REJECTED. Re-stub the SAME repository mock, same
+        // request, only the occasion count changes.
         when(leaveRepository.countNoCertificateRequestsInMonth(eq(10L), eq("SICK"),
             eq(request.startDate().withDayOfMonth(1)), any(LocalDate.class), any(Collection.class)))
             .thenReturn(3);
@@ -290,8 +287,8 @@ class LeaveServiceTest {
 
     @Test
     void submissionLandsSubmittedForSickLeaveWithACertificateFiledWithinTheWorkingDayWindow() {
-        // FIXED_NOW = Wed 2026-07-01. Start date Mon 2026-06-29: addWorkingDays(Mon, 3) = Thu
-        // 2026-07-02 -- "today" (2026-07-01) is on/before that deadline -> ON TIME -> SUBMITTED.
+        // FIXED_NOW = Wed 2026-07-01. Start date Mon 2026-06-29: addWorkingDays(Mon, 3) = Thu 2026-07-02 -- "today"
+        // (2026-07-01) is on/before that deadline -> ON TIME -> SUBMITTED.
         LocalDate start = LocalDate.parse("2026-06-29");
         SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", start, start, "Fever, saw a doctor");
         MultipartFile certificate = new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "cert".getBytes());
@@ -363,13 +360,9 @@ class LeaveServiceTest {
 
     @Test
     void submissionAllowsCertificatelessSickLeaveEvenWhenFiledLongAfterTheStartDate() {
-        // THE combined case the task calls out explicitly: no certificate AND beyond the 3-working-
-        // day window (same start date as the "filed late" test above, which is AUTO_REJECTED WITH a
-        // certificate) -- but WITHOUT a certificate and with tolerance still available, this lands
-        // SUBMITTED. The filing-window clause governs the certificate path only; it never gates the
-        // no-certificate tolerance path. Occasion count 0 (1st this month) proves the interaction, not
-        // just "no certificate ever needs one" -- the SAME date that fails the window on the
-        // certificate path passes cleanly here.
+        // THE combined case the task calls out explicitly: no certificate AND beyond the 3-working- day window (same
+        // start date as the "filed late" test above, which is AUTO_REJECTED WITH a certificate) -- but WITHOUT a
+        // certificate and with tolerance still available, this lands SUBMITTED.
         LocalDate start = LocalDate.parse("2026-06-01");
         SubmitLeaveRequest request = new SubmitLeaveRequest(null, "SICK", start, start, "Minor illness, no doctor visit, filed late");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -392,8 +385,8 @@ class LeaveServiceTest {
 
     @Test
     void submissionOnLeaveWithoutPayTypeIsAlwaysFullyUnpaid() {
-        // LEAVE_WITHOUT_PAY has a 0-day statutory quota, so remaining is always 0 regardless of
-        // usage: every requested day is unpaid from day 1.
+        // LEAVE_WITHOUT_PAY has a 0-day statutory quota, so remaining is always 0 regardless of usage: every requested
+        // day is unpaid from day 1.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null,
             "LEAVE_WITHOUT_PAY",
@@ -405,9 +398,8 @@ class LeaveServiceTest {
         when(leaveRepository.findLeaveType("LEAVE_WITHOUT_PAY")).thenReturn(Optional.of(leaveWithoutPayType()));
         when(leaveRepository.sumUsedDays(eq(10L), eq("LEAVE_WITHOUT_PAY"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
-        // leaveWithoutPayType() carries a real (non-null) paidDaysCap of 0.00, so #submit's
-        // boundByPaidCap path calls sumPaidDays -- must be stubbed or Mockito's default null return
-        // NPEs inside BigDecimal#subtract.
+        // leaveWithoutPayType() carries a real (non-null) paidDaysCap of 0.00, so #submit's boundByPaidCap path calls
+        // sumPaidDays -- must be stubbed or Mockito's default null return NPEs inside BigDecimal#subtract.
         when(leaveRepository.sumPaidDays(eq(10L), eq("LEAVE_WITHOUT_PAY"), eq(request.startDate().getYear()), any(Collection.class)))
             .thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
@@ -474,9 +466,8 @@ class LeaveServiceTest {
             unpaidDays.capture(), eq(request.startDate().getYear()),
             eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(totalDays.getValue()).isEqualByComparingTo("0.50");
-        // Wrong-way-round (CLAUDE.md): the superseded schedule-span-divisor draft (0.44) is NOT what
-        // should be persisted -- if a future edit reintroduced it, THIS assertion (not just the
-        // positive one above) must go red.
+        // Wrong-way-round (CLAUDE.md): the superseded schedule-span-divisor draft (0.44) is NOT what should be
+        // persisted -- if a future edit reintroduced it, THIS assertion (not just the positive one above) must go red.
         assertThat(totalDays.getValue()).isNotEqualByComparingTo("0.44");
         assertThat(paidDays.getValue()).isEqualByComparingTo("0.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("0.50");
@@ -573,8 +564,8 @@ class LeaveServiceTest {
         ));
     }
 
-    // Each bound defaults INDEPENDENTLY -- a caller that narrows one edge must not silently lose
-    // the widened default on the other. MyLeaveTab's filter bar can submit either date alone.
+    // Each bound defaults INDEPENDENTLY -- a caller that narrows one edge must not silently lose the widened
+    // default on the other. MyLeaveTab's filter bar can submit either date alone.
     @Test
     void listDefaultsEachDateBoundIndependently() {
         when(leaveRepository.findRequests(any(LeaveFilter.class))).thenReturn(List.of());
@@ -661,12 +652,7 @@ class LeaveServiceTest {
         verify(auditService).record(ceo, "APPROVE_LEAVE_REQUEST", "leave_request", 77L, submitted, approved);
     }
 
-    /**
-     * Wrong-way-round for the same change: REVIEW_ALL_ROLES must not have widened past "hr"/"ceo".
-     * Employee 10's request has a DIFFERENT manager of record (99L), so a "sales" actor who is
-     * neither in REVIEW_ALL_ROLES nor employee 10's direct manager must still 403 -- proves the
-     * reach stops at ceo rather than becoming "any role".
-     */
+    /** Wrong-way-round for the same change: REVIEW_ALL_ROLES must not have widened past "hr"/"ceo". */
     @Test
     void aNonReviewerRoleCannotApproveSomeoneElsesLeave() {
         when(leaveRepository.findById(77L)).thenReturn(Optional.of(
@@ -708,8 +694,8 @@ class LeaveServiceTest {
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("SUBMITTED");
-        // Both years must have been consulted, proving the request's days were genuinely attributed
-        // per year, not just against the start year the way the pre-fix single-quotaYear model did.
+        // Both years must have been consulted, proving the request's days were genuinely attributed per year, not just
+        // against the start year the way the pre-fix single-quotaYear model did.
         verify(leaveRepository).sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class));
         verify(leaveRepository).sumUsedDays(eq(10L), eq("VACATION"), eq(2027), any(Collection.class));
         // The per-year attribution itself must have been persisted, one row per year touched.
@@ -767,11 +753,8 @@ class LeaveServiceTest {
 
     @Test
     void cancelAfterAnAlreadyProcessedMonthRecordsAPayrollCorrection() {
-        // Cancel-after-close reversal (v1/minimal design): cancelling an APPROVED leave whose unpaid
-        // days already landed in a PROCESSED payroll month records a correction so the credit isn't
-        // silently lost. This is a Mockito-level proof that LeaveService calls through to the
-        // repository correctly; the real weekday-math + real-DB behaviour is covered by
-        // LeaveDayMathTest and the integration tests.
+        // Cancel-after-close reversal (v1/minimal design): cancelling an APPROVED leave whose unpaid days already
+        // landed in a PROCESSED payroll month records a correction so the credit isn't silently lost.
         LeaveRequestDto approved = requestDto(80L, 10L, "APPROVED", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), "1.00", "1.00");
         when(leaveRepository.findById(80L)).thenReturn(Optional.of(approved));
         when(leaveRepository.cancel(80L, 20L, null)).thenReturn(1);
@@ -807,10 +790,8 @@ class LeaveServiceTest {
             org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong(), any(LocalDate.class), any(BigDecimal.class));
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Notification coverage gap B: cancel() must notify the requester and whoever the request was
-    // still pending with -- but NOT an already-decided request's approvers.
-    // ─────────────────────────────────────────────────────────────────────
+    // Notification coverage gap B: cancel() must notify the requester and whoever the request was still pending
+    // with -- but NOT an already-decided request's approvers.
 
     @Test
     void selfCancelOfSubmittedRequestNotifiesEmployeeAndThePendingManager() {
@@ -821,8 +802,8 @@ class LeaveServiceTest {
 
         leaveService.cancel(90L, null, user("employee", 10L));
 
-        // Self-cancel: reviewedById is null on the after-cancel row, same shape LeaveRepository#cancel
-        // itself writes for an employee cancelling their own request (reviewer ? actorId : null).
+        // Self-cancel: reviewedById is null on the after-cancel row, same shape LeaveRepository#cancel itself writes
+        // for an employee cancelling their own request (reviewer ? actorId : null).
         verify(notificationService).notify(eq(10L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
         verify(notificationService).notify(eq(99L), eq("LEAVE_CANCELLED"), any(String.class), any(String.class), eq("/leave"), eq(true));
     }
@@ -883,19 +864,12 @@ class LeaveServiceTest {
         assertThat(body.getValue()).contains("hr ยกเลิก");
     }
 
-    /**
-     * BLOCKING 1's Leave-side failure case: employee E's direct manager M (reachable via {@code
-     * isDirectManager}, not just HR's blanket {@code REVIEW_ALL_ROLES}) cancels E's own SUBMITTED
-     * request. {@code before.managerEmployeeId()} resolves to M -- the SAME person doing the
-     * cancelling -- so M must not be told about the cancellation M themselves just performed.
-     */
+    /** BLOCKING 1's Leave-side failure case: employee E's direct manager M (reachable via isDirectManager, not just
+     * HR's blanket REVIEW_ALL_ROLES) cancels E's own SUBMITTED request. */
     @Test
     void directManagerCancelOfSubmittedRequestDoesNotNotifyThemselfAsThePendingManager() {
-        // S-1 (review, second pass): manager id raised from 99L to 10099L -- a realistic 4-5 digit
-        // id, OUTSIDE Java's Long cache (-128..127). 99L could never catch a regression from the
-        // primitive-`long` self-skip comparison back to a boxed-`Long` reference comparison: cached
-        // Longs of the same small value are always `==` equal regardless, so the assertion below
-        // would stay green either way. Proven: see the mutation-check in the PR report.
+        // S-1 (review, second pass): manager id raised from 99L to 10099L -- a realistic 4-5 digit id, OUTSIDE Java's
+        // Long cache (-128..127). Proven: see the mutation-check in the PR report.
         LeaveRequestDto submitted = cancelFixtureDto(98L, "SUBMITTED", null, null, 10099L);
         LeaveRequestDto cancelled = cancelFixtureDto(98L, "CANCELLED", 10099L, "Test Manager", 10099L);
         when(leaveRepository.findById(98L)).thenReturn(Optional.of(submitted)).thenReturn(Optional.of(cancelled));
@@ -960,9 +934,8 @@ class LeaveServiceTest {
      */
     @Test
     void reviewerCancelOfApprovedRequestSkipsNotifyingSelfWhenActorIsTheOriginalApprover() {
-        // S-1 (review, second pass): HR actor id raised from 20L to 10020L -- same cache-blind-spot
-        // reasoning as directManagerCancelOfSubmittedRequestDoesNotNotifyThemselfAsThePendingManager
-        // above.
+        // S-1 (review, second pass): HR actor id raised from 20L to 10020L -- same cache-blind-spot reasoning as
+        // directManagerCancelOfSubmittedRequestDoesNotNotifyThemselfAsThePendingManager above.
         LeaveRequestDto approved = cancelFixtureDto(95L, "APPROVED", 10020L, "Test HR", 99L);
         LeaveRequestDto cancelled = cancelFixtureDto(95L, "CANCELLED", 10020L, "Test HR", 99L);
         when(leaveRepository.findById(95L)).thenReturn(Optional.of(approved)).thenReturn(Optional.of(cancelled));
@@ -1126,8 +1099,8 @@ class LeaveServiceTest {
         assertThat(body.getValue()).contains("รอฝ่ายบุคคลอนุมัติ").doesNotContain("รอผู้จัดการอนุมัติ");
     }
 
-    /** The ordinary path still names the manager -- the counterpart to the test above, so a mutation
-     *  that hardcodes either branch reddens one of the two. */
+    /** The ordinary path still names the manager -- the counterpart to the test above, so a mutation that hardcodes
+     * either branch reddens one of the two. */
     @Test
     void submitWithAManagerOfRecordTellsTheEmployeeTheManagerIsReviewing() {
         SubmitLeaveRequest request = validSubmit(10010L);
@@ -1182,8 +1155,8 @@ class LeaveServiceTest {
             .contains("ยื่นล่วงหน้าไม่ทันกำหนด แจ้งเตือนที่หนึ่ง")
             .contains("เกินสิทธิ์ปีแรก แจ้งเตือนที่สอง")
             .contains("หากอนุมัติ พนักงานจะไม่ได้รับค่าจ้าง 2 วัน");
-        // The plain-text body is shared with the email surface -- see NotificationEmailService#send,
-        // which converts \n to <br>. No HTML/styled callout belongs in this string.
+        // The plain-text body is shared with the email surface -- see NotificationEmailService#send, which converts \n
+        // to . No HTML/styled callout belongs in this string.
         assertThat(body.getValue()).doesNotContain("<");
     }
 
@@ -1244,16 +1217,16 @@ class LeaveServiceTest {
         when(leaveRepository.findById(71L)).thenReturn(Optional.of(
             requestDtoWithManager(71L, 10010L, request.startDate(), request.endDate(), 10099L)));
 
-        // The actor is HR (10099L), NOT the employee (10010L) -- resolveTargetEmployee allows this
-        // via canReviewAll(user), and the returned dto's managerEmployeeId is deliberately the SAME
-        // 10099L, so the actor is the request's only manager-of-record.
+        // The actor is HR (10099L), NOT the employee (10010L) -- resolveTargetEmployee allows this via
+        // canReviewAll(user), and the returned dto's managerEmployeeId is deliberately the SAME 10099L, so the actor
+        // is the request's only manager-of-record.
         leaveService.submit(request, user("hr", 10099L));
 
         verify(notificationService).notify(eq(10010L), eq("LEAVE_SUBMITTED"), any(String.class), any(String.class), eq("/leave"), eq(false));
         verify(notificationService, org.mockito.Mockito.never())
             .notify(eq(10099L), eq("LEAVE_PENDING_APPROVAL"), any(String.class), any(String.class), any(String.class), org.mockito.ArgumentMatchers.anyBoolean());
-        // findHrEmployeeIds is the OTHER branch (no manager of record) -- must not even be consulted
-        // when a manager IS on file, even though that manager ends up excluded.
+        // findHrEmployeeIds is the OTHER branch (no manager of record) -- must not even be consulted when a manager IS
+        // on file, even though that manager ends up excluded.
         org.mockito.Mockito.verify(employeeRepository, org.mockito.Mockito.never()).findHrEmployeeIds();
     }
 
@@ -1394,8 +1367,7 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsARequestWithinTheMaxConsecutiveDaysCap() {
-        // Same fixture, a 3-calendar-day span -- exactly at the cap, must be allowed (not "strictly
-        // less than").
+        // Same fixture, a 3-calendar-day span -- exactly at the cap, must be allowed (not "strictly less than").
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-15"), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1480,9 +1452,9 @@ class LeaveServiceTest {
 
     @Test
     void submitRejectsPersonalLeaveWhenTheEmployeeHasNoHireDateOnFile() {
-        // DECISION (same fail-closed direction as every other eligibility gate in this class): a
-        // NULL hire_date does NOT silently pass the probation check -- eligibility cannot be
-        // verified, so the request is rejected, not approved.
+        // DECISION (same fail-closed direction as every other eligibility gate in this class): a NULL hire_date does
+        // NOT silently pass the probation check -- eligibility cannot be verified, so the request is rejected, not
+        // approved.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1510,8 +1482,8 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsPersonalLeaveImmediatelyWhenProbationDaysIsZero() {
-        // probation_days = 0 means eligible from the hire date itself -- hired on the exact request
-        // date, no waiting period.
+        // probation_days = 0 means eligible from the hire date itself -- hired on the exact request date, no waiting
+        // period.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1535,9 +1507,8 @@ class LeaveServiceTest {
     @Test
     void submitFallsBackToTheDefaultProbationPeriodWhenProbationDaysIsNullOnTheEmployee() {
         // findProbationDays deliberately unstubbed -> Optional.empty() -> falls back to
-        // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS (119). Hired exactly 119 days before
-        // the request date -> probation ends ON the request date itself -- "at least", not "strictly
-        // more than" -- so this must be APPROVED.
+        // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS (119). Hired exactly 119 days before the request date ->
+        // probation ends ON the request date itself -- "at least", not "strictly more than" -- so this must be APPROVED.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1629,8 +1600,8 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsPersonalLeaveTheDayAfterConfirmDate() {
-        // SAME confirm_date family as the rejection above, pinned from the other side: confirm_date
-        // is one day BEFORE the request date this time -> eligible.
+        // SAME confirm_date family as the rejection above, pinned from the other side: confirm_date is one day BEFORE
+        // the request date this time -> eligible.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1653,9 +1624,8 @@ class LeaveServiceTest {
     }
 
     // NOTE: submitRejectsPersonalLeaveWhenTheEmployeeIsStillInProbation /
-    // submitAllowsPersonalLeaveAfterProbationHasPassed above never stub findConfirmDate, so
-    // Mockito's default Optional.empty() already proves the hire_date+probation_days fallback fires
-    // when confirm_date is NULL -- no separate test needed for that path here.
+    // submitAllowsPersonalLeaveAfterProbationHasPassed above never stub findConfirmDate, so Mockito's default
+    // Optional.empty already proves the hire_date+probation_days fallback fires when confirm_date is NULL.
 
     @Test
     void submitRejectsAnOncePerEmploymentTypeWhenAClaimAlreadyExists() {
@@ -1676,8 +1646,8 @@ class LeaveServiceTest {
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        // Once-per-employment is checked BEFORE min-service -- findHireDate must never even be
-        // called, proving the short-circuit (not just the final outcome).
+        // Once-per-employment is checked BEFORE min-service -- findHireDate must never even be called, proving the
+        // short-circuit (not just the final outcome).
         verify(leaveRepository, org.mockito.Mockito.never()).findHireDate(anyLong());
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
@@ -1768,16 +1738,16 @@ class LeaveServiceTest {
         verify(leaveRepository).create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), paidDays.capture(),
             unpaidDays.capture(), eq(2026),
             eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
-        // 6 working days requested, 10-day quota fully covers them -- but the 4-day paid cap bounds
-        // the PAID portion to 4, leaving 2 unpaid even though quota was never exhausted.
+        // 6 working days requested, 10-day quota fully covers them -- but the 4-day paid cap bounds the PAID portion
+        // to 4, leaving 2 unpaid even though quota was never exhausted.
         assertThat(paidDays.getValue()).isEqualByComparingTo("4.00");
         assertThat(unpaidDays.getValue()).isEqualByComparingTo("2.00");
     }
 
     @Test
     void submitDoesNotApplyThePaidCapWhenItExceedsWhatWasRequested() {
-        // Same fixture, but the cap (9) is larger than the 6 working days requested -- the cap must
-        // not bind, and the result must be identical to the uncapped (quota-only) behaviour.
+        // Same fixture, but the cap (9) is larger than the 6 working days requested -- the cap must not bind, and the
+        // result must be identical to the uncapped (quota-only) behaviour.
         LeaveTypeDto cappedType = new LeaveTypeDto("VACATION", "ลาพักร้อน", "Vacation leave",
             new BigDecimal("10.00"), false, new BigDecimal("9.00"), 0, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null,
             null, 0, null, false);
@@ -1816,18 +1786,9 @@ class LeaveServiceTest {
 
     @Test
     void submitCountsCalendarDaysForMaternityButWorkingDaysForSickOnTheIdenticalDateRange() {
-        // THE vacuous-fixture guard (CLAUDE.md): the SAME Mon 2026-07-13 .. Sun 2026-07-19 range (a
-        // full week, both weekend days included) must count DIFFERENTLY depending on the leave
-        // type's basis -- 7 calendar days for MATERNITY, but only 5 working days (Mon-Fri) for SICK.
-        // A test asserting only one side would still pass if #computeTotalDays ignored the leave
-        // type entirely and always used one basis.
-        //
-        // SICK's status here is irrelevant to what this test proves (totalDays is computed BEFORE
-        // the auto-reject gates run, unconditionally on every submission -- see LeaveService#submit)
-        // -- SICK has no attachment here, so it auto-rejects on the medical-certificate gate, which
-        // is exactly why the create()/status matchers below are basis-agnostic (any(LeaveStatus.class))
-        // rather than pinned to APPROVED. LeaveTypeRuleIntegrationTest's real-DB companion instead
-        // supplies a real attachment so both sides land APPROVED.
+        // THE vacuous-fixture guard (CLAUDE.md): the SAME Mon 2026-07-13 .. Sun 2026-07-19 range (a full week, both
+        // weekend days included) must count DIFFERENTLY depending on the leave type's basis -- 7 calendar days for
+        // MATERNITY, but only 5 working days (Mon-Fri) for SICK.
         LocalDate start = LocalDate.parse("2026-07-13");
         LocalDate end = LocalDate.parse("2026-07-19");
 
@@ -1871,8 +1832,8 @@ class LeaveServiceTest {
             any(BigDecimal.class), any(BigDecimal.class), eq(2026),
             any(LeaveStatus.class), any(BigDecimal.class), any(BigDecimal.class), nullable(String.class),
             eq(null), eq(null), eq(null), eq(null), eq(null));
-        // The critical negative assertion: 5.00 (working days), NOT 7.00 -- proves SICK did not pick
-        // up MATERNITY's calendar-day basis.
+        // The critical negative assertion: 5.00 (working days), NOT 7.00 -- proves SICK did not pick up MATERNITY's
+        // calendar-day basis.
         assertThat(sickTotalDays.getValue()).isEqualByComparingTo("5.00");
         assertThat(sickTotalDays.getValue()).isNotEqualByComparingTo(maternityTotalDays.getValue());
     }
@@ -1919,17 +1880,17 @@ class LeaveServiceTest {
 
     @Test
     void submitProratesVacationQuotaUnderOneYearOfServiceAndGrantsFullQuotaAfterOneYear() {
-        // Both sides on one fixture/method (same LeaveTypeDto), DIFFERENT request date ranges so
-        // each leaveRepository.create() invocation is unambiguously distinguishable to verify() --
-        // this cannot pass by only ever constructing the easy (>1 year) case.
+        // Both sides on one fixture/method (same LeaveTypeDto), DIFFERENT request date ranges so each
+        // leaveRepository.create() invocation is unambiguously distinguishable to verify() -- this cannot pass by only
+        // ever constructing the easy (>1 year) case.
         LeaveTypeDto type = vacationTypeProratedFirstYear();
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(type));
         when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
 
-        // 6 completed months of service (hired exactly 6 months before the request) -> prorated
-        // quota = 6.00 * 6/12 = 3.00 -- captured via remainingAfter on a 1-day request (3.00 - 1.00 =
-        // 2.00) so the exact prorated figure is pinned, not merely "some non-zero, non-6 number".
+        // 6 completed months of service (hired exactly 6 months before the request) -> prorated quota = 6.00 * 6/12 =
+        // 3.00 -- captured via remainingAfter on a 1-day request (3.00 - 1.00 = 2.00) so the exact prorated figure is
+        // pinned, not merely "some non-zero, non-6 number".
         SubmitLeaveRequest underOneYearRequest = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), "Family trip");
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-01-13")));
@@ -1948,9 +1909,8 @@ class LeaveServiceTest {
             underOneYearRemainingAfter.capture(), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null));
         assertThat(underOneYearRemainingAfter.getValue()).isEqualByComparingTo("2.00");
 
-        // Wrong-way-round complement, identical fixture, DIFFERENT date range: hired well over a
-        // year before the request -> full 6.00-day quota -> remainingAfter = 6.00 - 1.00 = 5.00, NOT
-        // the 2.00 above.
+        // Wrong-way-round complement, identical fixture, DIFFERENT date range: hired well over a year before the
+        // request -> full 6.00-day quota -> remainingAfter = 6.00 - 1.00 = 5.00, NOT the 2.00 above.
         SubmitLeaveRequest overOneYearRequest = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-20"), "Family trip");
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
@@ -2006,16 +1966,14 @@ class LeaveServiceTest {
 
     @Test
     void submitRejectsPersonalLeaveBeyondTheFirstYearCapAndAllowsExactlyAtIt() {
-        // Both sides on one fixture/method. Hired 6 months before the request -> prorated quota =
-        // 7.00 * 6/12 = 3.50 -- ABOVE the flat 3.00 firstYearMaxDays, so 3.00 is the binding
-        // effectiveCap (min(3.50, 3.00) = 3.00).
+        // Both sides on one fixture/method. Hired 6 months before the request -> prorated quota = 7.00 * 6/12 = 3.50
+        // -- ABOVE the flat 3.00 firstYearMaxDays, so 3.00 is the binding effectiveCap (min(3.50, 3.00) = 3.00).
         LeaveTypeDto type = personalTypeProratedFirstYear();
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(weekdayAfterNotice().minusMonths(6)));
-        // findProbationDays deliberately unstubbed: 6 months (~183 days) safely clears the
-        // DEFAULT_PROBATION_DAYS=119 fallback, so the probation gate never binds here -- isolating
-        // this test to the first-year cap decision.
+        // findProbationDays deliberately unstubbed: 6 months (~183 days) safely clears the DEFAULT_PROBATION_DAYS=119
+        // fallback, so the probation gate never binds here -- isolating this test to the first-year cap decision.
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.sumPaidDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
 
@@ -2061,10 +2019,8 @@ class LeaveServiceTest {
 
     @Test
     void submitDoesNotApplyTheFirstYearCapAfterOneYearOfService() {
-        // Wrong-way-round complement: an employee past 12 months of service is NOT subject to
-        // firstYearMaxDays at all (not "subject to it with an unlimited allowance") -- a 4-day
-        // request (over the flat 3, and over the old blanket max_consecutive_days=3 this replaces)
-        // must be approved in full, proving the gate is genuinely skipped, not merely satisfied.
+        // Wrong-way-round complement: an employee past 12 months of service is NOT subject to firstYearMaxDays at all
+        // -- a 4-day request must be approved in full, proving the gate is genuinely skipped, not merely satisfied.
         LeaveTypeDto type = personalTypeProratedFirstYear();
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-16"), "Family matter"); // 4 working days
@@ -2100,8 +2056,8 @@ class LeaveServiceTest {
 
     @Test
     void submitCountsASaturdayAsAWorkingDayWhenTheWorkingDayPredicateSaysSo() {
-        // Mon 2026-07-13 .. Sat 2026-07-18: simulates an OPS_6D (six-day) employee by stubbing a
-        // predicate that treats every day except Sunday as a working day.
+        // Mon 2026-07-13 .. Sat 2026-07-18: simulates an OPS_6D (six-day) employee by stubbing a predicate that treats
+        // every day except Sunday as a working day.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "LEAVE_WITHOUT_PAY", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-18"),
             "Six-day schedule test");
@@ -2134,9 +2090,9 @@ class LeaveServiceTest {
 
     @Test
     void submitExcludesASeededHolidayFromTheDayCountViaThePredicate() {
-        // Mon 2026-07-13 .. Tue 2026-07-14: simulates a seeded hr.holiday row on the Tuesday by
-        // stubbing a predicate that excludes that one date specifically -- Monday still counts,
-        // proving the exclusion is scoped to the one date, not "nothing counts".
+        // Mon 2026-07-13 .. Tue 2026-07-14: simulates a seeded hr.holiday row on the Tuesday by stubbing a predicate
+        // that excludes that one date specifically -- Monday still counts, proving the exclusion is scoped to the one
+        // date, not "nothing counts".
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "LEAVE_WITHOUT_PAY", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"),
             "Holiday-in-range test");
@@ -2168,12 +2124,9 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsASubDayMaternityRequestOnADateThePredicateMarksNonWorkingButRejectsTheSameForAWorkingDaysType() {
-        // The double-handling guard, at the LeaveService/mock level (LeaveDayMathTest and
-        // LeaveScheduleHolidayAwareIntegrationTest cover the same guard at the pure-math and
-        // real-Postgres levels respectively): a predicate that marks the ONE date in range as
-        // non-working must reject a WORKING_DAYS sub-day request there, but must NOT reject the
-        // identical sub-day shape for a CALENDAR_DAYS (MATERNITY) type -- see
-        // LeaveService#validateSubDayTimes's basis gate.
+        // The double-handling guard, at the LeaveService/mock level: a predicate that marks the ONE date in range as
+        // non-working must reject a WORKING_DAYS sub-day request there, but must NOT reject the identical sub-day
+        // shape for a CALENDAR_DAYS type -- see LeaveService#validateSubDayTimes's basis gate.
         LocalDate nonWorkingDate = LocalDate.parse("2026-07-13");
         Predicate<LocalDate> alwaysNonWorking = date -> false;
 
@@ -2221,10 +2174,8 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsWeddingLeaveAtExactlyThreeDaysAndRejectsFourDays() {
-        // Both sides on one fixture: 3 calendar days (Mon-Wed) allowed, 4 (Mon-Thu, a different date
-        // range so this isn't blocked by any other gate) rejected -- proves the cap binds at "> 3",
-        // not some looser boundary, and that the reject case is not vacuous (an otherwise-identical
-        // request one day shorter, same fixture, passes).
+        // Both sides on one fixture: 3 calendar days allowed, 4 rejected -- proves the cap binds at "> 3", not some
+        // looser boundary, and that the reject case is not vacuous.
         LeaveTypeDto type = personalTypeForWeddingCap();
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
@@ -2267,9 +2218,8 @@ class LeaveServiceTest {
 
     @Test
     void submitDoesNotCapAnOtherPurposePersonalLeaveRequestAtThreeDays() {
-        // §5.2 is explicitly non-exhaustive ("เป็นต้น"/"etc."): the wedding cap must not leak onto
-        // every purpose -- a 4-day OTHER-purpose request (same span the wedding case above rejects)
-        // must be approved in full.
+        // §5.2 is explicitly non-exhaustive ("เป็นต้น"/"etc."): the wedding cap must not leak onto every purpose -- a
+        // 4-day OTHER-purpose request (same span the wedding case above rejects) must be approved in full.
         LeaveTypeDto type = personalTypeForWeddingCap();
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-23"), "Family business",
@@ -2293,10 +2243,9 @@ class LeaveServiceTest {
 
     @Test
     void submitRejectsAPurposeCodeThatIsNeitherANamedPurposeNorOther() {
-        // Vacuous-fixture guard for normalizePurposeCode's whitelist: a genuinely malformed code (not
-        // one of the five named purposes, and not the OTHER escape valve) must still be rejected --
-        // otherwise the "OTHER accepts anything" test above would be trivially true because nothing
-        // was ever validated at all.
+        // Vacuous-fixture guard for normalizePurposeCode's whitelist: a genuinely malformed code (not one of the five
+        // named purposes, and not the OTHER escape valve) must still be rejected -- otherwise the "OTHER accepts
+        // anything" test above would be trivially true because nothing was ever validated at all.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "PERSONAL", weekdayAfterNotice(), weekdayAfterNotice(), "Family matter",
             null, null, null, null, null, null, null, "NOT_A_REAL_PURPOSE", null);
@@ -2320,12 +2269,8 @@ class LeaveServiceTest {
 
     @Test
     void submitLandsSubmittedForEmergencyPersonalLeaveForEachOccasionUpToTheMonthlyAllowance() {
-        // Occasions 1, 2 and 3 this month (usedThisMonth 0, 1, 2 -- STRICTLY LESS than the 3-occasion
-        // allowance) must each be approved AND recorded as an emergency filing. FIXED_NOW is Wed
-        // 2026-07-01 09:00; PERSONAL's 1-day notice makes any date before 2026-07-02 late -- three
-        // distinct Mondays in June 2026 stand in for three different occasions the same calendar
-        // month, each independently stubbed via countEmergencyFilings (a Mockito test cannot derive
-        // this count from real accumulating state; see the class comment above).
+        // Occasions 1, 2 and 3 this month (usedThisMonth 0, 1, 2 -- STRICTLY LESS than the 3-occasion allowance) must
+        // each be approved AND recorded as an emergency filing.
         LeaveTypeDto type = personalTypeWithEmergencyTolerance();
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
@@ -2407,8 +2352,8 @@ class LeaveServiceTest {
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(type));
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2015-01-01")));
-        // remainingDays() (and so sumUsedDays()) always runs, WARN or BLOCK alike -- see the identical
-        // stub note in submitWarnsUnpaidForEmergencyPersonalLeaveOnceTheMonthlyAllowanceIsFullyUsed.
+        // remainingDays() (and so sumUsedDays()) always runs, WARN or BLOCK alike -- see the identical stub note in
+        // submitWarnsUnpaidForEmergencyPersonalLeaveOnceTheMonthlyAllowanceIsFullyUsed.
         when(leaveRepository.sumUsedDays(eq(10L), eq("PERSONAL"), eq(2026), any(Collection.class))).thenReturn(BigDecimal.ZERO);
         when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), eq(BigDecimal.ZERO),
             eq(BigDecimal.ONE), eq(2026), eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class),
@@ -2546,11 +2491,9 @@ class LeaveServiceTest {
 
     @Test
     void submitRejectsVacationContiguousWithAnExistingPersonalRequestAcrossAWeekend() {
-        // §5.3.3 "ติดต่อกัน across a non-working day" DECISION: a Friday PERSONAL request immediately
-        // followed by a Monday VACATION request, with an ordinary Sat/Sun weekend (no scheduled
-        // workday) between them, counts as CONTIGUOUS -- the weekend does not break the run. The
-        // default Mon-Fri/no-holiday workingDayPredicate stub (this file's instance initializer)
-        // already gives the right answer for both dates here, so no extra stub is needed.
+        // §5.3.3 "ติดต่อกัน across a non-working day" DECISION: a Friday PERSONAL request immediately followed by a
+        // Monday VACATION request, with an ordinary Sat/Sun weekend (no scheduled workday) between them, counts as
+        // CONTIGUOUS -- the weekend does not break the run.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), "Family trip"); // Monday
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -2576,8 +2519,8 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsVacationWhenAPriorPersonalRequestHasAClearWorkingDayGap() {
-        // Wrong-way-round complement, same paired PERSONAL request: the new VACATION request instead
-        // starts a week later, with a genuine Mon-Fri working gap in between -- must be allowed.
+        // Wrong-way-round complement, same paired PERSONAL request: the new VACATION request instead starts a week
+        // later, with a genuine Mon-Fri working gap in between -- must be allowed.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "VACATION", LocalDate.parse("2026-07-20"), LocalDate.parse("2026-07-20"), "Family trip");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -2600,12 +2543,8 @@ class LeaveServiceTest {
 
     @Test
     void submitBlocksVacationWhenItWouldLeaveNoOneElseInTheDepartmentAtWork() {
-        // §5.3.2, first half of the vacuous-fixture pair: a THREE-person department (requester +
-        // colleagues 20L/30L -- the gate only APPLIES at department size 3+, see
-        // MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE) where BOTH colleagues are on leave that day -- one
-        // SUBMITTED (not yet approved), one APPROVED, proving a PENDING request blocks too, not only
-        // an APPROVED one. The default Mon-Fri/no-holiday workingDayPredicate stub already covers the
-        // requester and both colleagues here.
+        // §5.3.2, first half of the vacuous-fixture pair: a THREE-person department where BOTH colleagues are on leave
+        // that day -- one SUBMITTED, one APPROVED, proving a PENDING request blocks too, not only an APPROVED one.
         SubmitLeaveRequest request = validSubmit(null); // Mon 2026-07-13 .. Tue 2026-07-14
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
@@ -2635,10 +2574,9 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsVacationWhenAColleagueRemainsAtWork() {
-        // §5.3.2, wrong-way-round complement, THE SAME fixture (same department, same two colleagues,
-        // same requested dates) -- only ONE colleague's leave state differs (20L still on leave, 30L
-        // now free), proving this cannot pass by a fixture that never contains a colleague at all (the
-        // vacuous-fixture trap) or by a fixture that happens to sit below the size-3 floor.
+        // §5.3.2, wrong-way-round complement, THE SAME fixture -- only ONE colleague's leave state differs, proving
+        // this cannot pass by a fixture that never contains a colleague at all or by a fixture that happens to sit
+        // below the size-3 floor.
         SubmitLeaveRequest request = validSubmit(null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
@@ -2688,19 +2626,17 @@ class LeaveServiceTest {
         LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
 
         assertThat(result.status()).isEqualTo("SUBMITTED");
-        // The exemption is a size short-circuit, not a lucky coverage check -- findActiveLeaveSpans
-        // (which would tell us whether 20L is on leave) must never even be consulted.
+        // The exemption is a size short-circuit, not a lucky coverage check -- findActiveLeaveSpans (which would tell
+        // us whether 20L is on leave) must never even be consulted.
         verify(leaveRepository, org.mockito.Mockito.never())
             .findActiveLeaveSpans(any(Collection.class), any(LocalDate.class), any(LocalDate.class));
     }
 
     @Test
     void submitBlocksVacationInAThreePersonDepartmentWhenItWouldEmptyIt() {
-        // §5.3.2 department-size-floor boundary, wrong-way-round complement: identical scenario (the
-        // requester's leave would leave the department's only other members on leave too) but with
-        // ONE MORE colleague -- department size 3, AT the floor -- and the gate fires. The two tests
-        // together pin the boundary from both sides on materially the same fixture: only department
-        // size crosses MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE, and the outcome flips exactly there.
+        // §5.3.2 department-size-floor boundary, wrong-way-round complement: identical scenario (the requester's leave
+        // would leave the department's only other members on leave too) but with ONE MORE colleague -- department size
+        // 3, AT the floor -- and the gate fires.
         SubmitLeaveRequest request = validSubmit(null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
@@ -2730,11 +2666,8 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsVacationInAOnePersonDepartmentWithoutCheckingSchedules() {
-        // §5.3.2 one-person-department exemption: an empty colleague list must short-circuit BEFORE
-        // any further schedule lookup for the department-coverage gate -- proven here by asserting
-        // workingDayPredicate for the requester's own range was called exactly ONCE (submit()'s own
-        // unconditional day-counting call), not a second time by departmentCoverageRuleOutcome's
-        // own-day check, which is exactly the empty-list short-circuit doing its job.
+        // §5.3.2 one-person-department exemption: an empty colleague list must short-circuit BEFORE any further
+        // schedule lookup for the department-coverage gate.
         SubmitLeaveRequest request = validSubmit(null);
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
@@ -2810,9 +2743,9 @@ class LeaveServiceTest {
 
     @Test
     void previewSurfacesRuleWarningsForADatedWarnTriggeringRequest() {
-        // Same fixture as submitWarnsUnpaidWhenMinimumServiceIsNotMet, but through #preview -- proves
-        // the pre-submit live check can show the SAME warning #submit would persist, before the
-        // employee commits (the gap this branch closes).
+        // Same fixture as submitWarnsUnpaidWhenMinimumServiceIsNotMet, but through #preview -- proves the pre-submit
+        // live check can show the SAME warning #submit would persist, before the employee commits (the gap this branch
+        // closes).
         LeavePreviewRequest request = new LeavePreviewRequest(
             "ORDINATION", weekdayAfterNotice(), weekdayAfterNotice(), null, null, false, false,
             LeavePreviewDepth.FULL, null);
@@ -2837,11 +2770,8 @@ class LeaveServiceTest {
 
     @Test
     void previewReturnsNoWarningsForACleanRequest() {
-        // The complement of the WARN-triggering test above: a request no §5 gate touches at all must
-        // report an empty ruleWarnings (never a null-vs-empty ambiguity) and a ZERO -- not null --
-        // unpaidByRuleDays, since dates ARE known here (matching AutoRejectResult#reject's/the
-        // dominance rule's own ZERO-for-clean-request convention, and LeaveRequestDto#unpaidByRuleDays'
-        // identical "0 when no WARN gate fired" precedent).
+        // The complement of the WARN-triggering test above: a request no §5 gate touches at all must report an empty
+        // ruleWarnings and a ZERO -- not null -- unpaidByRuleDays, since dates ARE known here.
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("VACATION")).thenReturn(Optional.of(vacationType()));
         when(leaveRepository.sumUsedDays(eq(10L), eq("VACATION"), eq(2026), any(Collection.class)))
@@ -2911,10 +2841,8 @@ class LeaveServiceTest {
 
     @Test
     void previewDoesNotLeakAWarningWhenABlockingGateFires() {
-        // Wrong-way-round proof: a BLOCK code (§5.3.4 post-resignation) must report `blocking`
-        // non-null AND an EMPTY ruleWarnings. LeaveService.AutoRejectResult's own dominance rule
-        // discards any WARN accumulated before a BLOCK fires (a BLOCK wins outright -- see that
-        // record's Javadoc); this proves #preview's mapping does not reintroduce a leak on top of it.
+        // Wrong-way-round proof: a BLOCK code (§5.3.4 post-resignation) must report `blocking` non-null AND an EMPTY
+        // ruleWarnings.
         LeavePreviewRequest request = new LeavePreviewRequest(
             "VACATION", weekdayAfterNotice(), weekdayAfterNotice(), null, null, false, false,
             LeavePreviewDepth.FULL, null);
@@ -2933,11 +2861,8 @@ class LeaveServiceTest {
 
     @Test
     void previewReturnsNoWarningsWhenNoDatesAreChosenYet() {
-        // Same fixture as submitWarnsUnpaidWhenTheEmployeeIsStillInProbation (probation not passed as
-        // of FIXED_NOW), but called via #preview with NO dates chosen -- decision (a) for the "0 วัน"
-        // bug this branch closes (see LeavePreviewDto's/#preview's Javadoc): a dateless preview cannot
-        // honestly quantify how many days would be unpaid, so it must report NO warning at all rather
-        // than one whose rendered sentence would falsely claim "0 วัน".
+        // Same fixture as submitWarnsUnpaidWhenTheEmployeeIsStillInProbation, but called via #preview with NO dates
+        // chosen.
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
         when(leaveRepository.findLeaveType("PERSONAL")).thenReturn(Optional.of(personalTypeWithMaxConsecutive()));
         when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2026-06-20")));
@@ -3026,12 +2951,9 @@ class LeaveServiceTest {
     }
 
     private LeaveTypeDto vacationType() {
-        // proratedFirstYear=false here (deliberate, same "no restriction on fields not under test"
-        // convention as every other field in this fixture): pro-ration is covered by its own
-        // dedicated fixture/tests below (vacationTypeProratedFirstYear,
-        // submitProratesVacationQuotaForAnEmployeeUnderOneYearOfService friends), which construct a
-        // LeaveTypeDto with proratedFirstYear=true explicitly rather than making every existing
-        // VACATION test in this class newly depend on a stubbed hire date.
+        // proratedFirstYear=false here: pro-ration is covered by its own dedicated fixture/tests below, which
+        // construct a LeaveTypeDto with proratedFirstYear=true explicitly rather than making every existing VACATION
+        // test in this class newly depend on a stubbed hire date.
         return new LeaveTypeDto("VACATION", "ลาพักร้อน", "Vacation leave", new BigDecimal("6.00"), false,
             null, 7, 0, null, false, LeaveDayCountBasis.WORKING_DAYS, false, null, null, 0, null, false);
     }

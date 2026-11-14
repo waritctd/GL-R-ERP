@@ -22,17 +22,13 @@ function money(v) {
   return Number(v).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-// Issue #756: pre-document placeholder ONLY. Before a deposit-notice document exists to serve
-// its own `vatPercent` (DepositNoticeDto.java:25), the page has nothing else to compute a VAT
-// preview from — this is what that preview uses. Once a document exists, the served value
-// always wins (see `vatPercent` below); this constant is never consulted after that. The
-// backend's authoritative copies live in CustomerQuotationService.VAT_RATE and
-// QuotationRenderer.VAT_RATE — this is a pre-document placeholder, not a fourth source of truth.
+// pre-document placeholder ONLY. Once a document exists, the served value always wins (see `vatPercent`
+// below); this constant is never consulted after that.
 const FALLBACK_VAT_PERCENT = 0.07;
 
-// Formats a VAT rate (0.07, 0.10, 0.075, …) as the bare percentage string used in labels —
-// "7", "10", "7.5" — rounded to 2dp of the percent value so float noise (e.g. the classic
-// "7.000000000000001") never reaches the screen.
+// Formats a VAT rate (0.07, 0.10, 0.075, …) as the bare percentage string used in labels — "7", "10", "7.5" —
+// rounded to 2dp of the percent value so float noise (e.g. the classic "7.000000000000001") never reaches the
+// screen.
 function formatVatPercent(rate) {
   return String(Math.round(Number(rate) * 100 * 100) / 100);
 }
@@ -74,18 +70,9 @@ export function DepositIssueSummary({ customerName, depositPercent, deposit, vat
   );
 }
 
-// ── validation (UX-03) ──────────────────────────────────────────────────────
-// This gate fires ONLY from handleIssue() — never from handleSave() or the
-// preview path. This is a draft editor: users save partial drafts
-// incrementally, and blocking that would break a legitimate workflow.
-// Issuing is different — it is irreversible (fields become read-only) and it
-// advances the ticket's payment track, so it is the one action worth
-// validating before the confirm dialog even opens. Every field below is
-// hand-wired (not <FormField>): each candidate control already lives inside
-// a pre-existing `<label className="...">` or a CSS-grid table row whose exact
-// markup this task must not restyle (UX-18 is a separate, out-of-scope
-// finding) — nesting <FormField>'s own <label> inside those would either
-// produce an invalid nested <label> or silently change spacing/typography.
+// validation (UX-03) ────────────────────────────────────────────────────── This gate fires ONLY from
+// handleIssue() — never from handleSave() or the preview path. This is a draft editor: users save partial
+// drafts incrementally, and blocking that would break a legitimate workflow.
 const customerNameSchema = z.string().trim().min(1, 'กรุณากรอกชื่อบริษัท / หน่วยงาน');
 
 function makeLineItemSchema(rowNumber) {
@@ -102,12 +89,9 @@ function makeLineItemSchema(rowNumber) {
   });
 }
 
-/**
- * Validates the deposit notice at ISSUE time only. Returns every invalid
- * field plus `order` — those same keys in on-screen top-to-bottom order — so
- * handleIssue() can scroll/focus the first one without depending on zod's
- * internal issue ordering.
- */
+/** Validates the deposit notice at ISSUE time only. Returns every invalid field plus `order` — those same keys
+ * in on-screen top-to-bottom order — so handleIssue() can scroll/focus the first one without depending on
+ * zod's internal issue ordering. */
 function validateIssueForm({ customerName, items, total, depositPercent }) {
   const errors = {};
   const order = [];
@@ -143,11 +127,7 @@ function validateIssueForm({ customerName, items, total, depositPercent }) {
     order.push('depositPercent');
   }
 
-  // Rule 4: issuing a ฿0 deposit notice is meaningless and would still
-  // advance the ticket's payment track. Only checked once the rules above
-  // are otherwise satisfied — a ฿0 total caused by missing item data is
-  // already covered by those, and flagging it again here would just be a
-  // second message for the same root cause.
+  // Rule 4: issuing a ฿0 deposit notice is meaningless and would still advance the ticket's payment track.
   if (order.length === 0 && !(Number(total) > 0)) {
     errors.total = 'ยอดเงินรวมต้องมากกว่า 0 บาท — กรุณาตรวจสอบราคาต่อหน่วยและจำนวนในรายการสินค้า';
     order.push('total');
@@ -164,11 +144,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   const [downloading, setDownloading] = useState(null); // 'xlsx' | 'pdf' | null
   const iframeRef = useRef(null);
 
-  // UX-03: per-field issue-validation errors, keyed 'customerName' | 'items'
-  // (at-least-one-line-item) | `items.<index>.<field>` | 'total'. Populated
-  // only by handleIssue() below — see the SCOPING DECISION comment on
-  // validateIssueForm(). fieldRefs holds the DOM node for each key so a
-  // failed issue attempt can scroll/focus the first invalid field.
+  // UX-03: per-field issue-validation errors, keyed 'customerName' | 'items' (at-least-one-line-item) |
+  // `items.<index>.<field>` | 'total'. Populated only by handleIssue() below — see the SCOPING DECISION comment
+  // on validateIssueForm().
   const [fieldErrors, setFieldErrors] = useState({});
   const fieldRefs = useRef({});
   function clearFieldError(key) {
@@ -189,27 +167,17 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     items: [],
   });
 
-  // --- Reads (TanStack Query) ---
-  // Mount only LOADS existing documents — it must never create one as a side
-  // effect of navigating here. The previous version unconditionally called
-  // createDraft() whenever no DRAFT was found, which (a) fired twice under React
-  // StrictMode's double-invoke, (b) minted a stray draft every time a user opened
-  // this page and then navigated away without touching it, and (c) minted ANOTHER
-  // new draft (version+1) every time this page was revisited after the document
-  // had already been issued, since an ISSUED doc is never a DRAFT. Now: load the
-  // DRAFT if one exists, else show the most recent ISSUED doc read-only, else
-  // render an explicit empty state — creation only happens on the user's click
-  // (see handleCreateDraft). None of the queries below ever create anything.
+  // Reads (TanStack Query) --- Mount only LOADS existing documents — it must never create one as a side effect
+  // of navigating here. None of the queries below ever create anything.
   const noteTemplatesQuery = useQuery({
     queryKey: queryKeys.depositNoteTemplates(),
     queryFn: () => api.depositNotices.noteTemplates().then((response) => response.templates ?? []),
   });
   const noteTemplates = noteTemplatesQuery.data ?? [];
 
-  // Keyed by the live search text so every keystroke gets its own cache entry
-  // (matches the old onChange's per-keystroke api.customers.search(text) call);
-  // customerSearch === '' is the initial "whole master list" load loadDocs used
-  // to do up front.
+  // Keyed by the live search text so every keystroke gets its own cache entry (matches the old onChange's
+  // per-keystroke api.customers.search(text) call); customerSearch === '' is the initial "whole master list"
+  // load loadDocs used to do up front.
   const customersQuery = useQuery({
     queryKey: queryKeys.customersSearch(customerSearch),
     queryFn: () => api.customers.search(customerSearch).then((response) => response.customers ?? []),
@@ -236,24 +204,17 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     return draft ?? latestIssued ?? null;
   }, [depositNoticesQuery.data]);
 
-  // The full-page skeleton only gates on the two loads a first paint actually
-  // needs (doc list + note templates). customersQuery is deliberately excluded:
-  // it's keyed by customerSearch, so every keystroke in the customer-search box
-  // mints a "new" query key with isLoading briefly true for it — including it
-  // here would flash the *entire page* back to a skeleton on every keystroke,
-  // which the original imperative version never did (its onChange fetch had no
-  // loading indicator at all).
+  // The full-page skeleton only gates on the two loads a first paint actually needs (doc list + note templates).
   const loading = depositNoticesQuery.isLoading || noteTemplatesQuery.isLoading;
 
-  // Same reasoning as `loading`: only the doc-list/template load blocks the page
-  // with an error+retry state, matching the original loadDocs try/catch scope.
-  // A failed customer search (mid-session, per keystroke) stays silent, as it
-  // did before (the old onChange handler had its own `.catch(() => {})`).
+  // Same reasoning as `loading`: only the doc-list/template load blocks the page with an error+retry state,
+  // matching the original loadDocs try/catch scope. A failed customer search (mid-session, per keystroke) stays
+  // silent, as it did before (the old onChange handler had its own `.catch(() => {})`).
   const loadError = depositNoticesQuery.error || noteTemplatesQuery.error;
 
-  // showToast (useToast.js) is now a stable useCallback([]) identity, so it belongs directly in
-  // this effect's deps -- the eslint-disable this line used to carry (to route around showToast's
-  // then-unstable identity retriggering the effect) is no longer needed.
+  // showToast (useToast.js) is now a stable useCallback([]) identity, so it belongs directly in this effect's
+  // deps -- the eslint-disable this line used to carry (to route around showToast's then-unstable identity
+  // retriggering the effect) is no longer needed.
   useEffect(() => {
     if (loadError) showToast('error', loadError.message || 'โหลดไม่สำเร็จ');
   }, [loadError, showToast]);
@@ -265,8 +226,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   }
 
   function populateForm(d, customerList = []) {
-    // If taxId/address already saved in draft, use them directly
-    // Otherwise try to match customerName against master
+    // If taxId/address already saved in draft, use them directly Otherwise try to match customerName against
+    // master
     let taxId   = d.customerTaxId   ?? '';
     let address = d.customerAddress ?? '';
     if (d.customerName && (!taxId || !address)) {
@@ -291,9 +252,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     });
   }
 
-  // Re-seed the editable `form` whenever the doc's identity/version/status
-  // actually changes (new draft created, or DRAFT -> ISSUED) — not on every
-  // background refetch of the same doc (e.g. a save doesn't bump
+  // Re-seed the editable `form` whenever the doc's identity/version/status actually changes (new draft created,
+  // or DRAFT -> ISSUED) — not on every background refetch of the same doc (e.g. a save doesn't bump
   // version/status, so no reseed fires and in-flight edits aren't clobbered).
   const docSeedKey = doc ? `${doc.id}:${doc.version}:${doc.status}` : null;
   // The draft's updatedAt as last read from the server (the list, or this page's own save):
@@ -302,9 +262,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   useEffect(() => { stampRef.current = doc?.updatedAt ?? null; }, [doc?.updatedAt]);
   useEffect(() => {
     if (doc) populateForm(doc, customers);
-    // A reseed means a different document identity (or the same one flipping
-    // to ISSUED) — any leftover UX-03 issue-validation errors belong to the
-    // previous edit session and would otherwise linger on screen.
+    // A reseed means a different document identity (or the same one flipping to ISSUED) — any leftover UX-03
+    // issue-validation errors belong to the previous edit session and would otherwise linger on screen.
     setFieldErrors({});
     // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed on docSeedKey only, see comment above
   }, [docSeedKey]);
@@ -382,10 +341,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
   function handleIssue() {
     if (!doc) return;
-    // UX-03: validate before opening the confirm dialog — don't ask "are you
-    // sure?" for something that's then going to fail. `total` is read here
-    // (never written) from the money-math block below; see the HARD
-    // CONSTRAINT comment on that block.
+    // UX-03: validate before opening the confirm dialog — don't ask "are you sure?" for something that's then
+    // going to fail. `total` is read here (never written) from the money-math block below; see the HARD CONSTRAINT
+    // comment on that block.
     const { errors, order } = validateIssueForm({
       customerName: form.customerName, items: form.items, total, depositPercent: form.depositPercent,
     });
@@ -414,9 +372,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       showToast('success', `ออกเอกสาร ${res.depositNotice.docNumber} เรียบร้อย`);
       setConfirmIssue(false);
       invalidateDepositNotices();
-      // Issuing the deposit notice is the payment-track step that advances the
-      // ticket (see mockApi.depositNotices.issue) — refresh the ticket list +
-      // detail so those views don't show stale paymentStatus.
+      // Issuing the deposit notice is the payment-track step that advances the ticket (see
+      // mockApi.depositNotices.issue) — refresh the ticket list + detail so those views don't show stale
+      // paymentStatus.
       queryClient.invalidateQueries({ queryKey: ['tickets', 'list'] });
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     },
@@ -480,8 +438,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     }));
     if (key === 'description') clearFieldError(`items.${idx}.description`);
     if (key === 'qty') clearFieldError(`items.${idx}.qty`);
-    // Any of these four feed into `total` below — clear a stale "total must
-    // be > 0" error so it's re-checked fresh on the next issue attempt.
+    // Any of these four feed into `total` below — clear a stale "total must be > 0" error so it's re-checked fresh
+    // on the next issue attempt.
     if (['qty', 'unitPrice', 'netUnitPrice', 'discountLabel'].includes(key)) clearFieldError('total');
   }
 
@@ -533,8 +491,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
   // DepositNoticeRepository does (HALF_UP), so the screen matches the stored document.
   const subtotal = round2(form.items.reduce((sum, it) => sum + lineNet(it) * (Number(it.qty) || 0), 0));
   const deposit = round2(subtotal * (Number(form.depositPercent) || 0));
-  // Issue #756: the served document's own vatPercent always wins once one exists — only
-  // before that (no `doc` yet) does this fall back to FALLBACK_VAT_PERCENT above.
+  // the served document's own vatPercent always wins once one exists — only before that (no `doc` yet) does this
+  // fall back to FALLBACK_VAT_PERCENT above.
   const vatPercent = Number(doc?.vatPercent ?? FALLBACK_VAT_PERCENT);
   const vat = round2(deposit * vatPercent);
   const total = round2(deposit + vat);
@@ -583,12 +541,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
         ]}
       />
-      {/* Mobile overflow fix: this row previously had no flexWrap, so the back
-          button + title + 3 action buttons (บันทึก/Preview/ออกเอกสาร) forced
-          .content-scroll into horizontal scroll at 375px (verified: scrollWidth
-          493 vs clientWidth 375) — burying the primary "ออกเอกสาร" action off
-          the right edge with no visible scrollbar affordance. Wrapping keeps
-          every action reachable without horizontal scrolling. */}
+      {/* Mobile overflow fix: this row previously had no flexWrap, so the back button + title + 3 action buttons
+       * forced .content-scroll into horizontal scroll at 375px — burying the primary "ออกเอกสาร" action off the
+       * right edge with no visible scrollbar affordance. */}
       <header className="flex flex-wrap items-start gap-3 mb-1">
         <Button variant="secondary" onClick={onBack}>
           <Icon name="chevronLeft" size={14} /> กลับ
@@ -605,21 +560,15 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               {doc.docNumber && (
                 <code className="rounded bg-surface-subtle px-2 py-0.5 text-xs">{doc.docNumber}</code>
               )}
-              {/* GLA-117: `doc` here is always the ticket's DRAFT or latest ISSUED notice (see
-                  the draft ?? latestIssued memo above) — this editor never opens on a SUPERSEDED
-                  row — but the badge now goes through the shared label map (which also fixes the
-                  untranslated English "Draft" this badge used to show) instead of a local
-                  ISSUED-only ternary, so this page can't independently regress the same way. */}
+              {/* GLA-117: `doc` here is always the ticket's DRAFT or latest ISSUED notice (see the draft ?? */}
               <StatusBadge tone={depositNoticeStatusLabel(doc.status).tone}>
                 {depositNoticeStatusLabel(doc.status).label}
               </StatusBadge>
             </div>
           )}
-          {/* Summary line: who this document is for and who prepared/issued it.
-              Every field below already comes back on `doc` from
-              api.depositNotices.get/createDraft/issue (src/api/mockApi.js
-              ~L2266-2345) — no new API calls, nothing invented. Pieces are
-              omitted individually when the underlying field is empty. */}
+          {/* Summary line: who this document is for and who prepared/issued it. Every field below already comes back on
+           * `doc` from api.depositNotices.get/createDraft/issue (src/api/mockApi.js ~L2266-2345) — no new API calls,
+           * nothing invented. Pieces are omitted individually when the underlying field is empty. */}
           {doc && (
             <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-text-muted">
               {doc.customerName && (
@@ -633,11 +582,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
             </div>
           )}
         </div>
-        {/* Save/Preview/ออกเอกสาร only render once a document actually exists —
-            previously these rendered whenever `!isIssued` (true for `doc === null`
-            too), so a failed load or a not-yet-created draft still offered three
-            live-looking buttons whose handlers silently no-op'd on `if (!doc) return;`.
-            No doc now means no action buttons, not dead ones. */}
+        {/* Save/Preview/ออกเอกสาร only render once a document actually exists — previously these rendered whenever
+         * `!isIssued` (true for `doc === null` too), so a failed load or a not-yet-created draft still offered three
+         * live-looking buttons whose handlers silently no-op'd on `if (!doc) return;`. */}
         {doc && !isIssued && (
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" onClick={handleSave} disabled={saving}>
@@ -689,15 +636,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
       ) : (
       <div className={previewHtml ? 'grid grid-cols-2 gap-4' : 'grid grid-cols-1 gap-4'}>
         {/* ── Left: Form ── */}
-        {/* min-width: 0 fix: this flex column is a CSS-grid item (parent grid
-            at previewHtml ? grid-cols-2 : grid-cols-1) and, like all flex/grid items,
-            defaults to min-width: auto — it refuses to shrink below its
-            content's min-content width. Thai has no inter-word spaces, so a
-            long unbreakable label/value run inside the panels below forced
-            this column (and the page) 43px past the viewport at 375px
-            (verified: content-scroll scrollWidth 418 vs clientWidth 375).
-            min-w-0 lets it shrink to the grid track and wrap/truncate
-            normally instead. */}
+        {/* min-width: 0 fix: this flex column is a CSS-grid item (parent grid at previewHtml ? grid-cols-2 :
+         * grid-cols-1) and, like all flex/grid items, defaults to min-width: auto — it refuses to shrink below its
+         * content's min-content width. */}
         <div className="flex min-w-0 flex-col gap-3.5">
 
           {/* Customer */}
@@ -768,13 +709,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
           {/* Items table */}
           <Panel title={`รายการสินค้า (${form.items.length} รายการ)`}>
-            {/*
-              UX-03: this whole panel body is the scroll/focus target for the
-              "at least 1 line item" rule — there's no single input to point
-              at when the list is empty, so (like TicketCreateModal's project
-              selector) the wrapper itself carries aria-invalid/
-              aria-describedby and a tabIndex so it's focusable.
-            */}
+            {/* UX-03: this whole panel body is the scroll/focus target for the "at least 1 line item" rule — there's no
+             * single input to point at when the list is empty, so (like TicketCreateModal's project selector) the wrapper
+             * itself carries aria-invalid/ aria-describedby and a tabIndex so it's focusable. */}
             <div
               id="doc-items-panel"
               ref={(el) => { fieldRefs.current.items = el; }}
@@ -783,8 +720,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
               aria-describedby={fieldErrors.items ? fieldErrorId('doc-items-panel') : undefined}
               className="px-4.5 pb-3.5"
             >
-              {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label —
-                  DESIGN.md specifies Ink Muted (#5c6b80) for `.table-head` overline text. */}
+              {/* Muted Floor fix: was Ink Faint (#94a3b8) on a table header label — DESIGN.md specifies Ink Muted (#5c6b80)
+               * for `.table-head` overline text. */}
               <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,60px)_minmax(0,80px)_minmax(0,80px)_minmax(0,80px)] gap-1.5 border-b border-border py-2 text-2xs font-bold text-text-muted">
                 <span>รายละเอียด</span><span className="text-right">จำนวน</span>
                 <span className="text-right">ราคา/หน่วย</span>
@@ -879,12 +816,9 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
 
           {/* Summary + Deposit % */}
           <Panel title="สรุปยอด">
-            {/*
-              UX-03: scroll/focus target for the "total must be > 0" rule —
-              total is a computed value with no single input of its own, so
-              (same technique as doc-items-panel above) this wrapper carries
-              the aria-invalid/aria-describedby contract itself.
-            */}
+            {/* UX-03: scroll/focus target for the "total must be > 0" rule — total is a computed value with no single input
+             * of its own, so (same technique as doc-items-panel above) this wrapper carries the
+             * aria-invalid/aria-describedby contract itself. */}
             <div
               id="doc-summary-panel"
               ref={(el) => { fieldRefs.current.total = el; }}

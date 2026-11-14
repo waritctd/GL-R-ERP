@@ -21,35 +21,13 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Leave HR-submit gate (2026-08-03): real-Postgres coverage of the owner ruling "HR and บริหาร
- * oversee leave but do not request it for themselves." Verified role mapping (frontend/src/app/
- * roles.js): `ผู้บริหาร` -> role {@code hr}, `ผู้บริหารระดับสูง` -> role {@code ceo} -- there is no
- * separate "บริหาร" role, so the gate is on {@code hr}/{@code ceo}, matching the existing {@code
- * LeaveService.VIEW_ALL_ROLES} bucket and the "CEO/HR are queue-side, they never file their own
- * requests" precedent already established for OT/welfare approval routing in this codebase.
- *
- * <p>Mockito cannot reach this: the gate lives in {@link LeaveService#resolveTargetEmployee}, which
- * is exercised only through the real {@link LeaveService#submit} entry point end-to-end against a
- * real {@link LeaveRepository} -- a mocked repository would prove nothing about whether the actual
- * decision (role bucket + self-vs-other target resolution) is wired correctly into the request path.
- *
- * <p>Written WRONG-WAY-ROUND, per CLAUDE.md's rule for authorization changes: every 403 case here
- * asserts what the caller CANNOT reach (submitting for themselves), not merely that the intended
- * caller can reach what they should. The HR-for-a-subordinate / CEO-for-a-subordinate / plain-
- * employee-for-self cases are regression guards -- proof this gate did NOT become a role-alone
- * block, which the brief explicitly forbids ("Do NOT gate on role alone").
- *
- * <p>Every request here uses {@code LEAVE_WITHOUT_PAY} (V116: zero advance notice, zero min-service,
- * no consecutive-day cap, not once-per-employment, no attachment requirement) so the only gate any
- * case can possibly trip is the one under test -- a 403 that showed up instead because of an
- * unrelated leave-type rule would be a false positive for this class's own point.
- */
+/** Leave HR-submit gate: real-Postgres coverage of the owner ruling "HR and บริหาร oversee leave but do not
+ * request it for themselves." Verified role mapping: `ผู้บริหาร` -> role hr, `ผู้บริหารระดับสูง` -> role ceo. */
 class LeaveSubmitSelfRoleGateIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    // Wednesday 2026-08-05 09:00 Asia/Bangkok -- every leave date below is a later-in-the-week
-    // working day (Mon-Fri, the legacy no-schedule LeaveRepository(jdbc) default), comfortably
-    // clear of LEAVE_WITHOUT_PAY's own zero-notice requirement (irrelevant here regardless).
+    // Wednesday 2026-08-05 09:00 Asia/Bangkok -- every leave date below is a later-in-the-week working day
+    // (Mon-Fri, the legacy no-schedule LeaveRepository(jdbc) default), comfortably clear of LEAVE_WITHOUT_PAY's
+    // own zero-notice requirement (irrelevant here regardless).
     private static final Instant FIXED_NOW = Instant.parse("2026-08-05T02:00:00Z");
     private static final LocalDate LEAVE_DATE = LocalDate.of(2026, 8, 6); // Thursday
 
@@ -76,11 +54,11 @@ class LeaveSubmitSelfRoleGateIntegrationTest extends AbstractPostgresIntegration
         hrEmployeeId = insertEmployee("GATE-HR", null, true);
         ceoEmployeeId = insertEmployee("GATE-CEO", null, true);
         plainEmployeeId = insertEmployee("GATE-EMP", null, true);
-        // Not the HR actor's own report -- proves the HR case below is HR's blanket
-        // REVIEW_ALL_ROLES reach ("paper form on someone else's behalf"), not a manager-FK match.
+        // Not the HR actor's own report -- proves the HR case below is HR's blanket REVIEW_ALL_ROLES reach ("paper
+        // form on someone else's behalf"), not a manager-FK match.
         hrManagedSubordinateId = insertEmployee("GATE-HR-SUB", null, true);
-        // Reports directly to the CEO actor -- CEO is NOT in REVIEW_ALL_ROLES (that set is {hr}
-        // only), so CEO-for-a-subordinate can only succeed via the isDirectManager relationship.
+        // Reports directly to the CEO actor -- CEO is NOT in REVIEW_ALL_ROLES (that set is {hr} only), so
+        // CEO-for-a-subordinate can only succeed via the isDirectManager relationship.
         ceoDirectReportId = insertEmployee("GATE-CEO-SUB", ceoEmployeeId, true);
     }
 
@@ -109,8 +87,8 @@ class LeaveSubmitSelfRoleGateIntegrationTest extends AbstractPostgresIntegration
 
     @Test
     void ceoSubmittingForADirectReportStillSucceeds() {
-        // CEO can submit for someone else ONLY via the manager-of-record relationship (CEO is not
-        // in REVIEW_ALL_ROLES) -- this is that path, seeded above via ceoDirectReportId.
+        // CEO can submit for someone else ONLY via the manager-of-record relationship (CEO is not in REVIEW_ALL_ROLES)
+        // -- this is that path, seeded above via ceoDirectReportId.
         LeaveRequestDto result = leaveService.submit(
             submitRequest(ceoDirectReportId), ceo(ceoEmployeeId));
 

@@ -3,17 +3,9 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { STAT_ICON_TILE_CLASSES, STAT_TONE_CLASSES } from '../../components/common/StatCard.jsx';
 import { cn } from '../../utils/cn.js';
 
-/**
- * Landing-page nudge for ล.ย.01, shown ONLY when the employee actually has something to do.
- *
- * <p>Deliberately not a stat tile: the employee landings already carry a three-across tile grid
- * (a fourth would orphan onto its own row), and a permanent card would occupy space on every
- * visit to say "nothing to do". This is the same one-wide-row shape as the attendance card above
- * it — icon, text, chevron — and it disappears entirely once the declaration is filed and live.
- *
- * <p>It exists because nothing in the ล.ย.01 workflow notifies anyone: a rejection or a yearly
- * expiry is otherwise discoverable only by opening a page the employee has no reason to visit.
- */
+/** Landing-page nudge for ล.ย.01, shown ONLY when the employee actually has something to do. It exists because
+ * nothing in the ล.ย.01 workflow notifies anyone: a rejection or a yearly expiry is otherwise discoverable
+ * only by opening a page the employee has no reason to visit. */
 
 // Only states the form will actually accept a submission for — mirrors TaxAllowancePage's
 // EDITABLE_STATUS_KEYS, so this never points at a form that would refuse the visit.
@@ -43,15 +35,15 @@ const PROMPTS = {
 
 export function TaxAllowanceActionRow({ summary }) {
   const navigate = useNavigate();
-  // No status yet (the summary query is still in flight) means we do not know whether anything is
-  // needed — NOT that nothing has been filed. Defaulting to 'NONE' here would flash "you haven't
-  // filed" at an employee who has, every time the landing page loads.
+  // No status yet (the summary query is still in flight) means we do not know whether anything is needed — NOT
+  // that nothing has been filed. Defaulting to 'NONE' here would flash "you haven't filed" at an employee who
+  // has, every time the landing page loads.
   const statusKey = summary?.statusInfo?.key;
   const prompt = statusKey ? PROMPTS[statusKey] : null;
   if (!prompt) return null;
 
-  // A rejection reason is the single most useful thing to show here, so it replaces the generic
-  // line when HR left one.
+  // A rejection reason is the single most useful thing to show here, so it replaces the generic line when HR
+  // left one.
   const description = statusKey === 'REJECTED' && summary?.statusInfo?.note
     ? summary.statusInfo.note
     : prompt.description;

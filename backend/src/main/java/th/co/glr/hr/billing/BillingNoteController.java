@@ -18,12 +18,7 @@ import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
-/**
- * ใบวางบิล (billing note, GLA-99 step 3) routes — backend + renderer only. Every route below stays
- * {@code SERVER_ONLY} in {@code frontend/src/api/serverContract.test.js} until GLA-99 step 4 wires
- * a screen to it; see {@link BillingNoteService}'s own Javadoc for the authorisation these routes
- * enforce (a per-employee grant, not a role, so a plain {@code employee} row can hold it).
- */
+/** ใบวางบิล (billing note, GLA-99 step 3) routes — backend + renderer only. */
 @RestController
 @RequestMapping("/api")
 public class BillingNoteController {
@@ -121,8 +116,8 @@ public class BillingNoteController {
     @GetMapping("/billing-notes/{id}/file")
     ResponseEntity<byte[]> file(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        // Nit fix (Opus review, GLA-99 step 3 round 1): ONE load+authorize, not two — service.file
-        // now returns the doc_number the filename needs alongside the rendered bytes.
+        // Nit fix (Opus review, GLA-99 step 3 round 1): ONE load+authorize, not two — service.file now returns the
+        // doc_number the filename needs alongside the rendered bytes.
         BillingNoteService.RenderedFile rendered = service.file(id, user);
         String filename = (rendered.docNumber() != null ? rendered.docNumber() : "draft-" + id) + ".xls";
         return ResponseEntity.ok()

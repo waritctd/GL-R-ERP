@@ -45,20 +45,9 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * Shared real-Postgres wiring for the quotation ↔ deal linking SLICE 2 backend tests
- * ({@code .design/quotation-deal-link/SLICE-2-FLOW-A.md} Part 1: S2-B1 recipient, one pricing route
- * per deal, S2-B3 N6, S2-B4 {@code liveDirectQuotation}).
- *
- * <p>Every service is the production class, hand-wired against real Postgres exactly as
- * {@link DealQuotationConfirmOrderIntegrationTest} wires it — no Mockito anywhere, so every refusal
- * asserted by a subclass is the real service's, and every "nothing was written" is read back from
- * the real tables. The pricing-request rows the one-route rule keys on are inserted with an explicit
- * {@code status} (see {@link #insertPricingRequest}): the rule reads nothing else, and driving a
- * request through the whole import/CEO chain to reach, say, {@code QUOTATION_ACCEPTED} would test
- * that chain rather than this rule. The HTTP test creates its live request through the real
- * {@code PricingRequestController} instead.
- */
+/** Shared real-Postgres wiring for the quotation ↔ deal linking SLICE 2 backend tests
+ * (.design/quotation-deal-link/SLICE-2-FLOW-A.md Part 1: S2-B1 recipient, one pricing route per deal, S2-B3
+ * N6, S2-B4 liveDirectQuotation). */
 public abstract class AbstractDealQuotationSlice2IntegrationTest extends AbstractPostgresIntegrationTest {
 
     protected TicketRepository tickets;
@@ -165,8 +154,8 @@ public abstract class AbstractDealQuotationSlice2IntegrationTest extends Abstrac
         return approved;
     }
 
-    /** A {@code sales.pricing_request} row on {@code ticketId} in exactly {@code status} (with the
-     * {@code cancelled_at} that {@code chk_pricing_request_cancelled_pair} demands of a CANCELLED row). */
+    /** A sales.pricing_request row on ticketId in exactly status (with the cancelled_at that
+     * chk_pricing_request_cancelled_pair demands of a CANCELLED row). */
     protected long insertPricingRequest(long ticketId, long requestedBy, String status) {
         return jdbc.queryForObject("""
             INSERT INTO sales.pricing_request (request_code, ticket_id, recipient_type, requested_by, status,

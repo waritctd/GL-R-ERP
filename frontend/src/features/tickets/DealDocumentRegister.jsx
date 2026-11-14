@@ -118,18 +118,15 @@ export function DealDocumentRegister({
   const [busyKey, setBusyKey] = useState(null);
   const [remainingInvoiceDialogOpen, setRemainingInvoiceDialogOpen] = useState(false);
 
-  // Unchanged from the pre-Slice-D `documents` tab gate (ticketDetailTabs.js) — see this file's
-  // own header comment for why it stays a two-part role+section check rather than collapsing to
-  // just `canViewPricingRequests`.
+  // Unchanged from the pre-Slice-D `documents` tab gate (ticketDetailTabs.js) — see this file's own header
+  // comment for why it stays a two-part role+section check rather than collapsing to just
+  // `canViewPricingRequests`.
   const canViewQuotations = canViewPricingRequests && Boolean(sections?.dealQuotation || sections?.quotation);
-  // Mirrors DepositNoticeService#requireTicketViewer via salesViewScope's own `depositNotice`
-  // section id (see header comment) — governs BOTH the deposit notice and the remaining invoice.
+  // Mirrors DepositNoticeService#requireTicketViewer via salesViewScope's own `depositNotice` section id (see
+  // header comment) — governs BOTH the deposit notice and the remaining invoice.
   const canViewDepositAndInvoice = Boolean(sections?.depositNotice);
-  // R4 (GLA-99 step 2 review-round-1): the remaining invoice's own WRITE gate — mirrors
-  // RemainingInvoiceService#requireDepositNoticeIssueGate / mockApi's
-  // requireRemainingInvoiceWriteGate exactly (sales role + this deal's own owner, no CEO
-  // carve-out). UI-only convenience for RemainingInvoiceDialog's own button visibility — the
-  // backend gate above is what actually enforces this.
+  // the remaining invoice's own WRITE gate — mirrors RemainingInvoiceService#requireDepositNoticeIssueGate /
+  // mockApi's requireRemainingInvoiceWriteGate exactly (sales role + this deal's own owner, no CEO carve-out).
   const canWriteRemainingInvoice = user?.role === 'sales' && isOwnerOrKeyer(summary, user?.id);
 
   const eligiblePricingRequests = useMemo(
@@ -137,10 +134,9 @@ export function DealDocumentRegister({
     [canViewQuotations, pricingRequests, user],
   );
 
-  // One listCustomerQuotations call per eligible pricing request — there is no ticket-level "all
-  // customer quotations for this deal" endpoint (only the per-pricing-request one DealQuotationPanel
-  // already uses), so a complete register necessarily fans out across every request this viewer may
-  // read, not just the single "currently relevant" one that panel narrows to.
+  // One listCustomerQuotations call per eligible pricing request — there is no ticket-level "all customer
+  // quotations for this deal" endpoint, so a complete register necessarily fans out across every request this
+  // viewer may read, not just the single "currently relevant" one that panel narrows to.
   const customerQuotationQueries = useQueries({
     queries: eligiblePricingRequests.map((pr) => ({
       queryKey: queryKeys.customerQuotations(pr.id),
@@ -153,10 +149,7 @@ export function DealDocumentRegister({
     (q.data ?? []).map((doc) => ({ ...doc, pricingRequestId: eligiblePricingRequests[idx]?.id }))
   )), [customerQuotationQueries, eligiblePricingRequests]);
 
-  // Direct (v2) quotations, listed here with their versions. The query is shared with
-  // DealDirectQuotationPanel, so `Number(ticketId)` is required, not cosmetic: `ticketId` arrives
-  // as the raw useParams() STRING and that panel keys the very same query with the numeric id —
-  // the string would open a SECOND cache entry and fire a second request for data already loaded.
+  // Direct (v2) quotations, listed here with their versions.
   const directQuotationsQuery = useQuery({
     // The full response: `orderConfirmedQuotationId` names the version the order was confirmed from, which leads
     // its group (see dealDocumentVersions.js#inForceFirst).
@@ -169,14 +162,14 @@ export function DealDocumentRegister({
   const depositNoticesQuery = useQuery({
     queryKey: queryKeys.depositNotices(ticketId),
     queryFn: () => api.depositNotices.listByTicket(ticketId).then((r) => r.depositNotices ?? []),
-    // Never fire this for a viewer DepositNoticeService#requireTicketViewer would 403 — same
-    // reasoning as TicketDetailPage's own `attachmentsQuery`/`activitiesQuery` `enabled` gates.
+    // Never fire this for a viewer DepositNoticeService#requireTicketViewer would 403 — same reasoning as
+    // TicketDetailPage's own `attachmentsQuery`/`activitiesQuery` `enabled` gates.
     enabled: Boolean(ticketId) && canViewDepositAndInvoice,
   });
   const depositGroups = useMemo(() => groupDepositNotices(depositNoticesQuery.data ?? []), [depositNoticesQuery.data]);
 
-  // Stored remaining-invoice versions. Same key form as RemainingInvoiceDialog (raw `ticketId`)
-  // so both share one cache entry; same gate as the deposit notice (requireTicketViewer).
+  // Stored remaining-invoice versions. Same key form as RemainingInvoiceDialog (raw `ticketId`) so both share
+  // one cache entry; same gate as the deposit notice (requireTicketViewer).
   const remainingInvoicesQuery = useQuery({
     queryKey: queryKeys.storedRemainingInvoices(ticketId),
     queryFn: () => api.storedRemainingInvoices.listForTicket(ticketId).then((r) => r.remainingInvoices ?? []),
@@ -185,8 +178,8 @@ export function DealDocumentRegister({
   const remainingGroups = useMemo(() => groupRemainingInvoices(remainingInvoicesQuery.data ?? []), [remainingInvoicesQuery.data]);
 
   // CR-1 (R6/R9): the stored ใบขอซื้อ rows — one IR per factory — in a 5th section. Same read gate as
-  // ImportRequestService#requireRead (and DealFulfilmentPanel's canReadStoredIr): import / CEO /
-  // sales_manager, or the OWNING sales rep. Same query key as that panel, so one fetch feeds both.
+  // ImportRequestService#requireRead (and DealFulfilmentPanel's canReadStoredIr): import / CEO / sales_manager,
+  // or the OWNING sales rep. Same query key as that panel, so one fetch feeds both.
   const canViewImportRequests = canReadStoredImportRequests(user, summary);
   const importRequestsQuery = useQuery({
     queryKey: queryKeys.storedImportRequests(ticketId),
@@ -201,10 +194,8 @@ export function DealDocumentRegister({
   );
 
   const chainGroups = useMemo(() => groupChainQuotations(customerQuotationRows), [customerQuotationRows]);
-  // Legacy rows that also exist in the chain (same id) render once, as the chain row. Until the
-  // chain queries have settled ONCE we cannot tell which those are, so hold the legacy rows back
-  // rather than flash duplicates. Latched: a later pricing request starting to load must not make
-  // already-shown rows vanish.
+  // Legacy rows that also exist in the chain (same id) render once, as the chain row. Until the chain queries
+  // have settled ONCE we cannot tell which those are, so hold the legacy rows back rather than flash duplicates.
   const [chainSettledOnce, setChainSettledOnce] = useState(false);
   if (!chainSettledOnce && !customerQuotationsLoading && !pricingRequestsLoading) setChainSettledOnce(true);
   const legacyRows = useMemo(
@@ -327,8 +318,8 @@ export function DealDocumentRegister({
     status: dealQuotationStatusLabel(q.docStatus),
     date: q.approvedAt ?? q.createdAt,
     amount: q.grandTotal,
-    // DealQuotationDto#recipientType (Round 8). An older backend omits it: undefined -> no chip
-    // (never a wrong one) — the frontend deploys before the backend image.
+    // DealQuotationDto#recipientType (Round 8). An older backend omits it: undefined -> no chip (never a wrong
+    // one) — the frontend deploys before the backend image.
     recipient: q.recipientType ? quotationRecipientLabel(q.recipientType).label : null,
     meta: `ครั้งที่ ${q.revisionNo ?? 1}`,
     // The version the order was confirmed from says so, and every row states its deposit terms in the PDF's own
@@ -347,11 +338,9 @@ export function DealDocumentRegister({
     status: depositNoticeStatusLabel(doc.status),
     date: doc.issueDate ?? doc.createdAt,
     meta: `มัดจำ ${Math.round(Number(doc.depositPercent ?? 0.5) * 100)}%`,
-    // GLA-117: a SUPERSEDED notice was once ISSUED (DepositNoticeRepository#supersede only ever
-    // transitions FROM ISSUED, keeping doc_number/pdf_path/xlsx_path intact) and
-    // DepositNoticeService#getPdf/getXlsx re-render from that persisted snapshot with no status
-    // guard — so it stays downloadable exactly like an ISSUED one. Only DRAFT (never rendered, no
-    // doc number yet) has no download actions.
+    // GLA-117: a SUPERSEDED notice was once ISSUED and DepositNoticeService#getPdf/getXlsx re-render from that
+    // persisted snapshot with no status guard — so it stays downloadable exactly like an ISSUED one. Only DRAFT
+    // (never rendered, no doc number yet) has no download actions.
     actions: doc.status === 'ISSUED' || doc.status === 'SUPERSEDED'
       ? pdfXlsx('deposit', downloadDepositNotice, doc) : [],
   });
@@ -396,8 +385,8 @@ export function DealDocumentRegister({
       {canViewQuotations ? (
         <RegisterSection testId="register-quotations" title="ใบเสนอราคา" count={quotationDocCount} unit="เอกสาร">
           {customerQuotationsLoading && quotationDocCount === 0 ? (
-            // Only block on the async chain fetch while there is NOTHING else to show yet —
-            // legacy rows arrive as a prop and must never wait on an unrelated query.
+            // Only block on the async chain fetch while there is NOTHING else to show yet — legacy rows arrive as a prop
+            // and must never wait on an unrelated query.
             <Skeleton height={40} />
           ) : quotationDocCount === 0 ? (
             directQuotationsQuery.isLoading
@@ -429,9 +418,8 @@ export function DealDocumentRegister({
 
       {canViewDepositAndInvoice ? (
         <RegisterSection testId="register-remaining-invoice" title="ใบแจ้งหนี้ส่วนที่เหลือ" count={remainingGroups.length} unit="เอกสาร">
-          {/* The readiness row (create/download via the dialog) always leads the section; the
-              stored versions follow. Its title says what the button DOES, so it does not repeat
-              the section heading. */}
+          {/* The readiness row (create/download via the dialog) always leads the section; the stored versions follow. Its
+           * title says what the button DOES, so it does not repeat the section heading. */}
           <DocumentRow
             icon="fileText"
             title="ออกใบแจ้งหนี้ส่วนที่เหลือ"
@@ -544,8 +532,8 @@ function DocumentGroup({ items }) {
   );
 }
 
-// Below desktop (<=1040px, the `nav-drawer` band) every button/link is a 44px touch target; the
-// 8px gap between them is kept by `gap-2`. Desktop stays compact.
+// Below desktop (<=1040px, the `nav-drawer` band) every button/link is a 44px touch target; the 8px gap
+// between them is kept by `gap-2`. Desktop stays compact.
 const TOUCH_TARGET = 'nav-drawer:min-h-11 nav-drawer:min-w-11';
 
 function DocumentRow({ testId, icon, title, meta, status, date, amount, recipient, flag, terms, actions = [], muted = false, to }) {
@@ -589,8 +577,8 @@ function DocumentRow({ testId, icon, title, meta, status, date, amount, recipien
           {actions.length > 0 ? (
             <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
               {actions.map((action) => (action.href ? (
-                // Not a <Button>: this is a real navigation link (target="_blank" to
-                // a file URL) — Button renders a <button>, which has no href.
+                // Not a <Button>: this is a real navigation link (target="_blank" to a file URL) — Button renders a <button>,
+                // which has no href.
                 <a key={action.label} href={action.href} target="_blank" rel="noreferrer"
                   className={cn(buttonVariants({ variant: 'secondary' }), 'px-2.5 py-1 text-xs', TOUCH_TARGET)}>
                   {action.label}

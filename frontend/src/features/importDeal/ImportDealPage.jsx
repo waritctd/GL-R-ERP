@@ -21,17 +21,12 @@ import { IMPORT_ACTION_LABELS, nextImportAction } from '../tickets/importActions
 
 const NOOP = () => {};
 
-/**
- * The LEGACY deal-level transitions import performs on this page (issue IR, mark IR sent, shipping,
- * goods received). `nextImportAction` routes most of them here (importActions.js) because
- * DealFulfilmentPanel — where they used to live — is closed to import. `markIrSent` is here too:
- * /fulfilment's legacy section only links back to this page, so without it a legacy deal at
- * IR_ISSUED could not advance anywhere. `recordDelivery` is NOT (delivery is Sales's; this page
- * stays read-only for it).
- */
+/** The LEGACY deal-level transitions import performs on this page (issue IR, mark IR sent, shipping, goods
+ * received). `markIrSent` is here too: /fulfilment's legacy section only links back to this page, so without
+ * it a legacy deal at IR_ISSUED could not advance anywhere. */
 const LEGACY_ACTIONS = {
-  // A deal whose IR went out the legacy one-shot way (no per-factory rows) has nowhere else to
-  // advance from IR_ISSUED: /fulfilment's legacy section only links back to this page.
+  // A deal whose IR went out the legacy one-shot way (no per-factory rows) has nowhere else to advance from
+  // IR_ISSUED: /fulfilment's legacy section only links back to this page.
   markIrSent: {
     call: (ticketId) => api.tickets.markIrSent(ticketId),
     toast: 'ส่งคำขอนำเข้าแล้ว',
@@ -60,35 +55,9 @@ function itemSpec(item) {
   return [item.color, item.texture, item.size].filter(Boolean).join(' · ');
 }
 
-/**
- * ดีลนำเข้า — import's OWN per-deal page (`/import/deals/:ticketId`).
- *
- * Import is refused the whole-deal read (GET /api/tickets/{id} carries the customer price and the
- * quotation chain), so this page never touches it: everything comes from
- * GET /api/import/deals/{id} (ImportDealController), an import-only projection that has NO price,
- * cost or margin field on any line. This component therefore renders only the fields it names —
- * it never spreads a DTO — so a money field could not reach the screen even if one appeared.
- *
- * Sections, top to bottom: header → at-a-glance status strip → per-factory ใบขอซื้อ tracking (the
- * focal section — the SAME `ImportRequestFactoryCard` the deal tab's "ใบขอซื้อรายโรงงาน" section
- * renders; a LEGACY deal with no per-factory rows shows the deal-level import action here instead)
- * → delivery status (READ-ONLY: delivery is Sales's) → items → comments → attachments.
- *
- * LEGACY deals: a deal that never started per-factory tracking still advances through the old
- * deal-level chain (issue IR → shipping → goods received). `nextImportAction` routes those three
- * here; the page performs them, gated on "no live per-factory rows" because the backend 409s them
- * once a deal is IR-tracked (TicketService.markShipping/markGoodsReceived).
- *
- * SYNC with the deal tab and /fulfilment: the per-factory mutations live in
- * ImportRequestFactoryCard, whose `invalidate()` refreshes `queryKeys.importDeal` alongside the
- * storedImportRequests / ticketDetail caches, so a step advanced here shows on the other surfaces
- * and vice versa.
- *
- * The role props handed to the card mirror DealFulfilmentPanel's matrix exactly
- * (ImportRequestService): import advances steps, sets lead time after issue and works the order
- * email; issue/revise/delete and the printed footer stay with the owning rep / CEO. Import is
- * neither, so it gets none of those controls.
- */
+/** ดีลนำเข้า — import's OWN per-deal page (`/import/deals/:ticketId`). This component therefore renders only
+ * the fields it names — it never spreads a DTO — so a money field could not reach the screen even if one
+ * appeared. */
 export function ImportDealPage({ user, showToast }) {
   const { ticketId } = useParams();
   const queryClient = useQueryClient();
@@ -104,8 +73,8 @@ export function ImportDealPage({ user, showToast }) {
   });
   const deal = dealQuery.data;
 
-  // Documents: import may now READ every type on an in-scope deal (TicketAccessPolicy). Fetched
-  // only once the deal itself resolved, so an out-of-scope deal never fires a second 403.
+  // Documents: import may now READ every type on an in-scope deal (TicketAccessPolicy). Fetched only once the
+  // deal itself resolved, so an out-of-scope deal never fires a second 403.
   const attachmentsQuery = useQuery({
     queryKey: queryKeys.ticketAttachments(ticketId),
     queryFn: () => api.attachments.list(ticketId).then((r) => r.attachments ?? []),
@@ -123,8 +92,8 @@ export function ImportDealPage({ user, showToast }) {
     onError: (err) => showToast?.('error', err.message || 'ดำเนินการไม่สำเร็จ'),
   });
 
-  // Legacy deal-level transition (issue IR / shipping / goods received). Same cache set as the
-  // per-factory card's invalidate() so the deal tab, /fulfilment and the worklist all move together.
+  // Legacy deal-level transition (issue IR / shipping / goods received). Same cache set as the per-factory
+  // card's invalidate() so the deal tab, /fulfilment and the worklist all move together.
   const legacyMutation = useMutation({
     mutationFn: (code) => LEGACY_ACTIONS[code].call(ticketId),
     onSuccess: (_data, code) => {
@@ -209,8 +178,8 @@ export function ImportDealPage({ user, showToast }) {
   const comments = deal.comments ?? [];
   const attachments = attachmentsQuery.data ?? [];
 
-  // Overall delivery = the mean of the per-item bars below (each item's delivered/ordered, capped at
-  // 100%). Deliberately NOT a sum of quantities: lines are in different units (ตร.ม. / กล่อง).
+  // Overall delivery = the mean of the per-item bars below (each item's delivered/ordered, capped at 100%).
+  // Deliberately NOT a sum of quantities: lines are in different units (ตร.ม. / กล่อง).
   const deliveryPct = items.length > 0
     ? Math.round(items.reduce((sum, item) => {
       const ordered = Number(item.qty) || 0;
@@ -239,8 +208,8 @@ export function ImportDealPage({ user, showToast }) {
         )}
       />
 
-      {/* At-a-glance: the SAME strip the deal tab's Step-1 header shows (fulfilment status → ถึงไทย
-          X/N โรงงาน → ส่งมอบ N%) — shared so the two surfaces read as one system. */}
+      {/* At-a-glance: the SAME strip the deal tab's Step-1 header shows (fulfilment status → ถึงไทย X/N โรงงาน →
+       * ส่งมอบ N%) — shared so the two surfaces read as one system. */}
       <ImportStatusStrip
         className="-mt-1"
         testIdPrefix="import-deal"
@@ -250,8 +219,8 @@ export function ImportDealPage({ user, showToast }) {
         deliveryPct={deliveryPct}
       />
 
-      {/* The focal section: per-factory tracking. Same padding as the supporting panels below, but a
-          stronger rule and the full-size title (theirs are quieted), so the eye lands here first. */}
+      {/* The focal section: per-factory tracking. Same padding as the supporting panels below, but a stronger rule
+       * and the full-size title (theirs are quieted), so the eye lands here first. */}
       <Panel
         title="ใบขอซื้อรายโรงงาน"
         data-testid="import-deal-tracking"
@@ -308,13 +277,12 @@ export function ImportDealPage({ user, showToast }) {
         </div>
       </Panel>
 
-      {/* Supporting sections (delivery → items → comments → attachments): one wrapper so every
-          panel title — including DealAttachmentsPanel's, which this page does not own — steps down
-          to the same quiet size (and every panel to the same 16px/12px padding) and the tracker above is the only thing with a full-size heading. */}
+      {/* Supporting sections: one wrapper so every panel title — including DealAttachmentsPanel's, which this page
+       * does not own — steps down to the same quiet size and the tracker above is the only thing with a full-size
+       * heading. */}
       <div className="grid min-w-0 gap-5 [&>section]:p-4 mobile:[&>section]:p-3 [&_h2]:text-md [&_h2]:text-text-secondary" data-testid="import-deal-supporting">
-        {/* Delivery is Sales's (owner ruling 2026-08-17): status only, no write control of any kind.
-            The status badge stays in the header — the delivery panel is read on its own, and its own
-            test pins the label here. */}
+        {/* Delivery is Sales's (owner ruling 2026-08-17): status only, no write control of any kind. The status badge
+         * stays in the header — the delivery panel is read on its own, and its own test pins the label here. */}
         <Panel
           title="สถานะการส่งมอบ"
           data-testid="import-deal-delivery"

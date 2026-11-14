@@ -120,10 +120,9 @@ class ResendMailerTest {
 
     @Test
     void sendHtmlWithNoInlineImagesSendsNoAttachments() {
-        // The plain 4-arg sendHtml is Mailer's default method, delegating to the 5-arg one with
-        // List.of() - this pins that the Resend request built from an empty list carries no
-        // attachments at all (not an empty-but-present list), i.e. behaves exactly like it did
-        // before inline images existed.
+        // The plain 4-arg sendHtml is Mailer's default method, delegating to the 5-arg one with List.of() - this pins
+        // that the Resend request built from an empty list carries no attachments at all (not an empty-but-present
+        // list), i.e. behaves exactly like it did before inline images existed.
         AtomicReference<CreateEmailOptions> captured = new AtomicReference<>();
         ResendMailer mailer = mailerWith(options -> {
             captured.set(options);
@@ -139,10 +138,9 @@ class ResendMailerTest {
 
     @Test
     void sendHtmlWithInlineImagesAttachesEachWithItsContentIdAndBase64Content() {
-        // This is the mechanism #5 (broken logo) actually relies on: Resend has no separate
-        // "inline image" concept, an attachment becomes inline purely by carrying a contentId the
-        // HTML matches via cid:<contentId> - confirmed by decompiling resend-java 4.13.0's
-        // Attachment.Builder, which exposes .contentId(String).
+        // This is the mechanism #5 actually relies on: Resend has no separate "inline image" concept, an attachment
+        // becomes inline purely by carrying a contentId the HTML matches via cid:<contentId> - confirmed by
+        // decompiling resend-java 4.13.0's Attachment.Builder, which exposes .contentId.
         AtomicReference<CreateEmailOptions> captured = new AtomicReference<>();
         ResendMailer mailer = mailerWith(options -> {
             captured.set(options);
@@ -211,14 +209,13 @@ class ResendMailerTest {
         assertThat(captured.get().getCc()).isNullOrEmpty();
     }
 
-    // MUTATION-CHECK (verified live, not just by reasoning): temporarily removed the
-    // `if (!replyTo.isBlank())` guard in applyReplyTo() so it always called request.replyTo(replyTo)
-    // -- exactly this one test went red (getReplyTo() became a 1-element list containing "" rather
+    // MUTATION-CHECK: temporarily removed the `if (!replyTo.isBlank)` guard in applyReplyTo so it always called
+    // request.replyTo -- exactly this one test went red (getReplyTo became a 1-element list containing "" rather
     // than null/empty), nothing else in this class. Reverted to an empty diff.
     @Test
     void replyToIsOmittedWhenBlank() {
-        // No address is ever invented - blank app.mail.reply-to must leave Resend's replyTo unset,
-        // not default to something.
+        // No address is ever invented - blank app.mail.reply-to must leave Resend's replyTo unset, not default to
+        // something.
         AtomicReference<CreateEmailOptions> captured = new AtomicReference<>();
         ResendMailer mailer = mailerWith(options -> {
             captured.set(options);

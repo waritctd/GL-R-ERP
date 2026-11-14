@@ -101,8 +101,8 @@ function openSection(id) {
   fireEvent.click(sectionHeader(id));
 }
 
-// Every render needs a QueryClientProvider — the modal fetches fxRates via react-query. A fresh
-// QueryClient per render keeps tests isolated from each other.
+// Every render needs a QueryClientProvider — the modal fetches fxRates via react-query. A fresh QueryClient
+// per render keeps tests isolated from each other.
 function renderModal(props = {}) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -171,8 +171,8 @@ beforeEach(() => {
   api.customers.projects.mockResolvedValue({ projects: [mockProject] });
   api.tickets.list.mockResolvedValue({ tickets: [] });
   api.dealQuotations.displayNameOptions.mockResolvedValue({ items: OWNER_OPTIONS });
-  // FX rates covering the catalogItem() fixture's EUR price. Individual tests override this to
-  // exercise the "no rate for this currency" path.
+  // FX rates covering the catalogItem() fixture's EUR price. Individual tests override this to exercise the "no
+  // rate for this currency" path.
   api.fxRates.list.mockResolvedValue({
     fxRates: [
       { currency: 'THB', rateToThb: 1 },
@@ -262,8 +262,8 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ unitBasis: 'PIECE', qty: 0 })] });
 
     await selectCustomerAndProject();
-    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be
-    // chosen or the failed-submit jump goes to the channel picker instead of this item field.
+    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be chosen or the
+    // failed-submit jump goes to the channel picker instead of this item field.
     chooseEntryChannel();
     submitForm();
 
@@ -280,8 +280,8 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ unitBasis: 'SQM', qtySqm: '' })] });
 
     await selectCustomerAndProject();
-    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be
-    // chosen or the failed-submit jump goes to the channel picker instead of this item field.
+    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be chosen or the
+    // failed-submit jump goes to the channel picker instead of this item field.
     chooseEntryChannel();
     submitForm();
 
@@ -310,9 +310,9 @@ describe('TicketCreateModal validation', () => {
       note: null,
       entryChannel: 'DESIGNER_LED',
       priority: 'NORMAL',
-      // Defaulted to +14 days at mount, so the value moves with the clock — the shape is what this
-      // test pins. It is REQUIRED in the payload: without a next_follow_up_at the stage-advance
-      // readiness gate refuses every forward move, which is what made a UI-created deal unmovable.
+      // Defaulted to +14 days at mount, so the value moves with the clock — the shape is what this test pins. It is
+      // REQUIRED in the payload: without a next_follow_up_at the stage-advance readiness gate refuses every forward
+      // move, which is what made a UI-created deal unmovable.
       nextFollowUpAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
       items: [{
         brand: 'SCG',
@@ -339,8 +339,8 @@ describe('TicketCreateModal validation', () => {
     renderModal({ onSubmit, initialItems: [validItem({ size: '' })] });
 
     await selectCustomerAndProject();
-    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be
-    // chosen or the failed-submit jump goes to the channel picker instead of this item field.
+    // See the ขนาด test above: entryChannel precedes items in on-screen order, so it must be chosen or the
+    // failed-submit jump goes to the channel picker instead of this item field.
     chooseEntryChannel();
     submitForm();
 
@@ -913,8 +913,8 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     expect(screen.getByText('เกรด A01')).toBeTruthy();
   });
 
-  // ยี่ห้อ doubles as the catalog search box, so a partial query left in it after a pick is a
-  // QUERY, not a deliberate brand — keeping it would leave junk ("Bod") in the field.
+  // ยี่ห้อ doubles as the catalog search box, so a partial query left in it after a pick is a QUERY, not a
+  // deliberate brand — keeping it would leave junk ("Bod") in the field.
   it('replaces a partial search query with the factory name', async () => {
     api.catalog.prices.mockResolvedValue({ items: [mockCatalogProduct()] });
     renderModal({ onSubmit: vi.fn() });
@@ -1022,8 +1022,8 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
   });
 
   it('leaves BOTH quantity boxes editable when no ตร.ม./แผ่น factor can be established', async () => {
-    // A size string that carries a thickness suffix ("598X598X18") -- the catalog has no factor
-    // and none is derived, so neither box may be locked.
+    // A size string that carries a thickness suffix ("598X598X18") -- the catalog has no factor and none is
+    // derived, so neither box may be locked.
     api.catalog.prices.mockResolvedValue({
       items: [mockCatalogProduct({ sizeRaw: '598X598X18', sqmPerPiece: null })],
     });
@@ -1038,9 +1038,9 @@ describe('TicketCreateModal catalog picker (catalog link + factory-as-brand mapp
     expect(screen.getByPlaceholderText('เช่น 120.500').readOnly).toBe(false);
   });
 
-  // V153: a per_linear_m row's own sqm_per_piece is LINEAR METRES per piece, not area (the same
-  // rule QuotationItemRow's resolveTileSqmPerPiece pins) -- reading it as ตร.ม./แผ่น here would be
-  // 14x off, so it must resolve to "no factor" exactly like an absent one.
+  // V153: a per_linear_m row's own sqm_per_piece is LINEAR METRES per piece, not area (the same rule
+  // QuotationItemRow's resolveTileSqmPerPiece pins) -- reading it as ตร.ม./แผ่น here would be 14x off, so it
+  // must resolve to "no factor" exactly like an absent one.
   it('never reads a per_linear_m catalog row\'s sqm_per_piece as an area', async () => {
     api.catalog.prices.mockResolvedValue({
       items: [mockCatalogProduct({ priceUnit: 'per_linear_m', sqmPerPiece: 0.36 })],
@@ -1065,9 +1065,9 @@ describe('TicketCreateModal catalog price display', () => {
 
     openSection('items');
 
-    // 8.80 USD/ตร.ม. at 35.20 THB/USD = 309.76 บาท/ตร.ม. — a pure conversion, no markup.
-    // The row renders from local state immediately; the baht line waits on the FX query, so it
-    // must be awaited rather than asserted on the first paint.
+    // 8.80 USD/ตร.ม. at 35.20 THB/USD = 309.76 บาท/ตร.ม. — a pure conversion, no markup. The row renders from
+    // local state immediately; the baht line waits on the FX query, so it must be awaited rather than asserted on
+    // the first paint.
     const row = await screen.findByTestId('item-catalog-price-0');
     expect(within(row).getByText('8.80 USD/ตร.ม.')).toBeTruthy();
     expect(await within(row).findByText('≈ 309.76 บาท/ตร.ม.')).toBeTruthy();
@@ -1253,8 +1253,8 @@ describe('TicketCreateModal submit + autosave interaction (GLA-20)', () => {
 
     await selectCustomerAndProject();
     chooseEntryChannel();
-    // Let the autosave from customer+project+channel land, so there is a real persisted draft to
-    // verify gets deleted below (not just an absence of one).
+    // Let the autosave from customer+project+channel land, so there is a real persisted draft to verify gets
+    // deleted below (not just an absence of one).
     await act(async () => { await sleep(1100); });
     expect(listDrafts()).toHaveLength(1);
 
@@ -1267,11 +1267,9 @@ describe('TicketCreateModal submit + autosave interaction (GLA-20)', () => {
     await waitFor(() => expect(onSubmit).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(listDrafts()).toHaveLength(0)); // deleted on success
 
-    // Wait past where the late edit's own pending timer would have fired, had submit() not
-    // cancelled it. (React's own effect-cleanup, via the debounce effect's `loading` dependency,
-    // ALSO cancels this specific timer once `setLoading(true)` commits — so on its own this
-    // real-clock wait does not isolate submit()'s explicit guard. The next test forces the exact
-    // race directly.)
+    // Wait past where the late edit's own pending timer would have fired, had submit not cancelled it. (React's
+    // own effect-cleanup, via the debounce effect's `loading` dependency, ALSO cancels this specific timer once
+    // `setLoading` commits. The next test forces the exact race directly.)
     await act(async () => { await sleep(1300); });
     expect(listDrafts()).toHaveLength(0);
   }, 10000);
@@ -1393,8 +1391,8 @@ describe('TicketCreateModal restore baseline (review fix, GLA-19/20)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'เปิดต่อ' }));
     openSection('details');
 
-    // Fake timers BEFORE the edit -- the debounce effect's setTimeout must be scheduled against
-    // the fake clock, or advancing it below never fires the (still-real) pending timer.
+    // Fake timers BEFORE the edit -- the debounce effect's setTimeout must be scheduled against the fake clock, or
+    // advancing it below never fires the (still-real) pending timer.
     vi.useFakeTimers();
     try {
       fireEvent.change(screen.getByDisplayValue('ดีลค้างไว้'), { target: { value: 'ดีลค้างไว้ แก้ไข' } });
@@ -1574,8 +1572,7 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
       fireEvent.keyDown(document, { key: 'Escape' });
 
       expect(onClose).not.toHaveBeenCalled(); // the modal must stay open
-      expect(screen.queryByText('ยังไม่ได้สร้างดีล')).toBeNull(); // only the confirm itself closed
-      // The typed data is still there -- Escape must not have discarded anything.
+      expect(screen.queryByText('ยังไม่ได้สร้างดีล')).toBeNull(); // only the confirm itself closed The typed data is still there -- Escape must not have discarded anything.
       openSection('details');
       expect(screen.getByDisplayValue('ดีลใหม่เกินโควตา')).not.toBeNull();
     } finally {
@@ -1595,8 +1592,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
       fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
       expect(screen.getByText('ยังไม่ได้สร้างดีล')).not.toBeNull();
 
-      // The confirm dialog's OWN backdrop -- the last (topmost) [role="presentation"] in the DOM,
-      // since it is rendered after (and on top of) the outer modal's own backdrop.
+      // The confirm dialog's OWN backdrop -- the last (topmost) [role="presentation"] in the DOM, since it is
+      // rendered after (and on top of) the outer modal's own backdrop.
       const backdrops = document.querySelectorAll('[role="presentation"]');
       fireEvent.mouseDown(backdrops[backdrops.length - 1]);
 
@@ -1612,8 +1609,8 @@ describe('TicketCreateModal close confirmation (GLA-20)', () => {
   it('softens the copy when an older saved copy already exists: says the latest edits will be lost, not everything', () => {
     saveDraft(null, { dealTitle: 'ร่างเดิมที่บันทึกไว้แล้ว' });
     renderModal({ onSubmit: vi.fn() });
-    // Restore with a WORKING store first, so currentDraftIdRef is genuinely already assigned --
-    // the whole point of this test is that the older copy predates the failure below.
+    // Restore with a WORKING store first, so currentDraftIdRef is genuinely already assigned -- the whole point of
+    // this test is that the older copy predates the failure below.
     fireEvent.click(screen.getByRole('button', { name: 'เปิดต่อ' }));
     openSection('details');
     fireEvent.change(screen.getByDisplayValue('ร่างเดิมที่บันทึกไว้แล้ว'), { target: { value: 'ร่างเดิมที่บันทึกไว้แล้ว แก้ไข' } });
@@ -1696,10 +1693,9 @@ describe('TicketCreateModal nested-dialog Escape/backdrop routing (review fix)',
     }
   });
 
-  // Two separate cases (not one test with two renders in sequence): the FIRST render's own
-  // backdrop-mousedown already writes a real draft via handleRequestClose's synchronous flush, so
-  // reusing that same storage for a second render would open it on the PICKER instead of a blank
-  // hub -- each case gets its own fresh beforeEach-provided store instead.
+  // Two separate cases: the FIRST render's own backdrop-mousedown already writes a real draft via
+  // handleRequestClose's synchronous flush, so reusing that same storage for a second render would open it on
+  // the PICKER instead of a blank hub -- each case gets its own fresh beforeEach-provided store instead.
   it('P2a: backdrop mousedown routes through the guard -- confirm shown, not a direct close', () => {
     vi.useFakeTimers();
     try {
