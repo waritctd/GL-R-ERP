@@ -276,9 +276,13 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
 
     // ── staleness ─────────────────────────────────────────────────────────────
 
+    // The 14-day QuietRule (salesboard.QuietRule) replaced the 7-day activity-only rule; these pin it through the
+    // service. Last touched = latest of created_at, activity, STAGE_CHANGED/QUOTATION_ISSUED event.
+
     @Test
-    void staleness_trueForAnActiveDealWithNoRecentActivity() {
+    void staleness_trueForAnActiveDealUntouchedFor14Days() {
         long ticketId = createTicket();
+        backdateDeal(ticketId, 20);
 
         TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
 
@@ -286,8 +290,18 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
     }
 
     @Test
-    void staleness_falseOnceActivityIsLoggedWithinTheLast7Days() {
+    void staleness_falseForABrandNewDealWithNoActivity() {
         long ticketId = createTicket();
+
+        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
+
+        assertThat(summary.stale()).isFalse();
+    }
+
+    @Test
+    void staleness_falseOnceActivityIsLoggedWithinTheLast14Days() {
+        long ticketId = createTicket();
+        backdateDeal(ticketId, 20);
         logActivity(ticketId, DealActivityKind.CALL);
 
         TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
@@ -296,16 +310,17 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
     }
 
     @Test
-    void staleness_falseForAnActivityLoggedMoreThan7DaysAgo() {
+    void staleness_trueForAnActivityLoggedMoreThan14DaysAgo() {
         long ticketId = createTicket();
+        backdateDeal(ticketId, 30);
         // Backdate the activity's created_at directly — insertDealActivity always stamps now().
         jdbc.update("""
             INSERT INTO sales.deal_activity (ticket_id, activity_date, kind, note, created_by_id, created_at)
-            VALUES (:ticketId, :date, :kind, NULL, :createdBy, now() - interval '10 days')
+            VALUES (:ticketId, :date, :kind, NULL, :createdBy, now() - interval '15 days')
             """,
             java.util.Map.of(
                 "ticketId", ticketId,
-                "date", LocalDate.now().minusDays(10),
+                "date", LocalDate.now().minusDays(15),
                 "kind", DealActivityKind.CALL,
                 "createdBy", salesRepId));
 
@@ -317,13 +332,22 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
     @Test
     void staleness_neverFlaggedOnANonActiveDeal() {
         long ticketId = createTicket();
-        // No activity at all — would be stale if it were ACTIVE — but mark it lost.
+        backdateDeal(ticketId, 20);
+        // Untouched for 20 days — would be stale if it were ACTIVE — but mark it lost.
         ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesRep);
 
         TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
 
         assertThat(summary.lifecycle()).isEqualTo(DealLifecycle.CLOSED_LOST);
         assertThat(summary.stale()).isFalse();
+    }
+
+    /** Pushes the deal and every event already written for it {@code days} into the past. */
+    private void backdateDeal(long ticketId, int days) {
+        java.util.Map<String, Object> p = java.util.Map.of("d", days, "id", ticketId);
+        jdbc.update("UPDATE sales.ticket SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id", p);
+        jdbc.update("UPDATE sales.ticket_event SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id",
+            p);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────
