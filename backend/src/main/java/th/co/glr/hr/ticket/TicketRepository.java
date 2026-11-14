@@ -2615,6 +2615,23 @@ public class TicketRepository {
 
     // ── Deal tracking + activity (V83) ──────
 
+    /**
+     * Writes {@code value} into the deal's party-name column for {@code recipientType} (DESIGNER → designer_name,
+     * OWNER → owner_name, BUYER → buyer_name) only when that column is null or blank. The column is chosen by a
+     * switch over the three codes, never from input. Returns rows written (0 or 1).
+     */
+    public int fillPartyNameIfBlank(long ticketId, String recipientType, String value) {
+        String column = switch (recipientType) {
+            case QuotationRecipient.DESIGNER -> "designer_name";
+            case QuotationRecipient.OWNER -> "owner_name";
+            case QuotationRecipient.BUYER -> "buyer_name";
+            default -> throw new IllegalArgumentException("Not a deal party: " + recipientType);
+        };
+        return jdbc.update("UPDATE sales.ticket SET " + column + " = :v, updated_at = now()"
+            + " WHERE ticket_id = :id AND COALESCE(TRIM(" + column + "), '') = ''",
+            new MapSqlParameterSource().addValue("v", value).addValue("id", ticketId));
+    }
+
     public void updateTracking(long ticketId, Integer winProbabilityOverride, String designerName,
                                String ownerName, String buyerName, LocalDate nextFollowUpAt) {
         jdbc.update("""

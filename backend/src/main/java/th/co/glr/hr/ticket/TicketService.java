@@ -2583,6 +2583,24 @@ public class TicketService {
     }
 
     /**
+     * An approved DEAL_DIRECT quotation fills its deal (spec 2026-11-15 §7.2): the stage advances onto the
+     * recipient's stage (forward-only, via {@link #advanceStageForCustomerQuotationIssue}), and the quotation's
+     * addressee is written into the matching {@code designer_name} / {@code owner_name} / {@code buyer_name} only
+     * when that column is blank — a name the rep typed is never overwritten. A non-ACTIVE deal is left untouched.
+     */
+    public void applyApprovedQuotation(long ticketId, String recipientType, String partyName, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            return;
+        }
+        advanceStageForCustomerQuotationIssue(ticketId, recipientType, actor);
+        String name = blankToNull(partyName);
+        if (name != null && QuotationRecipient.isAddressable(recipientType)) {
+            tickets.fillPartyNameIfBlank(ticketId, recipientType, name.strip());
+        }
+    }
+
+    /**
      * The one recipient → {@link DealStage} mapping, shared by {@link #generateQuotation} and
      * {@link #advanceStageForCustomerQuotationIssue}, so the two cannot drift apart (duplicated
      * literals would).

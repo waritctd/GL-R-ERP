@@ -1374,6 +1374,12 @@ public class DealQuotationService {
         }
         tickets.addEventWithDocument(approved.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
             null, null, "อนุมัติใบเสนอราคา " + approved.number(), RelatedDocumentType.QUOTATION, id);
+        // Spec 2026-11-15 §7.2: the approved document fills its deal — stage onto the recipient's (forward-only) and
+        // the addressee into the blank designer/owner/buyer name. Same transaction. Null only in hand-wired tests.
+        if (ticketService != null) {
+            ticketService.applyApprovedQuotation(approved.ticketId(), approved.recipientType(),
+                approved.customerName(), actor);
+        }
         String message = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
         // In-app + branded HTML email only; no second plain-text email with the PDF.
         notifyRepAndCreator(approved, TicketEventKind.DEAL_QUOTATION_APPROVED, message);
