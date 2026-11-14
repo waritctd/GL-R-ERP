@@ -34,6 +34,18 @@ const quickAccounts = [
     icon: 'users',
   },
   { role: 'sales', label: 'ฝ่ายขาย', helper: 'สร้างคำขอราคา · ออกใบเสนอราคา', icon: 'briefcase' },
+  // A second rep. `{ role: 'sales' }` always resolves to the first sales user, so this one signs
+  // in with credentials (like the division manager above). `key` keeps the two buttons' React keys
+  // and test ids apart, since both have role 'sales'.
+  {
+    key: 'sales2',
+    role: 'sales',
+    email: 'sales2@glr.co.th',
+    password: 'demo1234',
+    label: 'ฝ่ายขาย (คนที่ 2)',
+    helper: 'ดูดีลของเพื่อนร่วมทีม · ทดสอบสองคนพร้อมกัน',
+    icon: 'briefcase',
+  },
   { role: 'sales_manager', label: 'ผู้จัดการฝ่ายขาย', helper: 'อนุมัติค่าคอม · แก้ไขค่าหัก', icon: 'badgeDollar' },
   { role: 'import', label: 'ฝ่ายนำเข้า', helper: 'รับเรื่อง · เสนอราคาสินค้า', icon: 'clipboard' },
   { role: 'account', label: 'ฝ่ายบัญชี', helper: 'ยืนยันรับมัดจำ · รับชำระเงิน', icon: 'badgeDollar' },
@@ -188,11 +200,11 @@ export function LoginPage({ onLogin, loading, error }) {
               <div className="grid gap-[6px]">
                 {quickAccounts.map((account) => (
                   <Button
-                    key={account.role}
+                    key={account.key ?? account.role}
                     type="button"
                     variant="secondary"
                     className="justify-start gap-[10px] py-[6px] px-3"
-                    data-testid={`login-role-${account.role}`}
+                    data-testid={`login-role-${account.key ?? account.role}`}
                     disabled={loading}
                     onClick={() => onLogin(account.email
                       ? { email: account.email, password: account.password }
