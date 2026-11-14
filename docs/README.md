@@ -45,6 +45,8 @@ file.
 
 ## Environment / setup
 - Root [`README.md`](../README.md) — project setup, dev commands, frontend/backend split.
+- [Production maintenance mode](../README.md#maintenance-mode-during-cutover) — enable/disable the
+  temporary production notice, rebuild requirements, and the Vercel/on-prem API routing.
 - [`frontend/.env.example`](../frontend/.env.example) and [`backend/.env.example`](../backend/.env.example) —
   required environment variables for each app.
 
