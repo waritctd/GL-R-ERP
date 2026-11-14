@@ -176,7 +176,46 @@ anything is written. Customer data in the import stays out of git.
 3. Expected payments + Express upload + cash cards.
 4. Pipeline import (can run alongside 2–3 once data shape is settled).
 
-The weekly email is retired when slice 3 is live.
+The weekly email is retired when slice 3 is live. Slice 5 (import & account screens, §7.11) follows slice 3.
+
+### 7.11 Import and account (scope widened by the owner, 2026-11-15)
+
+The owner asked that the redesign also cover the import and account screens, not only sales / sales manager / CEO.
+Findings from a full capture of `develop` (333 screenshots, 5 roles):
+
+- **Import** re-selects the factory currency and the price unit that sales already set (and that the request form
+  labels "ฝ่ายนำเข้าเปลี่ยนไม่ได้"); the 6-step shipment tracker can be advanced from three places (`/fulfilment`,
+  `/import/deals/:id`, the CEO's deal tab) with no confirmation and no undo; the landing splits one job across four
+  tiles and three lists.
+- **Account** types every payment amount, date and reference by hand although sales already issued the deposit
+  notice / invoice with the amount; a second "บันทึกรับชำระเงิน" dialog exists on the sales deal page that account can
+  never reach (it is redirected to `/finance/deals/:id`).
+
+Design:
+
+1. **Import landing "งานนำเข้า"** — one worklist grouped by next step: รอรับเรื่อง (inline รับเรื่อง), รอราคาโรงงาน,
+   กำลังขนส่ง (step + ETA), ถึงโกดังแล้ว. Replaces the 4-tile overview and separate lists.
+2. **Pricing workspace** — currency and price unit that sales set are shown as read-only chips ("ตามที่ฝ่ายขายระบุ");
+   the per-factory currency select and per-line unit toggle appear only when the request did not set them.
+3. **One place to advance a shipment** — the `/fulfilment` card. `/import/deals/:id` and the sales/CEO deal tab show
+   the tracker read-only. An advance shows an undo snackbar (30 s) backed by a reversible event, instead of no
+   confirmation. Shipment ETA feeds the rep's "deliveries scheduled" cash line.
+4. **ติดต่อโรงงานแล้ว** defaults the date to today; **สร้างเมล** gains "คัดลอกทั้งหมด".
+5. **Account landing "งานการเงิน"** — top card for the Express upload (§7.8) with the last upload's summary and the
+   unmatched count, then the existing worklist.
+6. **บันทึกรับชำระ** becomes the fallback for unmatched receipts: amount pre-filled with the outstanding amount of the
+   open notice/invoice, kind pre-selected, note collapsed. **ยืนยันรับมัดจำ** happens on its own when an Express
+   receipt matches the deposit notice; the manual confirm stays for unmatched cases.
+7. Receipts show their source (Express / บันทึกเอง) on the finance deal page.
+8. The unreachable sales-page payment dialog is removed (dead UI; account uses `/finance/deals/:id`).
+
+Unchanged in this round: quotation editor and approval dialogs, commission pages, CEO settings, price import /
+factory management, pricing approvals, IR / order email drafts, lead-time change.
+
+Permission note: item 3 removes the advance control from `/import/deals/:id` and the CEO deal tab in the UI only; the
+backend endpoint and its role gate are unchanged (no authz change). Item 8 removes UI only.
+
+Rollout: slice 5 (import & account UI), after slice 3 because item 5–6 depend on the Express upload.
 
 ## 8. Decided by the owner
 
