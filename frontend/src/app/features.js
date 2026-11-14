@@ -64,3 +64,11 @@ export const SALES_ENABLED = env.VITE_ENABLE_SALES !== 'false';
 // server) and vitest.config.js's `test.env` (the suite), both of which are
 // development-mode-only and can never reach a production build.
 export const SELF_SERVICE_ONLY = env.VITE_SELF_SERVICE_ONLY !== 'false';
+
+// Maintenance mode (on-prem cutover): when "true", main.jsx renders only the
+// static maintenance page — no router, no API calls — so a suspended backend
+// shows a message instead of 502s. Unlike the flags above this is an ON-switch
+// (`=== 'true'`): unset must mean "app runs normally". Production gets it from a
+// committed frontend/.env.production (Vercel dashboard vars are unreliable here,
+// see the SELF_SERVICE_ONLY note); delete that file to end maintenance.
+export const MAINTENANCE = env.VITE_MAINTENANCE === 'true';

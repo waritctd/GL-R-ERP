@@ -126,6 +126,7 @@ docker compose up -d db
 | `VITE_API_PROXY_TARGET` | backend the Vite `/api` proxy forwards to, when `VITE_API_BASE_URL` is empty |
 | `VITE_SELF_SERVICE_ONLY=true` | show the locked-down production surface (self-service only) to non-HR, non-CEO roles |
 | `VITE_ENABLE_SALES=false` | hide the sales/CRM stack |
+| `VITE_MAINTENANCE=true` | replace the entire app with the maintenance page at build time |
 
 If you run the backend on another port or host, add the frontend origin to
 `APP_CORS_ALLOWED_ORIGINS`. The default allows `localhost` and `127.0.0.1` on ports 5173 and 5174.
@@ -161,11 +162,42 @@ request (`.github/workflows/`).
 
 ## Vercel Frontend Deployment
 
-This repo includes a root-level `vercel.json` for Vercel projects whose Root Directory is the repository root. It installs and builds `frontend/`, publishes `frontend/dist`, proxies `/api/*` to the Render backend, and serves `index.html` for React SPA routes.
+This repo includes a root-level `vercel.json` for Vercel projects whose Root Directory is the repository root. It installs and builds `frontend/`, publishes `frontend/dist`, proxies `/api/*` to `https://api.glr-hub.com/api/*` on the on-prem backend, and serves `index.html` for React SPA routes.
 
 Builds are locked to the self-service surface by default (`VITE_SELF_SERVICE_ONLY` is on unless set to `false`). The `develop` branch build sets it to `false`, so the develop preview shows the full app; every other branch, including `main`, ships the locked surface.
 
 If the Vercel project Root Directory is set to `frontend`, the matching `frontend/vercel.json` can be used instead.
+
+### Maintenance mode during cutover
+
+Production builds on `main` enable the existing Thai/English maintenance page through the
+committed `frontend/.env.production` file:
+
+```dotenv
+VITE_MAINTENANCE=true
+```
+
+`MaintenanceGate` replaces the app before the router and providers mount, so all frontend routes
+show the notice and the app does not initiate API calls. This is a frontend notice, not a backend
+write lock: direct API clients and already-open sessions are not stopped by it.
+
+- **Enable:** commit `frontend/.env.production` with `VITE_MAINTENANCE=true` to `main` and deploy
+  a fresh production build. If recreating the file locally, use
+  `git add -f frontend/.env.production` because `.env*` is ignored. Keep secrets out of this file.
+- **Disable:** remove that temporary file with `git rm frontend/.env.production`, commit to
+  `main`, and redeploy after the backend is ready. Check that the build environment does not
+  separately set `VITE_MAINTENANCE=true`.
+- **Verify:** open `https://glr-hub.com` and a deep link in a fresh browser session. While enabled,
+  both should display **ปรับปรุงระบบชั่วคราว** with no app API requests.
+- **Local development:** `npm run dev` and the default Vitest mode do not load
+  `.env.production`. Any production build from a branch containing this file does load it,
+  including preview builds; avoid carrying the temporary flag into `develop`.
+- **Build-time setting:** changing a VM environment variable or restarting the backend does not
+  change an existing frontend bundle; rebuild and redeploy the frontend.
+
+The frontend stays on Vercel at `glr-hub.com`; the production Cloudflare Tunnel routes
+`api.glr-hub.com` to `http://web:80`. Both Vercel configs redirect `glr-portal.com` and
+`www.glr-portal.com` to `https://glr-hub.com`, preserving the path, using temporary redirects.
 
 ## Production Shape
 
