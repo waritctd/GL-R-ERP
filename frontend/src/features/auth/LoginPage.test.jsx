@@ -4,6 +4,7 @@ import {
 } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
+import { createDemoDatabase } from '../../data/demoData.js';
 import { LoginPage } from './LoginPage.jsx';
 
 globalThis.React = React;
@@ -71,6 +72,48 @@ describe('LoginPage demo quick-login', () => {
     // the plain employee, which looks like a working button and shows the wrong person's data.
     expect(onLogin).not.toHaveBeenCalledWith({ role: 'employee' });
     expect(onLogin.mock.calls[0][0].role).toBeUndefined();
+  });
+
+  // Two sales reps, because most of the sales work only shows up with two people: "my deals" versus
+  // someone else's, and the owner picker. `{ role: 'sales' }` always resolves to the FIRST sales
+  // user, so the second rep is only reachable by credentials.
+  describe('two sales reps', () => {
+    const salesUsers = createDemoDatabase().users.filter((user) => user.role === 'sales' && user.active);
+
+    it('offers a second sales rep next to the first', () => {
+      renderLoginPage({ onLogin: vi.fn(), loading: false, error: null });
+
+      expect(screen.getByTestId('login-role-sales')).toBeTruthy();
+      expect(screen.getByTestId('login-role-sales2')).toBeTruthy();
+    });
+
+    it('logs the second button in as the second rep, not the first', () => {
+      const onLogin = vi.fn();
+      renderLoginPage({ onLogin, loading: false, error: null });
+
+      fireEvent.click(screen.getByTestId('login-role-sales'));
+      fireEvent.click(screen.getByTestId('login-role-sales2'));
+
+      const [first, second] = onLogin.mock.calls.map(([payload]) => payload);
+      expect(first).toEqual({ role: 'sales' });
+      expect(second).toEqual({ email: 'sales2@glr.co.th', password: 'demo1234' });
+      expect(second).not.toEqual(first);
+    });
+
+    it('sends credentials that a seeded sales user really has', () => {
+      // The demo seed and this button live in different files; a changed seed password would turn
+      // the button into a silent 401. Check the pair against the seed itself.
+      const onLogin = vi.fn();
+      renderLoginPage({ onLogin, loading: false, error: null });
+
+      fireEvent.click(screen.getByTestId('login-role-sales2'));
+
+      const { email, password } = onLogin.mock.calls[0][0];
+      const user = salesUsers.find((candidate) => candidate.email === email);
+      expect(user).toBeTruthy();
+      expect(user.password).toBe(password);
+      expect(salesUsers.length).toBeGreaterThanOrEqual(2);
+    });
   });
 });
 
