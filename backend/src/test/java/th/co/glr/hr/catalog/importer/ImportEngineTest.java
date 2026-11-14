@@ -5,14 +5,19 @@ import java.io.ByteArrayOutputStream;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.apache.poi.ss.usermodel.*;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.junit.jupiter.params.provider.Arguments.argumentSet;
 
 /** C4: verifies ImportEngine handles every special case from the 9 factory profiles. All tests are pure-unit
  * (no Spring context, no DB). */
@@ -109,18 +114,6 @@ class ImportEngineTest {
             assertThat(asMm[1]).isEqualByComparingTo("600.00");
         }
 
-        @Test
-        @DisplayName("REGRESSION (mutation-checked): CDE '150x600' under an mm-declared profile "
-            + "must be 150x600 mm, never guessed as 1500x6000 mm")
-        void mmDeclaredIsNeverGuessedAsCentimetres() {
-            // CDE's real defect: the old x<300 guess would read this as centimetres (10x wrong). Reinstating that guess in
-            // ImportEngine#toMm must turn this test red — verified by hand during implementation (see PR body), then
-            // reverted.
-            BigDecimal[] r = ImportEngine.parseSize("150x600", null, "mm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("150.00");
-            assertThat(r[1]).isEqualByComparingTo("600.00");
-        }
-
         @Test @DisplayName("normalize-on-write: same physical tile from two declared units stores "
             + "byte-identical mm dimensions")
         void sameTileFromTwoDeclaredUnitsConverges() {
@@ -155,37 +148,78 @@ class ImportEngineTest {
                 .isInstanceOf(IllegalArgumentException.class);
         }
 
-        // ── basic mechanics, now with a declared unit instead of a guess ─────────
+        // ── width x height only, default format, mm-declared thickness ───────────
+        // Each row: display name, size string, declared size unit, expected width mm, expected height mm.
 
-        @Test @DisplayName("uppercase X separator")
-        void upperX() {
-            BigDecimal[] r = ImportEngine.parseSize("120X120", null, "mm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("120.00");
-            assertThat(r[1]).isEqualByComparingTo("120.00");
+        static Stream<Arguments> widthHeightCases() {
+            return Stream.of(
+                // CDE's real defect: the old x<300 guess would read this as centimetres (10x wrong). Reinstating that
+                // guess in ImportEngine#toMm must turn this row red — verified by hand during implementation (see PR
+                // body), then reverted.
+                argumentSet("REGRESSION (mutation-checked): CDE '150x600' under an mm-declared profile "
+                    + "must be 150x600 mm, never guessed as 1500x6000 mm", "150x600", "mm", "150.00", "600.00"),
+                // basic mechanics, now with a declared unit instead of a guess
+                argumentSet("uppercase X separator", "120X120", "mm", "120.00", "120.00"),
+                argumentSet("leading space is ignored", " 150x600", "mm", "150.00", "600.00"),
+                // European decimal commas
+                argumentSet("European decimal comma: 36,1x57,6", "36,1x57,6", "cm",
+                    "361.00", "576.00"), // 36.1 cm -> 361 mm, 57.6 cm -> 576 mm
+                argumentSet("European decimal comma with spaces around separator: 2,5 x 10", "2,5 x 10", "cm",
+                    "25.00", "100.00"), // 2.5 cm -> 25 mm, 10 cm -> 100 mm
+                // trailing free-text junk
+                argumentSet("trailing junk token 'MOD' is stripped", "60X120 MOD", "cm", "600.00", "1200.00"),
+                argumentSet("trailing junk tokens 'CORBEL NAVAL' (two words) are stripped",
+                    "20X20 CORBEL NAVAL", "cm", "200.00", "200.00"),
+                argumentSet("trailing junk token 'S/AD' is stripped", "30X60 S/AD", "cm", "300.00", "600.00"),
+                // zero-padded (CDE)
+                argumentSet("zero-padded CDE-style size: '080x600'", "080x600", "mm", "80.00", "600.00"));
         }
 
-        @Test @DisplayName("leading space is ignored")
-        void leadingSpace() {
-            BigDecimal[] r = ImportEngine.parseSize(" 150x600", null, "mm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("150.00");
-            assertThat(r[1]).isEqualByComparingTo("600.00");
+        @ParameterizedTest(name = "{argumentSetName}")
+        @MethodSource("widthHeightCases")
+        void parsesWidthAndHeight(String size, String sizeUnit, String expectedWidth, String expectedHeight) {
+            BigDecimal[] r = ImportEngine.parseSize(size, null, sizeUnit, "mm");
+            assertThat(r[0]).isEqualByComparingTo(expectedWidth);
+            assertThat(r[1]).isEqualByComparingTo(expectedHeight);
         }
 
-        @Test @DisplayName("3-number bare form WxHxT (Bode's shape) — 3rd value is thickness, "
-            + "an mm-declared thicknessUnit leaves it unconverted")
-        void threeDimensionsBareForm() {
-            BigDecimal[] r = ImportEngine.parseSize("598X598X18", null, "mm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("598.00");
-            assertThat(r[1]).isEqualByComparingTo("598.00");
-            assertThat(r[2]).isEqualByComparingTo("18.00");
+        // ── width x height x thickness, default format, mm-declared thickness ────
+        // Each row: display name, size string, declared size unit, expected width/height/thickness mm.
+
+        static Stream<Arguments> widthHeightThicknessCases() {
+            return Stream.of(
+                argumentSet("3-number bare form WxHxT (Bode's shape) — 3rd value is thickness, "
+                    + "an mm-declared thicknessUnit leaves it unconverted", "598X598X18", "mm",
+                    "598.00", "598.00", "18.00"),
+                // 20 cm -> 200 mm; mm-declared: bare thickness unconverted
+                argumentSet("3-number bare form with spaces: '20 x 20 x 9', mm-declared thickness", "20 x 20 x 9", "cm",
+                    "200.00", "200.00", "9.00"),
+                // thickness glued onto the size string (real production shapes)
+                argumentSet("thickness embedded with explicit MM suffix: '60x120 9MM' (874 real rows)", "60x120 9MM", "cm",
+                    "600.00", "1200.00", "9.00"), // thickness never converted, already mm
+                argumentSet("thickness embedded with explicit MM suffix: '60x60 9MM' (867 real rows)", "60x60 9MM", "cm",
+                    "600.00", "600.00", "9.00"),
+                argumentSet("thickness embedded with explicit MM suffix: '20x20 12MM'", "20x20 12MM", "cm",
+                    "200.00", "200.00", "12.00"),
+                argumentSet("TRUNCATED thickness token '9M' is a clipped '9MM', never metres "
+                    + "(245 real rows: '120x120 9M')", "120x120 9M", "cm",
+                    "1200.00", "1200.00", "9.00"), // 9 mm, NOT 9 metres
+                argumentSet("TRUNCATED decimal thickness token: '60x60 9,4M' is a clipped '9,4MM'", "60x60 9,4M", "cm",
+                    "600.00", "600.00", "9.40"),
+                // messy fallback (embedded free text mid-string)
+                argumentSet("embedded free text mid-string ('120X50  h.15') falls back to numeric "
+                    + "scanning rather than throwing or dropping the row", "120X50  h.15", "cm",
+                    "1200.00", "500.00", "15.00"));
         }
 
-        @Test @DisplayName("3-number bare form with spaces: '20 x 20 x 9', mm-declared thickness")
-        void threeDimensionsWithSpaces() {
-            BigDecimal[] r = ImportEngine.parseSize("20 x 20 x 9", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("200.00"); // 20 cm -> 200 mm
-            assertThat(r[1]).isEqualByComparingTo("200.00");
-            assertThat(r[2]).isEqualByComparingTo("9.00");   // mm-declared: bare thickness unconverted
+        @ParameterizedTest(name = "{argumentSetName}")
+        @MethodSource("widthHeightThicknessCases")
+        void parsesWidthHeightAndThickness(String size, String sizeUnit, String expectedWidth, String expectedHeight,
+                                           String expectedThickness) {
+            BigDecimal[] r = ImportEngine.parseSize(size, null, sizeUnit, "mm");
+            assertThat(r[0]).isEqualByComparingTo(expectedWidth);
+            assertThat(r[1]).isEqualByComparingTo(expectedHeight);
+            assertThat(r[2]).isEqualByComparingTo(expectedThickness);
         }
 
         // ── bare 3rd-value thickness is AMBIGUOUS: the Chinese "2026 GENERAL EXPORT" list ───────
@@ -250,107 +284,9 @@ class ImportEngineTest {
             assertThat(r).containsExactly(null, null, null);
         }
 
-        // ── European decimal commas ──────────────────────────────────────────────
-
-        @Test @DisplayName("European decimal comma: 36,1x57,6")
-        void europeanDecimalComma() {
-            BigDecimal[] r = ImportEngine.parseSize("36,1x57,6", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("361.00"); // 36.1 cm -> 361 mm
-            assertThat(r[1]).isEqualByComparingTo("576.00"); // 57.6 cm -> 576 mm
-        }
-
-        @Test @DisplayName("European decimal comma with spaces around separator: 2,5 x 10")
-        void europeanDecimalCommaWithSpaces() {
-            BigDecimal[] r = ImportEngine.parseSize("2,5 x 10", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("25.00"); // 2.5 cm -> 25 mm
-            assertThat(r[1]).isEqualByComparingTo("100.00"); // 10 cm -> 100 mm
-        }
-
-        // ── thickness glued onto the size string (real production shapes) ───────
-
-        @Test @DisplayName("thickness embedded with explicit MM suffix: '60x120 9MM' (874 real rows)")
-        void thicknessEmbeddedMM_60x120() {
-            BigDecimal[] r = ImportEngine.parseSize("60x120 9MM", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("600.00");
-            assertThat(r[1]).isEqualByComparingTo("1200.00");
-            assertThat(r[2]).isEqualByComparingTo("9.00"); // never converted, already mm
-        }
-
-        @Test @DisplayName("thickness embedded with explicit MM suffix: '60x60 9MM' (867 real rows)")
-        void thicknessEmbeddedMM_60x60() {
-            BigDecimal[] r = ImportEngine.parseSize("60x60 9MM", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("600.00");
-            assertThat(r[1]).isEqualByComparingTo("600.00");
-            assertThat(r[2]).isEqualByComparingTo("9.00");
-        }
-
-        @Test @DisplayName("thickness embedded with explicit MM suffix: '20x20 12MM'")
-        void thicknessEmbeddedMM_20x20() {
-            BigDecimal[] r = ImportEngine.parseSize("20x20 12MM", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("200.00");
-            assertThat(r[1]).isEqualByComparingTo("200.00");
-            assertThat(r[2]).isEqualByComparingTo("12.00");
-        }
-
-        @Test @DisplayName("TRUNCATED thickness token '9M' is a clipped '9MM', never metres "
-            + "(245 real rows: '120x120 9M')")
-        void truncatedThicknessTokenSingleM() {
-            BigDecimal[] r = ImportEngine.parseSize("120x120 9M", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("1200.00");
-            assertThat(r[1]).isEqualByComparingTo("1200.00");
-            assertThat(r[2]).isEqualByComparingTo("9.00"); // 9 mm, NOT 9 metres
-        }
-
-        @Test @DisplayName("TRUNCATED decimal thickness token: '60x60 9,4M' is a clipped '9,4MM'")
-        void truncatedThicknessTokenWithDecimalComma() {
-            BigDecimal[] r = ImportEngine.parseSize("60x60 9,4M", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("600.00");
-            assertThat(r[1]).isEqualByComparingTo("600.00");
-            assertThat(r[2]).isEqualByComparingTo("9.40");
-        }
-
-        // ── trailing free-text junk ───────────────────────────────────────────────
-
-        @Test @DisplayName("trailing junk token 'MOD' is stripped")
-        void trailingJunkMod() {
-            BigDecimal[] r = ImportEngine.parseSize("60X120 MOD", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("600.00");
-            assertThat(r[1]).isEqualByComparingTo("1200.00");
-        }
-
-        @Test @DisplayName("trailing junk tokens 'CORBEL NAVAL' (two words) are stripped")
-        void trailingJunkTwoWords() {
-            BigDecimal[] r = ImportEngine.parseSize("20X20 CORBEL NAVAL", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("200.00");
-            assertThat(r[1]).isEqualByComparingTo("200.00");
-        }
-
-        @Test @DisplayName("trailing junk token 'S/AD' is stripped")
-        void trailingJunkSlashAd() {
-            BigDecimal[] r = ImportEngine.parseSize("30X60 S/AD", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("300.00");
-            assertThat(r[1]).isEqualByComparingTo("600.00");
-        }
-
-        // ── messy fallback (embedded free text mid-string) ───────────────────────
-
-        @Test @DisplayName("embedded free text mid-string ('120X50  h.15') falls back to numeric "
-            + "scanning rather than throwing or dropping the row")
-        void embeddedFreeTextFallsBackToScanning() {
-            BigDecimal[] r = ImportEngine.parseSize("120X50  h.15", null, "cm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("1200.00");
-            assertThat(r[1]).isEqualByComparingTo("500.00");
-            assertThat(r[2]).isEqualByComparingTo("15.00");
-        }
-
-        // ── zero-padded (CDE) ─────────────────────────────────────────────────────
-
-        @Test @DisplayName("zero-padded CDE-style size: '080x600'")
-        void zeroPadded() {
-            BigDecimal[] r = ImportEngine.parseSize("080x600", null, "mm", "mm");
-            assertThat(r[0]).isEqualByComparingTo("80.00");
-            assertThat(r[1]).isEqualByComparingTo("600.00");
-        }
+        // (European decimal commas, thickness glued onto the size string, trailing free-text junk, the messy
+        // embedded-free-text fallback and the zero-padded CDE shape are rows of parsesWidthAndHeight /
+        // parsesWidthHeightAndThickness above.)
     }
 
     // ── canonUnit ─────────────────────────────────────────────────────────────
