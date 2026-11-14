@@ -1,7 +1,6 @@
-// Contract tests for select-tests.mjs. Run with: node --test .github/scripts/
-//
-// Written BEFORE the implementation (test-first standing rule). Fixtures stand in for the
-// `git diff --name-only` output and the on-disk Java sources the phase-2 CLI will read.
+// Contract tests for select-tests.mjs. Run with: node --test .github/scripts/ Written BEFORE the
+// implementation (test-first standing rule). Fixtures stand in for the `git diff --name-only` output and the
+// on-disk Java sources the phase-2 CLI will read.
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
@@ -16,12 +15,9 @@ function src(path, content = '') {
   return { path, content };
 }
 
-// Dependency graph in this fixture (arrow = "imports"):
-//   leave     → employee
-//   payroll   → leave            (explicit import)
-//   dashboard → leave            (wildcard import, from a TEST source)
-//   ticket    → (nothing)        (the wrong-way-round control)
-//   employee  → (nothing)
+// Dependency graph in this fixture (arrow = "imports"): leave → employee payroll → leave (explicit import)
+// dashboard → leave (wildcard import, from a TEST source) ticket → (nothing) (the wrong-way-round control)
+// employee → (nothing)
 const JAVA_SOURCES = [
   src(`${MAIN}/employee/EmployeeService.java`,
     'package th.co.glr.hr.employee;\npublic class EmployeeService {}\n'),
@@ -57,8 +53,8 @@ function backend(overrides = {}) {
   });
 }
 
-// {path, content}: the picker must see the CONTENT because some of these read backend Java
-// files by path (F9), and only a content match can tie a backend change to them.
+// {path, content}: the picker must see the CONTENT because some of these read backend Java files by path (F9),
+// and only a content match can tie a backend change to them.
 const FS_READING_TESTS = [
   { path: 'src/baseLayer.test.js', content: "const css = readFileSync('src/styles.css', 'utf8');" },
   { path: 'src/features/payroll/payrollResponsiveCss.test.js', content: "readFileSync(resolve('src/index.css'))" },
@@ -80,8 +76,8 @@ function frontend(overrides = {}) {
   });
 }
 
-// Surefire's default includes, which `-Dtest` REPLACES rather than narrows, so the pattern
-// must restate them per package.
+// Surefire's default includes, which `-Dtest` REPLACES rather than narrows, so the pattern must restate them
+// per package.
 function surefireIncludesFor(pkg) {
   const base = `th/co/glr/hr/${pkg}/**`;
   return [`${base}/Test*.java`, `${base}/*Test.java`, `${base}/*Tests.java`, `${base}/*TestCase.java`];
@@ -200,8 +196,8 @@ describe('selectBackendTests — package selection', () => {
   it('single main-package change → that package + config + support, and always Flyway', () => {
     const r = backend({ changedFiles: [`${MAIN}/employee/EmployeeService.java`] });
     assert.equal(r.mode, 'selected');
-    // employee is changed; leave imports employee (one reverse level). payroll/dashboard
-    // import leave, NOT employee, so a second level is deliberately not followed.
+    // employee is changed; leave imports employee (one reverse level). payroll/dashboard import leave, NOT
+    // employee, so a second level is deliberately not followed.
     assert.deepEqual(r.packages, ['config', 'employee', 'leave', 'support']);
     assert.ok(r.testPattern.includes('th/co/glr/hr/FlywayMigrationTest.java'));
   });
@@ -231,8 +227,8 @@ describe('selectBackendTests — package selection', () => {
   });
 
   it('wrong-way-round: a package the changed one imports is NOT selected', () => {
-    // leave → employee. Changing leave must not drag employee in (nothing in employee
-    // references leave, so employee tests cannot be affected).
+    // leave → employee. Changing leave must not drag employee in (nothing in employee references leave, so
+    // employee tests cannot be affected).
     const r = backend({ changedFiles: [`${MAIN}/leave/LeaveService.java`] });
     assert.ok(!r.packages.includes('employee'), `employee must not be selected; got ${r.packages}`);
   });
@@ -278,8 +274,8 @@ describe('selectBackendTests — package selection', () => {
   });
 
   it('a same-package substring is not mistaken for a different package', () => {
-    // "pricing" vs "pricingrequest": a source importing th.co.glr.hr.pricingrequest.X must
-    // not be treated as a dependant of th.co.glr.hr.pricing.
+    // "pricing" vs "pricingrequest": a source importing th.co.glr.hr.pricingrequest.X must not be treated as a
+    // dependant of th.co.glr.hr.pricing.
     const sources = [
       src(`${MAIN}/pricing/PricingService.java`, 'package th.co.glr.hr.pricing;\n'),
       src(`${MAIN}/finance/FinanceService.java`,
@@ -451,8 +447,8 @@ describe('selectFrontendTests — changed mode', () => {
   });
 
   it('F9: a basename mention (WinProbabilityDefaults.java) is enough to tie the test in', () => {
-    // Own fixture that names ONLY the basename — the shared fixture also carries the full
-    // path, so the path match would pass this test even with the basename rule removed.
+    // Own fixture that names ONLY the basename — the shared fixture also carries the full path, so the path match
+    // would pass this test even with the basename rule removed.
     const readers = [{ path: 'src/features/tickets/winProbability.test.js',
       content: "// mirrors WinProbabilityDefaults.java\nreadFileSync(javaPath('WinProbabilityDefaults.java'))" }];
     const r = frontend({ changedFiles: [`${MAIN}/ticket/WinProbabilityDefaults.java`], testFilesReadingFs: readers });

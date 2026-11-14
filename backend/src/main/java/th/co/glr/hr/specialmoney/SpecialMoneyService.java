@@ -119,12 +119,9 @@ public class SpecialMoneyService {
         ));
     }
 
-    /**
-     * The submit form's employee picker. Non-hr/ceo callers get exactly one entry — themselves —
-     * because {@link #resolveTargetEmployee} will refuse anyone else. hr/ceo still get the full
-     * roster, which for them is a <em>list filter</em>, not an on-behalf picker: they cannot submit
-     * for an arbitrary employee either.
-     */
+    /** The submit form's employee picker. Non-hr/ceo callers get exactly one entry — themselves — because
+     * #resolveTargetEmployee will refuse anyone else. hr/ceo still get the full roster, which for them is a list
+     * filter, not an on-behalf picker: they cannot submit for an arbitrary employee either. */
     public List<SpecialMoneyEmployeeOption> employeeOptions(UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         return repository.findEmployeeOptions(actorEmployeeId, canViewAll(user));
@@ -139,9 +136,9 @@ public class SpecialMoneyService {
         snapshot.approvedAmountThisYearByType().forEach((type, amount) -> amounts.put(type.name(), amount));
         Map<String, Integer> lifetimeCounts = new LinkedHashMap<>();
         snapshot.activeCountLifetimeByType().forEach((type, count) -> lifetimeCounts.put(type.name(), count));
-        // The snapshot has always carried the per-year count for the once-per-year uniform rule;
-        // it was simply dropped here, so the UI could not warn "you already filed this year" and
-        // the employee only found out from the 400 on submit.
+        // The snapshot has always carried the per-year count for the once-per-year uniform rule; it was simply dropped
+        // here, so the UI could not warn "you already filed this year" and the employee only found out from the 400 on
+        // submit.
         Map<String, Integer> yearCounts = new LinkedHashMap<>();
         snapshot.activeCountThisYearByType().forEach((type, count) -> yearCounts.put(type.name(), count));
         return new SpecialMoneyUsageDto(employeeId, year, amounts, lifetimeCounts, yearCounts);
@@ -182,35 +179,17 @@ public class SpecialMoneyService {
             return ceoApproveFrom(SpecialMoneyStatus.SUBMITTED, id, request, user, actorEmployeeId, existing);
         }
         if (status == SpecialMoneyStatus.MANAGER_APPROVED) {
-            // Legacy rows only. Welfare no longer has a manager stage (see the class Javadoc), so
-            // nothing new can enter this state -- but rows parked here before the change still need
-            // a way out, and it is the same CEO decision either way.
+            // Legacy rows only. Welfare no longer has a manager stage (see the class Javadoc), so nothing new can enter
+            // this state -- but rows parked here before the change still need a way out, and it is the same CEO decision
+            // either way.
             return ceoApproveFrom(SpecialMoneyStatus.MANAGER_APPROVED, id, request, user, actorEmployeeId, existing);
         }
         throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
     }
 
-    /**
-     * Read-only preview of the ceiling {@link #ceoApproveFrom} would enforce for this request IF
-     * EVALUATED RIGHT NOW, so the CEO's approve dialog can show it before submitting a decision.
-     * Computed via the exact same {@link #computeApprovalCeiling} the approval itself uses -- this
-     * method never duplicates that calculation, only reads its result at PREVIEW time. That keeps
-     * "what the dialog shows" and "what the server enforces" using identical logic, but it is not a
-     * promise the two numbers stay equal: usage, the payroll cutoff/roll-forward, and policy
-     * amounts can all change in the (usually short) gap between this call and the CEO actually
-     * submitting {@link #ceoApproveFrom} -- most commonly, another of the same employee's requests
-     * gets decided in between. {@link #ceoApproveFrom} always re-evaluates the ceiling fresh at
-     * approval time regardless of what this method returned earlier, and is the sole authority; its
-     * own 400 remains the backstop a caller must still handle.
-     *
-     * <p>Deliberately does not call {@link #requireEvidence}: this is informational only, no write
-     * happens, and a CEO should be able to see the ceiling before evidence is attached, not be
-     * blocked from previewing it. Nor does it write an audit row -- nothing changed.
-     *
-     * <p>404 (missing row) is checked before {@link #requireCeo} (403) is checked before the 409
-     * status guard, matching the order a caller would naturally learn these facts in: whether the
-     * id exists at all, then whether they may act on it, then whether it is still actionable.
-     */
+    /** Read-only preview of the ceiling #ceoApproveFrom would enforce for this request IF EVALUATED RIGHT NOW, so
+     * the CEO's approve dialog can show it before submitting a decision. Nor does it write an audit row -- nothing
+     * changed. */
     public SpecialMoneyApprovalPreviewDto approvalPreview(long id, UserPrincipal user) {
         SpecialMoneyRequestDto existing = requireRequest(id);
         requireCeo(user);
@@ -225,15 +204,8 @@ public class SpecialMoneyService {
             existing.requestedAmount(), ceiling.eligibleAmount(), ceiling.payrollMonth());
     }
 
-    /**
-     * The CEO's approval — the only approval welfare has.
-     *
-     * <p>{@code from == SUBMITTED} is the live route for every request. {@code from ==
-     * MANAGER_APPROVED} exists only to clear rows written before the manager stage was removed. The
-     * amount, cap-override and payroll-month logic is identical for both; only the status the
-     * UPDATE accepts differs, so a legacy row cannot be approved under a different policy than a
-     * fresh one.
-     */
+    /** The CEO's approval — the only approval welfare has. from == MANAGER_APPROVED exists only to clear rows
+     * written before the manager stage was removed. from == SUBMITTED is the live route for every request. */
     private SpecialMoneyRequestDto ceoApproveFrom(
             SpecialMoneyStatus from,
             long id,
@@ -287,26 +259,14 @@ public class SpecialMoneyService {
         return after;
     }
 
-    /**
-     * The payroll month and policy ceiling for an EXISTING request, evaluated as of {@code today}.
-     * The single source of truth for both {@link #ceoApproveFrom} (which enforces it) and
-     * {@link #approvalPreview} (which only displays it) -- extracted so the two can never compute a
-     * different answer for the same row at the same instant.
-     *
-     * <p>Behaviour is copied verbatim from what {@link #ceoApproveFrom} did inline before this
-     * extraction: the 25th-of-month cutoff, rolling forward past an already-PROCESSED month, the
-     * AUTHORITATIVE cap-year lookup keyed on the resulting {@code payrollMonth} (never {@code
-     * existing.eventDate()}'s year -- see {@link #usageYear}'s Javadoc), and the evaluator recheck
-     * built from the ORIGINAL request rather than any CEO-chosen amount (see the long comment this
-     * method inherited, now below). This is payroll-adjacent money code: the refactor must not
-     * change what either caller observes.
-     */
+    /** The payroll month and policy ceiling for an EXISTING request, evaluated as of today. This is
+     * payroll-adjacent money code: the refactor must not change what either caller observes. */
     private ApprovalCeiling computeApprovalCeiling(SpecialMoneyRequestDto existing, LocalDate today) {
         SpecialMoneyType type = parseType(existing.requestType());
 
-        // The 25th-of-month payroll cutoff. Rolling forward past an already-PROCESSED month is
-        // deliberate: payroll writes a processed period once, so a request landing in a closed month
-        // would be approved and then never paid.
+        // The 25th-of-month payroll cutoff. Rolling forward past an already-PROCESSED month is deliberate: payroll
+        // writes a processed period once, so a request landing in a closed month would be approved and then never
+        // paid.
         int cutoffDay = appProperties.getSpecialMoney().getPayrollCutoffDay();
         LocalDate payrollMonth = today.getDayOfMonth() <= cutoffDay
             ? today.withDayOfMonth(1)
@@ -317,8 +277,8 @@ public class SpecialMoneyService {
 
         EmployeeEligibilitySnapshot eligibility = repository.findEligibility(existing.employeeId(), today)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบข้อมูลพนักงาน"));
-        // The AUTHORITATIVE cap-year check (see usageYear's Javadoc): the year this approval's own
-        // payrollMonth falls in, never existing.eventDate()'s year.
+        // The AUTHORITATIVE cap-year check (see usageYear's Javadoc): the year this approval's own payrollMonth falls
+        // in, never existing.eventDate()'s year.
         UsageSnapshot usage = repository.findUsage(existing.employeeId(), usageYear(payrollMonth));
         PolicyAmounts amounts = repository.findPolicyAmounts(type.name(), today);
         Set<String> excludedProvinces = repository.findExcludedProvinces();
@@ -353,8 +313,8 @@ public class SpecialMoneyService {
         return new ApprovalCeiling(payrollMonth, recheck.eligibleAmount());
     }
 
-    /** {@link #computeApprovalCeiling}'s result: the payroll month a fresh approval would land in
-     * right now, and the policy ceiling it would be checked against. */
+    /** #computeApprovalCeiling's result: the payroll month a fresh approval would land in right now, and the policy
+     * ceiling it would be checked against. */
     private record ApprovalCeiling(LocalDate payrollMonth, BigDecimal eligibleAmount) {
     }
 
@@ -364,8 +324,8 @@ public class SpecialMoneyService {
         SpecialMoneyRequestDto existing = requireRequest(id);
         SpecialMoneyStatus status = parseStatus(existing.status());
         if (status == SpecialMoneyStatus.SUBMITTED) {
-            // Symmetric with approve(): the sole reviewer must be able to refuse as well as accept,
-            // or a request could only ever be approved.
+            // Symmetric with approve(): the sole reviewer must be able to refuse as well as accept, or a request could
+            // only ever be approved.
             return ceoRejectFrom(SpecialMoneyStatus.SUBMITTED, id, request, user, actorEmployeeId, existing);
         }
         if (status == SpecialMoneyStatus.MANAGER_APPROVED) {
@@ -374,14 +334,8 @@ public class SpecialMoneyService {
         throw new ApiException(HttpStatus.CONFLICT, "คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว");
     }
 
-    /**
-     * The CEO's rejection. As with {@link #ceoApproveFrom}, {@code MANAGER_APPROVED} is reachable
-     * only for rows written before welfare's manager stage was removed.
-     *
-     * <p>{@code repository.reject} is guarded on {@code status = 'SUBMITTED'} and
-     * {@code repository.ceoReject} on {@code status = 'MANAGER_APPROVED'}; neither writes approver
-     * columns, so the two differ only in which row they will touch.
-     */
+    /** The CEO's rejection. As with #ceoApproveFrom, MANAGER_APPROVED is reachable only for rows written before
+     * welfare's manager stage was removed. */
     private SpecialMoneyRequestDto ceoRejectFrom(
             SpecialMoneyStatus from,
             long id,
@@ -406,11 +360,7 @@ public class SpecialMoneyService {
     public SpecialMoneyRequestDto cancel(long id, ReviewSpecialMoneyRequest request, UserPrincipal user) {
         SpecialMoneyRequestDto existing = requireRequest(id);
         Long actorEmployeeId = requireEmployeeId(user);
-        // The employee whose claim it is, and nobody else. The old "or whoever filed it"
-        // (requested_by_id) disjunct is gone: with submit-on-behalf removed it could only match a
-        // legacy row, and on those it let a manager cancel a colleague's claim -- and be handed the
-        // full DTO back as the return value, which is a read of exactly the confidential row this
-        // change exists to close.
+        // The employee whose claim it is, and nobody else.
         if (existing.employeeId() != actorEmployeeId) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -427,9 +377,7 @@ public class SpecialMoneyService {
         return after;
     }
 
-    // ---------------------------------------------------------------------
     // Gates
-    // ---------------------------------------------------------------------
 
     /**
      * Welfare is filed for yourself, by yourself — <b>every role, no exception</b>. A ฝ่าย manager
@@ -452,19 +400,9 @@ public class SpecialMoneyService {
         }
     }
 
-    /**
-     * Refuses to approve an evidence-required type with nothing attached.
-     *
-     * <p>{@code SpecialMoneyType.evidenceRequired()} existed since 2018 but was only ever returned
-     * to the UI as a display flag — nothing enforced it, and there was no upload endpoint at all, so
-     * the CEO approved money with no document trail whatsoever.
-     *
-     * <p><b>Presence is all this can check.</b> The policy document names a specific document per
-     * type (บัตรเชิญ, รูปถ่าย, ใบสุทธิ, สูติบัตร, ใบมรณบัตร, ใบเสร็จ); no server can verify that an
-     * uploaded file IS that document. The type-specific requirement is surfaced to the uploader in
-     * the UI and is the reviewer's job to check — this gate only guarantees there is something to
-     * check.
-     */
+    /** Refuses to approve an evidence-required type with nothing attached. The type-specific requirement is
+     * surfaced to the uploader in the UI and is the reviewer's job to check — this gate only guarantees there is
+     * something to check. */
     private void requireEvidence(SpecialMoneyRequestDto existing) {
         SpecialMoneyType type = parseType(existing.requestType());
         if (!type.evidenceRequired()) {
@@ -477,24 +415,10 @@ public class SpecialMoneyService {
         }
     }
 
-    // ---------------------------------------------------------------------
     // Evidence attachments
-    // ---------------------------------------------------------------------
 
-    /**
-     * Attaches a piece of evidence. <b>Only the employee the claim belongs to</b> may upload, and
-     * only while the request is still SUBMITTED — once a decision is recorded the evidence it was
-     * based on must not change underneath it.
-     *
-     * <p>As with {@link #cancel}, the old "or whoever filed it" disjunct is gone: it survived only
-     * on legacy on-behalf rows, where it let a ฝ่าย manager put documents into a colleague's
-     * confidential claim.
-     *
-     * <p>The upload gate is split out so the controller can authorize BEFORE writing the file to
-     * disk. It is called again inside {@link #addAttachment} — the two calls are cheap, and leaving
-     * the write path unguarded on the assumption that the caller checked first is how that
-     * guarantee decays.
-     */
+    /** Attaches a piece of evidence. Only the employee the claim belongs to may upload, and only while the request
+     * is still SUBMITTED — once a decision is recorded the evidence it was based on must not change underneath it. */
     public void requireCanAttach(long id, UserPrincipal user) {
         Long actorEmployeeId = requireEmployeeId(user);
         SpecialMoneyRequestDto existing = requireRequest(id);
@@ -533,11 +457,9 @@ public class SpecialMoneyService {
         return repository.findAttachments(id);
     }
 
-    /**
-     * Resolves an attachment for download, authorizing against its OWNING REQUEST rather than the
-     * attachment id. An attachment id is guessable; without this the file store would be a way to
-     * read other people's medical receipts and death certificates by incrementing a number.
-     */
+    /** Resolves an attachment for download, authorizing against its OWNING REQUEST rather than the attachment id.
+     * An attachment id is guessable; without this the file store would be a way to read other people's medical
+     * receipts and death certificates by incrementing a number. */
     public SpecialMoneyRepository.AttachmentLocation resolveAttachmentForDownload(
             long attachmentId, UserPrincipal user) {
         SpecialMoneyRepository.AttachmentLocation location = repository.findAttachmentLocation(attachmentId)
@@ -584,15 +506,11 @@ public class SpecialMoneyService {
         return user != null && VIEW_ALL_ROLES.contains(user.role());
     }
 
-    // ---------------------------------------------------------------------
     // Notifications
-    // ---------------------------------------------------------------------
 
-    /**
-     * Goes to the CEO, not to the requester's ผู้จัดการ. Notifying the manager would be worse than
-     * useless now that they cannot act on it — it would put a request in front of someone whose
-     * only possible response is to wait for someone else.
-     */
+    /** Goes to the CEO, not to the requester's ผู้จัดการ. Notifying the manager would be worse than useless now
+     * that they cannot act on it — it would put a request in front of someone whose only possible response is to
+     * wait for someone else. */
     private void notifySubmitted(SpecialMoneyRequestDto request) {
         String title = "ส่งคำขอเงินสวัสดิการแล้ว";
         String message = "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกส่งให้ CEO พิจารณาแล้ว";
@@ -637,9 +555,9 @@ public class SpecialMoneyService {
             request.employeeId(),
             "SPECIAL_MONEY_REJECTED",
             "คำขอเงินสวัสดิการถูกปฏิเสธ",
-            // "ติดต่อฝ่ายบุคคล", not the old "ติดต่อผู้จัดการหรือ HR": a ฝ่าย manager can no longer see this
-            // request, so pointing the employee at them would send them to someone with nothing to
-            // look up. HR and the CEO are the only roles who can still read the row.
+            // "ติดต่อฝ่ายบุคคล", not the old "ติดต่อผู้จัดการหรือ HR": a ฝ่าย manager can no longer see this request, so
+            // pointing the employee at them would send them to someone with nothing to look up. HR and the CEO are the
+            // only roles who can still read the row.
             "คำขอ " + request.requestType() + " วันที่ " + request.eventDate() + " ถูกปฏิเสธ: "
                 + (request.reviewerNote() == null ? "กรุณาติดต่อฝ่ายบุคคล" : request.reviewerNote()),
             "/employee-requests",
@@ -647,43 +565,11 @@ public class SpecialMoneyService {
         );
     }
 
-    // ---------------------------------------------------------------------
     // Small helpers
-    // ---------------------------------------------------------------------
 
-    /**
-     * The calendar year an annual welfare cap (MEDICAL's ฿ balance, UNIFORM_ANNUAL's once-a-year
-     * count) is evaluated against.
-     *
-     * <p><b>Deliberately never {@code request.eventDate()}'s year.</b> {@code event_date} is
-     * employee-supplied and unbounded -- {@link SubmitSpecialMoneyHttpRequest} marks it {@code
-     * @NotNull} only, {@code V66} has no future-date constraint, and {@code evaluateMedical} does
-     * not read it at all -- so a cap keyed on it can always be defeated by picking a date in a year
-     * nothing has been approved against yet (e.g. filing today against next year's date, where the
-     * "used so far" query always comes back ฿0). This was exploitable: see the fix commit for the
-     * concrete ฿6,000-against-a-฿3,000-cap repro.
-     *
-     * <p>The money itself lands in payroll via {@code payrollMonth} (computed in {@link
-     * #ceoApproveFrom}; V128's {@code welfare_pay} is summed by that same column), so that -- or,
-     * before it exists, the best available estimate of it -- is what the cap has to track instead:
-     *
-     * <ul>
-     *   <li>at <b>submit</b> time there is no {@code payrollMonth} yet (assigned only on approval),
-     *       so the caller passes {@code today}: the year a reasonably prompt approval would almost
-     *       always land in, and the only year-shaped value available this early. This is a
-     *       fast-fail estimate, not the authoritative check -- see the next point.
-     *   <li>at <b>approval</b> time ({@link #ceoApproveFrom}) the caller passes the {@code
-     *       payrollMonth} just computed for THIS row -- the authoritative answer, because it is the
-     *       exact year {@link SpecialMoneyRepository#findUsage}'s own money query files THIS
-     *       approval's amount under once it is written.
-     * </ul>
-     *
-     * <p>Backdating (a receipt from last month, filed today) is unaffected on purpose: this method
-     * never looks at how far in the past the request's own dates are, only at when the cap check
-     * itself is running. A genuinely backdated claim draws down the budget for the year it is
-     * actually decided in -- the same year its money is actually paid -- which is correct, not a
-     * side effect to route around.
-     */
+    /** The calendar year an annual welfare cap (MEDICAL's ฿ balance, UNIFORM_ANNUAL's once-a-year count) is
+     * evaluated against. Deliberately never request.eventDate()'s year. This was exploitable: see the fix commit
+     * for the concrete ฿6,000-against-a-฿3,000-cap repro. */
     private int usageYear(LocalDate reference) {
         return reference.getYear();
     }

@@ -8,17 +8,8 @@ import java.time.ZoneId;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
-/**
- * Pins the 15-minute grace boundary V121 raised {@code hr.work_schedule.grace_minutes} /
- * {@code app.attendance.schedule.grace-minutes} to (owner ruling 2026-08-02, was 5 minutes).
- *
- * <p>Pure unit test on {@link WorkSchedule} directly -- no Spring, no database -- so a future edit
- * to the grace CONSTANT (15) cannot silently change the THRESHOLD-not-allowance SEMANTICS
- * ({@link WorkSchedule#isLate} / {@link WorkSchedule#lateMinutes}, unchanged by this migration)
- * without this test catching it. {@link th.co.glr.hr.attendance.daily.AttendanceDailyCalculatorTest}
- * already pins the general mechanism at grace=5 with its own local fixture; this class exists
- * specifically to pin the NEW production value (15) and its exact boundary, on both sides.
- */
+/** Pins the 15-minute grace boundary V121 raised hr.work_schedule.grace_minutes /
+ * app.attendance.schedule.grace-minutes to (owner ruling 2026-08-02, was 5 minutes). */
 class WorkScheduleGraceBoundaryTest {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
@@ -42,9 +33,9 @@ class WorkScheduleGraceBoundaryTest {
 
     @Test
     void aCheckInAtEightFortySixIsLateBySixteenMinutesFromWorkStartNotOneMinutePastGrace() {
-        // The threshold-not-allowance rule, pinned at the NEW boundary: once 08:30 + 15 = 08:45 is
-        // exceeded, lateness is measured from workStart (08:30), not from the end of the grace
-        // window (08:45) -- so 08:46 is late by 16 minutes, not 1.
+        // The threshold-not-allowance rule, pinned at the NEW boundary: once 08:30 + 15 = 08:45 is exceeded, lateness
+        // is measured from workStart (08:30), not from the end of the grace window (08:45) -- so 08:46 is late by 16
+        // minutes, not 1.
         LocalTime checkIn = LocalTime.of(8, 46);
 
         assertThat(SCHEDULE.isLate(checkIn)).as("08:46 is past the 15-minute grace").isTrue();

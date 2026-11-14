@@ -10,8 +10,8 @@ public class PasswordConfig {
 
     @Bean
     PasswordEncoder passwordEncoder() {
-        // BCrypt strength 10 (Spring default). Postgres-side hashes are never produced,
-        // so verification is always against BCryptPasswordEncoder-generated hashes.
+        // BCrypt strength 10 (Spring default). Postgres-side hashes are never produced, so verification is always
+        // against BCryptPasswordEncoder-generated hashes.
         return new BCryptPasswordEncoder();
     }
 }

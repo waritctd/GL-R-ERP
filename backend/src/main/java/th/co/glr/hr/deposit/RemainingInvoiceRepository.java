@@ -14,15 +14,8 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.jdbc.support.KeyHolder;
 import org.springframework.stereotype.Repository;
 
-/**
- * Persistence for {@code sales.remaining_invoice}/{@code sales.remaining_invoice_item} (V188) — the
- * STORED ใบแจ้งหนี้ส่วนที่เหลือ (GLA-99 step 2). Mirrors {@code ImportRequestRepository}'s own
- * DRAFT/ISSUED/SUPERSEDED write shape (V154) — compare-and-set on every state transition, a locked
- * predecessor read for revision carry-forward — except numbering: this document keeps ONE
- * {@code base_number} across every revision and only the {@code -<version>} suffix moves, where
- * ImportRequestRepository mints a brand-new number on every issue (see this class's own
- * {@link #issue}/{@link #lockIssuedPredecessor} Javadoc for the difference).
- */
+/** Persistence for sales.remaining_invoice/sales.remaining_invoice_item (V188) — the STORED
+ * ใบแจ้งหนี้ส่วนที่เหลือ (GLA-99 step 2). */
 @Repository
 public class RemainingInvoiceRepository {
 
@@ -56,9 +49,8 @@ public class RemainingInvoiceRepository {
         return withItems(rows).stream().findFirst();
     }
 
-    /** One query for every row's items, not one query per row — a deal with several revisions on
-     * its document list would otherwise fan out, matching {@code ImportRequestRepository}'s own
-     * {@code withItems} reasoning. */
+    /** One query for every row's items, not one query per row — a deal with several revisions on its document list
+     * would otherwise fan out, matching ImportRequestRepository's own withItems reasoning. */
     private List<RemainingInvoiceDocumentDto> withItems(List<RemainingInvoiceDocumentDto> rows) {
         if (rows.isEmpty()) return rows;
         List<Long> ids = rows.stream().map(RemainingInvoiceDocumentDto::id).toList();
@@ -158,9 +150,9 @@ public class RemainingInvoiceRepository {
         return keys.getKey().longValue();
     }
 
-    /** Replaces every line, renumbering {@code seq} from 1 in the order supplied. Draft-only by
-     * convention (the caller never invokes this on an ISSUED/SUPERSEDED row — an issued document's
-     * items are frozen for good, see {@link RemainingInvoiceDocumentDto}'s own Javadoc). */
+    /** Replaces every line, renumbering seq from 1 in the order supplied. Draft-only by convention (the caller
+     * never invokes this on an ISSUED/SUPERSEDED row — an issued document's items are frozen for good, see
+     * RemainingInvoiceDocumentDto's own Javadoc). */
     public void replaceItems(long remainingInvoiceId, List<RemainingInvoiceItemDto> items) {
         jdbc.update("DELETE FROM sales.remaining_invoice_item WHERE remaining_invoice_id = :id",
             Map.of("id", remainingInvoiceId));
@@ -183,16 +175,7 @@ public class RemainingInvoiceRepository {
         }
     }
 
-    /** DRAFT-only, UNCONDITIONAL set of the dialog fields — the WHERE clause enforces DRAFT-only,
-     * not the caller. Deliberately NOT a SQL-level COALESCE PATCH: {@code
-     * DepositNoticeRepository#update} (the sibling document's own draft-edit write) is itself a
-     * plain unconditional overwrite, not a partial one, and matching that avoids a real footgun —
-     * binding a Java {@code null} against this column's {@code TEXT[]} type without an explicit SQL
-     * type hint is a known pgjdbc trap ("Invalid column type"), which a COALESCE(:notes, notes)
-     * would reintroduce for no benefit. {@link RemainingInvoiceService#updateDraft} resolves "leave
-     * this field alone" itself, by carrying the EXISTING row's value forward for any request field
-     * left {@code null}, before calling this method — so this method always receives concrete
-     * values, the same discipline {@code DepositNoticeService#update}'s own caller already follows. */
+    /** DRAFT-only, UNCONDITIONAL set of the dialog fields — the WHERE clause enforces DRAFT-only, not the caller. */
     public int updateDraftFields(long id, String reference, String depositReference,
             LocalDate docDate, List<String> notes) {
         return jdbc.update("""
@@ -207,9 +190,9 @@ public class RemainingInvoiceRepository {
                 .addValue("notes", notes == null ? new String[0] : notes.toArray(new String[0])));
     }
 
-    /** Re-snapshot the priced content (items applied separately via {@link #replaceItems}) — DRAFT
-     * only. Used by {@code RemainingInvoiceService#updateDraft}'s own re-snapshot-from-the-latest-
-     * issued-deposit-notice step (plan step 2). */
+    /** Re-snapshot the priced content (items applied separately via #replaceItems) — DRAFT only. Used by
+     * RemainingInvoiceService#updateDraft's own re-snapshot-from-the-latest- issued-deposit-notice step (plan step
+     * 2). */
     public int updateSnapshot(long id, Long depositNoticeId, String customerName, String customerTaxId,
             String customerBranch, String customerAddress, String projectName,
             BigDecimal itemsTotal, BigDecimal depositDeduction, BigDecimal netAmount,
@@ -233,13 +216,9 @@ public class RemainingInvoiceRepository {
                 .addValue("netAmount", netAmount).addValue("vatAmount", vatAmount).addValue("grandTotal", grandTotal));
     }
 
-    /** One (deal, source quotation)'s currently-ISSUED base_number/version, locked {@code FOR
-     * UPDATE} for the remainder of the caller's transaction — read so a revision's issue can carry
-     * the SAME base_number forward and bump only version, and locked so a concurrent issue racing
-     * on the same predecessor cannot be lost between this read and the supersede that follows it
-     * (same race {@code ImportRequestRepository#lockIssuedPredecessor}'s own Javadoc documents).
-     * Empty when this is the FIRST issue for this (deal, quotation) — nothing to carry forward, the
-     * caller mints a fresh base_number via {@link #nextDocNumber} instead. */
+    /** One's currently-ISSUED base_number/version, locked FOR UPDATE for the remainder of the caller's transaction.
+     * Empty when this is the FIRST issue for this (deal, quotation) — nothing to carry forward, the caller mints a
+     * fresh base_number via #nextDocNumber instead. */
     public record PredecessorNumber(long id, String baseNumber, int version) {}
 
     public Optional<PredecessorNumber> lockIssuedPredecessor(long ticketId, Long customerQuotationId) {
@@ -254,10 +233,9 @@ public class RemainingInvoiceRepository {
             });
     }
 
-    /** Compare-and-set DRAFT -> ISSUED. Returns rows affected; 0 means someone else issued,
-     * revised away, or deleted this DRAFT first — the caller must treat that as a 409, never as
-     * success (same discipline {@code DepositNoticeRepository#issue}/{@code
-     * ImportRequestRepository#issue} already document). */
+    /** Compare-and-set DRAFT -> ISSUED. Returns rows affected; 0 means someone else issued, revised away, or
+     * deleted this DRAFT first — the caller must treat that as a 409, never as success (same discipline
+     * DepositNoticeRepository#issue/ImportRequestRepository#issue already document). */
     public int issue(long id, String baseNumber, int version, String docNumber, long actorId, String actorName) {
         return jdbc.update("""
             UPDATE sales.remaining_invoice
@@ -281,16 +259,8 @@ public class RemainingInvoiceRepository {
         return jdbc.update("DELETE FROM sales.remaining_invoice WHERE id = :id AND status = 'DRAFT'", Map.of("id", id));
     }
 
-    /** Next {@code GLR<yy><5-digit seq>} for the Buddhist year, from the shared {@code
-     * sales.document_sequence} (doc_type {@code 'AR_GLR'}) — mechanism identical to {@code
-     * DepositNoticeRepository#nextDocNumber}/{@code ImportRequestRepository#nextDocNumber}. Must be
-     * called INSIDE the issuing transaction so a refused issue rolls the number back rather than
-     * burning it (the same property those two methods document).
-     *
-     * <p>Delegates to {@link th.co.glr.hr.common.ArGlrSequence} (GLA-99 step 3) — the shared home
-     * this method's own body moved to once {@code sales.billing_note} (V189) became a second
-     * caller of the exact same {@code AR_GLR} sequence. Kept as a thin wrapper, not inlined at every
-     * call site, so {@link RemainingInvoiceService} and its tests need no change. */
+    /** Next GLR<yy><5-digit seq> for the Buddhist year, from the shared sales.document_sequence (doc_type 'AR_GLR')
+     * — mechanism identical to DepositNoticeRepository#nextDocNumber/ImportRequestRepository#nextDocNumber. */
     public String nextDocNumber(int yearTh) {
         return th.co.glr.hr.common.ArGlrSequence.next(jdbc, yearTh);
     }

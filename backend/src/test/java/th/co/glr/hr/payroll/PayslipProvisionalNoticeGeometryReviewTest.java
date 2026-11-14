@@ -14,19 +14,9 @@ import org.apache.pdfbox.text.TextPosition;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/**
- * REVIEWER-authored, FIFTH pass. The gap the fourth pass's geometry test left open.
- *
- * <p>{@link PayslipMaximalLayoutReviewTest} renders its maximal payslip in DECEMBER only, on the
- * stated grounds that December "carries the longer of the two notice wordings". The over-withholding
- * notice was gated in the fourth-pass remediation, so there are now TWO wordings, and the one that is
- * printed for ELEVEN months of the year — the ประมาณการ variant — had no geometry coverage at all.
- *
- * <p>These tests therefore (a) measure which wording is actually wider, so the claim is a measured
- * fact rather than an assumption, and (b) re-run the fourth pass's off-page assertions on a maximal
- * payslip in a NON-December month. They also pin the gate's boundary at the month level, which is the
- * only thing that decides whether an employee is told a provisional figure is final.
- */
+/** REVIEWER-authored, FIFTH pass. PayslipMaximalLayoutReviewTest renders its maximal payslip in DECEMBER only,
+ * on the stated grounds that December "carries the longer of the two notice wordings". The gap the fourth
+ * pass's geometry test left open. */
 class PayslipProvisionalNoticeGeometryReviewTest {
     private final PayslipRenderer renderer = new PayslipRenderer();
 
@@ -105,16 +95,8 @@ class PayslipProvisionalNoticeGeometryReviewTest {
      * PayrollService's remaining pay periods ({@code 13 - month}): December, and only December,
      * is the period after which no further withholding can absorb the excess.
      */
-    /**
-     * P2 fix (Opus review, 2026-07-30): re-pinned against the owner-approved wording (spec section 8)
-     * after {@code PayslipRenderer} stopped printing the excess baht figure. The figure itself
-     * ({@code "17,527.51"}) must now be ABSENT from every month's notice -- spec section 8 says
-     * plainly "Do not print the excess amount"; {@code excessWithheldToDate} is still computed and
-     * persisted for the ภ.ง.ด.1 working papers (unchanged), only the printed text changed. December's
-     * wording also no longer says "ไม่สามารถคืนผ่านระบบเงินเดือนได้" (not part of the owner's approved
-     * text) and names BOTH ภ.ง.ด.90 and ภ.ง.ด.91 (never 91 unconditionally, per the handoff), so the
-     * assertion below checks for "ภ.ง.ด.90" and "ภ.ง.ด.91" together rather than the old sole-91 phrase.
-     */
+    /** re-pinned against the owner-approved wording (spec section 8) after PayslipRenderer stopped printing the
+     * excess baht figure. */
     @Test
     @DisplayName("only December prints the year-end ภ.ง.ด.90/91 wording; November is still provisional")
     void onlyDecemberAssertsTheExcessIsUnrecoverable() throws Exception {
@@ -143,12 +125,7 @@ class PayslipProvisionalNoticeGeometryReviewTest {
             .doesNotContain("ประมาณการ:");
     }
 
-    /**
-     * A null {@code payrollMonth} must fall to the PROVISIONAL wording, never the final one. The
-     * renderer's null guard decides this, and the safe direction is unambiguous: asserting an excess
-     * is unrecoverable when the period is unknown is a false statement on a payroll document, while
-     * labelling it an estimate is merely conservative.
-     */
+    /** A null payrollMonth must fall to the PROVISIONAL wording, never the final one. */
     @Test
     @DisplayName("an unknown payroll month degrades to the provisional wording")
     void anUnknownPayrollMonthIsTreatedAsProvisional() throws Exception {
@@ -193,11 +170,9 @@ class PayslipProvisionalNoticeGeometryReviewTest {
         return collected;
     }
 
-    /**
-     * The biggest payslip the engine can produce — mirrors {@link PayslipMaximalLayoutReviewTest}.
-     * All 9 พิเศษ slots (F6 fix, Opus review 2026-07-30 -- see that class's own comment; this loop
-     * had the identical one-slot-short defect).
-     */
+    /** The biggest payslip the engine can produce — mirrors PayslipMaximalLayoutReviewTest. All 9 พิเศษ slots (F6
+     * fix, Opus review 2026-07-30 -- see that class's own comment; this loop had the identical one-slot-short
+     * defect). */
     private PayrollLineDto maximalLine(BigDecimal excessWithheld, String note) {
         List<PayrollSpecialPayDto> specials = new ArrayList<>();
         for (int slot = 1; slot <= 9; slot += 1) {

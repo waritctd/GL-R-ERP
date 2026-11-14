@@ -65,8 +65,8 @@ function todayInBangkok() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Bangkok' });
 }
 
-/** An ISO date `days` after today in Asia/Bangkok. Never hardcoded — a fixed date eventually
- *  falls into a closed period and fails for a reason unrelated to the gate. */
+/** An ISO date `days` after today in Asia/Bangkok. Never hardcoded — a fixed date eventually falls into a
+ * closed period and fails for a reason unrelated to the gate. */
 function daysFromToday(days) {
   const base = new Date(`${todayInBangkok()}T00:00:00Z`);
   base.setUTCDate(base.getUTCDate() + days);
@@ -116,12 +116,8 @@ async function seededSubmittedRequest(hrSession) {
   return pending;
 }
 
-/**
- * Re-reads one request by id, through `session`, regardless of its current status — used to
- * prove a mutation actually landed rather than trusting the write response. Unlike
- * `seededSubmittedRequest`, this does not filter by status: the whole point of calling it is
- * finding out what status the row is in NOW.
- */
+/** Re-reads one request by id, through `session`, regardless of its current status — used to prove a mutation
+ * actually landed rather than trusting the write response. */
 async function requestById(session, id) {
   const response = await session.get('/api/leave');
   expect(response.status(), 'GET /api/leave').toBe(200);
@@ -171,8 +167,8 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
       `POST /api/leave expected 200, got ${response.status()}: ${body}`
     ).toBe(200);
 
-    // Parsed from the text already read above rather than a second response.json() — one read,
-    // one source of truth for what the server actually returned.
+    // Parsed from the text already read above rather than a second response.json() — one read, one source of truth
+    // for what the server actually returned.
     const { request: created } = JSON.parse(body);
 
     try {
@@ -230,11 +226,8 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
   });
 
   test("ceo can now approve and reject someone else's leave", async () => {
-    // Unlike the capability check above, this MUTATES — so unlike seededSubmittedRequest's
-    // callers, it cannot read V21's shared row: consuming it here would starve the denied-roles
-    // loop below (see this file's header). Each half below mints, acts on, and disposes of its
-    // OWN request, on its own date, so the run leaves the database exactly as it found it and the
-    // spec stays re-runnable — the same discipline `submitting VACATION now succeeds` uses above.
+    // Unlike the capability check above, this MUTATES — so unlike seededSubmittedRequest's callers, it cannot read
+    // V21's shared row: consuming it here would starve the denied-roles loop below (see this file's header).
 
     // ── approve ──────────────────────────────────────────────────────────────────────────────
     const approveDay = workingDayFromToday(50);
@@ -265,17 +258,15 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
           'leave'
       ).toBe(200);
 
-      // Re-read rather than trust the write response — proves the mutation actually landed, the
-      // same discipline the denied-roles loop below applies to a refusal NOT mutating.
+      // Re-read rather than trust the write response — proves the mutation actually landed, the same discipline the
+      // denied-roles loop below applies to a refusal NOT mutating.
       const approved = await requestById(sessions.hr, toApprove.id);
       expect(approved.status, "ceo's approve must actually move the row to APPROVED").toBe(
         'APPROVED'
       );
     } finally {
-      // APPROVED sits inside ACTIVE_QUOTA_STATUSES (see this file's header) — cancel gives the
-      // quota back, the same cleanup `submitting VACATION now succeeds` uses above. It works
-      // whether approve above succeeded (row is APPROVED) or failed (row is still SUBMITTED):
-      // LeaveService#cancel accepts a reviewer's cancel from either status.
+      // APPROVED sits inside ACTIVE_QUOTA_STATUSES (see this file's header) — cancel gives the quota back, the same
+      // cleanup `submitting VACATION now succeeds` uses above.
       const cleanup = await apiWrite(sessions.hr, 'post', `/api/leave/${toApprove.id}/cancel`, {});
       expect(
         cleanup.status(),
@@ -283,13 +274,9 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
       ).toBe(200);
     }
 
-    // ── reject ───────────────────────────────────────────────────────────────────────────────
-    // Reject travels the same gate as approve; asserting only approve would leave the
-    // cheaper-to-get-wrong direction untested — the same reasoning the denied-roles loop below
-    // states for its own two calls. A SEPARATE request, not the one just approved-and-cancelled
-    // above: LeaveService#approve/#reject both require status == SUBMITTED, so reusing the
-    // already-CANCELLED row here would 409 for a reason that has nothing to do with what this
-    // half tests.
+    // reject ─────────────────────────────────────────────────────────────────────────────── Reject travels the
+    // same gate as approve; asserting only approve would leave the cheaper-to-get-wrong direction untested — the
+    // same reasoning the denied-roles loop below states for its own two calls.
     const rejectDay = workingDayFromToday(60);
     const rejectCreate = await apiWrite(sessions[OWNER], 'post', '/api/leave', {
       leaveTypeCode: 'VACATION',
@@ -305,13 +292,9 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
     const { request: toReject } = JSON.parse(rejectCreateBody);
     expect(toReject.status).toBe('SUBMITTED');
 
-    // NOT a try/finally with an unconditional cancel like the approve half above: once reject
-    // succeeds the row is REJECTED, and LeaveService#cancel refuses anything that is not
-    // SUBMITTED or APPROVED (409 "ยกเลิกได้เฉพาะคำขอลาที่ยังอยู่ระหว่างพิจารณาเท่านั้น") — an
-    // unconditional cancel would 409 on the happy path. REJECTED needs no rescue anyway: it sits
-    // outside ACTIVE_QUOTA_STATUSES, so leaving it behind leaks no quota, and it is not SUBMITTED
-    // so seededSubmittedRequest's `.find` above can never pick it up. The flag below exists only
-    // to cover the OTHER path: reject failing outright and leaking a quota-holding SUBMITTED row.
+    // NOT a try/finally with an unconditional cancel like the approve half above: once reject succeeds the row is
+    // REJECTED, and LeaveService#cancel refuses anything that is not SUBMITTED or APPROVED — an unconditional
+    // cancel would 409 on the happy path.
     let rejectSucceeded = false;
     try {
       const rejectResult = await apiWrite(
@@ -358,15 +341,15 @@ test.describe('leave quota and review authorization (real LeaveService)', () => 
         (await apiWrite(sessions[role], 'post', `/api/leave/${pending.id}/approve`, {})).status(),
         `${role} is neither in REVIEW_ALL_ROLES ({hr, ceo}) nor this employee's manager of record`
       ).toBe(403);
-      // Reject travels the same gate; asserting only approve would leave the cheaper-to-get-wrong
-      // direction untested.
+      // Reject travels the same gate; asserting only approve would leave the cheaper-to-get-wrong direction
+      // untested.
       expect(
         (await apiWrite(sessions[role], 'post', `/api/leave/${pending.id}/reject`, {})).status(),
         `${role} must not be able to reject either`
       ).toBe(403);
 
-      // A 403 that still mutated would look safe and not be — the trap write-overtime.spec.js
-      // guards against too. The request must be untouched, not merely un-approved.
+      // A 403 that still mutated would look safe and not be — the trap write-overtime.spec.js guards against too.
+      // The request must be untouched, not merely un-approved.
       const after = await seededSubmittedRequest(sessions.hr);
       expect(after.id, 'the refused request must still be SUBMITTED').toBe(pending.id);
     });

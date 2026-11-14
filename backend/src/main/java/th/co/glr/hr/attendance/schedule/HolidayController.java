@@ -18,23 +18,8 @@ import th.co.glr.hr.attendance.schedule.BotHolidayFetchService.FetchOutcome;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 
-/**
- * {@code hr.holiday} admin surface: the manual BOT-refresh trigger, plus create/update/delete/list
- * for HR's own company-day additions ({@link HolidayAdminService}). Every handler is gated {@code
- * "hr", "ceo"}, matching the existing pattern for other admin-triggered attendance actions ({@code
- * AttendanceController}'s device import / card backfill).
- *
- * <p>This is a new authorization surface (five new/extended endpoints with a role gate), so it
- * ships with a real-Postgres integration test through this exact controller
- * ({@code HolidayControllerIntegrationTest}) proving the wrong roles get 403 for every handler —
- * see CLAUDE.md "Permission changes must ship evidence".
- *
- * <p>{@link BotHolidayFetchService#fetchNow()} — not this controller — enforces a minimum interval
- * between attempts (this fetcher's own {@code BOT_HOLIDAY_API_TOKEN} budget of 100 calls/hour — a
- * key distinct per BOT API and per environment, not shared with {@code BotFxFetchService}) and
- * throws a 429 {@link th.co.glr.hr.common.ApiException} rather than silently returning an empty
- * result when called too soon; see that method's javadoc.
- */
+/** hr.holiday admin surface: the manual BOT-refresh trigger, plus create/update/delete/list for HR's own
+ * company-day additions (HolidayAdminService). */
 @RestController
 @RequestMapping("/api/holidays")
 public class HolidayController {
@@ -77,10 +62,8 @@ public class HolidayController {
         return adminService.create(user, request.holidayDate(), request.nameTh());
     }
 
-    /**
-     * Renames an existing holiday (bank- or company-sourced) and forces it to {@code source =
-     * 'COMPANY'} — see {@link HolidayAdminService}. HR/CEO only.
-     */
+    /** Renames an existing holiday (bank- or company-sourced) and forces it to source = 'COMPANY' — see
+     * HolidayAdminService. HR/CEO only. */
     @PutMapping("/{date}")
     HolidayDto update(
             @PathVariable("date") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,

@@ -17,13 +17,8 @@ import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligati
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationUpdateRequest;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.RemittanceLedgerRowDto;
 
-/**
- * Persistence for {@code hr.deduction_obligation} + {@code hr.deduction_obligation_remittance}
- * (V106, issue #373). Every mutation is a conditional {@code UPDATE ... WHERE obligation_id = :id
- * AND status = '...'} with a rowcount check in the caller, the same idiom
- * {@code TaxAllowanceDeclarationRepository} uses — there is no {@code @Version} column anywhere in
- * this repo.
- */
+/** Persistence for hr.deduction_obligation + hr.deduction_obligation_remittance (V106, issue #373). Every
+ * mutation is a conditional UPDATE ... */
 @Repository
 public class DeductionObligationRepository {
     private static final String SELECT_COLUMNS = """
@@ -107,29 +102,9 @@ public class DeductionObligationRepository {
         );
     }
 
-    /**
-     * The obligation that drives THIS employee's payroll for this kind IN THIS PAYROLL MONTH, if
-     * any: the ACTIVE one when there is one (the unique partial index guarantees at most one),
-     * otherwise the most recently started COMPLETED one (still relevant — its {@code
-     * overrideContinuePastTotal} may keep it driving deductions). A STOPPED obligation never drives
-     * payroll again.
-     *
-     * <p>D2 fix (Opus review): a {@code start_date} filter is REQUIRED, not optional — an obligation
-     * recorded ahead of its start (HR entering a future กยศ notification early, or a typo'd year)
-     * must not deduct for a month before the authority actually instructed it, and reprocessing a
-     * month that predates a since-created obligation must not retroactively back-deduct it either.
-     * Before this filter existed, an obligation starting 2027-06 was found as "driving" for payroll
-     * month 2026-01 and deducted the full monthly figure.
-     *
-     * <p>Off-by-one-month fix (Opus re-review): {@code payrollMonth} is always normalised to the
-     * 1st of the month, but {@code start_date} is whatever DAY the authority's document is dated
-     * (see {@link DeductionObligationDto#startDate()}'s own javadoc — the field is intentionally
-     * the document date, not a "first payroll month to deduct" field). Comparing the raw dates
-     * (`start_date &lt;= payrollMonth`) made a mid-month start (e.g. 2026-01-15) fail for its own
-     * start month — 2026-01-15 &gt; 2026-01-01 — silently skipping January's instalment even though
-     * the obligation had already begun. TRUNCATING start_date to its own month-start before the
-     * comparison is what makes "started this calendar month" mean "drives this calendar month".
-     */
+    /** The obligation that drives THIS employee's payroll for this kind IN THIS PAYROLL MONTH, if any: the ACTIVE
+     * one when there is one, otherwise the most recently started COMPLETED one. A STOPPED obligation never drives
+     * payroll again. */
     public Optional<DeductionObligationDto> findDrivingObligation(
         long employeeId, DeductionObligationKind kind, LocalDate payrollMonth
     ) {
@@ -221,16 +196,8 @@ public class DeductionObligationRepository {
             Map.of("id", obligationId, "updatedById", updatedById));
     }
 
-    /**
-     * Applies the completion transition implied by a freshly-recomputed cumulative total.
-     * {@code shouldBeCompleted = true} only ever moves ACTIVE -> COMPLETED (a no-op if already
-     * COMPLETED or STOPPED); {@code false} only ever reverts COMPLETED -> ACTIVE, clearing the
-     * acknowledgement AND override fields (a correction that drops the cumulative total back under
-     * the instructed total means the obligation is, factually, no longer complete — see this
-     * method's caller, {@code DeductionObligationService#recordRemittance}). A STOPPED obligation is
-     * untouched either way: HR ending it deliberately is never silently reopened by a ledger
-     * recompute.
-     */
+    /** Applies the completion transition implied by a freshly-recomputed cumulative total. A STOPPED obligation is
+     * untouched either way: HR ending it deliberately is never silently reopened by a ledger recompute. */
     public void applyCompletionTransition(long obligationId, boolean shouldBeCompleted) {
         if (shouldBeCompleted) {
             jdbc.update("""
@@ -254,12 +221,9 @@ public class DeductionObligationRepository {
         }
     }
 
-    /**
-     * Sum of every ledger row for this obligation EXCLUDING {@code payrollMonth} itself — the basis
-     * for computing THIS period's own remaining-balance clamp so a re-run of {@code payrollMonth}
-     * never sees its own prior remittance as "already paid" (see V106's header on why the ledger is
-     * a per-period upsert, not an accumulating counter).
-     */
+    /** Sum of every ledger row for this obligation EXCLUDING payrollMonth itself — the basis for computing THIS
+     * period's own remaining-balance clamp so a re-run of payrollMonth never sees its own prior remittance as
+     * "already paid". */
     public BigDecimal sumRemittanceExcludingMonth(long obligationId, LocalDate payrollMonth) {
         BigDecimal sum = jdbc.queryForObject("""
             SELECT COALESCE(SUM(amount), 0)
@@ -292,11 +256,9 @@ public class DeductionObligationRepository {
         return count == null ? 0 : count;
     }
 
-    /**
-     * Idempotent per (obligation, payroll_month) — see V106's header. Reprocessing the same month
-     * overwrites that period's own row instead of inserting a second one, so the ledger self-
-     * corrects on a payroll re-run rather than double-counting.
-     */
+    /** Idempotent per (obligation, payroll_month) — see V106's header. Reprocessing the same month overwrites that
+     * period's own row instead of inserting a second one, so the ledger self- corrects on a payroll re-run rather
+     * than double-counting. */
     public void upsertRemittance(long obligationId, LocalDate payrollMonth, BigDecimal amount, Long payrollPeriodId) {
         jdbc.update("""
             INSERT INTO hr.deduction_obligation_remittance
@@ -314,15 +276,9 @@ public class DeductionObligationRepository {
                 .addValue("payrollPeriodId", payrollPeriodId));
     }
 
-    /**
-     * A zero-amount period is not a remittance (nothing was actually deducted/remitted that month
-     * -- an unrelated cap clamped it to zero, or the month predates the obligation's start_date) --
-     * removing any row instead of upserting a zero keeps {@link #countRemittedPeriods}/{@link
-     * #findLedger} honest as "periods money actually moved", the figure the progress view's "N of M
-     * งวด" reports. Idempotent no-op if no row exists for this period. DELETE (not "skip insert") is
-     * required so a reprocess that newly zeroes out a previously-nonzero period removes the STALE
-     * row rather than leaving it stranded.
-     */
+    /** A zero-amount period is not a remittance -- removing any row instead of upserting a zero keeps
+     * #countRemittedPeriods/#findLedger honest as "periods money actually moved", the figure the progress view's
+     * "N of M งวด" reports. Idempotent no-op if no row exists for this period. */
     public void deleteRemittance(long obligationId, LocalDate payrollMonth) {
         jdbc.update("""
             DELETE FROM hr.deduction_obligation_remittance

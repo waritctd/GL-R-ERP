@@ -25,21 +25,9 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
 import java.time.LocalDate;
 
-/**
- * Real-DB authz evidence for the designer-directory REVERSAL (owner ask relayed 2026-09-26, task
- * "designer-add-from-ui" — see {@link DesignerController}'s own class Javadoc and
- * {@code sales.designer}'s own V173 header): {@code sales.designer} used to be enforced read-only
- * by construction (no write mapping at all); {@code POST /api/designers} is now a new write
- * endpoint gated by {@link th.co.glr.hr.auth.DealEntryAccess#requireCanEnterDeal} -- the SAME gate
- * {@code CustomerController#create} uses, no wider.
- *
- * <p>Runs the REAL {@link DesignerController} over the REAL {@link DesignerRepository} on REAL
- * Postgres — CLAUDE.md's "Permission changes must ship evidence": a mocked repository (see
- * {@code DesignerControllerTest}) cannot prove the grant survives into the actual SQL/service call.
- * Every denial case is written wrong-way-round: it asks whether a caller who should NOT be able to
- * create a designer row can, asserts 403, AND re-reads the table to prove NO row was inserted — a
- * 403 that had already written would still be a real bug.
- */
+/** Real-DB authz evidence for the designer-directory REVERSAL: sales.designer used to be enforced read-only by
+ * construction; POST /api/designers is now a new write endpoint gated by
+ * th.co.glr.hr.auth.DealEntryAccess#requireCanEnterDeal -- the SAME gate CustomerController#create uses, no wider. */
 class DesignerCreateAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private MockMvc designerMvc;

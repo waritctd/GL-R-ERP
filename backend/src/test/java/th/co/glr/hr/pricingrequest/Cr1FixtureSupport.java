@@ -40,11 +40,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * CR-1 (GLA-167) shared fixture: real repositories and services (no Mockito), a deal owned by
- * {@code salesActor}, and the personas every CR-1 integration test needs. Copied from the wiring
- * in {@code PricingFactoryQuoteCostingIntegrationTest} so it stays faithful to production.
- */
+/** CR-1 (GLA-167) shared fixture: real repositories and services (no Mockito), a deal owned by salesActor, and
+ * the personas every CR-1 integration test needs. Copied from the wiring in
+ * PricingFactoryQuoteCostingIntegrationTest so it stays faithful to production. */
 abstract class Cr1FixtureSupport extends AbstractPostgresIntegrationTest {
     protected static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
 
@@ -138,10 +136,8 @@ abstract class Cr1FixtureSupport extends AbstractPostgresIntegrationTest {
 
     // ── pricing request builders ─────────────────────────────────────────────────────────────
 
-    /**
-     * One request line. {@code leadMin/leadMax} may be null (submit REQUIRES a lead time, so null means the default 3-7); {@code currency}/{@code priceUnit} are the
-     * CR-1 terms Sales fixes on the line (null = legacy line).
-     */
+    /** One request line. leadMin/leadMax may be null (submit REQUIRES a lead time, so null means the default 3-7);
+     * currency/priceUnit are the CR-1 terms Sales fixes on the line (null = legacy line). */
     protected PricingRequestRequests.PricingRequestItemRequest line(
         String model, String factory, int qty, Integer leadMin, Integer leadMax, String currency, String priceUnit
     ) {

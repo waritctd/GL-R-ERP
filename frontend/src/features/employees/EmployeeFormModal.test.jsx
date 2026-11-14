@@ -10,8 +10,8 @@ describe('EmployeeFormModal form validation', () => {
     const onSubmit = vi.fn();
     render(<EmployeeFormModal employees={[]} onClose={vi.fn()} onSubmit={onSubmit} />);
 
-    // Clear the name field (all required fields start empty in create mode already,
-    // but we still touch one to trigger onChange validation).
+    // Clear the name field (all required fields start empty in create mode already, but we still touch one to
+    // trigger onChange validation).
     fireEvent.change(screen.getByLabelText(/ชื่อ-นามสกุล/), { target: { value: '' } });
     fireEvent.change(screen.getByLabelText(/อีเมล/), { target: { value: '' } });
     fireEvent.change(screen.getByLabelText(/เบอร์โทร/), { target: { value: '' } });

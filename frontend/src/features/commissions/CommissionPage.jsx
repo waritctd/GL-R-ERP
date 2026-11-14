@@ -52,9 +52,9 @@ const emptyManualForm = {
   reason: '',
 };
 
-// Debounces `value` by `delayMs` -- mirrors OvertimePanel.jsx/LeaveRequestPage.jsx's identically
-// named private helper (same reason: don't fire one request per keystroke). Kept as its own small
-// local copy rather than a new shared hook module for a four-line function.
+// Debounces `value` by `delayMs` -- mirrors OvertimePanel.jsx/LeaveRequestPage.jsx's identically named private
+// helper (same reason: don't fire one request per keystroke). Kept as its own small local copy rather than a
+// new shared hook module for a four-line function.
 function useDebouncedValue(value, delayMs) {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -84,9 +84,9 @@ export function CommissionPage({ user, showToast }) {
   const [month, setMonth] = useState(() => (ROLE_PERMISSIONS.canApproveCommissions.includes(user.role) ? bangkokMonth() : thisMonth));
   const [records, setRecords] = useState([]);
   const [summary, setSummary] = useState(null);
-  // Sales-only monthly tier summary — server-computed (CommissionService#monthlySummary), fetched
-  // alongside `records` by the same load()/month effect below. Never re-derived client-side; a
-  // load failure leaves this null and the panel simply doesn't render (see load()).
+  // Sales-only monthly tier summary — server-computed (CommissionService#monthlySummary), fetched alongside
+  // `records` by the same load()/month effect below. Never re-derived client-side; a load failure leaves this
+  // null and the panel simply doesn't render (see load()).
   const [monthlyTierSummary, setMonthlyTierSummary] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -116,10 +116,8 @@ export function CommissionPage({ user, showToast }) {
   // sales_manager/ceo: review-queue inline input edit
   const [editingId, setEditingId] = useState(null);
   const [deductionDraft, setDeductionDraft] = useState(emptyDeductionDraft);
-  // Live preview of the edited invoice's recompute — server-computed (CommissionService#simulate)
-  // rather than client math; see the debounced effect below. Seeded from the record's own
-  // last-persisted figures on beginEdit (no math, just a field read) so the panel shows a sensible
-  // value immediately instead of stale zeros.
+  // Live preview of the edited invoice's recompute — server-computed (CommissionService#simulate) rather than
+  // client math; see the debounced effect below.
   const [deductionPreview, setDeductionPreview] = useState({ actualReceived: 0, commissionableBase: 0 });
   const deductionPreviewRequestId = useRef(0);
 
@@ -133,16 +131,9 @@ export function CommissionPage({ user, showToast }) {
   const [manualSaving, setManualSaving] = useState(false);
   const [repOptions, setRepOptions] = useState([]);
 
-  // Sales is read-only (Slice A3, AUTHZ CHANGE): commission creation moved entirely to the
-  // accountant's createFromDeal trigger. Mirrors ROLE_PERMISSIONS exactly — see api/routes.js
-  // for the "why" comments tying each key back to a CommissionController/Service role gate.
-  // Issue #422 B5 fix: every mutation below that changes a payroll-visible figure
-  // (line.commissionPay) must also invalidate the ['payroll'] prefix so an open PayrollPage tab
-  // picks the change up on its own next poll/focus refetch (issue #422 B1), not only on a manual
-  // reload. CommissionPage itself stays imperative (`load()`) -- a full react-query migration
-  // here is out of scope for this fix; invalidation alone is sufficient now that payroll is a
-  // query. payrollCurrent is ['payroll', 'current', month], so ['payroll'] is the correct prefix
-  // and no other queryKeys.js entry starts with 'payroll'.
+  // Sales is read-only (Slice A3, AUTHZ CHANGE): commission creation moved entirely to the accountant's
+  // createFromDeal trigger. Mirrors ROLE_PERMISSIONS exactly — see api/routes.js for the "why" comments tying
+  // each key back to a CommissionController/Service role gate.
   function invalidatePayrollUpstream() {
     return queryClient.invalidateQueries({ queryKey: ['payroll'] });
   }
@@ -198,8 +189,8 @@ export function CommissionPage({ user, showToast }) {
     return response;
   }
 
-  // A weight change moves the month's base: reload the records table and the picked rep's statement
-  // so "สรุปรายคน" and the table are not left showing the old figures.
+  // A weight change moves the month's base: reload the records table and the picked rep's statement so
+  // "สรุปรายคน" and the table are not left showing the old figures.
   function reloadAfterWeightChange(recordId) {
     load();
     refreshRep(recordId);
@@ -235,9 +226,9 @@ export function CommissionPage({ user, showToast }) {
         if (loadRequestId.current === requestId) setLoading(false);
       }
       if (isSales) {
-        // Server-computed monthly tier summary (CommissionService#monthlySummary) — never
-        // re-derived client-side. A failure here must not take down the records table above: it
-        // is a secondary, informational panel, so on error the panel just stays hidden.
+        // Server-computed monthly tier summary (CommissionService#monthlySummary) — never re-derived client-side. A
+        // failure here must not take down the records table above: it is a secondary, informational panel, so on error
+        // the panel just stays hidden.
         try {
           const summaryResponse = await api.commissions.monthlySummary({ payrollMonth: month });
           setMonthlyTierSummary(summaryResponse.summary);
@@ -247,13 +238,12 @@ export function CommissionPage({ user, showToast }) {
       }
       return;
     }
-    // account: GET /api/commissions has no route for this role on the real backend (see
-    // routes.js's canListCommissionRecords comment) — there is nothing to load here.
+    // account: GET /api/commissions has no route for this role on the real backend (see routes.js's
+    // canListCommissionRecords comment) — there is nothing to load here.
     setLoading(false);
   }
 
-  // `load` reads `user`-derived role flags that don't change while this page is mounted, so it
-  // is intentionally omitted from the dependency array (re-running per render would be a no-op).
+  // Keep this targeted lint exception for the documented hook usage.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [month]);
 
@@ -286,16 +276,9 @@ export function CommissionPage({ user, showToast }) {
       .catch(() => {});
   }
 
-  // Best-effort convenience picker for account: the deals TicketRepository's account-role list
-  // scoping surfaces are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often
-  // will not appear here — see createFromDeal's NOTE above the mock implementation. Manual
-  // ticket-id lookup (below) always works regardless; this list is a nice-to-have on top.
-  //
-  // Also drops any ticket whose commissionRecorded is already true (TicketSummaryDto
-  // .commissionRecorded, issue #736): a deal that already has a live commission is not actually
-  // "eligible" any more, and this mirrors the same flag accountActions.js#nextAccountAction now
-  // checks for its worklist CTA, so the picker and the worklist can't disagree about which
-  // CLOSED_PAID deals still need one recorded.
+  // Best-effort convenience picker for account: the deals TicketRepository's account-role list scoping surfaces
+  // are money-PENDING deals, so a CLOSED_PAID deal (already fully paid) often will not appear here — see
+  // createFromDeal's NOTE above the mock implementation.
   useEffect(() => {
     if (!canCreateFromDeal) return;
     let cancelled = false;
@@ -308,8 +291,8 @@ export function CommissionPage({ user, showToast }) {
     return () => { cancelled = true; };
   }, [canCreateFromDeal]);
 
-  // Deep-link support: a future "record invoice" call-to-action elsewhere (e.g. the ticket
-  // detail page, once it grows one) can send account straight here via /commissions?ticketId=NN.
+  // Deep-link support: a future "record invoice" call-to-action elsewhere (e.g. the ticket detail page, once it
+  // grows one) can send account straight here via /commissions?ticketId=NN.
   useEffect(() => {
     if (!canCreateFromDeal) return;
     const paramTicketId = searchParams.get('ticketId');
@@ -317,29 +300,15 @@ export function CommissionPage({ user, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- run once on mount, driven by the URL.
   }, [canCreateFromDeal]);
 
-  // Manual commission entry (feat/commission-manual-adjustments, issue #737): sales_manager/ceo
-  // has no /api/employees access (that's hr-only, see ROLE_PERMISSIONS.canViewEmployees), so the
-  // rep picker is served by a purpose-built read endpoint, GET /api/commissions/reps
-  // (CommissionController#reps), gated to the same sales_manager/ceo roles as this form.
-  //
-  // Owner ruling 2026-08-14 (2nd ruling on this endpoint, after per-caller division scoping):
-  // ceo and sales_manager get the IDENTICAL list -- every ACTIVE employee in ฝ่ายขาย, i.e. the
-  // people who actually earn commission (CommissionService#listManualCommissionRepOptions).
-  // Division MEMBERSHIP, not "has a commission record" -- a brand-new rep, or a manager never
-  // yet paid one, still appears. Still narrower than what POST /api/commissions/manual itself
-  // accepts (that write path's only real restriction is still the sales_rep_id foreign key --
-  // ANY hr.employee id, any division): the numeric Employee ID field below is how to reach
-  // someone the picker excludes on purpose (inactive, or outside ฝ่ายขาย entirely) -- see
-  // ManualCommissionForm's picker label, which says so rather than leaving the limit silent.
+  // Manual commission entry: sales_manager/ceo has no /api/employees access, so the rep picker is served by a
+  // purpose-built read endpoint, GET /api/commissions/reps, gated to the same sales_manager/ceo roles as this
+  // form.
   useEffect(() => {
     if (!canCreateManual) return;
     let cancelled = false;
     api.commissions.reps().then((response) => {
       if (cancelled) return;
-      // Do NOT re-sort here. `reps` already arrives ordered by the backend's own ORDER BY
-      // (display name, then id -- CommissionRepository#findActiveSalesRepOptions); a second,
-      // client-side sort could silently disagree with it (e.g. a different locale collation)
-      // rather than being the harmless no-op it looks like.
+      // Do NOT re-sort here.
       setRepOptions(response.reps ?? []);
     }).catch(() => { if (!cancelled) setRepOptions([]); });
     return () => { cancelled = true; };
@@ -358,8 +327,8 @@ export function CommissionPage({ user, showToast }) {
     setCreateForm((current) => ({ ...current, [field]: value }));
   }
 
-  // Ticket-detail lookup is unaffected by the account-role list scoping (see the NOTE above
-  // mockApi's createFromDeal) — this is the flow's real primary path, not a fallback.
+  // Ticket-detail lookup is unaffected by the account-role list scoping (see the NOTE above mockApi's
+  // createFromDeal) — this is the flow's real primary path, not a fallback.
   async function lookupTicket(rawTicketId) {
     const ticketId = Number(rawTicketId);
     if (!ticketId || Number.isNaN(ticketId)) {
@@ -370,10 +339,9 @@ export function CommissionPage({ user, showToast }) {
     setTicketLookupLoading(true);
     setTicketLookupError('');
     try {
-      // H1 lockdown: account is refused on api.tickets.get and reads the deal through the finance
-      // view (api.finance.getDeal, FinanceDealDto). Only the fields this form uses are mapped —
-      // id, code, customerName, salesStage and the amount, which lives under `money` there. Every
-      // other role keeps the ticket read unchanged.
+      // H1 lockdown: account is refused on api.tickets.get and reads the deal through the finance view
+      // (api.finance.getDeal, FinanceDealDto). Only the fields this form uses are mapped — id, code, customerName,
+      // salesStage and the amount, which lives under `money` there.
       const summary = user.role === 'account'
         ? summaryFromFinanceDeal((await api.finance.getDeal(ticketId)).deal)
         : (await api.tickets.get(ticketId)).ticket?.summary;
@@ -415,23 +383,12 @@ export function CommissionPage({ user, showToast }) {
       const invoiceAttachment = await prepareInvoiceAttachment(createForm.invoiceAttachment);
       const response = await api.commissions.createFromDeal(toCreateFromDealPayload(loadedTicket.id, createForm, invoiceAttachment));
       setRecentlyCreated((current) => [response.commission, ...current]);
-      // createFromDeal is not commission-only: it dual-writes the tax invoice as an
-      // AttachType.INVOICE attachment on the ticket, which flips that ticket's
-      // invoiceOnFile and so unlocks CONFIRM_CLOSE. Without this the ticket's cached
-      // detail/actions stay stale for staleTime (30s, api/queryClient.js), so account
-      // returns to the deal — usually straight from this page — and still sees
-      // "บันทึกใบกำกับ" instead of "ยืนยันพร้อมปิดงาน".
-      //
-      // Invalidated by the ['tickets'] PREFIX rather than the exact
-      // queryKeys.ticketDetail(id)/ticketActions(id)/ticketAttachments(id) triple, on
-      // purpose: TicketDetailPage builds those keys from useParams().id, a STRING,
-      // while loadedTicket.id here is a NUMBER — and TanStack compares keys
-      // structurally, so ['tickets','detail',16] would not match
-      // ['tickets','detail','16'] and the invalidation would silently no-op. The
-      // prefix also correctly refreshes the ticket lists, whose stage/scope changed.
+      // createFromDeal is not commission-only: it dual-writes the tax invoice as an AttachType.INVOICE attachment on
+      // the ticket, which flips that ticket's invoiceOnFile and so unlocks CONFIRM_CLOSE. The prefix also correctly
+      // refreshes the ticket lists, whose stage/scope changed.
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
-      // Account reads the deal through the finance view (['finance','deal',id]); its
-      // commissionRecorded flag drives the "บันทึกใบกำกับ" CTA, so it must go stale too.
+      // Account reads the deal through the finance view (['finance','deal',id]); its commissionRecorded flag drives
+      // the "บันทึกใบกำกับ" CTA, so it must go stale too.
       queryClient.invalidateQueries({ queryKey: ['finance'] });
       invalidatePayrollUpstream();
       setCreateForm(emptyCreateForm);
@@ -455,11 +412,8 @@ export function CommissionPage({ user, showToast }) {
     setShowManualForm(true);
   }
 
-  // Manual commission entries (feat/commission-manual-adjustments): NO auto-computation anywhere
-  // here — every amount is hand-typed by sales_manager/ceo, submitted verbatim to
-  // POST /api/commissions/manual. (A future CEO-confirmed auto-config may prefill a suggested
-  // amount for specific kinds, e.g. STOCK_BONUS — not implemented; owner decision is manual
-  // across the UI for now.)
+  // Manual commission entries: NO auto-computation anywhere here — every amount is hand-typed by
+  // sales_manager/ceo, submitted verbatim to POST /api/commissions/manual.
   async function submitManual(event) {
     event.preventDefault();
     if (!manualForm.salesRepId) {
@@ -513,9 +467,8 @@ export function CommissionPage({ user, showToast }) {
       weightMultiplier: Number(record.weightMultiplier || 1),
       reason: '',
     });
-    // Seed the preview with the record's own last-persisted figures (a plain field read, no
-    // math) so the panel shows a sensible value immediately, before the debounced simulate()
-    // call below has had a chance to run.
+    // Seed the preview with the record's own last-persisted figures (a plain field read, no math) so the panel
+    // shows a sensible value immediately, before the debounced simulate() call below has had a chance to run.
     setDeductionPreview({
       actualReceived: Number(record.actualReceived || 0),
       commissionableBase: Number(record.commissionableBase || 0),
@@ -528,27 +481,22 @@ export function CommissionPage({ user, showToast }) {
 
   const debouncedDeductionDraft = useDebouncedValue(deductionDraft, 300);
 
-  // Live preview only — server-computed (CommissionService#simulate) as the manager edits, so it
-  // can never drift from the real calculation; this draft never gets sent as-is, only the
-  // individual input fields do (see saveDeductions). Debounced ~300ms so editing doesn't fire one
-  // request per keystroke. A request counter drops a stale, out-of-order response so a slow
-  // earlier reply can never clobber a newer one. Only runs while a row is actually being edited.
+  // Live preview only — server-computed (CommissionService#simulate) as the manager edits, so it can never drift
+  // from the real calculation; this draft never gets sent as-is, only the individual input fields do (see
+  // saveDeductions).
   useEffect(() => {
     if (editingId == null) return;
-    // The debounced copy lags the live draft by one debounce interval, and `editingId` changing
-    // re-fires this effect immediately — without this guard, opening a row would first simulate
-    // the PREVIOUS row's (or the empty draft's) numbers and flash them into the money preview
-    // before the real values arrive. Wait until the debounce has caught up with the live draft.
+    // The debounced copy lags the live draft by one debounce interval, and `editingId` changing re-fires this
+    // effect immediately — without this guard, opening a row would first simulate the PREVIOUS row's (or the empty
+    // draft's) numbers and flash them into the money preview before the real values arrive.
     if (debouncedDeductionDraft !== deductionDraft) return;
     const editingRecord = findRecord(editingId);
     if (!editingRecord) return;
     const requestId = (deductionPreviewRequestId.current += 1);
     api.commissions.simulate({
       salesRepId: editingRecord.salesRepId,
-      // CommissionSimulatorRequest.payrollMonth is a Java LocalDate deserialised by Jackson's
-      // JavaTimeModule (see config/JacksonConfig.java), which requires a full ISO yyyy-MM-dd —
-      // a bare "yyyy-MM" 400s. `month` is a <input type="month"> value, hence the `-01`; this is
-      // the same conversion createManualCommission already does a few hundred lines below.
+      // CommissionSimulatorRequest.payrollMonth is a Java LocalDate deserialised by Jackson's JavaTimeModule (see
+      // config/JacksonConfig.java), which requires a full ISO yyyy-MM-dd — a bare "yyyy-MM" 400s.
       payrollMonth: `${month}-01`,
       grossAmount: debouncedDeductionDraft.grossAmount,
       bankFees: debouncedDeductionDraft.bankFees,
@@ -564,11 +512,8 @@ export function CommissionPage({ user, showToast }) {
     }).catch(() => {
       // Keep showing the previous preview values; do not toast on every keystroke.
     });
-    // `records` is read for the lookup only; re-running per records change (e.g. after an
-    // unrelated save) is unnecessary noise, so it is intentionally omitted below.
-    // `deductionDraft` IS in the deps (the guard above compares against it): each keystroke
-    // re-runs this effect, hits the guard, and returns without a request — the debounce still
-    // does the throttling.
+    // `records` is read for the lookup only; re-running per records change (e.g. after an unrelated save) is
+    // unnecessary noise, so it is intentionally omitted below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingId, debouncedDeductionDraft, deductionDraft, month]);
 
@@ -661,8 +606,8 @@ export function CommissionPage({ user, showToast }) {
     }
   }
 
-  // Commission paid in payroll month N comes from money RECEIVED in month N-1 — the one rule every
-  // figure on this page hangs on, so it is stated at the top of every month-scoped view.
+  // Commission paid in payroll month N comes from money RECEIVED in month N-1 — the one rule every figure on
+  // this page hangs on, so it is stated at the top of every month-scoped view.
   const receiptMonth = (() => {
     const match = /^(\d{4})-(\d{2})$/.exec(month);
     if (!match) return null;
@@ -682,11 +627,9 @@ export function CommissionPage({ user, showToast }) {
               รอบเดือน
               <input type="month" value={month} onChange={(event) => setMonth(event.target.value)} className="hover:border-border-muted pointer-coarse:min-h-11" />
             </label>
-            {/* A tax invoice recorded in month M lands in payroll month M+1, so a rep who closes a
-                deal and checks this page on the same day sees nothing — and the table's empty state
-                cannot warn them, because the CURRENT month usually has other rows and so is not
-                empty. Measured 2026-08-28: an invoice dated 27 Aug produced payroll_month 2026-09.
-                Hence a standing hint plus a one-click jump, rather than an empty-state message. */}
+            {/* A tax invoice recorded in month M lands in payroll month M+1, so a rep who closes a deal and checks this
+             * page on the same day sees nothing — and the table's empty state cannot warn them, because the CURRENT month
+             * usually has other rows and so is not empty. */}
             <Button
               type="button"
               variant="secondary"
@@ -787,10 +730,9 @@ export function CommissionPage({ user, showToast }) {
         message={(() => {
           const record = [...records, ...(pending ?? []).map((entry) => entry.commission)].find((item) => item.id === approveId);
           if (!record) return 'ยืนยันการอนุมัติค่าคอมมิชชันรายการนี้?';
-          // Status-transition copy quoted from api.commissions.approve
-          // (src/api/mockApi.js): SUBMITTED -> MANAGER_APPROVED when a
-          // sales_manager approves; MANAGER_APPROVED -> APPROVED when the CEO
-          // approves a manager-approved record.
+          // Status-transition copy quoted from api.commissions.approve (src/api/mockApi.js): SUBMITTED ->
+          // MANAGER_APPROVED when a sales_manager approves; MANAGER_APPROVED -> APPROVED when the CEO approves a
+          // manager-approved record.
           const nextStep = canCeoReview(record)
             ? 'สถานะจะเปลี่ยนเป็น "อนุมัติแล้ว" และพร้อมเข้ารอบ Payroll'
             : 'สถานะจะเปลี่ยนเป็น "รอ CEO" เพื่อรออนุมัติขั้นสุดท้าย';
@@ -817,14 +759,14 @@ export function CommissionPage({ user, showToast }) {
                 ตรวจสอบยอดก่อนอนุมัติใบกำกับ <strong>{record.invoiceDetails.invoiceNumber}</strong> ของ <strong>{record.salesRepName || record.salesRepId}</strong>
               </p>
               {record.dealAmountMismatch && (
-                // Step 9 cross-check: grossAmount diverged >5% from the linked deal's actual
-                // payableAmount at submission time. Never blocked submission — surfaced here so
-                // the approver sees it before signing off, which is the entire point of the flag.
+                // Step 9 cross-check: grossAmount diverged >5% from the linked deal's actual payableAmount at submission time.
+                // Never blocked submission — surfaced here so the approver sees it before signing off, which is the entire
+                // point of the flag.
                 <StatusBadge tone="warning">ยอดต่างจากยอดที่เรียกเก็บ — โปรดตรวจสอบก่อนอนุมัติ</StatusBadge>
               )}
               <div className="flex justify-between text-sm border-t border-border pt-2">
-                {/* #475569 has no exact --color-text-muted match (#5c6b80); --color-icon-muted is the
-                    literal token value, so it's used here to keep the rendered color identical. */}
+                {/* #475569 has no exact --color-text-muted match (#5c6b80); --color-icon-muted is the literal token value, so
+                 * it's used here to keep the rendered color identical. */}
                 <span className="text-icon-muted">ยอดรับจริง</span>
                 <code className="font-mono">{formatMoney(record.actualReceived)}</code>
               </div>
@@ -976,23 +918,11 @@ function AccountCreateFromDeal({
   );
 }
 
-/**
- * sales_manager/ceo manual commission entry (feat/commission-manual-adjustments): every amount
- * here is hand-typed and submitted verbatim — there is NO auto-computation anywhere in this
- * form. A future CEO-confirmed auto-config may prefill a suggested amount for specific kinds
- * (e.g. STOCK_BONUS) later; owner decision for now is manual across the UI, so this form stays a
- * plain number input with no formula behind it.
- *
- * Created by sales_manager lands MANAGER_APPROVED (needs CEO sign-off); created by ceo lands
- * APPROVED immediately — see CommissionService#createManualCommission. Either way it then flows
- * through the exact same approve/reject controls as a SALE commission (no parallel UI here).
- */
-// Issue #737 scope (owner ruling 2026-08-14, 2nd ruling): ceo and sales_manager now see the
-// IDENTICAL ฝ่ายขาย list, so one label serves both roles -- a role-keyed map would be dead
-// branching now that there is nothing left to branch on. Ploy asked for this copy to be concise;
-// it still has to say the list is scoped (not "everyone") and still has to point at the numeric
-// field above as the way to reach anyone outside ฝ่ายขาย -- dropping either would either overclaim
-// completeness or silently strand a caller with no way to find someone the picker excludes.
+/** sales_manager/ceo manual commission entry (feat/commission-manual-adjustments): every amount here is
+ * hand-typed and submitted verbatim — there is NO auto-computation anywhere in this form. */
+// Issue #737 scope (owner ruling 2026-08-14, 2nd ruling): ceo and sales_manager now see the IDENTICAL ฝ่ายขาย
+// list, so one label serves both roles -- a role-keyed map would be dead branching now that there is nothing
+// left to branch on.
 const REP_PICKER_LABEL = 'หรือเลือกจากพนักงานขาย (นอกฝ่ายขายให้กรอกรหัสพนักงานด้านบน)';
 
 function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, saving }) {
@@ -1076,11 +1006,9 @@ function ManualCommissionForm({ form, onChange, repOptions, onSubmit, onCancel, 
   );
 }
 
-/**
- * sales_manager/ceo review-queue edit panel: every input field (not the final amount) is
- * editable, each save requires a reason, and the recomputed actualReceived/commissionableBase
- * previews live as the reviewer types — the final commission itself is never hand-entered.
- */
+/** sales_manager/ceo review-queue edit panel: every input field (not the final amount) is editable, each save
+ * requires a reason, and the recomputed actualReceived/commissionableBase previews live as the reviewer types
+ * — the final commission itself is never hand-entered. */
 function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSave, onCancel }) {
   const fields = [
     ['grossAmount', 'Gross Amount'],
@@ -1123,12 +1051,9 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
         </div>
       </div>
       {record.effectiveWeightMultiplier !== null && record.effectiveWeightMultiplier !== undefined ? (
-        // V148 (per-item stock-commission weighting): this record already carries a FROZEN,
-        // blended weight computed from its ticket's items at creation time — it wins over the
-        // dropdown above via CommissionRepository#sumActiveWeightedActualReceived's COALESCE, so
-        // changing the selection below would silently do nothing to this record's money. Said
-        // here rather than disabling the control, so the fallback stays editable for audit/record
-        // purposes without misleading the reviewer about which number actually counts.
+        // V148: this record already carries a FROZEN, blended weight computed from its ticket's items at creation time
+        // — it wins over the dropdown above via CommissionRepository#sumActiveWeightedActualReceived's COALESCE, so
+        // changing the selection below would silently do nothing to this record's money.
         <p className="mt-2">
           <StatusBadge tone="info">
             รายการนี้คำนวณน้ำหนักจากรายการสินค้าอัตโนมัติแล้ว ({Number(record.effectiveWeightMultiplier).toFixed(2)} เท่า) —
@@ -1167,8 +1092,8 @@ function ManagerReviewEditPanel({ record, draft, onChange, preview, saving, onSa
   );
 }
 
-// The legacy `.commission-payroll-table` rule in styles.css is 5 columns; a Tailwind utility beats it
-// (layer order), so the 6-column variant (ค่าคอมทีม shown) lives here.
+// The legacy `.commission-payroll-table` rule in styles.css is 5 columns; a Tailwind utility beats it (layer
+// order), so the 6-column variant (ค่าคอมทีม shown) lives here.
 const PAYROLL_COLUMNS_BASE = 'grid-cols-[minmax(0,1.8fr)_repeat(4,minmax(0,1fr))]';
 const PAYROLL_COLUMNS_WITH_TEAM = 'grid-cols-[minmax(0,1.8fr)_repeat(5,minmax(0,1fr))]';
 
@@ -1179,10 +1104,9 @@ function PayrollSummary({ summary, loading }) {
   if (!summary) {
     return <EmptyState icon="badge" title="ยังไม่มีข้อมูลค่าคอม" description="เลือกรอบเดือนอื่นเพื่อตรวจสอบ" />;
   }
-  // The backend sends companyCommissionableBase = null when no override applies in the month, but
-  // ALWAYS sends totalTeamOverrideAmount (0.00) -- so only a non-null company base or a non-zero
-  // total means the override exists this month. Otherwise (every pre-October month) the ค่าคอมทีม
-  // column and footer would be all zeros and are left out.
+  // The backend sends companyCommissionableBase = null when no override applies in the month, but ALWAYS sends
+  // totalTeamOverrideAmount (0.00) -- so only a non-null company base or a non-zero total means the override
+  // exists this month.
   const showTeam = summary.companyCommissionableBase != null
     || (summary.totalTeamOverrideAmount != null && Number(summary.totalTeamOverrideAmount) !== 0);
   const PAYROLL_TABLE_COLUMNS = showTeam ? PAYROLL_COLUMNS_WITH_TEAM : PAYROLL_COLUMNS_BASE;
@@ -1199,15 +1123,12 @@ function PayrollSummary({ summary, loading }) {
         <div className={cn('commission-payroll-table table-head', PAYROLL_TABLE_COLUMNS)}>
           <span>Sales Rep</span>
           <span>ฐานค่าคอม</span>
-          {/* Issue #405: the auto-computed INCENTIVE ladder + STOCK_BONUS, already folded into
-              the "ค่าคอม" total column, surfaced separately so HR can see the breakdown. The
-              stock-bonus column stays visible (not conditionally hidden) even though it reads
-              all-zero until the CEO enables sales.stock_bonus_config -- that is expected. */}
+          {/* the auto-computed INCENTIVE ladder + STOCK_BONUS, already folded into the "ค่าคอม" total column, surfaced
+           * separately so HR can see the breakdown. */}
           <span>อินเซนทีฟ</span>
           <span>โบนัสขายของในสต๊อค</span>
-          {/* The team override (ค่าคอมทีม) is already folded into the "ค่าคอม" total column — only
-              the override recipients carry a non-zero amount, so the column is mostly empty by
-              design rather than broken. */}
+          {/* The team override (ค่าคอมทีม) is already folded into the "ค่าคอม" total column — only the override
+           * recipients carry a non-zero amount, so the column is mostly empty by design rather than broken. */}
           {showTeam ? <span>ค่าคอมทีม</span> : null}
           <span>ค่าคอม</span>
         </div>

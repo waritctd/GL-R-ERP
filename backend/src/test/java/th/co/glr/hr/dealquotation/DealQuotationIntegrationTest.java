@@ -66,11 +66,9 @@ import th.co.glr.hr.ticket.TicketEventKind;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Real-DB acceptance + authz + concurrency coverage for Quotation v2 (direct deal quotation,
- * V165) — see docs/sales/quotation-v2-plan.md. Copies the hand-wiring style of {@code
- * customerquotation/CustomerQuotationIntegrationTest} (its own {@code @BeforeEach}/helpers).
- */
+/** Real-DB acceptance + authz + concurrency coverage for Quotation v2 (direct deal quotation, V165) — see
+ * docs/sales/quotation-v2-plan.md. Copies the hand-wiring style of
+ * customerquotation/CustomerQuotationIntegrationTest (its own @BeforeEach/helpers). */
 class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
     private TicketRepository tickets;
@@ -123,8 +121,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         projects = new ProjectRepository(jdbc);
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
-        // pricingRequests (last arg) is dead-deal-cascade-only (markLost/cancel) -- unused by
-        // create(), the only TicketService method this test calls.
+        // pricingRequests (last arg) is dead-deal-cascade-only (markLost/cancel) -- unused by create(), the only
+        // TicketService method this test calls.
         ticketService = new TicketService(tickets, notifications, objectMapper, customers,
             new QuotationRenderer(), null, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
@@ -135,8 +133,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.test");
         employeeAuth = new EmployeeAuthRepository(jdbc);
         EmployeeSignatureRepository signatureRepository = new EmployeeSignatureRepository(jdbc);
-        // Exercise the Chromium engine end-to-end through the service wherever a Chromium can be
-        // launched; elsewhere the default LibreOffice engine keeps the PDF assertions meaningful.
+        // Exercise the Chromium engine end-to-end through the service wherever a Chromium can be launched; elsewhere
+        // the default LibreOffice engine keeps the PDF assertions meaningful.
         QuotationRenderer quotationRenderer = new QuotationRenderer();
         if (ChromiumPdfPrinter.isAvailable()) {
             quotationRenderer.setPdfRenderer(QuotationRenderer.PDF_RENDERER_CHROMIUM);
@@ -144,8 +142,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService = new DealQuotationService(quotationRepository, tickets, customers, contacts, notifications,
             approvalMailer, quotationRenderer, employeeAuth, signatureRepository, new CatalogRepository(jdbc),
             "https://portal.test",
-            // app.quotation.bank-block-line1..3 — empty here, so the English document prints the
-            // proforma-invoice line. DealQuotationEnglishFormTest covers the configured block.
+            // app.quotation.bank-block-line1..3 — empty here, so the English document prints the proforma-invoice line.
+            // DealQuotationEnglishFormTest covers the configured block.
             "", "", "");
         customerService = new CustomerService(customers, contacts, projects, employeeAuth, quotationRepository);
 
@@ -189,9 +187,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Acceptance
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** The DTO serves a DEAL_DIRECT row's persisted recipient_type through listForTicket's
      * real query. The recipient is REQUIRED on a direct create, so this pins the value the request
@@ -415,8 +411,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(created.revisionNo()).isEqualTo(1);
         assertThat(created.number()).matches("QT-\\d{4}-\\d{4}-1");
-        // The base sequence allocation itself is untouched -- the number minus its "-1" suffix is
-        // still exactly the {@code QT-<year>-<4-digit seq>} shape nextQuotationCode() produces.
+        // The base sequence allocation itself is untouched -- the number minus its "-1" suffix is still exactly the
+        // QT-<year>-<4-digit seq> shape nextQuotationCode() produces.
         String base = DealQuotationRepository.baseNumber(created.number(), created.revisionNo());
         assertThat(created.number()).isEqualTo(base + "-1");
         assertThat(base).matches("QT-\\d{4}-\\d{4}");
@@ -461,8 +457,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(approvedLegacy.number()).isEqualTo(bareLegacyNumber);
 
         DealQuotationDto revision = quotationService.createRevision(approvedLegacy.id(), salesActor);
-        // "{bareNumber}-2", never "{bareNumber}-1-2" and never colliding with a fresh quotation's
-        // own "{base}-1" (a different base entirely, since nextQuotationCode() never repeats).
+        // "{bareNumber}-2", never "{bareNumber}-1-2" and never colliding with a fresh quotation's own "{base}-1" (a
+        // different base entirely, since nextQuotationCode() never repeats).
         assertThat(revision.number()).isEqualTo(bareLegacyNumber + "-2");
         assertThat(revision.revisionNo()).isEqualTo(2);
     }
@@ -481,8 +477,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void createReorder_clonesApprovedIntoNewDraft_withDerivedFromSet_noParentLink_itemsAndPictureCopied()
             throws Exception {
-        // Picture must be attached while the row is still DRAFT (uploadItemPicture is DRAFT-only)
-        // -- attach it BEFORE submit/approve, unlike createSubmittedApproved's shorthand.
+        // Picture must be attached while the row is still DRAFT (uploadItemPicture is DRAFT-only) -- attach it BEFORE
+        // submit/approve, unlike createSubmittedApproved's shorthand.
         DealQuotationDto draft = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         long sourceItemId = draft.items().get(0).id();
@@ -494,9 +490,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(reorder.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(reorder.ticketId()).isEqualTo(source.ticketId());
-        // The core distinguishing fact: derivedFromQuotationId is set, parentQuotationId is NOT --
-        // this is what keeps the source out of reach of supersede()/hasOpenRevision()/the "แก้"
-        // bucket predicate, all of which key on parentQuotationId only.
+        // The core distinguishing fact: derivedFromQuotationId is set, parentQuotationId is NOT -- this is what keeps
+        // the source out of reach of supersede()/hasOpenRevision()/the "แก้" bucket predicate, all of which key on
+        // parentQuotationId only.
         assertThat(reorder.derivedFromQuotationId()).isEqualTo(source.id());
         assertThat(reorder.parentQuotationId()).isNull();
         // Same shared {base}-{n} numbering family a revision would use.
@@ -530,8 +526,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
 
         quotationService.submit(reorder.id(), salesActor);
-        // Still APPROVED while the clone is merely PENDING_APPROVAL -- the sweep only fires on
-        // the CLONE's own approval, not its submission.
+        // Still APPROVED while the clone is merely PENDING_APPROVAL -- the sweep only fires on the CLONE's own
+        // approval, not its submission.
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
 
         DealQuotationDto approvedReorder =
@@ -551,9 +547,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertSupersededEventWrittenExactlyOnce(source.ticketId(), source.number(), approvedReorder.number());
     }
 
-    /** Two wholly independent first-issue quotations on the SAME deal (no revision/clone lineage
-     * at all -- the ancestor walk can never reach either one from the other, since neither
-     * carries the other's id anywhere). Approving the second must supersede the first. */
+    /** Two wholly independent first-issue quotations on the SAME deal (no revision/clone lineage at all -- the
+     * ancestor walk can never reach either one from the other, since neither carries the other's id anywhere).
+     * Approving the second must supersede the first. */
     @Test
     void createReorder_twoIndependentFirstIssueQuotations_approvingTheSecondSupersedesTheFirst() {
         DealQuotationDto first = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -566,11 +562,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertSupersededEventWrittenExactlyOnce(ticketId, first.number(), second.number());
     }
 
-    /** A revision of the ORIGINAL source is approved while a CLONE of that same source is still
-     * DRAFT -- then the clone is approved too. Exactly one APPROVED row must remain (the clone,
-     * being the LAST one approved); the revision must be SUPERSEDED. Pins that the sweep applies
-     * uniformly regardless of which lineage (ancestor-chain revision vs. derivedFrom clone) a
-     * sibling belongs to. */
+    /** A revision of the ORIGINAL source is approved while a CLONE of that same source is still DRAFT -- then the
+     * clone is approved too. Exactly one APPROVED row must remain (the clone, being the LAST one approved); the
+     * revision must be SUPERSEDED. */
     @Test
     void createReorder_revisionOfSourceApprovedWhileCloneIsDraft_thenCloneApproved_exactlyOneApprovedRemains() {
         DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -622,8 +616,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(1L);
     }
 
-    /** A quotation on a DIFFERENT deal must never be touched by this deal's approval sweep -- the
-     * sweep is scoped to {@code ticketId}, not global. */
+    /** A quotation on a DIFFERENT deal must never be touched by this deal's approval sweep -- the sweep is scoped
+     * to ticketId, not global. */
     @Test
     void createReorder_approvalSweep_neverTouchesAQuotationOnADifferentDeal() {
         DealQuotationDto onOtherTicket = createSubmittedApproved(otherTicketId, otherSalesActor, salesManagerActor);
@@ -646,10 +640,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      */
     @Test
     void createReorder_approvalSweep_neverTouchesAPricingChainCustomerQuotationRow() {
-        // Slice 2 (one pricing route per deal): a direct quotation can no longer be CREATED on a deal
-        // with a live pricing request, so the direct draft is created and submitted FIRST and the
-        // pricing-chain rows arrive behind it (the legacy coexistence this test is about). The sweep
-        // under test runs at approve(), which still happens after both exist.
+        // Slice 2 (one pricing route per deal): a direct quotation can no longer be CREATED on a deal with a live
+        // pricing request, so the direct draft is created and submitted FIRST and the pricing-chain rows arrive behind
+        // it (the legacy coexistence this test is about).
         DealQuotationDto pendingDirect = quotationService.submit(quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
         jdbc.update("""
@@ -672,8 +665,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             "SELECT quotation_id FROM sales.quotation WHERE number = :number",
             java.util.Map.of("number", "PCR-QT-TEST-" + ticketId), Long.class);
 
-        // Approve an ordinary DEAL_DIRECT quotation on the SAME ticket -- must not touch the
-        // PCR-chain row above.
+        // Approve an ordinary DEAL_DIRECT quotation on the SAME ticket -- must not touch the PCR-chain row above.
         quotationService.approve(pendingDirect.id(), new ApproveRequest(null), salesManagerActor);
 
         String pcrStatusAfter = jdbc.queryForObject(
@@ -682,9 +674,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(pcrStatusAfter).isEqualTo("APPROVED");
     }
 
-    /** Cloning an already-SUPERSEDED source is refused (409) the same way a DRAFT/PENDING one is
-     * -- item 3's own requirement: only the CLONE's approval supersedes the source, but once it
-     * has, the source is no longer eligible to be cloned again either. */
+    /** Cloning an already-SUPERSEDED source is refused (409) the same way a DRAFT/PENDING one is -- item 3's own
+     * requirement: only the CLONE's approval supersedes the source, but once it has, the source is no longer
+     * eligible to be cloned again either. */
     @Test
     void createReorder_ofASupersededSource_isConflict() {
         DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -730,8 +722,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
-    /** The identical gap and fix on {@link DealQuotationService#createRevision} -- item 6's own
-     * "behaviour tightening on createRevision too", same message shape, same proof shape. */
+    /** The identical gap and fix on DealQuotationService#createRevision -- item 6's own "behaviour tightening on
+     * createRevision too", same message shape, same proof shape. */
     @Test
     void createRevision_reCheckAfterLock_refusesIfSourceWasSupersededWhileWaitingForTheLock() {
         DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -751,10 +743,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
-    /** A {@link DealQuotationService} wired with a repository whose {@code lockTicket} mutates
-     * {@code targetQuotationId} to SUPERSEDED right after taking the REAL advisory lock -- see
-     * the two tests above for why this is the deterministic stand-in for a genuinely concurrent
-     * {@code approve()} winning the race for the lock first. */
+    /** A DealQuotationService wired with a repository whose lockTicket mutates targetQuotationId to SUPERSEDED
+     * right after taking the REAL advisory lock -- see the two tests above for why this is the deterministic
+     * stand-in for a genuinely concurrent approve() winning the race for the lock first. */
     private DealQuotationService serviceSupersedingOnLock(long targetQuotationId) {
         DealQuotationRepository supersedingRepository =
             new SupersedeOnLockDealQuotationRepository(jdbc, new CatalogRepository(jdbc), targetQuotationId);
@@ -786,12 +777,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    /** Numbering interleaves correctly with revisions in the same family: two clones minted off
-     * the SAME still-APPROVED source, then one is approved (superseding the source and minting a
-     * revision off IT), then the second clone is separately approved and cloned again -- all
-     * share ONE counter (the task's own instruction: reuse {@code nextRevisionNo}, do not
-     * re-implement numbering), so no duplicate key is ever hit and the suffixes are dense
-     * (-2, -3, -4, -5). Also pins that a SUPERSEDED source can no longer be cloned (item 3). */
+    /** Numbering interleaves correctly with revisions in the same family: two clones minted off the SAME
+     * still-APPROVED source, then one is approved, then the second clone is separately approved and cloned again
+     * -- all share ONE counter, so no duplicate key is ever hit and the suffixes are dense. */
     @Test
     void createReorder_numbering_interleavesWithRevisions_noDuplicateKey() {
         DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -813,8 +801,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         DealQuotationDto revisionOfReorder1 = quotationService.createRevision(approvedReorder1.id(), salesActor);
         assertThat(revisionOfReorder1.number()).isEqualTo(base + "-4");
-        // Its parentQuotationId points at reorder1 (an ordinary revision link) -- unrelated to
-        // reorder1's OWN derivedFromQuotationId (which still points at the original source).
+        // Its parentQuotationId points at reorder1 (an ordinary revision link) -- unrelated to reorder1's OWN
+        // derivedFromQuotationId (which still points at the original source).
         assertThat(revisionOfReorder1.parentQuotationId()).isEqualTo(approvedReorder1.id());
 
         // The ORIGINAL source is already SUPERSEDED -- cloning it again must now 409 (item 3).
@@ -822,8 +810,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
 
-        // reorder2, however, is still its own live APPROVED-eligible document -- approve it, then
-        // clone IT (next suffix in the SAME shared family).
+        // reorder2, however, is still its own live APPROVED-eligible document -- approve it, then clone IT (next
+        // suffix in the SAME shared family).
         quotationService.submit(reorder2.id(), salesActor);
         DealQuotationDto approvedReorder2 =
             quotationService.approve(reorder2.id(), new ApproveRequest(null), salesManagerActor);
@@ -847,9 +835,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT);
     }
 
-    /** Unlike {@link #createRevision_twiceOffTheSameApprovedParent_secondIs409NotADuplicateKeyCrash},
-     * a SECOND (and third) reorder of the same source succeeds -- multiple clones are explicitly
-     * allowed (the task's own instruction), never gated by an open-child check. */
+    /** Unlike #createRevision_twiceOffTheSameApprovedParent_secondIs409NotADuplicateKeyCrash, a SECOND (and third)
+     * reorder of the same source succeeds -- multiple clones are explicitly allowed (the task's own instruction),
+     * never gated by an open-child check. */
     @Test
     void createReorder_multipleClonesOfTheSameSource_areAllAllowed() {
         DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -898,13 +886,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(count).isEqualTo((long) expected);
     }
 
-    /**
-     * Authz, WRONG-WAY-ROUND (CLAUDE.md "Permission changes must ship evidence"): the SAME gate
-     * {@link #createRevision} uses ({@code requireEditAccessForQuotation}) -- a plain {@code sales}
-     * rep who does not own this deal must be refused, and the refusal must be provable by reading
-     * the database back, not merely by catching the exception (a 403 thrown after the row had
-     * already landed would otherwise still pass a test that only checks for the throw).
-     */
+    /** Authz, WRONG-WAY-ROUND: the SAME gate #createRevision uses -- a plain sales rep who does not own this deal
+     * must be refused, and the refusal must be provable by reading the database back, not merely by catching the
+     * exception. */
     @Test
     void createReorder_byActorWithoutEditAccess_isForbidden_andNoRowInserted() {
         DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -921,10 +905,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
     }
 
-    /** Same wrong-way-round style as the {@code sales} case above, for the two OTHER roles that
-     * hold neither an {@code EDIT_ROLES} membership nor the {@code canCreateQuotation} grant in
-     * this fixture: {@code ceo} and {@code import}. Both must be refused, and refused with no row
-     * landed either. */
+    /** Same wrong-way-round style as the sales case above, for the two OTHER roles that hold neither an EDIT_ROLES
+     * membership nor the canCreateQuotation grant in this fixture: ceo and import. Both must be refused, and
+     * refused with no row landed either. */
     @Test
     void createReorder_ceoAndImport_areForbidden_andNoRowInserted() {
         DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -1009,11 +992,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             executor.shutdownNow();
         }
 
-        // Both calls are expected to SUCCEED (neither DB constraint nor a re-check throws here --
-        // each targets its OWN, distinct PENDING_APPROVAL row, so both compare-and-sets succeed
-        // regardless of ordering). The invariant under test is what happens AFTER both land: with
-        // the lock serialising them, the second caller's sweep runs against the FIRST caller's
-        // already-committed APPROVED row and supersedes it.
+        // Both calls are expected to SUCCEED (neither DB constraint nor a re-check throws here -- each targets its
+        // OWN, distinct PENDING_APPROVAL row, so both compare-and-sets succeed regardless of ordering).
         assertThat(failures).as("both approve() calls should succeed: %s", failures).isEmpty();
         assertThat(successes).hasSize(2);
 
@@ -1031,10 +1011,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(supersededCount).isEqualTo(1L);
     }
 
-    /** {@link DealQuotationRepository#approve}, but sleeping AFTER its own compare-and-set UPDATE
-     * (while the caller's transaction is still open/uncommitted) -- see
-     * {@link #approveConcurrently_onSameTicket_exactlyOneEndsApproved_theLockSerialisesTheOtherAfterCommit}'s
-     * own Javadoc for why this is a one-sided sleep, not a mutual rendezvous latch. */
+    /** DealQuotationRepository#approve, but sleeping AFTER its own compare-and-set UPDATE -- see
+     * #approveConcurrently_onSameTicket_exactlyOneEndsApproved_theLockSerialisesTheOtherAfterCommit's own Javadoc
+     * for why this is a one-sided sleep, not a mutual rendezvous latch. */
     private static final class SlowApproveDealQuotationRepository extends DealQuotationRepository {
         SlowApproveDealQuotationRepository(org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate jdbc,
                                            CatalogRepository catalog) {
@@ -1082,9 +1061,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // Rejection never approves anything, so the source is untouched so far.
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.APPROVED);
 
-        // Resubmitting the rejected clone mints a REVISION of it (a new row/number, parent =
-        // the clone) -- not a same-row PENDING_APPROVAL flip. This revision carries NO
-        // derivedFromQuotationId of its own (item 2's fix) -- only parentQuotationId.
+        // Resubmitting the rejected clone mints a REVISION of it (a new row/number, parent = the clone) -- not a
+        // same-row PENDING_APPROVAL flip. This revision carries NO derivedFromQuotationId of its own (item 2's fix) --
+        // only parentQuotationId.
         DealQuotationDto revisionOfClone = quotationService.submit(clone.id(), salesActor);
         assertThat(revisionOfClone.id()).isNotEqualTo(clone.id());
         assertThat(revisionOfClone.parentQuotationId()).isEqualTo(clone.id());
@@ -1097,10 +1076,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         // The clone (the revision's own parent) is superseded by the ANCESTOR WALK...
         assertThat(quotationService.get(clone.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
-        // ...and the ORIGINAL source is ALSO now superseded -- but by the SEPARATE same-ticket
-        // SWEEP (it was still the one live APPROVED document on this ticket), not because the
-        // ancestor walk somehow climbed past the clone (it did not -- the clone's own
-        // parentQuotationId is null).
+        // ...and the ORIGINAL source is ALSO now superseded -- but by the SEPARATE same-ticket SWEEP (it was still the
+        // one live APPROVED document on this ticket), not because the ancestor walk somehow climbed past the clone (it
+        // did not -- the clone's own parentQuotationId is null).
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
@@ -1121,8 +1099,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.submit(clone.id(), salesActor);
         DealQuotationDto approvedClone = quotationService.approve(clone.id(), new ApproveRequest(null), salesManagerActor);
         assertThat(approvedClone.docStatus()).isEqualTo(QuotationStatus.APPROVED);
-        // The source is superseded ALREADY, right here -- the clone's own approval sweep, not
-        // anything the revision below will do.
+        // The source is superseded ALREADY, right here -- the clone's own approval sweep, not anything the revision
+        // below will do.
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
 
         DealQuotationDto revision = quotationService.createRevision(approvedClone.id(), salesActor);
@@ -1136,10 +1114,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // The clone is superseded (it is the revision's direct parent, via the ancestor walk)...
         assertThat(quotationService.get(approvedClone.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.SUPERSEDED);
-        // ...and the ORIGINAL source stays superseded -- it already was, unaffected by this
-        // SECOND approval (the ancestor walk never climbs past the clone; the source is not
-        // re-touched because it is no longer APPROVED, so the sweep's own compare-and-set has
-        // nothing to do to it this time).
+        // ...and the ORIGINAL source stays superseded -- it already was, unaffected by this SECOND approval (the
+        // ancestor walk never climbs past the clone; the source is not re-touched because it is no longer APPROVED, so
+        // the sweep's own compare-and-set has nothing to do to it this time).
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
@@ -1170,9 +1147,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(clone2.derivedFromQuotationId()).isNotEqualTo(source.id());
         assertThat(clone2.parentQuotationId()).isNull();
 
-        // Cloning clone1 into clone2 is ITSELF a no-op on both clone1 and the root: clone
-        // CREATION never supersedes anything (only approval does), so clone1 stays APPROVED and
-        // the already-superseded root stays exactly as it was.
+        // Cloning clone1 into clone2 is ITSELF a no-op on both clone1 and the root: clone CREATION never supersedes
+        // anything (only approval does), so clone1 stays APPROVED and the already-superseded root stays exactly as it
+        // was.
         assertThat(quotationService.get(approvedClone1.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.APPROVED);
         assertThat(quotationService.get(source.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
@@ -1203,10 +1180,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(clone.parentQuotationId()).isNull();
     }
 
-    /** The ticket_event row itself, read back through {@code TicketRepository#findById} (a REAL
-     * read of {@code sales.ticket_event}, not a mock) -- pins that {@code createReorder} actually
-     * writes {@code TicketEventKind.DEAL_QUOTATION_REORDERED} (a real ticket_event kind, chk_event_kind
-     * widened for it in V186), carrying both numbers in its Thai message. */
+    /** The ticket_event row itself, read back through TicketRepository#findById -- pins that createReorder actually
+     * writes TicketEventKind.DEAL_QUOTATION_REORDERED, carrying both numbers in its Thai message. */
     @Test
     void createReorder_writesADealQuotationReorderedTicketEvent() {
         DealQuotationDto source = createSubmittedApproved(ticketId, salesActor, salesManagerActor);
@@ -1333,18 +1308,16 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(resubmitted.number()).isEqualTo(base + "-" + resubmitted.revisionNo());
         assertThat(resubmitted.number()).as("a genuinely different number").isNotEqualTo(rejected.number());
 
-        // The rejected row itself: untouched by this call -- still DRAFT, still carrying the SAME
-        // reason it always did (not cleared, unlike the old same-row-resubmit behaviour this
-        // supersedes).
+        // The rejected row itself: untouched by this call -- still DRAFT, still carrying the SAME reason it always did
+        // (not cleared, unlike the old same-row-resubmit behaviour this supersedes).
         DealQuotationDto rejectedReread = quotationService.get(rejected.id(), salesActor);
         assertThat(rejectedReread.docStatus()).isEqualTo(QuotationStatus.DRAFT);
         assertThat(rejectedReread.approvalNote()).isEqualTo("ราคาผิดพลาด กรุณาแก้ไข");
     }
 
-    /** Mirrors {@link #approve_supersedesParentOnlyWhenRevisionItselfReachesApproved} exactly, for
-     * a DRAFT (rejected) parent instead of an APPROVED one -- the SAME timing rule
-     * ({@code DealQuotationRepository#supersede}'s own Javadoc), now reachable from a second
-     * starting status. */
+    /** Mirrors #approve_supersedesParentOnlyWhenRevisionItselfReachesApproved exactly, for a DRAFT (rejected)
+     * parent instead of an APPROVED one -- the SAME timing rule (DealQuotationRepository#supersede's own Javadoc),
+     * now reachable from a second starting status. */
     @Test
     void submit_afterRejection_theRejectedParentBecomesSupersededOnlyOnceTheRevisionIsApproved() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -1364,11 +1337,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
-    /** Mirrors {@link #createRevision_twiceOffTheSameApprovedParent_secondIs409NotADuplicateKeyCrash}
-     * -- the SAME {@code hasOpenRevision} guard, reached from submit()'s new branch instead of
-     * {@code createRevision} directly. A rep double-clicking "ส่งใหม่" (a slow network, an
-     * impatient double-tap) must not either crash on the unique-index violation or silently mint
-     * two revisions of the same rejected draft. */
+    /** Mirrors #createRevision_twiceOffTheSameApprovedParent_secondIs409NotADuplicateKeyCrash -- the SAME
+     * hasOpenRevision guard, reached from submit()'s new branch instead of createRevision directly. */
     @Test
     void submit_afterRejection_twiceOnTheSameRejectedRow_secondIs409NotADuplicateKeyCrash() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -1386,10 +1356,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว");
     }
 
-    /** The negative space of the new behaviour: a plain first-ever submit (never decided on --
-     * {@code approval_note} is null) must be COMPLETELY untouched -- same row, same number, still
-     * the ordinary DRAFT -> PENDING_APPROVAL compare-and-set. Guards against the new branch's
-     * condition ever being loosened to fire on every DRAFT rather than only a REJECTED one. */
+    /** The negative space of the new behaviour: a plain first-ever submit (never decided on -- approval_note is
+     * null) must be COMPLETELY untouched -- same row, same number, still the ordinary DRAFT -> PENDING_APPROVAL
+     * compare-and-set. */
     @Test
     void submit_firstTimeNeverRejected_stillSubmitsTheSameRowSameNumber() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -1407,15 +1376,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // ── a revision's submit must read as a REVISION to
     // sales_manager/ceo, not the identical "รออนุมัติ" text a first-time submit sends ──
 
-    /**
-     * {@link #createRevision}'s own submit (parent {@code APPROVED}): sales_manager + CEO get the
-     * NEW {@code DEAL_QUOTATION_REVISION_SUBMITTED} kind, mailed with the REVISION subject/title
-     * ("ใบเสนอราคาฉบับแก้ไขรออนุมัติ" -- {@code NotificationRepository.TICKET_EVENT_TITLES}), and a
-     * message naming the actor, the new number, and the number it revises -- wired against the
-     * REAL {@link SalesNotificationMailRouter} (see {@link
-     * #submit_actuallyMailsSalesManagerCeoAndRep_throughTheRealMailRouter}'s own Javadoc for why a
-     * bare {@code new DealQuotationService} would be a false positive for the mail assertions).
-     */
+    /** #createRevision's own submit: sales_manager + CEO get the NEW DEAL_QUOTATION_REVISION_SUBMITTED kind, mailed
+     * with the REVISION subject/title, and a message naming the actor, the new number, and the number it revises
+     * -- wired against the REAL SalesNotificationMailRouter. */
     @Test
     void createRevision_thenSubmit_mailsAndNotifiesSalesManagerAndCeoWithTheRevisionSubjectAndMessage() {
         NotificationEmailService realEmailService =
@@ -1471,15 +1434,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(expectedMessage);
     }
 
-    /**
-     * {@link #submitAsRevisionOfRejected}'s path (parent {@code DRAFT}, carrying a rejection):
-     * same REVISION kind/subject as {@link
-     * #createRevision_thenSubmit_mailsAndNotifiesSalesManagerAndCeoWithTheRevisionSubjectAndMessage}
-     * above, PLUS the rejection reason appended to the message -- {@code parent.docStatus()}
-     * being {@code DRAFT} (not {@code approvalNote() != null} alone) is what {@code
-     * notifyRevisionSubmitted} keys the suffix on, since an APPROVED parent's own {@code
-     * approvalNote} is an approval note, not a rejection reason (see that method's own Javadoc).
-     */
+    /** #submitAsRevisionOfRejected's path: same REVISION kind/subject as
+     * #createRevision_thenSubmit_mailsAndNotifiesSalesManagerAndCeoWithTheRevisionSubjectAndMessage above, PLUS
+     * the rejection reason appended to the message. */
     @Test
     void submit_afterRejection_mailsAndNotifiesWithTheRevisionSubjectAndTheRejectionReason() {
         NotificationEmailService realEmailService =
@@ -1513,8 +1470,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .as("sales_manager + ceo get the REVISION subject on a resubmit-after-ตีกลับ too")
             .allSatisfy(sent -> assertThat(sent[1]).contains("ใบเสนอราคาฉบับแก้ไขรออนุมัติ"));
 
-        // Same reasoning as the sibling test above: pin the WHOLE message, not just substrings the
-        // revision number's own "{parent}-n" shape would satisfy regardless.
+        // Same reasoning as the sibling test above: pin the WHOLE message, not just substrings the revision number's
+        // own "{parent}-n" shape would satisfy regardless.
         String expectedMessage = salesActor.name() + " ได้จัดทำใบเสนอราคาฉบับแก้ไข " + resubmitted.number()
             + " (แก้ไขจาก " + rejected.number() + ") กรุณาตรวจสอบและพิจารณาอนุมัติ"
             + " — แก้ไขตามที่ตีกลับ: ราคาผิดพลาด กรุณาแก้ไข";
@@ -1563,14 +1520,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(expectedMessage);
     }
 
-    /**
-     * Wrong-way-round (CLAUDE.md's own rule for this kind of assertion): an ORDINARY first-time
-     * submit -- no parent, {@link #submit_firstTimeNeverRejected_stillSubmitsTheSameRowSameNumber}
-     * above already pins {@code parentQuotationId()} null for it -- must NOT use the revision
-     * kind, subject, or wording, byte-identical to before this feature. Guards against the new
-     * {@code parentQuotationId() != null} branch in {@code notifySubmitted} ever being loosened
-     * (or its condition inverted) to fire on a first-time submit too.
-     */
+    /** Wrong-way-round: an ORDINARY first-time submit -- no parent,
+     * #submit_firstTimeNeverRejected_stillSubmitsTheSameRowSameNumber above already pins parentQuotationId null
+     * for it -- must NOT use the revision kind, subject, or wording, byte-identical to before this feature. */
     @Test
     void submit_firstTime_doesNotUseTheRevisionKindSubjectOrMessage() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -1589,9 +1541,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(ceoNotifications).noneMatch(n -> n.type().equals("DEAL_QUOTATION_REVISION_SUBMITTED"));
     }
 
-    /** The revision must copy the rejected draft's CURRENT (edited-after-rejection) data, not a
-     * stale snapshot from before the rework -- the same verbatim-copy contract
-     * {@code createRevision_carriesPriceModeAndEveryRowTypeVerbatim} pins for an ordinary
+    /** The revision must copy the rejected draft's CURRENT data, not a stale snapshot from before the rework -- the
+     * same verbatim-copy contract createRevision_carriesPriceModeAndEveryRowTypeVerbatim pins for an ordinary
      * revision, exercised here through the OTHER path that now shares its copying code. */
     @Test
     void submit_afterRejection_copiesTheDraftsPostRejectionEditsVerbatim() {
@@ -1608,11 +1559,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
         DealQuotationDto revision = quotationService.submit(rejected.id(), salesActor);
 
-        // Mutation-check note: item data alone doesn't discriminate "copied into a new revision"
-        // from "the same row, still holding update()'s own edit" -- both would read identically
-        // here. id/parentQuotationId are what actually pin THIS test to the revision mechanism
-        // specifically (mintsANewRevision_notTheSameRow already covers this more directly, but a
-        // reader of THIS test alone should not be misled into thinking it proves that on its own).
+        // Mutation-check note: item data alone doesn't discriminate "copied into a new revision" from "the same row,
+        // still holding update()'s own edit" -- both would read identically here.
         assertThat(revision.id()).isNotEqualTo(rejected.id());
         assertThat(revision.parentQuotationId()).isEqualTo(rejected.id());
         assertThat(revision.items()).hasSize(1);
@@ -1620,10 +1568,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(revision.items().get(0).quantity()).isEqualByComparingTo("4");
     }
 
-    /** Numbering must chain off the ORIGINAL base through multiple reject/resubmit cycles, the
-     * same way {@link #revisionNumbering_chainsOffTheOriginalBaseNumber_notTheImmediateParent}
-     * already pins for ordinary approve-then-revise cycles -- never "{base}-1-2-3" and never
-     * colliding with a fresh quotation's own "{base}-1". */
+    /** Numbering must chain off the ORIGINAL base through multiple reject/resubmit cycles, the same way
+     * #revisionNumbering_chainsOffTheOriginalBaseNumber_notTheImmediateParent already pins for ordinary
+     * approve-then-revise cycles. */
     @Test
     void submit_afterRejection_numberingChainsThroughMultipleRejectCycles() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -1639,8 +1586,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto rejected2 = quotationService.reject(revision2.id(),
             new RejectRequest("รอบ 2"), salesManagerActor);
         DealQuotationDto revision3 = quotationService.submit(rejected2.id(), salesActor);
-        // Must chain off the ORIGINAL base ("QT-...-3"), never off rejected2's own number as if it
-        // were itself a base ("QT-...-2-3").
+        // Must chain off the ORIGINAL base ("QT-...-3"), never off rejected2's own number as if it were itself a base
+        // ("QT-...-2-3").
         assertThat(revision3.number()).isEqualTo(base + "-3");
         assertThat(revision3.revisionNo()).isEqualTo(3);
         assertThat(revision3.parentQuotationId()).isEqualTo(rejected2.id());
@@ -1678,8 +1625,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         quotationService.approve(revision3.id(), new ApproveRequest(null), salesManagerActor);
 
         // The IMMEDIATE parent (revision2) -- already covered by
-        // theRejectedParentBecomesSupersededOnlyOnceTheRevisionIsApproved, re-asserted here as
-        // part of the SAME chain this test is actually about.
+        // theRejectedParentBecomesSupersededOnlyOnceTheRevisionIsApproved, re-asserted here as part of the SAME chain
+        // this test is actually about.
         assertThat(quotationService.get(revision2Id, salesActor).docStatus())
             .isEqualTo(QuotationStatus.SUPERSEDED);
         // The GRANDPARENT (the original) -- THIS is what the single-hop version left stranded.
@@ -1723,11 +1670,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
             .hasMessageContaining("มีฉบับแก้ไขของใบเสนอราคานี้อยู่");
 
-        // Without this guard, the ORIGINAL sequence that broke the invariant continued: cancel(B)
-        // would have succeeded, hasOpenRevision(originalId) would then have read false (B's only
-        // status is CANCELLED, not open), and submit(originalId) would have minted a SECOND
-        // branch alongside C's. Confirm that second branch is ALSO still blocked, transitively:
-        // C itself must be resolved to a terminal CANCELLED state before B can be freed.
+        // Without this guard, the ORIGINAL sequence that broke the invariant continued: cancel(B) would have
+        // succeeded, hasOpenRevision(originalId) would then have read false (B's only status is CANCELLED, not open),
+        // and submit(originalId) would have minted a SECOND branch alongside C's.
         DealQuotationDto rejectedC = quotationService.reject(revisionC.id(),
             new RejectRequest("รอบ 3"), salesManagerActor);
         quotationService.cancel(rejectedC.id(), new CancelRequest(null), salesActor);
@@ -1735,21 +1680,21 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         DealQuotationDto cancelledB = quotationService.cancel(revisionB.id(), new CancelRequest(null), salesActor);
         assertThat(cancelledB.docStatus()).isEqualTo(QuotationStatus.CANCELLED);
 
-        // The original can now legitimately be resubmitted -- its whole subtree (B, C) is
-        // terminal, so there is only ONE live path from here, not a second sibling branch.
+        // The original can now legitimately be resubmitted -- its whole subtree (B, C) is terminal, so there is only
+        // ONE live path from here, not a second sibling branch.
         DealQuotationDto revisionB2 = quotationService.submit(originalId, salesActor);
         assertThat(revisionB2.id()).isNotEqualTo(revisionB.id());
         quotationService.approve(revisionB2.id(), new ApproveRequest(null), salesManagerActor);
 
-        // The invariant this whole feature exists to protect: never more than ONE APPROVED
-        // quotation on the same ticket at a time.
+        // The invariant this whole feature exists to protect: never more than ONE APPROVED quotation on the same
+        // ticket at a time.
         assertThat(quotationService.search(List.of("APPROVED"), false, salesActor))
             .extracting(DealQuotationDto::id).containsExactly(revisionB2.id());
     }
 
-    /** Regression guard: cancelling an ORDINARY leaf DRAFT (no open child of its own) must still
-     * work exactly as before -- the new guard in {@link #cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole}
-     * must not block the common case. */
+    /** Regression guard: cancelling an ORDINARY leaf DRAFT (no open child of its own) must still work exactly as
+     * before -- the new guard in #cancel_refusesADraftWithAnOpenChild_closingTheDoubleApproveHole must not block
+     * the common case. */
     @Test
     void cancel_stillWorksOnAPlainDraftWithNoOpenChild() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -1811,10 +1756,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
      * this earlier as a 400 — exercising the service's OWN defence, not the DTO's. */
     @Test
     void createItem_absurdAreaSqm_isBadRequestNot500() {
-        // Item completeness rule: thicknessMm/piecesPerBox filled in (otherwise the completeness
-        // check -- which now runs BEFORE WastageCalculator -- would 400 for a DIFFERENT reason and
-        // this test would stop actually exercising the ArithmeticException path its own Javadoc
-        // above describes).
+        // Item completeness rule: thicknessMm/piecesPerBox filled in (otherwise the completeness check -- which now
+        // runs BEFORE WastageCalculator -- would 400 for a DIFFERENT reason and this test would stop actually
+        // exercising the ArithmeticException path its own Javadoc above describes).
         ItemInput absurd = new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
             new BigDecimal("10"), BigDecimal.ONE, WastageCalculator.QUANTITY_MODE_AREA, new BigDecimal("1E30"), null,
             WastageCalculator.WASTAGE_MODE_NONE, null, 4, new BigDecimal("100.00"), BigDecimal.ZERO,
@@ -1917,9 +1861,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void incompleteItem_zeroUnitPrice_isBadRequestNamingTheRowAndField() {
-        // Bean validation (@DecimalMin) already rejects this at the controller; calling the
-        // SERVICE directly (as this test does throughout) proves the completeness check is ALSO a
-        // real defence, not just a DTO-layer one a stale/older client could bypass.
+        // Bean validation (@DecimalMin) already rejects this at the controller; calling the SERVICE directly (as this
+        // test does throughout) proves the completeness check is ALSO a real defence, not just a DTO-layer one a
+        // stale/older client could bypass.
         ItemInput zeroPrice = itemMissing(i -> i.withUnitPrice(BigDecimal.ZERO));
         assertThatThrownBy(() -> quotationService.create(ticketId, upsertRequest(List.of(zeroPrice)), salesActor))
             .isInstanceOf(ApiException.class)
@@ -1948,8 +1892,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("รายการที่ 1").hasMessageContaining("จำนวน");
     }
 
-    /** Item completeness must be checked per-row: the SECOND item's missing model must not be
-     * masked by the first item being complete, and the message names row 2, not row 1. */
+    /** Item completeness must be checked per-row: the SECOND item's missing model must not be masked by the first
+     * item being complete, and the message names row 2, not row 1. */
     @Test
     void incompleteItem_secondOfTwoRows_messageNamesRowTwo() {
         ItemInput complete = sampleItem("100.00", 10);
@@ -1961,14 +1905,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("รายการที่ 2").hasMessageContaining("รุ่น");
     }
 
-    /** {@code calculate-line} stays lenient (inline-deal-spec.md, explicit): the item editor calls
-     * this on every keystroke, often with the row still half-typed -- it must preview, not 400. */
+    /** calculate-line stays lenient (inline-deal-spec.md, explicit): the item editor calls this on every keystroke,
+     * often with the row still half-typed -- it must preview, not 400. */
     @Test
     void calculateLine_staysLenient_onAnIncompleteItem() {
-        // model/color/texture/sizeText/thicknessMm/piecesPerBox ALL missing -- exactly the fields
-        // the item completeness rule requires on create/update/submit -- yet calculate-line must
-        // still preview: quantityMode+piecesInput+unitPrice is all WastageCalculator itself
-        // (unrelated to this rule) needs to compute a line.
+        // model/color/texture/sizeText/thicknessMm/piecesPerBox ALL missing -- exactly the fields the item
+        // completeness rule requires on create/update/submit -- yet calculate-line must still preview:
+        // quantityMode+piecesInput+unitPrice is all WastageCalculator itself needs to compute a line.
         ItemInput incomplete = new ItemInput(null, null, null, null, null, null, null, null,
             null, null, WastageCalculator.QUANTITY_MODE_PIECES, null, 10,
             WastageCalculator.WASTAGE_MODE_NONE, null, null, new BigDecimal("10.00"), BigDecimal.ZERO,
@@ -1979,10 +1922,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(preview.lineAmount()).isEqualByComparingTo("100.00");
     }
 
-    /** Defence-in-depth: submit re-checks the STORED rows, not just create/update's write-time
-     * check -- see DealQuotationService#submit's own comment for why. Proven here by writing an
-     * incomplete row straight through the repository (bypassing the service), the same way a
-     * legacy pre-rule row would exist. */
+    /** Defence-in-depth: submit re-checks the STORED rows, not just create/update's write-time check -- see
+     * DealQuotationService#submit's own comment for why. Proven here by writing an incomplete row straight through
+     * the repository (bypassing the service), the same way a legacy pre-rule row would exist. */
     @Test
     void submit_reChecksStoredItems_incompleteRowIsBadRequest() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2015,8 +1957,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("รายการที่ 1");
     }
 
-    /** Multiple offending rows are named together, comma-separated, by their OWN seq numbers --
-     * not just "something is wrong". */
+    /** Multiple offending rows are named together, comma-separated, by their OWN seq numbers -- not just "something
+     * is wrong". */
     @Test
     void submit_rejectsMultipleTileItemsWithNoLeadTime_namingEveryItemNumber() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2034,10 +1976,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .satisfies(e -> assertThat(((ApiException) e).getMessage()).doesNotContain("รายการที่ 1,"));
     }
 
-    /** Wrong-way-round twin of the rejection above: PLAIN and ADJUSTMENT rows are EXEMPT -- neither
-     * has a lead-time concept at all (freight/consumables/a ส่วนลดพิเศษ line cannot "arrive"), so a
-     * document made of a TILE row (with a lead time) plus PLAIN/ADJUSTMENT rows with none still
-     * submits. */
+    /** Wrong-way-round twin of the rejection above: PLAIN and ADJUSTMENT rows are EXEMPT -- neither has a lead-time
+     * concept at all (freight/consumables/a ส่วนลดพิเศษ line cannot "arrive"), so a document made of a TILE row
+     * (with a lead time) plus PLAIN/ADJUSTMENT rows with none still submits. */
     @Test
     void submit_stillAcceptsPlainAndAdjustmentRowsWithNoLeadTime() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2051,10 +1992,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
     }
 
-    /** Defence-in-depth twin of {@link #submit_reChecksStoredItems_incompleteRowIsBadRequest}: the
-     * lead-time gate also re-checks the STORED rows, not just what create/update most recently
-     * wrote -- proven by nulling it out straight through the repository, the way a pre-#7 row
-     * would exist. */
+    /** Defence-in-depth twin of #submit_reChecksStoredItems_incompleteRowIsBadRequest: the lead-time gate also
+     * re-checks the STORED rows, not just what create/update most recently wrote -- proven by nulling it out
+     * straight through the repository, the way a pre-#7 row would exist. */
     @Test
     void submit_reChecksStoredItems_missingLeadTimeIsBadRequest() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2108,8 +2048,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── an ENTERED lead-time range must be min>=1, max>=min ────
 
-    /** {@code ประมาณ 0-3 วัน} saved on 2 approved quotations, and {@code 90-75}/negatives would too
-     * -- refused on save now, TILE row, the exact message the frontend validator mirrors. */
+    /** ประมาณ 0-3 วัน saved on 2 approved quotations, and 90-75/negatives would too -- refused on save now, TILE
+     * row, the exact message the frontend validator mirrors. */
     @Test
     void create_refusesATileLeadTimeMinBelowOne() {
         assertThatThrownBy(() -> quotationService.create(ticketId,
@@ -2151,8 +2091,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("ระยะเวลานำเข้าต้องไม่น้อยกว่า 1 วัน และค่าสูงสุดต้องไม่น้อยกว่าค่าต่ำสุด");
     }
 
-    /** Wrong-way-round: a valid range (including the min==max exact-day case) is untouched -- this
-     * rule refuses only genuinely invalid values, never a well-formed one. */
+    /** Wrong-way-round: a valid range (including the min==max exact-day case) is untouched -- this rule refuses
+     * only genuinely invalid values, never a well-formed one. */
     @Test
     void create_acceptsAValidLeadTimeRange_minEqualsMaxIncluded() {
         DealQuotationDto range = quotationService.create(ticketId,
@@ -2164,9 +2104,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(exact.items().get(0).leadTimeMaxDays()).isEqualTo(1);
     }
 
-    /** A lone value (the OTHER field still blank) is an INCOMPLETENESS question, not an invalid
-     * one -- this rule must not fire until BOTH fields are entered (the "is it required at all"
-     * rules are unchanged and untested here; see the #7 section above). */
+    /** A lone value (the OTHER field still blank) is an INCOMPLETENESS question, not an invalid one -- this rule
+     * must not fire until BOTH fields are entered (the "is it required at all" rules are unchanged and untested
+     * here; see the #7 section above). */
     @Test
     void create_doesNotValidateAPartiallyEnteredLeadTime() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2261,10 +2201,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── CREDIT remainder needs at least 1 credit day ──────────
 
-    /** {@code ส่วนที่เหลือเครดิต 0 วัน} can print today. An explicit 0 (or negative) is refused on
-     * SAVE (create/update), matching the "invalid value" half of the rule; a BLANK value still
-     * saves (see {@link #submit_refusesACreditRemainderWithNoCreditDays} for the submit-time half,
-     * mirroring how {@code fullPaymentTerm} is gated for a zero-deposit document). */
+    /** ส่วนที่เหลือเครดิต 0 วัน can print today. */
     @Test
     void create_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
         assertThatThrownBy(() -> quotationService.create(ticketId,
@@ -2276,8 +2213,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
     }
 
-    /** A negative creditDays is refused the same way (bean {@code @Min(0)} already blocks anything
-     * below -1... this proves the SERVICE rule, not the bean bound, is what actually names zero). */
+    /** A negative creditDays is refused the same way (bean @Min(0) already blocks anything below -1... this proves
+     * the SERVICE rule, not the bean bound, is what actually names zero). */
     @Test
     void update_refusesZeroCreditDaysWhenRemainderModeIsCredit() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2292,9 +2229,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
     }
 
-    /** The blank-on-draft half: create/update still accept a CREDIT remainder with NO creditDays
-     * typed yet (a draft may be incomplete) -- only {@link #submit} refuses to advance it, the
-     * EXACT "create/update permissive, submit strict" split {@code fullPaymentTerm} already uses. */
+    /** The blank-on-draft half: create/update still accept a CREDIT remainder with NO creditDays typed yet (a draft
+     * may be incomplete) -- only #submit refuses to advance it, the EXACT "create/update permissive, submit
+     * strict" split fullPaymentTerm already uses. */
     @Test
     void create_stillAcceptsACreditRemainderWithBlankCreditDays() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2305,8 +2242,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.creditDays()).isNull();
     }
 
-    /** The submit-time half: a CREDIT-remainder draft with creditDays still blank may not advance
-     * past DRAFT. */
+    /** The submit-time half: a CREDIT-remainder draft with creditDays still blank may not advance past DRAFT. */
     @Test
     void submit_refusesACreditRemainderWithNoCreditDays() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2320,8 +2256,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน");
     }
 
-    /** Wrong-way-round: a positive creditDays, or a non-CREDIT remainder mode with creditDays left
-     * however it likes, is completely untouched by this rule. */
+    /** Wrong-way-round: a positive creditDays, or a non-CREDIT remainder mode with creditDays left however it
+     * likes, is completely untouched by this rule. */
     @Test
     void create_acceptsAPositiveCreditDays_andANonCreditRemainderModeRegardlessOfCreditDays() {
         DealQuotationDto credit = quotationService.create(ticketId,
@@ -2337,22 +2273,21 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(delivery.remainderMode()).isEqualTo("ON_DELIVERY");
     }
 
-    /** Builder-shaped helper over the complete {@link #sampleItem} fixture, for one-field-at-a-time
-     * incompleteness tests -- avoids a 21-argument constructor call per test case. */
+    /** Builder-shaped helper over the complete #sampleItem fixture, for one-field-at-a-time incompleteness tests --
+     * avoids a 21-argument constructor call per test case. */
     private ItemInput itemMissing(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
         return mutate.apply(new ItemInputBuilder(sampleItem("100.00", 10))).build();
     }
 
-    /** Same builder, different name for a mutation that is not about INCOMPLETENESS (a value the
-     * validation rejects while every required field is still present) -- shares the exact same
-     * fixture and mechanism as {@link #itemMissing}. */
+    /** Same builder, different name for a mutation that is not about INCOMPLETENESS (a value the validation rejects
+     * while every required field is still present) -- shares the exact same fixture and mechanism as #itemMissing. */
     private ItemInput itemMutated(java.util.function.UnaryOperator<ItemInputBuilder> mutate) {
         return mutate.apply(new ItemInputBuilder(sampleItem("100.00", 10))).build();
     }
 
-    /** Minimal wither-style builder over {@link ItemInput} — this record has no canonical builder,
-     * and a 21-argument constructor call per single-field mutation is exactly the kind of test
-     * code a field reorder would silently miscompile without ever failing to compile. */
+    /** Minimal wither-style builder over ItemInput — this record has no canonical builder, and a 21-argument
+     * constructor call per single-field mutation is exactly the kind of test code a field reorder would silently
+     * miscompile without ever failing to compile. */
     private static final class ItemInputBuilder {
         private String locationLabel; private Long catalogPriceId; private String productCode;
         private String brand; private String model; private String color; private String texture;
@@ -2451,8 +2386,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             upsertRequest(List.of(sampleItem("111.00", 1), sampleItem("222.00", 1))), salesActor);
         DealQuotationDto second = quotationService.create(otherTicketId,
             upsertRequest(List.of(sampleItem("333.00", 1), sampleItem("444.00", 1))), otherSalesActor);
-        // The bug is keyed on ORDER BY quotation_id -- confirm which one sorts first so the
-        // assertions below are checking the row the bug actually drops, not by luck.
+        // The bug is keyed on ORDER BY quotation_id -- confirm which one sorts first so the assertions below are
+        // checking the row the bug actually drops, not by luck.
         assertThat(first.id()).isLessThan(second.id());
 
         // ceoActor, NOT importActor: the global list is scoped to sales_manager/ceo for "see
@@ -2460,10 +2395,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         // none here), which would make this fixture's own assertions vacuous.
         List<DealQuotationDto> results = quotationService.search(null, false, ceoActor);
 
-        // Ties the fixture to the bug's actual trigger (the SMALLEST quotation_id in the whole
-        // result set, not just relative to `second`) -- guards against this test going silently
-        // vacuous if a future fixture/migration ever seeds another DEAL_DIRECT quotation with a
-        // lower id than `first`, which would make some OTHER row the one the bug drops.
+        // Ties the fixture to the bug's actual trigger -- guards against this test going silently vacuous if a future
+        // fixture/migration ever seeds another DEAL_DIRECT quotation with a lower id than `first`, which would make
+        // some OTHER row the one the bug drops.
         assertThat(first.id()).isEqualTo(
             results.stream().mapToLong(DealQuotationDto::id).min().orElseThrow());
 
@@ -2483,18 +2417,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void renderPdfAndXlsx_nonEmptyBytes() {
-        // H1: a locationLabel forces QuotationRenderer down its heading-row path
-        // (underlinedStyle/writeHeadingRow) on BOTH calls below -- renderXlsx then renderPdf,
-        // through the SAME injected QuotationRenderer instance (wired once in @BeforeEach, like
-        // the real @Component singleton) -- which is exactly the "second render through one
-        // renderer instance with a heading" shape the underlineCache regression needed to throw.
+        // a locationLabel forces QuotationRenderer down its heading-row path on BOTH calls below.
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("ชั้น 1", "100.00", 10))), salesActor);
 
         byte[] xlsx = quotationService.renderXlsx(created.id(), salesActor);
         assertThat(xlsx).isNotEmpty();
-        // OLE2 (Compound File Binary Format) magic bytes -- the legacy .xls format QuotationRenderer
-        // actually emits (th.co.glr.hr.ticket.QuotationRenderer#toXlsx wraps toXls's HSSF bytes).
+        // OLE2 (Compound File Binary Format) magic bytes -- the legacy .xls format QuotationRenderer actually emits
+        // (th.co.glr.hr.ticket.QuotationRenderer#toXlsx wraps toXls's HSSF bytes).
         assertThat(xlsx).startsWith((byte) 0xD0, (byte) 0xCF, (byte) 0x11, (byte) 0xE0,
             (byte) 0xA1, (byte) 0xB1, (byte) 0x1A, (byte) 0xE1);
 
@@ -2508,8 +2438,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(pdf[3]).isEqualTo((byte) 'F');
     }
 
-    /** Extends the render coverage onto an APPROVED quotation (a DRAFT prints no approver name at
-     * all) -- asserts the approver's name reaches the PDF and that the item's calculation line
+    /** Extends the render coverage onto an APPROVED quotation (a DRAFT prints no approver name at all) -- asserts
+     * the approver's name reaches the PDF and that the item's calculation line
      * (DealQuotationLines#calculationLine, served on the DTO) is the text that actually printed. */
     @Test
     void renderPdf_approvedQuotation_showsApproverNameAndCalculationLine() throws Exception {
@@ -2559,9 +2489,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(saved.contactId()).as("a save with no contact still does not pick up the deal's").isNull();
     }
 
-    /** The snapshot is FROZEN: editing the contact row afterwards must not change what the
-     * quotation carries (or prints) — an approved, emailed document keeps the name it was
-     * approved with. Proven by rewriting the contact row directly and re-reading. */
+    /** The snapshot is FROZEN: editing the contact row afterwards must not change what the quotation carries (or
+     * prints) — an approved, emailed document keeps the name it was approved with. Proven by rewriting the contact
+     * row directly and re-reading. */
     @Test
     void contactSnapshot_isFrozen_laterContactEditDoesNotChangeTheQuotation() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2640,8 +2570,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         String originalName = created.customerName();
 
-        // The rep corrects a typo in the customer master (exactly what the new ชื่อลูกค้า field's
-        // PUT /api/customers/{id} does) …
+        // The rep corrects a typo in the customer master (exactly what the new ชื่อลูกค้า field's PUT
+        // /api/customers/{id} does) …
         customers.update(customer.id(), "บริษัท ชื่อที่ถูกต้อง จำกัด", null, null, null, null);
         // … and re-saves the DRAFT.
         DealQuotationDto resaved = quotationService.update(created.id(),
@@ -2665,20 +2595,12 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .noneMatch(s -> s.contains("บริษัท เปลี่ยนอีกครั้ง จำกัด"));
     }
 
-    // The documented reason `customerSnapshot`'s name falls back to the ticket's own frozen
-    // column at all -- a deal with no resolvable customer row should still print the name it was
-    // created with, not a blank -- has NO reachable test through the public service today, tried
-    // two ways and confirmed both closed:
-    //   1. A real DELETE of the referenced customer row: refused by a live FK
-    //      (`ticket_customer_id_fkey`) while any ticket still points at it.
-    //   2. Nulling `sales.ticket.customer_id` directly: `resolveContact`'s own
-    //      `ticket.customerId() != null && ...` guard (DealQuotationService.java:896) throws
-    //      "กรุณาระบุผู้สั่งซื้อ" before `customerSnapshot` is ever reached, for the SAME reason.
-    // So this fallback is unreachable dead-code-safety today, not a live branch -- worth flagging
-    // in the PR body rather than forcing a test around it.
+    // The documented reason `customerSnapshot`'s name falls back to the ticket's own frozen column at all. A real
+    // DELETE of the referenced customer row: refused by a live FK (`ticket_customer_id_fkey`) while any ticket
+    // still points at it.
 
-    /** Every string cell of the rendered XLS, so an assertion can ask "does the document say X"
-     * without hardcoding which cell the adapter happens to put it in. */
+    /** Every string cell of the rendered XLS, so an assertion can ask "does the document say X" without hardcoding
+     * which cell the adapter happens to put it in. */
     private List<String> renderedStrings(long quotationId) {
         byte[] xls = quotationService.renderXlsx(quotationId, salesActor);
         List<String> out = new java.util.ArrayList<>();
@@ -2722,8 +2644,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
     }
 
-    /** update: an omitted {@code contactId} keeps the draft's own contact (re-snapshotted from the
-     * row as it stands now); an explicit one switches it. */
+    /** update: an omitted contactId keeps the draft's own contact (re-snapshotted from the row as it stands now);
+     * an explicit one switches it. */
     @Test
     void update_keepsTheDraftsContactWhenOmitted_andSwitchesOnAnExplicitId() {
         ContactDto second = contacts.create(customer.id(), "วิชัย", "สลับ", null, null, null);
@@ -2760,9 +2682,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── โครงการ (project name) is editable, not write-once ──────
 
-    /** Every OTHER test in this class omits {@code projectName} entirely (the oldest legacy
-     * constructor shapes) and still passes -- that already proves the create-time fallback to
-     * {@code ticket.projectName()} is unbroken. This pins the other half: an EXPLICIT value wins. */
+    /** Every OTHER test in this class omits projectName entirely (the oldest legacy constructor shapes) and still
+     * passes -- that already proves the create-time fallback to ticket.projectName() is unbroken. This pins the
+     * other half: an EXPLICIT value wins. */
     @Test
     void create_withAnExplicitProjectName_usesItInsteadOfTheTickets() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2783,9 +2705,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(reread.projectName()).isEqualTo("Associates By Choice");
     }
 
-    /** No "missing keeps stored" for this field (unlike priceMode/documentLanguage/validityMode):
-     * the editor always sends its current value, blank included, so a blank is a deliberate clear
-     * -- same discipline as customerNotes/deptCode/unitCode on the same call. */
+    /** No "missing keeps stored" for this field (unlike priceMode/documentLanguage/validityMode): the editor always
+     * sends its current value, blank included, so a blank is a deliberate clear -- same discipline as
+     * customerNotes/deptCode/unitCode on the same call. */
     @Test
     void update_withABlankProjectName_clearsIt() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -2824,9 +2746,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // The rendered document: slot 4 name + the dates row
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** The 0-based index of the signature LABELS row in a rendered sheet, found by its own text —
-     * the footer block floats with the item count and the remark layout, so no fixed row number
-     * is safe here (the renderer's own unit tests pin 44 only for their single-remark fixture). */
+    /** The 0-based index of the signature LABELS row in a rendered sheet, found by its own text — the footer block
+     * floats with the item count and the remark layout, so no fixed row number is safe here (the renderer's own
+     * unit tests pin 44 only for their single-remark fixture). */
     private static int labelsRow(org.apache.poi.ss.usermodel.Sheet sheet) {
         for (var row : sheet) {
             var cell = row.getCell(0);
@@ -2900,8 +2822,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // The approver's signature image, whichever role approved
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Real PNG bytes (a drawn squiggle, not just magic bytes) — POI must be able to read the
-     * image's dimensions for the anchor to be placed at all. */
+    /** Real PNG bytes (a drawn squiggle, not just magic bytes) — POI must be able to read the image's dimensions
+     * for the anchor to be placed at all. */
     private MockMultipartFile realSignatureFile() {
         return new MockMultipartFile("file", "sig.png", "image/png", HtmlXlsFidelityTest.signaturePng());
     }
@@ -2942,9 +2864,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertApproverSignatureRendered(salesManagerActor);
     }
 
-    /** Slot 3 is the approver whoever they are: the picture must be anchored in the signature
-     * rows of the XLS (the same workbook both PDF engines print), and the name row must carry
-     * the approver's name. The PDF half runs only where a converter exists. */
+    /** Slot 3 is the approver whoever they are: the picture must be anchored in the signature rows of the XLS (the
+     * same workbook both PDF engines print), and the name row must carry the approver's name. The PDF half runs
+     * only where a converter exists. */
     private void assertApproverSignatureRendered(UserPrincipal approver) throws Exception {
         DealQuotationDto approved = createSubmittedApproved(ticketId, salesActor, approver);
         assertThat(approved.approvedById()).isEqualTo(approver.id());
@@ -2956,8 +2878,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         String[] rows = signatureRows(xls);
         assertThat(rows[1]).contains("(" + approved.approvedByName() + ")");
 
-        // A draft on the same deal (no approver yet) must NOT carry the image. Stacked beside the
-        // live approved row on purpose, so it bypasses N6 via the test-only fixture.
+        // A draft on the same deal (no approver yet) must NOT carry the image. Stacked beside the live approved row on
+        // purpose, so it bypasses N6 via the test-only fixture.
         DealQuotationDto draft = createAlongsideLive(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(signaturePicture(quotationService.renderXlsx(draft.id(), salesActor))).isNull();
@@ -2974,8 +2896,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 for (var ignored : page.getResources().getXObjectNames()) xObjects++;
             }
         }
-        // Template pictures (logo + badge) plus the signature: strictly more than the two the
-        // template itself embeds.
+        // Template pictures (logo + badge) plus the signature: strictly more than the two the template itself embeds.
         assertThat(xObjects).isGreaterThan(2);
     }
 
@@ -2983,9 +2904,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // The "แก้" bucket (needsRework) + per-status counts, owner-scoped
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Rep A: a rejected draft, a revision-in-progress draft, a plain draft, a pending one; rep B:
-     * a rejected draft of their own. Wrong-way-round first: B never sees A's rework rows, and A's
-     * plain DRAFT is not "rework". */
+    /** Rep A: a rejected draft, a revision-in-progress draft, a plain draft, a pending one; rep B: a rejected draft
+     * of their own. Wrong-way-round first: B never sees A's rework rows, and A's plain DRAFT is not "rework". */
     @Test
     void needsRework_returnsRejectedAndRevisionDraftsOnly_ownerScopedForSales() {
         DealQuotationDto rejected = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
@@ -3009,8 +2929,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(ownView).containsExactlyInAnyOrder(rejected.id(), revision.id());
         assertThat(ownView).doesNotContain(plainDraft.id(), pending.id(), approved.id());
 
-        // Composes with a status filter (AND): DRAFT + needsRework == the same two rows; a
-        // status that excludes DRAFT yields nothing.
+        // Composes with a status filter (AND): DRAFT + needsRework == the same two rows; a status that excludes DRAFT
+        // yields nothing.
         assertThat(quotationService.search(List.of("DRAFT"), true, salesActor)).extracting(DealQuotationDto::id)
             .containsExactlyInAnyOrder(rejected.id(), revision.id());
         assertThat(quotationService.search(List.of("PENDING_APPROVAL"), true, salesActor)).isEmpty();
@@ -3074,9 +2994,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             quotationService.search(List.of("APPROVED", "ISSUED", "SENT", "ACCEPTED"), false, actor).size());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authz — wrong-way-round (the caller must NOT reach what they should not)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void sales_cannotCreateOnAnotherRepsDeal() {
@@ -3201,8 +3119,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     void sales_cannotRenderPdfForAnotherRepsQuotation() {
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
-        // No LibreOffice dependency here: requireViewAccess throws INSIDE buildRenderModel, before
-        // renderer.toPdf(...) is ever invoked -- see DealQuotationService#renderPdf.
+        // No LibreOffice dependency here: requireViewAccess throws INSIDE buildRenderModel, before renderer.toPdf(...)
+        // is ever invoked -- see DealQuotationService#renderPdf.
         assertForbidden(() -> quotationService.renderPdf(created.id(), otherSalesActor));
     }
 
@@ -3213,8 +3131,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertForbidden(() -> quotationService.get(created.id(), qcActor));
         assertForbidden(() -> quotationService.listForTicket(ticketId, qcActor));
         assertForbidden(() -> quotationService.renderPdf(created.id(), qcActor));
-        // search() with no grant and a role outside VIEW_ROLES also 403s (unlike `sales`, which
-        // is IN VIEW_ROLES and gets scoped to zero rows instead -- qc has neither path open).
+        // search() with no grant and a role outside VIEW_ROLES also 403s (unlike `sales`, which is IN VIEW_ROLES and
+        // gets scoped to zero rows instead -- qc has neither path open).
         assertForbidden(() -> quotationService.search(null, false, qcActor));
     }
 
@@ -3326,8 +3244,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void account_seesADealQuotationOnlyOnceItWentToTheCustomer() {
         setSalesStage(ticketId, "PROCUREMENT");
-        // Every create after the first stacks another live direct quotation on this one deal on
-        // purpose (one per status under test), so those go through the N6-bypassing test fixture.
+        // Every create after the first stacks another live direct quotation on this one deal on purpose (one per
+        // status under test), so those go through the N6-bypassing test fixture.
         DealQuotationDto draft = quotationService.create(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         DealQuotationDto submitted = quotationService.submit(
             createAlongsideLive(ticketId, upsertRequest(List.of(sampleItem("100.00", 10))), salesActor).id(), salesActor);
@@ -3485,9 +3403,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     // Authz — the canCreateQuotation grant
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** {@code qc} WITHOUT the grant is covered by {@link #importAccountQcEmployee_cannotCreate}
-     * above (kept as-is) — this is its WITH-grant counterpart: a granted employee may create,
-     * update and submit on a deal they do NOT own, but still may not approve. */
+    /** qc WITHOUT the grant is covered by #importAccountQcEmployee_cannotCreate above (kept as-is) — this is its
+     * WITH-grant counterpart: a granted employee may create, update and submit on a deal they do NOT own, but
+     * still may not approve. */
     @Test
     void qcWithGrant_canCreateUpdateSubmitOnAnotherRepsDeal_butNotApprove() {
         grantQuotationCapability(qcUserId);
@@ -3514,8 +3432,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertForbidden(() -> quotationService.reject(submitted.id(), new RejectRequest("no"), qcActor));
     }
 
-    /** A grant on an INACTIVE employee must not work — {@code canCreateQuotation} filters
-     * {@code is_active}, exactly like {@code isAdmin}. */
+    /** A grant on an INACTIVE employee must not work — canCreateQuotation filters is_active, exactly like isAdmin. */
     @Test
     void grantOnInactiveEmployee_isForbidden() {
         grantQuotationCapability(qcUserId);
@@ -3556,10 +3473,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.BAD_REQUEST);
 
-        // Real PNG MAGIC BYTES, but no genuine decodable image stream -- passes the container
-        // sniff and is THEN rejected by ImageDecodability.decode (EmployeeSignatureService#upload).
-        // This is what "andMagicBytesValidated" pins: magic bytes alone are not sufficient any
-        // more, the file must actually decode.
+        // Real PNG MAGIC BYTES, but no genuine decodable image stream -- passes the container sniff and is THEN
+        // rejected by ImageDecodability.decode (EmployeeSignatureService#upload). This is what
+        // "andMagicBytesValidated" pins: magic bytes alone are not sufficient any more, the file must actually decode.
         MockMultipartFile undecodable = undecodablePngBytesFile();
         assertThatThrownBy(() -> signatureService.upload(salesRepId, undecodable, salesRepActor()))
             .isInstanceOf(ApiException.class)
@@ -3567,17 +3483,17 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("ไม่สามารถอ่านไฟล์รูปภาพนี้ได้");
     }
 
-    /** Wrong-way-round: an employee id with no {@code hr.employee} row is 404 on all three verbs —
-     * the real-backend write sweep found DELETE answering 204 against id 999999. The 403 gate
-     * still comes first, so a caller without the capability learns nothing about which ids exist. */
+    /** Wrong-way-round: an employee id with no hr.employee row is 404 on all three verbs — the real-backend write
+     * sweep found DELETE answering 204 against id 999999. The 403 gate still comes first, so a caller without the
+     * capability learns nothing about which ids exist. */
     @Test
     void signature_unknownEmployee_isNotFoundOnEveryVerb_andStillForbiddenWithoutTheCapability() throws Exception {
         long unknown = 999_999L;
         assertThat(jdbc.queryForObject("SELECT count(*) FROM hr.employee WHERE employee_id = :id",
             java.util.Map.of("id", unknown), Integer.class)).as("fixture: id must not exist").isZero();
 
-        // Built outside the Runnable lambdas below -- pngFile() throws a checked Exception (it
-        // genuinely encodes a PNG via ImageIO now) and Runnable#run() cannot declare one.
+        // Built outside the Runnable lambdas below -- pngFile() throws a checked Exception (it genuinely encodes a PNG
+        // via ImageIO now) and Runnable#run() cannot declare one.
         MockMultipartFile file = pngFile();
         assertNotFound(() -> signatureService.delete(unknown, ceoActor), "ไม่พบพนักงาน");
         assertNotFound(() -> signatureService.get(unknown, ceoActor), "ไม่พบพนักงาน");
@@ -3611,8 +3527,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void create_dateMode_withoutSpecialPricing_isBadRequest() {
-        // DIRECT_NET with net == list price -- no discount anywhere -- refuses DATE mode outright,
-        // before even checking for a date.
+        // DIRECT_NET with net == list price -- no discount anywhere -- refuses DATE mode outright, before even
+        // checking for a date.
         UpsertDealQuotationRequest request = withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "100.00"))),
@@ -3666,9 +3582,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void update_dateMode_lostSpecialPricing_isBadRequest() {
-        // Created WITH special pricing (net < list) in DATE mode -- fine. The SAME save that
-        // clears the discount (net back to list) while still asking for DATE mode must 400: the
-        // gate is decided from the rows being WRITTEN, not from what was there before.
+        // Created WITH special pricing (net < list) in DATE mode -- fine. The SAME save that clears the discount (net
+        // back to list) while still asking for DATE mode must 400: the gate is decided from the rows being WRITTEN,
+        // not from what was there before.
         DealQuotationDto created = quotationService.create(ticketId, withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "85.00"))),
@@ -3686,15 +3602,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void submit_dateModeValidityAlreadyPast_isBadRequest() {
-        // Match the service's business date: UTC CI can be a day behind Bangkok.
-        // Start with a future expiry so crossing midnight during setup cannot reject the draft.
+        // Match the service's business date: UTC CI can be a day behind Bangkok. Start with a future expiry so
+        // crossing midnight during setup cannot reject the draft.
         DealQuotationDto created = quotationService.create(ticketId, withValidity(
             upsertRequestWithMode(WastageCalculator.PRICE_MODE_DIRECT_NET,
                 List.of(directNetItem("100.00", 10, "85.00"))),
             WastageCalculator.VALIDITY_MODE_DATE, LocalDate.now(BANGKOK).plusDays(30)), salesActor);
-        // Time moves on after the draft is saved -- simulate that directly (create/update already
-        // refuse a date before the quotation's OWN date, so a past date cannot reach storage any
-        // other way in one test run).
+        // Time moves on after the draft is saved -- simulate that directly (create/update already refuse a date before
+        // the quotation's OWN date, so a past date cannot reach storage any other way in one test run).
         jdbc.update("UPDATE sales.quotation SET validity_until = :d WHERE quotation_id = :id",
             java.util.Map.of("d", LocalDate.now(BANGKOK).minusDays(1), "id", created.id()));
         assertThatThrownBy(() -> quotationService.submit(created.id(), salesActor))
@@ -3739,10 +3654,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void daysMode_behaviourIsUnchanged() {
-        // The default shape every OTHER test in this file already relies on: no validityMode sent
-        // at all normalises to DAYS, validityUntil stays null, and approve keeps computing
-        // approvalDate + validityDays -- see #acceptanceScenario_createUpdateSubmitApprove's own
-        // assertion on this, pinned again here explicitly for V178.
+        // The default shape every OTHER test in this file already relies on: no validityMode sent at all normalises to
+        // DAYS, validityUntil stays null, and approve keeps computing approvalDate + validityDays.
         DealQuotationDto created = quotationService.create(ticketId,
             upsertRequest(List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(created.validityMode()).isEqualTo(WastageCalculator.VALIDITY_MODE_DAYS);
@@ -3756,9 +3669,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).plusDays(30));
     }
 
-    /** {@code withValidity} — the ONE wither this file's {@code UpsertDealQuotationRequest}
-     * builders lack, added for V178 so every test above can start from an existing request
-     * (built by {@link #upsertRequestWithMode}) and set just the two new fields. */
+    /** withValidity — the ONE wither this file's UpsertDealQuotationRequest builders lack, added for V178 so every
+     * test above can start from an existing request (built by #upsertRequestWithMode) and set just the two new
+     * fields. */
     private UpsertDealQuotationRequest withValidity(UpsertDealQuotationRequest base, String validityMode,
                                                      LocalDate validityUntil) {
         return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(),
@@ -3808,9 +3721,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.omitContactHonorific()).isTrue();
     }
 
-    /** No "missing keeps stored" case for this flag on UPDATE — the editor always sends its
-     * CURRENT value, so an update that omits it (or sends {@code false}) clears a previously-set
-     * {@code true} back to {@code false}, exactly like {@code printedByDisplayId}/{@code projectName}. */
+    /** No "missing keeps stored" case for this flag on UPDATE — the editor always sends its CURRENT value, so an
+     * update that omits it (or sends false) clears a previously-set true back to false, exactly like
+     * printedByDisplayId/projectName. */
     @Test
     void update_omitContactHonorific_clearsWhenOmittedFromThePayload() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -3834,9 +3747,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_DELIVERY);
     }
 
-    /** A rep who unticks "ไม่รับมัดจำ" (re-enters an ordinary percentage) can never leave a stale
-     * term attached, EVEN IF the request still sends one — wrong-way-round: the field the request
-     * carries is not the field the stored row ends up with. */
+    /** A rep who unticks "ไม่รับมัดจำ" (re-enters an ordinary percentage) can never leave a stale term attached,
+     * EVEN IF the request still sends one — wrong-way-round: the field the request carries is not the field the
+     * stored row ends up with. */
     @Test
     void create_nonZeroDeposit_forcesFullPaymentTermNull_evenIfTheRequestSendsOne() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -3849,8 +3762,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.creditDays()).isEqualTo(30);
     }
 
-    /** A {@code null} depositPercent is NOT "no deposit" (it defaults to 30% at render time) — same
-     * refusal as an explicit non-zero percentage. */
+    /** A null depositPercent is NOT "no deposit" (it defaults to 30% at render time) — same refusal as an explicit
+     * non-zero percentage. */
     @Test
     void create_nullDepositPercent_alsoForcesFullPaymentTermNull() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -3875,10 +3788,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(updated.fullPaymentTerm()).isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY);
     }
 
-    /** Wrong-way-round: a zero-deposit DRAFT is SAVEABLE with no term chosen yet (create/update
-     * above never refuse it) — {@link DealQuotationService#submit} is the one gate, the last check
-     * before an approver ever sees the document, same "create/update permissive, submit strict"
-     * split the DATE-mode validity check and the per-item lead-time check already use. */
+    /** Wrong-way-round: a zero-deposit DRAFT is SAVEABLE with no term chosen yet. */
     @Test
     void submit_zeroDepositWithNoTermChosen_isBadRequest() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -3902,8 +3812,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(WastageCalculator.FULL_PAYMENT_TERM_ON_OR_BEFORE_DELIVERY);
     }
 
-    /** A non-zero-deposit document is NEVER blocked by the new submit gate — the condition can
-     * only ever fire on a genuinely zero-deposit document (regression guard for the guard itself). */
+    /** A non-zero-deposit document is NEVER blocked by the new submit gate — the condition can only ever fire on a
+     * genuinely zero-deposit document (regression guard for the guard itself). */
     @Test
     void submit_nonZeroDeposit_isUnaffectedByTheNewGate() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -3978,8 +3888,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             upsertRequest(otherContact.id(), List.of(sampleItem("100.00", 10))), salesActor);
         assertThat(otherDraft.contactEmail()).isEqualTo(otherContact.email());
 
-        // Updating the ORIGINAL contact (`contact`, not `otherContact`) must never touch a draft
-        // snapshotted against a DIFFERENT contact id.
+        // Updating the ORIGINAL contact (`contact`, not `otherContact`) must never touch a draft snapshotted against a
+        // DIFFERENT contact id.
         transactional(customerService).updateContact(customer.id(), contact.id(),
             null, null, null, "changed-for-original-contact@customer.test", null);
 
@@ -4040,8 +3950,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(repBsDraft.contactEmail()).isEqualTo(contact.email());
         assertThat(repBsDraft.salesRepId()).isEqualTo(otherSalesId);
 
-        // Rep A (or anyone reaching CustomerService#updateContact -- it takes no actor) corrects
-        // the SHARED contact. Rep B never touched their own draft.
+        // Rep A (or anyone reaching CustomerService#updateContact -- it takes no actor) corrects the SHARED contact.
+        // Rep B never touched their own draft.
         transactional(customerService).updateContact(customer.id(), contact.id(),
             null, null, null, "shared-contact-new-email@customer.test", "085-000-1111");
 
@@ -4072,16 +3982,14 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(reloaded.contactEmail()).isNull();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private UserPrincipal salesRepActor() {
         return salesActor;
     }
 
-    /** Slice 2's N6 allows one live direct quotation per deal; the tests below that put several on one
-     * deal (legacy/revision shapes) create through {@link LegacyDirectQuotationFixtures}. */
+    /** Slice 2's N6 allows one live direct quotation per deal; the tests below that put several on one deal
+     * (legacy/revision shapes) create through LegacyDirectQuotationFixtures. */
     private DealQuotationDto createAlongsideLive(long ticketIdParam, UpsertDealQuotationRequest request,
                                                  UserPrincipal actor) {
         return LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketIdParam, request, actor);
@@ -4152,10 +4060,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         return new MockMultipartFile("file", "sig.png", "image/png", out.toByteArray());
     }
 
-    /** Real PNG MAGIC BYTES (89 50 4E 47 0D 0A 1A 0A) but no genuine IHDR/IDAT/IEND stream --
-     * passes the container sniff, then fails {@code ImageDecodability.decode}. This is the
-     * regression {@code signatureUpload_selfCeoOrAdmin_allowed_andMagicBytesValidated}'s
-     * {@code andMagicBytesValidated} name refers to. */
+    /** Real PNG MAGIC BYTES (89 50 4E 47 0D 0A 1A 0A) but no genuine IHDR/IDAT/IEND stream -- passes the container
+     * sniff, then fails ImageDecodability.decode. This is the regression
+     * signatureUpload_selfCeoOrAdmin_allowed_andMagicBytesValidated's andMagicBytesValidated name refers to. */
     private MockMultipartFile undecodablePngBytesFile() {
         byte[] bytes = new byte[]{
             (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x00
@@ -4171,13 +4078,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
-    /**
-     * Unlike {@link #createEmployee}, which leaves {@code positionTh} null, this sets a real
-     * position containing "ผู้จัดการ" -- {@code NotificationRepository#notifyByRole}'s own
-     * {@code sales_manager} predicate keys on {@code hr.position.name_th}, NOT the employee's
-     * display name, so an employee with no position can never match it (see that predicate's own
-     * comment for why it is deliberately narrower than a division match).
-     */
+    /** Unlike #createEmployee, which leaves positionTh null, this sets a real position containing "ผู้จัดการ" --
+     * NotificationRepository#notifyByRole's own sales_manager predicate keys on hr.position.name_th, NOT the
+     * employee's display name, so an employee with no position can never match it. */
     private long createSalesManager(EmployeeRepository employees, String nameTh, String email) {
         return employees.create(new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,
@@ -4199,13 +4102,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             true, LocalDate.now(), false, null, false);
     }
 
-    /** Records every {@code sendWithAttachment} call as {@code [to, subject]} — the "capturing
-     * mailer" the report's evidence for the approval email cites. */
+    /** Records every sendWithAttachment call as [to, subject] — the "capturing mailer" the report's evidence for
+     * the approval email cites. */
     private static final class CapturingMailer implements Mailer {
         final List<String[]> attachmentsSent = new ArrayList<>();
-        // The branded HTML notification path (NotificationEmailService#send -> Mailer#sendHtml) --
-        // distinct from attachmentsSent above, which is the dead PDF-attachment path's own mailer
-        // call. {to, subject} per send, in call order.
+        // The branded HTML notification path (NotificationEmailService#send -> Mailer#sendHtml) -- distinct from
+        // attachmentsSent above, which is the dead PDF-attachment path's own mailer call. {to, subject} per send, in
+        // call order.
         final List<String[]> htmlSent = new ArrayList<>();
 
         @Override
@@ -4247,8 +4150,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.priceMode()).isEqualTo(WastageCalculator.PRICE_MODE_SPECIAL_SQM);
         DealQuotationItemDto item = created.items().get(0);
         assertThat(item.netUnitPrice()).isEqualByComparingTo("453.84");
-        assertThat(item.lineAmount()).isEqualByComparingTo("4538.40"); // 453.84 x 10 แผ่น
-        // ราคา stays the CATALOG LIST price the rep typed — it is not overwritten by the special.
+        assertThat(item.lineAmount()).isEqualByComparingTo("4538.40"); // 453.84 x 10 แผ่น ราคา stays the CATALOG LIST price the rep typed — it is not overwritten by the special.
         assertThat(item.unitPrice()).isEqualByComparingTo("2000.00");
         assertThat(item.specialPriceSqm()).isEqualByComparingTo("1350");
         assertThat(item.specialPriceLine())
@@ -4303,8 +4205,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(freight.quantity()).isEqualByComparingTo("1");
         assertThat(freight.unit()).isEqualTo("JOB");
         assertThat(freight.lineAmount()).isEqualByComparingTo("50000.00");
-        // None of the tile machinery: no size line, no wastage/calculation line, no catalog link,
-        // no ตร.ม./แผ่น, no แผ่น/กล่อง.
+        // None of the tile machinery: no size line, no wastage/calculation line, no catalog link, no ตร.ม./แผ่น, no
+        // แผ่น/กล่อง.
         assertThat(freight.sizeLine()).isNull();
         assertThat(freight.calculationLine()).isNull();
         assertThat(freight.catalogPriceId()).isNull();
@@ -4422,11 +4324,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(adj.adjustmentPct()).isEqualByComparingTo("3");
         assertThat(adj.adjustmentDeadline()).isEqualTo(LocalDate.of(2026, 7, 31));
 
-        // The document total nets the discount out — and so, therefore, does the VAT and the
-        // grand total. (Both are computed FROM the subtotal, not summed from the per-line vat
-        // columns, so a negative line reduces the tax the customer is charged rather than being
-        // taxed separately. Pinned because getting this wrong would over-charge VAT on every
-        // discounted document while every other assertion here still passed.)
+        // The document total nets the discount out — and so, therefore, does the VAT and the grand total. (Both are
+        // computed FROM the subtotal, not summed from the per-line vat columns, so a negative line reduces the tax the
+        // customer is charged rather than being taxed separately.
         assertThat(created.subtotalAmount()).isEqualByComparingTo("1235075.35"); // 1273273.56 - 38198.21
         assertThat(created.vatAmount()).isEqualByComparingTo("86455.27");        // 7% of the NET subtotal
         assertThat(created.grandTotal()).isEqualByComparingTo("1321530.62");
@@ -4446,11 +4346,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.subtotalAmount()).isEqualByComparingTo("750.00");
     }
 
-    /**
-     * ⚠️ ORDERING IS LOAD-BEARING. An adjustment applies to the rows ABOVE it, so it must sort
-     * LAST whatever order the client sent — otherwise its base is whatever happened to precede it
-     * in the payload, and the same document totals differently depending on row order in the UI.
-     */
+    /** ⚠️ ORDERING IS LOAD-BEARING. An adjustment applies to the rows ABOVE it, so it must sort LAST whatever order
+     * the client sent — otherwise its base is whatever happened to precede it in the payload, and the same
+     * document totals differently depending on row order in the UI. */
     @Test
     void adjustmentRow_sortsLast_whateverOrderTheClientSends() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4464,8 +4362,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .containsExactly(WastageCalculator.LINE_TYPE_TILE, WastageCalculator.LINE_TYPE_PLAIN,
                 WastageCalculator.LINE_TYPE_ADJUSTMENT);
         assertThat(created.items()).extracting(DealQuotationItemDto::seq).containsExactly(1, 2, 3);
-        // 10% of (1000 + 500), NOT 10% of nothing — which is what a first-position adjustment
-        // would have computed had the reorder not happened.
+        // 10% of (1000 + 500), NOT 10% of nothing — which is what a first-position adjustment would have computed had
+        // the reorder not happened.
         assertThat(created.items().get(2).lineAmount()).isEqualByComparingTo("-150.00");
         assertThat(created.subtotalAmount()).isEqualByComparingTo("1350.00");
     }
@@ -4484,14 +4382,13 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 adjustmentPctItem("5", null))),
             salesActor);
 
-        assertThat(created.items().get(1).lineAmount()).isEqualByComparingTo("-100.00"); // 10% of 1000
-        // 5% of 1,000 = 50.00. Compounding would make it 5% of 900 = 45.00.
+        assertThat(created.items().get(1).lineAmount()).isEqualByComparingTo("-100.00"); // 10% of 1000 5% of 1,000 = 50.00. Compounding would make it 5% of 900 = 45.00.
         assertThat(created.items().get(2).lineAmount()).isEqualByComparingTo("-50.00");
         assertThat(created.subtotalAmount()).isEqualByComparingTo("850.00");
     }
 
-    /** A document of nothing but adjustments has no base to discount — refuse it rather than
-     * silently writing a ฿0 discount line. */
+    /** A document of nothing but adjustments has no base to discount — refuse it rather than silently writing a ฿0
+     * discount line. */
     @Test
     void adjustmentOnly_document_isRejected() {
         assertThatThrownBy(() -> quotationService.create(ticketId,
@@ -4502,21 +4399,7 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── Type-aware price validation, wrong-way-round ────────────────────────────────────────
 
-    /**
-     * The regression guard for the {@code @DecimalMin("0.01")} that was removed from
-     * {@code ItemInput.unitPrice}: a TILE row must STILL refuse a non-positive or missing price.
-     *
-     * <p>⚠️ <b>Mutation-checked, and the result is worth recording:</b> deleting the TILE/PLAIN
-     * price guard from {@code DealQuotationService#requirePriceValidForType} does NOT red this
-     * test. On the create path a bad price is caught a second time by
-     * {@code #requireItemComplete}'s own "ราคาต่อหน่วย" check, which pre-dates v3. That
-     * belt-and-braces is welcome, but it means THIS test does not isolate the new rule — the two
-     * that do are {@link #tileRow_withNonPositivePrice_isRejectedOnTheCalculateLinePreviewToo}
-     * (the preview path skips completeness entirely) and
-     * {@link #plainRow_withNonPositiveOrMissingPrice_isRejected} (a PLAIN row has no completeness
-     * check to fall back on). Those two are the real guard; keep this one as the statement of
-     * intent, but do not read a green here as evidence the guard exists.
-     */
+    /** Checks tile rows still reject missing or non-positive prices; this does not isolate the type-specific guard. */
     @Test
     void tileRow_withNonPositiveOrMissingPrice_isStillRejected() {
         for (BigDecimal bad : new BigDecimal[]{BigDecimal.ZERO, new BigDecimal("-5"), null}) {
@@ -4612,8 +4495,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    /** A price mode whose own price is missing must 400, NEVER fall back to the list price —
-     * a silent fallback would quote the customer the undiscounted figure. */
+    /** A price mode whose own price is missing must 400, NEVER fall back to the list price — a silent fallback
+     * would quote the customer the undiscounted figure. */
     @Test
     void specialSqmMode_withoutASpecialPrice_isRejected_notSilentlyFallenBackToTheListPrice() {
         assertThatThrownBy(() -> quotationService.create(ticketId,
@@ -4642,9 +4525,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── submit / revision over the new row types ────────────────────────────────────────────
 
-    /** submit re-checks the STORED rows. Its tile completeness rule must NOT be applied to a
-     * PLAIN or ADJUSTMENT row — without the type switch, every document containing a freight line
-     * would be un-submittable because it has no รุ่น/สี/ผิว/ขนาด. */
+    /** submit re-checks the STORED rows. Its tile completeness rule must NOT be applied to a PLAIN or ADJUSTMENT
+     * row — without the type switch, every document containing a freight line would be un-submittable because it
+     * has no รุ่น/สี/ผิว/ขนาด. */
     @Test
     void submit_acceptsADocumentContainingPlainAndAdjustmentRows() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4658,9 +4541,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
     }
 
-    /** A PLAIN row missing its description is still refused at submit — the type switch narrows
-     * the rule, it does not remove it. Written by breaking the stored row directly, the way a
-     * legacy/pre-rule row would exist. */
+    /** A PLAIN row missing its description is still refused at submit — the type switch narrows the rule, it does
+     * not remove it. Written by breaking the stored row directly, the way a legacy/pre-rule row would exist. */
     @Test
     void submit_stillRejectsAPlainRowWithNoDescription() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4677,8 +4559,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             .hasMessageContaining("รายละเอียด");
     }
 
-    /** A revision copies the parent's rows VERBATIM — adjustments included, at their approved
-     * figure, rather than re-deriving them. */
+    /** A revision copies the parent's rows VERBATIM — adjustments included, at their approved figure, rather than
+     * re-deriving them. */
     @Test
     void createRevision_carriesPriceModeAndEveryRowTypeVerbatim() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4965,8 +4847,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
                 plainItemWithDiscount("สุขภัณฑ์ 5", "2", "ชุด", "35433.64", "20"),
                 plainItemWithDiscount("สุขภัณฑ์ 5.1", "2", "ชุด", "45581.31", "20"),
                 plainItemWithDiscount("สุขภัณฑ์ 5.2", "2", "ชุด", "36764.49", "20"),
-                // Bold in the plan: proves amount = round2(list × qty × (1 − pct/100)), not
-                // round2(round2(net) × qty) — the double-rounded formula gives 35,799.64 here.
+                // Bold in the plan: proves amount = round2(list × qty × (1 − pct/100)), not round2(round2(net) × qty) — the
+                // double-rounded formula gives 35,799.64 here.
                 plainItemWithDiscount("สุขภัณฑ์ 5.3", "2", "ชุด", "22374.77", "20"),
                 plainItemWithDiscount("สุขภัณฑ์ 5.4", "2", "ชุด", "10314.02", "20"),
                 plainItemWithDiscount("สุขภัณฑ์ 5.5", "2", "ชุด", "7153.27", "20"),
@@ -5086,8 +4968,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── "Sell loose pieces" ─────────────────────────────────
 
-    /** The flag persists, round-trips on GET, and defaults true for a request that never mentions
-     * it — same "null reads as true" contract as every other layer. */
+    /** The flag persists, round-trips on GET, and defaults true for a request that never mentions it — same "null
+     * reads as true" contract as every other layer. */
     @Test
     void roundToFullBox_persistsAndRoundTripsOnGet() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -5098,10 +4980,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(reloaded.items().get(0).roundToFullBox()).isTrue();
     }
 
-    /** The headline case, end to end through the real service and Postgres: 32 pieces, box of 10,
-     * no wastage — 3 full boxes plus 2 loose, piecesFinal UNROUNDED at 32 (not the old ceiling of
-     * 40), and the printed line reflects it. Proves the column round-trips both directions, not
-     * only "does not reject false". */
+    /** The headline case, end to end through the real service and Postgres: 32 pieces, box of 10, no wastage — 3
+     * full boxes plus 2 loose, piecesFinal UNROUNDED at 32 (not the old ceiling of 40), and the printed line
+     * reflects it. */
     @Test
     void roundToFullBoxFalse_persistsAndComputesTheLooseSplit_onCreateAndGet() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -5125,8 +5006,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(reloadedItem.lineAmount()).isEqualByComparingTo("1600.00");
     }
 
-    /** update() can flip the flag on an existing row, in either direction, and the stored row
-     * follows — not merely accepted at create and frozen thereafter. */
+    /** update() can flip the flag on an existing row, in either direction, and the stored row follows — not merely
+     * accepted at create and frozen thereafter. */
     @Test
     void roundToFullBox_canBeToggledOnUpdate_inEitherDirection() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -5151,10 +5032,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(toggledBackOn.items().get(0).piecesFinal()).isEqualTo(40);
     }
 
-    /** {@code createRevision} copies its parent's rows VERBATIM (the class's own documented
-     * contract for every other item field) — proven here for roundToFullBox specifically, in
-     * BOTH directions, so a regression that silently defaulted a revision back to true (or froze
-     * it at false) would be caught either way. */
+    /** createRevision copies its parent's rows VERBATIM (the class's own documented contract for every other item
+     * field) — proven here for roundToFullBox specifically, in BOTH directions, so a regression that silently
+     * defaulted a revision back to true (or froze it at false) would be caught either way. */
     @Test
     void createRevision_copiesRoundToFullBoxVerbatim_bothDirections() {
         DealQuotationDto createdFalse = quotationService.create(ticketId,
@@ -5181,9 +5061,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(revisionOfTrue.items().get(0).piecesFinal()).isEqualTo(40);
     }
 
-    /** A PLAIN row is unaffected: it has no {@code piecesPerBox} concept at all, and the stored
-     * flag reads {@code true} (the moot default) rather than propagating whatever a client might
-     * have sent for a TILE row elsewhere in the same payload. */
+    /** A PLAIN row is unaffected: it has no piecesPerBox concept at all, and the stored flag reads true (the moot
+     * default) rather than propagating whatever a client might have sent for a TILE row elsewhere in the same
+     * payload. */
     @Test
     void roundToFullBox_plainRow_isAlwaysTrue_flagIsMootWithoutABox() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -5191,9 +5071,9 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(created.items().get(0).roundToFullBox()).isTrue();
     }
 
-    /** V182 "sell loose pieces" fixture: a PIECES-mode TILE row with explicit piecesPerBox,
-     * wastage and roundToFullBox — every other field mirrors {@link #sampleItem}'s 60x60/
-     * 0.36-sqm-per-piece fixture (so it satisfies the same item-completeness rule). */
+    /** V182 "sell loose pieces" fixture: a PIECES-mode TILE row with explicit piecesPerBox, wastage and
+     * roundToFullBox — every other field mirrors #sampleItem's 60x60/ 0.36-sqm-per-piece fixture (so it satisfies
+     * the same item-completeness rule). */
     private ItemInput loosePiecesItem(int piecesInput, String wastageMode, String wastageValue,
                                       int piecesPerBox, String unitPrice, boolean roundToFullBox) {
         return new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
@@ -5254,19 +5134,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── v3 fixtures ────────────────────────────────────────────────────────────────────────
 
-    /**
-     * What an honest UI does on save: hand every field the GET returned straight back. Mirrors
-     * {@code DealQuotationItemDto} onto {@code ItemInput} one-for-one, with the two mappings the
-     * DTO cannot make for itself:
-     * <ul>
-     *   <li>{@code description} comes from {@code descriptionLine} — the same field under the two
-     *       names it has on the way out and the way in.</li>
-     *   <li>{@code directNetPrice} comes from {@code netUnitPrice}. There is no {@code
-     *       directNetPrice} on the DTO ON PURPOSE (V168: the typed net IS final_unit_price, and a
-     *       second column could only drift), so this mapping is the caller's job — recoverable,
-     *       unlike a flat adjustment's amount, which is why THAT one needed a DTO field.</li>
-     * </ul>
-     */
+    /** What an honest UI does on save: hand every field the GET returned straight back. directNetPrice comes from
+     * netUnitPrice. */
     private ItemInput echoBack(DealQuotationItemDto src, String priceMode) {
         boolean directNetTile = WastageCalculator.PRICE_MODE_DIRECT_NET.equals(priceMode)
             && WastageCalculator.LINE_TYPE_TILE.equals(src.lineType());
@@ -5285,8 +5154,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
             "หมายเหตุทดสอบ", priceMode, items).withRecipientType("OWNER");
     }
 
-    /** The full canonical constructor, for the one field (projectName) none of this class's other
-     * helpers thread through. Every other field left at its "use the default" value. */
+    /** The full canonical constructor, for the one field (projectName) none of this class's other helpers thread
+     * through. Every other field left at its "use the default" value. */
     private UpsertDealQuotationRequest upsertRequestWithProjectName(String projectName, List<ItemInput> items) {
         return new UpsertDealQuotationRequest(null, "P003", "D002", LocalDate.now(), 30, "CREDIT", 30, 30,
             null, null, "หมายเหตุทดสอบ", null, null, null, null, null, projectName, items).withRecipientType("OWNER");

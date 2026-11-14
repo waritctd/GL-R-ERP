@@ -15,12 +15,8 @@ import { Figure, failed, moneySum } from './dashboardParts.jsx';
 import { defaultRange } from '../tickets/movementRange.js';
 import { TeamMovementPanel } from './TeamMovementPanel.jsx';
 
-// A deal is "won" once it reaches the terminal pipeline stage, "lost" once
-// its lifecycle/legacy status marks it lost or cancelled, else "open" —
-// mirrors the same three-way split features/tickets/salesViewScope.js's
-// `dealInScope`/`closed` already draws for the identical distinction, kept
-// separate here only because this view needs won vs lost as two counts
-// (close-rate) rather than one combined "closed" boolean.
+// A deal is "won" once it reaches the terminal pipeline stage, "lost" once its lifecycle/legacy status marks
+// it lost or cancelled, else "open".
 function isDealWon(ticket) {
   return ticket.salesStage === 'CLOSED_PAID';
 }

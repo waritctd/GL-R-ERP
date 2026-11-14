@@ -118,8 +118,8 @@ describe('PricingRequestCreateModal', () => {
 
   it('renders no price/discount input anywhere on the item row (CEO pricing is a later phase)', () => {
     renderModal();
-    // Scoped to the per-ITEM price labels specifically -- "ราคาเป้าหมายของลูกค้า" is a top-level
-    // form field (the customer's OWN target price, unrelated to the item row's own price/unit).
+    // Scoped to the per-ITEM price labels specifically -- "ราคาเป้าหมายของลูกค้า" is a top-level form field (the
+    // customer's OWN target price, unrelated to the item row's own price/unit).
     expect(screen.queryByLabelText(/^ราคา\/หน่วย/)).toBeNull();
     expect(screen.queryByLabelText(/^ส่วนลด/)).toBeNull();
   });
@@ -197,8 +197,8 @@ describe('PricingRequestCreateModal', () => {
     expect(item.requestedQty).toBeUndefined();
     expect(item.requestedUnit).toBeUndefined();
     expect(item.requestedUnitBasis).toBeUndefined();
-    // The fixture's ticketItem() has no `factory` -- confirms the field IS sent (not omitted, as
-    // an earlier version of this form did) but is null when the source ticket item carries none.
+    // The fixture's ticketItem() has no `factory` -- confirms the field IS sent (not omitted, as an earlier
+    // version of this form did) but is null when the source ticket item carries none.
     expect(item.factory).toBeNull();
   });
 
@@ -463,9 +463,9 @@ describe('PricingRequestCreateModal', () => {
   });
 
   it('a catalogue pick autofills the โรงงาน-labelled brand field from the catalog factory name, and replaces a seeded origin, lead time, thickness and pieces-per-box with the picked product\'s', async () => {
-    // Keyed on the query text, not mockResolvedValueOnce -- an earlier test's own debounced
-    // (280ms) typeahead call can still be in flight when this test starts (see
-    // QuotationItemRow.test.jsx's identical note on its own catalog-pick test).
+    // Keyed on the query text, not mockResolvedValueOnce -- an earlier test's own debounced (280ms) typeahead call
+    // can still be in flight when this test starts (see QuotationItemRow.test.jsx's identical note on its own
+    // catalog-pick test).
     api.catalog.prices.mockImplementation(async (q) => (
       (q ?? '').includes('B2')
         ? { items: [{
@@ -887,11 +887,9 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
     // and the จำนวน field shows the legacy quantity, not empty.
     expect(screen.getByRole('button', { name: 'ตร.ม.', pressed: true })).not.toBeNull();
     expect(screen.getByDisplayValue('144')).not.toBeNull();
-    // Second-pass review finding N1: a PER_SQM row's requestedQtySqm/requestedQty pair is NOT
-    // pieces × sqmPerPiece (it's the same area counted twice, often exactly equal, as this
-    // fixture's own 144/144 shows) -- deriving "sqmPerPiece" from it would give a fake ~1.0
-    // ตร.ม./แผ่น and have the server order 144 pieces instead of the ~400 a real ~0.36 ตร.ม./แผ่น
-    // tile needs. แผ่น/ตร.ม. must stay BLANK for the rep to fill in, never silently populated.
+    // Second-pass review finding N1: a PER_SQM row's requestedQtySqm/requestedQty pair is NOT pieces × sqmPerPiece
+    // -- deriving "sqmPerPiece" from it would give a fake ~1.0 ตร.ม./แผ่น and have the server order 144 pieces
+    // instead of the ~400 a real ~0.36 ตร.ม./แผ่น tile needs. แผ่น/ตร.ม.
     expect(screen.getByLabelText(/^แผ่น\/ตร\.ม\./).value).toBe('');
   });
 
@@ -903,8 +901,8 @@ describe('PricingRequestCreateModal edit mode (Fix 2)', () => {
           items: [{
             id: 10, sourceTicketItemId: null, productId: null, brand: 'SCG', model: 'A1', color: 'ขาว',
             productDescription: 'กระเบื้องพื้น SCG A1 (เดิม)', texture: 'ด้าน', size: '60x60',
-            // 400 pieces at a real sqmPerPiece of 0.36 -> requestedQtySqm = 144 (400 * 0.36).
-            // Dividing back out (144 / 400 = 0.36) recovers the REAL figure here, unlike PER_SQM.
+            // 400 pieces at a real sqmPerPiece of 0.36 -> requestedQtySqm = 144 (400 * 0.36). Dividing back out (144 / 400
+            // = 0.36) recovers the REAL figure here, unlike PER_SQM.
             requestedUnitBasis: 'PER_PIECE', requestedQty: 400, requestedQtySqm: 144,
             requestedUnit: 'แผ่น',
             wastageMode: null, roundToFullBox: true,

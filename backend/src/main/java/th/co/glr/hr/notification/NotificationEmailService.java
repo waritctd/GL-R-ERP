@@ -13,71 +13,30 @@ import th.co.glr.hr.mail.Mailer;
 public class NotificationEmailService {
     private static final Logger log = LoggerFactory.getLogger(NotificationEmailService.class);
 
-    /** Content-ID the logo is embedded under and referenced from the HTML via {@code cid:glr-logo}
-     * (see {@link #htmlBody}). Previously this was a remote {@code <img src>} built from a separate
-     * {@code asset-base-url} host (the backend's own Render origin) specifically to dodge a Vercel
-     * Deployment-Protection auth wall that could block Gmail's image-fetching proxy. That whole
-     * class of problem - any mail client refusing to FETCH a URL, whether from an auth wall or (the
-     * defect that actually reached UAT) Gmail blocking remote images for mail it files as Spam or
-     * from a sender it does not yet trust - is moot once the image travels INSIDE the message:
-     * there is no URL, so there is nothing to block. {@code asset-base-url} /
-     * {@code app.mail.asset-base-url} are retired along with it. {@code app-base-url} remains,
-     * unrelated, for the portal CTA link below. */
+    /** Content-ID the logo is embedded under and referenced from the HTML via cid:glr-logo (see #htmlBody).
+     * asset-base-url / app.mail.asset-base-url are retired along with it. app-base-url remains, unrelated, for the
+     * portal CTA link below. */
     private static final String LOGO_CONTENT_ID = "glr-logo";
     private static final String BRAND_COLOR = "#4f46e5";
     private static final String FONT_STACK = "'Sarabun',-apple-system,'Segoe UI',Tahoma,sans-serif";
 
     private final Mailer mailer;
-    /**
-     * Whether {@code app.mail.override-to} is configured - NOT the address itself, and NOT used to
-     * pick a recipient. Recipient redirection now lives entirely in
-     * {@link th.co.glr.hr.mail.OverrideRedirectingMailer}, which wraps the {@link Mailer} bean this
-     * class is handed (issue #782: this class and the then-existing {@code FactoryEmailService}
-     * (deleted since — factory-quote mail became manual-only) used to each need their own copy of
-     * {@code overrideTo.isBlank() ? to : overrideTo} - one of them simply didn't have it - which is
-     * the defect the decorator exists to make structurally impossible; see that class).
-     *
-     * <p>This class still needs to know WHETHER an override is active, for a narrower and unrelated
-     * reason: {@code to} can legitimately arrive null/blank (an employee with no email on file -
-     * {@code NotificationService} no longer gates on the address before calling this), and normally
-     * that means there is nothing to send. Except when an override IS configured, where attempting the
-     * send anyway - and letting the Mailer redirect it - is what lets a UAT/test deployment exercise
-     * the full notification pipeline even for an employee seeded without a real address. That
-     * send-or-skip decision is this class's business, not the Mailer's; the address actually dialled,
-     * and the note marking a redirected send as redirected, are the Mailer's alone now - see
-     * {@link #send} / {@link #sendWithAttachment} below, both of which pass {@code to} to the Mailer
-     * completely unchanged, override configured or not.
-     */
+    /** Whether app.mail.override-to is configured - NOT the address itself, and NOT used to pick a recipient. to :
+     * overrideTo - one of them simply didn't have it - which is the defect the decorator exists to make
+     * structurally impossible; see that class). */
     private final boolean overrideConfigured;
     private final String subjectSuffix;
     private final String appBaseUrl;
-    /** The logo, pre-wrapped as the single-element list {@link Mailer#sendHtml} expects - computed
-     * once at construction (this service is a singleton bean), not per email. Loaded via
-     * {@link BrandAssets#logoBytes()} - a small standalone component in the {@code brand} package,
-     * not a method on {@code BrandController} (a {@code @RestController}, i.e. a web adapter):
-     * this service depending on that would invert the normal dependency direction. Both this
-     * service and {@code BrandController} depend on {@code BrandAssets} instead, so there is
-     * exactly one place that knows where the asset lives on disk. Empty when the resource is
-     * absent, in which case the email sends with no inline image and the {@code <img>} falls back
-     * to its alt text - the same degrade-gracefully behavior a 404'd remote fetch would have had
-     * before this change. */
+    /** The logo, pre-wrapped as the single-element list Mailer#sendHtml expects - computed once at construction
+     * (this service is a singleton bean), not per email. Both this service and BrandController depend on
+     * BrandAssets instead, so there is exactly one place that knows where the asset lives on disk. */
     private final List<Mailer.InlineImage> logoInlineImages;
 
     public NotificationEmailService(Mailer mailer,
                                     BrandAssets brandAssets,
                                     @Value("${app.mail.override-to:}") String overrideTo,
                                     @Value("${app.mail.subject-suffix:}") String subjectSuffix,
-                                    // Blank, NOT a URL. This annotation default is the last line of
-                                    // defence and it must not name an environment. It carried uat's
-                                    // preview host when ported; that was harmless only because
-                                    // application.yml defines app.mail.app-base-url as
-                                    // ${APP_MAIL_APP_BASE_URL:}, so the property is PRESENT-BUT-EMPTY
-                                    // and an annotation default never fires. Delete or rename that
-                                    // yml line and the property becomes ABSENT, the default fires,
-                                    // and every production email links to UAT — silently. Absent and
-                                    // empty are not the same thing, and this repo has been bitten by
-                                    // that distinction before. ProductionReadinessConfig is what
-                                    // actually forces a real value in a real deployment.
+                                    // Keep the URL default blank so a missing property cannot send production email links to another environment.
                                     @Value("${app.mail.app-base-url:}") String appBaseUrl) {
         this.mailer = mailer;
         this.overrideConfigured = !clean(overrideTo).isBlank();
@@ -91,10 +50,9 @@ public class NotificationEmailService {
 
     @Async
     public void send(long employeeId, String to, String recipientName, String subject, String body, String link) {
-        // See overrideConfigured's Javadoc above: this is a send-or-skip decision, not a "who do I
-        // send to" decision. `to` reaches the Mailer exactly as received below, whether or not an
-        // override is configured - the Mailer is what redirects it (and marks that it did) when one
-        // is active.
+        // See overrideConfigured's Javadoc above: this is a send-or-skip decision, not a "who do I send to" decision.
+        // `to` reaches the Mailer exactly as received below, whether or not an override is configured - the Mailer is
+        // what redirects it (and marks that it did) when one is active.
         if ((to == null || to.isBlank()) && !overrideConfigured) {
             log.info("Notification email skipped: employee={} has no email and no override configured",
                 employeeId);
@@ -189,12 +147,9 @@ public class NotificationEmailService {
         return message.toString();
     }
 
-    /**
-     * Table-based, inline-styled HTML for email-client compatibility (no {@code <style>} blocks, no
-     * flexbox/grid). Every interpolated value is HTML-escaped before insertion - {@code body} in
-     * particular is often free text typed by a manager (e.g. a leave reviewerNote) and must not be
-     * able to inject markup.
-     */
+    /** Table-based, inline-styled HTML for email-client compatibility (no <style> blocks, no flexbox/grid). Every
+     * interpolated value is HTML-escaped before insertion - body in particular is often free text typed by a
+     * manager (e.g. a leave reviewerNote) and must not be able to inject markup. */
     private String htmlBody(String recipientName, String body, String link) {
         String cleanName = clean(recipientName);
         String greeting = cleanName.isBlank()
@@ -208,10 +163,9 @@ public class NotificationEmailService {
                 + cta);
     }
 
-    /** Plain-text alternative for the leave-submission letter: the letter verbatim (control chars are
-     * sanitized downstream by the PDF/mail layer), the portal link, and the standard auto-mail footer
-     * {@link #textBody} uses. The letter already carries its own greeting and signature, so no {@code
-     * เรียน คุณ...} line is prepended. */
+    /** Plain-text alternative for the leave-submission letter: the letter verbatim (control chars are sanitized
+     * downstream by the PDF/mail layer), the portal link, and the standard auto-mail footer #textBody uses. The
+     * letter already carries its own greeting and signature, so no เรียน คุณ... */
     private String letterTextContent(String letterBody, String link) {
         StringBuilder message = new StringBuilder(clean(letterBody)).append("\n\n");
         String cleanLink = clean(link);
@@ -223,31 +177,22 @@ public class NotificationEmailService {
         return message.toString();
     }
 
-    /** HTML content (the inner block placed inside {@link #wrapShell}) for the leave-submission letter:
-     * the letter HTML-escaped with newlines turned into {@code <br>}, plus the portal CTA. */
+    /** HTML content (the inner block placed inside #wrapShell) for the leave-submission letter: the letter
+     * HTML-escaped with newlines turned into , plus the portal CTA. */
     private String letterHtmlContent(String letterBody, String link) {
         String letterHtml = escapeHtml(clean(letterBody)).replace("\r\n", "\n").replace("\n", "<br>");
         return "<p style=\"margin:0;\">" + letterHtml + "</p>" + ctaHtml(link);
     }
 
-    /** Wraps caller-supplied content HTML in the shared branded shell (inline logo header, brand rule,
-     * auto-mail footer). Extracted from {@link #htmlBody} so the notification body and the
-     * leave-submission letter render in one identical shell instead of two copies that can drift. */
+    /** Wraps caller-supplied content HTML in the shared branded shell (inline logo header, brand rule, auto-mail
+     * footer). Extracted from #htmlBody so the notification body and the leave-submission letter render in one
+     * identical shell instead of two copies that can drift. */
     private String wrapShell(String contentHtml) {
         String logoSrc = "cid:" + LOGO_CONTENT_ID;
 
-        // The GL&R artwork is black-on-white with NO alpha channel, so the header band stays white
-        // and the brand colour appears as the rule beneath it (and on the CTA) instead. Painting the
-        // brand colour behind this logo would show a white rectangle floating on indigo. width/height
-        // are pinned to the source's true 360x195 (1.85:1) ratio, halved for retina - an
-        // aspect-ratio guess here letterboxes the wordmark in every client that honours the
-        // attributes. The font/color styles apply to the ALT TEXT when the image is blocked (Outlook
-        // always, or any client that disables inline images entirely), so a blocked image still
-        // reads as a deliberate wordmark rather than a broken box - which is why no duplicate text
-        // wordmark sits beside it.
-        //
-        // NOTE: this reasoning stays a Java comment, not an HTML one - an HTML comment here would
-        // ship inside every recipient's email and be readable via "show original".
+        // The GL&R artwork is black-on-white with NO alpha channel, so the header band stays white and the brand
+        // colour appears as the rule beneath it (and on the CTA) instead. Painting the brand colour behind this logo
+        // would show a white rectangle floating on indigo.
         return """
             <!doctype html>
             <html lang="th">
@@ -286,9 +231,9 @@ public class NotificationEmailService {
             """.formatted(BRAND_COLOR, logoSrc, FONT_STACK, FONT_STACK, contentHtml, FONT_STACK, FONT_STACK);
     }
 
-    /** Bulletproof CTA: a background-colored {@code <table>} with a padded {@code <a>}, not a styled
-     * {@code <div>} - Outlook (Word rendering engine) ignores padding/border-radius on anchors but
-     * honours them on table cells. Only rendered when link is non-blank. */
+    /** Bulletproof CTA: a background-colored <table> with a padded {@code }, not a styled <div> - Outlook (Word
+     * rendering engine) ignores padding/border-radius on anchors but honours them on table cells. Only rendered
+     * when link is non-blank. */
     private String ctaHtml(String link) {
         String cleanLink = clean(link);
         if (cleanLink.isBlank()) {
@@ -310,8 +255,8 @@ public class NotificationEmailService {
         return cleanLink.startsWith("/") ? cleanLink : "/" + cleanLink;
     }
 
-    /** Escapes the five HTML-significant characters. No third-party dependency - this is the entire
-     * surface a plain-text notification body/name/link can hit. Run BEFORE converting "\n" to "&lt;br&gt;". */
+    /** Escapes the five HTML-significant characters. No third-party dependency - this is the entire surface a
+     * plain-text notification body/name/link can hit. Run BEFORE converting "\n" to "<br>". */
     private String escapeHtml(String value) {
         if (value == null || value.isEmpty()) {
             return "";

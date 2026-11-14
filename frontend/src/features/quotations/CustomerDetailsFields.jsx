@@ -18,68 +18,23 @@ function editsFrom(customer) {
   };
 }
 
-/**
- * The SELECTED customer's ชื่อ / เลขที่ผู้เสียภาษี / โทร. / ที่อยู่, editable in place and saved back
- * to the customer master on blur (PUT /api/customers/{id}).
- *
- * History: F7 (owner, 2026-09-10) made tax id and phone editable inside DealCustomerCard. The owner
- * then asked (2026-09-11) for "a way for the sales to fill in the customer address" and for the
- * details to "autofill in later on if they get the same customer" — which is exactly what writing
- * to the customer MASTER (not the quotation) buys: the next quotation for that customer starts
- * filled. This component is those fields lifted OUT of DealCustomerCard, because the editor also
- * needs them on the `?ticket=` and existing-draft paths where that card is not rendered — one
- * component, not a pasted twin that a later fix would miss.
- *
- * `name` added (owner feedback, 2026-09-14 — "sometimes there's a typo in the name so they should
- * be able to correct it"): `PUT /api/customers/{id}` already accepted it (`UpdateCustomerRequest
- * .name`, `CustomerController#update`), it was just never surfaced here — unlike the other three,
- * the backend refuses a BLANK name (400 "กรุณาระบุชื่อลูกค้า", NOT NULL column), which `saveField`'s
- * existing generic error handling already covers correctly (restores the previous value, shows the
- * server's own message) with no special-casing needed.
- *
- * taxId/phone/address stay OPTIONAL (a customer without a tax id is still quotable — F7). The
- * document snapshots all four columns on every DRAFT save (DealQuotationService#update re-reads
- * the live customer), so the caller marks the quotation dirty after a save here; that next save is
- * what carries the correction onto the printed page.
- *
- * Contract: `customer` is the record (or a stand-in carrying `id`); `onChange(next)` receives the
- * record the SERVER says it stored (optimistic first, rolled back on refusal).
- *
- * ลูกค้าต่างประเทศ switch (bug fix, prod customer_id 4326 "DONG NGO GROUP..." / QT-2026-0039-1): a
- * customer already saved with a Thai structured address (`provinceCode` set) had its ที่อยู่
- * textarea permanently `readOnly` — the only editor was "แก้ไขที่อยู่แบบแยกจังหวัด", which requires
- * `completeThaiAddress(...)` and so could never turn INTO a foreign/free-text address. 4326 is a
- * Vietnamese customer that got fake Thai codes because the rep had no real way to say otherwise.
- * `foreignSwitch` (reset whenever `customer?.id` changes, or a switch attempt is refused) unlocks
- * the textarea for a currently-structured customer, reusing DealCustomerCard's exact checkbox
- * label. Saving still goes through the existing generic `saveField('address')` below, which
- * already sends ONLY `{ address }` — no structured keys, not even blank ones — and
- * `CustomerRepository#update` (verified 2026-09-15) already clears every structured column to
- * NULL whenever `:address` is non-null, so no backend change was needed, only this frontend gate.
- * A customer that already has no `provinceCode` keeps today's behaviour unchanged (free-text
- * textarea, no checkbox shown — there is nothing to switch out of).
- */
+/** The SELECTED customer's ชื่อ / เลขที่ผู้เสียภาษี / โทร. / ที่อยู่, editable in place and saved back to the
+ * customer master on blur (PUT /api/customers/{id}). History: F7 (owner, 2026-09-10) made tax id and phone
+ * editable inside DealCustomerCard. */
 export function CustomerDetailsFields({ customer, onChange, showToast, disabled = false }) {
-  // Own local state rather than editing `customer` on every keystroke, so a half-typed value never
-  // becomes what a save would snapshot. Re-seeded per FIELD whenever the underlying record changes
-  // — including from a save's own response, which is what makes the update "verified" rather than
-  // merely optimistic — but only for a field this component itself last seeded and the rep has not
-  // since edited. `customer` is QuotationEditorPage's `summaryCustomer`, which can swap from the
-  // quotation's frozen snapshot to the live customer-record query mid-session; without the
-  // last-seeded check that resync silently overwrote whatever the rep had typed but not yet
-  // blurred.
+  // Own local state rather than editing `customer` on every keystroke, so a half-typed value never becomes what
+  // a save would snapshot.
   const [edits, setEdits] = useState(() => editsFrom(customer));
   const [savingField, setSavingField] = useState(null);
   const queryClient = useQueryClient();
   const [addressEdit, setAddressEdit] = useState(null);
   // "ลูกค้าต่างประเทศ / ที่อยู่นอกประเทศไทย" — see the component doc above. Only meaningful while
-  // `customer?.provinceCode` is set (a currently-structured customer); reset per customer below and
-  // on a refused switch, so it never survives onto a different record.
+  // `customer?.provinceCode` is set (a currently-structured customer); reset per customer below and on a refused
+  // switch, so it never survives onto a different record.
   const [foreignSwitch, setForeignSwitch] = useState(false);
   // What this component itself last put into each field (the record's value, or a save's own
-  // in-flight/rolled-back value) — the baseline a field is compared against to tell "still what we
-  // seeded" (safe to re-seed) from "the rep typed something else" (leave it alone). `id` tracks
-  // which customer that baseline belongs to.
+  // in-flight/rolled-back value) — the baseline a field is compared against to tell "still what we seeded" (safe
+  // to re-seed) from "the rep typed something else" (leave it alone).
   const lastSeededRef = useRef({ id: customer?.id, ...editsFrom(customer) });
 
   async function saveAddress() {
@@ -87,10 +42,9 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
     setSavingField('address');
     try {
       const res = await api.customers.update(customer.id, addressEdit);
-      // The structured-address modal is the authoritative source for ที่อยู่ once used — apply its
-      // result to the field directly (and mark it clean) rather than relying on the dirty check
-      // above, since the free-text ที่อยู่ field may have been left dirty from typing before the
-      // modal was ever opened.
+      // The structured-address modal is the authoritative source for ที่อยู่ once used — apply its result to the
+      // field directly (and mark it clean) rather than relying on the dirty check above, since the free-text ที่อยู่
+      // field may have been left dirty from typing before the modal was ever opened.
       const nextAddress = res.customer?.address ?? '';
       setEdits((prev) => ({ ...prev, address: nextAddress }));
       lastSeededRef.current = { ...lastSeededRef.current, address: nextAddress };
@@ -103,17 +57,14 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   }
 
   useEffect(() => {
-    // Read fields directly (not via `editsFrom(customer)`) so eslint's exhaustive-deps rule can
-    // verify this against the deps array below field by field, same as the deps themselves.
+    // Read fields directly (not via `editsFrom(customer)`) so eslint's exhaustive-deps rule can verify this
+    // against the deps array below field by field, same as the deps themselves.
     const record = {
       name: customer?.name ?? '', taxId: customer?.taxId ?? '', phone: customer?.phone ?? '',
       address: customer?.address ?? '',
     };
-    // Snapshot the OLD baseline before reassigning the ref below. `setEdits`'s updater runs
-    // asynchronously (whenever React processes the queued update) — by then `lastSeededRef.current`
-    // has already been reassigned to the NEW record a few lines down, so reading `.current` from
-    // inside the updater would compare against the wrong baseline. Closing over this snapshot
-    // instead keeps the comparison correct regardless of when React actually calls the updater.
+    // Snapshot the OLD baseline before reassigning the ref below. Closing over this snapshot instead keeps the
+    // comparison correct regardless of when React actually calls the updater.
     const wasSeeded = lastSeededRef.current;
     const idChanged = customer?.id !== wasSeeded.id;
     if (idChanged) setForeignSwitch(false); // a dirty ลูกค้าต่างประเทศ toggle belonged to the OLD customer
@@ -121,21 +72,16 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
       if (idChanged) return record; // a different customer — the rep's dirty text belonged to the old one
       const merged = { ...prev };
       for (const field of EDIT_FIELDS) {
-        if (prev[field] === wasSeeded[field]) merged[field] = record[field]; // clean — take the record
-        // else: the rep has typed something else since it was seeded — keep their text
+        if (prev[field] === wasSeeded[field]) merged[field] = record[field]; // clean — take the record else: the rep has typed something else since it was seeded — keep their text
       }
       return merged;
     });
     lastSeededRef.current = { id: customer?.id, ...record };
   }, [customer?.id, customer?.name, customer?.taxId, customer?.phone, customer?.address]);
 
-  /**
-   * Persists ONE field on blur. Sends only that field, never the whole record: the endpoint has
-   * PATCH semantics (an omitted key is left alone), so a one-field PUT cannot clobber a value some
-   * other session changed meanwhile. A 403 — the deal-entry gate is real (DealEntryAccess) —
-   * surfaces the backend's own Thai message and puts the previous value back, so the rep never
-   * walks away believing a correction was saved.
-   */
+  /** Persists ONE field on blur. Sends only that field, never the whole record: the endpoint has PATCH semantics
+   * (an omitted key is left alone), so a one-field PUT cannot clobber a value some other session changed
+   * meanwhile. */
   async function saveField(field) {
     if (!customer?.id) return;
     const previous = customer[field] ?? '';
@@ -144,14 +90,8 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
     if (next === previous.trim()) return; // untouched (or re-typed identically) — no request at all
     const restore = customer;
     setSavingField(field);
-    // Mark this field clean — both the ref AND the displayed text — at `next` (the value being
-    // sent) BEFORE the optimistic onChange below. `next` is `edits[field]` trimmed, so a rep who
-    // left whitespace at the ends needs the display normalised to match too, or it would never
-    // again equal what the ref/record hold and would read as "still dirty" forever. Marking both
-    // like this is what lets the record-resync effect above — which compares `edits[field]`
-    // against this ref to tell a rep's own dirty edit from a value this component put there
-    // itself — treat the optimistic update, and then the server's own response (even normalised
-    // differently, e.g. a reformatted taxId), as safe to apply.
+    // Mark this field clean — both the ref AND the displayed text — at `next` (the value being sent) BEFORE the
+    // optimistic onChange below.
     lastSeededRef.current = { ...lastSeededRef.current, [field]: next };
     setEdits((prev) => ({ ...prev, [field]: next }));
     onChange({ ...customer, [field]: next || null });
@@ -164,9 +104,8 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
       onChange(restore);
       setEdits((prev) => ({ ...prev, [field]: previous }));
       lastSeededRef.current = { ...lastSeededRef.current, [field]: previous };
-      // A refused switch-to-foreign leaves the customer structured (restored above) — drop the
-      // toggle too, so the textarea goes back to readOnly rather than looking "unlocked" over a
-      // value that was never actually saved.
+      // A refused switch-to-foreign leaves the customer structured (restored above) — drop the toggle too, so the
+      // textarea goes back to readOnly rather than looking "unlocked" over a value that was never actually saved.
       if (field === 'address') setForeignSwitch(false);
       showToast?.('error', error.message || 'บันทึกข้อมูลลูกค้าไม่สำเร็จ');
     } finally {
@@ -177,11 +116,9 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
   const hint = 'แก้ไขได้ บันทึกกลับไปที่ข้อมูลลูกค้าอัตโนมัติ ใช้ต่อได้ในใบเสนอราคาถัดไป';
   return (
     <div className="grid grid-cols-2 gap-3 mobile:grid-cols-1" data-testid="customer-details">
-      {/* Owner feedback (2026-09-14): "sometimes there's a typo in the name so they should be able
-          to correct it" — a plain rename of the customer MASTER record (not a different customer,
-          not a deal reassignment), same PUT the other three fields already use. 200 = Update
-          CustomerRequest's @Size; the server 400s a blank ("กรุณาระบุชื่อลูกค้า") rather than
-          letting a NOT NULL column violation surface. */}
+      {/* Owner feedback (2026-09-14): "sometimes there's a typo in the name so they should be able to correct it" — a
+       * plain rename of the customer MASTER record (not a different customer, not a deal reassignment), same PUT the
+       * other three fields already use. */}
       <div className="col-span-full">
         <FormField label="ชื่อลูกค้า" htmlFor={QUOTATION_FIELD_IDS.customerName} hint={hint}>
           <input
@@ -219,8 +156,8 @@ export function CustomerDetailsFields({ customer, onChange, showToast, disabled 
           onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur(); }}
         />
       </FormField>
-      {/* Multi-line: the reference documents print a two-line Thai address. No Enter-to-blur here,
-          because Enter is how a second line is typed. 2000 = CreateCustomerRequest's @Size. */}
+      {/* Multi-line: the reference documents print a two-line Thai address. No Enter-to-blur here, because Enter is
+       * how a second line is typed. 2000 = CreateCustomerRequest's @Size. */}
       <div className="col-span-full">
         <FormField label="ที่อยู่" htmlFor={QUOTATION_FIELD_IDS.customerAddress}>
           <textarea

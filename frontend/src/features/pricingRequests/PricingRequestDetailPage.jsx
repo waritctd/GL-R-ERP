@@ -106,12 +106,9 @@ function canSeeRaw(user) {
   return user?.role === 'import' || user?.role === 'ceo';
 }
 
-/**
- * Statuses in which Import may name the factory on a blank line. Mirrors
- * PricingRequestService.FACTORY_ROUTING_STATUSES, which is itself
- * FactoryQuoteService.DRAFT_STATUSES: the window in which สร้างร่างอีเมล can still run is exactly
- * the window in which its missing input can still be supplied.
- */
+/** Statuses in which Import may name the factory on a blank line. Mirrors
+ * PricingRequestService.FACTORY_ROUTING_STATUSES, which is itself FactoryQuoteService.DRAFT_STATUSES: the window
+ * in which สร้างร่างอีเมล can still run is exactly the window in which its missing input can still be supplied. */
 const FACTORY_ROUTING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE'];
 
 // Read-only display of the sales-entered tile fields on each item card. `—` for anything a legacy
@@ -202,8 +199,8 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
     rawUnitPrice: item.rawUnitPrice ?? '',
     currency: (item.rawUnitPrice != null ? item.currency : requestItem.requestedCurrency) || item.currency || requestItem.requestedCurrency || quote.defaultCurrency || requestItem.catalogCurrency || 'THB',
     minimumOrderQuantity: item.minimumOrderQuantity ?? '',
-    // Falls back to the request item's own ตร.ม./แผ่น (required on every item since V185) so import
-    // is not asked for a figure the system already holds; a value saved on the quote still wins.
+    // Falls back to the request item's own ตร.ม./แผ่น (required on every item since V185) so import is not asked
+    // for a figure the system already holds; a value saved on the quote still wins.
     sqmPerUnit: item.sqmPerUnit ?? requestItem.sqmPerPiece ?? '',
     piecesPerBox: item.piecesPerBox ?? '',
     leadTimeText: item.leadTimeText ?? '',
@@ -217,8 +214,8 @@ function defaultResponseItems(quote, requestItemById = new Map()) {
 // (PricingDecisionService#applyItemUpdates) — the CEO-typed ราคาตั้ง has no separate note field.
 const CEO_LIST_PRICE_NOTE = 'CEO กรอกราคาตั้งเอง';
 
-// Price boxes are plain text inputs (no number spinner / scroll-to-change). Keep digits and a
-// single decimal point only, so Number() on submit can never see junk; commas are dropped.
+// Price boxes are plain text inputs (no number spinner / scroll-to-change). Keep digits and a single decimal
+// point only, so Number() on submit can never see junk; commas are dropped.
 function sanitizeDecimal(raw) {
   const [whole, ...rest] = String(raw).replace(/[^\d.]/g, '').split('.');
   return rest.length ? `${whole}.${rest.join('')}` : whole;
@@ -311,10 +308,8 @@ function LineMarginReadout({ costThb, netPrice, fxRate, qty, testid }) {
 const CURRENCY_SYMBOLS = { EUR: '€', THB: '฿', USD: '$', CNY: '¥', JPY: '¥', GBP: '£' };
 const QUOTE_UNIT_SUFFIX = { PER_SQM: '/ตร.ม.', PER_PIECE: '/แผ่น', PER_BOX: '/กล่อง', PER_LINEAR_M: '/เมตร' };
 
-/**
- * The typed price expressed in the OTHER unit (per ตร.ม. <-> per แผ่น), so import sees both without
- * doing the arithmetic. null until a price and the ตร.ม./แผ่น are known, and for any other unit.
- */
+/** The typed price expressed in the OTHER unit (per ตร.ม. <-> per แผ่น), so import sees both without doing the
+ * arithmetic. null until a price and the ตร.ม./แผ่น are known, and for any other unit. */
 function equivalentUnitPrice(line, requestItem) {
   const price = Number(line.rawUnitPrice);
   const sqmPerPiece = Number(line.sqmPerUnit) > 0 ? Number(line.sqmPerUnit) : Number(requestItem?.sqmPerPiece);
@@ -428,9 +423,9 @@ function ImportFactoryPicker({
               onChange={(code) => { setEmptyWarned(false); onChangeValue(code); }}
             />
           </FormField>
-          {/* Distinguishes "the fetch failed" from "the roster really is empty" — SearchableCombobox's
-              own empty state (ไม่พบข้อมูล) reads as the latter, which would be a misleading dead end
-              for the one control that unblocks the whole request. */}
+          {/* Distinguishes "the fetch failed" from "the roster really is empty" — SearchableCombobox's own empty state
+           * (ไม่พบข้อมูล) reads as the latter, which would be a misleading dead end for the one control that unblocks
+           * the whole request. */}
           {loadFailed ? (
             <p className="m-0 mt-1 text-xs font-bold text-danger">โหลดรายชื่อโรงงานไม่สำเร็จ — ลองรีเฟรชหน้านี้</p>
           ) : null}
@@ -910,9 +905,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // instead of raising a new one.
   const [contactQuoteId, setContactQuoteId] = useState(null);
   const [leadTimeDialog, setLeadTimeDialog] = useState(null);
-  // R3 ("สร้างเมล is optional"): the pre-draft preview card of a factory can be contacted / mailed
-  // directly — the draft is generated on demand. `previewContactFactory` is the factory NAME whose
-  // contact dialog is open; `previewBusyFactory` the one currently generating/marking.
+  // the pre-draft preview card of a factory can be contacted / mailed directly — the draft is generated on
+  // demand. `previewContactFactory` is the factory NAME whose contact dialog is open; `previewBusyFactory` the
+  // one currently generating/marking.
   const [previewContactFactory, setPreviewContactFactory] = useState(null);
   const [previewBusyFactory, setPreviewBusyFactory] = useState(null);
 
@@ -971,9 +966,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     refetchOnWindowFocus: 'always',
   });
 
-  // Step 3: CEO Selling Price Decision. Raw (cost/margin-bearing) history is import/ceo only
-  // (design correction 2 — never leak cost to Sales); this query must never even fire for a
-  // sales/sales_manager actor, not just be hidden in the DOM.
+  // Step 3: CEO Selling Price Decision. Raw (cost/margin-bearing) history is import/ceo only (design correction
+  // 2 — never leak cost to Sales); this query must never even fire for a sales/sales_manager actor, not just be
+  // hidden in the DOM.
   const decisionsQuery = useQuery({
     queryKey: queryKeys.pricingDecisions(pricingRequestId),
     queryFn: () => api.pricingRequests.listPricingDecisions(pricingRequestId).then((r) => r.items ?? []),
@@ -991,8 +986,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
     staleTime: 5 * 60 * 1000,
   });
 
-  // Sales-facing approved-price projection — a distinct query/DTO, not a client-side filter of
-  // decisionsQuery above (which sales never even fetches).
+  // Sales-facing approved-price projection — a distinct query/DTO, not a client-side filter of decisionsQuery
+  // above (which sales never even fetches).
   const decisionSalesViewQuery = useQuery({
     queryKey: queryKeys.pricingDecisionSalesView(pricingRequestId),
     queryFn: () => api.pricingRequests.getPricingDecisionSalesView(pricingRequestId).then((r) => r.decision),
@@ -1092,10 +1087,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     // without this line the recreate button stays stale until a reload or the 30s staleTime
     // (api/queryClient.js). Nothing else invalidates this key.
     queryClient.invalidateQueries({ queryKey: queryKeys.dealQuotationForPricingRequest(pricingRequestId) });
-    // discountApprovals is keyed by quotation id, not pricingRequestId — invalidate the whole
-    // family with the shared 'discountApprovals' prefix rather than needing the current
-    // quotation's id here too (this function is called from mutations that may have just
-    // superseded/replaced it).
+    // discountApprovals is keyed by quotation id, not pricingRequestId — invalidate the whole family with the
+    // shared 'discountApprovals' prefix rather than needing the current quotation's id here too (this function is
+    // called from mutations that may have just superseded/replaced it).
     queryClient.invalidateQueries({ queryKey: ['customerQuotations', 'discountApprovals'] });
     queryClient.invalidateQueries({ queryKey: ['pricingRequests', 'queue'] });
     // The deal page's sticky bar reads its pricing requests and quotations. By prefix: that page
@@ -1114,11 +1108,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     navigate(-1);
   };
 
-  // `options.onError` / `options.onSuccess` are an opt-in escape hatch for the two costing
-  // mutations below (startCeoReview, recalculateDecisionCost) — everything else in this file
-  // calls useActionMutation with only (fn, successMessage) and gets EXACTLY the same
-  // toast-only behaviour as before this change. Scoped this way (rather than editing the
-  // default onError itself) so the ~10 other call sites are provably untouched.
+  // `options.onError` / `options.onSuccess` are an opt-in escape hatch for the two costing mutations below
+  // (startCeoReview, recalculateDecisionCost) — everything else in this file calls useActionMutation with only
+  // (fn, successMessage) and gets EXACTLY the same toast-only behaviour as before this change.
   function useActionMutation(fn, successMessage, options = {}) {
     return useMutation({
       mutationFn: fn,
@@ -1138,9 +1130,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     ({ itemId, factoryId }) => api.pricingRequests.setItemFactory(pricingRequestId, itemId, { factoryId }),
     'บันทึกโรงงานแล้ว',
   );
-  // รับเรื่อง (pickup) from the request page itself — a SUBMITTED request landed here (e.g. from a
-  // notification link) with no way to claim it except going back to the คิวขอราคา queue. Same
-  // endpoint + canPickupPricingRequest gate as the queue and the deal panel; server is the authority.
+  // รับเรื่อง (pickup) from the request page itself — a SUBMITTED request landed here (e.g. from a notification
+  // link) with no way to claim it except going back to the คิวขอราคา queue. Same endpoint +
+  // canPickupPricingRequest gate as the queue and the deal panel; server is the authority.
   const pickupRequest = useActionMutation(() => api.pricingRequests.pickup(pricingRequestId), 'รับเรื่องแล้ว');
   // A DRAFT (e.g. a customer-change revision) is sent from its own page; same gate as the deal panel.
   const submitRequest = useActionMutation(() => api.pricingRequests.submit(pricingRequestId), 'ส่งคำขอราคาแล้ว');
@@ -1186,8 +1178,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
     'บันทึกการไม่อนุมัติแล้ว',
     { onError: decideErrorHandler },
   );
-  // Generates the drafts (idempotent: factories that already have one are skipped server-side) and
-  // returns THIS factory's current quote from the answer.
+  // Generates the drafts (idempotent: factories that already have one are skipped server-side) and returns THIS
+  // factory's current quote from the answer.
   async function generateDraftFor(factoryName) {
     const result = await api.pricingRequests.generateFactoryEmailDrafts(pricingRequestId);
     invalidate();
@@ -1262,8 +1254,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
           ...cleanResponsePayload(draft),
           clientRequestId,
         });
-        // A successful submission consumes this idempotency key; a later distinct
-        // response/revision for the same quote must mint a fresh one, not replay.
+        // A successful submission consumes this idempotency key; a later distinct response/revision for the same quote
+        // must mint a fresh one, not replay.
         setReceiveClientRequestIds((cur) => {
           const next = { ...cur };
           delete next[quote.id];
@@ -1305,10 +1297,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     (attachment) => api.pricingRequests.setAttachmentIncludeInFactoryEmail(attachment.id, !attachment.includeInFactoryEmail),
     'อัปเดตไฟล์แนบแล้ว',
   );
-  // Step 3: CEO Selling Price Decision.
-  // null until the CEO types: the field then shows the formula config's own defaultMarginPct (the
-  // same /pricing-formula-config CeoSettingsPage edits) and falls back to 0.30 only if that read
-  // fails or returns nothing. Resolved below, once formulaConfigQuery's data is in scope.
+  // Step 3: CEO Selling Price Decision. null until the CEO types: the field then shows the formula config's own
+  // defaultMarginPct (the same /pricing-formula-config CeoSettingsPage edits) and falls back to 0.30 only if
+  // that read fails or returns nothing.
   const [decisionDefaultMargin, setDecisionDefaultMargin] = useState(null);
   // Typed and shown as a PERCENT (30); the call below sends the stored fraction (0.30).
   const resolvedDefaultMargin = decisionDefaultMargin
@@ -1367,10 +1358,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     'เริ่มพิจารณาราคาขายแล้ว',
     {
       onSuccess: () => setCeoCostingError(null),
-      // Rendered inline (role="alert", whitespace-pre-line, dismissible) in the CEO panel below —
-      // NOT the toast: LandedCostCalculator's 422 here is a multi-line "heading + one bullet per
-      // problem" message, and the toast both collapses newlines to a space and auto-dismisses
-      // after 3.2s (Toast.jsx / useToast.js) — exactly wrong for a list the CEO needs to act on.
+      // Rendered inline in the CEO panel below — NOT the toast: LandedCostCalculator's 422 here is a multi-line
+      // "heading + one bullet per problem" message, and the toast both collapses newlines to a space and
+      // auto-dismisses after 3.2s — exactly wrong for a list the CEO needs to act on.
       onError: (error) => setCeoCostingError(error.message || 'เริ่มพิจารณาราคาขายไม่สำเร็จ'),
     },
   );
@@ -1385,8 +1375,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
           pricingDecisionItemId: item.id,
           sellingPriceOverride: clearSellingPriceOverride ? null : sellingPriceOverride,
           clearSellingPriceOverride: Boolean(clearSellingPriceOverride),
-          // The real backend (primitive booleans) 400s a request that omits these three, even
-          // though this action never touches them — always send them as "no change".
+          // The real backend (primitive booleans) 400s a request that omits these three, even though this action never
+          // touches them — always send them as "no change".
           clearDiscountPct: false,
           clearSpecialPriceSqm: false,
           clearDirectNetPrice: false,
@@ -1684,12 +1674,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
-  /**
-   * Copies the generated factory message so Import can paste it into its own mail client.
-   * `navigator.clipboard` is absent in jsdom and on non-secure origins, so the failure path
-   * reports honestly rather than pretending the copy happened — a silent no-op here would have
-   * Import paste stale content without knowing.
-   */
+  /** Copies the generated factory message so Import can paste it into its own mail client. */
   async function copyFactoryEmail(emailDraft) {
     const text = [
       emailDraft.emailTo ? `To: ${emailDraft.emailTo}` : null,
@@ -1754,26 +1739,23 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // convention) for that line; resolved server-side to the canonical master name on save. Same
   // shape as `responseDrafts` above: a key exists only once a change handler has written to it.
   const [factoryDrafts, setFactoryDrafts] = useState({});
-  // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems'
-  // autofill and the read-only "what Sales asked for" echo on each response row. Declared here
-  // rather than beside the mutations above because it reads `request`, which is assigned just
-  // above this line — and there are no early returns between, so hook order stays stable.
+  // pricingRequestItemId -> the sales-side item it came from. Feeds both defaultResponseItems' autofill and the
+  // read-only "what Sales asked for" echo on each response row.
   const requestItemById = useMemo(
     () => new Map((request?.items ?? []).map((item) => [item.id, item])),
     [request],
   );
-  // The lines FactoryQuoteService.groupByFactory would refuse, computed from the SAME predicate it
-  // uses, with the same 1-based row position it reports — so the warning on screen and the 422 the
-  // button would return name the same rows.
+  // The lines FactoryQuoteService.groupByFactory would refuse, computed from the SAME predicate it uses, with
+  // the same 1-based row position it reports — so the warning on screen and the 422 the button would return name
+  // the same rows.
   const missingFactoryItems = useMemo(
     () => (request?.items ?? [])
       .map((item, index) => ({ item, position: index + 1 }))
       .filter((entry) => entry.item.stockSource == null && !itemFactoryName(entry.item)),
     [request],
   );
-  // Import owns this field, and only while the request is in its hands. NOT an authorization
-  // decision — PricingRequestService#setItemFactory is — just whether to offer an input that would
-  // otherwise be refused.
+  // Import owns this field, and only while the request is in its hands. NOT an authorization decision —
+  // PricingRequestService#setItemFactory is — just whether to offer an input that would otherwise be refused.
   const canSetItemFactory = isImport(user) && FACTORY_ROUTING_STATUSES.includes(summary?.status);
   // Whether FactoryQuoteService.send (and updateDraft, guarded by the same DRAFT_STATUSES) would
   // still accept an action against this request: whether the request itself, not any one quote,
@@ -1856,12 +1838,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const contactQuote = contactQuoteId != null ? factoryQuotes.find((q) => q.id === contactQuoteId) ?? null : null;
   const leadTimeChanges = useMemo(() => leadTimeChangesQuery.data ?? [], [leadTimeChangesQuery.data]);
   const leadTimeSplit = useMemo(() => splitLeadTimeChanges(leadTimeChanges), [leadTimeChanges]);
-  // B-R3: only the owning rep (sales + ticket creator, matched the way this page matches ownership
-  // everywhere: ticketCreatedById === employeeId) or a sales manager decides — never the CEO.
+  // B-R3: only the owning rep (sales + ticket creator, matched the way this page matches ownership everywhere:
+  // ticketCreatedById === employeeId) or a sales manager decides — never the CEO.
   const canDecideLeadTime = (isSales(user) && isOwnerOrKeyer({ createdById: summary?.ticketCreatedById, keyedById: summary?.ticketKeyedById }, user?.employeeId))
     || user?.role === 'sales_manager';
-  // The factory a pending request is about, for a viewer who cannot read factory quotes (sales):
-  // read it off the request's own lines (every line of one change belongs to one factory).
+  // The factory a pending request is about, for a viewer who cannot read factory quotes (sales): read it off the
+  // request's own lines (every line of one change belongs to one factory).
   const lineNameById = useMemo(
     () => new Map((request?.items ?? []).map((item) => [item.id, itemDisplayName(item)])),
     [request],
@@ -1869,32 +1851,29 @@ export function PricingRequestDetailPage({ user, showToast }) {
   const leadTimeDialogQuote = leadTimeDialog ? factoryQuotes.find((q) => q.id === leadTimeDialog.quoteId) ?? null : null;
   const costings = useMemo(() => costingQuery.data ?? [], [costingQuery.data]);
   const pricingDecisions = useMemo(() => decisionsQuery.data ?? [], [decisionsQuery.data]);
-  // The currently-relevant decision: the open DRAFT if one exists (the CEO's active review),
-  // else the most recent one (so a just-approved or just-returned decision still renders).
+  // The currently-relevant decision: the open DRAFT if one exists (the CEO's active review), else the most
+  // recent one (so a just-approved or just-returned decision still renders).
   const currentDecision = useMemo(
     () => pricingDecisions.find((d) => d.status === 'DRAFT') ?? [...pricingDecisions].reverse()[0] ?? null,
     [pricingDecisions],
   );
-  // Phase 1 UI simplification: lifted out of the render IIFE so both the Panel's `actions` slot
-  // (the small refresh control "at the top of the section") and the body below can read it —
-  // mirrors PricingDecisionService's own DRAFT + CEO_REVIEWING + canActOnPricingDecision guard.
+  // Phase 1 UI simplification: lifted out of the render IIFE so both the Panel's `actions` slot (the small
+  // refresh control "at the top of the section") and the body below can read it — mirrors
+  // PricingDecisionService's own DRAFT + CEO_REVIEWING + canActOnPricingDecision guard.
   const decisionEditable = Boolean(currentDecision) && currentDecision.status === 'DRAFT'
     && canActOnPricingDecision(user, summary);
   // Returned to import and back READY: the RETURNED decision is history, the CEO starts a fresh one.
   const needsFreshReview = !currentDecision || currentDecision.status === 'RETURNED';
-  // V141 ("CEO owns costing"): the bound costing's items, keyed by their OWN id — a decision
-  // item's pricingCostingItemId is a FK to that id, never to pricingRequestItemId (the two are
-  // easy to conflate since a costing item also carries pricingRequestItemId as its own FK). Every
-  // render must tolerate a missing costing item (the map simply has no entry for it) — this query
-  // can legitimately be empty (sales/sales_manager never fetch it) or not yet contain the bound
-  // costing (a brand-new decision before its first paint).
+  // V141 ("CEO owns costing"): the bound costing's items, keyed by their OWN id — a decision item's
+  // pricingCostingItemId is a FK to that id, never to pricingRequestItemId (the two are easy to conflate since a
+  // costing item also carries pricingRequestItemId as its own FK).
   const decisionCostingItems = useMemo(() => {
     const costing = costings.find((c) => c.id === currentDecision?.pricingCostingId);
     return new Map((costing?.items ?? []).map((ci) => [ci.id, ci]));
   }, [costings, currentDecision]);
   const decisionSalesView = decisionSalesViewQuery.data;
-  // Step 4: newest revision last (creation order) — the OPEN draft/ready-to-issue revision if
-  // one exists, else the most recent (so a just-issued or just-cancelled quotation still shows).
+  // Step 4: newest revision last (creation order) — the OPEN draft/ready-to-issue revision if one exists, else
+  // the most recent (so a just-issued or just-cancelled quotation still shows).
   const customerQuotations = useMemo(
     () => [...(customerQuotationsQuery.data ?? [])].sort((a, b) => a.quotationRevisionNo - b.quotationRevisionNo),
     [customerQuotationsQuery.data],
@@ -1909,12 +1888,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
   // absent keeps the panel on "the one that matters" instead of a stale cancelled row.
   const dealQuotationForPr = dealQuotationForPrQuery.data ?? null;
   const shownQuotation = shownCustomerQuotation(dealQuotationForPr, currentCustomerQuotation);
-  // CEO discount-approval workflow, Phase 2 (V155): per-line status for the CURRENT quotation
-  // only — placed here (not grouped with the other useQuery calls above) because its key/enabled
-  // genuinely depend on currentCustomerQuotation's id, and re-deriving that id independently here
-  // would be the exact kind of duplicated-derivation drift this codebase has been bitten by
-  // before. Same view-access gate as customerQuotationsQuery itself (the backend delegates to the
-  // identical check), so nothing new is exposed by fetching it.
+  // CEO discount-approval workflow, Phase 2: per-line status for the CURRENT quotation only. Same view-access
+  // gate as customerQuotationsQuery itself (the backend delegates to the identical check), so nothing new is
+  // exposed by fetching it.
   const discountApprovalsQuery = useQuery({
     queryKey: queryKeys.discountApprovals(currentCustomerQuotation?.id),
     queryFn: () => api.pricingRequests.listDiscountApprovalsForQuotation(currentCustomerQuotation.id).then((r) => r.items ?? []),
@@ -2050,9 +2026,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
       return !hasPriceOverride && (item.proposedMarginPct == null || item.proposedMarginPct === '');
     });
-    // V141: mirrors PricingDecisionService.approve's own stale-override 409 guard, so the
-    // CEO discovers it here instead of via a failed approve. The server stays
-    // authoritative — this only pre-empts a call that would fail anyway.
+    // V141: mirrors PricingDecisionService.approve's own stale-override 409 guard, so the CEO discovers it here
+    // instead of via a failed approve. The server stays authoritative — this only pre-empts a call that would fail
+    // anyway.
     const staleOverrideItems = decision.items.filter(
       (item) => decisionCostingItems.get(item.pricingCostingItemId)?.overrideStale,
     );
@@ -2316,10 +2292,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
     const costingItem = decisionCostingItems.get(item.pricingCostingItemId);
     const hasCostOverride = costingItem?.manualLandedCostPerUnitThb != null;
     const hasPriceOverride = item.manualSellingPricePerRequestedUnit != null;
-    // Frozen (post-approval) beats an active override, which beats the formula's
-    // own computed figure — the one number the main view shows. Never a fourth,
-    // client-recomputed value: this is exactly what the server will freeze in
-    // (design correction 7 + the ปรับราคาเอง exception to it), never a preview.
+    // Frozen (post-approval) beats an active override, which beats the formula's own computed figure — the one
+    // number the main view shows. Never a fourth, client-recomputed value: this is exactly what the server will
+    // freeze in (design correction 7 + the ปรับราคาเอง exception to it), never a preview.
     const effectivePrice = item.approvedSellingPricePerRequestedUnit
       ?? (hasPriceOverride ? item.manualSellingPricePerRequestedUnit : item.proposedSellingPricePerRequestedUnit);
     const effectiveMargin = item.approvedMarginPct ?? item.proposedMarginPct;
@@ -2331,11 +2306,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
           <span>{item.requestedQuantity} {unitBasisLabel(item.requestedUnitBasis)}</span>
           {hasPriceOverride ? <span className="font-bold text-override">ราคาปรับเอง</span> : null}
           {costingItem?.overrideStale ? <StatusBadge tone="warning">ต้นทุนที่ปรับล้าสมัย</StatusBadge> : null}
-          {/* V156: the freight table could not be looked up for this line (the
-              Price Catalog row has no thickness or no origin country), so it
-              arrives with NO cost instead of blocking the whole costing. The CEO
-              must supply one with "ปรับต้นทุน" before the decision can be
-              approved — approve() refuses otherwise. */}
+          {/* V156: the freight table could not be looked up for this line (the Price Catalog row has no thickness or no
+           * origin country), so it arrives with NO cost instead of blocking the whole costing. The CEO must supply one
+           * with "ปรับต้นทุน" before the decision can be approved — approve() refuses otherwise. */}
           {costingItem?.uncostableReason ? (
             <StatusBadge tone="warning">ต้องระบุต้นทุนเอง</StatusBadge>
           ) : null}
@@ -3275,9 +3248,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
           {renderMissingFactoryBanner()}
           {(request.items ?? []).map((item, index) => {
             const factoryName = itemFactoryName(item);
-            // `position` is the 1-based row number the server counts too: findItems returns
-            // ORDER BY sort_order, pricing_request_item_id and groupByFactory's sort is stable on
-            // sortOrder, so "รายการที่ N" means this exact row on both sides.
+            // `position` is the 1-based row number the server counts too: findItems returns ORDER BY sort_order,
+            // pricing_request_item_id and groupByFactory's sort is stable on sortOrder, so "รายการที่ N" means this exact
+            // row on both sides.
             const position = index + 1;
             // The label on this panel is โรงงาน, matching the PCR form's `brandLabel="โรงงาน"`
             // (PricingRequestCreateModal.jsx). Two DIFFERENT values both say โรงงาน, so they are
@@ -3298,8 +3271,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
             // quantity (pieces after wastage + full-box rounding, boxes, sqm equivalent).
             // Sales/CEO/everyone else keeps the full breakdown. UI scoping only, no backend authz change.
             const showWastageDetail = !isImport(user);
-            // Import's own quoted price (the CURRENT factory quote's line for this item) — not the
-            // catalogue list price. Absent until Import has typed a price.
+            // Import's own quoted price (the CURRENT factory quote's line for this item) — not the catalogue list price.
+            // Absent until Import has typed a price.
             const importQuoteItem = importQuoteItemByRequestItem.get(item.id);
             const importPriceThb = quotedPriceInThb(importQuoteItem, item, fxRatesQuery.data);
             return (
@@ -3387,9 +3360,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
         flush
         title="ไฟล์แนบประกอบคำขอราคา"
         actions={canEditPricingRequestAttachments ? (
-          // Left as a <label> wrapping the hidden file input, not <Button>: a
-          // <button> cannot open the native file picker the way a <label>
-          // wrapping its <input type="file"> does.
+          // Left as a <label> wrapping the hidden file input, not <Button>: a <button> cannot open the native file
+          // picker the way a <label> wrapping its <input type="file"> does.
           <label className={cn(buttonVariants({ variant: 'secondary' }), 'cursor-pointer')}>
             <input type="file" className="hidden" onChange={(event) => {
               const file = event.target.files?.[0];
@@ -3645,11 +3617,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
                       const previewFinal = item.approvedUnitPrice - discount;
                       const belowMinimum = item.minimumSellingPricePerRequestedUnit != null
                         && previewFinal < item.minimumSellingPricePerRequestedUnit;
-                      // CEO discount-approval workflow, Phase 2 (V155): the SAVED line's own
-                      // status, keyed off the server-persisted final_unit_price — distinct from
-                      // `belowMinimum` above, which previews an UNSAVED draft edit still in the
-                      // input box. Only ever set when this item's current price is genuinely
-                      // below minimum (see DiscountApprovalRepository#findCurrentByQuotationId).
+                      // CEO discount-approval workflow, Phase 2 (V155): the SAVED line's own status, keyed off the server-persisted
+                      // final_unit_price — distinct from `belowMinimum` above, which previews an UNSAVED draft edit still in the
+                      // input box.
                       const discountApproval = discountApprovalByItemId.get(item.id);
                       const discountApprovalStatus = discountApproval
                         ? discountApprovalStatusLabel(discountApproval.status) : null;
@@ -3829,9 +3799,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                     </div>
                   ) : null}
 
-                  {/* Read-only outcome summary — visible to everyone (CEO/Import included), once
-                      the customer's response has been recorded or the document has moved past
-                      ISSUED for any other reason. */}
+                  {/* Read-only outcome summary — visible to everyone (CEO/Import included), once the customer's response has been
+                   * recorded or the document has moved past ISSUED for any other reason. */}
                   {['ACCEPTED', 'REJECTED', 'REVISION_REQUESTED', 'EXPIRED', 'SUPERSEDED'].includes(quotation.docStatus) ? (
                     <p className="text-sm text-text-muted">
                       ผลใบเสนอราคา: <strong>{quotationStatus.label}</strong>
@@ -4009,8 +3978,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
           })}
           savePending={updateQuote.isPending}
           onCopy={copyFactoryEmail}
-          // updateDraft is the contact roles' (import + CEO), DRAFT-only, and guarded by the same
-          // DRAFT_STATUSES window as markContacted — outside any of those the modal is view + copy.
+          // updateDraft is the contact roles' (import + CEO), DRAFT-only, and guarded by the same DRAFT_STATUSES window
+          // as markContacted — outside any of those the modal is view + copy.
           canEdit={canContactFactory && emailModalQuote.status === 'DRAFT' && emailModalQuote.current && inSendWindow}
           attachments={pricingRequestAttachments.filter((attachment) => attachment.includeInFactoryEmail)}
         />

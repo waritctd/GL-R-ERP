@@ -7,11 +7,9 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/**
- * Quotation v2 (direct deal quotation, V165) — persistence for {@code hr.employee_signature}, the
- * approver's signature image anchored into the ผู้อนุมัติ box on an APPROVED PDF/XLSX (a later
- * renderer slice — this repository just stores/serves the bytes).
- */
+/** Quotation v2 (direct deal quotation, V165) — persistence for hr.employee_signature, the approver's signature
+ * image anchored into the ผู้อนุมัติ box on an APPROVED PDF/XLSX (a later renderer slice — this repository
+ * just stores/serves the bytes). */
 @Repository
 public class EmployeeSignatureRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -22,9 +20,8 @@ public class EmployeeSignatureRepository {
 
     public record SignatureImage(String mimeType, byte[] image) {}
 
-    /** Whether {@code hr.employee} has this row at all (active or not) — the 404 gate the service
-     * applies before touching a signature, so a write against an id that does not exist is
-     * refused rather than "succeeding" against nothing. */
+    /** Whether hr.employee has this row at all (active or not) — the 404 gate the service applies before touching a
+     * signature, so a write against an id that does not exist is refused rather than "succeeding" against nothing. */
     public boolean employeeExists(long employeeId) {
         Boolean found = jdbc.queryForObject(
             "SELECT EXISTS (SELECT 1 FROM hr.employee WHERE employee_id = :id)",

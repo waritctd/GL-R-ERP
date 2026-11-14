@@ -11,18 +11,9 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
-/**
- * The API-boundary half of "a new deal must state a real ช่องทางดีล" (owner ruling 2026-09-30).
- *
- * <p>{@code TicketController.create} takes {@code @Valid @RequestBody CreateTicketRequest}, so a
- * violation here is a 400 before {@link TicketService#create} is reached. The service deliberately
- * still tolerates a null channel (see {@code TicketServiceTest#create_stillToleratesNullEntryChannelAtServiceLevel}),
- * which is why the absent/blank rule lives on the DTO and not in the service.
- *
- * <p>There is no {@code TicketController} MVC test in this repo to extend; this follows
- * {@code LoginRequestNormalizationTest}'s pattern of running the real {@code Validator} over the
- * real record, which is exactly what {@code @Valid} does at request time.
- */
+/** The API-boundary half of "a new deal must state a real ช่องทางดีล" (owner ruling 2026-09-30).
+ * TicketController.create takes @Valid @RequestBody CreateTicketRequest, so a violation here is a 400 before
+ * TicketService#create is reached. */
 class CreateTicketRequestValidationTest {
 
     private static final ValidatorFactory FACTORY = Validation.buildDefaultValidatorFactory();
@@ -63,13 +54,9 @@ class CreateTicketRequestValidationTest {
         }
     }
 
-    /**
-     * The asymmetry is the design, not an oversight: {@code @NotBlank} only asks "was a channel
-     * sent?", and {@code UNSPECIFIED} is a non-blank string, so it passes here. Refusing it is the
-     * SERVICE's job ({@code TicketServiceTest#create_rejectsUnspecifiedEntryChannel}) because the
-     * value check belongs next to {@link EntryChannel}. Do not "fix" this by adding a pattern to the
-     * DTO without moving that test with it.
-     */
+    /** The asymmetry is the design, not an oversight: @NotBlank only asks "was a channel sent?", and UNSPECIFIED is
+     * a non-blank string, so it passes here. Do not "fix" this by adding a pattern to the DTO without moving that
+     * test with it. */
     @Test
     void unspecifiedPassesBeanValidationBecauseTheServiceOwnsThatRefusal() {
         assertThat(violatedFields(withChannel(EntryChannel.UNSPECIFIED))).isEmpty();

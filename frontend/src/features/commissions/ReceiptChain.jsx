@@ -94,8 +94,8 @@ export function ReceiptChain({ record, compact = false, bare = false }) {
         {deductions.map(([label, value]) => <Line key={label} op="−" label={label} value={formatMoney(value)} />)}
         {Number(invoice.overpayment || 0) !== 0 ? <Line op="+" label="รับเงินเกิน" value={formatMoney(invoice.overpayment)} /> : null}
         <Line op="=" label="ยอดรับจริง" value={formatMoney(record.actualReceived)} strong />
-        {/* The VAT divisor is a policy number owned by CommissionCalculator, so it is not restated
-            here: both figures either side of this step are server-computed columns off the record. */}
+        {/* The VAT divisor is a policy number owned by CommissionCalculator, so it is not restated here: both figures
+         * either side of this step are server-computed columns off the record. */}
         <Line op="÷" label="แยกภาษีมูลค่าเพิ่ม (VAT)" value="" muted />
         <Line op="=" label="ยอดไม่รวม VAT" value={formatMoney(record.commissionableBase)} strong />
         {showWeight ? <Line op="×" label="น้ำหนัก" value={formatWeight(weight)} /> : null}

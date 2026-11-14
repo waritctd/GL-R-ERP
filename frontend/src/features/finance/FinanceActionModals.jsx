@@ -5,12 +5,9 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-// Small money-action forms for the finance deal page. Each one owns only its draft; the page owns
-// the mutation and hands back `busy` (request pending) and `error` (the server's own message), so
-// a failed request stays inside the dialog with the user's input intact. Deliberately NOT a copy of
-// TicketDetailPage's inline modals — those live in a 6,800-line component and extracting them would
-// widen this change; the field set and the request body are the same (RecordPaymentRequest /
-// BillingRequest), which the page's tests pin.
+// Small money-action forms for the finance deal page. Each one owns only its draft; the page owns the mutation
+// and hands back `busy` (request pending) and `error` (the server's own message), so a failed request stays
+// inside the dialog with the user's input intact.
 
 const PAYMENT_KINDS = [
   { value: 'DEPOSIT', label: 'มัดจำ' },

@@ -13,11 +13,8 @@ import { PageStack, Panel, StatGrid } from '../../components/common/Layout.jsx';
 import { attendanceStatusLabel, formatBangkokTime, formatThaiDate } from '../../utils/format.js';
 import { cn } from '../../utils/cn.js';
 
-/**
- * Same column ratio as EmployeeDashboard's `.dashboard-grid` (no shared
- * primitive for this exact ratio yet — see that file's own copy of this
- * constant for the reasoning).
- */
+/** Same column ratio as EmployeeDashboard's `.dashboard-grid` (no shared primitive for this exact ratio yet —
+ * see that file's own copy of this constant for the reasoning). */
 const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-2 mobile:grid-cols-1';
 
 function bangkokDateParts(date = new Date()) {
@@ -55,12 +52,9 @@ function leaveDetail(request) {
   return `${type} · ${formatDateRange(request.startDate, request.endDate)}`;
 }
 
-/**
- * "พนักงาน ✓ → คุณ (ตอนนี้) → CEO" chain badge. Steps are passed explicitly
- * per item because OT/leave genuinely have different chains in this codebase
- * (see the OT/leave worklist comment below) — this component only renders
- * whatever it's handed, it never assumes a fixed 3-step shape.
- */
+/** "พนักงาน ✓ → คุณ (ตอนนี้) → CEO" chain badge. Steps are passed explicitly per item because OT/leave
+ * genuinely have different chains in this codebase (see the OT/leave worklist comment below) — this component
+ * only renders whatever it's handed, it never assumes a fixed 3-step shape. */
 function ApprovalChain({ steps }) {
   return (
     <div className="flex flex-wrap items-center gap-1 mt-1">
@@ -83,19 +77,8 @@ function ApprovalChain({ steps }) {
   );
 }
 
-/**
- * Division-manager (non-sales) landing — role `employee` + the manager flag
- * (DivisionAccessPolicy.isManager: position contains "ผู้จัดการ", assistant
- * managers included). This replaces EmployeeDashboard's generic 'manager'
- * mode for this audience with a purpose-built people-ops worklist: approve
- * the division's OT/leave (step 1 of employee -> manager -> CEO), see the
- * team's attendance today, plus the manager's own self-service. No sales
- * surface — this role never had one.
- *
- * Approve/reject mutations are NOT duplicated here — every CTA deep-links to
- * the real approve surface (OvertimePanel via /employee-requests, LeavePage
- * via /leave), which already owns the confirm dialogs and the mutations.
- */
+/** Division-manager (non-sales) landing — role `employee` + the manager flag (DivisionAccessPolicy.isManager:
+ * position contains "ผู้จัดการ", assistant managers included). No sales surface — this role never had one. */
 export function DivisionManagerOverview({ user, employee, dashboardSummary, showToast }) {
   const navigate = useNavigate();
   const today = todayIso();
@@ -123,11 +106,9 @@ export function DivisionManagerOverview({ user, employee, dashboardSummary, show
     if (attendanceQuery.error) showToast?.('error', attendanceQuery.error.message || 'โหลดข้อมูลเวลาทำงานไม่สำเร็จ');
   }, [attendanceQuery.error, showToast]);
 
-  // `api.overtime.list`/`api.leave.list` are already scoped server-side to what
-  // this caller may review (division-wide for OT, direct-report FK for leave —
-  // see mockApi's canReviewOvertime/canReviewLeave); the one thing left to drop
-  // client-side is the caller's OWN submitted request, which the API legitimately
-  // returns (they may see it) but which they cannot approve (no self-approval).
+  // `api.overtime.list`/`api.leave.list` are already scoped server-side to what this caller may review; the one
+  // thing left to drop client-side is the caller's OWN submitted request, which the API legitimately returns but
+  // which they cannot approve.
   const otPending = useMemo(
     () => (overtimeQuery.data ?? []).filter((request) => Number(request.employeeId) !== Number(user?.employeeId)),
     [overtimeQuery.data, user?.employeeId],
@@ -143,13 +124,7 @@ export function DivisionManagerOverview({ user, employee, dashboardSummary, show
   const notCheckedOut = attendanceDays.filter((day) => day.check_in && !day.check_out).length;
   const teamTotal = dashboardSummary?.headcount?.active ?? 0;
 
-  // Worklist rows. OT genuinely is a 3-step chain in this codebase (SUBMITTED
-  // -> MANAGER_APPROVED -> APPROVED, i.e. employee -> manager -> CEO — see
-  // OvertimePanel.canCeoApprove). Leave, however, is single-step here
-  // (SUBMITTED -> APPROVED, no CEO stage — see LeavePage.canReviewRequest /
-  // mockApi canReviewLeave): the manager's approval is terminal. The chain
-  // badge reflects that difference rather than forcing a uniform 3-step shape
-  // the leave workflow doesn't actually have.
+  // Show manager-to-CEO approval for overtime and terminal manager approval for leave.
   const worklist = useMemo(() => {
     const otRows = otPending.map((request) => ({
       key: `ot-${request.id}`,
@@ -175,9 +150,9 @@ export function DivisionManagerOverview({ user, employee, dashboardSummary, show
     return [...otRows, ...leaveRows];
   }, [otPending, leavePending, navigate]);
 
-  // A couple of team rows for the "การลงเวลาทีมวันนี้" rail: attention-worthy
-  // statuses (late, missing check-out) surface first, same "don't bury what
-  // needs a look" principle as the worklist above; capped to keep the card short.
+  // A couple of team rows for the "การลงเวลาทีมวันนี้" rail: attention-worthy statuses (late, missing check-out)
+  // surface first, same "don't bury what needs a look" principle as the worklist above; capped to keep the card
+  // short.
   const teamAttendanceRows = useMemo(() => {
     const priority = {
       LATE: 0, MISSING_CHECK_OUT: 1, MISSING_CHECK_IN: 2, PRESENT: 3,

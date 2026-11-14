@@ -11,12 +11,12 @@ globalThis.React = React;
 const catalog = DEAL_STAGE_CATALOG;
 const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
 const BUYER_OFF = ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'];
-// The server's own refusal, one distinct sentence per stage so a test can prove it is rendered
-// VERBATIM per row (DealRoute.refusalMessage's shape).
+// The server's own refusal, one distinct sentence per stage so a test can prove it is rendered VERBATIM per
+// row (DealRoute.refusalMessage's shape).
 const reasonFor = (stage) => `ดีลนี้เป็นผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง — ขั้นที่ ${stage.no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
 
-// ⚠️ Built here and passed DIRECTLY as props. mockApi.js does not emit `onRoute`, so driving these
-// through the mock would see every stage on-route and pass vacuously.
+// ⚠️ Built here and passed DIRECTLY as props. mockApi.js does not emit `onRoute`, so driving these through the
+// mock would see every stage on-route and pass vacuously.
 const decisionsFor = (off) => catalog.stages.map((stage) => ({
   stage: stage.code,
   no: stage.no,
@@ -43,8 +43,8 @@ describe('RouteRibbon — ordinal numbering', () => {
   it('numbers pips by the ROUTE ordinal, not the business stage number', () => {
     render(<DealStageStepper salesStage="QUOTE_BUYER" catalog={catalog}
       stageDecisions={decisionsFor(BUYER_OFF)} entryChannel="BUYER_DIRECT" />);
-    // 11-stage route, current is its 4th step. Steps 1–3 are done and render a tick, so the first
-    // NUMBER shown is the current step: 4, then 5…11. The business numbers (8, 9, 10…) must be gone.
+    // 11-stage route, current is its 4th step. Steps 1–3 are done and render a tick, so the first NUMBER shown is
+    // the current step: 4, then 5…11. The business numbers (8, 9, 10…) must be gone.
     expect(pipNumbers()).toEqual(['4', '5', '6', '7', '8', '9', '10', '11']);
   });
 
@@ -266,14 +266,9 @@ describe('DealStageStepper phase list follows the route', () => {
   });
 });
 
-/**
- * The remedy for the gate's own refusal. The server's blockedReason ends "— แก้ช่องทางดีลก่อน", and
- * GLA-156 had deleted the only control that could do that. It lives WHERE THE REFUSAL IS READ — on
- * each off-route row — as an inline disclosure, never a permanent row and never a modal.
- *
- * `entryChannelAction` is the server's own SET_ENTRY_CHANNEL advertisement, passed straight in;
- * the stepper decides nothing about who may correct a channel.
- */
+/** The remedy for the gate's own refusal. The server's blockedReason ends "— แก้ช่องทางดีลก่อน", and GLA-156
+ * had deleted the only control that could do that. It lives WHERE THE REFUSAL IS READ — on each off-route row
+ * — as an inline disclosure, never a permanent row and never a modal. */
 describe('DealStageStepper off-route rows — แก้ช่องทางดีล', () => {
   const FIRST = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value'] };
   const STATED = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value', 'note'] };
@@ -374,9 +369,9 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
   });
 });
 
-// The list's segmented bar had the same catalog-wide denominator as its text: one flex-weighted
-// segment per phase, sized by the phase's stage count (2,4,3,3,3 = 15). A buyer-direct deal's bar
-// now counts only that channel's on-route stages, so the graphic and "ขั้นตอน 4/11" cannot disagree.
+// The list's segmented bar had the same catalog-wide denominator as its text: one flex-weighted segment per
+// phase, sized by the phase's stage count (2,4,3,3,3 = 15). A buyer-direct deal's bar now counts only that
+// channel's on-route stages, so the graphic and "ขั้นตอน 4/11" cannot disagree.
 describe('StageProgressBar — per-phase segments count only the deal\'s on-route stages', () => {
   const segments = (container) => Array.from(container.firstChild.children);
   const grows = (container) => segments(container).map((seg) => Number(seg.style.flexGrow));

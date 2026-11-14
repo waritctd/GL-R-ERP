@@ -14,11 +14,8 @@ public final class QuotationRecipient {
 
     public static final Set<String> VALID = Set.of(DESIGNER, OWNER, BUYER, UNSPECIFIED);
 
-    /**
-     * Quotation ↔ deal linking slice 2 (S2-B1): the three recipients a client may name on a direct
-     * quotation. {@link #UNSPECIFIED} is the legacy bucket (V52) for pre-slice-2 rows and is never
-     * accepted from a client.
-     */
+    /** Quotation ↔ deal linking slice 2 (S2-B1): the three recipients a client may name on a direct quotation.
+     * #UNSPECIFIED is the legacy bucket (V52) for pre-slice-2 rows and is never accepted from a client. */
     public static final Set<String> ADDRESSABLE = Set.of(DESIGNER, OWNER, BUYER);
 
     /** The quoting route, earliest party first. */
@@ -31,13 +28,9 @@ public final class QuotationRecipient {
         return a >= 0 && b >= 0 && a < b;
     }
 
-    /**
-     * The Thai label written to {@code sales.quotation.recipient_label} for a direct quotation —
-     * verbatim the frontend's {@code quotationMeta.QUOTATION_RECIPIENT_OPTIONS} labels (the only
-     * existing Thai convention for these three codes; {@code mockApi.dealQuotations.create/update}
-     * already writes exactly these). A PRICING_REQUEST-origin row's label is its คำขอราคา's own
-     * free-text recipient name instead, and is never written through here.
-     */
+    /** The Thai label written to sales.quotation.recipient_label for a direct quotation — verbatim the frontend's
+     * quotationMeta.QUOTATION_RECIPIENT_OPTIONS labels (the only existing Thai convention for these three codes;
+     * mockApi.dealQuotations.create/update already writes exactly these). */
     private static final Map<String, String> THAI_LABELS = Map.of(
         DESIGNER, "ผู้ออกแบบ",
         OWNER, "เจ้าของโครงการ",

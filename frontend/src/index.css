@@ -1,19 +1,6 @@
-/* Layer order: theme, base, legacy, utilities.
-
-   `base` sits between `theme` and `legacy` deliberately. The reset and
-   bare-element defaults in `@layer base` below used to live in styles.css,
-   co-located with the class-level rules that override them (`.currency-input
-   input`, `.input-with-icon input`, and the like) -- and lost to them there purely on
-   selector specificity, both rules in the same cascade layer. Splitting them
-   into their own layer, positioned BEFORE `legacy`, reproduces that same
-   losing relationship deliberately: a `@layer` always loses to a layer
-   declared later, regardless of specificity, so `base`'s bare-element
-   selectors keep losing to `legacy`'s class selectors exactly as they did
-   when they were one file and one layer -- nothing rendered changes.
-
-   This app deliberately does NOT import `tailwindcss/preflight.css` -- the
-   reset in `@layer base` below is the only browser-default reset this app
-   has. Do not delete it expecting Tailwind to supply one; nothing else does. */
+/* Layer order: theme, base, legacy, utilities. This app deliberately does NOT import
+ * `tailwindcss/preflight.css` -- the reset in `@layer base` below is the only browser-default reset this app
+ * has. Do not delete it expecting Tailwind to supply one; nothing else does. */
 @layer theme, base, legacy, utilities;
 
 @import "tailwindcss/theme.css" layer(theme);
@@ -51,36 +38,30 @@
    `--breakpoint-*` namespace generates min-width variants, which is the wrong
    direction for this app's max-width "mobile" concept. */
 
-/* ≤1040px — the off-canvas navigation drawer used by AppShell's hamburger button
-   and styles.css's drawer rules (see `@media (max-width: 1040px)` there). A
-   dedicated variant rather than the union of `mobile`/`tablet` because this is a
-   single inclusive cutoff, not two disjoint bands. This variant and styles.css's
-   media query are provably identical (both emit `(width<=1040px)` in the built CSS). */
+/* ≤1040px — the off-canvas navigation drawer used by AppShell's hamburger button and styles.css's drawer rules
+ * (see `@media (max-width: 1040px)` there). A dedicated variant rather than the union of `mobile`/`tablet`
+ * because this is a single inclusive cutoff, not two disjoint bands. */
 @custom-variant nav-drawer {
   @media (max-width: 1040px) {
     @slot;
   }
 }
-/* ≤900px — AttendancePage's non-self-view day grid needs a min-width floor below
-   this point so its seven columns scroll instead of crushing the status column
-   off-screen (see AttendancePage.jsx's gridClassName). This is now the app's only
-   900px boundary: styles.css used to carry an unrelated `@media (max-width: 900px)`
-   block for `.ticket-detail-grid` that shared nothing but the number, and it was
-   deleted with that rule as dead code. Do not reintroduce a second one. */
+/* ≤900px — AttendancePage's non-self-view day grid needs a min-width floor below this point so its seven
+ * columns scroll instead of crushing the status column off-screen (see AttendancePage.jsx's gridClassName). */
 @custom-variant attendance-scroll {
   @media (max-width: 900px) {
     @slot;
   }
 }
-/* 721–1040px — the tablet band proper. Declared after `nav-drawer` because it is
-   the narrower (more specific) of the two overlapping bands and should win. */
+/* 721–1040px — the tablet band proper. Declared after `nav-drawer` because it is the narrower (more specific)
+ * of the two overlapping bands and should win. */
 @custom-variant tablet {
   @media (min-width: 721px) and (max-width: 1040px) {
     @slot;
   }
 }
-/* ≤720px — the app's primary mobile band. Mirrors useIsMobile.js's MOBILE_QUERY
-   exactly; the two must never drift. */
+/* ≤720px — the app's primary mobile band. Mirrors useIsMobile.js's MOBILE_QUERY exactly; the two must never
+ * drift. */
 @custom-variant mobile {
   @media (max-width: 720px) {
     @slot;
@@ -99,14 +80,9 @@
   }
 }
 
-/* Payroll detail-panel side-by-side floor (Phase A, 2026-07-31): the side panel used to wait until
-   1440px because the old 340px panel track plus the table's measured 714px minimum needed roughly
-   1070px of content width. Phase A deliberately shrinks the persistent panel floor to 310px: at the
-   1366px desktop band the app leaves ~1042px of content width, enough for 714px table + 16px gap +
-   310px panel with no hidden money columns. 1280px remains overlay because the same math still does
-   not fit there. Kept as the named `payroll-wide:` variant (not a bare `min-[1366px]:`) so
-   PayrollPage.jsx's grid track and `useMediaQuery('(min-width: 1366px)')` JS check stay in lockstep
-   with the CSS presentation boundary. */
+/* Payroll detail-panel side-by-side floor (Phase A, 2026-07-31): the side panel used to wait until 1440px
+ * because the old 340px panel track plus the table's measured 714px minimum needed roughly 1070px of content
+ * width. */
 @custom-variant payroll-wide {
   @media (min-width: 1366px) {
     @slot;
@@ -140,9 +116,9 @@
   --space-7: 28px;
   --space-8: 32px;
   --app-topbar-h: 66px;
-  /* Ticket workspace sticky chrome fallback. TicketDetailPage overwrites this
-     with ResizeObserver after first render; 18rem matches the old hardcoded
-     desktop rail offset so first paint is never worse than the prior layout. */
+  /* Ticket workspace sticky chrome fallback. TicketDetailPage overwrites this with ResizeObserver after first
+   * render; 18rem matches the old hardcoded desktop rail offset so first paint is never worse than the prior
+   * layout. */
   --deal-header-h: 18rem;
 
   /* Radius */
@@ -156,32 +132,23 @@
   --shadow-md: 0 18px 44px rgba(2, 6, 23, 0.28);
   --shadow-lg: 0 24px 70px rgba(2, 6, 23, 0.24);
   --shadow-lg-heavy: 0 24px 70px rgba(2, 6, 23, 0.28);
-  /* Item 4a fix (WCAG 1.4.11/2.4.11, 2026-07-31): the previous `rgba(99, 102, 241, 0.13)` composites
-     to rgb(235,235,253) on a white surface -- 1.18:1, nowhere near the 3:1 non-text-contrast floor.
-     60% alpha of the same hue only reaches 2.54:1 -- alpha alone cannot fix this, the ring has to be
-     a solid, opaque color. `--color-indigo-ring` (#2563eb, defined below) already exists for exactly
-     this purpose and measures 5.17:1 on white (verified by direct WCAG relative-luminance
-     computation, not just eyeballed) -- reusing it here fixes focus-ring contrast at all 18 call
-     sites from this one token, instead of hunting each one down individually. */
+  /* Item 4a fix (WCAG 1.4.11/2.4.11, 2026-07-31): the previous `rgba(99, 102, 241, 0.13)` composites to
+   * rgb(235,235,253) on a white surface -- 1.18:1, nowhere near the 3:1 non-text-contrast floor. */
   --shadow-focus-ring: 0 0 0 3px var(--color-indigo-ring);
   --shadow-inset-active: inset 3px 0 0 #2563eb;
 
   /* Brand / semantic colors */
   --color-primary: #4f46e5;
   --color-primary-hover: #6366f1;
-  /* Selection tint (indigo-100) — the *selection* fill, distinct from the
-     `info-*` status family. Paired with --color-primary text it reads ~6:1.
-     Use for "this is the active/selected one" chips (e.g. SalesTabs active tab),
-     not for informational status, which stays on --color-info-bg-alt. */
+  /* Selection tint (indigo-100) — the *selection* fill, distinct from the `info-*` status family. Paired with
+   * --color-primary text it reads ~6:1. Use for "this is the active/selected one" chips (e.g. SalesTabs active
+   * tab), not for informational status, which stays on --color-info-bg-alt. */
   --color-primary-bg: #e0e7ff;
   --color-accent: #14b8a6;
   --color-accent-dark: #0f766e;
-  /* WCAG AA fix (fix/ui-contrast-tokens): #059669 measured 3.77:1 as white
-     text on this bg (Approve button /requests) and as text-on-white
-     (commission % on /ceo-settings) — both fail the 4.5:1 text floor.
-     #047857 clears 5.48:1 in both directions. --color-success-bg (#dcfce7)
-     is always paired with --color-success-dark (#15803d, unchanged,
-     4.57:1) never with this token, so that pairing is unaffected. */
+  /* WCAG AA fix: #059669 measured 3.77:1 as white text on this bg and as text-on-white — both fail the 4.5:1
+   * text floor. #047857 clears 5.48:1 in both directions. --color-success-bg is always paired with
+   * --color-success-dark never with this token, so that pairing is unaffected. */
   --color-success: #047857;
   --color-success-dark: #15803d;
   --color-success-bg: #dcfce7;
@@ -215,10 +182,9 @@
   --color-override: #7c3aed;
   --color-override-border: #a78bfa;
 
-  /* Deal pipeline phase accents (V50) — one hue per phase, adopted from the
-     user's Claude Design prototype (PipelineApp PHASE_TONE/hexTint). Used by
-     the งานขาย phase filter cards and stage progress bars; เสียงาน uses the
-     existing danger tokens. */
+  /* Deal pipeline phase accents (V50) — one hue per phase, adopted from the user's Claude Design prototype
+   * (PipelineApp PHASE_TONE/hexTint). Used by the งานขาย phase filter cards and stage progress bars; เสียงาน
+   * uses the existing danger tokens. */
   --color-phase-1: #6366f1;
   --color-phase-1-bg: #eef2ff;
   --color-phase-2: #0ea5e9;
@@ -239,31 +205,12 @@
   --color-surface-subtle: #f1f5f9;
   --color-text: #0f172a;
   --color-text-secondary: #334155;
-  /* WCAG AA fix (fix/ui-contrast-tokens): #64748b measured 3.93-4.34:1 on
-     the workspace/surface-subtle/#efefef/sidebar-dark surfaces it's
-     actually rendered against in this app (only ~4.6:1 on pure white,
-     which is not most of its call sites) — a straight text-contrast
-     failure. #5c6b80 clears 4.5+ on every LIGHT surface it's used on
-     (white 5.43, surface-muted 5.19, surface-subtle 4.95, workspace 4.79,
-     #efefef 4.72) but still fails on the dark sidebar (3.45) — see
-     --color-text-faint below for that surface instead. --color-muted is
-     a live alias (Tailwind `text-muted`, used on /catalog and
-     /price-import) kept in lockstep so it doesn't silently regress. */
+  /* WCAG AA fix: #64748b measured 3.93-4.34:1 on the workspace/surface-subtle/#efefef/sidebar-dark surfaces it's
+   * actually rendered against in this app. */
   --color-text-muted: #5c6b80;
   --color-muted: #5c6b80;
-  /* Retired for TEXT as of this fix: #94a3b8 measures only ~2.3-2.6:1 on
-     every light surface, a straight AA failure. Its remaining callers are
-     all non-text: decorative/redundant icons (chevrons, search, file, the
-     sidebar logout icon-button, and the `.empty-state svg` icon — the
-     `.empty-state` container itself was moved to --color-text-muted by
-     this same fix so bare text nodes inside it no longer render in Faint
-     (now a `text-text-muted`/`text-text-faint` Tailwind pair directly on
-     EmptyState.jsx, Group B primitives port) and — deliberately — muted
-     text ON THE DARK SIDEBAR
-     (`.nav-item small`, `.sidebar-account small`, `.nav-group-header`, and
-     now `.brand small`, see styles.css), where this same value clears
-     7.30:1 against --color-sidebar-bg. Do not add a new call site of this
-     token against a light background for text. */
+  /* Retired for TEXT as of this fix: #94a3b8 measures only ~2.3-2.6:1 on every light surface, a straight AA
+   * failure. Do not add a new call site of this token against a light background for text. */
   --color-text-faint: #94a3b8;
   --color-faint: #94a3b8;
   --color-icon-muted: #475569;
@@ -277,42 +224,26 @@
   --color-sidebar-bg: #0b1220;
   --color-sidebar-text: #cbd5e1;
 
-  /* ============================================================
-     Phase 3.4 — semantic token infrastructure
-     (docs/ui-repair/03-design-foundation/TOKENS.md "Token gap summary")
+  /* Phase 3.4 — semantic token infrastructure (docs/ui-repair/03-design-foundation/TOKENS.md "Token gap
+   * summary") Additive only: nothing below is consumed by any existing selector or component yet, so no rendered
+   * page changes. */
 
-     Additive only: nothing below is consumed by any existing selector
-     or component yet, so no rendered page changes. Each entry closes a
-     documented gap from Phase 3; migrating an existing call site onto
-     one of these is a separate, screenshotted change per
-     LEGACY_STYLE_MIGRATION.md, not part of this commit.
-
-     Naming convention: tokens under a Tailwind-recognized namespace
-     (`--color-*`) use it deliberately, to get bg-/text-/border-*
-     utilities for free. Tokens with no natural Tailwind utility
-     surface (motion, layout dimensions) are plain custom properties,
-     consumed via var() in arbitrary values (e.g. duration-[var(--motion-standard)])
-     rather than spawning a new one-off utility class per token.
-     ============================================================ */
-
-  /* Overlay / scrim colors — today these are 5 hardcoded rgba literals
-     in styles.css (:394,481,1465,1551,2036). Values match those exactly;
-     see LEGACY_STYLE_MIGRATION.md for the swap-in-place follow-up. */
+  /* Overlay / scrim colors — today these are 5 hardcoded rgba literals in styles.css (:394,481,1465,1551,2036).
+   * Values match those exactly; see LEGACY_STYLE_MIGRATION.md for the swap-in-place follow-up. */
   --color-overlay: rgba(15, 23, 42, 0.52);
   --color-overlay-drawer: rgba(15, 23, 42, 0.48);
   --color-veil: rgba(255, 255, 255, 0.55);
 
-  /* Motion — formalizes the durations/easing already in informal use
-     across styles.css (100-180ms, ease). ease-standard is an
-     ease-out-quint curve per the product design guidance (no bounce/elastic). */
+  /* Motion — formalizes the durations/easing already in informal use across styles.css (100-180ms, ease).
+   * ease-standard is an ease-out-quint curve per the product design guidance (no bounce/elastic). */
   --motion-fast: 140ms;
   --motion-standard: 190ms;
   --motion-slow: 240ms;
   --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
-  /* Layout — mirrors the current rendered desktop rail width and the
-     per-breakpoint page gutters already hardcoded per page/breakpoint. */
+  /* Layout — mirrors the current rendered desktop rail width and the per-breakpoint page gutters already
+   * hardcoded per page/breakpoint. */
   --sidebar-width: 260px;
   --sidebar-width-icon: 72px;
   --content-max: 1440px;
@@ -321,10 +252,8 @@
   --page-gutter-desktop: 24px;
 }
 
-/* Skeleton shimmer keyframe, relocated from styles.css's retired `.skeleton` rule (Group B
-   primitives port). Referenced by Skeleton.jsx's `animate-[skeleton-shimmer_1.4s_ease_infinite]`
-   utility class. Left unlayered (not inside @layer theme/base/legacy/utilities) so it is simply
-   "the" definition, with no cascade-layer ordering to reason about. */
+/* Skeleton shimmer keyframe, relocated from styles.css's retired `.skeleton` rule (Group B primitives port).
+ * Referenced by Skeleton.jsx's `animate-[skeleton-shimmer_1.4s_ease_infinite]` utility class. */
 @keyframes skeleton-shimmer {
   0% {
     background-position: 100% 50%;
@@ -334,22 +263,18 @@
   }
 }
 
-/* Button loading-spinner keyframe, relocated from styles.css's retired `.button-loading-spinner`
-   rule (Group C primitives port). Referenced by Button.jsx's
-   `animate-[button-loading-spin_700ms_linear_infinite]` utility class. Left unlayered for the
-   same reason as skeleton-shimmer above. */
+/* Button loading-spinner keyframe, relocated from styles.css's retired `.button-loading-spinner` rule (Group C
+ * primitives port). Referenced by Button.jsx's `animate-[button-loading-spin_700ms_linear_infinite]` utility
+ * class. Left unlayered for the same reason as skeleton-shimmer above. */
 @keyframes button-loading-spin {
   to {
     transform: rotate(360deg);
   }
 }
 
-/* Phase 3.4 — reduced-motion foundation for the tokens above. Nothing
-   currently reads --motion-*, so this has no effect today; any future
-   component that does `transition-duration: var(--motion-standard)`
-   automatically respects prefers-reduced-motion without adding its own
-   media query. Does not touch the app's 4 existing reduced-motion
-   blocks in styles.css. */
+/* Phase 3.4 — reduced-motion foundation for the tokens above. Nothing currently reads --motion-*, so this has
+ * no effect today; any future component that does `transition-duration: var(--motion-standard)` automatically
+ * respects prefers-reduced-motion without adding its own media query. */
 @media (prefers-reduced-motion: reduce) {
   :root {
     --motion-fast: 0ms;
@@ -359,36 +284,15 @@
 }
 
 @layer base {
-  /* Base layer: reset + bare-element defaults, moved out of styles.css as
-     the first slice of retiring it (see the `@layer` comment above for why
-     this layer sits where it does). Order mirrors styles.css's original
-     source order for these rules -- that order is load-bearing in two
-     places, called out inline where it matters: `textarea`'s
-     `height: auto` must stay after the shared `height: 40px` rule, and the
-     ≤720px override must stay last. */
+  /* Base layer: reset + bare-element defaults, moved out of styles.css as the first slice of retiring it (see
+   * the `@layer` comment above for why this layer sits where it does). */
 
   * {
     box-sizing: border-box;
   }
 
-  /* This `:root` used to also carry 29 custom-property token declarations
-     (--font-family, --font-family-mono, --text-*, --space-*, --radius-*,
-     --shadow-*) duplicating this file's own `@theme static` block above.
-     They are dropped here, not moved -- verified byte-for-byte identical to
-     `@theme static`, so dropping them changes nothing rendered.
-
-     They were not simply redundant, either: this `:root` used to live in
-     styles.css's `@layer legacy`, ordered AFTER `@layer theme` in the
-     `@layer theme, base, legacy, utilities;` statement above, so for any
-     property both blocks set, THIS copy was the one the cascade actually
-     served -- the `@theme static` values were silently dead. That was
-     verified empirically once already, when the *color* tokens were
-     de-duplicated the same way in an earlier fix (fix/ui-contrast-tokens:
-     editing a color here changed the rendered page; editing "the same"
-     token in `@theme static` did not, until the color tokens were
-     removed). The non-color tokens stayed in styles.css at the time, out
-     of scope for a colour-only fix; this refactor finishes the job, so
-     `@theme static` is now the single source of truth for all 29. */
+  /* This `:root` used to also carry 29 custom-property token declarations (--font-family, --font-family-mono,
+   * --text-*, --space-*, --radius-*, --shadow-*) duplicating this file's own `@theme static` block above. */
   :root {
     color-scheme: light;
     font-family: var(--font-family);
@@ -432,17 +336,8 @@
     font-family: var(--font-family-mono);
   }
 
-  /* `align-content: start` is load-bearing, not cosmetic. This rule makes every
-     <label> a grid, and ~185 hand-rolled field wrappers across src/features rely
-     on it to stack their label text above their control. Wherever such a label is
-     itself a stretched grid/flex item — the common case, since `align-items`
-     defaults to `stretch` — the spare height of the row was distributed into
-     these auto rows, growing the *control* rather than leaving whitespace below
-     it. How much it grew depended on how many rows that field happened to have,
-     i.e. whether it carried a hint line, so two fields side by side in one row
-     ended up different heights and different vertical positions. Packing the rows
-     to the start leaves the control at its natural height and the slack at the
-     bottom, where it belongs. Same fix as FormField.jsx's `content-start`. */
+  /* `align-content: start` is load-bearing, not cosmetic. This rule makes every <label> a grid, and ~185
+   * hand-rolled field wrappers across src/features rely on it to stack their label text above their control. */
   label {
     display: grid;
     align-content: start;
@@ -452,34 +347,9 @@
     font-weight: 700;
   }
 
-  /* `height`, not `min-height`: a fixed-height control cannot absorb a stretched
-     parent's spare height, so it stays aligned with its neighbour even where a
-     wrapper misses the `align-content: start` above. `textarea` overrides this
-     back to auto below — it is the one control that must still grow.
-
-     The exclusion is wrapped in `:where()` for its zero specificity, which is
-     still load-bearing — but READ THE SECOND REASON BELOW BEFORE TOUCHING IT,
-     because the original one no longer applies and looks removable.
-
-     Originally: a bare `input:not([type='checkbox']):not([type='radio'])`
-     scores (0,2,1) — higher than `.currency-input input` (0,1,1) — so this
-     rule's `padding: 0 12px` won over the 34px left inset those wrappers use
-     to clear their symbol, and the ฿ glyph landed on top of the value.
-     That reason is now MOOT: `.currency-input` / `.input-with-icon` /
-     `.search-field` all live in styles.css's `@layer legacy`, which is ordered
-     after `@layer base`, so they beat this rule on layer order no matter what
-     it scores. Verified — removing `:where()` leaves every desktop and tablet
-     surface pixel-identical, the ฿ inset included.
-
-     The reason it MUST stay is now intra-layer, not cross-layer. The ≤720px
-     `height: 44px` override at the bottom of this layer reuses this same
-     selector, so it also scores (0,0,1), and it wins purely by being declared
-     later. Raise this rule to (0,2,1) and specificity beats source order: the
-     40px height wins at ≤720px too, and every text input silently loses the
-     mobile touch-target floor. Measured — that exact mutation reddens 3 of the
-     5 mobile visual-baseline surfaces and none of the desktop or tablet ones,
-     which is the whole tell: the damage is mobile-only and invisible on the
-     viewport most people check. */
+  /* `height`, not `min-height`: a fixed-height control cannot absorb a stretched parent's spare height, so it
+   * stays aligned with its neighbour even where a wrapper misses the `align-content: start` above. `textarea`
+   * overrides this back to auto below — it is the one control that must still grow. */
   input:where(:not([type='checkbox'], [type='radio'])),
   select,
   textarea {
@@ -494,26 +364,9 @@
     padding: 0 12px;
   }
 
-  /* Native checkbox/radio are excluded from the box above and reset here: they
-     were inheriting `width: 100%` and the 40px padded box, which rendered a bare
-     radio as a full-width bar with its label pushed off screen (measured 668px
-     on the ล.ย.01 form).
-
-     16px rather than the 13px UA default — 13px reads undersized beside 14px
-     Thai label text, and 16px is already what the three call sites that worked
-     around the old bug picked by hand (`h-4 w-4` in TypePicker.jsx,
-     SpecialMoneyPanel.jsx, LeaveRequestPage.jsx), so this makes the default
-     agree with them instead of leaving two sizes in the app.
-
-     Row heights are deliberately NOT raised to the 44px mobile floor that
-     buttons and status chips carry in styles.css: these rows are `py-2 text-sm`
-     by design, they clear WCAG 2.2 SC 2.5.8 through the spacing exception, and
-     the welfare TypePicker stacks 12 of them — a floor there would cost ~108px
-     of scrolling at 375px for no accessibility gain (owner call, 2026-08-04).
-
-     They keep the shared `input:focus` ring below. `border: 0` is safe: with
-     `appearance` left at `auto` the browser paints the native widget, so the old
-     1.5px border was never visible on them anyway. */
+  /* Native checkbox/radio are excluded from the box above and reset here: they were inheriting `width: 100%` and
+   * the 40px padded box, which rendered a bare radio as a full-width bar with its label pushed off screen
+   * (measured 668px on the ล.ย.01 form). */
   input[type='checkbox'],
   input[type='radio'] {
     width: 16px;
@@ -589,35 +442,13 @@
     }
   }
 
-  /* Extracted out of styles.css's own ≤720px media block -- the rest of
-     that block's rules stay there in styles.css; re-wrapped in the same
-     media condition here since this rule is mobile-only, same as it always
-     was. This MUST stay the LAST rule in `@layer base`: it ties the 40px
-     rule above on specificity (0,0,1), so source order is the only thing
-     making it win at ≤720px -- moving it earlier would silently kill the
-     mobile touch-target floor. */
+  /* Extracted out of styles.css's own ≤720px media block -- the rest of that block's rules stay there in
+   * styles.css; re-wrapped in the same media condition here since this rule is mobile-only, same as it always
+   * was. */
   @media (max-width: 720px) {
-    /* Text controls join the same 44px floor. Two reasons, and the second is
-       why this rule is here rather than left alone:
-
-       1. They were below the floor. A 40px input is a touch target on a phone
-          exactly as much as the buttons in styles.css are.
-       2. They used to reach 44px by accident, and the base rule's fixed
-          `height` took that away. `align-items: stretch` only stretches a flex
-          item whose cross-size is `auto`, so under the old `min-height: 40px`
-          an input sharing a flex row with one of those 44px buttons was
-          silently stretched to match it. An explicit `height` opts out of
-          stretch, which left ProcurementDetailPage's four inline record-forms
-          (`/factory-purchase-orders/:id`, six inputs in `flex flex-wrap` rows
-          beside a `.primary-button`) with their inputs ending 4px above the
-          button — measured 699 vs 703 at 700px. Matching the floor restores a
-          flush row deliberately instead of by side effect. That page was
-          deleted in 2026-08 (factory purchase orders left the product); the
-          measurement stands as the worked example, and the rule itself is
-          global — every input/select on a phone still needs the 44px floor.
-
-       `textarea` is excluded along with checkbox/radio: it is the growable
-       control, and pinning its height would undo `height: auto` above. */
+    /* Text controls join the same 44px floor. `align-items: stretch` only stretches a flex item whose cross-size
+     * is `auto`, so under the old `min-height: 40px` an input sharing a flex row with one of those 44px buttons
+     * was silently stretched to match it. */
     input:where(:not([type='checkbox'], [type='radio'])),
     select {
       height: 44px;

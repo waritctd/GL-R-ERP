@@ -8,11 +8,9 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// Slice 2 — flow A (SLICE-2-FLOW-A.md §A): "เลือกดีลที่มีอยู่". One combobox over the rows
-// api.tickets.list() already returns (server-scoped: a sales rep only ever gets their own deals),
-// filtered client-side on code · customer · project. Picking one sets `?ticket=<id>` — the editor's
-// EXISTING ?ticket= path, not a second code path. A picked deal that already has a live direct
-// quotation (TicketSummaryDto.liveDirectQuotation, S2-B4) gets an inline notice — never a modal.
+// Slice 2 — flow A (SLICE-2-FLOW-A.md §A): "เลือกดีลที่มีอยู่". One combobox over the rows api.tickets.list()
+// already returns (server-scoped: a sales rep only ever gets their own deals), filtered client-side on code ·
+// customer · project.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -30,8 +28,8 @@ const managerUser = { id: 11, name: 'ผึ้ง', role: 'sales_manager' };
 const DEALS = [
   { id: 11, code: 'DL-2026-0011', customerName: 'บริษัท ลาดพร้าว จำกัด', projectName: 'โครงการ Central Ladprao', salesStage: 'PRESENTATION', createdById: 6, lifecycle: 'ACTIVE', liveDirectQuotation: null },
   { id: 12, code: 'DL-2026-0012', customerName: 'บริษัท บางนา จำกัด', projectName: 'Mega Bangna', salesStage: 'QUOTE_OWNER', createdById: 6, lifecycle: 'ACTIVE', liveDirectQuotation: null },
-  // Another rep's deal — the list is server-scoped already, but a sales rep may create a quotation
-  // only on their OWN deal (canCreateDealQuotation), so it is never offered even if it arrives.
+  // Another rep's deal — the list is server-scoped already, but a sales rep may create a quotation only on their
+  // OWN deal (canCreateDealQuotation), so it is never offered even if it arrives.
   { id: 13, code: 'DL-2026-0013', customerName: 'บริษัท คนอื่น จำกัด', projectName: 'โครงการคนอื่น', salesStage: 'PRESENTATION', createdById: 99, lifecycle: 'ACTIVE', liveDirectQuotation: null },
   // A lost deal cannot take a quotation — not offered.
   { id: 14, code: 'DL-2026-0014', customerName: 'บริษัท เสียงาน จำกัด', projectName: 'โครงการเสีย', salesStage: 'NEGOTIATION', createdById: 6, lifecycle: 'CLOSED_LOST', liveDirectQuotation: null },

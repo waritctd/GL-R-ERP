@@ -3,12 +3,9 @@ package th.co.glr.hr.attendance.daily;
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
 
-/**
- * A raw row from the day-range query, before status/flags are derived.
- *
- * <p>{@code hasRecord} distinguishes "we know they did not scan" from "there is simply no data",
- * which is what lets the UI render "-" instead of implying an absence.
- */
+/** A raw row from the day-range query, before status/flags are derived. hasRecord distinguishes "we know they
+ * did not scan" from "there is simply no data", which is what lets the UI render "-" instead of implying an
+ * absence. */
 public record AttendanceDailyRow(
     long employeeId,
     String employeeCode,

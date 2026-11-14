@@ -1,23 +1,12 @@
-// Per-rep, per-browser conveniences for the ใบเสนอราคา editor (owner ask 2026-09-10, "as little
-// typing as possible"). NOTHING here is data: every value is a DEFAULT the rep can immediately
-// overwrite, and losing all of it costs one extra dropdown pick. That is deliberate, and it is
-// what makes localStorage the right home — these are per-device conveniences, not state anyone
-// else needs to see, and they must never become a source of truth the server disagrees with.
-//
-// ⚠️ EVERY read and write is wrapped. `localStorage` is not merely "sometimes empty": the
-// ACCESSOR ITSELF THROWS in a Safari private window and under a browser set to block site data,
-// so `localStorage.getItem(...)` inside a render path takes the whole editor down rather than
-// degrading. A throw here is indistinguishable from "nothing saved yet" by design — the caller
-// gets null/[] and renders exactly as it would for a rep on their first visit.
-//
-// Keys are namespaced AND suffixed with the login-account id, because a shared sales machine is
-// the normal case in this office: two reps on one browser must not inherit each other's terms.
+// Per-rep, per-browser conveniences for the ใบเสนอราคา editor (owner ask 2026-09-10, "as little typing as
+// possible"). NOTHING here is data: every value is a DEFAULT the rep can immediately overwrite, and losing all
+// of it costs one extra dropdown pick.
 
 const DEFAULTS_KEY = 'glr.quotation.defaults.v1';
 const RECENT_PRODUCTS_KEY = 'glr.quotation.recentProducts.v1';
 
-/** How many "ใช้ล่าสุด" catalog chips the item row offers. 8 per the brief — one row's worth on a
- * 1366px screen, and few enough that scanning them is faster than typing the model name. */
+/** How many "ใช้ล่าสุด" catalog chips the item row offers. 8 per the brief — one row's worth on a 1366px
+ * screen, and few enough that scanning them is faster than typing the model name. */
 export const RECENT_PRODUCT_LIMIT = 8;
 
 function storageKey(base, userId) {
@@ -37,40 +26,25 @@ function readJson(key) {
 
 function writeJson(key, value) {
   try {
-    // NOT `globalThis.localStorage?.setItem(...)` followed by `return true` -- optional chaining
-    // makes a MISSING storage silently succeed, so this would report "saved" for a write that
-    // never happened. The environment is checked, then the call is made unguarded so a real
-    // failure lands in the catch.
+    // NOT `globalThis.localStorage?.setItem(...)` followed by `return true` -- optional chaining makes a MISSING
+    // storage silently succeed, so this would report "saved" for a write that never happened. The environment is
+    // checked, then the call is made unguarded so a real failure lands in the catch.
     const storage = globalThis.localStorage;
     if (!storage) return false;
     storage.setItem(key, JSON.stringify(value));
     return true;
   } catch {
-    // Quota exceeded or storage blocked. A default that failed to save is not an error the rep
-    // needs to hear about — the next quotation simply starts from the app defaults.
+    // Quota exceeded or storage blocked. A default that failed to save is not an error the rep needs to hear about
+    // — the next quotation simply starts from the app defaults.
     return false;
   }
 }
 
-// ── Last-used terms ──────────────────────────────────────────────────────────────────────────
-// Only the four terms fields a rep repeats deal after deal, plus the ประเทศต้นทาง a new ITEM row
-// starts on. Deliberately NOT remembered: วันที่ (always today), หมายเหตุ (customer-specific),
-// ฝ่าย/หน่วยงาน (deal-specific), and anything money-shaped.
-//
-// V178: `validityMode` joined this list (a rep who always dates their validity keeps starting
-// there) but `validityUntil` NEVER does — a remembered CALENDAR DATE from a previous deal would
-// silently be a date in the past, or simply the wrong one, on every quotation after the first.
+// Last-used terms ────────────────────────────────────────────────────────────────────────── Only the four
+// terms fields a rep repeats deal after deal, plus the ประเทศต้นทาง a new ITEM row starts on.
 
-// Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): `noDeposit`/`fullPaymentTerm` were added
-// here alongside `validityMode`, then DELIBERATELY REMOVED the same day on a second owner ruling.
-// Unlike `validityMode`, remembering `noDeposit` is not a harmless convenience: ticking it once on
-// one quotation would make EVERY later new quotation start with no deposit, which is a rep sending
-// a quotation with no deposit BY ACCIDENT rather than by deliberate choice each time. A new
-// quotation must always start with the normal deposit controls — see `emptyTerms` below, which no
-// longer reads either field off `defaults`. Leaving both OUT of this list also means
-// `readQuotationDefaults` silently drops a stale `noDeposit`/`fullPaymentTerm` already sitting in
-// localStorage from the brief window this shipped — no special-casing needed, the picker below
-// already ignores any field not in DEFAULT_TERM_FIELDS.
+// Item 4 ("ไม่รับมัดจำ", V181, owner ruling 2026-09-16): `noDeposit`/`fullPaymentTerm` were added here
+// alongside `validityMode`, then DELIBERATELY REMOVED the same day on a second owner ruling.
 const DEFAULT_TERM_FIELDS = [
   'depositPercent', 'remainderMode', 'creditDays', 'validityDays', 'validityMode', 'originCountry',
 ];
@@ -86,8 +60,8 @@ export function readQuotationDefaults(userId) {
   return Object.keys(picked).length ? picked : null;
 }
 
-/** Called after a successful save — the rep's own last choices become the next NEW quotation's
- * starting point. Returns false if storage refused, so a test can assert the throw path. */
+/** Called after a successful save — the rep's own last choices become the next NEW quotation's starting point.
+ * Returns false if storage refused, so a test can assert the throw path. */
 export function writeQuotationDefaults(userId, values) {
   const picked = {};
   for (const field of DEFAULT_TERM_FIELDS) {
@@ -98,11 +72,9 @@ export function writeQuotationDefaults(userId, values) {
   return writeJson(storageKey(DEFAULTS_KEY, userId), picked);
 }
 
-// ── Recent catalog picks ─────────────────────────────────────────────────────────────────────
-// The rep's own last RECENT_PRODUCT_LIMIT catalog rows, most recent first. Stored as the SUBSET of
-// ProductPriceDto that QuotationItemRow.pickCatalog actually consumes plus what the chip shows —
-// never the whole DTO, so a catalog schema change cannot bloat or poison this cache. A stale entry
-// is harmless: picking one only ever pre-fills fields the rep can edit, exactly like the typeahead.
+// Recent catalog picks ───────────────────────────────────────────────────────────────────── The rep's own
+// last RECENT_PRODUCT_LIMIT catalog rows, most recent first. A stale entry is harmless: picking one only ever
+// pre-fills fields the rep can edit, exactly like the typeahead.
 
 const RECENT_PRODUCT_FIELDS = [
   'priceId', 'productCode', 'factoryName', 'factory', 'brand', 'collection', 'productName',
@@ -110,17 +82,17 @@ const RECENT_PRODUCT_FIELDS = [
   'originCountryCode',
 ];
 
-/** Always an array — `[]` when nothing is stored, storage threw, or the stored value is not a
- * list (a hand-edited or half-written key must not crash the editor). */
+/** Always an array — `[]` when nothing is stored, storage threw, or the stored value is not a list (a
+ * hand-edited or half-written key must not crash the editor). */
 export function readRecentCatalogPicks(userId) {
   const stored = readJson(storageKey(RECENT_PRODUCTS_KEY, userId));
   if (!Array.isArray(stored)) return [];
   return stored.filter((entry) => entry && typeof entry === 'object').slice(0, RECENT_PRODUCT_LIMIT);
 }
 
-/** Most-recent-first, deduped by priceId, capped at RECENT_PRODUCT_LIMIT. Returns the new list so
- * the caller can update its own state without a second read (which could disagree if storage is
- * unavailable — the list stays live in memory for the session either way). */
+/** Most-recent-first, deduped by priceId, capped at RECENT_PRODUCT_LIMIT. Returns the new list so the caller
+ * can update its own state without a second read (which could disagree if storage is unavailable — the list
+ * stays live in memory for the session either way). */
 export function pushRecentCatalogPick(userId, catalogRow) {
   const priceId = catalogRow?.priceId;
   const entry = {};

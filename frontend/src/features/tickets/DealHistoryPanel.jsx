@@ -10,12 +10,9 @@ import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-// Moved verbatim from TicketDetailPage.jsx (IA rebuild — see
-// docs/ui-repair/02-information-architecture/): this is the label table for
-// `ticket.events`, unrelated to the DealActivityKind taxonomy
-// (dealTrackingMeta.js's ACTIVITY_KINDS) that backs the activity log merged
-// in below. Kept as one map, not duplicated — see this file's own history if
-// TicketDetailPage ever needs it again.
+// Moved verbatim from TicketDetailPage.jsx (IA rebuild — see docs/ui-repair/02-information-architecture/):
+// this is the label table for `ticket.events`, unrelated to the DealActivityKind taxonomy
+// (dealTrackingMeta.js's ACTIVITY_KINDS) that backs the activity log merged in below.
 export const EVENT_KIND_LABEL = {
   CREATED:            'สร้างดีล',
   STAGE_CHANGED:      'เปลี่ยนสถานะดีล',
@@ -40,16 +37,16 @@ export const EVENT_KIND_LABEL = {
   PRICE_REVISED:      'แก้ไขราคาที่เสนอ',
   REVISION_REQUESTED: 'ขอแก้ไข',
   // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม, V186) -- a genuinely new kind, not a reuse of
-  // REVISION_REQUESTED: a reorder clones an APPROVED quotation into an independent draft without
-  // ever revising, rejecting, or touching the source, so "ขอแก้ไข" above would misdescribe it.
+  // REVISION_REQUESTED: a reorder clones an APPROVED quotation into an independent draft without ever revising,
+  // rejecting, or touching the source, so "ขอแก้ไข" above would misdescribe it.
   DEAL_QUOTATION_REORDERED: 'สร้างจากใบเดิม (สั่งเหมือนเดิม)',
-  // Owner ruling 2026-09-19 ("a deal may hold only ONE APPROVED DEAL_DIRECT quotation") -- the
-  // same-ticket sweep DealQuotationService#approve fires once per sibling it actually
-  // supersedes. Missing here would leave the raw kind string on screen (Opus review finding).
+  // Owner ruling 2026-09-19 ("a deal may hold only ONE APPROVED DEAL_DIRECT quotation") -- the same-ticket sweep
+  // DealQuotationService#approve fires once per sibling it actually supersedes. Missing here would leave the raw
+  // kind string on screen (Opus review finding).
   DEAL_QUOTATION_SUPERSEDED: 'ใบเสนอราคาถูกแทนที่',
-  // GLA-136 (V193) -- DealQuotationService#promoteToDeal: the customer ordered on an APPROVED
-  // direct quotation. Relabelled by slice 2 (IA §4/§8): under the linked design the deal already
-  // exists, so what this event records is the ORDER, in the same words as the CTA that fires it.
+  // GLA-136 (V193) -- DealQuotationService#promoteToDeal: the customer ordered on an APPROVED direct quotation.
+  // Relabelled by slice 2 (IA §4/§8): under the linked design the deal already exists, so what this event
+  // records is the ORDER, in the same words as the CTA that fires it.
   DEAL_PROMOTED_FROM_QUOTATION: 'ยืนยันคำสั่งซื้อจากใบเสนอราคา',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
@@ -57,10 +54,9 @@ export const EVENT_KIND_LABEL = {
   COMMENTED:          'ความคิดเห็น',
   COMMENT:            'ความคิดเห็น',
   PRICE_OVERRIDDEN:   'แก้ไขราคาด้วยตนเอง (CEO)',
-  // Dual-track post-quotation events (see backend TicketEventKind.java) — payment
-  // and fulfillment labels mirror the DealStagePanel's การชำระเงิน/การนำเข้า
-  // sub-status chips so an event and its chip read
-  // as the same real-world action.
+  // Dual-track post-quotation events (see backend TicketEventKind.java) — payment and fulfillment labels mirror
+  // the DealStagePanel's การชำระเงิน/การนำเข้า sub-status chips so an event and its chip read as the same
+  // real-world action.
   CUSTOMER_CONFIRMED:     'ลูกค้ายืนยันคำสั่งซื้อ',
   DEPOSIT_NOTICE_ISSUED:  'ออกใบแจ้งมัดจำ',
   DEPOSIT_PAID:           'รับมัดจำแล้ว',
@@ -122,9 +118,8 @@ function eventDotClass(kind) {
 // Read on every render/reset, not once at module load: today's date in Bangkok, never the UTC date.
 const emptyActivityDraft = () => ({ activityDate: bangkokTodayIso(), kind: 'CALL', note: '' });
 
-/** `Date.parse`-safe timestamp, or `null` for a missing/unparseable value —
- * rows with a `null` timestamp sort last rather than crashing `Array#sort` or
- * floating to the top as `NaN` would. */
+/** `Date.parse`-safe timestamp, or `null` for a missing/unparseable value — rows with a `null` timestamp sort
+ * last rather than crashing `Array#sort` or floating to the top as `NaN` would. */
 function toTimestamp(value) {
   if (!value) return null;
   const t = new Date(value).getTime();
@@ -164,10 +159,9 @@ function EventRow({ event }) {
   );
 }
 
-// Same rendering DealTrackingPanel's activity log used before this merge —
-// a `StatusBadge` (not a coloured dot) is what visually marks a row as "a
-// rep's own follow-up" rather than "the system's audit trail" (the event
-// rows' `eventDotClass` dot).
+// Same rendering DealTrackingPanel's activity log used before this merge — a `StatusBadge` (not a coloured
+// dot) is what visually marks a row as "a rep's own follow-up" rather than "the system's audit trail" (the
+// event rows' `eventDotClass` dot).
 function ActivityRow({ activity }) {
   return (
     <li className="flex flex-col gap-0.5 rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2">
@@ -181,40 +175,9 @@ function ActivityRow({ activity }) {
   );
 }
 
-/**
- * "ประวัติดีล" (IA rebuild — see docs/ui-repair/02-information-architecture/):
- * one chronological history merging the system audit trail (`ticket.events`,
- * formerly its own "ประวัติการดำเนินการ" panel ~1,500px away from this one)
- * with the rep's own follow-up log (`activities`, formerly DealTrackingPanel's
- * "ประวัติการติดตาม (Activity log)"). Two separate timelines describing the
- * same deal is exactly the redundancy this rebuild folds — see the measured
- * facts in TicketDetailPage's own doc comments.
- *
- * Sorted by `event.createdAt` / `activity.activityDate` descending — those are
- * each stream's own canonical timestamp field (see dealTrackingMeta.js's
- * `lastStageChangeAt`/`hasActivitySince`, which already key activities off
- * `activityDate`, not `createdAt`). A row with no parseable timestamp sorts
- * last rather than crashing or floating to the top.
- *
- * Both input affordances survive verbatim: the comment box (`canComment`,
- * moved from TicketDetailPage's own state/handler — passed down rather than
- * duplicated so `resetActionDrafts` still clears it after any action) and the
- * add-activity form (`canAddActivity`, state now owned locally here since
- * DealTrackingPanel no longer renders it).
- *
- * FIX 1 (Opus review): this tab (and so this panel) now renders for every
- * viewer of the deal — the audit trail (`events`) and the comment box
- * (`canComment`) are backed by `TicketService.projectForRole`/`comment`'s
- * `requireViewAccess`, which every viewer passes. Only the follow-up feed
- * (`activities`, `TicketService.listActivities`) stays genuinely gated on
- * `requireDealOwnership` — the parent never fetches it for a role that gate
- * would refuse (`activitiesQuery`'s own `enabled`), so `activities` here is
- * always `[]` for those roles, not a real "nothing logged yet" answer.
- * `canViewActivityFeed` (true only for the roles that DID fetch it) exists
- * so the empty state below can tell those two situations apart instead of
- * claiming "ยังไม่มีประวัติ ... กิจกรรมจะปรากฏที่นี่" when the feed was simply
- * never asked for on this viewer's behalf.
- */
+/** "ประวัติดีล": one chronological history merging the system audit trail with the rep's own follow-up log
+ * (`activities`, formerly DealTrackingPanel's "ประวัติการติดตาม"). A row with no parseable timestamp sorts
+ * last rather than crashing or floating to the top. */
 export function DealHistoryPanel({
   events = [],
   activities = [],
@@ -239,31 +202,9 @@ export function DealHistoryPanel({
       if (a.ts == null) return 1;
       if (b.ts == null) return -1;
       if (b.ts !== a.ts) return b.ts - a.ts;
-      // FIX 4 (Opus review — comparator was not a strict weak ordering): the
-      // old tiebreak below only compared `event.id` when BOTH rows were
-      // events, and fell through to a bare `0` for every other combination
-      // (event-vs-activity, activity-vs-activity). That made the "tie"
-      // relation non-transitive: for two events E1(id 1)/E2(id 2) and an
-      // activity A sharing one instant, cmp(E1,A)=0 and cmp(A,E2)=0 (neither
-      // is event-vs-event) implied E1~A~E2, yet cmp(E1,E2) actually resolves
-      // via the id tiebreak to a definite (non-zero) order — Array#sort has
-      // no obligation to honor a comparator whose "equal" pairs aren't
-      // mutually consistent, so the final order for that trio depended on
-      // the engine's internal comparison sequence, not on any rule this file
-      // states. D5: sales.ticket_event.created_at defaults to Postgres now()
-      // (transaction_timestamp()), so every event written in the same
-      // transaction (e.g. confirmCustomer's CUSTOMER_CONFIRMED then
-      // STAGE_CHANGED) shares one identical instant — this is the case the
-      // tiebreak exists for at all.
-      //
-      // Fixed by applying ONE secondary key to every row regardless of kind,
-      // not just to event/event pairs: events sort before activities at a
-      // shared instant (arbitrary but FIXED, so every pair — including one
-      // event and one activity — now has a definite, mutually consistent
-      // order instead of a same-kind-only special case), and within one kind
-      // a numerically higher id (written later) sorts first — the exact
-      // event-vs-event rule the passing D5 test below already requires,
-      // unchanged.
+      // FIX 4 (Opus review — comparator was not a strict weak ordering): the old tiebreak below only compared
+      // `event.id` when BOTH rows were events, and fell through to a bare `0` for every other combination
+      // (event-vs-activity, activity-vs-activity).
       const aRank = a.type === 'event' ? 0 : 1;
       const bRank = b.type === 'event' ? 0 : 1;
       if (aRank !== bRank) return aRank - bRank;
@@ -287,14 +228,9 @@ export function DealHistoryPanel({
     <Panel title="ประวัติดีล" actions={<span className="text-2xs font-normal text-text-muted">History</span>}>
       <div className="ticket-events">
         {rows.length === 0 && !loading ? (
-          // FIX 1 (Opus review): when `canViewActivityFeed` is false,
-          // `activities` is always `[]` because it was never fetched for
-          // this viewer (see the parent's `activitiesQuery.enabled`) — an
-          // empty `events` list here only proves the AUDIT TRAIL is empty,
-          // not that "nothing has happened on this deal". The default copy
-          // ("เหตุการณ์และกิจกรรมจะปรากฏที่นี่") promises the follow-up feed will
-          // show up here too, which is untrue for these viewers — say what
-          // this panel actually knows instead.
+          // FIX 1 (Opus review): when `canViewActivityFeed` is false, `activities` is always `[]` because it was never
+          // fetched for this viewer (see the parent's `activitiesQuery.enabled`) — an empty `events` list here only
+          // proves the AUDIT TRAIL is empty, not that "nothing has happened on this deal".
           canViewActivityFeed ? (
             <EmptyState icon="clock" title="ยังไม่มีประวัติ" description="เหตุการณ์และกิจกรรมจะปรากฏที่นี่" />
           ) : (
@@ -313,9 +249,8 @@ export function DealHistoryPanel({
             ))}
           </ul>
         )}
-        {/* activitiesQuery loading never blocks the events that are already
-            part of the ticket payload — this is an additive "more is coming"
-            line, not a full-panel skeleton swap. */}
+        {/* activitiesQuery loading never blocks the events that are already part of the ticket payload — this is an
+         * additive "more is coming" line, not a full-panel skeleton swap. */}
         {loading ? (
           <div className="px-1 pt-2">
             <SkeletonText lines={2} />

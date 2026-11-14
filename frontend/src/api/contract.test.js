@@ -2,27 +2,14 @@ import { describe, it, expect } from 'vitest';
 import { api as hrApi } from './hrApi.js';
 import { api as mockApi } from './mockApi.js';
 
-// Guards the mock/real API contract at the level of *method names* — see #201.
-//
-// The direction that matters is hrApi → mockApi: every endpoint the app can call
-// must exist in the mock, or `VITE_USE_MOCKS=true` verification hits
-// "TypeError: api.x.y is not a function" on click. That is exactly how
-// `priceImport.uploadAndCommit` shipped missing while the page still *loaded*
-// fine (read paths were mocked, only the mutation was absent).
-//
-// This asserts names and parameter COUNTS, not behaviour, and deliberately so:
-// it is the cheap, durable half. DTO shapes and — critically — authorization are
-// NOT covered here. Mock authz is not authoritative; verify permission behaviour
-// against the Java service. See CLAUDE.md "Mock API contract".
-//
-// See the "arity" block at the bottom of this file for issue #434 — a mock that
-// silently drops an argument the real API honours — and for a precise statement
-// of what that check does and does not cover.
+// Guards the mock/real API contract at the level of *method names* — see #201. The direction that matters is
+// hrApi → mockApi: every endpoint the app can call must exist in the mock, or `VITE_USE_MOCKS=true`
+// verification hits "TypeError: api.x.y is not a function" on click.
 
 const KNOWN_GAPS = {
-  // (empty) The former `documents` exemption is gone: the orphaned DocumentPage.jsx,
-  // its hrApi namespace, and the broken backend document/ module were deleted
-  // together — the deposit-notice stack is the single implementation now.
+  // (empty) The former `documents` exemption is gone: the orphaned DocumentPage.jsx, its hrApi namespace, and
+  // the broken backend document/ module were deleted together — the deposit-notice stack is the single
+  // implementation now.
 };
 
 function methodPaths(apiObject) {
@@ -63,55 +50,11 @@ describe('mockApi / hrApi method contract', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Argument arity — issue #434
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// WHAT THIS CATCHES. A mock that declares FEWER (or more) parameters than its
-// hrApi counterpart. That is not cosmetic: `hrApi.catalog.prices(q, factoryId,
-// limit)` was real while mockApi's `prices(q, factoryId)` silently dropped
-// `limit` and always returned a fixed slice. The real endpoint truncates with
-// `LIMIT :limit` under `ORDER BY f.name, ...` — alphabetical by factory, not by
-// relevance — so "exactly one match" could be an artifact of truncation, and a
-// fuzzy catalog fallback could rewrite a line to a different factory's product.
-// The mock returned a LARGER set, so it always saw ambiguity and correctly
-// bailed: systematically more forgiving than production, which is the direction
-// you only find out about in prod. See CLAUDE.md "Mock API contract".
-//
-// WHAT THIS DOES NOT CATCH — do not read a green run here as more than it is:
-//
-//  1. Parameters bundled into an options/params BAG. `list(params)` matches
-//     `list(params)` at arity 1 whether or not the mock reads `params.limit`,
-//     `params.page` or `params.sort`. Most of this codebase's filtering travels
-//     that way, so most limit/offset divergence is INVISIBLE to this check.
-//  2. Whether a declared parameter is actually USED. A mock may declare `limit`
-//     and ignore its value in the body; arity is satisfied.
-//  3. ORDERING. Same limit + different sort drops different rows — that is the
-//     real mechanism of the bug above, and nothing here compares sort order.
-//  4. Types, names, semantics, and DTO field coverage.
-//  5. Any backend computation the mock MIRRORS rather than stands in for (e.g.
-//     computeDraftEtag / PayrollDraftETag). If the algorithm is wrong the same
-//     way on both sides, every mock-driven test passes. A mock can validate
-//     plumbing; it can never be independent evidence about an algorithm it
-//     mirrors.
-//
-// A NOTE ON `Function.prototype.length`: the obvious implementation is to
-// compare `fn.length`, but `length` stops counting at the first defaulted or
-// rest parameter — `(params = {}) => …` reports 0 and `(id, payload = {}) => …`
-// reports 1. This file's mocks use defaults heavily, so `length` alone produced
-// 56 differences of which 32 were pure noise. `declaredParameters` below parses
-// the declared list from the function source instead, so defaulted and rest
-// parameters are counted. It is still a COUNT, with every caveat above intact.
+// Argument arity — issue #434 ─────────────────────────────────────────────────────────────────────────────
+// WHAT THIS CATCHES. WHAT THIS DOES NOT CATCH — do not read a green run here as more than it is: 1.
 
-/**
- * Parses a function's declared parameter list from its source text.
- *
- * Unlike `Function.prototype.length` this counts defaulted (`params = {}`),
- * destructured (`{ ifMatch } = {}`) and rest (`...args`) parameters. Commas
- * inside nested brackets, parens and string literals are not treated as
- * separators, so destructuring patterns and default values count as one
- * parameter each.
- */
+/** Parses a function's declared parameter list from its source text. Unlike `Function.prototype.length` this
+ * counts defaulted (`params = {}`), destructured (`{ ifMatch } = {}`) and rest (`...args`) parameters. */
 function declaredParameters(fn) {
   const src = Function.prototype.toString.call(fn);
   const open = src.indexOf('(');
@@ -157,17 +100,9 @@ function declaredParameters(fn) {
   return params.map((p) => p.trim()).filter(Boolean);
 }
 
-// Methods whose mock deliberately declares a different parameter count from
-// hrApi's. Same spirit — and same enforcement — as KNOWN_GAPS above: every entry
-// must name a real, still-divergent method and carry a written reason.
-//
-// PREFER FIXING THE MOCK TO ADDING AN ENTRY HERE. An entry is only appropriate
-// when the mock genuinely cannot use the argument, which in practice means the
-// method is a deliberate "not supported in mock mode" stub. If you are adding an
-// entry because honouring a limit/offset/sort argument looked like work, you are
-// re-creating issue #434 — and note that mirroring the real ORDER BY matters as
-// much as the limit, since the same limit under a different sort truncates a
-// different set of rows.
+// Methods whose mock deliberately declares a different parameter count from hrApi's. Same spirit — and same
+// enforcement — as KNOWN_GAPS above: every entry must name a real, still-divergent method and carry a written
+// reason.
 const ARITY_EXEMPTIONS = {
   'attendance.unmapped': 'Returns the static MOCK_UNMAPPED_BADGES fixture; the mock has no persisted attendance store for the params filter to narrow.',
   'attendance.recalculate': 'The mock generates attendance days on the fly, so there is no stored rollup to recalculate; it reports 0 rather than pretending work happened.',
@@ -222,8 +157,8 @@ describe('mockApi / hrApi argument arity contract (#434)', () => {
         typeof hrApi[namespace]?.[method],
         `ARITY_EXEMPTIONS lists "${path}", which hrApi does not have`,
       ).toBe('function');
-      // Stale entries rot: once a mock is fixed to match, its exemption must go,
-      // or the next genuine divergence on that method is silently pre-approved.
+      // Stale entries rot: once a mock is fixed to match, its exemption must go, or the next genuine divergence on
+      // that method is silently pre-approved.
       expect(
         arityDivergence(namespace, method),
         `ARITY_EXEMPTIONS["${path}"] no longer diverges — delete the entry`,
@@ -233,29 +168,16 @@ describe('mockApi / hrApi argument arity contract (#434)', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Fixture completeness — issue #434's third shape
-// ─────────────────────────────────────────────────────────────────────────────
-//
-// A mock can implement an endpoint, match its arity, and still omit a FIELD the
-// feature keys on — in which case the feature's real code path is never entered
-// and the suite is green about nothing. The instance on record: mocks returned
-// no `etag`, so `hrApi.payroll.saveInputDraft` (which sends `If-Match` only when
-// the caller threads one through) sent NO header at all, and a 993/993 green
-// suite was exercising the headerless path end to end. It would have stayed
-// green no matter what the optimistic-concurrency logic did.
-//
-// This is narrower than the arity check by design — it is not a general DTO-shape
-// assertion, just a guard on the specific fields whose ABSENCE silently disables a
-// code path. Add to it when you ship a feature that branches on a mock-supplied
-// field; do not mistake it for coverage of DTO shapes at large.
+// Fixture completeness. The instance on record: mocks returned no `etag`, so `hrApi.payroll.saveInputDraft`
+// (which sends `If-Match` only when the caller threads one through) sent NO header at all, and a 993/993 green
+// suite was exercising the headerless path end to end.
 describe('mock fixtures populate fields callers branch on (#434)', () => {
   it('payroll.getInputDraft supplies the etag that saveInputDraft sends as If-Match', async () => {
     await mockApi.auth.login({ role: 'hr' });
     const draft = await mockApi.payroll.getInputDraft({ payrollMonth: '2026-08' });
 
-    // Without this, saveInputDraft's `ifMatch ? {...} : {}` collapses to no header
-    // and the 428/409 conflict paths become unreachable under VITE_USE_MOCKS=true.
+    // Without this, saveInputDraft's `ifMatch ? {...} : {}` collapses to no header and the 428/409 conflict paths
+    // become unreachable under VITE_USE_MOCKS=true.
     expect(typeof draft.etag, 'getInputDraft must return an etag').toBe('string');
     expect(draft.etag.length).toBeGreaterThan(0);
   });

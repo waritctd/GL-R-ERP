@@ -209,9 +209,9 @@ describe('PayrollPage adjustment inputs', () => {
 
     await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
     expect(api.payroll.preview.mock.calls[0][0].inputs).toEqual([]);
-    // Mutation-testing survivor: `payload().payrollMonth: \`${month}-01\`` had no assertion pinning
-    // down the literal "-01" -- changing it to "-02" left the whole suite green. Assert the exact
-    // value, not just a shape match.
+    // Mutation-testing survivor: `payload().payrollMonth: \`${month}-01\`` had no assertion pinning down the
+    // literal "-01" -- changing it to "-02" left the whole suite green. Assert the exact value, not just a shape
+    // match.
     expect(api.payroll.preview.mock.calls[0][0].payrollMonth).toBe(`${thisMonth}-01`);
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('');
   });
@@ -264,8 +264,8 @@ describe('PayrollPage adjustment inputs', () => {
     api.payroll.saveInputDraft.mockRejectedValue(new Error('เครือข่ายขัดข้อง'));
     renderWithClient(<PayrollPage user={hrUser} showToast={showToast} />);
 
-    // Wait for real data (not just the always-rendered button, which stays `disabled` until the
-    // period query resolves) before clicking, or the click is a no-op on a disabled button.
+    // Wait for real data (not just the always-rendered button, which stays `disabled` until the period query
+    // resolves) before clicking, or the click is a no-op on a disabled button.
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/i }));
 
@@ -274,12 +274,9 @@ describe('PayrollPage adjustment inputs', () => {
   });
 
   it('includes an input value of exactly 1 -- the boundary of hasPayrollInput\'s `> 0` check', async () => {
-    // Mutation-testing survivor: `parsePayrollNumber(input[key]) > 0` could be weakened to `> 1`
-    // without failing anything, because no existing test isolated a value of exactly 1 -- it would
-    // silently drop a real HR-entered "1" (e.g. 1 special-pay baht, 1 unpaid-leave day) from the
-    // submitted payload. Must clear the two UAT-default fields (specialPay1/5, both 500) first --
-    // otherwise they mask the mutation by satisfying `.some(...)` on their own regardless of what
-    // the field under test is set to.
+    // Mutation-testing survivor: `parsePayrollNumber(input[key]) > 0` could be weakened to `> 1` without failing
+    // anything, because no existing test isolated a value of exactly 1 -- it would silently drop a real HR-entered
+    // "1" (e.g. 1 special-pay baht, 1 unpaid-leave day) from the submitted payload.
     renderPayrollPage();
 
     const costOfLiving = await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
@@ -307,8 +304,8 @@ describe('PayrollPage adjustment inputs', () => {
     expect(screen.queryByRole('button', { name: /Download payslip/i })).toBeNull();
 
     // Exact match, not just anchored-start: upstream's bulk "ดาวน์โหลดสลิปเงินเดือนทั้งหมด" button
-    // (feat/payroll-detail-xlsx-export) also starts with "ดาวน์โหลดสลิป", so a merely-anchored regex
-    // matches both this single-payslip button and the bulk one, ambiguously.
+    // (feat/payroll-detail-xlsx-export) also starts with "ดาวน์โหลดสลิป", so a merely-anchored regex matches both
+    // this single-payslip button and the bulk one, ambiguously.
     fireEvent.click(await screen.findByRole('button', { name: /^ดาวน์โหลดสลิป$/i }));
 
     await waitFor(() => expect(api.payroll.downloadPayslip).toHaveBeenCalledWith(7, 55));
@@ -376,8 +373,8 @@ describe('PayrollPage adjustment inputs', () => {
 
     const zeroDisclosure = employeeCell.querySelector('details');
     expect(zeroDisclosure).toBeTruthy();
-    // 3 since V128 added สวัสดิการ to mobileOptionalMoneySummaries: เงินพิเศษ, ล่วงเวลา/คอมมิชชัน
-    // and สวัสดิการ are all zero on this fixture, and the phone layout folds zero rows away.
+    // 3 since V128 added สวัสดิการ to mobileOptionalMoneySummaries: เงินพิเศษ, ล่วงเวลา/คอมมิชชัน and สวัสดิการ
+    // are all zero on this fixture, and the phone layout folds zero rows away.
     expect(zeroDisclosure.textContent).toContain('รายการศูนย์ 3 รายการ');
     expect(zeroDisclosure.textContent).toContain('เงินพิเศษ');
     expect(zeroDisclosure.textContent).toContain('ล่วงเวลา/คอมมิชชัน');
@@ -511,12 +508,9 @@ describe('PayrollPage adjustment inputs', () => {
       mockPayrollViewport({ desktopPanel: isDesktopWidth });
     }
 
-    // Not `findByText(payrollLine.employeeName)`: with a single line, that name is ALSO the
-    // default `selectedLine` shown in the (always-mounted, just CSS-hidden until opened) detail
-    // panel's own heading from the very first render -- an ambiguous match before any click even
-    // happens, and the employee code has the same problem. Wait on the always-unique Preview
-    // button instead (proof the period finished loading), then grab the row via `.data-row` --
-    // DataTable's own class for a genuine data row (see DataTable.jsx) -- and click it directly.
+    // Not `findByText`: with a single line, that name is ALSO the default `selectedLine` shown in the detail
+    // panel's own heading from the very first render -- an ambiguous match before any click even happens, and the
+    // employee code has the same problem.
     async function openDetailPanel(container) {
       // Wait for the row itself: it only exists once the period query has resolved.
       await waitFor(() => expect(container.querySelector('tr.data-row:not([aria-hidden="true"])')).not.toBeNull());
@@ -741,9 +735,9 @@ describe('PayrollPage adjustment inputs', () => {
   // expand it first.
   async function expandUnpaidLeaveSection() {
     fireEvent.click(await screen.findByRole('button', { name: /รายการหักรายบุคคล/ }));
-    // The `selector: 'input'` filter is needed because the field's InfoTip button carries the same
-    // accessible name ("วันลาไม่รับค่าจ้าง") as an aria-label -- without it, getByLabelText matches
-    // both the input and the InfoTip trigger and throws "Found multiple elements".
+    // The `selector: 'input'` filter is needed because the field's InfoTip button carries the same accessible name
+    // ("วันลาไม่รับค่าจ้าง") as an aria-label -- without it, getByLabelText matches both the input and the InfoTip
+    // trigger and throws "Found multiple elements".
     return screen.findByLabelText(/วันลาไม่รับค่าจ้าง/, { selector: 'input' });
   }
 
@@ -806,8 +800,8 @@ describe('PayrollPage adjustment inputs', () => {
 
       const unpaidLeaveDays = await expandUnpaidLeaveSection();
       expect(unpaidLeaveDays.value).toBe('');
-      // findByText throws (failing the test) if the hint isn't present -- no jest-dom matchers are
-      // set up in this project's vitest config, so there's nothing to chain here.
+      // findByText throws (failing the test) if the hint isn't present -- no jest-dom matchers are set up in this
+      // project's vitest config, so there's nothing to chain here.
       await screen.findByText(/เครดิตวันลาไม่รับค่าจ้างค้างคืน/);
     });
 
@@ -917,8 +911,8 @@ describe('PayrollPage adjustment inputs', () => {
       fireEvent.click(screen.getByRole('button', { name: /บันทึกร่าง/i }));
 
       await waitFor(() => expect(api.payroll.preview).toHaveBeenCalledTimes(1));
-      // The line is still submitted (it carries the UAT default special pays), but the untyped
-      // override is null -- never 0 -- so the server computes/uses the standing value.
+      // The line is still submitted (it carries the UAT default special pays), but the untyped override is null --
+      // never 0 -- so the server computes/uses the standing value.
       const submitted = api.payroll.preview.mock.calls[0][0].inputs.find((input) => input.employeeId === 1);
       expect(submitted).toBeDefined();
       expect(submitted.withholdingTaxOverride).toBeNull();
@@ -1036,8 +1030,8 @@ describe('PayrollPage adjustment inputs', () => {
       .toHaveBeenCalledWith(7, 'pnd1', expect.stringMatching(/^\d{4}-\d{2}-26$/)));
   });
 
-  // The detailed payroll xlsx export -- reachable from the same document menu as the three
-  // statutory kinds, per PayrollController#export's slug ∈ {kbank,pnd1,sso,payroll-detail}.
+  // The detailed payroll xlsx export -- reachable from the same document menu as the three statutory kinds, per
+  // PayrollController#export's slug ∈ {kbank,pnd1,sso,payroll-detail}.
   it('reaches the detailed payroll xlsx export from the same document menu and downloads it as .xlsx', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod({ id: 7, status: 'PROCESSED' }) });
     api.payroll.exportFile.mockResolvedValue(new Blob(['PK'], {
@@ -1142,10 +1136,9 @@ describe('PayrollPage adjustment inputs', () => {
     });
   });
 
-  // F1: PayrollService#process (backend) doesn't need a period id -- it recomputes from
-  // findActiveEmployees() and commits regardless. Opening the confirm dialog and processing while
-  // the header reads "พนักงาน 0 คน" would silently zero out every HR-entered value and commit an
-  // irreversible PROCESSED status. See the `emptyPeriod` comment in PayrollPage.jsx.
+  // PayrollService#process (backend) doesn't need a period id -- it recomputes from findActiveEmployees() and
+  // commits regardless. Opening the confirm dialog and processing while the header reads "พนักงาน 0 คน" would
+  // silently zero out every HR-entered value and commit an irreversible PROCESSED status.
   describe('Process Payroll guard against an empty period (F1)', () => {
     it('disables Process Payroll when the loaded period has zero lines (lineCount: 0)', async () => {
       api.payroll.current.mockResolvedValue({ period: previewPeriod({ lineCount: 0, lines: [] }) });
@@ -1385,8 +1378,7 @@ describe('PayrollPage adjustment inputs', () => {
 
       expect(customerReturn.value).toBe('3000');
       // The checkbox's render gate is `> 0` on this same field -- if hydration had read the zeroed
-      // customerReturnDeduction instead, findByLabelText below would reject (no such element) rather
-      // than resolve.
+      // customerReturnDeduction instead, findByLabelText below would reject (no such element) rather than resolve.
       const alreadyEarned = await screen.findByLabelText(/คอมมิชชันนี้รับไปแล้ว/, { selector: 'input' });
       expect(alreadyEarned.checked).toBe(false);
     });
@@ -1507,9 +1499,9 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     expect(flushedPayload.inputs.find((input) => input.employeeId === 1).specialPay1).toBe(4321);
   });
 
-  // A5: a negative typed into the one raw <input type="number"> most directly reachable
-  // (unpaidLeaveDays) must never leave the browser -- clamped to '0' on input, so the value the
-  // page would ever submit is never negative in the first place.
+  // a negative typed into the one raw <input type="number"> most directly reachable (unpaidLeaveDays) must never
+  // leave the browser -- clamped to '0' on input, so the value the page would ever submit is never negative in
+  // the first place.
   it('clamps a typed negative unpaidLeaveDays to 0 instead of letting it reach the draft/preview payload', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriod() });
     renderPayrollPage();
@@ -1563,12 +1555,12 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
       await queryClient.refetchQueries({ queryKey: queryKeys.payrollCurrent(thisMonth) });
     });
 
-    // Proof the refetch's data actually reached and re-rendered this component: `period` is
-    // read-only server state and always updates, even while the form is dirty.
+    // Proof the refetch's data actually reached and re-rendered this component: `period` is read-only server state
+    // and always updates, even while the form is dirty.
     await waitFor(() => expect(screen.getByTestId('compact-stat-row').textContent).toContain('฿55,555.00'));
 
-    // The typed value must survive -- untouched by the refetch while the form is dirty (B1's
-    // governing constraint).
+    // The typed value must survive -- untouched by the refetch while the form is dirty (B1's governing
+    // constraint).
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('999');
   });
 
@@ -1601,15 +1593,15 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     const [year, monthNum] = thisMonth.split('-').map(Number);
     const otherMonth = monthNum === 1 ? `${year - 1}-12` : `${year}-${String(monthNum - 1).padStart(2, '0')}`;
 
-    // --- Switch to visit: June, BEFORE PUT #1 settles. Fires the A4 flush (saveInputDraft() #2,
-    // independent of #1, for the outgoing July visit #1) and resets state for June. ---
+    // Switch to visit: June, BEFORE PUT #1 settles. Fires the A4 flush (saveInputDraft() #2, independent of #1,
+    // for the outgoing July visit #1) and resets state for June.
     fireEvent.change(monthInput, { target: { value: otherMonth } });
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว');
     await waitFor(() => expect(api.payroll.saveInputDraft).toHaveBeenCalledTimes(2));
 
-    // --- Switch BACK to visit #2: July, without ever touching June (nothing dirty there, so no
-    // third saveInputDraft call fires). Lands on a fresh, clean July visit. ---
+    // Switch BACK to visit #2: July, without ever touching June (nothing dirty there, so no third saveInputDraft
+    // call fires). Lands on a fresh, clean July visit.
     fireEvent.change(monthInput, { target: { value: thisMonth } });
     await screen.findByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/);
     expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว');
@@ -1621,9 +1613,9 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
       settlers[0].reject(new Error('เครือข่ายขัดข้อง'));
     });
 
-    // The fresh second July visit's badge must stay clean -- not flipped to
-    // "บันทึกอัตโนมัติไม่สำเร็จ" by a failure that belongs to a visit HR has already left twice
-    // over -- and no error toast must fire for it either.
+    // The fresh second July visit's badge must stay clean -- not flipped to "บันทึกอัตโนมัติไม่สำเร็จ" by a
+    // failure that belongs to a visit HR has already left twice over -- and no error toast must fire for it
+    // either.
     expect(screen.getByRole('status').textContent).toContain('บันทึกแล้ว');
     expect(showToast).not.toHaveBeenCalled();
 
@@ -1663,8 +1655,8 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
       settlers[0].resolve({ payrollMonth: `${thisMonth}-01`, drafts: [] });
     });
 
-    // The new month's genuine dirty state must survive -- not wiped by a success that belongs to
-    // a different month's save.
+    // The new month's genuine dirty state must survive -- not wiped by a success that belongs to a different
+    // month's save.
     expect(screen.getByRole('status').textContent).toContain('รอบันทึกอัตโนมัติ');
     expect(screen.getByLabelText(/พิเศษ 1 \(ค่าครองชีพ\)/).value).toBe('456');
 
@@ -1749,9 +1741,9 @@ describe('PayrollPage read-only CEO view (issue #390)', () => {
     expect(screen.queryByText('มุมมองสำหรับผู้บริหาร — อ่านอย่างเดียว')).toBeNull();
   });
 
-  // The test that matters: CEO cannot reach ประมวลผลเงินเดือน (POST /process, hasRole('HR')
-  // only) at all -- not present in the DOM, not merely disabled. HR keeps it, same as every
-  // pre-existing test in this file that never passes a `user` prop.
+  // The test that matters: CEO cannot reach ประมวลผลเงินเดือน (POST /process, hasRole('HR') only) at all -- not
+  // present in the DOM, not merely disabled. HR keeps it, same as every pre-existing test in this file that
+  // never passes a `user` prop.
   it('never renders the ประมวลผลเงินเดือน (process) button for CEO, while HR still has it', async () => {
     const { unmount } = renderWithClient(<PayrollPage user={ceoUser} showToast={vi.fn()} />);
     await screen.findByRole('button', { name: /คำนวณตัวอย่าง/i });

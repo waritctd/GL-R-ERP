@@ -12,9 +12,9 @@ import { DealStagePanel } from './DealStagePanel.jsx';
 import { nextStageIn } from './stageCatalog.js';
 import { AUTO_STAGE_HINT, GATE_LABEL } from './stageMeta.js';
 
-// The guided-advance flow calls api.tickets.{updateTracking,addActivity} directly (then defers the
-// actual stage move to the parent's onUpdateStage), so the module is mocked here (vitest hoists
-// vi.mock above the imports). Other tests in this file are presentational and never touch it.
+// The guided-advance flow calls api.tickets.{updateTracking,addActivity} directly (then defers the actual
+// stage move to the parent's onUpdateStage), so the module is mocked here (vitest hoists vi.mock above the
+// imports). Other tests in this file are presentational and never touch it.
 vi.mock('../../api/index.js', () => ({
   api: {
     tickets: {
@@ -26,9 +26,9 @@ vi.mock('../../api/index.js', () => ({
 
 globalThis.React = React;
 
-// The panel no longer takes a `user` and no longer decides anything: it renders the server's
-// availableActions plus its per-stage stageDecisions (TicketService.stageDecisions), over the
-// backend-served stage catalog. Both are supplied here as the API supplies them.
+// The panel no longer takes a `user` and no longer decides anything: it renders the server's availableActions
+// plus its per-stage stageDecisions (TicketService.stageDecisions), over the backend-served stage catalog.
+// Both are supplied here as the API supplies them.
 const catalog = DEAL_STAGE_CATALOG;
 
 // "Everything the server would allow": enough for the UPDATE_STAGE gate, which asks whether ANY
@@ -106,12 +106,9 @@ function renderPanelWithRef(props = {}) {
   return { ref, ...utils };
 }
 
-// Ticket-detail IA rebuild Phase 1: แก้ไขสถานะ…/เสียงาน/พักดีลไว้/พัก dormant
-// no longer render inline here — TicketDetailPage's header overflow menu and
-// bottom danger zone trigger them via this forwardRef instead (see the
-// component's own doc comment). Each exposed opener re-checks its own gate
-// before acting, so a caller invoking one this deal doesn't actually allow
-// is a no-op rather than a forced action.
+// Ticket-detail IA rebuild Phase 1: แก้ไขสถานะ…/เสียงาน/พักดีลไว้/พัก dormant no longer render inline here —
+// TicketDetailPage's header overflow menu and bottom danger zone trigger them via this forwardRef instead (see
+// the component's own doc comment).
 describe('DealStagePanel imperative handle (overflow menu / danger zone triggers)', () => {
   it('openEditStage() is a no-op when UPDATE_STAGE is not in availableActions', () => {
     const { ref } = renderPanelWithRef({ availableActions: [] });
@@ -288,11 +285,9 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
   // only on its OWN precondition (readyToAdvance for เลื่อนไป, nothing for the other three) and
   // never re-derives actionLoading.
   it('openAdvance() is a no-op while actionLoading is true, even though the gate and advanceReady both pass', () => {
-    // A fresh local spy, not the shared noopHandlers.onUpdateStage — that
-    // mock already has a call recorded from the "gate and advanceReady both
-    // satisfied" test above it (this file never resets mocks between tests),
-    // so asserting against it here would pass or fail on stale state instead
-    // of this test's own action.
+    // A fresh local spy, not the shared noopHandlers.onUpdateStage — that mock already has a call recorded from
+    // the "gate and advanceReady both satisfied" test above it, so asserting against it here would pass or fail on
+    // stale state instead of this test's own action.
     const onUpdateStage = vi.fn();
     const { ref } = renderPanelWithRef({
       availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'SPEC_APPROVED' }],
@@ -363,8 +358,8 @@ describe('DealStagePanel Slice A "chip diet" — removed sub-status rows stay go
     });
     expect(screen.queryByText('ยอดชำระ:')).toBeNull();
     expect(screen.queryByText('นโยบายมัดจำ:')).toBeNull();
-    // PAYMENT_SUBSTEPS moved to the money tab (TicketDetailPage), not
-    // deleted — but it never renders from inside THIS panel either way.
+    // PAYMENT_SUBSTEPS moved to the money tab (TicketDetailPage), not deleted — but it never renders from inside
+    // THIS panel either way.
     expect(screen.queryByText('การชำระเงิน:')).toBeNull();
     expect(screen.queryByText('ลูกค้ายืนยัน')).toBeNull();
   });
@@ -431,8 +426,8 @@ describe('DealStagePanel headline names the counterparty', () => {
     expect(screen.queryByTestId('deal-stage-owner')).toBeNull();
   });
 
-  // The primary action lives in the sticky header, so with no `primaryAction` the panel must not
-  // leave an empty flex row behind — each empty row still costs a full gap-3 of dead space.
+  // The primary action lives in the sticky header, so with no `primaryAction` the panel must not leave an empty
+  // flex row behind — each empty row still costs a full gap-3 of dead space.
   it('renders no empty placeholder rows when there is no primaryAction', () => {
     renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }), docActions: <a href="#doc">doc</a> });
     expect(screen.getByTestId('deal-stage-panel').querySelectorAll('div:empty')).toHaveLength(0);
@@ -480,8 +475,8 @@ describe('DealStagePanel focused default view', () => {
 
   it('does not render the unlabeled gate chip next to the stage name', () => {
     renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }) });
-    // Exact match: the merged next-step line may still MENTION a department, the chip was the
-    // bare label on its own.
+    // Exact match: the merged next-step line may still MENTION a department, the chip was the bare label on its
+    // own.
     expect(screen.queryByText('ฝ่ายขาย')).toBeNull();
     expect(screen.queryByText('ฝ่ายบัญชี')).toBeNull();
   });
@@ -804,13 +799,9 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
   });
 });
 
-/**
- * Route-aware navigation (deal-route-staging). The deal's entry channel decides which stages it
- * visits; the server serves the verdict per stage as `onRoute` on stageDecisions (StageDecisionDto)
- * and `entryChannel` on the summary. These tests build both by hand and pass them DIRECTLY as
- * props — never through mockApi.js, which does not emit `onRoute`: a mock-driven test would see
- * every stage on-route and pass vacuously.
- */
+/** Route-aware navigation (deal-route-staging). These tests build both by hand and pass them DIRECTLY as props
+ * — never through mockApi.js, which does not emit `onRoute`: a mock-driven test would see every stage on-route
+ * and pass vacuously. */
 describe('DealStagePanel route awareness', () => {
   const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
   const BUYER_OFF = ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'];

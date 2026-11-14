@@ -33,12 +33,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const salesUser = { employeeId: 1, name: 'Sales Test', role: 'sales' };
 const employee = { nameTh: 'สมชาย ใจดี' };
 
-// Dates are derived from the REAL `bangkokTodayIso()` (never faked/frozen) so
-// the fixtures always agree with what the component itself computes at
-// render time — see the repo's Bangkok-timezone memory note: a bare
-// `new Date()`/fake-timer comparison can disagree with the Asia/Bangkok
-// calendar day, and faking the clock here would also stall
-// @testing-library's setTimeout-based `waitFor`/`findBy*` polling.
+// Dates are derived from the REAL `bangkokTodayIso` so the fixtures always agree with what the component
+// itself computes at render time.
 function addDays(isoDate, delta) {
   const date = new Date(`${isoDate}T00:00:00.000Z`);
   date.setUTCDate(date.getUTCDate() + delta);
@@ -48,10 +44,9 @@ const TODAY = bangkokTodayIso();
 const OVERDUE_DATE = addDays(TODAY, -5);
 const THIS_MONTH = `${TODAY.slice(0, 7)}-01`;
 
-// One deal per next-action bucket (now including RECORD_DELIVERY — deal I —
-// and RECORD_QUOTATION_OUTCOME — deal J), plus a "nothing to do" deal (G)
-// and a non-ACTIVE deal (H) that must be excluded from both the pulse and
-// the worklist entirely.
+// One deal per next-action bucket (now including RECORD_DELIVERY — deal I — and RECORD_QUOTATION_OUTCOME —
+// deal J), plus a "nothing to do" deal (G) and a non-ACTIVE deal (H) that must be excluded from both the pulse
+// and the worklist entirely.
 const deals = [
   { id: 601, code: 'PR-2026-0601', customerName: 'บริษัท เอ จำกัด', title: 'ดีลเอ', lifecycle: 'ACTIVE', amountPayable: 100000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 602, code: 'PR-2026-0602', customerName: 'บริษัท บี จำกัด', title: 'ดีลบี', lifecycle: 'ACTIVE', amountPayable: 200000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
@@ -61,16 +56,11 @@ const deals = [
   { id: 606, code: 'PR-2026-0606', customerName: 'บริษัท เอฟ จำกัด', title: 'ดีลเอฟ', lifecycle: 'ACTIVE', amountPayable: 25000, stale: true, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 607, code: 'PR-2026-0607', customerName: 'บริษัท จี จำกัด', title: 'ดีลจี', lifecycle: 'ACTIVE', amountPayable: 10000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
   { id: 608, code: 'PR-2026-0608', customerName: 'บริษัท เอช จำกัด', title: 'ดีลเอช (ปิดแล้ว)', lifecycle: 'CLOSED_LOST', amountPayable: 999999, stale: false, nextFollowUpAt: OVERDUE_DATE, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
-  // Deal I: stages 13-14 (ส่งมอบสินค้า) handoff to sales, owner ruling 2026-08-17 — delivery-ready
-  // (GOODS_RECEIVED) with ZERO pricing requests but a non-null paymentStatus, the exact "priced
-  // outside the PCR chain" shape of demoData.js tickets 13/14 (Mega Bangna Retail / IconSiam
-  // Riverside) — bucket 1's pricedOutsidePcrChain guard must let RECORD_DELIVERY through rather
-  // than parking this on CREATE_PCR (see salesActions.js bucket 1's own comment, and
-  // salesActions.test.js's dedicated bucket-1-interaction cases).
+  // Deal I: stages 13-14 handoff to sales, owner ruling 2026-08-17.
   { id: 609, code: 'PR-2026-0609', customerName: 'บริษัท ไอ จำกัด', title: 'ดีลไอ', lifecycle: 'ACTIVE', amountPayable: 300000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z', status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', paymentStatus: 'AWAITING_FINAL_PAYMENT' },
-  // Deal J: the quotation was issued to the customer but nobody has recorded the outcome yet
-  // (deal-page discoverability fix — this used to fall through to follow-up/log-activity; see
-  // salesActions.js bucket 4's own comment, and salesActions.test.js's dedicated cases).
+  // Deal J: the quotation was issued to the customer but nobody has recorded the outcome yet (deal-page
+  // discoverability fix — this used to fall through to follow-up/log-activity; see salesActions.js bucket 4's
+  // own comment, and salesActions.test.js's dedicated cases).
   { id: 610, code: 'PR-2026-0610', customerName: 'บริษัท เจ จำกัด', title: 'ดีลเจ', lifecycle: 'ACTIVE', amountPayable: 120000, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z' },
 ];
 
@@ -79,17 +69,17 @@ const pricingRequests = [
   { id: 2, ticketId: 603, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: null },
   { id: 3, ticketId: 604, status: 'SUBMITTED', orderConfirmedAt: null },
   { id: 4, ticketId: 605, status: 'IMPORT_REVIEWING', orderConfirmedAt: null },
-  // CEO_REVIEWING, not QUOTATION_ISSUED: deal F is the dedicated "stale, nothing else pending"
-  // LOG_ACTIVITY fixture below, and QUOTATION_ISSUED now has its own bucket (see deal J's PR
-  // below) — a live-but-unmatched status keeps deal F actually exercising the fall-through path.
+  // CEO_REVIEWING, not QUOTATION_ISSUED: deal F is the dedicated "stale, nothing else pending" LOG_ACTIVITY
+  // fixture below, and QUOTATION_ISSUED now has its own bucket (see deal J's PR below) — a live-but-unmatched
+  // status keeps deal F actually exercising the fall-through path.
   { id: 5, ticketId: 606, status: 'CEO_REVIEWING', orderConfirmedAt: null },
   { id: 6, ticketId: 607, status: 'IMPORT_REVIEWING', orderConfirmedAt: null },
   { id: 7, ticketId: 610, status: 'QUOTATION_ISSUED', orderConfirmedAt: null },
   // Deal 601 deliberately has no pricing request at all.
 ];
 
-// Default monthlySummary fixture for tests that don't care about the commission KPI figures —
-// see the two dedicated cases below for the ones that do.
+// Default monthlySummary fixture for tests that don't care about the commission KPI figures — see the two
+// dedicated cases below for the ones that do.
 const defaultCommissionSummary = {
   payrollMonth: null,
   salesRepId: 1,
@@ -319,9 +309,9 @@ describe('SalesOverview', () => {
   });
 });
 
-// Slice 2 — flow A (SLICE-2-FLOW-A.md §E, DESIGN.md §15): the three live-direct-quotation buckets
-// reach the worklist, and their badge tone says whose move it is — SUBMIT / CONFIRM are the rep's
-// own (warning), AWAIT is waiting on ผจก.ขาย/CEO (neutral), never the same tone as a task.
+// Slice 2 — flow A (SLICE-2-FLOW-A.md §E, DESIGN.md §15): the three live-direct-quotation buckets reach the
+// worklist, and their badge tone says whose move it is — SUBMIT / CONFIRM are the rep's own (warning), AWAIT
+// is waiting on ผจก.ขาย/CEO (neutral), never the same tone as a task.
 describe('SalesOverview — live direct quotation worklist tones (slice 2)', () => {
   const liveDeals = [
     { id: 701, code: 'DL-2026-0701', customerName: 'บริษัท ร่าง จำกัด', title: 'ร่าง', lifecycle: 'ACTIVE', amountPayable: 0, stale: false, nextFollowUpAt: null, stageUpdatedAt: '2026-07-01T00:00:00.000Z',

@@ -51,12 +51,9 @@ class DepositNoticeServiceTest {
     private final DepositNoticeService service = new DepositNoticeService(
         docs, ticketRepo, notifications, renderer, customerRepo, quotationRepo);
     {
-        // Default stub so every payment-track write in this file (advancePaymentStatus's
-        // compare-and-set) reads as "succeeded" unless a specific test overrides it — Mockito's
-        // default answer for an unstubbed int-returning method is 0, which the service would
-        // read as a lost race and turn into a 409. any() (untyped) matches null too, so a null
-        // "expected" would be covered by this same stub (not exercised by this file's fixtures,
-        // which always start from a real status, but kept for consistency with TicketServiceTest).
+        // Default stub so every payment-track write in this file (advancePaymentStatus's compare-and-set) reads as
+        // "succeeded" unless a specific test overrides it — Mockito's default answer for an unstubbed int-returning
+        // method is 0, which the service would read as a lost race and turn into a 409.
         when(ticketRepo.advancePaymentStatus(anyLong(), anyString(), any(), anyString())).thenReturn(1);
     }
 
@@ -78,8 +75,8 @@ class DepositNoticeServiceTest {
 
         service.issue(99L, owner);
 
-        // Payment track advances; the main status is untouched (no document_issued flip
-        // — that side effect killed the dual-track UI and let unpaid tickets close).
+        // Payment track advances; the main status is untouched (no document_issued flip — that side effect killed the
+        // dual-track UI and let unpaid tickets close).
         verify(ticketRepo).advancePaymentStatus(
             10L, DepositPolicy.REQUIRED, "CUSTOMER_CONFIRMED", PaymentTrack.DEPOSIT_NOTICE_ISSUED);
         verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
@@ -121,9 +118,9 @@ class DepositNoticeServiceTest {
         assertConflict(() -> service.issue(99L, owner));
         verify(docs, never()).issue(anyLong(), anyLong(), anyString());
 
-        // A payment status genuinely past the deposit-notice step (already paid) is also
-        // refused — only CUSTOMER_CONFIRMED (first issue) or DEPOSIT_NOTICE_ISSUED (a revision,
-        // tested separately below — PaymentTrack's one legal self-loop) are legal here.
+        // A payment status genuinely past the deposit-notice step (already paid) is also refused — only
+        // CUSTOMER_CONFIRMED (first issue) or DEPOSIT_NOTICE_ISSUED (a revision, tested separately below —
+        // PaymentTrack's one legal self-loop) are legal here.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID");
         assertConflict(() -> service.issue(99L, owner));
         verify(docs, never()).issue(anyLong(), anyLong(), anyString());
@@ -170,10 +167,9 @@ class DepositNoticeServiceTest {
         assertThat(doc.id()).isEqualTo(99L);
     }
 
-    // ── Phase B (role-scoped views): import has no business reading deposit ─
-    // notices — a customer financial document, unlike a ticket's other fields
-    // which import may still see. Mirrors salesViewScope.js hiding the whole
-    // "depositNotice" section from import's TicketDetailPage.
+    // Phase B (role-scoped views): import has no business reading deposit ─ notices — a customer financial
+    // document, unlike a ticket's other fields which import may still see. Mirrors salesViewScope.js hiding the
+    // whole "depositNotice" section from import's TicketDetailPage.
 
     private final UserPrincipal importActor = new UserPrincipal(
         3L, "import@glr.co.th", "Import", "import", 3L, true, LocalDate.of(2026, 1, 1), false, null, false);
@@ -205,8 +201,8 @@ class DepositNoticeServiceTest {
 
     @Test
     void remainingInvoiceOptions_otherSalesRepDenied() {
-        // sales scoped to the deal it OWNS — createdById=1 (owner) in stubTicket; a different
-        // sales rep must be refused, mirroring requireTicketViewer's ownership check.
+        // sales scoped to the deal it OWNS — createdById=1 (owner) in stubTicket; a different sales rep must be
+        // refused, mirroring requireTicketViewer's ownership check.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         UserPrincipal otherSalesRep = new UserPrincipal(
             77L, "other-sales@glr.co.th", "Other Sales", "sales", 77L, true,
@@ -214,12 +210,9 @@ class DepositNoticeServiceTest {
         assertForbidden(() -> service.getRemainingInvoiceOptions(10L, otherSalesRep));
     }
 
-    // ── Remaining invoice item sourcing / capacity / defaults (branch fix) ──────────────────
-    // The real production shape: every ticket_item.approved_price is NULL for a deal priced
-    // through PricingRequest -> PricingDecision -> CustomerQuotation (stubTicket's items are
-    // always List.of() — see stubTicket below), so a fixture that also sets approvedPrice would
-    // hide the exact bug this branch fixes. None of these tests ever populate ticket items with
-    // approvedPrice unless the test is specifically about the legacy back-compat path.
+    // Remaining invoice item sourcing / capacity / defaults ────────────────── The real production shape: every
+    // ticket_item.approved_price is NULL for a deal priced through PricingRequest -> PricingDecision ->
+    // CustomerQuotation (stubTicket's items are always List.of.
 
     @Test
     void remainingInvoiceXlsx_sourcesItemsFromAcceptedQuotationUsingStoredLineSubtotal() throws Exception {
@@ -228,8 +221,8 @@ class DepositNoticeServiceTest {
         // "stored lineSubtotal used verbatim" from the separate deposit-matching rules (B/C),
         // which have their own dedicated tests below.
         stubTicketWithDepositPolicy(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", DepositPolicy.WAIVED);
-        // lineSubtotal deliberately NOT equal to finalUnitPrice*qty (299.99 vs 300.00) so this
-        // test actually proves the stored subtotal is used verbatim, not recomputed.
+        // lineSubtotal deliberately NOT equal to finalUnitPrice*qty (299.99 vs 300.00) so this test actually proves
+        // the stored subtotal is used verbatim, not recomputed.
         CustomerQuotationItemDto item = new CustomerQuotationItemDto(
             1L, 1, 1L, 1L, "กระเบื้อง A", null, "PER_SQM", new BigDecimal("3"),
             new BigDecimal("100"), BigDecimal.ZERO, new BigDecimal("100"),
@@ -252,14 +245,10 @@ class DepositNoticeServiceTest {
 
     @Test
     void remainingInvoiceXlsx_nullLineSubtotalFallsBackToFinalUnitPriceTimesQtyHalfUp() throws Exception {
-        // Finding 5 (preview/render agreement, the null case): quotationLineAmount's
-        // null-lineSubtotal branch — line_subtotal is nullable (V74) — must fall back to
-        // HALF_UP(finalUnitPrice * qty), the SAME function both the subtotal-match check (rule B)
-        // and this item's own amount field route through, so a null there can never silently
-        // diverge between the options preview and the actual render.
+        // Finding 5: quotationLineAmount's null-lineSubtotal branch.
         stubTicketWithDepositPolicy(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", DepositPolicy.WAIVED);
-        // finalUnitPrice * qty = 33.335 * 3 = 100.005 exactly -> HALF_UP rounds the half-cent UP
-        // to 100.01, proving the actual recompute+rounding ran, not merely "some non-null number".
+        // finalUnitPrice * qty = 33.335 * 3 = 100.005 exactly -> HALF_UP rounds the half-cent UP to 100.01, proving
+        // the actual recompute+rounding ran, not merely "some non-null number".
         CustomerQuotationItemDto item = new CustomerQuotationItemDto(
             1L, 1, 1L, 1L, "กระเบื้อง B", null, "PER_SQM", new BigDecimal("3"),
             new BigDecimal("100"), BigDecimal.ZERO, new BigDecimal("33.335"),
@@ -299,12 +288,12 @@ class DepositNoticeServiceTest {
         assertThat(options.blockingReason()).isNull();
         assertThat(options.itemCount()).isEqualTo(2); // 1 item + 1 deposit row
         assertThat(options.depositAmount()).isEqualByComparingTo("40");
-        // itemsTotal must be the NOTICE item's amount (100), never the ignored ISSUED quotation's
-        // (10) — this is what actually distinguishes "sourced from the notice" from "sourced from
-        // the wrongly-qualifying ISSUED quotation".
+        // itemsTotal must be the NOTICE item's amount (100), never the ignored ISSUED quotation's (10) — this is what
+        // actually distinguishes "sourced from the notice" from "sourced from the wrongly-qualifying ISSUED
+        // quotation".
         assertThat(options.itemsTotal()).isEqualByComparingTo("100");
-        // No DEPOSIT-kind payment_receipt rows stubbed -> falls back to the issued notice's own
-        // doc number as the deposit-reference default.
+        // No DEPOSIT-kind payment_receipt rows stubbed -> falls back to the issued notice's own doc number as the
+        // deposit-reference default.
         assertThat(options.defaultDepositReference()).isEqualTo("GLRD69001");
         // Legacy path (no accepted quotation): the reference defaults to the ISSUED deposit notice's own
         // reference (the helper's "REF-1"), not null.
@@ -367,8 +356,8 @@ class DepositNoticeServiceTest {
 
     @Test
     void remainingInvoiceXlsx_noAcceptedQuotationNoIssuedNoticeNoLegacyThrowsConflict() throws Exception {
-        // stubTicket's items are always List.of() (no legacy approved_price), and both repos are
-        // unstubbed (Mockito default: empty list) -> nothing this document could possibly price.
+        // stubTicket's items are always List.of() (no legacy approved_price), and both repos are unstubbed (Mockito
+        // default: empty list) -> nothing this document could possibly price.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         // This exact "truly nothing to price" terminal case (no accepted quotation at all ->
         // resolveLegacy -> no issued notice AND no legacy approved_price items either) is the ONE
@@ -397,9 +386,9 @@ class DepositNoticeServiceTest {
 
     @Test
     void remainingInvoiceXlsx_designerQuotationExcludedBuyerQuotationChosenAutomatically() throws Exception {
-        // Designer's early quotation is ACCEPTED too (a real shape: several pricing requests on
-        // one deal), but has NO matching issued deposit notice — it must never qualify on its own.
-        // The buyer's quotation (higher id = newer) DOES have a matching notice and must win.
+        // Designer's early quotation is ACCEPTED too (a real shape: several pricing requests on one deal), but has NO
+        // matching issued deposit notice — it must never qualify on its own. The buyer's quotation (higher id = newer)
+        // DOES have a matching notice and must win.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         CustomerQuotationItemDto designerItem = quotationItem("Designer pick", BigDecimal.ONE, "PER_PIECE",
             BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN);
@@ -629,9 +618,9 @@ class DepositNoticeServiceTest {
         assertThat(first.items().get(0).amount()).isEqualByComparingTo("50");
         assertThat(first.depositAmount()).isEqualByComparingTo("5");
 
-        // The notice was edited/re-issued: a fresh version with a different item and deposit
-        // amount, still matching the same quotation's reference. No cache to invalidate — the
-        // service simply re-reads docs.findByTicket, which now returns the edited version.
+        // The notice was edited/re-issued: a fresh version with a different item and deposit amount, still matching
+        // the same quotation's reference. No cache to invalidate — the service simply re-reads docs.findByTicket,
+        // which now returns the edited version.
         DepositNoticeItemDto secondVersionItem = new DepositNoticeItemDto(
             2L, 1, "After edit", BigDecimal.ONE, "แผ่น",
             new BigDecimal("80"), null, new BigDecimal("80"), new BigDecimal("80"));
@@ -703,11 +692,8 @@ class DepositNoticeServiceTest {
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.TEN, "PER_PIECE",
                 new BigDecimal("100"), new BigDecimal("43.17"), new BigDecimal("56.83"))))));
-        // unitPrice=100 (approvedUnitPrice), netUnitPrice=56.83 (finalUnitPrice) -> discount = 43.17
-        // per unit, the same figure the REAL long-form label below quotes. discountLabel is set to
-        // the actual long form itemsFromQuotation would have authored when this notice was
-        // created/issued — normalization must replace it with "ลด 43.17", not pass it through and
-        // not re-derive some other number from it.
+        // unitPrice=100 (approvedUnitPrice), netUnitPrice=56.83 (finalUnitPrice) -> discount = 43.17 per unit, the
+        // same figure the REAL long-form label below quotes.
         DepositNoticeItemDto noticeItem = new DepositNoticeItemDto(
             1L, 1, "From notice", BigDecimal.TEN, "แผ่น",
             new BigDecimal("100"), "ส่วนลด 43.17 ต่อหน่วย", new BigDecimal("56.83"), new BigDecimal("568.30"));
@@ -748,12 +734,9 @@ class DepositNoticeServiceTest {
         when(quotationRepo.findByTicket(10L)).thenReturn(List.of(
             quotation(1L, 10L, "ACCEPTED", 1, List.of(quotationItem("A", BigDecimal.ONE, "PER_PIECE",
                 BigDecimal.TEN, BigDecimal.ZERO, BigDecimal.TEN)))));
-        // Deposit amount ZERO here on purpose (not "5" like the options test above): with an empty
-        // item snapshot, items total 0 and deposit 0 gives net == 0, which rule C explicitly
-        // ALLOWS (only < 0 is refused — see remainingInvoiceXlsx_netEqualsZeroIsAllowed above). This
-        // isolates the emptiness guard from rule C's negative-net refusal — without the guard, this
-        // exact fixture would fall through to a SILENT zero-total render (the bug this test pins),
-        // not merely coincide with an unrelated block.
+        // Deposit amount ZERO here on purpose (not "5" like the options test above): with an empty item snapshot,
+        // items total 0 and deposit 0 gives net == 0, which rule C explicitly ALLOWS (only < 0 is refused — see
+        // remainingInvoiceXlsx_netEqualsZeroIsAllowed above).
         when(docs.findByTicket(10L)).thenReturn(List.of(
             issuedNotice(5L, 10L, 1, "GLRD69001", "QT-2026-1", BigDecimal.ZERO, BigDecimal.ZERO,
                 List.of())));
@@ -768,20 +751,17 @@ class DepositNoticeServiceTest {
         assertThat(resolved.items()).isEmpty();
     }
 
-    // Legacy-fallback overload: reference "REF-1" never matches any of this file's "QT-2026-N"
-    // quotation numbers, and subtotal is a placeholder (depositAmount*2) — correct ONLY for a
-    // fixture where no ACCEPTED quotation is in play at all (the legacy resolveLegacy path, which
-    // never checks reference/subtotal against a quotation). Any test with an ACCEPTED quotation
-    // that should QUALIFY must use the 7-arg overload below instead.
+    // Legacy-fallback overload: reference "REF-1" never matches any of this file's "QT-2026-N" quotation numbers,
+    // and subtotal is a placeholder — correct ONLY for a fixture where no ACCEPTED quotation is in play at all.
     private DepositNoticeDto issuedNotice(long docId, long ticketId, int version, String docNumber,
                                           BigDecimal depositAmount, List<DepositNoticeItemDto> items) {
         return issuedNotice(docId, ticketId, version, docNumber, "REF-1",
             depositAmount.multiply(new BigDecimal("2")), depositAmount, items);
     }
 
-    // reference/subtotal explicit — reference must equal the qualifying quotation's own number
-    // (rule A's match key) and subtotal must equal that quotation's own item total (rule B) for
-    // the notice to actually qualify a quotation as a remaining-invoice source.
+    // reference/subtotal explicit — reference must equal the qualifying quotation's own number (rule A's match
+    // key) and subtotal must equal that quotation's own item total (rule B) for the notice to actually qualify a
+    // quotation as a remaining-invoice source.
     private DepositNoticeDto issuedNotice(long docId, long ticketId, int version, String docNumber,
                                           String reference, BigDecimal subtotal, BigDecimal depositAmount,
                                           List<DepositNoticeItemDto> items) {
@@ -831,9 +811,8 @@ class DepositNoticeServiceTest {
             new RevisionRequest(RevisionScope.QTY_OR_NOTE, "reason"), salesManagerActor));
     }
 
-    // ── Header autofill + item fallback (branch fix: deposit-notice autofill) ─
-    // See DepositNoticeService.createDraft/buildItemsFromRequest for what changed and why —
-    // every deal created through the pricing-request chain reached these methods with
+    // Header autofill + item fallback ─ See DepositNoticeService.createDraft/buildItemsFromRequest for what
+    // changed and why — every deal created through the pricing-request chain reached these methods with
     // approved_price NULL on every ticket_item and no header autofill at all.
 
     @Test
@@ -857,8 +836,8 @@ class DepositNoticeServiceTest {
 
     @Test
     void createDraft_nullCustomerIdLeavesHeaderFieldsBlankWithoutThrowing() {
-        // Base fixture's ticket carries customerId = null — must not NPE, and the customer
-        // repository must never even be consulted.
+        // Base fixture's ticket carries customerId = null — must not NPE, and the customer repository must never even
+        // be consulted.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED");
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(202L);
         stubDraft(202L, 10L);
@@ -943,8 +922,7 @@ class DepositNoticeServiceTest {
         when(docs.createDraft(eq(10L), any(), any())).thenReturn(301L);
         stubDraft(301L, 10L);
 
-        // Caller (or a stale/forged client) asks for 99% — must be ignored; the quotation's own
-        // 30% wins.
+        // Caller (or a stale/forged client) asks for 99% — must be ignored; the quotation's own 30% wins.
         service.createDraft(10L,
             new DepositNoticeDraftRequest(null, null, null, null, null, new BigDecimal("0.99"), null, null),
             owner);
@@ -1121,8 +1099,8 @@ class DepositNoticeServiceTest {
 
     @org.junit.jupiter.api.Test
     void createDraft_rejectsPausedDeal() {
-        // Phase 1 lifecycle gate: deposit-notice mutations advance the payment track,
-        // so an ON_HOLD deal must not create/issue notices.
+        // Phase 1 lifecycle gate: deposit-notice mutations advance the payment track, so an ON_HOLD deal must not
+        // create/issue notices.
         stubTicket(10L, TicketStatus.QUOTATION_ISSUED, "CUSTOMER_CONFIRMED", "ON_HOLD");
         assertThatThrownBy(() -> service.createDraft(10L,
                 new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), owner))
@@ -1166,8 +1144,8 @@ class DepositNoticeServiceTest {
             .thenReturn(Optional.of(new TicketDto(summary, List.of(), List.of(), null, List.of())));
     }
 
-    // customerId non-null + a projectName — the header-autofill source fields — with no items
-    // (so the item-fallback path is exercised at the same time by every caller of this fixture).
+    // customerId non-null + a projectName — the header-autofill source fields — with no items (so the
+    // item-fallback path is exercised at the same time by every caller of this fixture).
     private void stubTicketWithCustomer(long ticketId, String status, String paymentStatus,
                                         Long customerId, String projectName) {
         TicketSummaryDto summary = new TicketSummaryDto(
@@ -1180,8 +1158,8 @@ class DepositNoticeServiceTest {
             .thenReturn(Optional.of(new TicketDto(summary, List.of(), List.of(), null, List.of())));
     }
 
-    // Same ticket shape as stubTicket, but with explicit ticket_item rows — for the legacy
-    // approved_price fallback path.
+    // Same ticket shape as stubTicket, but with explicit ticket_item rows — for the legacy approved_price fallback
+    // path.
     private void stubTicketWithItems(long ticketId, String status, String paymentStatus,
                                      List<TicketItemDto> items) {
         TicketSummaryDto summary = new TicketSummaryDto(

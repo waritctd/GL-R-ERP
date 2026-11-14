@@ -5,12 +5,8 @@ import { EntryChannelFix } from './EntryChannelFix.jsx';
 
 globalThis.React = React;
 
-/**
- * The server's own advertisement (TicketService.addPolicyActions). Hand-built and passed DIRECTLY:
- * this component's whole contract is "render what the server advertised", so the fixture has to be
- * able to say either answer independently of the deal's channel. `requiredFields` is what
- * TicketService.entryChannelIsStated populates — `note` only when a STATED channel is being changed.
- */
+/** The server's own advertisement (TicketService.addPolicyActions). `requiredFields` is what
+ * TicketService.entryChannelIsStated populates — `note` only when a STATED channel is being changed. */
 const FIRST_CORRECTION = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value'] };
 const STATED_CHANGE = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', label: 'ตั้งค่า entry channel', requiredFields: ['value', 'note'] };
 
@@ -30,8 +26,8 @@ const pick = (value) => fireEvent.click(radios().find((radio) => radio.value ===
 
 describe('EntryChannelFix — rendered only when the server advertises SET_ENTRY_CHANNEL', () => {
   it('renders nothing at all when the action is not advertised, even with a handler wired', () => {
-    // Wrong-way-round: a caller who cannot correct the channel must not be handed a control that
-    // would only 403 — and there must be no request path either.
+    // Wrong-way-round: a caller who cannot correct the channel must not be handed a control that would only 403 —
+    // and there must be no request path either.
     const { container, onSubmit } = renderFix({ action: undefined });
     expect(container.innerHTML).toBe('');
     expect(screen.queryByRole('button')).toBeNull();

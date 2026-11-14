@@ -28,19 +28,19 @@ const DOC_LABELS = {
   },
 };
 
-/** "184 แผ่น", "85 Bags", "1 JOB" — and "-1" with an EMPTY unit for a ส่วนลดพิเศษ row, exactly as
- * her QN6900704-2 prints it. `quantity`/`unit` are the v3 per-row fields; a pre-v3 DTO (or fixture)
- * without them falls back to the tile's own piecesFinal/แผ่น, which is what they always meant. */
+/** "184 แผ่น", "85 Bags", "1 JOB" — and "-1" with an EMPTY unit for a ส่วนลดพิเศษ row, exactly as her
+ * QN6900704-2 prints it. `quantity`/`unit` are the v3 per-row fields; a pre-v3 DTO (or fixture) without them
+ * falls back to the tile's own piecesFinal/แผ่น, which is what they always meant. */
 function quantityCell(item, language = 'TH') {
   const type = lineTypeOf(item);
-  // An English per-sqm row's quantity is square metres the SERVER computes (boxes × ตร.ม./กล่อง).
-  // Where it is absent (mock mode never computes it) print "-", never the piece count under "SQM".
+  // An English per-sqm row's quantity is square metres the SERVER computes (boxes × ตร.ม./กล่อง). Where it is
+  // absent (mock mode never computes it) print "-", never the piece count under "SQM".
   if (item.unit === 'SQM' && item.quantity == null) return '-';
   const quantity = item.quantity ?? item.piecesFinal;
   const shown = quantity == null ? '-' : Number(quantity).toLocaleString('en-US', { maximumFractionDigits: 2 });
   if (type === LINE_TYPE_ADJUSTMENT) return shown;
-  // The server already sends "PCS" on an English tile row (DealQuotationLines#printedTileUnit);
-  // this is only the fallback for a DTO without a unit, and it follows the document too.
+  // The server already sends "PCS" on an English tile row (DealQuotationLines#printedTileUnit); this is only the
+  // fallback for a DTO without a unit, and it follows the document too.
   const unit = item.unit ?? (type === LINE_TYPE_TILE ? (language === 'EN' ? 'PCS' : 'แผ่น') : '');
   return unit ? `${shown} ${unit}` : shown;
 }
@@ -89,9 +89,9 @@ export function QuotationDocumentView({ quotation }) {
   const labels = DOC_LABELS[language];
   const currency = quotation.currency || currencyForLanguage(language);
   const money = (value) => formatQuotationMoney(value, currency);
-  // The English signature block prints English names and FALLS BACK to the Thai one when an
-  // employee has none on file — the renderer's rule (DealQuotationDto's *NameEn javadoc), so the
-  // screen never shows an empty slot the paper would have filled.
+  // The English signature block prints English names and FALLS BACK to the Thai one when an employee has none on
+  // file — the renderer's rule (DealQuotationDto's *NameEn javadoc), so the screen never shows an empty slot the
+  // paper would have filled.
   const name = (en, th) => (language === 'EN' ? (en || th) : th);
   // Print-only ผู้พิมพ์/พนักงานขาย name override. Mirrors DealQuotationRenderAdapter#printedByName /
   // #salesRepDisplayNameOrReal / #salesRepDisplayPhoneOrReal exactly, so this preview never shows a
@@ -153,9 +153,8 @@ export function QuotationDocumentView({ quotation }) {
               ผู้ติดต่อ's typed ones, what the renderer prints. */}
           {contactLine ? (
             <div data-testid="doc-contact">
-              {/* "ติดต่อผู้สั่งซื้อ", not a second "ผู้สั่งซื้อ": that word already heads the fourth
-                  signature slot below, and two identical headings for two different things read
-                  as a duplicate. */}
+              {/* "ติดต่อผู้สั่งซื้อ", not a second "ผู้สั่งซื้อ": that word already heads the fourth signature slot below,
+               * and two identical headings for two different things read as a duplicate. */}
               <span className="block text-2xs font-bold uppercase text-text-muted">ติดต่อผู้สั่งซื้อ</span>
               <strong>{contactLine}</strong>
             </div>
@@ -211,16 +210,9 @@ export function QuotationDocumentView({ quotation }) {
                   applies to the printed document and locationGroupsFromItems rebuilds in the editor.
                   Compared against the PREVIOUS item's label, never a collected set, so the run
                   structure survives an item order the rep chose deliberately. */}
-              {/* These sub-lines are <span>, NOT <div>, and that is load-bearing rather than a
-                  style preference. `styles.css` clips on the WRAPPER — `.data-row > span` is
-                  `white-space: nowrap; text-overflow: ellipsis` — and its escape hatch (the
-                  "SECONDARY sub-line wraps instead of truncating" rule) only reaches
-                  `> strong | > small | > span`. A <div> child therefore inherits the nowrap and
-                  the Thai description gets cut mid-word instead of wrapping (measured: 111 px lost
-                  at 390, 74 at 1024). This is the recorded `.data-row` wrapper-span trap recurring
-                  in new code — the clip is on the parent, so styling the child alone does nothing;
-                  the child has to MATCH the escape hatch's selector. (A <div> inside a <span> was
-                  invalid nesting too, but the wrapping bug is the reason.) */}
+              {/* These sub-lines are <span>, NOT <div>, and that is load-bearing rather than a style preference. A <div>
+               * child therefore inherits the nowrap and the Thai description gets cut mid-word instead of wrapping
+               * (measured: 111 px lost at 390, 74 at 1024). */}
               {item.locationLabel && item.locationLabel !== quotation.items[index - 1]?.locationLabel ? (
                 <span className="text-2xs font-bold uppercase text-text-muted">{item.locationLabel}</span>
               ) : null}

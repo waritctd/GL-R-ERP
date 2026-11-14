@@ -11,16 +11,8 @@ export function defaultRouteFor() {
   return 'dashboard';
 }
 
-/**
- * A "division manager" is role `employee` with the manager flag set — the
- * non-sales manager of their own division (DivisionAccessPolicy.isManager:
- * position contains "ผู้จัดการ", assistant managers included). This is the
- * exact `user?.manager` predicate EmployeeDashboard.dashboardMode's 'manager'
- * branch uses, narrowed to `role === 'employee'` so sales_manager/hr/ceo
- * (who have their own dedicated landings/company mode) aren't swept in.
- * Single source of truth for App.jsx's `/` route branch, AppShell.jsx's nav
- * grouping, and DivisionManagerOverview's own detection.
- */
+/** A "division manager" is role `employee` with the manager flag set — the non-sales manager of their own
+ * division (DivisionAccessPolicy.isManager: position contains "ผู้จัดการ", assistant managers included). */
 export function isDivisionManager(user) {
   return user?.role === 'employee' && !!user?.manager;
 }
@@ -57,9 +49,9 @@ function isActivityLogPath(path) {
 }
 
 const PATH_GUARDS = [
-  // Admin capability, NOT a role — `admin` is orthogonal to roleFor's output and no role grants
-  // it (see V157 and AuthResponse). This only decides whether the route renders; the server
-  // re-reads hr.employee.is_admin on every call, so forging `admin` on the client gains nothing.
+  // Admin capability, NOT a role — `admin` is orthogonal to roleFor's output and no role grants it (see V157 and
+  // AuthResponse). This only decides whether the route renders; the server re-reads hr.employee.is_admin on
+  // every call, so forging `admin` on the client gains nothing.
   { test: (p) => isActivityLogPath(p), can: (u) => Boolean(u.admin) },
   { test: (p) => p === '/hr', can: (u) => hasPermission(u.role, 'canViewEmployees') },
   // The bare `/tickets` list is the deal-PIPELINE BROWSER (canViewDealPipeline: sales/sales_manager/ceo);
@@ -72,12 +64,12 @@ const PATH_GUARDS = [
   { test: (p) => p === '/my-requests' || p === '/profile', can: (u) => !!u.employeeId },
   // List = pipeline browser; a single ticket's DETAIL page is canViewWholeDeal.
   { test: (p) => p === '/tickets', can: (u) => hasPermission(u.role, 'canViewDealPipeline') },
-  // Whole-deal page (and its sub-paths, e.g. /tickets/:id/deposit). Import is REFUSED here — the
-  // backend 403s it the whole-deal read and deposit notices — and gets its own per-deal page below.
+  // Whole-deal page (and its sub-paths, e.g. /tickets/:id/deposit). Import is REFUSED here — the backend 403s it
+  // the whole-deal read and deposit notices — and gets its own per-deal page below.
   { test: (p) => p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewWholeDeal') },
-  // Import's own per-deal page (GET /api/import/deals/{id}: import + ceo). MANDATORY entry:
-  // canAccessPath fails OPEN for a path no guard claims, so without this line every authenticated
-  // role would reach /import/deals/:id.
+  // Import's own per-deal page (GET /api/import/deals/{id}: import + ceo). MANDATORY entry: canAccessPath fails
+  // OPEN for a path no guard claims, so without this line every authenticated role would reach
+  // /import/deals/:id.
   { test: (p) => p === '/import/deals' || p.startsWith('/import/deals/'), can: (u) => hasPermission(u.role, 'canViewImportDeal') },
   { test: (p) => p === '/catalog', can: (u) => hasPermission(u.role, 'canViewCatalog') },
   // Direct deal quotation. Exact + prefix (the editor's /quotations/new and /quotations/:id both
@@ -102,10 +94,9 @@ const PATH_GUARDS = [
   // /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays hr-only and is gated
   // inside PayrollPage.jsx (canManagePayroll), not at the route level.
   { test: (p) => p === '/payroll', can: (u) => hasPermission(u.role, 'canViewPayroll') },
-  // Garnishment shortfall ledger. Needs its own entry because the guard above is an EXACT match
-  // and canAccessPath fails OPEN for a path no guard claims — a nested path would otherwise be
-  // reachable by any authenticated role. canViewPayroll (hr + ceo) mirrors the endpoint's
-  // @PreAuthorize("hasAnyRole('HR','CEO')") and PayrollDeductionShortfallService's VIEW_ROLES.
+  // Garnishment shortfall ledger. Needs its own entry because the guard above is an EXACT match and
+  // canAccessPath fails OPEN for a path no guard claims — a nested path would otherwise be reachable by any
+  // authenticated role.
   { test: (p) => p === '/payroll/deduction-shortfalls', can: (u) => hasPermission(u.role, 'canViewPayroll') },
   // Written-consent register. Needs its own entry for the same reason as the sibling above:
   // `/payroll` is an EXACT match and canAccessPath fails OPEN for a path no guard claims.
@@ -120,13 +111,12 @@ const PATH_GUARDS = [
   // fail OPEN in canAccessPath (the `if (!guard) return true` below), so omitting
   // this entry would let any logged-in user without an employeeId reach it.
   { test: (p) => p === '/tax-allowance', can: (u) => !!u.employeeId },
-  // `/tax-allowance-review` is HR/CEO's register — mirrors
-  // TaxAllowanceDeclarationService's GET /declarations gate (hasAnyRole('HR','CEO')).
+  // `/tax-allowance-review` is HR/CEO's register — mirrors TaxAllowanceDeclarationService's GET /declarations
+  // gate (hasAnyRole('HR','CEO')).
   { test: (p) => p === '/tax-allowance-review', can: (u) => hasPermission(u.role, 'canViewTaxAllowanceRegister') },
-  // /employee-requests hosts both the overtime and welfare/special-money tabs
-  // (RequestsPage.jsx), so it is visible to anyone either sub-page would be
-  // visible to. /overtime stays guarded identically since it's a same-page
-  // redirect alias (App.jsx), not a separate view.
+  // /employee-requests hosts both the overtime and welfare/special-money tabs (RequestsPage.jsx), so it is
+  // visible to anyone either sub-page would be visible to. /overtime stays guarded identically since it's a
+  // same-page redirect alias (App.jsx), not a separate view.
   {
     test: (p) => p === '/employee-requests' || p === '/overtime',
     can: (u) => !!u.employeeId || hasPermission(u.role, 'canViewAllOvertime') || hasPermission(u.role, 'canViewAllSpecialMoney'),
@@ -144,12 +134,9 @@ const PATH_GUARDS = [
   // enforces per-request access; this guard only decides whether the role belongs on the URL shape.
   { test: (p) => p === '/pricing-requests', can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') },
   { test: (p) => p.startsWith('/pricing-requests/'), can: (u) => hasPermission(u.role, 'canViewPricingRequestQueue') || u.role === 'sales' },
-  // งานนำเข้า — Import's cross-deal fulfilment workspace. This entry is MANDATORY,
-  // not decorative: canAccessPath fails OPEN for any path no guard claims (the
-  // `if (!guard) return true` below), so without this line every authenticated
-  // role reaches /fulfilment. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself
-  // a mirror of TicketService.FULFILMENT_ROLES {import, ceo}. Frontend gating
-  // only — the four endpoints enforce the real gate and are unchanged.
+  // งานนำเข้า — Import's cross-deal fulfilment workspace. Frontend gating only — the four endpoints enforce the
+  // real gate and are unchanged. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself a mirror of
+  // TicketService.FULFILMENT_ROLES {import, ceo}.
   { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') },
   // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
@@ -201,26 +188,19 @@ export function isSelfServiceLocked(user) {
   return !SELF_SERVICE_EXEMPT_ROLES.includes(user?.role);
 }
 
-// The lockdown is an ALLOWLIST, not a blocklist, and that direction is the
-// whole point. canAccessPath below fails OPEN for any path no PATH_GUARDS
-// entry claims (`if (!guard) return true`), so a blocklist would silently
-// admit every route added after this one was written. Listing what stays
-// visible instead makes a new route locked-by-default — the safe direction.
-//
-// Entries match exactly or as a path prefix (`/leave` covers `/leave/new`).
-// The prefix test requires the trailing slash, so `/tax-allowance` does NOT
-// admit `/tax-allowance-review` — HR's register, which must stay hidden.
+// The lockdown is an ALLOWLIST, not a blocklist, and that direction is the whole point. The prefix test
+// requires the trailing slash, so `/tax-allowance` does NOT admit `/tax-allowance-review` — HR's register,
+// which must stay hidden.
 const SELF_SERVICE_PATHS = [
   '/profile',
-  // Alias that redirects to /profile (App.jsx) — must be allowed identically
-  // or an old notification deep-link dies at the access-denied page.
+  // Alias that redirects to /profile (App.jsx) — must be allowed identically or an old notification deep-link
+  // dies at the access-denied page.
   '/my-requests',
   '/attendance',
   '/leave',
   '/employee-requests',
-  // Same reasoning as /my-requests: /overtime is a redirect alias for
-  // /employee-requests?tab=ot, and OvertimeService hardcodes it in notification
-  // links.
+  // Same reasoning as /my-requests: /overtime is a redirect alias for /employee-requests?tab=ot, and
+  // OvertimeService hardcodes it in notification links.
   '/overtime',
   '/tax-allowance',
 ];
@@ -298,14 +278,8 @@ export function dealRedirectFor(path, user) {
 
 export function canAccessPath(path, user) {
   if (!user) return false;
-  // Checked BEFORE the guards below, not after: the lockdown has to deny paths
-  // the user's role would otherwise pass (a sales rep on /tickets) as well as
-  // paths no guard claims at all.
-  // The activity log is NOT self-service, so the release lockdown would otherwise hide it from
-  // its only holder — วริศรา is role `sales`, which is not one of SELF_SERVICE_EXEMPT_ROLES.
-  // Exempted per-path rather than by adding `admin` to the exempt roles, because the latter would
-  // unlock the ENTIRE portal (the sales stack, payroll, the HR queues) for her as a side effect of
-  // wanting one page. Narrow exemption, deliberate.
+  // Checked BEFORE the guards below, not after: the lockdown has to deny paths the user's role would otherwise
+  // pass (a sales rep on /tickets) as well as paths no guard claims at all. Narrow exemption, deliberate.
   const adminActivityLog = isActivityLogPath(path) && Boolean(user.admin);
   const quotationRelease = isQuotationPath(path) && isQuotationReleaseUser(user);
   if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease

@@ -23,23 +23,8 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * F3 fix (Opus review, 2026-07-30): {@link PayrollService#calculateLine} used to hardcode {@code
- * excessWithheldToDate} to {@link BigDecimal#ZERO} on every line processed through {@link
- * PayrollCalculator#calculateClassified} -- the ONLY engine {@code calculateLine} actually calls (see
- * that method's own comment) -- making {@link PayslipRenderer}'s over-withholding notice (line 158)
- * permanently unreachable and losing the figure spec section 8 requires be kept "for the ภ.ง.ด.1
- * working papers and reconciliation". {@link PayrollCalculator} now computes it as the classified
- * engine's own analogue of the legacy {@code #calculate()}'s field of the same name: the running total
- * ACTUALLY withheld this tax year (prior periods' persisted total, plus this period's own
- * POST-OVERRIDE withholding) exceeding the TRUE annual liability given everything known so far this
- * year (F1's carried-known-limb {@code annualTaxWithCumulativeYtd}, not the narrower reported
- * {@code taxableAnnualIncome}/{@code annualTax} fields, which deliberately exclude a settled
- * known-limb payment from later months).
- *
- * <p>Driven through the real {@link PayrollService#process}/{@link PayrollRepository}, per CLAUDE.md's
- * requirement that business-logic changes get real-DB coverage.
- */
+/** PayrollService#calculateLine used to hardcode excessWithheldToDate to BigDecimal#ZERO on every line
+ * processed through PayrollCalculator#calculateClassified. */
 class PayrollExcessWithheldClassifiedEngineIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -77,9 +62,9 @@ class PayrollExcessWithheldClassifiedEngineIntegrationTest extends AbstractPostg
 
     @Test
     void normalProcessingWithNoOverrideLeavesExcessWithheldToDateAtZero() {
-        // ฿10,000/mo -- annual income (120,000) never clears the ฿150,000 exempt bracket even before
-        // the personal/SSO allowances are subtracted, so the true annual liability is genuinely zero
-        // and nothing should ever read as "excess".
+        // ฿10,000/mo -- annual income (120,000) never clears the ฿150,000 exempt bracket even before the personal/SSO
+        // allowances are subtracted, so the true annual liability is genuinely zero and nothing should ever read as
+        // "excess".
         long employeeId = seedEmployee("EXCESS-001", "ปกติ", "ทดสอบ", new BigDecimal("10000.00"));
 
         PayrollPeriodDto processed = payrollService.process(
@@ -92,8 +77,8 @@ class PayrollExcessWithheldClassifiedEngineIntegrationTest extends AbstractPostg
     void anHrOverrideThatExceedsTheTrueAnnualLiabilityProducesAPositiveExcessWithheldToDate() {
         long employeeId = seedEmployee("EXCESS-002", "หักเกิน", "ทดสอบ", new BigDecimal("10000.00"));
 
-        // The true annual liability for this employee is zero (see the test above). An HR override of
-        // ฿5,000 this period is therefore ENTIRELY in excess of what could ever be owed.
+        // The true annual liability for this employee is zero (see the test above). An HR override of ฿5,000 this
+        // period is therefore ENTIRELY in excess of what could ever be owed.
         PayrollPeriodDto processed = payrollService.process(
             new ProcessPayrollRequest(LocalDate.of(2026, 1, 1), List.of(input(employeeId, new BigDecimal("5000.00")))),
             hr());
@@ -104,8 +89,8 @@ class PayrollExcessWithheldClassifiedEngineIntegrationTest extends AbstractPostg
             .withFailMessage("annual liability is 0.00 and 5,000.00 was withheld by override -- the whole amount is excess")
             .isEqualByComparingTo("5000.00");
 
-        // Re-read straight from the DB (not the service's in-memory return value) -- confirms the F3
-        // fix actually reaches the INSERT, not just the in-memory calculation.
+        // Re-read straight from the DB (not the service's in-memory return value) -- confirms the F3 fix actually
+        // reaches the INSERT, not just the in-memory calculation.
         PayrollLineDto reread = onlyLine(payrollRepository.findPeriodById(processed.id()).orElseThrow(), employeeId);
         assertThat(reread.excessWithheldToDate()).isEqualByComparingTo("5000.00");
     }
@@ -151,8 +136,8 @@ class PayrollExcessWithheldClassifiedEngineIntegrationTest extends AbstractPostg
         return employeeId;
     }
 
-    /** Salary-only request (every non-salary component stays zero, so nothing needs classifying),
-     *  with an optional per-run withholding override. */
+    /** Salary-only request (every non-salary component stays zero, so nothing needs classifying), with an optional
+     * per-run withholding override. */
     private PayrollEmployeeInputRequest input(long employeeId, BigDecimal withholdingTaxOverride) {
         BigDecimal zero = BigDecimal.ZERO;
         return new PayrollEmployeeInputRequest(

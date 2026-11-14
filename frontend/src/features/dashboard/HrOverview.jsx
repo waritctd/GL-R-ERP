@@ -11,21 +11,9 @@ import { bangkokMonthStartIso, formatThaiDate, payrollStatusLabel } from '../../
 import { ActionQueue } from './ActionQueue.jsx';
 import { buildHrDashboardStats, DivisionHeadcountPanel } from './hrHeadcount.jsx';
 
-/**
- * HR Overview — the HR-role landing (`/` when `user.role === 'hr'`).
- *
- * RECONCILED APPROVAL MODEL (owner-confirmed, 2026-07-22): OT and leave both
- * route division-manager -> CEO, or straight to CEO when the division has no
- * manager. HR is NOT an approver of either — HR only *monitors* status here.
- * There is deliberately no approve action anywhere on this page for OT/leave;
- * see "ภาพรวมลา / OT (ดูอย่างเดียว)" below. HR's one real review task is
- * profile-change requests (canReviewProfileRequests={hr}), framed as
- * "ตรวจ/ดำเนินการ" rather than "approve".
- *
- * Reuses HrDashboard's Panel/StatGrid/StatCard/ActionQueue structure and its
- * `dashboard.summary` data wiring (see HrDashboard.jsx), but the queue/cards
- * below only ever surface actions HR genuinely owns.
- */
+/** HR Overview — the HR-role landing (`/` when `user.role === 'hr'`). HR is NOT an approver of either — HR only
+ * *monitors* status here. RECONCILED APPROVAL MODEL (owner-confirmed, 2026-07-22): OT and leave both route
+ * division-manager -> CEO, or straight to CEO when the division has no manager. */
 
 const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-2 mobile:grid-cols-1';
 
@@ -52,9 +40,8 @@ function HrTaskRow({ label, detail, cta, onClick }) {
   );
 }
 
-// Deliberately renders no "approve"/"reject" affordance — HR's role for OT
-// and leave is monitoring only (see file-level note above). The only action
-// offered is "ดูสถานะ" (view status), which opens the read-only list.
+// Deliberately renders no "approve"/"reject" affordance — HR's role for OT and leave is monitoring only (see
+// file-level note above). The only action offered is "ดูสถานะ" (view status), which opens the read-only list.
 function MonitorRow({ label, value, onClick }) {
   return (
     <button
@@ -84,10 +71,8 @@ export function HrOverview({ employees, dashboardSummary }) {
   });
   const payrollPeriod = payrollQuery.data ?? null;
 
-  // Same queryKey and queryFn shape as TaxAllowanceReviewPage's own register query — deliberately,
-  // so this shares that one cache entry instead of adding a second fetch of the same rows. The
-  // count is derived client-side; GET /declarations already returns the year's rows and there is
-  // no count endpoint to add.
+  // Same queryKey and queryFn shape as TaxAllowanceReviewPage's own register query — deliberately, so this
+  // shares that one cache entry instead of adding a second fetch of the same rows.
   const currentTaxYear = new Date().getFullYear();
   const taxAllowanceRegisterQuery = useQuery({
     queryKey: queryKeys.taxAllowanceDeclarationsRegister({ year: currentTaxYear }),
@@ -100,8 +85,8 @@ export function HrOverview({ employees, dashboardSummary }) {
 
   const stats = useMemo(() => buildHrDashboardStats(employees, dashboardSummary), [employees, dashboardSummary]);
 
-  // HR's only actionable queue item is profile requests — OT/leave are
-  // monitoring-only (see file header) so they never appear as "needs action".
+  // HR's only actionable queue item is profile requests — OT/leave are monitoring-only (see file header) so they
+  // never appear as "needs action".
   const queueItems = [
     { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูลรออนุมัติ', value: stats.pendingProfileRequests, to: () => navigate('/requests') },
     { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: stats.unreadNotifications },
@@ -177,10 +162,9 @@ export function HrOverview({ employees, dashboardSummary }) {
               cta="ตรวจคำขอ"
               onClick={() => navigate('/requests')}
             />
-            {/* ล.ย.01 review is HR's own work, like the profile-change queue above it — approve/
-                reject/apply are hr-only — so it belongs here rather than in the read-only
-                monitor panel. It had no presence on this page at all before, which meant HR had
-                to remember to go looking for a queue nothing surfaced. */}
+            {/* ล.ย.01 review is HR's own work, like the profile-change queue above it — approve/ reject/apply are hr-only —
+             * so it belongs here rather than in the read-only monitor panel. It had no presence on this page at all
+             * before, which meant HR had to remember to go looking for a queue nothing surfaced. */}
             <HrTaskRow
               label="แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)"
               detail={`${pendingTaxAllowance} รายการรอตรวจ`}

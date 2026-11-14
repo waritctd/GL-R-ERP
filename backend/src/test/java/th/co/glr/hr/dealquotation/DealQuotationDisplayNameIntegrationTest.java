@@ -98,8 +98,8 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
             new QuotationRenderer(), new EmployeeAuthRepository(jdbc), new EmployeeSignatureRepository(jdbc),
             new CatalogRepository(jdbc), "https://portal.test", "", "", "");
 
-        // Real sales-division code ("SA"), matching DivisionAccessPolicy.SALES_DIVISION_CODE —
-        // NOT the "SALES" literal some older fixtures in this package use, which does not match.
+        // Real sales-division code ("SA"), matching DivisionAccessPolicy.SALES_DIVISION_CODE — NOT the "SALES" literal
+        // some older fixtures in this package use, which does not match.
         salesDivisionRepId = createEmployee(employees, "พนักงานขาย ดิสเพลย์", "sales-display@glr.co.th",
             "SA", "ฝ่ายขาย", null);
         otherSalesRepId = createEmployee(employees, "พนักงานขาย อื่นดิสเพลย์", "sales-other-display@glr.co.th",
@@ -128,9 +128,7 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
             customer.id(), project.id(), contact.id(), null, null, null), salesActor).summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Repository — the eligible union itself
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void findEligibleOptions_includesSalesDivisionAndGrantHolder_excludesIneligibleAndInactive() {
@@ -156,9 +154,7 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
         assertThat(quotationRepository.isEligibleQuotationDisplayName(inactiveEligibleId, sa)).isFalse();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Service — create/update validation
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void create_withSalesDivisionDisplayId_succeedsAndRoundTrips() {
@@ -270,9 +266,7 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
             .id()).isEqualTo(created.id());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Options endpoint gate
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void findQuotationDisplayNameOptions_listsTheEligibleUnion_forAnEditRoleActor() {
@@ -304,9 +298,7 @@ class DealQuotationDisplayNameIntegrationTest extends AbstractPostgresIntegratio
             .hasFieldOrPropertyWithValue("status", HttpStatus.FORBIDDEN);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private UpsertDealQuotationRequest upsertRequest(Long printedByDisplayId, Long salesRepDisplayId) {
         ItemInput item = new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",

@@ -316,8 +316,8 @@ describe('mockApi.dealQuotations.update — origin=PRICING_REQUEST link carry-fo
     expect(changedItem.ceoDiscountPct).toBe(ceoDiscountPct);
     expect(changedItem.ceoNetUnitPrice).not.toBeNull();
 
-    // Second save — the link must still be there (it was never sent on the wire; ItemInput has
-    // no field for it), so reverting to the CEO's own discount clears the flag again.
+    // Second save — the link must still be there (it was never sent on the wire; ItemInput has no field for it),
+    // so reverting to the CEO's own discount clears the flag again.
     const { quotation: afterRevert } = await api.dealQuotations.update(quotation.id, {
       priceMode: quotation.priceMode,
       items: [{ ...changedItem, id: changedItem.id, discountPct: ceoDiscountPct }],
@@ -488,9 +488,9 @@ describe('mockApi.dealQuotations.listForTicket/list/counts — origin scoping (m
     expect(items.find((q) => q.id === quotation.id)).toBeUndefined();
 
     const counts = await api.dealQuotations.counts();
-    // Every OTHER test in this mock instance may have left DEAL_DIRECT rows behind (the mock db
-    // is process-wide, not reset between files) — this only asserts the PRICING_REQUEST row this
-    // test itself just created is not among what the counts consider "all".
+    // Every OTHER test in this mock instance may have left DEAL_DIRECT rows behind (the mock db is process-wide,
+    // not reset between files) — this only asserts the PRICING_REQUEST row this test itself just created is not
+    // among what the counts consider "all".
     const { items: allDealDirect } = await api.dealQuotations.list({});
     expect(counts.all).toBe(allDealDirect.length);
   });

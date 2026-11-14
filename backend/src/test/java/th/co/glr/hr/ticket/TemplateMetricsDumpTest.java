@@ -12,15 +12,9 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.springframework.core.io.ClassPathResource;
 
-/**
- * html-fidelity-spec.md §1 — pins {@code quotation_template.metrics.json} to what
- * {@link TemplateMetricsDump} produces from the real template TODAY, so the checked-in JSON the
- * HTML renderer trusts can never silently drift from the XLS file it is supposed to describe.
- *
- * <p>Regenerate deliberately (after a genuine template change) with:
- * {@code ./mvnw -Dtest=TemplateMetricsDumpTest -Dregenerate=true test} — this OVERWRITES the
- * checked-in JSON + picture assets instead of asserting against them.
- */
+/** html-fidelity-spec.md §1 — pins quotation_template.metrics.json to what TemplateMetricsDump produces from
+ * the real template TODAY, so the checked-in JSON the HTML renderer trusts can never silently drift from the
+ * XLS file it is supposed to describe. */
 class TemplateMetricsDumpTest {
     private static final String JSON_RESOURCE = "templates/quotation_template.metrics.json";
 
@@ -53,9 +47,9 @@ class TemplateMetricsDumpTest {
 
     @Test
     void keyLayoutCellsCarryTheExpectedLabelsAndBorders() throws Exception {
-        // Cheap, human-readable sanity check independent of the full-JSON equality above — if
-        // this one ever fails, the byte-for-byte JSON pin will fail too, but this pinpoints WHAT
-        // moved without needing to read a 400-cell JSON diff.
+        // Cheap, human-readable sanity check independent of the full-JSON equality above — if this one ever fails, the
+        // byte-for-byte JSON pin will fail too, but this pinpoints WHAT moved without needing to read a 400-cell JSON
+        // diff.
         ObjectMapper mapper = new ObjectMapper();
         ObjectNode fresh;
         try (InputStream in = new ClassPathResource(TemplateMetricsDump.TEMPLATE_RESOURCE).getInputStream()) {
@@ -74,8 +68,8 @@ class TemplateMetricsDumpTest {
         try (OutputStream out = Files.newOutputStream(jsonOut)) {
             mapper.writerWithDefaultPrettyPrinter().writeValue(out, fresh);
         }
-        // Dump output only — no main code reads these (SheetPlan takes pictures from the live
-        // workbook), so they are TEST resources: src/test/resources/static/brand/template.
+        // Dump output only — no main code reads these (SheetPlan takes pictures from the live workbook), so they are
+        // TEST resources: src/test/resources/static/brand/template.
         Path picturesOut = testResourcesDir().resolve("static/brand/template");
         try (InputStream in = new ClassPathResource(TemplateMetricsDump.TEMPLATE_RESOURCE).getInputStream()) {
             Map<String, byte[]> pics = TemplateMetricsDump.extractPictures(in, picturesOut);
@@ -91,8 +85,8 @@ class TemplateMetricsDumpTest {
     }
 
     private Path findResourcesDir() {
-        // Tests run with the backend module as the working directory (mvnw -pl backend or a
-        // module-root mvnw); src/main/resources is stable relative to that.
+        // Tests run with the backend module as the working directory (mvnw -pl backend or a module-root mvnw);
+        // src/main/resources is stable relative to that.
         Path candidate = Path.of("src/main/resources").toAbsolutePath();
         if (Files.isDirectory(candidate)) return candidate;
         throw new IllegalStateException("Could not locate src/main/resources from " + Path.of("").toAbsolutePath());

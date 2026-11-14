@@ -10,26 +10,14 @@ const TYPE_ICON = {
   PICKED_UP:       { name: 'users',    color: '#3b82f6' },
   PRICE_PROPOSED:  { name: 'clock',    color: '#f59e0b' },
   APPROVED:        { name: 'check',    color: '#22c55e' },
-  // #ef4444 (measures 3.76:1, fails AA) replaced with DESIGN.md's
-  // documented danger red #dc2626 (4.83:1). Kept as a literal hex rather
-  // than var(--color-danger): icon.color is string-concatenated with an
-  // alpha suffix below (`icon.color + '1a'`) to derive the tinted circle
-  // background, which only works with a literal hex, not a CSS var().
+  // #ef4444 (measures 3.76:1, fails AA) replaced with DESIGN.md's documented danger red #dc2626 (4.83:1).
   REJECTED:        { name: 'close',    color: '#dc2626' },
   QUOTATION_ISSUED:{ name: 'fileText', color: '#22c55e' },
   CLOSED:          { name: 'check',    color: '#94a3b8' },
   CANCELLED:       { name: 'close',    color: '#94a3b8' },
-  // GLA-123 slice S2 review fix (Opus re-review, 2026-09-20, UI note 7) — the dual-approval
-  // notification surface had NO icon entries at all (confirmed by grep before this fix; every one
-  // of these fell back to the default bell/`#5c6b80`). DEAL_QUOTATION_APPROVED covers BOTH a
-  // partial fill ("รอการอนุมัติจากอีกฝ่ายหนึ่ง...") and a full/issuing approval
-  // ("ได้รับอนุมัติครบถ้วนและออกใบแล้ว") — the two are already distinguishable by their MESSAGE
-  // text (DealQuotationService's own partialMessage vs the issue-completion message), so one
-  // shared icon entry is correct here, not two. SUBMITTED/REJECTED reuse the SAME icon/colour as
-  // the plain kinds above (DEAL_QUOTATION_SUBMITTED reads exactly like SUBMITTED to a viewer;
-  // DEAL_QUOTATION_REJECTED like REJECTED) rather than inventing a visually different pair for
-  // what is, to the person reading the bell, the same kind of event under a more specific type
-  // string.
+  // GLA-123 slice S2 review fix (Opus re-review, 2026-09-20, UI note 7) — the dual-approval notification surface
+  // had NO icon entries at all (confirmed by grep before this fix; every one of these fell back to the default
+  // bell/`#5c6b80`).
   DEAL_QUOTATION_SUBMITTED: { name: 'fileText', color: '#f59e0b' },
   DEAL_QUOTATION_APPROVED:  { name: 'check',    color: '#22c55e' },
   DEAL_QUOTATION_REJECTED:  { name: 'close',    color: '#dc2626' },
@@ -68,17 +56,16 @@ export function NotificationBell({
     triggerRef.current?.focus();
   }, [setOpen]);
 
-  // Polling moves from a manual setInterval to refetchInterval — same 30s
-  // cadence, but the cache now lives at queryKeys.notifications() so any
-  // mutation elsewhere (e.g. a ticket action) that invalidates that key also
+  // Polling moves from a manual setInterval to refetchInterval — same 30s cadence, but the cache now lives at
+  // queryKeys.notifications() so any mutation elsewhere (e.g. a ticket action) that invalidates that key also
   // refreshes this bell immediately instead of waiting up to 30s.
   const notificationsQuery = useQuery({
     queryKey: queryKeys.notifications(),
     queryFn: () => api.notifications.list().then((res) => (Array.isArray(res.notifications) ? res.notifications : [])),
     refetchInterval: 30_000,
   });
-  // On error, fall back to an empty list — matches the original load()'s
-  // catch-and-clear behavior (this component has no showToast prop to report through).
+  // On error, fall back to an empty list — matches the original load()'s catch-and-clear behavior (this
+  // component has no showToast prop to report through).
   const items = notificationsQuery.data ?? [];
 
   const markReadMutation = useMutation({
@@ -210,9 +197,8 @@ export function NotificationBell({
                 ไม่มีการแจ้งเตือน
               </div>
             ) : items.map((item, index) => {
-              // Literal hex (not var(--color-text-muted)): same alpha-concat
-              // constraint as TYPE_ICON above. Kept in sync with the token's
-              // new value (fix/ui-contrast-tokens).
+              // Literal hex (not var(--color-text-muted)): same alpha-concat constraint as TYPE_ICON above. Kept in sync
+              // with the token's new value (fix/ui-contrast-tokens).
               const icon = TYPE_ICON[item.type] ?? { name: 'bell', color: '#5c6b80' };
               return (
                 <button

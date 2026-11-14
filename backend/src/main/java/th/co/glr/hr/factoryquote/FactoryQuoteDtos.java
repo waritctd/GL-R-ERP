@@ -91,11 +91,8 @@ public final class FactoryQuoteDtos {
         Long fileSize,
         long uploadedBy,
         Instant uploadedAt,
-        // Audited-tombstone fields (V69, review remediation COMMIT 4): a permitted deletion now
-        // sets these three instead of physically removing the row/file — see
-        // FactoryQuoteService.deleteAttachment. Null means "not deleted." The row and its
-        // deletedAt/deletedBy/deleteReason remain visible in the same list Import/CEO already
-        // see, so the audit trail is never hidden, only marked.
+        // Audited-tombstone fields (V69, review remediation COMMIT 4): a permitted deletion now sets these three
+        // instead of physically removing the row/file — see FactoryQuoteService.deleteAttachment.
         Instant deletedAt,
         Long deletedBy,
         String deleteReason

@@ -16,11 +16,8 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.ticket.CommentRequest;
 import th.co.glr.hr.ticket.RecordPaymentRequest;
 
-/**
- * Finance-only deal read model and money actions for the account and ceo roles -- see
- * {@link FinanceDealService} for the authorisation rules and what the payload deliberately omits.
- * Every route returns {@code {deal: FinanceDealDto}}.
- */
+/** Finance-only deal read model and money actions for the account and ceo roles -- see FinanceDealService for
+ * the authorisation rules and what the payload deliberately omits. Every route returns {deal: FinanceDealDto}. */
 @RestController
 @RequestMapping("/api/finance/deals")
 public class FinanceDealController {

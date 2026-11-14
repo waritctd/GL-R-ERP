@@ -29,11 +29,8 @@ public class ContactRepository {
         );
     }
 
-    /**
-     * Used by {@code PricingRequestService} to verify a pricing request's
-     * {@code recipientContactId} actually belongs to the deal's customer
-     * before persisting it.
-     */
+    /** Used by PricingRequestService to verify a pricing request's recipientContactId actually belongs to the
+     * deal's customer before persisting it. */
     public Optional<ContactDto> findById(long contactId) {
         return jdbc.query(
             "SELECT contact_id, customer_id, first_name, last_name, position, email, phone FROM customers.contact WHERE contact_id = :id",
@@ -41,20 +38,9 @@ public class ContactRepository {
         ).stream().findFirst();
     }
 
-    /**
-     * PATCH-shaped update (mirrors {@link CustomerRepository#update}'s own {@code COALESCE}
-     * discipline exactly): a {@code null} argument — what an omitted JSON key deserializes to —
-     * means "leave this column alone"; any other value, blank included, is written. The
-     * {@code WHERE} clause requires BOTH {@code contact_id} AND {@code customer_id} so a caller
-     * cannot rewrite a contact that belongs to a different customer by guessing/URL-editing the
-     * {@code customerId} path segment — an id mismatch simply matches zero rows, and the
-     * controller turns that into 404 rather than silently applying the edit or leaking whose
-     * contact it is.
-     *
-     * <p>{@code firstName} is validated not-blank-if-present in the controller before this is
-     * called (mirrors {@code first_name NOT NULL}); there is no NOT NULL enforcement here, same
-     * division of labour as {@code CustomerRepository#update}'s name/branch checks.
-     */
+    /** PATCH-shaped update (mirrors CustomerRepository#update's own COALESCE discipline exactly): a null argument —
+     * what an omitted JSON key deserializes to — means "leave this column alone"; any other value, blank included,
+     * is written. */
     public Optional<ContactDto> update(long customerId, long contactId, String firstName, String lastName,
                                        String position, String email, String phone) {
         int updated = jdbc.update(
@@ -98,9 +84,8 @@ public class ContactRepository {
             kh, new String[]{"contact_id"}
         );
         long id = kh.getKey().longValue();
-        // Reuses findById rather than a second inline query — the row must
-        // exist immediately after its own insert, so an empty result here
-        // means something is badly wrong, not a normal "not found".
+        // Reuses findById rather than a second inline query — the row must exist immediately after its own insert, so
+        // an empty result here means something is badly wrong, not a normal "not found".
         return findById(id)
             .orElseThrow(() -> new IllegalStateException("Contact " + id + " not found immediately after insert"));
     }

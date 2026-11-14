@@ -35,12 +35,8 @@ function concretePath(templatePath) {
     DATE_PARAMS.test(name) ? PLACEHOLDER_DATE : String(PLACEHOLDER_ID));
 }
 
-/**
- * Every operation the backend serves, as `{ name, path, verb, template }`.
- *
- * `name` is the canonical `VERB /template/{path}` so a failure names the endpoint as the backend
- * declares it, not as some frontend alias.
- */
+/** Every operation the backend serves, as `{ name, path, verb, template }`. `name` is the canonical `VERB
+ * /template/{path}` so a failure names the endpoint as the backend declares it, not as some frontend alias. */
 export function apiSurface() {
   return backendOperations()
     .map(({ verb, path }) => ({
@@ -52,42 +48,28 @@ export function apiSurface() {
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
-// SecurityConfig's anonymous allowlist, mirrored exactly. Anything here is reachable without a
-// session BY DESIGN; everything else in the surface must answer 401. Keeping the list here (and
-// asserting it, rather than just skipping these paths) means widening the real allowlist without
-// updating this constant fails the suite — which is the direction that matters, since a new
-// permitAll() line is precisely the change that should never pass unnoticed.
+// SecurityConfig's anonymous allowlist, mirrored exactly. Anything here is reachable without a session BY
+// DESIGN; everything else in the surface must answer 401.
 export const ANONYMOUS_ALLOWLIST = [
   // POST /api/auth/login — no session exists yet, by definition.
   '/api/auth/login',
-  // POST /api/attendance/punch — scanner devices authenticate with X-GLR-Agent-Token, not a
-  // session, so the filter chain cannot gate it.
+  // POST /api/attendance/punch — scanner devices authenticate with X-GLR-Agent-Token, not a session, so the
+  // filter chain cannot gate it.
   '/api/attendance/punch',
-  // POST /api/auth/forgot-password, POST /api/auth/reset-password — the self-service password
-  // reset flow (V190). Both are anonymous by necessity, the same way login is: a caller who
-  // forgot their password by definition has no session, and the second call arrives from a link
-  // in an email, not from a browser that has ever authenticated. Enumeration safety and token
-  // validity are what actually gate these, not a session — see PasswordResetService.
+  // POST /api/auth/forgot-password, POST /api/auth/reset-password — the self-service password reset flow (V190).
+  // Enumeration safety and token validity are what actually gate these, not a session — see
+  // PasswordResetService.
   '/api/auth/forgot-password',
   '/api/auth/reset-password',
-  // GET /api/public/brand/logo.png — the requester is a MAIL CLIENT rendering a notification
-  // email, so there is no session to present and none can be obtained: Gmail and Outlook fetch an
-  // image URL with no credentials, and Gmail proxies it besides. Anonymous by necessity, not by
-  // oversight. Serves one static asset and reads nothing.
-  //
-  // SecurityConfig scopes this to /api/public/brand/** and NOT /api/public/**. That distinction is
-  // the whole safety argument: a wildcard there would make every future endpoint under that prefix
-  // anonymous by default, which is how a data leak gets introduced by accident rather than by
-  // decision.
+  // GET /api/public/brand/logo.png — the requester is a MAIL CLIENT rendering a notification email, so there is
+  // no session to present and none can be obtained: Gmail and Outlook fetch an image URL with no credentials,
+  // and Gmail proxies it besides. Anonymous by necessity, not by oversight.
   '/api/public/brand/logo.png',
 ];
 
-// Endpoints excluded from the per-role authenticated sweep (they are still covered by the
-// anonymous 401 sweep, which costs one rejected request each). These render or stream a document
-// — a PDF, a ZIP of payslips, a bank/tax export file — so hitting them once per role would
-// dominate the suite's runtime and, for the LibreOffice-backed renderers, shell out to `soffice`
-// each time. Their AUTHORIZATION is still asserted anonymously; only the authenticated fetch is
-// skipped.
+// Endpoints excluded from the per-role authenticated sweep (they are still covered by the anonymous 401 sweep,
+// which costs one rejected request each). Their AUTHORIZATION is still asserted anonymously; only the
+// authenticated fetch is skipped.
 const HEAVY_PATH_PATTERNS = [/\.pdf$/, /\.zip$/, /\/export\//, /\/file$/, /proforma/];
 
 export function isHeavyPath(path) {
@@ -99,16 +81,9 @@ export function readableSurface() {
   return apiSurface().filter((entry) => entry.verb === 'GET');
 }
 
-/**
- * Write endpoints that address a resource by id — the safe subset to sweep for authorization.
- *
- * Safe because the id is a placeholder that matches no row: every one of these is an action on
- * an existing resource, so with a non-existent id the service can only refuse (403) or fail to
- * find it (404). It cannot mutate a real row, and it cannot create the parent it was asked to
- * act on. Collection-level writes (`POST /api/employees`, `POST /api/overtime`) are deliberately
- * excluded — those genuinely can create something, so sweeping them across every role would mean
- * writing rows into a shared database to find out who is allowed to.
- */
+/** Write endpoints that address a resource by id — the safe subset to sweep for authorization. Safe because the
+ * id is a placeholder that matches no row: every one of these is an action on an existing resource, so with a
+ * non-existent id the service can only refuse (403) or fail to find it (404). */
 export function writeEndpointsWithId() {
   return apiSurface()
     .filter((entry) => entry.verb !== 'GET' && /\{[^}]+\}/.test(entry.template))

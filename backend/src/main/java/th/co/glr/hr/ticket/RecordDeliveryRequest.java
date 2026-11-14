@@ -13,8 +13,8 @@ public record RecordDeliveryRequest(
     @NotBlank String source,
     @Size(max = 2000) String note,
     @NotEmpty @Valid List<Line> lines,
-    // Step 8 (V78): who on the customer's side received/confirmed this delivery. Optional —
-    // every existing caller that omits it keeps working unchanged.
+    // Step 8 (V78): who on the customer's side received/confirmed this delivery. Optional — every existing caller
+    // that omits it keeps working unchanged.
     @Size(max = 255) String recipientName
 ) {
     public record Line(

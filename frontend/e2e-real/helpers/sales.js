@@ -2,19 +2,9 @@ import { expect } from '@playwright/test';
 import { randomUUID } from 'node:crypto';
 import { apiWrite } from './api.js';
 
-// Fixture builders for the sales-pipeline journey specs.
-//
-// ── Every deal is created by the test, never borrowed ────────────────────────────────────────
-// These run against a SHARED, long-lived UAT database that human testers navigate. UAT-TKT-01..14
-// and UAT-GOLD-01 are their fixtures: a test that advanced one would silently rewrite somebody's
-// acceptance script. So each test creates its own deal, tagged with the run id global-setup
-// stamped, and cancels it afterwards.
-//
-// ── Nothing here is hardcoded to a seeded row ────────────────────────────────────────────────
-// Customer and project are DISCOVERED at runtime. `projectId` is @NotNull on CreateTicketRequest
-// and TicketService.create 400s without it, so a fixture that hardcoded one would break the first
-// time UAT's customer master was re-seeded — which, given UAT was rebuilt from production once
-// already, is not hypothetical.
+// Fixture builders for the sales-pipeline journey specs. ── Every deal is created by the test, never borrowed
+// ──────────────────────────────────────── These run against a SHARED, long-lived UAT database that human
+// testers navigate.
 
 // ⚠️ THE THREE STATUS AXES ON A DEAL DO NOT SHARE A CASING CONVENTION. A deal row carries three
 // independent state fields, and asserting the wrong case is a failure that reads like a broken
@@ -58,13 +48,8 @@ function inThirtyDays() {
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(d);
 }
 
-/**
- * Resolves a (customerId, projectId) pair that already exists on the target database.
- *
- * Deliberately does NOT create either. A customer or project created per-run would accumulate in
- * a shared database with no cleanup path — `cancel` reaches deals, nothing reaches a stray
- * project — and would drift the very master data human testers are looking at.
- */
+/** Resolves a (customerId, projectId) pair that already exists on the target database. Deliberately does NOT
+ * create either. */
 async function resolveProject(session) {
   const customersResponse = await session.get('/api/customers', { failOnStatusCode: false });
   expect(customersResponse.status(), 'GET /api/customers').toBe(200);
@@ -94,33 +79,23 @@ async function resolveProject(session) {
   );
 }
 
-/**
- * Creates a deal owned by `sales`, tracked and ready to advance.
- *
- * Sets `nextFollowUpAt` in the same breath, because it is half of the forward-stage readiness
- * gate (TicketService.requireStageAdvanceReadiness) and every journey needs it for the whole run.
- * The other half — an activity newer than the last STAGE_CHANGED — is handled per-move by
- * `advanceStage`, since every stage change (auto-advances included) resets that clock.
- *
- * @param sessions  must contain a `sales` context — TicketService.create is SALES_ROLES only
- * @returns {{id: number, code: string, customerId: number, projectId: number}}
- */
+/** Creates a deal owned by `sales`, tracked and ready to advance. Sets `nextFollowUpAt` in the same breath, because it is half of the forward-stage readiness gate (TicketService.requireStageAdvanceReadiness) and every journey needs it for the whole run.
+ * @returns {{id: number, code: string, customerId: number, projectId: number}} */
 export async function createDeal(sessions, { caseName, entryChannel, items = [] } = {}) {
   const tag = runId();
   const { customerId, customerName, projectId } = await resolveProject(sessions.sales);
 
   const response = await apiWrite(sessions.sales, 'post', '/api/tickets', {
-    // The run id leads the title so one prefix search finds everything a run touched. This is the
-    // only handle a human has: sales.ticket.code is server-generated (tickets.nextTicketCode()).
+    // The run id leads the title so one prefix search finds everything a run touched. This is the only handle a
+    // human has: sales.ticket.code is server-generated (tickets.nextTicketCode()).
     title: `${tag} ${caseName ?? 'deal'}`,
     priority: 'NORMAL',
     customerId,
     customerName,
     projectId,
     note: `created by the e2e sales suite, run ${tag}`,
-    // Omitted deliberately when undefined: EntryChannel.UNSPECIFIED is legal at creation and
-    // ILLEGAL as a PATCH input (setEntryChannel 400s on it), and asserting that asymmetry needs
-    // both paths to stay reachable.
+    // Omitted deliberately when undefined: EntryChannel.UNSPECIFIED is legal at creation and ILLEGAL as a PATCH
+    // input (setEntryChannel 400s on it), and asserting that asymmetry needs both paths to stay reachable.
     ...(entryChannel ? { entryChannel } : {}),
     items,
   });
@@ -137,13 +112,8 @@ export async function createDeal(sessions, { caseName, entryChannel, items = [] 
   };
 }
 
-/**
- * PUT /api/tickets/{id}/tracking — FULL REPLACE.
- *
- * TrackingUpdateRequest carries every tracking field, and a null clears the stored value. Send
- * everything you want kept, every time; a partial PUT silently wipes `nextFollowUpAt` and the
- * next forward stage move fails the readiness gate for a reason that points nowhere near here.
- */
+/** PUT /api/tickets/{id}/tracking — FULL REPLACE. TrackingUpdateRequest carries every tracking field, and a
+ * null clears the stored value. */
 export async function setTracking(sessions, ticketId, fields) {
   const response = await apiWrite(sessions.sales, 'put', `/api/tickets/${ticketId}/tracking`, fields);
   expect(response.status(), `PUT /api/tickets/${ticketId}/tracking`).toBe(200);
@@ -170,17 +140,9 @@ export async function readDeal(sessions, role, ticketId) {
   return ticket;
 }
 
-/**
- * The ordered STAGE_CHANGED chain, as `[{ from, to, message }]`.
- *
- * This is what proves a ROUTE rather than a destination. `expect(salesStage).toBe('CLOSED_PAID')`
- * would be satisfied by one illegal jump; the event chain would not. TicketRepository orders
- * events `created_at ASC, event_id ASC`, and every stage write — manual (updateStage) and
- * automatic (autoAdvanceStage) — emits exactly one, so the sequence is complete and ordered.
- *
- * Auto hops carry the message 'อัตโนมัติจากขั้นตอนของดีล'; manual ones carry the caller's note
- * or null. That difference is how a journey tells "the system advanced it" from "the rep clicked".
- */
+/** The ordered STAGE_CHANGED chain, as `[{ from, to, message }]`. This is what proves a ROUTE rather than a
+ * destination. `expect(salesStage).toBe('CLOSED_PAID')` would be satisfied by one illegal jump; the event
+ * chain would not. */
 export async function stageHistory(sessions, role, ticketId) {
   const ticket = await readDeal(sessions, role, ticketId);
   return (ticket.events ?? [])
@@ -188,20 +150,9 @@ export async function stageHistory(sessions, role, ticketId) {
     .map((event) => ({ from: event.fromStatus, to: event.toStatus, message: event.message }));
 }
 
-/**
- * Best-effort teardown. NEVER throws.
- *
- * `cancel` is owner-only (TicketService:2123 compares createdById to the actor) and the `sales`
- * persona is the owner, so it works — but teardown must not turn a passing assertion red, and
- * must not mask a real failure with a second one. Mirrors write-overtime.spec.js's cancelOvertime.
- *
- * Deliberately `cancel`, not `markLost`: lost writes lost_reason, a reporting input the CEO
- * actually reads. "Cancelled is not lost" is the distinction DealCancelReason exists to preserve.
- *
- * Cancel is terminal, so the row survives as CANCELLED — hidden from the active-deal queue but
- * present in an unfiltered list. That residue is the accepted cost; the run-id prefix is what
- * makes it sweepable (`WHERE title LIKE 'E2E-%'`).
- */
+/** Best-effort teardown. NEVER throws. `cancel` is owner-only (TicketService:2123 compares createdById to the
+ * actor) and the `sales` persona is the owner, so it works — but teardown must not turn a passing assertion
+ * red, and must not mask a real failure with a second one. */
 export async function cancelDeal(sessions, ticketId) {
   try {
     await apiWrite(sessions.sales, 'post', `/api/tickets/${ticketId}/cancel`, {
@@ -280,11 +231,9 @@ export const QUOTATION_STATUS = {
 /** th.co.glr.hr.pricingrequest.PricingRequestRecipient's three values. */
 export const PRICING_REQUEST_RECIPIENT = { DESIGNER: 'DESIGNER', OWNER: 'OWNER', BUYER: 'BUYER' };
 
-/**
- * The DealStage each recipient auto-advances the deal to on the quotation's first issue —
- * TicketService.stageForQuotationRecipient (ticket/TicketService.java:1910-1921). Exported so a
- * spec can assert the mapping without hand-copying it a second time.
- */
+/** The DealStage each recipient auto-advances the deal to on the quotation's first issue —
+ * TicketService.stageForQuotationRecipient (ticket/TicketService.java:1910-1921). Exported so a spec can
+ * assert the mapping without hand-copying it a second time. */
 export const STAGE_FOR_RECIPIENT = {
   DESIGNER: 'QUOTE_DESIGN_SIDE',
   OWNER: 'QUOTE_OWNER',
@@ -294,24 +243,8 @@ export const STAGE_FOR_RECIPIENT = {
 /** The literal STAGE_CHANGED message every AUTOMATIC hop carries — see stageHistory's Javadoc above. */
 export const AUTO_STAGE_MESSAGE = 'อัตโนมัติจากขั้นตอนของดีล';
 
-/**
- * Discovers a factory this database can actually cost, so PricingDecisionService.startReview
- * (the CEO step, eight calls after this one) does not 422.
- *
- * LandedCostCalculator.calculate (pricingcosting/LandedCostCalculator.java:76-84) looks the
- * factory up by name and requires a non-null country; it then requires a
- * sales.price_calc_config row for THAT country (priceConfigs.findCurrentByCountry, line 85-87).
- * A factory with no country, or a country with no config, 422s — at the CEO step, i.e. long
- * after the pricing request, factory quote and factory response were already built on it. This
- * checks both gates up front instead.
- *
- * Both reads need `import` (or `ceo`) — FactoryConfigController.READ_ROLES and
- * PriceCalcConfigController.READ_ROLES are both {ceo, import}
- * (factory/FactoryConfigController.java:28, pricing/PriceCalcConfigController.java:34); `sales`
- * cannot call either.
- *
- * @returns {{id: number, factoryName: string, email: string, currency: string, unit: string, country: string}}
- */
+/** Discovers a factory this database can actually cost, so PricingDecisionService.startReview (the CEO step, eight calls after this one) does not 422. This checks both gates up front instead.
+ * @returns {{id: number, factoryName: string, email: string, currency: string, unit: string, country: string}} */
 export async function resolveFactory(sessions) {
   const factoriesResponse = await sessions.import.get('/api/factory-configs', { failOnStatusCode: false });
   expect(factoriesResponse.status(), 'GET /api/factory-configs').toBe(200);
@@ -334,31 +267,7 @@ export async function resolveFactory(sessions) {
   return usable;
 }
 
-/**
- * Step 1. sales POST /api/tickets/{id}/pricing-requests -> PCR DRAFT.
- *
- * PricingRequestController.createDraft (pricingrequest/PricingRequestController.java:57-66);
- * body shape th.co.glr.hr.pricingrequest.PricingRequestRequests.CreatePricingRequestRequest
- * (pricingrequest/PricingRequestRequests.java:15-25), items shape
- * PricingRequestItemRequest (same file, :39-61).
- *
- * The single item identifies itself by model/productDescription rather than a
- * sourceTicketItemId (PricingRequestService.isProductIdentified accepts either — :897-899) since
- * createDeal's own deals carry no items. recipientLabel (free text) is used instead of
- * recipientContactId so this never depends on a customer contact existing on the discovered
- * project (validateRecipientContactBelongsToCustomer is a no-op when recipientContactId is null
- * — PricingRequestService.java:947-955).
- *
- * @param sessions   must contain `sales` — createDraft is SALES_ROLES-only and further requires
- *                    the acting session to be the deal's OWNER (ticket.createdById == actor.id).
- * @param ticketId   the deal (from createDeal) this pricing request is filed against.
- * @param opts.factoryName    from resolveFactory(sessions) — becomes the item's free-text
- *                    `factory` field, which FactoryQuoteService.groupByFactory
- *                    (factoryquote/FactoryQuoteService.java:680-691) and LandedCostCalculator
- *                    both key off verbatim.
- * @param opts.recipientType  one of PRICING_REQUEST_RECIPIENT; default DESIGNER.
- * @param opts.requestedQty   default 10.
- */
+/** Creates a pricing-request draft through the sales API. */
 export async function createPricingRequest(
   sessions,
   ticketId,
@@ -390,11 +299,8 @@ export async function createPricingRequest(
   return pricingRequest;
 }
 
-/**
- * Step 2. sales POST /api/pricing-requests/{id}/submit -> SUBMITTED.
- * PricingRequestController.submit (pricingrequest/PricingRequestController.java:101-105) takes
- * no request body.
- */
+/** Step 2. sales POST /api/pricing-requests/{id}/submit -> SUBMITTED. PricingRequestController.submit
+ * (pricingrequest/PricingRequestController.java:101-105) takes no request body. */
 export async function submitPricingRequest(sessions, pricingRequestId) {
   const response = await apiWrite(sessions.sales, 'post', `/api/pricing-requests/${pricingRequestId}/submit`);
   expect(response.status(), `POST /api/pricing-requests/${pricingRequestId}/submit`).toBe(200);
@@ -402,11 +308,8 @@ export async function submitPricingRequest(sessions, pricingRequestId) {
   return pricingRequest;
 }
 
-/**
- * Step 3. import POST /api/pricing-requests/{id}/pickup -> IMPORT_REVIEWING.
- * PricingRequestController.pickup (pricingrequest/PricingRequestController.java:107-111), no
- * request body.
- */
+/** Step 3. import POST /api/pricing-requests/{id}/pickup -> IMPORT_REVIEWING. PricingRequestController.pickup
+ * (pricingrequest/PricingRequestController.java:107-111), no request body. */
 export async function pickupPricingRequest(sessions, pricingRequestId) {
   const response = await apiWrite(sessions.import, 'post', `/api/pricing-requests/${pricingRequestId}/pickup`);
   expect(response.status(), `POST /api/pricing-requests/${pricingRequestId}/pickup`).toBe(200);
@@ -414,18 +317,8 @@ export async function pickupPricingRequest(sessions, pricingRequestId) {
   return pricingRequest;
 }
 
-/**
- * Step 4. import POST /api/pricing-requests/{id}/factory-email-drafts -> one FactoryQuoteDto
- * per factory, each DRAFT. FactoryQuoteController.generateDrafts
- * (factoryquote/FactoryQuoteController.java:50-54), no request body.
- *
- * Does NOT transition the pricing request (FactoryQuoteService.generateDrafts never calls
- * PricingRequestRepository.transition) — a caller should re-read the PCR afterward to confirm
- * that, rather than assume it.
- *
- * @returns {Array} the created/current FactoryQuoteDto list (one per distinct factory name
- *                    among the PCR's items).
- */
+/** Generates factory-email drafts without advancing the pricing request.
+ * @returns {Array} the created/current FactoryQuoteDto list (one per distinct factory name */
 export async function generateFactoryEmailDrafts(sessions, pricingRequestId) {
   const response = await apiWrite(sessions.import, 'post', `/api/pricing-requests/${pricingRequestId}/factory-email-drafts`);
   expect(response.status(), `POST /api/pricing-requests/${pricingRequestId}/factory-email-drafts`).toBe(200);
@@ -494,15 +387,7 @@ export async function receiveFactoryQuote(
   return factoryQuote;
 }
 
-/**
- * Step 6. import POST /api/factory-quotes/{id}/mark-ready-for-costing -> quote
- * READY_FOR_COSTING; the moment EVERY item on the PCR resolves
- * (LandedCostCalculator.isFullyResolvable), auto-advances the PCR AWAITING_FACTORY_RESPONSE ->
- * READY_FOR_CEO_REVIEW in the SAME call (FactoryQuoteService.markReadyForCosting,
- * factoryquote/FactoryQuoteService.java:611-660, the auto-advance at :642-658).
- * FactoryQuoteController.markReady (factoryquote/FactoryQuoteController.java:108-112), no
- * request body.
- */
+/** Marks a factory quote ready for costing; the request advances when all items resolve. */
 export async function markFactoryQuoteReadyForCosting(sessions, factoryQuoteId) {
   const response = await apiWrite(sessions.import, 'post', `/api/factory-quotes/${factoryQuoteId}/mark-ready-for-costing`);
   expect(response.status(), `POST /api/factory-quotes/${factoryQuoteId}/mark-ready-for-costing`).toBe(200);
@@ -538,27 +423,8 @@ export async function startPricingDecision(sessions, pricingRequestId, { default
   return decision;
 }
 
-/**
- * NOT one of the chain's 12 numbered hops — it moves no PCR status — but load-bearing: without
- * it, approve() (step 8) always 422s. insertItems never writes
- * minimum_selling_price_per_requested_unit at all (pricingdecision/
- * PricingDecisionRepository.java:97-134 — the INSERT's column list simply omits it), so every
- * item's minimumSellingPricePerRequestedUnit is null until a PUT sets it, and
- * PricingDecisionService.approve refuses to approve any item that is still null
- * (PricingDecisionService.java:381-395).
- *
- * Floors each item at its own frozen cost (zero-margin floor); startPricingDecision's
- * defaultMarginPct > 0 always clears that floor, so approve()'s own
- * `finalUnitPrice < minimumSellingPrice` check downstream (CustomerQuotationService.issue,
- * customerquotation/CustomerQuotationService.java:299-305) can never trip from this fixture.
- *
- * PricingDecisionController.update (pricingdecision/PricingDecisionController.java:63-71); the
- * repository UPDATE is a COALESCE (PricingDecisionRepository.java:168-183), so omitting
- * marginPct here does not disturb what startPricingDecision already set.
- *
- * @param items  the decision's own `.items` array (from startPricingDecision's response) — each
- *                must carry `id` and `frozenLandedCostPerRequestedUnitThb`.
- */
+/** NOT one of the chain's 12 numbered hops — it moves no PCR status — but load-bearing: without it, approve()
+ * (step 8) always 422s. */
 export async function setPricingDecisionMinimums(sessions, decisionId, items) {
   const response = await apiWrite(sessions.ceo, 'put', `/api/pricing-decisions/${decisionId}`, {
     items: items.map((item) => ({
@@ -571,14 +437,7 @@ export async function setPricingDecisionMinimums(sessions, decisionId, items) {
   return decision;
 }
 
-/**
- * Step 8. ceo POST /api/pricing-decisions/{id}/approve -> APPROVED, PCR CEO_REVIEWING ->
- * APPROVED_FOR_QUOTATION. PricingDecisionController.approve
- * (pricingdecision/PricingDecisionController.java:100-108); body shape
- * ApprovePricingDecisionRequest (pricingdecision/PricingDecisionRequests.java:35) — deliberately
- * no selling-price/margin field, since approval always freezes whatever proposedMarginPct each
- * item currently holds.
- */
+/** Approves the decision using its stored item margins and makes the request ready for quotation. */
 export async function approvePricingDecision(sessions, decisionId) {
   const response = await apiWrite(sessions.ceo, 'post', `/api/pricing-decisions/${decisionId}/approve`, {
     ceoNote: `${runId()} e2e approval`,
@@ -615,17 +474,7 @@ export async function createCustomerQuotation(sessions, pricingRequestId) {
   return quotation;
 }
 
-/**
- * Step 10. sales POST /api/customer-quotations/{id}/issue -> ISSUED; PCR
- * APPROVED_FOR_QUOTATION -> QUOTATION_ISSUED; auto-advances the DEAL's own salesStage per
- * recipient type — see STAGE_FOR_RECIPIENT. CustomerQuotationController.issue
- * (customerquotation/CustomerQuotationController.java:87-94);
- * CustomerQuotationService.issue (customerquotation/CustomerQuotationService.java:272-349) is
- * where both transitions happen: the PCR transition at :323-329, then the deal-stage advance at
- * :334 via TicketService.advanceStageForCustomerQuotationIssue
- * (ticket/TicketService.java:1890-1897), which emits the STAGE_CHANGED event stageHistory()
- * reads carrying AUTO_STAGE_MESSAGE (ticket/TicketService.java:1934-1935).
- */
+/** Issues the quotation and advances the pricing request and recipient-specific deal stage. */
 export async function issueCustomerQuotation(sessions, quotationId) {
   const response = await apiWrite(sessions.sales, 'post', `/api/customer-quotations/${quotationId}/issue`, {
     clientRequestId: randomUUID(),
@@ -635,14 +484,7 @@ export async function issueCustomerQuotation(sessions, quotationId) {
   return quotation;
 }
 
-/**
- * Step 11. sales POST /api/customer-quotations/{id}/outcome ACCEPTED -> PCR QUOTATION_ISSUED ->
- * QUOTATION_ACCEPTED. CustomerQuotationController.recordOutcome
- * (customerquotation/CustomerQuotationController.java:114-120); body shape
- * RecordQuotationOutcomeRequest (customerquotation/CustomerQuotationRequests.java:55-59). The
- * PCR transition only fires for outcome ACCEPTED, and only from QUOTATION_ISSUED
- * (CustomerQuotationService.java:509-516) — this is the one bridge confirmOrder (step 12) needs.
- */
+/** Records customer acceptance and advances an issued pricing request to quotation accepted. */
 export async function acceptCustomerQuotation(sessions, quotationId) {
   const tag = runId();
   const response = await apiWrite(sessions.sales, 'post', `/api/customer-quotations/${quotationId}/outcome`, {
@@ -655,27 +497,8 @@ export async function acceptCustomerQuotation(sessions, quotationId) {
   return quotation;
 }
 
-/**
- * Step 12. sales POST /api/pricing-requests/{id}/confirm-order -> the bridge out of the
- * PricingRequest chain into the legacy ticket payment/stage machinery: ticket.status
- * draft -> quotation_issued, then TicketService.confirmCustomer (called internally) sets
- * paymentStatus CUSTOMER_CONFIRMED and auto-advances salesStage to ORDER_RECEIVED.
- * OrderConfirmationController.confirmOrder
- * (orderconfirmation/OrderConfirmationController.java:36-44); body shape ConfirmOrderRequest
- * (orderconfirmation/OrderConfirmationRequests.java:11).
- *
- * Reachable ONLY from PCR QUOTATION_ACCEPTED (OrderConfirmationService.confirmOrder,
- * orderconfirmation/OrderConfirmationService.java:100-197, the gate at :127-131) — steps 10
- * (issue) and 11 (accept) must both have already run, in that order, or this 409s.
- *
- * Does not itself advance the PCR status further (it stays QUOTATION_ACCEPTED — only
- * orderConfirmedAt is stamped, at :133); the ticket-level status/paymentStatus/salesStage triple
- * is what actually moved, which is why a caller should re-read the TICKET (readDeal), not just
- * trust this call's own response, for the final assertion.
- *
- * @returns {{ticket: object, pricingRequest: object}} OrderConfirmationResultDto
- *          (orderconfirmation/OrderConfirmationDtos.java:9-16).
- */
+/** Confirms an accepted order and bridges it into ticket payment and stage tracking.
+ * @returns {{ticket: object, pricingRequest: object}} OrderConfirmationResultDto */
 export async function confirmOrder(sessions, pricingRequestId) {
   const response = await apiWrite(sessions.sales, 'post', `/api/pricing-requests/${pricingRequestId}/confirm-order`, {
     clientRequestId: randomUUID(),
@@ -685,13 +508,7 @@ export async function confirmOrder(sessions, pricingRequestId) {
   return result;
 }
 
-/**
- * GET /api/pricing-requests/{id} -> the full PricingRequestDetailDto (summary, items, events).
- * Mirrors readDeal above — re-reading rather than trusting a mutating call's own response is
- * what several of the functions above call out by name as required, not optional, since most of
- * the chain's endpoints return a DIFFERENT aggregate's DTO (FactoryQuoteDto, PricingDecisionDto,
- * CustomerQuotationDto) and never echo the PCR's own summary at all.
- */
+/** GET /api/pricing-requests/{id} -> the full PricingRequestDetailDto (summary, items, events). */
 export async function readPricingRequest(sessions, role, pricingRequestId) {
   const response = await sessions[role].get(`/api/pricing-requests/${pricingRequestId}`, { failOnStatusCode: false });
   expect(response.status(), `${role} GET /api/pricing-requests/${pricingRequestId}`).toBe(200);
@@ -710,47 +527,9 @@ export async function readPricingRequest(sessions, role, pricingRequestId) {
 // (:1701-1718) before updateStage's own note check ever runs. uat-sales-refusals.spec.js is
 // written around this ordering explicitly; see that file's own header.
 
-/**
- * POST /api/tickets/{id}/stage as `role` — TicketController.updateStage
- * (ticket/TicketController.java:203-209), body shape UpdateStageRequest{stage, note}
- * (ticket/TicketController.java:303-304), decided by TicketService.updateStage
- * (ticket/TicketService.java:1497-1534).
- *
- * ALWAYS logs a fresh deal_activity row FIRST, via {@link logActivity} — which is hardcoded to
- * the `sales` session, same as that function's own contract, so this works regardless of which
- * role is about to attempt the move (the deal is always owned by `sales`; see createDeal). Two
- * independent reasons this is unconditional, not only on a call expected to succeed:
- *
- *   1. The forward readiness gate (requireStageAdvanceReadiness, ticket/TicketService.java:
- *      1587-1592) compares the newest deal_activity row against MAX(ticket_event.created_at
- *      WHERE kind = 'STAGE_CHANGED') (TicketRepository.hasActivitySinceLastStageChange, ticket/
- *      TicketRepository.java:1945-1960) — and EVERY accepted stage change, manual or automatic,
- *      moves that maximum forward. A test that calls this twice in a row for two successful
- *      moves would fail the second call's readiness gate for a reason unrelated to what it is
- *      testing, unless the activity clock is refreshed on every call.
- *   2. It is what lets a refusal be asserted through the exact same function as a success: the
- *      only thing that differs between a passing call and a failing one is targetStage/note/role/
- *      expect, never an incidental extra step a refusal happened to skip. That is what proves a
- *      refusal in uat-sales-refusals.spec.js is the RULE under test, not an artefact of a
- *      differently-shaped request.
- *
- * Refusal #8 (no NEW activity since the last stage change) deliberately does NOT route its
- * middle, refused call through this helper — that specific case would be unreachable if this
- * helper's own unconditional activity-log ran first. See that test's own comment.
- *
- * @param role          key into `sessions` — the actor attempting the move. Not necessarily the
- *                       deal's owner: several refusals are specifically about a non-owner or
- *                       wrong-role actor.
- * @param opts.note      defaults to `null` — the exact shape the note-rule refusals need. Pass a
- *                       non-blank string to satisfy DealStage.requiresJustification.
- * @param opts.expect    `'ok'` (default; asserts 200) or an exact HTTP status number for a
- *                       refusal. Named `expect` per the brief; destructured to a local
- *                       `expectation` so it does not shadow the `expect` imported from
- *                       @playwright/test that this function still needs to call.
- * @returns the raw response — callers read `.status()`/`.json()` themselves, since a refusal's
- *          body (ErrorResponse{message,status}) and a success's body (TicketDetailResponse
- *          {ticket}) are different shapes and only the caller knows which one to expect.
- */
+/** POST /api/tickets/{id}/stage as `role` — TicketController.updateStage (ticket/TicketController.java:203-209),
+ * body shape UpdateStageRequest{stage, note} (ticket/TicketController.java:303-304), decided by
+ * TicketService.updateStage (ticket/TicketService.java:1497-1534). */
 export async function advanceStage(
   sessions,
   role,
@@ -771,32 +550,11 @@ export async function advanceStage(
   return response;
 }
 
-/**
- * GET /api/tickets/{id}/actions -> the server's own per-stage verdicts — TicketController.actions
- * (ticket/TicketController.java:68-72, gated only by requireViewAccess so any VIEWER_ROLES caller
- * may read it), TicketActionsResponse.stageDecisions (ticket/TicketResponses.java:13-32), computed
- * by the private TicketService.stageDecisions (ticket/TicketService.java:1628-1647): one entry per
- * DealStage.ORDER stage, `requiresReason` is DealStage.requiresJustification(currentStage,
- * thatStage) — populated even when `allowed` is false, since the note rule does not depend on the
- * gates. See refusal #6, which recomputes the same predicate independently in JS and asserts
- * agreement for all 15 stages.
- */
-/**
- * ⚠️ `allowed` IS TIME-DEPENDENT. `requiresReason` IS NOT. They answer different questions and are
- * not interchangeable:
- *
- *   allowed        requireStageMoveAllowed AND, for a FORWARD target, requireStageAdvanceReadiness,
- *                  both run in a try/catch. So it folds in the readiness gate, which needs an
- *                  activity newer than the last STAGE_CHANGED. Read immediately after ANY stage
- *                  change — including an auto-advance, which emits that event too — every forward
- *                  target correctly reports `false` until an activity is logged.
- *   requiresReason DealStage.requiresJustification alone. Reported even for a BLOCKED stage,
- *                  because "would this need a note" is independent of "can I do it right now".
- *
- * Use `requiresReason` to check the NOTE rule. Only assert `allowed` after logActivity(), or you
- * are asserting the clock rather than the rule — Case B's first version did exactly that, expected
- * true, and the server was right to say false.
- */
+/** GET /api/tickets/{id}/actions -> the server's own per-stage verdicts. See refusal #6, which recomputes the
+ * same predicate independently in JS and asserts agreement for all 15 stages. */
+/** ⚠️ `allowed` IS TIME-DEPENDENT. Only assert `allowed` after logActivity(), or you are asserting the clock
+ * rather than the rule — Case B's first version did exactly that, expected true, and the server was right to
+ * say false. */
 export async function stageDecisions(sessions, role, ticketId) {
   const response = await sessions[role].get(`/api/tickets/${ticketId}/actions`, { failOnStatusCode: false });
   expect(response.status(), `${role} GET /api/tickets/${ticketId}/actions`).toBe(200);
@@ -882,8 +640,8 @@ export function expectRoute(history, expectedStages, expectedMessages) {
       'missing hop, an extra hop, or a wrong order all fail this'
   ).toEqual(expectedStages);
 
-  // 3. No stage visited twice — derived from `walked` alone (never from `expectedStages`), so an
-  // oscillating real route cannot be "expected" into passing by a matching-but-wrong expectation.
+  // 3. No stage visited twice — derived from `walked` alone (never from `expectedStages`), so an oscillating
+  // real route cannot be "expected" into passing by a matching-but-wrong expectation.
   expect(
     new Set(walked).size,
     `expectRoute: a stage was visited more than once in the actual route — ${JSON.stringify(walked)}`
@@ -897,16 +655,7 @@ export function expectRoute(history, expectedStages, expectedMessages) {
   ).toEqual(expectedMessages);
 }
 
-/**
- * Asserts none of `stages` was ever visited — as a `from` OR a `to` — across `history`.
- *
- * Independent of {@link expectRoute}'s own exact-walk check (#2 above), which already implies
- * this for anything the FINAL expected route omits — that implication is exactly what would let
- * a copy-paste error in `expectedStages` silently drop a stage from both arrays at once. Calling
- * this separately, with the skipped stages transcribed BY HAND from DealStage's route Javadoc
- * rather than derived from `expectedStages`, is what makes "route B skips S3/S4/S7/S8" its own
- * falsifiable claim rather than a restatement of whatever expectRoute happened to be given.
- */
+/** Asserts none of `stages` was ever visited — as a `from` OR a `to` — across `history`. */
 export function expectNeverEntered(history, stages) {
   const touched = new Set(history.flatMap((hop) => [hop.from, hop.to]));
   for (const stage of stages) {

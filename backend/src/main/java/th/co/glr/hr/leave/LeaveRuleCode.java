@@ -35,8 +35,8 @@ package th.co.glr.hr.leave;
  * enforcement column is independent of, and orthogonal to, the ordering invariant described above.
  */
 public enum LeaveRuleCode {
-    /** §5.6 ORDINATION: usable only once during the employee's whole employment. BLOCK: backed by the
-     *  DB unique index ux_leave_once_per_employment (V116), deliberately not dropped by V164. */
+    /** §5.6 ORDINATION: usable only once during the employee's whole employment. BLOCK: backed by the DB unique
+     * index ux_leave_once_per_employment (V116), deliberately not dropped by V164. */
     ONCE_PER_EMPLOYMENT("5.6", LeaveRuleEnforcement.BLOCK),
     /** §5.3.4: VACATION/PERSONAL are refused once a resignation has been submitted. BLOCK: protects
      *  handover, which docking pay does not achieve. */
@@ -102,11 +102,9 @@ public enum LeaveRuleCode {
         return sectionRef;
     }
 
-    /**
-     * BLOCK (auto-rejects, unchanged pre-V164 behaviour) or WARN_UNPAID_ALL/WARN_UNPAID_EXCESS
-     * (V164: submits normally, carrying a warning) -- see {@link LeaveRuleEnforcement}'s class
-     * Javadoc for what each means and {@link LeaveService#autoRejectNote} for how it is dispatched.
-     */
+    /** BLOCK (auto-rejects, unchanged pre-V164 behaviour) or WARN_UNPAID_ALL/WARN_UNPAID_EXCESS (V164: submits
+     * normally, carrying a warning) -- see LeaveRuleEnforcement's class Javadoc for what each means and
+     * LeaveService#autoRejectNote for how it is dispatched. */
     public LeaveRuleEnforcement enforcement() {
         return enforcement;
     }

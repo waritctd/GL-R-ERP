@@ -13,10 +13,7 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { ProductFormModal } from './ProductFormModal.jsx';
 
-// Default quoting unit for a factory's RFQ (price_catalog.factories.unit, V163). The column is a
-// free VARCHAR with no server-side CHECK constraint, but its own migration comment names exactly
-// these three values as the intended vocabulary — a constrained select is a better fit for that
-// than a free-text field pretending the domain is open-ended.
+// Default quoting unit for a factory's RFQ (price_catalog.factories.unit, V163).
 const FACTORY_UNIT_OPTIONS = [
   { value: 'piece', label: 'ชิ้น' },
   { value: 'sqm', label: 'ตร.ม.' },
@@ -24,12 +21,9 @@ const FACTORY_UNIT_OPTIONS = [
 ];
 const FACTORY_CURRENCY_OPTIONS = ['EUR', 'USD', 'THB', 'GBP'];
 
-// ── StepLabel ─────────────────────────────────────────────────────────────────
-// This upload flow is a genuine ordered sequence (select factory → upload →
-// commit — there is no separate preview/validate step, see handleUpload),
-// which is exactly the case where a step number carries real information
-// rather than acting as decoration. Kept to plain bold/muted text, no
-// circles or color blocks, per DESIGN.md's overline treatment.
+// StepLabel ───────────────────────────────────────────────────────────────── This upload flow is a genuine
+// ordered sequence, which is exactly the case where a step number carries real information rather than acting
+// as decoration.
 function StepLabel({ n, children }) {
   return (
     <p className="mb-1.5 text-xs font-bold text-text-muted">
@@ -78,40 +72,25 @@ function factoryUnitLabel(unit) {
   return FACTORY_UNIT_OPTIONS.find((opt) => opt.value === unit)?.label ?? (unit || '—');
 }
 
-// `factory.country` is a price_catalog.country CODE (e.g. "IT") since V163's factory editor
-// replaced the old free-text input — resolves it to a Thai display name via the same roster the
-// picker itself offers, so the list reads "อิตาลี (IT)" instead of a bare code. `countryOther`
-// (V184, PR-B) is the typed name that pairs with 'ZZ' อื่นๆ — appended when present so the list
-// reads "อื่นๆ (ZZ) — Vietnam" rather than the opaque catch-all code alone.
+// `factory.country` is a price_catalog.country CODE (e.g. "IT") since V163's factory editor replaced the old
+// free-text input — resolves it to a Thai display name via the same roster the picker itself offers, so the
+// list reads "อิตาลี (IT)" instead of a bare code.
 function countryLabel(countries, code, countryOther) {
   const match = countries.find((c) => c.countryCode === code);
   const base = match ? `${match.nameTh} (${match.countryCode})` : (code || '—');
   return code === 'ZZ' && countryOther ? `${base} — ${countryOther}` : base;
 }
 
-// ── FactoryFormModal ─────────────────────────────────────────────────────────
-// Add AND edit share this one modal rather than a second, drifting copy of the same five fields —
-// `factory` is null for "เพิ่มโรงงานใหม่", or the row being edited.
-//
-// Country used to be a free-text 2-letter input — the direct cause of "cannot add a factory": a
-// typo or an unseeded code reached price_catalog.factories' NOT NULL + FK column and 500'd
-// (PriceImportService.createFactory's own javadoc). It is now a required <select> sourced from
-// GET /api/price-import/countries, so an invalid value cannot be typed in the first place.
-//
-// email/unit are the two RFQ fields V163 folded onto price_catalog.factories from the dropped
-// sales.factory_config — email is this change's whole point (see PriceImportPage's own comment
-// on the factory list below), so it is deliberately NOT required: a factory may sit here with no
-// contact email until จัดซื้อ has one to enter, same as every real factory does today.
-// 'ZZ' (อื่นๆ) is a real, backend-valid country that PAIRS with a required typed countryOther —
-// PR-B restores it to this picker (it was temporarily hidden by PR-A, review round 1 S6, because
-// this form had no countryOther field yet) alongside the text input below.
+// FactoryFormModal ───────────────────────────────────────────────────────── Add AND edit share this one modal
+// rather than a second, drifting copy of the same five fields — `factory` is null for "เพิ่มโรงงานใหม่", or
+// the row being edited.
 function selectableCountries(countries) {
   return countries;
 }
 
-// Exported (B6, GLA-135): PricingRequestDetailPage's import factory picker reuses this exact
-// form for its inline "เพิ่มโรงงานใหม่" affordance rather than a second, drifting copy of the
-// same five fields + validation — see that page's own comment at the picker call site.
+// Exported (B6, GLA-135): PricingRequestDetailPage's import factory picker reuses this exact form for its
+// inline "เพิ่มโรงงานใหม่" affordance rather than a second, drifting copy of the same five fields + validation
+// — see that page's own comment at the picker call site.
 export function FactoryFormModal({ factory, countries, onClose, onSaved }) {
   const isEdit = Boolean(factory);
   const [name, setName]         = useState(factory?.name ?? '');
@@ -122,10 +101,9 @@ export function FactoryFormModal({ factory, countries, onClose, onSaved }) {
   const [unit, setUnit]         = useState(factory?.unit ?? 'piece');
   const [saving, setSaving]     = useState(false);
   const [error, setError]       = useState('');
-  // QA BUG-20: hard lock against a double-submit. `saving` (the disabled attribute's source) only
-  // flips on the next render, so a fast second click/Enter can fire createFactory twice before the
-  // button disables — and a second create is a duplicate-name 409 at best, a duplicate row at worst.
-  // The ref blocks the repeat synchronously, in the same tick.
+  // QA BUG-20: hard lock against a double-submit. `saving` (the disabled attribute's source) only flips on the
+  // next render, so a fast second click/Enter can fire createFactory twice before the button disables — and a
+  // second create is a duplicate-name 409 at best, a duplicate row at worst.
   const submitting = useRef(false);
 
   async function handleSubmit(e) {
@@ -144,8 +122,8 @@ export function FactoryFormModal({ factory, countries, onClose, onSaved }) {
         : await api.priceImport.createFactory(name.trim(), country, otherToSend, currency, email.trim(), unit);
       onSaved(saved);
     } catch (err) {
-      // Surfaces the backend's own Thai 400/409 message (bad/blank country, duplicate name)
-      // rather than a generic failure — see PriceImportService.createFactory/updateFactory.
+      // Surfaces the backend's own Thai 400/409 message (bad/blank country, duplicate name) rather than a generic
+      // failure — see PriceImportService.createFactory/updateFactory.
       setError(err.message || (isEdit ? 'บันทึกโรงงานไม่สำเร็จ' : 'เพิ่มโรงงานไม่สำเร็จ'));
     } finally {
       setSaving(false);
@@ -286,16 +264,14 @@ function UploadResultCard({ result }) {
   );
 }
 
-// ── ProductCard (mobile) ──────────────────────────────────────────────────────
-// Same 8-column desktop table as CatalogSearchPage, minus the factory column
-// (already filtered to one factory here) — reflowed by hand since this is a
-// plain `<table>`, not DataTable.
+// ProductCard (mobile) ────────────────────────────────────────────────────── Same 8-column desktop table as
+// CatalogSearchPage, minus the factory column (already filtered to one factory here) — reflowed by hand since
+// this is a plain `<table>`, not DataTable.
 function ProductCard({ product, onEdit, onDelete }) {
   return (
     <div className="mt-2.5 flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 first:mt-0">
-      {/* This list is already scoped to one selected factory, so collection is the
-          identity anchor here (it leads the desktop table); productName is often
-          empty in real price-list rows and would collapse the line to a dash. */}
+      {/* This list is already scoped to one selected factory, so collection is the identity anchor here (it leads the
+       * desktop table); productName is often empty in real price-list rows and would collapse the line to a dash. */}
       <div className="flex min-w-0 items-start justify-between gap-3">
         <strong className="min-w-0 truncate text-md font-extrabold text-text">
           {product.collection || product.productName || '—'}
@@ -328,9 +304,8 @@ function ProductCard({ product, onEdit, onDelete }) {
   );
 }
 
-// ── FactoryCard (mobile) ─────────────────────────────────────────────────────
-// Same five columns as the desktop factory table below, reflowed by hand — same pattern as
-// ProductCard above for the products table.
+// FactoryCard (mobile) ───────────────────────────────────────────────────── Same five columns as the desktop
+// factory table below, reflowed by hand — same pattern as ProductCard above for the products table.
 function FactoryCard({ factory, countries, onEdit }) {
   return (
     <div className="mt-2.5 flex w-full min-w-0 flex-col items-stretch gap-2 rounded-md border border-solid border-border bg-surface p-4 first:mt-0">
@@ -402,9 +377,9 @@ export function PriceImportPage({ showToast }) {
   const [error, setError]                       = useState('');
 
   const [showFactoryModal, setShowFactoryModal] = useState(false);
-  // The factory master-data row จัดซื้อ is currently editing — null closes FactoryFormModal in
-  // edit mode; `showFactoryModal` above is the separate "add" trigger. Both render the same modal
-  // (see FactoryFormModal), just with `factory` set or not.
+  // The factory master-data row จัดซื้อ is currently editing — null closes FactoryFormModal in edit mode;
+  // `showFactoryModal` above is the separate "add" trigger. Both render the same modal (see FactoryFormModal),
+  // just with `factory` set or not.
   const [editingFactory, setEditingFactory]     = useState(null);
   const [editingProduct, setEditingProduct]     = useState(null);
   const [confirmUpload, setConfirmUpload]       = useState(false);
@@ -468,14 +443,9 @@ export function PriceImportPage({ showToast }) {
     setError('');
   }
 
-  // uploadAndCommit (src/api/hrApi.js) hits POST /api/price-import/upload-commit,
-  // which parses the file then calls PriceImportService.uploadAndCommit —
-  // parse → stage → validate → commit, in one transaction, with no separate
-  // preview step. commit() sets this version ACTIVE, archives the factory's
-  // previous ACTIVE version (kept for history, not deleted), and carries
-  // forward any existing product not matched by a row in the new file. This
-  // same call/args are unchanged; the confirm step below only gates *when*
-  // it fires, not what it does.
+  // uploadAndCommit (src/api/hrApi.js) hits POST /api/price-import/upload-commit, which parses the file then
+  // calls PriceImportService.uploadAndCommit — parse → stage → validate → commit, in one transaction, with no
+  // separate preview step.
   async function handleUpload() {
     if (!factoryId || !file) return;
     setUploading(true);
@@ -500,10 +470,7 @@ export function PriceImportPage({ showToast }) {
     }
   }
 
-  // Shared save handler for FactoryFormModal in BOTH its modes. An edit replaces the row in
-  // place and leaves the current price-list selection alone (its versions/products are
-  // untouched — only master data changed); an add appends the new row and switches Step 2's
-  // selection onto it, same as this page has always done right after creating a factory.
+  // Shared save handler for FactoryFormModal in BOTH its modes.
   function handleFactorySaved(factory) {
     setFactories((prev) => {
       const isEdit = prev.some((f) => f.factoryId === factory.factoryId);
@@ -549,9 +516,9 @@ export function PriceImportPage({ showToast }) {
     await loadProducts(factoryId);
   }
 
-  // The RFQ-email gap this whole change exists to close (see V163's migration header: the old
-  // email directory matched 0% of the real factories) — surfaced as a count here rather than only
-  // discoverable one row at a time.
+  // The RFQ-email gap this whole change exists to close (see V163's migration header: the old email directory
+  // matched 0% of the real factories) — surfaced as a count here rather than only discoverable one row at a
+  // time.
   const factoriesMissingEmail = factories.filter((f) => !f.email).length;
 
   return (
@@ -588,13 +555,9 @@ export function PriceImportPage({ showToast }) {
         </div>
       </Panel>
 
-      {/* Factory master data — name/country/currency/RFQ email/quoting unit for every factory,
-          each with its own แก้ไข action (PUT /api/price-import/factories/{factoryId}). Deliberately
-          NOT folded into the เลือกโรงงาน select above or gated behind a disclosure: setting a real
-          RFQ email here is this change's whole point (see V163's migration header — the old email
-          directory matched 0% of the real factories, so no factory has ever had a usable one), and
-          that only gets fixed if the gap is visible, not tucked away. Always rendered once
-          factories have loaded, independent of Step 1's price-list selection below. */}
+      {/* Factory master data — name/country/currency/RFQ email/quoting unit for every factory, each with its own
+       * แก้ไข action (PUT /api/price-import/factories/{factoryId}). Always rendered once factories have loaded,
+       * independent of Step 1's price-list selection below. */}
       <Panel flush title="ข้อมูลโรงงาน">
         {factoriesMissingEmail > 0 ? (
           <p className="m-0 border-b border-warning-border bg-warning-bg-soft px-5 py-2.5 text-xs text-warning-dark">
@@ -675,10 +638,9 @@ export function PriceImportPage({ showToast }) {
             className="max-w-md mb-4"
           />
 
-          {/* No preview/validation step exists for this upload path — it parses,
-              stages, validates, and commits in one call (see handleUpload above).
-              Per the plan: "If preview does not exist, add a clear warning/note
-              before commit" instead of fabricating one. */}
+          {/* No preview/validation step exists for this upload path — it parses, stages, validates, and commits in one
+           * call (see handleUpload above). Per the plan: "If preview does not exist, add a clear warning/note before
+           * commit" instead of fabricating one. */}
           <div className="max-w-md rounded-md border border-border-input bg-surface-muted p-3 mb-4">
             <StepLabel n={3}>ไม่มีขั้นตอนแสดงตัวอย่างก่อนบันทึก</StepLabel>
             <p className="text-sm text-text-secondary">
@@ -757,10 +719,8 @@ export function PriceImportPage({ showToast }) {
                       key={p.priceId}
                       className="border-b border-border hover:bg-surface-hover transition-colors"
                     >
-                      {/* Collection (primary) + product code (secondary, muted
-                          mono) stacked — this list is already scoped to one
-                          factory, so collection is the identity anchor, same
-                          as the mobile ProductCard above. */}
+                      {/* Collection (primary) + product code (secondary, muted mono) stacked — this list is already scoped to one
+                       * factory, so collection is the identity anchor, same as the mobile ProductCard above. */}
                       <td className="px-2 py-2">
                         <span className="flex min-w-0 flex-col gap-0.5">
                           <strong className="block truncate font-medium text-text">{p.collection || p.productName || '—'}</strong>
@@ -825,8 +785,8 @@ export function PriceImportPage({ showToast }) {
         />
       )}
 
-      {/* tone stays default (not danger): commit archives the previous version
-          and carries forward unmatched products — it does not delete data. */}
+      {/* tone stays default (not danger): commit archives the previous version and carries forward unmatched products
+       * — it does not delete data. */}
       <ConfirmDialog
         open={confirmUpload}
         title="ยืนยันอัปโหลดและบันทึกราคาใช้งาน"

@@ -30,21 +30,9 @@ import th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedUpsertRequest;
 public class PayrollRepository {
     private final NamedParameterJdbcTemplate jdbc;
 
-    /**
-     * Total employee SSO contributions recorded for one employee in one TAX YEAR — ข้อ 13 of ล.ย.01.
-     *
-     * <p>Deliberately NOT a reuse of {@link #findYearToDateByEmployee}: that one filters
-     * {@code pp.payroll_month < :payrollMonth}, excluding the current period because it feeds a
-     * forward projection. Correct there, wrong here — a ล.ย.01 states what has actually been
-     * contributed, so the current month counts.
-     *
-     * <p>Unions the seed table for the same reason the YTD query does: an employee who joined before
-     * go-live has pre-system contributions in {@code payroll_year_to_date_seed}, and omitting it
-     * would understate their filing. VOID periods are excluded, matching every other money query.
-     *
-     * <p>ข้อ 13 is DERIVED, never typed: the employee cannot choose this number, so a form filed in
-     * January legitimately shows nothing here yet.
-     */
+    /** Total employee SSO contributions recorded for one employee in one TAX YEAR — ข้อ 13 of ล.ย.01. VOID periods
+     * are excluded, matching every other money query. ข้อ 13 is DERIVED, never typed: the employee cannot choose
+     * this number, so a form filed in January legitimately shows nothing here yet. */
     public BigDecimal sumSocialSecurityForTaxYear(long employeeId, int taxYear) {
         BigDecimal total = jdbc.queryForObject("""
             SELECT COALESCE(SUM(amount), 0) FROM (
@@ -98,11 +86,11 @@ public class PayrollRepository {
                 rs.getString("bank_account"),
                 rs.getBigDecimal("base_salary"),
                 rs.getBigDecimal("director_remuneration"),
-                // NULLABLE standing override -- read raw so SQL NULL stays null (no COALESCE):
-                // null = no standing override, distinct from a 0 override.
+                // NULLABLE standing override -- read raw so SQL NULL stays null (no COALESCE): null = no standing override,
+                // distinct from a 0 override.
                 rs.getBigDecimal("withholding_tax_override"),
-                // Drives the ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (V93). Nullable: a missing
-                // date of birth means the exemption is not granted on an assumption.
+                // Drives the ยกเว้นเงินได้ 190,000 for taxpayers aged 65+ (V93). Nullable: a missing date of birth means the
+                // exemption is not granted on an assumption.
                 rs.getObject("date_of_birth", LocalDate.class),
                 // Daily-rate support: raw CHAR(1) code ('M'/'D'/null). Read raw --
                 // NULL means "never set" (172 legacy rows + any created before V1's default), which
@@ -133,18 +121,9 @@ public class PayrollRepository {
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
-    /**
-     * Approved welfare (สวัสดิการ) payable in this payroll month, per employee — V128.
-     *
-     * <p>{@code status = 'APPROVED'} is load-bearing, not defensive: a SUBMITTED claim is a request,
-     * not money owed, and this repo has been bitten before by a payroll money query that forgot the
-     * status filter. {@code payroll_month} is assigned once at CEO approval (the 25th-of-month
-     * cutoff, rolled past any already-processed month) and frozen, so a claim cannot drift between
-     * periods after the fact.
-     *
-     * <p>Sums {@code approved_amount}, never {@code requested_amount}: the approved figure is the
-     * only one anybody authorised to pay.
-     */
+    /** Approved welfare (สวัสดิการ) payable in this payroll month, per employee — V128. payroll_month is assigned
+     * once at CEO approval (the 25th-of-month cutoff, rolled past any already-processed month) and frozen, so a
+     * claim cannot drift between periods after the fact. */
     public Map<Long, BigDecimal> findApprovedWelfarePayByEmployee(LocalDate payrollMonth) {
         return jdbc.query("""
             SELECT smr.employee_id,
@@ -160,15 +139,8 @@ public class PayrollRepository {
             .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
     }
 
-    /**
-     * Stamps which payroll period actually paid each approved welfare claim. {@code
-     * included_period_id} has existed since V66 and was never written, because nothing consumed
-     * these rows.
-     *
-     * <p>Only ever fills a NULL: a claim already attributed to a period must not be re-pointed at a
-     * later one by a re-run, or the audit trail would follow the most recent process rather than the
-     * payment.
-     */
+    /** Stamps which payroll period actually paid each approved welfare claim. included_period_id has existed since
+     * V66 and was never written, because nothing consumed these rows. */
     public int markWelfareIncludedInPeriod(LocalDate payrollMonth, long periodId) {
         return jdbc.update("""
             UPDATE hr.special_money_request
@@ -190,8 +162,8 @@ public class PayrollRepository {
      * exists per employee, equivalent to a FULL OUTER JOIN without the NULL-handling ceremony.
      */
     public Map<Long, PayrollYearToDate> findYearToDateByEmployee(LocalDate payrollMonth) {
-        // ป.96/2543: the two limbs are summed SEPARATELY. Collapsing them here would destroy the
-        // variable-limb withholding figure that next period's ข้อ 2.5 difference must net against.
+        // ป.96/2543: the two limbs are summed SEPARATELY. Collapsing them here would destroy the variable-limb
+        // withholding figure that next period's ข้อ 2.5 difference must net against.
         return jdbc.query("""
             SELECT employee_id,
                    COALESCE(SUM(regular_income), 0) AS regular_income,
@@ -410,14 +382,13 @@ public class PayrollRepository {
                 money(rs.getBigDecimal("non_taxable_income")),
                 money(rs.getBigDecimal("student_loan_deduction")),
                 money(rs.getBigDecimal("legal_execution_deduction")),
-                // Leave-derived unpaidLeaveDays/pendingUnpaidLeaveCorrectionDays are not this query's
-                // concern (it only knows the prior payroll_line) -- PayrollService#suggestedInputs
-                // overlays the real leave-derived figures onto every row after this method returns.
+                // Leave-derived unpaidLeaveDays/pendingUnpaidLeaveCorrectionDays are not this query's concern (it only knows
+                // the prior payroll_line) -- PayrollService#suggestedInputs overlays the real leave-derived figures onto every
+                // row after this method returns.
                 BigDecimal.ZERO,
                 BigDecimal.ZERO,
-                // PER-RUN withholding override typed last month, so HR sees it pre-filled again. Read
-                // raw (nullable): null = none typed -> field starts blank and the standing employee
-                // override (if any) re-applies on its own.
+                // PER-RUN withholding override typed last month, so HR sees it pre-filled again. Read raw (nullable): null =
+                // none typed -> field starts blank and the standing employee override (if any) re-applies on its own.
                 rs.getBigDecimal("withholding_tax_override")
             ));
     }
@@ -476,8 +447,8 @@ public class PayrollRepository {
                 rs.getInt("disabled_care_count"),
                 rs.getBoolean("disability_card_holder"),
                 rs.getInt("parent_care_count"),
-                // ข้อ 9 (V137). This is the value PayrollCalculator's ฿500,000 retirement cluster
-                // consumes FIRST -- see that class.
+                // ข้อ 9 (V137). This is the value PayrollCalculator's ฿500,000 retirement cluster consumes FIRST -- see that
+                // class.
                 money(rs.getBigDecimal("provident_fund_allowance"))
             )))
             .stream()
@@ -542,15 +513,8 @@ public class PayrollRepository {
             ));
     }
 
-    /**
-     * Columns whose change invalidates a prior HR verification -- used by {@link
-     * #upsertTaxAllowances} to decide whether an overwrite must reset {@code verification_status}.
-     * Deliberately the full set of DECLARED content: amounts, the per-head counts, the disability
-     * flag, and {@code document_reference} (VERIFIED means HR confirmed THESE documents -- a new
-     * reference means different documents were supplied, so the old confirmation no longer applies).
-     * Deliberately NOT {@code updated_by_id}/{@code updated_at}: those change on every call
-     * regardless of content, and would make even a byte-identical re-save look "changed".
-     */
+    /** Columns whose change invalidates a prior HR verification -- used by #upsertTaxAllowances to decide whether
+     * an overwrite must reset verification_status. */
     private static final String TAX_ALLOWANCE_CONTENT_CHANGED = """
         (eta.spouse_allowance IS DISTINCT FROM EXCLUDED.spouse_allowance
          OR eta.child_allowance IS DISTINCT FROM EXCLUDED.child_allowance
@@ -732,8 +696,8 @@ public class PayrollRepository {
                     .addValue("disabledCareCount", item.disabledCareCount() == null ? 0 : item.disabledCareCount())
                     .addValue("disabilityCardHolder", Boolean.TRUE.equals(item.disabilityCardHolder()))
                     .addValue("parentCareCount", item.parentCareCount() == null ? 0 : item.parentCareCount())
-                    // ล.ย.01 ข้อ 2.2: a declaration with no stated month is the one in force from
-                    // January, which is how every pre-V93 row was already applied.
+                    // ล.ย.01 ข้อ 2.2: a declaration with no stated month is the one in force from January, which is how every
+                    // pre-V93 row was already applied.
                     .addValue("effectiveMonth", item.effectiveMonth() == null ? 1 : item.effectiveMonth())
                     .addValue("documentReference", item.documentReference())
                     .addValue("providentFundAllowance", safe(item.providentFundAllowance()))
@@ -778,21 +742,9 @@ public class PayrollRepository {
      */
     public record DraftRowVersion(long draftId, long employeeId, int version) {}
 
-    /**
-     * Serializes every mutating operation on a payroll month's draft set (both {@link
-     * #saveInputDrafts} via {@code saveInputDraft}, and the draft-clearing branch of {@code
-     * process}) against every other one, for the lifetime of the caller's transaction. Keyed on
-     * the month, not any row -- deliberately: the draft set for a brand-new month has NO rows to
-     * {@code SELECT ... FOR UPDATE} yet, so a row lock alone cannot serialize two concurrent first
-     * saves, and the employee set can grow between reads as new employees are hired. An advisory
-     * lock covers the whole month regardless of how many rows currently exist.
-     *
-     * <p>Uses the two-int-key {@code pg_advisory_xact_lock} overload (a separate keyspace in
-     * Postgres from the single-bigint overload {@code PricingDecisionRepository#lockPricingRequest}
-     * already uses) so a payroll-month key can never collide with an unrelated domain's advisory
-     * lock. {@code classId} is an arbitrary constant fixed to this table; {@code objId} folds
-     * year+month into one int (safe well past any date this system will ever process).
-     */
+    /** Serializes every mutating operation on a payroll month's draft set (both #saveInputDrafts via
+     * saveInputDraft, and the draft-clearing branch of process) against every other one, for the lifetime of the
+     * caller's transaction. */
     private static final int DRAFT_LOCK_CLASS_ID = 0x50444654; // "PDFT", arbitrary but stable
 
     public void lockInputDraftMonth(LocalDate payrollMonth) {
@@ -801,8 +753,8 @@ public class PayrollRepository {
             Map.of("classId", DRAFT_LOCK_CLASS_ID, "objId", objId), (rs, rowNum) -> 0);
     }
 
-    /** One draft row, both its typed input AND its optimistic-concurrency identity, from the
-     * SAME database read -- see {@link #findInputDraftRows} for why this matters. */
+    /** One draft row, both its typed input AND its optimistic-concurrency identity, from the SAME database read --
+     * see #findInputDraftRows for why this matters. */
     public record DraftRow(PayrollEmployeeInputRequest input, DraftRowVersion version) {}
 
     /**
@@ -849,14 +801,13 @@ public class PayrollRepository {
                     money(rs.getBigDecimal("non_taxable_income")), money(rs.getBigDecimal("unpaid_leave_days")),
                     money(rs.getBigDecimal("student_loan_deduction")), money(rs.getBigDecimal("legal_execution_deduction")),
                     money(rs.getBigDecimal("other_post_tax_deductions")),
-                    // Tax-allowance fields are never part of a draft -- see this table's own comment
-                    // above; they are the standing declaration, edited only via /api/payroll/tax-allowances.
+                    // Tax-allowance fields are never part of a draft -- see this table's own comment above; they are the standing
+                    // declaration, edited only via /api/payroll/tax-allowances.
                     null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                     money(rs.getBigDecimal("warning_letter_deduction")), money(rs.getBigDecimal("customer_return_deduction")),
                     money(rs.getBigDecimal("other_pretax_deduction")),
-                    // Nullable/meaningful, read raw (no money() coercion) -- NULL = "no per-run override
-                    // typed", distinct from an explicit 0. Same convention as every other reader of this
-                    // column (e.g. the payroll_line row mapper below).
+                    // Nullable/meaningful, read raw (no money() coercion) -- NULL = "no per-run override typed", distinct from an
+                    // explicit 0. Same convention as every other reader of this column (e.g. the payroll_line row mapper below).
                     rs.getBigDecimal("withholding_tax_override"),
                     money(rs.getBigDecimal("meal_allowance")), money(rs.getBigDecimal("per_diem_exempt")),
                     money(rs.getBigDecimal("per_diem_taxable")),
@@ -872,10 +823,7 @@ public class PayrollRepository {
     }
 
     /** Every draft row's concurrency identity for a month, ordered by employee_id -- the material
-     * {@link PayrollDraftETag#compute} folds into the month-level ETag. Delegates to {@link
-     * #findInputDraftRows} (one query, one source of truth for the row mapper) rather than
-     * running its own narrower SELECT -- the locked caller inside {@code saveInputDraft} doesn't
-     * need the smaller payload badly enough to justify a second, divergent query shape. */
+     * PayrollDraftETag#compute folds into the month-level ETag. */
     public List<DraftRowVersion> findInputDraftVersions(LocalDate payrollMonth) {
         return findInputDraftRows(payrollMonth).stream().map(DraftRow::version).toList();
     }
@@ -981,12 +929,9 @@ public class PayrollRepository {
         }
     }
 
-    /**
-     * Clears every draft row for a month. Called once {@link PayrollService#process} succeeds, in
-     * the same transaction, so a stale draft can never resurrect over real submitted values on a
-     * later reload -- the whole point of a draft is to hold HR's place until the month is
-     * processed, not to survive past it.
-     */
+    /** Clears every draft row for a month. Called once PayrollService#process succeeds, in the same transaction, so
+     * a stale draft can never resurrect over real submitted values on a later reload -- the whole point of a draft
+     * is to hold HR's place until the month is processed, not to survive past it. */
     public void deleteInputDrafts(LocalDate payrollMonth) {
         jdbc.update("DELETE FROM hr.payroll_input_draft WHERE payroll_month = :payrollMonth",
             Map.of("payrollMonth", payrollMonth));
@@ -1088,11 +1033,9 @@ public class PayrollRepository {
                 .addValue("verifiedById", verifiedById));
     }
 
-    /**
-     * The verification deadline lapsed unverified: EXPIRED_UNVERIFIED. From the next payroll the
-     * declared amount stops applying (service-layer concern -- this only flips the stored status;
-     * it never retro-alters an already-filed month).
-     */
+    /** The verification deadline lapsed unverified: EXPIRED_UNVERIFIED. From the next payroll the declared amount
+     * stops applying (service-layer concern -- this only flips the stored status; it never retro-alters an
+     * already-filed month). */
     public void expireTaxAllowanceVerification(long employeeId, int taxYear) {
         jdbc.update("""
             UPDATE hr.employee_tax_allowance
@@ -1210,19 +1153,13 @@ public class PayrollRepository {
             (rs, rowNum) -> new Row(
                 rs.getLong("employee_id"),
                 PayrollComponent.valueOf(rs.getString("component")),
-                // Read raw (nullable): a stored NULL means "row exists, not yet classified" and
-                // must stay distinct from any default treatment.
+                // Read raw (nullable): a stored NULL means "row exists, not yet classified" and must stay distinct from any
+                // default treatment.
                 rs.getString("tax_treatment") == null ? null : PayrollTaxTreatment.valueOf(rs.getString("tax_treatment"))
             ));
-        // Accumulated by hand into a HashMap, NOT via Collectors.toMap. toMap (and groupingBy's
-        // downstream toMap) route through Map.merge, which throws NullPointerException on a null
-        // VALUE -- so the standard collector cannot represent the one state this map exists to carry:
-        // a component row that exists but is not yet classified. That state is what blocks a payroll
-        // run, so losing it would silently let an unclassified line through.
-        //
-        // A key that is ABSENT and a key present with a NULL value mean different things here:
-        // absent = HR has never touched this component for this employee; present-and-null = a row
-        // was created and deliberately left unclassified. Both must survive the round trip.
+        // Accumulated by hand into a HashMap, NOT via Collectors.toMap. A key that is ABSENT and a key present with a
+        // NULL value mean different things here: absent = HR has never touched this component for this employee;
+        // present-and-null = a row was created and deliberately left unclassified.
         Map<Long, Map<PayrollComponent, PayrollTaxTreatment>> byEmployee = new LinkedHashMap<>();
         for (Row row : rows) {
             byEmployee.computeIfAbsent(row.employeeId(), id -> new LinkedHashMap<>())
@@ -1249,8 +1186,8 @@ public class PayrollRepository {
                     .addValue("employeeId", item.employeeId())
                     .addValue("taxYear", taxYear)
                     .addValue("component", item.component().name())
-                    // Nullable and meaningful: null explicitly resets to "not yet classified"
-                    // rather than being coerced to a default treatment.
+                    // Nullable and meaningful: null explicitly resets to "not yet classified" rather than being coerced to a
+                    // default treatment.
                     .addValue("taxTreatment", item.taxTreatment() == null ? null : item.taxTreatment().name())
                     .addValue("updatedById", updatedById));
         }
@@ -1407,15 +1344,8 @@ public class PayrollRepository {
         }
     }
 
-    /**
-     * Seeds the SSO-inclusion default for every canonical {@link PayrollComponent} for one
-     * employee/tax year: TRUE except {@code DIRECTOR_REMUNERATION} and {@code NON_TAXABLE_INCOME}
-     * (handoff section 5). {@code ON CONFLICT DO NOTHING} -- this only fills in components that
-     * do not have a row yet, so calling it again (or after HR has already edited some rows) never
-     * clobbers an existing tick. Intended to run once per employee, e.g. when the employee record
-     * is created; wiring this into the actual employee-onboarding flow is service-layer work for a
-     * later task -- this method provides only the seeding behaviour itself.
-     */
+    /** Seeds the SSO-inclusion default for every canonical PayrollComponent for one employee/tax year: TRUE except
+     * DIRECTOR_REMUNERATION and NON_TAXABLE_INCOME (handoff section 5). */
     public void seedSsoInclusionDefaults(long employeeId, int taxYear, Long updatedById) {
         for (PayrollComponent component : PayrollComponent.values()) {
             jdbc.update("""
@@ -1545,12 +1475,8 @@ public class PayrollRepository {
             (rs, rowNum) -> mapLine(rs));
     }
 
-    /**
-     * Rows for the statutory export files (KBank/PND1/SSO): the already-computed {@code payroll_line}
-     * amounts joined with the identity, bank and current-address fields the file formats need. Reads
-     * the PDPA-restricted {@code hr_restricted.employee_pii} (national id / tax id / SSN) — the caller
-     * (PayrollService) gates this to HR/CEO, and every access is audited.
-     */
+    /** Rows for the statutory export files (KBank/PND1/SSO): the already-computed payroll_line amounts joined with
+     * the identity, bank and current-address fields the file formats need. */
     public List<PayrollExportRow> findExportRows(long periodId) {
         return jdbc.query("""
             SELECT pl.employee_id, e.employee_code,
@@ -1594,27 +1520,23 @@ public class PayrollRepository {
                 rs.getBigDecimal("gross_taxable_income"),
                 rs.getBigDecimal("withholding_tax"),
                 rs.getBigDecimal("sso_wage_base"),
-                // Nullable, read raw (no money() coercion): NULL is a meaningful "not recorded" for
-                // rows processed before V123, distinct from a genuine ฿0.00 wage. SsoExporter falls
-                // back to sso_wage_base when this is null.
+                // Nullable, read raw (no money() coercion): NULL is a meaningful "not recorded" for rows processed before
+                // V123, distinct from a genuine ฿0.00 wage. SsoExporter falls back to sso_wage_base when this is null.
                 rs.getBigDecimal("sso_wage_gross"),
                 rs.getBigDecimal("social_security"),
                 rs.getString("sso_branch_code")));
     }
 
-    /**
-     * Identity/salary-history enrichment for {@code PayrollDetailExporter} only — see {@link
-     * PayrollDetailIdentityDto}'s javadoc for exactly what each field means and why. Read-only,
-     * no payroll math; two cheap queries (not a join into {@link #findLines}) so that method's
-     * shape and every existing caller/test stay untouched.
-     */
+    /** Identity/salary-history enrichment for PayrollDetailExporter only — see PayrollDetailIdentityDto's javadoc
+     * for exactly what each field means and why. Read-only, no payroll math; two cheap queries (not a join into
+     * #findLines) so that method's shape and every existing caller/test stay untouched. */
     public Map<Long, PayrollDetailIdentityDto> findDetailIdentity(Collection<Long> employeeIds) {
         if (employeeIds == null || employeeIds.isEmpty()) {
             return Map.of();
         }
-        // Built with a plain mutable map, NOT Map.entry()/Collectors.toMap() -- both reject a null
-        // value, and hire_date is frequently null (an employee seeded/onboarded without one), which
-        // must round-trip as null (no hire date on file), not blow up the whole export.
+        // Built with a plain mutable map, NOT Map.entry()/Collectors.toMap() -- both reject a null value, and
+        // hire_date is frequently null (an employee seeded/onboarded without one), which must round-trip as null (no
+        // hire date on file), not blow up the whole export.
         Map<Long, LocalDate> hireDates = new LinkedHashMap<>();
         jdbc.query("""
             SELECT employee_id, hire_date
@@ -1888,9 +1810,9 @@ public class PayrollRepository {
                 .addValue("unpaidLeaveDeduction", line.unpaidLeaveDeduction())
                 .addValue("grossTaxableIncome", line.grossTaxableIncome())
                 .addValue("ssoWageBase", line.ssoWageBase())
-                // Nullable, no COALESCE: NULL genuinely means "not recorded" (see the column comment
-                // in V123), distinct from a computed ฿0.00. Every line processed from here forward
-                // carries the real PayrollCalculator#ssoWageBaseRaw value (see PayrollService).
+                // Nullable, no COALESCE: NULL genuinely means "not recorded" (see the column comment in V123), distinct from a
+                // computed ฿0.00. Every line processed from here forward carries the real PayrollCalculator#ssoWageBaseRaw
+                // value (see PayrollService).
                 .addValue("ssoWageGross", line.ssoWageGross())
                 .addValue("socialSecurity", line.socialSecurity())
                 .addValue("projectedAnnualIncome", line.projectedAnnualIncome())
@@ -1911,8 +1833,8 @@ public class PayrollRepository {
                 .addValue("otherPretaxDeduction", line.otherPretaxDeduction())
                 .addValue("leaveRefundDays", line.leaveRefundDays())
                 .addValue("leaveDeductionRefund", line.leaveDeductionRefund())
-                // Nullable per-run typed override -- pass through null (no COALESCE) so "none typed"
-                // persists as SQL NULL, distinct from a 0 override.
+                // Nullable per-run typed override -- pass through null (no COALESCE) so "none typed" persists as SQL NULL,
+                // distinct from a 0 override.
                 .addValue("withholdingTaxOverride", line.withholdingTaxOverride())
                 .addValue("regularTaxableIncome", safe(line.regularTaxableIncome()))
                 .addValue("variableTaxableIncome", safe(line.variableTaxableIncome()))
@@ -1932,9 +1854,8 @@ public class PayrollRepository {
                 .addValue("mealAllowance", safe(line.mealAllowance()))
                 .addValue("perDiemExempt", safe(line.perDiemExempt()))
                 .addValue("perDiemTaxable", safe(line.perDiemTaxable()))
-                // Nullable: null = no per-diem paid this line, matching the
-                // chk_payroll_line_per_diem_basis_present CHECK (no basis required when both
-                // per_diem_exempt/per_diem_taxable are zero).
+                // Nullable: null = no per-diem paid this line, matching the chk_payroll_line_per_diem_basis_present CHECK (no
+                // basis required when both per_diem_exempt/per_diem_taxable are zero).
                 .addValue("perDiemBasis", line.perDiemBasis())
                 // The raw entered amount, always -- see PayrollLineDto#customerReturnRequested's own javadoc.
                 .addValue("customerReturnRequested", safe(line.customerReturnRequested()))
@@ -2009,8 +1930,8 @@ public class PayrollRepository {
             money(rs.getBigDecimal("other_pretax_deduction")),
             money(rs.getBigDecimal("leave_refund_days")),
             money(rs.getBigDecimal("leave_deduction_refund")),
-            // Nullable per-run typed override -- read raw so SQL NULL stays null (money() would coerce
-            // it to 0.00, which is a different, meaningful override value).
+            // Nullable per-run typed override -- read raw so SQL NULL stays null (money() would coerce it to 0.00, which
+            // is a different, meaningful override value).
             rs.getBigDecimal("withholding_tax_override"),
             // ป.96/2543 limbs (V92, superseded going forward -- see PayrollLineDto's javadoc).
             money(rs.getBigDecimal("regular_taxable_income")),
@@ -2036,8 +1957,8 @@ public class PayrollRepository {
             // employee's line, which never has this figure, stays null rather than a misleading 0.00.
             rs.getBigDecimal("days_worked"),
             rs.getString("pay_type"),
-            // V128: nullable on purpose -- a line processed before welfare reached payroll has no
-            // figure, which is not the same statement as a genuine ฿0.00 of welfare that month.
+            // V128: nullable on purpose -- a line processed before welfare reached payroll has no figure, which is not the
+            // same statement as a genuine ฿0.00 of welfare that month.
             rs.getBigDecimal("welfare_pay")
         );
     }

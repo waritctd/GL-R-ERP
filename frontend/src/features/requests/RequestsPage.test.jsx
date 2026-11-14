@@ -90,12 +90,9 @@ describe('RequestsPage tab bar', () => {
     expect(tabs).toHaveLength(2);
     expect(screen.getByRole('tab', { name: 'ล่วงเวลา' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tab', { name: 'สวัสดิการ / เงินพิเศษ' }).getAttribute('aria-selected')).toBe('false');
-    // The OT panel deliberately has no page heading of its own — RequestsPage owns the only one,
-    // otherwise the tab renders two stacked headers. Identify the panel by its form instead.
-    // Exactly one — the assertion is about there being a SINGLE page heading, not about the
-    // wording. Renamed คำขอ -> คำขอเงินพิเศษ (owner, 2026-08-10); an exact name match keeps this
-    // checking what it was written to check, where a regex could start matching a panel heading
-    // and quietly stop detecting the stacked-header regression.
+    // The OT panel deliberately has no page heading of its own — RequestsPage owns the only one, otherwise the tab
+    // renders two stacked headers. Identify the panel by its form instead. Exactly one — the assertion is about
+    // there being a SINGLE page heading, not about the wording.
     expect(screen.getAllByRole('heading', { name: 'คำขอเงินพิเศษ' })).toHaveLength(1);
     expect(await screen.findByLabelText(/วันที่ทำ OT/)).not.toBeNull();
   });
@@ -107,11 +104,8 @@ describe('RequestsPage tab bar', () => {
     expect(await screen.findByRole('heading', { name: 'ยื่นคำขอเงินสวัสดิการ' })).not.toBeNull();
   });
 
-  // Deliberate graceful degradation (fix/attendance-correction-on-attendance-page): the
-  // attendance-correction tab moved to /attendance (button + modal, see AttendancePage.jsx), so
-  // it no longer has a tab here at all. An old bookmark or notification link still carrying
-  // ?tab=attendance-correction must not error or render a blank tab -- it falls back to the
-  // default 'ot' tab, exactly like any other unrecognised ?tab value.
+  // Deliberate graceful degradation (fix/attendance-correction-on-attendance-page): the attendance-correction
+  // tab moved to /attendance (button + modal, see AttendancePage.jsx), so it no longer has a tab here at all.
   it('falls back to the overtime tab for a stale ?tab=attendance-correction bookmark', async () => {
     renderRequestsPage('/employee-requests?tab=attendance-correction');
 

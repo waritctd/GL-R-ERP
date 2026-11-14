@@ -381,8 +381,8 @@ describe('TicketListPage', () => {
     const filterToggle = screen.getByRole('button', { name: /^ตัวกรอง/ });
     filterToggle.focus();
     fireEvent.click(filterToggle);
-    // This case stubs the mobile viewport, where the sheet is a modal dialog
-    // rather than the desktop inline region (see the modal-contract suite).
+    // This case stubs the mobile viewport, where the sheet is a modal dialog rather than the desktop inline region
+    // (see the modal-contract suite).
     const filterSheet = screen.getByRole('dialog', { name: 'ตัวกรองเพิ่มเติม' });
     expect(filterSheet).toBeTruthy();
 
@@ -597,8 +597,8 @@ describe('TicketListPage', () => {
       expect(screen.getByText('บริษัท จากสต็อก จำกัด')).not.toBeNull();
       expect(screen.queryByText('บริษัท ส่งมอบบางส่วน จำกัด')).toBeNull();
 
-      // Toggling the SAME chip again clears the filter (same on/off pattern the lifecycle chip
-      // test above uses) — the excluded deal reappears.
+      // Toggling the SAME chip again clears the filter (same on/off pattern the lifecycle chip test above uses) —
+      // the excluded deal reappears.
       fireEvent.click(flagChip);
       expect(screen.getByText('บริษัท ส่งมอบบางส่วน จำกัด')).not.toBeNull();
     });
@@ -674,8 +674,8 @@ describe('TicketListPage', () => {
       expect(sheet.contains(document.activeElement)).toBe(true);
       expect(document.activeElement).toBe(focusables[0]);
 
-      // Tab off the last control wraps to the first, and shift+Tab off the
-      // first wraps to the last — focus never lands on the inert page behind.
+      // Tab off the last control wraps to the first, and shift+Tab off the first wraps to the last — focus never
+      // lands on the inert page behind.
       const last = focusables[focusables.length - 1];
       last.focus();
       fireEvent.keyDown(document, { key: 'Tab' });
@@ -699,8 +699,7 @@ describe('TicketListPage', () => {
       const { sheet } = await openMobileSheet();
       const pageRoot = document.querySelector('.ticket-list-page');
 
-      // The sheet is portalled out of the page root, so inerting the root
-      // cannot swallow the sheet itself.
+      // The sheet is portalled out of the page root, so inerting the root cannot swallow the sheet itself.
       expect(pageRoot.contains(sheet)).toBe(false);
       expect(pageRoot.hasAttribute('inert')).toBe(true);
       expect(pageRoot.getAttribute('aria-hidden')).toBe('true');
@@ -725,8 +724,8 @@ describe('TicketListPage', () => {
     it('closes on scrim click and restores focus', async () => {
       const { toggle } = await openMobileSheet();
 
-      // The scrim specifically — the header close button carries the same
-      // accessible name, so target the backdrop element itself.
+      // The scrim specifically — the header close button carries the same accessible name, so target the backdrop
+      // element itself.
       fireEvent.click(document.querySelector('.ticket-filter-backdrop'));
 
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -895,8 +894,7 @@ describe('TicketListPage', () => {
           stageUpdatedAt: '2026-07-06T09:00:00.000Z',
           stale: false,
           amountPayable: '1000000',
-          // 25, NOT the 70 WIN_PROBABILITY_DEFAULTS.NEGOTIATION would give. The disagreement is
-          // the assertion.
+          // 25, NOT the 70 WIN_PROBABILITY_DEFAULTS.NEGOTIATION would give. The disagreement is the assertion.
           winProbabilityOverride: null,
           effectiveWinProbability: 25,
         },

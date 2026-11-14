@@ -43,8 +43,8 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  */
 class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- every date below is fixed relative to this so the
-    // 7-day advance-notice rule is a non-issue for dates in mid-July onward.
+    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- every date below is fixed relative to this so the 7-day
+    // advance-notice rule is a non-issue for dates in mid-July onward.
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
 
     private LeaveRepository leaveRepository;
@@ -53,13 +53,9 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     @BeforeEach
     void wireRealCollaborators() {
         leaveRepository = new LeaveRepository(jdbc);
-        // fileStorage/leaveAttachments are mocked (attachment storage is not under test here), but
-        // sickLeaveBeyondQuotaStillAutoRejectsWithoutACertificate submits a real MockMultipartFile
-        // certificate, and LeaveService#submit's attachment path does a REAL FK-constrained UPDATE
-        // (hr.leave_request.attachment_id -> hr.file_attachment.attachment_id) -- so the stubbed
-        // LeaveAttachmentDto must point at a real row, not a fabricated id.
-        // V134 storage-durability fix: LeaveService#submit stores attachments to the database now,
-        // via FileStorageService#storeInDatabase + LeaveAttachmentRepository#saveWithContent.
+        // fileStorage/leaveAttachments are mocked, but sickLeaveBeyondQuotaStillAutoRejectsWithoutACertificate submits
+        // a real MockMultipartFile certificate, and LeaveService#submit's attachment path does a REAL FK-constrained
+        // UPDATE.
         FileStorageService fileStorage = mock(FileStorageService.class);
         when(fileStorage.storeInDatabase(anyString(), anyLong(), any(), any()))
             .thenReturn(new FileStorageService.StoredContent(
@@ -125,9 +121,9 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(result.unpaidDays()).isEqualByComparingTo("1.00");
         assertThat(result.quotaRemainingAfter()).isEqualByComparingTo("0.00");
 
-        // findUnpaidLeaveDaysByEmployeeForMonth is the separate payroll-visibility seam, which is
-        // filtered to APPROVED requests only (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth)
-        // -- exercising it for real requires actually driving the request to APPROVED first.
+        // findUnpaidLeaveDaysByEmployeeForMonth is the separate payroll-visibility seam, which is filtered to APPROVED
+        // requests only (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth) -- exercising it for real requires
+        // actually driving the request to APPROVED first.
         leaveService.approve(result.id(), new ReviewLeaveRequest("approved"), hr());
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
             .containsEntry(employeeId, new BigDecimal("1.00"));
@@ -148,25 +144,25 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
     void submittedLeaveContributesNothingToPayrollUntilApprovedThenContributesItsUnpaidDays() {
         long employeeId = insertEmployee("SUBMIT-GATE-001");
 
-        // Mon 2026-07-13 .. Tue 2026-07-21: 7 working days against a 6-day VACATION quota, nothing
-        // used yet -> 6 paid + 1 unpaid, computed and persisted at submit time regardless of status.
+        // Mon 2026-07-13 .. Tue 2026-07-21: 7 working days against a 6-day VACATION quota, nothing used yet -> 6 paid
+        // + 1 unpaid, computed and persisted at submit time regardless of status.
         LeaveRequestDto leave = leaveService.submit(
             submitRequest(employeeId, "VACATION", "2026-07-13", "2026-07-21"),
             employee(employeeId));
         assertThat(leave.status()).isEqualTo("SUBMITTED");
         assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
 
-        // Side 1: SUBMITTED (pending approval) contributes ZERO to payroll's unpaid-day view --
-        // the whole point of this branch. Before this branch this request could not even exist in
-        // this state (submit() went straight to APPROVED), so this side was previously untestable.
+        // Side 1: SUBMITTED (pending approval) contributes ZERO to payroll's unpaid-day view -- the whole point of
+        // this branch. Before this branch this request could not even exist in this state (submit() went straight to
+        // APPROVED), so this side was previously untestable.
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
             .as("a SUBMITTED request must not yet reduce anyone's pay")
             .doesNotContainKey(employeeId);
 
         leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
-        // Side 2: the SAME request, now APPROVED, contributes its unpaid days -- proving Side 1 was
-        // a genuine "not yet", not an accidental "never" (e.g. a broken employee_id join).
+        // Side 2: the SAME request, now APPROVED, contributes its unpaid days -- proving Side 1 was a genuine "not
+        // yet", not an accidental "never" (e.g. a broken employee_id join).
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
             .as("the identical request, now APPROVED, must reduce pay")
             .containsEntry(employeeId, new BigDecimal("1.00"));
@@ -231,8 +227,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // APPROVED-but-fully-UNPAID split (the ordinary quota machinery), while the certificate
         // rule gates on the MONTHLY OCCASION COUNT, not on quota availability at all.
         long employeeId = insertEmployee("SICK-30PLUS");
-        // Exhaust the 30-day SICK quota first, WITH a certificate each time so the fill-up itself is
-        // approved.
+        // Exhaust the 30-day SICK quota first, WITH a certificate each time so the fill-up itself is approved.
         MockMultipartFile certificate = new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "pdf".getBytes());
         LeaveRequestDto fillUp = leaveService.submit(
             submitRequest(employeeId, "SICK", "2026-07-13", "2026-08-21"), // 30 working weekdays
@@ -241,9 +236,9 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(fillUp.status()).isEqualTo("SUBMITTED");
         assertThat(fillUp.paidDays()).isEqualByComparingTo("30.00");
 
-        // Occasions 1-3 this month (August), quota fully exhausted (remaining 0): each is APPROVED
-        // (money-moving: the OLD code auto-rejected every one of these, 0 pay) but entirely UNPAID
-        // (the ordinary quota-exceeded split, unrelated to the certificate rule).
+        // Occasions 1-3 this month (August), quota fully exhausted (remaining 0): each is APPROVED (money-moving: the
+        // OLD code auto-rejected every one of these, 0 pay) but entirely UNPAID (the ordinary quota-exceeded split,
+        // unrelated to the certificate rule).
         LeaveRequestDto firstOccasion = leaveService.submit(
             submitRequest(employeeId, "SICK", "2026-08-24", "2026-08-24"), employee(employeeId)); // Mon
         LeaveRequestDto secondOccasion = leaveService.submit(
@@ -285,8 +280,7 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // that is APPROVED at cancel time -- drive it there first.
         leaveService.approve(approved.id(), new ReviewLeaveRequest("approved"), hr());
 
-        // Payroll for July has since been processed -- the 1 unpaid day already reduced this
-        // employee's July net pay.
+        // Payroll for July has since been processed -- the 1 unpaid day already reduced this employee's July net pay.
         insertProcessedPayrollPeriod(LocalDate.parse("2026-07-01"));
 
         leaveService.cancel(approved.id(), new ReviewLeaveRequest("no longer needed"), hr());
@@ -294,9 +288,9 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         Map<Long, BigDecimal> pending = leaveRepository.findPendingPayrollCorrectionsByEmployee();
         assertThat(pending).containsEntry(employeeId, new BigDecimal("1.00"));
 
-        // Once cancelled, the leave no longer contributes to the (already-closed) month's unpaid-day
-        // query -- its status is no longer APPROVED. The correction row above is the only remaining
-        // trace that a day was ever deducted for it.
+        // Once cancelled, the leave no longer contributes to the (already-closed) month's unpaid-day query -- its
+        // status is no longer APPROVED. The correction row above is the only remaining trace that a day was ever
+        // deducted for it.
         assertThat(leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-07-01")))
             .doesNotContainKey(employeeId);
     }
@@ -337,8 +331,8 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         // production-lacks trap).
         leaveService.approve(approved.id(), new ReviewLeaveRequest("approved"), hr());
 
-        // No payroll_period has been PROCESSED for July -- nothing was ever actually deducted, so
-        // cancelling owes no credit back.
+        // No payroll_period has been PROCESSED for July -- nothing was ever actually deducted, so cancelling owes no
+        // credit back.
         leaveService.cancel(approved.id(), new ReviewLeaveRequest("changed my mind"), hr());
 
         assertThat(leaveRepository.findPendingPayrollCorrectionsByEmployee()).doesNotContainKey(employeeId);
@@ -359,12 +353,9 @@ class LeaveUnpaidDeductionIntegrationTest extends AbstractPostgresIntegrationTes
         return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
     }
 
-    // §5 leave-rules-as-data (V116): VACATION/PERSONAL now carry a min_service_months eligibility
-    // floor (12/4 months respectively). None of the scenarios in this class are ABOUT that gate --
-    // they predate it and exercise the quota/paid-cap/cross-month-split machinery -- so the default
-    // hire date here is far enough in the past (2015, well over both floors) that it is a no-op for
-    // every existing test. LeaveTypeRuleIntegrationTest carries the dedicated min-service coverage,
-    // including the "no hire_date on file" case.
+    // §5 leave-rules-as-data (V116): VACATION/PERSONAL now carry a min_service_months eligibility floor (12/4
+    // months respectively). LeaveTypeRuleIntegrationTest carries the dedicated min-service coverage, including the
+    // "no hire_date on file" case.
     private long insertEmployee(String code) {
         return insertEmployee(code, LocalDate.parse("2015-01-01"));
     }

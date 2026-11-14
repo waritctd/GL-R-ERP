@@ -16,22 +16,8 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
-/**
- * An employee who missed a clock-in/clock-out scan files a request here to record the correct
- * time; the CEO approves or rejects it. Modelled on {@code LeaveService}/{@code OvertimeService}'s
- * submit/approve/reject/cancel shape, deliberately simpler in one respect: there is <b>no manager
- * stage</b> — the CEO is the sole approver (product decision, no ฝ่าย manager routing at all, unlike
- * overtime's two-stage manager→CEO flow). See {@link #requireCeo}.
- *
- * <p>Approving does not just flip a status column: it is the one write path in this codebase (V7
- * reserved {@code punch_source = 'MANUAL'} / {@code ingest_method = 'MANUAL_ENTRY'} for exactly
- * this, and nothing wrote them before this class) that inserts a real
- * {@code hr.attendance_punch} row and marks the affected {@code hr.attendance_daily} row
- * {@code is_manual_override = TRUE} via {@link AttendanceDailyService#applyManualCorrection} — see
- * that method's javadoc for why the derivation itself (total/late/early minutes) is the SAME §76
- * reporting-only computation an ordinary punch would produce, not a new one. Rejecting never writes
- * to attendance_punch/attendance_daily at all.
- */
+/** An employee who missed a clock-in/clock-out scan files a request here to record the correct time; the CEO
+ * approves or rejects it. Rejecting never writes to attendance_punch/attendance_daily at all. See #requireCeo. */
 @Service
 public class AttendanceCorrectionService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
@@ -80,8 +66,8 @@ public class AttendanceCorrectionService {
         validateWorkDate(request.workDate());
 
         // Friendly pre-check ahead of the DB-level once-per-open-request guard (see the
-        // ux_attendance_correction_one_open_per_employee_day index and the DuplicateKeyException
-        // catch below for the race backstop).
+        // ux_attendance_correction_one_open_per_employee_day index and the DuplicateKeyException catch below for the
+        // race backstop).
         if (repository.hasOpenRequest(employeeId, request.workDate())) {
             throw new ApiException(HttpStatus.CONFLICT, "มีคำขอแก้ไขเวลาสำหรับวันนี้ที่ยังไม่ได้รับการพิจารณาอยู่แล้ว");
         }
@@ -123,12 +109,7 @@ public class AttendanceCorrectionService {
         return withCanReviewFlag(after, user);
     }
 
-    /**
-     * Inserts the corrected punch(es) and re-derives the day's roll-up as an authoritative override.
-     * Runs inside {@link #approve}'s own transaction so a failure here (e.g. the day somehow ends up
-     * with no punches) rolls the status flip back too — never a request left APPROVED with nothing
-     * actually corrected on the attendance side.
-     */
+    /** Inserts the corrected punch(es) and re-derives the day's roll-up as an authoritative override. */
     private void applyCorrectionToAttendance(AttendanceCorrectionRequestDto existing) {
         long employeeId = existing.employeeId();
         LocalDate workDate = existing.workDate();
@@ -173,10 +154,9 @@ public class AttendanceCorrectionService {
     public AttendanceCorrectionRequestDto cancel(long id, UserPrincipal user) {
         AttendanceCorrectionRequestDto existing = requireRequest(id);
         long actorEmployeeId = requireEmployeeId(user);
-        // Requester-only: unlike leave/overtime, there is no reviewer-side cancel here — the CEO's
-        // only actions on an open request are approve/reject (see class javadoc: no manager stage,
-        // and cancellation-of-someone-else's-request was never asked for in the product spec this
-        // feature was built from).
+        // Requester-only: unlike leave/overtime, there is no reviewer-side cancel here — the CEO's only actions on an
+        // open request are approve/reject (see class javadoc: no manager stage, and
+        // cancellation-of-someone-else's-request was never asked for in the product spec this feature was built from).
         if (existing.employeeId() != actorEmployeeId) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -199,13 +179,9 @@ public class AttendanceCorrectionService {
         }
     }
 
-    /**
-     * Mirrors {@code chk_attendance_correction_fields_match_type} in Java, ahead of the DB — a
-     * request whose {@code requestedCheckIn}/{@code requestedCheckOut} do not match
-     * {@code correctionType} must fail with a clear 400 <em>before</em> it ever reaches the insert,
-     * not surface as an opaque constraint-violation 500. See V135's migration comment for the exact
-     * constraint this must stay in lockstep with.
-     */
+    /** Mirrors chk_attendance_correction_fields_match_type in Java, ahead of the DB — a request whose
+     * requestedCheckIn/requestedCheckOut do not match correctionType must fail with a clear 400 before it ever
+     * reaches the insert, not surface as an opaque constraint-violation 500. */
     private void validateRequestShape(SubmitAttendanceCorrectionRequest request) {
         AttendanceCorrectionType type = request.correctionType();
         OffsetDateTime checkIn = request.requestedCheckIn();
@@ -253,12 +229,9 @@ public class AttendanceCorrectionService {
 
     // --- access control ---------------------------------------------------------------------------
 
-    /**
-     * CEO-only, no manager stage — the deliberate simplification from overtime's two-stage
-     * manager→CEO routing (product decision for this feature). Mirrors
-     * {@code OvertimeService#requireCeo} exactly in shape: {@code "ceo".equals(user.role())}, else a
-     * 403 {@link ApiException}.
-     */
+    /** CEO-only, no manager stage — the deliberate simplification from overtime's two-stage manager→CEO routing
+     * (product decision for this feature). Mirrors OvertimeService#requireCeo exactly in shape:
+     * "ceo".equals(user.role()), else a 403 ApiException. */
     private void requireCeo(UserPrincipal user) {
         if (user == null || !"ceo".equals(user.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะ CEO เท่านั้นที่สามารถพิจารณาคำขอแก้ไขเวลาเข้า-ออกงานได้");
@@ -314,16 +287,9 @@ public class AttendanceCorrectionService {
         return request == null ? null : request.reviewerNote();
     }
 
-    /**
-     * The notification link tracks where this feature's review UI actually lives, not a fixed API
-     * route -- it moved from {@code /employee-requests} (the old third tab on the combined requests
-     * page) to {@code /attendance} (fix/attendance-correction-on-attendance-page), matching the
-     * frontend move of both {@code AttendanceCorrectionPanel} and the submit modal onto that page.
-     * Same link is used by {@link #approve}/{@link #reject}'s own notifications to the employee.
-     * The next person who relocates this UI again must update this literal (all three call sites)
-     * to match, or every notification/deep-link into this feature silently 404s-by-content (lands
-     * on a page with nothing about attendance correction on it) instead of erroring.
-     */
+    /** The notification link tracks where this feature's review UI actually lives, not a fixed API route -- it
+     * moved from /employee-requests to /attendance, matching the frontend move of both AttendanceCorrectionPanel
+     * and the submit modal onto that page. */
     private void notifyCeoOfSubmission(AttendanceCorrectionRequestDto created) {
         for (long ceoEmployeeId : ceoApprovers.findEmployeeIds()) {
             notificationService.notify(

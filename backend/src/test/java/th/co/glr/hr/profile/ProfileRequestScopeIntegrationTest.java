@@ -22,26 +22,14 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms the widened profile-change-request gate against the real service and the real SQL.
- *
- * <p>The gate used to be a role list ({@code sessions.requireAnyRole(user, "employee")} at the
- * controller); it is now an identity check inside {@link ProfileRequestService#create} —
- * {@code employeeId != null}. Unit tests on the controller and service prove the decision was
- * made correctly; only this proves the decision survives into the {@code WHERE} clause of
- * {@link ProfileRequestRepository#findByEmployee} and actually filters rows, exactly as {@code
- * AttendanceScopeIntegrationTest} does for attendance (CLAUDE.md, "Permission changes must ship
- * evidence — not a claim").
- *
- * <p>Every refusal case here asks the question the wrong way round — can this caller reach or
- * write data they should not — rather than confirming they can reach their own.
- */
+/** Confirms the widened profile-change-request gate against the real service and the real SQL. The gate used to
+ * be a role list (sessions.requireAnyRole(user, "employee") at the controller); it is now an identity check
+ * inside ProfileRequestService#create — employeeId != null. */
 class ProfileRequestScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    // Mocked deliberately: neither collaborator participates in the authorization decision under
-    // test. EmployeeRepository only shapes the DTO's nested `employee` summary; AuditService is
-    // only called from #update, which this class does not exercise. ProfileRequestRepository is
-    // the one that must be real, since it is what carries the decision into SQL.
+    // Mocked deliberately: neither collaborator participates in the authorization decision under test.
+    // EmployeeRepository only shapes the DTO's nested `employee` summary; AuditService is only called from
+    // #update, which this class does not exercise.
     private final EmployeeRepository employees = mock(EmployeeRepository.class);
     private final AuditService auditService = mock(AuditService.class);
 
@@ -57,17 +45,16 @@ class ProfileRequestScopeIntegrationTest extends AbstractPostgresIntegrationTest
         when(employees.findEmployeeSummariesByIds(any())).thenReturn(Map.of());
 
         profileRequests = new ProfileRequestRepository(jdbc);
-        // Real, not mocked, like profileRequests above: create() now writes an hr.notification row
-        // through this collaborator, and NO_OP keeps the assertions in this class (which is about
-        // request-scoping, not notifications) from depending on mail. See
-        // ProfileRequestNotificationIntegrationTest for the notification-specific coverage.
+        // Real, not mocked, like profileRequests above: create() now writes an hr.notification row through this
+        // collaborator, and NO_OP keeps the assertions in this class (which is about request-scoping, not
+        // notifications) from depending on mail.
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
-        // Mocked: this class exercises #create only (see the class-level comment above), and
-        // #update -- the only method that calls notificationService -- is never invoked here.
+        // Mocked: this class exercises #create only (see the class-level comment above), and #update -- the only
+        // method that calls notificationService -- is never invoked here.
         NotificationService notificationService = mock(NotificationService.class);
-        // @Transactional on ProfileRequestService#create is inert without a real AOP proxy (no
-        // Spring context here) -- see AbstractPostgresIntegrationTest#transactional's Javadoc.
-        // Wrap it so the annotation is actually exercised, matching AttendanceScopeIntegrationTest.
+        // @Transactional on ProfileRequestService#create is inert without a real AOP proxy (no Spring context here) --
+        // see AbstractPostgresIntegrationTest#transactional's Javadoc. Wrap it so the annotation is actually
+        // exercised, matching AttendanceScopeIntegrationTest.
         service = transactional(
             new ProfileRequestService(profileRequests, employees, auditService, notifications, notificationService));
 
@@ -91,8 +78,8 @@ class ProfileRequestScopeIntegrationTest extends AbstractPostgresIntegrationTest
 
     @Test
     void salesCallerCreatesLandsOnlyOnTheirOwnEmployeeId() {
-        // `id` (the app_user/session id) is deliberately different from `employeeId` here, so a
-        // mutation that swapped one for the other is caught rather than coincidentally passing.
+        // `id` (the app_user/session id) is deliberately different from `employeeId` here, so a mutation that swapped
+        // one for the other is caught rather than coincidentally passing.
         UserPrincipal sales = sessionUser(500L, "sales", salesEmployeeA);
 
         service.create(phoneRequest(), sales);

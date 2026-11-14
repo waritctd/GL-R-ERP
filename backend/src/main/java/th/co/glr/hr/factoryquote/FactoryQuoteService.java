@@ -64,13 +64,8 @@ public class FactoryQuoteService {
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
         PricingRequestStatus.READY_FOR_CEO_REVIEW);
-    // Review remediation (COMMIT 4): deliberately NARROWER than MUTABLE_STATUSES —
-    // READY_FOR_CEO_REVIEW is excluded on purpose. Uploading new supplementary evidence while
-    // the request awaits CEO review is still fine (MUTABLE_STATUSES, above); DELETING evidence
-    // once the request has reached that far is not, because a submitted costing may already
-    // depend on it. See deleteAttachment's own two additional per-quote/per-costing guards below
-    // for the remaining cases MUTABLE_STATUSES membership alone cannot catch (READY_FOR_COSTING,
-    // and a SUBMITTED costing referencing this exact quote revision).
+    // Review remediation (COMMIT 4): deliberately NARROWER than MUTABLE_STATUSES — READY_FOR_CEO_REVIEW is
+    // excluded on purpose.
     private static final Set<String> ATTACHMENT_DELETE_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
@@ -271,8 +266,8 @@ public class FactoryQuoteService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ใบเสนอราคาโรงงาน " + quote.id() + " ถูกบันทึกว่าติดต่อแล้วโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่");
         }
-        // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is the
-        // only status still needing promotion here.
+        // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is the only status still
+        // needing promotion here.
         if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
             int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                 PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
@@ -326,13 +321,9 @@ public class FactoryQuoteService {
         return attachment;
     }
 
-    /**
-     * V134 storage-durability fix: resolves the attachment's storage location AND confirms its
-     * bytes are actually available (DATABASE, or DISK_LEGACY with a file that still resolves),
-     * throwing 410 GONE otherwise -- checked only AFTER {@link #getAttachment}'s own 404/role
-     * checks above, mirroring {@code LeaveService#resolveAttachmentForDownload}'s ordering (see
-     * that method's javadoc for why the order itself is a security property).
-     */
+    /** V134 storage-durability fix: resolves the attachment's storage location AND confirms its bytes are actually
+     * available, throwing 410 GONE otherwise -- checked only AFTER #getAttachment's own 404/role checks above,
+     * mirroring LeaveService#resolveAttachmentForDownload's ordering. */
     public FactoryQuoteRepository.AttachmentFileLocation attachmentFileLocation(long attachmentId, UserPrincipal actor) {
         getAttachment(attachmentId, actor);
         FactoryQuoteRepository.AttachmentFileLocation location = quotes.findAttachmentFileLocation(attachmentId)
@@ -352,28 +343,9 @@ public class FactoryQuoteService {
         };
     }
 
-    /**
-     * Review remediation (COMMIT 4): the original version permitted deletion whenever the parent
-     * pricing request was in {@code MUTABLE_STATUSES} (which included {@code
-     * READY_FOR_CEO_REVIEW}) and then physically removed the row and the file — so evidence
-     * backing an already-submitted costing could be destroyed outright. Now:
-     * <ol>
-     *   <li>{@code READY_FOR_CEO_REVIEW} is excluded from the permitted pricing-request statuses
-     *       ({@link #ATTACHMENT_DELETE_STATUSES}, deliberately narrower than the upload gate's
-     *       {@link #MUTABLE_STATUSES}).</li>
-     *   <li>Deletion is refused outright once the quote ITSELF has reached {@code
-     *       READY_FOR_COSTING} — a quote can reach that status while its parent pricing request
-     *       is still, say, {@code COSTING_IN_PROGRESS} for a DIFFERENT factory, so the
-     *       pricing-request-level gate above cannot catch this case alone.</li>
-     *   <li>Deletion is refused outright if this exact quote revision is referenced by any {@code
-     *       SUBMITTED} costing ({@link FactoryQuoteRepository#existsSubmittedCostingReferencingQuote}) —
-     *       covers a quote that was READY_FOR_COSTING, got superseded by a later revision, but
-     *       whose OLD revision a costing still points at.</li>
-     * </ol>
-     * Otherwise, deletion is an audited tombstone ({@link FactoryQuoteRepository#tombstoneAttachment}):
-     * the row and the file on disk are both kept, only {@code deleted_at}/{@code deleted_by}/
-     * {@code delete_reason} are recorded. Supplemental supplier evidence is append-only.
-     */
+    /** Review remediation (COMMIT 4): the original version permitted deletion whenever the parent pricing request
+     * was in MUTABLE_STATUSES (which included READY_FOR_CEO_REVIEW) and then physically removed the row and the
+     * file — so evidence backing an already-submitted costing could be destroyed outright. */
     @Transactional
     public void deleteAttachment(long attachmentId, String reason, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
@@ -403,22 +375,17 @@ public class FactoryQuoteService {
     public FactoryQuoteDto receive(long quoteId, ReceiveFactoryQuoteRequest request, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         String clientRequestId = validateClientRequestId(request.clientRequestId());
-        // Serialize concurrent calls that share the same idempotency key so a racing
-        // retry blocks until the first attempt's receipt is committed and visible,
-        // rather than both attempts racing into duplicate mutations. Held for the whole
-        // (Spring-proxied, @Transactional) method via the transaction-scoped advisory lock.
+        // Serialize concurrent calls that share the same idempotency key so a racing retry blocks until the first
+        // attempt's receipt is committed and visible, rather than both attempts racing into duplicate mutations.
         quotes.lockResponseIdempotencyKey(actor.id(), clientRequestId);
         FactoryQuoteRepository.FactoryQuoteResponseReceiptDto existingReceipt =
             quotes.findResponseReceipt(actor.id(), clientRequestId).orElse(null);
         FactoryQuoteDto current = requireQuote(quoteId);
         if (existingReceipt != null) {
             FactoryQuoteDto receiptQuote = requireQuote(existingReceipt.factoryQuoteId());
-            // Compare the QUOTE CHAIN, not the pricing request: a pricing request has one
-            // quote per factory, so on a revision replay the caller retries with the OLD
-            // quoteId while the receipt now points at the NEW revision row — those must
-            // match (same chain) and return idempotently. A key reused against a DIFFERENT
-            // factory's quote in the SAME pricing request must 409, not silently return the
-            // wrong factory's quote (which would discard this call's response with a 200).
+            // Compare the QUOTE CHAIN, not the pricing request: a pricing request has one quote per factory, so on a
+            // revision replay the caller retries with the OLD quoteId while the receipt now points at the NEW revision row
+            // — those must match (same chain) and return idempotently.
             if (chainId(receiptQuote) != chainId(current)) {
                 throw new ApiException(HttpStatus.CONFLICT,
                     "clientRequestId นี้ถูกใช้ไปแล้วกับใบเสนอราคาโรงงานอื่น");
@@ -443,10 +410,9 @@ public class FactoryQuoteService {
             int rows = quotes.updateFirstResponse(quoteId, request.supplierQuoteRef(), optionalCurrencyCode(request.defaultCurrency()),
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote());
             if (rows == 0) {
-                // Someone else already moved this quote out of DRAFT/REQUESTED. If that was a
-                // concurrent replay of THIS SAME idempotency key that won the race, return its
-                // result rather than surfacing a conflict to a caller that is, from Import's
-                // point of view, just retrying a lost response.
+                // Someone else already moved this quote out of DRAFT/REQUESTED. If that was a concurrent replay of THIS SAME
+                // idempotency key that won the race, return its result rather than surfacing a conflict to a caller that is,
+                // from Import's point of view, just retrying a lost response.
                 FactoryQuoteRepository.FactoryQuoteResponseReceiptDto raced =
                     quotes.findResponseReceipt(actor.id(), clientRequestId).orElse(null);
                 if (raced != null) {
@@ -459,12 +425,7 @@ public class FactoryQuoteService {
             }
             quotes.replaceResponseItems(quoteId, normalizedItems);
             String toStatus = summary.status();
-            // A first/partial factory response only confirms the request is awaiting
-            // (or still awaiting) factory replies. COSTING_IN_PROGRESS is entered only
-            // by PricingCostingService.createDraft(), once every request item's factory
-            // has a current READY_FOR_COSTING quote — otherwise a multi-factory request
-            // would flip to "costing in progress" the moment the first factory answers,
-            // while other factories are still pending.
+            // A first/partial factory response only confirms the request is awaiting (or still awaiting) factory replies.
             if (PricingRequestStatus.IMPORT_REVIEWING.equals(summary.status())) {
                 int transitioned = pricingRequests.transition(summary.id(), summary.status(),
                     PricingRequestStatus.AWAITING_FACTORY_RESPONSE, null, null);
@@ -490,17 +451,9 @@ public class FactoryQuoteService {
             long newId = quotes.createRevision(current, request.supplierQuoteRef(), optionalCurrencyCode(request.defaultCurrency()),
                 request.paymentTerms(), request.leadTimeText(), request.revisionReason(), request.negotiationNote(), actor.id());
             quotes.replaceResponseItems(newId, normalizedItems);
-            // CEO-owns-costing (plan 2.3): there is no submitted costing row sitting around any
-            // more for a revision to mark "stale" (markOpenCostingsStale, deleted) — cost is
-            // computed fresh, once, at CEO-review time, from whichever quote is CURRENT then. So
-            // what a revision arriving here can invalidate instead is READINESS: if the request
-            // already sits at READY_FOR_CEO_REVIEW, that status asserted every item's factory
-            // quote was ready — this revision just un-readied one of them (the new revision is
-            // RESPONSE_RECEIVED, not READY_FOR_COSTING, until Import re-marks it). Pull the
-            // request back so the CEO cannot open a review whose price is about to change under
-            // them; Import must re-mark this revision ready to re-advance (FactoryQuoteService.
-            // markReadyForCosting). See PricingRequestStatus's READY_FOR_CEO_REVIEW ->
-            // AWAITING_FACTORY_RESPONSE back-edge for the state-machine side of this.
+            // CEO-owns-costing (plan 2.3): there is no submitted costing row sitting around any more for a revision to
+            // mark "stale" (markOpenCostingsStale, deleted) — cost is computed fresh, once, at CEO-review time, from
+            // whichever quote is CURRENT then.
             String toStatus = summary.status();
             if (PricingRequestStatus.READY_FOR_CEO_REVIEW.equals(summary.status())) {
                 int pulledBack = pricingRequests.transition(summary.id(), PricingRequestStatus.READY_FOR_CEO_REVIEW,
@@ -518,9 +471,9 @@ public class FactoryQuoteService {
         } else {
             throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคาโรงงานนี้ไม่สามารถรับคำตอบได้ในสถานะ " + current.status());
         }
-        // ON CONFLICT DO NOTHING never aborts the transaction (unlike letting the unique index
-        // throw and catching it): a duplicate key here means a concurrent racer already recorded
-        // the receipt first, so fetch and return its result instead of ours.
+        // ON CONFLICT DO NOTHING never aborts the transaction (unlike letting the unique index throw and catching it):
+        // a duplicate key here means a concurrent racer already recorded the receipt first, so fetch and return its
+        // result instead of ours.
         Optional<FactoryQuoteRepository.FactoryQuoteResponseReceiptDto> insertedReceipt =
             quotes.createResponseReceiptIfAbsent(respondedQuoteId, actor.id(), clientRequestId);
         if (insertedReceipt.isEmpty()) {
@@ -560,14 +513,9 @@ public class FactoryQuoteService {
     public FactoryQuoteDto markReadyForCosting(long quoteId, UserPrincipal actor) {
         requireRole(actor, IMPORT_ROLES);
         FactoryQuoteDto quote = requireQuote(quoteId);
-        // Serialize concurrent mark-ready calls on the SAME pricing request, so the
-        // "is every quote ready now?" check below cannot be run by two callers who each see only
-        // their own uncommitted markReady. Without this, two Import users marking the LAST two
-        // factories ready simultaneously would BOTH evaluate isFullyResolvable to false under
-        // READ COMMITTED, neither would advance, and the request would sit at
-        // AWAITING_FACTORY_RESPONSE with every quote ready — recoverable only by re-negotiating a
-        // quote to get it back out of READY_FOR_COSTING (markReady 409s on an already-ready one).
-        // Same pg_advisory_xact_lock key every other step in this chain uses.
+        // Serialize concurrent mark-ready calls on the SAME pricing request, so the "is every quote ready now?" check
+        // below cannot be run by two callers who each see only their own uncommitted markReady. Same
+        // pg_advisory_xact_lock key every other step in this chain uses.
         pricingRequests.lockPricingRequest(quote.pricingRequestId());
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
         requireMutablePricingRequest(summary, RESPONSE_STATUSES);
@@ -578,28 +526,17 @@ public class FactoryQuoteService {
         }
         addEvent(summary, actor, PricingRequestEventKind.FACTORY_RESPONSE_READY_FOR_COSTING, summary.status(), summary.status(),
             "Factory response ready for costing: " + quote.factoryName());
-        // CEO-owns-costing (plan 2.2): push the request forward the moment EVERY item's factory
-        // quote is ready — LandedCostCalculator.isFullyResolvable is the SAME predicate
-        // LandedCostCalculator.calculate() itself requires, so "we said ready" and "the
-        // calculator can run" cannot drift apart. A multi-factory request does not advance until
-        // the LAST factory's quote is marked ready; re-reading summary is unnecessary since
-        // quotes.markReady above did not touch the pricing_request row itself. No advisory lock
-        // guards this check (unlike PricingDecisionService.startReview) — the worst case of two
-        // quotes being marked ready in the same instant is a missed auto-advance, not an illegal
-        // state, and the plan does not call for locking here.
-        // Stock lines (V194): the predicate is now "every import line resolvable AND every
-        // in-transit line has an ETA" (LandedCostCalculator#isReadyForCeoReview); for an
-        // import-only request it is exactly isFullyResolvable, as before.
+        // CEO-owns-costing (plan 2.2): push the request forward the moment EVERY item's factory quote is ready —
+        // LandedCostCalculator.isFullyResolvable is the SAME predicate LandedCostCalculator.calculate() itself
+        // requires, so "we said ready" and "the calculator can run" cannot drift apart.
         if (PricingRequestStatus.AWAITING_FACTORY_RESPONSE.equals(summary.status())
                 && landedCosts.isReadyForCeoReview(summary)) {
             int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.AWAITING_FACTORY_RESPONSE,
                 PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
             if (transitioned == 1) {
-                // Reuses PRICING_COSTING_SUBMITTED: historically the event marking exactly this
-                // transition (AWAITING_FACTORY_RESPONSE -> READY_FOR_CEO_REVIEW), back when
-                // PricingCostingService.submit() drove it instead of this auto-advance. Keeping
-                // the same kind preserves one consistent "became ready for CEO review" trail
-                // across both eras of the workflow.
+                // Reuses PRICING_COSTING_SUBMITTED: historically the event marking exactly this transition
+                // (AWAITING_FACTORY_RESPONSE -> READY_FOR_CEO_REVIEW), back when PricingCostingService.submit() drove it
+                // instead of this auto-advance.
                 addEvent(summary, actor, PricingRequestEventKind.PRICING_COSTING_SUBMITTED,
                     PricingRequestStatus.AWAITING_FACTORY_RESPONSE, PricingRequestStatus.READY_FOR_CEO_REVIEW,
                     "All factory quotes ready for costing — request advanced for CEO review");
@@ -751,15 +688,9 @@ public class FactoryQuoteService {
                 throw new ApiException(HttpStatus.CONFLICT, "หน่วยราคาต้องเป็น " + requestItem.requestedPriceUnitBasis()
                     + " ตามที่ฝ่ายขายระบุ (รายการ " + requestItem.displayName() + ")");
             }
-            // quotedUnit is the DISPLAY unit (ตร.ม., PCS, ...) — LandedCostCalculator never reads
-            // it for arithmetic (only unitBasis feeds pricePerPiece/quantityToPieces; quotedUnit
-            // rides through as PricingCostingWriteItem.rawUnit, display-only). Routing it through
-            // UnitBasis.canonicalize alongside unitBasis was itself a defect, not just the frontend
-            // seed that fed it: canonicalize() forces its input to one of the four PER_ codes,
-            // rejecting anything else with a 422 — so a real unit like "ตร.ม." could never be
-            // stored here, only a basis code (or an English synonym that happens to canonicalize
-            // to one). requireUnitText only requires non-blank text, same as every other free-text
-            // field on this request.
+            // quotedUnit is the DISPLAY unit (ตร.ม., PCS, ...) — LandedCostCalculator never reads it for arithmetic (only
+            // unitBasis feeds pricePerPiece/quantityToPieces; quotedUnit rides through as PricingCostingWriteItem.rawUnit,
+            // display-only).
             String quotedUnit = requireUnitText(responseItem.quotedUnit(), "Factory quote unit");
             if (UnitBasis.PER_BOX.equals(unitBasis) && responseItem.piecesPerBox() == null) {
                 throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
@@ -927,12 +858,9 @@ public class FactoryQuoteService {
         return body.toString();
     }
 
-    /**
-     * Renders one numbered item block for {@link #emailBody}. Every optional field (catalog code,
-     * colour, surface/texture, size, unit, special requirement) is skipped outright when blank —
-     * this never prints "null" or a "-" placeholder. Model falls back to productDescription, same
-     * as the rest of this codebase's factory-facing text.
-     */
+    /** Renders one numbered item block for #emailBody. Every optional field (catalog code, colour, surface/texture,
+     * size, unit, special requirement) is skipped outright when blank — this never prints "null" or a "-"
+     * placeholder. */
     private void appendItemBlock(StringBuilder body, int lineNo, PricingRequestItemDto item) {
         String brand = firstText(item.brand(), null);
         String model = firstText(item.model(), item.productDescription());
@@ -947,8 +875,8 @@ public class FactoryQuoteService {
         if (catalogCode != null) {
             headerParts.add(headerParts.isEmpty() ? "Code: " + catalogCode : "  (Code: " + catalogCode + ")");
         }
-        // A line can be identified only by a ticket/catalog link (PricingRequestService accepts it), so
-        // the header may have nothing printable -- say "Item" rather than leave a dangling "1. ".
+        // A line can be identified only by a ticket/catalog link (PricingRequestService accepts it), so the header may
+        // have nothing printable -- say "Item" rather than leave a dangling "1. ".
         body.append(lineNo).append(". ")
             .append(headerParts.isEmpty() ? "Item" : String.join(" ", headerParts))
             .append("\n");
@@ -988,10 +916,7 @@ public class FactoryQuoteService {
         }
     }
 
-    /**
-     * Quantity formatting for the factory email — no trailing zeros, e.g. "120" rather than
-     * "120.000".
-     */
+    /** Quantity formatting for the factory email — no trailing zeros, e.g. "120" rather than "120.000". */
     private String formatQty(BigDecimal qty) {
         return qty.stripTrailingZeros().toPlainString();
     }
@@ -1007,11 +932,9 @@ public class FactoryQuoteService {
         return fallback != null && !fallback.isBlank() ? fallback.trim() : null;
     }
 
-    /**
-     * Requires non-blank free text and trims it — the same blank check {@link UnitBasis#canonicalize}
-     * applies, without forcing the value onto one of its four canonical codes. Used for
-     * {@code quotedUnit}, which is a display unit (ตร.ม., PCS, กล่อง, ...), not a basis.
-     */
+    /** Requires non-blank free text and trims it — the same blank check UnitBasis#canonicalize applies, without
+     * forcing the value onto one of its four canonical codes. Used for quotedUnit, which is a display unit (ตร.ม.,
+     * PCS, กล่อง, ...), not a basis. */
     private static String requireUnitText(String value, String fieldLabel) {
         if (value == null || value.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, fieldLabel + " ต้องไม่เว้นว่าง");

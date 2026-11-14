@@ -23,15 +23,8 @@ public record CreateTicketRequest(
     // Optional: a deal may start at the lead stage with no product items
     // yet (lightweight DRAFT); items arrive later via editItems before submit.
     List<@Valid TicketItemRequest> items,
-    /**
-     * Optional วันติดตามครั้งถัดไป, set at creation.
-     *
-     * <p>Exists because the stage-advance readiness gate
-     * ({@code TicketService#requireStageAdvanceReadiness}) refuses EVERY forward move while
-     * {@code next_follow_up_at} is null — so a deal created without one could not be advanced at
-     * all, and the rep met that refusal on their very first action with no clue it was coming.
-     * Collecting it here is what makes a freshly created deal actually movable.
-     */
+    /** Optional วันติดตามครั้งถัดไป, set at creation. Collecting it here is what makes a freshly created deal
+     * actually movable. */
     LocalDate nextFollowUpAt,
     /**
      * Optional; {@code true} records that the deal was created quotation-first

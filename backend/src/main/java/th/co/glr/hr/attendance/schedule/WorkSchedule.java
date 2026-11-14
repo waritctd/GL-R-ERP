@@ -7,32 +7,8 @@ import java.time.LocalTime;
 import java.time.ZoneId;
 import java.util.Set;
 
-/**
- * The expected working day for one employee on one date.
- *
- * <p>Immutable and free of Spring/config types on purpose: {@code AttendanceDailyCalculator} takes
- * one of these as an argument rather than reading configuration itself, so the calculator stays a
- * pure function and a future per-division schedule is a new {@link WorkScheduleResolver} rather
- * than a change to the calculation.
- *
- * <p><strong>§76:</strong> {@code lateMinutes} / {@code earlyLeaveMinutes} derived from this
- * schedule are reporting-only. Thai Labour Protection Act §76 forbids deducting wages as a penalty
- * for lateness or absence.
- *
- * @param zone         zone the punch timestamps are interpreted in (business-day zone)
- * @param workStart    expected clock-in time, e.g. 08:30
- * @param workEnd      expected clock-out time, e.g. 17:30
- * @param graceMinutes minutes after {@code workStart} before a check-in counts late. A
- *                     <strong>threshold, not an allowance</strong> — see {@link #isLate}.
- * @param workdays     days of the week the schedule applies to; other days are non-workdays
- * @param requiresCheckOut whether a missing check-out is a compliance problem for this schedule.
- *                     {@code true} for every schedule except V117's {@code SALES_5D}: §4 of the
- *                     governing announcement (ประกาศ วันเวลาทำงาน และการหยุดงาน, effective 1 ต.ค.
- *                     2567) lets ฝ่ายขาย scan in only ("ฝ่ายขาย อนุญาตให้ทาบบัตรเข้างานอย่างเดียวได้").
- *                     When {@code false}, {@code AttendanceDailyCalculator} must not flag a lone
- *                     check-in as {@code MISSING_CHECK_OUT} — check-in is still mandatory for
- *                     everyone; only the check-out side of the requirement is relaxed.
- */
+/** The expected working day for one employee on one date. Thai Labour Protection Act §76 forbids deducting
+ * wages as a penalty for lateness or absence. */
 public record WorkSchedule(
     ZoneId zone,
     LocalTime workStart,
@@ -54,12 +30,9 @@ public record WorkSchedule(
         workdays = Set.copyOf(workdays);
     }
 
-    /**
-     * Convenience constructor for the common case of a schedule that requires both scans —
-     * every schedule before V117's {@code SALES_5D}. Keeps every pre-existing call site (production
-     * and test) compiling unchanged; only sales-schedule-specific code needs the 6-arg canonical
-     * constructor directly.
-     */
+    /** Convenience constructor for the common case of a schedule that requires both scans — every schedule before
+     * V117's SALES_5D. Keeps every pre-existing call site (production and test) compiling unchanged; only
+     * sales-schedule-specific code needs the 6-arg canonical constructor directly. */
     public WorkSchedule(ZoneId zone, LocalTime workStart, LocalTime workEnd, int graceMinutes,
             Set<DayOfWeek> workdays) {
         this(zone, workStart, workEnd, graceMinutes, workdays, true);
@@ -69,24 +42,17 @@ public record WorkSchedule(
         return date != null && workdays.contains(date.getDayOfWeek());
     }
 
-    /**
-     * The instant that separates "this lone punch was an arrival" from "this lone punch was a
-     * departure" — the midpoint of the working window (13:00 for 08:30–17:30).
-     *
-     * <p>Derived, never hardcoded, so moving the working hours moves the boundary with them.
-     */
+    /** The instant that separates "this lone punch was an arrival" from "this lone punch was a departure" — the
+     * midpoint of the working window (13:00 for 08:30–17:30). Derived, never hardcoded, so moving the working
+     * hours moves the boundary with them. */
     public LocalTime midpoint() {
         long halfDay = Duration.between(workStart, workEnd).toMinutes() / 2;
         return workStart.plusMinutes(halfDay);
     }
 
-    /**
-     * True when a check-in at {@code checkIn} counts as late.
-     *
-     * <p>Grace is a threshold: with a 5-minute grace, 08:34 is not late at all, and 08:40 is late
-     * by <em>10</em> minutes (measured from 08:30), not 4. Callers must use {@link #lateMinutes}
-     * for the magnitude rather than subtracting the grace themselves.
-     */
+    /** True when a check-in at checkIn counts as late. Grace is a threshold: with a 5-minute grace, 08:34 is not
+     * late at all, and 08:40 is late by 10 minutes (measured from 08:30), not 4. Callers must use #lateMinutes for
+     * the magnitude rather than subtracting the grace themselves. */
     public boolean isLate(LocalTime checkIn) {
         return checkIn != null && checkIn.isAfter(workStart.plusMinutes(graceMinutes));
     }

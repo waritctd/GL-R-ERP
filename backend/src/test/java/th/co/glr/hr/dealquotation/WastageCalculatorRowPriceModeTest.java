@@ -40,8 +40,8 @@ class WastageCalculatorRowPriceModeTest {
         }
     }
 
-    /** The wrong-way-round half, and the one that protects every document that exists today: on a
-     * single-mode document the header governs, and nothing left on a row can reprice it. */
+    /** The wrong-way-round half, and the one that protects every document that exists today: on a single-mode
+     * document the header governs, and nothing left on a row can reprice it. */
     @Test
     void onASingleModeDocument_theRowsOwnModeIsNotConsulted() {
         for (String documentMode : List.of(NET, SPECIAL_SQM, DIRECT_NET)) {
@@ -53,10 +53,9 @@ class WastageCalculatorRowPriceModeTest {
         }
     }
 
-    /** MIXED is never the answer: a row is always priced in exactly one of the three. A row of a
-     * MIXED document with no mode of its own cannot be written (the service refuses it), but a
-     * READ must not fail on one — it reads as NET, the mode a row with no choice made has always
-     * been in. */
+    /** MIXED is never the answer: a row is always priced in exactly one of the three. A row of a MIXED document
+     * with no mode of its own cannot be written (the service refuses it), but a READ must not fail on one — it
+     * reads as NET, the mode a row with no choice made has always been in. */
     @Test
     void aRowIsNeverPricedInMixed_evenWhenItStatesNoModeOfItsOwn() {
         assertThat(WastageCalculator.rowPriceMode(MIXED, null)).isEqualTo(NET);
@@ -76,8 +75,8 @@ class WastageCalculatorRowPriceModeTest {
         }
     }
 
-    /** A ROW may state one of the three, or nothing. Never MIXED — "this row is priced in several
-     * ways" means nothing — and never a code the engine does not know. */
+    /** A ROW may state one of the three, or nothing. Never MIXED — "this row is priced in several ways" means
+     * nothing — and never a code the engine does not know. */
     @Test
     void aRowsMode_mayBeOneOfTheThree_orAbsent_andNeverMixed() {
         for (String mode : new String[] {null, NET, SPECIAL_SQM, DIRECT_NET}) {
@@ -88,15 +87,15 @@ class WastageCalculatorRowPriceModeTest {
         }
     }
 
-    /** …and the row-level bound is reached through the document, which is how a real request
-     * arrives ({@code @Valid} cascades into {@code items}). */
+    /** …and the row-level bound is reached through the document, which is how a real request arrives (@Valid
+     * cascades into items). */
     @Test
     void aBadRowMode_failsTheWholeRequest() {
         UpsertDealQuotationRequest request = new UpsertDealQuotationRequest(null, null, null, null, 30,
             "CREDIT", 30, 30, null, MIXED, "TH", "THB", List.of(row().withPriceMode("MIXED")));
         assertThat(VALIDATOR.validate(request)).isNotEmpty();
-        // …and it is that row, not something else about the fixture: the same request with the row
-        // stating a real mode is clean.
+        // …and it is that row, not something else about the fixture: the same request with the row stating a real mode
+        // is clean.
         assertThat(VALIDATOR.validate(new UpsertDealQuotationRequest(null, null, null, null, 30,
             "CREDIT", 30, 30, null, MIXED, "TH", "THB", List.of(row().withPriceMode(NET))))).isEmpty();
     }

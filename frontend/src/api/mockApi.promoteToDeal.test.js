@@ -1,15 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { api } from './mockApi.js';
 
-// GLA-136 (owner ruling 2026-09-30) — the MOCK's mirror of the quotation-only container ticket
-// (V193) and DealQuotationService#promoteToDeal, AS RE-GATED BY SLICE 1 (backend 2ed3468e,
-// IA §7): the flag is provenance only (the list no longer hides such a deal; stage / entry-channel /
-// tender no longer refuse it), the two remaining refusals (editItems, pricing-request create) are
-// keyed on "a live DEAL_DIRECT quotation exists" (DirectQuotationLocks), and the confirm-order
-// endpoint (still `promoteToDeal` in this tree's hrApi) no longer requires quotation_only. This pins
-// the mock's own plumbing so demo/QA/agents driving VITE_USE_MOCKS=true see the real flow. It is
-// NOT evidence about authorization: the mock's permission gates are not authoritative (CLAUDE.md) —
-// DealQuotationConfirmOrderIntegrationTest against real Postgres is.
+// Checks mock quotation-to-deal promotion and the live-direct-quotation locks retained by the backend.
 
 const LOCK_REFUSAL = 'ดีลนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
 
@@ -199,8 +191,8 @@ describe('mock dealQuotations.promoteToDeal (GLA-136)', () => {
     expect(ticket.summary.status).toBe('draft');
   });
 
-  // Slice 1 (2ed3468e) DROPPED the quotation_only precondition: confirming the order from an APPROVED
-  // direct quotation works on an ordinary deal too — which is exactly the deal-page CTA slice 2 adds
+  // Slice 1 (2ed3468e) DROPPED the quotation_only precondition: confirming the order from an APPROVED direct
+  // quotation works on an ordinary deal too — which is exactly the deal-page CTA slice 2 adds
   // (CONFIRM_ORDER_DIRECT). This used to pin a 409 here.
   it('confirms the order on an ordinary pipeline deal too (quotation_only precondition dropped by slice 1)', async () => {
     const { ticket } = await api.tickets.create({

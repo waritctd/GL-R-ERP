@@ -44,22 +44,9 @@ public final class ThaiText {
         return d.getDayOfMonth() + " " + THAI_MONTHS[d.getMonthValue() - 1] + " " + (d.getYear() + 543);
     }
 
-    /**
-     * A Thai-reader date range for a notification body.
-     *
-     * <ul>
-     *   <li>{@code from.equals(to)}, or {@code to == null} -- a single date: {@link #date(LocalDate)}.
-     *   <li>Same month <b>and</b> year -- compact form, day range then one month/year:
-     *       {@code 9–12 สิงหาคม 2569} (EN DASH, no surrounding spaces).
-     *   <li>Otherwise -- full form, each side its own day+month, year stated once at the end:
-     *       {@code 30 กรกฎาคม – 2 สิงหาคม 2569} (EN DASH, one space each side). Deliberately verbatim
-     *       per the approved copy: the FROM side does not repeat the year even when {@code from} and
-     *       {@code to} fall in different years -- this is the same two-way split the approved copy
-     *       specifies, not a third cross-year case.
-     * </ul>
-     *
-     * @param from must be non-null -- every caller in this codebase has a required start date.
-     */
+    /** A Thai-reader date range for a notification body. from.equals(to), or to == null -- a single date:
+     * #date(LocalDate). Same month and year -- compact form, day range then one month/year: 9–12 สิงหาคม 2569 (EN
+     * DASH, no surrounding spaces). */
     public static String dateRange(LocalDate from, LocalDate to) {
         if (to == null || from.equals(to)) {
             return date(from);
@@ -75,15 +62,8 @@ public final class ThaiText {
         return d.getDayOfMonth() + " " + THAI_MONTHS[d.getMonthValue() - 1];
     }
 
-    /**
-     * {@code MONTH (year+543)}, e.g. สิงหาคม 2569 -- the whole-month counterpart to {@link
-     * #date(LocalDate)}, for a report titled by month rather than by day (e.g.
-     * {@code AttendanceMonthlySummaryExporter}'s "สรุปเวลาทำงานประจำเดือน" title line). Reuses the
-     * same {@link #THAI_MONTHS} table {@link #date(LocalDate)}/{@link #dayMonth(LocalDate)} do, so a
-     * future month-name edit cannot land in one and not the other.
-     *
-     * @return {@code ""} for a {@code null} month, mirroring {@link #date(LocalDate)}'s null-guard.
-     */
+    /** MONTH (year+543), e.g. สิงหาคม 2569 -- the whole-month counterpart to #date(LocalDate), for a report titled
+     * by month rather than by day (e.g. AttendanceMonthlySummaryExporter's "สรุปเวลาทำงานประจำเดือน" title line). */
     public static String monthYear(YearMonth month) {
         if (month == null) {
             return "";
@@ -91,19 +71,8 @@ public final class ThaiText {
         return THAI_MONTHS[month.getMonthValue() - 1] + " " + (month.getYear() + 543);
     }
 
-    /**
-     * Grouped-thousands baht amount, with the {@code .00} dropped for a whole number -- {@code 1,500}
-     * for 1500.00, {@code 1,500.50} for 1500.50. Never prepends a currency symbol: the approved copy
-     * always follows this with the literal word {@code บาท}.
-     *
-     * <p>Builds a fresh format string per call rather than a shared {@code DecimalFormat} field --
-     * {@code DecimalFormat} is not thread-safe and this class's callers (notification-sending
-     * services) are Spring singletons, the same reasoning {@code LorYor01Renderer#money} documents.
-     * {@link Locale#US} is pinned explicitly so the "," grouping / "." decimal separators this format
-     * relies on do not depend on the JVM's default locale.
-     *
-     * @return {@code "-"} for a {@code null} amount.
-     */
+    /** Grouped-thousands baht amount, with the .00 dropped for a whole number -- 1,500 for 1500.00, 1,500.50 for
+     * 1500.50. Never prepends a currency symbol: the approved copy always follows this with the literal word บาท. */
     public static String money(BigDecimal amount) {
         if (amount == null) {
             return "-";
@@ -170,9 +139,8 @@ public final class ThaiText {
         if (satang == 0) {
             sb.append("ถ้วน");
         } else {
-            // Satang is its own two-digit group (0-99) -- the ones-digit เอ็ด rule still applies
-            // relative to satang's OWN reading (e.g. 21 สตางค์ = ยี่สิบเอ็ดสตางค์), independent of
-            // whatever came before "บาท".
+            // Satang is its own two-digit group (0-99) -- the ones-digit เอ็ด rule still applies relative to satang's OWN
+            // reading (e.g. 21 สตางค์ = ยี่สิบเอ็ดสตางค์), independent of whatever came before "บาท".
             sb.append(readNumber(satang)).append("สตางค์");
         }
         return sb.toString();
@@ -199,8 +167,8 @@ public final class ThaiText {
             String group = padded.substring(chunk * 6, chunk * 6 + 6);
             appendGroup(sb, group);
             if (group.chars().anyMatch(ch -> ch != '0')) {
-                // 0 for the base (rightmost) group -- "ล้าน".repeat(0) is "", so this is a no-op
-                // there without needing a separate isLastChunk guard.
+                // 0 for the base (rightmost) group -- "ล้าน".repeat(0) is "", so this is a no-op there without needing a
+                // separate isLastChunk guard.
                 sb.append("ล้าน".repeat(numChunks - 1 - chunk));
             }
         }
@@ -238,12 +206,8 @@ public final class ThaiText {
         }
     }
 
-    /**
-     * A duration in whole hours plus leftover minutes -- {@code 3 ชม.} for exactly 180 minutes,
-     * {@code 3 ชม. 30 นาที} for 210, {@code 45 นาที} for anything under an hour.
-     *
-     * @return {@code "-"} for zero or a negative minute count.
-     */
+    /** A duration in whole hours plus leftover minutes -- 3 ชม. for exactly 180 minutes, 3 ชม. 30 นาที for 210, 45
+     * นาที for anything under an hour. */
     public static String hours(int minutes) {
         if (minutes <= 0) {
             return "-";

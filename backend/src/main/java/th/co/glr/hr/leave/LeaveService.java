@@ -93,20 +93,20 @@ public class LeaveService {
     // completed months of service out of a full 12 -- see #employeeAnnualQuota.
     private static final int FULL_SERVICE_MONTHS = 12;
     private static final BigDecimal HALF_DAY_INCREMENT = new BigDecimal("0.5");
-    // §5.2 leave purpose (V125): the five NAMED purposes plus OTHER, the open-ended catch-all for
-    // the announcement's trailing "เป็นต้น" ("etc.") -- see normalizePurposeCode's Javadoc.
+    // §5.2 leave purpose (V125): the five NAMED purposes plus OTHER, the open-ended catch-all for the
+    // announcement's trailing "เป็นต้น" ("etc.") -- see normalizePurposeCode's Javadoc.
     private static final Set<String> KNOWN_PURPOSE_CODES = Set.of(
         "DRIVING_LICENSE_OR_GOVERNMENT", "FAMILY_NECESSITY", "RELIGIOUS_PRACTICE",
         "WEDDING", "FAMILY_FUNERAL", "OTHER");
     private static final String WEDDING_PURPOSE_CODE = "WEDDING";
-    // §5.2 wedding leave cap ("ลาเข้าพิธีสมรส จัดงานสมรสของบุตรลาได้ไม่เกิน 3 วัน"). See the check
-    // itself in #autoRejectNote for why this is a hardcoded Java constant, not a hr.leave_type
-    // column, the same way SICK's certificate requirement and PERSONAL's probation gate are.
+    // §5.2 wedding leave cap ("ลาเข้าพิธีสมรส จัดงานสมรสของบุตรลาได้ไม่เกิน 3 วัน"). See the check itself in
+    // #autoRejectNote for why this is a hardcoded Java constant, not a hr.leave_type column, the same way SICK's
+    // certificate requirement and PERSONAL's probation gate are.
     private static final BigDecimal WEDDING_LEAVE_MAX_DAYS = new BigDecimal("3.00");
     // §5.3.4: types the announcement names explicitly ("ลาพักร้อน ลากิจ" -- VACATION, PERSONAL).
     private static final Set<String> RESIGNATION_GATED_LEAVE_TYPES = Set.of("VACATION", "PERSONAL");
-    // §5.3.3: the pair the announcement names ("ลากิจและลาพักผ่อน") -- each type maps to the other,
-    // so a single lookup tells #contiguousLeaveRuleOutcome which type to search for.
+    // §5.3.3: the pair the announcement names ("ลากิจและลาพักผ่อน") -- each type maps to the other, so a single
+    // lookup tells #contiguousLeaveRuleOutcome which type to search for.
     private static final Map<String, String> CONTIGUOUS_LEAVE_PAIR = Map.of(
         "VACATION", "PERSONAL",
         "PERSONAL", "VACATION"
@@ -121,21 +121,12 @@ public class LeaveService {
     //      other take SICK leave at all). Departments below this floor are EXEMPT ENTIRELY, not just
     //      down to one person; do not "fix" this back to a 1-person floor or the literal text.
     private static final int MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE = 3;
-    // §5.3.3: how far past the new request's own dates to search for a same-employee request of the
-    // paired type. 14 days comfortably bounds every seeded schedule's longest realistic run of
-    // consecutive non-workdays (WEEKEND_DUTY's is the extreme case at 5) with room to spare -- see
-    // #hasInterveningWorkday.
+    // §5.3.3: how far past the new request's own dates to search for a same-employee request of the paired type.
+    // 14 days comfortably bounds every seeded schedule's longest realistic run of consecutive non-workdays
+    // (WEEKEND_DUTY's is the extreme case at 5) with room to spare -- see #hasInterveningWorkday.
     private static final int CONTIGUOUS_CHECK_WINDOW_DAYS = 14;
-    // §5.3.5 VACATION carry-forward (V127): no grant is ever computed for an earned_year before
-    // this constant -- see #ensureCarryoverGrant. The governing announcement took effect 1 Oct
-    // 2567/2024, but this is deliberately 2025 (the first FULL calendar year it governs), not 2024
-    // (2567's own partial first year): computing a carry-out for 2024 would require deciding what
-    // "annual quota" means for a year the rule only covered for its last quarter -- an
-    // interpretation this migration does not make, per CLAUDE.md's "historical years must not be
-    // invented ... a wrong balance is worse than none." No hr.leave_carryover row is ever written
-    // for earned_year < 2025, and no employee's 2024 (or earlier) vacation usage ever grants
-    // anything into 2025 -- this is a deliberate NO-BACKFILL boundary, not an oversight; state it
-    // plainly when reporting this change.
+    // §5.3.5 VACATION carry-forward (V127): no grant is ever computed for an earned_year before this constant --
+    // see #ensureCarryoverGrant.
     private static final int CARRY_FORWARD_BASELINE_YEAR = 2025;
 
     private final LeaveRepository leaveRepository;
@@ -366,9 +357,8 @@ public class LeaveService {
             .toList();
     }
 
-    /** {@link #ownLeaveReport}/{@link #teamLeaveReport} shared assembly -- {@code employeeId} must
-     * already be authorization-vetted by the caller (self, or a {@code teamBalances} row); this
-     * method performs no access check of its own. */
+    /** #ownLeaveReport/#teamLeaveReport shared assembly -- employeeId must already be authorization-vetted by the
+     * caller (self, or a teamBalances row); this method performs no access check of its own. */
     private LeaveReportEmployeeDto buildReportSection(
             long employeeId, String employeeCode, String employeeName,
             List<LeaveBalanceDto> balances, LocalDate from, LocalDate to) {
@@ -382,9 +372,9 @@ public class LeaveService {
             hireDate, balances, requests);
     }
 
-    /** {@code employeeOptions}' own "self" row (code/name/department) for {@code employeeId} --
-     * reuses {@link LeaveRepository#findEmployeeOptions} the same way {@link #teamBalances} does,
-     * rather than a third source for an employee's display name. */
+    /** employeeOptions' own "self" row (code/name/department) for employeeId -- reuses
+     * LeaveRepository#findEmployeeOptions the same way #teamBalances does, rather than a third source for an
+     * employee's display name. */
     private LeaveEmployeeOption selfOption(long employeeId) {
         return leaveRepository.findEmployeeOptions(employeeId, false).stream()
             .filter(LeaveEmployeeOption::self)
@@ -411,11 +401,9 @@ public class LeaveService {
         return month == null ? LocalDate.of(year, 12, 31) : start.withDayOfMonth(start.lengthOfMonth());
     }
 
-    /**
-     * Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
-     * position/department/division -- same access predicate as {@link #balances}: own record, HR/CEO,
-     * or the employee's direct manager.
-     */
+    /** Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
+     * position/department/division -- same access predicate as #balances: own record, HR/CEO, or the employee's
+     * direct manager. */
     public LeaveContactDefaultsDto contactDefaults(UserPrincipal user, Long requestedEmployeeId) {
         long actorEmployeeId = requireEmployeeId(user);
         long employeeId = requestedEmployeeId == null ? actorEmployeeId : requestedEmployeeId;
@@ -450,30 +438,21 @@ public class LeaveService {
         LocalDate predicateFrom = request.startDate().isBefore(noticeFrom) ? request.startDate() : noticeFrom;
         Predicate<LocalDate> isWorkingDay =
             leaveRepository.workingDayPredicate(employeeId, predicateFrom, request.endDate());
-        // Partial-day span (V166): resolved ONCE here (at most two extra queries -- one per distinct
-        // boundary date, none at all for a whole-day request) and reused by BOTH validateSubDayTimes
-        // (time-bound validation) and the spanFractions ledger below, rather than each resolving the
-        // same date's WorkSchedule separately. null for a whole-day request (startTime == null) --
-        // every timed-request-only code path below is gated on that same null check.
+        // Partial-day span: resolved ONCE here and reused by BOTH validateSubDayTimes and the spanFractions ledger
+        // below, rather than each resolving the same date's WorkSchedule separately.
         WorkSchedule startSchedule = request.startTime() != null
             ? leaveRepository.resolveOwnSchedule(employeeId, request.startDate()) : null;
         WorkSchedule endSchedule = request.startTime() == null ? null
             : request.startDate().equals(request.endDate()) ? startSchedule
             : leaveRepository.resolveOwnSchedule(employeeId, request.endDate());
         validateSubDayTimes(request, leaveType.dayCountBasis(), isWorkingDay, startSchedule, endSchedule);
-        // §5.2 leave purpose (V125): validated up front, same as leaveTypeCode -- see
-        // normalizePurposeCode's Javadoc for why this can never refuse a request for lacking a
-        // matching NAMED category (OTHER is always available).
+        // §5.2 leave purpose (V125): validated up front, same as leaveTypeCode -- see normalizePurposeCode's Javadoc
+        // for why this can never refuse a request for lacking a matching NAMED category (OTHER is always available).
         String purposeCode = normalizePurposeCode(request.purposeCode());
         boolean requestedAsEmergency = Boolean.TRUE.equals(request.requestedAsEmergency());
 
-        // Partial-day span (V166): the per-date fraction ledger for a TIMED request (single- or
-        // multi-day) -- null for a whole-day request, in which case every call site below falls back
-        // to its pre-V166 behaviour UNCHANGED (see LeaveDayMath's own "Partial-day span" section
-        // header for why that old path is never touched, not merely reused). Built once, shared by
-        // #computeTotalDays and #computeQuotaSplit so a submitted request's totalDays and its
-        // per-year attribution can never drift apart (the same "identical arguments" guarantee this
-        // class already gives #submit vs #preview elsewhere).
+        // Partial-day span: the per-date fraction ledger for a TIMED request -- null for a whole-day request, in which
+        // case every call site below falls back to its pre-V166 behaviour UNCHANGED.
         Map<LocalDate, BigDecimal> spanFractions = request.startTime() == null ? null
             : LeaveDayMath.spanDayFractions(
                 request.startDate(), request.endDate(), request.startTime(), request.endTime(),
@@ -559,32 +538,20 @@ public class LeaveService {
                 contact.phone()
             );
         } catch (DuplicateKeyException e) {
-            // §5.6 once-per-employment (V116) race backstop: ux_leave_once_per_employment catches a
-            // concurrent second submission that slipped past the Java-level check in autoRejectNote
-            // above (both requests read "no existing claim" before either had committed). The
-            // Java-level check is what produces the normal AUTO_REJECTED-with-systemNote UX; this is
-            // only the last-resort guard when two submissions genuinely race.
-            //
-            // NOTE: this maps ANY DuplicateKeyException thrown by leaveRepository.create to the
-            // once-per-employment message -- safe today, since ux_leave_once_per_employment is the
-            // only unique constraint hr.leave_request has. If a future migration adds another unique
-            // index on this table, this catch will need to inspect the constraint name (or a similar
-            // discriminator) before it can keep assuming every DuplicateKeyException here means this.
+            // §5.6 once-per-employment (V116) race backstop: ux_leave_once_per_employment catches a concurrent second
+            // submission that slipped past the Java-level check in autoRejectNote above (both requests read "no existing
+            // claim" before either had committed).
             throw new ApiException(HttpStatus.CONFLICT, "การลาประเภทนี้ใช้สิทธิ์ได้เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน และมีคำขอที่ใช้สิทธิ์นี้ไปแล้ว");
         }
-        // §5.2 emergency-filing exception (V125): a small follow-up UPDATE by id, same shape as
-        // #attachFile below -- kept OUT of #create's own parameter list so every pre-existing
-        // caller/test of LeaveRepository#create is unaffected by this addition (see
-        // LeaveRepository#markEmergencyFiling's Javadoc).
+        // §5.2 emergency-filing exception (V125): a small follow-up UPDATE by id, same shape as #attachFile below --
+        // kept OUT of #create's own parameter list so every pre-existing caller/test of LeaveRepository#create is
+        // unaffected by this addition (see LeaveRepository#markEmergencyFiling's Javadoc).
         if (autoReject.emergencyFilingApplied()) {
             leaveRepository.markEmergencyFiling(id);
         }
         // Phase A0a (structured rejection outcome, V131): same small-follow-up-UPDATE-by-id shape as
-        // markEmergencyFiling immediately above and #attachFile below -- kept OUT of #create's own
-        // parameter list for the identical reason (every pre-existing caller/test of
-        // LeaveRepository#create stays unaffected). Only called for an actually-rejected outcome;
-        // system_note_code/system_note_params stay NULL for an APPROVED request (create() never sets
-        // them to anything but their SQL default), the same as system_note itself.
+        // markEmergencyFiling immediately above and #attachFile below -- kept OUT of #create's own parameter list for
+        // the identical reason (every pre-existing caller/test of LeaveRepository#create stays unaffected).
         if (outcome != null) {
             leaveRepository.recordAutoRejectReason(id, outcome.code(), outcome.params());
         }
@@ -598,15 +565,12 @@ public class LeaveService {
             leaveRepository.recordRuleWarnings(id, autoReject.warnings(), autoReject.unpaidByRuleDays());
         }
         // V118 cross-year quota fix: persist the per-year attribution now that the parent row exists
-        // (leave_request_quota_year.leave_request_id is a FK to it). Same transaction as #create
-        // above (this method is @Transactional).
+        // (leave_request_quota_year.leave_request_id is a FK to it). Same transaction as #create above (this method is
+        // @Transactional).
         leaveRepository.insertQuotaYearSplits(id, quotaYearSplits);
         if (hasAttachment) {
-            // V134 storage-durability fix: leave attachments (e.g. a SICK medical certificate) go
-            // straight to the database now -- never to the app container's ephemeral disk. See
-            // FileStorageService#storeInDatabase's javadoc for why, and LeaveAttachmentRepository
-            // #saveWithContent for how the blob insert and the storage_state flip land in this same
-            // @Transactional method.
+            // V134 storage-durability fix: leave attachments (e.g. a SICK medical certificate) go straight to the database
+            // now -- never to the app container's ephemeral disk.
             FileStorageService.StoredContent storedContent =
                 fileStorage.storeInDatabase("leave", id, attachment, LEAVE_ATTACHMENT_MIME_TYPES);
             LeaveAttachmentDto savedAttachment = leaveAttachments.saveWithContent(
@@ -704,20 +668,9 @@ public class LeaveService {
         LocalDate startDate = request.startDate();
         LocalDate endDate = request.endDate();
         if (startDate == null || endDate == null) {
-            // Nullable-dates case: only the categorical eligibility gates can be evaluated -- see
-            // this method's own Javadoc for why LocalDate.now(clock) stands in for the request's own
-            // (not-yet-chosen) startDate here, and why datesEvaluated/coverageEvaluated must both be
-            // explicit false rather than silently defaulting to an "approved" reading.
-            // V164: totalDays is genuinely unknown before dates are chosen -- pass null through to
-            // #eligibilityRuleOutcome (see its Javadoc and #personalProbationRuleOutcome's identical
-            // caveat). Only `.blocking()` is surfaced here; a WARN_UNPAID_ALL outcome among
-            // `.warnings()` is intentionally NOT shown by this dateless preview path -- see this
-            // method's own Javadoc ("ruleWarnings/unpaidByRuleDays" section) and LeavePreviewDto's
-            // Javadoc for why: every WARN message needs a real totalDays to render its day-count
-            // clause, which this call does not have, so reporting the outcome here would fabricate a
-            // "0 วัน" answer rather than an honest "not yet known" one. This IS consistent with
-            // #submit's own post-V164 behaviour: a WARN no longer blocks, so reporting `outcome = null`
-            // for `blocking` here (nothing blocking) is correct, not merely convenient.
+            // Nullable-dates case: only the categorical eligibility gates can be evaluated. V164: totalDays is genuinely
+            // unknown before dates are chosen -- pass null through to #eligibilityRuleOutcome (see its Javadoc and
+            // #personalProbationRuleOutcome's identical caveat).
             EligibilityResult eligibilityResult =
                 eligibilityRuleOutcome(leaveType, employeeId, LocalDate.now(clock), null);
             return new LeavePreviewDto(
@@ -729,13 +682,9 @@ public class LeaveService {
         LocalDate noticeFrom = LocalDate.now(clock).plusDays(1);
         Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(employeeId,
             startDate.isBefore(noticeFrom) ? startDate : noticeFrom, endDate);
-        // Partial-day span (V166): LeavePreviewRequest now carries the SAME optional startTime/
-        // endTime SubmitLeaveRequest does (widened from the original "no sub-day times in this
-        // shape at all" design -- see LeavePreviewRequest's own Javadoc for why), resolved and
-        // ledgered the IDENTICAL way #submit does, so a previewed totalDays can never drift from
-        // what #submit would actually persist for the same request. null request times -> null
-        // schedules/ledger -> the unchanged pre-V166 whole-day path, exactly as before this field
-        // existed.
+        // Partial-day span: LeavePreviewRequest now carries the SAME optional startTime/ endTime SubmitLeaveRequest
+        // does, resolved and ledgered the IDENTICAL way #submit does, so a previewed totalDays can never drift from
+        // what #submit would actually persist for the same request.
         WorkSchedule startSchedule = request.startTime() != null
             ? leaveRepository.resolveOwnSchedule(employeeId, startDate) : null;
         WorkSchedule endSchedule = request.startTime() == null ? null
@@ -753,24 +702,20 @@ public class LeaveService {
         LeaveRuleOutcome outcome = autoReject.blocking();
         boolean approved = outcome == null;
         int quotaYear = startDate.getYear();
-        // §5.3.5 pool choice (V161): same resolve-once-per-request reasoning as #submit above, so a
-        // previewed split and what #submit would actually persist for the SAME preference can never
-        // drift apart (matching this method's own "identical arguments" guarantee -- see its Javadoc).
+        // §5.3.5 pool choice (V161): same resolve-once-per-request reasoning as #submit above, so a previewed split
+        // and what #submit would actually persist for the SAME preference can never drift apart (matching this
+        // method's own "identical arguments" guarantee -- see its Javadoc).
         LeaveQuotaPoolPreference quotaPoolPreference = LeaveQuotaPoolPreference.orDefault(request.quotaPoolPreference());
-        // V164: same unpaid-by-rule exclusion #submit applies -- see that call site's comment. A
-        // previewed split can therefore never drift from what #submit would actually persist for the
-        // same rule outcome, matching this method's own "identical arguments" guarantee.
+        // V164: same unpaid-by-rule exclusion #submit applies -- see that call site's comment. A previewed split can
+        // therefore never drift from what #submit would actually persist for the same rule outcome, matching this
+        // method's own "identical arguments" guarantee.
         QuotaSplitResult split = computeQuotaSplit(
             employeeId, leaveType, startDate, endDate, totalDays, isWorkingDay, quotaYear, approved,
             quotaPoolPreference, autoReject.unpaidByRuleDays(), spanFractions);
 
-        // V164 follow-up: mirrors AutoRejectResult#warnings()/#unpaidByRuleDays() exactly -- the SAME
-        // values #submit would persist for the identical request -- see this method's Javadoc and
-        // LeavePreviewDto's for the full contract. LeaveRuleWarningDto#from is its documented
-        // in-memory LeaveRuleOutcome -> DTO converter (until now unused -- LeaveRepository#mapRequest
-        // instead deserializes a SUBMITTED request's persisted rule_warnings jsonb straight into
-        // List<LeaveRuleWarningDto> via Jackson, since that path never has a live LeaveRuleOutcome to
-        // convert from); this is exactly the caller #from was written for.
+        // V164 follow-up: mirrors AutoRejectResult#warnings()/#unpaidByRuleDays() exactly -- the SAME values #submit
+        // would persist for the identical request -- see this method's Javadoc and LeavePreviewDto's for the full
+        // contract.
         List<LeaveRuleWarningDto> ruleWarnings = autoReject.warnings().stream()
             .map(LeaveRuleWarningDto::from)
             .toList();
@@ -780,19 +725,8 @@ public class LeaveService {
             ruleWarnings, autoReject.unpaidByRuleDays(), counters);
     }
 
-    /**
-     * The counters {@link #autoRejectNote}'s SICK/PERSONAL branches already compute as locals
-     * ({@code occasionsUsed}/{@code usedThisMonth}) -- exposed here for {@link #preview} via the SAME
-     * two repository methods those branches call ({@link LeaveRepository#countNoCertificateRequestsInMonth}/
-     * {@link LeaveRepository#countEmergencyFilings}), without changing how either gate USES them.
-     * Always scoped to the CURRENT calendar month ({@code LocalDate.now(clock)}), independent of any
-     * dates the caller may have chosen -- so this is computable even for a dateless preview.
-     *
-     * <p>{@code 0} when the type carries no such allowance at all (a non-SICK type for the
-     * no-certificate tolerance, or any type but PERSONAL for the emergency exception) -- the same "no
-     * allowance" reading {@link #autoRejectNote} itself uses ({@code tolerance <= 0} rejects
-     * outright; {@code emergencyMonthlyAllowance() == null} never grants the exception).
-     */
+    /** The counters #autoRejectNote's SICK/PERSONAL branches already compute as locals -- exposed here for #preview
+     * via the SAME two repository methods those branches call, without changing how either gate USES them. */
     private LeavePreviewCounters previewCounters(LeaveTypeDto leaveType, long employeeId) {
         LocalDate today = LocalDate.now(clock);
         int tolerance = leaveType.noCertificateMonthlyTolerance();
@@ -881,8 +815,8 @@ public class LeaveService {
         if (updated != 1) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอลานี้ไม่สามารถยกเลิกได้แล้ว");
         }
-        // Cancel-after-close reversal: uses `existing` (the pre-cancel snapshot), not the freshly
-        // cancelled row -- it still carries the paidDays/unpaidDays that were actually granted.
+        // Cancel-after-close reversal: uses `existing` (the pre-cancel snapshot), not the freshly cancelled row -- it
+        // still carries the paidDays/unpaidDays that were actually granted.
         recordPayrollCorrectionIfNeeded(existing);
         LeaveRequestDto after = requireRequest(id);
         auditService.record(user, "CANCEL_LEAVE_REQUEST", "leave_request", id, existing, after);
@@ -933,12 +867,7 @@ public class LeaveService {
         boolean cancelledByReviewer = actorEmployeeId != after.employeeId();
         String type = after.leaveTypeNameTh();
         String period = ThaiText.dateRange(before.startDate(), before.endDate());
-        // Every branch below appends "โควตาถูกคืนเข้าระบบแล้ว" -- verified true, not just claimed:
-        // #remainingDays/#balanceFor sum ONLY ACTIVE_QUOTA_STATUSES (SUBMITTED/APPROVED -- see
-        // LeaveRepository#sumUsedDays), and #cancel always moves the row OUT of that set (to
-        // CANCELLED, from either SUBMITTED or APPROVED -- see LeaveRepository#cancel's WHERE
-        // clause), so a cancelled request's days stop counting as "used" for every future quota
-        // read, for both the pending-cancel and the approved-cancel path alike.
+        // Every branch below appends "โควตาถูกคืนเข้าระบบแล้ว".
         notificationService.notify(
             after.employeeId(),
             "LEAVE_CANCELLED",
@@ -1023,12 +952,9 @@ public class LeaveService {
         // deducted (mirrors the basis decision in the comment above, one paragraph up).
         Predicate<LocalDate> isWorkingDay = leaveRepository.workingDayPredicate(
             cancelled.employeeId(), cancelled.startDate(), cancelled.endDate());
-        // Partial-day span (V166): a multi-day TIMED request (cancelled.startTime() != null AND
-        // startDate != endDate) reverses through the fraction-aware
-        // LeaveDayMath#unpaidByMonthFromFractionsAcrossYears instead -- the plain whole-day-per-rank
-        // composition above cannot represent a fractional boundary day. Every other request shape
-        // (whole-day, or single-day timed) is UNCHANGED, still reversed through
-        // #unpaidWorkingDaysByMonthAcrossYears exactly as before this migration.
+        // Partial-day span (V166): a multi-day TIMED request (cancelled.startTime() != null AND startDate != endDate)
+        // reverses through the fraction-aware LeaveDayMath#unpaidByMonthFromFractionsAcrossYears instead -- the plain
+        // whole-day-per-rank composition above cannot represent a fractional boundary day.
         Map<LocalDate, BigDecimal> unpaidByMonth;
         if (cancelled.startTime() != null && !cancelled.startDate().equals(cancelled.endDate())) {
             WorkSchedule startSchedule = leaveRepository.resolveOwnSchedule(cancelled.employeeId(), cancelled.startDate());
@@ -1056,29 +982,23 @@ public class LeaveService {
     private LeaveBalanceDto balanceFor(long employeeId, int year, LeaveTypeDto type) {
         BigDecimal approved = leaveRepository.sumUsedDays(employeeId, type.code(), year, Set.of(LeaveStatus.APPROVED));
         BigDecimal pending = leaveRepository.sumUsedDays(employeeId, type.code(), year, Set.of(LeaveStatus.SUBMITTED));
-        // §5.2/§5.3 pro-ration (V120): a balance check reflects the employee's quota AS OF TODAY
-        // (LocalDate.now(clock)), not the requested `year` -- the same "as of the reference date"
-        // meaning #employeeAnnualQuota uses for a live submission (request.startDate()), just with
-        // "today" standing in since a balance query has no request date of its own.
+        // §5.2/§5.3 pro-ration: a balance check reflects the employee's quota AS OF TODAY (LocalDate.now), not the
+        // requested `year`.
         BigDecimal annualQuota = employeeAnnualQuota(type, employeeId, LocalDate.now(clock));
-        // §5.3.5 VACATION carry-forward (V127): `year` (not "today") is the right key here -- a
-        // carry-in is scoped to a specific usable_year, not to "today's" calendar year, so a
-        // balance query for a past or future year must see THAT year's own carry-in.
+        // §5.3.5 VACATION carry-forward (V127): `year` (not "today") is the right key here -- a carry-in is scoped to
+        // a specific usable_year, not to "today's" calendar year, so a balance query for a past or future year must
+        // see THAT year's own carry-in.
         BigDecimal carriedIn = carryInDays(employeeId, type, year);
         BigDecimal quota = annualQuota.add(carriedIn);
         BigDecimal remaining = quota.subtract(approved).subtract(pending).max(BigDecimal.ZERO);
-        // Phase A0b carry-forward provenance: DERIVED, not queried -- see LeaveBalanceDto's Javadoc
-        // for why `year - 1`/31 Dec of `year` is the same relationship hr.leave_carryover's own
-        // earned_year/usable_year columns already encode (no migration, no new query). null for a
-        // type that does not carry forward at all -- "from which year" is meaningless there, not
-        // just zero.
+        // Phase A0b carry-forward provenance: DERIVED, not queried -- see LeaveBalanceDto's Javadoc for why `year -
+        // 1`/31 Dec of `year` is the same relationship hr.leave_carryover's own earned_year/usable_year columns
+        // already encode (no migration, no new query).
         Integer carriedInFromYear = type.carriesForward() ? year - 1 : null;
         LocalDate carriedInExpiresOn = type.carriesForward() ? LocalDate.of(year, 12, 31) : null;
-        // §5.3.5 pool choice (V161): the SAME `remaining` above, split by pool -- see
-        // LeaveBalanceDto's Javadoc for why the two do not always sum to exactly `remaining`, and
-        // #carriedInRemaining/#ownQuotaRemaining for the underlying reads. `asOf = LocalDate.now(clock)`
-        // for the own-quota figure, matching `annualQuota` two lines above (both read "today's"
-        // accrued entitlement, not `year`'s -- see the existing pro-ration comment on annualQuota).
+        // §5.3.5 pool choice (V161): the SAME `remaining` above, split by pool -- see LeaveBalanceDto's Javadoc for
+        // why the two do not always sum to exactly `remaining`, and #carriedInRemaining/#ownQuotaRemaining for the
+        // underlying reads.
         BigDecimal carriedInRemainingDays = carriedInRemaining(employeeId, type, year);
         BigDecimal ownQuotaRemainingDays = ownQuotaRemaining(employeeId, type, year, LocalDate.now(clock));
         return new LeaveBalanceDto(
@@ -1098,22 +1018,8 @@ public class LeaveService {
         );
     }
 
-    /**
-     * The COMBINED (both-pools-merged) remaining balance for {@code quotaYear} -- annual quota plus
-     * any carry-in, less every ACTIVE-status request's whole {@code total_days} (via {@link
-     * LeaveRepository#sumUsedDays}). Unchanged by V161's pool split: this is still the single figure
-     * {@link #computeQuotaSplit} bounds a year's total quota consumption by, and still what {@link
-     * LeaveBalanceDto#remainingDays()} reports.
-     *
-     * <p>§5.3.5 pool split (V161): {@link #carriedInRemaining}/{@link #ownQuotaRemaining} describe the
-     * SAME balance split by pool, but do not always sum to exactly this method's result -- {@code
-     * used} here sums a request's WHOLE {@code total_days}, including any unpaid days beyond what a
-     * pool covered, while the two pool-specific sums ({@link LeaveRepository#sumCarriedInDaysUsed}/
-     * {@link LeaveRepository#sumOwnQuotaDaysUsed}) sum only {@code carried_in_days}/{@code
-     * own_quota_days} -- the strictly-smaller amount that actually consumed a pool (see {@link
-     * LeaveQuotaYearSplit}'s Javadoc). The two therefore always sum to AT LEAST this method's result,
-     * equal in the common case (no request that year ever ran past what remained).
-     */
+    /** The COMBINED (both-pools-merged) remaining balance for quotaYear -- annual quota plus any carry-in, less
+     * every ACTIVE-status request's whole total_days (via LeaveRepository#sumUsedDays). */
     private BigDecimal remainingDays(long employeeId, LeaveTypeDto leaveType, int quotaYear, LocalDate asOf) {
         BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveType.code(), quotaYear, ACTIVE_QUOTA_STATUSES);
         BigDecimal quota = employeeAnnualQuota(leaveType, employeeId, asOf)
@@ -1185,17 +1091,14 @@ public class LeaveService {
             BigDecimal totalDays, Predicate<LocalDate> isWorkingDay, int quotaYear, boolean approved,
             LeaveQuotaPoolPreference preference, BigDecimal unpaidByRuleDays,
             Map<LocalDate, BigDecimal> spanFractions) {
-        // Partial-day span (V166): `spanFractions` is non-null ONLY for a timed request (see
-        // #submit/#preview's own comment on why) -- summing it per year is the fraction-aware
-        // analogue of #totalDaysByYear's multi-day branch, and (trivially) sums to EXACTLY
-        // `totalDays`, preserving this method's pre-existing invariant. A whole-day request
-        // (spanFractions == null) is completely unaffected: this falls through to the SAME
-        // #totalDaysByYear call every pre-V166 caller already used.
+        // Partial-day span: `spanFractions` is non-null ONLY for a timed request -- summing it per year is the
+        // fraction-aware analogue of #totalDaysByYear's multi-day branch, and sums to EXACTLY `totalDays`, preserving
+        // this method's pre-existing invariant.
         Map<Integer, BigDecimal> requestedDaysByYear = spanFractions != null
             ? LeaveDayMath.sumFractionsByYear(spanFractions)
             : LeaveDayMath.totalDaysByYear(startDate, endDate, totalDays, leaveType.dayCountBasis(), isWorkingDay);
-        // V164: see this method's Javadoc paragraph above for why this is allocated BEFORE the
-        // per-year loop and consumed latest-year-first.
+        // V164: see this method's Javadoc paragraph above for why this is allocated BEFORE the per-year loop and
+        // consumed latest-year-first.
         Map<Integer, BigDecimal> unpaidByRuleByYear =
             allocateUnpaidByRuleAcrossYears(requestedDaysByYear, unpaidByRuleDays);
         List<LeaveQuotaYearSplit> quotaYearSplits = new ArrayList<>();
@@ -1204,13 +1107,7 @@ public class LeaveService {
         for (Map.Entry<Integer, BigDecimal> entry : requestedDaysByYear.entrySet()) {
             int year = entry.getKey();
             BigDecimal daysInYear = entry.getValue();
-            // §5.2/§5.3 pro-ration (V120): the quota itself may depend on the employee's completed
-            // service AS OF this request -- startDate is used uniformly for every year in a
-            // cross-year split (VACATION/PERSONAL never span a year boundary in practice: VACATION
-            // has no max_consecutive_days cap but is a planned, short-notice-driven leave type in
-            // practice, and PERSONAL is hard-capped at 3 consecutive days), matching how the
-            // pre-existing min-service-months and PERSONAL-probation gates already evaluate tenure
-            // as of the request's start date, not "today".
+            // §5.2/§5.3 pro-ration: the quota itself may depend on the employee's completed service AS OF this request.
             BigDecimal remainingBeforeYear = remainingDays(employeeId, leaveType, year, startDate);
             // This year's slice of unpaidByRuleDays, computed regardless of `approved` -- see
             // this method's Javadoc. ZERO for a not-approved (rejected) request, since `unpaidByRuleByYear`
@@ -1226,23 +1123,19 @@ public class LeaveService {
                 // This year's slice of unpaidByRuleDays is removed from the quota-eligible pool
                 // BEFORE the quota-bounding min() below -- see this method's Javadoc.
                 BigDecimal quotaEligibleDaysInYear = daysInYear.subtract(unpaidByRuleDaysYear);
-                // paidDaysYear consumes from THIS YEAR's earliest working days first (chronological
-                // order, reset per year): the only ordering an aggregate paid/unpaid split can
-                // represent, matching the natural reading of "day N of this year onward went unpaid".
-                // See LeaveDayMath.
+                // paidDaysYear consumes from THIS YEAR's earliest working days first (chronological order, reset per year):
+                // the only ordering an aggregate paid/unpaid split can represent, matching the natural reading of "day N of
+                // this year onward went unpaid". See LeaveDayMath.
                 BigDecimal quotaBoundedPaidDaysYear = remainingBeforeYear.min(quotaEligibleDaysInYear).max(BigDecimal.ZERO);
                 // §5.4 MATERNITY-shaped rule: paid_days_cap bounds how many of THOSE days are
                 // paid, independently of the quota -- e.g. a 44-day slice of a MATERNITY request
                 // still gets bounded by that same year's 45-day paid_days_cap.
                 paidDaysYear = boundByPaidCap(employeeId, leaveType, year, quotaBoundedPaidDaysYear);
-                // Naturally includes unpaidByRuleDaysYear alongside any ordinary quota-exceeded unpaid
-                // days -- see this method's Javadoc.
+                // Naturally includes unpaidByRuleDaysYear alongside any ordinary quota-exceeded unpaid days -- see this
+                // method's Javadoc.
                 unpaidDaysYear = daysInYear.subtract(paidDaysYear);
-                // review fix (V116), preserved per-year: remainingAfterYear tracks QUOTA consumption,
-                // not money paid -- derived from quotaBoundedPaidDaysYear, NOT from the
-                // paid-cap-narrowed `paidDaysYear`. See the original review-fix comment (git blame)
-                // for the full "98-45=53 lies about quota left" rationale, which applies identically
-                // per year here.
+                // review fix (V116), preserved per-year: remainingAfterYear tracks QUOTA consumption, not money paid --
+                // derived from quotaBoundedPaidDaysYear, NOT from the paid-cap-narrowed `paidDaysYear`.
                 remainingAfterYear = remainingBeforeYear.subtract(quotaBoundedPaidDaysYear).max(BigDecimal.ZERO);
                 // §5.3.5 pool split (V161): see this method's own Javadoc paragraph above.
                 PoolAllocation poolAllocation = splitAcrossPools(
@@ -1264,12 +1157,8 @@ public class LeaveService {
                 year, daysInYear, paidDaysYear, unpaidDaysYear, remainingBeforeYear, remainingAfterYear,
                 carriedInDaysYear, ownQuotaDaysYear, unpaidByRuleDaysYear));
         }
-        // hr.leave_request.quota_remaining_before/after (the PARENT columns) reflect ONLY the
-        // request's nominal start year (quotaYear) -- see that table's V118 column comments. In the
-        // rare case the start year itself received zero requested days (e.g. a request starting on
-        // the last weekend of a year with no working days left in it before the boundary), fall back
-        // to that year's own remainingDays() so the parent still carries a real, correct-for-that-year
-        // figure rather than an arbitrary other year's.
+        // hr.leave_request.quota_remaining_before/after (the PARENT columns) reflect ONLY the request's nominal start
+        // year (quotaYear) -- see that table's V118 column comments.
         BigDecimal remainingBefore = quotaYearSplits.stream()
             .filter(split -> split.quotaYear() == quotaYear)
             .map(LeaveQuotaYearSplit::quotaRemainingBefore)
@@ -1324,21 +1213,8 @@ public class LeaveService {
     private record PoolAllocation(BigDecimal carriedIn, BigDecimal ownQuota) {
     }
 
-    /**
-     * §5.3.5 pool split (V161): divides {@code amount} (a single year's {@code
-     * quotaBoundedPaidDaysYear} -- see {@link #computeQuotaSplit}'s Javadoc) between the carry-in and
-     * own-quota pools in {@code preference}'s order. The chosen (first) pool is drawn down up to its
-     * own {@code firstRemaining}; whatever {@code amount} still needs beyond that spills into the
-     * second pool, ALSO bounded by its own remaining ({@code .min(secondRemaining)}) rather than left
-     * unbounded -- both pools are real, finite balances, never an assumed-infinite fallback.
-     *
-     * <p>{@code fromFirst + fromSecond == amount} is guaranteed whenever {@code amount <=
-     * firstRemaining + secondRemaining} (proven true for every real call site -- see {@link
-     * #computeQuotaSplit}'s Javadoc); if that ever failed to hold (a data anomaly, not a reachable
-     * code path today), the two allocations would under-sum instead of over-drawing either pool, and
-     * {@code chk_lrqy_pool_matches_consumed} (V161) would then reject the resulting INSERT/UPDATE
-     * loudly rather than silently persisting an inconsistent split.
-     */
+    /** §5.3.5 pool split (V161): divides amount (a single year's quotaBoundedPaidDaysYear -- see
+     * #computeQuotaSplit's Javadoc) between the carry-in and own-quota pools in preference's order. */
     private PoolAllocation splitAcrossPools(
             BigDecimal amount, LeaveQuotaPoolPreference preference,
             BigDecimal carriedInRemaining, BigDecimal ownQuotaRemaining) {
@@ -1352,43 +1228,26 @@ public class LeaveService {
             : new PoolAllocation(fromSecond, fromFirst);
     }
 
-    /**
-     * §5.3.5 pool split (V161): how much of {@code year}'s carry-in grant ({@link #carryInDays})
-     * remains after every ACTIVE-status ({@link #ACTIVE_QUOTA_STATUSES}) request's already-recorded
-     * {@code carried_in_days} for that year (see {@link LeaveRepository#sumCarriedInDaysUsed}).
-     * Always {@code ZERO} when {@link LeaveTypeDto#carriesForward()} is FALSE, since {@link
-     * #carryInDays} itself is ({@code carryInDays} short-circuits before ever consulting the grant).
-     */
+    /** §5.3.5 pool split (V161): how much of year's carry-in grant (#carryInDays) remains after every ACTIVE-status
+     * (#ACTIVE_QUOTA_STATUSES) request's already-recorded carried_in_days for that year (see
+     * LeaveRepository#sumCarriedInDaysUsed). */
     private BigDecimal carriedInRemaining(long employeeId, LeaveTypeDto leaveType, int year) {
         BigDecimal grant = carryInDays(employeeId, leaveType, year);
         BigDecimal used = leaveRepository.sumCarriedInDaysUsed(employeeId, leaveType.code(), year, ACTIVE_QUOTA_STATUSES);
         return grant.subtract(used).max(BigDecimal.ZERO);
     }
 
-    /**
-     * §5.3.5 pool split (V161): how much of {@code year}'s OWN annual quota ({@link
-     * #employeeAnnualQuota}, evaluated {@code asOf} the same start date every other per-year quota
-     * figure in {@link #computeQuotaSplit} uses) remains after every ACTIVE-status request's
-     * already-recorded {@code own_quota_days} for that year (see {@link
-     * LeaveRepository#sumOwnQuotaDaysUsed}). The counterpart to {@link #carriedInRemaining} above --
-     * together the two describe the SAME combined balance {@link #remainingDays} already computes,
-     * just split by pool instead of merged (see that method's own Javadoc note on why the two do not
-     * always sum to exactly {@link #remainingDays}' figure).
-     */
+    /** §5.3.5 pool split: how much of year's OWN annual quota remains after every ACTIVE-status request's
+     * already-recorded own_quota_days for that year. */
     private BigDecimal ownQuotaRemaining(long employeeId, LeaveTypeDto leaveType, int year, LocalDate asOf) {
         BigDecimal quota = employeeAnnualQuota(leaveType, employeeId, asOf);
         BigDecimal used = leaveRepository.sumOwnQuotaDaysUsed(employeeId, leaveType.code(), year, ACTIVE_QUOTA_STATUSES);
         return quota.subtract(used).max(BigDecimal.ZERO);
     }
 
-    /**
-     * §5.3.5 VACATION carry-forward (V127): the carry-in available for {@code leaveType} in
-     * {@code usableYear} -- always {@link BigDecimal#ZERO} when {@link
-     * LeaveTypeDto#carriesForward()} is FALSE (every type except VACATION; this is the ONLY gate
-     * -- see that field's Javadoc for why a column, not a hardcoded type-code check). Delegates to
-     * {@link #ensureCarryoverGrant} for {@code usableYear - 1} (the EARNED year whose leftover, if
-     * any, is what "carry-in for usableYear" means).
-     */
+    /** §5.3.5 VACATION carry-forward (V127): the carry-in available for leaveType in usableYear -- always
+     * BigDecimal#ZERO when LeaveTypeDto#carriesForward() is FALSE (every type except VACATION; this is the ONLY
+     * gate -- see that field's Javadoc for why a column, not a hardcoded type-code check). */
     private BigDecimal carryInDays(long employeeId, LeaveTypeDto leaveType, int usableYear) {
         if (!leaveType.carriesForward()) {
             return BigDecimal.ZERO;
@@ -1487,15 +1346,13 @@ public class LeaveService {
             return BigDecimal.ZERO;
         }
         // carriedIn/used are still computed and persisted as the audit-trail inputs
-        // hr.leave_carryover.carried_in_days/used_days always were (see that table's V127 column
-        // comments) -- and the recursive call still walks the chain backward, memoizing every earlier
-        // year's grant. Neither drives carryOut itself any more; see this method's own "RECORDED, not
-        // INFERRED" Javadoc paragraph for why.
+        // hr.leave_carryover.carried_in_days/used_days always were (see that table's V127 column comments) -- and the
+        // recursive call still walks the chain backward, memoizing every earlier year's grant.
         BigDecimal carriedIn = ensureCarryoverGrant(employeeId, leaveType, earnedYear - 1);
         BigDecimal ownQuota = employeeAnnualQuota(leaveType, employeeId, LocalDate.of(earnedYear, 12, 31));
         BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveType.code(), earnedYear, ACTIVE_QUOTA_STATUSES);
-        // §5.3.5 pool choice (V161): carryOut now reads the RECORDED consumption of THIS year's own
-        // pool specifically (ownUsed), not the aggregate `used` above -- see this method's Javadoc.
+        // §5.3.5 pool choice (V161): carryOut now reads the RECORDED consumption of THIS year's own pool specifically
+        // (ownUsed), not the aggregate `used` above -- see this method's Javadoc.
         BigDecimal ownUsed = leaveRepository.sumOwnQuotaDaysUsed(employeeId, leaveType.code(), earnedYear, ACTIVE_QUOTA_STATUSES);
         BigDecimal carryOut = ownQuota.subtract(ownUsed).max(BigDecimal.ZERO).min(ownQuota);
         leaveRepository.insertCarryoverIfAbsent(
@@ -1574,12 +1431,8 @@ public class LeaveService {
             .setScale(2, RoundingMode.HALF_UP);
     }
 
-    /**
-     * §5.4-shaped paid-days-cap gate (V116): bounds an already quota-bounded candidate paidDays
-     * figure by what remains of the type's OWN paid allowance this quota year (independent of the
-     * quota itself). {@code paidDaysCap == null} means "no separate cap" (today's behaviour for
-     * SICK/VACATION/PERSONAL) -- every quota-bounded day is paid, unchanged.
-     */
+    /** §5.4-shaped paid-days-cap gate (V116): bounds an already quota-bounded candidate paidDays figure by what
+     * remains of the type's OWN paid allowance this quota year (independent of the quota itself). */
     private BigDecimal boundByPaidCap(long employeeId, LeaveTypeDto leaveType, int quotaYear, BigDecimal candidatePaidDays) {
         if (leaveType.paidDaysCap() == null) {
             return candidatePaidDays;
@@ -1624,28 +1477,25 @@ public class LeaveService {
             return LeaveRuleOutcome.of(LeaveRuleCode.PROBATION_HIRE_DATE_MISSING,
                 Map.of("leaveTypeNameTh", leaveType.nameTh()));
         }
-        // confirm_date is authoritative when present (see #hasPassedProbation), so probation_days
-        // is only ever consulted on the hire_date fallback path -- skip the extra read otherwise,
-        // the same care findHireDate/findProbationDays already take elsewhere in this class.
+        // confirm_date is authoritative when present (see #hasPassedProbation), so probation_days is only ever
+        // consulted on the hire_date fallback path -- skip the extra read otherwise, the same care
+        // findHireDate/findProbationDays already take elsewhere in this class.
         Integer probationDays =
             confirmDate.isEmpty() ? leaveRepository.findProbationDays(employeeId).orElse(null) : null;
         if (SpecialMoneyPolicyEvaluator.hasPassedProbation(
                 hireDate.orElse(null), probationDays, confirmDate.orElse(null), startDate)) {
             return null;
         }
-        // Presentational only -- the eligibility DECISION above already came from the shared
-        // method; this just recomputes the same "expected eligible on" date for the message,
-        // preferring confirm_date (day-after) the same way the decision itself did.
+        // Presentational only -- the eligibility DECISION above already came from the shared method; this just
+        // recomputes the same "expected eligible on" date for the message, preferring confirm_date (day-after) the
+        // same way the decision itself did.
         LocalDate probationEndsOn = confirmDate
             .map(d -> d.plusDays(1))
             .orElseGet(() -> hireDate.get()
                 .plusDays(probationDays != null ? probationDays : SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS));
-        // V164: PROBATION_NOT_PASSED is WARN_UNPAID_ALL -- "days" is the WARN_UNPAID_TAIL's "how many
-        // days are unpaid if approved" figure, which is the whole request. `totalDays` is null only
-        // for #preview's dateless categorical-only call (see #eligibilityRuleOutcome's Javadoc) --
-        // that call site never surfaces this outcome's `.warnings()`, only `.blocking()` (always null
-        // for a WARN code), so ZERO here is an inert placeholder, never actually shown to a user.
-        // Flagged as a known, narrow gap rather than silently defaulted.
+        // V164: PROBATION_NOT_PASSED is WARN_UNPAID_ALL -- "days" is the WARN_UNPAID_TAIL's "how many days are unpaid
+        // if approved" figure, which is the whole request. Flagged as a known, narrow gap rather than silently
+        // defaulted.
         BigDecimal daysForMessage = totalDays == null ? BigDecimal.ZERO : totalDays;
         return LeaveRuleOutcome.of(LeaveRuleCode.PROBATION_NOT_PASSED, Map.of(
             "leaveTypeNameTh", leaveType.nameTh(),
@@ -1727,10 +1577,8 @@ public class LeaveService {
      */
     private LeaveRuleOutcome sickCertificateRuleOutcome(
             LeaveTypeDto leaveType, long employeeId, LocalDate startDate, boolean hasAttachment, BigDecimal totalDays) {
-        // V164: all three outcomes below are WARN_UNPAID_ALL -- "days" is the WARN_UNPAID_TAIL's
-        // "how many days are unpaid if approved" figure, the whole request. Unlike
-        // #personalProbationRuleOutcome, this method's only caller (#autoRejectNote) always has a
-        // real totalDays, so there is no dateless-preview placeholder concern here.
+        // V164: all three outcomes below are WARN_UNPAID_ALL -- "days" is the WARN_UNPAID_TAIL's "how many days are
+        // unpaid if approved" figure, the whole request.
         String days = formatDays(totalDays);
         if (hasAttachment) {
             Integer filingWindowDays = leaveType.certificateFilingWindowDays();
@@ -1896,34 +1744,8 @@ public class LeaveService {
         return LeaveRuleOutcome.of(LeaveRuleCode.RESIGNATION_GATE, Map.of("leaveTypeNameTh", leaveType.nameTh()));
     }
 
-    /**
-     * §5.3.3: <i>"ไม่อนุญาตให้ลากิจและลาพักผ่อนติดต่อกัน"</i> ("PERSONAL and VACATION leave may not be
-     * taken back to back"). Symmetric: submitting either type checks against the other.
-     *
-     * <p><b>DECISION -- "ติดต่อกัน" ("contiguous"/"back to back") across a non-working day:</b> two
-     * requests are contiguous when there is no day the employee would actually have been AT WORK
-     * between them -- i.e. every calendar day strictly between the earlier request's end and the
-     * later request's start is a non-working day under {@link LeaveRepository#workingDayPredicate}
-     * (schedule- AND holiday-aware, see {@link #hasInterveningWorkday}). A Friday PERSONAL request
-     * immediately followed by a Monday VACATION request (an ordinary Sat/Sun weekend sitting between
-     * them) therefore counts as CONTIGUOUS and is rejected: the employee never actually returned to
-     * work between the two, so the weekend does not break the run any more than it would for two
-     * halves of a single request. This is the reading that gives the rule teeth -- the opposite
-     * reading (any calendar gap at all, including a plain weekend, breaks contiguity) would let every
-     * VACATION/PERSONAL pair dodge this rule just by landing on either side of a weekend, which is
-     * precisely the kind of disguised-extended-break pattern "ติดต่อกัน" exists to catch. A real,
-     * worked weekday sitting between the two requests DOES break contiguity -- the employee genuinely
-     * came back to work, so the two periods are not one continuous absence.
-     *
-     * <p>Searches only {@link #CONTIGUOUS_CHECK_WINDOW_DAYS} on either side of the new request's own
-     * dates (see {@link LeaveRepository#findActiveRequestsByType}), not the employee's whole history
-     * -- nothing further away can possibly be contiguous under any seeded schedule.
-     *
-     * @return a rejection outcome ({@link LeaveRuleCode#CONTIGUOUS_LEAVE_PAIR}), or {@code null} if
-     *         this type is not gated or no contiguous request of the paired type exists. (Phase A0a:
-     *         was a plain English rejection message; the DECISION is unchanged, only its return shape
-     *         is now structured -- see {@link LeaveRuleOutcome}.)
-     */
+    /** §5.3.3: "ไม่อนุญาตให้ลากิจและลาพักผ่อนติดต่อกัน" ("PERSONAL and VACATION leave may not be taken back to
+     * back"). Symmetric: submitting either type checks against the other. */
     private LeaveRuleOutcome contiguousLeaveRuleOutcome(LeaveTypeDto leaveType, long employeeId, LocalDate startDate, LocalDate endDate) {
         String pairedTypeCode = CONTIGUOUS_LEAVE_PAIR.get(leaveType.code());
         if (pairedTypeCode == null) {
@@ -1934,11 +1756,9 @@ public class LeaveService {
             startDate.minusDays(CONTIGUOUS_CHECK_WINDOW_DAYS), endDate.plusDays(CONTIGUOUS_CHECK_WINDOW_DAYS));
         for (LeaveRequestSpan existing : existingRequests) {
             if (isContiguous(employeeId, existing, startDate, endDate)) {
-                // Phase A0a: pairedTypeNameTh is looked up ONLY on this (rare) rejection path, not on
-                // every submission -- a presentational-only read (the paired type's own Thai name for
-                // the message), not a change to the DECISION made just above. Falls back to the raw
-                // code if the type row is somehow missing (defensive only; VACATION/PERSONAL are both
-                // permanently-seeded rows).
+                // Phase A0a: pairedTypeNameTh is looked up ONLY on this (rare) rejection path, not on every submission -- a
+                // presentational-only read (the paired type's own Thai name for the message), not a change to the DECISION
+                // made just above.
                 String pairedTypeNameTh = leaveRepository.findLeaveType(pairedTypeCode)
                     .map(LeaveTypeDto::nameTh)
                     .orElse(pairedTypeCode);
@@ -2029,16 +1849,15 @@ public class LeaveService {
      */
     private LeaveRuleOutcome departmentCoverageRuleOutcome(long employeeId, LocalDate startDate, LocalDate endDate) {
         List<Long> colleagueIds = leaveRepository.findActiveDepartmentColleagues(employeeId);
-        // +1 for the requester, who is themselves an active member of the department but is
-        // deliberately excluded from findActiveDepartmentColleagues's own result -- see that
-        // method's Javadoc.
+        // +1 for the requester, who is themselves an active member of the department but is deliberately excluded from
+        // findActiveDepartmentColleagues's own result -- see that method's Javadoc.
         int departmentSize = colleagueIds.size() + 1;
         if (departmentSize < MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE) {
             return null;
         }
         Predicate<LocalDate> ownWorkingDay = leaveRepository.workingDayPredicate(employeeId, startDate, endDate);
-        // Built ONCE per colleague, outside the day loop below -- workingDayPredicate is a per-
-        // employee-per-request call (two queries), not a per-day one; see its javadoc.
+        // Built ONCE per colleague, outside the day loop below -- workingDayPredicate is a per- employee-per-request
+        // call (two queries), not a per-day one; see its javadoc.
         Map<Long, Predicate<LocalDate>> colleagueWorkingDays = new HashMap<>();
         for (Long colleagueId : colleagueIds) {
             colleagueWorkingDays.put(colleagueId, leaveRepository.workingDayPredicate(colleagueId, startDate, endDate));
@@ -2100,9 +1919,9 @@ public class LeaveService {
             LeaveTypeDto leaveType, long employeeId, LocalDate referenceDate, BigDecimal totalDays) {
         List<LeaveRuleOutcome> warnings = new ArrayList<>();
 
-        // §5.6 once-per-employment (ORDINATION today). Java-level check; ux_leave_once_per_employment
-        // (V116) is the race-proof DB backstop -- see the DuplicateKeyException catch in #submit.
-        // BLOCK (V164) -- see LeaveRuleCode#enforcement()'s per-code table.
+        // §5.6 once-per-employment (ORDINATION today). Java-level check; ux_leave_once_per_employment (V116) is the
+        // race-proof DB backstop -- see the DuplicateKeyException catch in #submit. BLOCK (V164) -- see
+        // LeaveRuleCode#enforcement()'s per-code table.
         if (leaveType.oncePerEmployment() && leaveRepository.hasOutstandingOrGrantedRequest(employeeId, leaveType.code())) {
             LeaveRuleOutcome outcome = LeaveRuleOutcome.of(LeaveRuleCode.ONCE_PER_EMPLOYMENT,
                 Map.of("leaveTypeNameTh", leaveType.nameTh()));
@@ -2117,31 +1936,17 @@ public class LeaveService {
             return new EligibilityResult(resignationOutcome, List.of());
         }
 
-        // §5.2/§5.3 pro-ration (V120): #employeeAnnualQuota cannot compute a quota without hire_date
-        // for a prorated_first_year type (VACATION, PERSONAL) -- fails CLOSED here, the same
-        // direction as every other eligibility gate in this method, rather than letting
-        // #employeeAnnualQuota silently return ZERO and produce a confusing all-unpaid approval with
-        // no explanation. Runs before minServiceMonths below (VACATION's own min_service_months is
-        // now 0 post-V120, so that check would never catch this) and before PERSONAL's probation
-        // gate (which has its own, narrower NULL-hire_date check further down -- unreachable in
-        // practice once this fires first, kept as a defensive fallback, not because it needs to run).
-        // BLOCK (V164): missing data in HR's OWN records, not an employee violation.
+        // §5.2/§5.3 pro-ration: #employeeAnnualQuota cannot compute a quota without hire_date for a
+        // prorated_first_year type. BLOCK (V164): missing data in HR's OWN records, not an employee violation.
         if (leaveType.proratedFirstYear() && leaveRepository.findHireDate(employeeId).isEmpty()) {
             LeaveRuleOutcome outcome = LeaveRuleOutcome.of(LeaveRuleCode.HIRE_DATE_MISSING_PRORATED,
                 Map.of("leaveTypeNameTh", leaveType.nameTh()));
             return new EligibilityResult(outcome, List.of());
         }
 
-        // §5.3 minimum SERVICE DURATION (months since hr.employee.hire_date). This is genuinely
-        // different from PERSONAL's "passed probation" gate just below -- VACATION/ORDINATION state
-        // an N-year/month tenure requirement, not a probation-length one -- which is why PERSONAL's
-        // min_service_months is 0 (seeded, V116) and does not reach this branch at all; see that
-        // migration's PERSONAL comment. DECISION: a NULL hire_date does NOT silently pass -- eligibility
-        // cannot be verified, so the request is rejected with an actionable message, the same
-        // fail-closed direction as every other eligibility gate in this method. HIRE_DATE_MISSING_
-        // MIN_SERVICE stays BLOCK (V164, missing HR data); MIN_SERVICE_MONTHS itself is now
-        // WARN_UNPAID_ALL (V164) -- the employee HAS a hire_date, they simply have not completed the
-        // required tenure yet, which is a genuine (if now-forgivable) eligibility gap, not missing data.
+        // §5.3 minimum SERVICE DURATION (months since hr.employee.hire_date). DECISION: a NULL hire_date does NOT
+        // silently pass -- eligibility cannot be verified, so the request is rejected with an actionable message, the
+        // same fail-closed direction as every other eligibility gate in this method.
         if (leaveType.minServiceMonths() > 0) {
             Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
             if (hireDate.isEmpty()) {
@@ -2151,8 +1956,8 @@ public class LeaveService {
             }
             long completedMonths = ChronoUnit.MONTHS.between(hireDate.get(), referenceDate);
             if (completedMonths < leaveType.minServiceMonths()) {
-                // V164: WARN_UNPAID_ALL -- "days" is the whole request, same dateless-preview
-                // placeholder caveat as #personalProbationRuleOutcome's identical comment below.
+                // V164: WARN_UNPAID_ALL -- "days" is the whole request, same dateless-preview placeholder caveat as
+                // #personalProbationRuleOutcome's identical comment below.
                 BigDecimal daysForMessage = totalDays == null ? BigDecimal.ZERO : totalDays;
                 LeaveRuleOutcome outcome = LeaveRuleOutcome.of(LeaveRuleCode.MIN_SERVICE_MONTHS, Map.of(
                     "leaveTypeNameTh", leaveType.nameTh(),
@@ -2162,12 +1967,9 @@ public class LeaveService {
             }
         }
 
-        // §5.2 PERSONAL "passed probation" gate (review fix, V116): hardcoded to PERSONAL's code,
-        // the same way the SICK certificate check below is hardcoded to SICK's code -- neither is a
-        // per-type column the way quota/notice/consecutive-days are. See
-        // #personalProbationRuleOutcome's Javadoc for the full rationale and decisions.
-        // PROBATION_HIRE_DATE_MISSING stays BLOCK (V164, missing HR data); PROBATION_NOT_PASSED is
-        // now WARN_UNPAID_ALL (V164).
+        // §5.2 PERSONAL "passed probation" gate (review fix, V116): hardcoded to PERSONAL's code, the same way the
+        // SICK certificate check below is hardcoded to SICK's code -- neither is a per-type column the way
+        // quota/notice/consecutive-days are.
         if ("PERSONAL".equals(leaveType.code())) {
             LeaveRuleOutcome probationOutcome =
                 personalProbationRuleOutcome(leaveType, employeeId, referenceDate, totalDays);
@@ -2178,11 +1980,9 @@ public class LeaveService {
         return new EligibilityResult(null, warnings);
     }
 
-    /**
-     * V164: the {@link #eligibilityRuleOutcome} return shape -- see that method's Javadoc. {@code
-     * blocking} is the first BLOCK outcome (or {@code null}); {@code warnings} is every WARN outcome
-     * that fired before a BLOCK short-circuited (always empty when {@code blocking != null}).
-     */
+    /** V164: the #eligibilityRuleOutcome return shape -- see that method's Javadoc. blocking is the first BLOCK
+     * outcome (or null); warnings is every WARN outcome that fired before a BLOCK short-circuited (always empty
+     * when blocking != null). */
     private record EligibilityResult(LeaveRuleOutcome blocking, List<LeaveRuleOutcome> warnings) {
     }
 
@@ -2237,19 +2037,12 @@ public class LeaveService {
             boolean evaluateDepartmentCoverage, Predicate<LocalDate> isWorkingDay) {
         List<LeaveRuleOutcome> warnings = new ArrayList<>();
         // V164: the largest single WARN_UNPAID_EXCESS excess amount seen so far (FIRST_YEAR_MAX_DAYS/
-        // WEDDING_MAX_DAYS/MAX_CONSECUTIVE_DAYS below) -- see #dominantUnpaidByRuleDays's Javadoc for
-        // why this is the MAX, not the sum, and is only even consulted when no WARN_UNPAID_ALL fired.
+        // WEDDING_MAX_DAYS/MAX_CONSECUTIVE_DAYS below) -- see #dominantUnpaidByRuleDays's Javadoc for why this is the
+        // MAX, not the sum, and is only even consulted when no WARN_UNPAID_ALL fired.
         BigDecimal maxExcessDays = BigDecimal.ZERO;
 
-        // Phase A0b: the categorical eligibility gates (once-per-employment, resignation,
-        // hire-date-missing-prorated, min-service-months, PERSONAL probation) are extracted to
-        // #eligibilityRuleOutcome -- called here with the SAME arguments (leaveType, employeeId,
-        // startDate), in the SAME order, as they ran inline before this extraction. This is a pure
-        // relocation, not a behaviour change: see that method's Javadoc for why it exists (LeaveService
-        // #preview needs to run exactly these checks against LocalDate.now(clock) when the caller has
-        // not chosen dates yet, without a second, drift-prone copy of the same decisions). V164:
-        // `totalDays` is now threaded through too (this call site always has a real one -- #submit's
-        // own -- unlike #preview's dateless call, which passes null; see that method's own comment).
+        // Phase A0b: the categorical eligibility gates are extracted to #eligibilityRuleOutcome -- called here with
+        // the SAME arguments, in the SAME order, as they ran inline before this extraction.
         EligibilityResult eligibilityResult = eligibilityRuleOutcome(leaveType, employeeId, startDate, totalDays);
         if (eligibilityResult.blocking() != null) {
             return AutoRejectResult.reject(eligibilityResult.blocking());
@@ -2284,10 +2077,9 @@ public class LeaveService {
         // not just this single request's length), matching "3 days ... in total".
         if (leaveType.firstYearMaxDays() != null) {
             Optional<LocalDate> hireDate = leaveRepository.findHireDate(employeeId);
-            // Presence already established by the proratedFirstYear gate above for every type this
-            // branch can reach today (firstYearMaxDays is only ever seeded alongside
-            // proratedFirstYear -- see V120's migration comment); re-checked rather than assumed,
-            // since nothing in the Java model itself enforces that the two columns travel together.
+            // Presence already established by the proratedFirstYear gate above for every type this branch can reach today;
+            // re-checked rather than assumed, since nothing in the Java model itself enforces that the two columns travel
+            // together.
             if (hireDate.isPresent()) {
                 long completedMonths = Math.min(FULL_SERVICE_MONTHS, ChronoUnit.MONTHS.between(hireDate.get(), startDate));
                 if (completedMonths < FULL_SERVICE_MONTHS) {
@@ -2297,12 +2089,11 @@ public class LeaveService {
                         employeeId, leaveType.code(), startDate.getYear(), ACTIVE_QUOTA_STATUSES);
                     BigDecimal cumulative = usedThisYear.add(totalDays);
                     if (cumulative.compareTo(effectiveCap) > 0) {
-                        // Excess attributable to THIS request: the cumulative overage, but never more
-                        // than totalDays itself (prior requests' own days are not this request's to
-                        // dock -- see chk_leave_unpaid_by_rule_le_total, V164).
+                        // Excess attributable to THIS request: the cumulative overage, but never more than totalDays itself (prior
+                        // requests' own days are not this request's to dock -- see chk_leave_unpaid_by_rule_le_total, V164).
                         BigDecimal excessDays = cumulative.subtract(effectiveCap).min(totalDays).max(BigDecimal.ZERO);
-                        // V164 final copy: the EXCESS template only takes {excessDays} now, not
-                        // {days} too -- see LeaveRuleMessages's WARN_UNPAID_TAIL block comment.
+                        // V164 final copy: the EXCESS template only takes {excessDays} now, not {days} too -- see LeaveRuleMessages's
+                        // WARN_UNPAID_TAIL block comment.
                         LeaveRuleOutcome outcome = LeaveRuleOutcome.of(LeaveRuleCode.FIRST_YEAR_MAX_DAYS, Map.of(
                             "leaveTypeNameTh", leaveType.nameTh(),
                             "effectiveCap", formatDays(effectiveCap),
@@ -2340,13 +2131,12 @@ public class LeaveService {
             long weddingSpanDays = ChronoUnit.DAYS.between(startDate, endDate) + 1;
             BigDecimal spanDaysValue = BigDecimal.valueOf(weddingSpanDays);
             if (spanDaysValue.compareTo(WEDDING_LEAVE_MAX_DAYS) > 0) {
-                // min(totalDays, ...): spanDaysValue is a CALENDAR-day count (may exceed totalDays,
-                // a WORKING-day count, when the span crosses a weekend) -- never dock more than the
-                // request's own totalDays (chk_leave_unpaid_by_rule_le_total, V164).
+                // min(totalDays, ...): spanDaysValue is a CALENDAR-day count (may exceed totalDays, a WORKING-day count, when
+                // the span crosses a weekend) -- never dock more than the request's own totalDays
+                // (chk_leave_unpaid_by_rule_le_total, V164).
                 BigDecimal excessDays = spanDaysValue.subtract(WEDDING_LEAVE_MAX_DAYS).min(totalDays).max(BigDecimal.ZERO);
-                // V164 final copy: the template now also states {totalDays} (this request's own
-                // length) alongside {excessDays}; it no longer takes a bare {days} -- see
-                // LeaveRuleMessages's WARN_UNPAID_TAIL block comment.
+                // V164 final copy: the template now also states {totalDays} (this request's own length) alongside
+                // {excessDays}; it no longer takes a bare {days} -- see LeaveRuleMessages's WARN_UNPAID_TAIL block comment.
                 LeaveRuleOutcome outcome = LeaveRuleOutcome.of(LeaveRuleCode.WEDDING_MAX_DAYS, Map.of(
                     "maxDays", formatDays(WEDDING_LEAVE_MAX_DAYS),
                     "totalDays", formatDays(totalDays),
@@ -2381,8 +2171,8 @@ public class LeaveService {
                 // min(totalDays, ...): same calendar-vs-working-day reasoning as WEDDING_MAX_DAYS above.
                 BigDecimal excessDays =
                     spanDaysValue.subtract(leaveType.maxConsecutiveDays()).min(totalDays).max(BigDecimal.ZERO);
-                // V164 final copy: the EXCESS template only takes {excessDays} now, not {days} too --
-                // see LeaveRuleMessages's WARN_UNPAID_TAIL block comment.
+                // V164 final copy: the EXCESS template only takes {excessDays} now, not {days} too -- see LeaveRuleMessages's
+                // WARN_UNPAID_TAIL block comment.
                 LeaveRuleOutcome outcome = LeaveRuleOutcome.of(LeaveRuleCode.MAX_CONSECUTIVE_DAYS, Map.of(
                     "leaveTypeNameTh", leaveType.nameTh(),
                     "maxConsecutiveDays", formatDays(leaveType.maxConsecutiveDays()),
@@ -2404,9 +2194,9 @@ public class LeaveService {
             return AutoRejectResult.reject(contiguousOutcome);
         }
 
-        // §5.1 SICK certificate + filing-window + no-certificate tolerance (V124). See
-        // #sickCertificateRuleOutcome's Javadoc for the combined decision table. V164: all three
-        // outcomes it can produce are WARN_UNPAID_ALL, never BLOCK -- isBlocking always appends here.
+        // §5.1 SICK certificate + filing-window + no-certificate tolerance (V124). See #sickCertificateRuleOutcome's
+        // Javadoc for the combined decision table. V164: all three outcomes it can produce are WARN_UNPAID_ALL, never
+        // BLOCK -- isBlocking always appends here.
         if ("SICK".equals(leaveType.code())) {
             LeaveRuleOutcome sickOutcome =
                 sickCertificateRuleOutcome(leaveType, employeeId, startDate, hasAttachment, totalDays);
@@ -2473,17 +2263,9 @@ public class LeaveService {
                     int usedThisMonth = leaveRepository.countEmergencyFilings(
                         employeeId, leaveType.code(), startDate, ACTIVE_QUOTA_STATUSES);
                     if (usedThisMonth < leaveType.emergencyMonthlyAllowance()) {
-                        // PRE-EXISTING quirk, unchanged by Phase A0b AND by V164: this return happens
-                        // BEFORE the department-coverage block below, so an emergency-approved request
-                        // always skips that gate entirely, regardless of `evaluateDepartmentCoverage`
-                        // -- coverageEvaluated is therefore `false` here, accurately reflecting that
-                        // #departmentCoverageRuleOutcome never ran for this outcome. This is a
-                        // behaviour this extraction inherited, not one it introduces; flagged in the
-                        // PR body rather than silently "fixed". V164: `warnings`/`maxExcessDays` may
-                        // already hold accumulated warnings from gates ABOVE this one (e.g. a wedding
-                        // excess on the same request) -- the dominance rule is applied here exactly
-                        // the same way as the method's final return, so this early return cannot
-                        // under-report what already fired.
+                        // PRE-EXISTING quirk, unchanged by Phase A0b AND by V164: this return happens BEFORE the department-coverage
+                        // block below, so an emergency-approved request always skips that gate entirely, regardless of
+                        // `evaluateDepartmentCoverage`.
                         return new AutoRejectResult(null, true, false, List.copyOf(warnings),
                             dominantUnpaidByRuleDays(warnings, maxExcessDays, totalDays));
                     }
@@ -2516,9 +2298,9 @@ public class LeaveService {
             ? departmentCoverageRuleOutcome(employeeId, startDate, endDate)
             : null;
         if (departmentCoverageOutcome != null) {
-            // DEPARTMENT_COVERAGE stays BLOCK (V164) -- a BLOCK wins outright regardless of any WARN
-            // accumulated above (see AutoRejectResult's Javadoc), so `warnings`/`maxExcessDays` are
-            // deliberately NOT threaded into this return.
+            // DEPARTMENT_COVERAGE stays BLOCK (V164) -- a BLOCK wins outright regardless of any WARN accumulated above
+            // (see AutoRejectResult's Javadoc), so `warnings`/`maxExcessDays` are deliberately NOT threaded into this
+            // return.
             return new AutoRejectResult(departmentCoverageOutcome, false, true, List.of(), BigDecimal.ZERO);
         }
         return new AutoRejectResult(null, false, evaluateDepartmentCoverage, List.copyOf(warnings),
@@ -2596,11 +2378,8 @@ public class LeaveService {
         String period = ThaiText.dateRange(request.startDate(), request.endDate());
         String days = formatDays(request.totalDays());
 
-        // Resolve the routing BEFORE wording the employee's message, so the message names the stage
-        // the request actually goes to. Saying "รอผู้จัดการอนุมัติ" unconditionally would be false
-        // for exactly the employees with no manager of record -- their request falls back to HR (see
-        // the branch below and this method's Javadoc), so they would be told to wait on an approver
-        // who does not exist. Same shape as OvertimeService#notifySubmitted's goesToCeo branch.
+        // Resolve the routing BEFORE wording the employee's message, so the message names the stage the request
+        // actually goes to. Same shape as OvertimeService#notifySubmitted's goesToCeo branch.
         Set<Long> approvers = new LinkedHashSet<>();
         boolean goesToHr = request.managerEmployeeId() == null;
         if (!goesToHr) {
@@ -2639,15 +2418,8 @@ public class LeaveService {
         emailLeaveSubmission(request);
     }
 
-    /**
-     * Schedules the auto-generated leave-submission email (ใบลา PDF to the shared HR inbox, CC
-     * requester + manager) for after the submit transaction commits -- mail cannot be un-sent, so it
-     * must not go out for a submission a later constraint rolls back (same rule {@link
-     * NotificationService} defers its own sends by). No-op when {@link #leaveSubmissionMailer} is
-     * absent (the unit-test constructor), so submit stays email-free under mocks. The PDF render and
-     * recipient lookups run in the after-commit callback and any failure is swallowed-and-logged: a
-     * mail problem must never fail a leave submission that already succeeded.
-     */
+    /** Schedules the auto-generated leave-submission email for after the submit transaction commits -- mail cannot
+     * be un-sent, so it must not go out for a submission a later constraint rolls back. */
     private void emailLeaveSubmission(LeaveRequestDto request) {
         if (leaveSubmissionMailer == null) {
             return;
@@ -2662,12 +2434,9 @@ public class LeaveService {
         });
     }
 
-    /**
-     * Schedules the completed ใบลา (now carrying the filled ความเห็นผู้บังคับบัญชา / HR-receipt boxes)
-     * to the employee after an APPROVE/REJECT commits -- same after-commit + null-guard + swallow-and-log
-     * rule as {@link #emailLeaveSubmission}. {@code buildLeaveForm} runs post-commit, so it reads the
-     * reviewed request (status + reviewedAt + manager) and fills the decision boxes.
-     */
+    /** Schedules the completed ใบลา (now carrying the filled ความเห็นผู้บังคับบัญชา / HR-receipt boxes) to the
+     * employee after an APPROVE/REJECT commits -- same after-commit + null-guard + swallow-and-log rule as
+     * #emailLeaveSubmission. */
     private void emailLeaveDecision(LeaveRequestDto request) {
         if (leaveSubmissionMailer == null) {
             return;
@@ -2683,12 +2452,11 @@ public class LeaveService {
     }
 
     /** Assembles the ใบลา F-HR-020 fields: the request itself, the employee's nickname/position/
-     * department/division (two read-only lookups), and year-to-date approved usage per type (the
-     * balance math this class owns). Runs post-commit; the just-submitted request is SUBMITTED, so it
-     * contributes to pending -- not approved -- usage and never inflates its own history figures. */
-    // Package-private for LeaveServiceTest: the DTO -> LeaveFormData mapping (decision derivation,
-    // approverName = reports-to manager, reviewedAt -> Bangkok LocalDateTime) is otherwise only
-    // exercised through the after-commit email path, which the unit test wires with a null mailer.
+     * department/division (two read-only lookups), and year-to-date approved usage per type (the balance math this
+     * class owns). */
+    // Package-private for LeaveServiceTest: the DTO -> LeaveFormData mapping (decision derivation, approverName =
+    // reports-to manager, reviewedAt -> Bangkok LocalDateTime) is otherwise only exercised through the
+    // after-commit email path, which the unit test wires with a null mailer.
     LeaveFormData buildLeaveForm(LeaveRequestDto request) {
         long employeeId = request.employeeId();
         int year = request.quotaYear();
@@ -2700,10 +2468,9 @@ public class LeaveService {
         BigDecimal usedTotal = leaveRepository.findLeaveTypes().stream()
             .map(type -> usedDaysThisYear(employeeId, year, type.code()))
             .reduce(BigDecimal.ZERO, BigDecimal::add);
-        // Approval outcome: null on a SUBMITTED form (boxes render blank for HR to sign); populated
-        // once a human APPROVE/REJECT has stamped reviewedAt, so the copy re-rendered for the employee
-        // carries the ticked box, the ผู้อนุมัติ signature (the reports-to manager) and the decision
-        // date/time. AUTO_REJECTED has no reviewer, so its status is deliberately not mapped here.
+        // Approval outcome: null on a SUBMITTED form (boxes render blank for HR to sign); populated once a human
+        // APPROVE/REJECT has stamped reviewedAt, so the copy re-rendered for the employee carries the ticked box, the
+        // ผู้อนุมัติ signature (the reports-to manager) and the decision date/time.
         String decision = "APPROVED".equals(request.status()) ? "APPROVED"
             : "REJECTED".equals(request.status()) ? "REJECTED" : null;
         LocalDateTime approvedAt = request.reviewedAt() == null ? null
@@ -2723,22 +2490,15 @@ public class LeaveService {
             decision, request.managerName(), approvedAt);
     }
 
-    /** Approved days used for one type in one quota year -- the "ประวัติการลาในรอบปีนี้" figures on the
-     * form. A PURE READ ({@link LeaveRepository#sumUsedDays} over {@code APPROVED} only): deliberately
-     * NOT {@link #balanceFor}, which computes carry-forward and can WRITE a {@code hr.leave_carryover}
-     * grant row -- unwanted from this after-commit email path. APPROVED-only (not
-     * {@link #ACTIVE_QUOTA_STATUSES}) excludes the just-submitted SUBMITTED request, so a request never
+    /** Approved days used for one type in one quota year -- the "ประวัติการลาในรอบปีนี้" figures on the form.
+     * APPROVED-only (not #ACTIVE_QUOTA_STATUSES) excludes the just-submitted SUBMITTED request, so a request never
      * inflates its own history figure. */
     private BigDecimal usedDaysThisYear(long employeeId, int year, String leaveTypeCode) {
         BigDecimal used = leaveRepository.sumUsedDays(employeeId, leaveTypeCode, year, Set.of(LeaveStatus.APPROVED));
         return used == null ? BigDecimal.ZERO : used;
     }
 
-    /** Runs {@code action} after the current transaction commits, or immediately when none is active
-     * (unit tests, non-transactional callers) -- the same rule {@code AfterCommit} applies in the
-     * notification package, replicated here to avoid a cross-package dependency on a package-private
-     * helper. "Defer forever" is never the outcome: a swallowed side effect is worse than an early
-     * one. */
+    /** Runs action after the current transaction commits, or immediately when none is active. */
     private void runAfterCommit(Runnable action) {
         if (!TransactionSynchronizationManager.isSynchronizationActive()) {
             action.run();
@@ -2967,19 +2727,9 @@ public class LeaveService {
         if (singleDay && !endTime.isAfter(startTime)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "เวลาสิ้นสุดการลาต้องอยู่หลังเวลาเริ่มต้น");
         }
-        // The TIME-BOUND check applies to EVERY basis, including CALENDAR_DAYS (MATERNITY).
-        //
-        // Regression fix: an earlier draft of this method returned early for CALENDAR_DAYS before
-        // reaching here, and its comment claimed that matched pre-V166 behaviour. It did not. In the
-        // pre-V166 version the `basis == WORKING_DAYS` condition gated ONLY the working-day COUNT;
-        // the 08:30-17:30 bound below it was ungated and applied to every leave type. Returning early
-        // therefore let a single-day MATERNITY request at e.g. 06:00-20:00 through, where it had
-        // always been refused. Only the WORKING-DAY checks are basis-specific -- the clock bound is
-        // not, and must stay above the gate.
-        //
-        // CALENDAR_DAYS has no working-day concept, so its bound is checked unconditionally rather
-        // than behind isWorkingDay -- every date in a MATERNITY range counts, weekends included
-        // (§5.4), which is the whole reason that basis exists.
+        // The TIME-BOUND check applies to EVERY basis, including CALENDAR_DAYS (MATERNITY). In the pre-V166 version
+        // the `basis == WORKING_DAYS` condition gated ONLY the working-day COUNT; the 08:30-17:30 bound below it was
+        // ungated and applied to every leave type.
         if (basis != LeaveDayCountBasis.WORKING_DAYS) {
             validateWithinSchedule(startTime, startSchedule, startDate);
             validateWithinSchedule(endTime, singleDay ? startSchedule : endSchedule,
@@ -3013,11 +2763,9 @@ public class LeaveService {
         }
     }
 
-    /**
-     * Paper-form (ใบลาหยุด F-HR-020) contact-during-leave autofill/override: per field, use what the
-     * requester submitted if non-blank, else fall back to the employee's current address/phone. Missing
-     * defaults (e.g. no address on file) simply leave the field null.
-     */
+    /** Paper-form (ใบลาหยุด F-HR-020) contact-during-leave autofill/override: per field, use what the requester
+     * submitted if non-blank, else fall back to the employee's current address/phone. Missing defaults (e.g. no
+     * address on file) simply leave the field null. */
     private ResolvedContact resolveContact(long employeeId, SubmitLeaveRequest request) {
         LeaveContactDefaultsDto defaults = leaveRepository.findContactDefaults(employeeId).orElse(null);
         return new ResolvedContact(
@@ -3174,8 +2922,8 @@ public class LeaveService {
         if (!allowed) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        // 3. Known id, permitted, bytes unavailable -> 410 GONE. Only reached once 1 and 2 have
-        // already let the caller through, so this can never leak existence to an unauthorized caller.
+        // 3. Known id, permitted, bytes unavailable -> 410 GONE. Only reached once 1 and 2 have already let the caller
+        // through, so this can never leak existence to an unauthorized caller.
         if (!bytesAvailable(location)) {
             throw new ApiException(HttpStatus.GONE, "ไฟล์เอกสารนี้สูญหายจากระบบจัดเก็บ กรุณาติดต่อฝ่ายบุคคล");
         }

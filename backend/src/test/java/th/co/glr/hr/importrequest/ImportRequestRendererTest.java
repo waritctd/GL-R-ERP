@@ -20,34 +20,13 @@ import org.apache.pdfbox.text.TextPosition;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.importrequest.ImportRequestFormData.Line;
 
-/**
- * Guards the one promise this feature makes: the generated ใบขอซื้อ is the business's own
- * F-SM-001 (04) with the deal's data on it — not a replica, not a shifted copy, and not values in
- * the wrong columns.
- *
- * <p>Mirrors {@code LorYor01RendererTest}'s structure, because the same three failures apply and
- * each is invisible to the other two:
- *
- * <ol>
- *   <li>{@link #renderingDestroysNoneOfTheControlledFormsOwnArtwork()} — no pixel of the form's own
- *       ink disappears. Catches an overlay covering a printed label or rule.</li>
- *   <li>{@link #everyTableValueLandsInsideItsOwnColumn()} — each value sits between the correct pair
- *       of measured column rules. Catches a wrong coordinate that check 1 happily allows because it
- *       landed on blank paper.</li>
- *   <li>{@link #rowPitchDoesNotDriftDownThePage()} — the defect that actually happened: a pitch
- *       measured from the gap BETWEEN rules rather than rule-to-rule looked perfect for four rows
- *       and had the text sitting on the rules by row six.</li>
- * </ol>
- */
+/** Guards the one promise this feature makes: the generated ใบขอซื้อ is the business's own F-SM-001 (04) with
+ * the deal's data on it — not a replica, not a shifted copy, and not values in the wrong columns. */
 class ImportRequestRendererTest {
 
-    /**
-     * sha256 of the owner-supplied F-SM-001 (04).
-     *
-     * <p>Pinned because every coordinate in {@link ImportRequestRenderer} was measured against these
-     * exact bytes. Re-saving the template through any PDF editor nudges the rules, and this fails
-     * first and says why instead of the overlay quietly drifting off the grid.
-     */
+    /** sha256 of the owner-supplied F-SM-001 (04). Pinned because every coordinate in ImportRequestRenderer was
+     * measured against these exact bytes. Re-saving the template through any PDF editor nudges the rules, and this
+     * fails first and says why instead of the overlay quietly drifting off the grid. */
     private static final String TEMPLATE_SHA256 =
         "e0c1fa1c5c184170bd860115d9dd81a83bb5de9f03d0c18e78bbe3371a8d3171";
 
@@ -111,10 +90,8 @@ class ImportRequestRendererTest {
         assertThat(added).as("the overlay must actually put data on the page").isGreaterThan(2_000);
     }
 
-    /**
-     * Column rules as measured off the template, as {@code {left, right}} in PDF user space. A value
-     * whose glyphs stray outside its pair is in the wrong cell even if the page looks plausible.
-     */
+    /** Column rules as measured off the template, as {left, right} in PDF user space. A value whose glyphs stray
+     * outside its pair is in the wrong cell even if the page looks plausible. */
     @Test
     void everyTableValueLandsInsideItsOwnColumn() throws Exception {
         List<Placed> placed = placedText(renderer.render(ir69068()));
@@ -158,12 +135,9 @@ class ImportRequestRendererTest {
         }
     }
 
-    /**
-     * The pitch defect, pinned. 13 lines fill all 26 body rows, so any per-row error accumulates to
-     * its maximum by the bottom of the page. Each item's baseline must sit the SAME distance above
-     * its own rule; with the original 21.35 (the gap between rule edges, not the 22.2077 pitch) the
-     * spread runs to ~11pt and the text ends up on the rules.
-     */
+    /** The pitch defect, pinned. Each item's baseline must sit the SAME distance above its own rule; with the
+     * original 21.35 (the gap between rule edges, not the 22.2077 pitch) the spread runs to ~11pt and the text
+     * ends up on the rules. */
     @Test
     void rowPitchDoesNotDriftDownThePage() throws Exception {
         List<Line> lines = new ArrayList<>();
@@ -188,11 +162,9 @@ class ImportRequestRendererTest {
         assertThat(worst).as("row-pitch drift accumulated over a full page").isLessThan(0.75f);
     }
 
-    /**
-     * A line and its note are one indivisible block. 13 two-row lines exactly fill a sheet, so a
-     * 14th must move WHOLE to sheet two — chunking a flat row list every 26 would leave its
-     * "สั่งตามPO" stranded at the top of sheet two under a different item number.
-     */
+    /** A line and its note are one indivisible block. 13 two-row lines exactly fill a sheet, so a 14th must move
+     * WHOLE to sheet two — chunking a flat row list every 26 would leave its "สั่งตามPO" stranded at the top of
+     * sheet two under a different item number. */
     @Test
     void aLineIsNeverSeparatedFromItsOwnNoteByAPageBreak() throws Exception {
         List<Line> lines = new ArrayList<>();
@@ -215,18 +187,9 @@ class ImportRequestRendererTest {
         }
     }
 
-    /**
-     * Regression: a long customer name must arrive WHOLE.
-     *
-     * <p>สั่งมาให้ is a 52.5pt column and its cell is merged over however many rows the line block
-     * spans — which on a two-line deal is only two. The first wrapping implementation wrapped at a
-     * fixed size and cut the overflow, which silently dropped "จำกัด" off the end of a registered
-     * company name: a purchase document naming a party that does not exist. It must shrink until
-     * every word fits, not drop words.
-     *
-     * <p>Deliberately uses a TWO-line deal, the tightest case — with more lines the block is taller
-     * and the bug hides.
-     */
+    /** Regression: a long customer name must arrive WHOLE. สั่งมาให้ is a 52.5pt column and its cell is merged over
+     * however many rows the line block spans — which on a two-line deal is only two. It must shrink until every
+     * word fits, not drop words. */
     @Test
     void aLongCustomerNameSurvivesWholeEvenInTheTightestBlock() throws Exception {
         ImportRequestFormData data = new ImportRequestFormData(
@@ -239,18 +202,14 @@ class ImportRequestRendererTest {
         String text = placedText(renderer.render(data)).stream()
             .map(Placed::text).reduce("", (a, b) -> a + " " + b);
 
-        // Every word, including the last. Asserted word by word because the value legitimately
-        // wraps across rows and is not contiguous in the text layer.
+        // Every word, including the last. Asserted word by word because the value legitimately wraps across rows and
+        // is not contiguous in the text layer.
         assertThat(text).contains("บริษัท").contains("ยู่ฮุย").contains("อินทีเรีย").contains("จำกัด");
     }
 
-    /**
-     * Direct {@link ImportRequestRenderer#rowsRequired} capacity test (owner decision 09-18 #3 §A):
-     * a line with no note costs ONE row, a line WITH a note costs TWO — the note occupies a second,
-     * indivisible row rather than sharing its line's row. Asserted on the row count itself rather
-     * than indirectly through pagination, so a future capacity regression fails here first instead
-     * of only showing up as an off-by-one on some later page-count test.
-     */
+    /** Direct ImportRequestRenderer#rowsRequired capacity test (owner decision 09-18 #3 §A): a line with no note
+     * costs ONE row, a line WITH a note costs TWO — the note occupies a second, indivisible row rather than
+     * sharing its line's row. */
     @Test
     void rowsRequired_countsANoteAsASecondRow() {
         Line withoutNote = new Line(1, "Plain Line", "60x60", new BigDecimal("10"), "pcs", null);
@@ -271,8 +230,7 @@ class ImportRequestRendererTest {
     void aFormThatFitsIsASingleSheetAndCarriesNoPageMarker() throws Exception {
         try (PDDocument doc = Loader.loadPDF(renderer.render(ir69068()))) {
             assertThat(doc.getNumberOfPages()).isEqualTo(1);
-            // The paper original has no page marker; adding one would change what a normal form
-            // looks like.
+            // The paper original has no page marker; adding one would change what a normal form looks like.
             assertThat(textOfPage(doc, 1)).doesNotContain("หน้า");
         }
     }

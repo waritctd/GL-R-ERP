@@ -65,10 +65,8 @@ class OvertimeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(repository.payrollMonthProcessed(LocalDate.parse("2026-05-01"))).isFalse();
     }
 
-    // V114: a fresh test database is migrated with NO hr.payroll_seed_coverage row (the guarded
-    // insert in V114 only fires when hr.payroll_year_to_date_seed already has a 2026 row, and this
-    // schema has none) — the UAT shape from the plan's fact 3, proven directly against the real
-    // migrated schema rather than assumed.
+    // V114: a fresh test database is migrated with NO hr.payroll_seed_coverage row — the UAT shape from the plan's
+    // fact 3, proven directly against the real migrated schema rather than assumed.
     @Test
     void payrollMonthSeedCoveredIsFalseWhenNoCoverageRowExists() {
         assertThat(repository.payrollMonthSeedCovered(LocalDate.parse("2026-03-01"))).isFalse();
@@ -105,11 +103,9 @@ class OvertimeRepositoryIntegrationTest extends AbstractPostgresIntegrationTest 
         assertThat(basis).isEqualByComparingTo(new BigDecimal("28000.00"));
     }
 
-    /**
-     * The case that current_salary cannot answer. The only recorded change is dated after the work
-     * date, so the salary in force on the work date is that row's old_amount (เงินเก่า) — not the
-     * employee's present salary, which is already the post-raise figure.
-     */
+    /** The case that current_salary cannot answer. The only recorded change is dated after the work date, so the
+     * salary in force on the work date is that row's old_amount (เงินเก่า) — not the employee's present salary,
+     * which is already the post-raise figure. */
     @Test
     void findSalaryBasisAsOfUsesOldAmountOfTheNextChangeWhenNoHistoryPrecedesTheWorkDate() {
         long employeeId = insertEmployeeWithSalary("OT-012", new BigDecimal("60000.00"));

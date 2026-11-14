@@ -25,8 +25,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 function pdf(name = 'announcement.pdf', size = 1024) {
   const file = new File(['%PDF-1.4'], name, { type: 'application/pdf' });
-  // jsdom computes size from the blob parts; override so a size-cap test does not need a real 10 MB
-  // buffer.
+  // jsdom computes size from the blob parts; override so a size-cap test does not need a real 10 MB buffer.
   Object.defineProperty(file, 'size', { value: size });
   return file;
 }
@@ -67,9 +66,8 @@ describe('LeavePolicyDocumentPage', () => {
     });
   });
 
-  // The state production, UAT and a fresh mock session are all in: V133 says rows reach the table
-  // only through this endpoint, and it has never had a client. Phrased as a starting point, not a
-  // fault.
+  // The state production, UAT and a fresh mock session are all in: V133 says rows reach the table only through
+  // this endpoint, and it has never had a client. Phrased as a starting point, not a fault.
   it('reads an empty store as the normal starting point rather than a fault', async () => {
     renderPage();
 
@@ -84,22 +82,20 @@ describe('LeavePolicyDocumentPage', () => {
     expect(await screen.findByRole('button', { name: /เปิดเอกสารในระบบ/ })).not.toBeNull();
   });
 
-  // ── The honesty requirement, reversed 2026-08-14 ──────────────────────────
-  // Until issue #774 shipped this page, uploading here did NOT change the PDF at /leave. Now it
-  // does, once the version's effective date arrives and LeavePolicyBar.jsx's probe confirms it --
-  // see that file's own tests for the reader side of this.
+  // The honesty requirement, reversed 2026-08-14 ────────────────────────── Until issue #774 shipped this page,
+  // uploading here did NOT change the PDF at /leave.
   it('says outright that the leave-page reader now prefers the uploaded file once it is in force', async () => {
     renderPage();
 
     expect(await screen.findByText(/จะเปลี่ยนตามฉบับนี้เมื่อถึงวันมีผลบังคับใช้/)).not.toBeNull();
-    // The old claim -- "the file employees see has NOT changed" -- would be a lie now; guard
-    // against a stale revert bringing it back.
+    // The old claim -- "the file employees see has NOT changed" -- would be a lie now; guard against a stale
+    // revert bringing it back.
     expect(screen.queryByText(/ยังไม่เปลี่ยนไฟล์ที่พนักงานเห็นในหน้า/)).toBeNull();
   });
 
-  // 'check-failed' shares the retry branch with a genuine query error: with no confirmed answer,
-  // "never uploaded" is a claim this page cannot support, and it has no bundled fallback to show
-  // in its place the way LeavePolicyBar.jsx does.
+  // 'check-failed' shares the retry branch with a genuine query error: with no confirmed answer, "never
+  // uploaded" is a claim this page cannot support, and it has no bundled fallback to show in its place the way
+  // LeavePolicyBar.jsx does.
   it('renders the retry affordance for a failed check, not the "never uploaded" copy', async () => {
     api.leave.policyDocumentAvailable.mockResolvedValue('check-failed');
     renderPage();
@@ -109,8 +105,8 @@ describe('LeavePolicyDocumentPage', () => {
     expect(screen.queryByText(/ยังไม่เคยมีการอัปโหลดไฟล์เข้ามาเลย/)).toBeNull();
   });
 
-  // The server checks MultipartFile#getContentType — the type the CLIENT declares — so nothing
-  // verifies the bytes really are a PDF. The copy must state the rule without claiming a check.
+  // The server checks MultipartFile#getContentType — the type the CLIENT declares — so nothing verifies the
+  // bytes really are a PDF. The copy must state the rule without claiming a check.
   it('states the PDF rule without claiming the file is verified', async () => {
     renderPage();
 
@@ -128,10 +124,8 @@ describe('LeavePolicyDocumentPage', () => {
     await waitFor(() => expect(api.leave.uploadPolicyDocument).toHaveBeenCalledWith(file, '2026-08-01'));
   });
 
-  // ── The trap this page exists to defuse ───────────────────────────────────
-  // "Current" is the latest effective_from <= today. A future-dated upload is stored and returns
-  // 200 while the availability probe keeps reporting the previous state — which reads as "my upload
-  // did nothing" unless the page says otherwise.
+  // The trap this page exists to defuse ─────────────────────────────────── "Current" is the latest
+  // effective_from <= today.
   it('explains that a future-dated version is stored but not yet in force', async () => {
     const future = '2099-01-01';
     api.leave.uploadPolicyDocument.mockResolvedValue({
@@ -160,10 +154,9 @@ describe('LeavePolicyDocumentPage', () => {
     expect(screen.queryByText(/ยังไม่ถือเป็นฉบับปัจจุบัน/)).toBeNull();
   });
 
-  // Found by clicking through the real app, not by a failing test: clearing the input's `value`
-  // empties the real <input type="file"> but not FileUploadField's own display state, so the
-  // control kept naming a file it had already consumed while the input behind it was empty — and
-  // the next submit would complain about a missing file the user could still see on screen.
+  // Found by clicking through the real app, not by a failing test: clearing the input's `value` empties the real
+  // <input type="file"> but not FileUploadField's own display state, so the control kept naming a file it had
+  // already consumed while the input behind it was empty.
   it('clears the file field after a successful upload, name and input together', async () => {
     renderPage();
     await screen.findByText(/ยังไม่เคยมีการอัปโหลดไฟล์เข้ามาเลย/);
@@ -198,9 +191,9 @@ describe('LeavePolicyDocumentPage', () => {
     expect(api.leave.uploadPolicyDocument).not.toHaveBeenCalled();
   });
 
-  // Mirrors LeaveController.MAX_POLICY_DOCUMENT_BYTES. Size is a real client-side fact (unlike the
-  // declared content type), so checking it before the round trip adds something without implying a
-  // verification nobody performs.
+  // Mirrors LeaveController.MAX_POLICY_DOCUMENT_BYTES. Size is a real client-side fact (unlike the declared
+  // content type), so checking it before the round trip adds something without implying a verification nobody
+  // performs.
   it('catches an oversized file before sending it', async () => {
     renderPage();
     await screen.findByText(/ยังไม่เคยมีการอัปโหลดไฟล์เข้ามาเลย/);

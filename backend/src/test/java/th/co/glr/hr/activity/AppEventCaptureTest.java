@@ -15,23 +15,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 
-/**
- * Pins what the log capture does and — more importantly — what it refuses to do.
- *
- * <p>Two of these are safety properties rather than features. The level filter and the single-frame
- * rule are what keep {@code hr.app_event} from becoming a full log mirror on a web page; V159 says
- * so in the schema and this says so in a test that fails if someone widens either.
- *
- * <p><strong>Uses its own {@link AppEventBuffer}, never {@link AppEventBuffer#shared()}.</strong>
- * The shared instance is JVM-wide, and {@code reuseForks=true} means this class can share a surefire
- * fork with any {@code @SpringBootTest} that boots an {@link AppEventWriter} — whose {@code
- * @PostConstruct} attaches a {@link DatabaseLogAppender} to the root logger and starts a daemon
- * thread that drains the shared buffer for the rest of the fork's life. Against the shared buffer
- * that thread steals events between {@code doAppend} and this class's own drain, and keeps the queue
- * below capacity so nothing is ever counted as dropped — see
- * {@link #assertionsSurviveACompetingDrainerOfTheSharedBuffer} below, which reproduces exactly that.
- * A private instance makes every assertion here independent of what else is running in the JVM.
- */
+/** Pins what the log capture does and — more importantly — what it refuses to do. Uses its own AppEventBuffer,
+ * never AppEventBuffer#shared(). Two of these are safety properties rather than features. A private instance
+ * makes every assertion here independent of what else is running in the JVM. */
 class AppEventCaptureTest {
 
     private AppEventBuffer buffer;
@@ -59,8 +45,8 @@ class AppEventCaptureTest {
 
     @Test
     void ignoresInfoAndBelow() {
-        // The volume decision, pinned. INFO is 36 of this codebase's 76 log statements and is
-        // routine chatter; capturing it would multiply the table for no diagnostic gain.
+        // The volume decision, pinned. INFO is 36 of this codebase's 76 log statements and is routine chatter;
+        // capturing it would multiply the table for no diagnostic gain.
         appender.doAppend(event(Level.INFO, "routine", null));
         appender.doAppend(event(Level.DEBUG, "noisy", null));
         appender.doAppend(event(Level.TRACE, "very noisy", null));
@@ -70,8 +56,8 @@ class AppEventCaptureTest {
 
     @Test
     void storesOneStackFrameAndNeverTheWholeTrace() {
-        // The data-exposure guard. A full trace is where a connection string, a token or an
-        // employee's data reaches a page that a human reads in a browser.
+        // The data-exposure guard. A full trace is where a connection string, a token or an employee's data reaches a
+        // page that a human reads in a browser.
         RuntimeException failure = new IllegalStateException("connection to db.internal failed");
         failure.setStackTrace(new StackTraceElement[] {
             new StackTraceElement("th.co.glr.hr.Deep", "inner", "Deep.java", 10),
@@ -121,10 +107,7 @@ class AppEventCaptureTest {
 
     @Test
     void assertionsSurviveACompetingDrainerOfTheSharedBuffer() throws InterruptedException {
-        // Regression test for the flake this class used to have: a background thread draining
-        // AppEventBuffer.shared() — exactly what AppEventWriter#drainForever does once any
-        // @SpringBootTest in this surefire fork boots one — must not be able to touch what this
-        // test observes, because setUp() gave this test its own buffer instead of the shared one.
+        // Regression test for the flake this class used to have: a background thread draining AppEventBuffer.shared.
         AtomicBoolean running = new AtomicBoolean(true);
         CountDownLatch drainerStarted = new CountDownLatch(1);
         AppEventBuffer sharedBuffer = AppEventBuffer.shared();
@@ -164,21 +147,16 @@ class AppEventCaptureTest {
 
     @Test
     void namesAScheduledJobByItsMethodNotItsLambdaIdentity() {
-        // A lambda's toString() is a synthetic identity that changes between builds, which would
-        // make job history impossible to group by worker.
+        // A lambda's toString() is a synthetic identity that changes between builds, which would make job history
+        // impossible to group by worker.
         Runnable plain = () -> { };
         assertThat(ScheduledJobEventConfig.describe(plain)).doesNotContain("$$Lambda");
         assertThat(ScheduledJobEventConfig.describe(null)).isEqualTo("unknown");
     }
 
-    /**
-     * Built through a REAL logger from the real context, not {@code new LoggingEvent()}.
-     *
-     * <p>A hand-constructed event has a null logger context, and {@code getMDCPropertyMap()}
-     * resolves the MDC adapter through it — so the bare constructor throws inside the appender and
-     * every assertion here silently sees an empty buffer. The first draft of this test did exactly
-     * that: `ignoresInfoAndBelow` passed against an empty queue and proved nothing at all.
-     */
+    /** Built through a REAL logger from the real context, not new LoggingEvent(). A hand-constructed event has a
+     * null logger context, and getMDCPropertyMap() resolves the MDC adapter through it — so the bare constructor
+     * throws inside the appender and every assertion here silently sees an empty buffer. */
     private LoggingEvent event(Level level, String message, Throwable thrown) {
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         ch.qos.logback.classic.Logger logger = context.getLogger("th.co.glr.hr.Example");

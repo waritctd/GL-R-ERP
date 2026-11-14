@@ -1,17 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// F1 (Opus final-pass review, Quotation v2): mockApi's deal-entry writes (tickets.create,
-// customers.create/createContact/createProject) used to gate on hasRole('sales') alone, which
-// was STRICTER than the real backend gate -- DealEntryAccess.canEnterDeal (role sales OR
-// sales_manager OR a live canCreateQuotation grant). That made the inline deal-creation flow
-// (TicketCreateModal / /quotations/new with no ?ticket=, "บันทึกลูกค้าใหม่") untestable under
-// VITE_USE_MOCKS=true for sales_manager and a granted employee, even though production accepts
-// both -- see DealEntryAccess's own Javadoc for the ruling. requireDealEntry() (write sites) and
-// requireCustomerViewer() (the three customer reads, which OR the same grant into
-// CUSTOMER_VIEWER_ROLES) now mirror that gate. These cases are written wrong-way-round per
-// CLAUDE.md's "Permission changes must ship evidence" section: they assert the roles that must
-// still be REFUSED, not just that the intended roles succeed.
+// mockApi's deal-entry writes (tickets.create, customers.create/createContact/createProject) used to gate on
+// hasRole('sales') alone, which was STRICTER than the real backend gate -- DealEntryAccess.canEnterDeal (role
+// sales OR sales_manager OR a live canCreateQuotation grant).
 
 async function loginAs(email) {
   return api.auth.login({ email, password: 'demo1234' });

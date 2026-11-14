@@ -58,26 +58,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Shared real-service / real-repository / real-Postgres fixture for slice 1 of the stock-line
- * feature (IA .design/stock-item-pricing/INFORMATION_ARCHITECTURE.md, sections 0, 1.1-1.4, 1.7).
- * No mocks: every collaborator is the production class, hand-wired the same way
- * {@code PricingChainEndToEndIntegrationTest} wires the pricing chain.
- *
- * <p><b>Two ways to put a pricing request on the books, on purpose.</b>
- * <ul>
- *   <li>{@link #persistDraft} writes the items straight through {@link PricingRequestRepository}
- *       (persistence only, no service validation) so that a test about ROUTING, ETAs or the CEO
- *       decision does not fail in its own fixture on the (also new) "stock lines need no
- *       factory/origin country/lead time" validation rule. That rule has its own tests, which DO go
- *       through {@code createDraft}.</li>
- *   <li>The service path ({@code pricingRequestService.createDraft}) is used only where the
- *       validation/round-trip behaviour is itself the thing under test.</li>
- * </ul>
- *
- * <p>Every line built here carries the full new-form fields (V185) so that a resulting decision is
- * "new form eligible" (PER_PIECE + sqmPerPiece), i.e. the CEO price-mode picker applies to it.
- */
+/** Shared real-service / real-repository / real-Postgres fixture for slice 1 of the stock-line feature (IA
+ * .design/stock-item-pricing/INFORMATION_ARCHITECTURE.md, sections 0, 1.1-1.4, 1.7). That rule has its own
+ * tests, which DO go through createDraft. */
 public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresIntegrationTest {
 
     protected static final String IN_THAILAND = "IN_THAILAND";
@@ -147,8 +130,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
         salesManagerId = createEmployee(employees, "ผจก.ขาย สต็อก", "sm-stock@glr.co.th", "SALES", "ฝ่ายขาย");
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า สต็อก", "import-stock@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
         accountUserId = createEmployee(employees, "บัญชี สต็อก", "acct-stock@glr.co.th", "ACCT", "ฝ่ายบัญชี");
-        // Matches CeoApproverRule.SQL_PREDICATE (position กรรมการผู้จัดการ) so hr.notification
-        // fan-out for role "ceo" actually reaches this employee.
+        // Matches CeoApproverRule.SQL_PREDICATE (position กรรมการผู้จัดการ) so hr.notification fan-out for role "ceo"
+        // actually reaches this employee.
         ceoUserId = employees.create(new UpsertEmployeeRequest(
             null, null, "ผู้บริหาร สต็อก", null, null, null, null, null, null, null,
             "ceo-stock@glr.co.th", null, "MD", "ผู้บริหาร", "ผู้บริหาร",
@@ -211,10 +194,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
         return line(model, null, factory, pieces, "อื่นๆ", 3, 7, null);
     }
 
-    /**
-     * A STOCK line the way R7 says it arrives: no factory, no origin country, no lead time - those
-     * three inputs are hidden for a stock line, so nothing is sent.
-     */
+    /** A STOCK line the way R7 says it arrives: no factory, no origin country, no lead time - those three inputs
+     * are hidden for a stock line, so nothing is sent. */
     protected PricingRequestItemRequest stockLine(String model, String stockSource, int pieces) {
         return line(model, null, null, pieces, null, null, null, stockSource);
     }
@@ -225,9 +206,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
         return line(model, catalogProductId, factory, pieces, null, null, null, stockSource);
     }
 
-    /** A line that is COMPLETE as an import line (origin country + lead time) but carries an arbitrary
-     * {@code stockSource} - used to probe source validation without tripping an unrelated
-     * "missing origin country" 400 first. */
+    /** A line that is COMPLETE as an import line (origin country + lead time) but carries an arbitrary stockSource
+     * - used to probe source validation without tripping an unrelated "missing origin country" 400 first. */
     protected PricingRequestItemRequest lineWithFullImportFields(String model, String stockSource, int pieces) {
         return line(model, null, null, pieces, "ไทย-สต็อก", 3, 7, stockSource);
     }
@@ -238,8 +218,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
         BigDecimal qty = BigDecimal.valueOf(pieces);
         return new PricingRequestItemRequest(null, catalogProductId, null, "SCG", model, "SCG " + model,
             "White", "Matte", "60x60", factory,
-            // requestedQty/Sqm/Unit/Basis: what PricingRequestService#resolveItem would derive, spelled
-            // out so a repository-persisted line (persistDraft) is identical to a service-created one.
+            // requestedQty/Sqm/Unit/Basis: what PricingRequestService#resolveItem would derive, spelled out so a
+            // repository-persisted line (persistDraft) is identical to a service-created one.
             qty, qty.multiply(new BigDecimal("0.36")), "แผ่น", UnitBasis.PER_PIECE,
             QuantityType.CONFIRMED, null, null, null,
             null, new BigDecimal("10"), new BigDecimal("0.36"), WastageCalculator.QUANTITY_MODE_PIECES,
@@ -307,8 +287,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
     protected List<FactoryQuoteDto> quoteEveryImportLineReady(long pricingRequestId) {
         List<FactoryQuoteDto> drafts = factoryQuoteService.generateDrafts(pricingRequestId, importActor);
         for (FactoryQuoteDto draft : drafts) {
-            // generateDrafts returns EVERY quote of the request; a quote answered on an earlier call
-            // is not a draft any more and must not be re-answered (that would open a revision).
+            // generateDrafts returns EVERY quote of the request; a quote answered on an earlier call is not a draft any
+            // more and must not be re-answered (that would open a revision).
             if ("DRAFT".equals(draft.status())) {
                 answerAndMarkReady(draft);
             }
@@ -318,19 +298,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
 
     // ── seeding a decision for STOCK lines ─────────────────────────────────────────────────
 
-    /**
-     * Writes, straight through the repositories, what {@code PricingDecisionService#startReview} is
-     * specified to leave behind for the STOCK lines of {@code pricingRequestId}: one DRAFT decision
-     * whose stock lines are decision items with NO costing link, NO frozen cost, NO list price and
-     * NO proposed price, PER_PIECE, quantity = the requested pieces. The request is put in
-     * CEO_REVIEWING. Used ONLY by tests of {@code update}/{@code approve}/{@code returnToImport}/the
-     * quotation, so that each of them fails on ITS OWN assertion rather than inside an unbuilt
-     * {@code startReview}; {@code startReview} itself has its own tests that do not use this.
-     *
-     * <p>The shape written here is exactly what the {@code startReview} tests assert, so the two
-     * cannot drift apart unnoticed. An empty costing (total 0) is what the decision hangs off,
-     * because {@code pricing_decision.pricing_costing_id} stays NOT NULL (an open design point).
-     */
+    /** Seeds an uncosted stock-only draft decision for tests of later review actions; does not exercise startReview
+     * itself. */
     protected long seedStockOnlyDecision(long pricingRequestId) {
         long costingId = costingRepository.createComputed(pricingRequestId, null, ceoUserId, BigDecimal.ZERO);
         long decisionId = decisionRepository.createDraft(pricingRequestId, costingId, new BigDecimal("0.20"),
@@ -378,8 +347,8 @@ public abstract class AbstractStockLineIntegrationTest extends AbstractPostgresI
             Map.of("id", pricingRequestId), String.class);
     }
 
-    /** Raw status write, used ONLY to put a request into a state a test needs as a PRECONDITION
-     * without driving unrelated (and possibly not-yet-built) behaviour to get there. */
+    /** Raw status write, used ONLY to put a request into a state a test needs as a PRECONDITION without driving
+     * unrelated (and possibly not-yet-built) behaviour to get there. */
     protected void forceStatus(long pricingRequestId, String status) {
         // chk_pricing_request_cancelled_pair: CANCELLED must carry who/when it was cancelled.
         jdbc.update("""

@@ -82,8 +82,8 @@ export function ReviewQueueTab({ user, showToast }) {
     const reviewable = actionableRequests.filter((request) => canReviewRequest(request, user, canReviewAll));
     const pendingDays = reviewable.reduce((sum, request) => sum + Number(request.totalDays || 0), 0);
     const people = new Set(reviewable.map((request) => request.employeeId)).size;
-    // "Starting within 7 days" is the urgency signal a queue needs -- a request whose leave begins
-    // on Monday matters more than one three months out, and nothing else on this tab surfaces that.
+    // "Starting within 7 days" is the urgency signal a queue needs -- a request whose leave begins on Monday
+    // matters more than one three months out, and nothing else on this tab surfaces that.
     const soonCutoff = addDaysIso(todayIso(), 7);
     const startingSoon = reviewable.filter((request) => request.startDate <= soonCutoff).length;
     return {
@@ -211,8 +211,8 @@ export function ReviewQueueTab({ user, showToast }) {
   const columns = useMemo(() => buildLeaveRequestColumns({
     expandedId,
     onToggleExpand: toggleExpand,
-    // Suppresses the "waiting on ผู้จัดการ (คุณนา)" note on rows waiting on THIS user -- which, on
-    // a division manager's own queue, is every pending row. See PendingApproverNote's own comment.
+    // Suppresses the "waiting on ผู้จัดการ (คุณนา)" note on rows waiting on THIS user -- which, on a division
+    // manager's own queue, is every pending row. See PendingApproverNote's own comment.
     viewer: user,
     renderActions: (request) => {
       const reviewable = canReviewRequest(request, user, canReviewAll);
@@ -364,8 +364,8 @@ export function ReviewQueueTab({ user, showToast }) {
         items={[
           { key: 'awaiting', label: 'รอคุณพิจารณา', value: totals.awaitingDecision, helper: 'อนุมัติ / ปฏิเสธได้' },
           { key: 'soon', label: 'เริ่มใน 7 วัน', value: totals.startingSoon, helper: 'ควรพิจารณาก่อน' },
-          // `wrapValue`: a sum over every pending request, so it carries the same multi-unit
-          // duration MyLeaveTab's own "โควตาคงเหลือ" tile does. See CompactStatRow.
+          // `wrapValue`: a sum over every pending request, so it carries the same multi-unit duration MyLeaveTab's own
+          // "โควตาคงเหลือ" tile does. See CompactStatRow.
           { key: 'days', label: 'วันลารวม', value: formatDays(totals.pendingDays), helper: 'ที่รอพิจารณา', wrapValue: true },
           { key: 'people', label: 'พนักงาน', value: totals.people, helper: 'ที่ยื่นคำขอ' },
         ]}

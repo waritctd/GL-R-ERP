@@ -30,27 +30,9 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres proof for Part B (the S4/S5 split) and Part C (route-dependent stages need no
- * written justification), plus the authorization surface Part B widens.
- *
- * <p>Three things here are unreachable from a unit test:
- *
- * <ol>
- *   <li>the V143 CHECK constraint actually accepts {@code QUOTE_OWNER} — and is still a live
- *       constraint, not one the migration quietly dropped;
- *   <li>{@code requireStageWriteAccess} keys off {@code SALES_TARGET_STAGES}, so adding
- *       {@code QUOTE_OWNER} to that set is a PERMISSION change. Per {@code CLAUDE.md} the enforcing
- *       test must run through the real Java service against real Postgres, and it is written
- *       wrong-way-round: the assertion that matters is that account, import and a NON-owning sales
- *       rep are refused and the row does not move;
- *   <li>{@code updateStage}'s note rule composes with the tracking-field gate and the ownership
- *       gate, which a pure {@link DealStage} test cannot see.
- * </ol>
- *
- * <p>Modelled on {@link DealTrackingAndActivityIntegrationTest}, which covers the tracking gate
- * itself. No assertion here depends on a rollback: {@code @Transactional} is inert in this suite.
- */
+/** Real-Postgres proof for Part B (the S4/S5 split) and Part C (route-dependent stages need no written
+ * justification), plus the authorization surface Part B widens. Modelled on
+ * DealTrackingAndActivityIntegrationTest, which covers the tracking gate itself. */
 class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -89,10 +71,8 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
 
     // ── Part B: the schema, and the recipient routing ────────────────────────
 
-    /**
-     * V143 widened {@code chk_ticket_sales_stage} rather than dropping it. Both halves are asserted
-     * because a migration that simply deleted the constraint would pass the first half alone.
-     */
+    /** V143 widened chk_ticket_sales_stage rather than dropping it. Both halves are asserted because a migration
+     * that simply deleted the constraint would pass the first half alone. */
     @Test
     void theCheckConstraintAcceptsQuoteOwnerAndStillRejectsAnUnknownStage() {
         long ticketId = createTicket();
@@ -106,15 +86,9 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
     }
 
-    /**
-     * The headline of Part B, written wrong-way-round: a quotation issued to the OWNER must NOT
-     * land on {@code QUOTE_DESIGN_SIDE}. It did before — both recipients were mapped onto that one
-     * stage, which is why {@code sales_stage} could not answer "has the owner been quoted yet?".
-     *
-     * <p>This drives {@code advanceStageForCustomerQuotationIssue}, the entry point
-     * {@code CustomerQuotationService.issue} calls, so it is the production routing and not a
-     * re-implementation of it.
-     */
+    /** The headline of Part B, written wrong-way-round: a quotation issued to the OWNER must NOT land on
+     * QUOTE_DESIGN_SIDE. It did before — both recipients were mapped onto that one stage, which is why sales_stage
+     * could not answer "has the owner been quoted yet?". */
     @Test
     void aQuotationIssuedToTheOwnerLandsOnQuoteOwnerAndNeverOnQuoteDesignSide() {
         long ticketId = createTicket();
@@ -135,8 +109,8 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
         ticketService.advanceStageForCustomerQuotationIssue(buyerDeal, QuotationRecipient.BUYER, ownerRep);
         assertThat(stageOf(buyerDeal)).isEqualTo(DealStage.QUOTE_BUYER);
 
-        // UNSPECIFIED (and anything unrecognised) advances nothing, exactly as the old if/else-if
-        // chain did by falling off the end.
+        // UNSPECIFIED (and anything unrecognised) advances nothing, exactly as the old if/else-if chain did by falling
+        // off the end.
         long unspecifiedDeal = createTicket();
         ticketService.advanceStageForCustomerQuotationIssue(unspecifiedDeal, QuotationRecipient.UNSPECIFIED, ownerRep);
         assertThat(stageOf(unspecifiedDeal)).isEqualTo(DealStage.LEAD_APPROACH);
@@ -157,11 +131,8 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
 
     // ── Part B: the permission surface QUOTE_OWNER joins ─────────────────────
 
-    /**
-     * Wrong-way-round authz. {@code QUOTE_OWNER} is in {@code SALES_TARGET_STAGES}, so the money
-     * roles and a rep who does not own this deal must be refused — and the stage must genuinely not
-     * move, not merely throw.
-     */
+    /** Wrong-way-round authz. QUOTE_OWNER is in SALES_TARGET_STAGES, so the money roles and a rep who does not own
+     * this deal must be refused — and the stage must genuinely not move, not merely throw. */
     @Test
     void quoteOwnerIsRefusedToAccountImportAndANonOwningRep() {
         long ticketId = readyToAdvanceFrom(DealStage.SPEC_APPROVED);
@@ -209,10 +180,8 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
         assertThat(stageOf(byCeo)).isEqualTo(DealStage.QUOTE_OWNER);
     }
 
-    /**
-     * The money/import stages are unchanged by this branch — asserted so a future widening of
-     * {@code SALES_TARGET_STAGES} cannot quietly hand a sales rep the payment or import stages.
-     */
+    /** The money/import stages are unchanged by this branch — asserted so a future widening of SALES_TARGET_STAGES
+     * cannot quietly hand a sales rep the payment or import stages. */
     @Test
     void theMoneyAndImportStagesStillBelongToTheirOwnRoles() {
         long ticketId = readyToAdvanceFrom(DealStage.NEGOTIATION);
@@ -272,18 +241,13 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
     }
 
-    /**
-     * …and the wrong-way-round half: stepping over a MANDATORY stage still costs a sentence.
-     * QUOTE_BUYER -> ORDER_RECEIVED steps over NEGOTIATION.
-     */
+    /** …and the wrong-way-round half: stepping over a MANDATORY stage still costs a sentence. QUOTE_BUYER ->
+     * ORDER_RECEIVED steps over NEGOTIATION. */
     @Test
     void skippingAMandatoryStage_isStillRefusedWithoutANoteAndTheStageDoesNotMove() {
         long ticketId = readyToAdvanceFrom(DealStage.QUOTE_BUYER);
-        // ORDER_RECEIVED is fact-gated as of the stage-fact-gate branch, and that gate runs BEFORE
-        // the note rule — without a verified customer order this call would now 409 on the fact and
-        // never reach the rule under test. CUSTOMER_CONFIRMED is what confirmCustomer writes, so
-        // seeding it leaves the missing NOTE as the only thing wrong with the call below.
-        // (StageFactGateIntegrationTest owns the fact gate's own coverage.)
+        // ORDER_RECEIVED is fact-gated as of the stage-fact-gate branch, and that gate runs BEFORE the note rule —
+        // without a verified customer order this call would now 409 on the fact and never reach the rule under test.
         jdbc.update("UPDATE sales.ticket SET payment_status = :status WHERE ticket_id = :id",
             new MapSqlParameterSource()
                 .addValue("status", PaymentTrack.CUSTOMER_CONFIRMED).addValue("id", ticketId));
@@ -324,11 +288,9 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
 
     // ── helpers ──────────────────────────────────────────────────────────────
 
-    /**
-     * A deal parked at {@code stage} with the tracking fields the B1 forward-advance gate demands
-     * (a next follow-up date and one activity logged after the last stage change), so that a test
-     * asserting the NOTE rule fails on the note rule and nothing else.
-     */
+    /** A deal parked at stage with the tracking fields the B1 forward-advance gate demands (a next follow-up date
+     * and one activity logged after the last stage change), so that a test asserting the NOTE rule fails on the
+     * note rule and nothing else. */
     private long readyToAdvanceFrom(String stage) {
         long ticketId = createTicket();
         jdbc.update("UPDATE sales.ticket SET sales_stage = :stage WHERE ticket_id = :id",

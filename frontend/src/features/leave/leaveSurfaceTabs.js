@@ -106,13 +106,8 @@ export const LEAVE_SURFACE_TABS = [
   // resolveLeaveSurfaceTab's fallback below compensate for.
 ];
 
-/**
- * `tab.label`/`tab.helper` unless the tab declares a role-aware override
- * (`labelFor`/`helperFor` -- currently only `team`, see its own comment above), in which case
- * that override wins. Centralised here so every renderer of LEAVE_SURFACE_TABS copy (currently
- * LeaveSurfacePage.jsx's `<Tabs>` items) resolves the same way instead of reading `tab.label`
- * directly and missing the hr/ceo override.
- */
+/** `tab.label`/`tab.helper` unless the tab declares a role-aware override (`labelFor`/`helperFor` -- currently
+ * only `team`, see its own comment above), in which case that override wins. */
 export function resolveTabLabel(tab, user) {
   return tab.labelFor ? tab.labelFor(user) : tab.label;
 }
@@ -139,11 +134,9 @@ export function canSubmitOwnLeave(user) {
   return !LEAVE_QUEUE_ONLY_ROLES.has(user?.role);
 }
 
-/**
- * The tab an hr/ceo actor should land on absent an explicit (and currently visible) `?tab=` --
- * "รอพิจารณา" (review), not "ของฉัน" (me), since they oversee leave rather than file their own.
- * Every other role keeps the pre-existing DEFAULT_LEAVE_SURFACE_TAB_ID ("me").
- */
+/** The tab an hr/ceo actor should land on absent an explicit (and currently visible) `?tab=` -- "รอพิจารณา"
+ * (review), not "ของฉัน" (me), since they oversee leave rather than file their own. Every other role keeps the
+ * pre-existing DEFAULT_LEAVE_SURFACE_TAB_ID ("me"). */
 export function defaultLeaveSurfaceTabId(user) {
   return LEAVE_QUEUE_ONLY_ROLES.has(user?.role) ? 'review' : DEFAULT_LEAVE_SURFACE_TAB_ID;
 }

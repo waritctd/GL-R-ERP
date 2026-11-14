@@ -70,44 +70,13 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Phase 1 UI simplification (owner ruling 2026-08-16): ราคาขั้นต่ำ is no longer a CEO input, so
- * {@link PricingDecisionService#approve} now auto-populates {@code
- * minimumSellingPricePerRequestedUnit} with the approved selling price itself whenever the CEO
- * has not explicitly set a lower floor (see that method's own doc comment for the full
- * reasoning).
- *
- * <p><b>Why this file exists — the money hole it closes.</b> {@code CustomerQuotationService}
- * enforces the floor in three places (update/issue/buildItem), and all three checks are
- * NULL-GUARDED: {@code item.minimumSellingPricePerRequestedUnit() != null && ... < minimum}. A UI
- * change that simply stops setting the field would leave it NULL forever, which does not fail
- * one check — it silently disarms all three, so every future discount on every future pricing
- * decision goes completely unguarded. That is exactly the class of defect this repo has been
- * bitten by before (see CLAUDE.md's "mock more permissive than production" section for the same
- * failure shape in a different feature).
- *
- * <p><b>Written wrong-way-round throughout</b>, per CLAUDE.md: every test here asserts a
- * DISCOUNTED quotation line is still REFUSED, not that a permitted one succeeds — "the guard still
- * fires" is the claim under test, not "the happy path still works". {@link
- * #minimumSellingPrice_isNeverNull_evenWhenTheCeoNeverTypedOne_soTheFirstDiscountAttemptIs422ed}
- * is the direct proof: zero CEO input into ราคาขั้นต่ำ anywhere in this test, and the very first
- * ฿0.01 discount on the very first quotation line is still refused with a 422 quoting the
- * CEO-approved minimum. {@link
- * #approve_leavesMinimumNull_isTheMutationThisFileExistsToCatch} documents (does not itself
- * enforce — see this task's own mutation-check step) what a regression here would look like: a
- * decision item approved with a NULL minimum is the exact hole CustomerQuotationService's guards
- * cannot see through.
- *
- * <p>Real service, real repository, real Postgres — no Mockito on the path under test (the outer
- * class fields ARE mocked, matching every sibling fixture file in this package, but nothing here
- * stubs {@code PricingDecisionService} or {@code CustomerQuotationService} themselves).
- */
+/** Phase 1 UI simplification: ราคาขั้นต่ำ is no longer a CEO input, so PricingDecisionService#approve now
+ * auto-populates minimumSellingPricePerRequestedUnit with the approved selling price itself whenever the CEO
+ * has not explicitly set a lower floor. */
 class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractPostgresIntegrationTest {
-    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155): saving a
-    // below-minimum discount no longer throws at update() at all — see
-    // th.co.glr.hr.customerquotation.DiscountApprovalIntegrationTest for the full approval
-    // workflow. The below-minimum-at-ISSUE prefix stays in force: issue() is the one site that
-    // still refuses (now "below minimum AND unapproved", not merely "below minimum").
+    // CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155): saving a below-minimum discount no
+    // longer throws at update() at all — see th.co.glr.hr.customerquotation.DiscountApprovalIntegrationTest for
+    // the full approval workflow.
     private static final String BELOW_MINIMUM_ON_ISSUE = "ไม่สามารถออกใบเสนอราคาได้ — รายการ";
 
     private PricingRequestService pricingRequestService;
@@ -177,24 +146,16 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Wrong-way-round: the guard still fires with ZERO CEO input into ราคาขั้นต่ำ anywhere.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The direct proof the task brief asks for. The CEO does nothing except set a margin (the
-     * one remaining input) and approve — no minimum-price field exists in the Phase 1 UI at all —
-     * yet the very first discount attempt on the resulting quotation, of just one satang, is still
-     * refused with a 422 quoting the CEO-approved minimum.
-     */
+    /** The direct proof the task brief asks for. */
     @Test
     void minimumSellingPrice_isNeverNull_evenWhenTheCeoNeverTypedOne_soTheFirstDiscountNeedsCeoApprovalBeforeIssue() {
         PricingDecisionDto approved = approveOneItemDecision(new BigDecimal("0.20"));
         PricingDecisionItemDto approvedItem = approved.items().get(0);
 
-        // The auto-population itself, at the source: never null, always equal to the approved
-        // price (floor == price -> zero discount headroom, exactly today's "any discount needs
-        // CEO approval" outcome per the task brief).
+        // The auto-population itself, at the source: never null, always equal to the approved price (floor == price ->
+        // zero discount headroom, exactly today's "any discount needs CEO approval" outcome per the task brief).
         assertThat(approvedItem.minimumSellingPricePerRequestedUnit()).isNotNull();
         assertThat(approvedItem.minimumSellingPricePerRequestedUnit())
             .isEqualByComparingTo(approvedItem.approvedSellingPricePerRequestedUnit());
@@ -204,9 +165,9 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
         CustomerQuotationItemDto item = draft.items().get(0);
         BigDecimal oneSatang = new BigDecimal("0.01");
 
-        // Phase 2 (2026-08-16): update() no longer throws — it saves, and opens a CEO approval
-        // request (wrong-way-round proof this file still cares about: the request exists at
-        // exactly one satang below the auto-populated minimum, the smallest possible breach).
+        // Phase 2 (2026-08-16): update() no longer throws — it saves, and opens a CEO approval request
+        // (wrong-way-round proof this file still cares about: the request exists at exactly one satang below the
+        // auto-populated minimum, the smallest possible breach).
         CustomerQuotationDto discounted = quotationService.update(draft.id(), new UpdateCustomerQuotationRequest(
             null, null, null, null, null,
             List.of(new UpdateCustomerQuotationItemRequest(item.id(), null, null, oneSatang))), salesActor);
@@ -225,9 +186,9 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
             });
     }
 
-    /** Same proof at the ISSUE gate — {@code CustomerQuotationService#issue}'s own independent
-     * null-guarded check, not the one {@code update} already refused above. Corrupts the discount
-     * directly via SQL so issue() is what has to catch it, not update(). */
+    /** Same proof at the ISSUE gate — CustomerQuotationService#issue's own independent null-guarded check, not the
+     * one update already refused above. Corrupts the discount directly via SQL so issue() is what has to catch it,
+     * not update(). */
     @Test
     void minimumSellingPrice_autoPopulated_alsoBlocksIssueOfAnAlreadyDiscountedLine() {
         PricingDecisionDto approved = approveOneItemDecision(new BigDecimal("0.20"));
@@ -251,9 +212,9 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
             });
     }
 
-    /** A margin of exactly 0 still produces a non-null minimum (== the approved price, which is
-     * itself equal to cost at 0 margin) — the auto-population does not depend on the price being
-     * "large" or the margin being positive, only on the item having been approved at all. */
+    /** A margin of exactly 0 still produces a non-null minimum (== the approved price, which is itself equal to
+     * cost at 0 margin) — the auto-population does not depend on the price being "large" or the margin being
+     * positive, only on the item having been approved at all. */
     @Test
     void minimumSellingPrice_autoPopulated_evenAtZeroMargin_stillNeedsApprovalBeforeIssue() {
         PricingDecisionDto approved = approveOneItemDecision(BigDecimal.ZERO);
@@ -277,26 +238,19 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }
 
-    /**
-     * Documents the mutation this file exists to catch — see this task's own mutation-check step
-     * (neuter the auto-population fallback in {@code PricingDecisionService#approve}, confirm
-     * {@link #minimumSellingPrice_isNeverNull_evenWhenTheCeoNeverTypedOne_soTheFirstDiscountAttemptIs422ed}
-     * goes red, restore, prove byte-identity by sha256). This test itself only pins the CURRENT
-     * (correct) behaviour at the DTO level as a fast, non-quotation-round-trip signal; it is not
-     * the mutation-check itself.
-     */
+    /** Documents the mutation this file exists to catch — see this task's own mutation-check step. This test itself
+     * only pins the CURRENT (correct) behaviour at the DTO level as a fast, non-quotation-round-trip signal; it is
+     * not the mutation-check itself. */
     @Test
     void approve_leavesMinimumNull_isTheMutationThisFileExistsToCatch() {
         PricingDecisionDto approved = approveOneItemDecision(new BigDecimal("0.20"));
         assertThat(approved.items().get(0).minimumSellingPricePerRequestedUnit()).isNotNull();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** One-item deal driven all the way to an APPROVED pricing decision, with margin as the ONLY
-     * CEO input — no minimum-price field touched anywhere, matching the Phase 1 UI exactly. */
+    /** One-item deal driven all the way to an APPROVED pricing decision, with margin as the ONLY CEO input — no
+     * minimum-price field touched anywhere, matching the Phase 1 UI exactly. */
     private PricingDecisionDto approveOneItemDecision(BigDecimal marginPct) {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, oneItemPricingRequest(), salesActor)
             .summary().id();
@@ -323,8 +277,8 @@ class PricingDecisionMinimumPriceAutoPopulationIntegrationTest extends AbstractP
             UUID.randomUUID().toString());
     }
 
-    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-    // quantity are now required on every item PricingRequestService#createDraft persists —
+    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+    // required on every item PricingRequestService#createDraft persists —
     // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
     private PricingRequestRequests.CreatePricingRequestRequest oneItemPricingRequest() {
         return new PricingRequestRequests.CreatePricingRequestRequest(

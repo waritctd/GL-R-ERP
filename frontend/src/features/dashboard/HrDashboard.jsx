@@ -10,12 +10,9 @@ import { formatShortDate, greetingName, requestStatus } from '../../utils/format
 import { ActionQueue } from './ActionQueue.jsx';
 import { buildHrDashboardStats, DivisionHeadcountPanel } from './hrHeadcount.jsx';
 
-/**
- * Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px;
- * align-items: start; ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: 1fr.
- * No shared primitive yet for this exact column ratio, so it's kept local
- * (matches the breakpoints of `.stat-grid`/`.dashboard-grid` in styles.css).
- */
+/** Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px; align-items: start; ≤1040px:
+ * repeat(2, minmax(0, 1fr)); ≤720px: 1fr. No shared primitive yet for this exact column ratio, so it's kept
+ * local (matches the breakpoints of `.stat-grid`/`.dashboard-grid` in styles.css). */
 const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-2 mobile:grid-cols-1';
 
 export function HrDashboard({ employee, employees, profileRequests, dashboardSummary }) {
@@ -27,10 +24,9 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
       ?? profileRequests.reduce((count, item) => count + (item.status === 'pending' ? 1 : 0), 0),
   }), [employees, profileRequests, dashboardSummary]);
 
-  // /hr is gated to hr/admin (canViewEmployees) — both roles hold
-  // canReviewProfileRequests, canViewAllOvertime, canViewAllLeave, so these
-  // targets are always reachable here (no per-role branching needed, unlike
-  // the shared EmployeeDashboard which every role lands on).
+  // /hr is gated to hr/admin (canViewEmployees) — both roles hold canReviewProfileRequests, canViewAllOvertime,
+  // canViewAllLeave, so these targets are always reachable here (no per-role branching needed, unlike the shared
+  // EmployeeDashboard which every role lands on).
   const queueItems = [
     { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูลรออนุมัติ', value: dashboardStats.pendingProfileRequests, to: () => navigate('/requests') },
     { key: 'overtime', label: 'OT รออนุมัติ', value: dashboardStats.pendingOvertime, to: () => navigate('/overtime') },
@@ -48,11 +44,8 @@ export function HrDashboard({ employee, employees, profileRequests, dashboardSum
       <ActionQueue items={queueItems} />
 
       <StatGrid>
-        {/* The list now defaults to currently-employed staff, so the total card has
-            to ask for every status explicitly or it would open a shorter list than
-            the number it advertises. `activeCount` counts `active` (ACT+PRB), which
-            is exactly the list's default — and why this card is labelled
-            ปฏิบัติงานอยู่ rather than ทำงานปกติ, which means ACT alone. */}
+        {/* The list now defaults to currently-employed staff, so the total card has to ask for every status explicitly
+         * or it would open a shorter list than the number it advertises. */}
         <StatCard icon="users" label="พนักงานทั้งหมด" value={dashboardStats.totalCount} helper="Total employees" tone="indigo" onClick={() => navigate('/employees?status=all')} />
         <StatCard icon="badgeCheck" label="ปฏิบัติงานอยู่" value={dashboardStats.activeCount} helper="Active" tone="teal" onClick={() => navigate('/employees')} />
         <StatCard icon="clipboard" label="รออนุมัติทั้งหมด" value={dashboardStats.pendingCount} helper="Approvals" tone="rose" />

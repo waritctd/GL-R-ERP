@@ -29,23 +29,9 @@ import org.apache.poi.ss.usermodel.Sheet;
 import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.util.CellRangeAddress;
 
-/**
- * html-fidelity-spec.md §1 — extracts every metric the HTML/Chromium render needs to reproduce
- * {@code quotation_template.xls} (sheet "Update") EXACTLY, into a checked-in JSON file
- * ({@code quotation_template.metrics.json}), and the template's embedded pictures (logo + the two
- * certification badges) into checked-in PNG assets. This is a pure extraction tool — it never
- * writes back to the template.
- *
- * <p>Run it directly ({@code main}) or through {@link TemplateMetricsDumpTest} with
- * {@code -Dregenerate=true} to refresh the checked-in files after a genuine template change;
- * without that flag the test only VERIFIES the checked-in JSON still matches what dumping the XLS
- * produces today, so the JSON can never silently drift from the real template (spec §1's own
- * requirement).
- *
- * <p>Units: column widths and row heights are reported in both their native POI unit (pixels at
- * 96 dpi for columns, points for rows) and the derived millimetres the HTML grid consumes
- * directly ({@code px96 / 96 * 25.4} and {@code pt / 72 * 25.4}).
- */
+/** html-fidelity-spec.md §1 — extracts every metric the HTML/Chromium render needs to reproduce
+ * quotation_template.xls EXACTLY, into a checked-in JSON file, and the template's embedded pictures into
+ * checked-in PNG assets. This is a pure extraction tool — it never writes back to the template. */
 public final class TemplateMetricsDump {
     private TemplateMetricsDump() {}
 
@@ -80,8 +66,8 @@ public final class TemplateMetricsDump {
     private static ObjectNode pageSetup(ObjectMapper mapper, Sheet sh) {
         ObjectNode node = mapper.createObjectNode();
         PrintSetup ps = sh.getPrintSetup();
-        // PrintSetup's numeric getters return short — cast every one to int, same reasoning as
-        // #font's comment (ShortNode vs the IntNode a round-tripped JSON literal parses back as).
+        // PrintSetup's numeric getters return short — cast every one to int, same reasoning as #font's comment
+        // (ShortNode vs the IntNode a round-tripped JSON literal parses back as).
         node.put("paperSize", (int) ps.getPaperSize());
         node.put("landscape", ps.getLandscape());
         node.put("fitToPage", sh.getFitToPage());
@@ -105,12 +91,9 @@ public final class TemplateMetricsDump {
         String printArea = sh.getWorkbook().getPrintArea(sh.getWorkbook().getSheetIndex(sh));
         node.put("printArea", printArea);
 
-        // The XLS renderer (QuotationRenderer#naturalWidthScale) computes fit-to-width from real
-        // AWT font metrics at render time rather than from a static workbook field — the
-        // template's OWN PrintSetup scale is not that number (Excel/LO recompute fit-to-width
-        // dynamically same as we do). Record the renderer's documented approximation here as a
-        // named constant so the HTML path and any comparison script share one source rather than
-        // two independently maintained "~0.86" comments.
+        // The XLS renderer (QuotationRenderer#naturalWidthScale) computes fit-to-width from real AWT font metrics at
+        // render time rather than from a static workbook field — the template's OWN PrintSetup scale is not that
+        // number (Excel/LO recompute fit-to-width dynamically same as we do).
         node.put("xlsPathFitToWidthScaleApprox", 0.86);
         return node;
     }
@@ -133,9 +116,9 @@ public final class TemplateMetricsDump {
         ObjectNode node = mapper.createObjectNode();
         for (int r = FIRST_ROW; r <= LAST_ROW; r++) {
             Row row = sh.getRow(r);
-            // Row#getHeightInPoints returns float — widen to double so re-parsed JSON (always
-            // DoubleNode for a decimal literal) equals what THIS dump produces; see #font's
-            // comment for why the node TYPE (not just the numeric value) has to match exactly.
+            // Row#getHeightInPoints returns float — widen to double so re-parsed JSON (always DoubleNode for a decimal
+            // literal) equals what THIS dump produces; see #font's comment for why the node TYPE (not just the numeric
+            // value) has to match exactly.
             double pt = row != null ? row.getHeightInPoints() : sh.getDefaultRowHeightInPoints();
             ObjectNode rn = mapper.createObjectNode();
             rn.put("index", r);
@@ -229,24 +212,16 @@ public final class TemplateMetricsDump {
         Font f = wb.getFontAt(style.getFontIndexAsInt());
         ObjectNode node = mapper.createObjectNode();
         node.put("name", f.getFontName());
-        // Cast every POI numeric getter that returns short/byte to int explicitly — ObjectNode
-        // has short/byte-specific #put overloads that produce ShortNode/ByteNode, which are NOT
-        // equal() to the IntNode a plain JSON integer literal parses back as (JsonNode#equals is
-        // exact-type, not by numeric value) — that mismatch is what broke the round-trip pin the
-        // first time this ran (TemplateMetricsDumpTest, "13 (NUMBER) vs 13 (NUMBER)").
+        // Cast every POI numeric getter that returns short/byte to int explicitly.
         node.put("sizePt", (int) f.getFontHeightInPoints());
         node.put("bold", f.getBold());
         node.put("underline", f.getUnderline() != Font.U_NONE);
         return node;
     }
 
-    /**
-     * Every embedded picture (logo + the two certification badges) anchored on the sheet, with
-     * its anchor converted to millimetres from the sheet's own top-left (spec §2's "place them as
-     * data: URIs at the same anchors") and a stable, content-derived asset id
-     * ({@code pic-<index>.<ext>}) so re-running the dump against an unchanged template produces
-     * byte-identical file names.
-     */
+    /** Every embedded picture anchored on the sheet, with its anchor converted to millimetres from the sheet's own
+     * top-left and a stable, content-derived asset id so re-running the dump against an unchanged template
+     * produces byte-identical file names. */
     private static com.fasterxml.jackson.databind.node.ArrayNode pictures(ObjectMapper mapper, Sheet sh) {
         var arr = mapper.createArrayNode();
         if (!(sh instanceof HSSFSheet hssfSheet)) return arr;
@@ -280,9 +255,9 @@ public final class TemplateMetricsDump {
         return arr;
     }
 
-    // EMU-to-pixel: HSSF anchors report dx/dy in 1/1024ths of the anchor cell's own width/height
-    // (see QuotationRendererTest's own #startPx computation, which this mirrors) — NOT EMUs (that
-    // is the XSSF convention only).
+    // EMU-to-pixel: HSSF anchors report dx/dy in 1/1024ths of the anchor cell's own width/height (see
+    // QuotationRendererTest's own #startPx computation, which this mirrors) — NOT EMUs (that is the XSSF
+    // convention only).
     private static double pixelOffsetToMm(Sheet sh, int col, int dx) {
         double px = 0;
         for (int c = 0; c < col; c++) px += sh.getColumnWidthInPixels(c);
@@ -306,11 +281,8 @@ public final class TemplateMetricsDump {
         return String.valueOf((char) ('A' + index));
     }
 
-    /**
-     * Writes every embedded picture found on the sheet to {@code outDir} (asset id as filename)
-     * and returns the map of assetId → bytes actually written, so {@link #main} can report what
-     * it extracted.
-     */
+    /** Writes every embedded picture found on the sheet to outDir (asset id as filename) and returns the map of
+     * assetId → bytes actually written, so #main can report what it extracted. */
     static Map<String, byte[]> extractPictures(InputStream xlsStream, Path outDir) throws IOException {
         Map<String, byte[]> written = new LinkedHashMap<>();
         try (Workbook wb = new HSSFWorkbook(xlsStream)) {
@@ -339,9 +311,9 @@ public final class TemplateMetricsDump {
         Path repoRoot = Path.of("").toAbsolutePath();
         Path templatePath = repoRoot.resolve("src/main/resources/" + TEMPLATE_RESOURCE);
         Path jsonOut = repoRoot.resolve("src/main/resources/templates/quotation_template.metrics.json");
-        // The extracted pictures are a dump for humans/diffs only: the HTML renderer takes the
-        // pictures from the live workbook (SheetPlan#readPictures), never from these files, so
-        // they live in the TEST resources and never reach the jar.
+        // The extracted pictures are a dump for humans/diffs only: the HTML renderer takes the pictures from the live
+        // workbook (SheetPlan#readPictures), never from these files, so they live in the TEST resources and never
+        // reach the jar.
         Path picturesOut = repoRoot.resolve("src/test/resources/static/brand/template");
 
         ObjectMapper mapper = new ObjectMapper();

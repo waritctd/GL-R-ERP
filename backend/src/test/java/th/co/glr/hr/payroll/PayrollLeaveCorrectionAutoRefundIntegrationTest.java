@@ -27,25 +27,8 @@ import th.co.glr.hr.leave.SubmitLeaveRequest;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Cancel-after-close reversal, AUTO-REFUND (2026-07-23; owner decision, same day as V85 --
- * the original record-and-surface-only design was not enough, this must auto-net). Full real-DB
- * cycle: beyond-quota leave deducts in month M -&gt; leave is cancelled AFTER M is PROCESSED,
- * recording a {@code hr.leave_payroll_correction} row -&gt; month M+1's PREVIEW shows the refund
- * (before anything is persisted) -&gt; month M+1's PROCESS applies the refund as a real pre-tax
- * credit (tax/SSO recompute, not a flat net-pay bump) and resolves the correction -&gt; RE-processing
- * month M+1 does not double-refund.
- *
- * <p>Deliberately a NEW test class (not {@code PayrollServiceTest}, {@code
- * PayrollRepositoryIntegrationTest}, or {@code RetroactiveOvertimeReachesPayrollIntegrationTest} --
- * a concurrent branch touches those). Mockito cannot reach any of this: the whole point under test
- * is that a real transaction sees a consistent view across the leave and payroll repositories'
- * independently-written queries, and that the resolve-on-process UPDATE actually lands in Postgres.
- *
- * <p>Uses {@link LeaveService}'s public constructor (real system clock), like {@code
- * PayrollLeaveUnpaidDeductionSeamIntegrationTest} -- dates are computed relative to "now" ({@link
- * #firstMondayOfMonth}) rather than hardcoded literals.
- */
+/** Cancel-after-close reversal, AUTO-REFUND (2026-07-23; owner decision, same day as V85 -- the original
+ * record-and-surface-only design was not enough, this must auto-net). */
 class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final BigDecimal SALARY = new BigDecimal("30000.00");
@@ -95,20 +78,19 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
         LocalDate monthM = monday.withDayOfMonth(1);
         LocalDate monthM1 = monthM.plusMonths(1);
 
-        // Step 1: beyond-quota leave in month M. 7 working days (Mon..next Tue) against a 6-day
-        // VACATION quota, nothing used yet -> 6 paid + 1 unpaid.
+        // Step 1: beyond-quota leave in month M. 7 working days (Mon..next Tue) against a 6-day VACATION quota,
+        // nothing used yet -> 6 paid + 1 unpaid.
         LeaveRequestDto leave = leaveService.submit(
             new SubmitLeaveRequest(employeeId, "VACATION", monday, monday.plusDays(8), "Trip"),
             employee(employeeId));
         assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
-        // Leave requires approval (2026-08-05): this whole test's subject is the approved-leave
-        // deduct/cancel-after-close/auto-refund cycle -- #recordPayrollCorrectionIfNeeded (fired
-        // from #cancel in Step 3 below) only fires for a request that is APPROVED at cancel time,
-        // so the request must actually reach APPROVED before the cycle can proceed.
+        // Leave requires approval: this whole test's subject is the approved-leave
+        // deduct/cancel-after-close/auto-refund cycle -- #recordPayrollCorrectionIfNeeded only fires for a request
+        // that is APPROVED at cancel time, so the request must actually reach APPROVED before the cycle can proceed.
         leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
-        // Step 2: month M is PROCESSED for real, with HR typing in the 1 unpaid day (exactly how the
-        // frontend pre-fills from suggestedInputs and submits today) -- deducts 1,000.00 pre-tax.
+        // Step 2: month M is PROCESSED for real, with HR typing in the 1 unpaid day (exactly how the frontend
+        // pre-fills from suggestedInputs and submits today) -- deducts 1,000.00 pre-tax.
         PayrollPeriodDto periodM = payrollService.process(
             new ProcessPayrollRequest(monthM, List.of(inputWithUnpaidLeaveDays(employeeId, leave.unpaidDays()))),
             hr());
@@ -117,52 +99,45 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
         assertThat(lineM.leaveRefundDays()).isEqualByComparingTo("0.00");
         assertThat(lineM.leaveDeductionRefund()).isEqualByComparingTo("0.00");
 
-        // Step 3: the leave is cancelled AFTER month M has already processed -- LeaveService#cancel
-        // records a correction (1 unpaid day owed back) since month M is now closed.
+        // Step 3: the leave is cancelled AFTER month M has already processed -- LeaveService#cancel records a
+        // correction (1 unpaid day owed back) since month M is now closed.
         leaveService.cancel(leave.id(), new ReviewLeaveRequest("cancelled after close"), hr());
         assertThat(leaveRepository.findPendingPayrollCorrectionsByEmployee())
             .containsEntry(employeeId, new BigDecimal("1.00"));
 
-        // Control employee: same salary, never took leave, no correction -- inserted before the
-        // month M+1 run so it's picked up in the SAME preview/process calls below (findActiveEmployees
-        // scans all active employees), letting the refunded employee's net pay be compared against a
-        // same-salary/same-month baseline instead of a hand-derived tax figure (which would depend on
-        // "today"'s relative month value and duplicate the progressive-tax engine already covered by
-        // PayrollCalculatorTest).
+        // Control employee: same salary, never took leave, no correction -- inserted before the month M+1 run so it's
+        // picked up in the SAME preview/process calls below, letting the refunded employee's net pay be compared
+        // against a same-salary/same-month baseline instead of a hand-derived tax figure.
         long controlEmployeeId = insertEmployee("REFUND-001-CONTROL");
 
-        // Step 4: month M+1's PREVIEW (nothing persisted yet) already shows the refund -- HR sees it
-        // before committing to Process.
+        // Step 4: month M+1's PREVIEW (nothing persisted yet) already shows the refund -- HR sees it before committing
+        // to Process.
         PayrollPeriodDto previewM1 = payrollService.preview(new ProcessPayrollRequest(monthM1, List.of()), hr());
         PayrollLineDto previewLine = lineFor(previewM1, employeeId);
         assertThat(previewLine.leaveRefundDays()).isEqualByComparingTo("1.00");
         assertThat(previewLine.leaveDeductionRefund()).isEqualByComparingTo(DAILY_RATE.multiply(BigDecimal.ONE).setScale(2));
         assertThat(previewLine.unpaidLeaveDays()).isEqualByComparingTo("0.00");
         assertThat(previewLine.unpaidLeaveDeduction()).isEqualByComparingTo("0.00");
-        // Pre-tax credit: no unpaid leave of its own this month, so grossTaxableIncome is base +
-        // refund, and net pay is HIGHER than a plain unaffected month (base salary, no deductions at
-        // all, would net exactly base salary here since there's no SSO/tax at this low income level
-        // in isolation -- but the refund itself is taxed/SSO'd, see the process() assertions below
-        // for the concrete recomputed figures).
+        // Pre-tax credit: no unpaid leave of its own this month, so grossTaxableIncome is base + refund, and net pay
+        // is HIGHER than a plain unaffected month (base salary, no deductions at all, would net exactly base salary
+        // here since there's no SSO/tax at this low income level in isolation.
         assertThat(previewLine.grossTaxableIncome())
             .isEqualByComparingTo(previewLine.grossEarnings().add(previewLine.leaveDeductionRefund()));
         // Nothing resolved yet -- preview() must never mutate hr.leave_payroll_correction.
         assertThat(leaveRepository.findPendingPayrollCorrectionsByEmployee())
             .containsEntry(employeeId, new BigDecimal("1.00"));
 
-        // Step 5: month M+1 is PROCESSED -- the refund is auto-applied (matches preview exactly) AND
-        // the correction is resolved.
+        // Step 5: month M+1 is PROCESSED -- the refund is auto-applied (matches preview exactly) AND the correction is
+        // resolved.
         PayrollPeriodDto processedM1 = payrollService.process(new ProcessPayrollRequest(monthM1, List.of()), hr());
         PayrollLineDto processedLine = lineFor(processedM1, employeeId);
         assertThat(processedLine.leaveRefundDays()).isEqualByComparingTo(previewLine.leaveRefundDays());
         assertThat(processedLine.leaveDeductionRefund()).isEqualByComparingTo(previewLine.leaveDeductionRefund());
         assertThat(processedLine.grossTaxableIncome()).isEqualByComparingTo(previewLine.grossTaxableIncome());
         assertThat(processedLine.netPay()).isEqualByComparingTo(previewLine.netPay());
-        // Net pay is strictly higher than the same-salary/same-month control employee's -- the credit
-        // genuinely reached the employee's pocket net of whatever extra SSO/tax it incurred, not just
-        // an internal pre-tax figure. (SSO's own wage base is already at the 17,500 ceiling either way
-        // at this salary, so the entire difference here is the refund minus its marginal tax cost --
-        // guaranteed positive since the top marginal rate is 35%, never 100%.)
+        // Net pay is strictly higher than the same-salary/same-month control employee's -- the credit genuinely
+        // reached the employee's pocket net of whatever extra SSO/tax it incurred, not just an internal pre-tax
+        // figure.
         PayrollLineDto controlLine = lineFor(processedM1, controlEmployeeId);
         assertThat(processedLine.netPay()).isGreaterThan(controlLine.netPay());
         assertThat(controlLine.leaveRefundDays()).isEqualByComparingTo("0.00");
@@ -172,9 +147,9 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
         assertThat(resolved.resolvedAt()).isNotNull();
         assertThat(resolved.resolvedPeriodId()).isEqualTo(processedM1.id());
 
-        // Step 6: RE-processing month M+1 (e.g. HR re-hits Process after noticing nothing else
-        // needed changing) must NOT double-refund -- same period_id (saveProcessedPeriod upserts by
-        // payroll_month), same refund figures, same single resolved correction row.
+        // Step 6: RE-processing month M+1 (e.g. HR re-hits Process after noticing nothing else needed changing) must
+        // NOT double-refund -- same period_id (saveProcessedPeriod upserts by payroll_month), same refund figures,
+        // same single resolved correction row.
         PayrollPeriodDto reprocessedM1 = payrollService.process(new ProcessPayrollRequest(monthM1, List.of()), hr());
         assertThat(reprocessedM1.id()).isEqualTo(processedM1.id());
         PayrollLineDto reprocessedLine = lineFor(reprocessedM1, employeeId);
@@ -185,8 +160,8 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
         OffsetDateTimeAndPeriod reResolved = fetchResolution(leave.id());
         assertThat(reResolved.resolvedPeriodId()).isEqualTo(processedM1.id());
 
-        // A THIRD month (M+2) must see nothing outstanding -- the correction was fully consumed by
-        // M+1, not left dangling or double-counted forward.
+        // A THIRD month (M+2) must see nothing outstanding -- the correction was fully consumed by M+1, not left
+        // dangling or double-counted forward.
         PayrollPeriodDto previewM2 = payrollService.preview(new ProcessPayrollRequest(monthM1.plusMonths(1), List.of()), hr());
         PayrollLineDto previewLineM2 = lineFor(previewM2, employeeId);
         assertThat(previewLineM2.leaveRefundDays()).isEqualByComparingTo("0.00");
@@ -197,10 +172,9 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
     void pendingCorrectionWithNoOtherPayrollActivityStillRefunds() {
         long employeeId = insertEmployee("REFUND-002");
         LocalDate month = firstMondayOfMonth(3).withDayOfMonth(1);
-        // Correction inserted directly, bypassing the leave workflow entirely, to isolate the
-        // payroll-side refund logic from leave-side plumbing: this employee has NEVER submitted any
-        // leave request and has no other payroll inputs this month at all -- the refund must still
-        // apply on an otherwise completely vanilla run.
+        // Correction inserted directly, bypassing the leave workflow entirely, to isolate the payroll-side refund
+        // logic from leave-side plumbing: this employee has NEVER submitted any leave request and has no other payroll
+        // inputs this month at all.
         insertPendingCorrection(employeeId, month.minusMonths(1), new BigDecimal("2.50"));
 
         PayrollPeriodDto preview = payrollService.preview(new ProcessPayrollRequest(month, List.of()), hr());
@@ -259,9 +233,9 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
         return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
     }
 
-    // §5 leave-rules-as-data (V116): VACATION now carries a 12-month min_service_months floor. This
-    // class is about the auto-refund seam, not eligibility, so hire_date is set far enough in the
-    // past (2015) that the floor is always a no-op here.
+    // §5 leave-rules-as-data (V116): VACATION now carries a 12-month min_service_months floor. This class is about
+    // the auto-refund seam, not eligibility, so hire_date is set far enough in the past (2015) that the floor is
+    // always a no-op here.
     private long insertEmployee(String code) {
         long employeeId = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date)
@@ -272,14 +246,9 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
         return employeeId;
     }
 
-    /**
-     * §5.3.5 VACATION carry-forward (V127) interaction: the default 2015 hire date leaves 2025
-     * (fully elapsed by this class's fixed clock) reading as "0 of 6 used", which now legitimately
-     * carries 6.00 into 2026 -- correct new behaviour, but not what this class's pre-existing
-     * auto-refund-seam assertions (written before carry-forward existed) are about. Neutralised by
-     * marking 2025's VACATION quota fully used, so LeaveService#ensureCarryoverGrant computes a
-     * real, correct ZERO carry-in for 2026.
-     */
+    /** §5.3.5 VACATION carry-forward interaction: the default 2015 hire date leaves 2025 reading as "0 of 6 used",
+     * which now legitimately carries 6.00 into 2026 -- correct new behaviour, but not what this class's
+     * pre-existing auto-refund-seam assertions are about. */
     private void neutralizeVacationCarryForwardFrom2025(long employeeId) {
         Long leaveRequestId = jdbc.queryForObject("""
             INSERT INTO hr.leave_request (
@@ -310,9 +279,9 @@ class PayrollLeaveCorrectionAutoRefundIntegrationTest extends AbstractPostgresIn
     }
 
     private void insertPendingCorrection(long employeeId, LocalDate payrollMonth, BigDecimal unpaidDays) {
-        // A correction always references a real leave_request row (FK), so create a trivial
-        // already-cancelled one to satisfy it -- its own fields are irrelevant to this test, only
-        // the correction row's employee_id/payroll_month/unpaid_days_to_refund matter.
+        // A correction always references a real leave_request row (FK), so create a trivial already-cancelled one to
+        // satisfy it -- its own fields are irrelevant to this test, only the correction row's
+        // employee_id/payroll_month/unpaid_days_to_refund matter.
         Long leaveRequestId = jdbc.queryForObject("""
             INSERT INTO hr.leave_request (
                 employee_id, leave_type_code, start_date, end_date, total_days, paid_days, unpaid_days,

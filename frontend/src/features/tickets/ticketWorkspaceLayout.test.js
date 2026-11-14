@@ -5,11 +5,9 @@ import { describe, expect, it } from 'vitest';
 
 const indexCss = readFileSync(join(process.cwd(), 'src/index.css'), 'utf8');
 const dealStateHeaderJsx = readFileSync(join(process.cwd(), 'src/features/tickets/DealStateHeader.jsx'), 'utf8');
-// AppShell.test.jsx renders shell markup; these two guards specifically pin the
-// exact `calc()` chrome-clearance expressions, so a source-text check on the
-// Tailwind port of `.content-scroll` (moved off styles.css in the Tailwind-first
-// shell conversion — see AppShell.jsx's CONTENT_SCROLL_CLASS comment) is the
-// direct equivalent of the old styles.css text guard.
+// AppShell.test.jsx renders shell markup; these two guards specifically pin the exact `calc` chrome-clearance
+// expressions, so a source-text check on the Tailwind port of `.content-scroll` is the direct equivalent of
+// the old styles.css text guard.
 const appShellJsx = readFileSync(join(process.cwd(), 'src/components/layout/AppShell.jsx'), 'utf8');
 const ticketDetailPageJsx = readFileSync(join(process.cwd(), 'src/features/tickets/TicketDetailPage.jsx'), 'utf8');
 

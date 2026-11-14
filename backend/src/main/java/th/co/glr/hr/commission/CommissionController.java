@@ -48,19 +48,8 @@ public class CommissionController {
         return new CommissionListResponse(commissionService.list(parseMonth(payrollMonth), user));
     }
 
-    // Slice A2 (AUTHZ CHANGE): sales removed — commission creation is now the accountant's
-    // auto-create trigger (see createFromDeal below). sales_manager/ceo keep the manual-submission
-    // ability they already had; account replaces sales as the day-to-day creator role here too.
-    //
-    // KNOWN DEAD ENDPOINT (F9, found 2026-07-30 during ข้อ 15 documentation-gate review — see
-    // this branch's PR body):
-    // this JSON route calls CommissionService#submit's 2-arg overload, which always passes a
-    // null invoiceAttachment into the 3-arg version -- and that now unconditionally 400s
-    // ("Tax invoice file is required"), so this endpoint can never succeed for ANY caller. It
-    // predates the attachment being made mandatory and was simply never removed. The real
-    // create paths are submitMultipart (below) and CommissionService#createFromDeal. Left as-is
-    // here (removing a public endpoint is out of scope for a documentation-gate branch); flagged
-    // as a known risk for a follow-up cleanup.
+    // Slice A2 (AUTHZ CHANGE): sales removed — commission creation is now the accountant's auto-create trigger
+    // (see createFromDeal below). It predates the attachment being made mandatory and was simply never removed.
     @PostMapping(consumes = MediaType.APPLICATION_JSON_VALUE)
     @PreAuthorize("hasAnyRole('ACCOUNT','SALES_MANAGER','CEO')")
     public CommissionDetailResponse submit(@Valid @RequestBody SubmitCommissionRequest request, HttpSession session) {
@@ -104,12 +93,8 @@ public class CommissionController {
         return new CommissionDetailResponse(commissionService.submit(request, invoiceAttachment, user));
     }
 
-    /**
-     * Slice A2 auto-create trigger: the accountant records the tax invoice for a close-eligible
-     * deal and the commission is created for the deal's owner automatically — sales does nothing.
-     * {@code ticketId} identifies the deal; {@code salesRepId} is never accepted here, it is always
-     * resolved server-side from the deal's owner.
-     */
+    /** Slice A2 auto-create trigger: the accountant records the tax invoice for a close-eligible deal and the
+     * commission is created for the deal's owner automatically — sales does nothing. */
     @PostMapping(value = "/from-deal", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @PreAuthorize("hasRole('ACCOUNT')")
     public CommissionDetailResponse createFromDeal(
@@ -205,11 +190,9 @@ public class CommissionController {
         return new CommissionDetailResponse(commissionService.createClawback(id, request, user));
     }
 
-    /**
-     * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
-     * hand-typed, signed amount (kind ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE) directly to a
-     * rep's monthly commission -- no invoice, no tier calc. See {@link CommissionService#createManualCommission}.
-     */
+    /** Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a hand-typed, signed
+     * amount (kind ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE) directly to a rep's monthly commission -- no
+     * invoice, no tier calc. See CommissionService#createManualCommission. */
     @PostMapping("/manual")
     @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
     public CommissionDetailResponse createManual(@Valid @RequestBody ManualCommissionRequest request, HttpSession session) {
@@ -224,25 +207,9 @@ public class CommissionController {
         ));
     }
 
-    /**
-     * Issue #737: the manual-commission rep picker's data source (id and display name only).
-     * Placed next to {@code createManual} deliberately: same role gate, same purpose. Per owner
-     * ruling 2026-08-14, {@code ceo} and {@code sales_manager} get the IDENTICAL list — every
-     * ACTIVE employee in ฝ่ายขาย, division membership rather than "has a commission record" so a
-     * brand-new rep still appears. {@link CommissionService#listManualCommissionRepOptions} is the
-     * authoritative statement of that rule — read it there, not here, so this comment cannot drift
-     * out of sync with the one that actually enforces it.
-     *
-     * <p>Defence in depth, not the authority: {@link CommissionService#listManualCommissionRepOptions}
-     * repeats this exact role check itself and IS the authoritative gate — this repo's integration
-     * test harness hand-wires the service directly with no Spring AOP proxy, so
-     * {@code @PreAuthorize} is never exercised there. In production this annotation IS live and
-     * independently refuses a wrong-role request: {@code SecurityConfig}'s {@code
-     * @EnableMethodSecurity} wraps this bean in a method-security AOP proxy that evaluates
-     * {@code @PreAuthorize} before the method body runs — a second, separate mechanism from the
-     * servlet filter chain (which only gets as far as "is there a session" via {@code
-     * .anyRequest().authenticated()}, and never sees a role at all).
-     */
+    /** the manual-commission rep picker's data source (id and display name only).
+     * CommissionService#listManualCommissionRepOptions is the authoritative statement of that rule — read it
+     * there, not here, so this comment cannot drift out of sync with the one that actually enforces it. */
     @GetMapping("/reps")
     @PreAuthorize("hasAnyRole('SALES_MANAGER','CEO')")
     public CommissionRepOptionsResponse reps(HttpSession session) {
@@ -267,12 +234,9 @@ public class CommissionController {
         return new PayrollSummaryResponse(commissionService.payrollReadySummary(parseMonth(payrollMonth), user));
     }
 
-    /**
-     * A sales rep's own live monthly commission estimate — server-computed by {@link
-     * CommissionService#monthlySummary} from the same tier/incentive config a real payroll run
-     * uses, replacing the frontend's former client-side re-implementation of this math. Same role
-     * gate as {@link #list} (SALES, SALES_MANAGER, CEO).
-     */
+    /** A sales rep's own live monthly commission estimate — server-computed by CommissionService#monthlySummary
+     * from the same tier/incentive config a real payroll run uses, replacing the frontend's former client-side
+     * re-implementation of this math. Same role gate as #list (SALES, SALES_MANAGER, CEO). */
     @GetMapping("/monthly-summary")
     @PreAuthorize("hasAnyRole('SALES','SALES_MANAGER','CEO')")
     public CommissionMonthlySummaryResponse monthlySummary(

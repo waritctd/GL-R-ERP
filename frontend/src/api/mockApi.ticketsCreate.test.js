@@ -1,12 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// Mirrors th.co.glr.hr.ticket.TicketRepository.create: the INSERT writes `next_follow_up_at`
-// straight from CreateTicketRequest.nextFollowUpAt. The mock's tickets.create used to build its
-// ticket literal without ever reading that field, so a caller-supplied date was silently dropped
-// on creation while the other two ticket-mutation handlers kept it — the "mock drops an argument
-// the real API honours" shape CLAUDE.md's Mock API contract names. Both TicketCreateModal and the
-// inline deal step on /quotations/new send it, and the stage-advance readiness gate needs it.
+// Mirrors th.co.glr.hr.ticket.TicketRepository.create: the INSERT writes `next_follow_up_at` straight from
+// CreateTicketRequest.nextFollowUpAt. Both TicketCreateModal and the inline deal step on /quotations/new send
+// it, and the stage-advance readiness gate needs it.
 
 async function anyCustomerAndProject() {
   await api.auth.login({ role: 'sales' });
@@ -43,11 +40,9 @@ describe('mock tickets.create -- nextFollowUpAt is persisted like the real INSER
   });
 });
 
-// Mirrors th.co.glr.hr.ticket.CreateTicketRequest (@NotBlank entryChannel, enforced by
-// TicketController's @Valid @RequestBody -> 400) plus TicketService.create's explicit refusal of
-// UNSPECIFIED (valid as STORED, invalid as a create INPUT -- see th.co.glr.hr.ticket.EntryChannel).
-// Owner ruling 2026-09-30: a NEW deal must state a real ช่องทางดีล, because the channel decides its
-// route. A mock more permissive than production is the dangerous direction (CLAUDE.md, issue #199).
+// Mirrors th.co.glr.hr.ticket.CreateTicketRequest (@NotBlank entryChannel, enforced by TicketController's
+// @Valid @RequestBody -> 400) plus TicketService.create's explicit refusal of UNSPECIFIED (valid as STORED,
+// invalid as a create INPUT -- see th.co.glr.hr.ticket.EntryChannel).
 describe('mock tickets.create -- a new deal must state a real entry channel', () => {
   async function createWith(channelFields) {
     const { customer, project } = await anyCustomerAndProject();

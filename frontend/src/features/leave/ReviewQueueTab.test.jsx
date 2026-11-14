@@ -95,9 +95,9 @@ const submittedWithCertificate = {
   attachmentFileName: 'ใบรับรองแพทย์.pdf',
 };
 
-// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): a SUBMITTED request carrying one warning --
-// `messageTh` copied VERBATIM from LeaveRuleMessages' real ADVANCE_NOTICE template
-// (WARN_UNPAID_TAIL included), same reason CLAUDE.md gives for never hand-translating backend copy.
+// §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): a SUBMITTED request carrying one warning -- `messageTh`
+// copied VERBATIM from LeaveRuleMessages' real ADVANCE_NOTICE template (WARN_UNPAID_TAIL included), same
+// reason CLAUDE.md gives for never hand-translating backend copy.
 const submittedWithWarning = {
   id: 705,
   employeeId: 6,
@@ -125,13 +125,8 @@ const submittedWithWarning = {
   unpaidByRuleDays: 1,
 };
 
-// `actingUser` overrides the default division-manager persona -- only the pending-approver-note
-// tests need it (an hr actor sees a different note than the manager the row is waiting on).
-//
-// Wrapped in a MemoryRouter (V164 follow-up, 2026-09-09): a §5 WARN_UNPAID_* row's expanded detail
-// now renders LeaveRulePanel, which links to `/leave?tab=rules` via react-router's own <Link> --
-// with no router in the tree that throws (`useContext(...)` is null), not just render blank, so
-// every test needs this even the ones that never touch a warning.
+// `actingUser` overrides the default division-manager persona -- only the pending-approver-note tests need it
+// (an hr actor sees a different note than the manager the row is waiting on).
 function renderReviewQueueTab(actingUser = manager, showToast = vi.fn()) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -146,13 +141,9 @@ function renderReviewQueueTab(actingUser = manager, showToast = vi.fn()) {
   return queryClient;
 }
 
-// DataTable renders `mobileCard` only when useIsMobile() is true, and that hook reads
-// window.matchMedia -- unimplemented in jsdom, so it returns false and the DESKTOP table renders.
-// An unstubbed "mobile card" assertion therefore passes against leaveRequestTable.jsx's shared
-// desktop status column, which has carried the unpaid badge since before this branch, and proves
-// nothing about the card. Confirmed by mutation: with the card's gate forced permanently true, the
-// unstubbed version of this test stayed green. Restored in afterEach -- assigning matchMedia is a
-// global mutation that otherwise leaks into later tests and flips them to the mobile card.
+// DataTable renders `mobileCard` only when useIsMobile() is true, and that hook reads window.matchMedia --
+// unimplemented in jsdom, so it returns false and the DESKTOP table renders. Confirmed by mutation: with the
+// card's gate forced permanently true, the unstubbed version of this test stayed green.
 const originalMatchMedia = window.matchMedia;
 
 function stubMobileViewport() {
@@ -198,8 +189,8 @@ describe('ReviewQueueTab', () => {
 
     await screen.findByText('พักผ่อน');
     fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
-    // The row icon-button and the ConfirmDialog's confirm button share the label "อนุมัติ" --
-    // the dialog's is the one that just appeared (last in the tree).
+    // The row icon-button and the ConfirmDialog's confirm button share the label "อนุมัติ" -- the dialog's is the
+    // one that just appeared (last in the tree).
     const approveButtons = await screen.findAllByRole('button', { name: 'อนุมัติ' });
     fireEvent.click(approveButtons[approveButtons.length - 1]);
 
@@ -226,9 +217,9 @@ describe('ReviewQueueTab', () => {
 
   it('puts rows awaiting a decision above the already-approved ones this user may only void', async () => {
     api.leave.list.mockResolvedValue({
-      // LeaveRepository#findRequests orders by start_date DESC, so an approved row dated further
-      // out legitimately arrives FIRST -- the interleave that used to open a queue headed
-      // "รอคุณพิจารณา 1" on a row needing nothing, and could push a real decision onto page 2.
+      // LeaveRepository#findRequests orders by start_date DESC, so an approved row dated further out legitimately
+      // arrives FIRST -- the interleave that used to open a queue headed "รอคุณพิจารณา 1" on a row needing nothing,
+      // and could push a real decision onto page 2.
       requests: [
         { ...approvedUnderManager, startDate: '2026-09-20', endDate: '2026-09-20' },
         submittedUnderManager,
@@ -254,12 +245,12 @@ describe('ReviewQueueTab', () => {
     await waitFor(() => expect(api.leave.cancel).toHaveBeenCalledWith(702, { reviewerNote: null }));
   });
 
-  // feat/pending-approver-info: "who this is waiting on" beside the รออนุมัติ badge — narrowed on
-  // 2026-08-11 so it never names the person reading it (PendingApproverNote's `viewer`).
+  // feat/pending-approver-info: "who this is waiting on" beside the รออนุมัติ badge — narrowed on 2026-08-11 so
+  // it never names the person reading it (PendingApproverNote's `viewer`).
   it('omits the pending-approver note on a row that is waiting on the viewer themselves', async () => {
     api.leave.list.mockResolvedValue({
-      // managerEmployeeId 5 === the acting manager's own employeeId, so "ผู้จัดการ (คุณเอ็ม)"
-      // would be this user telling themselves their own name — on EVERY pending row in their queue.
+      // managerEmployeeId 5 === the acting manager's own employeeId, so "ผู้จัดการ (คุณเอ็ม)" would be this user
+      // telling themselves their own name — on EVERY pending row in their queue.
       requests: [
         { ...submittedUnderManager, pendingApproverRole: 'manager', pendingApproverName: 'เอ็ม' },
         { ...approvedUnderManager, pendingApproverRole: null, pendingApproverName: null },
@@ -273,9 +264,9 @@ describe('ReviewQueueTab', () => {
   });
 
   it('keeps the note when the row is waiting on SOMEONE ELSE, even though this viewer may act on it', async () => {
-    // An hr actor may decide any request (canReviewAll), including ones that normally sit with a
-    // division manager — and for them the note is the whole point. Suppression is only ever about
-    // the self-referential case, never about "can this user act on it".
+    // An hr actor may decide any request (canReviewAll), including ones that normally sit with a division manager
+    // — and for them the note is the whole point. Suppression is only ever about the self-referential case, never
+    // about "can this user act on it".
     api.leave.list.mockResolvedValue({
       requests: [{
         ...submittedUnderManager,
@@ -291,8 +282,8 @@ describe('ReviewQueueTab', () => {
     expect(await screen.findByText('ผู้จัดการ (คุณเอ็ม)')).not.toBeNull();
   });
 
-  // Role-only fallback: the backend omits pendingApproverName when the role's candidate set is
-  // ambiguous (e.g. more than one active hr-role employee) -- the note must still show the role.
+  // Role-only fallback: the backend omits pendingApproverName when the role's candidate set is ambiguous (e.g.
+  // more than one active hr-role employee) -- the note must still show the role.
   it('shows the role alone when the backend could not resolve a single approver name', async () => {
     api.leave.list.mockResolvedValue({
       requests: [{ ...submittedUnderManager, pendingApproverRole: 'hr', pendingApproverName: null }],
@@ -405,8 +396,8 @@ describe('ReviewQueueTab', () => {
       const confirmButtons = await screen.findAllByRole('button', { name: 'อนุมัติ' });
       fireEvent.click(confirmButtons[confirmButtons.length - 1]);
 
-      // While the mutation for row 701 is in flight, that row's own icon button disables --
-      // the other row (704) is untouched by this mutation and stays interactive.
+      // While the mutation for row 701 is in flight, that row's own icon button disables -- the other row (704) is
+      // untouched by this mutation and stays interactive.
       await waitFor(() => expect(screen.getAllByRole('button', { name: 'อนุมัติ' })[0].disabled).toBe(true));
       const otherRowApprove = screen.getAllByRole('button', { name: 'อนุมัติ' })[1];
       expect(otherRowApprove.disabled).toBe(false);
@@ -416,8 +407,8 @@ describe('ReviewQueueTab', () => {
     });
   });
 
-  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the approver must see the warning BEFORE
-  // approving, not after (owner ruling #2 -- LeaveRequestDto's own ruleWarnings Javadoc).
+  // §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09): the approver must see the warning BEFORE approving, not
+  // after (owner ruling #2 -- LeaveRequestDto's own ruleWarnings Javadoc).
   describe('§5 WARN_UNPAID_* gates (V164 follow-up)', () => {
     it('shows the warning in the expanded row, and the confirm button states the unpaid days', async () => {
       api.leave.list.mockResolvedValue({ requests: [submittedWithWarning] });
@@ -425,16 +416,16 @@ describe('ReviewQueueTab', () => {
       renderReviewQueueTab();
 
       await screen.findByText('ธุระด่วน');
-      // Not visible before the row is expanded -- it lives in renderExpanded, above the request's
-      // other detail fields.
+      // Not visible before the row is expanded -- it lives in renderExpanded, above the request's other detail
+      // fields.
       expect(screen.queryByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).toBeNull();
 
       fireEvent.click(screen.getByRole('button', { name: /ดูรายละเอียดคำขอลาของ/ }));
       expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
 
-      // The row's own icon button and the ConfirmDialog's button do NOT share a label any more --
-      // the icon button (opens the dialog) stays plain "อนุมัติ", the dialog's real commit button
-      // states the pay consequence, so an approver cannot click past it unaware.
+      // The row's own icon button and the ConfirmDialog's button do NOT share a label any more -- the icon button
+      // (opens the dialog) stays plain "อนุมัติ", the dialog's real commit button states the pay consequence, so an
+      // approver cannot click past it unaware.
       fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
       const confirmButton = await screen.findByRole('button', { name: /อนุมัติ \(ไม่จ่ายค่าจ้าง/ });
       fireEvent.click(confirmButton);

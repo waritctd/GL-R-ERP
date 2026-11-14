@@ -48,8 +48,8 @@ public class TicketController {
     @GetMapping
     TicketListResponse list(
         @RequestParam(required = false) String status,
-        // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — lets the
-        // commission "Linked Deal" picker ask for only deals eligible for a commission submission.
+        // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — lets the commission "Linked
+        // Deal" picker ask for only deals eligible for a commission submission.
         @RequestParam(required = false) String salesStage,
         // Movement range (inclusive Asia/Bangkok days): adds stageChangedInRange / activityInRange to every row.
         @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate movementFrom,
@@ -82,10 +82,8 @@ public class TicketController {
     }
 
     // H1 lockdown (2026-09-30): the four routes that only `account` could call -- POST /{id}/payments,
-    // /{id}/deposit-paid, /{id}/final-payment and /{id}/close/confirm -- were REMOVED from this controller
-    // (their allowed role sets became empty once account was refused here). They live on the finance
-    // controller now: POST /api/finance/deals/{id}/{payments,deposit-paid,final-payment,close/confirm}.
-    // (`ceo` was never allowed on them.) GET /{id}/payments below refuses account (requireViewAccess).
+    // /{id}/deposit-paid, /{id}/final-payment and /{id}/close/confirm -- were REMOVED from this controller (their
+    // allowed role sets became empty once account was refused here).
     @GetMapping("/{id}/payments")
     Map<String, List<PaymentReceiptDto>> payments(@PathVariable long id, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
@@ -134,9 +132,9 @@ public class TicketController {
         return detail(user, ticketService.decideProcurementSource(id, request, user));
     }
 
-    // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to
-    // reserve-stock above. Authorization is enforced in TicketService.setItemWeightMultipliers,
-    // not here -- see that method's Javadoc.
+    // V148 (per-item stock-commission weighting): the sales_manager/CEO-approved counterpart to reserve-stock
+    // above. Authorization is enforced in TicketService.setItemWeightMultipliers, not here -- see that method's
+    // Javadoc.
     @PostMapping("/{id}/item-weight-multipliers")
     TicketDetailResponse setItemWeightMultipliers(
         @PathVariable long id,
@@ -167,16 +165,8 @@ public class TicketController {
         return detail(user, ticketService.completeDelivery(id, request, user));
     }
 
-    // Slice S1 "engine collapse" (feat/deal-workspace-unification): the legacy ticket-native
-    // submit/pickup/propose-price/approve/reject/quotation-generate/mark-quotation-lifecycle
-    // routes are RETIRED — pricing now runs through the PricingRequest (PCR) chain, quotation
-    // issuance through CustomerQuotationService, and TicketService.submit() always 409s for
-    // new deals. The backing TicketService methods stay (deprecated, not deleted — see each
-    // method's own Javadoc) so the 3 legacy tickets already stranded in submitted/in_review/
-    // price_proposed status and their historical events stay readable, but no route exposes
-    // them anymore. Quotation READ/DOWNLOAD stays below (getQuotationXlsx/Pdf via
-    // /{id}/quotations/{quotationId}/file) — legacy and PCR-issued quotations are both still
-    // viewable.
+    // Slice S1 "engine collapse": the legacy ticket-native
+    // submit/pickup/propose-price/approve/reject/quotation-generate/mark-quotation-lifecycle routes are RETIRED.
 
     @GetMapping("/{id}/quotations/{quotationId}/file")
     ResponseEntity<byte[]> quotationFile(
@@ -357,15 +347,13 @@ public class TicketController {
                                 @jakarta.validation.constraints.NotBlank
                                 @jakarta.validation.constraints.Size(max = 2000) String reason) {}
 
-    // POST /{id}/factory-emails/send is retired: factory RFQ email is manual-only now (owner
-    // decision) — a human copies the draft FactoryQuoteService generates and sends it from their
-    // own mail client, then marks it sent via POST /api/factory-quotes/{factoryQuoteId}/contacted (CR-1; was /send)
-    // (FactoryQuoteController.markContacted / FactoryQuoteService.markContacted).
-    // TicketService.assertFactoryEmailAllowed, this route's only gate, was deleted alongside it.
+    // POST /{id}/factory-emails/send is retired: factory RFQ email is manual-only now — a human copies the draft
+    // FactoryQuoteService generates and sends it from their own mail client, then marks it sent via POST
+    // /api/factory-quotes/{factoryQuoteId}/contacted.
 
-    // calculate-prices and items/{itemId}/price-override are retired too — same Slice S1
-    // rationale as above (legacy price_proposed-only CEO tooling; see
-    // TicketService.calculatePrices/overrideItemPrice's own @Deprecated Javadoc).
+    // calculate-prices and items/{itemId}/price-override are retired too — same Slice S1 rationale as above
+    // (legacy price_proposed-only CEO tooling; see TicketService.calculatePrices/overrideItemPrice's own
+    // @Deprecated Javadoc).
 
     @PatchMapping("/{id}/items")
     TicketDetailResponse editItems(

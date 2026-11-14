@@ -12,32 +12,17 @@ import { TaxAllowanceSummaryPanel } from '../taxAllowance/TaxAllowanceSummaryPan
 import { ChangeRequestModal } from './ChangeRequestModal.jsx';
 import { SignatureCard } from './SignatureCard.jsx';
 
-// Quotation v2's approver signature card (QUOTATION-V2-PLAN.md): "self, ceo, or admin capability"
-// may WRITE it, but this card only ever renders for the user's OWN profile (there is no
-// view-someone-else's-profile page), so the narrower "self" half of that gate is all this needs
-// -- restricted further to the roles who can appear in a quotation's signature block at all, so a
-// import/account/hr viewer (who never appears there) doesn't see a card with nothing to do.
-//
-// Task 4 (slot signatures, 2026-09-26): widened to include 'sales' -- the rep now draws in the
-// ผู้พิมพ์/พนักงานขาย slots too (QuotationRenderer#writeSignatureBlock), and
-// EmployeeSignatureService#upload already permits "self" regardless of role, so this was purely a
-// frontend gate lagging the backend's actual capability. Backend authz is untouched here.
-//
-// NOTE (flagged, out of scope for this widen): a QC user with `can_create_quotation` (e.g.
-// ภิญญดา) can also be picked as printedBy/salesRep on a display override and is therefore
-// picker-eligible the same way -- but QC is not a role this list covers, and adding a
-// capability-based (rather than role-based) gate here is a separate, deliberate change left for
-// its own task.
+// Quotation v2's approver signature card: "self, ceo, or admin capability" may WRITE it, but this card only
+// ever renders for the user's OWN profile, so the narrower "self" half of that gate is all this needs.
 const SIGNATURE_CARD_ROLES = new Set(['ceo', 'sales_manager', 'sales']);
 
 const MY_REQUESTS_TABLE_GRID = 'grid-cols-[minmax(0,1.2fr)_minmax(0,2fr)_minmax(0,2fr)_minmax(0,0.9fr)_minmax(0,1fr)] nav-drawer:min-w-[900px] reflow-cards';
 
 export function ProfilePage({ user, employee, profileRequests, onCreateRequest, taxAllowanceSummary }) {
   const [requestField, setRequestField] = useState(null);
-  // Identity-gated, not role-gated: every role reaches /profile under the self-service lock, so
-  // whether the "ขอแก้ไข" button shows depends on being linked to an employee record at all, not
-  // on which role that link has. Mirrors ProfileRequestController#create's server-side gate
-  // (employeeId != null) exactly, and the existing `/profile` PATH_GUARDS entry in permissions.js.
+  // Identity-gated, not role-gated: every role reaches /profile under the self-service lock, so whether the
+  // "ขอแก้ไข" button shows depends on being linked to an employee record at all, not on which role that link
+  // has.
   const canRequestChange = !!user.employeeId;
   const pendingKeys = useMemo(
     () => new Set(profileRequests.filter((request) => request.status === 'pending').map((request) => request.fieldKey)),
@@ -45,13 +30,9 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
   );
   const pendingCount = profileRequests.filter((request) => request.status === 'pending').length;
 
-  // `displayValue` exists only for address: the row shows the complete address,
-  // but the change request still carries `line1` as its old value. Approving an
-  // address request calls EmployeeRepository.updateAddressLine, which writes only
-  // `house_no` — district/province/postal_code are untouched columns. Submitting
-  // a whole address as the new value would therefore store it in `house_no` and
-  // leave the old tail behind, rendering a duplicated address. Editing stays
-  // scoped to the street line until the write path can take all four fields.
+  // `displayValue` exists only for address: the row shows the complete address, but the change request still
+  // carries `line1` as its old value. Approving an address request calls EmployeeRepository.updateAddressLine,
+  // which writes only `house_no` — district/province/postal_code are untouched columns.
   const requestableFields = [
     { fieldKey: 'phone', fieldLabel: 'เบอร์โทรศัพท์', oldValue: employee?.phone, icon: 'phone' },
     { fieldKey: 'email', fieldLabel: 'อีเมล', oldValue: employee?.email, icon: 'mail' },
@@ -114,9 +95,8 @@ export function ProfilePage({ user, employee, profileRequests, onCreateRequest, 
 
       {SIGNATURE_CARD_ROLES.has(user.role) ? <SignatureCard user={user} /> : null}
 
-      {/* The full request table, absorbed from the former /my-requests page —
-          same `ownRequests` data, so a separate page only split one story in
-          two. `.table-panel` is a sibling of the panel above, never nested. */}
+      {/* The full request table, absorbed from the former /my-requests page — same `ownRequests` data, so a separate
+       * page only split one story in two. `.table-panel` is a sibling of the panel above, never nested. */}
       <Panel flush>
         <div className="flex items-center justify-between gap-[14px] py-4 px-5 border-b border-border">
           <h2 className="m-0 text-lg">คำขอแก้ไขของฉัน</h2>

@@ -1,13 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// PR B — mock coverage for DealQuotationService#createRevision on a PRICING_REQUEST-origin
-// quotation (revise an ISSUED / REVISION_REQUESTED quotation, repeatedly). NOT authz evidence —
-// CLAUDE.md "Mock API contract": the mock's role gates approximate the Java service and are NOT
-// authoritative. The real-DB matrix (every role, wrong-way-round, number family, supersede,
-// single-open-child, recipient + stage hook) lives in
-// backend/.../DealQuotationPricingRequestRevisionIntegrationTest; this file only keeps the mock's
-// own plumbing honest for the same paths a coding agent drives under VITE_USE_MOCKS=true.
+// PR B — mock coverage for DealQuotationService#createRevision on a PRICING_REQUEST-origin quotation (revise
+// an ISSUED / REVISION_REQUESTED quotation, repeatedly). NOT authz evidence — CLAUDE.md "Mock API contract":
+// the mock's role gates approximate the Java service and are NOT authoritative.
 
 const uuid = () => crypto.randomUUID();
 
@@ -28,8 +24,8 @@ async function freshTicket() {
   return { ticketId: created.summary.id, sourceItemId: created.items[0].id };
 }
 
-// Same pricing-request -> costing -> approved NET decision walk as
-// mockApi.dealQuotationOutcome.test.js's approvedDecisionOn (duplicated, as that file duplicates its own).
+// Same pricing-request -> costing -> approved NET decision walk as mockApi.dealQuotationOutcome.test.js's
+// approvedDecisionOn (duplicated, as that file duplicates its own).
 async function approvedDecisionOn(ticketId, sourceItemId) {
   await api.auth.login({ role: 'sales' });
   const { pricingRequest: draftPr } = await api.pricingRequests.create(ticketId, {
@@ -96,8 +92,8 @@ async function pendingRevision() {
   return { source, pending: submitted };
 }
 
-// Approval of a revision: ONE approval by EITHER the sales_manager OR the CEO issues it; it never
-// auto-issues on submit; either may reject it back to DRAFT. (Mock authz is not authoritative.)
+// Approval of a revision: ONE approval by EITHER the sales_manager OR the CEO issues it; it never auto-issues
+// on submit; either may reject it back to DRAFT. (Mock authz is not authoritative.)
 describe('mockApi dealQuotations.approve -- a PRICING_REQUEST revision (PR B)', { timeout: 30000 }, () => {
   it('submit leaves the revision PENDING_APPROVAL (never auto-issues)', async () => {
     const a = await pendingRevision();

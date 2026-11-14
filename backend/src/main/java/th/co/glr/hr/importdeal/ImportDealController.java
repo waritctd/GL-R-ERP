@@ -9,12 +9,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.importdeal.ImportDealDtos.ImportDealResponse;
 
-/**
- * The import role's own per-deal page endpoint. Authorisation (role + row scope) is enforced in
- * {@link ImportDealService}, never here; this class only unwraps the session and shapes the
- * response. {@code SERVER_ONLY} in {@code frontend/src/api/serverContract.test.js} until the page
- * that consumes it lands.
- */
+/** The import role's own per-deal page endpoint. Authorisation (role + row scope) is enforced in
+ * ImportDealService, never here; this class only unwraps the session and shapes the response. SERVER_ONLY in
+ * frontend/src/api/serverContract.test.js until the page that consumes it lands. */
 @RestController
 @RequestMapping("/api/import")
 public class ImportDealController {

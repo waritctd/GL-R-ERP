@@ -250,8 +250,8 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState(null);
 
-  // Re-prefill whenever a genuinely different (or freshly re-snapshotted) draft loads — same
-  // "key on the object itself" discipline the stateless preview dialog already used.
+  // Re-prefill whenever a genuinely different (or freshly re-snapshotted) draft loads — same "key on the object
+  // itself" discipline the stateless preview dialog already used.
   useEffect(() => {
     setReference(draft.reference ?? '');
     setDepositReference(draft.depositReference ?? '');

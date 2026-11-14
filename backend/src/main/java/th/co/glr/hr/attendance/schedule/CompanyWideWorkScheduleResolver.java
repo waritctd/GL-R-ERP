@@ -10,17 +10,7 @@ import java.util.Set;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * The company-wide fallback: every employee shares one configured schedule, so all four arguments
- * are ignored. Kept as its own bean (not folded into {@link TieredWorkScheduleResolver}) so an
- * employee with no schedule assignment at all keeps today's behaviour unchanged, and so this class
- * stays constructible directly wherever a test only cares about the pre-tiering behaviour.
- *
- * <p>The schedule is parsed once at construction, not per call — a malformed {@code work-start} or
- * {@code workdays} entry then fails fast at startup instead of throwing on the first punch of the
- * day, which is the difference between a deploy that won't boot and one that silently stops
- * recording attendance.
- */
+/** The company-wide fallback: every employee shares one configured schedule, so all four arguments are ignored. */
 @Component
 public class CompanyWideWorkScheduleResolver implements WorkScheduleResolver {
     private final WorkSchedule schedule;

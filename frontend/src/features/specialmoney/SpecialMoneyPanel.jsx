@@ -37,11 +37,9 @@ import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
 const TABLE_GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.7fr)] nav-drawer:min-w-[820px] reflow-cards';
 
-// The policy PDF is bundled at build time (frontend/public/policy/, served as-is at this path —
-// see App.jsx's other public/ references for the convention). "ระเบียบสวัสดิการ_8_6_61.pdf" as the
-// download filename mirrors the source document's own name (สวัสดิการ_8_6_61.pdf) rather than the
-// URL's slug, so a saved copy is recognisable regardless of what the asset happens to be named on
-// disk.
+// The policy PDF is bundled at build time. "ระเบียบสวัสดิการ_8_6_61.pdf" as the download filename mirrors the
+// source document's own name rather than the URL's slug, so a saved copy is recognisable regardless of what
+// the asset happens to be named on disk.
 const POLICY_PDF_HREF = '/policy/welfare-policy-2561.pdf';
 const POLICY_PDF_DOWNLOAD_NAME = 'ระเบียบสวัสดิการ_8_6_61.pdf';
 
@@ -65,22 +63,16 @@ function currentBuddhistYear() {
   return new Date().getFullYear() + 543;
 }
 
-// Bangkok-anchored current year, distinct from currentBuddhistYear()'s local-time
-// `new Date().getFullYear()` above. The history period selector below builds date-range
-// BOUNDARIES that get sent straight to the backend's `event_date BETWEEN :from AND :to` filter
-// (SpecialMoneyRepository#findRequests), so the year it picks must agree with the Bangkok
-// calendar the backend filters against -- a UTC-vs-Bangkok mismatch near midnight would otherwise
-// silently shift the window by a year. currentBuddhistYear() itself is left untouched: it only
-// drives display text on the (unrelated) entitlement panel above, matching this file's existing
-// convention there.
+// Bangkok-anchored current year, distinct from currentBuddhistYear()'s local-time `new Date().getFullYear()`
+// above. currentBuddhistYear() itself is left untouched: it only drives display text on the (unrelated)
+// entitlement panel above, matching this file's existing convention there.
 function currentBangkokYear() {
   return Number(bangkokDateParts().year);
 }
 
-// History table period selector (distinct from reviewQueueWindow's own fixed wide window below --
-// see that constant's comment). 'THIS_YEAR' is the default: the EntitlementPanel directly above is
-// already year-scoped ("โควตาคงเหลือปี <BE year>"), so defaulting the table to the same calendar
-// year lets an employee reconcile "ใช้ไปแล้ว ฿X" against the rows that produced it.
+// History table period selector. 'THIS_YEAR' is the default: the EntitlementPanel directly above is already
+// year-scoped, so defaulting the table to the same calendar year lets an employee reconcile "ใช้ไปแล้ว ฿X"
+// against the rows that produced it.
 const HISTORY_PERIODS = {
   THIS_YEAR: 'ปีนี้',
   LAST_YEAR: 'ปีที่แล้ว',
@@ -101,10 +93,8 @@ function defaultForm(employeeId = '') {
     province: '',
     role: '',
     relation: '',
-    // UNIFORM_ANNUAL has two filing routes (evaluateUniformAnnual): SELF_BUY (receipt required,
-    // amount computed per-piece) or TAILORED (no receipt check, flat amount up to the cap). Kept
-    // hardcoded to SELF_BUY before this fix, which made the tailored route the RuleCard itself
-    // advertises impossible to actually file.
+    // UNIFORM_ANNUAL has two filing routes (evaluateUniformAnnual): SELF_BUY (receipt required, amount computed
+    // per-piece) or TAILORED (no receipt check, flat amount up to the cap).
     uniformMode: 'SELF_BUY',
     shirtCount: '0',
     trouserCount: '0',
@@ -116,8 +106,8 @@ function defaultForm(employeeId = '') {
   };
 }
 
-// employeeId is always the caller's own (there is no on-behalf picker -- see the พนักงาน field
-// below), so there is nothing to validate about it here.
+// employeeId is always the caller's own (there is no on-behalf picker -- see the พนักงาน field below), so
+// there is nothing to validate about it here.
 const specialMoneyFormSchema = z.object({
   employeeId: z.string(),
   requestType: z.string().min(1, 'กรุณาเลือกประเภทคำขอ'),
@@ -160,25 +150,23 @@ const specialMoneyFormSchema = z.object({
     }
   } else if (UNIFORM_TYPES.includes(data.requestType)) {
     if (!data.eventDate) context.addIssue({ code: z.ZodIssueCode.custom, path: ['eventDate'], message: 'กรุณาเลือกวันที่เบิก' });
-    // Receipt date is only checked by evaluateUniformAnnual on the SELF_BUY route -- the
-    // TAILORED route reads no receipt date at all. Requiring it unconditionally (as before)
-    // made the tailored route the RuleCard itself advertises impossible to file.
+    // Receipt date is only checked by evaluateUniformAnnual on the SELF_BUY route -- the TAILORED route reads no
+    // receipt date at all. Requiring it unconditionally (as before) made the tailored route the RuleCard itself
+    // advertises impossible to file.
     if (data.requestType === 'UNIFORM_ANNUAL' && data.uniformMode === 'SELF_BUY' && !data.receiptDate) {
       context.addIssue({ code: z.ZodIssueCode.custom, path: ['receiptDate'], message: 'กรุณาเลือกวันที่ใบเสร็จ' });
     }
-    // Piece count is checked in BOTH UNIFORM_ANNUAL modes (evaluateUniformAnnual's own comment:
-    // "The 4-piece limit is the document's, not the self-buy route's"), but
-    // UNIFORM_PREPROBATION_KIT's evaluator never reads shirtCount/trouserCount at all -- the
-    // kit's piece counts are fixed by policy, not chosen by the requester.
+    // Piece count is checked in BOTH UNIFORM_ANNUAL modes, but UNIFORM_PREPROBATION_KIT's evaluator never reads
+    // shirtCount/trouserCount at all -- the kit's piece counts are fixed by policy, not chosen by the requester.
     if (data.requestType !== 'UNIFORM_PREPROBATION_KIT') {
       const pieces = Number(data.shirtCount || 0) + Number(data.trouserCount || 0);
       if (pieces <= 0) {
         context.addIssue({ code: z.ZodIssueCode.custom, path: ['shirtCount'], message: 'กรุณาระบุจำนวนชิ้นอย่างน้อย 1 ชิ้น' });
       }
     }
-    // Manual amount entry: UNIFORM_NEW_STAFF and UNIFORM_PREPROBATION_KIT always (neither is
-    // priced from shirt/trouser rates); UNIFORM_ANNUAL only on the TAILORED route (SELF_BUY's
-    // amount is fully computed from the per-piece rates, same as before).
+    // Manual amount entry: UNIFORM_NEW_STAFF and UNIFORM_PREPROBATION_KIT always (neither is priced from
+    // shirt/trouser rates); UNIFORM_ANNUAL only on the TAILORED route (SELF_BUY's amount is fully computed from
+    // the per-piece rates, same as before).
     const needsManualAmount = data.requestType === 'UNIFORM_NEW_STAFF'
       || data.requestType === 'UNIFORM_PREPROBATION_KIT'
       || (data.requestType === 'UNIFORM_ANNUAL' && data.uniformMode === 'TAILORED');
@@ -201,11 +189,8 @@ function formatDate(value) {
   return new Intl.DateTimeFormat('th-TH', { dateStyle: 'medium', timeZone: 'Asia/Bangkok' }).format(date);
 }
 
-// Submit errors arrive from the real backend as ONE 400 string with every policy violation the
-// evaluator found joined by "; " (SpecialMoneyPolicyEvaluator accumulates every violation rather
-// than short-circuiting on the first one -- see PolicyDecision's own javadoc -- and
-// SpecialMoneyController surfaces them all in one ApiException message). Splitting here is what
-// turns that back into a real list instead of one run-on sentence.
+// Submit errors arrive from the real backend as ONE 400 string with every policy violation the evaluator found
+// joined by "; ". Splitting here is what turns that back into a real list instead of one run-on sentence.
 function splitViolations(message) {
   if (!message) return ['ส่งคำขอไม่สำเร็จ'];
   const parts = message.split('; ').map((part) => part.trim()).filter(Boolean);
@@ -219,15 +204,12 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   const [historyPeriod, setHistoryPeriod] = useState('THIS_YEAR');
   const [evidenceFile, setEvidenceFile] = useState(null);
   const [submitViolations, setSubmitViolations] = useState([]);
-  // Set when the request was FILED but its evidence upload failed -- see createMutation. Holds
-  // { requestId, message, file } so the notice can name the request that exists and retry the
-  // upload alone. Deliberately NOT cleared by the requestType effect below, unlike
-  // submitViolations: a violation describes the form on screen and goes stale when the type
-  // changes, whereas this describes a row that is already in the database and stays true.
+  // Set when the request was FILED but its evidence upload failed -- see createMutation. Holds { requestId,
+  // message, file } so the notice can name the request that exists and retry the upload alone.
   const [evidenceFailure, setEvidenceFailure] = useState(null);
-  // Bumped to remount FileUploadField, which keeps the chosen filename in its OWN state --
-  // clearing evidenceFile alone leaves the previous file's name sitting above an empty form,
-  // reading as "this file is going up with whatever I submit next". It is not.
+  // Bumped to remount FileUploadField, which keeps the chosen filename in its OWN state -- clearing evidenceFile
+  // alone leaves the previous file's name sitting above an empty form, reading as "this file is going up with
+  // whatever I submit next". It is not.
   const [evidenceFieldKey, setEvidenceFieldKey] = useState(0);
 
   const employeesQuery = useQuery({
@@ -242,9 +224,8 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   });
   const typeOptions = useMemo(() => typesQuery.data ?? [], [typesQuery.data]);
 
-  // Fixed, rule-derived grouping (plan §"Type grouping") — TYPE_GROUPS' order, filtered down to
-  // whatever GET /types actually returned, so a type the server doesn't offer never renders an
-  // empty radio.
+  // Fixed, rule-derived grouping (plan §"Type grouping") — TYPE_GROUPS' order, filtered down to whatever GET
+  // /types actually returned, so a type the server doesn't offer never renders an empty radio.
   const groupedTypeOptions = useMemo(() => TYPE_GROUPS.map((group) => ({
     ...group,
     items: group.types
@@ -252,23 +233,11 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       .filter(Boolean),
   })), [typeOptions]);
 
-  // The history table's own period window -- MUST be sent explicitly. Without it,
-  // `SpecialMoneyController#list` defaults `from`/`to` to the current calendar month
-  // (SpecialMoneyService.list():66-68), silently scoping this table to "this month" with nothing
-  // on screen saying so (see reviewQueueWindow's comment below for the full story; this is the
-  // employee-facing half of the same bug). 'ALL' intentionally reuses the exact 10-years-back /
-  // 1-year-forward shape reviewQueueWindow uses, kept as a separate computation so a future change
-  // to the CEO queue's window doesn't silently also change this employee-facing one.
+  // The history table's own period window -- MUST be sent explicitly.
   const historyWindow = useMemo(() => {
     if (historyPeriod === 'ALL') {
-      // Not literally "everything" -- this deliberately matches reviewQueueWindow's own
-      // 10-years-back/1-year-forward shape below, so an aid claim old enough to still be
-      // findable in the CEO queue is also findable here. Kept as its own copy (not a shared
-      // helper) so a future change to one window doesn't silently also change the other; if
-      // they ever need to diverge, this is where that would start. Also unlike THIS_YEAR/
-      // LAST_YEAR below, this branch uses local `today.getFullYear()` rather than
-      // currentBangkokYear() -- at 10-year width a UTC/Bangkok boundary mismatch is harmless
-      // (off by at most one day out of ~4000), so the extra Intl call isn't worth it here.
+      // Not literally "everything" -- this deliberately matches reviewQueueWindow's own 10-years-back/1-year-forward
+      // shape below, so an aid claim old enough to still be findable in the CEO queue is also findable here.
       const today = new Date();
       return {
         from: dateIso(new Date(today.getFullYear() - 10, today.getMonth(), today.getDate())),
@@ -279,23 +248,12 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     return yearWindow(year);
   }, [historyPeriod]);
 
-  // Drives the empty state below (and the once-per-lifetime hint). Derived FROM historyWindow.from
-  // itself (not recomputed independently via currentBangkokYear()) so the two literally cannot
-  // drift apart: historyWindow is memoized on [historyPeriod] alone, so if this were computed
-  // separately, a re-render that crosses a Bangkok New Year with the page left open could show a
-  // label year one year ahead of the window the query is still actually using. Reading it back off
-  // historyWindow.from makes them the same value by construction.
+  // Drives the empty state below (and the once-per-lifetime hint). Reading it back off historyWindow.from makes
+  // them the same value by construction.
   const historyPeriodYear = historyPeriod === 'ALL' ? null : Number(historyWindow.from.slice(0, 4));
 
-  // `status: statusFilter` here is deliberately the BARE state value ('' when unset) -- do not
-  // "clean up" this to `statusFilter || undefined` to match the queryFn's own normalization two
-  // lines down. Under historyPeriod 'ALL' with no status filter, this table's date window becomes
-  // IDENTICAL to reviewQueueWindow's below, and queryKeys.specialMoneyRequests() would then produce
-  // the exact same cache key for both queries EXCEPT for this one slot ('' here vs `undefined` on
-  // reviewQueueWindow, which never carries a `status` property at all) -- that's the only thing
-  // keeping the history table's and the CEO review queue's cache entries from colliding in that
-  // case. See the "keeps every historyPeriod x status combination distinct from the review queue's
-  // key" test below, which guards this directly.
+  // `status: statusFilter` here is deliberately the BARE state value ('' when unset) -- do not "clean up" this
+  // to `statusFilter || undefined` to match the queryFn's own normalization two lines down.
   const filters = useMemo(
     () => ({ status: statusFilter, from: historyWindow.from, to: historyWindow.to }),
     [statusFilter, historyWindow],
@@ -311,18 +269,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   const requests = useMemo(() => requestsQuery.data ?? [], [requestsQuery.data]);
   const loading = requestsQuery.isLoading || requestsQuery.isFetching;
 
-  // CEO review queue -- fetched with an EXPLICIT wide date window, deliberately separate from the
-  // history table's query above. `SpecialMoneyController#list` defaults `from`/`to` to the
-  // current calendar month when both are omitted (SpecialMoneyService.list():66-68,
-  // `effectiveTo.withDayOfMonth(1)`), and `SpecialMoneyRepository#findRequests` filters on
-  // `s.event_date BETWEEN :fromDate AND :toDate` -- so a bare `list({status})` call, on the real
-  // backend, silently drops any pending request whose event_date falls outside "this month". A
-  // UNIFORM_ANNUAL claim (event_date must be in June) would disappear from the queue on 1 July; a
-  // funeral claim for a July event filed in August would never appear at all -- and the CEO would
-  // just see "ไม่มีคำขอรออนุมัติ", an affirmative false statement. Ten years back covers aid claims
-  // (evaluateFixedAid deliberately has no filing deadline); one year forward covers anything
-  // event-dated in advance. This does NOT touch the backend's own default -- that stays as-is,
-  // this only ensures the frontend never relies on it for "what needs the CEO's attention".
+  // CEO review queue -- fetched with an EXPLICIT wide date window, deliberately separate from the history
+  // table's query above. This does NOT touch the backend's own default -- that stays as-is, this only ensures
+  // the frontend never relies on it for "what needs the CEO's attention".
   const reviewQueueWindow = useMemo(() => {
     const today = new Date();
     return {
@@ -366,10 +315,8 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   const selectedEmployeeId = watched.employeeId;
   const requestType = watched.requestType || '';
 
-  // Violations describe the type that was submitted, so they stop being true the moment the
-  // employee picks a different one. Without this, three AID_WEDDING violations stay on screen
-  // under a MEDICAL form until the next submit -- rules the employee is now being told they
-  // broke on a claim they are no longer making.
+  // Violations describe the type that was submitted, so they stop being true the moment the employee picks a
+  // different one.
   useEffect(() => {
     setSubmitViolations([]);
   }, [requestType]);
@@ -385,8 +332,8 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [employeesQuery.data]);
 
-  // The entitlement panel is scoped to whichever employee the form is currently submitting for
-  // (always self) -- "showing entitlement before intent" (plan's layer A).
+  // The entitlement panel is scoped to whichever employee the form is currently submitting for (always self) --
+  // "showing entitlement before intent" (plan's layer A).
   const usageEmployeeId = selectedEmployeeId ? Number(selectedEmployeeId) : (currentEmployee?.id || user.employeeId || null);
   const usageQuery = useQuery({
     queryKey: queryKeys.specialMoneyUsage(usageEmployeeId, new Date().getFullYear()),
@@ -412,49 +359,37 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     watched.shirtCount, watched.trouserCount, watched.requestedAmountInput, medicalUsedThisYear, usage,
   ]);
 
-  // Types whose amount is fully server-computed from other fields (no manual
-  // amount input shown) vs. types where the requester types an amount.
+  // Types whose amount is fully server-computed from other fields (no manual amount input shown) vs. types where
+  // the requester types an amount.
   const AUTO_COMPUTED_TYPES = ['TRAVEL_PER_DIEM', ...AID_TYPES, 'UNIFORM_ANNUAL'];
   const finalAmount = AUTO_COMPUTED_TYPES.includes(requestType) ? estimate.amount : Number(watched.requestedAmountInput || 0);
 
   const selectedTypeMeta = typeOptions.find((item) => item.requestType === requestType);
 
   const blockingWarning = requestType === 'TRAVEL_PER_DIEM' && watched.province && isExcludedProvince(watched.province);
-  // "เบิกชุดฟอร์มปีนี้ไปแล้ว" -- only answerable now that GET /usage carries
-  // activeCountThisYearByType (SpecialMoneyUsageDto, added alongside this redesign).
+  // "เบิกชุดฟอร์มปีนี้ไปแล้ว" -- only answerable now that GET /usage carries activeCountThisYearByType
+  // (SpecialMoneyUsageDto, added alongside this redesign).
   const uniformAlreadyClaimedThisYear = requestType === 'UNIFORM_ANNUAL'
     && Number(usage?.activeCountThisYearByType?.UNIFORM_ANNUAL || 0) >= 1;
 
   function invalidateSpecialMoney() {
     return Promise.all([
-      // Prefix-invalidate every specialMoney list query, not just the history table's exact
-      // `filters` key -- the review queue above is now a SECOND list query with its own (wide)
-      // date window, and a mutation (approve/reject/cancel/create) must refresh both.
+      // Prefix-invalidate every specialMoney list query, not just the history table's exact `filters` key -- the
+      // review queue above is now a SECOND list query with its own (wide) date window, and a mutation
+      // (approve/reject/cancel/create) must refresh both.
       queryClient.invalidateQueries({ queryKey: ['specialMoney', 'list'] }),
       queryClient.invalidateQueries({ queryKey: queryKeys.specialMoneyUsage(usageEmployeeId, new Date().getFullYear()) }),
-      // Prefix-invalidate every open/soon-to-open approve dialog's ceiling preview too: approving
-      // request A changes the usage-derived ceiling of every OTHER request from the same
-      // employee/type (see SpecialMoneyService#computeApprovalCeiling), and the dialog's own
-      // staleTime: 0 / refetchOnMount: 'always' only refetch on a fresh MOUNT -- an already-open
-      // dialog for a different request would otherwise keep showing the ceiling from before this
-      // mutation ran.
+      // Prefix-invalidate every open/soon-to-open approve dialog's ceiling preview too: approving request A changes
+      // the usage-derived ceiling of every OTHER request from the same employee/type, and the dialog's own
+      // staleTime: 0 / refetchOnMount: 'always' only refetch on a fresh MOUNT.
       queryClient.invalidateQueries({ queryKey: ['specialMoney', 'approvalPreview'] }),
     ]);
   }
 
   const createMutation = useMutation({
-    // Evidence needs a request id, so the file can only go up AFTER create. Chained here rather
-    // than left to the user: an evidence-required type cannot be approved without an attachment,
-    // so a request filed with the file forgotten is stuck until someone attaches one.
-    //
-    // The upload's failure is CAUGHT and returned, never rethrown. By the time it runs the
-    // request is already committed server-side -- SpecialMoneyService.submit() writes the row,
-    // the audit entry and both notifications in ONE transaction that has already answered 200 --
-    // so a rejection escaping here made the whole mutation fail and the form announce
-    // "ส่งคำขอไม่สำเร็จ" for a request that exists. Observed on production 2026-08-31: rows 1 and
-    // 2 (AID_WEDDING, AID_ORDINATION) were filed, notified and audited while
-    // POST /{id}/attachments answered 500, and the employee -- told nothing had been filed --
-    // filed again. Two independent outcomes need reporting as two facts, not collapsed into one.
+    // Evidence needs a request id, so the file can only go up AFTER create. Chained here rather than left to the
+    // user: an evidence-required type cannot be approved without an attachment, so a request filed with the file
+    // forgotten is stuck until someone attaches one.
     mutationFn: async (payload) => {
       const created = await api.specialMoney.create(payload).then((response) => response.request);
       if (!evidenceFile) return { created, attachmentError: null };
@@ -466,15 +401,15 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       }
     },
     onSuccess: ({ created, attachmentError }) => {
-      // The request was filed either way, so the form is cleared either way. Leaving it populated
-      // under a failure notice is what invites the duplicate: the employee's next move is to press
-      // ส่งคำขอ again on data that has already been accepted once.
+      // The request was filed either way, so the form is cleared either way. Leaving it populated under a failure
+      // notice is what invites the duplicate: the employee's next move is to press ส่งคำขอ again on data that has
+      // already been accepted once.
       reset(defaultForm(currentEmployee?.id || user.employeeId || ''));
       setSubmitViolations([]);
       setEvidenceFieldKey((key) => key + 1);
       if (attachmentError) {
-        // The file moves OUT of evidenceFile and into the notice. Leaving it in evidenceFile would
-        // silently staple this file to the NEXT request the employee files from the cleared form.
+        // The file moves OUT of evidenceFile and into the notice. Leaving it in evidenceFile would silently staple
+        // this file to the NEXT request the employee files from the cleared form.
         setEvidenceFailure({ requestId: created.id, message: attachmentError, file: evidenceFile });
         setEvidenceFile(null);
         showToast('info', 'บันทึกคำขอแล้ว แต่แนบเอกสารไม่สำเร็จ — ดูรายละเอียดด้านล่าง');
@@ -483,24 +418,21 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
         setEvidenceFailure(null);
         showToast('success', 'ส่งคำขอเงินสวัสดิการแล้ว');
       }
-      // Runs on both branches on purpose: after a failed upload the new request must appear in the
-      // history table below, both as proof it was filed and because that row is where the employee
-      // can attach the evidence themselves.
+      // Runs on both branches on purpose: after a failed upload the new request must appear in the history table
+      // below, both as proof it was filed and because that row is where the employee can attach the evidence
+      // themselves.
       invalidateSpecialMoney();
     },
     onError: (error) => {
-      // Only reachable when create() itself failed, so nothing was filed -- the form is
-      // deliberately NOT reset here, because correcting it and resubmitting is the right move.
+      // Only reachable when create() itself failed, so nothing was filed -- the form is deliberately NOT reset here,
+      // because correcting it and resubmitting is the right move.
       const violations = splitViolations(error.message);
       setSubmitViolations(violations);
       showToast('error', violations.length > 1 ? `ส่งคำขอไม่สำเร็จ (${violations.length} ข้อ) — ดูรายละเอียดด้านล่าง` : violations[0]);
     },
   });
 
-  // Retries ONLY the upload, against the request that already exists. Without this the sole way
-  // out of a failed upload is the request row's own AttachmentList further down the page, which
-  // means re-picking the file the employee already chose -- and the shorter path back to a filled
-  // form is to file the whole request again.
+  // Retries ONLY the upload, against the request that already exists.
   const retryAttachmentMutation = useMutation({
     mutationFn: ({ requestId, file }) => api.specialMoney.addAttachment(requestId, file),
     onSuccess: (_result, { requestId }) => {
@@ -510,8 +442,8 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       invalidateSpecialMoney();
     },
     onError: (error) => {
-      // Keeps the notice (and the file) up with the newer reason, rather than replacing it with a
-      // toast that disappears after 3.2s and leaves nothing on screen about the filed request.
+      // Keeps the notice (and the file) up with the newer reason, rather than replacing it with a toast that
+      // disappears after 3.2s and leaves nothing on screen about the filed request.
       setEvidenceFailure((current) => (
         current ? { ...current, message: error.message || 'แนบเอกสารไม่สำเร็จ' } : current
       ));
@@ -520,11 +452,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   });
 
   const approveMutation = useMutation({
-    // This `api.specialMoney.approve(` call must stay on one line: apiSurface.js's
-    // componentCalledMethods() regex only recognises `api.<ns>.<method>(` written contiguous, and
-    // a line break before `.approve(` made this one call invisible to it. Confirmed the hard way --
-    // wrapping it is exactly what flipped serverContract.test.js's reachability scan to report this
-    // endpoint UI-unreachable.
+    // This `api.specialMoney.approve(` call must stay on one line: apiSurface.js's componentCalledMethods() regex
+    // only recognises `api.<ns>.<method>(` written contiguous, and a line break before `.approve(` made this one
+    // call invisible to it.
     mutationFn: ({ id, approvedAmount, capOverrideReason }) => api.specialMoney.approve(
       id, { approvedAmount, capOverrideReason },
     ).then((response) => response.request),
@@ -533,9 +463,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       setConfirmState(null);
       invalidateSpecialMoney();
     },
-    // The dialog itself catches this rejection (it awaits confirmApprove's returned promise) and
-    // renders error.message inline, keeping the entered amount/reason on screen -- this toast is
-    // in addition to that, not instead of it (see ApproveSpecialMoneyDialog.jsx's own comment).
+    // The dialog itself catches this rejection (it awaits confirmApprove's returned promise) and renders
+    // error.message inline, keeping the entered amount/reason on screen -- this toast is in addition to that, not
+    // instead of it (see ApproveSpecialMoneyDialog.jsx's own comment).
     onError: (error) => showToast('error', error.message || 'อนุมัติไม่สำเร็จ'),
   });
 
@@ -565,14 +495,13 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     if (values.requestType === 'TRAVEL_PER_DIEM') return { destination: 'DOMESTIC', province: values.province, role: values.role };
     if (values.requestType === 'TRAVEL_LODGING') return { destination: 'DOMESTIC', province: values.province };
     if (values.requestType === 'UNIFORM_ANNUAL') {
-      // Sends whichever mode the requester actually picked -- this used to hardcode 'SELF_BUY'
-      // regardless of the form, which forced every claim down the self-buy branch (May-receipt
-      // check included) even when the employee used the company tailor.
+      // Sends whichever mode the requester actually picked -- this used to hardcode 'SELF_BUY' regardless of the
+      // form, which forced every claim down the self-buy branch (May-receipt check included) even when the employee
+      // used the company tailor.
       return { uniformMode: values.uniformMode, shirtCount: values.shirtCount, trouserCount: values.trouserCount };
     }
     // evaluateUniformPreprobationKit reads ONLY needsBackSupport -- see DETAIL_KEYS's comment in
-    // specialMoneyRules.js. Sent as a STRING ("true"/"false"): `detail` is Map<String,String> on
-    // the wire.
+    // specialMoneyRules.js. Sent as a STRING ("true"/"false"): `detail` is Map<String,String> on the wire.
     if (values.requestType === 'UNIFORM_PREPROBATION_KIT') {
       return { needsBackSupport: values.needsBackSupport ? 'true' : 'false' };
     }
@@ -592,9 +521,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
       employeeId: values.employeeId ? Number(values.employeeId) : null,
       eventDate,
       eventEndDate: isTravel ? values.eventEndDate : null,
-      // UNIFORM_ANNUAL only sends a receiptDate on the SELF_BUY route -- evaluateUniformAnnual
-      // never reads it for TAILORED, and the field itself isn't even shown in that mode (see the
-      // form below), so sending the stale default date would misrepresent what was actually filed.
+      // UNIFORM_ANNUAL only sends a receiptDate on the SELF_BUY route -- evaluateUniformAnnual never reads it for
+      // TAILORED, and the field itself isn't even shown in that mode (see the form below), so sending the stale
+      // default date would misrepresent what was actually filed.
       receiptDate: (values.requestType === 'MEDICAL'
         || (values.requestType === 'UNIFORM_ANNUAL' && values.uniformMode === 'SELF_BUY'))
         ? values.receiptDate
@@ -606,15 +535,14 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     createMutation.mutate(payload);
   }
 
-  // Carries the whole request (not just its id): ApproveSpecialMoneyDialog needs
-  // requestedAmount/employeeName/requestType to pre-fill the amount field and render its summary,
-  // and the review queue row already has the full object in hand -- looking it back up by id from
-  // reviewQueueQuery.data would just be a roundabout way to recover what the caller already had.
+  // Carries the whole request: ApproveSpecialMoneyDialog needs requestedAmount/employeeName/requestType to
+  // pre-fill the amount field and render its summary, and the review queue row already has the full object in
+  // hand.
   function approve(request) {
     setConfirmState({ kind: 'approve', request });
   }
-  // Returns the mutation's promise so the dialog can await it and catch a rejection locally,
-  // rendering error.message inline instead of only a toast (see approveMutation.onError above).
+  // Returns the mutation's promise so the dialog can await it and catch a rejection locally, rendering
+  // error.message inline instead of only a toast (see approveMutation.onError above).
   function confirmApprove(approvedAmount, capOverrideReason) {
     return approveMutation.mutateAsync({ id: confirmState.request.id, approvedAmount, capOverrideReason });
   }
@@ -626,20 +554,17 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
     rejectMutation.mutate({ id: confirmState.id, reviewerNote: reviewerNote.trim() });
   }
 
-  // Welfare is CEO-only, in one stage, for every employee -- there is no manager stage to offer a
-  // button for. MANAGER_APPROVED is still accepted because rows written before that rule was
-  // introduced can still be sitting in it. Mirrors SpecialMoneyService.approve().
+  // Welfare is CEO-only, in one stage, for every employee -- there is no manager stage to offer a button for.
+  // MANAGER_APPROVED is still accepted because rows written before that rule was introduced can still be sitting
+  // in it. Mirrors SpecialMoneyService.approve().
   function canCeoApprove(request) {
     return user.role === 'ceo' && ['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status);
   }
-  // Mirrors SpecialMoneyService.cancel() / requireCanAttach(): the owning employee only, only
-  // while SUBMITTED -- no manager-cancel path here, unlike overtime. The old "or whoever filed on
-  // their behalf" (requested_by_id) disjunct was removed in Java 2026-08-10, so a legacy
-  // on-behalf filer (e.g. hr/ceo recorded as requestedBy on a row filed before that ruling) sees
-  // no buttons here rather than buttons that would 403.
+  // Mirrors SpecialMoneyService.cancel() / requireCanAttach(): the owning employee only, only while SUBMITTED --
+  // no manager-cancel path here, unlike overtime.
   function isOwnerOnSubmittedRequest(request) {
-    // A user with no employee record owns nothing -- without this, Number(null) === Number(null)
-    // would match a row whose employeeId is also missing.
+    // A user with no employee record owns nothing -- without this, Number(null) === Number(null) would match a row
+    // whose employeeId is also missing.
     if (user.employeeId == null) return false;
     return request.status === 'SUBMITTED' && Number(request.employeeId) === Number(user.employeeId);
   }
@@ -660,11 +585,7 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
 
   const requestTypeError = errors.requestType?.message;
 
-  // [CEO] Review queue -- "the CEO's actual job, first" (plan's IA). Only a CEO ever gets an
-  // approve/reject button (canCeoApprove), so this section only renders for that role; HR can
-  // still see every request via the history table below (canViewAllSpecialMoney), but never gets
-  // a decide affordance -- HR/CEO viewing rights and CEO-only decision rights are deliberately
-  // different gates (see this file's canCeoApprove and the CLAUDE.md note on the same split).
+  // [CEO] Review queue -- "the CEO's actual job, first" (plan's IA).
   const reviewQueue = (reviewQueueQuery.data ?? []).filter((request) => canCeoApprove(request));
 
   return (
@@ -674,10 +595,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
           {reviewQueue.length === 0 ? (
             <EmptyState icon="badgeCheck" title="ไม่มีคำขอรออนุมัติ" />
           ) : (
-            // Typography + a divider between requests (card-diet rule, plan §"Craft rules") --
-            // this used to be its own `rounded-md border` box per request, sitting inside this
-            // Panel's own card chrome, the exact "bordered boxes inside a Panel" pattern the plan
-            // calls out by name. `divide-y` puts one border line between requests instead.
+            // Typography + a divider between requests (card-diet rule, plan §"Craft rules") -- this used to be its own
+            // `rounded-md border` box per request, sitting inside this Panel's own card chrome, the exact "bordered boxes
+            // inside a Panel" pattern the plan calls out by name.
             <div className="divide-y divide-border-subtle">
               {reviewQueue.map((request) => {
                 const typeMeta = typeOptions.find((item) => item.requestType === request.requestType);
@@ -735,9 +655,8 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
         </Panel>
       ) : null}
 
-      {/* Reference bar -- payroll cutoff countdown + the bundled source policy, per the plan's
-          "permanent link to the source PDF" goal. Downloaded filename mirrors the source
-          document's own name rather than the URL slug. */}
+      {/* Reference bar -- payroll cutoff countdown + the bundled source policy, per the plan's "permanent link to the
+       * source PDF" goal. Downloaded filename mirrors the source document's own name rather than the URL slug. */}
       <div className="flex flex-wrap items-center gap-2.5 rounded-md border border-border bg-surface px-3.5 py-2.5 text-sm">
         <Icon name="calendar" size={16} />
         <span className="min-w-0">
@@ -766,28 +685,22 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
         <SafeForm onSubmit={handleSubmit(submitSpecialMoney)} noValidate>
           <FormGrid>
             {/* Welfare is filed for yourself, by yourself -- every role, no exception (mirrors
-                SpecialMoneyService.resolveTargetEmployee, which refuses any target but the
-                caller). hr/ceo's GET /employees still returns the full roster, but only the
-                self entry is ever submittable, so there is no picker -- just the caller's name. */}
+             * SpecialMoneyService.resolveTargetEmployee, which refuses any target but the caller). */}
             <FormField label="พนักงาน" htmlFor="smr-employee-display">
               <input id="smr-employee-display" value={currentEmployee?.nameTh || user.name || '-'} disabled />
             </FormField>
   
             <div className={formGridSpan2}>
-              {/* TypePicker replaces the flat 12-option <select> (plan §"Type grouping"). The
-                  hidden input keeps react-hook-form's own registration/validation wiring for
-                  'requestType' identical to before -- TypePicker.onSelect writes through
-                  setValue(), same as every other controlled field in this form. */}
+              {/* TypePicker replaces the flat 12-option <select> (plan §"Type grouping"). The hidden input keeps
+               * react-hook-form's own registration/validation wiring for 'requestType' identical to before --
+               * TypePicker.onSelect writes through setValue(), same as every other controlled field in this form. */}
               <input type="hidden" {...register('requestType')} />
               <span id="smr-type-label" className="mb-1.5 block text-sm font-bold text-text">
                 ประเภทคำขอ<span className="field-required text-danger ml-0.5" aria-hidden="true"> *</span>
               </span>
-              {/* `role="group"` is required for `aria-labelledby` to mean anything here -- a bare
-                  `<div>` has no role that exposes an accessible-name slot, so the label
-                  association was previously a no-op for assistive tech despite looking wired up.
-                  `aria-describedby` -> the error paragraph below is likewise new: the error existed
-                  on screen but was never programmatically associated with the control it
-                  describes. */}
+              {/* `role="group"` is required for `aria-labelledby` to mean anything here -- a bare `<div>` has no role that
+               * exposes an accessible-name slot, so the label association was previously a no-op for assistive tech despite
+               * looking wired up. */}
               <div
                 role="group"
                 aria-labelledby="smr-type-label"
@@ -901,9 +814,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                     <ThaiDateController id="smr-receipt-date" control={control} name="receiptDate" required />
                   </FormField>
                 ) : null}
-                {/* Piece count applies in BOTH UNIFORM_ANNUAL modes (evaluateUniformAnnual checks
-                    it regardless of uniformMode), but UNIFORM_PREPROBATION_KIT's piece counts are
-                    fixed by policy -- its evaluator never reads shirtCount/trouserCount. */}
+                {/* Piece count applies in BOTH UNIFORM_ANNUAL modes (evaluateUniformAnnual checks it regardless of
+                 * uniformMode), but UNIFORM_PREPROBATION_KIT's piece counts are fixed by policy -- its evaluator never reads
+                 * shirtCount/trouserCount. */}
                 {requestType !== 'UNIFORM_PREPROBATION_KIT' ? (
                   <>
                     <FormField label="จำนวนเสื้อ (ชิ้น)" htmlFor="smr-shirt-count" error={errors.shirtCount?.message}>
@@ -950,9 +863,8 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
   
             {requestType ? (
               <div className={formGridSpan2}>
-                {/* The tax chip lives in RuleCard's "ภาษี" row now (rendered just above, once per
-                    type) -- it used to also render here, which meant it showed twice on screen for
-                    the same type. */}
+                {/* The tax chip lives in RuleCard's "ภาษี" row now (rendered just above, once per type) -- it used to also
+                 * render here, which meant it showed twice on screen for the same type. */}
                 <div className="border border-border rounded-md p-3.5">
                   <div className="text-2xl font-extrabold tabular-nums" data-testid="smr-computed-amount">{formatMoney(finalAmount)}</div>
                   {estimate.working ? <div className="text-xs text-icon-muted mt-1">{estimate.working}</div> : null}
@@ -977,10 +889,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                 <FormField
                   label="หลักฐานประกอบ"
                   htmlFor="smr-evidence"
-                  // Type-aware: TRAVEL_PER_DIEM is evidenceRequired=false (the only such type -- see
-                  // RuleCard's own "ไม่บังคับแนบหลักฐาน" row directly above this field), so telling its
-                  // requester the request "จะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร" was a direct contradiction
-                  // of what the rule card two elements up on the same screen already said correctly.
+                  // Type-aware: TRAVEL_PER_DIEM is evidenceRequired=false, so telling its requester the request
+                  // "จะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร" was a direct contradiction of what the rule card two elements up on the
+                  // same screen already said correctly.
                   hint={selectedTypeMeta?.evidenceRequired === false
                     ? `${evidenceLabel(requestType)} (ไม่บังคับ) — ไฟล์ PDF, JPG หรือ PNG`
                     : `${evidenceLabel(requestType)} — ไฟล์ PDF, JPG หรือ PNG. คำขอประเภทที่ต้องมีหลักฐานจะอนุมัติไม่ได้จนกว่าจะแนบเอกสาร`}
@@ -995,15 +906,15 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               </div>
             ) : null}
   
-            {/* Submit errors arrive as ONE 400 string with every violation joined by "; " -- split
-                into a real list instead of one run-on sentence (plan §"Backend contract"). */}
+            {/* Submit errors arrive as ONE 400 string with every violation joined by "; " -- split into a real list instead
+             * of one run-on sentence (plan §"Backend contract"). */}
             {submitViolations.length > 0 ? (
               <div className={formGridSpan2}>
                 <div className="rounded-md border border-danger-border bg-danger-bg p-3" role="alert">
                   <p className="m-0 text-xs font-bold text-danger">ส่งคำขอไม่สำเร็จ:</p>
                   <ul className="m-0 mt-1.5 list-disc pl-4 text-sm text-text">
-                    {/* Keyed by index, not by the string: the evaluator can emit the same violation
-                        twice (e.g. one per uniform piece type), and duplicate keys would collide. */}
+                    {/* Keyed by index, not by the string: the evaluator can emit the same violation twice (e.g. one per uniform
+                     * piece type), and duplicate keys would collide. */}
                     {submitViolations.map((violation, index) => (
                       <li key={index}>{violation}</li>
                     ))}
@@ -1012,9 +923,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               </div>
             ) : null}
   
-            {/* The request WAS filed; only its evidence failed. Warning, not danger: nothing here
-                needs redoing, and dressing it as an error is what makes an employee re-file. The
-                request number leads, because "ไม่ต้องส่งซ้ำ" is the one thing that has to land. */}
+            {/* The request WAS filed; only its evidence failed. Warning, not danger: nothing here needs redoing, and
+             * dressing it as an error is what makes an employee re-file. The request number leads, because "ไม่ต้องส่งซ้ำ"
+             * is the one thing that has to land. */}
             {evidenceFailure ? (
               <div className={formGridSpan2}>
                 <div className="rounded-md border border-warning-border bg-warning-bg p-3" role="status">
@@ -1063,17 +974,12 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
         title="คำขอเงินสวัสดิการ"
         actions={(
           <div className="flex flex-wrap items-center gap-2">
-            {/* w-auto on both selects: legacy styles.css sets `select { width: 100% }` (its
-                width:100%, not a flex-basis override, still wins the cascade over a bare `flex`
-                utility per this file's Tailwind-vs-legacy note elsewhere), so two selects
-                sharing this row would each claim the full row width and stack vertically instead
-                of sitting side by side -- w-auto is a Tailwind utility in a later layer, so it
-                wins and restores content-based sizing. Browser-verified: both selects render
-                side by side at 1280px with this class; without it they stack and the header
-                grows ~40px -> ~88px tall. */}
-            {/* Period selector -- makes the table's date window explicit and user-controllable
-                instead of silently defaulting (see historyWindow's comment above). Defaults to
-                'THIS_YEAR' to match the entitlement panel above. */}
+            {/* w-auto on both selects: legacy styles.css sets `select { width: 100% }`, so two selects sharing this row
+             * would each claim the full row width and stack vertically instead of sitting side by side -- w-auto is a
+             * Tailwind utility in a later layer, so it wins and restores content-based sizing. */}
+            {/* Period selector -- makes the table's date window explicit and user-controllable instead of silently
+             * defaulting (see historyWindow's comment above). Defaults to 'THIS_YEAR' to match the entitlement panel
+             * above. */}
             <select
               value={historyPeriod}
               onChange={(event) => setHistoryPeriod(event.target.value)}
@@ -1084,9 +990,8 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                 <option key={value} value={value}>{label}</option>
               ))}
             </select>
-            {/* Options are derived from the canonical label map rather than
-                duplicated inline — the inline copy is how this filter kept saying
-                'รอผู้จัดการ' after the manager stage was removed. */}
+            {/* Options are derived from the canonical label map rather than duplicated inline — the inline copy is how this
+             * filter kept saying 'รอผู้จัดการ' after the manager stage was removed. */}
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value)}
@@ -1101,22 +1006,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
           </div>
         )}
       >
-        {/*
-          The wide grid needs its OWN horizontal scroll region, or the page gets one.
-
-          `TABLE_GRID` carries `nav-drawer:min-w-[820px]`, i.e. a hard 820px floor for the whole
-          721–1040px band (below 721px `reflow-cards` turns these rows into cards, so the floor
-          stops applying). This Panel is not `flush`, so it has no `overflow-hidden`, and nothing
-          else between here and `.content-scroll` scrolls sideways — so at tablet widths the table
-          simply pushed the page out. Measured at 768px before this wrapper: the grid rendered
-          820px wide and ran 137px past the content edge, giving `.content-scroll` 105px of
-          horizontal overflow, so the whole page slid sideways under the user's thumb.
-
-          `overflow-x-auto` moves that scroll onto the table itself, which is what the wide-table
-          pattern elsewhere in the app does. Note the alternative — letting a `flush` Panel clip it
-          with `overflow-hidden` — is worse, not better: it trades a scrolling page for columns
-          that are silently unreachable.
-        */}
+        {/* The wide grid needs its OWN horizontal scroll region, or the page gets one. `TABLE_GRID` carries
+         * `nav-drawer:min-w-[820px]`, i.e. a hard 820px floor for the whole 721–1040px band (below 721px
+         * `reflow-cards` turns these rows into cards, so the floor stops applying). */}
         <div className="overflow-x-auto">
           <div className={`${TABLE_GRID} table-head`}>
             <span>ประเภท / รายละเอียด</span>
@@ -1129,24 +1021,17 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
         ) : requests.length === 0 ? (
           <EmptyState
             icon="badgeDollar"
-            // The period is named in the title itself -- this table used to say the bare
-            // "ยังไม่มีคำขอเงินสวัสดิการ" regardless of which window (silently "this month" on the
-            // real backend) produced zero rows, which is exactly the false-negative this whole
-            // change exists to fix.
+            // The period is named in the title itself -- this table used to say the bare "ยังไม่มีคำขอเงินสวัสดิการ"
+            // regardless of which window (silently "this month" on the real backend) produced zero rows, which is exactly
+            // the false-negative this whole change exists to fix.
             title={historyPeriodYear
               ? `ยังไม่มีคำขอเงินสวัสดิการในปี ${historyPeriodYear + 543}`
               : 'ยังไม่มีคำขอเงินสวัสดิการ'}
             description={historyPeriod === 'ALL'
               ? 'ยื่นคำขอใหม่ด้านบน'
-              // Once-per-lifetime types (ONCE_PER_LIFETIME_TYPES) are reported from a LIFETIME
-              // count on the entitlement panel above -- under a year-scoped default it can say
-              // "ใช้สิทธิแล้ว" for a claim made in an earlier year, while this table shows nothing
-              // for the current one. This line is unconditional advice shown on EVERY year-scoped
-              // empty result, not a targeted guard -- it does not check usage.
-              // approvedCountLifetimeByType (the API has no per-year breakdown of it to check
-              // against). It is phrased as a suggestion ("หากเคย...ลองเปลี่ยน...") specifically so
-              // it is never literally false when shown for an unrelated reason (e.g. an employee
-              // who has simply never filed anything).
+              // Once-per-lifetime types (ONCE_PER_LIFETIME_TYPES) are reported from a LIFETIME count on the entitlement
+              // panel above -- under a year-scoped default it can say "ใช้สิทธิแล้ว" for a claim made in an earlier year,
+              // while this table shows nothing for the current one.
               : 'ยื่นคำขอใหม่ด้านบน หรือหากเคยยื่นคำขอในปีก่อนหน้า ลองเปลี่ยนช่วงเวลาเป็น "ทั้งหมด"'}
           />
         ) : requests.map((request) => {
@@ -1170,12 +1055,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
               </span>
               <span data-label="สถานะ" className="mobile:order-2">
                 <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                {/* Only when a NAME was resolved. The role-only note was correct when the badge
-                    read a generic pending label, but specialMoneyStatusLabel now names the role
-                    itself ("รอ CEO อนุมัติ" -- welfare has been single-stage CEO-only since #482),
-                    and the note then merely repeated it: two lines for one fact. A name is the
-                    note's only remaining content -- "CEO (คุณราม)" tells you who to chase, which
-                    the badge cannot. Same reasoning as OvertimePanel's ขั้นอนุมัติ column. */}
+                {/* Only when a NAME was resolved. The role-only note was correct when the badge read a generic pending label,
+                 * but specialMoneyStatusLabel now names the role itself ("รอ CEO อนุมัติ" -- welfare has been single-stage
+                 * CEO-only since #482), and the note then merely repeated it: two lines for one fact. */}
                 {request.pendingApproverName && pendingApproverNote
                   ? <small className="text-text-muted">{pendingApproverNote}</small>
                   : null}
@@ -1193,12 +1075,9 @@ export function SpecialMoneyPanel({ user, currentEmployee, showToast }) {
                   </Button>
                 ) : null}
               </RowActions>
-              {/* Rejection (plan §"Rejection"): reviewerNote in a real callout (never truncated
-                  by `.data-row`'s ellipsis rule -- this sits in a plain <div>, not a
-                  `.data-row > span`), then the same rule card, then the attached evidence. This
-                  extra child stays a direct child of THIS .data-row (not a sibling wrapper), so
-                  `.reflow-cards.data-row + .data-row`'s adjacency-based row spacing keeps working
-                  in the ≤720px card layout. */}
+              {/* Rejection (plan §"Rejection"): reviewerNote in a real callout (never truncated by `.data-row`'s ellipsis
+               * rule -- this sits in a plain <div>, not a `.data-row > span`), then the same rule card, then the attached
+               * evidence. */}
               {isRejected ? (
                 <div style={{ gridColumn: '1 / -1' }} className="mt-1 flex flex-col gap-2.5 border-t border-border-subtle pt-3">
                   {request.reviewerNote ? (

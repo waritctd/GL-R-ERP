@@ -100,11 +100,9 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
 
-        // PricingRequestService is mocked exactly as in DealTrackingAndActivityIntegrationTest:
-        // reserveStock never calls it. The stub on cancelOpenForTicket exists only so Mockito's
-        // default null return cannot NPE if a future edit routes through markLost/cancel. The
-        // two things under test here — TicketService's gate and TicketRepository's UPDATE — are
-        // both real.
+        // PricingRequestService is mocked exactly as in DealTrackingAndActivityIntegrationTest: reserveStock never
+        // calls it. The stub on cancelOpenForTicket exists only so Mockito's default null return cannot NPE if a
+        // future edit routes through markLost/cancel.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -127,11 +125,9 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
 
     // ── the refusals: these are the evidence ─────────────────────────────────
 
-    /**
-     * The case the widened gate must NOT open. {@code otherSalesRep} holds the same {@code sales}
-     * role as the owner and passes the coarse role pre-filter — the only thing standing between
-     * them and another rep's commission input is the per-row ownership test.
-     */
+    /** The case the widened gate must NOT open. otherSalesRep holds the same sales role as the owner and passes the
+     * coarse role pre-filter — the only thing standing between them and another rep's commission input is the
+     * per-row ownership test. */
     @Test
     void salesRepWhoDoesNotOwnTheDeal_isRefused_andTheRowIsUnmoved() {
         long ticketId = createTicketWithOneItem();
@@ -165,12 +161,8 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertNothingMoved(ticketId, itemId);
     }
 
-    /**
-     * The coarse pre-filter's own reason to exist, and the only test that can fail if it is
-     * deleted (the per-row check below it already refuses these roles on a deal that exists).
-     * A role that can never declare must be refused BEFORE the ticket is read, so widening this
-     * endpoint cannot turn it into a "does ticket N exist?" probe: 403, never 404.
-     */
+    /** The coarse pre-filter's own reason to exist, and the only test that can fail if it is deleted (the per-row
+     * check below it already refuses these roles on a deal that exists). */
     @Test
     void roleThatCanNeverDeclare_isRefusedBeforeTheTicketIsRead() {
         long neverCreated = 9_999_999L;
@@ -193,12 +185,8 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         }
     }
 
-    /**
-     * A refusal is not enough on its own: a partly-applied write would leave the row moved even
-     * though the call threw. This drives the refusal AFTER a legitimate declaration, so the
-     * assertion is that the stranger's number did not overwrite the owner's — a stronger check
-     * than "still zero", which a no-op would also satisfy.
-     */
+    /** A refusal is not enough on its own: a partly-applied write would leave the row moved even though the call
+     * threw. */
     @Test
     void refusedDeclaration_doesNotOverwriteTheDeclarationAlreadyOnFile() {
         long ticketId = createTicketWithOneItem();
@@ -346,13 +334,9 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
             new StockReservationRequest.Line(itemId, new BigDecimal(qtyFromStock), "มีของในสต็อก")));
     }
 
-    /**
-     * A deal parked at {@link DealStage#ORDER_RECEIVED} — the stage floor a stock declaration must
-     * clear since the stage-fact-gate branch (below it every call 409s regardless of role, which
-     * would make every case in this class pass for the wrong reason). Seeded through the real
-     * {@code updateSalesStage} writer; this class is about WHO may declare, and
-     * {@code StageFactGateIntegrationTest} owns the floor's own coverage.
-     */
+    /** A deal parked at DealStage#ORDER_RECEIVED — the stage floor a stock declaration must clear since the
+     * stage-fact-gate branch (below it every call 409s regardless of role, which would make every case in this
+     * class pass for the wrong reason). */
     private long createTicketWithOneItem() {
         CreateTicketRequest request = new CreateTicketRequest(
             "ดีลทดสอบสต็อก", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, null,
@@ -397,13 +381,8 @@ class StockDeclarationAuthzIntegrationTest extends AbstractPostgresIntegrationTe
             Map.of("ticketId", ticketId, "kind", TicketEventKind.STOCK_RESERVED), Integer.class);
     }
 
-    /**
-     * A real APPROVED, ticket-linked SALE commission, built through the real
-     * {@link CommissionRepository} writers and then moved to APPROVED with one statement.
-     * {@link InvoiceCalculation} is constructed directly rather than via {@code
-     * CommissionCalculator} on purpose: this test is about the stock-share join, and it must not
-     * depend on (or appear to validate) the invoice math.
-     */
+    /** A real APPROVED, ticket-linked SALE commission, built through the real CommissionRepository writers and then
+     * moved to APPROVED with one statement. */
     private void seedApprovedTicketLinkedCommission(long ticketId, long salesRepId,
                                                     BigDecimal actualReceived, LocalDate payrollMonth) {
         SubmitCommissionRequest request = new SubmitCommissionRequest(

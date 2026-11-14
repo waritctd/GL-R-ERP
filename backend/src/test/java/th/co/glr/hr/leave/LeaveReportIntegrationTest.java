@@ -22,33 +22,9 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): real-Postgres coverage of {@link
- * LeaveService#teamLeaveReport}/{@link LeaveService#ownLeaveReport}'s scope, plus the rendered
- * {@link LeaveReportRenderer} PDF's extracted text (PDFBox {@link PDFTextStripper}, never a
- * byte-length check).
- *
- * <p>{@code teamLeaveReport} is built entirely on {@link LeaveService#teamBalances}, which already
- * resolves "who is my team" via {@link LeaveRepository#findEmployeeOptions} -- the SAME query
- * {@link LeaveTeamBalancesIntegrationTest} already pins. This class is that class's sibling for the
- * REPORT surface: it does not re-litigate {@code findEmployeeOptions}' own SQL (already covered
- * there), it proves the report ASSEMBLY never re-introduces a caller-supplied employee id or a
- * second scope predicate on top of it -- see {@link LeaveService#teamLeaveReport}'s Javadoc for why
- * that is the one thing genuinely new here.
- *
- * <p>Written WRONG-WAY-ROUND throughout (CLAUDE.md's "Permission changes must ship evidence"):
- * {@link #teamReportManagerCannotSeeAnotherManagersDirectReport} asserts a colleague's report is
- * genuinely ABSENT -- from the returned DTO list AND from the rendered PDF's own extracted text --
- * not merely that the caller's own report is present.
- *
- * <p><b>Mutation-check (see PR body for the run):</b> temporarily replace {@code
- * teamBalances(user, resolvedYear)} inside {@link LeaveService#teamLeaveReport} with {@code
- * leaveRepository.findEmployeeOptions(actorEmployeeId, true)} mapped to empty balances (i.e.
- * hardcode {@code includeAll = true}, simulating a developer bypassing the reused scope call) --
- * confirms {@link #teamReportManagerCannotSeeAnotherManagersDirectReport} goes red and no other
- * test in this class does, then revert BY HAND (never {@code git checkout --}, which would also
- * discard any other uncommitted work).
- */
+/** Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): real-Postgres coverage of
+ * LeaveService#teamLeaveReport/LeaveService#ownLeaveReport's scope, plus the rendered LeaveReportRenderer
+ * PDF's extracted text (PDFBox PDFTextStripper, never a byte-length check). */
 class LeaveReportIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private LeaveService leaveService;
@@ -88,9 +64,8 @@ class LeaveReportIntegrationTest extends AbstractPostgresIntegrationTest {
             .extracting(LeaveRequestDto::employeeId)
             .doesNotContain(report2);
 
-        // End-to-end proof: the rendered PDF's own extracted text must not carry the other
-        // manager's report -- proves the scope holds through the WHOLE pipeline (assembly AND
-        // rendering), not just the intermediate DTO list.
+        // End-to-end proof: the rendered PDF's own extracted text must not carry the other manager's report -- proves
+        // the scope holds through the WHOLE pipeline (assembly AND rendering), not just the intermediate DTO list.
         String text = extractText(renderer.toPdf(sections, 2026, null, true));
         assertThat(text).contains("LR-RPT-1");
         assertThat(text).doesNotContain("LR-RPT-2");
@@ -150,9 +125,9 @@ class LeaveReportIntegrationTest extends AbstractPostgresIntegrationTest {
         long divisionId = insertDivision("ฝ่ายทดสอบรายงานใบลา");
         long manager = insertEmployee("LR-FMT-MGR", null, true);
         long report = insertEmployeeWithDivision("LR-FMT-RPT", manager, divisionId, true);
-        // 1.56 round-trips to EXACTLY "1 วัน 4 ชม. 30 น." -- see LeaveDayMath#formatDuration's
-        // Javadoc: 1.56 * 480 = 748.8 minutes, snapped to the nearest 5-minute step = 750 minutes
-        // = 1 whole day (480min) + a 270-minute (4h30m) remainder.
+        // 1.56 round-trips to EXACTLY "1 วัน 4 ชม. 30 น." -- see LeaveDayMath#formatDuration's Javadoc: 1.56 * 480 =
+        // 748.8 minutes, snapped to the nearest 5-minute step = 750 minutes = 1 whole day (480min) + a 270-minute
+        // (4h30m) remainder.
         insertApprovedLeave(report, "PERSONAL", LocalDate.of(2026, 5, 11), LocalDate.of(2026, 5, 12), "1.56");
 
         List<LeaveReportEmployeeDto> sections = leaveService.teamLeaveReport(employee(manager), 2026, null);
@@ -190,13 +165,13 @@ class LeaveReportIntegrationTest extends AbstractPostgresIntegrationTest {
         List<LeaveReportEmployeeDto> sections = leaveService.teamLeaveReport(employee(manager), 2026, null);
         String text = extractText(renderer.toPdf(sections, 2026, null, true));
 
-        // LEAVE_WITHOUT_PAY carries a 0-day statutory quota and this employee has used none of it,
-        // so the row can tell the reader nothing and must not take a line.
+        // LEAVE_WITHOUT_PAY carries a 0-day statutory quota and this employee has used none of it, so the row can tell
+        // the reader nothing and must not take a line.
         assertThat(text)
             .as("a wholly inert quota row must be dropped")
             .doesNotContain("ลาไม่รับค่าจ้าง");
-        // VACATION is unused too, but the employee HOLDS the entitlement -- that is the most useful
-        // line on the page for someone who has taken none of it, so it must survive the same filter.
+        // VACATION is unused too, but the employee HOLDS the entitlement -- that is the most useful line on the page
+        // for someone who has taken none of it, so it must survive the same filter.
         assertThat(text)
             .as("an unused entitlement is NOT inert and must be kept")
             .contains("ลาพักร้อน");

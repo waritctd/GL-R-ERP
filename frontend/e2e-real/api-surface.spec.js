@@ -34,28 +34,20 @@ const READABLE_SURFACE = readableSurface();
 
 test.describe('API surface', () => {
   test('the surface is non-trivial and every entry is a concrete /api path', () => {
-    // A guard on the derivation itself. If the digest failed to load or its shape changed,
-    // SURFACE would quietly shrink and every sweep below would still pass — while covering
-    // nothing. Fail loudly instead.
+    // A guard on the derivation itself. If the digest failed to load or its shape changed, SURFACE would quietly
+    // shrink and every sweep below would still pass — while covering nothing. Fail loudly instead.
     expect(SURFACE.length).toBeGreaterThan(250);
     for (const { name, path } of SURFACE) {
       expect(path, `${name} resolved to a non-/api path`).toMatch(/^\/api\//);
-      // No unsubstituted template parameter may reach the wire: `/api/tickets/{id}/cancel` sent
-      // literally would 400 on type conversion and the sweep would report that instead of the
-      // endpoint's real behaviour.
+      // No unsubstituted template parameter may reach the wire: `/api/tickets/{id}/cancel` sent literally would 400
+      // on type conversion and the sweep would report that instead of the endpoint's real behaviour.
       expect(path, `${name} still contains an unsubstituted path parameter`).not.toMatch(/[{}]/);
     }
   });
 
   // Both read and write verbs, because SecurityConfig's allowlist entries are METHOD-scoped
-  // (`.requestMatchers(HttpMethod.POST, "/api/auth/login")`). A sweep that only sent GETs would
-  // be blind to the change that actually matters — someone adding a permitAll for POST on some
-  // path, leaving it anonymously writable while every GET still correctly answered 401.
-  //
-  // Sending a POST anonymously is safe by construction: `.anyRequest().authenticated()` rejects
-  // in the filter chain, before Spring MVC resolves a handler, so nothing runs and nothing is
-  // written. A 405 in these results would itself be a finding — it would mean the request got
-  // past authentication far enough for method resolution to matter.
+  // (`.requestMatchers(HttpMethod.POST, "/api/auth/login")`). A 405 in these results would itself be a finding —
+  // it would mean the request got past authentication far enough for method resolution to matter.
   for (const method of ['get', 'post']) {
     test(`every endpoint rejects an anonymous ${method.toUpperCase()} with 401`, async () => {
       test.setTimeout(120_000);
@@ -85,10 +77,9 @@ test.describe('API surface', () => {
   }
 
   test("every endpoint rejects an anonymous request sent with its OWN verb with 401", async () => {
-    // The GET/POST sweeps above are broad but ask most endpoints a question they do not answer.
-    // This one asks each endpoint exactly what it implements — a DELETE at a DELETE-only route,
-    // a PATCH at a PATCH-only route — so nothing is refused merely for using the wrong verb.
-    // Only possible now that the surface carries verbs from the backend's own handler mappings.
+    // The GET/POST sweeps above are broad but ask most endpoints a question they do not answer. This one asks each
+    // endpoint exactly what it implements — a DELETE at a DELETE-only route, a PATCH at a PATCH-only route — so
+    // nothing is refused merely for using the wrong verb.
     test.setTimeout(120_000);
     const anon = await anonApi();
     const leaked = [];
@@ -114,14 +105,9 @@ test.describe('API surface', () => {
   });
 
   test('the five allowlisted endpoints really are anonymously reachable', async () => {
-    // The complement of the sweep above. Silencing a sweep failure by appending a path to
-    // ANONYMOUS_ALLOWLIST must not become a quiet way to drop a real endpoint out of the
-    // authentication assertion — anything added there has to be justified here too.
-    //
-    // Status alone cannot carry that: AuthService answers a bad login with 401 as well, so a
-    // blanket "not 401" would also be satisfied by an endpoint the filter chain had rejected
-    // outright. Each path therefore gets an assertion only a request that REACHED ITS
-    // CONTROLLER could produce.
+    // The complement of the sweep above. Silencing a sweep failure by appending a path to ANONYMOUS_ALLOWLIST must
+    // not become a quiet way to drop a real endpoint out of the authentication assertion — anything added there
+    // has to be justified here too.
     expect(ANONYMOUS_ALLOWLIST).toEqual([
       '/api/auth/login',
       '/api/attendance/punch',
@@ -139,9 +125,9 @@ test.describe('API surface', () => {
       });
       expect(login.status(), 'POST /api/auth/login must be reachable without a session').toBe(200);
 
-      // Device endpoint: an empty body fails @Valid (400) or the X-GLR-Agent-Token check (403).
-      // Either proves it got past the filter chain; a 401 would mean it did not. Nothing is
-      // written — validation and the token check both run before any record is created.
+      // Device endpoint: an empty body fails @Valid (400) or the X-GLR-Agent-Token check (403). Either proves it got
+      // past the filter chain; a 401 would mean it did not. Nothing is written — validation and the token check both
+      // run before any record is created.
       const punch = await anon.post('/api/attendance/punch', {
         data: {},
         failOnStatusCode: false,
@@ -157,10 +143,7 @@ test.describe('API surface', () => {
       ).toBeGreaterThanOrEqual(400);
 
       // Forgot-password: a real demo email → the exact enumeration-safe generic message
-      // (PasswordResetService.GENERIC_SENT_MESSAGE). Status alone would not separate a
-      // filter-chain 401 from a real 200, and a bare 200 would not separate this controller's
-      // response from any other endpoint's — the specific Thai copy can only come from
-      // PasswordResetService actually running.
+      // (PasswordResetService.GENERIC_SENT_MESSAGE).
       const forgotPassword = await anon.post('/api/auth/forgot-password', {
         data: { email: PERSONAS.hr.email },
         failOnStatusCode: false,
@@ -174,10 +157,9 @@ test.describe('API surface', () => {
         'and it must return the real enumeration-safe message, not just any 200'
       ).toBe('หากอีเมลนี้มีอยู่ในระบบ เราได้ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปให้แล้ว กรุณาตรวจสอบกล่องอีเมลของคุณ');
 
-      // Reset-password: a syntactically valid but bogus token. This is stronger proof than an
-      // empty-body 400 (which only proves @Valid ran) — a bogus-but-well-formed token must reach
-      // PasswordResetService's real DB lookup, find no match, and answer with its specific
-      // invalid/expired message. A filter-chain rejection would be 401 with no such body.
+      // Reset-password: a syntactically valid but bogus token. This is stronger proof than an empty-body 400 (which
+      // only proves @Valid ran) — a bogus-but-well-formed token must reach PasswordResetService's real DB lookup,
+      // find no match, and answer with its specific invalid/expired message.
       const resetPassword = await anon.post('/api/auth/reset-password', {
         data: { token: 'e2e-surface-sweep-not-a-real-token', newPassword: 'SurfaceSweep123' },
         failOnStatusCode: false,
@@ -191,11 +173,8 @@ test.describe('API surface', () => {
         'and it must return the real invalid/expired-token message, not just any 400'
       ).toBe('ลิงก์สำหรับตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาขอลิงก์ใหม่อีกครั้ง');
 
-      // Brand logo: the requester is a mail client rendering a notification email — Gmail's image
-      // proxy fetches with no credentials and no way to obtain any — so it cannot be gated. A 200
-      // carrying image BYTES is the assertion only a request that reached BrandController could
-      // produce; a filter-chain rejection would be a 401 with no body, and an SPA catch-all or an
-      // error page would be a 200 of the wrong content-type. Status alone would not separate those.
+      // Brand logo: the requester is a mail client rendering a notification email — Gmail's image proxy fetches with
+      // no credentials and no way to obtain any — so it cannot be gated. Status alone would not separate those.
       const logo = await anon.get('/api/public/brand/logo.png', { failOnStatusCode: false });
       expect(
         logo.status(),
@@ -225,10 +204,9 @@ test.describe('API surface — authenticated sweep', () => {
   });
 
   test('the readable subset declared by the backend is substantial', () => {
-    // The no-5xx sweep below covers the endpoints the backend declares as GET. If the digest
-    // failed to load, READABLE would collapse toward empty and every sweep would pass while
-    // testing almost nothing — the same "green means covered" lie the drift guards exist to
-    // prevent. Pin a floor well under the current 104 but far above a broken derivation.
+    // The no-5xx sweep below covers the endpoints the backend declares as GET. If the digest failed to load,
+    // READABLE would collapse toward empty and every sweep would pass while testing almost nothing — the same
+    // "green means covered" lie the drift guards exist to prevent.
     expect(READABLE_SURFACE.length).toBeGreaterThan(90);
     expect(READABLE_SURFACE.length).toBeLessThan(SURFACE.length);
   });
@@ -259,10 +237,9 @@ test.describe('API surface — authenticated sweep', () => {
         if (isHeavyPath(path)) continue;
         const response = await sessions[role].get(path, { failOnStatusCode: false });
         swept += 1;
-        // 4xx is a legitimate answer — 403 (role gate), 404 (the placeholder id), 400 (a
-        // required query param this sweep doesn't supply). All mean the request was understood
-        // and handled. 5xx means it wasn't: an unhandled exception, a broken query, a null
-        // dereference. That is a defect regardless of which role provoked it.
+        // 4xx is a legitimate answer — 403 (role gate), 404 (the placeholder id), 400 (a required query param this
+        // sweep doesn't supply). All mean the request was understood and handled. 5xx means it wasn't: an unhandled
+        // exception, a broken query, a null dereference.
         if (response.status() >= 500) {
           failures.push(`${name} ${path} → ${response.status()}`);
         }

@@ -214,9 +214,8 @@ export function createDemoDatabase() {
     employee.reportsTo = employee.positionTh === 'ผู้จัดการฝ่าย'
       ? 'คุณวิชัย ธนาคาร · กรรมการผู้จัดการ'
       : `${employees[divisionManagers[employee.divisionId] - 1].nameTh} · ผู้จัดการฝ่าย`;
-    // Mirrors hr.employee.reports_to_employee_id (the stored self-FK). Division
-    // managers have no row above them in this seed (no MD employee row), so their
-    // FK is null — same as the real NULL-FK state.
+    // Mirrors hr.employee.reports_to_employee_id (the stored self-FK). Division managers have no row above them in
+    // this seed (no MD employee row), so their FK is null — same as the real NULL-FK state.
     employee.managerId = employee.positionTh === 'ผู้จัดการฝ่าย'
       ? null
       : divisionManagers[employee.divisionId];
@@ -251,9 +250,8 @@ export function createDemoDatabase() {
     // an org-chart change: every reports_to FK, OT chain, attendance scope and dashboard count
     // stays as it was.
     { id: 9, email: 'sales.manager@glr.co.th', password: 'demo1234', name: employees[0].nameTh, role: 'sales_manager', employeeId: employees[0].id, active: true, createdAt: iso(2025, 6, 1) },
-    // ฝ่ายบัญชี — confirms money receipts (รับยอดมัดจำ / รับชำระเต็มจำนวน) on
-    // sales tickets. Real role derivation: division AC-ฝ่ายบัญชี → 'account'
-    // (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
+    // ฝ่ายบัญชี — confirms money receipts (รับยอดมัดจำ / รับชำระเต็มจำนวน) on sales tickets. Real role derivation:
+    // division AC-ฝ่ายบัญชี → 'account' (DivisionAccessPolicy), gates mirror TicketService.ACCOUNT_ROLES.
     { id: 11, email: 'account@glr.co.th', password: 'demo1234', name: 'คุณบัญชี การเงิน', role: 'account', employeeId: null, active: true, createdAt: iso(2025, 6, 1) },
     // Second sales rep: with a single sales user, per-rep scoping and DRAFT-pricing-request
     // privacy (owning rep + CEO/sales_manager only) are never observable locally. Owns tickets
@@ -638,9 +636,7 @@ export function createDemoDatabase() {
   // Without seed rows every role saw /attendance's empty correction state. See demoHr.js.
   const attendanceCorrectionRequests = buildDemoAttendanceCorrectionRequests(employees);
 
-  // ════════════════════════════════════════════════════════════════════════════════
   // Attendance: Daily punch records (for multiple employees over several days)
-  // ════════════════════════════════════════════════════════════════════════════════
   const attendanceRecords = [];
   const attendanceEmployeeIds = [8, 12, 2, 15, 5];
   const baseDate = new Date(2026, 6, 28); // July 28, 2026
@@ -674,9 +670,7 @@ export function createDemoDatabase() {
     }
   }
 
-  // ════════════════════════════════════════════════════════════════════════════════
   // Projects (context for deal pipeline)
-  // ════════════════════════════════════════════════════════════════════════════════
   const projects = [
     {
       id: 1, code: 'PRJ-2026-001', name: 'โครงการ Central Ladprao ชั้น B1',
@@ -707,9 +701,7 @@ export function createDemoDatabase() {
     },
   ];
 
-  // ════════════════════════════════════════════════════════════════════════════════
   // Customers (for sales module)
-  // ════════════════════════════════════════════════════════════════════════════════
   const customers = [
     {
       id: 1, code: 'CUST-001', name: 'ห้างสรรพสินค้า Central',
@@ -748,9 +740,7 @@ export function createDemoDatabase() {
     },
   ];
 
-  // ════════════════════════════════════════════════════════════════════════════════
   // Product Catalog (tiles/ceramics with pricing)
-  // ════════════════════════════════════════════════════════════════════════════════
   const products = [
     {
       id: 1, code: 'SCG-GRANITE-WHITE', brand: 'SCG', model: 'Granite White', color: 'ขาว',
@@ -788,8 +778,8 @@ export function createDemoDatabase() {
     employees, users, profileRequests, tickets, notifications,
     leaveRequests, overtimeRequests, specialMoneyRequests, attendanceCorrectionRequests, attendanceRecords,
     projects, customers, products,
-    // Sales-chain seed rows for mockApi.js's own module-level stores (mockPricingRequests
-    // etc. aren't part of `db` — see mockApi.js's wiring near those declarations).
+    // Sales-chain seed rows for mockApi.js's own module-level stores (mockPricingRequests etc. aren't part of `db`
+    // — see mockApi.js's wiring near those declarations).
     salesSeed,
   };
 }

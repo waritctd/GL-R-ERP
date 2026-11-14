@@ -14,40 +14,16 @@ import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * V149 deletes dead, zero-reference {@code hr.division} duplicates that share a {@code name_th}
- * with a division that survives -- see that migration's own header comment for the full guard
- * design and the owner ruling behind it (issue: five candidate rows measured against production
- * 2026-08-16, only two of which actually qualify once the guard is applied correctly).
- *
- * <p><b>Every test below runs V149's own SQL, read live off the classpath</b> (see {@link
- * #executeV149()}), never a pasted copy -- a test asserting against its own stale copy of a
- * migration proves nothing about the migration, the same vacuity {@link
- * EmployeeReferenceForeignKeyIntegrationTest}'s Javadoc describes for V147. Because Flyway already
- * applies V149 once (as a no-op: the schema starts with zero {@code hr.division} rows, see V1's own
- * header -- division master data comes from a one-time ETL import outside the migration chain, not
- * from any migration) while building the test database, every test method re-applies V149's DELETE
- * directly against fixture rows it inserts itself, exactly as {@code EmployeeReferenceForeignKeyIntegrationTest}
- * does for V147.
- *
- * <p><b>Mutation-checked:</b> dropping V149's {@code hr.department} NOT EXISTS clause (guard 2)
- * turns {@link #rowWithOneDepartment_isNotDeleted_evenWithZeroRefSameNameDuplicate()} red -- the
- * division that should survive because it owns one department gets deleted instead, once its only
- * protection is removed. See the migration itself for the sha256-verified restore. Every other test
- * below stayed green under that specific mutation, which is expected: each isolates a different
- * guard, and {@link #rowWithOneDepartment_isNotDeleted_evenWithZeroRefSameNameDuplicate()} is the
- * one whose fixture depends on the department guard alone.
- */
+/** V149 deletes dead, zero-reference hr.division duplicates that share a name_th with a division that survives
+ * -- see that migration's own header comment for the full guard design and the owner ruling behind it. */
 class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String V149_RESOURCE =
         "db/migration/V149__drop_dead_duplicate_division_rows.sql";
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
-    // Confirms the migration comment's "exactly three FKs" claim against pg_constraint, rather
-    // than letting the comment assert it unchecked -- a fourth FK added later (to hr.division, in
-    // ANY schema Flyway owns) fails this test instead of silently making V149's guard incomplete.
-    // ═════════════════════════════════════════════════════════════════════════════════════════
+    // Confirms the migration comment's "exactly three FKs" claim against pg_constraint, rather than letting the
+    // comment assert it unchecked -- a fourth FK added later (to hr.division, in ANY schema Flyway owns) fails
+    // this test instead of silently making V149's guard incomplete.
 
     @Test
     void exactlyThreeForeignKeysReferenceHrDivision_confirmedFromPgConstraint() {
@@ -79,10 +55,8 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
                 "hr.employee_assignment.division_id");
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
-    // The core paired scenario: a dead duplicate is deleted, its canonical same-name sibling
-    // (carrying real references) survives by id. Mirrors division_id 38/18 (QC&ISO) exactly.
-    // ═════════════════════════════════════════════════════════════════════════════════════════
+    // The core paired scenario: a dead duplicate is deleted, its canonical same-name sibling (carrying real
+    // references) survives by id. Mirrors division_id 38/18 (QC&ISO) exactly.
 
     @Test
     void deadDuplicate_pairedWithSurvivingCanonical_isDeleted_andCanonicalSurvivesById() {
@@ -105,19 +79,15 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isTrue();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
-    // Guard isolation: a row that would otherwise qualify but carries exactly one reference in
-    // ONE of the three FK tables must survive. Tested separately per table, so a migration that
-    // only checks hr.employee cannot pass all three silently.
-    // ═════════════════════════════════════════════════════════════════════════════════════════
+    // Guard isolation: a row that would otherwise qualify but carries exactly one reference in ONE of the three FK
+    // tables must survive. Tested separately per table, so a migration that only checks hr.employee cannot pass
+    // all three silently.
 
     @Test
     void rowWithOneEmployee_isNotDeleted_evenWithZeroRefSameNameDuplicate() {
-        // Duplicate inserted FIRST (lower division_id) so that, if guard 1 were ever removed, the
-        // employee-holding row -- inserted second, higher id, same non-numeric source_code class --
-        // would LOSE the guard-6 tie-break and be deleted, making that regression visible here
-        // instead of being masked by insertion-order luck (see the department test's Javadoc for
-        // the mutation-check that proved this ordering matters).
+        // Duplicate inserted FIRST so that, if guard 1 were ever removed, the employee-holding row -- inserted second,
+        // higher id, same non-numeric source_code class -- would LOSE the guard-6 tie-break and be deleted, making
+        // that regression visible here instead of being masked by insertion-order luck.
         long zeroRefDuplicate = insertDivision("V149-EDUP", "Guard Employee Group");
         long protectedByEmployee = insertDivision("V149-EKEEP", "Guard Employee Group");
         insertEmployeeForDivision("V149-E-EMP1", protectedByEmployee);
@@ -134,20 +104,9 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isFalse();
     }
 
-    /**
-     * MUTATION-CHECK TARGET (named in the class Javadoc): dropping V149's {@code hr.department}
-     * NOT EXISTS clause (guard 2) turns this test red. {@code zeroRefDuplicate} is inserted FIRST
-     * (lower {@code division_id}); {@code protectedByDepartment} second (higher id). Both
-     * source_codes are non-numeric alike, so guard 6's tie-break -- if it were ever reached for
-     * this pair -- falls to the LOWER id, i.e. {@code zeroRefDuplicate}. That means
-     * {@code protectedByDepartment} survives ONLY because guard 2 excludes it from
-     * {@code reference_free} entirely; it would lose a tie-break outright. Confirmed empirically:
-     * with guard 2 removed, this test goes red (protectedByDepartment gets deleted instead of its
-     * duplicate) while the rest of the suite stays green -- the mutation this class's own Javadoc
-     * describes. An earlier version of this fixture inserted the rows in the opposite order, which
-     * let {@code protectedByDepartment} win the tie-break by accident regardless of guard 2 -- i.e.
-     * the test passed for the wrong reason. Keep this order; do not swap it back.
-     */
+    /** MUTATION-CHECK TARGET (named in the class Javadoc): dropping V149's hr.department NOT EXISTS clause (guard
+     * 2) turns this test red. That means protectedByDepartment survives ONLY because guard 2 excludes it from
+     * reference_free entirely; it would lose a tie-break outright. */
     @Test
     void rowWithOneDepartment_isNotDeleted_evenWithZeroRefSameNameDuplicate() {
         long zeroRefDuplicate = insertDivision("V149-DDUP", "Guard Department Group");
@@ -168,8 +127,8 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void rowWithOneAssignment_isNotDeleted_evenWithZeroRefSameNameDuplicate() {
-        // See the department test's Javadoc: duplicate inserted FIRST (lower id) so the
-        // assignment-holding row cannot win guard 6's tie-break by insertion-order luck alone.
+        // See the department test's Javadoc: duplicate inserted FIRST (lower id) so the assignment-holding row cannot
+        // win guard 6's tie-break by insertion-order luck alone.
         long zeroRefDuplicate = insertDivision("V149-ADUP", "Guard Assignment Group");
         long protectedByAssignment = insertDivision("V149-AKEEP", "Guard Assignment Group");
         insertAssignmentForDivision(protectedByAssignment);
@@ -186,15 +145,13 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isFalse();
     }
 
-    /**
-     * Guard 4: the non-FK polymorphic {@code hr.work_schedule_assignment} reference that {@code
-     * pg_constraint} cannot see (see V149's own comment). Added beyond the three FK tables because
-     * V146's migration comment already documents this exact table as a hazard for hr.division.
-     */
+    /** Guard 4: the non-FK polymorphic hr.work_schedule_assignment reference that pg_constraint cannot see (see
+     * V149's own comment). Added beyond the three FK tables because V146's migration comment already documents
+     * this exact table as a hazard for hr.division. */
     @Test
     void rowWithWorkScheduleAssignment_isNotDeleted_evenWithZeroRefSameNameDuplicate() {
-        // See the department test's Javadoc: duplicate inserted FIRST (lower id) so the
-        // schedule-holding row cannot win guard 6's tie-break by insertion-order luck alone.
+        // See the department test's Javadoc: duplicate inserted FIRST (lower id) so the schedule-holding row cannot
+        // win guard 6's tie-break by insertion-order luck alone.
         long zeroRefDuplicate = insertDivision("V149-WDUP", "Guard Schedule Group");
         long protectedBySchedule = insertDivision("V149-WKEEP", "Guard Schedule Group");
         insertWorkScheduleAssignmentForDivision(protectedBySchedule);
@@ -212,10 +169,8 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isFalse();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
-    // Guard 5: a uniquely-named empty division -- no same-name partner at all -- is never touched,
-    // regardless of how empty it is.
-    // ═════════════════════════════════════════════════════════════════════════════════════════
+    // Guard 5: a uniquely-named empty division -- no same-name partner at all -- is never touched, regardless of
+    // how empty it is.
 
     @Test
     void uniquelyNamedEmptyDivision_isNotDeleted() {
@@ -230,9 +185,7 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isTrue();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
     // Guard 6, the deterministic tie-break, exercised directly.
-    // ═════════════════════════════════════════════════════════════════════════════════════════
 
     @Test
     void tieBreak_prefersNonNumericSourceCode_overNumeric() {
@@ -268,11 +221,8 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isFalse();
     }
 
-    /**
-     * Mirrors division_id 8/13 ('Sales Support 2' vs 'Sales Support  2', double space) exactly:
-     * byte-exact name matching means these two rows never pair, so BOTH survive even though both
-     * are zero-reference.
-     */
+    /** Mirrors division_id 8/13 ('Sales Support 2' vs 'Sales Support 2', double space) exactly: byte-exact name
+     * matching means these two rows never pair, so BOTH survive even though both are zero-reference. */
     @Test
     void distinctWhitespaceVariants_neitherPairs_bothSurvive() {
         long singleSpace = insertDivision("0014", "Sales Support 2");
@@ -291,9 +241,7 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isTrue();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
     // Idempotency.
-    // ═════════════════════════════════════════════════════════════════════════════════════════
 
     @Test
     void rerunningAfterDelete_deletesZeroRows() {
@@ -314,10 +262,8 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(divisionExists(canonical)).isTrue();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
-    // End-to-end: replay the exact six-row shape measured against production 2026-08-16 and
-    // confirm precisely which rows this migration deletes and which it deliberately leaves alone.
-    // ═════════════════════════════════════════════════════════════════════════════════════════
+    // End-to-end: replay the exact six-row shape measured against production 2026-08-16 and confirm precisely
+    // which rows this migration deletes and which it deliberately leaves alone.
 
     @Test
     void fullProductionShape_deletesExactlyTheDocumentedTwoRows_andSurvivorsMatch() {
@@ -367,12 +313,7 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── running V149's own SQL, read live off the classpath ─────────────────────────────────────
 
-    /**
-     * Executes V149's real file contents against the test database and returns the DELETE's
-     * affected-row count. Deliberately NOT a copy of the SQL pasted into this test -- a pasted
-     * copy would drift from the real file the moment either one changed, and a test asserting
-     * against its own stale copy of a migration proves nothing about the migration.
-     */
+    /** Executes V149's real file contents against the test database and returns the DELETE's affected-row count. */
     private int executeV149() {
         String sql = readV149Sql();
         return jdbc.getJdbcTemplate().execute((ConnectionCallback<Integer>) connection -> {
@@ -437,11 +378,8 @@ class DivisionDedupeIntegrationTest extends AbstractPostgresIntegrationTest {
             Long.class);
     }
 
-    /**
-     * Creates exactly one {@code hr.employee_assignment} row scoped to {@code divisionId}. The
-     * backing employee's OWN {@code division_id} is left NULL so this fixture exercises guard 3
-     * alone, never incidentally also satisfying guard 1.
-     */
+    /** Creates exactly one hr.employee_assignment row scoped to divisionId. The backing employee's OWN division_id
+     * is left NULL so this fixture exercises guard 3 alone, never incidentally also satisfying guard 1. */
     private long insertAssignmentForDivision(long divisionId) {
         long employeeId = insertEmployeeForDivision("V149-ASG-" + divisionId, null);
         return jdbc.queryForObject("""

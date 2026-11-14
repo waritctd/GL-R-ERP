@@ -16,16 +16,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms the activity-log admin gate against the real service, the real repository and real SQL.
- *
- * <p>Step 2 of CLAUDE.md's requirement for an authorization change. {@link ActivityLogServiceTest}
- * proves the branch is chosen; only this proves the decision survives into the database and that a
- * refused caller really cannot read another employee's movements. Mockito cannot reach this — a
- * mocked repository passes while the SQL does whatever it likes.
- *
- * <p>Every case is asked the wrong way round: can a caller who should not see this reach it.
- */
+/** Confirms the activity-log admin gate against the real service, the real repository and real SQL.
+ * ActivityLogServiceTest proves the branch is chosen; only this proves the decision survives into the database
+ * and that a refused caller really cannot read another employee's movements. */
 class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
@@ -80,8 +73,8 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void refusesTheSemanticAuditEndpointForTheSameCallers() {
-        // Third entry point, same gate. hr.audit_log carries who approved whose leave and who
-        // processed payroll, so an ungated read here would be the worst of the three.
+        // Third entry point, same gate. hr.audit_log carries who approved whose leave and who processed payroll, so an
+        // ungated read here would be the worst of the three.
         assertThatThrownBy(() -> service.auditEvents(principal(hr, "hr"), DAY, DAY, null, null))
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -111,8 +104,8 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void refusesTheApplicationEventEndpointForTheSameCallers() {
-        // Fourth entry point, same gate. hr.app_event carries exception messages and job failures,
-        // so an ungated read here would hand an ordinary employee the server's error output.
+        // Fourth entry point, same gate. hr.app_event carries exception messages and job failures, so an ungated read
+        // here would hand an ordinary employee the server's error output.
         assertThatThrownBy(() -> service.appEvents(principal(hr, "hr"), DAY, DAY, null, null))
             .isInstanceOfSatisfying(ApiException.class, e ->
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -126,8 +119,8 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void roundTripsApplicationEventsAndJobRunsThroughRealPostgres() {
-        // Proves the INSERT is actually accepted: `kind` and `level` carry CHECK constraints and
-        // `message` is NOT NULL, none of which a mocked repository would enforce.
+        // Proves the INSERT is actually accepted: `kind` and `level` carry CHECK constraints and `message` is NOT
+        // NULL, none of which a mocked repository would enforce.
         repository.insertAppEvents(List.of(
             new AppEvent(at(9, 40), AppEvent.KIND_LOG, "ERROR", "th.co.glr.hr.Example",
                 "upload failed", "java.io.IOException", "disk full",
@@ -152,9 +145,9 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void refusesACallerClaimingAdminOnTheSessionWhenTheDatabaseSaysOtherwise() {
-        // The principal is session state and a stale or forged one must not be believed. The role
-        // string is attacker-controlled in the sense that matters here: it is whatever the session
-        // was built with. Only hr.employee.is_admin decides.
+        // The principal is session state and a stale or forged one must not be believed. The role string is
+        // attacker-controlled in the sense that matters here: it is whatever the session was built with. Only
+        // hr.employee.is_admin decides.
         assertForbidden(principal(hr, "admin"));
         assertForbidden(principal(plainEmployee, "admin"));
     }
@@ -187,8 +180,8 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void letsTheFlaggedAdminReadEveryEmployeesActivity() {
-        // The permitted case, stated last: the whole point is cross-employee visibility, so this
-        // asserts the admin sees rows belonging to people other than themselves.
+        // The permitted case, stated last: the whole point is cross-employee visibility, so this asserts the admin
+        // sees rows belonging to people other than themselves.
         List<ActivityLogEntryDto> rows = service.list(principal(admin, "sales"), DAY, DAY, null, null);
 
         assertThat(rows).extracting(ActivityLogEntryDto::employeeId)
@@ -221,8 +214,8 @@ class ActivityLogAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void excludesActivityFromTheAdjacentBangkokDay() {
-        // The window trap: 2026-08-31 23:30 Bangkok is 2026-08-31 16:30Z, and 2026-09-01 00:30
-        // Bangkok is 2026-08-30 17:30Z. A UTC-based window would put one of these on the wrong day.
+        // The window trap: 2026-08-31 23:30 Bangkok is 2026-08-31 16:30Z, and 2026-09-01 00:30 Bangkok is 2026-08-30
+        // 17:30Z. A UTC-based window would put one of these on the wrong day.
         insertActivity(sales, "GET", "/api/late", 200,
             DAY.atTime(23, 30).atZone(BANGKOK).toOffsetDateTime());
         insertActivity(sales, "GET", "/api/tomorrow", 200,

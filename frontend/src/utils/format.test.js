@@ -39,8 +39,8 @@ describe('formatAddress', () => {
     })).toBe('18/9 ซอย 9 ถ.สุขุมวิท บางนา กรุงเทพมหานคร 10111');
   });
 
-  // mockApi.createEmployee seeds district/province/postalCode as '' — joining
-  // blindly would produce "18/9 ถ.สุขุมวิท   " with trailing separators.
+  // mockApi.createEmployee seeds district/province/postalCode as '' — joining blindly would produce "18/9
+  // ถ.สุขุมวิท " with trailing separators.
   it('drops empty parts instead of leaving stray separators', () => {
     expect(formatAddress({ line1: '18/9 ถ.สุขุมวิท', district: '', province: '', postalCode: '' }))
       .toBe('18/9 ถ.สุขุมวิท');
@@ -235,16 +235,15 @@ describe('formatShortDate', () => {
     expect(formatShortDate('2026-07-26')).toBe('26/07/2569');
   });
 
-  // A value that IS a real instant (has a time/offset component, e.g. an attendance punch
-  // timestamp) is deliberately NOT parsed via the date-only fast path above -- it keeps going
-  // through `new Date()` + local getters, which is correct: an instant should display in whatever
-  // zone is viewing it, not the zone it was recorded in.
+  // A value that IS a real instant is deliberately NOT parsed via the date-only fast path above -- it keeps
+  // going through `new Date` + local getters, which is correct: an instant should display in whatever zone is
+  // viewing it, not the zone it was recorded in.
   it('reads a full ISO datetime (a real instant) back in the local zone, unchanged from before', () => {
     globalThis.process.env.TZ = 'Asia/Bangkok';
     expect(formatShortDate('2026-07-02T08:11:00+07:00')).toBe('02/07/2569');
 
-    // Same instant, viewed from a zone far enough behind UTC that the calendar date rolls back --
-    // this is expected/correct for a real timestamp, unlike the date-only case above.
+    // Same instant, viewed from a zone far enough behind UTC that the calendar date rolls back -- this is
+    // expected/correct for a real timestamp, unlike the date-only case above.
     globalThis.process.env.TZ = 'Pacific/Honolulu';
     expect(formatShortDate('2026-07-02T08:11:00+07:00')).toBe('01/07/2569');
   });
@@ -258,10 +257,9 @@ describe('specialMoneyStatusLabel', () => {
     expect(specialMoneyStatusLabel('SUBMITTED').label).not.toContain('ผู้จัดการ');
   });
 
-  // MANAGER_APPROVED is unreachable for new requests but still in the enum and
-  // the chk_smr_status constraint, and SpecialMoneyService still clears such
-  // rows. It sits in the same queue as SUBMITTED, so it must not read as a
-  // further-along step -- only as an older request in the same place.
+  // MANAGER_APPROVED is unreachable for new requests but still in the enum and the chk_smr_status constraint,
+  // and SpecialMoneyService still clears such rows. It sits in the same queue as SUBMITTED, so it must not read
+  // as a further-along step -- only as an older request in the same place.
   it('puts the legacy MANAGER_APPROVED state in the same CEO queue', () => {
     expect(specialMoneyStatusLabel('MANAGER_APPROVED').label).toContain('รอ CEO');
     expect(specialMoneyStatusLabel('MANAGER_APPROVED').tone)
@@ -296,8 +294,7 @@ describe('overtimeStatusLabel', () => {
   it('reads รอ CEO, not รอผู้จัดการ, for a SUBMITTED request with no manager stage', () => {
     expect(overtimeStatusLabel('SUBMITTED', 'ceo').label).toBe('รอ CEO');
     expect(overtimeStatusLabel('SUBMITTED', 'ceo').label).not.toContain('ผู้จัดการ');
-    // Same tone as MANAGER_APPROVED -- from the employee's point of view both states mean the CEO
-    // holds this now.
+    // Same tone as MANAGER_APPROVED -- from the employee's point of view both states mean the CEO holds this now.
     expect(overtimeStatusLabel('SUBMITTED', 'ceo').tone).toBe(overtimeStatusLabel('MANAGER_APPROVED').tone);
   });
 
@@ -332,9 +329,9 @@ describe('addDaysIso', () => {
   });
 });
 
-// bangkokMonthStartIso's monthsBack param (attendance page's 3-month-back browsable window) walks
-// calendar months on the Bangkok wall-clock date via a flat "months since epoch" count, so a
-// year rollover falls out of the Math.floor/modulo for free -- these pin that specific claim.
+// bangkokMonthStartIso's monthsBack param (attendance page's 3-month-back browsable window) walks calendar
+// months on the Bangkok wall-clock date via a flat "months since epoch" count, so a year rollover falls out of
+// the Math.floor/modulo for free -- these pin that specific claim.
 describe('bangkokMonthStartIso monthsBack', () => {
   it('defaults to the exact current month with no monthsBack argument', () => {
     expect(bangkokMonthStartIso(new Date('2026-08-15T10:00:00Z'))).toBe('2026-08-01');
@@ -418,8 +415,8 @@ describe('offered-to field labels (R8, owner ruling 2026-09-30)', () => {
   it('qualifies each one where both appear on the same surface', () => {
     expect(DEAL_OFFERED_TO_LABEL).toBe('ดีลนี้เสนอแก่');
     expect(QUOTATION_OFFERED_TO_LABEL).toBe('ใบเสนอราคานี้เสนอแก่');
-    // Both qualified forms must contain the shared label, or the two fields stop reading as the
-    // same question asked of two different documents.
+    // Both qualified forms must contain the shared label, or the two fields stop reading as the same question
+    // asked of two different documents.
     expect(DEAL_OFFERED_TO_LABEL).toContain(OFFERED_TO_LABEL);
     expect(QUOTATION_OFFERED_TO_LABEL).toContain(OFFERED_TO_LABEL);
   });

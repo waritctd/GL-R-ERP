@@ -5,42 +5,9 @@ import java.util.Locale;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-/**
- * Decorates the active {@link Mailer} so that when {@code app.mail.override-to} is configured, EVERY
- * outbound email is redirected to that one test inbox instead of the caller-supplied recipient - no
- * matter which class placed the call, and no matter which transport ({@link LogMailer} /
- * {@link SmtpMailer} / {@link ResendMailer}) is active underneath.
- *
- * <p><b>Issue #782.</b> Before this class existed, {@code NotificationEmailService} hand-rolled
- * {@code overrideTo.isBlank() ? to : overrideTo} at two separate call sites, and the
- * then-existing {@code FactoryEmailService} (deleted since — factory-quote mail became
- * manual-only, see {@code FactoryQuoteService#send}) had no such check at all - factory-quote
- * mail reached the factory's on-file email exactly as stored, in every environment, including a
- * UAT deployment with {@code app.mail.override-to} set. Two hand-written copies of the same rule,
- * one of them simply missing, with nothing structural to notice the gap - that is the defect
- * class, not "one caller forgot a check". Wrapping the {@link Mailer} bean itself - installed by
- * {@link MailOverrideBeanPostProcessor}, never constructed any other way - fixes it by construction:
- * every current caller of {@link Mailer} inherits containment, and so does every future one, because
- * there is no other way to send mail in this codebase (see {@link Mailer}'s own class Javadoc). A
- * sender cannot opt out of a rule it never implements.
- *
- * <p><b>The redirect note.</b> {@code NotificationEmailService} used to also mark a redirected email
- * as redirected, by appending a note naming the real intended recipient - but only on its own two
- * paths, so a redirected factory-quote email was completely indistinguishable from a delivered one
- * (half of what #782 is about: silent containment is not trustworthy containment). That note is
- * generalized here instead of preserved where it was: every {@link Mailer} method now gets one,
- * because every method now redirects. The note necessarily loses the domain-specific framing
- * {@code NotificationEmailService} used to add (it named the employee id) - this class sits below the
- * domain layer and only ever sees the {@code to} address a caller passed in - but the property that
- * actually matters (a redirected email must never look like a delivered one) now holds everywhere,
- * not just on two of four paths. No bracketed prefix ({@code "[Redirected...]"}) - the same
- * classic-spam-filter-trigger shape {@code NotificationEmailService}'s subject-suffix and body note
- * were both already written to avoid; see its history for why.
- *
- * <p>Package-private and instantiated only by {@link MailOverrideBeanPostProcessor}, which already
- * guards the blank case - so this class enforces non-blank at construction instead of re-checking
- * {@code isBlank()} on every send.
- */
+/** Decorates the active Mailer so that when app.mail.override-to is configured, EVERY outbound email is
+ * redirected to that one test inbox instead of the caller-supplied recipient - no matter which class placed
+ * the call, and no matter which transport is active underneath. */
 final class OverrideRedirectingMailer implements Mailer {
     private static final Logger log = LoggerFactory.getLogger(OverrideRedirectingMailer.class);
 
@@ -49,10 +16,8 @@ final class OverrideRedirectingMailer implements Mailer {
 
     OverrideRedirectingMailer(Mailer delegate, String overrideTo) {
         if (overrideTo == null || overrideTo.isBlank()) {
-            // Enforces the invariant MailOverrideBeanPostProcessor already relies on: this class
-            // exists only when a redirect is actually wanted. A blank override has no business
-            // constructing this decorator at all - keeping that invariant true here too means a
-            // future caller of this constructor cannot silently build a no-op wrapper by mistake.
+            // Enforces the invariant MailOverrideBeanPostProcessor already relies on: this class exists only when a
+            // redirect is actually wanted.
             throw new IllegalArgumentException("OverrideRedirectingMailer requires a non-blank override-to");
         }
         this.delegate = delegate;
@@ -85,11 +50,8 @@ final class OverrideRedirectingMailer implements Mailer {
 
     @Override
     public void send(OutgoingEmail email) {
-        // CC is DROPPED, not redirected: a UAT deployment must never mail a real manager via the CC
-        // list, so the whole message collapses to the single override inbox. The dropped recipients
-        // (to + cc) are named in the redirect note so the test inbox still shows who it was FOR - the
-        // same "a redirected email must never look like a delivered one" property the other methods
-        // hold, extended to CC. See this class's Javadoc / issue #782.
+        // CC is DROPPED, not redirected: a UAT deployment must never mail a real manager via the CC list, so the whole
+        // message collapses to the single override inbox. See this class's Javadoc / issue #782.
         log.info("app.mail.override-to active: redirecting mail from {} (cc dropped: {}) to {}",
             describe(email.to()), email.cc(), overrideTo);
         String recipients = email.cc().isEmpty()
@@ -111,11 +73,9 @@ final class OverrideRedirectingMailer implements Mailer {
         return base + "\n\n" + note(originalTo);
     }
 
-    /** Inserts the redirect note as a styled paragraph just before {@code </body>} (case-insensitive)
-     * so it renders inside {@code NotificationEmailService}'s templated HTML instead of trailing the
-     * document where a client's lenient parser might drop it. Falls back to a plain append when no
-     * {@code </body>} is found, so this never depends on every future HTML caller using that exact
-     * template. */
+    /** Inserts the redirect note as a styled paragraph just before </body> (case-insensitive) so it renders inside
+     * NotificationEmailService's templated HTML instead of trailing the document where a client's lenient parser
+     * might drop it. */
     private String htmlNote(String htmlBody, String originalTo) {
         String base = htmlBody == null ? "" : htmlBody;
         String marker = "<p style=\"margin:16px 0 0 0;padding:12px 0 0 0;border-top:1px solid #e5e7eb;"
@@ -134,10 +94,9 @@ final class OverrideRedirectingMailer implements Mailer {
         return (to == null || to.isBlank()) ? "(no address)" : to;
     }
 
-    /** Escapes the five HTML-significant characters - same minimal set
-     * {@code NotificationEmailService} escapes with, kept local rather than shared since it is three
-     * lines and pulling in a dependency (or an inter-package helper) for it would cost more than it
-     * saves. */
+    /** Escapes the five HTML-significant characters - same minimal set NotificationEmailService escapes with, kept
+     * local rather than shared since it is three lines and pulling in a dependency (or an inter-package helper)
+     * for it would cost more than it saves. */
     private String escapeHtml(String value) {
         StringBuilder escaped = new StringBuilder(value.length());
         for (int i = 0; i < value.length(); i++) {

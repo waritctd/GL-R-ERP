@@ -133,13 +133,9 @@ public final class DealStage {
     public static final String GATE_ACCOUNT = "account";
     public static final String GATE_IMPORT = "import";
 
-    /**
-     * Which department owns the manual fallback for {@code stage} — read straight off the three
-     * target sets above, never a second literal. Null for an unknown code.
-     *
-     * <p>The three sets partition {@link #ORDER} exactly (12 + 2 + 1 = 15), a property
-     * {@code DealStageTest} asserts, so every real stage has exactly one gate.
-     */
+    /** Which department owns the manual fallback for stage — read straight off the three target sets above, never a
+     * second literal. Null for an unknown code. The three sets partition #ORDER exactly (12 + 2 + 1 = 15), a
+     * property DealStageTest asserts, so every real stage has exactly one gate. */
     public static String gateOf(String stage) {
         if (SALES_TARGET_STAGES.contains(stage)) return GATE_SALES;
         if (ACCOUNT_TARGET_STAGES.contains(stage)) return GATE_ACCOUNT;
@@ -225,10 +221,8 @@ public final class DealStage {
         return BUSINESS_CODE.get(stage);
     }
 
-    /**
-     * The 1-based DISPLAY sequence — what a stepper prints beside a stage. See
-     * {@link #BUSINESS_CODE} for why this is not the S-number. 0 for an unknown code.
-     */
+    /** The 1-based DISPLAY sequence — what a stepper prints beside a stage. See #BUSINESS_CODE for why this is not
+     * the S-number. 0 for an unknown code. */
     public static int displayNoOf(String stage) {
         int idx = indexOf(stage);
         return idx < 0 ? 0 : idx + 1;
@@ -304,8 +298,8 @@ public final class DealStage {
         if (to < from) {
             return !isRoutineBackwardMove(fromStage, toStage);
         }
-        // Strictly between: the stages the deal steps OVER. `to` itself is being landed on, not
-        // skipped, and `from` has already happened.
+        // Strictly between: the stages the deal steps OVER. `to` itself is being landed on, not skipped, and `from`
+        // has already happened.
         return ORDER.subList(from + 1, to).stream().anyMatch(MANDATORY::contains);
     }
 

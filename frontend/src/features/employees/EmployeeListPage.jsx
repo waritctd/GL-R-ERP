@@ -14,15 +14,7 @@ import { statuses } from '../../data/referenceData.js';
 import { EmployeeFormModal } from './EmployeeFormModal.jsx';
 import { uniqueOptions } from './employeeOptions.js';
 
-// Employment status is a single axis. `statusId` already carries everything the
-// old boolean `active` select did — the backend derives `active` as
-// `!"RSG".equals(statusId)` (EmployeeStatus.java) — so the two selects that used
-// to sit side by side asked the same question twice and could be combined into
-// states that match nothing. One select, keyed on `statusId` alone.
-//
-// `ปฏิบัติงานอยู่` (still on duty) is deliberately distinct from ACT's own
-// `ทำงานปกติ`, which means *not on probation*; reusing that label would make the
-// default view and the ACT option read identically while returning different rows.
+// Employment status is a single axis. One select, keyed on `statusId` alone.
 const CURRENT_STATUS_IDS = ['ACT', 'PRB'];
 const DEFAULT_STATUS = 'current';
 
@@ -34,11 +26,8 @@ const STATUS_FILTER_OPTIONS = [
 
 const DEFAULT_SORT = 'name.asc';
 
-// HR-visible missing-nickname flag: read-only visibility only -- never auto-populates or invents a
-// nickname for anyone. `nickName` is blank for a genuinely un-set value (see
-// `EmployeeFormModal.jsx`'s `nickName: z.string()`, which allows an empty string), so "missing" is
-// simply "falsy after trim", the same emptiness check `formatAddress`/other display helpers in
-// `utils/format.js` already use elsewhere in this codebase.
+// HR-visible missing-nickname flag: read-only visibility only -- never auto-populates or invents a nickname
+// for anyone.
 function hasNoNickname(employee) {
   return !String(employee?.nickName || '').trim();
 }
@@ -105,9 +94,8 @@ const baseColumns = [
     header: 'เงินเดือน',
     sortable: true,
     sortAccessor: (employee) => employee.salary,
-    // Money reads down its digits, so it anchors right — ฿9,000 and ฿156,000
-    // otherwise start at the same x and agree only on where they end, which is
-    // the one place the eye cannot compare them. DataTable applies the same
+    // Money reads down its digits, so it anchors right — ฿9,000 and ฿156,000 otherwise start at the same x and
+    // agree only on where they end, which is the one place the eye cannot compare them. DataTable applies the same
     // class to the header, so the label tracks the column.
     align: 'right',
     render: (employee) => <code>{formatMoney(employee.salary)}</code>,
@@ -119,17 +107,9 @@ const baseColumns = [
   },
 ];
 
-/**
- * Mobile record card for one employee. The desktop grid has six columns, and the
- * legacy `.reflow-cards` fallback stacked each of them as its own labelled row —
- * about 266px tall, roughly four people per phone screen. This folds the same
- * fields into three lines (~100px) ordered for a lookup scan: who they are, what
- * they do, then the two figures HR actually reaches for.
- *
- * Card mode has no column header to click, so sorting would silently become
- * desktop-only; the page carries its own เรียงตาม control in the filter panel
- * rather than dropping the affordance.
- */
+/** Mobile record card for one employee. Card mode has no column header to click, so sorting would silently
+ * become desktop-only; the page carries its own เรียงตาม control in the filter panel rather than dropping the
+ * affordance. */
 function EmployeeCard({ employee, onOpen }) {
   return (
     <>
@@ -149,8 +129,8 @@ function EmployeeCard({ employee, onOpen }) {
         {hasNoNickname(employee) ? (
           <span className="text-warning">ไม่มีชื่อเล่น</span>
         ) : employee.nickName}
-        {/* Separator only when there's a position/department to join to it -- unconditional here
-            regressed to a trailing " · " for anyone missing both (review #pending-approver-info). */}
+        {/* Separator only when there's a position/department to join to it -- unconditional here regressed to a
+         * trailing " · " for anyone missing both (review #pending-approver-info). */}
         {employee.positionTh || employee.departmentTh
           ? <>{' · '}{[employee.positionTh, employee.departmentTh].filter(Boolean).join(' · ')}</>
           : null}
@@ -184,23 +164,23 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
   const isMobile = useIsMobile();
   const [searchParams, setSearchParams] = useSearchParams();
   const [creating, setCreating] = useState(false);
-  // Desktop has room to show the controls outright; a phone does not, so it
-  // opens collapsed and leans on the summary chips below the toggle.
+  // Desktop has room to show the controls outright; a phone does not, so it opens collapsed and leans on the
+  // summary chips below the toggle.
   const [filtersOpen, setFiltersOpen] = useState(() => !isMobile);
   const canCreate = hasPermission(user.role, 'canManageEmployees');
 
   const search = searchParams.get('q') ?? '';
   const divisionId = searchParams.get('div') ?? '';
   const departmentTh = searchParams.get('dept') ?? '';
-  // An unknown value in a hand-edited or stale URL falls back to the default
-  // rather than filtering everything out and looking like an empty database.
+  // An unknown value in a hand-edited or stale URL falls back to the default rather than filtering everything
+  // out and looking like an empty database.
   const statusParam = searchParams.get('status') ?? DEFAULT_STATUS;
   const status = isKnown(STATUS_FILTER_OPTIONS, statusParam) ? statusParam : DEFAULT_STATUS;
   const sortParam = searchParams.get('sort') ?? DEFAULT_SORT;
   const sortValue = isKnown(SORT_OPTIONS, sortParam) ? sortParam : DEFAULT_SORT;
   const [sortKey, sortDir] = sortValue.split('.');
-  // HR-visible missing-nickname flag: read-only filter, off by default -- an untouched page shows
-  // everyone, same "default = untouched URL" convention every other filter on this page follows.
+  // HR-visible missing-nickname flag: read-only filter, off by default -- an untouched page shows everyone, same
+  // "default = untouched URL" convention every other filter on this page follows.
   const nicknameFilter = searchParams.get('nickname') === 'missing';
 
   function updateParams(changes) {
@@ -210,8 +190,7 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
         if (value) next.set(key, value);
         else next.delete(key);
       });
-      // Departments are scoped to a division, so a stale dept would silently
-      // empty the list after switching ฝ่าย.
+      // Departments are scoped to a division, so a stale dept would silently empty the list after switching ฝ่าย.
       if ('div' in changes) next.delete('dept');
       return next;
     }, { replace: true });
@@ -227,9 +206,8 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
   const filteredEmployees = useMemo(() => {
     const query = search.trim().toLowerCase();
     return employees.filter((employee) => {
-      // Every accessor uses the same normalised term. nameTh and nickName used
-      // to match the raw input while nameEn and code matched a trimmed one, so a
-      // trailing space — routine on a phone keyboard or a paste — returned
+      // Every accessor uses the same normalised term. nameTh and nickName used to match the raw input while nameEn
+      // and code matched a trimmed one, so a trailing space — routine on a phone keyboard or a paste — returned
       // nothing while the box still showed text.
       const matchQuery = !query
         || employee.nameTh?.toLowerCase().includes(query)
@@ -247,10 +225,9 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
     });
   }, [employees, search, divisionId, departmentTh, status, nicknameFilter]);
 
-  // Chips stand in for the panel while it is closed, so a filtered list never
-  // looks like an unfiltered one. The status chip shows for every value except
-  // ทั้งหมด — including the default — because "resigned staff are hidden" is
-  // exactly what a reader would otherwise miss.
+  // Chips stand in for the panel while it is closed, so a filtered list never looks like an unfiltered one. The
+  // status chip shows for every value except ทั้งหมด — including the default — because "resigned staff are
+  // hidden" is exactly what a reader would otherwise miss.
   const activeChips = [
     status !== 'all' && {
       key: 'status',
@@ -279,9 +256,8 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
     },
   ].filter(Boolean);
 
-  // Keyed off the URL rather than the chips: the status chip shows even at the
-  // default (it is what hides resigned staff), so counting chips would offer a
-  // ล้าง button on an untouched page that clears nothing.
+  // Keyed off the URL rather than the chips: the status chip shows even at the default (it is what hides
+  // resigned staff), so counting chips would offer a ล้าง button on an untouched page that clears nothing.
   const hasAnyFilter = [...searchParams.keys()].length > 0;
 
   async function submitCreate(payload) {
@@ -420,8 +396,8 @@ export function EmployeeListPage({ user, employees, onCreateEmployee, loading })
                 ))}
               </select>
             </label>
-            {/* HR-visible missing-nickname flag: read-only visibility only -- see hasNoNickname's
-                comment. Not a data-quality fix; just lets HR find who to ask. */}
+            {/* HR-visible missing-nickname flag: read-only visibility only -- see hasNoNickname's comment. Not a
+             * data-quality fix; just lets HR find who to ask. */}
             <label htmlFor="employee-filter-missing-nickname" className="grid gap-1 text-sm font-bold text-text-secondary">
               ชื่อเล่น
               <span className="flex min-h-9 items-center gap-2 font-normal text-text">

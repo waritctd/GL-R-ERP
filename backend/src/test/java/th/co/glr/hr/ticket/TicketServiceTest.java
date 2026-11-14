@@ -44,12 +44,9 @@ class TicketServiceTest {
     private final th.co.glr.hr.auth.EmployeeAuthRepository employeeAuthRepo =
         mock(th.co.glr.hr.auth.EmployeeAuthRepository.class);
     {
-        // Default stub so every markLost/cancel call in this file (most of which
-        // don't care about the cascade's own outcome) doesn't NPE on
-        // cancelOpenForTicket's now-non-primitive return value — Mockito's default
-        // answer for an unstubbed reference-typed method is null, and TicketService
-        // calls .hasAbandoned() on the result unconditionally. Tests that DO care
-        // about an abandoned row override this per-test.
+        // Default stub so every markLost/cancel call in this file doesn't NPE on cancelOpenForTicket's
+        // now-non-primitive return value — Mockito's default answer for an unstubbed reference-typed method is null,
+        // and TicketService calls .hasAbandoned on the result unconditionally.
         when(pricingRequestService.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new CancelOpenForTicketResult(0, List.of()));
         // Gate default: the manual forward-updateStage gate needs
@@ -59,25 +56,17 @@ class TicketServiceTest {
         // against real SQL) is covered by DealTrackingAndActivityIntegrationTest — this file
         // stays focused on role/ownership/backward-move logic, per its own existing header.
         when(ticketRepo.hasActivitySinceLastStageChange(anyLong())).thenReturn(true);
-        // Default stub so every payment-track write in this file (advancePaymentStatus's
-        // compare-and-set) reads as "succeeded" unless a specific test overrides it — Mockito's
-        // default answer for an unstubbed int-returning method is 0, which requirePaymentAdvanced
-        // would read as a lost race and throw a 409. any() (untyped) matches null too, so the
-        // null "expected" entry edge (confirmCustomer) is covered by this same stub.
+        // Default stub so every payment-track write in this file (advancePaymentStatus's compare-and-set) reads as
+        // "succeeded" unless a specific test overrides it — Mockito's default answer for an unstubbed int-returning
+        // method is 0, which requirePaymentAdvanced would read as a lost race and throw a 409.
         when(ticketRepo.advancePaymentStatus(anyLong(), anyString(), any(), anyString())).thenReturn(1);
-        // Same shape, same reason, for the ticket-status machine's compare-and-set: an unstubbed
-        // int-returning mock answers 0, which requireStatusAdvanced reads as a lost race and turns
-        // into a 409. This stub says nothing about the CAS itself — a mocked repository cannot
-        // prove a WHERE clause. Both halves of that guard (an illegal edge throws before any SQL
-        // runs; a stale `expected` updates zero rows instead of overwriting) are proven against
-        // real Postgres in TicketStatusMachineIntegrationTest. What this file still checks is the
-        // SERVICE composition: which (expected -> next) pair each write site asks for.
+        // Same shape, same reason, for the ticket-status machine's compare-and-set: an unstubbed int-returning mock
+        // answers 0, which requireStatusAdvanced reads as a lost race and turns into a 409. This stub says nothing
+        // about the CAS itself — a mocked repository cannot prove a WHERE clause.
         when(ticketRepo.transitionStatus(anyLong(), any(), any())).thenReturn(1);
-        // H1 lockdown: account's money actions now also require the deal to be inside account's
-        // list scope (TicketRepository.isInAccountScope -- a SQL predicate this Mockito file cannot
-        // prove; FinanceDealLockdownIntegrationTest proves it against real Postgres). Default IN so
-        // the pre-existing account happy paths below keep testing their own logic; the
-        // *_outOfAccountScope_* tests flip it OFF per test.
+        // H1 lockdown: account's money actions now also require the deal to be inside account's list scope
+        // (TicketRepository.isInAccountScope -- a SQL predicate this Mockito file cannot prove;
+        // FinanceDealLockdownIntegrationTest proves it against real Postgres).
         when(ticketRepo.isInAccountScope(anyLong())).thenReturn(true);
     }
     private final TicketService service = new TicketService(
@@ -93,9 +82,9 @@ class TicketServiceTest {
     private final UserPrincipal accountActor = actor(5L, "account");
     private final UserPrincipal hrActor      = actor(6L, "hr");
     private final UserPrincipal employeeActor = actor(7L, "employee");
-    // sales_manager: read + comment oversight only — a project-manager-style
-    // follow-up role for the sales team. Never owns a ticket (cannot create one),
-    // so every owner-gated write action denies it via the ownership check alone.
+    // sales_manager: read + comment oversight only — a project-manager-style follow-up role for the sales team.
+    // Never owns a ticket (cannot create one), so every owner-gated write action denies it via the ownership check
+    // alone.
     private final UserPrincipal salesManagerActor = actor(8L, "sales_manager");
 
     // ── list ──────────────────────────────────────────────────────────────
@@ -179,8 +168,8 @@ class TicketServiceTest {
 
         assertThat(seen.items()).containsExactly(fallbackItem);
         assertThat(seen.fromPricingChain()).isTrue();
-        // Nothing else about the ticket changes — same summary/events/quotation(s) object,
-        // only `items`/`fromPricingChain` are swapped for the display fallback.
+        // Nothing else about the ticket changes — same summary/events/quotation(s) object, only
+        // `items`/`fromPricingChain` are swapped for the display fallback.
         assertThat(seen.summary()).isEqualTo(ticket.summary());
     }
 
@@ -195,10 +184,9 @@ class TicketServiceTest {
 
         assertThat(seen.items()).containsExactly(realItem);
         assertThat(seen.fromPricingChain()).isFalse();
-        // The fallback lookup is a read-path-only concern gated on an empty items list — a
-        // ticket that already has real ticket_item rows must never even ask the quotation
-        // chain (mirrors "wrong-way-round" discipline: prove the fallback path is NOT taken,
-        // not just that the happy path renders correctly).
+        // The fallback lookup is a read-path-only concern gated on an empty items list — a ticket that already has
+        // real ticket_item rows must never even ask the quotation chain (mirrors "wrong-way-round" discipline: prove
+        // the fallback path is NOT taken, not just that the happy path renders correctly).
         verify(ticketRepo, org.mockito.Mockito.never()).findPricingChainFallbackItems(anyLong());
     }
 
@@ -336,8 +324,8 @@ class TicketServiceTest {
 
     @Test
     void comment_rejectsRolesAndNonOwnersWithoutReadAccess() {
-        // comment() returns the full TicketDto — it must not be a side door around
-        // get()'s scoping (previously any authenticated user could pull any ticket).
+        // comment() returns the full TicketDto — it must not be a side door around get()'s scoping (previously any
+        // authenticated user could pull any ticket).
         stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
         assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), hrActor));
         assertForbidden(() -> service.comment(10L, new CommentRequest("hi"), employeeActor));
@@ -355,9 +343,8 @@ class TicketServiceTest {
 
     @Test
     void getQuotationXlsx_rendersFromSnapshotNotLiveEditedItems() throws Exception {
-        // The ticket's LIVE item/customer data has since been edited (a revision after
-        // this quotation was issued) — the render must reflect what was true AT ISSUE
-        // TIME (the snapshot), not these live values.
+        // The ticket's LIVE item/customer data has since been edited (a revision after this quotation was issued) —
+        // the render must reflect what was true AT ISSUE TIME (the snapshot), not these live values.
         TicketItemDto liveEditedItem = new TicketItemDto(1L, 10L, "EditedBrand", "EditedModel", null, null,
             null, null, new BigDecimal("9"), null, null, null, null, null,
             new BigDecimal("999.00"), "THB", 0, null, null, null, "PIECE", null, null);
@@ -427,8 +414,8 @@ class TicketServiceTest {
             assertThat(text).contains("IssueTimeModel");
             assertThat(text).doesNotContain("EditedBrand");
             assertThat(text).doesNotContain("EditedModel");
-            // "เรียน" (A5) and the customer name (B5) are separate template cells that don't
-            // land adjacent in the PDF's text-extraction order — assert each independently.
+            // "เรียน" (A5) and the customer name (B5) are separate template cells that don't land adjacent in the PDF's
+            // text-extraction order — assert each independently.
             assertThat(text).contains("เรียน");
             assertThat(text).contains("Issue-Time Customer");
             // B8 carries a literal double space before the colon in the real template.
@@ -438,11 +425,7 @@ class TicketServiceTest {
 
     @Test
     void getQuotationXlsx_legacyFallback_rendersLiveDataWhenNoSnapshotRows() throws Exception {
-        // Pre-V49 quotation: no quotation_item rows and no header snapshot. Neither
-        // findQuotationItemsByQuotationId nor findQuotationHeaderSnapshot is stubbed here —
-        // Mockito's default answer returns an empty List / Optional.empty(), exactly what
-        // the repository would return for a real pre-V49 row, so the service must fall
-        // back to live ticket data rather than rendering a blank document.
+        // Pre-V49 quotation: no quotation_item rows and no header snapshot.
         TicketItemDto liveItem = new TicketItemDto(1L, 10L, "LiveBrand", "LiveModel", null, null,
             null, null, new BigDecimal("3"), null, null, null, null, null,
             new BigDecimal("50.00"), "THB", 0, null, null, null, "PIECE", null, null);
@@ -460,25 +443,23 @@ class TicketServiceTest {
 
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
             var sheet = wb.getSheet("Update") != null ? wb.getSheet("Update") : wb.getSheetAt(0);
-            // QuotationRenderer.ITEM_START_ROW is 9 (0-based); buildDesc() renders the
-            // item's model, not its brand.
+            // QuotationRenderer.ITEM_START_ROW is 9 (0-based); buildDesc() renders the item's model, not its brand.
             assertThat(sheet.getRow(9).getCell(1).getStringCellValue()).contains("LiveModel");
             assertThat(sheet.getRow(4).getCell(1).getStringCellValue()).contains("Live Customer Name");
         }
     }
 
-    // factory email gate tests were removed alongside TicketService.assertFactoryEmailAllowed and
-    // the deleted POST /tickets/{id}/factory-emails/send route (factory RFQ email is manual-only
-    // now, gated by FactoryQuoteService.send's own IMPORT_ROLES check instead).
+    // factory email gate tests were removed alongside TicketService.assertFactoryEmailAllowed and the deleted POST
+    // /tickets/{id}/factory-emails/send route (factory RFQ email is manual-only now, gated by
+    // FactoryQuoteService.send's own IMPORT_ROLES check instead).
 
     // ── submit (deprecated — superseded by the PricingRequest aggregate) ───
 
     @Test
     void submit_isDeprecatedAndAlwaysConflicts() {
-        // Ticket-level submit() is retired: pricing now starts on a PricingRequest
-        // (POST /api/tickets/{id}/pricing-requests + /pricing-requests/{id}/submit).
-        // This must 409 unconditionally — regardless of status, role, or ownership —
-        // and must not touch the repository or notifications at all.
+        // Ticket-level submit() is retired: pricing now starts on a PricingRequest (POST
+        // /api/tickets/{id}/pricing-requests + /pricing-requests/{id}/submit). This must 409 unconditionally —
+        // regardless of status, role, or ownership — and must not touch the repository or notifications at all.
         stubTicketWithItems(10L, 1L, TicketStatus.DRAFT, List.of(sampleItem()));
 
         assertConflict(() -> service.submit(10L, salesActor));
@@ -705,8 +686,8 @@ class TicketServiceTest {
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
 
-        // (2 x 100.00) + (3 x 50.00) + (1.5 x 10.00) = 200.00 + 150.00 + 15.00 = 365.00
-        // (BigDecimal.equals() is scale-sensitive, so use isEqualByComparingTo rather than eq().)
+        // (2 x 100.00) + (3 x 50.00) + (1.5 x 10.00) = 200.00 + 150.00 + 15.00 = 365.00 (BigDecimal.equals() is
+        // scale-sensitive, so use isEqualByComparingTo rather than eq().)
         ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), total.capture(),
             eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
@@ -729,8 +710,8 @@ class TicketServiceTest {
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
 
-        // The unpriced item (approvedPrice = null) contributes 0 regardless of its quantity, rather
-        // than throwing or being skipped from the total silently in a way that hides its qty.
+        // The unpriced item (approvedPrice = null) contributes 0 regardless of its quantity, rather than throwing or
+        // being skipped from the total silently in a way that hides its qty.
         ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
         verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), total.capture(),
             eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
@@ -755,15 +736,15 @@ class TicketServiceTest {
 
         service.generateQuotation(10L, designerQuotation(), salesActor);
 
-        // insertQuotationItems is handed the FULL item list (priced + unpriced) — the
-        // repository itself is responsible for filtering to approvedPrice != null, mirroring
-        // how the total-amount calculation above already treats unpriced items as excluded.
+        // insertQuotationItems is handed the FULL item list (priced + unpriced) — the repository itself is responsible
+        // for filtering to approvedPrice != null, mirroring how the total-amount calculation above already treats
+        // unpriced items as excluded.
         ArgumentCaptor<List<TicketItemDto>> itemsCaptor = ArgumentCaptor.forClass(List.class);
         verify(ticketRepo).insertQuotationItems(eq(200L), itemsCaptor.capture());
         assertThat(itemsCaptor.getValue()).containsExactly(priced, unpriced);
 
-        // No customerId on this ticket (stubTicket leaves it null) — falls back to the
-        // ticket's free-text customerName, with no address/tax/phone to snapshot.
+        // No customerId on this ticket (stubTicket leaves it null) — falls back to the ticket's free-text
+        // customerName, with no address/tax/phone to snapshot.
         verify(ticketRepo).updateQuotationHeader(eq(200L), eq("Test Customer"),
             isNull(), isNull(), isNull(), isNull());
     }
@@ -910,8 +891,7 @@ class TicketServiceTest {
 
     @Test
     void confirmCloseReady_refusedWithoutInvoiceOnFile() {
-        // The invoice is produced externally and uploaded; without it there is nothing
-        // to verify against.
+        // The invoice is produced externally and uploaded; without it there is nothing to verify against.
         stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "FULLY_PAID",
             FulfilmentStatus.FULLY_DELIVERED, null, false);
 
@@ -948,17 +928,16 @@ class TicketServiceTest {
 
     @Test
     void ceoCannotSignBothHalves() {
-        // Two signatures means two people. ACCOUNT_ROLES includes ceo as a money
-        // fallback; CLOSE_CONFIRM_ROLES deliberately does not, or the CEO could
-        // confirm and verify alone.
+        // Two signatures means two people. ACCOUNT_ROLES includes ceo as a money fallback; CLOSE_CONFIRM_ROLES
+        // deliberately does not, or the CEO could confirm and verify alone.
         stubReadyToConfirm(10L);
         assertForbidden(() -> service.confirmCloseReady(10L, ceoActor));
     }
 
     @Test
     void verifyClose_reChecksPrerequisitesSoAStaleConfirmationCannotSlipThrough() {
-        // Confirmed, then the deal regressed (refund / returned delivery) before the
-        // CEO acted. The CEO verifies, never overrides.
+        // Confirmed, then the deal regressed (refund / returned delivery) before the CEO acted. The CEO verifies,
+        // never overrides.
         stubCloseDeal(10L, TicketStatus.QUOTATION_ISSUED, "AWAITING_FINAL_PAYMENT",
             FulfilmentStatus.FULLY_DELIVERED, Instant.now(), true);
 
@@ -998,8 +977,8 @@ class TicketServiceTest {
 
     @Test
     void confirmCustomer_refusesDowngradeWhenPaymentTrackAdvanced() {
-        // Re-confirming after the deposit was paid must not reset the payment track —
-        // a reset re-arms the deadlock orderings.
+        // Re-confirming after the deposit was paid must not reset the payment track — a reset re-arms the deadlock
+        // orderings.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED, "DEPOSIT_PAID", null);
         assertConflict(() -> service.confirmCustomer(10L, salesActor));
     }
@@ -1012,14 +991,14 @@ class TicketServiceTest {
         assertForbidden(() -> service.confirmCustomer(10L, otherSales));
     }
 
-    // (issueDepositNotice endpoint removed — DepositNoticeService.issue() is now the
-    //  single action that advances the payment track to DEPOSIT_NOTICE_ISSUED.)
+    // (issueDepositNotice endpoint removed — DepositNoticeService.issue() is now the single action that advances
+    // the payment track to DEPOSIT_NOTICE_ISSUED.)
 
     @Test
     void close_legacyDocumentIssuedWithNullPayment_stillClosesViaTheTwoSignatures() {
-        // Pre-dual-track tickets (paymentStatus never set) predate the delivery and
-        // invoice tracks, so those prerequisites are waived — but they still need
-        // both signatures. Waiving them entirely would strand this old data.
+        // Pre-dual-track tickets (paymentStatus never set) predate the delivery and invoice tracks, so those
+        // prerequisites are waived — but they still need both signatures. Waiving them entirely would strand this old
+        // data.
         stubCloseDeal(10L, TicketStatus.DOCUMENT_ISSUED, null, null, null, false);
         service.confirmCloseReady(10L, accountActor);
         verify(ticketRepo).confirmClose(10L, accountActor.id());
@@ -1031,8 +1010,7 @@ class TicketServiceTest {
 
     @Test
     void close_legacyDocumentIssuedMidPaymentTrack_isRefused() {
-        // The bypass from the audit: a mid-track ticket flipped to document_issued
-        // must not close unpaid.
+        // The bypass from the audit: a mid-track ticket flipped to document_issued must not close unpaid.
         stubCloseDeal(10L, TicketStatus.DOCUMENT_ISSUED, "DEPOSIT_NOTICE_ISSUED", null, null, true);
         assertConflict(() -> service.confirmCloseReady(10L, accountActor));
 
@@ -1077,9 +1055,8 @@ class TicketServiceTest {
 
     @Test
     void confirmDepositPaid_afterGoodsReceived_advancesToAwaitingFinalPayment() {
-        // Goods-first ordering (deadlock B): goods arrived while the deposit was
-        // unconfirmed; confirming the deposit must carry payment forward, otherwise
-        // AWAITING_FINAL_PAYMENT is unreachable and the ticket can never close.
+        // Goods-first ordering (deadlock B): goods arrived while the deposit was unconfirmed; confirming the deposit
+        // must carry payment forward, otherwise AWAITING_FINAL_PAYMENT is unreachable and the ticket can never close.
         stubTicketWithTracks(10L, 1L, TicketStatus.QUOTATION_ISSUED,
             "DEPOSIT_NOTICE_ISSUED", "GOODS_RECEIVED");
         when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
@@ -1092,8 +1069,8 @@ class TicketServiceTest {
             eq(5L), isNull(), eq("ยืนยันรับมัดจำ"), isNull(), isNull());
         verify(ticketRepo).advancePaymentStatus(
             10L, DepositPolicy.REQUIRED, "DEPOSIT_NOTICE_ISSUED", PaymentTrack.DEPOSIT_PAID);
-        // site 7: "expected" is DEPOSIT_PAID — the value site 6 just wrote in the same
-        // reconcilePaymentStatus call — never the stale DEPOSIT_NOTICE_ISSUED read at its start.
+        // site 7: "expected" is DEPOSIT_PAID — the value site 6 just wrote in the same reconcilePaymentStatus call —
+        // never the stale DEPOSIT_NOTICE_ISSUED read at its start.
         verify(ticketRepo).advancePaymentStatus(
             10L, DepositPolicy.REQUIRED, "DEPOSIT_PAID", PaymentTrack.AWAITING_FINAL_PAYMENT);
         verify(ticketRepo).addEvent(eq(10L), eq(5L), anyString(),
@@ -1188,8 +1165,8 @@ class TicketServiceTest {
         verify(ticketRepo).reserveStock(eq(10L), argThat(lines ->
             lines.size() == 1 && lines.get(0).qtyFromStock().compareTo(new BigDecimal("100.00")) == 0));
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FROM_STOCK);
-        // Full stock coverage has no import journey — goods are ready now, so the
-        // deal jumps past PROCUREMENT straight to DELIVERY_SCHEDULING (S18).
+        // Full stock coverage has no import journey — goods are ready now, so the deal jumps past PROCUREMENT straight
+        // to DELIVERY_SCHEDULING (S18).
         verify(ticketRepo).updateSalesStage(10L, DealStage.DELIVERY_SCHEDULING);
         verify(ticketRepo, never()).updateSalesStage(10L, DealStage.PROCUREMENT);
         verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
@@ -1267,19 +1244,16 @@ class TicketServiceTest {
         assertForbidden(() -> service.reserveStock(10L, request, accountActor));
         assertForbidden(() -> service.reserveStock(10L, request, hrActor));
         assertForbidden(() -> service.reserveStock(10L, request, employeeActor));
-        // sales_manager is deliberately excluded even though requireDealOwnership grants it:
-        // the ruling is "Sales declares", and this writes the OWNING rep's STOCK_BONUS input.
+        // sales_manager is deliberately excluded even though requireDealOwnership grants it: the ruling is "Sales
+        // declares", and this writes the OWNING rep's STOCK_BONUS input.
         assertForbidden(() -> service.reserveStock(10L, request, salesManagerActor));
 
         verify(ticketRepo, never()).reserveStock(anyLong(), any());
     }
 
-    // ── the stage floor a stock declaration must clear ───────────────────────
-    //
-    // qty_from_stock is uncorroborated (no inventory system exists — see reserveStock's Javadoc),
-    // and a full-coverage declaration reroutes the deal to DELIVERY_SCHEDULING/FROM_STOCK, which
-    // then blocks ISSUE_IMPORT_REQUEST. Below ORDER_RECEIVED the quantities are not final, so the
-    // declaration is refused outright.
+    // the stage floor a stock declaration must clear ─────────────────────── qty_from_stock is uncorroborated (no
+    // inventory system exists — see reserveStock's Javadoc), and a full-coverage declaration reroutes the deal to
+    // DELIVERY_SCHEDULING/FROM_STOCK, which then blocks ISSUE_IMPORT_REQUEST.
 
     @Test
     void reserveStock_belowOrderReceived_isRefusedAndWritesNothing() {
@@ -1370,8 +1344,8 @@ class TicketServiceTest {
         TicketDto updated = ticketLike(initial, List.of(deliveryItem(1L, "100.00", "100.00", "0.00")),
             FulfilmentStatus.PARTIALLY_DELIVERED);
         when(ticketRepo.findById(10L)).thenReturn(Optional.of(initial), Optional.of(updated), Optional.of(updated));
-        // Warehouse availability now keys off the permanent GOODS_RECEIVED event, not a
-        // prior delivery-record source (see warehouseDeliveryAvailable — Case 8 fix).
+        // Warehouse availability now keys off the permanent GOODS_RECEIVED event, not a prior delivery-record source
+        // (see warehouseDeliveryAvailable — Case 8 fix).
         when(ticketRepo.hasReceivedGoods(10L)).thenReturn(true);
 
         // V184: business-logic test, actor swapped to the owning rep -- see the note on
@@ -1429,9 +1403,8 @@ class TicketServiceTest {
             "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.PROCUREMENT, null,
             DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
 
-        // V184: salesActor (the owning rep), not importActor -- import no longer passes
-        // requireDeliveryAccess at all, so it would be FORBIDDEN before ever reaching the
-        // inactive-deal CONFLICT this test is actually about.
+        // V184: salesActor (the owning rep), not importActor -- import no longer passes requireDeliveryAccess at all,
+        // so it would be FORBIDDEN before ever reaching the inactive-deal CONFLICT this test is actually about.
         assertConflict(() -> service.recordPartialDelivery(10L, new RecordDeliveryRequest("WAREHOUSE", null,
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("10.00"))), null), salesActor));
     }
@@ -1455,10 +1428,9 @@ class TicketServiceTest {
 
     @Test
     void recordPartialDelivery_stockFirstThenWarehouseRemainder_isAllowed() {
-        // Case 8 ordering regression: 40 from stock delivered first flips status to
-        // PARTIALLY_DELIVERED; the imported remainder must still be WAREHOUSE-deliverable
-        // because goods physically reached the warehouse (GOODS_RECEIVED event), even
-        // though the current fulfillment_status is no longer GOODS_RECEIVED.
+        // Case 8 ordering regression: 40 from stock delivered first flips status to PARTIALLY_DELIVERED; the imported
+        // remainder must still be WAREHOUSE-deliverable because goods physically reached the warehouse (GOODS_RECEIVED
+        // event), even though the current fulfillment_status is no longer GOODS_RECEIVED.
         TicketItemDto stockDelivered = deliveryItem(1L, "100.00", "40.00", "40.00");
         TicketDto partiallyDelivered = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED,
             List.of(stockDelivered), "FULLY_PAID", FulfilmentStatus.PARTIALLY_DELIVERED,
@@ -1557,8 +1529,8 @@ class TicketServiceTest {
         verify(ticketRepo).insertPaymentReceipt(eq(10L), eq("BALANCE"),
             argThat(amount -> amount.compareTo(new BigDecimal("500.00")) == 0),
             eq(5L), isNull(), eq("ยืนยันชำระส่วนที่เหลือ"), isNull(), isNull());
-        // Multi-hop walk (DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID) — the ONE
-        // compare-and-set still moves the row straight from "expected" to "next" here.
+        // Multi-hop walk (DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID) — the ONE compare-and-set still moves
+        // the row straight from "expected" to "next" here.
         verify(ticketRepo).advancePaymentStatus(
             10L, DepositPolicy.REQUIRED, "DEPOSIT_PAID", PaymentTrack.FULLY_PAID);
     }
@@ -1690,9 +1662,8 @@ class TicketServiceTest {
 
     @Test
     void create_withItems_startsAsDraft() {
-        // Pricing no longer starts at deal-creation time: products attached here are
-        // preliminary deal products, and a PricingRequest must be created + submitted
-        // separately before the deal can be priced.
+        // Pricing no longer starts at deal-creation time: products attached here are preliminary deal products, and a
+        // PricingRequest must be created + submitted separately before the deal can be priced.
         var request = createRequest(77L, List.of(sampleItemRequest()));
         when(ticketRepo.nextTicketCode()).thenReturn("PR-2026-0001");
         when(ticketRepo.create(request, "PR-2026-0001", 1L, "sales")).thenReturn(10L);
@@ -1771,14 +1742,9 @@ class TicketServiceTest {
         assertCreateAcceptsEntryChannel(EntryChannel.BUYER_DIRECT);
     }
 
-    /**
-     * DELIBERATE, do not "tighten": the service still tolerates a null channel. Requiring it here
-     * would mean editing the 72 test files / 84 call sites that build a CreateTicketRequest with
-     * none, for a data-quality rule. The rule is enforced at the API boundary instead -- @NotBlank on
-     * CreateTicketRequest.entryChannel, reached through TicketController's @Valid @RequestBody -- so
-     * an HTTP create with no channel 400s before this method is ever called. If this test goes red,
-     * someone moved the enforcement into the service; move it back.
-     */
+    /** DELIBERATE, do not "tighten": the service still tolerates a null channel. Requiring it here would mean
+     * editing the 72 test files / 84 call sites that build a CreateTicketRequest with none, for a data-quality
+     * rule. */
     @Test
     void create_stillToleratesNullEntryChannelAtServiceLevel() {
         var request = createRequest(77L, List.of());
@@ -1864,9 +1830,9 @@ class TicketServiceTest {
 
     @Test
     void updateStage_rejectsNonOwnerSalesAndWrongRolesPerTarget() {
-        // DEPOSIT_PAID on the payment track so the two grants at the bottom exercise the ROLE
-        // routing this test is about, and not the fact gate (updateStage_intoAGatedStage_*).
-        // The refusals above it are unaffected either way: requireStageWriteAccess runs first.
+        // DEPOSIT_PAID on the payment track so the two grants at the bottom exercise the ROLE routing this test is
+        // about, and not the fact gate (updateStage_intoAGatedStage_*). The refusals above it are unaffected either
+        // way: requireStageWriteAccess runs first.
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.DEPOSIT_PAID, null,
             DealStage.PRESENTATION, null);
         // another rep's deal
@@ -1875,8 +1841,8 @@ class TicketServiceTest {
         assertForbidden(() -> service.updateStage(10L, DealStage.DEPOSIT_RECEIVED, null, salesActor));
         assertForbidden(() -> service.updateStage(10L, DealStage.PROCUREMENT, null, salesActor));
         assertForbidden(() -> service.updateStage(10L, DealStage.CLOSED_PAID, null, salesActor));
-        // account only money stages; import only PROCUREMENT
-        // H1 lockdown: account reaches updateStage only via the finance entrypoint (money stages only).
+        // account only money stages; import only PROCUREMENT H1 lockdown: account reaches updateStage only via the
+        // finance entrypoint (money stages only).
         assertForbidden(() -> service.financeUpdateStage(10L, DealStage.SPEC_APPROVED, null, accountActor));
         assertForbidden(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, importActor));
         service.financeUpdateStage(10L, DealStage.DEPOSIT_RECEIVED, "บัญชีแก้ย้อนหลังจากเอกสารรับเงิน", accountActor);
@@ -1899,9 +1865,8 @@ class TicketServiceTest {
 
     @Test
     void updateStage_quoteDesignSideBackToSpecApproved_needsNoNote() {
-        // S4 → S3 is the business's everyday path (S1 → S2 → S4 → S3 → S5): the
-        // designer is quoted before signing off the spec. It is "backward" only
-        // because of where the two sit in ORDER, so it must not demand a reason.
+        // S4 → S3 is the business's everyday path (S1 → S2 → S4 → S3 → S5): the designer is quoted before signing off
+        // the spec. It is "backward" only because of where the two sit in ORDER, so it must not demand a reason.
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.QUOTE_DESIGN_SIDE, null);
 
         service.updateStage(10L, DealStage.SPEC_APPROVED, null, salesActor);
@@ -1939,8 +1904,8 @@ class TicketServiceTest {
     /** …and the relaxation stops at the mandatory stages: stepping over NEGOTIATION still needs a reason. */
     @Test
     void updateStage_forwardSkipCrossingAMandatoryStage_stillRequiresNote() {
-        // CUSTOMER_CONFIRMED is what makes ORDER_RECEIVED's own fact hold, so the refusal below is
-        // the NOTE rule and the grant after it is not blocked by the fact gate.
+        // CUSTOMER_CONFIRMED is what makes ORDER_RECEIVED's own fact hold, so the refusal below is the NOTE rule and
+        // the grant after it is not blocked by the fact gate.
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.CUSTOMER_CONFIRMED, null,
             DealStage.QUOTE_BUYER, null);
 
@@ -1950,12 +1915,9 @@ class TicketServiceTest {
         verify(ticketRepo).updateSalesStage(10L, DealStage.ORDER_RECEIVED);
     }
 
-    // ── deal pipeline: a manual stage move must not outrun the facts ──────
-    //
-    // Requirement 1 of CLAUDE.md's evidence rule, applied to a STATE gate rather than an authz
-    // one: these pin which branch of requireStageFactsHold is taken per (stage, fact) pair. They
-    // are NOT the evidence — a mocked TicketRepository cannot prove the refusal keeps the UPDATE
-    // from running against a real row. That is StageFactGateIntegrationTest's job.
+    // deal pipeline: a manual stage move must not outrun the facts ────── Requirement 1 of CLAUDE.md's evidence
+    // rule, applied to a STATE gate rather than an authz one: these pin which branch of requireStageFactsHold is
+    // taken per (stage, fact) pair.
 
     /**
      * The headline hole this closes, at unit level: one call from S1 to S20 must not cost just a
@@ -1985,8 +1947,8 @@ class TicketServiceTest {
         stubDeal(11L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.DEPOSIT_NOTICE_ISSUED, null,
             DealStage.ORDER_RECEIVED, null);
         assertConflict(() -> service.updateStage(11L, DealStage.DEPOSIT_RECEIVED, "x", ceoActor));
-        // GOODS_RECEIVED is GLR's own warehouse (S17) — the customer has received nothing, so
-        // DELIVERED must refuse. This is the same distinction deliveryGateComplete documents.
+        // GOODS_RECEIVED is GLR's own warehouse (S17) — the customer has received nothing, so DELIVERED must refuse.
+        // This is the same distinction deliveryGateComplete documents.
         stubDeal(12L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
             FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
         assertConflict(() -> service.updateStage(12L, DealStage.DELIVERED, "x", ceoActor));
@@ -2019,11 +1981,9 @@ class TicketServiceTest {
         verify(ticketRepo).updateSalesStage(13L, DealStage.CLOSED_PAID);
     }
 
-    /**
-     * The other eleven stages are untouched — NEGOTIATION, PROCUREMENT and DELIVERY_SCHEDULING in
-     * particular keep their manual fallback with no facts recorded at all. A gate that quietly
-     * swallowed these would break the operational routes it was supposed to leave alone.
-     */
+    /** The other eleven stages are untouched — NEGOTIATION, PROCUREMENT and DELIVERY_SCHEDULING in particular keep
+     * their manual fallback with no facts recorded at all. A gate that quietly swallowed these would break the
+     * operational routes it was supposed to leave alone. */
     @Test
     void updateStage_theUngatedStages_stillMoveWithNoFactsRecorded() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), null, null, DealStage.QUOTE_BUYER, null);
@@ -2040,11 +2000,9 @@ class TicketServiceTest {
         verify(ticketRepo).updateSalesStage(12L, DealStage.DELIVERY_SCHEDULING);
     }
 
-    /**
-     * CLOSED_PAID needs BOTH halves — the same bar {@code maybeAdvanceClosedPaid} clears. Paid in
-     * full with the goods still undelivered is the case a FULLY_PAID-only gate let through, i.e. a
-     * manual path claiming a stage the automatic path would have refused.
-     */
+    /** CLOSED_PAID needs BOTH halves — the same bar maybeAdvanceClosedPaid clears. Paid in full with the goods
+     * still undelivered is the case a FULLY_PAID-only gate let through, i.e. a manual path claiming a stage the
+     * automatic path would have refused. */
     @Test
     void updateStage_closedPaid_needsDeliveryAsWellAsPayment() {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
@@ -2057,8 +2015,8 @@ class TicketServiceTest {
 
         verify(ticketRepo, never()).updateSalesStage(anyLong(), anyString());
 
-        // Both halves in place -> accepted. From DELIVERED, the adjacent move: nothing MANDATORY is
-        // stepped over, so no note is needed and the facts are the only thing permitting it.
+        // Both halves in place -> accepted. From DELIVERED, the adjacent move: nothing MANDATORY is stepped over, so
+        // no note is needed and the facts are the only thing permitting it.
         stubDeal(12L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.FULLY_PAID,
             FulfilmentStatus.FULLY_DELIVERED, DealStage.DELIVERED, null);
         service.financeUpdateStage(12L, DealStage.CLOSED_PAID, null, accountActor);
@@ -2129,12 +2087,9 @@ class TicketServiceTest {
 
     @Test
     void reopenedDealIsFullyOperableAndKeepsItsLostReason() {
-        // V58 stopped nulling lost_reason on reopen, so a live reopened deal now
-        // carries one. Every guard that used `lostReason != null` to mean "is
-        // currently lost" had to move to the lifecycle — otherwise reopening a deal
-        // silently bricked it: no stage changes, no auto-advance, un-losable again.
-        // CUSTOMER_CONFIRMED: ORDER_RECEIVED is fact-gated, and this test is about the LIFECYCLE
-        // (a reopened deal must still be operable), not about the gate.
+        // V58 stopped nulling lost_reason on reopen, so a live reopened deal now carries one. CUSTOMER_CONFIRMED:
+        // ORDER_RECEIVED is fact-gated, and this test is about the LIFECYCLE (a reopened deal must still be operable),
+        // not about the gate.
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(), PaymentTrack.CUSTOMER_CONFIRMED, null,
             DealStage.NEGOTIATION, DealLostReason.PRICE, DealLifecycle.ACTIVE, DepositPolicy.REQUIRED);
 
@@ -2269,14 +2224,14 @@ class TicketServiceTest {
         stubDeal(15L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
             DealStage.ORDER_RECEIVED, null);
 
-        // id 1L (== createdById), role promoted to sales_manager: granted, but via the
-        // sales_manager clause, not the ownership clause (SALES_ROLES excludes "sales_manager").
+        // id 1L (== createdById), role promoted to sales_manager: granted, but via the sales_manager clause, not the
+        // ownership clause (SALES_ROLES excludes "sales_manager").
         UserPrincipal promotedOwner = actor(1L, "sales_manager");
         service.waiveDeposit(15L, DepositPolicy.WAIVED, "เลื่อนตำแหน่งแล้ว", promotedOwner);
         verify(ticketRepo).updateDepositPolicy(15L, DepositPolicy.WAIVED, "เลื่อนตำแหน่งแล้ว", 1L);
 
-        // id 1L (== createdById), role moved to account entirely: refused — account is in neither
-        // clause, and the id match alone grants nothing.
+        // id 1L (== createdById), role moved to account entirely: refused — account is in neither clause, and the id
+        // match alone grants nothing.
         UserPrincipal movedToAccount = actor(1L, "account");
         assertForbidden(() ->
             service.waiveDeposit(15L, DepositPolicy.WAIVED, "ย้ายแผนกแล้ว", movedToAccount));
@@ -2353,9 +2308,8 @@ class TicketServiceTest {
 
     @Test
     void actions_neverOffersSubmit() {
-        // Ticket-level submit() is retired (superseded by the PricingRequest
-        // aggregate) — the API must never advertise a "SUBMIT" action that would
-        // 409 on click, for a draft ticket owned by its creator with items or not.
+        // Ticket-level submit() is retired (superseded by the PricingRequest aggregate) — the API must never advertise
+        // a "SUBMIT" action that would 409 on click, for a draft ticket owned by its creator with items or not.
         stubDeal(20L, 1L, TicketStatus.DRAFT, List.of(sampleItem()), null, null,
             DealStage.PRESENTATION, null);
         List<String> withItems = service.actions(20L, salesActor)
@@ -2413,12 +2367,9 @@ class TicketServiceTest {
         assertThat(actionCodes(50L, accountActor)).contains("DEPOSIT_PAID").doesNotContain("WAIVE_DEPOSIT");
     }
 
-    /**
-     * The positive case {@link #actions_neverOffersWaiveDepositOnceDepositNoticeExists_butStillOffersDepositPaidToAccount}
-     * deliberately does not cover: a deal whose payment track has not started yet (paymentStatus
-     * null) still owes WAIVE_DEPOSIT to the owner and, per Rule B, to sales_manager as a backup —
-     * account/ceo/a non-owning rep still see nothing.
-     */
+    /** The positive case #actions_neverOffersWaiveDepositOnceDepositNoticeExists_butStillOffersDepositPaidToAccount
+     * deliberately does not cover: a deal whose payment track has not started yet still owes WAIVE_DEPOSIT to the
+     * owner and, per Rule B, to sales_manager as a backup. */
     @Test
     void actions_offersWaiveDepositToOwnerAndSalesManager_whenPaymentTrackNotStarted() {
         stubDeal(51L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
@@ -2510,8 +2461,7 @@ class TicketServiceTest {
 
     @Test
     void confirmFinalPayment_afterFullDelivery_advancesDealToClosedPaid() {
-        // Delivered in full, then the balance is paid — both gates satisfied, so
-        // CLOSED_PAID advances.
+        // Delivered in full, then the balance is paid — both gates satisfied, so CLOSED_PAID advances.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
             "AWAITING_FINAL_PAYMENT", FulfilmentStatus.FULLY_DELIVERED, DealStage.DELIVERED, null);
         when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
@@ -2523,10 +2473,9 @@ class TicketServiceTest {
 
     @Test
     void confirmFinalPayment_goodsInWarehouseNotDelivered_doesNotAdvanceClosedPaid() {
-        // Case 9 / warehouse path: goods reached GLR's warehouse (GOODS_RECEIVED)
-        // and the deal sits at DELIVERY_SCHEDULING, but nothing has been delivered
-        // to the customer. Paying the balance in full must NOT close the deal —
-        // CLOSED_PAID requires FULLY_DELIVERED, not merely goods-in-warehouse.
+        // Case 9 / warehouse path: goods reached GLR's warehouse (GOODS_RECEIVED) and the deal sits at
+        // DELIVERY_SCHEDULING, but nothing has been delivered to the customer. Paying the balance in full must NOT
+        // close the deal — CLOSED_PAID requires FULLY_DELIVERED, not merely goods-in-warehouse.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
             "AWAITING_FINAL_PAYMENT", FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
         when(ticketRepo.payableAmount(10L)).thenReturn(new BigDecimal("1000.00"));
@@ -2540,8 +2489,8 @@ class TicketServiceTest {
 
     @Test
     void deliveryCompletion_whenAlreadyFullyPaid_advancesClosedPaid() {
-        // Second CLOSED_PAID gate: a deal paid in full before delivery closes
-        // exactly when the final delivery completes both tracks.
+        // Second CLOSED_PAID gate: a deal paid in full before delivery closes exactly when the final delivery
+        // completes both tracks.
         TicketItemDto initialItem = deliveryItem(1L, "100.00", "0.00", "0.00");
         TicketDto initial = stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(initialItem),
             "FULLY_PAID", FulfilmentStatus.GOODS_RECEIVED, DealStage.DELIVERY_SCHEDULING, null);
@@ -2574,8 +2523,7 @@ class TicketServiceTest {
 
     @Test
     void midFulfillmentTransitions_stayInsideProcurementUntilGoodsReceived() {
-        // IR_SENT / SHIPPING render from fulfillment_status — no stage writes; they
-        // stay inside PROCUREMENT.
+        // IR_SENT / SHIPPING render from fulfillment_status — no stage writes; they stay inside PROCUREMENT.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "IR_ISSUED",
             DealStage.PROCUREMENT, null);
         service.markIrSent(10L, importActor);
@@ -2583,8 +2531,8 @@ class TicketServiceTest {
             DealStage.PROCUREMENT, null);
         service.markShipping(10L, importActor);
         verify(ticketRepo, never()).updateSalesStage(org.mockito.ArgumentMatchers.anyLong(), anyString());
-        // Goods reaching the warehouse (S17) is the "ready to deliver" signal —
-        // markGoodsReceived advances the stage to DELIVERY_SCHEDULING (S18).
+        // Goods reaching the warehouse (S17) is the "ready to deliver" signal — markGoodsReceived advances the stage
+        // to DELIVERY_SCHEDULING (S18).
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), "DEPOSIT_PAID", "SHIPPING",
             DealStage.PROCUREMENT, null);
         service.markGoodsReceived(10L, importActor);
@@ -2593,13 +2541,13 @@ class TicketServiceTest {
 
     @Test
     void salesManager_stageWriteIsTheOnlyTicketWritePower() {
-        // The pipeline stage/lost/reopen trio is the deliberate exception to
-        // handoff 58's read-only invariant — operational actions must stay denied.
+        // The pipeline stage/lost/reopen trio is the deliberate exception to handoff 58's read-only invariant —
+        // operational actions must stay denied.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.NEGOTIATION, null);
         assertForbidden(() -> service.confirmCustomer(10L, salesManagerActor));
-        // submit() is now deprecated and 409s unconditionally for every role, sales_manager
-        // included — it no longer demonstrates a role-specific denial, just that the route
-        // is dead. See submit_isDeprecatedAndAlwaysConflicts for the dedicated coverage.
+        // submit() is now deprecated and 409s unconditionally for every role, sales_manager included — it no longer
+        // demonstrates a role-specific denial, just that the route is dead. See submit_isDeprecatedAndAlwaysConflicts
+        // for the dedicated coverage.
         assertConflict(() -> service.submit(10L, salesManagerActor));
         service.markLost(10L, DealLostReason.RELATIONSHIP, null, salesManagerActor);
         verify(ticketRepo).markDealLost(10L, DealLostReason.RELATIONSHIP);
@@ -2677,8 +2625,8 @@ class TicketServiceTest {
 
     @Test
     void cancel_requiresAValidReason() {
-        // Mandatory, matching markLost: an optional reason gets skipped in practice
-        // and the gap it was added to close stays open.
+        // Mandatory, matching markLost: an optional reason gets skipped in practice and the gap it was added to close
+        // stays open.
         stubTicket(10L, 1L, TicketStatus.DRAFT);
         assertBadRequest(() -> service.cancel(10L, null, null, salesActor));
         assertBadRequest(() -> service.cancel(10L, "", null, salesActor));
@@ -2857,9 +2805,9 @@ class TicketServiceTest {
 
     @Test
     void editItems_sourcedFromStockFalseForcesStockSalePriceNull() {
-        // A prior row that was stock-sourced, un-flagged in this edit but with a stray
-        // price still riding along in the request — the resolved row must not persist that
-        // stray price (never trust a value through when the flag itself is false).
+        // A prior row that was stock-sourced, un-flagged in this edit but with a stray price still riding along in the
+        // request — the resolved row must not persist that stray price (never trust a value through when the flag
+        // itself is false).
         TicketItemDto existing = new TicketItemDto(
             101L, 10L, "Brand", "Model", null, null, null, "Cotto",
             new BigDecimal("5"), new BigDecimal("10"), null, null, null,
@@ -2884,9 +2832,9 @@ class TicketServiceTest {
 
     @Test
     void editItems_omittingStockFieldsPreservesThePriorFlag_butNotAPrice() {
-        // A request that says nothing about sourcedFromStock (null, the "not specified" value
-        // for this Boolean field, as opposed to an explicit false) must not silently reset a
-        // flag a previous save set — same null-safe-fallback treatment unitBasis already gets.
+        // A request that says nothing about sourcedFromStock (null, the "not specified" value for this Boolean field,
+        // as opposed to an explicit false) must not silently reset a flag a previous save set — same
+        // null-safe-fallback treatment unitBasis already gets.
         TicketItemDto existing = new TicketItemDto(
             101L, 10L, "Brand", "Model", null, null, null, "Cotto",
             new BigDecimal("5"), new BigDecimal("10"), null, null, null,
@@ -2895,12 +2843,8 @@ class TicketServiceTest {
             null, null, null, null, null, 1, true, new BigDecimal("500.00"));
         stubTicketWithItems(10L, 1L, TicketStatus.IN_REVIEW, List.of(existing));
 
-        // Explicit null (via the canonical 18-arg constructor), not the 14-arg compat shape --
-        // that compat constructor resolves sourcedFromStock to an explicit false per its own
-        // Javadoc (mirroring the codebase's existing "compat defaults to a real value" pattern),
-        // which correctly does NOT preserve the prior flag. A real JSON request that simply
-        // omits the field is what Jackson binds to null on the canonical constructor, which is
-        // the case this test means to cover.
+        // Explicit null, not the 14-arg compat shape -- that compat constructor resolves sourcedFromStock to an
+        // explicit false per its own Javadoc, which correctly does NOT preserve the prior flag.
         TicketItemRequest edited = new TicketItemRequest(
             "NewBrand", "Model", null, null, null, "Cotto",
             new BigDecimal("6"), new BigDecimal("12"), "PIECE",
@@ -3011,9 +2955,9 @@ class TicketServiceTest {
 
     @Test
     void submit_deprecatedConflictAppliesToSalesManagerToo() {
-        // Previously sales_manager got a distinct FORBIDDEN (read-only role, never owns a
-        // ticket). Now that submit() is deprecated for everyone, it 409s here the same as
-        // for any other role — there is no more role-specific denial to assert.
+        // Previously sales_manager got a distinct FORBIDDEN (read-only role, never owns a ticket). Now that submit()
+        // is deprecated for everyone, it 409s here the same as for any other role — there is no more role-specific
+        // denial to assert.
         assertConflict(() -> service.submit(10L, salesManagerActor));
     }
 
@@ -3046,8 +2990,8 @@ class TicketServiceTest {
 
     @Test
     void editItems_rejectsSalesManagerRole() {
-        // Not role-gated via requireRole, but salesCanEdit requires SALES_ROLES
-        // membership regardless of ownership — sales_manager fails that check.
+        // Not role-gated via requireRole, but salesCanEdit requires SALES_ROLES membership regardless of ownership —
+        // sales_manager fails that check.
         stubTicket(10L, 1L, TicketStatus.SUBMITTED);
         TicketItemRequest req = new TicketItemRequest(
             "Brand", "Model", "Color", "Texture", "Size", "Factory",
@@ -3065,8 +3009,8 @@ class TicketServiceTest {
     // open a path around the role gate.
     @Test
     void editItems_rejectsImportRole() {
-        // createdById=1L (salesActor's id, not importActor's 3L) so this is unambiguously the
-        // "wrong-way-round" case — import is rejected on role alone, not merely on ownership.
+        // createdById=1L (salesActor's id, not importActor's 3L) so this is unambiguously the "wrong-way-round" case —
+        // import is rejected on role alone, not merely on ownership.
         stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
         TicketItemRequest req = new TicketItemRequest(
             "Brand", "Model", "Color", "Texture", "Size", "Factory",
@@ -3078,8 +3022,7 @@ class TicketServiceTest {
 
     @Test
     void close_rejectsSalesManagerRole() {
-        // The close sequence is account → ceo; sales_manager is read+comment
-        // oversight and appears in neither half.
+        // The close sequence is account → ceo; sales_manager is read+comment oversight and appears in neither half.
         stubReadyToConfirm(10L);
         assertForbidden(() -> service.confirmCloseReady(10L, salesManagerActor));
         stubAwaitingCeo(11L);
@@ -3088,8 +3031,8 @@ class TicketServiceTest {
 
     @Test
     void cancel_rejectsSalesManagerRole() {
-        // Same reasoning as close(): cancel() is owner-gated only, and sales_manager
-        // can never own a ticket, so it always 403s here.
+        // Same reasoning as close(): cancel() is owner-gated only, and sales_manager can never own a ticket, so it
+        // always 403s here.
         stubTicket(10L, 1L, TicketStatus.SUBMITTED);
         assertForbidden(() -> service.cancel(10L, DealCancelReason.OWNER_CANCELLED, null, salesManagerActor));
     }
@@ -3130,10 +3073,8 @@ class TicketServiceTest {
         return stubTicketWithItems(ticketId, createdById, status, List.of());
     }
 
-    /**
-     * Close-flow stub (V56): the compat constructor can't express close_confirmed_at
-     * or invoice_on_file, and both drive the three-party gate.
-     */
+    /** Close-flow stub (V56): the compat constructor can't express close_confirmed_at or invoice_on_file, and both
+     * drive the three-party gate. */
     private TicketDto stubCloseDeal(long ticketId, String status, String paymentStatus,
                                     String fulfillmentStatus, Instant closeConfirmedAt,
                                     boolean invoiceOnFile) {
@@ -3227,8 +3168,8 @@ class TicketServiceTest {
         return ticket;
     }
 
-    // generateQuotation captures createQuotation's return value to snapshot items/header
-    // against the new quotation_id — tests must stub a non-null return or that call NPEs.
+    // generateQuotation captures createQuotation's return value to snapshot items/header against the new
+    // quotation_id — tests must stub a non-null return or that call NPEs.
     private static QuotationDto quotationOf(long quotationId, long ticketId, String number) {
         return new QuotationDto(quotationId, ticketId, number, 1L, "Sales User",
             Instant.now(), null, null, "THB", 1, "ISSUED");

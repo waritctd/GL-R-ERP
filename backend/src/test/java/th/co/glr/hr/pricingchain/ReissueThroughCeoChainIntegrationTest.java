@@ -81,42 +81,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Evidence for the reissue-through-CEO-chain ruling (owner, 2026-08-13): <b>any change to an issued
- * customer quotation's prices or quantities goes through the full chain and ends in a fresh CEO
- * decision. Sales may not move a price on their own authority.</b>
- *
- * <p>Every test here is written the way the rule is stated — <b>wrong-way-round</b>, asserting the
- * paths that are now CLOSED, because "the happy path still works" is what a green suite proves
- * regardless of whether any guard exists. The four closed paths, one per work item:
- *
- * <ol>
- *   <li>{@code CustomerQuotationService.createRevision} + {@code update} cannot move a line price
- *       (the per-line discount is gone, and the follow-up {@code update} that would put it back
- *       409s). A price concession cannot survive a "typo fix".</li>
- *   <li>A customer-change revision from {@code QUOTATION_ACCEPTED} is refused — at the service with
- *       a 409, and at the repository with an {@code IllegalStateException} that the raw negative
- *       -guard {@code UPDATE} this change replaced could not produce.</li>
- *   <li>A revision that changes a QUANTITY never carries the parent's factory quote forward. Freight
- *       and clearance are quantity-banded and the quote carries a {@code minimumOrderQuantity}, so a
- *       carried-forward price across a quantity change is wrong, not merely stale.</li>
- *   <li>The parent's already-ISSUED quotation is NOT retired when the revision is created — the
- *       customer keeps a live offer while the replacement chain runs — and IS retired the moment the
- *       replacement is issued.</li>
- * </ol>
- *
- * <p>Driven end to end through the real services against real Postgres, never hand-rolled SQL:
- * a mocked repository "passes" while the SQL does something else, and three of the four rules here
- * live in SQL (the compare-and-set supersede, the quote copy, the chain-scoped quotation retire).
- * No mocks at all — factory RFQ email is manual-only ({@code FactoryQuoteService#send} just
- * records that a human sent it), so there is no mail-provider collaborator left to mock.
- *
- * <p><b>No assertion here depends on a rollback.</b> {@link AbstractPostgresIntegrationTest} builds
- * no Spring context, so services are hand-wired with {@code new}, {@code @Transactional} is inert,
- * and a "the failed call undid its writes" assertion would be asserting a rollback that never
- * happens. Where this file asserts nothing changed after a rejected call, the call is rejected
- * BEFORE it writes anything — which is the property actually worth pinning.
- */
+/** Evidence for the reissue-through-CEO-chain ruling (owner, 2026-08-13): any change to an issued customer
+ * quotation's prices or quantities goes through the full chain and ends in a fresh CEO decision. A price
+ * concession cannot survive a "typo fix". */
 class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String FACTORY = "Factory Reissue-Chain";
@@ -173,9 +140,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         importActor = actor(createEmployee(employees, "ฝ่ายนำเข้า รีอิชชู", "import-reissue@glr.co.th", "PCIM", "ฝ่ายนำเข้า"), "import");
         ceoActor = actor(createEmployee(employees, "ผู้บริหาร รีอิชชู", "ceo-reissue@glr.co.th", "MD", "ผู้บริหาร"), "ceo");
 
-        // Country 'Thailand' has a real, non-all-zero price_calc_config row (seeded by V26), so the
-        // landed cost this chain computes is real arithmetic — which matters here, because the
-        // carry-forward's own gate is LandedCostCalculator.isFullyResolvable.
+        // Country 'Thailand' has a real, non-all-zero price_calc_config row (seeded by V26), so the landed cost this
+        // chain computes is real arithmetic — which matters here, because the carry-forward's own gate is
+        // LandedCostCalculator.isFullyResolvable.
         catalogProductId = insertCatalogProduct(FACTORY, "IT", "TEST-REISSUE-001",
             new BigDecimal("100.00"), "THB", "per_piece");
 
@@ -188,20 +155,11 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Work item 1 — createRevision can no longer move a price
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The loophole itself, closed. Sales discounts the FIRST quotation (legitimate: Discount Policy
-     * B, the CEO's own decision set the floor), issues it, then creates a correction revision. The
-     * revision must come back at the CEO-APPROVED price with discount zero — the prior discount
-     * does NOT ride along.
-     *
-     * <p>The assertion is deliberately the uncomfortable direction: the corrected quotation is
-     * priced HIGHER than what the customer was last shown. That is the ruling, not a regression —
-     * a price concession cannot be kept alive through a "fix the typo" revision.
-     */
+    /** The loophole itself, closed. The revision must come back at the CEO-APPROVED price with discount zero — the
+     * prior discount does NOT ride along. That is the ruling, not a regression — a price concession cannot be kept
+     * alive through a "fix the typo" revision. */
     @Test
     void createRevision_rebuildsEveryLineAtTheCeoApprovedPrice_soAPriorDiscountDoesNotSurvive() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -231,12 +189,8 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(revisedLine.finalUnitPrice()).isGreaterThan(issued.items().get(0).finalUnitPrice());
     }
 
-    /**
-     * The other half of the same loophole. Removing {@code createRevision}'s carry-forward alone
-     * would have closed nothing: the revision it produces is a DRAFT, and {@code update} is what
-     * Sales would call next to put the discount straight back. Any non-zero discount on a REVISION
-     * draft is now a 409 naming the path Sales must take instead.
-     */
+    /** The other half of the same loophole. Any non-zero discount on a REVISION draft is now a 409 naming the path
+     * Sales must take instead. */
     @Test
     void updateOnARevisionDraft_withADiscount_is409_soSalesCannotMoveAPriceAfterIssue() {
         CustomerQuotationDto revision = issuedThenRevisedQuotation();
@@ -252,21 +206,16 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
                 assertThat(e.getMessage()).contains("customer-change revision");
             });
 
-        // Rejected before it wrote: the line is still at the CEO-approved price. Not a rollback
-        // assertion — @Transactional is inert here (see this class's Javadoc) — the guard simply
-        // throws before quotations.updateItems is reached.
+        // Rejected before it wrote: the line is still at the CEO-approved price. Not a rollback assertion —
+        // @Transactional is inert here (see this class's Javadoc) — the guard simply throws before
+        // quotations.updateItems is reached.
         CustomerQuotationDto unchanged = quotationService.get(revision.id(), salesActor);
         assertThat(unchanged.items().get(0).salesDiscount()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(unchanged.items().get(0).finalUnitPrice()).isEqualByComparingTo(approvedPrice);
     }
 
-    /**
-     * The guard reads the RESOLVED discount, not {@code req.salesDiscount()} — so it cannot be
-     * slipped past by omitting the field and letting a non-zero value already on the row survive
-     * {@code update}'s "null = leave unchanged" merge. Seeded directly with SQL because
-     * {@code createRevision} can no longer produce such a row; a pre-change row can still exist in
-     * a real database, which is exactly why the guard is written this way.
-     */
+    /** The guard reads the RESOLVED discount, not req.salesDiscount() — so it cannot be slipped past by omitting
+     * the field and letting a non-zero value already on the row survive update's "null = leave unchanged" merge. */
     @Test
     void updateOnARevisionDraft_omittingTheDiscountField_stillRejectsADiscountAlreadyOnTheRow() {
         CustomerQuotationDto revision = issuedThenRevisedQuotation();
@@ -282,12 +231,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /**
-     * The boundary, asserted so the guard cannot quietly grow into "no quotation may ever be
-     * discounted". Discount Policy B on a FIRST quotation is untouched: there the CEO's own
-     * decision supplied the floor, so discounting down to it is authority the CEO granted. The
-     * ruling is about moving a price AFTER the customer has been given one.
-     */
+    /** The boundary, asserted so the guard cannot quietly grow into "no quotation may ever be discounted". Discount
+     * Policy B on a FIRST quotation is untouched: there the CEO's own decision supplied the floor, so discounting
+     * down to it is authority the CEO granted. */
     @Test
     void updateOnAFirstQuotationDraft_stillAllowsADiscount_soPolicyBIsUntouched() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -306,19 +252,10 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             .isEqualByComparingTo(line.approvedUnitPrice().subtract(new BigDecimal("5.0000")));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Work item 2 — QUOTATION_ACCEPTED is terminal, and the repository now enforces it
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The capability this change REMOVES. Until now {@code supersedeForCustomerRevision} reached the
-     * row with a raw {@code status <> 'SUPERSEDED' AND status <> 'CANCELLED'} UPDATE that never
-     * consulted {@code PricingRequestStatus.ALLOWED}, so Sales could rewrite the pricing behind a
-     * quotation the customer had already ACCEPTED — silently, with no CEO involvement.
-     *
-     * <p>Asserted at both levels, because they fail differently and a reviewer should see both: the
-     * service 409s, and the row is untouched (no child pricing request was created either).
-     */
+    /** The capability this change REMOVES. Asserted at both levels, because they fail differently and a reviewer
+     * should see both: the service 409s, and the row is untouched (no child pricing request was created either). */
     @Test
     void customerChangeRevision_fromQuotationAccepted_is409_andLeavesTheAcceptedDealAlone() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -344,11 +281,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             """, Map.of("id", pricingRequestId), Long.class)).isZero();
     }
 
-    /**
-     * The repository half of the same rule, reached directly so the state machine is proved to be
-     * what enforces it rather than the service's own 409 sitting in front. The old raw UPDATE could
-     * not produce this outcome at all: it would have returned rowcount 1 and superseded the row.
-     */
+    /** The repository half of the same rule, reached directly so the state machine is proved to be what enforces it
+     * rather than the service's own 409 sitting in front. The old raw UPDATE could not produce this outcome at
+     * all: it would have returned rowcount 1 and superseded the row. */
     @Test
     void supersedeForCustomerRevision_fromQuotationAccepted_throwsAndWritesNothing() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
@@ -369,19 +304,15 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             """, Map.of("id", pricingRequestId), Long.class)).isNull();
     }
 
-    /**
-     * The compare-and-set the caller depends on for the lost-update race, tightened from a negative
-     * guard to {@code WHERE status = :expected}. A concurrent writer that moved the row between the
-     * service's read and this update must now yield rowcount 0 (which the service turns into a 409),
-     * not silently supersede from a status the caller never saw.
-     */
+    /** The compare-and-set the caller depends on for the lost-update race, tightened from a negative guard to WHERE
+     * status = :expected. */
     @Test
     void supersedeForCustomerRevision_whenTheRowMovedUnderneath_returnsZeroInsteadOfSupersedingAnyway() {
         long pricingRequestId = approvedPricingRequest(new BigDecimal("10"));
         issueQuotation(pricingRequestId);
-        // The caller read APPROVED_FOR_QUOTATION; by the time it writes, issue() has moved the row
-        // on to QUOTATION_ISSUED. Both are legal SUPERSEDED predecessors, so this proves the
-        // compare-and-set — not the transition assertion — is what refuses.
+        // The caller read APPROVED_FOR_QUOTATION; by the time it writes, issue() has moved the row on to
+        // QUOTATION_ISSUED. Both are legal SUPERSEDED predecessors, so this proves the compare-and-set — not the
+        // transition assertion — is what refuses.
         int rows = pricingRequests.supersedeForCustomerRevision(
             pricingRequestId, PricingRequestStatus.APPROVED_FOR_QUOTATION, pricingRequestId);
 
@@ -391,17 +322,10 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             """, Map.of("id", pricingRequestId), String.class)).isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Work item 3 — factory quotes carry forward ONLY when nothing cost-relevant changed
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * <b>The test that matters most in this file.</b> A quantity change must NEVER reuse the
-     * parent's factory quote: freight and clearance rates are quantity-banded
-     * ({@code qtyMinSqm}/{@code qtyMaxSqm}) and the quote carries a {@code minimumOrderQuantity} a
-     * reduced order can fall below — so the carried price would not be merely stale, it would be
-     * void. The revision must fall through to the ordinary SUBMITTED -> Import path.
-     */
+    /** The test that matters most in this file. The revision must fall through to the ordinary SUBMITTED -> Import
+     * path. */
     @Test
     void revisionThatChangesQuantity_doesNotCarryTheFactoryQuoteForward_andWaitsForImport() {
         long parentId = approvedPricingRequest(new BigDecimal("10"));
@@ -418,11 +342,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(readyForCostingQuoteCount(parentId)).isEqualTo(1L);
     }
 
-    /**
-     * The same refusal for a DIFFERENT reason: the item list itself changed shape. An added item has
-     * no factory price at all, so a mapping derived from a fuzzy match is how a real price silently
-     * lands on the wrong line. Item-count equality is a precondition of the mapping, not a nicety.
-     */
+    /** The same refusal for a DIFFERENT reason: the item list itself changed shape. An added item has no factory
+     * price at all, so a mapping derived from a fuzzy match is how a real price silently lands on the wrong line.
+     * Item-count equality is a precondition of the mapping, not a nicety. */
     @Test
     void revisionThatAddsAnItem_doesNotCarryTheFactoryQuoteForward_andWaitsForImport() {
         long parentId = approvedPricingRequest(new BigDecimal("10"));
@@ -469,8 +391,8 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
              WHERE pricing_request_id = :id AND revision_no = 1
                AND root_factory_quote_id = factory_quote_id AND parent_factory_quote_id IS NULL
             """, Map.of("id", childId), Long.class)).isEqualTo(1L);
-        // Every copied quote item points at one of the CHILD's request items — a dangling or
-        // parent-pointing reference is exactly what would make the CEO cost the wrong line.
+        // Every copied quote item points at one of the CHILD's request items — a dangling or parent-pointing reference
+        // is exactly what would make the CEO cost the wrong line.
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.factory_quote_item fqi
               JOIN sales.factory_quote fq ON fq.factory_quote_id = fqi.factory_quote_id
@@ -478,19 +400,17 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
              WHERE fq.pricing_request_id = :id AND pri.pricing_request_id <> :id
             """, Map.of("id", childId), Long.class)).isZero();
 
-        // The point of landing at READY_FOR_CEO_REVIEW: the CEO can actually cost it. Anything less
-        // and the shortcut has parked the request somewhere nobody can move it from.
+        // The point of landing at READY_FOR_CEO_REVIEW: the CEO can actually cost it. Anything less and the shortcut
+        // has parked the request somewhere nobody can move it from.
         PricingDecisionDto decision = decisionService.startReview(childId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         assertThat(decision.items()).hasSize(1);
         assertThat(decision.items().get(0).frozenLandedCostPerPieceThb()).isGreaterThan(BigDecimal.ZERO);
     }
 
-    /**
-     * The audit trail the shortcut writes. Import never touched this request, so the events must say
-     * so rather than implying a factory round-trip that did not happen — and the transition recorded
-     * must be the real one (SUBMITTED -> READY_FOR_CEO_REVIEW), not a fabricated Import hop.
-     */
+    /** The audit trail the shortcut writes. Import never touched this request, so the events must say so rather
+     * than implying a factory round-trip that did not happen — and the transition recorded must be the real one
+     * (SUBMITTED -> READY_FOR_CEO_REVIEW), not a fabricated Import hop. */
     @Test
     void carryForward_recordsTheAdvanceAsSubmittedToReadyForCeoReview_withNoImportPickup() {
         long parentId = approvedPricingRequest(new BigDecimal("10"));
@@ -511,22 +431,11 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             """, Map.of("id", childId), Long.class)).isZero();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Work item 4 — the parent's offer stays live until the replacement is issued
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Owner ruling: the already-issued quotation stays ISSUED and valid while the replacement chain
-     * runs. It used to be flipped to SUPERSEDED the instant a revision was created, which left the
-     * customer holding no live offer for the whole time — and nothing to fall back to if the CEO
-     * refused the new price.
-     *
-     * <p>Walks the full replacement chain so the retirement is observed at the moment it is supposed
-     * to happen, not merely absent at the start: ISSUED through revision creation, through Import,
-     * through the CEO's fresh decision, and SUPERSEDED only when the replacement quotation issues.
-     * The parent's internal pricing DECISION is superseded eagerly by contrast — it is not the
-     * customer-facing offer, and the issued quotation carries its own frozen price snapshot.
-     */
+    /** Owner ruling: the already-issued quotation stays ISSUED and valid while the replacement chain runs. It used
+     * to be flipped to SUPERSEDED the instant a revision was created, which left the customer holding no live
+     * offer for the whole time — and nothing to fall back to if the CEO refused the new price. */
     @Test
     void parentQuotationStaysIssuedWhileTheChainRuns_andRetiresWhenTheReplacementIssues() {
         long parentId = approvedPricingRequest(new BigDecimal("10"));
@@ -536,8 +445,8 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             parentId, revisionRequest(new BigDecimal("25")), salesActor);
         long childId = child.summary().id();
 
-        // Immediately after the revision is created: parent request SUPERSEDED, parent decision
-        // SUPERSEDED, parent QUOTATION still live.
+        // Immediately after the revision is created: parent request SUPERSEDED, parent decision SUPERSEDED, parent
+        // QUOTATION still live.
         assertThat(pricingRequestService.get(parentId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.SUPERSEDED);
         assertThat(jdbc.queryForObject("""
@@ -556,9 +465,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(quotationService.get(parentQuotation.id(), salesActor).docStatus())
             .isEqualTo(QuotationStatus.ISSUED);
 
-        // Still live all the way through Import and the CEO's fresh decision. The quantity changed
-        // (10 -> 25), so this revision takes the ordinary Import path rather than the
-        // factory-quote carry-forward shortcut — see the carry-forward tests above.
+        // Still live all the way through Import and the CEO's fresh decision. The quantity changed (10 -> 25), so this
+        // revision takes the ordinary Import path rather than the factory-quote carry-forward shortcut — see the
+        // carry-forward tests above.
         pricingRequestService.submit(childId, salesActor);
         assertThat(pricingRequestService.get(childId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.SUBMITTED);
@@ -668,19 +577,14 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             Map.of("id", pricingRequestId), String.class);
     }
 
-    /**
-     * Scoping, wrong-way-round: issuing a first quotation must not reach across to some OTHER deal's
-     * superseded chain. The chain-scoped UPDATE is keyed on
-     * {@code COALESCE(root_pricing_request_id, pricing_request_id)}, and a missing or wrong key
-     * there would show up as an unrelated customer's live offer silently disappearing — the kind of
-     * damage nobody notices until the customer calls.
-     */
+    /** Scoping, wrong-way-round: issuing a first quotation must not reach across to some OTHER deal's superseded
+     * chain. */
     @Test
     void issuing_doesNotRetireAQuotationBelongingToAnUnrelatedDeal() {
         long unrelatedId = approvedPricingRequest(new BigDecimal("10"));
         CustomerQuotationDto unrelatedQuotation = issueQuotation(unrelatedId);
-        // Make the unrelated deal's request SUPERSEDED, so ONLY the chain key stands between it and
-        // the sweep: without that clause it matches every condition the UPDATE tests.
+        // Make the unrelated deal's request SUPERSEDED, so ONLY the chain key stands between it and the sweep: without
+        // that clause it matches every condition the UPDATE tests.
         pricingRequestService.createCustomerChangeRevision(
             unrelatedId, revisionRequest(new BigDecimal("25")), salesActor);
         assertThat(pricingRequestService.get(unrelatedId, salesActor).summary().status())
@@ -693,9 +597,7 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             .isEqualTo(QuotationStatus.ISSUED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixtures — every precondition is driven through the real services, never SQL
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** Drives a fresh single-item pricing request from DRAFT to APPROVED_FOR_QUOTATION. */
     private long approvedPricingRequest(BigDecimal quantity) {
@@ -725,8 +627,8 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         for (PricingDecisionItemDto item : decision.items()) {
-            // A deliberately low floor: several tests here discount a FIRST quotation by 5.0000 to
-            // prove Policy B still works, and a realistic floor would 422 that instead.
+            // A deliberately low floor: several tests here discount a FIRST quotation by 5.0000 to prove Policy B still
+            // works, and a realistic floor would 422 that instead.
             decisionService.update(decision.id(), new UpdatePricingDecisionRequest(null, List.of(
                 new UpdatePricingDecisionItemRequest(item.id(), null, new BigDecimal("1.00"), null, null, false))), ceoActor);
         }
@@ -760,10 +662,9 @@ class ReissueThroughCeoChainIntegrationTest extends AbstractPostgresIntegrationT
             List.of(pricingItem(quantity)));
     }
 
-    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-    // quantity are now required on every item PricingRequestService's resolveItems persists —
-    // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-    // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
+    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+    // required on every item PricingRequestService's resolveItems persists —
+    // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
     private PricingRequestRequests.PricingRequestItemRequest pricingItem(BigDecimal quantity) {
         return new PricingRequestRequests.PricingRequestItemRequest(null, catalogProductId, null, "SCG",
             "Tile Reissue", "SCG Tile Reissue", "White", "Matte", "60x60", FACTORY, null, null, null, null,

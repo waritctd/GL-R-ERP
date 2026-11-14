@@ -12,12 +12,8 @@ import org.springframework.stereotype.Repository;
 import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallDtos.PayrollDeductionShortfallDto;
 
-/**
- * Persistence for {@code hr.payroll_deduction_shortfall} (V107, issue #376) -- the generalised
- * requested/actual/shortfall triple. See that migration's header and {@link
- * DeductionObligationService#recordGarnishmentShortfalls} for what writes it and why the ONLY
- * deduction kind that populates it today is {@link PayrollDeductionKind#LEGAL_EXECUTION_GARNISHMENT}.
- */
+/** Persistence for hr.payroll_deduction_shortfall (V107, issue #376) -- the generalised
+ * requested/actual/shortfall triple. */
 @Repository
 public class PayrollDeductionShortfallRepository {
     private static final String SELECT_COLUMNS = """
@@ -37,10 +33,8 @@ public class PayrollDeductionShortfallRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Idempotent per (employee, payroll_month, deduction_kind) -- a payroll re-run overwrites that
-     * period's own row, exactly mirroring {@code DeductionObligationRepository#upsertRemittance}.
-     */
+    /** Idempotent per (employee, payroll_month, deduction_kind) -- a payroll re-run overwrites that period's own
+     * row, exactly mirroring DeductionObligationRepository#upsertRemittance. */
     public void upsert(
         long employeeId, LocalDate payrollMonth, PayrollDeductionKind kind,
         BigDecimal requestedAmount, BigDecimal actualAmount, BigDecimal shortfallAmount,
@@ -72,11 +66,9 @@ public class PayrollDeductionShortfallRepository {
                 .addValue("payrollPeriodId", payrollPeriodId));
     }
 
-    /**
-     * A period that no longer has a shortfall (a correction lowered the requested figure, or raised
-     * the statutory cap headroom) must not leave a stale row behind -- same DELETE-not-skip
-     * discipline as {@code DeductionObligationRepository#deleteRemittance}.
-     */
+    /** A period that no longer has a shortfall (a correction lowered the requested figure, or raised the statutory
+     * cap headroom) must not leave a stale row behind -- same DELETE-not-skip discipline as
+     * DeductionObligationRepository#deleteRemittance. */
     public void delete(long employeeId, LocalDate payrollMonth, PayrollDeductionKind kind) {
         jdbc.update("""
             DELETE FROM hr.payroll_deduction_shortfall
@@ -101,9 +93,9 @@ public class PayrollDeductionShortfallRepository {
     }
 
     private PayrollDeductionShortfallDto mapRow(ResultSet rs, int rowNum) throws SQLException {
-        // wasNull() must be read IMMEDIATELY after the getLong it reports on -- any intervening
-        // column access (even a getString for an unrelated column) overwrites it, which is why
-        // periodId/periodIdWasNull are captured together, before anything else is read from rs.
+        // wasNull() must be read IMMEDIATELY after the getLong it reports on -- any intervening column access (even a
+        // getString for an unrelated column) overwrites it, which is why periodId/periodIdWasNull are captured
+        // together, before anything else is read from rs.
         long periodId = rs.getLong("payroll_period_id");
         boolean periodIdWasNull = rs.wasNull();
         return new PayrollDeductionShortfallDto(

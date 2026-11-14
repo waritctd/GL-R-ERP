@@ -25,15 +25,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Verifies the two new payroll endpoints added 2026-07-30 (detail-export preview, bulk payslip
- * ZIP) against the real {@code SecurityFilterChain} and real Postgres: HR and CEO reach both
- * (200), any other role is rejected (403), unauthenticated is rejected (401). Written wrong-way
- * round -- the assertions that matter are the roles that must NOT reach it -- mirroring {@link
- * PayrollSuggestedInputsAuthorizationIntegrationTest} exactly, per CLAUDE.md's "permission changes
- * must ship evidence" rule: both endpoints carry their own {@code @PreAuthorize}, and that rule
- * applies even when the annotation merely repeats an existing role set.
- */
+/** Verifies the two new payroll endpoints added 2026-07-30 (detail-export preview, bulk payslip ZIP) against
+ * the real SecurityFilterChain and real Postgres: HR and CEO reach both (200), any other role is rejected
+ * (403), unauthenticated is rejected (401). */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -124,8 +118,8 @@ class PayrollDetailPreviewAndBulkPayslipAuthorizationIntegrationTest {
 
     @Test
     void ceoCanReachBulkPayslipZip() throws Exception {
-        // A distinct month from the HR case above -- hr.payroll_period has a UNIQUE(payroll_month)
-        // index, and both tests share the same real Postgres schema/context.
+        // A distinct month from the HR case above -- hr.payroll_period has a UNIQUE(payroll_month) index, and both
+        // tests share the same real Postgres schema/context.
         long periodId = insertProcessedPeriod(LocalDate.of(2026, 4, 1));
         mvc.perform(get("/api/payroll/" + periodId + "/payslips.zip").session(sessionFor("ceo")))
             .andExpect(status().isOk());
@@ -133,9 +127,9 @@ class PayrollDetailPreviewAndBulkPayslipAuthorizationIntegrationTest {
 
     @Test
     void aPlainEmployeeCannotReachBulkPayslipZip() throws Exception {
-        // The security gate must reject the role BEFORE the service/DB is ever touched -- a
-        // nonexistent periodId still exercises exactly that, and proves the 403 isn't merely
-        // coincidental with a 404 the service would otherwise throw.
+        // The security gate must reject the role BEFORE the service/DB is ever touched -- a nonexistent periodId still
+        // exercises exactly that, and proves the 403 isn't merely coincidental with a 404 the service would otherwise
+        // throw.
         mvc.perform(get("/api/payroll/999999/payslips.zip").session(sessionFor("employee")))
             .andExpect(status().isForbidden());
     }
@@ -159,8 +153,8 @@ class PayrollDetailPreviewAndBulkPayslipAuthorizationIntegrationTest {
         return session;
     }
 
-    /** A bare PROCESSED period with no lines -- enough to prove HR/CEO reach the endpoint; the
-     * per-line rendering/byte-identity behaviour is covered by PayrollServiceTest's unit tests. */
+    /** A bare PROCESSED period with no lines -- enough to prove HR/CEO reach the endpoint; the per-line
+     * rendering/byte-identity behaviour is covered by PayrollServiceTest's unit tests. */
     private long insertProcessedPeriod(LocalDate month) {
         return jdbc.queryForObject("""
             INSERT INTO hr.payroll_period (payroll_month, period_start, period_end, pay_date, status)

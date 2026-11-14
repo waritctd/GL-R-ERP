@@ -33,9 +33,7 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
         wireServicesAndCreateDeal();
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
     // A — factory contacted
-    // ═════════════════════════════════════════════════════════════════════════════════════════
 
     /** A1 */
     @Test
@@ -136,8 +134,8 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
     void markContactedIs409_whenThePricingRequestIsPastImport() {
         long prId = requestInImportReview(line("Tile A", "Factory A", 10, null, null, null, null));
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(prId, importActor), "Factory A");
-        // Force a state the quote could never reach through the API while still DRAFT, so the
-        // request-status gate is the ONLY thing that can refuse.
+        // Force a state the quote could never reach through the API while still DRAFT, so the request-status gate is
+        // the ONLY thing that can refuse.
         jdbc.update("UPDATE sales.pricing_request SET status = 'CEO_REVIEWING' WHERE pricing_request_id = :id",
             Map.of("id", prId));
 
@@ -209,9 +207,7 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
         assertThat(factoryQuoteService.get(draft.id(), importActor).emailSubject()).isNotEqualTo("hack");
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
     // round 2 — review fixes
-    // ═════════════════════════════════════════════════════════════════════════════════════════
 
     /** A price revision is a NEW quote row: it must keep who contacted the factory, when, and the note. */
     @Test
@@ -391,9 +387,7 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
             .containsExactly("EUR/PER_SQM", "USD/PER_BOX", "null/PER_PIECE");
     }
 
-    // ═════════════════════════════════════════════════════════════════════════════════════════
     // B — currency + price unit locked from the sales request
-    // ═════════════════════════════════════════════════════════════════════════════════════════
 
     /** B1 */
     @Test
@@ -468,8 +462,8 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
             line("Tile A", "Factory A", 10, null, null, "EUR", UnitBasis.PER_SQM),
             line("Tile B", "Factory A", 10, null, null, "EUR", UnitBasis.PER_PIECE));
         FactoryQuoteDto quote = requestedQuote(prId, "Factory A");
-        // receiveAll applies ONE basis to every item; item 0 was requested per sqm, item 1 per piece.
-        // Quote per PIECE: item 0 is the switched one (sqm -> piece), item 1 matches.
+        // receiveAll applies ONE basis to every item; item 0 was requested per sqm, item 1 per piece. Quote per PIECE:
+        // item 0 is the switched one (sqm -> piece), item 1 matches.
         assertThat(factoryQuoteService.receive(quote.id(), receiveAll(quote, "EUR", "PER_PIECE"), importActor).items())
             .extracting(i -> i.unitBasis()).containsOnly("PER_PIECE");
     }
@@ -533,10 +527,8 @@ class FactoryContactFlowIntegrationTest extends Cr1FixtureSupport {
         assertThat(pricingRequestService.get(id, salesActor).items().get(0).requestedCurrency()).isEqualTo("EUR");
     }
 
-    /**
-     * A quote that is already contacted, reached by forcing the state directly so B3/B4 isolate the
-     * currency/unit rule from the A-part API (and from the A7 price-entry lock).
-     */
+    /** A quote that is already contacted, reached by forcing the state directly so B3/B4 isolate the currency/unit
+     * rule from the A-part API (and from the A7 price-entry lock). */
     private FactoryQuoteDto requestedQuote(long prId, String factoryName) {
         FactoryQuoteDto draft = quoteFor(factoryQuoteService.generateDrafts(prId, importActor), factoryName);
         jdbc.update("UPDATE sales.factory_quote SET status = 'REQUESTED', requested_at = now() WHERE factory_quote_id = :id",

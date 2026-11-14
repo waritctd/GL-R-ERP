@@ -37,9 +37,8 @@ describe('hasPermission', () => {
     expect(hasPermission('import', 'canViewDealPipeline')).toBe(false);
   });
 
-  // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER
-  // (canViewDealPipeline) is narrower than plain ticket-detail read
-  // (canViewTickets) — import and account both keep detail-read but lose the
+  // Role-scoped views (docs/role-scoped-views.md): the deal PIPELINE BROWSER (canViewDealPipeline) is narrower
+  // than plain ticket-detail read (canViewTickets) — import and account both keep detail-read but lose the
   // pipeline browser; sales/sales_manager/ceo keep both.
   it('keeps canViewTickets (detail-read) broader than canViewDealPipeline — import/account keep detail-read only', () => {
     expect(hasPermission('import', 'canViewTickets')).toBe(true);
@@ -165,10 +164,8 @@ describe('canAccessPath', () => {
     }
   });
 
-  // Same fail-open shape one directory over: `/settings/attendance-calendar` is an EXACT match, so
-  // a second `/settings/*` route with no PATH_GUARDS entry of its own would be reachable by every
-  // authenticated role. Mirrors LeaveController#uploadPolicyDocument's requireAnyRole(hr, ceo).
-  //
+  // Same fail-open shape one directory over: `/settings/attendance-calendar` is an EXACT match, so a second
+  // `/settings/*` route with no PATH_GUARDS entry of its own would be reachable by every authenticated role.
   // FRONTEND ROUTING ONLY — the server enforces its own gate, and that is not tested here.
   it('refuses everyone but hr/ceo on the leave-policy upload settings route', () => {
     expect(canAccessPath('/settings/leave-policy', employee)).toBe(false);
@@ -193,8 +190,8 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/fulfilment', sales)).toBe(false);
     expect(canAccessPath('/fulfilment', hr)).toBe(false);
     expect(canAccessPath('/fulfilment', account)).toBe(false);
-    // Narrower than its nav neighbour /pricing-requests, which DOES admit
-    // sales_manager — a sales_manager here would find every button 403s.
+    // Narrower than its nav neighbour /pricing-requests, which DOES admit sales_manager — a sales_manager here
+    // would find every button 403s.
     expect(canAccessPath('/fulfilment', { role: 'sales_manager', employeeId: 8 })).toBe(false);
     expect(canAccessPath('/pricing-requests', { role: 'sales_manager', employeeId: 8 })).toBe(true);
   });
@@ -211,10 +208,9 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/tickets', employee)).toBe(false);
   });
 
-  // Account role-scoped views: the pipeline BROWSER (the `/tickets` list) is
-  // narrower than ticket-DETAIL read (`/tickets/:id`) — account keeps the
-  // latter (its worklist deep-links straight to a single deal) but loses the
-  // former (its own งานการเงิน worklist replaces it).
+  // Account role-scoped views: the pipeline BROWSER (the `/tickets` list) is narrower than ticket-DETAIL read
+  // (`/tickets/:id`) — account keeps the latter (its worklist deep-links straight to a single deal) but loses
+  // the former (its own งานการเงิน worklist replaces it).
   it('splits the deal-pipeline browser from ticket-detail read for account', () => {
     expect(canAccessPath('/tickets', account)).toBe(false);
     expect(canAccessPath('/tickets/12', account)).toBe(true);
@@ -323,15 +319,15 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/ceo-settings', { role: 'sales_manager', employeeId: 4 })).toBe(false);
   });
 
-  // Role-scoped views (Import build): import is blocked from the pipeline
-  // BROWSER (/tickets exact) but keeps ticket-detail read (/tickets/:id).
+  // Role-scoped views (Import build): import is blocked from the pipeline BROWSER (/tickets exact) but keeps
+  // ticket-detail read (/tickets/:id).
   it('blocks import from the deal-pipeline browser AND from the whole-deal page', () => {
     expect(canAccessPath('/tickets', importer)).toBe(false);
     // Import has its own per-deal page (/import/deals/:id). The whole-deal GET /api/tickets/{id} 403s
     // import server-side, so the frontend guard refuses it too.
     expect(canAccessPath('/tickets/12', importer)).toBe(false);
-    // Deposit notices are denied to import outright (DepositNoticeService), so the whole
-    // /tickets/ prefix is closed to it, not just the bare detail path.
+    // Deposit notices are denied to import outright (DepositNoticeService), so the whole /tickets/ prefix is
+    // closed to it, not just the bare detail path.
     expect(canAccessPath('/tickets/12/deposit', importer)).toBe(false);
   });
 
@@ -420,9 +416,8 @@ describe('isDivisionManager', () => {
     expect(isDivisionManager({ role: 'employee', employeeId: 10 })).toBe(false);
   });
 
-  // Narrowed to role 'employee' on purpose: sales_manager/hr/ceo have their own
-  // dedicated landings (company mode / a future sales-manager Overview), so a
-  // manager flag on those roles must not also route them here.
+  // Narrowed to role 'employee' on purpose: sales_manager/hr/ceo have their own dedicated landings (company mode
+  // / a future sales-manager Overview), so a manager flag on those roles must not also route them here.
   it('is false for other roles even when the manager flag is set', () => {
     expect(isDivisionManager({ role: 'sales_manager', manager: true, employeeId: 11 })).toBe(false);
     expect(isDivisionManager({ role: 'hr', manager: true, employeeId: 12 })).toBe(false);
@@ -435,13 +430,9 @@ describe('isDivisionManager', () => {
   });
 });
 
-// Release lockdown (SELF_SERVICE_ONLY — app/features.js). features.js reads
-// import.meta.env once, at module-load time, and vitest.config.js pins the flag
-// OFF for the whole suite so the ~1300 tests above keep exercising the full
-// product. Turning it back ON therefore needs vi.stubEnv + vi.resetModules + a
-// dynamic import of a fresh permissions.js: the static `import` at the top of
-// this file already evaluated with the flag off and can only ever prove the
-// unlocked case.
+// Release lockdown (SELF_SERVICE_ONLY — app/features.js). Turning it back ON therefore needs vi.stubEnv +
+// vi.resetModules + a dynamic import of a fresh permissions.js: the static `import` at the top of this file
+// already evaluated with the flag off and can only ever prove the unlocked case.
 describe('canAccessPath under the release lockdown', () => {
   const sales = { role: 'sales', employeeId: 41 };
   const salesManager = { role: 'sales_manager', employeeId: 42 };
@@ -528,9 +519,8 @@ describe('canAccessPath under the release lockdown', () => {
     expect(refused).toEqual([]);
   });
 
-  // The prefix trap this allowlist is built to avoid: HR's ล.ย.01 REGISTER
-  // shares a leading string with the employee's own declaration form. A
-  // `startsWith('/tax-allowance')` test would have admitted it.
+  // The prefix trap this allowlist is built to avoid: HR's ล.ย.01 REGISTER shares a leading string with the
+  // employee's own declaration form. A `startsWith('/tax-allowance')` test would have admitted it.
   it('does not let /tax-allowance admit HR’s /tax-allowance-review', async () => {
     const { canAccessPath: guard } = await locked();
     expect(guard('/tax-allowance', importer)).toBe(true);
@@ -572,11 +562,9 @@ describe('canAccessPath under the release lockdown', () => {
     }
   });
 
-  // The lock flipped an unmatched path from allowed to refused, so a query
-  // string on an otherwise-visible path became a way to lock a user out of
-  // their own page. /employee-requests?tab=ot is the live shape: it is where
-  // the /overtime alias redirects and what EmployeeSelfService's OT card links
-  // to.
+  // The lock flipped an unmatched path from allowed to refused, so a query string on an otherwise-visible path
+  // became a way to lock a user out of their own page. /employee-requests?tab=ot is the live shape: it is where
+  // the /overtime alias redirects and what EmployeeSelfService's OT card links to.
   it('matches on the pathname, ignoring a query string or hash', async () => {
     const { canAccessPath: guard } = await locked();
     expect(guard('/employee-requests?tab=ot', importer)).toBe(true);
@@ -590,9 +578,8 @@ describe('canAccessPath under the release lockdown', () => {
     expect(guard('/finance?tab=deposits', account)).toBe(true);
   });
 
-  // The allowlist's reason for existing: canAccessPath fails OPEN for any path
-  // no PATH_GUARDS entry claims, so a route added after this lock shipped must
-  // be hidden by default rather than silently exposed.
+  // The allowlist's reason for existing: canAccessPath fails OPEN for any path no PATH_GUARDS entry claims, so a
+  // route added after this lock shipped must be hidden by default rather than silently exposed.
   it('refuses a path no guard claims — the lock is an allowlist, not a blocklist', async () => {
     const { canAccessPath: guard } = await locked();
     expect(guard('/some-feature-added-later', employee)).toBe(false);
@@ -608,14 +595,13 @@ describe('canAccessPath under the release lockdown', () => {
     expect(guard('/payroll', ceo)).toBe(true);
     expect(guard('/ceo-settings', ceo)).toBe(true);
     expect(guard('/tickets', ceo)).toBe(true);
-    // Pre-existing denials still hold — the lock exempts these roles, it does
-    // not widen them. /employees is hr-only (EmployeeController is
-    // requireAnyRole("hr")), so CEO is refused with or without the lock.
+    // Pre-existing denials still hold — the lock exempts these roles, it does not widen them. /employees is
+    // hr-only (EmployeeController is requireAnyRole("hr")), so CEO is refused with or without the lock.
     expect(guard('/employees', ceo)).toBe(false);
   });
 
-  // The lock narrows; it must never widen. A locked user with no linked
-  // employee row still fails the pre-existing `!!u.employeeId` guards.
+  // The lock narrows; it must never widen. A locked user with no linked employee row still fails the
+  // pre-existing `!!u.employeeId` guards.
   it('does not widen a self-service path past its own guard', async () => {
     const { canAccessPath: guard } = await locked();
     const noEmployeeRow = { role: 'sales', employeeId: null };
@@ -683,8 +669,8 @@ describe('activity log access (admin capability)', () => {
   });
 
   it('denies a caller whose role merely claims to be admin', () => {
-    // No role grants this; only the flag does. Guards against the gate drifting into a role
-    // check, which is what the backend mutation check covers on the other side.
+    // No role grants this; only the flag does. Guards against the gate drifting into a role check, which is what
+    // the backend mutation check covers on the other side.
     expect(canAccessPath('/activity-log', user('admin', { admin: false }))).toBe(false);
   });
 
@@ -692,9 +678,9 @@ describe('activity log access (admin capability)', () => {
     expect(canAccessPath('/activity-log', user('sales', { admin: true }))).toBe(true);
   });
 
-  // These two need the lockdown ON, so they re-import the module with the flag stubbed —
-  // vitest.config.js's test.env sets VITE_SELF_SERVICE_ONLY=false for the rest of the suite,
-  // which is why the plain tests above cannot assert lockdown behaviour.
+  // These two need the lockdown ON, so they re-import the module with the flag stubbed — vitest.config.js's
+  // test.env sets VITE_SELF_SERVICE_ONLY=false for the rest of the suite, which is why the plain tests above
+  // cannot assert lockdown behaviour.
   describe('under the self-service lockdown', () => {
     afterEach(() => {
       vi.unstubAllEnvs();

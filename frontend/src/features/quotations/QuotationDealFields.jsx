@@ -95,18 +95,9 @@ export function OrderedByContactFields({ terms, onChange, idSuffix }) {
   );
 }
 
-/**
- * The field that identifies the quotation's designer / unit (หน่วยงาน / ผู้ออกแบบ).
- * Kept shared between standalone creation and an existing deal/draft so the two
- * entry paths cannot drift apart visually or in how they update quotation terms.
- *
- * It used to hold a second field, ฝ่าย, beside this one. That is gone (sales feedback Admin 1d,
- * owner 2026-10-06: "remove ฝ่าย field completely" — reps filled it wrongly, some with their own
- * name): no input here, nothing printed on the document, and QuotationEditorPage sends
- * `deptCode: null` on every save so a value an older draft still carries is cleared rather than
- * kept where nobody can see or correct it. The two-column grid stays so the picker keeps the
- * width it had beside ฝ่าย instead of stretching across the whole card.
- */
+/** The field that identifies the quotation's designer / unit (หน่วยงาน / ผู้ออกแบบ). Kept shared between
+ * standalone creation and an existing deal/draft so the two entry paths cannot drift apart visually or in how
+ * they update quotation terms. */
 export function QuotationDealFields({ terms, onChange, idPrefix = 'quotation', showToast }) {
   return (
     <div className="col-span-full grid grid-cols-2 gap-3 mobile:grid-cols-1">

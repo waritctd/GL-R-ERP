@@ -38,15 +38,8 @@ function renderShell(user, initialEntries = ['/']) {
   );
 }
 
-// Role-scoped views (Import build, docs/role-scoped-views.md): the sidebar's
-// รายการดีล item is gated on canViewDealPipeline, not canViewTickets — import
-// loses it and leads with its pricing queue instead.
-//
-// The "จัดซื้อ & นำเข้า" item (/procurement) that used to sit here was removed
-// 2026-08-11 (owner ruling — factory purchase orders are not part of the
-// current business requirement, and the page's fulfilment worklist duplicated
-// ImportOverview's). Asserted wrong-way-round below: the item must be GONE,
-// not merely different, so a re-added nav entry fails this test.
+// Role-scoped views (Import build, docs/role-scoped-views.md): the sidebar's รายการดีล item is gated on
+// canViewDealPipeline, not canViewTickets — import loses it and leads with its pricing queue instead.
 describe('AppShell navigation (role-scoped views)', () => {
   it('hides รายการดีล for import and leads with คิวขอราคา', async () => {
     renderShell({ role: 'import', employeeId: 2, name: 'นำเข้า ทดสอบ', email: 'import@test.local' });
@@ -62,16 +55,14 @@ describe('AppShell navigation (role-scoped views)', () => {
     await screen.findByText('เนื้อหา');
     expect(screen.queryByText('จัดซื้อ & นำเข้า')).toBeNull();
     expect(screen.queryByText('ใบสั่งซื้อโรงงาน')).toBeNull();
-    // งานนำเข้า is NOT that page coming back. The deleted one was a link list
-    // duplicating the dashboard worklist; this one performs the four transitions.
-    // The retired LABEL must stay retired all the same.
+    // งานนำเข้า is NOT that page coming back. The deleted one was a link list duplicating the dashboard worklist;
+    // this one performs the four transitions. The retired LABEL must stay retired all the same.
     expect(screen.getByText('งานนำเข้า')).toBeTruthy();
   });
 
-  // งานนำเข้า's audience is canActOnFulfilment {import, ceo} — deliberately
-  // NARROWER than its คิวขอราคา neighbour, which also admits sales_manager.
-  // Wrong-way-round: the refusals are what matter, since a nav item pointing at a
-  // page whose every button 403s is worse than no nav item.
+  // งานนำเข้า's audience is canActOnFulfilment {import, ceo} — deliberately NARROWER than its คิวขอราคา
+  // neighbour, which also admits sales_manager. Wrong-way-round: the refusals are what matter, since a nav item
+  // pointing at a page whose every button 403s is worse than no nav item.
   it('shows งานนำเข้า to import and ceo only', async () => {
     for (const role of ['sales', 'sales_manager', 'account', 'hr', 'employee']) {
       const { unmount } = renderShell({ role, employeeId: 4, name: 'ทดสอบ', email: `${role}@test.local` });
@@ -99,14 +90,9 @@ describe('AppShell navigation (role-scoped views)', () => {
   });
 });
 
-// The 721–1040px band no longer has a persistent sidebar/rail at all (it was
-// superseded by the same off-canvas drawer used at ≤720px — see
-// Sidebar.jsx's `nav-drawer:` utilities and AppShell's `nav-drawer:` hamburger
-// gate, both driven by the same custom variant (index.css) so they can't
-// drift apart).
-// Sidebar itself has no width-conditional JS branch — group headers,
-// tooltips, and active-route highlighting are the same regardless of
-// viewport, so these assertions hold at every width, not just "tablet".
+// The 721–1040px band no longer has a persistent sidebar/rail at all (it was superseded by the same off-canvas
+// drawer used at ≤720px — see Sidebar.jsx's `nav-drawer:` utilities and AppShell's `nav-drawer:` hamburger
+// gate, both driven by the same custom variant (index.css) so they can't drift apart).
 describe('AppShell navigation (drawer content, no persistent tablet rail)', () => {
   it('keeps nav destinations accessible with native tooltip names', async () => {
     renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
@@ -127,13 +113,9 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
     expect(dealsLink.className).toContain('active');
   });
 
-  // jsdom never evaluates media queries, so nothing else in this suite can
-  // catch the hamburger's responsive gate reverting to the old ≤720px-only
-  // boundary — this pins the className directly (same technique as
+  // jsdom never evaluates media queries, so nothing else in this suite can catch the hamburger's responsive gate
+  // reverting to the old ≤720px-only boundary — this pins the className directly (same technique as
   // Layout.test.jsx's StatGrid 'nav-drawer:grid-cols-2' assertion).
-  // Mutation-checked: reverting the className to `mobile:` (undoing the
-  // whole point of this branch) turns this test red and nothing else in the
-  // suite.
   it('gates the mobile nav trigger on the nav-drawer (≤1040px) breakpoint, not ≤720px', async () => {
     renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
 
@@ -143,9 +125,8 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
     expect(trigger.className).toContain('nav-drawer:flex-[0_0_44px]');
   });
 
-  // A nav group header is a real, clickable control (not hidden behind an
-  // icon-only rail that no longer exists) — a toggle collapses/re-expands
-  // its links, same behavior at every width including inside the drawer.
+  // A nav group header is a real, clickable control (not hidden behind an icon-only rail that no longer exists)
+  // — a toggle collapses/re-expands its links, same behavior at every width including inside the drawer.
   it('lets a nav group toggle collapse and re-expand its links', async () => {
     renderShell({ role: 'ceo', employeeId: 1, name: 'ผู้บริหาร ทดสอบ', email: 'ceo@glr.co.th' });
 
@@ -204,10 +185,9 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
 
 });
 
-// Account role-scoped views (finalized design, owner-confirmed 2026-07-24): nav
-// drops BOTH รายการดีล (pipeline browser) and ค่าคอมมิชชัน (the invoice+commission
-// step is folded into งานการเงิน as the last money-lifecycle stage), and gains
-// งานการเงิน. sales is the control — unaffected by the split.
+// Account role-scoped views (finalized design, owner-confirmed 2026-07-24): nav drops BOTH รายการดีล (pipeline
+// browser) and ค่าคอมมิชชัน (the invoice+commission step is folded into งานการเงิน as the last money-lifecycle
+// stage), and gains งานการเงิน. sales is the control — unaffected by the split.
 describe('AppShell nav — Account role-scoped views', () => {
   it('account nav has no รายการดีล, no ค่าคอมมิชชัน, and has งานการเงิน', async () => {
     renderShell({ role: 'account', name: 'บัญชี ทดสอบ', email: 'account@glr.co.th', employeeId: 3 });
@@ -231,11 +211,9 @@ describe('AppShell nav — Account role-scoped views', () => {
   });
 });
 
-// Skip link (WCAG 2.2 §2.4.1 Bypass Blocks, issue #392): must be the first
-// focusable element in the shell — ahead of the sidebar's nav items — and
-// activating it must move real DOM focus onto the <main> landmark, not just
-// scroll to it. A bare `href="#main-content"` moving the viewport without
-// moving focus is the most common way this pattern silently fails.
+// Skip link (WCAG 2.2 §2.4.1 Bypass Blocks, issue #392): must be the first focusable element in the shell —
+// ahead of the sidebar's nav items — and activating it must move real DOM focus onto the <main> landmark, not
+// just scroll to it.
 describe('AppShell skip link (WCAG 2.2 §2.4.1 Bypass Blocks)', () => {
   it('renders as the first focusable element, before the sidebar nav', async () => {
     renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
@@ -276,18 +254,7 @@ describe('AppShell skip link (WCAG 2.2 §2.4.1 Bypass Blocks)', () => {
   });
 });
 
-// Landmark structure: the topbar <header> must be a SIBLING of <main>, never a
-// descendant. It was a descendant until this guard was added — caught in real
-// Chromium on /leave/new, where `bell.closest('main')` was truthy and
-// `getByRole('main').getByRole('button')` returned 9 — the page's own 7 plus
-// the notification bell and the account menu, both counted as page content.
-//
-// Two independent costs, so two tests. (1) Screen-reader landmark navigation
-// expects banner beside main; jumping to "main" landed the user with the
-// topbar *inside* the region they had just skipped past. (2) Every
-// `getByRole('main')`-scoped query silently stopped excluding chrome — the
-// failure mode is a passing assertion, which is why this is pinned here rather
-// than left to review.
+// Landmark structure: the topbar <header> must be a SIBLING of <main>, never a descendant.
 describe('AppShell landmark structure', () => {
   it('keeps the topbar <header> outside — and ahead of — the <main> landmark', async () => {
     renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
@@ -299,13 +266,11 @@ describe('AppShell landmark structure', () => {
     expect(main).not.toBeNull();
     expect(main.contains(header)).toBe(false);
 
-    // A <header> is only exposed as the `banner` landmark while its landmark
-    // scope is <body>; the plain <div> column wrapper it now sits in keeps that
-    // scope, where the old <main> parent did not.
+    // A <header> is only exposed as the `banner` landmark while its landmark scope is <body>; the plain <div>
+    // column wrapper it now sits in keeps that scope, where the old <main> parent did not.
     expect(screen.getByRole('banner')).toBe(header);
 
-    // DOCUMENT_POSITION_FOLLOWING (4): main comes after the header, so the
-    // reading order is still banner → main.
+    // DOCUMENT_POSITION_FOLLOWING (4): main comes after the header, so the reading order is still banner → main.
     expect(header.compareDocumentPosition(main) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -315,24 +280,23 @@ describe('AppShell landmark structure', () => {
 
     const main = screen.getByRole('main');
 
-    // Wrong-way-round on purpose: asserting the chrome is ABSENT from main is
-    // the assertion that can actually fail. "Page content is present" passed
-    // happily throughout the whole period the nesting was broken.
+    // Wrong-way-round on purpose: asserting the chrome is ABSENT from main is the assertion that can actually
+    // fail. "Page content is present" passed happily throughout the whole period the nesting was broken.
     expect(within(main).queryByRole('button', { name: 'เปิดเมนูนำทาง' })).toBeNull();
     expect(within(main).queryByRole('button', { name: 'เมนูผู้ใช้' })).toBeNull();
     expect(within(main).queryByRole('button', { name: /การแจ้งเตือน/ })).toBeNull();
     expect(within(main).queryAllByRole('button')).toHaveLength(0);
 
-    // ...and the same controls really are reachable from the document, so the
-    // assertions above cannot pass by the buttons simply not having rendered.
+    // ...and the same controls really are reachable from the document, so the assertions above cannot pass by the
+    // buttons simply not having rendered.
     expect(screen.getByRole('button', { name: 'เมนูผู้ใช้' })).not.toBeNull();
     expect(screen.getByRole('button', { name: /การแจ้งเตือน/ })).not.toBeNull();
   });
 });
 
-// Division Manager (non-sales) role-scoped views: a role==='employee' user with
-// the manager flag gains the "ทีมของฉัน" nav group (isDivisionManager, see
-// permissions.js) — a plain employee (no manager flag) never sees it.
+// Division Manager (non-sales) role-scoped views: a role==='employee' user with the manager flag gains the
+// "ทีมของฉัน" nav group (isDivisionManager, see permissions.js) — a plain employee (no manager flag) never
+// sees it.
 describe('AppShell nav — Division Manager (non-sales) role-scoped views', () => {
   it('shows the ทีมของฉัน group for a division manager (role employee + manager flag)', async () => {
     renderShell({ role: 'employee', manager: true, name: 'ผู้จัดการ ทดสอบ', email: 'manager@glr.co.th', employeeId: 30 });
@@ -350,20 +314,9 @@ describe('AppShell nav — Division Manager (non-sales) role-scoped views', () =
   });
 });
 
-// The scroll container must be its own subtree's containing block, or a
-// `position: absolute` descendant with no other positioned ancestor (Tailwind's
-// `sr-only` is `position: absolute`) resolves to the *initial* containing block
-// and leaks its static offset into `<html>`'s scrollable overflow — a second,
-// outer scrollbar over a viewport-height shell. Measured before the fix:
-// /employee-requests?tab=welfare 543px, /tax-allowance 1994px of phantom
-// document scroll. See the CONTENT_SCROLL_CLASS comment in AppShell.jsx.
-//
-// This asserts the rendered class, not the computed layout: jsdom has no layout
-// engine, so `scrollHeight`/`getBoundingClientRect()` are all zero here and the
-// real symptom is invisible to it — only a browser can measure that. What this
-// DOES catch is the class going missing from the shipped element, whether by
-// edit or by a tailwind-merge collision with a positioning utility added later,
-// because it renders the real component rather than reading the source string.
+// The scroll container must be its own subtree's containing block, or a `position: absolute` descendant with
+// no other positioned ancestor resolves to the *initial* containing block and leaks its static offset into
+// `<html>`'s scrollable overflow — a second, outer scrollbar over a viewport-height shell.
 describe('AppShell — <main> is the containing block for its own scrolled subtree', () => {
   it('renders <main> with both `relative` and `overflow-auto`, so absolutely-positioned page content cannot escape into document scroll', async () => {
     renderShell({ role: 'employee', name: 'พนักงาน ทดสอบ', email: 'employee@glr.co.th', employeeId: 31 });
@@ -372,26 +325,21 @@ describe('AppShell — <main> is the containing block for its own scrolled subtr
     const main = screen.getByRole('main');
     const classes = main.className.split(/\s+/);
 
-    // Both halves matter and they are different ancestor walks: `overflow-auto`
-    // makes this the scroll container, `relative` makes it the containing
-    // block. `overflow-auto` alone is the bug.
+    // Both halves matter and they are different ancestor walks: `overflow-auto` makes this the scroll container,
+    // `relative` makes it the containing block. `overflow-auto` alone is the bug.
     expect(classes).toContain('relative');
     expect(classes).toContain('overflow-auto');
 
-    // No competing positioning utility survived alongside it — `absolute`,
-    // `fixed` or `static` on this element would either re-open the leak or
-    // break the shell's flex layout outright.
+    // No competing positioning utility survived alongside it — `absolute`, `fixed` or `static` on this element
+    // would either re-open the leak or break the shell's flex layout outright.
     expect(classes).not.toContain('static');
     expect(classes).not.toContain('absolute');
     expect(classes).not.toContain('fixed');
   });
 });
 
-// Release lockdown (SELF_SERVICE_ONLY — app/features.js): the sidebar keeps
-// only the ungrouped แดชบอร์ด plus the 'self' group for every role except HR
-// and CEO. features.js reads import.meta.env at module-load time and
-// vitest.config.js pins the flag OFF for the suite, so the locked case needs
-// vi.stubEnv + vi.resetModules + a dynamic import of a fresh AppShell.
+// Release lockdown (SELF_SERVICE_ONLY — app/features.js): the sidebar keeps only the ungrouped แดชบอร์ด plus
+// the 'self' group for every role except HR and CEO.
 describe('AppShell navigation under the release lockdown', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -480,9 +428,8 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
   });
 
-  // A division manager loses the 'ทีมของฉัน' group but keeps the routes it
-  // pointed at: its three entries are /employee-requests, /leave and
-  // /attendance, all of which the surviving 'self' group also lists. Approval
+  // A division manager loses the 'ทีมของฉัน' group but keeps the routes it pointed at: its three entries are
+  // /employee-requests, /leave and /attendance, all of which the surviving 'self' group also lists. Approval
   // work therefore still has a way in.
   it('drops a division manager’s team group without stranding their approvals', async () => {
     await renderLockedShell({ role: 'employee', employeeId: 44, manager: true, name: 'หัวหน้า ทดสอบ', email: 'mgr@test.local' });
@@ -520,9 +467,9 @@ describe('AppShell navigation under the release lockdown', () => {
   });
 });
 
-// #H4: the canCreateQuotation capability grant (owner ruling 2026-09-09) OR'd into the
-// "ใบเสนอราคา" nav item's visibility -- same OR the '/quotations' PATH_GUARDS entry applies, so
-// the two never disagree about who sees the route at all.
+// #H4: the canCreateQuotation capability grant (owner ruling 2026-09-09) OR'd into the "ใบเสนอราคา" nav item's
+// visibility -- same OR the '/quotations' PATH_GUARDS entry applies, so the two never disagree about who sees
+// the route at all.
 describe('AppShell navigation — canCreateQuotation grant (#H4)', () => {
   it('hides ใบเสนอราคา from a qc user with no grant', async () => {
     renderShell({ role: 'qc', employeeId: 20, name: 'ภิญญดา ทดสอบ' });

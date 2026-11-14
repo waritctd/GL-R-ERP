@@ -6,14 +6,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * Pure unit tests for {@link PaymentTrack} — the payment-track state machine — with no database
- * involved. Mirrors {@code th.co.glr.hr.pricingrequest.PricingRequestStatusTest}'s own shape:
- * exercise the decision function ({@link PaymentTrack#canTransition}) and the multi-hop walker
- * ({@link PaymentTrack#stepsBetween}) in isolation. {@code PaymentTrackIntegrationTest} separately
- * proves {@code TicketRepository.advancePaymentStatus} enforces this machine against a real
- * Postgres row.
- */
+/** Pure unit tests for PaymentTrack — the payment-track state machine — with no database involved. Mirrors
+ * th.co.glr.hr.pricingrequest.PricingRequestStatusTest's own shape: exercise the decision function
+ * (PaymentTrack#canTransition) and the multi-hop walker (PaymentTrack#stepsBetween) in isolation. */
 class PaymentTrackTest {
 
     private static final List<String> BYPASS_POLICIES =
@@ -61,8 +56,8 @@ class PaymentTrackTest {
     @Test
     void bypassPaths_refuseDepositNoticeIssuedAndDepositPaid_entirely() {
         for (String policy : BYPASS_POLICIES) {
-            // Neither DEPOSIT_NOTICE_ISSUED nor DEPOSIT_PAID is ever a legal "to" on a bypass
-            // policy, from any starting point that would be legal on the REQUIRED path.
+            // Neither DEPOSIT_NOTICE_ISSUED nor DEPOSIT_PAID is ever a legal "to" on a bypass policy, from any starting
+            // point that would be legal on the REQUIRED path.
             assertThat(PaymentTrack.canTransition(policy, null, PaymentTrack.DEPOSIT_NOTICE_ISSUED))
                 .as("policy=%s", policy).isFalse();
             assertThat(PaymentTrack.canTransition(policy, null, PaymentTrack.DEPOSIT_PAID))
@@ -143,8 +138,8 @@ class PaymentTrackTest {
             for (int toIdx = 0; toIdx <= fromIdx; toIdx++) {
                 String from = path.get(fromIdx);
                 String to = path.get(toIdx);
-                // The one legal same-state pair (the DEPOSIT_NOTICE_ISSUED self-loop) is excluded
-                // — everything else at or behind "from" must be refused.
+                // The one legal same-state pair (the DEPOSIT_NOTICE_ISSUED self-loop) is excluded — everything else at or
+                // behind "from" must be refused.
                 if (from.equals(to) && PaymentTrack.DEPOSIT_NOTICE_ISSUED.equals(from)) continue;
                 assertThat(PaymentTrack.canTransition(DepositPolicy.REQUIRED, from, to))
                     .as("%s -> %s", from, to).isFalse();
@@ -165,13 +160,9 @@ class PaymentTrackTest {
         }
     }
 
-    // ── Every (single-hop) skip is refused at the machine level ──────────────────────────────
-    // NOTE: PaymentTrack.canTransition is a STRICT single-hop check by design (see its own
-    // Javadoc) — a forward multi-state jump is refused HERE, even though the very same jump is
-    // legal as a WALK via stepsBetween (tested separately below). This is the deliberate
-    // "walk, don't skip" split: the machine never grows a skip edge; a caller wanting to advance
-    // several states in one call must go through stepsBetween, not expect canTransition itself to
-    // permit the jump.
+    // Every skip is refused at the machine level ────────────────────────────── NOTE: PaymentTrack.canTransition
+    // is a STRICT single-hop check by design — a forward multi-state jump is refused HERE, even though the very
+    // same jump is legal as a WALK via stepsBetween.
 
     @Test
     void everySkip_onRequiredPath_isRefusedAtTheMachineLevel() {
@@ -317,8 +308,8 @@ class PaymentTrackTest {
 
     @Test
     void stepsBetween_selfLoop_onABypassPolicy_throws() {
-        // DEPOSIT_NOTICE_ISSUED is off-path entirely for a bypass policy, so even the otherwise-
-        // legal self-loop pair must still be refused.
+        // DEPOSIT_NOTICE_ISSUED is off-path entirely for a bypass policy, so even the otherwise- legal self-loop pair
+        // must still be refused.
         for (String policy : BYPASS_POLICIES) {
             assertThatThrownBy(() -> PaymentTrack.stepsBetween(
                     policy, PaymentTrack.DEPOSIT_NOTICE_ISSUED, PaymentTrack.DEPOSIT_NOTICE_ISSUED))

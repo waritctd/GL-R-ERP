@@ -270,9 +270,7 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
         assertThat(governing.depositPercent()).isEqualByComparingTo(depositPercent);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private long newBareTicket() {
         CustomerRepository customers = new CustomerRepository(jdbc);
@@ -286,9 +284,9 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
             tickets.nextTicketCode(), employeeId, "Sales");
     }
 
-    /** A ticket with one DRAFT pricing request attached — enough to satisfy {@code
-     * sales.quotation.pricing_request_id}'s FK for the legacy-branch fixtures; the request is
-     * never submitted/priced any further because these tests write the quotation row themselves. */
+    /** A ticket with one DRAFT pricing request attached — enough to satisfy sales.quotation.pricing_request_id's FK
+     * for the legacy-branch fixtures; the request is never submitted/priced any further because these tests write
+     * the quotation row themselves. */
     private long newTicketWithPricingRequestDraft() {
         long catalogProductId = insertCatalogProduct("Factory DepPct", "IT",
             "TEST-DEPPCT-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
@@ -310,8 +308,8 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
         return ticketId;
     }
 
-    /** Legacy quotation row: {@code origin IS NULL}, {@code pricing_request_id IS NOT NULL} —
-     * exactly the scope {@code CustomerQuotationRepository#findByTicket} uses. */
+    /** Legacy quotation row: origin IS NULL, pricing_request_id IS NOT NULL — exactly the scope
+     * CustomerQuotationRepository#findByTicket uses. */
     private long insertLegacyQuotation(long ticketId, String docStatus, Short depositPercent) {
         long pricingRequestId = pricingRequests.findByTicket(ticketId).get(0).id();
         int version = ++quotationVersionSeq;
@@ -326,9 +324,9 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
-                // number is VARCHAR(30) and UNIQUE — "QTD<ticketId>-<version>" is both short
-                // enough and unique per (ticket, test method), since each test method gets its
-                // own fresh ticket and quotationVersionSeq restarts per test instance.
+                // number is VARCHAR(30) and UNIQUE — "QTD<ticketId>-<version>" is both short enough and unique per (ticket,
+                // test method), since each test method gets its own fresh ticket and quotationVersionSeq restarts per test
+                // instance.
                 .addValue("number", "QTD" + ticketId + "-" + version)
                 .addValue("issuedBy", employeeId)
                 .addValue("docStatus", docStatus)
@@ -337,8 +335,8 @@ class DepositNoticeRepositoryDepositPercentIntegrationTest extends AbstractPostg
                 .addValue("depositPercent", depositPercent), Long.class);
     }
 
-    /** V2 deal-quotation row: {@code origin IN ('PRICING_REQUEST','DEAL_DIRECT')} — no {@code
-     * pricing_request_id} needed (nullable; the v2 engine's own scope is {@code origin} alone). */
+    /** V2 deal-quotation row: origin IN ('PRICING_REQUEST','DEAL_DIRECT') — no pricing_request_id needed (nullable;
+     * the v2 engine's own scope is origin alone). */
     private long insertOriginTaggedQuotation(long ticketId, String origin, String docStatus, Short depositPercent) {
         int version = ++quotationVersionSeq;
         return jdbc.queryForObject("""

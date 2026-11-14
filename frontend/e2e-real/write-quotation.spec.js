@@ -2,28 +2,9 @@ import { Buffer } from 'node:buffer';
 import { test, expect } from '@playwright/test';
 import { apiSessionsFor, apiWrite, disposeSessions } from './helpers/api.js';
 
-/**
- * The DIRECT-DEAL ใบเสนอราคา journey, end to end against the real stack.
- *
- * Why this file exists: `e2e-real/README.md` records that exactly one business workflow (overtime)
- * was driven end to end here, and the sales journey specs that went with the mock suite were never
- * replaced. The quotation flow this release actually ships — deal → items → submit → approve →
- * download — had NO real-backend coverage at all. The two existing sales specs
- * (`uat-sales-journeys`, `uat-sales-order-flow`) drive the PricingRequest chain, which this
- * release deliberately BYPASSES, so they say nothing about this path.
- *
- * Written wrong-way-round where it counts. The assertions that matter are the ones where a caller
- * CANNOT do a thing: `mockApi.js`'s authorization is documented as non-authoritative and known to
- * diverge, so a refusal is only real once the Java service has issued it.
- *
- * ── What this does NOT assert, deliberately ──────────────────────────────────────────────────
- * The PDF. `?format=pdf` shells out to a converter (LibreOffice, or headless Chromium) that the
- * backend-CI job installs and this e2e job does not promise, so a PDF assertion here would be
- * testing the runner's package list. `?format=xlsx` is pure Apache POI and always available, and it
- * exercises the same controller, the same authorization and the same rendering model. Document
- * FIDELITY is covered where it belongs — `HtmlXlsFidelityTest` and `QuotationRendererTest` in the
- * backend suite, which compare against a pinned render.
- */
+/** The DIRECT-DEAL ใบเสนอราคา journey, end to end against the real stack. Why this file exists:
+ * `e2e-real/README.md` records that exactly one business workflow (overtime) was driven end to end here, and
+ * the sales journey specs that went with the mock suite were never replaced. */
 
 const ITEM = {
   brand: 'Pietre Di Sardegna',
@@ -72,10 +53,8 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
   let contactId;
   let newDeal;
 
-  // Deliberately NOT using helpers/sales.js. Those helpers are for the `uat-*` specs, which this
-  // config EXCLUDES from a local/CI run (`testIgnore: ['**/uat-*.spec.js']`), and `runId()` there
-  // throws unless global-setup stamped E2E_RUN_ID for a remote run. A spec that only ran in the UAT
-  // lane would not cover this flow in CI, which is the whole reason this file exists.
+  // Deliberately NOT using helpers/sales.js. A spec that only ran in the UAT lane would not cover this flow in
+  // CI, which is the whole reason this file exists.
   const tag = `q3-${Date.now().toString(36)}`;
 
   test.beforeAll(async () => {
@@ -126,18 +105,18 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
 
   test('sales creates a draft, and the ผู้สั่งซื้อ snapshot is frozen onto it', async () => {
     const response = await apiWrite(sessions.sales, 'post', `/api/tickets/${await newDeal()}/deal-quotations`, draftBody(contactId));
-    // 201, not 200 — creating a quotation is the ONE endpoint in this journey that answers Created.
-    // Everything else here (contacts, projects, tickets, submit, approve) answers 200. Pinned
-    // because a status change is a contract change a caller can be broken by.
+    // 201, not 200 — creating a quotation is the ONE endpoint in this journey that answers Created. Everything
+    // else here (contacts, projects, tickets, submit, approve) answers 200. Pinned because a status change is a
+    // contract change a caller can be broken by.
     expect(response.status(), 'POST /api/tickets/{id}/deal-quotations').toBe(201);
 
     const { quotation } = await response.json();
     expect(quotation.docStatus).toBe('DRAFT');
-    // The frozen snapshot, not a live join: this is what the printed document prints, so a later
-    // edit to the contact record must not rewrite an issued quotation.
+    // The frozen snapshot, not a live join: this is what the printed document prints, so a later edit to the
+    // contact record must not rewrite an issued quotation.
     expect(quotation.contactName).toContain('ธนพล');
-    // The wastage/box math is the service's, not the caller's: 120 ตร.ม. at 0.72 ตร.ม./แผ่น is
-    // 1.39 แผ่น/ตร.ม. → 167 แผ่น, +10% → 184, rounded up to whole boxes of 2 → 184.
+    // The wastage/box math is the service's, not the caller's: 120 ตร.ม. at 0.72 ตร.ม./แผ่น is 1.39 แผ่น/ตร.ม. →
+    // 167 แผ่น, +10% → 184, rounded up to whole boxes of 2 → 184.
     expect(quotation.items).toHaveLength(1);
     expect(quotation.items[0].piecesFinal).toBeGreaterThan(0);
     expect(Number(quotation.grandTotal)).toBeGreaterThan(0);
@@ -208,8 +187,8 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
     expect(file.status(), 'GET the document').toBe(200);
     const body = await file.body();
     expect(body.length, 'a rendered workbook is not a stub').toBeGreaterThan(10_000);
-    // BIFF8 (.xls) magic, NOT a zip — the download is deliberately an .xls despite `format=xlsx`
-    // (see the sales-doc-downloads note; the parameter name is historical).
+    // BIFF8 (.xls) magic, NOT a zip — the download is deliberately an .xls despite `format=xlsx` (see the
+    // sales-doc-downloads note; the parameter name is historical).
     expect([...body.subarray(0, 4)]).toEqual([0xd0, 0xcf, 0x11, 0xe0]);
 
     // And an unrelated role cannot download it.
@@ -230,8 +209,8 @@ test.describe('direct-deal ใบเสนอราคา — the real service',
 // and mockApi.js deliberately returns no figure for it at all, so THIS file is the only evidence
 // that the number the editor shows is right.
 
-/** BIFF8 stores a cell string as compressed 8-bit when every character fits in Latin-1, else as
- * UTF-16LE — so a Thai string is found only in the latter, an ASCII one usually in the former. */
+/** BIFF8 stores a cell string as compressed 8-bit when every character fits in Latin-1, else as UTF-16LE — so a
+ * Thai string is found only in the latter, an ASCII one usually in the former. */
 function xlsHasText(buffer, text) {
   if (buffer.includes(Buffer.from(text, 'utf16le'))) return true;
   // eslint-disable-next-line no-control-regex
@@ -355,9 +334,9 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
       expect((await response.json()).message, what).toContain(fragment);
     }
 
-    // Moving a stored ราคาพิเศษ document to English keeps SPECIAL_SQM (a PUT that omits priceMode keeps
-    // the stored one), which on English is per-sqm — still refused here, but for a PARTIAL box pair
-    // (ตร.ม./กล่อง present, piecesPerBox blank), not for having no box data at all (Option B).
+    // Moving a stored ราคาพิเศษ document to English keeps SPECIAL_SQM (a PUT that omits priceMode keeps the stored
+    // one), which on English is per-sqm — still refused here, but for a PARTIAL box pair (ตร.ม./กล่อง present,
+    // piecesPerBox blank), not for having no box data at all (Option B).
     const before = await (await sessions.sales.get(`/api/deal-quotations/${thaiId}`)).json();
     const move = await apiWrite(sessions.sales, 'put', `/api/deal-quotations/${thaiId}`, draftBody(contactId, {
       documentLanguage: 'EN', items: [tile({ sqmPerPiece: 0.36, specialPriceSqm: 1350, sqmPerBox: 0.6, piecesPerBox: null }), plain, adjustment()],
@@ -422,8 +401,8 @@ test.describe('quotation v3 / v3b + customer details — the real service', () =
       const response = await apiWrite(sessions.sales, 'put', `/api/customers/${customerId}`, patch);
       expect(response.status(), `PUT /api/customers/{id} ${Object.keys(patch)[0]}`).toBe(200);
     }
-    // A saved document is a SNAPSHOT: the correction is not on it until the draft is saved again —
-    // which is why the editor marks the draft dirty after a customer-field save.
+    // A saved document is a SNAPSHOT: the correction is not on it until the draft is saved again — which is why
+    // the editor marks the draft dirty after a customer-field save.
     const stale = (await (await sessions.sales.get(`/api/deal-quotations/${thaiId}`)).json()).quotation;
     expect(stale.customerAddress, 'not re-snapshotted before a save').toBeNull();
 

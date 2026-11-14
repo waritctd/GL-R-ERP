@@ -81,14 +81,14 @@ function renderMyLeaveTab(renderUser = user) {
 describe('MyLeaveTab balances: one primary card + a single disclosure (owner feedback, 2026-08)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // The balance-preview select (Phase A2: decoupled from the removed submission form) seeds
-    // its default from THIS list, not from the balances fixture -- every test below needs at
-    // least VACATION here so that seeding effect has something to default to.
+    // The balance-preview select (Phase A2: decoupled from the removed submission form) seeds its default from
+    // THIS list, not from the balances fixture -- every test below needs at least VACATION here so that seeding
+    // effect has something to default to.
     api.leave.types.mockResolvedValue({ leaveTypes: [{ code: 'VACATION', nameTh: 'ลาพักร้อน', nameEn: 'Vacation' }] });
     api.leave.list.mockResolvedValue({ requests: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
-    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา"
-    // -- default to no holidays so this describe block's own assertions stay uninvolved with it.
+    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา" -- default to no
+    // holidays so this describe block's own assertions stay uninvolved with it.
     api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
   });
 
@@ -127,8 +127,8 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
     api.leave.balances.mockResolvedValue({
       balances: [
         { leaveTypeCode: 'VACATION', leaveTypeNameTh: 'ลาพักร้อน', remainingDays: 6, approvedDays: 0, pendingDays: 0, annualQuotaDays: 6 },
-        // MILITARY's annualQuotaDays/remainingDays (366) is a sentinel, not a real policy figure --
-        // must never reach the DOM as "เหลือ 366 วัน" or "สิทธิ์ 366 วัน", in an option or out.
+        // MILITARY's annualQuotaDays/remainingDays (366) is a sentinel, not a real policy figure -- must never reach
+        // the DOM as "เหลือ 366 วัน" or "สิทธิ์ 366 วัน", in an option or out.
         { leaveTypeCode: 'MILITARY', leaveTypeNameTh: 'ลารับราชการทหาร', remainingDays: 366, approvedDays: 10, pendingDays: 2, annualQuotaDays: 366 },
       ],
     });
@@ -137,14 +137,9 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
 
     const select = await screen.findByLabelText('เลือกประเภทการลาที่ต้องการดูโควตา');
     const optionTexts = () => [...select.querySelectorAll('option')].map((option) => option.textContent);
-    // Everyday type: the figure is on the option itself, which is what makes the removed
-    // disclosure redundant rather than missed. Re-read inside waitFor -- the labels only gain
-    // their "· เหลือ N วัน" suffix once balancesQuery lands, one render after the options exist.
-    //
-    // The space before "วัน" is a NO-BREAK space, not an ordinary one: `formatDays` glues every
-    // number to its unit so a duration can only wrap between units (see leaveFormatting.js). This
-    // assertion is exact about it on purpose -- it is a native <select>, where a label that does
-    // not fit is clipped with no ellipsis and no tooltip, so where it may break is load-bearing.
+    // Everyday type: the figure is on the option itself, which is what makes the removed disclosure redundant
+    // rather than missed. Re-read inside waitFor -- the labels only gain their "· เหลือ N วัน" suffix once
+    // balancesQuery lands, one render after the options exist.
     await waitFor(() => expect(optionTexts()).toContain('ลาพักร้อน · เหลือ 6\u00A0วัน'));
     // Rare type: name only, no derived figure.
     expect(optionTexts()).toContain('ลารับราชการทหาร');
@@ -172,8 +167,8 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
 
     renderMyLeaveTab();
 
-    // Scoped to the primary card specifically -- "ลาพักร้อน" also appears as an <option> in the
-    // "ประเภทการลา" select, so a bare screen.findByText would match both.
+    // Scoped to the primary card specifically -- "ลาพักร้อน" also appears as an <option> in the "ประเภทการลา"
+    // select, so a bare screen.findByText would match both.
     const card = await screen.findByTestId('primary-balance-card');
     await waitFor(() => expect(card.textContent).toMatch(/ลาพักร้อน/));
     expect(card.textContent).toMatch(/\b6\b/);
@@ -239,8 +234,8 @@ describe('MyLeaveTab balances: one primary card + a single disclosure (owner fee
     expect(card.textContent).toMatch(/สะสมจากปีก่อน 2\u00A0วัน/);
     expect(card.textContent).toMatch(/เหลือ 1\u00A0วัน/);
 
-    // The QuotaBar itself: cap is annualQuotaDays + carriedInDays (8), not the bare 6 -- used (7)
-    // no longer exceeds it, so this must NOT read as an over-quota bar.
+    // The QuotaBar itself: cap is annualQuotaDays + carriedInDays (8), not the bare 6 -- used (7) no longer
+    // exceeds it, so this must NOT read as an over-quota bar.
     expect(card.textContent).toMatch(/7\u00A0วัน \/ 8\u00A0วัน/);
     expect(screen.queryByText(/เกินโควตาประจำปีแล้ว/)).toBeNull();
     const progressBar = card.querySelector('[role="progressbar"]');
@@ -270,8 +265,8 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
-    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา"
-    // -- default to no holidays so this describe block's own assertions stay uninvolved with it.
+    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา" -- default to no
+    // holidays so this describe block's own assertions stay uninvolved with it.
     api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
   });
 
@@ -293,8 +288,8 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
 
     queryClient.refetchQueries({ queryKey: ['leave', 'list'] });
     await waitFor(() => expect(historyCalls).toBe(2));
-    // The row is STILL on screen while the second fetch is in flight -- the pre-A1 bug replaced
-    // it with an EmptyState on every 60s poll / window-focus refetch.
+    // The row is STILL on screen while the second fetch is in flight -- the pre-A1 bug replaced it with an
+    // EmptyState on every 60s poll / window-focus refetch.
     expect(screen.getByText('พักผ่อนประจำปี')).not.toBeNull();
     expect(screen.getByText('กำลังอัปเดต…')).not.toBeNull();
 
@@ -318,8 +313,8 @@ describe('MyLeaveTab own-request table: the three state-defect fixes (Phase A1)'
 
     expect(await screen.findByRole('alert')).not.toBeNull();
     expect(screen.getByRole('button', { name: /ลองอีกครั้ง/ })).not.toBeNull();
-    // No error toast for a load failure any more -- see the pre-A1 five-useEffect anti-pattern
-    // this replaces (CLAUDE.md: showToast has an unstable identity).
+    // No error toast for a load failure any more -- see the pre-A1 five-useEffect anti-pattern this replaces
+    // (CLAUDE.md: showToast has an unstable identity).
     expect(showToast).not.toHaveBeenCalled();
   });
 
@@ -407,8 +402,8 @@ describe('MyLeaveTab Phase A4: self-cancel confirmation + certificate download',
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
-    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา"
-    // -- default to no holidays so this describe block's own assertions stay uninvolved with it.
+    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา" -- default to no
+    // holidays so this describe block's own assertions stay uninvolved with it.
     api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
   });
 
@@ -422,8 +417,8 @@ describe('MyLeaveTab Phase A4: self-cancel confirmation + certificate download',
     // Still just the request -- clicking the row action alone must never cancel by itself.
     expect(api.leave.cancel).not.toHaveBeenCalled();
     const dialogConfirmButton = await screen.findByRole('button', { name: 'ยกเลิกคำขอ' });
-    // Optional reason -- an employee cancelling their own request is not held to the mandatory
-    // reason an approver's reject requires.
+    // Optional reason -- an employee cancelling their own request is not held to the mandatory reason an
+    // approver's reject requires.
     expect(dialogConfirmButton.disabled).toBe(false);
 
     fireEvent.click(dialogConfirmButton);
@@ -520,8 +515,8 @@ describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the
     api.leave.types.mockResolvedValue({ leaveTypes: [] });
     api.leave.balances.mockResolvedValue({ balances: [] });
     api.leave.contactDefaults.mockResolvedValue(emptyContactDefaults);
-    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา"
-    // -- default to no holidays so this describe block's own assertions stay uninvolved with it.
+    // #leave-holiday-visibility: UpcomingHolidays renders unconditionally alongside "ปฏิทินวันลา" -- default to no
+    // holidays so this describe block's own assertions stay uninvolved with it.
     api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
     // Mirrors the backend contract (LeaveService#list / LeaveRepository#findRequests): an explicit
     // `employeeId` narrows strictly to that employee's rows; omitted returns both rows.
@@ -547,17 +542,13 @@ describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the
     expect(screen.queryByText('ลาป่วยของลูกทีม')).toBeNull();
     expect(screen.queryByText('ลูกทีม ทดสอบ')).toBeNull();
 
-    // The plumbing assertion: requestsQuery must always pass the actor's own employeeId,
-    // never omit it.
+    // The plumbing assertion: requestsQuery must always pass the actor's own employeeId, never omit it.
     await waitFor(() => expect(api.leave.list).toHaveBeenCalledWith(expect.objectContaining({ employeeId: 5 })));
   });
 
   // "วันลาที่กำลังจะถึง" reads a FORWARD window (see UpcomingLeaveList.jsx).
   describe('"วันลาที่กำลังจะถึง" is self-scoped and genuinely forward-looking', () => {
-    // Relative to the real clock, deliberately: the panel derives its window from `todayIso()` at
-    // render, so a hardcoded fixture date would quietly stop being "upcoming" as time passed and
-    // the test would start proving nothing. +/-10 days is far enough from midnight that a
-    // UTC-vs-Bangkok day slip cannot flip which side of "today" a fixture falls on.
+    // Build dates relative to today so upcoming-request fixtures remain valid as the calendar advances.
     function isoDaysFromToday(offset) {
       const date = new Date();
       date.setDate(date.getDate() + offset);
@@ -585,10 +576,8 @@ describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the
       };
     }
 
-    // Honours the date window the caller actually asks for, the way LeaveRepository#findRequests
-    // does (OVERLAP: `start_date <= :toDate AND end_date >= :fromDate`). Without this the mock
-    // would hand every row to both queries and the forward window would never be exercised at all
-    // -- the panel would "pass" while showing rows the real backend would have excluded.
+    // Honours the date window the caller actually asks for, the way LeaveRepository#findRequests does (OVERLAP:
+    // `start_date <= :toDate AND end_date >= :fromDate`).
     function mockListHonouringWindow(rows) {
       api.leave.list.mockImplementation((params = {}) => Promise.resolve({
         requests: rows.filter((request) => {
@@ -608,8 +597,8 @@ describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the
           </QueryClientProvider>
         </MemoryRouter>,
       );
-      // The heading's immediate ancestor is only PanelHeader's wrapper `<div>`, so the list
-      // content (a sibling of that div) requires walking up to the Panel's `<section>`.
+      // The heading's immediate ancestor is only PanelHeader's wrapper `<div>`, so the list content (a sibling of
+      // that div) requires walking up to the Panel's `<section>`.
       return screen.findByRole('heading', { name: 'วันลาที่กำลังจะถึง' })
         .then((heading) => heading.closest('section'));
     }
@@ -651,9 +640,9 @@ describe('MyLeaveTab bugfix (2026-08): "ของฉัน" always scopes to the
 
       const panel = await renderFor(managerUser, managerCurrentEmployee);
       await waitFor(() => expect(panel.textContent).toMatch(/ลาพักร้อน/));
-      // The direct report never appears in the actor's OWN panel -- LeaveService#list's default
-      // scoping for an actor with reports is "self OR reports_to = actor", which is why this query
-      // must always pass an explicit employeeId.
+      // The direct report never appears in the actor's OWN panel -- LeaveService#list's default scoping for an actor
+      // with reports is "self OR reports_to = actor", which is why this query must always pass an explicit
+      // employeeId.
       expect(panel.textContent).not.toMatch(/ลูกทีม ทดสอบ/);
     });
   });
@@ -682,8 +671,8 @@ describe('MyLeaveTab holiday visibility (#leave-holiday-visibility, PR 3)', () =
 
     const holidayHeading = await screen.findByRole('heading', { name: 'วันหยุดที่จะถึง' });
     const holidayPanel = holidayHeading.closest('section');
-    // The heading itself is present from first render (Panel's title is static); the query
-    // result it depends on is not -- waitFor lets the loading EmptyState resolve before asserting.
+    // The heading itself is present from first render (Panel's title is static); the query result it depends on is
+    // not -- waitFor lets the loading EmptyState resolve before asserting.
     await waitFor(() => expect(holidayPanel.textContent).toMatch(/วันหยุดทดสอบ/));
 
     // The personal leave panel still renders: the two "what's coming up" panels sit alongside each
@@ -692,11 +681,8 @@ describe('MyLeaveTab holiday visibility (#leave-holiday-visibility, PR 3)', () =
     expect(upcomingLeaveHeading.closest('section')).not.toBeNull();
   });
 
-  // Real วันหยุดบริษัท names run up to 149 chars (MOCK_HOLIDAY_DATES in mockApi.js is a verbatim
-  // copy of production's hr.holiday, the reason V129 widened name_th from VARCHAR(120) to TEXT).
-  // UpcomingHolidays.jsx already renders one holiday per list row rather than a comma-joined
-  // sentence -- this pins that the composition holds through THIS caller too, not only in
-  // isolation or only in the leave composer (LeaveRequestPage.test.jsx's own long-name coverage).
+  // Real วันหยุดบริษัท names run up to 149 chars (MOCK_HOLIDAY_DATES in mockApi.js is a verbatim copy of
+  // production's hr.holiday, the reason V129 widened name_th from VARCHAR(120) to TEXT).
   it('renders a 149-char real production holiday name intact, not truncated or broken', async () => {
     const LONGEST_REAL_HOLIDAY_NAME =
       'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)';

@@ -13,15 +13,14 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rawStylesCss = fs.readFileSync(path.resolve(__dirname, '../../styles.css'), 'utf8');
 const rawIndexCss = fs.readFileSync(path.resolve(__dirname, '../../index.css'), 'utf8');
-// Comments are stripped before every check below -- this file's own comments narrate the fix in
-// terms of the breakpoints/selectors that were REMOVED (e.g. "the previous `max-width: 1500px`
-// breakpoint"), which would otherwise trip a naive `.not.toContain` on the prose describing the fix,
-// not the fix itself.
+// Comments are stripped before every check below -- this file's own comments narrate the fix in terms of the
+// breakpoints/selectors that were REMOVED, which would otherwise trip a naive `.not.toContain` on the prose
+// describing the fix, not the fix itself.
 const stylesCss = rawStylesCss.replace(/\/\*[\s\S]*?\*\//g, '');
 const indexCss = rawIndexCss.replace(/\/\*[\s\S]*?\*\//g, '');
 
-// Returns the bodies of every `@media (...)` block whose header contains `headerSubstring`, by
-// counting braces from each block's opening `{` (one level of nested rule blocks is expected).
+// Returns the bodies of every `@media (...)` block whose header contains `headerSubstring`, by counting braces
+// from each block's opening `{` (one level of nested rule blocks is expected).
 function extractMediaBlocks(css, headerSubstring) {
   const blocks = [];
   let searchFrom = 0;
@@ -64,8 +63,8 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
     // The old 1279px complement must be gone outright, not left behind as a second, now-dead block.
     expect(stylesCss).not.toContain('@media (max-width: 1279px)');
 
-    // The panel must not still be governed by the generic ≤1040px nav-drawer band -- that band
-    // legitimately still exists for unrelated rules (sidebar drawer, other tables' scroll trap).
+    // The panel must not still be governed by the generic ≤1040px nav-drawer band -- that band legitimately still
+    // exists for unrelated rules (sidebar drawer, other tables' scroll trap).
     const navDrawerBlocks = extractMediaBlocks(stylesCss, '@media (max-width: 1040px)');
     expect(navDrawerBlocks.length).toBeGreaterThan(0);
     navDrawerBlocks.forEach((block) => {
@@ -74,10 +73,9 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
   });
 
   it('declares the payroll-wide floor as a named custom variant in index.css, at 1366px', () => {
-    // CLAUDE.md's styling direction requires a new breakpoint value to be a named custom variant in
-    // index.css (the single source of truth for this app's responsive bands), not a bare
-    // `min-[1366px]:` literal scattered at call sites -- see the `mobile:`/`tablet:`/`nav-drawer:`
-    // variants already declared there.
+    // CLAUDE.md's styling direction requires a new breakpoint value to be a named custom variant in index.css, not
+    // a bare `min-[1366px]:` literal scattered at call sites -- see the `mobile:`/`tablet:`/`nav-drawer:` variants
+    // already declared there.
     const variantBlocks = extractMediaBlocks(indexCss, '@custom-variant payroll-wide');
     expect(variantBlocks).toHaveLength(1);
     expect(variantBlocks[0]).toContain('@media (min-width: 1366px)');
@@ -85,8 +83,8 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
 
   it('does not reflow the payroll table into cards in the 721-1040px tablet band', () => {
     const tabletBlocks = extractMediaBlocks(stylesCss, '(min-width: 721px) and (max-width: 1040px)');
-    // Sanity: this band still legitimately exists for the ticket worklist table -- the assertion
-    // below must be about `.payroll-table` specifically, not "the band is gone".
+    // Sanity: this band still legitimately exists for the ticket worklist table -- the assertion below must be
+    // about `.payroll-table` specifically, not "the band is gone".
     expect(tabletBlocks.length).toBeGreaterThan(0);
     tabletBlocks.forEach((block) => {
       expect(block).not.toMatch(/\.payroll-table\b/);
@@ -111,8 +109,8 @@ describe('payroll responsive CSS (B1/B3 regression guard)', () => {
 describe('payroll detail panel container-query grids (Defect 2 regression guard)', () => {
   const rawPayrollPageJsx = fs.readFileSync(path.resolve(__dirname, './PayrollPage.jsx'), 'utf8');
   // Strip the same way as styles.css above: this file's own comments narrate the fix in terms of the
-  // widths/selectors it moved away from (e.g. "dropped to 300px"), which would otherwise trip a
-  // naive `.not.toContain` on the prose describing the fix, not the fix itself.
+  // widths/selectors it moved away from (e.g. "dropped to 300px"), which would otherwise trip a naive
+  // `.not.toContain` on the prose describing the fix, not the fix itself.
   const payrollPageJsx = rawPayrollPageJsx.replace(/\/\*[\s\S]*?\*\//g, '');
 
   it('keeps the >=1366px side panel track at its 310px floor, not the narrowed 300px', () => {
@@ -122,24 +120,23 @@ describe('payroll detail panel container-query grids (Defect 2 regression guard)
   });
 
   it('mirrors the 1366px payroll-wide floor in the JS-side useMediaQuery check', () => {
-    // The CSS `payroll-wide:` variant and this JS check must never be able to drift -- both must
-    // name the exact same number (index.css's `@custom-variant payroll-wide` test above pins the CSS
-    // side down).
+    // The CSS `payroll-wide:` variant and this JS check must never be able to drift -- both must name the exact
+    // same number (index.css's `@custom-variant payroll-wide` test above pins the CSS side down).
     expect(payrollPageJsx).toContain("useMediaQuery('(min-width: 1366px)')");
     expect(payrollPageJsx).not.toContain("useMediaQuery('(min-width: 1280px)')");
   });
 
   it('makes the detail panel a container-query context', () => {
-    // `@container` (Tailwind v4, no plugin) on the `<aside>` itself -- the two money-field grids
-    // below key their column count off THIS element's width, not the viewport's, since the panel
-    // is a sticky side column at >=1366px and a fixed-width overlay below that.
+    // `@container` (Tailwind v4, no plugin) on the `<aside>` itself -- the two money-field grids below key their
+    // column count off THIS element's width, not the viewport's, since the panel is a sticky side column at
+    // >=1366px and a fixed-width overlay below that.
     expect(payrollPageJsx).toMatch(/className=\{cn\(\s*PANEL_CLASS,\s*'payroll-detail-panel',\s*'@container'/);
   });
 
   it('collapses both money-field grids to 1 column below the panel container-query floor', () => {
-    // Both payroll-detail-grid (the 4 MiniMetric cards) and payroll-special-grid (the 9 special-pay
-    // inputs the review measured at 107px) get the same treatment: 1 column by default, 2 only once
-    // the panel container has room per Tailwind's `@sm` (24rem/384px) content-box floor.
+    // Both payroll-detail-grid (the 4 MiniMetric cards) and payroll-special-grid (the 9 special-pay inputs the
+    // review measured at 107px) get the same treatment: 1 column by default, 2 only once the panel container has
+    // room per Tailwind's `@sm` (24rem/384px) content-box floor.
     const detailGridMatches = payrollPageJsx.match(/payroll-detail-grid grid grid-cols-1 gap-2\.5 @sm:grid-cols-2/g) || [];
     const specialGridMatches = payrollPageJsx.match(/payroll-special-grid grid grid-cols-1 gap-2\.5 @sm:grid-cols-2/g) || [];
     expect(detailGridMatches).toHaveLength(1);
@@ -147,11 +144,9 @@ describe('payroll detail panel container-query grids (Defect 2 regression guard)
   });
 
   it('no longer pins payroll-detail-grid/payroll-special-grid to an unconditional 2-column grid in styles.css', () => {
-    // The column count now lives entirely in the Tailwind classes above -- a leftover
-    // `grid-template-columns: repeat(2, ...)` for either class here would be dead weight at best
-    // (styles.css is `@layer legacy` and always loses to a Tailwind utility on the same element) and
-    // a silent reversion at worst if the Tailwind classes were ever dropped without noticing this
-    // stylesheet still pins the columns.
+    // The column count now lives entirely in the Tailwind classes above -- a leftover `grid-template-columns:
+    // repeat` for either class here would be dead weight at best and a silent reversion at worst if the Tailwind
+    // classes were ever dropped without noticing this stylesheet still pins the columns.
     expect(stylesCss).not.toMatch(/\.payroll-detail-grid\b/);
     expect(stylesCss).not.toMatch(/\.payroll-special-grid\b/);
   });
@@ -183,11 +178,8 @@ describe('payroll totals-footer money cell sizing (Item 2 regression guard)', ()
   });
 
   it('does not widen ordinary data-row/table-head money cells the same way -- Item 2 is about the footer only', () => {
-    // `.payroll-table.data-row > .payroll-money-cell` and `.payroll-table.table-head > .payroll-money-cell`
-    // (the truncation-defeat overrides a few lines above the Item 2 fix) must still be the plain
-    // `overflow: visible` rule from B4, not additionally carry `width: max-content` -- individual line
-    // amounts were not observed overflowing, and widening every row's cells would be a wider,
-    // unrequested change.
+    // `.payroll-table.data-row > .payroll-money-cell` and `.payroll-table.table-head > .payroll-money-cell` must
+    // still be the plain `overflow: visible` rule from B4, not additionally carry `width: max-content`.
     const dataRowBlockMatch = stylesCss.match(/\.payroll-table\.table-head > \.payroll-money-cell,\s*\.payroll-table\.data-row > \.payroll-money-cell,\s*\.payroll-table\.payroll-total-row > \.payroll-money-cell\s*{([^}]*)}/);
     expect(dataRowBlockMatch).toBeTruthy();
     expect(dataRowBlockMatch[1]).not.toContain('width: max-content');

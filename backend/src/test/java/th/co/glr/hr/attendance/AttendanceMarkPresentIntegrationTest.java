@@ -29,20 +29,9 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms the CEO/HR "mark present" (WFH / stand-up) write path against the real service, the
- * real SQL and the real controller role gate — CLAUDE.md "Permission changes must ship evidence",
- * because this endpoint is both a new write path and a new authorization rule.
- *
- * <p>Wires the real {@link AttendanceController} — not a mock — so
- * {@code sessions.requireAnyRole(user, "ceo", "hr")} is exercised exactly as production runs it,
- * on top of {@link AttendanceService#markPresent}'s own scope check and the real
- * {@link AttendanceDailyRepository} SQL guards ({@code upsertWfhPresent} / {@code
- * clearWfhNotInRoster}).
- *
- * <p>Every authorization case here asks the question the wrong way round: can a caller who should
- * not be able to reach this endpoint or this data actually reach it.
- */
+/** Confirms the CEO/HR "mark present" (WFH / stand-up) write path against the real service, the real SQL and
+ * the real controller role gate — CLAUDE.md "Permission changes must ship evidence", because this endpoint is
+ * both a new write path and a new authorization rule. */
 class AttendanceMarkPresentIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
@@ -69,10 +58,9 @@ class AttendanceMarkPresentIntegrationTest extends AbstractPostgresIntegrationTe
             new AttendanceDatParser(),
             properties,
             dailyService);
-        // Real AttendanceMonthlySummaryService (not a mock) -- unrelated to markPresent, but this
-        // file's own philosophy ("wires the real AttendanceController — not a mock") extends
-        // naturally to the controller's other collaborator now that it has one; both LeaveRepository
-        // and AttendanceMonthlySummaryExporter are cheap to construct for real.
+        // Real AttendanceMonthlySummaryService -- unrelated to markPresent, but this file's own philosophy extends
+        // naturally to the controller's other collaborator now that it has one; both LeaveRepository and
+        // AttendanceMonthlySummaryExporter are cheap to construct for real.
         AttendanceMonthlySummaryService monthlySummaryService = new AttendanceMonthlySummaryService(
             service, dailyService, new LeaveRepository(jdbc), new AttendanceMonthlySummaryExporter());
         controller = new AttendanceController(service, monthlySummaryService, new SessionContext());
@@ -160,9 +148,9 @@ class AttendanceMarkPresentIntegrationTest extends AbstractPostgresIntegrationTe
 
         AttendanceMarkPresentResponse response = markPresent(ceo(), WEDNESDAY, List.of(alice), "stand-up");
 
-        // The CEO ticked alice present, so the manual mark wins over the scan: the derived row is
-        // overwritten to WFH. The raw punches are untouched (not asserted here — see the repository
-        // javadoc), so un-marking + a recalc would restore the punch-derived view.
+        // The CEO ticked alice present, so the manual mark wins over the scan: the derived row is overwritten to WFH.
+        // The raw punches are untouched (not asserted here — see the repository javadoc), so un-marking + a recalc
+        // would restore the punch-derived view.
         assertThat(response.markedCount()).isEqualTo(1);
         AttendanceDailyDto after = dayFor(alice, WEDNESDAY);
         assertThat(after.status()).isEqualTo(AttendanceDayStatus.WFH);

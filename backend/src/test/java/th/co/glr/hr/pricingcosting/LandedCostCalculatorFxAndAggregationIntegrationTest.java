@@ -60,16 +60,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Real-DB proof for the three P0/P1a fixes to {@link LandedCostCalculator} and {@code FxResolver}
- * that need the FULL pricing-decision pipeline (ticket &rarr; pricing request &rarr; factory quote
- * &rarr; {@code startReview}) rather than a DB-free unit test — {@code FxResolverTest} covers the
- * FX gate's OWN logic in isolation; this class proves the fixes reach the real chain.
- *
- * <p>Mirrors {@link LandedCostCalculatorFormulaIntegrationTest}'s wiring exactly (same fixture
- * conventions, same hand-wired services) — that class owns V109 formula-arithmetic proof; this one
- * owns the P0 FX-gate and P1a aggregation proof, kept separate so neither file's purpose blurs.
- */
+/** Real-DB proof for the three P0/P1a fixes to LandedCostCalculator and FxResolver that need the FULL
+ * pricing-decision pipeline rather than a DB-free unit test — FxResolverTest covers the FX gate's OWN logic in
+ * isolation; this class proves the fixes reach the real chain. */
 class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -128,19 +121,11 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         ceoActor = actor(ceoUserId, "ceo");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // P0: a CEO-entered MANUAL non-THB rate reaches startReview, and is fully traceable
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // a CEO-entered MANUAL non-THB rate reaches startReview, and is fully traceable
 
-    /**
-     * Before the P0 fix, EVERY non-THB pricing request 422'd here — {@code FxResolver} refused any
-     * rate not sourced from BOT, and the ONLY writer reachable from the CEO settings UI ({@code
-     * FxRateRepository#upsert}) hardcodes {@code source = 'MANUAL'}. This proves the fix through
-     * the REAL chain: a MANUAL EUR rate, seeded exactly the way the CEO settings screen would write
-     * it, now lets {@code startReview} succeed — and asserts the traceability claim the fix's own
-     * reasoning depends on: the decision AND the costing row both record {@code fxSource =
-     * "MANUAL"}, not just a believed side effect.
-     */
+    /** Before the P0 fix, EVERY non-THB pricing request 422'd here — FxResolver refused any rate not sourced from
+     * BOT, and the ONLY writer reachable from the CEO settings UI (FxRateRepository#upsert) hardcodes source =
+     * 'MANUAL'. */
     @Test
     void manualEurRate_reachesStartReview_andDecisionAndCostingRecordFxSourceManual() {
         seedManualFxRate("EUR", new BigDecimal("38.5000"), LocalDate.now());
@@ -166,9 +151,7 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         assertThat(costingItem.fxRate()).isEqualByComparingTo("38.5000");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // P1a: every missing-factor problem across every item is reported together, in one 422
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
      * Two items, from TWO DIFFERENT factories (so two shipments) — this is what actually
@@ -204,17 +187,11 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
             });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // isFullyResolvable's semantics must survive the restructure: false, never a thrown exception
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * {@code FactoryQuoteCarryForward} and {@code FactoryQuoteService#markReadyForCosting} both
-     * depend on {@code isFullyResolvable} returning a plain {@code false} (never letting the
-     * {@code ApiException} escape) for a request that is not yet costable — a request with no
-     * factory quote at all is the simplest such case. Proves this still holds after resolveSources
-     * was rewritten to accumulate rather than throw-first.
-     */
+    /** FactoryQuoteCarryForward and FactoryQuoteService#markReadyForCosting both depend on isFullyResolvable
+     * returning a plain false (never letting the ApiException escape) for a request that is not yet costable — a
+     * request with no factory quote at all is the simplest such case. */
     @Test
     void isFullyResolvable_returnsFalse_neverThrows_whenNoFactoryQuoteExistsYet() {
         long pricingRequestId = singleItemSubmittedNoQuoteYet("FX Unresolvable Factory");
@@ -229,14 +206,10 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
             .isFalse();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Seeds (or overwrites) a MANUAL {@code sales.fx_rates} row exactly the shape {@code
-     * FxRateRepository#upsert} — the CEO settings FX write path — produces: {@code source =
-     * 'MANUAL'}, {@code fetched_at = NULL}. Deliberately raw SQL, not the repository, so this test
-     * does not depend on the very write path {@code FxResolverTest} already covers in isolation. */
+    /** Seeds (or overwrites) a MANUAL sales.fx_rates row exactly the shape FxRateRepository#upsert — the CEO
+     * settings FX write path — produces: source = 'MANUAL', fetched_at = NULL. */
     private void seedManualFxRate(String currency, BigDecimal rateToThb, LocalDate effectiveDate) {
         jdbc.update("""
             INSERT INTO sales.fx_rates (currency, rate_to_thb, effective_date, source, fetched_at, updated_at)
@@ -249,9 +222,9 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
                 .addValue("currency", currency).addValue("rate", rateToThb).addValue("date", effectiveDate));
     }
 
-    /** One item, one factory, driven to READY_FOR_CEO_REVIEW, quoted (and requested) entirely in
-     * {@code currency} PER_PIECE — the simplest costable fixture, parametrized only by currency so
-     * the FX test above can drive a non-THB chain end to end. */
+    /** One item, one factory, driven to READY_FOR_CEO_REVIEW, quoted (and requested) entirely in currency PER_PIECE
+     * — the simplest costable fixture, parametrized only by currency so the FX test above can drive a non-THB
+     * chain end to end. */
     private long singleItemReadyForReview(String factoryName, String currency) {
         long productId = insertCatalogProduct(factoryName, "IT", "FX-TEST-" + UUID.randomUUID(),
             new BigDecimal("100.00"), currency, "per_piece");
@@ -379,9 +352,8 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         factoryQuoteService.markReadyForCosting(respondedA.id(), importActor);
 
         // Factory B: quoted PER_PIECE (sqmPerUnit supplied, so resolveSqmPerPiece succeeds and
-        // FactoryQuoteService#receive's own PER_BOX/PER_SQM/PER_LINEAR_M validation never triggers
-        // — that check only looks at the QUOTE's basis). piecesPerBox is null; the REQUEST's own
-        // PER_BOX basis (see itemB above) is what drives quantityToPieces to need it anyway.
+        // FactoryQuoteService#receive's own PER_BOX/PER_SQM/PER_LINEAR_M validation never triggers — that check only
+        // looks at the QUOTE's basis).
         ReceiveFactoryQuoteRequest responseB = new ReceiveFactoryQuoteRequest("REF-AGG-B", "THB", "30 days", "45 days",
             "revision", "note", List.of(new ReceiveFactoryQuoteItemRequest(
                 draftB.items().get(0).pricingRequestItemId(), null, null, new BigDecimal("100"),
@@ -401,9 +373,8 @@ class LandedCostCalculatorFxAndAggregationIntegrationTest extends AbstractPostgr
         return pricingRequestId;
     }
 
-    /** A single item, single factory, submitted and picked up but with NO factory quote drafted or
-     * received yet — {@code resolveSources} fails at the "quote not found" step, the simplest
-     * unresolvable state. */
+    /** A single item, single factory, submitted and picked up but with NO factory quote drafted or received yet —
+     * resolveSources fails at the "quote not found" step, the simplest unresolvable state. */
     private long singleItemSubmittedNoQuoteYet(String factoryName) {
         long productId = insertCatalogProduct(factoryName, "IT", "UNRESOLVED-" + UUID.randomUUID(),
             new BigDecimal("100.00"), "THB", "per_piece");

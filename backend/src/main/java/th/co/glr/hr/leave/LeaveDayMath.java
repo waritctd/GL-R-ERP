@@ -71,9 +71,9 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
  * {@link LeaveService#computeTotalDays} for where the basis is selected.
  */
 final class LeaveDayMath {
-    // Renamed from ONE_WORKING_DAY (V119): this constant is now merged per COUNTED day under
-    // EITHER basis (working or calendar), not just a working day -- see the basis-aware overloads
-    // below. Purely an internal name; not part of any tested/pinned public shape.
+    // Renamed from ONE_WORKING_DAY (V119): this constant is now merged per COUNTED day under EITHER basis (working
+    // or calendar), not just a working day -- see the basis-aware overloads below. Purely an internal name; not
+    // part of any tested/pinned public shape.
     private static final BigDecimal ONE_DAY = new BigDecimal("1.00");
 
     private LeaveDayMath() {
@@ -102,10 +102,8 @@ final class LeaveDayMath {
             && scheduleResolver.resolve(employeeId, divisionId, departmentId, date).isWorkday(date);
     }
 
-    /**
-     * Total working days in the inclusive range [startDate, endDate], per the caller-supplied
-     * {@code isWorkingDay} predicate (see {@link #workingDayPredicate}).
-     */
+    /** Total working days in the inclusive range [startDate, endDate], per the caller-supplied isWorkingDay
+     * predicate (see #workingDayPredicate). */
     static int countWorkingDays(LocalDate startDate, LocalDate endDate, Predicate<LocalDate> isWorkingDay) {
         int days = 0;
         LocalDate cursor = startDate;
@@ -130,12 +128,9 @@ final class LeaveDayMath {
         return countWorkingDays(startDate, endDate, LeaveDayMath::isWorkingDay);
     }
 
-    /**
-     * §5.4 MATERNITY calendar-day counting (V119): total CALENDAR days (every day, no Mon-Fri
-     * filter) in the inclusive range [startDate, endDate]. Trivial ({@code endDate - startDate +
-     * 1}), but centralised here (rather than inlined in LeaveService) so every day-counting rule
-     * this codebase uses lives in one place. See {@link LeaveDayCountBasis#CALENDAR_DAYS}.
-     */
+    /** §5.4 MATERNITY calendar-day counting (V119): total CALENDAR days (every day, no Mon-Fri filter) in the
+     * inclusive range [startDate, endDate]. Trivial (endDate - startDate + 1), but centralised here (rather than
+     * inlined in LeaveService) so every day-counting rule this codebase uses lives in one place. */
     static int countCalendarDays(LocalDate startDate, LocalDate endDate) {
         return (int) (ChronoUnit.DAYS.between(startDate, endDate) + 1);
     }
@@ -165,12 +160,9 @@ final class LeaveDayMath {
         return unpaidWorkingDaysByMonth(startDate, endDate, paidDays, totalDays, LeaveDayCountBasis.WORKING_DAYS);
     }
 
-    /**
-     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload of {@link
-     * #unpaidWorkingDaysByMonth(LocalDate, LocalDate, BigDecimal, BigDecimal)}, using the legacy
-     * Mon-Fri/no-holiday predicate -- see the 6-arg overload below (now the real implementation)
-     * for the schedule/holiday-aware version every production call site uses.
-     */
+    /** §5.4 MATERNITY calendar-day counting: basis-aware overload of #unpaidWorkingDaysByMonth, using the legacy
+     * Mon-Fri/no-holiday predicate -- see the 6-arg overload below for the schedule/holiday-aware version every
+     * production call site uses. */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonth(
             LocalDate startDate, LocalDate endDate, BigDecimal paidDays, BigDecimal totalDays,
             LeaveDayCountBasis basis) {
@@ -231,17 +223,8 @@ final class LeaveDayMath {
         return day != DayOfWeek.SATURDAY && day != DayOfWeek.SUNDAY;
     }
 
-    /**
-     * §5.1 SICK certificate filing-window (V124): returns the date reached by walking forward from
-     * {@code from}, counting only WORKING days ({@link #isWorkingDay}, Mon-Fri -- same known
-     * no-holiday-calendar limitation as the rest of this class, see the class Javadoc and CLAUDE.md;
-     * NOT fixed here), until {@code workingDays} of them have been counted. {@code from} itself is
-     * NEVER counted, even when it is itself a working day -- "file within N working days of X" reads
-     * as N days AFTER X, not X itself as day one (mirrors the ordinary "N business days from today"
-     * reading a filing deadline states). {@code workingDays <= 0} returns {@code from} unchanged
-     * (defensive; every caller today passes a positive filing-window value, enforced by {@code
-     * chk_leave_type_certificate_filing_window_positive}).
-     */
+    /** §5.1 SICK certificate filing-window: returns the date reached by walking forward from from, counting only
+     * WORKING days, until workingDays of them have been counted. */
     static LocalDate addWorkingDays(LocalDate from, int workingDays) {
         LocalDate date = from;
         int counted = 0;
@@ -280,11 +263,9 @@ final class LeaveDayMath {
         return totalDaysByYear(startDate, endDate, totalDays, LeaveDayCountBasis.WORKING_DAYS);
     }
 
-    /**
-     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload, using the legacy Mon-Fri/
-     * no-holiday predicate -- see the 5-arg overload below (now the real implementation) for the
-     * schedule/holiday-aware version every production call site uses.
-     */
+    /** §5.4 MATERNITY calendar-day counting (V119): basis-aware overload, using the legacy Mon-Fri/ no-holiday
+     * predicate -- see the 5-arg overload below (now the real implementation) for the schedule/holiday-aware
+     * version every production call site uses. */
     static Map<Integer, BigDecimal> totalDaysByYear(
             LocalDate startDate, LocalDate endDate, BigDecimal totalDays, LeaveDayCountBasis basis) {
         return totalDaysByYear(startDate, endDate, totalDays, basis, LeaveDayMath::isWorkingDay);
@@ -316,13 +297,8 @@ final class LeaveDayMath {
         return byYear;
     }
 
-    /**
-     * Clips {@code [startDate, endDate]} to the portion that falls within calendar {@code year}, as a
-     * two-element {@code [clippedStart, clippedEnd]} array, or {@code null} if the range does not
-     * intersect that year at all. Lets a caller holding a per-year (paidDays, totalDays) attribution
-     * (see {@link LeaveQuotaYearSplit}) reuse {@link #unpaidWorkingDaysByMonth} UNMODIFIED for just
-     * that year's slice of a request that spans a calendar-year boundary.
-     */
+    /** Clips [startDate, endDate] to the portion that falls within calendar year, as a two-element [clippedStart,
+     * clippedEnd] array, or null if the range does not intersect that year at all. */
     static LocalDate[] clipToYear(LocalDate startDate, LocalDate endDate, int year) {
         LocalDate yearStart = LocalDate.of(year, 1, 1);
         LocalDate yearEnd = LocalDate.of(year, 12, 31);
@@ -334,32 +310,17 @@ final class LeaveDayMath {
         return new LocalDate[] {clippedStart, clippedEnd};
     }
 
-    /**
-     * Cross-year-aware composition of {@link #unpaidWorkingDaysByMonth}: calls it once per {@code
-     * perYear} entry, using that year's OWN (paidDays, totalDays) attribution and that year's clipped
-     * date sub-range (via {@link #clipToYear}), then merges the resulting per-month maps.
-     *
-     * <p>This is REQUIRED, not optional, once a single request can be granted paid days
-     * independently per calendar year (see {@link LeaveQuotaYearSplit}'s Javadoc for why: a request
-     * can legitimately be "paid, then unpaid" in year A and "paid" again from the start of year B --
-     * a single whole-request chronological-rank threshold, which is what feeding the PARENT's
-     * aggregate paidDays/totalDays into {@link #unpaidWorkingDaysByMonth} would do, cannot represent
-     * that "paid resets at the boundary" shape and would misattribute which calendar days are unpaid
-     * whenever an earlier year's paid cap is exhausted while a later year's is not). Used by {@code
-     * LeaveService#cancel}'s cancel-after-close reversal, which (unlike the single-month payroll
-     * query in {@code LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}) needs the full
-     * multi-month, multi-year picture in one call.
-     */
+    /** Cross-year-aware composition of #unpaidWorkingDaysByMonth: calls it once per perYear entry, using that
+     * year's OWN (paidDays, totalDays) attribution and that year's clipped date sub-range (via #clipToYear), then
+     * merges the resulting per-month maps. */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonthAcrossYears(
             LocalDate startDate, LocalDate endDate, List<LeaveQuotaYearSplit> perYear) {
         return unpaidWorkingDaysByMonthAcrossYears(startDate, endDate, perYear, LeaveDayCountBasis.WORKING_DAYS);
     }
 
-    /**
-     * §5.4 MATERNITY calendar-day counting (V119): basis-aware overload, using the legacy Mon-Fri/
-     * no-holiday predicate -- see the 5-arg overload below (now the real implementation) for the
-     * schedule/holiday-aware version every production call site uses.
-     */
+    /** §5.4 MATERNITY calendar-day counting (V119): basis-aware overload, using the legacy Mon-Fri/ no-holiday
+     * predicate -- see the 5-arg overload below (now the real implementation) for the schedule/holiday-aware
+     * version every production call site uses. */
     static Map<LocalDate, BigDecimal> unpaidWorkingDaysByMonthAcrossYears(
             LocalDate startDate, LocalDate endDate, List<LeaveQuotaYearSplit> perYear, LeaveDayCountBasis basis) {
         return unpaidWorkingDaysByMonthAcrossYears(startDate, endDate, perYear, basis, LeaveDayMath::isWorkingDay);
@@ -422,22 +383,18 @@ final class LeaveDayMath {
     // (270 clock - 30 break overlap)/480 = 240/480 = 0.50.
     // ─────────────────────────────────────────────────────────────────────
 
-    /** The company-wide lunch break subtracted from a boundary segment's worked minutes (leave
-     * arithmetic only -- see the "Partial-day span" section header above for why this is not a
-     * {@link WorkSchedule} field). */
+    /** The company-wide lunch break subtracted from a boundary segment's worked minutes (leave arithmetic only --
+     * see the "Partial-day span" section header above for why this is not a WorkSchedule field). */
     private static final LocalTime BREAK_START = LocalTime.of(12, 30);
     private static final LocalTime BREAK_END = LocalTime.of(13, 30);
 
-    /** The fixed denominator for a boundary-day fraction: 8 WORKED hours, never a schedule's own
-     * (break-inclusive) clock span. See the "Partial-day span" section header above. */
+    /** The fixed denominator for a boundary-day fraction: 8 WORKED hours, never a schedule's own (break-inclusive)
+     * clock span. See the "Partial-day span" section header above. */
     private static final long WORKED_MINUTES_PER_DAY = 480;
 
-    /**
-     * One boundary day's fraction: {@code (minutes(from, to) - overlapMinutes(from, to,
-     * BREAK_START, BREAK_END)) / 480}, rounded HALF_UP to 2dp (matching every other day figure in
-     * this class), clamped to {@code [0.00, 1.00]}. Zero (never negative) when {@code to} is not
-     * after {@code from}, or the break entirely consumes the segment.
-     */
+    /** One boundary day's fraction: (minutes(from, to) - overlapMinutes(from, to, BREAK_START, BREAK_END)) / 480,
+     * rounded HALF_UP to 2dp (matching every other day figure in this class), clamped to [0.00, 1.00]. Zero (never
+     * negative) when to is not after from, or the break entirely consumes the segment. */
     private static BigDecimal boundaryFraction(LocalTime from, LocalTime to) {
         long minutes = Duration.between(from, to).toMinutes();
         if (minutes <= 0) {
@@ -455,36 +412,9 @@ final class LeaveDayMath {
             .min(ONE_DAY);
     }
 
-    /**
-     * The per-date fraction ledger for ONE timed leave request (single- or multi-day), in
-     * chronological order (a {@link LinkedHashMap}, so a caller may safely read entries in
-     * insertion order -- every caller below relies on this for its "consume paidDays from the
-     * earliest day first" reasoning, same principle as every other method in this class).
-     *
-     * <p><b>Single-day</b> ({@code startDate.equals(endDate)}): one entry, {@code
-     * boundaryFraction(startTime, endTime)} -- contributes regardless of {@code
-     * isWorkingDay}/{@code basis}, matching the pre-existing single-day sub-day rule ({@code
-     * LeaveService#computeTotalDays}'s old behaviour, and {@code AttendanceMonthlySummaryService}'s
-     * "an employee who filed a half-day off has, by definition, already accounted for the working
-     * half themselves") -- an employee who chose to time-box a day they were not otherwise scheduled
-     * to work (e.g. a CALENDAR_DAYS/MATERNITY sub-day request landing on a Saturday) still gets that
-     * day counted; whether the fraction is ever NON-zero for such a day is entirely a product of the
-     * times chosen relative to the fixed 480-minute/break rule, not a rule enforced here.
-     *
-     * <p><b>Multi-day</b> ({@code startDate} before {@code endDate}): the first day contributes
-     * {@code boundaryFraction(startTime, startSchedule.workEnd())}, the last day contributes {@code
-     * boundaryFraction(endSchedule.workStart(), endTime)}, and every day strictly between contributes
-     * a flat {@link #ONE_DAY} -- but ONLY when {@code basis.counts(date, isWorkingDay)} says that
-     * boundary/interior day counts at all (a Saturday for a five-day-schedule employee, or a seeded
-     * {@code hr.holiday}, contributes nothing, exactly the same schedule/holiday awareness every
-     * other method in this class already gives a whole-day request). {@code startSchedule}/{@code
-     * endSchedule} are used ONLY to anchor a boundary segment's open end at that day's own
-     * {@code workStart()}/{@code workEnd()} -- the FRACTION itself is always computed against the
-     * fixed 480-worked-minute/break rule (see the "Partial-day span" section header above), never
-     * against the schedule's own span. A zero-fraction boundary day (e.g. a first day whose {@code
-     * isWorkingDay} says no) is omitted from the map entirely, not stored as a zero entry -- callers
-     * that sum this map's values never need to special-case a zero.
-     */
+    /** The per-date fraction ledger for ONE timed leave request, in chronological order. A zero-fraction boundary
+     * day (e.g. a first day whose isWorkingDay says no) is omitted from the map entirely, not stored as a zero
+     * entry -- callers that sum this map's values never need to special-case a zero. */
     static Map<LocalDate, BigDecimal> spanDayFractions(
             LocalDate startDate, LocalDate endDate, LocalTime startTime, LocalTime endTime,
             LeaveDayCountBasis basis, Predicate<LocalDate> isWorkingDay,
@@ -529,34 +459,18 @@ final class LeaveDayMath {
         return fractions.values().stream().reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
-    /**
-     * A {@link #spanDayFractions} ledger, bucketed by calendar year -- the fraction-aware analogue of
-     * {@link #totalDaysByYear} for a multi-day timed request, used by {@code
-     * LeaveService#computeQuotaSplit} so a request's per-year attribution sums to EXACTLY the same
-     * total {@link #sumFractions} reports (trivially true here: every entry lands in exactly one
-     * year's bucket).
-     */
+    /** A #spanDayFractions ledger, bucketed by calendar year -- the fraction-aware analogue of #totalDaysByYear for
+     * a multi-day timed request, used by LeaveService#computeQuotaSplit so a request's per-year attribution sums
+     * to EXACTLY the same total #sumFractions reports. */
     static Map<Integer, BigDecimal> sumFractionsByYear(Map<LocalDate, BigDecimal> fractions) {
         Map<Integer, BigDecimal> byYear = new LinkedHashMap<>();
         fractions.forEach((date, value) -> byYear.merge(date.getYear(), value, BigDecimal::add));
         return byYear;
     }
 
-    /**
-     * The unpaid portion of a {@link #spanDayFractions} ledger, bucketed by calendar month -- the
-     * fraction-aware analogue of {@link #unpaidWorkingDaysByMonth}'s multi-day branch, generalised
-     * from "consume {@code floor(paidDays)} WHOLE days, in order" to "consume {@code paidDays} (a
-     * BigDecimal, never floored) against the ledger's own per-day VALUES, in the SAME chronological
-     * order" -- required because a boundary day's value here may itself be fractional (e.g. 0.50),
-     * so an integer day-count budget cannot represent how much of it is paid. {@code fractions} MUST
-     * already be in chronological order (guaranteed by {@link #spanDayFractions}); a caller
-     * attributing a cross-year request must pre-filter this map to one year's own dates and pass that
-     * year's own {@code paidDays} -- see {@link LeaveQuotaYearSplit}'s "paid consumption resets per
-     * calendar year" rule, which this method does not itself know about.
-     *
-     * <p>Never called for a whole-day request -- that keeps using {@link #unpaidWorkingDaysByMonth}
-     * unchanged (see this section's own header comment for why the two paths must never merge).
-     */
+    /** The unpaid portion of a #spanDayFractions ledger, bucketed by calendar month. Never called for a whole-day
+     * request -- that keeps using #unpaidWorkingDaysByMonth unchanged (see this section's own header comment for
+     * why the two paths must never merge). */
     static Map<LocalDate, BigDecimal> unpaidByMonthFromFractions(
             Map<LocalDate, BigDecimal> fractions, BigDecimal paidDays) {
         Map<LocalDate, BigDecimal> byMonth = new LinkedHashMap<>();
@@ -574,15 +488,9 @@ final class LeaveDayMath {
         return byMonth;
     }
 
-    /**
-     * Cross-year composition of {@link #unpaidByMonthFromFractions} -- the fraction-aware analogue of
-     * {@link #unpaidWorkingDaysByMonthAcrossYears}, used by {@code
-     * LeaveService#recordPayrollCorrectionIfNeeded} (cancel-after-close reversal) for a multi-day
-     * timed request. Filters {@code fractions} to each {@code perYear} entry's own calendar year
-     * (paid consumption resets at the year boundary, same reasoning as the whole-day analogue this
-     * mirrors) rather than {@link #clipToYear}ing a date RANGE: a fraction ledger already carries
-     * exact dates, so filtering by {@code date.getYear()} is simpler and exactly as correct.
-     */
+    /** Cross-year composition of #unpaidByMonthFromFractions -- the fraction-aware analogue of
+     * #unpaidWorkingDaysByMonthAcrossYears, used by LeaveService#recordPayrollCorrectionIfNeeded
+     * (cancel-after-close reversal) for a multi-day timed request. */
     static Map<LocalDate, BigDecimal> unpaidByMonthFromFractionsAcrossYears(
             Map<LocalDate, BigDecimal> fractions, List<LeaveQuotaYearSplit> perYear) {
         Map<LocalDate, BigDecimal> combined = new LinkedHashMap<>();
@@ -625,13 +533,8 @@ final class LeaveDayMath {
     // minute would print quantisation noise as though it were data.
     private static final long DISPLAY_MINUTE_STEP = 5;
 
-    /**
-     * A stored day count as "1 วัน 4 ชม. 30 น." / "4 ชม. 30 น." / "1 วัน" (never a decimal, never a
-     * trailing zero-valued unit). {@code null} reads as zero, matching {@code formatDaysOrDash}'s
-     * frontend sibling's "genuinely zero vs not known" split being the CALLER's job, not this
-     * method's -- a caller that must distinguish "no leave" from "not computed" should check for
-     * {@code null} itself before calling this.
-     */
+    /** A stored day count as "1 วัน 4 ชม. 30 น." / "1 วัน" (never a decimal, never a trailing zero-valued unit). 30
+     * น." / "4 ชม. */
     static String formatDuration(BigDecimal days) {
         BigDecimal value = days == null ? BigDecimal.ZERO : days;
         BigDecimal rawMinutes = value.abs().multiply(BigDecimal.valueOf(WORKED_MINUTES_PER_DAY));

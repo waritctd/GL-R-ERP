@@ -224,11 +224,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // R9 — outcome authz: mirrors CustomerQuotationService#recordOutcome's gate EXACTLY
-    // (SALES_ROLES = Set.of("sales") only — sales_manager is NOT included there, so it is not
-    // included here either). Every non-owner case asserts NOTHING was written (still ISSUED).
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // outcome authz: mirrors CustomerQuotationService#recordOutcome's gate EXACTLY (SALES_ROLES = Set.of("sales")
+    // only — sales_manager is NOT included there, so it is not included here either). Every non-owner case asserts
+    // NOTHING was written (still ISSUED).
 
     @Test
     void recordOutcome_byOwningSales_accepted_setsPrStatusAndDocStatus() {
@@ -619,9 +617,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    /** Deliberate divergence check (stated in the brief): this origin's own EDIT_ROLES lets
-     * sales_manager edit/submit/cancel ANY deal, but recordOutcome mirrors the LEGACY gate
-     * instead, which has no such carve-out — sales_manager must be refused here too. */
+    /** Deliberate divergence check (stated in the brief): this origin's own EDIT_ROLES lets sales_manager
+     * edit/submit/cancel ANY deal, but recordOutcome mirrors the LEGACY gate instead, which has no such carve-out
+     * — sales_manager must be refused here too. */
     @Test
     void recordOutcome_bySalesManager_refused_writesNothing() {
         DealQuotationDto issued = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("10"));
@@ -746,9 +744,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             new RecordOutcomeRequest(QuotationStatus.REVISION_REQUESTED, "ขอปรับราคา", UUID.randomUUID().toString()),
             salesActor);
         assertThat(revisionRequested.docStatus()).isEqualTo(QuotationStatus.REVISION_REQUESTED);
-        // Mirrors REJECTED: this outcome deliberately does NOT change the PR's own status — still
-        // QUOTATION_ISSUED, which is exactly what #createFromPricingRequest's own "expiry escape
-        // hatch" status gate already tolerates (see that method's own updated comment).
+        // Mirrors REJECTED: this outcome deliberately does NOT change the PR's own status — still QUOTATION_ISSUED,
+        // which is exactly what #createFromPricingRequest's own "expiry escape hatch" status gate already tolerates
+        // (see that method's own updated comment).
         assertThat(pricingRequestService.get(pricingRequestId, salesActor).summary().status())
             .isEqualTo(PricingRequestStatus.QUOTATION_ISSUED);
 
@@ -772,11 +770,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(quotationService.get(issued.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.SUPERSEDED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // R8 — one finalized (ACCEPTED) quotation per DEAL, across BOTH คำขอราคา origins. Both
-    // directions are wrong-way-round: the SECOND accept must be refused with NOTHING written,
-    // regardless of which origin goes first.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // one finalized (ACCEPTED) quotation per DEAL, across BOTH คำขอราคา origins. Both directions are
+    // wrong-way-round: the SECOND accept must be refused with NOTHING written, regardless of which origin goes
+    // first.
 
     @Test
     void recordOutcome_newOrigin_refusedWhenLegacyAlreadyAccepted_r8() {
@@ -808,8 +804,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void recordOutcome_newOrigin_notBlockedByLegacyNonAcceptedOutcome_r8() {
-        // R8 only fires on ACCEPTED-vs-ACCEPTED — a REJECTED legacy quotation on a sibling
-        // pricing request must never block this origin's own accept.
+        // R8 only fires on ACCEPTED-vs-ACCEPTED — a REJECTED legacy quotation on a sibling pricing request must never
+        // block this origin's own accept.
         CustomerQuotationDto legacyIssued = issuedLegacyQuotation(PricingRequestRecipient.DESIGNER);
         legacyQuotationService.recordOutcome(legacyIssued.id(),
             new RecordQuotationOutcomeRequest(QuotationStatus.REJECTED, "ไม่เอา", UUID.randomUUID().toString()), salesActor);
@@ -835,9 +831,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void confirmOrder_fromNewOriginAcceptedQuotation_unedited_reconcilesTicketItemsAndAdvancesStage() {
-        // Original ticket_item.qty is 1 (ticketItem() helper below) — deliberately mismatched
-        // from the pricing request's own requestedQty (10 pieces, see pricingItem()) so a
-        // successful reconciliation is observable, not a coincidence.
+        // Original ticket_item.qty is 1 (ticketItem() helper below) — deliberately mismatched from the pricing
+        // request's own requestedQty (10 pieces, see pricingItem()) so a successful reconciliation is observable, not
+        // a coincidence.
         long originalTicketItemId = jdbc.queryForObject(
             "SELECT item_id FROM sales.ticket_item WHERE ticket_id = :id",
             Map.of("id", ticketId), Long.class);
@@ -854,8 +850,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             "SELECT requested_qty FROM sales.pricing_request_item WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), BigDecimal.class);
         assertThat(requestedQty).isNotEqualByComparingTo("1");
-        // The unedited case: the quotation's own accepted line quantity equals the PR's, so the
-        // fix's map lookup and the old PR-item fallback must agree.
+        // The unedited case: the quotation's own accepted line quantity equals the PR's, so the fix's map lookup and
+        // the old PR-item fallback must agree.
         assertThat(new BigDecimal(accepted.items().get(0).piecesFinal())).isEqualByComparingTo(requestedQty);
 
         OrderConfirmationDtos.OrderConfirmationResultDto result = orderConfirmation.confirmOrder(
@@ -902,8 +898,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         BigDecimal prOriginalQty = jdbc.queryForObject(
             "SELECT requested_qty FROM sales.pricing_request_item WHERE pricing_request_id = :id",
             Map.of("id", pricingRequestId), BigDecimal.class);
-        // The PR itself was never touched by the quotation edit — still 10. This is the exact
-        // fact the old code got wrong: it treated THIS number as authoritative for reconciliation.
+        // The PR itself was never touched by the quotation edit — still 10. This is the exact fact the old code got
+        // wrong: it treated THIS number as authoritative for reconciliation.
         assertThat(prOriginalQty).isEqualByComparingTo("10");
 
         orderConfirmation.confirmOrder(pricingRequestId,
@@ -1186,16 +1182,14 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                 assertThat(e.getMessage()).contains("clientRequestId ถูกใช้ไปแล้วกับใบเสนอราคาอื่น");
             });
-        // Nothing recorded on the new-engine row — the collision surfaced as a clean 409 before
-        // any partial write could stick (the UPDATE and the constraint violation are atomic).
+        // Nothing recorded on the new-engine row — the collision surfaced as a clean 409 before any partial write
+        // could stick (the UPDATE and the constraint violation are atomic).
         assertThat(quotationService.get(issuedNew.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    /** Reverse order of {@link
-     * #recordOutcome_crossEngineClientRequestIdCollision_legacyThenNew_refused409} — same
-     * collision, same guard, opposite engine calling second, proving the catch in {@code
-     * CustomerQuotationService#recordOutcome} (not just {@code DealQuotationService}'s) actually
-     * fires. */
+    /** Reverse order of #recordOutcome_crossEngineClientRequestIdCollision_legacyThenNew_refused409 — same
+     * collision, same guard, opposite engine calling second, proving the catch in
+     * CustomerQuotationService#recordOutcome (not just DealQuotationService's) actually fires. */
     @Test
     void recordOutcome_crossEngineClientRequestIdCollision_newThenLegacy_refused409() {
         DealQuotationDto issuedNew = issuedNewOriginQuotation(PricingRequestRecipient.DESIGNER, new BigDecimal("5"));
@@ -1213,9 +1207,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(legacyQuotationService.get(issuedLegacy.id(), salesActor).docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private static String line(BigDecimal qty, BigDecimal netUnitPrice) {
         return (qty == null ? "null" : qty.stripTrailingZeros().toPlainString()) + " @ "
@@ -1289,9 +1281,8 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
             draft.remainderMode(), draft.creditDays(), 30, draft.customerNotes(), draft.priceMode(),
             draft.documentLanguage(), draft.currency(), List.of(editedItem));
         DealQuotationDto edited = quotationService.update(draft.id(), editRequest, salesActor);
-        // Confirms the edit actually landed BEFORE driving the rest of the flow — if this
-        // assertion ever fails, the test below would otherwise silently degrade into the
-        // unedited case.
+        // Confirms the edit actually landed BEFORE driving the rest of the flow — if this assertion ever fails, the
+        // test below would otherwise silently degrade into the unedited case.
         assertThat(edited.items().get(0).piecesFinal()).isEqualTo(editedPiecesInput);
         DealQuotationDto submitted = quotationService.submit(edited.id(), salesActor);
         return quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
@@ -1344,10 +1335,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     private long submittedCostingReadyRequest(String recipient, BigDecimal qty) {
-        // Links back to the ticket's own (pre-existing, qty=1) ticket_item — the realistic shape
-        // OrderConfirmationService#reconcileTicketItems documents as its main case ("a line that
-        // traces back via source_ticket_item_id"), and the one confirmOrder_...'s own test needs
-        // to observe an actual UPDATE rather than a new-line INSERT.
+        // Links back to the ticket's own ticket_item — the realistic shape
+        // OrderConfirmationService#reconcileTicketItems documents as its main case, and the one confirmOrder_...'s own
+        // test needs to observe an actual UPDATE rather than a new-line INSERT.
         long sourceTicketItemId = jdbc.queryForObject(
             "SELECT item_id FROM sales.ticket_item WHERE ticket_id = :id ORDER BY item_id LIMIT 1",
             Map.of("id", ticketId), Long.class);
@@ -1436,10 +1426,9 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         return actor(id, "account");
     }
 
-    /** {@code account} role WITH the {@code can_create_quotation} grant — mirrors
-     * {@code PricingRequestQuotationIntegrationTest#grantedAccountActor}'s identical pattern; the
-     * grant lets this actor view/edit ANY DEAL_DIRECT deal, but must NOT bypass
-     * {@link DealQuotationService#PRICING_REQUEST_VIEW_ROLES} for a PRICING_REQUEST-origin row. */
+    /** account role WITH the can_create_quotation grant — mirrors PricingRequestQuotationIntegrationTest#grantedAccountActor's
+     * identical pattern; the grant lets this actor view/edit ANY DEAL_DIRECT deal, but must NOT bypass
+     * DealQuotationService#PRICING_REQUEST_VIEW_ROLES for a PRICING_REQUEST-origin row. */
     private UserPrincipal grantedAccountActor(String suffix) {
         EmployeeRepository employees = new EmployeeRepository(
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));

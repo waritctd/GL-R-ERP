@@ -60,9 +60,9 @@ function netTileItem(overrides = {}) {
   };
 }
 
-/** `netTileItem` LINKED to a CEO decision — `ceoNetUnitPrice` non-null is the one signal the
- * editor reads to decide whether to show the badge/marker at all (see QuotationItemRow's own
- * comment). `changed` (via overrides) toggles the badge vs the amber marker. */
+/** `netTileItem` LINKED to a CEO decision — `ceoNetUnitPrice` non-null is the one signal the editor reads to
+ * decide whether to show the badge/marker at all (see QuotationItemRow's own comment). `changed` (via
+ * overrides) toggles the badge vs the amber marker. */
 function linkedNetTileItem(overrides = {}) {
   return netTileItem({
     ceoListUnitPrice: 83, ceoDiscountPct: 10, ceoSpecialPriceSqm: null, ceoDirectNetPrice: null,
@@ -349,10 +349,8 @@ describe('QuotationEditorPage — GLA-123 M5 fix: per-line CEO marker refreshes 
 // that the marker updates on every keystroke with NO save.
 describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before any save lands', () => {
   it('amber marker appears the instant ส่วนลด changes on a row with validation errors (autosave blocked), and clears on revert -- update is never called', async () => {
-    // thicknessMm: null reproduces the coordinator's exact repro (missing ความหนา) and blocks
-    // autosave regardless of the 2s debounce timing -- this test never advances timers or waits
-    // long enough for a real debounce to fire anyway, but the validation error makes the "blocked"
-    // half of the bug explicit rather than incidental.
+    // thicknessMm: null reproduces the coordinator's exact repro and blocks autosave regardless of the 2s debounce
+    // timing.
     api.dealQuotations.get.mockResolvedValue({
       quotation: pricingRequestDraft({ items: [linkedNetTileItem({ thicknessMm: null })] }),
     });
@@ -373,9 +371,9 @@ describe('QuotationEditorPage — coordinator follow-up: LOCAL CEO marker before
   });
 
   it('the SERVER flag stays authoritative after a save: even once the rep types the discount back to the CEO\'s own number (so the LOCAL comparison alone would read "unchanged"), a server response that still says priceChangedFromCeo keeps the amber marker showing', async () => {
-    // A COMPLETE row (no validation errors) this time -- บันทึกร่าง is itself disabled while any
-    // row has a blocking validation error, so exercising an actual save (as this test needs)
-    // requires a row that would pass validateQuotationItem, unlike the two tests above.
+    // A COMPLETE row (no validation errors) this time -- บันทึกร่าง is itself disabled while any row has a
+    // blocking validation error, so exercising an actual save (as this test needs) requires a row that would pass
+    // validateQuotationItem, unlike the two tests above.
     api.dealQuotations.get.mockResolvedValue({
       quotation: pricingRequestDraft({ items: [linkedNetTileItem({ discountPct: 25 })] }),
     });

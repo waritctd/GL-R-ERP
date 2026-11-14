@@ -19,11 +19,8 @@ function setClock(iso) {
 }
 afterEach(() => { vi.useRealTimers(); });
 
-// Issue #405: covers the new HR payroll-ready table columns (อินเซนทีฟ / โบนัสขายของในสต๊อค) and
-// the sales rep's own monthly-summary incentive line, including the manual-INCENTIVE suppression
-// guard. Mirrors the real DTO shape CommissionService#payrollReadySummary now returns
-// (incentiveAmount/stockBonusAmount, additive fields) and the real CommissionRecord shape list()
-// returns, so this test exercises CommissionPage exactly as the real API would drive it.
+// covers the new HR payroll-ready table columns (อินเซนทีฟ / โบนัสขายของในสต๊อค) and the sales rep's own
+// monthly-summary incentive line, including the manual-INCENTIVE suppression guard.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -41,10 +38,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         reject: vi.fn(),
         clawback: vi.fn(),
         updateDeductions: vi.fn(),
-        // Default empty, same reasoning as tickets.list below: every sales_manager/ceo render
-        // (canCreateManual) fires this effect on mount regardless of what a given test is
-        // actually checking, so an unconfigured vi.fn() (resolving to undefined) would throw on
-        // `.then()` in tests that never touch the rep picker at all.
+        // Default empty, same reasoning as tickets.list below: every sales_manager/ceo render fires this effect on
+        // mount regardless of what a given test is actually checking, so an unconfigured vi.fn would throw on `.then`
+        // in tests that never touch the rep picker at all.
         reps: vi.fn().mockResolvedValue({ reps: [] }),
       },
       tickets: {
@@ -58,10 +54,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   };
 });
 
-// browser-image-compression genuinely returns a plain Blob with no `.name` -- this mock
-// reproduces that faithfully rather than a File, which is exactly the shape that exposed the
-// "blob" filename bug in #498/#504. A mock that quietly upgrades the library's real return type
-// would make this test pass whether or not the component re-wraps it.
+// browser-image-compression genuinely returns a plain Blob with no `.name` -- this mock reproduces that
+// faithfully rather than a File, which is exactly the shape that exposed the "blob" filename bug in #498/#504.
 vi.mock('browser-image-compression', () => ({
   default: vi.fn((file) => Promise.resolve(new Blob([file], { type: file.type }))),
 }));
@@ -79,8 +73,8 @@ function renderPage(user) {
   );
 }
 
-// The ×1/×2/×3 segmented control may be native radios or role="radio" buttons -- the contract is
-// the ARIA state, not the element type.
+// The ×1/×2/×3 segmented control may be native radios or role="radio" buttons -- the contract is the ARIA
+// state, not the element type.
 const isDisabled = (el) => el.disabled === true || el.getAttribute('aria-disabled') === 'true';
 
 const hrUser = { id: 900, employeeId: 900, name: 'HR Test', role: 'hr' };
@@ -253,15 +247,8 @@ describe('CommissionPage — HR payroll-ready table (issue #405)', () => {
   });
 });
 
-// fix/commission-figures-from-backend: the incentive line's SUPPRESSION rule (an approved manual
-// INCENTIVE, or a payroll month before the 2026-08-01 fix-forward effective date, both zero the
-// auto-computed limb) used to be re-implemented client-side and was exercised here by feeding raw
-// commission records through it. That computation now lives entirely in
-// CommissionService#monthlySummary, proven by the real-DB CommissionMonthlySummaryIntegrationTest
-// (backend) and, for the underlying ladder/suppression math itself, by
-// CommissionIncentiveStockBonusIntegrationTest and CommissionCalculatorTest. What remains here is
-// purely a RENDERING contract: the panel shows the incentive line when the server reports a
-// positive incentiveAmount, and hides it when the server reports zero (for any reason).
+// fix/commission-figures-from-backend: the incentive line's SUPPRESSION rule used to be re-implemented
+// client-side and was exercised here by feeding raw commission records through it.
 describe('CommissionPage — sales rep monthly incentive line renders the server-reported amount (issue #405)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -288,9 +275,9 @@ describe('CommissionPage — sales rep monthly incentive line renders the server
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    // Redesign: the incentive is one limb of the "ค่าคอมของฉัน" statement ("+ Incentive ข้อ 12"),
-    // not a free-floating "อินเซนทีฟ (นอกขั้นบันได)" line. Scoped to the row because ฿15,000.00
-    // can legitimately also appear elsewhere (a receipt row, the tier panel).
+    // Redesign: the incentive is one limb of the "ค่าคอมของฉัน" statement ("+ Incentive ข้อ 12"), not a
+    // free-floating "อินเซนทีฟ (นอกขั้นบันได)" line. Scoped to the row because ฿15,000.00 can legitimately also
+    // appear elsewhere (a receipt row, the tier panel).
     const incentiveRow = await screen.findByTestId('statement-incentive');
     expect(incentiveRow.textContent).toContain('Incentive ข้อ 12');
     expect(incentiveRow.textContent).toContain('฿15,000.00');
@@ -317,23 +304,16 @@ describe('CommissionPage — sales rep monthly incentive line renders the server
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    // Wait for the statement (proves records loaded and the month change took effect) before
-    // asserting the suppressed limb is absent.
+    // Wait for the statement (proves records loaded and the month change took effect) before asserting the
+    // suppressed limb is absent.
     expect(await screen.findByTestId('statement-total')).not.toBeNull();
     expect(screen.queryByTestId('statement-incentive')).toBeNull();
   });
 });
 
-// fix/commission-figures-from-backend (#548-style V81 regression guard): the monthly tier panel
-// is now driven entirely by the SERVER-computed monthly summary (CommissionService
-// #monthlySummary), replacing a former client-side re-implementation of the tier math that could
-// silently desynchronise from a DB tier-config change (the V81 tier-13 rate correction is the
-// case on record — see CLAUDE.md). These two cases stub figures deliberately unreachable by any
-// tier table (no combination of the seeded 0.25%-3.25% bands on any base yields exactly
-// 99,999.99), and assert the panel renders that exact server figure — not one recomputed
-// client-side from `records`. On unmodified (pre-refactor) code these failed: the panel rendered
-// a JS-recomputed figure derived from `saleRecord()` instead — see the C1 baseline evidence in
-// the PR.
+// fix/commission-figures-from-backend: the monthly tier panel is now driven entirely by the SERVER-computed
+// monthly summary, replacing a former client-side re-implementation of the tier math that could silently
+// desynchronise from a DB tier-config change.
 describe('CommissionPage — monthly tier summary comes from the server, not client math (regression guard)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -360,9 +340,8 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    // Scoped to statement rows: 99,999.99 is BOTH the tier limb and the total here, so a bare
-    // getByText would now match twice. The point is unchanged -- the exact SERVER figure renders,
-    // not one recomputed from `records`.
+    // Scoped to statement rows: 99,999.99 is BOTH the tier limb and the total here, so a bare getByText would now
+    // match twice. The point is unchanged -- the exact SERVER figure renders, not one recomputed from `records`.
     expect((await screen.findByTestId('statement-tier')).textContent).toContain('฿99,999.99');
     expect(screen.getByTestId('statement-total').textContent).toContain('฿99,999.99');
     expect(screen.getByTestId('statement-base').textContent).toContain('฿1,200,000.00');
@@ -394,12 +373,8 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     expect(screen.getByTestId('statement-base').textContent).toContain('฿654,321.09');
   });
 
-  // The three cases above all stub `tiers: []` (what mock mode returns, since it has no DB tier
-  // config), which means they never exercise the per-tier TABLE itself. Against the real backend
-  // `tiers` is always populated from sales.tier_config, so that render path needs its own cover --
-  // in particular `Number(row.ratePercent).toFixed(2)`, which exists because a Java BigDecimal can
-  // reach JSON as either a number or a string, and the string form would throw on a bare
-  // `.toFixed`. Both forms are asserted here on purpose.
+  // The three cases above all stub `tiers: []` (what mock mode returns, since it has no DB tier config), which
+  // means they never exercise the per-tier TABLE itself. Both forms are asserted here on purpose.
   it('renders the server-supplied per-tier rows, with a numeric AND a string ratePercent', async () => {
     api.commissions.list.mockResolvedValue({ commissions: [saleRecord()] });
     api.commissions.monthlySummary.mockResolvedValue({
@@ -427,9 +402,9 @@ describe('CommissionPage — monthly tier summary comes from the server, not cli
     await waitFor(() => expect(api.commissions.list).toHaveBeenCalled());
     await setMonthInput('2026-08');
 
-    // Redesign: the bands are a disclosure under the statement's "ค่าคอมตามขั้นบันได" limb, and it
-    // lists only the bands actually reached (commission != 0) -- hence the zero-commission band
-    // added to the fixture below, which must NOT appear.
+    // Redesign: the bands are a disclosure under the statement's "ค่าคอมตามขั้นบันได" limb, and it lists only the
+    // bands actually reached (commission != 0) -- hence the zero-commission band added to the fixture below, which
+    // must NOT appear.
     const disclosure = await screen.findByRole('button', { name: /ขั้นบันไดที่ได้รับ/ });
     expect(disclosure.getAttribute('aria-expanded')).toBe('false');
     fireEvent.click(disclosure);
@@ -469,12 +444,9 @@ async function loadEligibleDeal(ticketId = '42') {
   await screen.findByText('TCK-0042');
 }
 
-// Found in #498/#504 (same client-side Blob-vs-File defect, different feature): imageCompression()
-// returns a plain Blob, and FormData built from a bare Blob has no filename to send, so the
-// multipart part's filename defaults to the literal string "blob" per spec. This one matters more
-// than the other instances: createFromDeal dual-writes the uploaded file as the ticket's real tax
-// invoice attachment (AttachType.INVOICE), which gates CONFIRM_CLOSE -- so the corrupted filename
-// hit an actual business document, not just a photo used for internal reference.
+// Found in #498/#504 (same client-side Blob-vs-File defect, different feature): imageCompression() returns a
+// plain Blob, and FormData built from a bare Blob has no filename to send, so the multipart part's filename
+// defaults to the literal string "blob" per spec.
 describe('CommissionPage — account create-from-deal tax invoice upload', () => {
   let showToast;
 
@@ -518,15 +490,15 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
     fireEvent.click(screen.getByRole('button', { name: /โหลดข้อมูลดีล/ }));
     const msg = (await screen.findByText(/ยังไม่ถึงขั้นตอนปิดงาน/)).textContent;
-    // dealStageLabel() returns { label, tone }, never a string: interpolating the call itself
-    // renders "[object Object]" where the Thai stage name belongs. Pin the rendered text.
+    // dealStageLabel() returns { label, tone }, never a string: interpolating the call itself renders "[object
+    // Object]" where the Thai stage name belongs. Pin the rendered text.
     expect(msg).toContain('นัดส่งสินค้า / นัดรับเงินส่วนที่เหลือ');
     expect(msg).not.toContain('[object Object]');
   });
 
   it('a stage with no Thai copy falls back to the raw code, still not "[object Object]"', async () => {
-    // dealStageLabel()'s fallback limb returns an object too, so a fix that only handles known
-    // stages would leak "[object Object]" here.
+    // dealStageLabel()'s fallback limb returns an object too, so a fix that only handles known stages would leak
+    // "[object Object]" here.
     api.finance.getDeal.mockResolvedValue({ deal: financeDeal({ salesStage: 'FUTURE_STAGE' }) });
     renderAccountPage();
     fireEvent.change(screen.getByLabelText(/เลขที่ Ticket ID/), { target: { value: '42' } });
@@ -558,18 +530,16 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [original] } });
     fireEvent.change(screen.getByLabelText(/ยอดรับจริง/), { target: { value: '3210000' } });
 
-    // fireEvent.click on the submit button runs jsdom's native constraint validation first,
-    // which (unlike a real browser) does not reliably see the file input as satisfied after a
-    // synthetic fireEvent.change -- dispatching submit directly on the form exercises the same
-    // onSubmit={submitFromDeal} handler without that jsdom-only false negative.
+    // fireEvent.click on the submit button runs jsdom's native constraint validation first, which does not
+    // reliably see the file input as satisfied after a synthetic fireEvent.change.
     fireEvent.submit(screen.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).closest('form'));
 
     await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
     const { invoiceAttachment } = api.commissions.createFromDeal.mock.calls[0][0];
 
-    // The regression this guards: without the File re-wrap, `invoiceAttachment.name` is undefined
-    // (a bare Blob has no `.name`), and FormData/fetch would send "blob" to the real backend --
-    // corrupting the filename of the ticket's actual tax invoice attachment, not a cosmetic label.
+    // The regression this guards: without the File re-wrap, `invoiceAttachment.name` is undefined (a bare Blob has
+    // no `.name`), and FormData/fetch would send "blob" to the real backend -- corrupting the filename of the
+    // ticket's actual tax invoice attachment, not a cosmetic label.
     expect(invoiceAttachment.name).toBe('tax-invoice-0042.jpg');
     expect(invoiceAttachment).toBeInstanceOf(File);
     expect(invoiceAttachment.type).toBe('image/jpeg');
@@ -585,10 +555,8 @@ describe('CommissionPage — account create-from-deal tax invoice upload', () =>
     fireEvent.change(document.getElementById('commission-invoice-file'), { target: { files: [pdf] } });
     fireEvent.change(screen.getByLabelText(/ยอดรับจริง/), { target: { value: '3210000' } });
 
-    // fireEvent.click on the submit button runs jsdom's native constraint validation first,
-    // which (unlike a real browser) does not reliably see the file input as satisfied after a
-    // synthetic fireEvent.change -- dispatching submit directly on the form exercises the same
-    // onSubmit={submitFromDeal} handler without that jsdom-only false negative.
+    // fireEvent.click on the submit button runs jsdom's native constraint validation first, which does not
+    // reliably see the file input as satisfied after a synthetic fireEvent.change.
     fireEvent.submit(screen.getByRole('button', { name: 'บันทึกและสร้างคำขอค่าคอม' }).closest('form'));
 
     await waitFor(() => expect(api.commissions.createFromDeal).toHaveBeenCalledTimes(1));
@@ -677,17 +645,9 @@ describe('CommissionPage — edit-deductions pencil gated on the viewer\'s stage
   });
 });
 
-// Issue #737: the manual-commission rep picker used to be derived from api.tickets.list({})'s
-// distinct createdById values, so a rep who owned zero deals -- e.g. a sales manager receiving a
-// MANAGER-kind commission -- never appeared, with no message saying the list was partial. It is
-// now served by a dedicated endpoint, api.commissions.reps() (CommissionController#reps),
-// independent of tickets entirely.
-//
-// This is a MOCK-DRIVEN test: it proves the frontend wiring (the effect calls the new endpoint
-// and renders what it returns), NOT the authorization boundary. Per CLAUDE.md, a stubbed
-// api.commissions.reps is not evidence about who the real backend lets call
-// GET /api/commissions/reps -- that is CommissionRepLookupIntegrationTest's job, against real
-// Postgres.
+// the manual-commission rep picker used to be derived from api.tickets.list({})'s distinct createdById values,
+// so a rep who owned zero deals -- e.g. a sales manager receiving a MANAGER-kind commission -- never appeared,
+// with no message saying the list was partial.
 describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -695,9 +655,8 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
 
   it('renders a rep who owns no deal at all, and selecting it writes the rep\'s id into salesRepId', async () => {
     api.commissions.list.mockResolvedValue({ commissions: [] });
-    // No employeeCode: CommissionRepOptionDto dropped it (review fix, #737) -- the option shows
-    // ONLY the name now, precisely so there is nothing on screen that could be mistaken for the
-    // separate numeric Employee ID field.
+    // No employeeCode: CommissionRepOptionDto dropped it (review fix, #737) -- the option shows ONLY the name now,
+    // precisely so there is nothing on screen that could be mistaken for the separate numeric Employee ID field.
     api.commissions.reps.mockResolvedValue({
       reps: [{ id: 777, name: 'ผู้จัดการ ไม่มีดีลเลย' }],
     });
@@ -713,26 +672,19 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
     // Scoped to the manual form's picker (kept from when the page had its own rep <select>).
     expect(await within(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).findByText('ผู้จัดการ ไม่มีดีลเลย')).not.toBeNull();
 
-    // api.tickets.list resolves { tickets: [] } by default (top-level mock) -- the OLD
-    // ticket-derived picker could never have shown a rep with no deal. This picker never calls
-    // it at all any more, for any role: proof the rep list no longer depends on tickets.
+    // api.tickets.list resolves { tickets: [] } by default (top-level mock) -- the OLD ticket-derived picker could
+    // never have shown a rep with no deal. This picker never calls it at all any more, for any role: proof the rep
+    // list no longer depends on tickets.
     expect(api.tickets.list).not.toHaveBeenCalled();
 
-    // The load-bearing behaviour (review fix, #737): choosing the option must write the rep's
-    // real `id` -- the value createManualCommission actually submits as salesRepId -- into the
-    // numeric Employee ID field. Falsifiable by construction: this asserts the field equals the
-    // STUBBED id (777) verbatim, so a wiring regression that writes anything else (a hardcoded
-    // value, an index, undefined) fails this exact assertion rather than a value coincidentally
-    // matching it.
+    // The load-bearing behaviour (review fix, #737): choosing the option must write the rep's real `id` -- the
+    // value createManualCommission actually submits as salesRepId -- into the numeric Employee ID field.
     fireEvent.change(screen.getByLabelText(/หรือเลือกจากพนักงานขาย/), { target: { value: '777' } });
     expect(screen.getByLabelText(/รหัสพนักงาน \(Employee ID\)/).value).toBe('777');
   });
 
-  // Scope change (owner ruling 2026-08-14, 2nd ruling): ceo and sales_manager now get the
-  // IDENTICAL ฝ่ายขาย list, so there is exactly one picker label -- no more role branching to
-  // distinguish. Proven through ceoUser specifically (the other test above already covers
-  // salesManagerUser) so both roles are exercised somewhere in this file, even though the label
-  // itself no longer varies.
+  // Scope change (owner ruling 2026-08-14, 2nd ruling): ceo and sales_manager now get the IDENTICAL ฝ่ายขาย
+  // list, so there is exactly one picker label -- no more role branching to distinguish.
   it('shows the single ฝ่ายขาย picker label, still pointing at the numeric field, for ceo too', async () => {
     api.commissions.list.mockResolvedValue({ commissions: [] });
     api.commissions.reps.mockResolvedValue({
@@ -747,9 +699,9 @@ describe('CommissionPage — manual-commission rep picker (issue #737)', () => {
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มค่าคอมด้วยตนเอง/ }));
 
     expect(await within(await screen.findByLabelText(/หรือเลือกจากพนักงานขาย/)).findByText('พนักงานขาย ตัวอย่าง')).not.toBeNull();
-    // Concise (Ploy's request) but still names the scope (ฝ่ายขาย) and still points at the
-    // numeric Employee-ID field for anyone the picker excludes -- dropping either would either
-    // overclaim completeness or silently strand a caller with no way to reach someone.
+    // Concise (Ploy's request) but still names the scope (ฝ่ายขาย) and still points at the numeric Employee-ID
+    // field for anyone the picker excludes -- dropping either would either overclaim completeness or silently
+    // strand a caller with no way to reach someone.
     expect(screen.getByText('หรือเลือกจากพนักงานขาย (นอกฝ่ายขายให้กรอกรหัสพนักงานด้านบน)')).not.toBeNull();
   });
 });

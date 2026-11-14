@@ -31,17 +31,8 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceOnBehalfRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceReviewRequest;
 
-/**
- * HTTP surface for the tax-allowance self-declaration workflow (PR A). Base path is a sibling of
- * the existing {@code PayrollController#getTaxAllowances}/{@code #putTaxAllowances} (the legacy
- * bulk HR-typed editor, which stays live and untouched — see V105's header and risk #9 in the
- * plan). No mapping here collides with those: this controller only maps {@code /declarations/**}
- * and {@code /caps} under the same {@code /api/payroll/tax-allowances} prefix.
- *
- * <p>Every {@code @PreAuthorize} here is doubled by an equivalent {@code requireRole}/{@code
- * requireEmployeeActor} check in {@link TaxAllowanceDeclarationService} — copy of the {@code
- * PayrollController}/{@code PayrollService} idiom.
- */
+/** HTTP surface for the tax-allowance self-declaration workflow (PR A). No mapping here collides with those:
+ * this controller only maps /declarations/** and /caps under the same /api/payroll/tax-allowances prefix. */
 @RestController
 @RequestMapping("/api/payroll/tax-allowances")
 public class TaxAllowanceDeclarationController {
@@ -81,12 +72,8 @@ public class TaxAllowanceDeclarationController {
         return ResponseEntity.noContent().build();
     }
 
-    /**
-     * "What this saves me" (decision #4). NO employeeId anywhere — the body is the exact same
-     * shape {@code POST .../declarations/me} takes, and the employee under estimate is always
-     * {@code actor.employeeId()}. All arithmetic runs through the real {@code PayrollCalculator}
-     * (see {@code PayrollService#estimateAllowanceEffect}) — never reimplemented here.
-     */
+    /** "What this saves me" (decision #4). All arithmetic runs through the real PayrollCalculator (see
+     * PayrollService#estimateAllowanceEffect) — never reimplemented here. */
     @PostMapping("/declarations/me/estimate")
     @PreAuthorize("isAuthenticated()")
     public PayrollAllowanceEstimateResult estimateOwn(
@@ -96,15 +83,9 @@ public class TaxAllowanceDeclarationController {
         return service.estimateOwn(request, user);
     }
 
-    // ---- Evidence attachments (decision #5) -------------------------------------------------
-    //
-    // Nested here (mirrors PricingRequestController's own POST/GET .../{id}/attachments); the
-    // flat download/delete routes live on TaxAllowanceAttachmentController, since a flat
-    // "/tax-allowance-attachments/{id}" resource does not fit under this controller's
-    // "/api/payroll/tax-allowances" class-level prefix. Access for every one of these four
-    // endpoints is enforced inside TaxAllowanceDeclarationService#requireOwnerOrHr — see that
-    // method's own javadoc for why AttachmentController#requireAttachmentAccess's uploader
-    // short-circuit is deliberately NOT copied.
+    // Evidence attachments ------------------------------------------------- Nested here; the flat download/delete
+    // routes live on TaxAllowanceAttachmentController, since a flat "/tax-allowance-attachments/{id}" resource
+    // does not fit under this controller's "/api/payroll/tax-allowances" class-level prefix.
 
     @PostMapping("/declarations/{id}/attachments")
     @PreAuthorize("isAuthenticated()")
@@ -164,11 +145,9 @@ public class TaxAllowanceDeclarationController {
         return service.reject(id, request, user);
     }
 
-    /**
-      * Backlog drain only — {@link TaxAllowanceDeclarationService#approve} promotes to payroll in its
-      * own transaction since the whole-year ruling (2026-08-31), so nothing new reaches the APPROVED
-      * + not-yet-applied state this clears. Takes NO body: the งวดเดือน it used to accept is gone.
-      */
+    /** Backlog drain only — TaxAllowanceDeclarationService#approve promotes to payroll in its own transaction since
+     * the whole-year ruling (2026-08-31), so nothing new reaches the APPROVED + not-yet-applied state this clears.
+     * Takes NO body: the งวดเดือน it used to accept is gone. */
     @PostMapping("/declarations/{id}/apply")
     @PreAuthorize("hasRole('HR')")
     public TaxAllowanceDeclarationDto apply(@PathVariable long id, HttpSession session) {
@@ -195,10 +174,8 @@ public class TaxAllowanceDeclarationController {
 
     // ---- แบบ ล.ย.01 PDF ----------------------------------------------------------------------
 
-    /**
-     * The official ล.ย.01 for a saved declaration, flattened and ready to print. Owner or HR only —
-     * enforced in the service, which re-resolves the declaration on every call.
-     */
+    /** The official ล.ย.01 for a saved declaration, flattened and ready to print. Owner or HR only — enforced in
+     * the service, which re-resolves the declaration on every call. */
     @GetMapping("/declarations/{declarationId}/form.pdf")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<byte[]> lorYor01Pdf(@PathVariable long declarationId, HttpSession session) {
@@ -206,13 +183,8 @@ public class TaxAllowanceDeclarationController {
         return pdf(service.renderLorYor01(declarationId, user), "loryor01-" + declarationId + ".pdf");
     }
 
-    /**
-     * The official ล.ย.01 for an UNSAVED draft, so the employee can print and sign it before filing.
-     *
-     * <p>POST rather than GET because the whole draft travels in the body — same shape and same
-     * reasoning as {@code /declarations/me/estimate} above. Nothing is persisted, and the form is
-     * always rendered for {@code actor.employeeId()}, never a target named in the body.
-     */
+    /** The official ล.ย.01 for an UNSAVED draft, so the employee can print and sign it before filing. Nothing is
+     * persisted, and the form is always rendered for actor.employeeId(), never a target named in the body. */
     @PostMapping("/declarations/me/form.pdf")
     @PreAuthorize("isAuthenticated()")
     public ResponseEntity<byte[]> lorYor01DraftPdf(
@@ -222,10 +194,8 @@ public class TaxAllowanceDeclarationController {
         return pdf(service.renderLorYor01Draft(request, user), "loryor01-draft.pdf");
     }
 
-    /**
-     * Same hardening as the evidence download: {@code attachment} so a browser never renders it
-     * inline, and {@code nosniff} so a mislabelled body cannot be re-interpreted as HTML.
-     */
+    /** Same hardening as the evidence download: attachment so a browser never renders it inline, and nosniff so a
+     * mislabelled body cannot be re-interpreted as HTML. */
     private ResponseEntity<byte[]> pdf(byte[] body, String filename) {
         return ResponseEntity.ok()
             .header(HttpHeaders.CONTENT_DISPOSITION,

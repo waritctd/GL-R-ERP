@@ -15,22 +15,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Commission redesign Slice A1 — real-DB acceptance coverage for {@link CommissionCalculator}'s
- * new withholding-tax/overpayment inputs, the &lt;50,000 monthly floor, and the V81 tier-13 rate
- * fix, driven through the real {@link CommissionService} and a real {@link CommissionRepository}
- * against real Postgres (per CLAUDE.md: unit tests alone cannot prove {@code sales.tier_config}
- * actually contains the corrected 3.25% rate after V81, or that the schema round-trips the two
- * new {@code sales.invoice_details} columns added by V80).
- *
- * <p>Every test goes through {@link CommissionService#simulate}, which is read-only (no invoice
- * file, no persisted commission_record) but exercises the exact same {@link CommissionCalculator}
- * call and the exact same {@link CommissionRepository#findTiers()} query against real
- * {@code sales.tier_config} that {@code submit()}/{@code updateDeductions()} use. {@link
- * CommissionAttachmentRepository}, {@link FileStorageService}, {@link AuditService}, {@link
- * NotificationService}, and {@link TicketRepository} are mocked — {@code simulate()} never touches
- * them, so mocking them keeps the fixture minimal without weakening what's actually under test.
- */
+/** Commission redesign Slice A1 — real-DB acceptance coverage for CommissionCalculator's new
+ * withholding-tax/overpayment inputs, the <50,000 monthly floor, and the V81 tier-13 rate fix, driven through
+ * the real CommissionService and a real CommissionRepository against real Postgres. */
 class CommissionCalculationIntegrationTest extends AbstractPostgresIntegrationTest {
     private CommissionRepository commissions;
     private CommissionService commissionService;
@@ -51,9 +38,7 @@ class CommissionCalculationIntegrationTest extends AbstractPostgresIntegrationTe
             true, LocalDate.now(), false, null, false);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Withholding tax / overpayment sign convention.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void withholdingTax_reducesCommissionableBase_vsSameInvoiceWithoutIt() {
@@ -92,16 +77,14 @@ class CommissionCalculationIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(withZeros.commissionableBase()).isEqualByComparingTo(new BigDecimal("100000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // <50,000 monthly floor — written wrong-way-round: the below-floor ZERO case is the
-    // assertion that matters, not the above-floor positive case.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // <50,000 monthly floor — written wrong-way-round: the below-floor ZERO case is the assertion that matters,
+    // not the above-floor positive case.
 
     @Test
     void monthlyBaseBelowFiftyThousand_paysExactlyZeroCommission() {
         wireService();
-        // grossAmount chosen so commissionableBase = actualReceived / 1.07 lands on exactly
-        // 49,999.00 (49999 * 1.07 = 53498.93, an exact reverse with no rounding ambiguity).
+        // grossAmount chosen so commissionableBase = actualReceived / 1.07 lands on exactly 49,999.00 (49999 * 1.07 =
+        // 53498.93, an exact reverse with no rounding ambiguity).
         CommissionSimulationDto dto = commissionService.simulate(
             simulatorRequest(new BigDecimal("53498.93"), BigDecimal.ZERO, BigDecimal.ZERO), salesActor);
 
@@ -122,10 +105,8 @@ class CommissionCalculationIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(dto.projectedMonthlyCommission()).isEqualByComparingTo(new BigDecimal("125.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // V81: tier 13 (>3,000,000) corrected from 7.5000% to 3.2500% — read from the real
-    // sales.tier_config table, not TierConfig.defaults(), proving the migration actually applied.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // V81: tier 13 (>3,000,000) corrected from 7.5000% to 3.2500% — read from the real sales.tier_config table,
+    // not TierConfig.defaults(), proving the migration actually applied.
 
     @Test
     void monthlyBaseAboveThreeMillion_usesCorrectedTier13RateFromRealDb() {
@@ -135,9 +116,9 @@ class CommissionCalculationIntegrationTest extends AbstractPostgresIntegrationTe
             simulatorRequest(new BigDecimal("3424000.00"), BigDecimal.ZERO, BigDecimal.ZERO), salesActor);
 
         assertThat(dto.commissionableBase()).isEqualByComparingTo(new BigDecimal("3200000.00"));
-        // Tiers 1-12 (0-3,000,000, all fully taxed) sum to 48,750.00; the 200,000 excess above
-        // 3,000,000 is taxed at the V81-corrected 3.25% = 6,500.00. Total = 55,250.00.
-        // (Pre-V81 this would have been 48,750.00 + 200,000 * 7.5% = 63,750.00.)
+        // Tiers 1-12 (0-3,000,000, all fully taxed) sum to 48,750.00; the 200,000 excess above 3,000,000 is taxed at
+        // the V81-corrected 3.25% = 6,500.00. Total = 55,250.00. (Pre-V81 this would have been 48,750.00 + 200,000 *
+        // 7.5% = 63,750.00.)
         assertThat(dto.projectedMonthlyCommission()).isEqualByComparingTo(new BigDecimal("55250.00"));
 
         BigDecimal tier13Rate = jdbc.queryForObject(

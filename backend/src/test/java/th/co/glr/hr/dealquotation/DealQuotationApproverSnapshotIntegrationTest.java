@@ -55,20 +55,9 @@ import th.co.glr.hr.ticket.QuotationStatus;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * V175 — the approver's printed names and signature image are FROZEN at approval (owner ruling
- * 2026-09-13: "Already-sent quotations never change afterwards"). Real Postgres, through the real
- * {@link DealQuotationService} and {@link DealQuotationRepository}, rendering the real workbook.
- *
- * <p>Written wrong-way-round: every test changes the approver AFTER approval (replace the
- * signature, delete it, rename the employee) and asserts the document does NOT follow. The
- * signature assertion compares the picture bytes embedded in the rendered XLS against the exact
- * stored bytes, so "some picture is present" can never pass for the wrong picture.
- *
- * <p>No authz surface is touched here — who may approve/render is unchanged; this is about which
- * VALUES an already-authorised render prints. Signature images are synthetic drawings only (the
- * repository is public).
- */
+/** V175 — the approver's printed names and signature image are FROZEN at approval (owner ruling 2026-09-13:
+ * "Already-sent quotations never change afterwards"). Signature images are synthetic drawings only (the
+ * repository is public). */
 class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final String MIGRATION = "db/migration/V175__deal_quotation_approver_snapshot.sql";
 
@@ -77,9 +66,9 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
     private EmployeeSignatureRepository signatureRepository;
 
     private long managerId;
-    // Task 4 (slot signatures, 2026-09-26): the ticket's creator/sales-rep id, needed by the two
-    // new tests below (createSubmittedApproved's ticket is always created by salesActor, so
-    // createdById == salesRepId == salesId on this fixture — see those tests' own Javadoc).
+    // Task 4 (slot signatures, 2026-09-26): the ticket's creator/sales-rep id, needed by the two new tests below
+    // (createSubmittedApproved's ticket is always created by salesActor, so createdById == salesRepId == salesId
+    // on this fixture — see those tests' own Javadoc).
     private long salesId;
     private EmployeeRepository employeeRepository;
     private UserPrincipal salesActor;
@@ -213,8 +202,8 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         assertThat(signatureBytes(render(supersededParent))).isEqualTo(storedA);
     }
 
-    /** The production case: approved with NO signature on file. The snapshot is still taken (names
-     * frozen, image NULL), so a signature uploaded afterwards must NOT appear on it. */
+    /** The production case: approved with NO signature on file. The snapshot is still taken (names frozen, image
+     * NULL), so a signature uploaded afterwards must NOT appear on it. */
     @Test
     void approvedWithoutASignature_staysUnsigned_evenAfterOneIsUploaded() throws Exception {
         DealQuotationDto approved = createSubmittedApproved();
@@ -230,13 +219,8 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         assertThat(signatureBytes(render(approved))).isNull();
     }
 
-    /**
-     * Upload-time trim (owner-approved 2026-09-13): a signature drawn small in the middle of a big
-     * transparent canvas is stored cropped to its ink, and the printed picture follows the CROPPED
-     * shape. The canvas is 1000x400 (2.5:1) but the ink is 300x40, so the stored image is
-     * 312x52 (6:1, margin round(300*0.02)=6); the anchored picture's printed box must read as the
-     * wide 6:1 ink, not the 2.5:1 frame the renderer used to shrink the ink into.
-     */
+    /** Upload-time trim (owner-approved 2026-09-13): a signature drawn small in the middle of a big transparent
+     * canvas is stored cropped to its ink, and the printed picture follows the CROPPED shape. */
     @Test
     void trimmedSignature_drivesTheStoredImageAndThePrintedAspectRatio() throws Exception {
         BufferedImage canvas = new BufferedImage(1000, 400, BufferedImage.TYPE_INT_ARGB);
@@ -297,17 +281,9 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
 
     // ── Task 4 (slot signatures, 2026-09-26): ผู้พิมพ์/พนักงานขาย resolve LIVE, never snapshotted ──
 
-    /**
-     * The DEFAULT (no display override) path: {@code createdById} and {@code salesRepId} both
-     * resolve to {@code salesId} on this fixture's ticket ({@code createSubmittedApproved} is
-     * always created by {@code salesActor}, and {@code ticketService.create}'s own creator IS the
-     * ticket's {@code salesRepId} — see {@code DealQuotationService#create}'s
-     * {@code InsertDraftParams}). Uploading ONE signature for {@code salesId} must therefore make
-     * BOTH the ผู้พิมพ์ (slot 0) and พนักงานขาย (slot 1) pictures print it — proving
-     * {@code DealQuotationService#toRenderModel}'s new {@code printedById}/{@code salesRepId}
-     * resolution actually reaches the render, live, with NO approval event involved at all (unlike
-     * the approver's snapshot-frozen bytes, this is re-resolved on every single render).
-     */
+    /** The DEFAULT (no display override) path: createdById and salesRepId both resolve to salesId on this fixture's
+     * ticket (createSubmittedApproved is always created by salesActor, and ticketService.create's own creator IS
+     * the ticket's salesRepId — see DealQuotationService#create's InsertDraftParams). */
     @Test
     void printedByAndSalesRepSlots_resolveTheRealCreatedByAndSalesRepId_liveOnEveryRender() throws Exception {
         signatureService.upload(salesId, png(signatureA()), salesActor);
@@ -322,8 +298,8 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         assertThat(bySlot.get(0)).as("ผู้พิมพ์ slot").isEqualTo(storedA);
         assertThat(bySlot.get(1)).as("พนักงานขาย slot").isEqualTo(storedA);
 
-        // LIVE, not frozen: replacing the signature AFTER approval must change what a fresh render
-        // prints — the opposite of the approver's V175 snapshot behaviour pinned by the tests above.
+        // LIVE, not frozen: replacing the signature AFTER approval must change what a fresh render prints — the
+        // opposite of the approver's V175 snapshot behaviour pinned by the tests above.
         signatureService.upload(salesId, png(signatureB()), salesActor);
         byte[] storedB = signatureRepository.find(salesId).orElseThrow().image();
         Map<Integer, byte[]> afterReplace = signaturePicturesBySlot(render(approved));
@@ -331,17 +307,9 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         assertThat(afterReplace.get(1)).isEqualTo(storedB);
     }
 
-    /**
-     * The DISPLAY-OVERRIDE path (V179 {@code printedByDisplayId}): a rep may pick a DIFFERENT
-     * eligible employee's name for the ผู้พิมพ์ slot, and {@code DealQuotationService#toRenderModel}
-     * must resolve THAT id's signature — not {@code createdById}'s — independently of slot 1, which
-     * keeps resolving the real {@code salesRepId} exactly as the test above pins. The override
-     * employee needs a division whose {@code source_code} lower-cases to
-     * {@code DivisionAccessPolicy.SALES_DIVISION_CODE} ("sa") to pass
-     * {@code requireEligibleDisplayEmployeeId} — {@code "SA"} does that; this fixture's other
-     * employees deliberately do NOT ({@code "SALES"} lower-cases to "sales", not "sa"), so this is
-     * the one case in this file that needs a purpose-built eligible employee.
-     */
+    /** The DISPLAY-OVERRIDE path: a rep may pick a DIFFERENT eligible employee's name for the ผู้พิมพ์ slot, and
+     * DealQuotationService#toRenderModel must resolve THAT id's signature — not createdById's — independently of
+     * slot 1, which keeps resolving the real salesRepId exactly as the test above pins. */
     @Test
     void printedByDisplaySlot_resolvesTheSelectedEmployeesSignature_independentlyOfSalesRepSlot() throws Exception {
         long displayId = createEmployee(employeeRepository, "พนักงานขาย สอง", "sales2-snap@glr.co.th", "SA",
@@ -369,19 +337,14 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
 
     // ── V175 BACKFILL (owner ruling 2026-09-13, "Freeze them unsigned.") ─────────────────────
 
-    /**
-     * A quotation approved BEFORE V175 has no snapshot row — simulated here by deleting the one
-     * approve() wrote. Without a snapshot it follows the LIVE values (the pre-V175 behaviour);
-     * once V175 runs (the whole shipped file), it is frozen at the values current AT MIGRATION
-     * TIME, and a later change no longer reaches it.
-     */
+    /** A quotation approved BEFORE V175 has no snapshot row — simulated here by deleting the one approve() wrote. */
     @Test
     void backfill_freezesPreV175ApprovalsAtBackfillTimeValues_andSkipsDraftAndPending() throws Exception {
         signatureService.upload(managerId, png(signatureA()), managerActor);
         DealQuotationDto legacy = createSubmittedApproved();
         DealQuotationDto pending = quotationService.submit(
-            // Slice 2's N6: a second/third live direct quotation on one deal is a legacy shape —
-            // see LegacyDirectQuotationFixtures.
+            // Slice 2's N6: a second/third live direct quotation on one deal is a legacy shape — see
+            // LegacyDirectQuotationFixtures.
             LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId, upsertRequest(),
                 salesActor).id(), salesActor);
         DealQuotationDto draft = LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId,
@@ -429,24 +392,18 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
 
     // ── helpers ────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Re-executes V175 AS SHIPPED — the whole file, verbatim, from the classpath (the DDL is
-     * IF NOT EXISTS and COMMENT ON is re-runnable, so a full re-run against the already-migrated
-     * schema is exactly "the migration running over pre-existing approved rows"). If the backfill
-     * statement were ever commented out or removed again, the backfill tests go red: nothing else
-     * inserts the deleted snapshot rows.
-     */
+    /** Re-executes V175 AS SHIPPED — the whole file, verbatim, from the classpath (the DDL is IF NOT EXISTS and
+     * COMMENT ON is re-runnable, so a full re-run against the already-migrated schema is exactly "the migration
+     * running over pre-existing approved rows"). */
     private void runBackfill() throws Exception {
         String text;
         try (InputStream in = getClass().getClassLoader().getResourceAsStream(MIGRATION)) {
             assertThat(in).as(MIGRATION + " on the classpath").isNotNull();
             text = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
-        // GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): V191/V192
-        // (the dual-slot migrations, which had widened this table's key to (quotation_id, slot))
-        // were DELETED in the rework — the design reverted to the single-approval path this table
-        // was originally built for. V175's OWN file is executed here VERBATIM again, with no patch:
-        // its `ON CONFLICT (quotation_id)` target matches the CURRENT schema exactly once more.
+        // GLA-123 slice S2 REWORK (owner reversed the dual-approval design, 2026-09-20): V191/V192 (the dual-slot
+        // migrations, which had widened this table's key to (quotation_id, slot)) were DELETED in the rework — the
+        // design reverted to the single-approval path this table was originally built for.
         jdbc.getJdbcOperations().execute(text);
     }
 
@@ -513,13 +470,9 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
         }
     }
 
-    /**
-     * Task 4 (slot signatures, 2026-09-26): every signature picture anchored on the labels row,
-     * bucketed by which of the four equal-width slots (0=ผู้พิมพ์..3=ผู้สั่งซื้อ) its CENTRE pixel
-     * falls in — same anchor-row filter as {@link #signatureBytes}, generalized to more than one
-     * picture and keyed by slot instead of asserting "at most one" for the whole row. Fails loudly
-     * if two pictures land in the same slot (a real bug, never an expected shape here).
-     */
+    /** Task 4: every signature picture anchored on the labels row, bucketed by which of the four equal-width slots
+     * its CENTRE pixel falls in — same anchor-row filter as #signatureBytes, generalized to more than one picture
+     * and keyed by slot instead of asserting "at most one" for the whole row. */
     private static Map<Integer, byte[]> signaturePicturesBySlot(byte[] xls) throws Exception {
         try (var wb = WorkbookFactory.create(new ByteArrayInputStream(xls))) {
             Sheet sheet = sheet(wb);
@@ -589,9 +542,9 @@ class DealQuotationApproverSnapshotIntegrationTest extends AbstractPostgresInteg
             "หมายเหตุทดสอบ", List.of(item)).withRecipientType("OWNER");
     }
 
-    /** Same fixture as {@link #upsertRequest} plus a ผู้พิมพ์ display-name override (V179) —
-     * the canonical (20-arg) constructor is needed here since none of the legacy overloads carry
-     * {@code printedByDisplayId}/{@code salesRepDisplayId} without carrying every field before it. */
+    /** Same fixture as #upsertRequest plus a ผู้พิมพ์ display-name override (V179) — the canonical (20-arg)
+     * constructor is needed here since none of the legacy overloads carry printedByDisplayId/salesRepDisplayId
+     * without carrying every field before it. */
     private UpsertDealQuotationRequest upsertRequestWithPrintedByDisplayId(Long printedByDisplayId) {
         ItemInput item = new ItemInput(null, null, null, "Brand A", "Model A", "White", "Matte", "60x60",
             new BigDecimal("10"), new BigDecimal("0.36"),

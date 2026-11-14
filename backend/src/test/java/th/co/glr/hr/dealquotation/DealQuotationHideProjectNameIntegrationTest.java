@@ -54,14 +54,9 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
 
     // ── update ───────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The wrong-way-round case, and DELIBERATELY the opposite of {@code omitContactHonorific}
-     * (whose update "clears when omitted"). A browser tab still running the bundle from before this
-     * field existed sends no {@code hideProjectName} at all. Reading that as {@code false} would
-     * silently start PRINTING a project name the rep had chosen to hide — on a customer document —
-     * the first time anyone saved from the stale tab. A missing value says nothing, so the stored
-     * choice stands.
-     */
+    /** The wrong-way-round case, and DELIBERATELY the opposite of omitContactHonorific (whose update "clears when
+     * omitted"). A browser tab still running the bundle from before this field existed sends no hideProjectName at
+     * all. */
     @Test
     void update_thatDoesNotMentionTheFlag_keepsAHiddenProjectHidden() {
         long ticket = deal(salesActor);
@@ -102,8 +97,8 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
         assertThat(storedProjectName(created.id())).isEqualTo(PROJECT_NAME);
     }
 
-    /** An APPROVED document is frozen at what was approved. Trying to hide its project afterwards
-     * is refused like any other edit, and what it prints does not change. */
+    /** An APPROVED document is frozen at what was approved. Trying to hide its project afterwards is refused like
+     * any other edit, and what it prints does not change. */
     @Test
     void anApprovedDocument_cannotHaveItsProjectHiddenAfterwards() {
         DealQuotationDto approved = approved(deal(salesActor), salesActor);
@@ -116,8 +111,8 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
 
     // ── the document the service renders from the stored row ─────────────────────────────────
 
-    /** Regression guard for the next test: this deal's ordinary document really does print the
-     * line, so "no cell mentions it" cannot pass merely because nothing was ever printed. */
+    /** Regression guard for the next test: this deal's ordinary document really does print the line, so "no cell
+     * mentions it" cannot pass merely because nothing was ever printed. */
     @Test
     void renderedDocument_printsTheProjectLine_whenNotHidden() {
         DealQuotationDto created = quotationService.create(deal(salesActor), draft(), salesActor);
@@ -134,8 +129,7 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
         assertThat(cells).noneMatch(text -> text.contains("Project"));
     }
 
-    /** Ticking the box on an existing draft changes the very next render — there is no cached
-     * document to go stale. */
+    /** Ticking the box on an existing draft changes the very next render — there is no cached document to go stale. */
     @Test
     void renderedDocument_followsTheFlag_acrossAnUpdate() {
         long ticket = deal(salesActor);
@@ -152,8 +146,8 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
 
     // ── copies ───────────────────────────────────────────────────────────────────────────────
 
-    /** A re-issue of a document that hid its project must not print it: the revision and the
-     * reorder clone both inherit the choice, exactly as they inherit every other header field. */
+    /** A re-issue of a document that hid its project must not print it: the revision and the reorder clone both
+     * inherit the choice, exactly as they inherit every other header field. */
     @Test
     void revisionAndReorder_bothInheritAHiddenProject() {
         DealQuotationDto approved = approved(deal(salesActor), hidden(draft()), salesActor);
@@ -201,18 +195,9 @@ class DealQuotationHideProjectNameIntegrationTest extends AbstractDealDirectQuot
         return base.withHideProjectName(true);
     }
 
-    /**
-     * An UPDATE body, as the editor sends one: it re-states the project name on every save.
-     *
-     * <p>{@code draft()} names no project. That is right for a CREATE (the deal's own project is
-     * used), but on UPDATE a null {@code projectName} is a real request to CLEAR the stored name
-     * ({@code UpsertDealQuotationRequest#projectName}'s own Javadoc) — and a cleared name prints no
-     * "Project : …" line either. Updating with {@code draft()} here would therefore make every
-     * "the hidden project is not printed" assertion pass for the wrong reason, with the flag
-     * playing no part. The first draft of this class did exactly that; this helper is the fix.
-     *
-     * @param hideProjectName {@code null} = the request does not mention the flag at all.
-     */
+    /** An UPDATE body, as the editor sends one: it re-states the project name on every save. draft() names no
+     * project. Updating with draft() here would therefore make every "the hidden project is not printed" assertion
+     * pass for the wrong reason, with the flag playing no part. */
     private static UpsertDealQuotationRequest edit(Boolean hideProjectName) {
         UpsertDealQuotationRequest base = draft();
         return new UpsertDealQuotationRequest(base.contactId(), base.deptCode(), base.unitCode(), base.offerDate(),

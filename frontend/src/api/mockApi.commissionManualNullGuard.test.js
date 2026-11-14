@@ -1,38 +1,13 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-/**
- * fix/commission-figures-from-backend: this file used to be
- * mockApi.commissionIncentiveStockBonus.test.js and also asserted mockApi.js's own
- * payrollReady() auto-computed INCENTIVE/STOCK_BONUS aggregation (issue #405) — a
- * reimplementation of CommissionService#computeRepPayrollCommissions in the mock. That
- * computation has been REMOVED from the mock as part of this branch: per CLAUDE.md's "Mock API
- * contract" ("mock-driven tests are not independent evidence about a computation the mock
- * mirrors" / "prefer NOT reimplementing payroll/tax/commission math in the mock at all"),
- * payrollReady() now returns a canned tier/incentive/stock-bonus fixture
- * (MOCK_PAYROLL_READY_TIER_FIXTURE in mockApi.js) instead of recomputing the ladder — the same
- * class of drift risk this whole branch exists to close (the V81 tier-13 rate correction is the
- * case on record). The real incentive/stock-bonus suppression rule is proven against real
- * Postgres by CommissionIncentiveStockBonusIntegrationTest (backend).
- *
- * What SURVIVES here is unrelated to that computation: a null-guard regression in
- * commissions.create()'s duplicate-invoice-number check, which is still real mock logic worth
- * covering directly (not itemised in CommissionPage's own tests, which mock api.commissions
- * wholesale and never exercise this code path).
- */
+/** fix/commission-figures-from-backend: this file used to be mockApi.commissionIncentiveStockBonus.test.js and
+ * also asserted mockApi.js's own payrollReady() auto-computed INCENTIVE/STOCK_BONUS aggregation (issue #405) —
+ * a reimplementation of CommissionService#computeRepPayrollCommissions in the mock. */
 
-// The null-guard regression, kept separate from the (now-removed) incentive maths.
-//
-// A manual commission carries `invoiceDetails: null` (V84). Both commissions.create() and
-// commissions.createFromDeal() compared `item.invoiceDetails.invoiceNumber` unguarded, so ONE
-// manual row anywhere in the shared mock db made every later create() throw — in the live mock
-// app, not only here. It is why the four MANUAL_COMMISSION_KINDS were unseedable, and why the
-// calls below are front-loaded relative to any manual-commission creation.
-//
-// Asserts the create SUCCEEDS with an invoice-less row present, and — the half that a bare
-// optional-chain would have got wrong — that two invoice-less rows are NOT treated as duplicates
-// of each other. `undefined === undefined` is true, so `?.` alone would have turned the crash
-// into a spurious 409.
+// The null-guard regression, kept separate from the (now-removed) incentive maths. A manual commission carries
+// `invoiceDetails: null` (V84). It is why the four MANUAL_COMMISSION_KINDS were unseedable, and why the calls
+// below are front-loaded relative to any manual-commission creation.
 describe('duplicate-invoice check tolerates invoice-less manual commissions', () => {
   const REP = 990501;
 
@@ -49,10 +24,7 @@ describe('duplicate-invoice check tolerates invoice-less manual commissions', ()
     })).resolves.toBeTruthy();
   });
 
-  // The half-fix case. A bare `?.` stops the crash and introduces a quieter bug: create() does
-  // not require an invoice number (only the attachment), so a call that omits one compares
-  // `undefined === undefined` against the manual row and is refused as a duplicate of an invoice
-  // that does not exist. This is the assertion that separates `?.` from `?. &&`.
+  // Checks missing invoice numbers do not collide with invoice-less manual commission rows.
   it('does not treat a missing invoice number as a duplicate of an invoice-less row', async () => {
     await api.auth.login({ role: 'sales_manager' });
     await api.commissions.createManualCommission({

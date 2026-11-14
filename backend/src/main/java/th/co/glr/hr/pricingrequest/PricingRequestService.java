@@ -41,57 +41,35 @@ import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * Workflow + authz for the PricingRequest aggregate: createDraft, get, listForTicket,
- * list (the Import queue), updateDraft, submit, pickup, cancel, plus the internal {@link #cancelOpenForTicket} cascade
- * invoked by {@code TicketService} when a deal reaches a terminal lifecycle state.
- *
- * <p>Reads {@link TicketRepository} for deal ownership/lifecycle/scoping context
- * only — this class never writes through it. Writing to {@code sales.ticket} /
- * {@code sales.ticket_event} from here would be exactly the coupling
- * {@link PricingRequestRepository}'s class-level Javadoc warns against.
- */
+/** Workflow + authz for the PricingRequest aggregate: createDraft, get, listForTicket, list (the Import queue),
+ * updateDraft, submit, pickup, cancel, plus the internal #cancelOpenForTicket cascade invoked by TicketService
+ * when a deal reaches a terminal lifecycle state. */
 @Service
 public class PricingRequestService {
     private static final Logger log = LoggerFactory.getLogger(PricingRequestService.class);
 
-    // Duplicated from th.co.glr.hr.ticket.TicketService's role sets on purpose:
-    // TicketService keeps its own copies private, and this is a distinct
-    // aggregate's authz, not a side door into ticket workflow rules. Keep the
-    // two lists in sync by inspection, not by sharing a mutable reference.
+    // Duplicated from th.co.glr.hr.ticket.TicketService's role sets on purpose: TicketService keeps its own copies
+    // private, and this is a distinct aggregate's authz, not a side door into ticket workflow rules. Keep the two
+    // lists in sync by inspection, not by sharing a mutable reference.
     private static final Set<String> SALES_ROLES  = Set.of("sales");
     private static final Set<String> IMPORT_ROLES = Set.of("import");
     /** Line sources (V194). null = สั่งนำเข้า. */
     public static final String STOCK_IN_THAILAND = "IN_THAILAND";
-    // Mirrors TicketService.VIEWER_ROLES: who may read a pricing request at all.
-    // sales_manager stays read-only oversight here too — never add it to
-    // SALES_ROLES/IMPORT_ROLES.
+    // Mirrors TicketService.VIEWER_ROLES: who may read a pricing request at all. sales_manager stays read-only
+    // oversight here too — never add it to SALES_ROLES/IMPORT_ROLES.
     private static final Set<String> VIEWER_ROLES =
         Set.of("sales", "import", "ceo", "sales_manager");
     /** Bounded retry count for {@link #cancelOpenForTicket}'s per-row compare-and-set. */
     private static final int CANCEL_MAX_ATTEMPTS = 3;
-    /**
-     * Statuses in which Import may name the factory on a line Sales left blank
-     * ({@link #setItemFactory}). Deliberately IDENTICAL to
-     * {@code FactoryQuoteService.DRAFT_STATUSES} — the window in which the factory-email step can
-     * still be run is exactly the window in which its missing input can still be supplied. Keep
-     * the two in sync by inspection; they are separate aggregates' authz, not a shared reference
-     * (same reasoning as the role sets above).
-     */
+    /** Statuses in which Import may name the factory on a line Sales left blank (#setItemFactory). Deliberately
+     * IDENTICAL to FactoryQuoteService.DRAFT_STATUSES — the window in which the factory-email step can still be
+     * run is exactly the window in which its missing input can still be supplied. */
     private static final Set<String> FACTORY_ROUTING_STATUSES = Set.of(
         PricingRequestStatus.IMPORT_REVIEWING,
         PricingRequestStatus.AWAITING_FACTORY_RESPONSE);
-    /**
-     * Statuses in which Sales may upload/delete a Pricing Request attachment (V69, review
-     * remediation COMMIT 4). A DRAFT is the rep's own scratchpad. Once past it, the request has
-     * moved into Import/CEO territory and its attachment set should stop changing out from under
-     * whatever email draft or costing review is already in flight.
-     *
-     * <p>V140 narrowed this from {DRAFT, MORE_INFO_REQUIRED} to {DRAFT} — a consequence of
-     * removing the ขอข้อมูลเพิ่มเติม round-trip, not a separate decision. That was the one state
-     * where Sales was expected to add material AFTER submitting; with it gone, Sales attaches
-     * while drafting or creates a revision.
-     */
+    /** Statuses in which Sales may upload/delete a Pricing Request attachment (V69, review remediation COMMIT 4). A
+     * DRAFT is the rep's own scratchpad. V140 narrowed this from {DRAFT, MORE_INFO_REQUIRED} to {DRAFT} — a
+     * consequence of removing the ขอข้อมูลเพิ่มเติม round-trip, not a separate decision. */
     private static final Set<String> ATTACHMENT_EDITABLE_STATUSES =
         Set.of(PricingRequestStatus.DRAFT);
 
@@ -136,9 +114,8 @@ public class PricingRequestService {
         // short-circuit, so a non-owner still gets 403 and an idempotent replay still returns its
         // original result.
         th.co.glr.hr.ticket.DirectQuotationLocks.requireNoLiveDirectQuotation(tickets, ticketId);
-        // Validate BEFORE persisting — an unvalidated value hits a CHECK
-        // constraint in the repository and fails closed (500), same reasoning
-        // as TicketService.create's Priority guard.
+        // Validate BEFORE persisting — an unvalidated value hits a CHECK constraint in the repository and fails closed
+        // (500), same reasoning as TicketService.create's Priority guard.
         validateRecipient(request.recipientType());
         validateItems(request.items());
         validateCurrency(request.targetCurrency());
@@ -147,10 +124,8 @@ public class PricingRequestService {
         validateSourceItemsBelongToTicket(ticketId, request.items());
         validateHeaderTerms(request.paymentTermMode(), request.creditDays(),
             request.printedByDisplayId(), request.salesRepDisplayId());
-        // V185 (direct-deal-form parity): derive requestedQty/requestedQtySqm/requestedUnit/
-        // requestedUnitBasis and the wastage audit columns from the item's own tile fields — see
-        // #resolveItems' own Javadoc. Every item created from here on goes through this, never
-        // just the client-sent (now optional) requestedQty/Unit/Basis.
+        // V185 (direct-deal-form parity): derive requestedQty/requestedQtySqm/requestedUnit/ requestedUnitBasis and
+        // the wastage audit columns from the item's own tile fields — see #resolveItems' own Javadoc.
         request = withResolvedItems(request, resolveItems(request.items()));
 
         String requestCode = requests.nextRequestCode();
@@ -164,9 +139,8 @@ public class PricingRequestService {
         }
         requests.addEvent(id, ticketId, actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_CREATED, null, PricingRequestStatus.DRAFT, null, null);
-        // Deliberately no notification, no ticket status change, no sales_stage
-        // change, no ticket_item write — a draft is the rep's private scratchpad
-        // until submit().
+        // Deliberately no notification, no ticket status change, no sales_stage change, no ticket_item write — a draft
+        // is the rep's private scratchpad until submit().
         return detail(id);
     }
 
@@ -181,9 +155,9 @@ public class PricingRequestService {
         if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
-        // Separate read path from findSummaries/list — must apply the same DRAFT
-        // privacy rule so a request that's still a draft never leaks through the
-        // per-ticket view either (e.g. to import/account before the rep submits it).
+        // Separate read path from findSummaries/list — must apply the same DRAFT privacy rule so a request that's
+        // still a draft never leaks through the per-ticket view either (e.g. to import/account before the rep submits
+        // it).
         return requests.findByTicket(ticketId).stream()
             .filter(summary -> !PricingRequestStatus.DRAFT.equals(summary.status()) || canSeeDraft(actor, summary))
             .toList();
@@ -215,15 +189,9 @@ public class PricingRequestService {
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
 
-        // PricingRequestRepository.updateDraft is now a FULL REPLACEMENT of
-        // the draft's editable fields (COALESCE dropped — see its Javadoc):
-        // the request represents the complete new state, not a sparse patch,
-        // so every editable field is validated unconditionally here, the same
-        // way createDraft validates its (also complete) payload — there is no
-        // more "only re-check what the caller touched". recipient_type is
-        // additionally NOT NULL in the DB, so a blank/missing one must be
-        // rejected here as a 400, before it can reach the repository and fail
-        // as a raw constraint violation (500).
+        // PricingRequestRepository.updateDraft is now a FULL REPLACEMENT of the draft's editable fields: the request
+        // represents the complete new state, not a sparse patch, so every editable field is validated unconditionally
+        // here, the same way createDraft validates its payload.
         if (request.recipientType() == null || request.recipientType().isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "recipientType ต้องไม่เว้นว่าง");
         }
@@ -318,22 +286,15 @@ public class PricingRequestService {
                 && (summary.recipientLabel() == null || summary.recipientLabel().isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุผู้รับคำขอราคา");
         }
-        // Re-check against the PERSISTED recipientContactId, not a request
-        // payload — submit() takes no body, so this is the only re-validation
-        // point. Same reasoning as the item-identity recheck below: a draft
-        // created before this rule existed (or before its recipient was
-        // last touched) must not be submittable while pointing at another
-        // customer's contact.
+        // Re-check against the PERSISTED recipientContactId, not a request payload — submit() takes no body, so this
+        // is the only re-validation point.
         validateRecipientContactBelongsToCustomer(summary.recipientContactId(), ticket);
         if (summary.requiredDate() != null && summary.requiredDate().isBefore(LocalDate.now())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ต้องการต้องไม่ใช่วันที่ผ่านมาแล้ว");
         }
-        // Re-check item identity against the PERSISTED items, not the
-        // createDraft/updateDraft payload that produced them — validateItems
-        // only runs before a write, so a draft created before that rule
-        // existed (or one whose items were never touched again) must still
-        // be blocked here, at the one point before a request becomes visible
-        // to Import.
+        // Re-check item identity against the PERSISTED items, not the createDraft/updateDraft payload that produced
+        // them — validateItems only runs before a write, so a draft created before that rule existed must still be
+        // blocked here, at the one point before a request becomes visible to Import.
         Set<Long> seenSourceItemIds = new HashSet<>();
         for (int i = 0; i < items.size(); i++) {
             PricingRequestItemDto item = items.get(i);
@@ -347,17 +308,15 @@ public class PricingRequestService {
 
         int rows = requests.transition(id, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
         if (rows == 0) {
-            // Compare-and-set miss: someone else changed this row between the
-            // requireViewable() read above and this call. Don't re-query to
-            // build a nicer message — see PricingRequestRepository.transition's
-            // Javadoc for why.
+            // Compare-and-set miss: someone else changed this row between the requireViewable() read above and this call.
+            // Don't re-query to build a nicer message — see PricingRequestRepository.transition's Javadoc for why.
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_REQUEST_SUBMITTED, PricingRequestStatus.DRAFT,
             PricingRequestStatus.SUBMITTED, null, null);
-        // Stock lines (V194, R4): a request made ONLY of สต็อกในไทย lines has nothing for Import to
-        // do - no factory quote, no ETA - so it goes straight to the CEO and Import is NOT told.
+        // Stock lines (V194, R4): a request made ONLY of สต็อกในไทย lines has nothing for Import to do - no factory
+        // quote, no ETA - so it goes straight to the CEO and Import is NOT told.
         if (allInThailand(items)) {
             int toCeo = requests.transition(id, PricingRequestStatus.SUBMITTED,
                 PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
@@ -409,18 +368,15 @@ public class PricingRequestService {
         if (submitted == null || !factoryQuoteCarryForward.carryForwardOnSubmit(submitted, actor.id())) {
             return false;
         }
-        // The advance itself. SUBMITTED -> READY_FOR_CEO_REVIEW is declared in
-        // PricingRequestStatus.ALLOWED specifically for this path. A compare-and-set miss here is
-        // not a user-facing error: the request is validly SUBMITTED either way, so fall back to
-        // the Import path rather than failing a submit that already succeeded.
+        // Advance eligible submissions to CEO review; a concurrent transition miss leaves the valid submission on the
+        // Import path.
         int transitioned = requests.transition(summary.id(), PricingRequestStatus.SUBMITTED,
             PricingRequestStatus.READY_FOR_CEO_REVIEW, null, null);
         if (transitioned == 0) {
             return false;
         }
-        // Same event kind FactoryQuoteService.markReadyForCosting emits for the same transition,
-        // so "became ready for CEO review" reads as one consistent trail regardless of which path
-        // produced it.
+        // Same event kind FactoryQuoteService.markReadyForCosting emits for the same transition, so "became ready for
+        // CEO review" reads as one consistent trail regardless of which path produced it.
         requests.addEvent(summary.id(), summary.ticketId(), actor.id(), actor.name(),
             PricingRequestEventKind.PRICING_COSTING_SUBMITTED, PricingRequestStatus.SUBMITTED,
             PricingRequestStatus.READY_FOR_CEO_REVIEW,
@@ -447,19 +403,11 @@ public class PricingRequestService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำขอราคานี้เป็นสต็อกในไทยทั้งหมด ไม่ต้องผ่านฝ่ายนำเข้า");
         }
-        // CRITICAL: this assigns the Import employee to the PRICING REQUEST only,
-        // never to sales.ticket.assigned_to. TicketRepository.addEventInternal sets
-        // assigned_to as a side-effect of any PICKED_UP event ON THE TICKET; this
-        // flow deliberately never routes through TicketRepository's write methods
-        // (see that class's and PricingRequestRepository's class-level Javadoc), so
-        // two pricing requests on the same deal can be picked up by two different
-        // Import employees without either stealing the other's — or the whole
-        // deal's — assignment.
+        // CRITICAL: this assigns the Import employee to the PRICING REQUEST only, never to sales.ticket.assigned_to.
         int rows = requests.transition(id, PricingRequestStatus.SUBMITTED, PricingRequestStatus.IMPORT_REVIEWING,
             actor.id(), null);
         if (rows == 0) {
-            // Compare-and-set miss: someone else already picked this up between
-            // requireViewable()'s read and here.
+            // Compare-and-set miss: someone else already picked this up between requireViewable()'s read and here.
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ถูกรับเรื่องไปแล้วโดยผู้ใช้อื่น");
         }
         requests.addEvent(id, summary.ticketId(), actor.id(), actor.name(),
@@ -549,9 +497,9 @@ public class PricingRequestService {
 
         int rows = requests.fillItemFactory(id, itemId, factoryId, factory);
         if (rows == 0) {
-            // Lost race against another Import user filling the same blank between the read above
-            // and this write — the repository's own WHERE clause is what caught it. Same shape and
-            // same message as every other compare-and-set miss in this class.
+            // Lost race against another Import user filling the same blank between the read above and this write — the
+            // repository's own WHERE clause is what caught it. Same shape and same message as every other compare-and-set
+            // miss in this class.
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำขอราคาถูกแก้ไขโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
@@ -577,15 +525,9 @@ public class PricingRequestService {
     @Transactional
     public PricingRequestDetailDto cancel(long id, CancelPricingRequestRequest request, UserPrincipal actor) {
         PricingRequestSummaryDto summary = requireViewable(id, actor);
-        // Deliberately NO requireTicket/requireActive here (unlike updateDraft): a
-        // request on a dead deal
-        // (ON_HOLD/DORMANT/etc.) must still be cancellable — that is the one
-        // mutation that should always be available on a stalled deal, not blocked
-        // by it. Do not add a lifecycle gate to this method.
-        // Mirrors TicketService.cancel: ownership is the gate, not a role set —
-        // extended here with an explicit CEO override (unlike TicketService.cancel,
-        // which currently has none) so a manager can unwind an abandoned draft
-        // without needing the original sales rep's session.
+        // Deliberately NO requireTicket/requireActive here (unlike updateDraft): a request on a dead deal
+        // (ON_HOLD/DORMANT/etc.) must still be cancellable — that is the one mutation that should always be available
+        // on a stalled deal, not blocked by it. Do not add a lifecycle gate to this method.
         if (!"ceo".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(summary.ticketCreatedById(), summary.ticketKeyedById(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -758,12 +700,9 @@ public class PricingRequestService {
         TicketSummaryDto ticket = requireTicket(summary.ticketId());
         requireActive(ticket);
         FileStorageService.StoredFile stored = fileStorage.store("pricing-request", id, file, Set.of());
-        // The disk copy above is NOT part of this transaction. saveAttachment and addEvent below
-        // can both still fail, rolling this method back and leaving the file on disk with no
-        // sales.pricing_request_attachment row referencing it. deleteOnRollback ties it to the
-        // transaction's outcome and is a no-op when the method commits. The store deliberately
-        // stays BELOW the authorization/status gates above (see deleteOnRollback's Javadoc):
-        // hoisting it out of the transaction would mean storing before authorizing.
+        // The disk copy above is NOT part of this transaction. saveAttachment and addEvent below can both still fail,
+        // rolling this method back and leaving the file on disk with no sales.pricing_request_attachment row
+        // referencing it.
         fileStorage.deleteOnRollback(stored);
         PricingRequestAttachmentDto attachment = requests.saveAttachment(id, stored.fileName(), stored.filePath(),
             stored.mimeType(), stored.fileSize(), actor.id());
@@ -827,13 +766,8 @@ public class PricingRequestService {
         fileStorage.deleteOnCommit(path);
     }
 
-    /**
-     * Import-only. Deliberately no {@code ATTACHMENT_EDITABLE_STATUSES}-style status gate here:
-     * {@code requireViewable} already makes a DRAFT request invisible to import entirely (see its
-     * Javadoc — draft privacy), so import can only ever reach an attachment on a request that has
-     * already been submitted; there is no separate "too early" state to guard against for this
-     * role the way there is for Sales's own upload/delete.
-     */
+    /** Import controls factory-email inclusion only after request visibility checks; private drafts remain
+     * inaccessible. */
     @Transactional
     public PricingRequestAttachmentDto setAttachmentIncludeInFactoryEmail(
         long attachmentId, UpdatePricingRequestAttachmentRequest request, UserPrincipal actor
@@ -853,53 +787,15 @@ public class PricingRequestService {
         return !requests.findOpenIdsForTicket(ticketId).isEmpty();
     }
 
-    /**
-     * Internal cascade: when a deal reaches a terminal lifecycle state (lost or
-     * cancelled — see {@code TicketService.markLost}/{@code cancel}), any pricing
-     * requests still open on it can never be priced, so they are cancelled here
-     * too rather than left stranded in the Import queue forever.
-     *
-     * <p><strong>No role check on purpose.</strong> This is not a user-facing
-     * endpoint — it is invoked by an already-authorised ticket action (the caller
-     * has already passed {@code TicketService}'s own gate for markLost/cancel), and
-     * re-deriving a pricing-request-specific role check here would either reject a
-     * legitimate cascade (the triggering actor may be sales, not import — pricing
-     * requests are normally only cancellable by import/CEO-adjacent flows) or
-     * require threading a bypass flag through. Do NOT add a controller endpoint for
-     * this method.
-     *
-     * <p>Bypasses {@link PricingRequestStatus#canTransition} on purpose, via {@link
-     * PricingRequestRepository#cancelForDeadDeal} (review remediation COMMIT 5) rather than
-     * {@link PricingRequestRepository#transition}, which now asserts the canonical map and would
-     * reject this cascade for a request sitting in {@code READY_FOR_CEO_REVIEW} — a status from
-     * which a live user action may not cancel directly, but a dead deal must still be able to kill
-     * ANY open pricing request, in ANY open status. The normal restriction exists to protect a
-     * live workflow, which no longer exists once the deal itself is terminal.
-     *
-     * <p>Each row's compare-and-set is retried up to {@value #CANCEL_MAX_ATTEMPTS}
-     * times against a freshly-read status before being given up on — a single
-     * raced miss (something else changed the row between the read and the
-     * transition) is common enough under concurrent access that giving up on the
-     * first attempt would routinely leave a request stranded open on a dead deal.
-     * A row already found CANCELLED (by whatever raced it) counts as settled, not
-     * abandoned — the outcome we wanted already holds. Exhausting every attempt
-     * without settling is logged as a warning (this method has no caller that
-     * inspects the return value today, so the log is the only operator-visible
-     * signal) and the id is reported back in {@link CancelOpenForTicketResult
-     * #abandonedIds()} so a future caller can act on it without a plain count
-     * silently swallowing the distinction between "nothing was open" and
-     * "gave up on some".
-     *
-     * @return cancelled/abandoned counts — never throws for a row that could not
-     *         be settled, so the caller's own deal-terminal transaction still commits.
-     */
+    /** Internal cascade: when a deal reaches a terminal lifecycle state (lost or cancelled — see
+     * TicketService.markLost/cancel), any pricing requests still open on it can never be priced, so they are
+     * cancelled here too rather than left stranded in the Import queue forever. */
     @Transactional
     public CancelOpenForTicketResult cancelOpenForTicket(long ticketId, String reason, DeadDealCause cause,
                                                          UserPrincipal actor) {
-        // Deliberately NO requireTicket/requireActive here: this method exists
-        // BECAUSE the deal just left ACTIVE (see the class Javadoc above) — a
-        // lifecycle gate would make the one caller that needs this cascade fail
-        // every time it runs. Do not add one.
+        // Deliberately NO requireTicket/requireActive here: this method exists BECAUSE the deal just left ACTIVE (see
+        // the class Javadoc above) — a lifecycle gate would make the one caller that needs this cascade fail every
+        // time it runs. Do not add one.
         List<Long> openIds = requests.findOpenIdsForTicket(ticketId);
         String metadataJson = toDeadDealMetadataJson(reason);
         int cancelledCount = 0;
@@ -909,10 +805,9 @@ public class PricingRequestService {
         for (Long id : openIds) {
             boolean settled = false;
             for (int attempt = 1; attempt <= CANCEL_MAX_ATTEMPTS; attempt++) {
-                // Read each request's own current status fresh on every attempt to pass
-                // as the compare-and-set `expected` value — findOpenIdsForTicket only
-                // guarantees status <> CANCELLED at the time it ran, not which of the
-                // open statuses each row is still in by the time we get here.
+                // Read each request's own current status fresh on every attempt to pass as the compare-and-set `expected`
+                // value — findOpenIdsForTicket only guarantees status <> CANCELLED at the time it ran, not which of the open
+                // statuses each row is still in by the time we get here.
                 PricingRequestSummaryDto summary = requests.findSummary(id).orElse(null);
                 if (summary == null) {
                     // Row is gone entirely — nothing left to cancel.
@@ -920,9 +815,8 @@ public class PricingRequestService {
                     break;
                 }
                 if (PricingRequestStatus.CANCELLED.equals(summary.status())) {
-                    // Already cancelled by whatever raced us — the wanted end state
-                    // already holds. Not a new cancellation of ours, so it does not
-                    // add to cancelledCount, but it is settled, not abandoned.
+                    // Already cancelled by whatever raced us — the wanted end state already holds. Not a new cancellation of ours,
+                    // so it does not add to cancelledCount, but it is settled, not abandoned.
                     settled = true;
                     break;
                 }
@@ -952,13 +846,8 @@ public class PricingRequestService {
                     settled = true;
                     break;
                 }
-                // Raced: something else changed this row between the read above and
-                // this transition (e.g. the owning rep cancelled it concurrently).
-                // Retry with a fresh read rather than giving up on the first miss —
-                // this runs inside the caller's transaction (REQUIRED propagation
-                // joins markLost/cancel), so throwing here would roll back the deal's
-                // own lost/cancel too, which must never happen over a pricing request
-                // someone else is concurrently touching.
+                // Raced: something else changed this row between the read above and this transition (e.g. the owning rep
+                // cancelled it concurrently).
                 log.warn("cancelOpenForTicket: transition raced on pricing request {} (ticket {}, attempt {}/{}); retrying",
                     id, ticketId, attempt, CANCEL_MAX_ATTEMPTS);
             }
@@ -971,12 +860,9 @@ public class PricingRequestService {
         return new CancelOpenForTicketResult(cancelledCount, abandonedIds);
     }
 
-    /**
-     * Result of {@link #cancelOpenForTicket}: distinguishes "nothing was open" /
-     * "cancelled everything that was open" from "gave up on N requests after
-     * retrying" — a plain {@code int} count cannot express that distinction, which
-     * matters because an abandoned row is left open on an otherwise-dead deal.
-     */
+    /** Result of #cancelOpenForTicket: distinguishes "nothing was open" / "cancelled everything that was open" from
+     * "gave up on N requests after retrying" — a plain int count cannot express that distinction, which matters
+     * because an abandoned row is left open on an otherwise-dead deal. */
     public record CancelOpenForTicketResult(int cancelledCount, List<Long> abandonedIds) {
         public CancelOpenForTicketResult {
             abandonedIds = List.copyOf(abandonedIds);
@@ -997,9 +883,8 @@ public class PricingRequestService {
         try {
             return objectMapper.writeValueAsString(Map.of("reason", reason));
         } catch (JsonProcessingException e) {
-            // reason is @NotBlank String — a plain string can never actually fail
-            // Jackson serialisation, but the checked exception must still be
-            // handled rather than escaping as an unhandled 500.
+            // reason is @NotBlank String — a plain string can never actually fail Jackson serialisation, but the checked
+            // exception must still be handled rather than escaping as an unhandled 500.
             throw new ApiException(HttpStatus.BAD_REQUEST, "เหตุผลการยกเลิกไม่ถูกต้อง");
         }
     }
@@ -1026,22 +911,15 @@ public class PricingRequestService {
         return new PricingRequestDetailDto(summary, requests.findItems(id), requests.findEvents(id));
     }
 
-    /**
-     * The one read-access rule for a single pricing request: viewer role
-     * required, and sales reps only see requests on tickets they created.
-     * Every read path (get, updateDraft, submit, cancel) must go through this.
-     */
+    /** The one read-access rule for a single pricing request: viewer role required, and sales reps only see
+     * requests on tickets they created. Every read path (get, updateDraft, submit, cancel) must go through this. */
     private PricingRequestSummaryDto requireViewable(long id, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         PricingRequestSummaryDto summary = requests.findSummary(id)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้"));
-        // A DRAFT is the rep's private scratchpad (see this class's Javadoc) — only
-        // the owning sales rep and managerial oversight (ceo/sales_manager) may see
-        // it. import/account must not, even though they can see every other status.
-        // Respond 404, NOT 403: a 403 here would confirm to a non-owner that a
-        // pricing request with this id exists in SOME status, letting them probe
-        // ids to enumerate other reps' in-flight drafts. 404 is indistinguishable
-        // from "no such id", which is what we want a non-owner to see.
+        // A DRAFT is the rep's private scratchpad (see this class's Javadoc) — only the owning sales rep and
+        // managerial oversight (ceo/sales_manager) may see it. import/account must not, even though they can see every
+        // other status.
         if (PricingRequestStatus.DRAFT.equals(summary.status()) && !canSeeDraft(actor, summary)) {
             throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบคำขอราคานี้");
         }
@@ -1178,10 +1056,8 @@ public class PricingRequestService {
             if (!QuantityType.isValid(item.quantityType())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทจำนวน '" + item.quantityType() + "'");
             }
-            // V185: requestedUnitBasis is no longer @NotBlank on the DTO — #resolveItems always
-            // derives it to PER_PIECE for every item from here on, so a null here (the new form's
-            // only payload shape) is not an error. Only an EXPLICIT, unrecognised value is —
-            // preserved for a legacy caller that still sends one directly.
+            // V185: requestedUnitBasis is no longer @NotBlank on the DTO — #resolveItems always derives it to PER_PIECE
+            // for every item from here on, so a null here (the new form's only payload shape) is not an error.
             if (item.requestedUnitBasis() != null && !UnitBasis.isValid(item.requestedUnitBasis())) {
                 throw new ApiException(HttpStatus.BAD_REQUEST,
                     "ไม่รองรับ requestedUnitBasis '" + item.requestedUnitBasis() + "'");
@@ -1219,8 +1095,8 @@ public class PricingRequestService {
         if (item.piecesPerBox() == null || item.piecesPerBox() < 1) missing.add("จำนวนแผ่นต่อกล่อง");
         if (item.sqmPerPiece() == null || item.sqmPerPiece().signum() <= 0) missing.add("ตร.ม./แผ่น");
         if (!hasItemQuantity(item.quantityMode(), item.areaSqm(), item.piecesInput())) missing.add("จำนวน");
-        // Stock lines (V194, R7): โรงงาน / ประเทศต้นทาง / ระยะเวลานำเข้า are hidden and NOT required
-        // for a stock line - per line, so an import line on the same request is still held to them.
+        // Stock lines (V194, R7): โรงงาน / ประเทศต้นทาง / ระยะเวลานำเข้า are hidden and NOT required for a stock line
+        // - per line, so an import line on the same request is still held to them.
         boolean stockLine = item.stockSource() != null;
         // ประเทศต้นทาง is required on the PCR form (unlike the direct-deal quotation, where it
         // stays optional — DealQuotationRequests.ItemInput).
@@ -1252,8 +1128,8 @@ public class PricingRequestService {
         }
     }
 
-    /** Mirrors {@code DealQuotationService#hasQuantity} exactly — AREA is the default reading of
-     * any blank/other quantityMode, matching {@code WastageCalculator.Input}'s own Javadoc. */
+    /** Mirrors DealQuotationService#hasQuantity exactly — AREA is the default reading of any blank/other
+     * quantityMode, matching WastageCalculator.Input's own Javadoc. */
     private boolean hasItemQuantity(String quantityMode, BigDecimal areaSqm, Integer piecesInput) {
         if (WastageCalculator.QUANTITY_MODE_PIECES.equals(quantityMode)) {
             return piecesInput != null && piecesInput >= 1;
@@ -1261,13 +1137,9 @@ public class PricingRequestService {
         return areaSqm != null && areaSqm.signum() > 0;
     }
 
-    /**
-     * V185: the piece unit label a PER_PIECE pricing-request line prints — mirrors {@code
-     * th.co.glr.hr.dealquotation.DealQuotationLines#TILE_UNIT_TH} verbatim (that constant is
-     * package-private there); duplicated here rather than exposed cross-package, the same
-     * deliberate small-duplication convention this class already uses for {@code SALES_ROLES}/
-     * {@code IMPORT_ROLES} (see their own comment).
-     */
+    /** V185: the piece unit label a PER_PIECE pricing-request line prints — mirrors
+     * th.co.glr.hr.dealquotation.DealQuotationLines#TILE_UNIT_TH verbatim; duplicated here rather than exposed
+     * cross-package, the same deliberate small-duplication convention this class already uses for SALES_ROLES/ IMPORT_ROLES. */
     private static final String PIECE_UNIT_LABEL = "แผ่น";
 
     /**
@@ -1318,8 +1190,8 @@ public class PricingRequestService {
 
     private PricingRequestItemRequest resolveItem(int rowNumber, PricingRequestItemRequest rawItem,
                                                   java.util.function.Supplier<List<String>> masterFactoryNames) {
-        // Stock lines (V194): an unknown source is a caller-fixable 400, not a CHECK-constraint 500.
-        // A blank source normalizes to null (สั่งนำเข้า).
+        // Stock lines (V194): an unknown source is a caller-fixable 400, not a CHECK-constraint 500. A blank source
+        // normalizes to null (สั่งนำเข้า).
         String stockSource = hasText(rawItem.stockSource()) ? rawItem.stockSource().trim() : null;
         if (stockSource != null && !STOCK_IN_THAILAND.equals(stockSource)) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
@@ -1328,8 +1200,8 @@ public class PricingRequestService {
         PricingRequestItemRequest item = java.util.Objects.equals(stockSource, rawItem.stockSource()) ? rawItem
             : withStockSource(rawItem, stockSource);
         requireItemFieldsComplete(rowNumber, item);
-        // Mirrors DealQuotationRequests.ItemInput/tileInputFromRow's own "blank quantityMode reads
-        // as AREA" default (WastageCalculator.calculate itself requires the literal string).
+        // Mirrors DealQuotationRequests.ItemInput/tileInputFromRow's own "blank quantityMode reads as AREA" default
+        // (WastageCalculator.calculate itself requires the literal string).
         String quantityMode = hasText(item.quantityMode())
             ? item.quantityMode() : WastageCalculator.QUANTITY_MODE_AREA;
         boolean roundToFullBox = item.roundToFullBox() == null || item.roundToFullBox();
@@ -1470,19 +1342,8 @@ public class PricingRequestService {
             request.unitCode(), request.omitContactHonorific(), items);
     }
 
-    /**
-     * Shared identity predicate for product identity:
-     * an item must actually name a product somehow — an existing deal line,
-     * a catalog reference, a model name, or a dedicated product description.
-     * Brand alone is deliberately NOT sufficient (a brand with no model does
-     * not identify a product), so this checks the other four fields only.
-     *
-     * <p>Called from both {@link #validateItems} (the payload-shaped
-     * {@link PricingRequestItemRequest}, pre-persist) and {@link #submit}
-     * (the persisted {@link PricingRequestItemDto}) — the two are different
-     * record types with no shared interface, so callers extract the four
-     * relevant fields themselves rather than this method taking either DTO.
-     */
+    /** Shared identity predicate for product identity: an item must actually name a product somehow — an existing
+     * deal line, a catalog reference, a model name, or a dedicated product description. */
     private static boolean isProductIdentified(Long sourceTicketItemId, Long productId, String model, String productDescription) {
         return sourceTicketItemId != null || productId != null || hasText(model) || hasText(productDescription);
     }
@@ -1520,19 +1381,9 @@ public class PricingRequestService {
             + ": ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)";
     }
 
-    /**
-     * Part 2 of the review-remediation plan: a {@code recipientContactId}
-     * must belong to the SAME customer as the deal itself — otherwise a
-     * pricing request on Customer A's deal could name Customer B's contact,
-     * which would later put the wrong recipient on a quotation.
-     *
-     * <p>Skips the comparison when {@code ticket.customerId()} is null (an
-     * older deal with no customer link) rather than throwing — there is no
-     * customer to compare against, so this is "nothing to check", NOT "any
-     * contact is fine". A contact id that does not resolve to any row at all
-     * is treated the same as a mismatch: both are a 400, since neither could
-     * possibly belong to the deal's customer.
-     */
+    /** Part 2 of the review-remediation plan: a recipientContactId must belong to the SAME customer as the deal
+     * itself — otherwise a pricing request on Customer A's deal could name Customer B's contact, which would later
+     * put the wrong recipient on a quotation. */
     private void validateRecipientContactBelongsToCustomer(Long recipientContactId, TicketSummaryDto ticket) {
         if (recipientContactId == null || ticket.customerId() == null) {
             return;

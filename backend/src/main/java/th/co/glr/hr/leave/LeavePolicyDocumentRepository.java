@@ -11,12 +11,8 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
-/**
- * {@code hr.leave_policy_document} (+ {@code hr.leave_policy_document_blob}) — the §5 announcement
- * PDF a rules-tab reader may download, and HR/CEO may upload a new version of. See V133's migration
- * comment for the schema rationale: bytes split from metadata, effective-dated and never-overwritten
- * versions instead of a single mutable row.
- */
+/** hr.leave_policy_document (+ hr.leave_policy_document_blob) — the §5 announcement PDF a rules-tab reader may
+ * download, and HR/CEO may upload a new version of. */
 @Repository
 public class LeavePolicyDocumentRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -25,12 +21,9 @@ public class LeavePolicyDocumentRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * The document currently in force: the row with the latest {@code effective_from} that is not
-     * in the future. Never touches {@code leave_policy_document_blob} — a caller that only needs to
-     * know WHETHER a document exists (the frontend's HEAD availability probe) or its metadata pays
-     * no cost for the payload.
-     */
+    /** The document currently in force: the row with the latest effective_from that is not in the future. Never
+     * touches leave_policy_document_blob — a caller that only needs to know WHETHER a document exists (the
+     * frontend's HEAD availability probe) or its metadata pays no cost for the payload. */
     public Optional<LeavePolicyDocumentDto> findCurrent() {
         try {
             return Optional.ofNullable(jdbc.queryForObject("""
@@ -64,13 +57,9 @@ public class LeavePolicyDocumentRepository {
         }
     }
 
-    /**
-     * Inserts a brand-new version — never updates or replaces an existing row. A superseded version
-     * stays byte-for-byte retrievable (nothing here ever calls {@code findContent} on a stale id and
-     * gets nothing back); only {@link #findCurrent()}'s answer changes as of a new row's
-     * {@code effective_from}. Metadata and bytes are written in one transaction so a crash between
-     * the two INSERTs can never leave a metadata row with no blob (or vice versa).
-     */
+    /** Inserts a brand-new version — never updates or replaces an existing row. A superseded version stays
+     * byte-for-byte retrievable (nothing here ever calls findContent on a stale id and gets nothing back); only
+     * #findCurrent()'s answer changes as of a new row's effective_from. */
     @Transactional
     public LeavePolicyDocumentDto insert(
             String fileName, String mimeType, byte[] content, LocalDate effectiveFrom, Long uploadedBy) {

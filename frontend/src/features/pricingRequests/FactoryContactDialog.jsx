@@ -6,19 +6,15 @@ import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { bangkokToday } from './factoryContactMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-/**
- * CR-1 (GLA-167) R3 / R5 / R7 — "ติดต่อโรงงานแล้ว". A small dialog, not a confirm: import (or the
- * CEO) already contacted the factory outside the system and records WHEN (date, default today in
- * Asia/Bangkok, never later than today — the same zone FactoryQuoteService checks) and, optionally,
- * a note. Confirming moves the quote DRAFT -> REQUESTED and unlocks price entry; it is FINAL (no
- * undo, no edit), which the dialog says up front rather than leaving it as a surprise.
- */
+/** CR-1 (GLA-167) R3 / R5 / R7 — "ติดต่อโรงงานแล้ว". A small dialog, not a confirm: import (or the CEO) already
+ * contacted the factory outside the system and records WHEN (date, default today in Asia/Bangkok, never later
+ * than today — the same zone FactoryQuoteService checks) and, optionally, a note. */
 export function FactoryContactDialog({ factoryName, pending, onCancel, onConfirm }) {
   const today = bangkokToday();
   const [contactedOn, setContactedOn] = useState(today);
   const [note, setNote] = useState('');
-  // A cleared date input yields '' and a typed future date is refused by the server with a 400;
-  // both are caught here so the button never invites a call that cannot succeed.
+  // A cleared date input yields '' and a typed future date is refused by the server with a 400; both are caught
+  // here so the button never invites a call that cannot succeed.
   const valid = Boolean(contactedOn) && contactedOn <= today;
 
   function submit() {

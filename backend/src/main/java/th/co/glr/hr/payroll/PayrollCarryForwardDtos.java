@@ -62,8 +62,7 @@ public final class PayrollCarryForwardDtos {
         BigDecimal specialPay7,
         BigDecimal specialPay8,
         BigDecimal specialPay9,
-        // ค่าอาหาร (V97/V98) -- also carry-forward-flagged per employee, same mechanism as the พิเศษ
-        // slots.
+        // ค่าอาหาร (V97/V98) -- also carry-forward-flagged per employee, same mechanism as the พิเศษ slots.
         BigDecimal mealAllowance,
         BigDecimal nonTaxableIncome,
         BigDecimal studentLoanDeduction,
@@ -76,8 +75,8 @@ public final class PayrollCarryForwardDtos {
         // (if any) re-applies on its own -- the standing value is deliberately NOT carried here.
         BigDecimal withholdingTaxOverride
     ) {
-        /** A row with only the identity set — used when an employee has leave-derived figures to
-         *  surface but no special-pay carry-forward row (e.g. their first-ever processed month). */
+        /** A row with only the identity set — used when an employee has leave-derived figures to surface but no
+         * special-pay carry-forward row (e.g. their first-ever processed month). */
         public static SuggestedInputRow empty(Long employeeId) {
             return new SuggestedInputRow(
                 employeeId,

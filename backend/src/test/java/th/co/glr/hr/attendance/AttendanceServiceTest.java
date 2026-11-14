@@ -25,9 +25,8 @@ import th.co.glr.hr.config.AppProperties;
 class AttendanceServiceTest {
     private final AttendanceRepository attendanceRepository = mock(AttendanceRepository.class);
     private final AppProperties properties = new AppProperties();
-    // The daily roll-up is exercised for real in AttendanceDailyCalculatorTest and the
-    // Testcontainers integration tests; here it is stubbed so these cases stay about punch
-    // ingestion and scoping.
+    // The daily roll-up is exercised for real in AttendanceDailyCalculatorTest and the Testcontainers integration
+    // tests; here it is stubbed so these cases stay about punch ingestion and scoping.
     private final AttendanceDailyService dailyService = mock(AttendanceDailyService.class);
     private final AttendanceService attendanceService =
         new AttendanceService(attendanceRepository, new AttendanceDatParser(), properties, dailyService);
@@ -188,8 +187,8 @@ class AttendanceServiceTest {
                 org.mockito.ArgumentMatchers.anyLong(),
                 org.mockito.ArgumentMatchers.any()))
             .thenReturn(7L);
-        // Two valid rows parse; the batch insert reports 1 newly inserted (the
-        // other is a dedup skip). The broken row is an error, not a punch.
+        // Two valid rows parse; the batch insert reports 1 newly inserted (the other is a dedup skip). The broken row
+        // is an error, not a punch.
         when(attendanceRepository.batchInsertPunches(org.mockito.ArgumentMatchers.anyList()))
             .thenReturn(1);
 
@@ -298,11 +297,9 @@ class AttendanceServiceTest {
         assertThat(scope.employeeId()).isNull();
     }
 
-    /**
-     * The division filter is a convenience for roles that can already see everything — it must never
-     * become a way to look sideways. A ฝ่าย manager's division comes from their own principal, so a
-     * requested one is ignored outright rather than merged.
-     */
+    /** The division filter is a convenience for roles that can already see everything — it must never become a way
+     * to look sideways. A ฝ่าย manager's division comes from their own principal, so a requested one is ignored
+     * outright rather than merged. */
     @Test
     void aManagerCannotUseTheDivisionFilterToSeeAnotherDivision() {
         AttendanceScope scope = attendanceService.resolveScope(manager("employee", 5L, 7L), null, 42L);
@@ -326,13 +323,9 @@ class AttendanceServiceTest {
         return new UserPrincipal(1L, role + "@glr.co.th", role, role, employeeId, true, LocalDate.now(), false, divisionId, true);
     }
 
-    // --- markPresent (WFH / stand-up roster) -----------------------------------
-    //
-    // The controller already restricts this endpoint to hr/ceo via requireAnyRole; these cases cover
-    // the decision markPresent itself makes — validating the submitted ids against the caller's own
-    // scope rather than trusting them outright. Real-DB enforcement (the authoritative WFH write
-    // that supersedes a punch-derived row, and the role gate end to end) is proven separately by
-    // AttendanceMarkPresentIntegrationTest — Mockito cannot demonstrate either.
+    // markPresent ----------------------------------- The controller already restricts this endpoint to hr/ceo via
+    // requireAnyRole; these cases cover the decision markPresent itself makes — validating the submitted ids
+    // against the caller's own scope rather than trusting them outright.
 
     @Test
     void hrMarkingPresentDelegatesToTheDailyRosterReconciliation() {
@@ -353,8 +346,8 @@ class AttendanceServiceTest {
     @Test
     void markPresentRejectsAnEmployeeOutsideTheCallersScope() {
         LocalDate date = LocalDate.parse("2026-07-15");
-        // hr sees company-wide, but this stubs a narrower scope to exercise the defense-in-depth
-        // check on its own terms, independent of who the controller happens to let through.
+        // hr sees company-wide, but this stubs a narrower scope to exercise the defense-in-depth check on its own
+        // terms, independent of who the controller happens to let through.
         when(dailyService.listEmployeeOptions(10L, null, true)).thenReturn(List.of(
             new th.co.glr.hr.attendance.daily.AttendanceEmployeeOption(10L, "E010", "Employee Ten", null, null, null, null)
         ));

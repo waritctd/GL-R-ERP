@@ -55,8 +55,8 @@ public class CustomerService {
     private final CustomerRepository customers;
     private final ContactRepository  contacts;
     private final ProjectRepository  projects;
-    // Deal-ENTRY grant read only (see DealEntryAccess's own Javadoc) -- ORed alongside
-    // VIEWER_ROLES below, never replacing it (import/ceo/account must stay reachable too).
+    // Deal-ENTRY grant read only (see DealEntryAccess's own Javadoc) -- ORed alongside VIEWER_ROLES below, never
+    // replacing it (import/ceo/account must stay reachable too).
     private final EmployeeAuthRepository employeeAuth;
     // Only used by #updateContact (see its Javadoc); the reads above stay as narrow as before.
     private final DealQuotationRepository dealQuotations;

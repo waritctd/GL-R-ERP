@@ -36,11 +36,9 @@ public final class LeaveResponses {
     public record LeaveReviewSummaryResponse(LeaveReviewSummaryDto reviewSummary) {
     }
 
-    /**
-     * GET /api/leave/calendar-context -- see {@link LeaveCalendarContextService}. A new record
-     * (not reusing {@code HolidaysResponse}/{@code WorkSchedulesResponse} from
-     * attendance/schedule/) because this wraps one combined DTO, not a bare list.
-     */
+    /** GET /api/leave/calendar-context -- see LeaveCalendarContextService. A new record (not reusing
+     * HolidaysResponse/WorkSchedulesResponse from attendance/schedule/) because this wraps one combined DTO, not a
+     * bare list. */
     public record LeaveCalendarContextResponse(LeaveCalendarContextDto calendarContext) {
     }
 }

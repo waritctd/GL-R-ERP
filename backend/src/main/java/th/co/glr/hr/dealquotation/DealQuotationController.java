@@ -38,15 +38,9 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 
-/**
- * Quotation v2 (direct deal quotation, V165) endpoints — see docs/sales/quotation-v2-plan.md's "API"
- * section for the exact routes/envelopes this implements. Detail-shaped responses are wrapped as
- * {@code {quotation: ...}}, list-shaped as {@code {items: [...]}} and the single-item preview as
- * {@code {item: ...}} — mirrors {@code CustomerQuotationController}'s own envelope convention.
- *
- * <p>Every authz decision lives in {@link DealQuotationService}; this class only resolves the
- * session and delegates.
- */
+/** Quotation v2 (direct deal quotation, V165) endpoints — see docs/sales/quotation-v2-plan.md's "API" section
+ * for the exact routes/envelopes this implements. Every authz decision lives in DealQuotationService; this
+ * class only resolves the session and delegates. */
 @RestController
 @RequestMapping("/api")
 public class DealQuotationController {
@@ -257,11 +251,8 @@ public class DealQuotationController {
         if (!"xlsx".equalsIgnoreCase(format) && !"pdf".equalsIgnoreCase(format)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับรูปแบบไฟล์ '" + format + "'");
         }
-        // Download filename is the quotation NUMBER, not the internal id -- "deal-quotation-42.pdf"
-        // told the rep nothing about which document they just downloaded when they have several
-        // deals open. quotations.get() re-runs requireViewAccess (also re-run inside
-        // renderPdf/renderXlsx below) -- an extra read, not a second authz decision; both are the
-        // same view-access check on the same row.
+        // Download filename is the quotation NUMBER, not the internal id -- "deal-quotation-42.pdf" told the rep
+        // nothing about which document they just downloaded when they have several deals open.
         String number = quotations.get(id, user).number();
         String filename = sanitizeFilename(number);
         if ("xlsx".equalsIgnoreCase(format)) {
@@ -283,9 +274,8 @@ public class DealQuotationController {
     // DealQuotationService#uploadItemPicture for the rule. Writes answer {quotation: ...} so the
     // client re-reads hasPicture/picturePlacement/pictureUrl from one response.
 
-    /** Multipart {@code file} (PNG/JPEG by magic bytes, ≤ 2 MB) and optional {@code placement}
-     * ({@code BELOW} default | {@code BESIDE}). Replaces any existing picture on the item. PUT +
-     * multipart, like {@code EmployeeSignatureController#upload}. */
+    /** Multipart file (PNG/JPEG by magic bytes, ≤ 2 MB) and optional placement (BELOW default | BESIDE). Replaces
+     * any existing picture on the item. PUT + multipart, like EmployeeSignatureController#upload. */
     @PutMapping("/deal-quotations/{id}/items/{itemId}/picture")
     Map<String, DealQuotationDto> uploadItemPicture(@PathVariable long id, @PathVariable long itemId,
                                                     @RequestParam("file") MultipartFile file,

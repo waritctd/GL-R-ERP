@@ -52,8 +52,8 @@ public class DealQuotationRepository {
         this.catalog = catalog;
     }
 
-    /** Same sequence, same format as {@code CustomerQuotationRepository.nextQuotationCode()} —
-     * one quotation number space across both flows (the {@code number} column is UNIQUE). */
+    /** Same sequence, same format as CustomerQuotationRepository.nextQuotationCode() — one quotation number space
+     * across both flows (the number column is UNIQUE). */
     public String nextQuotationCode() {
         long seq = jdbc.queryForObject("SELECT nextval('sales.quotation_code_seq')", Map.of(), Long.class);
         return "QT-" + Year.now() + "-" + String.format("%04d", seq);
@@ -74,8 +74,8 @@ public class DealQuotationRepository {
         return th.co.glr.hr.ticket.QuotationNumbering.baseNumber(sourceNumber, sourceRevisionNo);
     }
 
-    /** Delegates to {@link th.co.glr.hr.ticket.QuotationNumbering#revisionNumber} — see
-     * {@link #baseNumber}'s Javadoc for why this class keeps a same-signature wrapper. */
+    /** Delegates to th.co.glr.hr.ticket.QuotationNumbering#revisionNumber — see #baseNumber's Javadoc for why this
+     * class keeps a same-signature wrapper. */
     static String revisionNumber(String baseNumber, int revisionNo) {
         return th.co.glr.hr.ticket.QuotationNumbering.revisionNumber(baseNumber, revisionNo);
     }
@@ -703,8 +703,8 @@ public class DealQuotationRepository {
                 null, null, null, null);
         }
 
-        /** The pre-V176 shape (no sqmPerBox/roundToFullBox) — PLAIN/ADJUSTMENT rows and existing
-         * call sites, for which the flag is moot; hardcodes {@code roundToFullBox = true}. */
+        /** The pre-V176 shape (no sqmPerBox/roundToFullBox) — PLAIN/ADJUSTMENT rows and existing call sites, for which
+         * the flag is moot; hardcodes roundToFullBox = true. */
         public NewItem(
             String locationLabel, Long catalogPriceId, String productCode,
             String brand, String model, String color, String texture, String sizeText,
@@ -728,14 +728,13 @@ public class DealQuotationRepository {
         }
     }
 
-    /** The ผู้สั่งซื้อ snapshot written onto {@code sales.quotation} (V167) — see {@link
-     * DealQuotationService#resolveContact}; a revision copies its parent's verbatim. */
+    /** The ผู้สั่งซื้อ snapshot written onto sales.quotation (V167) — see DealQuotationService#resolveContact; a
+     * revision copies its parent's verbatim. */
     public record ContactSnapshot(Long contactId, String name, String phone, String email) {}
 
-    /** The ลูกค้า snapshot on {@code sales.quotation} — written at insert AND re-written on every
-     * DRAFT save (see {@link #updateHeader}), so a tax id / phone the rep corrects on the deal card
-     * reaches the document instead of being frozen at the value the deal happened to carry when the
-     * draft was first created. Built in ONE place, {@code DealQuotationService#customerSnapshot}. */
+    /** The ลูกค้า snapshot on sales.quotation — written at insert AND re-written on every DRAFT save (see
+     * #updateHeader), so a tax id / phone the rep corrects on the deal card reaches the document instead of being
+     * frozen at the value the deal happened to carry when the draft was first created. */
     public record CustomerSnapshot(String name, String address, String taxId, String phone) {}
 
     public record InsertDraftParams(
@@ -744,8 +743,8 @@ public class DealQuotationRepository {
         ContactSnapshot contact,
         String projectName, String deptCode, String unitCode, LocalDate offerDate,
         Integer depositPercent, String remainderMode, Integer creditDays, Integer validityDays,
-        // V178 — "DAYS" | "DATE" and the exact deadline for DATE mode; see WastageCalculator's
-        // VALIDITY_MODE_* constants and DealQuotationService#requireValidityUntilForMode.
+        // V178 — "DAYS" | "DATE" and the exact deadline for DATE mode; see WastageCalculator's VALIDITY_MODE_*
+        // constants and DealQuotationService#requireValidityUntilForMode.
         String validityMode, LocalDate validityUntil,
         String customerNotes, String priceMode, String documentLanguage, String currency,
         // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; see DealQuotationDtos'
@@ -861,9 +860,8 @@ public class DealQuotationRepository {
                 .addValue("validityUntil", p.validityUntil())
                 .addValue("customerNotes", p.customerNotes())
                 .addValue("priceMode", p.priceMode())
-                // v3b: currency was a hardcoded 'THB' LITERAL in the VALUES list until V169 — it
-                // is a real parameter now, defaulted from the document language by
-                // DealQuotationService#resolveCurrency (TH->THB, EN->USD).
+                // v3b: currency was a hardcoded 'THB' LITERAL in the VALUES list until V169 — it is a real parameter now,
+                // defaulted from the document language by DealQuotationService#resolveCurrency (TH->THB, EN->USD).
                 .addValue("documentLanguage", p.documentLanguage())
                 .addValue("currency", p.currency())
                 .addValue("printedByDisplayId", p.printedByDisplayId())
@@ -985,13 +983,13 @@ public class DealQuotationRepository {
              :listPriceSqm, :directNetPriceSqm, :priceMode)
         """;
 
-    /** One row about to be inserted at an explicit {@code seq} — {@link #insertItemsAtSeq}, the
-     * variant {@code update()} needs because its inserted rows fill the gaps left by whichever
-     * seqs an in-place UPDATE claimed, so they cannot simply be numbered {@code i + 1}. */
+    /** One row about to be inserted at an explicit seq — #insertItemsAtSeq, the variant update() needs because its
+     * inserted rows fill the gaps left by whichever seqs an in-place UPDATE claimed, so they cannot simply be
+     * numbered i + 1. */
     public record SeqItem(int seq, NewItem item) {}
 
-    /** One row about to be UPDATED in place — {@code itemId} identifies the existing
-     * {@code quotation_item_id}; {@code seq} and {@code item} are its new stored values. */
+    /** One row about to be UPDATED in place — itemId identifies the existing quotation_item_id; seq and item are
+     * its new stored values. */
     public record ExistingItem(long itemId, int seq, NewItem item) {}
 
     public void insertItems(long quotationId, List<NewItem> items) {
@@ -1005,9 +1003,9 @@ public class DealQuotationRepository {
         jdbc.batchUpdate(INSERT_ITEM_SQL, batch);
     }
 
-    /** Inserts new rows at the {@code seq} each {@link SeqItem} carries — used by
-     * {@code DealQuotationService#update} for every input that did not reuse an existing item id
-     * (a brand-new row, or one whose id was null/foreign/stale/a duplicate within the payload). */
+    /** Inserts new rows at the seq each SeqItem carries — used by DealQuotationService#update for every input that
+     * did not reuse an existing item id (a brand-new row, or one whose id was null/foreign/stale/a duplicate
+     * within the payload). */
     public void insertItemsAtSeq(long quotationId, List<SeqItem> items) {
         if (items.isEmpty()) {
             return;
@@ -1018,12 +1016,9 @@ public class DealQuotationRepository {
         jdbc.batchUpdate(INSERT_ITEM_SQL, batch);
     }
 
-    /** Updates each existing row IN PLACE — every column {@link #insertItems} would set, keyed by
-     * {@code quotation_id AND quotation_item_id} so a foreign {@code itemId} (one belonging to
-     * another quotation) can never modify anything: this WHERE clause is the enforcement, on top
-     * of the caller's own membership check (the decision). Deliberately never touches
-     * {@code picture_id}/{@code picture_placement} — see {@link #itemParams}'s Javadoc — which is
-     * how a picture survives a draft save that reuses the item's id. */
+    /** Updates each existing row IN PLACE — every column #insertItems would set, keyed by quotation_id AND
+     * quotation_item_id so a foreign itemId (one belonging to another quotation) can never modify anything: this
+     * WHERE clause is the enforcement, on top of the caller's own membership check (the decision). */
     public void updateItemsInPlace(long quotationId, List<ExistingItem> items) {
         if (items.isEmpty()) {
             return;
@@ -1487,7 +1482,7 @@ public class DealQuotationRepository {
     }
 
     /** One quotation actually flipped ISSUED -> EXPIRED — same shape as
-     * {@code CustomerQuotationRepository.ExpiredQuotationRow}. */
+     * CustomerQuotationRepository.ExpiredQuotationRow. */
     public record ExpiredQuotationRow(long quotationId, long pricingRequestId, long ticketId, String number) {}
 
     /**
@@ -1647,8 +1642,8 @@ public class DealQuotationRepository {
             (rs, rowNum) -> new SupersededSibling(rs.getLong("quotation_id"), rs.getString("number")));
     }
 
-    /** The V175 approver signature snapshot. {@code mimeType}/{@code image} are both null when the
-     * approver had no signature on file at approval — which is still a TAKEN snapshot. */
+    /** The V175 approver signature snapshot. mimeType/image are both null when the approver had no signature on
+     * file at approval — which is still a TAKEN snapshot. */
     public record ApproverSignatureSnapshot(String mimeType, byte[] image) {}
 
     /** Present iff the V175 snapshot row exists for this quotation (i.e. it was approved on or
@@ -1680,8 +1675,8 @@ public class DealQuotationRepository {
 
     public record RepInfo(String name, String phone) {}
 
-    /** Nothing existing on the employee-lookup surface returns phone — added here rather than
-     * widening a shared DTO for one caller. */
+    /** Nothing existing on the employee-lookup surface returns phone — added here rather than widening a shared DTO
+     * for one caller. */
     public Optional<RepInfo> findEmployeeNameAndPhone(long employeeId) {
         try {
             RepInfo info = jdbc.queryForObject("""
@@ -1712,11 +1707,8 @@ public class DealQuotationRepository {
         return th.co.glr.hr.commission.QuotationDisplayNameEligibility.options(jdbc, salesDivisionCode);
     }
 
-    /** Whether {@code employeeId} is in the SAME eligible union {@link
-     * #findEligibleQuotationDisplayNameOptions} lists — the validation
-     * {@code DealQuotationService#create}/{@code #update} run before accepting a
-     * {@code printedByDisplayId}/{@code salesRepDisplayId}. See that method's Javadoc for why the
-     * predicate itself now lives in {@code QuotationDisplayNameEligibility}. */
+    /** Whether employeeId is in the SAME eligible union #findEligibleQuotationDisplayNameOptions lists — the
+     * validation DealQuotationService#create/#update run before accepting a printedByDisplayId/salesRepDisplayId. */
     public boolean isEligibleQuotationDisplayName(long employeeId, String salesDivisionCode) {
         return th.co.glr.hr.commission.QuotationDisplayNameEligibility.isEligible(jdbc, employeeId, salesDivisionCode);
     }
@@ -1780,8 +1772,8 @@ public class DealQuotationRepository {
      * stranded here forever).
      */
     private static final String NEEDS_REWORK_PREDICATE =
-        // Slice 1: `q.origin IS NOT NULL` — a LEGACY row is read-only here, so it is never "work
-        // to redo" on this engine even if its v1 status/parent happen to match the shape below.
+        // Slice 1: `q.origin IS NOT NULL` — a LEGACY row is read-only here, so it is never "work to redo" on this
+        // engine even if its v1 status/parent happen to match the shape below.
         "(q.origin IS NOT NULL AND q.doc_status = 'DRAFT'"
             + " AND (q.approval_note IS NOT NULL OR q.parent_quotation_id IS NOT NULL))";
 
@@ -1790,16 +1782,8 @@ public class DealQuotationRepository {
     public static final String ORIGIN_DEAL_DIRECT = "DEAL_DIRECT";
     public static final String ORIGIN_PRICING_REQUEST = "PRICING_REQUEST";
 
-    /**
-     * Slice 1 — the ONE origin predicate {@link #search} and {@link #counts} share, so a tab's count
-     * can never disagree with the rows it lists.
-     *
-     * @param originFilter null (every origin) or one of {@link #ORIGIN_DEAL_DIRECT},
-     *        {@link #ORIGIN_PRICING_REQUEST}, {@link #ORIGIN_LEGACY} (the service validates it).
-     * @param includePricedOrigins false drops PRICING_REQUEST and LEGACY rows — both carry a
-     *        CEO/pricing-chain price, which the caller's role may not read (see
-     *        {@code DealQuotationService#canViewPricedOriginsOnList}).
-     */
+    /** Slice 1 — the ONE origin predicate #search and #counts share, so a tab's count can never disagree with the
+     * rows it lists. */
     private static String originPredicate(String originFilter, boolean includePricedOrigins) {
         String allowed = includePricedOrigins
             ? "(q.origin IS NULL OR q.origin IN ('DEAL_DIRECT', 'PRICING_REQUEST'))"
@@ -1872,13 +1856,9 @@ public class DealQuotationRepository {
         return result;
     }
 
-    /**
-     * Per-status counts over the SAME scope as {@link #search} with no status filter — the same
-     * {@code t.created_by} owner clause (null = unrestricted), the same {@link #originPredicate},
-     * the same {@link #NEEDS_REWORK_PREDICATE} — in one statement with conditional aggregates.
-     * {@code all} counts every row in scope regardless of status (SUPERSEDED etc. included),
-     * matching what {@code search(null, owner, false, originFilter, includePricedOrigins)} returns.
-     */
+    /** Per-status counts over the SAME scope as #search with no status filter — the same t.created_by owner clause
+     * (null = unrestricted), the same #originPredicate, the same #NEEDS_REWORK_PREDICATE — in one statement with
+     * conditional aggregates. */
     public DealQuotationCountsDto counts(Long ownerTicketCreatedById, String originFilter,
                                          boolean includePricedOrigins, LocalDate from) {
         MapSqlParameterSource params = new MapSqlParameterSource();
@@ -1948,11 +1928,9 @@ public class DealQuotationRepository {
         return result;
     }
 
-    /** The distinct {@code catalog_price_id}s a set of quotation items reference, batch-resolved
-     * to their catalogue basis in ONE round trip via {@link CatalogRepository#findSqmBases} —
-     * fetched BEFORE the main row query below so {@link #mapItemColumns} can look each row's up by
-     * id instead of querying per row (see that method's caller for why: the same N+1 shape {@link
-     * CatalogRepository#findPricingKeys}'s own Javadoc already documents avoiding elsewhere). */
+    /** The distinct catalog_price_ids a set of quotation items reference, batch-resolved to their catalogue basis
+     * in ONE round trip via CatalogRepository#findSqmBases — fetched BEFORE the main row query below so
+     * #mapItemColumns can look each row's up by id instead of querying per row. */
     private Map<Long, CatalogSqmBasis> findCatalogBasesFor(String whereClause, Map<String, ?> params) {
         List<Long> priceIds = jdbc.query(
             "SELECT DISTINCT catalog_price_id FROM sales.quotation_item WHERE " + whereClause
@@ -2009,8 +1987,7 @@ public class DealQuotationRepository {
             """, Map.of("id", quotationId), (rs, rowNum) -> mapItem(rs, basisByPriceId));
     }
 
-    /** Same row shape as {@link #findItems}, batched across every id in one query — see
-     * {@link #hydrate}. */
+    /** Same row shape as #findItems, batched across every id in one query — see #hydrate. */
     private Map<Long, List<DealQuotationItemDto>> findItemsForQuotations(List<Long> ids) {
         Map<Long, CatalogSqmBasis> basisByPriceId =
             findCatalogBasesFor("quotation_id IN (:ids)", Map.of("ids", ids));
@@ -2177,14 +2154,12 @@ public class DealQuotationRepository {
         // v3b: NULL document_language (every pre-V169 row) reads as TH — see V169's own comment.
         String documentLanguage = rs.getString("document_language") == null
             ? WastageCalculator.DOCUMENT_LANGUAGE_TH : rs.getString("document_language");
-        // ⚠️ The VAT rate is a function of the LANGUAGE, not a constant: an EN/F-SM-008 document
-        // has no VAT row at all, so vatTotal is ZERO and grandTotal == subtotal there. Routed
-        // through WastageCalculator#vat(subtotal, language) so the DTO, the stored per-item vat
-        // column and the printed footer can never disagree about it.
+        // ⚠️ The VAT rate is a function of the LANGUAGE, not a constant: an EN/F-SM-008 document has no VAT row at
+        // all, so vatTotal is ZERO and grandTotal == subtotal there.
         BigDecimal vatTotal = WastageCalculator.vat(subtotal, documentLanguage);
-        // total_amount is the persisted subtotal (server-recomputed on every write — see
-        // DealQuotationService); vat/grand are always DERIVED from it here, never stored
-        // separately, so they can never drift from the subtotal they belong to.
+        // total_amount is the persisted subtotal (server-recomputed on every write — see DealQuotationService);
+        // vat/grand are always DERIVED from it here, never stored separately, so they can never drift from the
+        // subtotal they belong to.
         BigDecimal grandTotal = WastageCalculator.grandTotal(subtotal, vatTotal);
         Instant approvedAt = instant(rs, "approved_at");
         Instant createdAt = instant(rs, "created_at");
@@ -2235,8 +2210,8 @@ public class DealQuotationRepository {
             nullableInt(rs, "credit_days"),
             nullableInt(rs, "validity_days"),
             rs.getObject("validity_date", LocalDate.class),
-            // V178: NULL validity_mode (every pre-V178 row, and the whole legacy customer-quotation
-            // path) reads as DAYS — see the migration's own comment.
+            // V178: NULL validity_mode (every pre-V178 row, and the whole legacy customer-quotation path) reads as DAYS —
+            // see the migration's own comment.
             rs.getString("validity_mode") == null
                 ? WastageCalculator.VALIDITY_MODE_DAYS : rs.getString("validity_mode"),
             rs.getObject("validity_until", LocalDate.class),
@@ -2250,8 +2225,8 @@ public class DealQuotationRepository {
             grandTotal,
             rs.getString("currency"),
             rs.getBoolean("approver_has_signature"),
-            // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; both null unless the
-            // corresponding column is set (see #baseSelect's LEFT JOINs).
+            // V179 — print-only ผู้พิมพ์/พนักงานขาย name override; both null unless the corresponding column is set (see
+            // #baseSelect's LEFT JOINs).
             nullableLong(rs, "printed_by_display_id"),
             rs.getString("printed_by_display_name"),
             rs.getString("printed_by_display_name_en"),
@@ -2269,13 +2244,9 @@ public class DealQuotationRepository {
             items,
             createdAt,
             instant(rs, "updated_at"),
-            // Slice 1 (quotation <-> deal linking): a stored NULL origin is a LEGACY v1 row
-            // (customerquotation/), and must NEVER read as DEAL_DIRECT — that was this mapper's
-            // default until now, harmless only because every query into it filters
-            // `origin IN ('DEAL_DIRECT','PRICING_REQUEST')`. They still all do; LEGACY rows are
-            // listed through #hydrateLegacy's own narrow mapper instead. Tagged defensively here
-            // too, with readOnly below, so a future query that forgets the filter cannot present
-            // one as an editable direct quotation.
+            // Slice 1 (quotation <-> deal linking): a stored NULL origin is a LEGACY v1 row (customerquotation/), and must
+            // NEVER read as DEAL_DIRECT — that was this mapper's default until now, harmless only because every query into
+            // it filters `origin IN ('DEAL_DIRECT','PRICING_REQUEST')`.
             rs.getString("origin") == null ? ORIGIN_LEGACY : rs.getString("origin"),
             nullableLong(rs, "pricing_request_id"),
             ceoPriceModeChanged(rs),
@@ -2394,10 +2365,9 @@ public class DealQuotationRepository {
             });
     }
 
-    /** {@code true} exactly when this is a PRICING_REQUEST-origin row whose CURRENT price_mode no
-     * longer matches the CEO's ORIGINAL decision — see DealQuotationDto#priceModeChangedFromCeo's
-     * own Javadoc. A DEAL_DIRECT row (ceo_price_mode always null, no pricing_decision_id) never
-     * flags. */
+    /** true exactly when this is a PRICING_REQUEST-origin row whose CURRENT price_mode no longer matches the CEO's
+     * ORIGINAL decision — see DealQuotationDto#priceModeChangedFromCeo's own Javadoc. A DEAL_DIRECT row
+     * (ceo_price_mode always null, no pricing_decision_id) never flags. */
     private boolean ceoPriceModeChanged(ResultSet rs) throws SQLException {
         String ceoPriceMode = rs.getString("ceo_price_mode");
         if (ceoPriceMode == null) {
@@ -2417,52 +2387,36 @@ public class DealQuotationRepository {
         return placement == null ? item : item.withPicture(rs.getLong("quotation_id"), placement);
     }
 
-    /**
-     * {@code true} when this row is linked to a decision item (a non-null CEO value came back
-     * over the join) AND, under whichever price mode is CURRENTLY saved on the document, the
-     * relevant stored field(s) no longer equal the CEO's ORIGINAL ones — see
-     * {@link DealQuotationDtos.DealQuotationItemDto#priceChangedFromCeo}'s own Javadoc. A row
-     * whose document price_mode itself changed (so the "relevant field" is no longer even the
-     * same column the CEO priced) always reads changed, mirroring
-     * {@link #ceoPriceModeChanged}'s own header-level rule — comparing across modes is
-     * meaningless, and treating a mode switch as "unchanged" would hide the biggest possible
-     * deviation from the CEO's decision.
-     */
+    /** true when this row is linked to a decision item AND, under whichever price mode is CURRENTLY saved on the
+     * document, the relevant stored field no longer equal the CEO's ORIGINAL ones — see
+     * DealQuotationDtos.DealQuotationItemDto#priceChangedFromCeo's own Javadoc. */
     private boolean priceChangedFromCeo(ResultSet rs, String currentPriceMode, BigDecimal ceoListUnitPrice,
             BigDecimal ceoDiscountPct, BigDecimal ceoSpecialPriceSqm, BigDecimal ceoDirectNetPrice)
             throws SQLException {
         if (ceoListUnitPrice == null && ceoDiscountPct == null && ceoSpecialPriceSqm == null
                 && ceoDirectNetPrice == null) {
-            // Unlinked row (no decision item) — every ceo_* column came back null over the LEFT
-            // JOIN. Never flagged; nothing to compare against.
+            // Unlinked row (no decision item) — every ceo_* column came back null over the LEFT JOIN. Never flagged;
+            // nothing to compare against.
             return false;
         }
         return switch (currentPriceMode) {
             case WastageCalculator.PRICE_MODE_NET ->
                 !moneyEquals(rs.getBigDecimal("unit_price"), ceoListUnitPrice)
-                    // zeroIfNull on BOTH sides: "the CEO never typed a discount" (pdi.discount_pct
-                    // NULL) and "this line carries 0%" are the SAME value, not a mismatch — every
-                    // NET-mode writer in this codebase (buildItemInputFromDecisionItem here,
-                    // PricingDecisionService's own approve()) already treats a null discount as
-                    // zero; the comparison must use the identical convention or a never-discounted
-                    // line reads as "changed" the moment it is created.
+                    // zeroIfNull on BOTH sides: "the CEO never typed a discount" and "this line carries 0%" are the SAME value,
+                    // not a mismatch.
                     || !moneyEquals(zeroIfNull(rs.getBigDecimal("discount_pct")), zeroIfNull(ceoDiscountPct));
             case WastageCalculator.PRICE_MODE_SPECIAL_SQM ->
                 !moneyEquals(rs.getBigDecimal("special_price_sqm"), ceoSpecialPriceSqm);
             case WastageCalculator.PRICE_MODE_DIRECT_NET ->
-                // DIRECT_NET has no dedicated stored column on quotation_item (V187's own comment
-                // on pricing_decision_item.direct_net_price) — the typed net lands straight in
-                // final_unit_price, exactly like the CEO's direct_net_price is his own typed net.
+                // DIRECT_NET has no dedicated stored column on quotation_item (V187's own comment on
+                // pricing_decision_item.direct_net_price) — the typed net lands straight in final_unit_price, exactly like the
+                // CEO's direct_net_price is his own typed net.
                 !moneyEquals(rs.getBigDecimal("final_unit_price"), ceoDirectNetPrice);
             default -> true;
         };
     }
 
-    /** Null-safe, scale-insensitive equality for two money columns of potentially different
-     * NUMERIC scales (e.g. {@code quotation_item.discount_pct} NUMERIC(5,2) vs
-     * {@code pricing_decision_item.discount_pct}, same scale but read back through JDBC as
-     * BigDecimals that {@link BigDecimal#equals} would otherwise treat as unequal on trailing
-     * zeros alone — {@code compareTo} is the correct comparison for a decimal VALUE). */
+    /** Compares nullable monetary values without treating different decimal scales as different amounts. */
     private boolean moneyEquals(BigDecimal a, BigDecimal b) {
         if (a == null || b == null) {
             return a == b;
@@ -2507,17 +2461,17 @@ public class DealQuotationRepository {
         String quantityMode = rs.getString("quantity_mode");
         BigDecimal areaSqm = rs.getBigDecimal("area_sqm");
         Integer piecesPerBox = nullableInt(rs, "pieces_per_box");
-        // V182: NOT NULL DEFAULT TRUE (every pre-V182 row backfills to true at the ALTER TABLE
-        // itself), so this is never NULL — no fallback needed, unlike the nullable columns above.
+        // V182: NOT NULL DEFAULT TRUE (every pre-V182 row backfills to true at the ALTER TABLE itself), so this is
+        // never NULL — no fallback needed, unlike the nullable columns above.
         boolean roundToFullBox = rs.getBoolean("round_to_full_box");
         int piecesBeforeWastage = rs.getInt("pieces_before_wastage");
         int piecesAfterWastage = rs.getInt("pieces_after_wastage");
         BigDecimal sqmPerPiece = rs.getBigDecimal("sqm_per_piece");
         String wastageMode = rs.getString("wastage_mode");
         BigDecimal wastageValue = rs.getBigDecimal("wastage_value");
-        // v3: piecesPerSqm now comes from WastageCalculator rather than an inline reciprocal here.
-        // It is a DIVISOR in the SPECIAL_SQM money math, so the printed ตร.ม./แผ่น and the price
-        // computed from it must be the same number — see WastageCalculator#piecesPerSqm's Javadoc.
+        // v3: piecesPerSqm now comes from WastageCalculator rather than an inline reciprocal here. It is a DIVISOR in
+        // the SPECIAL_SQM money math, so the printed ตร.ม./แผ่น and the price computed from it must be the same number
+        // — see WastageCalculator#piecesPerSqm's Javadoc.
         BigDecimal piecesPerSqm = sqmPerPiece != null && sqmPerPiece.signum() > 0
             ? WastageCalculator.piecesPerSqm(sqmPerPiece) : null;
         String model = rs.getString("model");
@@ -2527,26 +2481,24 @@ public class DealQuotationRepository {
         String sizeText = rs.getString("size");
         BigDecimal thicknessMm = rs.getBigDecimal("thickness_mm");
         Long catalogPriceId = nullableLong(rs, "catalog_price_id");
-        // The catalogue's own width_mm/height_mm for this row's catalogPriceId, batch-resolved by
-        // the caller (see #findItems/#findItemsForQuotations) — used ONLY to print DealQuotation
-        // Lines#sizeLine in centimetres below; never persisted, never used for any arithmetic.
+        // The catalogue's own width_mm/height_mm for this row's catalogPriceId, batch-resolved by the caller (see
+        // #findItems/#findItemsForQuotations) — used ONLY to print DealQuotation Lines#sizeLine in centimetres below;
+        // never persisted, never used for any arithmetic.
         CatalogSqmBasis catalogBasis = catalogPriceId != null ? basisByPriceId.get(catalogPriceId) : null;
         BigDecimal catalogWidthMm = catalogBasis != null ? catalogBasis.widthMm() : null;
         BigDecimal catalogHeightMm = catalogBasis != null ? catalogBasis.heightMm() : null;
 
-        // ── quotation v3 (V168) ──────────────────────────────────────────────────────────────
-        // NULL line_type reads as TILE: every pre-V168 row, and every row written by a build that
-        // predates this feature, keeps behaving exactly as it does today with no data rewrite.
+        // quotation v3 (V168) ────────────────────────────────────────────────────────────── NULL line_type reads as
+        // TILE: every pre-V168 row, and every row written by a build that predates this feature, keeps behaving
+        // exactly as it does today with no data rewrite.
         String lineType = rs.getString("line_type");
         if (lineType == null) {
             lineType = WastageCalculator.LINE_TYPE_TILE;
         }
         boolean tile = WastageCalculator.LINE_TYPE_TILE.equals(lineType);
-        BigDecimal quantity = rs.getBigDecimal("pieces_final"); // the `qty` column, aliased
-        // piecesFinal stays an int for TILE rows (it is a piece COUNT and always whole). For a
-        // PLAIN row the quantity may legitimately be fractional and for an ADJUSTMENT it is −1, so
-        // intValueExact() — which THROWS on a non-integral value — must not be reached for those.
-        // The printed จำนวน for every row type is `quantity`; piecesFinal is TILE-only.
+        BigDecimal quantity = rs.getBigDecimal("pieces_final"); // the `qty` column, aliased piecesFinal stays an int for TILE rows (it is a piece COUNT and always whole). For
+        // a PLAIN row the quantity may legitimately be fractional and for an ADJUSTMENT it is −1, so intValueExact() —
+        // which THROWS on a non-integral value — must not be reached for those.
         int piecesFinal = tile && quantity != null ? quantity.intValueExact() : 0;
         String storedDescription = rs.getString("description");
         BigDecimal specialPriceSqm = rs.getBigDecimal("special_price_sqm");
@@ -2554,9 +2506,9 @@ public class DealQuotationRepository {
         LocalDate adjustmentDeadline = rs.getObject("adjustment_deadline", LocalDate.class);
 
         if (!tile) {
-            // A non-tile row has no รุ่น/สี/ผิว/ขนาด and no wastage arithmetic: its description was
-            // composed once at write time (rep-typed for PLAIN, derived for ADJUSTMENT) and stored,
-            // and there is no size line or calculation line to print at all.
+            // A non-tile row has no รุ่น/สี/ผิว/ขนาด and no wastage arithmetic: its description was composed once at write
+            // time (rep-typed for PLAIN, derived for ADJUSTMENT) and stored, and there is no size line or calculation line
+            // to print at all.
             return new DealQuotationItemDto(
                 rs.getLong("quotation_item_id"), rs.getInt("seq"), rs.getString("location_label"),
                 catalogPriceId, productCode, rs.getString("brand"), model, color,
@@ -2567,9 +2519,9 @@ public class DealQuotationRepository {
                 nullableInt(rs, "lead_time_max_days"), rs.getString("item_notes"),
                 piecesPerSqm, piecesBeforeWastage, piecesAfterWastage, piecesFinal,
                 nullableInt(rs, "boxes"), rs.getBigDecimal("final_unit_price"), rs.getBigDecimal("amount"),
-                // An ADJUSTMENT's description was composed in Thai at write time; an English document
-                // re-derives it here (DealQuotationLines#printedAdjustmentDescription). A PLAIN row's
-                // text is the rep's own and is printed as typed.
+                // An ADJUSTMENT's description was composed in Thai at write time; an English document re-derives it here
+                // (DealQuotationLines#printedAdjustmentDescription). A PLAIN row's text is the rep's own and is printed as
+                // typed.
                 WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(lineType)
                     ? DealQuotationLines.printedAdjustmentDescription(documentLanguage, storedDescription,
                         adjustmentPct, adjustmentDeadline)
@@ -2629,9 +2581,8 @@ public class DealQuotationRepository {
             specialPriceSqm, adjustmentPct,
             adjustmentDeadline,
             print.subLine(),
-            // Always null on this branch — it is the TILE branch, and only an ADJUSTMENT row can
-            // carry a flat amount. Routed through the same helper anyway so the two branches can
-            // never disagree about the rule.
+            // Always null on this branch — it is the TILE branch, and only an ADJUSTMENT row can carry a flat amount.
+            // Routed through the same helper anyway so the two branches can never disagree about the rule.
             DealQuotationLines.flatAdjustmentAmount(lineType, adjustmentPct, null)
         ).withSqmPerBox(sqmPerBox).withRoundToFullBox(roundToFullBox).withCeoComparison(priceChangedFromCeo,
             ceoListUnitPrice, ceoDiscountPct, ceoSpecialPriceSqm, ceoDirectNetPrice, ceoNetUnitPrice)
@@ -2651,8 +2602,8 @@ public class DealQuotationRepository {
 
     public record PictureImage(String mimeType, byte[] image) {}
 
-    /** A revision copies its parent's items verbatim and in the same order, so {@code seq} lines
-     * the two sets up exactly; the child SHARES the parent's picture rows (immutable). */
+    /** A revision copies its parent's items verbatim and in the same order, so seq lines the two sets up exactly;
+     * the child SHARES the parent's picture rows (immutable). */
     public int copyPictureLinks(long fromQuotationId, long toQuotationId) {
         return jdbc.update("""
             UPDATE sales.quotation_item child
@@ -2688,9 +2639,8 @@ public class DealQuotationRepository {
         return ids.isEmpty() ? null : ids.get(0);
     }
 
-    /** The DRAFT predicate every picture write shares — the ENFORCEMENT, in the statement itself,
-     * exactly like {@link #updateHeader}'s; the service's own status check only chooses the
-     * error message. */
+    /** The DRAFT predicate every picture write shares — the ENFORCEMENT, in the statement itself, exactly like
+     * #updateHeader's; the service's own status check only chooses the error message. */
     private static final String EDITABLE_DRAFT_ITEM = """
              WHERE quotation_id = :quotationId AND quotation_item_id = :itemId
                AND EXISTS (SELECT 1 FROM sales.quotation q
@@ -2727,8 +2677,8 @@ public class DealQuotationRepository {
                 .addValue("placement", placement));
     }
 
-    /** One item's picture bytes — scoped to the quotation, so the caller's view access on THAT
-     * quotation is what governs the read. */
+    /** One item's picture bytes — scoped to the quotation, so the caller's view access on THAT quotation is what
+     * governs the read. */
     public Optional<PictureImage> findItemPicture(long quotationId, long itemId) {
         List<PictureImage> found = jdbc.query("""
             SELECT p.mime_type, p.image
@@ -2749,16 +2699,16 @@ public class DealQuotationRepository {
               JOIN sales.quotation_item_picture p ON p.picture_id = i.picture_id
              WHERE i.quotation_id = :id
             """, Map.of("id", quotationId), (ResultSet rs) -> {
-                // A RowCallbackHandler: Spring has ALREADY advanced to this row. An inner
-                // `while (rs.next())` here would silently drop the first row.
+                // A RowCallbackHandler: Spring has ALREADY advanced to this row. An inner `while (rs.next())` here would
+                // silently drop the first row.
                 images.put(rs.getLong("quotation_item_id"),
                     new PictureImage(rs.getString("mime_type"), rs.getBytes("image")));
             });
         return images;
     }
 
-    /** Deletes each picture row NO item references any more (on any quotation — a revision shares
-     * its parent's). A still-referenced row is left alone; the FK would refuse it anyway. */
+    /** Deletes each picture row NO item references any more (on any quotation — a revision shares its parent's). A
+     * still-referenced row is left alone; the FK would refuse it anyway. */
     public void deletePicturesIfUnreferenced(java.util.Collection<Long> pictureIds) {
         if (pictureIds == null || pictureIds.isEmpty()) {
             return;

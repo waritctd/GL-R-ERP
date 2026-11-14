@@ -18,12 +18,9 @@ import th.co.glr.hr.notification.NotificationService;
 public class ProfileRequestService {
     private static final Set<String> SUPPORTED_FIELDS = Set.of("phone", "email", "address", "emergency");
 
-    // Byte-identical to the PROFILE_REQUEST_APPROVED/PROFILE_REQUEST_REJECTED entries that used to
-    // live in NotificationRepository#TICKET_EVENT_TITLES. That map is read only by the sales-style
-    // notifyEmployeeAt/notifyByRoleInternal transport (NotificationRepository#ticketEventTitle) --
-    // now that update() below calls NotificationService#notify directly, which takes its subject as
-    // an explicit parameter rather than resolving one from a type code, the title has to live here
-    // instead. See this class's constructor Javadoc for why the transport changed.
+    // Byte-identical to the PROFILE_REQUEST_APPROVED/PROFILE_REQUEST_REJECTED entries that used to live in
+    // NotificationRepository#TICKET_EVENT_TITLES. See this class's constructor Javadoc for why the transport
+    // changed.
     private static final String APPROVED_TITLE = "อนุมัติคำขอแก้ไขข้อมูลของคุณแล้ว";
     private static final String REJECTED_TITLE = "คำขอแก้ไขข้อมูลของคุณไม่ได้รับอนุมัติ";
 
@@ -33,26 +30,9 @@ public class ProfileRequestService {
     private final NotificationRepository notifications;
     private final NotificationService notificationService;
 
-    /**
-     * {@code notifications} ({@link NotificationRepository}) is still used directly for {@link
-     * #create}'s HR fan-out ({@code notifyHrOfProfileRequest} -&gt; {@code notifyByRoleInternal}) --
-     * that path is unaffected by this constructor's new argument and stays exactly as #860 shipped
-     * it.
-     *
-     * <p>{@code notificationService} is new (regression fix, 2026-08-31): {@link #update} used to
-     * notify the requesting employee through {@code notifications.notifyEmployeeOfProfileRequest},
-     * which -- like every other {@code NotificationRepository#notifyEmployee*} method -- ultimately
-     * routes through {@code SalesNotificationMailRouter#routeResolved}. That router deliberately
-     * redirects anyone in an {@code AC}- or {@code PCIM}-coded division to a SHARED departmental
-     * mailbox ({@code account@glr.co.th} / {@code import@glr.co.th}) instead of their own address --
-     * correct for a sales/deal notification, but wrong for a personal HR one: verified against
-     * production, employee 72 (ฝ่ายบัญชี, {@code source_code = 'AC'}) would have her "your email was
-     * updated" notice land in the shared accounting inbox instead of reaching her, and the message
-     * itself names her new personal email address. {@link NotificationService#notify} is the plain
-     * per-employee transport every other HR domain (leave, overtime, welfare, attendance-correction)
-     * already uses -- it resolves the employee's own address with no shared-box branch, so it is the
-     * right transport for a request that is fundamentally about one person's own data.
-     */
+    /** notifications (NotificationRepository) is still used directly for #create's HR fan-out
+     * (notifyHrOfProfileRequest -> notifyByRoleInternal) -- that path is unaffected by this constructor's new
+     * argument and stays exactly as #860 shipped it. */
     public ProfileRequestService(ProfileRequestRepository profileRequests, EmployeeRepository employees,
                                  AuditService auditService, NotificationRepository notifications,
                                  NotificationService notificationService) {
@@ -86,16 +66,13 @@ public class ProfileRequestService {
         }
         long id = profileRequests.create(user.employeeId(), request, user);
         ProfileRequestRecord created = profileRequests.findById(id).orElseThrow();
-        // Fetched once and threaded into both the notification copy and the returned DTO below,
-        // rather than letting toDto(record) re-query EmployeeRepository a second time for the
-        // same employee.
+        // Fetched once and threaded into both the notification copy and the returned DTO below, rather than letting
+        // toDto(record) re-query EmployeeRepository a second time for the same employee.
         EmployeeDto employee = employees.findEmployeeSummaryById(created.employeeId()).orElse(null);
         notifications.notifyHrOfProfileRequest("PROFILE_REQUEST_SUBMITTED", submittedMessage(employee, created));
         ProfileRequestDto dto = toDto(created, employee);
-        // The review side (APPROVE_/REJECT_PROFILE_REQUEST) was already audited; the submission was
-        // not, so the trail recorded who decided a request but never who raised it. Placed after
-        // main's notification block rather than replacing it: both sides of this merge are wanted,
-        // and reusing `employee` keeps that side's single-fetch optimisation intact.
+        // The review side (APPROVE_/REJECT_PROFILE_REQUEST) was already audited; the submission was not, so the trail
+        // recorded who decided a request but never who raised it.
         auditService.record(user, "SUBMIT_PROFILE_REQUEST", "profile_request", id, null, dto);
         return dto;
     }
@@ -123,12 +100,8 @@ public class ProfileRequestService {
         String action = approved ? "APPROVE_PROFILE_REQUEST" : "REJECT_PROFILE_REQUEST";
         auditService.record(reviewer, action, "profile_request", id, existing, reviewed);
 
-        // Tell the requesting employee what happened to their own request, addressed to THEM --
-        // never to a shared departmental mailbox. notificationService.notify(...) is the plain
-        // per-employee transport (see this class's constructor Javadoc for why it replaced
-        // notifications.notifyEmployeeOfProfileRequest here). The link stays "/profile" and the
-        // type codes stay PROFILE_REQUEST_APPROVED/PROFILE_REQUEST_REJECTED, unchanged from #860 --
-        // rows with those values already exist in production and the frontend renders them.
+        // Tell the requesting employee what happened to their own request, addressed to THEM -- never to a shared
+        // departmental mailbox.
         notificationService.notify(reviewed.employeeId(),
             approved ? "PROFILE_REQUEST_APPROVED" : "PROFILE_REQUEST_REJECTED",
             approved ? APPROVED_TITLE : REJECTED_TITLE,
@@ -154,22 +127,13 @@ public class ProfileRequestService {
         }
     }
 
-    // --- notification copy (2026-08-31) --------------------------------------------------------
-    //
-    // Never interpolate fieldKey (a machine code like "email"/"emergency") into any of these three
-    // strings -- always fieldLabel(), which is already Thai ("อีเมล", "เบอร์โทรศัพท์",
-    // "ที่อยู่ปัจจุบัน", "ผู้ติดต่อฉุกเฉิน"). A previous round shipped a raw machine code
-    // (TRAVEL_PER_DIEM) into a subject line at real people -- see
-    // NotificationRepository#notifyEmployeeAt's comment for the same lesson, and
-    // ProfileRequestNotificationIntegrationTest#everyNotificationMessageCarriesTheThaiLabelNeverTheRawFieldKey
-    // for the regression guard.
+    // notification copy -------------------------------------------------------- Never interpolate fieldKey into
+    // any of these three strings -- always fieldLabel, which is already Thai.
 
     /** To HR, when an employee files a new request. */
     private String submittedMessage(EmployeeDto employee, ProfileRequestRecord record) {
-        // employee is only ever null if the employee row backing a just-created request vanished
-        // between the insert and this read -- the FK on hr.profile_change_request.employee_id
-        // makes that a can't-happen in practice. Fall back to the name snapshotted on the request
-        // itself rather than risk an NPE over an edge case this defensively.
+        // employee is only ever null if the employee row backing a just-created request vanished between the insert
+        // and this read -- the FK on hr.profile_change_request.employee_id makes that a can't-happen in practice.
         String who = employee == null
             ? record.requestedBy()
             : titleAndName(employee) + " (" + employee.code() + ")";
@@ -188,12 +152,9 @@ public class ProfileRequestService {
         return "คำขอแก้ไข" + record.fieldLabel() + "ของคุณไม่ได้รับอนุมัติ" + reasonClause;
     }
 
-    /**
-     * A Thai title glues directly onto the first name with no space in between ("นาย" +
-     * "ภาคภูมิ" -&gt; "นายภาคภูมิ"); {@code nameTh()} already carries exactly one space between
-     * first and last name ({@code EmployeeRepository#fullName}). {@code titleTh()} is nullable on
-     * some imported rows, so a missing title degrades to the bare name rather than a leading space.
-     */
+    /** A Thai title glues directly onto the first name with no space in between ("นาย" + "ภาคภูมิ" ->
+     * "นายภาคภูมิ"); nameTh() already carries exactly one space between first and last name
+     * (EmployeeRepository#fullName). */
     private static String titleAndName(EmployeeDto employee) {
         String title = employee.titleTh();
         return (title == null ? "" : title) + employee.nameTh();

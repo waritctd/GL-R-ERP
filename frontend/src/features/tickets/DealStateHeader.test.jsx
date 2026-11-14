@@ -7,9 +7,9 @@ import { DealStateHeader } from './DealStateHeader.jsx';
 
 globalThis.React = React;
 
-// The header's stage chip used to read dealStageLabel(code) with ONE argument, so on an
-// owner-direct deal at S3 it said "ผู้ออกแบบอนุมัติสเปค" while DealStagePanel, on the same screen,
-// said "เจ้าของตกลงตามสเปคแล้ว". These tests pin the chip to the same route-aware wording.
+// The header's stage chip used to read dealStageLabel(code) with ONE argument, so on an owner-direct deal at
+// S3 it said "ผู้ออกแบบอนุมัติสเปค" while DealStagePanel, on the same screen, said "เจ้าของตกลงตามสเปคแล้ว".
+// These tests pin the chip to the same route-aware wording.
 const OWNER_S3 = 'เจ้าของตกลงตามสเปคแล้ว';
 const BUYER_S3 = 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว';
 const DESIGNER_S3 = 'ผู้ออกแบบอนุมัติสเปค';
@@ -30,9 +30,9 @@ function summary(overrides = {}) {
   };
 }
 
-// The VIEWER's role, not an ARIA role — DealStateHeader takes `role` as a prop and production
-// passes it as an expression (TicketDetailPage.jsx:1471). A string literal here trips
-// jsx-a11y/aria-role, which reads any literal `role=` as the DOM attribute.
+// The VIEWER's role, not an ARIA role — DealStateHeader takes `role` as a prop and production passes it as an
+// expression (TicketDetailPage.jsx:1471). A string literal here trips jsx-a11y/aria-role, which reads any
+// literal `role=` as the DOM attribute.
 const VIEWER_ROLE = 'sales';
 
 function renderHeader(summaryOverrides, props = {}) {
@@ -91,9 +91,9 @@ describe('DealStateHeader — stage chip is route-aware', () => {
 
 describe('DealStateHeader — every non-S3 stage is identical regardless of channel', () => {
   const channels = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT', 'UNSPECIFIED', undefined];
-  // The two stages whose WORDING follows the entry channel (format.js STAGE_LABEL_BY_CHANNEL):
-// S3, and S1 since the owner ruling of 2026-10-01. Every OTHER stage must stay identical
-// across channels — that is what this loop guards.
+  // The two stages whose WORDING follows the entry channel (format.js STAGE_LABEL_BY_CHANNEL): S3, and S1 since
+  // the owner ruling of 2026-10-01. Every OTHER stage must stay identical across channels — that is what this
+  // loop guards.
 const CHANNEL_WORDED = ['SPEC_APPROVED', 'LEAD_APPROACH'];
 const stages = DEAL_STAGE_CATALOG.stages.map((s) => s.code).filter((c) => !CHANNEL_WORDED.includes(c));
 

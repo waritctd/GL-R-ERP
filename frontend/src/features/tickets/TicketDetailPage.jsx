@@ -138,9 +138,8 @@ const JUMP_TARGET_TAB = {
 function scrollToSection(id) {
   const el = typeof document !== 'undefined' ? document.getElementById(id) : null;
   if (!el) return;
-  // jsdom (Vitest) doesn't implement scrollIntoView — guarded so the same
-  // jump helper used by the sticky primary CTA doesn't throw under test,
-  // only under a real browser's absence of it.
+  // jsdom (Vitest) doesn't implement scrollIntoView — guarded so the same jump helper used by the sticky primary
+  // CTA doesn't throw under test, only under a real browser's absence of it.
   el.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
   el.focus?.({ preventScroll: true });
 }
@@ -155,15 +154,9 @@ const TERMINAL = ['closed', 'cancelled'];
 export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  // Ticket-detail IA rebuild Phase 2: the active tab lives in the URL, not
-  // local state (same `useSearchParams` convention as TicketListPage.jsx's
-  // phase/lifecycle/flag filters) — list → detail → back and a shared deep
-  // link both keep it, and `{ replace: true }` keeps switching tabs out of
-  // the back-button history stack (matches TicketListPage's own filter
-  // writes). `role`/`sections` aren't known yet this early (they're derived
-  // from `ticket.summary` below, past the loading/no-ticket early returns),
-  // so the actual `activeTab` value is computed further down; the setter
-  // only needs the param plumbing, which IS available this early.
+  // Ticket-detail IA rebuild Phase 2: the active tab lives in the URL, not local state — list → detail → back
+  // and a shared deep link both keep it, and `{ replace: true }` keeps switching tabs out of the back-button
+  // history stack.
   const [searchParams, setSearchParams] = useSearchParams();
   function setActiveTab(tabId) {
     setSearchParams((prev) => {
@@ -172,32 +165,23 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       return next;
     }, { replace: true });
   }
-  // A cross-tab trigger (the sticky header primary CTA, the "⋯" overflow
-  // menu's "ขอแก้ไข") queues its real action here and switches tabs; the
-  // effect below (after `activeTab` is known) runs it once the destination
-  // tab's TabPanel has actually mounted — see JUMP_TARGET_TAB's own doc
-  // comment for why this can't just scroll/call-ref immediately. Declared
-  // with useRef this early (hooks can't follow the loading/no-ticket early
-  // returns below) but only ever populated by `runOnTab`, defined further
-  // down once `activeTab` itself is known.
+  // A cross-tab trigger queues its real action here and switches tabs; the effect below runs it once the
+  // destination tab's TabPanel has actually mounted — see JUMP_TARGET_TAB's own doc comment for why this can't
+  // just scroll/call-ref immediately.
   const pendingTabActionRef = useRef(null);
 
-  // `role`/`sections`/the tab derivation below only need `user`/`searchParams`
-  // (never `ticket`), so — unlike `isOwner`/`summary`-derived values further
-  // down — they can (and, per the rules of hooks, must) sit before the
-  // loading/no-ticket early returns: the pending-tab-action effect that
-  // reads `activeTab` cannot itself come after a conditional return.
+  // `role`/`sections`/the tab derivation below only need `user`/`searchParams`, so — unlike
+  // `isOwner`/`summary`-derived values further down — they can sit before the loading/no-ticket early returns:
+  // the pending-tab-action effect that reads `activeTab` cannot itself come after a conditional return.
   const role = user.role;
   // Which sections this viewer's role gets in full vs. hidden entirely (salesViewScope.js;
   // presentation only, never a security boundary). These section ids compose
   // ticketDetailTabs.js's tabs; a role-hidden section's TAB is simply absent from the tablist.
   const sections = visibleSections(role);
 
-  // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth
-  // for which tab is open — an absent, unknown, or role-hidden value falls
-  // back to `overview` (resolveTicketDetailTab), so a stale deep link (a
-  // role change, a typo, hand-editing the URL) never renders a blank or
-  // forbidden panel.
+  // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth for which tab is open — an absent,
+  // unknown, or role-hidden value falls back to `overview` (resolveTicketDetailTab), so a stale deep link (a
+  // role change, a typo, hand-editing the URL) never renders a blank or forbidden panel.
   const visibleTabIds = visibleTicketDetailTabIds(role);
   const activeTab = resolveTicketDetailTab(searchParams.get('tab'), role);
   const tabItems = TICKET_DETAIL_TABS
@@ -213,13 +197,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     pendingTabActionRef.current = { tabId, run };
     setActiveTab(tabId);
   }
-  // `activeTab` only changes (and this effect only re-fires) once the URL
-  // update above has actually committed — by then the destination
-  // TabPanel's children (and any ref inside them) have already mounted in
-  // the SAME commit, so `pending.run()` here always finds a live target.
-  // Intentionally keyed on `activeTab` alone: `pending` is read fresh from
-  // the ref (never a dependency), so adding it would replay a stale queued
-  // action on every unrelated render.
+  // `activeTab` only changes (and this effect only re-fires) once the URL update above has actually committed —
+  // by then the destination TabPanel's children (and any ref inside them) have already mounted in the SAME
+  // commit, so `pending.run()` here always finds a live target.
   useEffect(() => {
     const pending = pendingTabActionRef.current;
     if (pending && pending.tabId === activeTab) {
@@ -280,9 +260,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const [editMode, setEditMode] = useState(false);
   const [editDraft, setEditDraft] = useState([]);
   const [editNote, setEditNote] = useState('');
-  // Catalog autocomplete for the ยี่ห้อ/รุ่น fields in edit mode — same shape as
-  // TicketCreateModal's catalogResults/catalogFocus (`{ index, field }`), kept as this page's own
-  // state because edit-items and create are two separate mounted trees.
+  // Catalog autocomplete for the ยี่ห้อ/รุ่น fields in edit mode — same shape as TicketCreateModal's
+  // catalogResults/catalogFocus (`{ index, field }`), kept as this page's own state because edit-items and
+  // create are two separate mounted trees.
   const [editCatalogResults, setEditCatalogResults] = useState([]);
   const [editCatalogFocus, setEditCatalogFocus] = useState(null);
   // Mirrors TicketCreateModal's onCatalogInput/applyCatalogItem: brand/model typing searches the
@@ -299,8 +279,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setEditCatalogFocus({ index, field });
     searchCatalog(value, setEditCatalogResults);
   }
-  // Focus-only: search-only, no row mutation. Safe to call on every focus, including a re-focus of
-  // a field the rep never actually retyped.
+  // Focus-only: search-only, no row mutation. Safe to call on every focus, including a re-focus of a field the
+  // rep never actually retyped.
   function onEditCatalogFieldFocus(index, field, value) {
     setEditCatalogFocus({ index, field });
     if (value) searchCatalog(value, setEditCatalogResults);
@@ -333,18 +313,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       return next;
     });
   }
-  // Sets exactly one key. Used (instead of setFieldErrorsForPrefix) for the
-  // per-item override.<itemId> key: itemIds are numeric, and
-  // setFieldErrorsForPrefix's startsWith match would treat 'override.1' as a
-  // prefix of 'override.10' — silently wiping out a different item's error.
-  // clearFieldError above is exact-match-safe already; this is its setter
-  // counterpart.
+  // Sets exactly one key. Used (instead of setFieldErrorsForPrefix) for the per-item override.<itemId> key:
+  // itemIds are numeric, and setFieldErrorsForPrefix's startsWith match would treat 'override.1' as a prefix of
+  // 'override.10' — silently wiping out a different item's error.
   function setFieldError(key, message) {
     setFieldErrors((prev) => ({ ...prev, [key]: message }));
   }
-  // Replaces every fieldErrors key under `prefix` with `errors` in one go —
-  // used both to report a fresh validation failure for one modal (errors
-  // non-empty) and to clear that modal's errors on open/close/success
+  // Replaces every fieldErrors key under `prefix` with `errors` in one go — used both to report a fresh
+  // validation failure for one modal (errors non-empty) and to clear that modal's errors on open/close/success
   // (errors = {}), without touching any other modal's keys.
   function setFieldErrorsForPrefix(prefix, errors) {
     setFieldErrors((prev) => {
@@ -376,9 +352,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Confirmation dialogs (state-driven, replaces native browser confirm)
   const [confirm, setConfirm] = useState(null); // { kind: 'deleteAttachment', id, name } | { kind: 'cancelTicket' } | { kind: 'finalPayment' } | null
 
-  // Download busy-state — keyed so each quotation/format pair (and the
-  // remaining-invoice download) gets its own disabled+label state instead of
-  // one shared flag that would disable every download button at once. Not
+  // Download busy-state — keyed so each quotation/format pair (and the remaining-invoice download) gets its own
+  // disabled+label state instead of one shared flag that would disable every download button at once. Not
   // server-state mutations (no cache to invalidate), so left as local state.
   const [downloadingQuotationKey, setDownloadingQuotationKey] = useState(null); // `${quotationId}-${format}` | null
   const [remainingInvoiceDialogOpen, setRemainingInvoiceDialogOpen] = useState(false);
@@ -435,10 +410,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     || user.id === documentsTicketSummary.assignedToId
     || ROLE_PERMISSIONS.canViewTicketDocuments.includes(role)
   );
-  // The pipeline's shape (stages, phases, gates, lost/cancel reason codes), fetched once from
-  // GET /api/meta/deal-stages. Deliberately NOT folded into this page's `loading` gate: the deal
-  // must still render if the enumeration is slow, exactly as CeoSettingsPage keeps its newest
-  // config query out of its own full-page gate.
+  // The pipeline's shape (stages, phases, gates, lost/cancel reason codes), fetched once from GET
+  // /api/meta/deal-stages.
   const { catalog: stageCatalog } = useStageCatalog();
   const actionsQuery = useQuery({
     queryKey: queryKeys.ticketActions(ticketId),
@@ -469,9 +442,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
 
   // Delivery history lives in DealFulfilmentPanel's own query.
 
-  // Commit 6: the deal's own pricing requests — read here (not inside
-  // PricingRequestPanel) so DealStagePanel's substep strip can also key off
-  // the most recent one, without a second fetch of the same list.
+  // Commit 6: the deal's own pricing requests — read here (not inside PricingRequestPanel) so DealStagePanel's
+  // substep strip can also key off the most recent one, without a second fetch of the same list.
   const pricingRequestsQuery = useQuery({
     queryKey: queryKeys.pricingRequestsByTicket(ticketId),
     queryFn: () => api.pricingRequests.listForTicket(ticketId).then((r) => r.items ?? []),
@@ -555,11 +527,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     enabled: !!ticketId && canViewDocumentsTab,
   });
   const attachments = attachmentsQuery.data ?? [];
-  // Same isLoading-only reasoning as `loading` above — a re-upload/delete
-  // shouldn't flash the attachment list back to its skeleton rows.
+  // Same isLoading-only reasoning as `loading` above — a re-upload/delete shouldn't flash the attachment list
+  // back to its skeleton rows.
   const attachLoading = attachmentsQuery.isLoading;
-  // Attachment load failures were silently swallowed before ("non-critical")
-  // — preserved as-is, no error toast wired up here.
+  // Attachment load failures were silently swallowed before ("non-critical") — preserved as-is, no error toast
+  // wired up here.
 
   // No factoryConfigs fetch: the ticket-native propose-price flow is gone.
 
@@ -570,9 +542,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     if (updatedTicket) {
       queryClient.setQueryData(queryKeys.ticketDetail(ticketId), updatedTicket);
     } else {
-      // The re-pointed money calls (recordPayment / confirmFinalPayment / confirmCloseReady) answer
-      // with the finance view `{ deal }`, which carries no ticket — writing `undefined` into the
-      // cache would blank the page, so re-read the ticket instead.
+      // The re-pointed money calls (recordPayment / confirmFinalPayment / confirmCloseReady) answer with the finance
+      // view `{ deal }`, which carries no ticket — writing `undefined` into the cache would blank the page, so
+      // re-read the ticket instead.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     }
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
@@ -680,15 +652,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     });
   }
 
-  // R5: Attachments upload/delete — invalidate the attachments query instead
-  // of manually reloading + setting local array state.
+  // Attachments upload/delete — invalidate the attachments query instead of manually reloading + setting local
+  // array state.
   const uploadAttachmentMutation = useMutation({
     mutationFn: ({ file, attachType }) => api.attachments.upload(ticketId, file, attachType),
     onSuccess: (_res, { file }) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
-      // An INVOICE upload unlocks ฝ่ายบัญชี's close confirmation, so the action
-      // list has to be re-read — otherwise the button only appears after the user
-      // navigates away and back.
+      // An INVOICE upload unlocks ฝ่ายบัญชี's close confirmation, so the action list has to be re-read — otherwise
+      // the button only appears after the user navigates away and back.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
       // Use queryKeys.ticketDetail (there is no bare `queryKeys.ticket`): a throw here, after the
       // two invalidations, would abort before `showToast`. react-query does not route an onSuccess
@@ -708,8 +679,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketAttachments(ticketId) });
       // Deleting the invoice re-locks the close confirmation — same reason as upload.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
-      // Same `queryKeys.ticket` TypeError as the upload handler above — see its
-      // comment. Deleting a file silently reported nothing either.
+      // Same `queryKeys.ticket` TypeError as the upload handler above — see its comment. Deleting a file silently
+      // reported nothing either.
       queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
       showToast('success', 'ลบไฟล์แล้ว');
     },
@@ -994,9 +965,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       : 'ยังไม่มีคำขอราคา'
     : 'ไม่แสดงในมุมมองนี้';
 
-  // 'draft' included since V50: a lightweight lead-stage deal gets its product
-  // items here, then submits into the price-request flow when it reaches the
-  // quote stages.
+  // 'draft' included since V50: a lightweight lead-stage deal gets its product items here, then submits into the
+  // price-request flow when it reaches the quote stages.
   const EDITABLE_STATUSES = ['draft', 'submitted', 'in_review', 'price_proposed'];
   const can = {
     // Pricing runs entirely on the PricingRequest chain (PricingRequestPanel below the items table
@@ -1054,12 +1024,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   ];
   const nextAction = NEXT_ACTION_STEPS.find(([key, text]) => can[key] && text)?.[1] ?? null;
 
-  // The blocker line (region 7 of the IA — "unmet precondition"): why the
-  // deal isn't moving even though it might not be this viewer's turn to act.
-  // Paired with the "รอ<role>" waiting banner below, never alongside a live
-  // primary CTA (a live primary action is never "blocked" by the same thing
-  // the banner would name — pairing the two would read as a contradiction).
-  // Kept to the fact only (design law: brief — who/what, not
+  // The blocker line (region 7 of the IA — "unmet precondition"): why the deal isn't moving even though it might
+  // not be this viewer's turn to act. Kept to the fact only (design law: brief — who/what, not
   // what-to-do-about-it-by-when).
   const closeConfirmedAt = summary?.closeConfirmedAt ?? null;
   // !isMoneyRecorder on the two payment-wait lines: account is the ONLY role that CLEARS these
@@ -1491,9 +1457,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const readyToAdvance = activitiesQuery.isLoading
     || isReadyToAdvance(summary, hasActivitySince(activities, lastStageChangeAt(events, summary.createdAt)));
 
-  // Named handlers (not inline closures in the array below) so each ref read
-  // happens inside an ordinary event-handler function, not lexically inside
-  // an object/array literal being built during render.
+  // Named handlers (not inline closures in the array below) so each ref read happens inside an ordinary
+  // event-handler function, not lexically inside an object/array literal being built during render.
   function handleOpenEditStage() { dealStagePanelRef.current?.openEditStage(); }
   function handleOpenHold() { dealStagePanelRef.current?.openHold(); }
   function handleOpenDormant() { dealStagePanelRef.current?.openDormant(); }
@@ -1502,15 +1467,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // whichever tab is active.
   function handleOpenRevise() { setShowReviseForm(true); clearFieldError('revise.reason'); }
 
-  // react-hooks/refs (react-hooks v7's Compiler-oriented ruleset — see this
-  // file's neighbouring `set-state-in-effect: 'off'` in eslint.config.js for
-  // the same class of false positive) flags every named handler below as
-  // "passing a ref to a function" because they end up as values inside this
-  // array, which is itself passed to OverflowMenu as a prop. Each handler
-  // only ever reads dealStagePanelRef.current from inside a real click
-  // handler (OverflowMenu's own onClick, see OverflowMenu.jsx) — never
-  // during render — so this is the same class of false positive, not a rule
-  // violation.
+  // react-hooks/refs flags every named handler below as "passing a ref to a function" because they end up as
+  // values inside this array, which is itself passed to OverflowMenu as a prop.
   // eslint-disable-next-line react-hooks/refs
   const overflowItems = [
     // "เลื่อนไป" lives in the overflow, not DealStagePanel: the sticky header's primary CTA is the
@@ -1568,10 +1526,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   async function handleUploadAttachment(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-    // INVOICE is never produced here — not inferred from the filename, and no
-    // longer settable via an explicit type either. It gates the close and must
-    // come from CommissionService.createFromDeal, which writes it alongside the
-    // commission (see the "ไฟล์แนบ" panel comment below).
+    // INVOICE is never produced here — not inferred from the filename, and no longer settable via an explicit type
+    // either. It gates the close and must come from CommissionService.createFromDeal, which writes it alongside
+    // the commission (see the "ไฟล์แนบ" panel comment below).
     const attachType = file.name.toLowerCase().includes('po') ? 'PO' : 'OTHER';
     try {
       await uploadAttachmentMutation.mutateAsync({ file, attachType });
@@ -2044,10 +2001,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         <>
                           <label className="m-0 text-xs" htmlFor={`edit-item-qtysqm-${index}`}>
                             <ItemFieldLabel label="พื้นที่ (ตร.ม.)" required={requiredQtyField(item.unitBasis) === 'qtySqm'} />
-                            {/* Governs qty when this row is in SQM mode (qty is
-                                derived from qtySqm × sqmPerPiece below) — so the
-                                per-row qty error, if any, attaches here rather
-                                than to a non-editable derived display. */}
+                            {/* Governs qty when this row is in SQM mode (qty is derived from qtySqm × sqmPerPiece below) — so the per-row
+                             * qty error, if any, attaches here rather than to a non-editable derived display. */}
                             <input type="number" value={item.qtySqm ?? ''} min="0" step="0.001"
                               id={`edit-item-qtysqm-${index}`}
                               ref={(el) => { fieldRefs.current[`editItems.qty.${index}`] = el; }}
@@ -2248,9 +2203,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                         <span data-label="ราคาโรงงาน" className="text-xs">
                           {item.rawPrice != null
                             ? (() => {
-                              // Original currency is the figure of record; the baht line underneath is a
-                              // straight FX conversion (no markup) and is omitted entirely when no rate
-                              // exists for that currency, rather than implying a 1:1 rate.
+                              // Original currency is the figure of record; the baht line underneath is a straight FX conversion (no markup)
+                              // and is omitted entirely when no rate exists for that currency, rather than implying a 1:1 rate.
                               const thb = convertToThb(item.rawPrice, item.rawCurrency, fxRatesByCurrency);
                               const unit = item.rawUnit === 'sqm' ? 'ตร.ม.' : 'แผ่น';
                               return (
@@ -2476,21 +2430,17 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       </TabPanel>
       </div>
 
-      {/* "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1): เสียงาน /
-          ยกเลิก moved off the working surface into a clearly-labelled,
-          danger-toned section at the very bottom of the page — conventional
-          danger-zone pattern, no new route. Both actions stay exactly as
-          reachable as before (same canLostDeal/can.cancel gates, same
-          modals), only demoted from sitting inline among the day-to-day
-          pipeline controls. */}
+      {/* "จัดการดีล" danger zone (ticket-detail IA rebuild Phase 1): เสียงาน / ยกเลิก moved off the working surface
+       * into a clearly-labelled, danger-toned section at the very bottom of the page — conventional danger-zone
+       * pattern, no new route. */}
       {(canLostDeal || can.cancel) ? (
         <section className="rounded-md border border-danger-border bg-danger-bg p-4 sm:p-5" aria-labelledby="deal-danger-zone-heading">
           <h2 id="deal-danger-zone-heading" className="m-0 text-sm font-extrabold text-danger-dark">จัดการดีล</h2>
           <p className="mt-1 text-xs text-danger-dark">การดำเนินการเหล่านี้ส่งผลต่อทั้งดีล และบางรายการย้อนกลับไม่ได้ — ใช้เมื่อจำเป็นเท่านั้น</p>
           <div className="mt-3 flex flex-wrap gap-2">
             {canLostDeal ? (
-              // Button's own `danger` variant (bg-surface text-danger border-danger-border) is
-              // byte-identical to this hand-rolled secondary+override, so it replaces both here.
+              // Button's own `danger` variant (bg-surface text-danger border-danger-border) is byte-identical to this
+              // hand-rolled secondary+override, so it replaces both here.
               <Button
                 type="button"
                 variant="danger"
@@ -2653,12 +2603,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         </Modal>
       )}
 
-      {/* Delivery/stock-reservation modals moved into DealFulfilmentPanel
-          (Phase 3 Slice S4). */}
+      {/* Delivery/stock-reservation modals moved into DealFulfilmentPanel (Phase 3 Slice S4). */}
 
       {remainingInvoiceDialogOpen ? (
-        // R4 (GLA-99 step 2 review-round-1): mirrors RemainingInvoiceService's own write gate —
-        // sales role + this deal's own owner, see DealDocumentRegister.jsx's identical predicate.
+        // mirrors RemainingInvoiceService's own write gate — sales role + this deal's own owner, see
+        // DealDocumentRegister.jsx's identical predicate.
         <RemainingInvoiceDialog ticketId={ticketId} canWrite={role === 'sales' && isOwner}
           onClose={() => setRemainingInvoiceDialogOpen(false)} />
       ) : null}
@@ -2692,8 +2641,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onConfirm={() => confirmDeleteAttachment(confirm?.id)}
       />
 
-      {/* A bare yes/no confirm can't capture WHY, and cancel is irreversible —
-          so this is the mark-lost modal's reason picker, not a ConfirmDialog. */}
+      {/* A bare yes/no confirm can't capture WHY, and cancel is irreversible — so this is the mark-lost modal's
+       * reason picker, not a ConfirmDialog. */}
       {confirm?.kind === 'cancelTicket' && (
         <CancelDealModal
           catalog={stageCatalog}
@@ -2711,9 +2660,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         tone="danger"
         title="ยืนยันการรับชำระครบถ้วน"
         message={(() => {
-          // Same summary.amountOutstanding the การชำระเงิน panel above renders
-          // as "คงเหลือ" (line ~1091) — reused as-is, not recomputed, so this
-          // dialog can never disagree with the panel the user just looked at.
+          // Same summary.amountOutstanding the การชำระเงิน panel above renders as "คงเหลือ" (line ~1091) — reused as-is,
+          // not recomputed, so this dialog can never disagree with the panel the user just looked at.
           const outstanding = Number(summary.amountOutstanding ?? 0);
           const hasOutstanding = outstanding > 0;
           return (
@@ -2753,9 +2701,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         onCancel={() => setConfirm(null)}
       />
 
-      {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the
-          quotation editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two
-          doors to the same irreversible act say the same thing. */}
+      {/* Slice 2 §E — the sticky "ยืนยันคำสั่งซื้อ" of an APPROVED direct quotation. The copy is the quotation
+       * editor's own (quotationMeta's CONFIRM_ORDER_FROM_QUOTATION_COPY), so the two doors to the same irreversible
+       * act say the same thing. */}
       {bidOutcomeOpen ? (
         <BidOutcomeModal
           ticketId={ticketId}

@@ -16,16 +16,9 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * GET /api/leave/review-summary (Phase A0b, refined after the frontend's phase A1 started consuming
- * it): real-Postgres coverage of {@link LeaveService#reviewSummary}'s two-field shape.
- *
- * <p>The case that motivated splitting a single count into {@code isReviewer}/{@code pendingCount}:
- * {@link #managerWithZeroPendingRequestsIsStillAReviewer} below. A test that only checks a manager
- * WITH pending work would pass whether {@code isReviewer} was derived correctly or was merely {@code
- * pendingCount > 0} in disguise -- proving nothing about the distinction the two fields exist to
- * make. This is the one that actually tells them apart.
- */
+/** GET /api/leave/review-summary (Phase A0b, refined after the frontend's phase A1 started consuming it):
+ * real-Postgres coverage of LeaveService#reviewSummary's two-field shape. This is the one that actually tells
+ * them apart. */
 class LeaveReviewSummaryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private LeaveService leaveService;

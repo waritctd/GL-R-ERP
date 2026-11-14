@@ -16,8 +16,8 @@ function baseDeal(overrides = {}) {
   };
 }
 
-// A live, order-confirmed pricing request — the shape that clears buckets 1-3 without itself
-// matching any of them, so bucket 4 (or whatever fires after it) is being tested in isolation.
+// A live, order-confirmed pricing request — the shape that clears buckets 1-3 without itself matching any of
+// them, so bucket 4 (or whatever fires after it) is being tested in isolation.
 function orderConfirmedPr(overrides = {}) {
   return { id: 1, ticketId: 1, status: 'QUOTATION_ACCEPTED', orderConfirmedAt: '2026-07-01T00:00:00.000Z', ...overrides };
 }
@@ -41,9 +41,9 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
 
   it('does NOT return RECORD_DELIVERY once delivery is complete (FULLY_DELIVERED) or still mid-fulfilment (SHIPPING)', () => {
     const prs = [orderConfirmedPr()];
-    // .toBeNull(), not just ".key !== RECORD_DELIVERY": with orderConfirmedAt already set, bucket 3
-    // is also closed, so a passing implementation must fall all the way through the cascade to
-    // nothing, not quietly land on some OTHER bucket.
+    // .toBeNull(), not just ".key !== RECORD_DELIVERY": with orderConfirmedAt already set, bucket 3 is also
+    // closed, so a passing implementation must fall all the way through the cascade to nothing, not quietly land
+    // on some OTHER bucket.
     expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'FULLY_DELIVERED' }), prs)).toBeNull();
     expect(nextSalesAction(baseDeal({ status: 'quotation_issued', fulfillmentStatus: 'SHIPPING' }), prs)).toBeNull();
   });
@@ -55,8 +55,8 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
     });
     const action = nextSalesAction(deal, [orderConfirmedPr()]);
     expect(action.key).toBe(SALES_ACTION.RECORD_DELIVERY);
-    // `followUp` is only ever set by bucket 5's own return — its absence here confirms this really
-    // is bucket 4 firing, not a follow-up action that happens to carry the delivery label.
+    // `followUp` is only ever set by bucket 5's own return — its absence here confirms this really is bucket 4
+    // firing, not a follow-up action that happens to carry the delivery label.
     expect(action.followUp).toBeUndefined();
   });
 
@@ -69,10 +69,8 @@ describe('nextSalesAction — RECORD_DELIVERY (stages 13-14, owner ruling 2026-0
   // precondition at all), i.e. a never-priced deal, which bucket 1 exists to catch.
   it('bucket 1 (CREATE_PCR) wins over RECORD_DELIVERY when a delivery-ready deal has zero pricing requests and no price evidence', () => {
     const deal = baseDeal({ salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'FROM_STOCK' });
-    // No status/paymentStatus at all — genuinely never priced. Same shape as
-    // workState.test.js's pre-existing 'still offers create_pcr after ... FROM_STOCK' case, which
-    // already exercised this exact interaction before bucket 4 existed; this test pins it again
-    // directly against nextSalesAction, from this bucket's own side.
+    // No status/paymentStatus at all — genuinely never priced. Same shape as workState.test.js's pre-existing
+    // 'still offers create_pcr after ...
     expect(nextSalesAction(deal, [])).toMatchObject({ key: SALES_ACTION.CREATE_PCR });
   });
 

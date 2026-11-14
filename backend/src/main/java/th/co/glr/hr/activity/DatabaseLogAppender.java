@@ -9,24 +9,9 @@ import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 
-/**
- * Captures WARN and ERROR log events for {@code hr.app_event}.
- *
- * <p>Attached to the root logger programmatically by {@link AppEventWriter} rather than through a
- * {@code logback-spring.xml}. That is a safety choice: this project has no logback config file, so
- * introducing one to add an appender would put every existing console log line at the mercy of
- * getting that file right. Attaching in code adds an appender and changes nothing else.
- *
- * <p><strong>Never logs.</strong> Failures go to logback's own status manager via
- * {@link #addError}, which does not re-enter the logging pipeline. A {@code log.warn} here would be
- * appended by this appender, and a database outage would turn that into a spin.
- *
- * <p>Feeds {@link AppEventBuffer#shared()} by default — the no-arg constructor is what production
- * uses via {@link AppEventWriter}, and that default is what keeps production behaviour identical to
- * before this class took a buffer at all. The package-private constructor exists so a test can
- * inject its own isolated {@link AppEventBuffer} instead of fighting every other test in the fork
- * for the shared one.
- */
+/** Captures WARN and ERROR log events for hr.app_event. Never logs. Attached to the root logger
+ * programmatically by AppEventWriter rather than through a logback-spring.xml. Attaching in code adds an
+ * appender and changes nothing else. */
 public class DatabaseLogAppender extends AppenderBase<ILoggingEvent> {
 
     static final String CORRELATION_ID_KEY = "correlationId";
@@ -79,14 +64,9 @@ public class DatabaseLogAppender extends AppenderBase<ILoggingEvent> {
             null);
     }
 
-    /**
-     * The correlation id, or null if it cannot be read.
-     *
-     * <p>Guarded separately rather than folded into the caller's catch, because the id is the
-     * least valuable field on the row and losing the whole event to get it would be a bad trade.
-     * {@code getMDCPropertyMap()} resolves the MDC adapter lazily through the event's logger
-     * context, so it throws on any event that does not have one.
-     */
+    /** The correlation id, or null if it cannot be read. Guarded separately rather than folded into the caller's
+     * catch, because the id is the least valuable field on the row and losing the whole event to get it would be a
+     * bad trade. */
     private static String correlationIdOf(ILoggingEvent event) {
         try {
             var mdc = event.getMDCPropertyMap();
@@ -96,12 +76,9 @@ public class DatabaseLogAppender extends AppenderBase<ILoggingEvent> {
         }
     }
 
-    /**
-     * The first stack frame, and only the first.
-     *
-     * <p>Enough to find the line that failed; not enough to reconstruct the request. Storing whole
-     * traces here would put connection strings, tokens and employee data on a web page — see V159.
-     */
+    /** The first stack frame, and only the first. Enough to find the line that failed; not enough to reconstruct
+     * the request. Storing whole traces here would put connection strings, tokens and employee data on a web page
+     * — see V159. */
     private static String firstFrameOf(IThrowableProxy thrown) {
         if (thrown == null) {
             return null;

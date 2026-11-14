@@ -11,10 +11,8 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallDtos.PayrollDeductionShortfallListResponse;
 
-/**
- * HTTP surface for the shortfall ledger (issue #376) -- HR/CEO only, read-only. See {@link
- * PayrollDeductionShortfallService}.
- */
+/** HTTP surface for the shortfall ledger (issue #376) -- HR/CEO only, read-only. See
+ * PayrollDeductionShortfallService. */
 @RestController
 @RequestMapping("/api/payroll/deduction-shortfalls")
 public class PayrollDeductionShortfallController {

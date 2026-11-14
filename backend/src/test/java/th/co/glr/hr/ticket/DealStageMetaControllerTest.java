@@ -12,16 +12,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * {@code GET /api/meta/deal-stages}'s {@code routes} entry: the per-{@link EntryChannel} route,
- * served so a LIST row (which has {@code deal.entryChannel} but no per-deal payload) can print its
- * position on the deal's own route instead of the catalog-wide "of 15".
- *
- * <p>The values must be {@link DealRoute#path} verbatim — the point of serving them is that no
- * client re-declares the table — so what is pinned here is the SHAPE the client relies on (the four
- * keys, stage codes only, {@code DealStage.ORDER} order) plus the one structural invariant the
- * design rests on: a route may only ever vary the party stages, never the operational tail.
- */
+/** GET /api/meta/deal-stages's routes entry: the per-EntryChannel route, served so a LIST row (which has
+ * deal.entryChannel but no per-deal payload) can print its position on the deal's own route instead of the
+ * catalog-wide "of 15". */
 class DealStageMetaControllerTest {
 
     private static final SessionContext SESSIONS = new SessionContext();
@@ -50,8 +43,8 @@ class DealStageMetaControllerTest {
 
     @Test
     void unspecifiedAndDesignerLedServeAllFifteenStages() {
-        // UNSPECIFIED gates nothing (design 13.1c): a deal with no stated channel must read as the
-        // full spine, never as a shortened route it was never put on.
+        // UNSPECIFIED gates nothing (design 13.1c): a deal with no stated channel must read as the full spine, never
+        // as a shortened route it was never put on.
         assertThat(routes().get(EntryChannel.UNSPECIFIED)).containsExactlyElementsOf(DealStage.ORDER);
         assertThat(routes().get(EntryChannel.UNSPECIFIED)).hasSize(15);
         assertThat(routes().get(EntryChannel.DESIGNER_LED)).containsExactlyElementsOf(DealStage.ORDER);
@@ -88,11 +81,9 @@ class DealStageMetaControllerTest {
         });
     }
 
-    /**
-     * The operational tail is never route-variable. Mirrors {@code DealRoute.ROUTE_VARIABLE}: were
-     * any stage from NEGOTIATION onward off a route, {@code autoAdvanceStage} would skip it silently
-     * and the deal would be left behind with no error anywhere.
-     */
+    /** The operational tail is never route-variable. Mirrors DealRoute.ROUTE_VARIABLE: were any stage from
+     * NEGOTIATION onward off a route, autoAdvanceStage would skip it silently and the deal would be left behind
+     * with no error anywhere. */
     @Test
     void everyRouteContainsEveryStageFromNegotiationOnward() {
         List<String> tail = DealStage.ORDER.subList(

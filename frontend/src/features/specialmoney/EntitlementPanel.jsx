@@ -6,20 +6,9 @@ function money(value) {
   return `฿${Number(value || 0).toLocaleString('th-TH')}`;
 }
 
-/**
- * EntitlementPanel — "entitlement before intent" (layer A of LeavePage's four-layer model, plan
- * §"Model: the leave page's four layers"): per-type remaining/used/consumed straight off GET
- * /usage, shown BEFORE the employee picks a type below. The capped money type (medical) gets the
- * shared QuotaBar; once-only / once-a-year types get a plain typography+divider row instead of a
- * second bordered box — the card-diet rule this whole redesign is following (LeavePage.jsx
- * :572-583): QuotaBar is the one sanctioned bordered primitive here, not a pattern to repeat per
- * type.
- *
- * `usage.activeCountThisYearByType` (added for this redesign — see
- * SpecialMoneyUsageDto/UsageSnapshot) is what makes the "เบิกชุดฟอร์มปีนี้ไปแล้ว" line possible at
- * all: the amount map alone can't distinguish "not claimed yet" from "claimed but still pending
- * CEO decision, so no APPROVED amount exists yet".
- */
+/** EntitlementPanel — "entitlement before intent" (layer A of LeavePage's four-layer model, plan §"Model: the
+ * leave page's four layers"): per-type remaining/used/consumed straight off GET /usage, shown BEFORE the
+ * employee picks a type below. */
 export function EntitlementPanel({ usage, typeOptions, year, loading }) {
   if (loading) {
     return <EmptyState icon="badgeDollar" title="กำลังโหลดโควตา" />;

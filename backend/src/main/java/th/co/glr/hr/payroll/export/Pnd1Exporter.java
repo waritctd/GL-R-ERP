@@ -7,30 +7,15 @@ import java.util.Locale;
 import org.springframework.stereotype.Component;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Builds the Revenue Department ภ.ง.ด.1 withholding-tax file: one pipe-delimited line of 21 tokens per
- * employee, CP874-encoded with CRLF line endings. Layout follows the RD "Format กลาง" import spec and
- * is verified against a real GL&amp;R {@code Pnd1.txt} (see {@code Pnd1ExporterGoldenTest}).
- *
- * <p>Amounts render with two explicit decimals ({@code 150000.00}); the year is Buddhist Era (พ.ศ. =
- * Gregorian + 543) and the pay date is {@code ddMMyyyy} in พ.ศ. Only already-computed
- * {@code gross_taxable_income} and {@code withholding_tax} are rendered — no tax math here.
- *
- * <p>KNOWN GAP: the sample splits the owner across two income-type rows (types 1 &amp; 4). The ERP
- * holds one withholding figure per employee, so this emits one line per employee at income type 1
- * (40(1) salary). This is a deliberate, documented simplification, not a silent divergence.
- */
+/** Builds the Revenue Department ภ.ง.ด.1 withholding-tax file: one pipe-delimited line of 21 tokens per
+ * employee, CP874-encoded with CRLF line endings. Only already-computed gross_taxable_income and
+ * withholding_tax are rendered — no tax math here. */
 @Component
 public class Pnd1Exporter {
     private static final String DEFAULT_INCOME_TYPE = "1"; // 40(1) salary
     private static final String WITHHOLDING_CONDITION = "1"; // หัก ณ ที่จ่าย
 
-    /**
-     * @param rows         the period's payroll lines (all paid employees get a line)
-     * @param employer     employer registration constants (payer tax id + branch)
-     * @param payrollMonth the payroll month (drives fields month + พ.ศ. year)
-     * @param payDate      the date income was paid (HR-picked; defaults to the 26th)
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public byte[] export(List<PayrollExportRow> rows, AppProperties.Employer employer,
                          LocalDate payrollMonth, LocalDate payDate) {
         String companyTaxId = digits(employer.getCompanyTaxId());
@@ -50,11 +35,9 @@ public class Pnd1Exporter {
         return Cp874.file(lines);
     }
 
-    /**
-     * Assemble one ภ.ง.ด.1 line (21 pipe-delimited tokens) as CP874 bytes. Package-private so the
-     * golden-file test can drive {@code seq} and {@code incomeType} from the sample (the two values
-     * the business layer decides) while still exercising the real token/decimal/date formatting.
-     */
+    /** Assemble one ภ.ง.ด.1 line (21 pipe-delimited tokens) as CP874 bytes. Package-private so the golden-file test
+     * can drive seq and incomeType from the sample (the two values the business layer decides) while still
+     * exercising the real token/decimal/date formatting. */
     byte[] formatLine(PayrollExportRow row, int seq, String incomeType, String companyTaxId,
                       String branch, String month, String buddhistYear, String payDateThai) {
         String line = String.join("|",

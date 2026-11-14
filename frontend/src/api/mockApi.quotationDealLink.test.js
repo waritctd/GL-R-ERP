@@ -453,12 +453,9 @@ describe('mock tickets — liveDirectQuotation on the summary (S2-B4)', () => {
   });
 });
 
-// Owner ruling 2026-09-30 — ONE PRICING ROUTE PER DEAL, both directions. Slice 1 refuses a คำขอราคา
-// while a live direct quotation exists; this pins the reverse on dealQuotations.create: while the
-// deal has a LIVE pricing request — ANY status but CANCELLED / SUPERSEDED (DRAFT and
-// QUOTATION_ACCEPTED count) — a direct quotation is refused 409. Checked after the recipient
-// validation (a malformed request is a 400 whatever the deal holds) and before N6.
-// Mock plumbing only — the Java mirror is DealQuotationService#create (slice-2 backend).
+// Owner ruling 2026-09-30 — ONE PRICING ROUTE PER DEAL, both directions. Mock plumbing only — the Java mirror
+// is DealQuotationService#create (slice-2 backend). Checked after the recipient validation (a malformed
+// request is a 400 whatever the deal holds) and before N6.
 describe('mock dealQuotations.create — one pricing route per deal (a live pricing request blocks)', () => {
   const LIVE_PR_MESSAGE = 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
 

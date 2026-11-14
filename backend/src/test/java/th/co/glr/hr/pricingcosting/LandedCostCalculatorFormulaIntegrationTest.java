@@ -72,19 +72,8 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Real-DB (Postgres, real V109-seeded {@code sales.pricing_formula_config}) proof that {@link
- * LandedCostCalculator} and {@link PricingDecisionService#computeSellingPrice} actually implement
- * V109's formula — not mocked, not simulated. Every expected figure below is derived BY HAND in
- * each test's own comment, independently of the code under test (an expectation produced by
- * running the code proves nothing — see this branch's own brief).
- *
- * <p>Fixture convention: every factory is seeded with {@code country = 'Italy'} and every catalog
- * product defaults to {@code thickness_mm = 10} (inside V109's seeded Italy [8,12)mm band, whose
- * top quantity band is open-ended — see {@link AbstractPostgresIntegrationTest#insertCatalogProduct}),
- * so a plain-vanilla item is always costable; individual tests override country/thickness/quantity
- * to probe a specific band edge or a specific failure.
- */
+/** Real-DB (Postgres, real V109-seeded sales.pricing_formula_config) proof that LandedCostCalculator and
+ * PricingDecisionService#computeSellingPrice actually implement V109's formula — not mocked, not simulated. */
 class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -143,11 +132,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         importActor = actor(importUserId, "import");
         ceoActor = actor(ceoUserId, "ceo");
 
-        // price_catalog.factories.country (via insertCatalogProduct, country "IT" below) is what
-        // feeds the freight lookup (LandedCostCalculator#resolveOriginCountryCode) -- see
-        // originCountry_resolvesFromTheItemsCatalogLink_notFromTheQuotesFactoryNameSnapshot for a
-        // test that pins this precisely, by making the item's catalog link and its quote's
-        // factory-name snapshot disagree on which factory (and therefore country) applies.
+        // price_catalog.factories.country is what feeds the freight lookup -- see
+        // originCountry_resolvesFromTheItemsCatalogLink_notFromTheQuotesFactoryNameSnapshot for a test that pins this
+        // precisely, by making the item's catalog link and its quote's factory-name snapshot disagree on which factory applies.
 
         CustomerDto customer = customers.create(
             "บริษัท V109 จำกัด", "0100000000109", "109 ถนนทดสอบ", "สำนักงานใหญ่", "02-000-0109");
@@ -159,37 +146,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Hand-computed happy path: every formula step independently verified
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * ONE item, ONE factory shipment, thickness 10mm (Italy [8,12)mm band), 100 pieces @ 1
-     * sqm/piece = 100 sqm total, quoted PER_PIECE at 100.00 THB/piece, requested PER_PIECE.
-     *
-     * <p>Hand-computed (every intermediate independently, base-10 arithmetic shown so it can be
-     * checked without a calculator):
-     * <pre>
-     * C  (goods, total)   = 100.00 x 100 pieces                       = 10,000.0000
-     * i  (insurance)      = 10000 x 1.15 x 0.0045 x 1.07               = 55.3725
-     * F  (freight)        = Italy [8,12)mm, qty=100 -> band [1,101)   = 50,000.0000 (looked up, not computed)
-     * cif = C + i + F     = 10000 + 55.3725 + 50000                    = 60,055.3725
-     * T  (duty, TILE)     = 30% (default -- no override set)
-     * duty amount = cif x T = 60055.3725 x 0.30 = 18016.61175, HALF_UP (exact ...5 midpoint,
-     *               rounds away from zero)                              = 18,016.6118
-     * (cif+duty) x cost_buffer(1.07) = 78071.9843 x 1.07 = 83537.023201, rounds to 83,537.0232
-     * S  (clearance)      = qty=100 -> band [1,101)                    = 8,000.0000 (looked up)
-     * TC (total)          = 83537.0232 + 8000.0000                     = 91,537.0232
-     * UC (per sqm)        = TC / Q(100 sqm)                            = 915.370232
-     * landed cost/piece   = UC x sqmPerPiece(1)                        = 915.3702 (money4)
-     * total landed cost   = 915.3702 x 100 pieces                      = 91,537.0200
-     *
-     * Selling price (margin 20%, no manual override) — owner ruling 2026-09-19 (Phase 2 CEO
-     * pricing) replaced the old RoundUp-to-nearest-฿10 rule with HALF_UP 2dp:
-     * raw = 915.3702 x 1.20 x selling_buffer(1.07) = 1175.3353368
-     * HALF_UP 2dp: 1175.3353368                                                          = 1,175.34
-     * </pre>
-     */
+    /** ONE item, ONE factory shipment, thickness 10mm (Italy [8,12)mm band), 100 pieces @ 1 sqm/piece = 100 sqm
+     * total, quoted PER_PIECE at 100.00 THB/piece, requested PER_PIECE. */
     @Test
     void singleItem_fullFormulaPipeline_everyStepHandVerified() {
         long pricingRequestId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
@@ -219,12 +179,8 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         assertThat(item.proposedSellingPricePerRequestedUnit()).isEqualByComparingTo("1175.34");
     }
 
-    /**
-     * Same physical item, requested at the qty=101 sqm freight-band EDGE — min-inclusive means
-     * 101 belongs to the NEXT band ([101,451) -> ฿80,000), not the previous one ([1,101) ->
-     * ฿50,000). Proves the boundary through the REAL pipeline (real seeded config, real
-     * LandedCostCalculator), not just the isolated PricingFormulaEngineTest.
-     */
+    /** Same physical item, requested at the qty=101 sqm freight-band EDGE — min-inclusive means 101 belongs to the
+     * NEXT band ([101,451) -> ฿80,000), not the previous one ([1,101) -> ฿50,000). */
     @Test
     void bandEdge_qty101_landsInSecondFreightBand_throughTheRealPipeline() {
         long pricingRequestId = readyForReview(new BigDecimal("101"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
@@ -236,30 +192,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         assertThat(costingItem.freightCostThb()).isEqualByComparingTo("792.0792");
     }
 
-    /**
-     * Replaces {@code originCountry_resolvesFromTheCatalogFactoryJoin_notFromFactoryConfigsFreeTextCountry}
-     * (review remediation, MEDIUM 7). That test pinned V151's fix by putting price_catalog.factories.country
-     * and sales.factory_config.country DELIBERATELY at odds and proving the engine read the
-     * former; it was deleted because V163 merged factory_config's columns onto
-     * price_catalog.factories and dropped the table outright — there is no second,
-     * independently-settable country field left to regress to.
-     *
-     * <p><b>But a DIFFERENT way for two paths to disagree survived the merge, and post-V163 it is
-     * arguably more dangerous.</b> {@code LandedCostCalculator.costShipment} still separately
-     * resolves a {@code FactoryConfigDto} for the quote's {@code factory_name_snapshot} (today
-     * only as an existence check — see that method's own comment) while {@code
-     * resolveOriginCountryCode} resolves the ACTUAL freight-lookup country per item, through a
-     * LIVE join on the item's own {@code catalog_price_id -> product_prices.factory_id ->
-     * factories.country}. {@code resolved_factory_name} (what names the quote) is a snapshot,
-     * frozen at submit time; the catalog join is not. If a catalog product's factory assignment
-     * is corrected AFTER a pricing request already snapshotted its item and reached
-     * READY_FOR_COSTING under the ORIGINAL factory's name, the two paths point at different rows —
-     * and unlike pre-V163 (where the wrong table's free-text country would 422 the freight lookup
-     * outright), post-V163 BOTH factories carry a genuinely valid ISO code, so a future regression
-     * that read the quote's factory config instead of the item's catalog link would resolve
-     * CLEANLY to the WRONG country and silently miscost the shipment, never throwing at all. This
-     * test constructs exactly that drift and pins which side actually wins today.
-     */
+    /** Replaces originCountry_resolvesFromTheCatalogFactoryJoin_notFromFactoryConfigsFreeTextCountry (review
+     * remediation, MEDIUM 7). But a DIFFERENT way for two paths to disagree survived the merge, and post-V163 it
+     * is arguably more dangerous. */
     @Test
     void originCountry_resolvesFromTheItemsCatalogLink_notFromTheQuotesFactoryNameSnapshot() {
         String factoryName = "Reassignable Factory " + UUID.randomUUID();
@@ -269,12 +204,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("100"), "100.00",
             new BigDecimal("1"), null, null);
 
-        // Simulates a LATER catalog correction: the product's factory assignment changes AFTER the
-        // pricing request already snapshotted resolved_factory_name = factoryName (Italy) and its
-        // factory quote (also named factoryName) reached READY_FOR_COSTING. Neither frozen,
-        // name-keyed value is touched here — only the LIVE product_prices.factory_id the catalog
-        // join reads is reassigned, to a factory whose country (China) has a KNOWN, DIFFERENT
-        // freight rate for the identical thickness/quantity band than Italy's (V109's seed).
+        // Simulates a LATER catalog correction: the product's factory assignment changes AFTER the pricing request
+        // already snapshotted resolved_factory_name = factoryName (Italy) and its factory quote (also named
+        // factoryName) reached READY_FOR_COSTING.
         long reassignedFactoryId = jdbc.queryForObject("""
             INSERT INTO price_catalog.factories (name, country, default_currency)
             VALUES (:name, 'CN', 'THB')
@@ -290,29 +222,13 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         PricingCostingItemDto costingItem = costingItemFor(decision);
 
         // China [8,12)mm, qty [1,101) -> 30,000 THB / 100 pieces = 300.0000/pc (V109 seed).
-        // Italy's rate for the SAME band is 50,000 -> 500.0000/pc (see the hand-computed test
-        // above): if a regression ever read the quote's (still-"factoryName", still-Italy)
-        // factory config instead of the item's reassigned catalog link, this would silently
-        // resolve 500.0000 instead, with no error of any kind.
         assertThat(costingItem.freightCostThb()).isEqualByComparingTo("300.0000");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Multi-item factory shipment: F/S are looked up ONCE and allocated proportionally by sqm
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * TWO items, SAME factory (so the SAME sales.factory_quote / "factory shipment"), SAME
-     * thickness. Item A: 60 sqm. Item B: 40 sqm. Shipment total Q = 100 sqm -> the SAME freight
-     * (฿50,000, band [1,101)) and clearance (฿8,000, band [1,101)) bands as the single-item test
-     * above, but now split 60/40 between the two items instead of one item getting the whole
-     * flat amount — proving F and S are shipment-level, not per-item, and are allocated fairly
-     * rather than either double-charged or dropped.
-     *
-     * <p>Hand-computed allocation: item A gets 60% of both flats (F=30,000.0000, S=4,800.0000),
-     * item B gets 40% (F=20,000.0000, S=3,200.0000) — and 30000+20000=50000,
-     * 4800+3200=8000 confirms nothing was lost or duplicated across the pair.
-     */
+    /** TWO items, SAME factory (so the SAME sales.factory_quote / "factory shipment"), SAME thickness. Item A: 60
+     * sqm. Item B: 40 sqm. */
     @Test
     void multiItemShipment_freightAndClearance_allocatedProportionallyBySqm_notDuplicatedNorDropped() {
         long pricingRequestId = twoItemSameFactoryReadyForReview(
@@ -328,9 +244,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         PricingCostingItemDto itemB = costingItems.stream()
             .filter(i -> i.requestedQuantity().compareTo(new BigDecimal("40")) == 0).findFirst().orElseThrow();
 
-        // Freight PER PIECE: itemA share 30000/60=500.0000, itemB share 20000/40=500.0000 (same
-        // rate per sqm/piece here since both share sqmPerPiece=1 -- the ALLOCATION is what this
-        // test is really proving, made visible via the TOTAL freight each item's row carries).
+        // Freight PER PIECE: itemA share 30000/60=500.0000, itemB share 20000/40=500.0000 (same rate per sqm/piece
+        // here since both share sqmPerPiece=1 -- the ALLOCATION is what this test is really proving, made visible via
+        // the TOTAL freight each item's row carries).
         assertThat(itemA.freightCostThb().multiply(itemA.normalizedQuantityPieces()))
             .isEqualByComparingTo("30000.0000");
         assertThat(itemB.freightCostThb().multiply(itemB.normalizedQuantityPieces()))
@@ -449,25 +365,22 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Missing inputs / bands MUST fail loudly, naming the item — never silently price as ฿0
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void missingThickness_reachesTheCeoScreen_butApproveRefusesUntilACostIsSupplied() {
-        // A catalog product with NULL thickness_mm (the 7-arg overload with an explicit null) —
-        // a legitimate real-world state (owner ruling 2026-08-11: a free-text/unmatched line may
-        // be submitted with no catalog snapshot).
+        // A catalog product with NULL thickness_mm (the 7-arg overload with an explicit null) — a legitimate
+        // real-world state (owner ruling 2026-08-11: a free-text/unmatched line may be submitted with no catalog
+        // snapshot).
         long noThicknessProductId = insertCatalogProduct("No Thickness Factory", "IT", "NO-THICKNESS-001",
             new BigDecimal("100.00"), "THB", "per_piece", "ACTIVE", null);
         long pricingRequestId = readyForReviewWithProduct(noThicknessProductId, "No Thickness Factory",
             new BigDecimal("10"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE, new BigDecimal("10"), "100.00",
             new BigDecimal("1"), null, null);
 
-        // V156 — the behaviour CHANGED here, deliberately. startReview used to throw 422, which
-        // aborted before any costing row was written and therefore before the CEO could reach the
-        // one screen that owns the manual cost override that resolves this. Costing now SUCCEEDS
-        // with the line marked uncostable.
+        // V156 — the behaviour CHANGED here, deliberately. startReview used to throw 422, which aborted before any
+        // costing row was written and therefore before the CEO could reach the one screen that owns the manual cost
+        // override that resolves this. Costing now SUCCEEDS with the line marked uncostable.
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
 
@@ -484,10 +397,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             .contains("ความหนา")
             .containsPattern("รายการที่ \\d+");
 
-        // ...and the guarantee did not weaken, it MOVED: approve() must refuse while the line
-        // still has neither a computed cost nor a CEO-supplied one. Written wrong-way-round on
-        // purpose — this is the assertion that would go red if the uncostable path ever started
-        // silently pricing freight at zero.
+        // ...and the guarantee did not weaken, it MOVED: approve() must refuse while the line still has neither a
+        // computed cost nor a CEO-supplied one. Written wrong-way-round on purpose — this is the assertion that would
+        // go red if the uncostable path ever started silently pricing freight at zero.
         assertThatThrownBy(() -> decisionService.approve(decision.id(),
                 new ApprovePricingDecisionRequest(null, UUID.randomUUID().toString()), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
@@ -654,13 +566,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void missingClearanceBand_gapInTheLadder_refusesToPrice_neverZero_evenWhenFreightResolvesFine() {
-        // V109's real seed happens to give freight and clearance the SAME effective coverage
-        // (both start at qty=1, both end open-ended), so a qty that misses clearance would ALSO
-        // miss freight there -- not a clean isolation of "clearance specifically can miss".
-        // Publish a config whose clearance ladder has a deliberate GAP ([1,50) then [100,NULL),
-        // nothing in between) while keeping FULL freight/duty coverage, so qty=75 resolves
-        // freight fine and fails ONLY on clearance -- proving clearance's own band-miss path,
-        // independent of freight's.
+        // V109's real seed happens to give freight and clearance the SAME effective coverage (both start at qty=1,
+        // both end open-ended), so a qty that misses clearance would ALSO miss freight there -- not a clean isolation
+        // of "clearance specifically can miss".
         publishConfigWithGappedClearanceLadder();
         long pricingRequestId = readyForReview(new BigDecimal("75"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
             new BigDecimal("75"), "100.00", new BigDecimal("1"), null, null);
@@ -672,17 +580,10 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Duty default TILE + CEO per-item override
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The owner's own worked example: โมเสคแก้ว defaults to TILE (30%) and would be over-taxed
-     * unless the CEO overrides it to GLASS_MOSAIC (10%). Hand-computed delta at the SAME
-     * inputs as the happy-path test above (cif=600.5537 per piece): TILE duty = 600.5537 x 0.30 =
-     * 180.1661; GLASS_MOSAIC duty = 600.5537 x 0.10 = 60.0554 (60.05537, HALF_UP rounds the 5th
-     * decimal "7" up) -- a real, visible difference the CEO's override must actually produce.
-     */
+    /** The owner's own worked example: โมเสคแก้ว defaults to TILE (30%) and would be over-taxed unless the CEO
+     * overrides it to GLASS_MOSAIC (10%). */
     @Test
     void ceoOverridesProductType_glassMosaic_isTaxedAt10PercentNot30_andReachableViaTheDecisionService() {
         long pricingRequestId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
@@ -724,18 +625,11 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Already-approved decisions must not move
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Approve a decision under the CURRENT formula config, then publish a BRAND NEW config
-     * version with materially different numbers (double the margin default, different buffers),
-     * and prove the already-approved decision's price is byte-identical to what it was at
-     * approval — the frozen figures never re-read a config that has since moved on. Also proves
-     * the freeze is ENFORCED, not just incidentally true: a mutation attempt on the now-approved
-     * decision still 409s.
-     */
+    /** Approve a decision under the CURRENT formula config, then publish a BRAND NEW config version with materially
+     * different numbers, and prove the already-approved decision's price is byte-identical to what it was at
+     * approval — the frozen figures never re-read a config that has since moved on. */
     @Test
     void approvedDecision_priceUnchanged_evenAfterTheLiveFormulaConfigChanges() {
         long pricingRequestId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
@@ -746,9 +640,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             new ApprovePricingDecisionRequest("อนุมัติ", UUID.randomUUID().toString()), ceoActor);
         BigDecimal approvedPriceBefore = approved.items().get(0).approvedSellingPricePerRequestedUnit();
         BigDecimal approvedMarginBefore = approved.items().get(0).approvedMarginPct();
-        // Owner ruling 2026-09-19 (Phase 2 CEO pricing): HALF_UP 2dp, not RoundUp to nearest ฿10
-        // -- same 915.3702 base cost / 20% margin / 1.07 buffer as singleItem_fullFormulaPipeline
-        // _everyStepHandVerified's own hand-computed derivation.
+        // Owner ruling 2026-09-19 (Phase 2 CEO pricing): HALF_UP 2dp, not RoundUp to nearest ฿10 -- same 915.3702 base
+        // cost / 20% margin / 1.07 buffer as singleItem_fullFormulaPipeline _everyStepHandVerified's own hand-computed
+        // derivation.
         assertThat(approvedPriceBefore).isEqualByComparingTo("1175.34");
 
         // Publish a new config version with DIFFERENT numbers.
@@ -764,12 +658,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /**
-     * The OTHER half of the same rule: a DRAFT decision (never approved) DOES pick up the new
-     * formula once the CEO explicitly recalculates — this is the existing recalculateCost path,
-     * unchanged mechanism, now driven by V109 instead of V26. No auto-migration: the row only
-     * moves because recalculateCost was called, not on its own.
-     */
+    /** The OTHER half of the same rule: a DRAFT decision (never approved) DOES pick up the new formula once the CEO
+     * explicitly recalculates — this is the existing recalculateCost path, unchanged mechanism, now driven by V109
+     * instead of V26. */
     @Test
     void draftDecision_picksUpANewFormulaConfigVersion_onlyWhenExplicitlyRecalculated() {
         long pricingRequestId = readyForReview(new BigDecimal("100"), UnitBasis.PER_PIECE, UnitBasis.PER_PIECE,
@@ -791,10 +682,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             .isNotEqualByComparingTo(costBefore);
     }
 
-    /** Publishes a new current pricing_formula_config version with different insurance/cost/
-     * selling buffers and a different margin default, keeping the SAME freight/duty/clearance
-     * bands (so the same fixture quantities stay costable) — enough to prove a config change is
-     * genuinely picked up (or not) without needing to duplicate V109's entire seed matrix. */
+    /** Publishes a new current pricing_formula_config version with different insurance/cost/ selling buffers and a
+     * different margin default, keeping the SAME freight/duty/clearance bands — enough to prove a config change is
+     * genuinely picked up without needing to duplicate V109's entire seed matrix. */
     private void publishNewFormulaConfigVersion() {
         Long currentId = jdbc.queryForObject(
             "SELECT formula_config_id FROM sales.pricing_formula_config WHERE is_current = TRUE",
@@ -828,10 +718,9 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             .addValue("newId", newId).addValue("oldId", currentId));
     }
 
-    /** Publishes a new current config with FULL freight/duty coverage (copied verbatim from the
-     * current version) but a clearance ladder with a deliberate GAP: [1,50) and [100,NULL), with
-     * [50,100) uncovered — so a qty inside the gap fails clearance specifically while freight
-     * still resolves normally. See {@link #missingClearanceBand_gapInTheLadder_refusesToPrice_neverZero_evenWhenFreightResolvesFine}. */
+    /** Publishes a new current config with FULL freight/duty coverage (copied verbatim from the current version)
+     * but a clearance ladder with a deliberate GAP: [1,50) and [100,NULL), with [50,100) uncovered — so a qty
+     * inside the gap fails clearance specifically while freight still resolves normally. */
     private void publishConfigWithGappedClearanceLadder() {
         Long currentId = jdbc.queryForObject(
             "SELECT formula_config_id FROM sales.pricing_formula_config WHERE is_current = TRUE",
@@ -866,9 +755,7 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("newId", newId));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private PricingCostingItemDto costingItemFor(PricingDecisionDto decision) {
         return costingRepository.find(decision.pricingCostingId()).orElseThrow().items().get(0);
@@ -1527,13 +1414,8 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
             quotedUnitBasis, quotedQuantity, rawPrice, sqmPerUnit, piecesPerBox, linearMPerUnit);
     }
 
-    /**
-     * {@code originCountryCode} is the factory's country on {@code price_catalog.factories.country}
-     * — the value that actually drives V109's freight lookup as of V151 (see {@code
-     * LandedCostCalculator#resolveOriginCountryCode}). Must be one of the twelve codes V151 seeds
-     * into {@code price_catalog.country} (its FK target), or the fixture INSERT itself fails —
-     * this is deliberately NOT a free-text field, the exact thing V151 fixed.
-     */
+    /** originCountryCode is the factory's country on price_catalog.factories.country — the value that actually
+     * drives V109's freight lookup as of V151 (see LandedCostCalculator#resolveOriginCountryCode). */
     private long readyForReviewInCountry(String originCountryCode, BigDecimal requestedQty, String rawPrice) {
         String factoryName = "Country Test Factory " + UUID.randomUUID();
         long productId = insertCatalogProduct(factoryName, originCountryCode, "COUNTRY-TEST-" + UUID.randomUUID(),
@@ -1584,9 +1466,8 @@ class LandedCostCalculatorFormulaIntegrationTest extends AbstractPostgresIntegra
         return pricingRequestId;
     }
 
-    /** Two items sourced from the SAME factory (so the SAME factory_quote/"shipment"), each
-     * PER_SQM requested at 1 sqm/piece so requestedQty == qtySqm directly, for a simple hand-
-     * computable allocation ratio. */
+    /** Two items sourced from the SAME factory (so the SAME factory_quote/"shipment"), each PER_SQM requested at 1
+     * sqm/piece so requestedQty == qtySqm directly, for a simple hand- computable allocation ratio. */
     private long twoItemSameFactoryReadyForReview(BigDecimal qtyA, BigDecimal qtyB) {
         return twoItemSameFactoryReadyForReview(qtyA, new BigDecimal("10"), qtyB, new BigDecimal("10"));
     }

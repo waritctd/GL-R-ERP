@@ -8,14 +8,9 @@ import {
   emptyAllowanceValues,
 } from './taxAllowanceSchema.js';
 
-/**
- * Guards the ล.ย.01 form after it stopped being a five-category wizard and became the government
- * form's own ข้อ 1–15, one collapsible each.
- *
- * The suite this replaced pinned hub/section/review navigation, which no longer exists. What
- * matters now is different: that the page really is the document, that collapsing does not eat
- * data, and that an unsigned declaration cannot be filed.
- */
+/** Guards the ล.ย.01 form after it stopped being a five-category wizard and became the government form's own
+ * ข้อ 1–15, one collapsible each. What matters now is different: that the page really is the document, that
+ * collapsing does not eat data, and that an unsigned declaration cannot be filed. */
 
 function renderForm(props = {}) {
   return render(
@@ -35,8 +30,8 @@ function openSection(titleFragment) {
 describe('TaxAllowanceForm — the page is the government form', () => {
   it('renders one section per ข้อ, numbered as the form numbers them', () => {
     renderForm();
-    // ข้อ 1–2 share a section (both are สถานภาพ), so the numbering is not a plain 1..15 sequence —
-    // it is whatever the form prints, which is the point.
+    // ข้อ 1–2 share a section (both are สถานภาพ), so the numbering is not a plain 1..15 sequence — it is whatever
+    // the form prints, which is the point.
     for (const section of LOR_YOR_01_SECTIONS) {
       const label = section.no ? `ข้อ ${section.no} · ${section.title}` : section.title;
       expect(screen.getByRole('button', { name: new RegExp(label.slice(0, 24)) })).toBeTruthy();
@@ -44,10 +39,8 @@ describe('TaxAllowanceForm — the page is the government form', () => {
   });
 
   it('offers no control for the five deductions ล.ย.01 does not print', () => {
-    // SSF, Thai ESG, pension life insurance, ค่าฝากครรภ์, political donation are all legally real
-    // but absent from this form (owner ruling: strictly the 15 items). They must not reappear as
-    // stray inputs — the wire shape still carries them, which is exactly why a control would be
-    // easy to add back by accident.
+    // SSF, Thai ESG, pension life insurance, ค่าฝากครรภ์, political donation are all legally real but absent from
+    // this form (owner ruling: strictly the 15 items).
     renderForm();
     for (const key of ['ssfAllowance', 'thaiEsgAllowance', 'pensionInsuranceAllowance',
       'maternityAllowance', 'politicalDonation']) {
@@ -69,12 +62,8 @@ describe('TaxAllowanceForm — the page is the government form', () => {
     expect(screen.getByText(/คำนวณอัตโนมัติ/)).toBeTruthy();
   });
 
-  /**
-   * The one library behaviour this component leans on. `CollapsibleSection` UNMOUNTS its children,
-   * and these are `register`ed inputs — so the values survive only because react-hook-form defaults
-   * `shouldUnregister: false`. If a future bump flips that default, every collapsed ข้อ silently
-   * submits as empty and nothing else in the suite would notice.
-   */
+  /** The one library behaviour this component leans on. `CollapsibleSection` UNMOUNTS its children, and these are
+   * `register`ed inputs — so the values survive only because react-hook-form defaults `shouldUnregister: false`. */
   it('a value typed into a ข้อ survives collapsing it', () => {
     const onSubmit = vi.fn();
     renderForm({ onSubmit, signedFormAttached: true });
@@ -103,17 +92,9 @@ describe('TaxAllowanceForm — the signed form gates submission', () => {
     expect(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }).disabled).toBe(false);
   });
 
-  /**
-   * A submit event that did not come from a real submitter must not file the declaration.
-   *
-   * ⚠️ READ THIS BEFORE TRUSTING IT. `SafeForm` refuses a submit with no submitter REGARDLESS of
-   * `canSubmit`, so this passing does not prove the signed-form gate works — it proves the
-   * submitter guard does. The gate itself is covered by the disabled-button test above, and the
-   * case that actually matters — Enter in one of a dozen text fields, which HTML turns into a real
-   * implicit submission — CANNOT be reproduced here at all: jsdom does not implement implicit
-   * submission. That one needs e2e-real, and this repo has shipped exactly that bug before while a
-   * green jsdom suite said nothing.
-   */
+  /** A submit event that did not come from a real submitter must not file the declaration. ⚠️ READ THIS BEFORE
+   * TRUSTING IT. `SafeForm` refuses a submit with no submitter REGARDLESS of `canSubmit`, so this passing does
+   * not prove the signed-form gate works — it proves the submitter guard does. */
   it('a submit event with no submitter does nothing', () => {
     const onSubmit = vi.fn();
     renderForm({ onSubmit, signedFormAttached: false });
@@ -137,12 +118,8 @@ describe('TaxAllowanceForm — the signed form gates submission', () => {
     expect(Number(onGeneratePdf.mock.calls[0][0].homeLoanInterestAllowance)).toBe(54321);
   });
 
-  /**
-   * The PDF is the sheet the employee prints and signs, so it must not be rendered from values the
-   * schema rejects. Until validation moved to `onTouched` this was unreachable in practice: the
-   * resolver only ran on submit, and submit is gated behind the signed scan — i.e. behind having
-   * already printed and signed this very PDF.
-   */
+  /** The PDF is the sheet the employee prints and signs, so it must not be rendered from values the schema
+   * rejects. */
   it('refuses to render the PDF while a field is invalid, and says so', async () => {
     const onGeneratePdf = vi.fn();
     const showToast = vi.fn();
@@ -180,28 +157,23 @@ describe('TaxAllowanceForm — read-only', () => {
     values.lifeInsuranceAllowance = 9999;
     renderForm({ readOnly: true, defaultValues: values });
 
-    // Twice, and that is the point: once as ข้อ 7's own collapsed-row subtotal, once as the
-    // declared total. The total used to live only inside the sign-off panel, which read-only does
-    // not render — so a filed declaration showed fifteen subtotals and no total anywhere.
+    // Twice, and that is the point: once as ข้อ 7's own collapsed-row subtotal, once as the declared total. The
+    // total used to live only inside the sign-off panel, which read-only does not render — so a filed declaration
+    // showed fifteen subtotals and no total anywhere.
     expect(screen.getAllByText(/9,999/)).toHaveLength(2);
     expect(screen.getByText('รวมค่าลดหย่อนที่ประกาศ')).toBeTruthy();
   });
 });
 
 describe('TaxAllowanceForm — whole-tax-year, no effective month', () => {
-  /**
-   * Owner ruling 2026-08-31: a ล.ย.01 covers its whole tax year and HR's approval is what makes it
-   * live, so the employee has no งวดเดือน to pick. Pinned as an ABSENCE because that is the shape
-   * of the regression — the select was removed from the form and `effectiveMonth` from
-   * TaxAllowanceDeclarationSubmitRequest in the same change, so a re-added control would send a
-   * field the backend no longer binds and silently do nothing.
-   */
+  /** Owner ruling 2026-08-31: a ล.ย.01 covers its whole tax year and HR's approval is what makes it live, so the
+   * employee has no งวดเดือน to pick. */
   it('renders no มีผลตั้งแต่งวดเดือน control anywhere on the form', () => {
     renderForm();
     expect(screen.queryByLabelText(/มีผลตั้งแต่งวดเดือน/)).toBeNull();
     expect(document.querySelector('#ta-effective-month')).toBeNull();
-    // The neighbouring field in the same FormGrid still renders, so this is not passing because
-    // the whole block failed to mount.
+    // The neighbouring field in the same FormGrid still renders, so this is not passing because the whole block
+    // failed to mount.
     expect(screen.getByLabelText(/เลขที่เอกสารอ้างอิง/)).toBeTruthy();
   });
 });

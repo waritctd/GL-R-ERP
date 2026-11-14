@@ -8,15 +8,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// GLA-136 → slice 1/2 (IA §7/§8, decision D3): "ยืนยันคำสั่งซื้อ" on an APPROVED direct quotation
-// (was "สร้างดีลจากใบเสนอราคา"). The gate here is DISPLAY-only (quotationMeta.
-// canPromoteDealQuotationToDeal); who may actually confirm is enforced and proven server-side in
-// DealQuotationPromoteIntegrationTest / DealQuotationConfirmOrderIntegrationTest, never here.
-//
-// Whether the order is still confirmable is the deal's `status === 'draft'` — the backend's own
-// precondition (DealQuotationService#confirmOrderFromDirectQuotation 409s otherwise; confirming
-// flips it to 'quotation_issued'). `quotationOnly` is provenance only since #1086 and must NOT
-// decide it: every deal created on the deal page (flow B) carries quotationOnly=false.
+// GLA-136 → slice 1/2 (IA §7/§8, decision D3): "ยืนยันคำสั่งซื้อ" on an APPROVED direct quotation (was
+// "สร้างดีลจากใบเสนอราคา"). The gate here is DISPLAY-only (quotationMeta.
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {

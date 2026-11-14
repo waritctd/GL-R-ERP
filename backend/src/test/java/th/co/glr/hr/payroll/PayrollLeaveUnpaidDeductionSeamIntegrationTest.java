@@ -28,30 +28,9 @@ import th.co.glr.hr.leave.SubmitLeaveRequest;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Leave -&gt; payroll unpaid-day deduction (2026-07-23): the cross-package seam between the real
- * {@link LeaveService} (writing {@code hr.leave_request.paid_days}/{@code unpaid_days} and, on
- * cancel-after-close, {@code hr.leave_payroll_correction}) and the real {@link PayrollService}
- * (reading both back through {@link PayrollService#suggestedInputs} and folding an explicit
- * {@code unpaidLeaveDays} figure into {@link PayrollService#preview} exactly as it always has).
- *
- * <p>Deliberately a NEW test class (not {@code PayrollServiceTest}, {@code
- * PayrollRepositoryIntegrationTest}, or {@code RetroactiveOvertimeReachesPayrollIntegrationTest} --
- * a concurrent branch touches those). Mockito cannot reach this: the whole point under test is that
- * two independently-written repository queries (leave's per-month attribution, payroll's suggestion
- * merge) agree with each other and with the real {@code hr.leave_request}/{@code
- * hr.payroll_period} rows.
- *
- * <p>Does not touch attendance/lateness (Labour Protection Act §76) at all -- {@code
- * PayrollCalculator} and {@code preview()}/{@code process()} math are unchanged by this feature, so
- * the §76 no-penalty guarantee ({@code LatenessNeverAffectsPayrollTest}) is structurally unaffected.
- *
- * <p>Uses {@link LeaveService}'s public constructor (real system clock) rather than the
- * package-private test-clock constructor {@code LeaveServiceTest}/{@code
- * LeaveUnpaidDeductionIntegrationTest} use, since this class lives in {@code th.co.glr.hr.payroll}.
- * Dates are therefore computed relative to "now" ({@link #firstMondayOfMonth}) rather than hardcoded
- * literals, comfortably clear of the 7-day advance-notice window either way.
- */
+/** Leave -> payroll unpaid-day deduction: the cross-package seam between the real LeaveService and the real
+ * PayrollService. Deliberately a NEW test class (not PayrollServiceTest, PayrollRepositoryIntegrationTest, or
+ * RetroactiveOvertimeReachesPayrollIntegrationTest -- a concurrent branch touches those). */
 class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     private static final BigDecimal SALARY = new BigDecimal("30000.00");
@@ -98,19 +77,15 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
         LocalDate monday = firstMondayOfMonth(2);
         LocalDate month = monday.withDayOfMonth(1);
 
-        // 7 working days (Mon,Tue,Wed,Thu,Fri, next Mon,Tue) against a 6-day VACATION quota, nothing
-        // used yet -> 6 paid + 1 unpaid.
+        // 7 working days (Mon,Tue,Wed,Thu,Fri, next Mon,Tue) against a 6-day VACATION quota, nothing used yet -> 6
+        // paid + 1 unpaid.
         LeaveRequestDto leave = leaveService.submit(
             new SubmitLeaveRequest(employeeId, "VACATION", monday, monday.plusDays(8), "Trip"),
             employee(employeeId));
         assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
-        // Leave requires approval (2026-08-05): #submit now lands a rule-passing request at
-        // SUBMITTED, not APPROVED -- findUnpaidLeaveDaysByEmployeeForMonth (which
-        // #suggestedInputs reads) filters `WHERE status = 'APPROVED'`, so this test's subject
-        // (an approved-leave payroll deduction) requires driving the request all the way to
-        // APPROVED before it can surface. paidDays/unpaidDays were computed and persisted at
-        // submit time and are unchanged by #approve -- see LeaveService#submit's computeQuotaSplit
-        // call-site comment.
+        // Leave requires approval: #submit now lands a rule-passing request at SUBMITTED, not APPROVED --
+        // findUnpaidLeaveDaysByEmployeeForMonth filters `WHERE status = 'APPROVED'`, so this test's subject requires
+        // driving the request all the way to APPROVED before it can surface.
         leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
         PayrollCarryForwardDtos.SuggestedInputsResponse suggestions = payrollService.suggestedInputs(month, hr());
@@ -121,15 +96,15 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
         assertThat(row.unpaidLeaveDays()).isEqualByComparingTo("1.00");
         assertThat(row.pendingUnpaidLeaveCorrectionDays()).isEqualByComparingTo("0.00");
 
-        // The frontend pre-fills the unpaidLeaveDays form field from `row.unpaidLeaveDays()` and HR
-        // submits it as an explicit input -- preview()/process() never read leave data directly.
+        // The frontend pre-fills the unpaidLeaveDays form field from `row.unpaidLeaveDays()` and HR submits it as an
+        // explicit input -- preview()/process() never read leave data directly.
         PayrollPeriodDto period = payrollService.preview(
             new ProcessPayrollRequest(month, List.of(inputWithUnpaidLeaveDays(employeeId, row.unpaidLeaveDays()))),
             hr());
         PayrollLineDto line = lineFor(period, employeeId);
 
-        // dailyRate = 30000/30 = 1000.00; unpaidLeaveDeduction = 1000.00 x 1 unpaid day = 1000.00,
-        // subtracted PRE-TAX (grossTaxableIncome = grossEarnings - unpaidLeaveDeduction).
+        // dailyRate = 30000/30 = 1000.00; unpaidLeaveDeduction = 1000.00 x 1 unpaid day = 1000.00, subtracted PRE-TAX
+        // (grossTaxableIncome = grossEarnings - unpaidLeaveDeduction).
         assertThat(line.unpaidLeaveDays()).isEqualByComparingTo("1.00");
         assertThat(line.unpaidLeaveDeduction()).isEqualByComparingTo("1000.00");
         assertThat(line.grossEarnings()).isEqualByComparingTo("30000.00");
@@ -171,10 +146,9 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             new SubmitLeaveRequest(employeeId, "VACATION", monday, monday.plusDays(8), "Trip"),
             employee(employeeId));
         assertThat(leave.unpaidDays()).isEqualByComparingTo("1.00");
-        // Leave requires approval (2026-08-05): #recordPayrollCorrectionIfNeeded (invoked from
-        // #cancel below) only fires for a request that is APPROVED at cancel time -- this test's
-        // subject is exactly that cancel-after-close correction, so the request must actually
-        // reach APPROVED first.
+        // Leave requires approval (2026-08-05): #recordPayrollCorrectionIfNeeded (invoked from #cancel below) only
+        // fires for a request that is APPROVED at cancel time -- this test's subject is exactly that
+        // cancel-after-close correction, so the request must actually reach APPROVED first.
         leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
         insertProcessedPayrollPeriod(month);
@@ -186,27 +160,17 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
             .findFirst()
             .orElseThrow(() -> new AssertionError("no suggestion row for employee " + employeeId));
 
-        // The cancelled leave no longer contributes unpaid days going forward (next month has none),
-        // but the pending correction credit (1 unpaid day already deducted in the now-closed month) is
-        // surfaced so HR can see and manually net it -- this PR does NOT auto-apply it into
-        // unpaidLeaveDays or into preview()/process(); see LeaveService#cancel.
+        // The cancelled leave no longer contributes unpaid days going forward, but the pending correction credit is
+        // surfaced so HR can see and manually net it -- this PR does NOT auto-apply it into unpaidLeaveDays or into
+        // preview/process; see LeaveService#cancel.
         assertThat(row.unpaidLeaveDays()).isEqualByComparingTo("0.00");
         assertThat(row.pendingUnpaidLeaveCorrectionDays()).isEqualByComparingTo("1.00");
     }
 
     @Test
     void subDayLeaveOverQuotaDeductsProportionalDailyRate() {
-        // Partial-day span (V166, FINAL owner ruling 2026-09-10, widened from the original
-        // single-day-only sub-day feature, 2026-07-25): LEAVE_WITHOUT_PAY has a 0-day statutory
-        // quota, so a half-day (08:30-12:30 = 240 clock-minutes, ZERO overlap with the 12:30-13:30
-        // lunch break -> 240 worked minutes / 480 = 0.50 HALF_UP) request is entirely unpaid from
-        // day 1 -- proves the fraction survives the same submit -> per-month attribution ->
-        // payroll-preview path the whole-day cases above exercise, and that PayrollCalculator's
-        // dailyRate x unpaidLeaveDays deduction is proportional, not floored to a whole day.
-        //
-        // An intermediate draft of this feature divided by the day's own resolved WorkSchedule span
-        // instead (240/540 = 0.44) -- WRONG, superseded (see LeaveDayMath's "Partial-day span"
-        // section header) -- asserted wrong-way-round below.
+        // Partial-day span: LEAVE_WITHOUT_PAY has a 0-day statutory quota, so a half-day request is entirely unpaid
+        // from day 1.
         long employeeId = insertEmployee("SEAM-004");
         LocalDate monday = firstMondayOfMonth(2);
         LocalDate month = monday.withDayOfMonth(1);
@@ -218,8 +182,7 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
         assertThat(leave.totalDays()).isEqualByComparingTo("0.50");
         assertThat(leave.totalDays()).isNotEqualByComparingTo("0.44");
         assertThat(leave.unpaidDays()).isEqualByComparingTo("0.50");
-        // Leave requires approval (2026-08-05): see the whole-day case above -- payroll only sees
-        // APPROVED leave.
+        // Leave requires approval (2026-08-05): see the whole-day case above -- payroll only sees APPROVED leave.
         leaveService.approve(leave.id(), new ReviewLeaveRequest("approved"), hr());
 
         PayrollCarryForwardDtos.SuggestedInputsResponse suggestions = payrollService.suggestedInputs(month, hr());
@@ -243,9 +206,9 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
 
     // --- helpers ------------------------------------------------------------
 
-    /** The first Monday of the month {@code monthsFromNow} months from today, in Asia/Bangkok --
-     *  always well clear of the 7-day advance-notice window, and always within that same month
-     *  (the first Monday of a month is always on day 1-7). */
+    /** The first Monday of the month monthsFromNow months from today, in Asia/Bangkok -- always well clear of the
+     * 7-day advance-notice window, and always within that same month (the first Monday of a month is always on day
+     * 1-7). */
     private LocalDate firstMondayOfMonth(int monthsFromNow) {
         return LocalDate.now(BUSINESS_ZONE).plusMonths(monthsFromNow)
             .withDayOfMonth(1)
@@ -302,9 +265,9 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
         return new UserPrincipal(1L, "hr@glr.co.th", "HR", "hr", 1L, true, LocalDate.now(), false, null, false);
     }
 
-    // §5 leave-rules-as-data (V116): VACATION now carries a 12-month min_service_months floor. This
-    // class is about the leave->payroll seam (deduction/refund plumbing), not eligibility, so
-    // hire_date is set far enough in the past (2015) that the floor is always a no-op here.
+    // §5 leave-rules-as-data (V116): VACATION now carries a 12-month min_service_months floor. This class is about
+    // the leave->payroll seam (deduction/refund plumbing), not eligibility, so hire_date is set far enough in the
+    // past (2015) that the floor is always a no-op here.
     private long insertEmployee(String code) {
         long employeeId = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date)
@@ -315,14 +278,9 @@ class PayrollLeaveUnpaidDeductionSeamIntegrationTest extends AbstractPostgresInt
         return employeeId;
     }
 
-    /**
-     * §5.3.5 VACATION carry-forward (V127) interaction: the default 2015 hire date leaves 2025
-     * (fully elapsed by this class's fixed clock) reading as "0 of 6 used", which now legitimately
-     * carries 6.00 into 2026 -- correct new behaviour, but not what this class's pre-existing
-     * leave->payroll-seam assertions (written before carry-forward existed) are about. Neutralised
-     * by marking 2025's VACATION quota fully used, so LeaveService#ensureCarryoverGrant computes a
-     * real, correct ZERO carry-in for 2026.
-     */
+    /** §5.3.5 VACATION carry-forward interaction: the default 2015 hire date leaves 2025 reading as "0 of 6 used",
+     * which now legitimately carries 6.00 into 2026 -- correct new behaviour, but not what this class's
+     * pre-existing leave->payroll-seam assertions are about. */
     private void neutralizeVacationCarryForwardFrom2025(long employeeId) {
         Long leaveRequestId = jdbc.queryForObject("""
             INSERT INTO hr.leave_request (

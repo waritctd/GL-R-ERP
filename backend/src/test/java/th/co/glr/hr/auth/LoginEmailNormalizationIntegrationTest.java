@@ -17,23 +17,9 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Pins the promise that an employee's address logs them in <b>however it is capitalised, and with
- * whatever whitespace survived the paste</b> — through the real {@link AuthService}, the real
- * {@link EmployeeAuthRepository} and its real SQL, against real PostgreSQL.
- *
- * <p><b>Why this has to reach a database.</b> Case-folding is not implemented in Java at all: it
- * lives entirely in {@code findByEmail}'s {@code LOWER(btrim(e.email)) = LOWER(:email)}. {@code
- * AuthServiceTest} mocks {@link EmployeeAuthRepository}, so its stub answers whatever the test asks
- * regardless of what the predicate says — a Mockito suite stays green even if that {@code LOWER()}
- * is deleted. Until this class existed the behaviour had no test of any kind, which is how a
- * property that everyone assumes ends up load-bearing and unguarded.
- *
- * <p><b>The cases are written wrong-way-round where it counts.</b> Asserting only that a matching
- * address gets in would also pass against a predicate that matched everything, so
- * {@link #rejectsADifferentAddressNoMatterHowItIsCapitalised} asserts the negative: a
- * <em>different</em> address must be refused in every casing.
- */
+/** Pins the promise that an employee's address logs them in however it is capitalised, and with whatever
+ * whitespace survived the paste — through the real AuthService, the real EmployeeAuthRepository and its real
+ * SQL, against real PostgreSQL. */
 class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String PASSWORD = "Str0ngPass!";
@@ -49,10 +35,8 @@ class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegration
         service = new AuthService(repo, encoder, audit, new ViewAsService(repo, audit, ""));
     }
 
-    /**
-     * The shape the owner reported: the address is stored with capitals, exactly as HR typed it into
-     * the employee form. Every casing the person might type must reach that row.
-     */
+    /** The shape the owner reported: the address is stored with capitals, exactly as HR typed it into the employee
+     * form. Every casing the person might type must reach that row. */
     @Test
     void logsInAgainstAMixedCaseStoredAddressWhateverTheCallerTypes() {
         long id = insertEmployeeWithEmail("CASE-001", "Suneesllim.1977@gmail.com");
@@ -63,17 +47,8 @@ class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegration
         assertThat(loginAs("SuNeEsLlIm.1977@GmAiL.cOm").user().id()).isEqualTo(id);
     }
 
-    /**
-     * The mirror image: stored lowercase, typed with capitals — e.g. by a phone keyboard.
-     *
-     * <p><b>This one guards {@link LoginRequest}'s constructor, NOT the SQL</b>, and the difference
-     * was found by mutation rather than assumed. Replacing the query's {@code LOWER(...)} comparison
-     * with a plain {@code =} leaves this test <em>green</em>, because the constructor has already
-     * lowercased the caller's input by the time it reaches the query — only
-     * {@link #logsInAgainstAMixedCaseStoredAddressWhateverTheCallerTypes} went red, since nothing on
-     * the client side can fold a value that is mixed-case <em>in the database</em>. Keep both: they
-     * pin two different mechanisms that happen to produce the same user-visible promise.
-     */
+    /** The mirror image: stored lowercase, typed with capitals — e.g. by a phone keyboard. This one guards
+     * LoginRequest's constructor, NOT the SQL, and the difference was found by mutation rather than assumed. */
     @Test
     void logsInAgainstALowercaseStoredAddressWhenTheCallerTypesCapitals() {
         long id = insertEmployeeWithEmail("CASE-002", "somchai.p@glr.co.th");
@@ -82,28 +57,9 @@ class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegration
         assertThat(loginAs("SOMCHAI.P@GLR.CO.TH").user().id()).isEqualTo(id);
     }
 
-    /**
-     * The half that was actually broken. {@code AuthController#login} is {@code @Valid}, so {@code
-     * LoginRequest}'s {@code @Email} runs on the constructed record — and Hibernate Validator's
-     * pattern admits no whitespace — while {@code AuthService}'s {@code .trim()} only ran
-     * <em>afterwards</em>. An address pasted from a spreadsheet, or autocorrected by a phone that
-     * appended a space, was therefore rejected with a 400 that never reached the lookup at all.
-     * {@code LoginRequest}'s constructor now trims first, so the value both validation and the query
-     * see is already clean.
-     *
-     * <p><b>This case was vacuous when first written, and the mutation check is what caught it.</b>
-     * {@code AuthService} used to call {@code safeRequest.email().trim()} itself, so removing the
-     * constructor's trim left this test green — it would have passed with or without the fix,
-     * proving nothing. Deleting that redundant service-level trim is what made it load-bearing:
-     * re-run with the constructor's trim removed and this test now fails, along with exactly two
-     * cases in {@link LoginRequestNormalizationTest} and nothing else.
-     *
-     * <p>Note what it still cannot see: calling {@code AuthService} directly exercises the
-     * normalisation but not the {@code @Valid} pass, which needs the MVC stack. The 400 that {@code
-     * @Valid} used to return is pinned instead by
-     * {@link LoginRequestNormalizationTest#theEmailValidatorRejectsTheUntrimmedFormItWouldHaveSeenBefore},
-     * which runs the real Jakarta validator over the untrimmed string.
-     */
+    /** The half that was actually broken. AuthController#login is @Valid, so LoginRequest's @Email runs on the
+     * constructed record — and Hibernate Validator's pattern admits no whitespace — while AuthService's .trim()
+     * only ran afterwards. */
     @Test
     void logsInWhenTheAddressArrivesWithSurroundingWhitespace() {
         long id = insertEmployeeWithEmail("CASE-003", "warehouse.manager@glr.co.th");
@@ -113,11 +69,9 @@ class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegration
         assertThat(loginAs("  Warehouse.Manager@glr.co.th  ").user().id()).isEqualTo(id);
     }
 
-    /**
-     * Asked the wrong way round. Everything above would also pass against a predicate that matched
-     * any row at all, so this is the case that gives the others their meaning: a different address
-     * must be refused however it is capitalised, and a near-miss must not be folded into a hit.
-     */
+    /** Asked the wrong way round. Everything above would also pass against a predicate that matched any row at all,
+     * so this is the case that gives the others their meaning: a different address must be refused however it is
+     * capitalised, and a near-miss must not be folded into a hit. */
     @Test
     void rejectsADifferentAddressNoMatterHowItIsCapitalised() {
         insertEmployeeWithEmail("CASE-004", "Suneesllim.1977@gmail.com");
@@ -129,12 +83,9 @@ class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegration
         assertThatThrownBy(() -> loginAs("uneesllim.1977@gmail.com")).isInstanceOf(ApiException.class);
     }
 
-    /**
-     * The password is emphatically NOT normalised alongside the email. Leading and trailing spaces
-     * are legitimate password characters, and trimming them would silently lock out anyone whose
-     * password has one — a far worse failure than the one being fixed. Guards {@code LoginRequest}
-     * against someone "tidying up" its constructor by trimming both fields.
-     */
+    /** The password is emphatically NOT normalised alongside the email. Leading and trailing spaces are legitimate
+     * password characters, and trimming them would silently lock out anyone whose password has one — a far worse
+     * failure than the one being fixed. */
     @Test
     void doesNotTrimThePasswordWhileNormalisingTheEmail() {
         insertEmployeeWithEmail("CASE-005", "spacey@glr.co.th");

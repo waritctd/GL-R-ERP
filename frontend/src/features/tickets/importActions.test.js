@@ -1,12 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { nextFulfilmentActionCode, nextImportAction } from './importActions.js';
 
-// Single source of truth for "what does Import need to do next on a deal" —
-// shared by DealFulfilmentPanel's `can.*` gates, ImportOverview's worklist,
-// and ImportFulfilmentPage (งานนำเข้า, which selects its rows with it). A drift
-// here silently disagrees with the surfaces that perform the mutation (see
-// importActions.js header). It named ProcurementFulfilmentPage until ebaf6888
-// deleted that page.
+// Single source of truth for "what does Import need to do next on a deal" — shared by DealFulfilmentPanel's
+// `can.*` gates, ImportOverview's worklist, and ImportFulfilmentPage (งานนำเข้า, which selects its rows with
+// it).
 describe('nextFulfilmentActionCode', () => {
   // W3-01 (owner ruling 2026-10-29): there is no deal-level "issue the IR" step any more — a deal with
   // no fulfilment status yields no code at all, whatever its status or deposit.
@@ -16,9 +13,9 @@ describe('nextFulfilmentActionCode', () => {
       expect(nextFulfilmentActionCode({ status: 'quotation_issued', fulfillmentStatus: null, paymentStatus })).toBeNull();
     }
   });
-  // The backend's markIrSent/markShipping/markGoodsReceived gate on fulfillmentStatus alone (never
-  // on ticket.status), and the redesigned pricing chain does not always reach quotation_issued — a
-  // deal whose IR is already out must still be advanceable (the buttons used to vanish).
+  // The backend's markIrSent/markShipping/markGoodsReceived gate on fulfillmentStatus alone (never on
+  // ticket.status), and the redesigned pricing chain does not always reach quotation_issued — a deal whose IR is
+  // already out must still be advanceable (the buttons used to vanish).
   it.each([
     ['IR_ISSUED', 'markIrSent'],
     ['IR_SENT', 'markShipping'],
@@ -88,10 +85,8 @@ describe('nextImportAction', () => {
     expect(action.to).toBe('/pricing-requests/4');
   });
 
-  // PR-B REVIEW ROUND 1, S8: IR_ISSUED is the status every IR-TRACKED deal (V184 per-factory)
-  // sits at for its whole tracking period — the old "ส่งคำขอนำเข้าแล้ว" label implied a single
-  // legacy click /fulfilment no longer performs (the real control is a per-factory tracker), so
-  // the label must be the neutral one regardless of what triggered nextImportAction to reach it.
+  // PR-B REVIEW ROUND 1, S8: IR_ISSUED is the status every IR-TRACKED deal sits at for its whole tracking
+  // period.
   it('uses the neutral IR-tracking label for markIrSent, not the legacy "mark sent" wording', () => {
     const ticket = { id: 5, status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED' };
     expect(nextImportAction(ticket)).toEqual({ code: 'markIrSent', label: 'อัปเดตสถานะนำเข้า', to: '/fulfilment' });
@@ -105,12 +100,9 @@ describe('nextImportAction', () => {
     expect(action).toBeNull();
   });
 
-  // PR-B REVIEW ROUND 2, X1: only markIrSent still routes to /fulfilment (its legacy section
-  // lists a non-tracked IR_ISSUED deal with a link out). The rewritten per-factory
-  // ImportFulfilmentPage cannot perform issueImportRequest/markShipping/markGoodsReceived at
-  // all — those three now route to the deal page, where DealFulfilmentPanel still performs
-  // them. This test used to assert all four landed on /fulfilment, back when that page
-  // performed each as a single deal-level click.
+  // PR-B REVIEW ROUND 2, X1: only markIrSent still routes to /fulfilment (its legacy section lists a non-tracked
+  // IR_ISSUED deal with a link out). This test used to assert all four landed on /fulfilment, back when that
+  // page performed each as a single deal-level click.
   it('routes markIrSent to /fulfilment and the other three legacy codes to import\'s own deal page (never /tickets/:id, which import can no longer open)', () => {
     const cases = [
       ['IR_ISSUED', 'markIrSent', 'อัปเดตสถานะนำเข้า', '/fulfilment'],
@@ -123,14 +115,8 @@ describe('nextImportAction', () => {
     });
   });
 
-  // Owner ruling 2026-08-17: stages 13-14 (ส่งมอบสินค้า) are Sales's now. This test used to pin an
-  // intermediate state — delivery out of งานนำเข้า's scope but still deep-linked from Import's own
-  // worklist CTA (a '/tickets/:id' route) — superseded by this case: nextFulfilmentActionCode
-  // (tested above) still IDENTIFIES a delivery-ready deal, but nextImportAction must no longer turn
-  // that into a worklist PROMPT for Import at all. Import keeps the write CAPABILITY (additive,
-  // #818) — DealFulfilmentPanel's own hasAction gate is untouched — it just stops being asked.
-  // salesActions.js's own RECORD_DELIVERY bucket is what now surfaces this, reusing
-  // nextFulfilmentActionCode directly rather than a second copy of the status list.
+  // Owner ruling 2026-08-17: stages 13-14 (ส่งมอบสินค้า) are Sales's now. Import keeps the write CAPABILITY
+  // (additive, #818) — DealFulfilmentPanel's own hasAction gate is untouched — it just stops being asked.
   it('returns null for every delivery-ready fulfillmentStatus — Import is no longer prompted to record delivery', () => {
     expect(nextImportAction({ id: 9, status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED' })).toBeNull();
     expect(nextImportAction({ id: 9, status: 'quotation_issued', fulfillmentStatus: 'FROM_STOCK' })).toBeNull();

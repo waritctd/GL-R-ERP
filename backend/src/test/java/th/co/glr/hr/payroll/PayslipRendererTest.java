@@ -61,9 +61,8 @@ class PayslipRendererTest {
 
     @Test
     void footsWithNonTaxableIncomeAndLeaveRefundCredit() throws Exception {
-        // gross 30,000 + non-taxable 2,000 = earnings total 32,000
-        // deductions: unpaidLeave 1,500 − refund 500 + sso 875 + กยศ 1,000 = 2,875
-        // net = 30,000 − 2,875 + 2,000 = 29,125
+        // gross 30,000 + non-taxable 2,000 = earnings total 32,000 deductions: unpaidLeave 1,500 − refund 500 + sso
+        // 875 + กยศ 1,000 = 2,875 net = 30,000 − 2,875 + 2,000 = 29,125
         PayrollLineDto line = new PayrollLineDto(
             1L, 7L, "GLR-07", "ทดสอบ สอง", "AC-บัญชี", "ธ.", "1",
             money("30000.00"), money("1000.00"), money("125.00"),
@@ -115,36 +114,20 @@ class PayslipRendererTest {
         );
     }
 
-    /**
-     * The over-withholding notice must reach the RENDERED PDF, not merely the DTO.
-     *
-     * <p>Review found `excessWithheldToDate` computed correctly and consumed by nothing at the time — the only
-     * signal of the branch's largest defect, visible to no one. Without it a stranded excess appears
-     * on the payslip as a 0.00 ภาษี line, indistinguishable from "no tax was due this month". Asserted
-     * through PDFTextStripper because that is the only thing that proves the employee can actually
-     * read it: an earlier "visible on the payslip" claim was true of the string and false of the page,
-     * where the text was drawn ~900pt past the right edge.
-     */
-    /**
-     * DECEMBER: the over-withholding is final, so the payslip may state plainly that payroll cannot
-     * return it and name the ภ.ง.ด.91 route.
-     *
-     * <p>Asserted through PDFTextStripper rather than on the DTO, deliberately: an earlier "visible on
-     * the payslip" claim was true of the string and false of the page, because the text was drawn ~900pt
-     * past the right edge. Reading it back out of the rendered PDF is the only thing that proves an
-     * employee can see it.
-     */
+    /** The over-withholding notice must reach the RENDERED PDF, not merely the DTO. Review found
+     * `excessWithheldToDate` computed correctly and consumed by nothing at the time — the only signal of the
+     * branch's largest defect, visible to no one. */
+    /** DECEMBER: the over-withholding is final, so the payslip may state plainly that payroll cannot return it and
+     * name the ภ.ง.ด.91 route. Reading it back out of the rendered PDF is the only thing that proves an employee
+     * can see it. */
     @Test
     void anOverWithheldEmployeeIsToldSoOnTheFinalPayslipOfTheYear() throws Exception {
         PayrollLineDto line = lineWithExcessWithheld(new BigDecimal("17527.51"));
         String text = extractText(renderer.toPdf(line, periodForMonth(line, 12)));
 
-        // P2 fix (Opus review, 2026-07-30): F3 re-activated a payslip line the owner forbade at spec
-        // section 8: "Do not print the excess amount." The notice text moved to the owner-approved
-        // wording verbatim, which states neither a figure nor "เกินภาษีที่ต้องเสียทั้งปี" -- it names
-        // WHY December's withholding differs (a year-end true-up) without ever quantifying the excess.
-        // excessWithheldToDate is still computed and persisted (F3's own contribution, untouched) for
-        // the ภ.ง.ด.1 working papers -- only what gets PRINTED changed here.
+        // F3 re-activated a payslip line the owner forbade at spec section 8: "Do not print the excess amount." The
+        // notice text moved to the owner-approved wording verbatim, which states neither a figure nor
+        // "เกินภาษีที่ต้องเสียทั้งปี".
         assertThat(text).contains("ภาษีหัก ณ ที่จ่ายเดือนธันวาคมเป็นการปรับปรุงยอดปลายปี");
         assertThat(text)
             .as("spec section 8 forbids printing the excess baht figure, even in the final period")
@@ -155,15 +138,8 @@ class PayslipRendererTest {
             .contains("ภ.ง.ด.91");
     }
 
-    /**
-     * MID-YEAR: the same figure is only an estimate — later periods can still absorb it by withholding
-     * less — so the payslip must NOT assert it is unrecoverable.
-     *
-     * <p>Review built the case that forced this: a March commission spike produced a notice from April
-     * onward whose amount later periods then returned in full. Telling an employee on a payroll document
-     * that a named sum "ไม่สามารถคืนผ่านระบบเงินเดือนได้" when payroll subsequently returns it is a false
-     * statement they could carry onto a ภ.ง.ด.91.
-     */
+    /** MID-YEAR: the same figure is only an estimate — later periods can still absorb it by withholding less — so
+     * the payslip must NOT assert it is unrecoverable. */
     @Test
     void aMidYearOverWithholdingIsReportedAsProvisionalNotFinal() throws Exception {
         PayrollLineDto line = lineWithExcessWithheld(new BigDecimal("17527.51"));
@@ -172,8 +148,8 @@ class PayslipRendererTest {
         assertThat(text)
             .as("mid-year the figure is an estimate and must be labelled as one")
             .contains("ประมาณการ");
-        // P2 fix (Opus review, 2026-07-30): spec section 8 forbids printing the excess baht figure at
-        // all, in any month -- see the December test's own comment above for the full reasoning.
+        // spec section 8 forbids printing the excess baht figure at all, in any month -- see the December test's own
+        // comment above for the full reasoning.
         assertThat(text)
             .as("spec section 8 forbids printing the excess baht figure")
             .doesNotContain("17,527.51");

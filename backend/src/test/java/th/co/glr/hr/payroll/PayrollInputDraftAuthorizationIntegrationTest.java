@@ -25,23 +25,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Payroll input draft (2026-07-30): verifies {@code GET/PUT /api/payroll/input-draft} on top of
- * the real {@code SecurityFilterChain} -- HR reaches both, CEO reaches only the GET (view), any
- * other role is rejected (403) from both. Written wrong-way-round -- the assertions that matter
- * are the roles that must NOT reach it.
- *
- * <p>No NEW authorization decision is introduced here: both endpoints reuse
- * {@link PayrollService}'s existing {@code PAYROLL_VIEW_ROLES} (hr, ceo) / {@code
- * PAYROLL_EDIT_ROLES} (hr) gate verbatim -- the identical split already enforced for
- * tax-allowances/ytd-seed/component-tax-treatments and (for the GET side)
- * {@code suggested-inputs}, mirrored via {@code @PreAuthorize("hasAnyRole('HR','CEO')")} /
- * {@code @PreAuthorize("hasRole('HR')")} on {@link PayrollController}. This test class exists so
- * that reuse is proven against the real filter chain rather than merely asserted by inspection,
- * mirroring {@link PayrollSuggestedInputsAuthorizationIntegrationTest}'s pattern exactly (new test
- * class, real Postgres via {@link PostgresTestSupport}, rather than editing a shared file a
- * concurrent branch might also be touching).
- */
+/** Payroll input draft (2026-07-30): verifies GET/PUT /api/payroll/input-draft on top of the real
+ * SecurityFilterChain -- HR reaches both, CEO reaches only the GET (view), any other role is rejected (403)
+ * from both. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -100,19 +86,9 @@ class PayrollInputDraftAuthorizationIntegrationTest {
             .andExpect(status().isUnauthorized());
     }
 
-    /**
-     * Optimistic concurrency (issue #422 follow-up): PUT now REQUIRES {@code If-Match} (428
-     * without it -- see {@code missingIfMatchIsRejectedWith428} below), so the positive case must
-     * GET first to obtain the month's current ETag and thread it through, exactly like the real
-     * frontend does. This also makes the test a genuine round-trip proof of the threading, not
-     * just of the role gate.
-     *
-     * <p>No etag-changed assertion here deliberately: {@code EMPTY_SAVE_BODY} submits zero
-     * employee inputs, so {@code saveInputDrafts} upserts nothing and the month's draft set (and
-     * therefore its token) is unchanged either side of this call -- a real, content-bearing save
-     * changing the token IS covered, thoroughly, by {@code PayrollDraftOptimisticConcurrencyIntegrationTest}.
-     * This class's job is the role gate and the threading, not draft content.
-     */
+    /** Optimistic concurrency (issue #422 follow-up): PUT now REQUIRES If-Match (428 without it -- see
+     * missingIfMatchIsRejectedWith428 below), so the positive case must GET first to obtain the month's current
+     * ETag and thread it through, exactly like the real frontend does. */
     @Test
     void hrCanSaveTheDraft() throws Exception {
         MockHttpSession hrSession = sessionFor("hr");
@@ -129,12 +105,9 @@ class PayrollInputDraftAuthorizationIntegrationTest {
             .andExpect(status().isOk());
     }
 
-    /**
-     * Optimistic concurrency (issue #422 follow-up): a missing {@code If-Match} is refused with
-     * 428, never silently allowed -- that headerless write is exactly the hole this feature
-     * closes (see PayrollService#saveInputDraft's javadoc). Distinct from the role-gate tests
-     * below: HR *is* authorized here, and is refused anyway, on a purely precondition ground.
-     */
+    /** Optimistic concurrency (issue #422 follow-up): a missing If-Match is refused with 428, never silently
+     * allowed -- that headerless write is exactly the hole this feature closes (see
+     * PayrollService#saveInputDraft's javadoc). */
     @Test
     void missingIfMatchIsRejectedWith428() throws Exception {
         mvc.perform(put("/api/payroll/input-draft")

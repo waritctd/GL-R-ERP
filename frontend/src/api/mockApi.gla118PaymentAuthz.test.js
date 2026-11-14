@@ -1,27 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// GLA-118 review fix 2: "Mock tests must pin the gates. Today they don't: two mutations
-// survived." — the backend's DepositPolicyAuthzIntegrationTest / PaymentRecordingAuthzIntegrationTest
-// are the real evidence (real Java service, real Postgres); this file pins the MOCK's own gates so
-// a future edit to mockApi.js's role checks cannot silently drift back to more-permissive-than-
-// production without a red test here. Per CLAUDE.md, this is NOT authz evidence on its own — the
-// mock's authorization is never authoritative — it only proves the mock's plumbing matches the
-// rules it claims to mirror.
-//
-// Seed deal 19 (demoSales.js) is owned by the `sales` quick-login rep (id 6) and sits at
-// DEPOSIT_NOTICE_ISSUED with a real payable amount (quotationTotal 486,000) — reused across every
-// refusal case below because every gate under test does its role check BEFORE touching the ticket
-// (hasRole/requireDepositPolicyOwner run first), so a refusal never mutates it. Seed deal 20 is a
-// second DEPOSIT_NOTICE_ISSUED deal, also owned by the same rep, reserved for the one test that
-// DOES need to mutate a ticket (the account recordPayment grant), so ticket 19 stays untouched for
-// every other case in this file.
+// GLA-118 review fix 2: "Mock tests must pin the gates. Per CLAUDE.md, this is NOT authz evidence on its own —
+// the mock's authorization is never authoritative — it only proves the mock's plumbing matches the rules it
+// claims to mirror.
 const NOTICE_ISSUED_TICKET_ID = 19;
 const NOTICE_ISSUED_TICKET_ID_2 = 20;
 
-// A second seeded `sales`-role user (demoData.js id 12) — needed because `api.auth.login({role:
-// 'sales'})` always resolves to the SAME single quick-login persona (id 6, ticket 19's owner), so
-// "a non-owning sales rep" cannot be reached by role alone.
+// A second seeded `sales`-role user (demoData.js id 12) — needed because `api.auth.login({role: 'sales'})`
+// always resolves to the SAME single quick-login persona (id 6, ticket 19's owner), so "a non-owning sales
+// rep" cannot be reached by role alone.
 const OTHER_SALES_REP = { email: 'sales2@glr.co.th', password: 'demo1234' };
 
 async function loginRole(role) {
@@ -53,9 +41,9 @@ describe('mockApi.tickets.setDepositPolicy — GLA-118 role gate (rule B)', () =
       api.tickets.setDepositPolicy(NOTICE_ISSUED_TICKET_ID, { policy: 'WAIVED', reason: 'sales อื่นขอเอง' }),
     ).rejects.toMatchObject({ status: 403 });
 
-    // get() is itself owner-scoped for a `sales` actor (a non-owning rep can't even READ someone
-    // else's deal) — switch back to a role that can view it before the final assertion.
-    // H1 lockdown: account no longer reads /tickets/{id} -- read it back as the ceo.
+    // get() is itself owner-scoped for a `sales` actor (a non-owning rep can't even READ someone else's deal) —
+    // switch back to a role that can view it before the final assertion. H1 lockdown: account no longer reads
+    // /tickets/{id} -- read it back as the ceo.
     await loginRole('ceo');
     const { ticket: after } = await api.tickets.get(NOTICE_ISSUED_TICKET_ID);
     expect(after.summary.depositPolicy).toBe(before.summary.depositPolicy);
@@ -87,9 +75,8 @@ describe('mockApi.tickets.setDepositPolicy — GLA-118 role gate (rule B)', () =
     });
     expect(afterOwner.summary.depositPolicy).toBe('WAIVED');
 
-    // sales_manager, as a backup, ALSO grants — Rule B (owner ruling 2026-09-20, part B). The
-    // ticket's paymentStatus is still null (setDepositPolicy never touches it), so Rule 4 does not
-    // block this second write.
+    // sales_manager, as a backup, ALSO grants — Rule B (owner ruling 2026-09-20, part B). The ticket's
+    // paymentStatus is still null (setDepositPolicy never touches it), so Rule 4 does not block this second write.
     await loginRole('sales_manager');
     const { ticket: afterManager } = await api.tickets.setDepositPolicy(id, {
       policy: 'CREDIT_CUSTOMER', reason: 'sales_manager สำรอง',

@@ -25,9 +25,9 @@ describe('QuotationPlainItemRow (v3 S2)', () => {
     expect(screen.queryByText(/เผื่อ/)).toBeNull();
   });
 
-  // D1 (owner decision, 2026-09-16): a สินค้า/บริการอื่น row (sanitaryware) may carry an OPTIONAL
-  // import lead time — her reference document QN6900971-4 prints "ระยะเวลานำเข้า 75-90 วัน" against
-  // exactly this kind of row. Mirrors QuotationItemRow's own tile lead-time control.
+  // D1 (owner decision, 2026-09-16): a สินค้า/บริการอื่น row (sanitaryware) may carry an OPTIONAL import lead
+  // time — her reference document QN6900971-4 prints "ระยะเวลานำเข้า 75-90 วัน" against exactly this kind of
+  // row. Mirrors QuotationItemRow's own tile lead-time control.
   it('offers an OPTIONAL ระยะเวลานำเข้า (วัน) min–max input, blank by default', () => {
     renderRow();
     expect(screen.getByLabelText(/^ระยะเวลานำเข้า/).value).toBe('');

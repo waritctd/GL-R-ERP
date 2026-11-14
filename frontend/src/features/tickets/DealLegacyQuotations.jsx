@@ -1,23 +1,13 @@
-// DealLegacyQuotations — extracted verbatim from TicketDetailPage.jsx in the
-// ticket-workspace IA rebuild (ia-extract Slice C1, "extract two panels out
-// of TicketDetailPage"). This is a pure move: the JSX, its comments, and the
-// row markup are unchanged from the "quotations" tab's ใบเสนอราคา (เอกสารเดิม)
-// section — only the plumbing (props in, formatting helpers imported
-// directly like the parent already did, `docStatusColors` moved alongside
-// its only caller) changed so this block could live in its own file. It
-// holds NO state of its own: `quotationGroups` is computed by the parent,
-// and the download click still calls back into the parent's
-// `downloadingQuotationKey`/`handleDownloadQuotation` state and mutation.
+// DealLegacyQuotations — extracted verbatim from TicketDetailPage.jsx in the ticket-workspace IA rebuild
+// (ia-extract Slice C1, "extract two panels out of TicketDetailPage").
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { formatMoney, formatThaiDate, quotationStatusLabel } from '../../utils/format.js';
 
-// Quotation revision docStatus (DRAFT / ISSUED / SUPERSEDED) mapped onto the same
-// success/info/neutral tokens StatusBadge uses, instead of one-off hex per state.
-// Previously SUPERSEDED text used Ink Faint (#94a3b8), below the DESIGN.md Ink Muted
-// contrast floor on a light background — this switches it to --color-icon-muted.
+// Quotation revision docStatus (DRAFT / ISSUED / SUPERSEDED) mapped onto the same success/info/neutral tokens
+// StatusBadge uses, instead of one-off hex per state.
 function docStatusColors(docStatus) {
   if (docStatus === 'SUPERSEDED') {
     return { background: 'var(--color-surface-subtle)', color: 'var(--color-icon-muted)' };
@@ -32,11 +22,9 @@ export function DealLegacyQuotations({ quotationGroups, downloadingQuotationKey,
   if (quotationGroups.length === 0) return null;
   return (
     <Panel title="ใบเสนอราคา (เอกสารเดิม)">
-      {/* Ticket-native quotation generate/mark-sent/accepted/rejected is retired
-          (Phase 2 Slice S1/S2 — see docs/agent-handoffs/104): these rows predate the
-          PricingRequest/CustomerQuotation redesign (pricing_request_id IS NULL) and
-          stay visible read-only/download-only so the 3 legacy deals' history isn't
-          stranded. New quotations live in DealQuotationPanel above. */}
+      {/* Ticket-native quotation generate/mark-sent/accepted/rejected is retired: these rows predate the
+       * PricingRequest/CustomerQuotation redesign and stay visible read-only/download-only so the 3 legacy deals'
+       * history isn't stranded. New quotations live in DealQuotationPanel above. */}
       {quotationGroups.map((group) => (
         <div key={group.recipientType} style={{ borderTop: '1px solid var(--color-surface-subtle)' }}>
           <div style={{ padding: '12px 18px 6px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>

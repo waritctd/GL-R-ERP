@@ -14,11 +14,8 @@ import { Icon } from './Icon.jsx';
 import { Skeleton } from './Skeleton.jsx';
 import { Panel } from './Layout.jsx';
 
-/**
- * Formalized `SortHeader` (lifted from TicketListPage) — a clickable
- * `columnheader` cell for sortable columns. Styled via `.sort-header` /
- * `.is-active` in styles.css (no inline hex).
- */
+/** Formalized `SortHeader` (lifted from TicketListPage) — a clickable `columnheader` cell for sortable columns.
+ * Styled via `.sort-header` / `.is-active` in styles.css (no inline hex). */
 function SortHeader({ label, active, dir, onSort }) {
   return (
     <button
@@ -47,43 +44,18 @@ function defaultCompare(a, b) {
   return String(a).localeCompare(String(b), 'th');
 }
 
-/**
- * A comparable value for a column that has no `sortAccessor`, derived from what its `render`
- * actually produces.
- *
- * Sorting used to fall back to `render` itself, so any column whose render returns a React ELEMENT
- * handed `defaultCompare` two objects; both stringified to "[object Object]", every comparison
- * returned 0, and the sort was a no-op. The failure was silent and looked like success — the header
- * still took `aria-sort="ascending"` and its active styling while the rows sat still. Measured on
- * /quotations: เลขที่, ยอดรวม and สถานะ all reported ascending and did not move; วันที่ worked only
- * because its render happened to return a bare string. Eight columns across five pages were affected
- * (also HolidaysTab, WorkSchedulesTab, PricingRequestQueuePage and TaxAllowanceReviewPage).
- *
- * Two steps, and the order matters:
- *   1. flatten the element to its text, which is what the reader sees and therefore what they expect
- *      to be sorting by;
- *   2. if that text is a formatted NUMBER, compare it as one. Text alone is not enough — money
- *      renders as `฿1,790,714.29`, and comparing that against `฿600,616.00` as text puts the larger
- *      figure first, which is a wrong answer rather than a missing one.
- *
- * Deliberately confined to the fallback path. A column that supplies its own `sortAccessor` keeps
- * exactly its current behaviour, so this cannot re-order anything that was already sorting correctly.
- */
+/** A comparable value for a column that has no `sortAccessor`, derived from what its `render` actually
+ * produces. Measured on /quotations: เลขที่, ยอดรวม and สถานะ all reported ascending and did not move; วันที่
+ * worked only because its render happened to return a bare string. */
 function comparableFromRendered(rendered, columnKey) {
-  // Review raised a Date regression here — `defaultCompare` compares Dates chronologically and
-  // flattening one to text would sort it by WEEKDAY NAME. Checked, and it cannot happen: a `render`
-  // returning a bare Date makes React throw "Objects are not valid as a React child" before any of
-  // this runs, so no column can have that shape. A Date reaches the comparator only through
-  // `sortAccessor` (TicketListPage does exactly that), which is the untouched path. No guard added,
-  // because a guard nothing can reach is a guard nothing can test.
+  // Review raised a Date regression here — `defaultCompare` compares Dates chronologically and flattening one to
+  // text would sort it by WEEKDAY NAME. A Date reaches the comparator only through `sortAccessor`
+  // (TicketListPage does exactly that), which is the untouched path.
   const text = textFromRendered(rendered);
 
-  // ⚠️ KNOWN LIMIT, and it is the original bug in a new disguise. `textFromRendered` reads an
-  // element's CHILDREN, so a component that carries its content in a PROP instead — PayrollPage's
-  // `MoneyCode({ value })` is exactly this shape — flattens to '' for every row, every comparison
-  // ties, and the sort is a silent no-op again. Nothing can recover the text from an arbitrary
-  // prop, so the honest move is to make the failure loud instead of silent: such a column needs its
-  // own `sortAccessor`. No current column without an accessor has this shape.
+  // ⚠️ KNOWN LIMIT, and it is the original bug in a new disguise. Nothing can recover the text from an arbitrary
+  // prop, so the honest move is to make the failure loud instead of silent: such a column needs its own
+  // `sortAccessor`.
   if (text === '' && isValidElement(rendered) && rendered.props?.children === undefined) {
     warnUnsortableOnce(columnKey, rendered);
   }
@@ -107,14 +79,8 @@ function warnUnsortableOnce(columnKey, rendered) {
   );
 }
 
-/**
- * `"฿1,790,714.29"` → `1790714.29`; `"12.5%"` → `12.5`; `"อนุมัติแล้ว"` → null.
- *
- * Only currency symbols, thousands separators, percent signs and surrounding whitespace are
- * stripped. Anything else left over means this is text that merely contains digits — a document
- * number like `QT-2026-0005-2`, a size like `60x120` — and it must stay text, or the sort silently
- * changes meaning.
- */
+/** `"฿1,790,714.29"` → `1790714.29`; `"12.5%"` → `12.5`; `"อนุมัติแล้ว"` → null. Only currency symbols,
+ * thousands separators, percent signs and surrounding whitespace are stripped. */
 function numericFromFormatted(text) {
   if (typeof text !== 'string') return null;
   const stripped = text.replace(/[\s,\u00a0฿%$]/g, '');
@@ -131,18 +97,9 @@ function textFromRendered(value) {
   return String(value);
 }
 
-// Elements a row-level click handler must defer to instead of hijacking — a
-// button, link (e.g. the identity-cell `<Link>` a caller renders per FIX A),
-// or form control nested in a cell should fire its own handler/navigation,
-// not the row's `onRowClick`. FIX F8 (review-remediation): also covers
-// `label`/`summary`/`option`, the ARIA roles a screen-reader user could land
-// on with a click (`link`/`checkbox`/`menuitem`), and an explicitly
-// focusable `[tabindex]` element — but NOT `tabindex="-1"` specifically:
-// that value means "programmatically focusable, not in the tab order" (e.g.
-// a wrapper a caller focuses imperatively after some action), not "this is a
-// real interactive control the row must defer to". Treating it as
-// interactive would silently kill row activation for any row that happens to
-// contain one, so it is carved out of the selector.
+// Elements a row-level click handler must defer to instead of hijacking — a button, link (e.g. the
+// identity-cell `<Link>` a caller renders per FIX A), or form control nested in a cell should fire its own
+// handler/navigation, not the row's `onRowClick`.
 const INTERACTIVE_SELECTOR = [
   'button',
   'a[href]',
@@ -164,24 +121,15 @@ function isInteractiveTarget(target, boundary) {
   if (typeof target?.closest !== 'function') return false;
   const match = target.closest(INTERACTIVE_SELECTOR);
   if (!match) return false;
-  // FIX F8: `closest()` walks all the way up to the document root, not just
-  // to `boundary` (the row) — the old `match !== boundary` check only ever
-  // excluded the row matching itself (which it never does), so a match found
-  // *outside* the row (e.g. some ancestor toolbar button) would incorrectly
-  // suppress row activation. Require the match to actually be inside the row.
+  // FIX F8: `closest` walks all the way up to the document root, not just to `boundary` — the old `match !==
+  // boundary` check only ever excluded the row matching itself, so a match found outside* the row would
+  // incorrectly suppress row activation. Require the match to actually be inside the row.
   return match !== boundary && typeof boundary?.contains === 'function' && boundary.contains(match);
 }
 
-// Leave-surface IA rebuild Phase A1: every existing `renderExpanded` caller (AttendancePage,
-// CommissionPage, TaxAllowanceReviewPage) sets `aria-expanded` on its own toggle button but has no
-// way to also set `aria-controls`, because the expanded region DataTable renders (the desktop `<tr
-// class="data-table-expanded-row">`'s `<td>`, and the mobile card's own expanded wrapper) never
-// carried an `id` for the button to point at -- so the disclosure relationship was only ever half
-// wired. Exporting one deterministic id-from-row-key formula, applied to BOTH the desktop and mobile
-// expanded wrappers below, lets every caller (present and future) do
-// `aria-controls={expandedRowRegionId(getRowKey(row))}` on its own toggle without DataTable needing
-// to know anything about how that toggle is rendered. Fixed here once, in the shared primitive, so
-// every consumer benefits instead of each page re-deriving its own id scheme.
+// Leave-surface IA rebuild Phase A1: every existing `renderExpanded` caller sets `aria-expanded` on its own
+// toggle button but has no way to also set `aria-controls`, because the expanded region DataTable renders
+// never carried an `id` for the button to point at.
 export function expandedRowRegionId(rowKey) {
   return `data-table-expanded-${String(rowKey).replace(/[^a-zA-Z0-9_-]/g, '-')}`;
 }
@@ -206,12 +154,9 @@ function buildCsv(columns, rows) {
   return lines.join('\r\n');
 }
 
-// FIX F9: this used to be two different strings — 'ไม่มีข้อมูลที่จะแสดง' for
-// the sr-only zero-row announcement and 'ไม่พบข้อมูล' for the EmptyState
-// fallback title — despite meaning the same thing and being unreachable in
-// practice today (every current caller passes its own `emptyState.title`).
-// One shared constant so a future caller that omits `emptyState.title` gets
-// the same wording in both places instead of a silent mismatch.
+// FIX F9: this used to be two different strings — 'ไม่มีข้อมูลที่จะแสดง' for the sr-only zero-row announcement
+// and 'ไม่พบข้อมูล' for the EmptyState fallback title — despite meaning the same thing and being unreachable
+// in practice today (every current caller passes its own `emptyState.title`).
 const DEFAULT_EMPTY_MESSAGE = 'ไม่พบข้อมูล';
 
 function downloadCsv(csv, filename = 'data-table-export.csv') {
@@ -227,29 +172,16 @@ function downloadCsv(csv, filename = 'data-table-export.csv') {
 // Production logs the missing-grid misuse once per page load, not on every render.
 let warnedMissingGrid = false;
 
-/**
- * Generic, controlled-data table primitive. Keeps emitting the exact
- * `{gridClassName} table-head` / `{gridClassName} data-row` classes the
- * per-page `grid-template-columns` CSS keys off, while formalizing sorting,
- * in-table search, client pagination, loading skeletons, and an empty state.
- *
- * `rows` should already reflect any page-level filters (status tabs, date
- * range, etc.) — this component only owns search/sort/pagination on top of
- * whatever it's given.
- */
+/** Generic, controlled-data table primitive. `rows` should already reflect any page-level filters (status tabs,
+ * date range, etc.) — this component only owns search/sort/pagination on top of whatever it's given. */
 export function DataTable({
   columns,
   rows,
   getRowKey,
   gridClassName,
-  // Applied to the card wrapper. Exists because the wrapper used to be a
-  // `.table-panel`, which let a page constrain it from CSS —
-  // `.payroll-table-region .table-panel { max-height: min(68vh,760px);
-  // overflow: auto }` was the only such caller. Once the wrapper became
-  // `<Panel flush>` that selector stopped matching and the payroll table
-  // silently lost its scroll region, growing unbounded instead. A prop keeps
-  // that reachable without a page-specific CSS rule reaching into a shared
-  // component's markup.
+  // Applied to the card wrapper. Exists because the wrapper used to be a `.table-panel`, which let a page
+  // constrain it from CSS — `.payroll-table-region .table-panel { max-height: min(68vh,760px); overflow: auto }`
+  // was the only such caller.
   panelClassName,
   pageSize = 20,
   searchable = false,
@@ -264,19 +196,13 @@ export function DataTable({
   retryLabel = 'ลองอีกครั้ง',
   onRetry,
   emptyState,
-  // Opt-in: keep the desktop <thead> mounted even when the (filtered) result is empty, rendering
-  // the empty-state message BELOW it instead of replacing the whole table. Needed when a caller
-  // puts an interactive control (a filter dropdown) INSIDE a column header — without this, a
-  // filter that narrows to zero rows would unmount its own control and trap the user in the empty
-  // state. Default false, so every existing caller keeps the full-table EmptyState swap unchanged.
+  // Opt-in: keep the desktop <thead> mounted even when the (filtered) result is empty, rendering the empty-state
+  // message BELOW it instead of replacing the whole table. Default false, so every existing caller keeps the
+  // full-table EmptyState swap unchanged.
   retainHeaderWhenEmpty = false,
-  // FIX G: the pre-DataTable `.ticket-result-count` band showed "ตรงเงื่อนไข
-  // N จาก M รายการ" (N matched out of M total), so a filter's own effect
-  // (how much it hid) stayed visible. This footer's own N (`sortedRows.length`
-  // below) already states "matched", but folding that band into this footer
-  // dropped M — the caller can pass its unfiltered population size here to
-  // restore it as an appended "(กรองจาก M)" clause. Omit it, or pass a value
-  // equal to the matched count, to render the footer exactly as before.
+  // FIX G: the pre-DataTable `.ticket-result-count` band showed "ตรงเงื่อนไข N จาก M รายการ" (N matched out of M
+  // total), so a filter's own effect (how much it hid) stayed visible. Omit it, or pass a value equal to the
+  // matched count, to render the footer exactly as before.
   unfilteredTotal,
   initialSort,
   sort,
@@ -287,43 +213,24 @@ export function DataTable({
   exportable = false,
   onExportCsv,
   mobileCard,
-  // Optional per-row detail panel. Return an element to expand that row, null to leave it
-  // collapsed. Callers should expose their own explicit expand/open control.
+  // Optional per-row detail panel. Return an element to expand that row, null to leave it collapsed. Callers
+  // should expose their own explicit expand/open control.
   renderExpanded,
-  // Optional semantic table footer. Receives the filtered/sorted rows before pagination so callers
-  // can reconcile the full visible result set, not just the current page.
+  // Optional semantic table footer. Receives the filtered/sorted rows before pagination so callers can reconcile
+  // the full visible result set, not just the current page.
   footerRow,
   showPagination = true,
-  // Optional row-level navigation/activation. Purely additive and default-off:
-  // every existing caller that omits this prop renders and behaves exactly as
-  // before. When provided, clicking the desktop `<tr>` (outside of a nested
-  // interactive control) fires `onRowClick` as a *mouse-only convenience* —
-  // it is not a keyboard or assistive-tech affordance. `role="button"` on a
-  // `<tr>` is a "Children Presentational: True" role in ARIA 1.2: it prunes
-  // every descendant (customer name, badges, the stage cell, etc.) from the
-  // accessibility tree and replaces name computation with a single
-  // `aria-label`, so an earlier version of this component that gave the row
-  // that role/tabIndex/keydown made every other cell unreachable to a screen
-  // reader (FIX A). The caller is expected to render a real `<Link>` in its
-  // identity column instead — that is the keyboard and assistive-tech
-  // activation target, and it also gives touch/tablet users (721–1040px,
-  // where there is no hover) a visible affordance that the row opens
-  // something. Scoped to the desktop table only: the mobile card list
-  // (`mobileCard`) already expects callers to give each card its own
-  // explicit open affordance (see e.g. TicketListPage's `DealOpenButton`).
+  // Optional row-level navigation/activation. When provided, clicking the desktop `<tr>` (outside of a nested
+  // interactive control) fires `onRowClick` as a *mouse-only convenience* — it is not a keyboard or
+  // assistive-tech affordance.
   onRowClick,
-  // Optional row selection. Unlike `onRowClick` navigation above, selection is
-  // a stateful table interaction: the row itself becomes focusable and exposes
-  // `aria-current` (see the render below for why not `aria-selected`) so callers
-  // can use the whole row as the selection target without hiding the cells
-  // behind a `role="button"` name. Only one selectable row sits in the Tab
-  // order at a time; ArrowUp/ArrowDown/Home/End move focus within the rows.
+  // Optional row selection. Only one selectable row sits in the Tab order at a time; ArrowUp/ArrowDown/Home/End
+  // move focus within the rows.
   onRowSelect,
   isRowSelected,
-  // Overlay/detail callers can opt into focusing the clicked row before the
-  // detail opens so a dialog focus-restoration hook has the row as its origin.
-  // Persistent side panels should leave this false so mouse clicks do not
-  // steal focus from the user's current toolbar/control.
+  // Overlay/detail callers can opt into focusing the clicked row before the detail opens so a dialog
+  // focus-restoration hook has the row as its origin. Persistent side panels should leave this false so mouse
+  // clicks do not steal focus from the user's current toolbar/control.
   focusRowOnSelectClick = false,
 }) {
   // `.data-row` is `display: grid`; with no template every cell stacks full-width in one column.
@@ -335,25 +242,21 @@ export function DataTable({
       console.error(message);
     }
   }
-  // Below 720px a dense grid crushes every column into an unreadable stub
-  // (ids as "PR-…", clipped badges). When a page supplies `mobileCard`, render
-  // that instead of the column cells. Search/sort/pagination act on data, not
-  // markup, so they are unaffected.
+  // Below 720px a dense grid crushes every column into an unreadable stub (ids as "PR-…", clipped badges). When
+  // a page supplies `mobileCard`, render that instead of the column cells. Search/sort/pagination act on data,
+  // not markup, so they are unaffected.
   const isMobile = useIsMobile();
   const asCards = isMobile && typeof mobileCard === 'function';
-  // Optional controlled search: when the caller passes `searchValue` (and
-  // typically `onSearchChange`, e.g. to mirror it into a URL query param),
-  // this component defers to it instead of owning the text itself. Omitting
+  // Optional controlled search: when the caller passes `searchValue` (and typically `onSearchChange`, e.g. to
+  // mirror it into a URL query param), this component defers to it instead of owning the text itself. Omitting
   // both keeps every other caller's existing uncontrolled behavior unchanged.
   const isControlledSearch = searchValue !== undefined;
   const [internalSearch, setInternalSearch] = useState('');
   const search = isControlledSearch ? searchValue : internalSearch;
   const setSearch = isControlledSearch ? (value) => onSearchChange?.(value) : setInternalSearch;
-  // Optional controlled sort, same contract as the controlled search above:
-  // when the caller passes `sort` (typically mirrored into a URL query param so
-  // header clicks and an out-of-table sort control stay in step), this component
-  // defers to it. Omitting both `sort` and `onSortChange` leaves every existing
-  // caller on the uncontrolled `initialSort` path unchanged.
+  // Optional controlled sort, same contract as the controlled search above: when the caller passes `sort`
+  // (typically mirrored into a URL query param so header clicks and an out-of-table sort control stay in step),
+  // this component defers to it.
   const isControlledSort = sort !== undefined;
   const [internalSorting, setInternalSorting] = useState(
     initialSort?.key ? [{ id: initialSort.key, desc: initialSort.dir === 'desc' }] : [],
@@ -388,9 +291,9 @@ export function DataTable({
     sortingFn: (rowA, rowB, columnId) => {
       const sourceColumn = columnMap.get(columnId);
       if (!sourceColumn) return 0;
-      // NOT `sortAccessor || render` — see comparableFromRendered. Falling back to `render` fed
-      // `defaultCompare` React elements, which compare equal to each other, so the sort silently
-      // did nothing on every column that renders anything richer than a bare string.
+      // NOT `sortAccessor || render` — see comparableFromRendered. Falling back to `render` fed `defaultCompare`
+      // React elements, which compare equal to each other, so the sort silently did nothing on every column that
+      // renders anything richer than a bare string.
       const accessor = typeof sourceColumn.sortAccessor === 'function'
         ? sourceColumn.sortAccessor
         : (row) => comparableFromRendered(sourceColumn.render(row), columnId);
@@ -445,40 +348,20 @@ export function DataTable({
   const to = Math.min(safePage * pageSize, sortedRows.length);
   const hasError = Boolean(error);
   const isZeroRows = !loading && !hasError && sortedRows.length === 0;
-  // FIX B: this used to hardcode "ไม่พบข้อมูลที่ตรงกับตัวกรองที่เลือก" (no
-  // results matching the selected filter) for every consumer, even pages
-  // with no filters at all — e.g. HR opening `/payroll` for a month with no
-  // run yet. Prefer the caller's own `emptyState.title` (already authored
-  // per page for the EmptyState illustration) and fall back to a neutral
-  // message that doesn't assert a filter exists. FIX F9: this is now the
-  // single default "no data" string, shared with the EmptyState fallbacks
-  // below, instead of a second, differently-worded default living there.
+  // FIX B: this used to hardcode "ไม่พบข้อมูลที่ตรงกับตัวกรองที่เลือก" (no results matching the selected filter)
+  // for every consumer, even pages with no filters at all — e.g. HR opening `/payroll` for a month with no run
+  // yet.
   const zeroRowsMessage = emptyState?.title ?? DEFAULT_EMPTY_MESSAGE;
-  // FIX G: only append the filtered-out denominator when the caller passed
-  // one and it actually differs from the matched count — a caller that never
-  // filters (or omits the prop) sees the summary unchanged. Hoisted above
-  // both the live region and the visible footer so both stay in sync. FIX
-  // F7: previously only the visible footer carried this clause, so it
-  // disappeared in exactly the case that matters most — a filter matching
-  // zero rows, i.e. "you filtered 15 down to nothing".
+  // FIX G: only append the filtered-out denominator when the caller passed one and it actually differs from the
+  // matched count — a caller that never filters (or omits the prop) sees the summary unchanged. Hoisted above
+  // both the live region and the visible footer so both stay in sync.
   const filteredNote = unfilteredTotal != null && unfilteredTotal !== sortedRows.length
     ? ` (กรองจาก ${unfilteredTotal})`
     : '';
   const paginationSummary = `แสดง ${from}–${to} จาก ${sortedRows.length} รายการ${filteredNote}`;
-  // FIX F1 (review-remediation): a live region that mounts or unmounts in the
-  // very same render as its own content change is unreliable per the
-  // WAI-ARIA Authoring Practices — a screen reader needs the node present in
-  // the tree *before* the mutation to reliably pick it up. The previous
-  // split design — a conditionally-mounted sr-only `<div>` that only existed
-  // at zero rows, plus `aria-live` on the visible footer `<span>` that only
-  // existed at non-zero rows — meant the two most important transitions
-  // (15 rows -> 0, and 0 -> 15) each unmounted the very node that was
-  // supposed to announce the change, so neither ever fired. Keeping exactly
-  // one always-mounted region sidesteps that: the node persists across every
-  // transition and only its text content changes, which is what `aria-live`
-  // is built to pick up. The visible footer span is no longer a live region
-  // itself (see renderPagination) — it is now purely decorative,
-  // `aria-hidden`, text, so nothing is announced twice in a linear read.
+  // FIX F1 (review-remediation): a live region that mounts or unmounts in the very same render as its own
+  // content change is unreliable per the WAI-ARIA Authoring Practices — a screen reader needs the node present
+  // in the tree *before* the mutation to reliably pick it up.
   const liveRegionText = (loading || hasError)
     ? ''
     : isZeroRows
@@ -515,43 +398,18 @@ export function DataTable({
     setPagination((current) => ({ ...current, pageIndex: 0 }));
   }
 
-  // Mouse-only navigation activation (FIX A/D): `onRowClick` still does not
-  // make the row a keyboard target. Keyboard selection is handled separately
-  // by the explicit `onRowSelect` contract below.
+  // Mouse-only navigation activation (FIX A/D): `onRowClick` still does not make the row a keyboard target.
+  // Keyboard selection is handled separately by the explicit `onRowSelect` contract below.
   function handleRowActivateClick(event, row, activate, rowKey) {
     if (typeof activate !== 'function') return;
-    // FIX F5: `cursor-pointer` advertises the whole row as clickable, so a
-    // cmd/ctrl/shift/alt-click anywhere in the row (not just on the identity
-    // `<Link>`, which already handles this correctly on its own) must bail
-    // out of the row's own same-tab `onRowClick` navigation instead of
-    // hijacking it. This does NOT give the rest of the row the same "open in
-    // a new tab/window" behaviour a real `<a>` would — a modified click that
-    // lands outside the identity `<Link>` simply does nothing at all once it
-    // bails here, which is the correct behaviour (nothing else in the row is
-    // a navigable target) but is not "the same" as the link's own handling.
-    // `event.button !== 0` alongside these modifier checks is dead code in a
-    // `click` handler specifically: a real browser never dispatches `click`
-    // for a middle/right button press (those fire `auxclick`/`contextmenu`
-    // instead), so this branch cannot be reached via genuine user input. It
-    // is left in place only as defense-in-depth against a non-primary click
-    // arriving here some other way (e.g. a synthetic event from a testing
-    // tool or an unusual input device); DataTable.test.jsx's "non-primary
-    // button" case exercises exactly that synthetic scenario, not anything a
-    // browser produces.
+    // FIX F5: `cursor-pointer` advertises the whole row as clickable, so a cmd/ctrl/shift/alt-click anywhere in
+    // the row (not just on the identity `<Link>`, which already handles this correctly on its own) must bail out
+    // of the row's own same-tab `onRowClick` navigation instead of hijacking it.
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if (isInteractiveTarget(event.target, event.currentTarget)) return;
-    // FIX F3: dragging a text selection across a plain-text cell (e.g. the
-    // deal code sub-line) ends in a `click` on mouseup with a non-collapsed
-    // selection still present — letting that fall through to `onRowClick`
-    // would discard the selection and navigate the row away, so there would
-    // be no way to copy any text out of the table. That drag-select case is
-    // what this guard actually protects. Double-clicking to select a word is
-    // NOT protected by it, despite an earlier version of this comment
-    // claiming otherwise: the first click of a double-click fires on mouseup
-    // with the selection still collapsed (word selection only happens after,
-    // on `dblclick`), so it sails through this check and navigates before
-    // the word is ever selected. Bail whenever the click leaves behind a
-    // live (non-collapsed) selection — the case that matters is drag-select.
+    // FIX F3: dragging a text selection across a plain-text cell ends in a `click` on mouseup with a non-collapsed
+    // selection still present — letting that fall through to `onRowClick` would discard the selection and navigate
+    // the row away, so there would be no way to copy any text out of the table.
     const selectionText = typeof window !== 'undefined' && typeof window.getSelection === 'function'
       ? window.getSelection()?.toString()
       : '';
@@ -634,11 +492,9 @@ export function DataTable({
     if (loading || sortedRows.length === 0) return null;
     return (
       <footer className="pagination">
-        {/* FIX F1: no `aria-live` here any more — the single, always-mounted
-            region above the toolbar (see `liveRegionText`) is now the sole
-            spoken status for the table, so this text would otherwise be
-            announced twice in a linear read. `aria-hidden` keeps it a purely
-            visual restatement for sighted users. */}
+        {/* FIX F1: no `aria-live` here any more — the single, always-mounted region above the toolbar (see
+         * `liveRegionText`) is now the sole spoken status for the table, so this text would otherwise be announced
+         * twice in a linear read. `aria-hidden` keeps it a purely visual restatement for sighted users. */}
         <span aria-hidden="true" style={{ fontSize: 13 }}>
           {paginationSummary}
         </span>
@@ -747,10 +603,9 @@ export function DataTable({
         {(loading || sortedRows.length > 0 || (retainHeaderWhenEmpty && !hasError)) ? (
           <table className="data-table-table w-full border-separate border-spacing-0">
             {caption ? <caption className="sr-only">{caption}</caption> : null}
-            {/* `display: block` on thead/tbody/tfoot opts them out of the native table
-                layout algorithm so `.table-head`/`.data-row` (styles.css) can opt back in
-                with `display: grid` and drive column widths from each page's own
-                grid-template-columns. */}
+            {/* `display: block` on thead/tbody/tfoot opts them out of the native table layout algorithm so
+             * `.table-head`/`.data-row` (styles.css) can opt back in with `display: grid` and drive column widths from
+             * each page's own grid-template-columns. */}
             <thead className="block">
               <tr className={`${gridClassName} table-head${stickyHeader ? ' is-sticky' : ''}`}>
                 {columns.map((column) => (
@@ -810,14 +665,9 @@ export function DataTable({
                         } : undefined}
                         className={cn(
                           `${gridClassName} data-row${extraClassName}`,
-                          // `hover:bg-surface-hover` (#fbfcff on a white surface) reads as
-                          // essentially no hover at all — swap to the stronger, already-defined
-                          // `surface-subtle` tone so the affordance is actually visible.
-                          //
-                          // Mouse-only convenience (FIX A): no role/tabIndex/keydown here —
-                          // see the `onRowClick` doc comment above for why. Keyboard
-                          // activation and the row's accessible name now come from the
-                          // caller's own identity-column `<Link>`.
+                          // `hover:bg-surface-hover` (#fbfcff on a white surface) reads as essentially no hover at all — swap to the
+                          // stronger, already-defined `surface-subtle` tone so the affordance is actually visible. Keyboard activation
+                          // and the row's accessible name now come from the caller's own identity-column `<Link>`.
                           (onRowClick || selectable) && 'cursor-pointer transition-colors hover:bg-surface-subtle',
                           selectable && 'is-selectable',
                           selected && 'is-selected',
@@ -825,17 +675,9 @@ export function DataTable({
                         style={style}
                         role={selectable ? 'row' : undefined}
                         tabIndex={selectable ? (currentTabStop ? 0 : -1) : undefined}
-                        // Item 4d fix (2026-07-31): `aria-selected` is only valid ARIA on a row that
-                        // is a descendant of a `grid`/`treegrid` (WAI-ARIA `aria-selected` "Used in
-                        // roles": option, row (grid/treegrid only), tab, ...) -- this is a plain
-                        // `<table>`/`role="row"` with no grid ancestor, so assistive tech is not
-                        // guaranteed to announce it (and implementing a real `grid` here would mean
-                        // full arrow-key grid navigation, out of scope for this fix). `aria-current`
-                        // is a GLOBAL ARIA state valid on any role, and "true"/"false" here reads as
-                        // "the current item in this set of rows" -- a legitimate, valid stand-in that
-                        // needs no markup change beyond the attribute name. The visible "✓ เลือกอยู่"
-                        // text cue callers render in their identity column (e.g. PayrollPage.jsx) is
-                        // unaffected and stays the primary, always-reliable signal either way.
+                        // Item 4d fix: `aria-selected` is only valid ARIA on a row that is a descendant of a `grid`/`treegrid`
+                        // (WAI-ARIA `aria-selected` "Used in roles": option, row, tab, ...) -- this is a plain `<table>`/`role="row"`
+                        // with no grid ancestor, so assistive tech is not guaranteed to announce it.
                         aria-current={selectable ? selected : undefined}
                         onClick={activateRow ? (event) => handleRowActivateClick(event, row, activateRow, key) : undefined}
                         onKeyDown={selectable ? (event) => handleSelectableRowKeyDown(event, row, key) : undefined}
@@ -851,14 +693,8 @@ export function DataTable({
                         ))}
                       </tr>
                       {expanded ? (
-                        // thead/tbody above are `block` (see comment near <thead>), and
-                        // `.table-head`/`.data-row` opt back into `display: grid`. This
-                        // expansion row carries neither class, so leaving it at its default
-                        // `display: table-row` inside a block parent would make the browser
-                        // generate an anonymous shrink-to-fit table around it (width: auto)
-                        // instead of spanning the row (visible on AttendancePage/CommissionPage
-                        // above 720px). Block-level both the row and its cell so the panel
-                        // fills the width.
+                        // thead/tbody above are `block` (see comment near <thead>), and `.table-head`/`.data-row` opt back into
+                        // `display: grid`. Block-level both the row and its cell so the panel fills the width.
                         <tr className="data-table-expanded-row block">
                           <td colSpan={columns.length} className="block w-full p-0 border-0">
                             <div id={expandedRowRegionId(key)} className="border-b border-border bg-surface-subtle px-4 py-3">
@@ -891,10 +727,9 @@ export function DataTable({
 
   return (
     <div className="data-table flex flex-col gap-3">
-      {/* FIX F1: exactly one always-mounted live region for the whole table
-          — see `liveRegionText` above for why it must never conditionally
-          mount/unmount, and why the visible footer span is `aria-hidden`
-          instead of carrying its own `aria-live`. */}
+      {/* FIX F1: exactly one always-mounted live region for the whole table — see `liveRegionText` above for why it
+       * must never conditionally mount/unmount, and why the visible footer span is `aria-hidden` instead of carrying
+       * its own `aria-live`. */}
       <div aria-live="polite" className="sr-only">{liveRegionText}</div>
       {(searchable || toolbarExtra || canExport) ? (
         <div className="data-table-toolbar flex flex-wrap gap-2.5 items-center">

@@ -25,8 +25,8 @@ public class EmployeeService {
     // Dedicated audit channel so PII-access events can be shipped/retained separately (issue #21).
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
     private static final java.util.Set<String> PRIVILEGED_EMPLOYEE_ROLES = java.util.Set.of("hr");
-    // Same business-day zone convention as LeaveService/OvertimeService/etc. -- "now" for payroll
-    // tax-year purposes is Asia/Bangkok, not the server's UTC.
+    // Same business-day zone convention as LeaveService/OvertimeService/etc. -- "now" for payroll tax-year
+    // purposes is Asia/Bangkok, not the server's UTC.
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
 
     private final EmployeeRepository employees;
@@ -35,11 +35,8 @@ public class EmployeeService {
     private final EmployeeAuthRepository employeeAuth;
     private final TemporaryPasswordGenerator temporaryPasswordGenerator;
     private final PasswordEncoder passwordEncoder;
-    // Known risk 3 (task 1 handoff): nothing seeded hr.payroll_component_sso_inclusion for a new
-    // hire, so their SSO wage base read as empty until someone manually ran the seed. Wired here so
-    // every newly-created employee gets the default matrix (TRUE except DIRECTOR_REMUNERATION /
-    // NON_TAXABLE_INCOME) the moment they exist, matching the V96 backfill for employees that
-    // predate this wiring.
+    // Known risk 3 (task 1 handoff): nothing seeded hr.payroll_component_sso_inclusion for a new hire, so their
+    // SSO wage base read as empty until someone manually ran the seed.
     private final PayrollRepository payrollRepository;
 
     public EmployeeService(EmployeeRepository employees, ProfileRequestRepository profileRequests,
@@ -105,12 +102,8 @@ public class EmployeeService {
         long id = employees.create(request);
         int taxYear = java.time.LocalDate.now(BUSINESS_ZONE).getYear();
         payrollRepository.seedSsoInclusionDefaults(id, taxYear, user == null ? null : user.employeeId());
-        // P0 fix (Opus review, 2026-07-30): the withholding-tax classification matrix has the exact
-        // same "new employee gets nothing" gap SSO inclusion had before the call above -- see
-        // PayrollRepository#seedComponentTaxTreatmentDefaults' own javadoc. Without this, a new hire
-        // paid anything beyond bare salary hits PayrollCalculator#calculateClassified's classification
-        // 409 on their very first payroll run, exactly like every pre-existing employee did before the
-        // V100 migration backfill (which only reaches employees that already existed when it ran).
+        // the withholding-tax classification matrix has the exact same "new employee gets nothing" gap SSO inclusion
+        // had before the call above -- see PayrollRepository#seedComponentTaxTreatmentDefaults' own javadoc.
         payrollRepository.seedComponentTaxTreatmentDefaults(id, taxYear, user == null ? null : user.employeeId());
         EmployeeDto created = get(id, user);
         auditService.record(user, "CREATE_EMPLOYEE", "employee", id, null, created);
@@ -126,11 +119,9 @@ public class EmployeeService {
         return after;
     }
 
-    /**
-     * HR-only: issues a fresh random temporary password for the target employee, forcing a change
-     * on next login. Returns the plaintext ONCE for the HR caller to hand over; the plaintext is
-     * never logged or persisted (only its BCrypt hash is stored).
-     */
+    /** HR-only: issues a fresh random temporary password for the target employee, forcing a change on next login.
+     * Returns the plaintext ONCE for the HR caller to hand over; the plaintext is never logged or persisted (only
+     * its BCrypt hash is stored). */
     @Transactional
     public PasswordResetResult resetPassword(long employeeId, UserPrincipal actingUser) {
         if (!employees.exists(employeeId)) {

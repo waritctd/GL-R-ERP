@@ -14,18 +14,8 @@ import org.apache.pdfbox.text.TextPosition;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/**
- * REVIEWER-authored, FOURTH pass. Geometry, not strings.
- *
- * <p>{@code PdfDocumentWriter#textAt} neither paginates nor calls {@code ensureRoom}, and PDFBox
- * draws outside the media box without error. Every previous "it is on the payslip" claim on this
- * branch was asserted with {@link PDFTextStripper#getText}, which reports a glyph whether or not it
- * landed on the page — that is exactly how a note drawn ~900pt past the right edge passed review.
- *
- * <p>These tests therefore assert POSITIONS. The third pass verified vertical headroom WITHOUT the
- * over-withholding notice; the notice adds an unbounded block of prose below the signature line, so
- * the headroom has to be re-verified WITH it, on the biggest payslip the engine can actually produce.
- */
+/** REVIEWER-authored, FOURTH pass. Geometry, not strings. PdfDocumentWriter#textAt neither paginates nor calls
+ * ensureRoom, and PDFBox draws outside the media box without error. These tests therefore assert POSITIONS. */
 class PayslipMaximalLayoutReviewTest {
     private final PayslipRenderer renderer = new PayslipRenderer();
 
@@ -49,8 +39,8 @@ class PayslipMaximalLayoutReviewTest {
 
             assertThat(glyphs).as("the payslip rendered no text at all").isNotEmpty();
 
-            // PDFTextStripper reports y in top-down page space. A glyph below the page bottom has
-            // y > pageHeight; one past the right edge has endX > pageWidth. Both are invisible.
+            // PDFTextStripper reports y in top-down page space. A glyph below the page bottom has y > pageHeight; one past
+            // the right edge has endX > pageWidth. Both are invisible.
             List<String> offPage = new ArrayList<>();
             for (TextPosition glyph : glyphs) {
                 if (glyph.getY() > pageHeight || glyph.getY() < 0
@@ -63,9 +53,8 @@ class PayslipMaximalLayoutReviewTest {
                     + "PDFBox reports no error — this is the failure mode review caught before")
                 .isEmpty();
 
-            // Measured 2026-07-29: the lowest glyph on this maximal payslip sits at y=551 of 841.89,
-            // i.e. 240pt of slack below the bottom margin. Pinned so a future addition below the
-            // signature line cannot quietly eat it.
+            // Measured 2026-07-29: the lowest glyph on this maximal payslip sits at y=551 of 841.89, i.e. 240pt of slack
+            // below the bottom margin. Pinned so a future addition below the signature line cannot quietly eat it.
             float lowest = 0f;
             for (TextPosition glyph : glyphs) {
                 lowest = Math.max(lowest, glyph.getY());
@@ -81,10 +70,8 @@ class PayslipMaximalLayoutReviewTest {
         }
     }
 
-    /**
-     * The notice and the note must both be READABLE, not merely present in the text layer: every
-     * wrapped line has to end inside the right margin.
-     */
+    /** The notice and the note must both be READABLE, not merely present in the text layer: every wrapped line has
+     * to end inside the right margin. */
     @Test
     @DisplayName("the over-withholding notice and the note both wrap inside the printable width")
     void theNoticeAndNoteWrapInsideThePrintableWidth() throws Exception {
@@ -122,13 +109,8 @@ class PayslipMaximalLayoutReviewTest {
         return collected;
     }
 
-    /**
-     * The biggest payslip the engine can produce: all 9 พิเศษ slots populated (F6 fix, Opus review
-     * 2026-07-30 -- พิเศษ 9/ค่าเช่าบ้าน exists since 2026-07-29 and this loop was never widened past
-     * the original 8, so the true worst case had never actually been geometry-checked), plus OT,
-     * commission, the two V94 one-off fields, ค่าตอบแทนกรรมการ and non-taxable income (15 earnings
-     * rows), against all 10 deduction rows.
-     */
+    /** The biggest payslip the engine can produce: all 9 พิเศษ slots populated, plus OT, commission, the two V94
+     * one-off fields, ค่าตอบแทนกรรมการ and non-taxable income, against all 10 deduction rows. */
     private PayrollLineDto maximalLine(BigDecimal excessWithheld, String note) {
         List<PayrollSpecialPayDto> specials = new ArrayList<>();
         for (int slot = 1; slot <= 9; slot += 1) {
@@ -166,15 +148,9 @@ class PayslipMaximalLayoutReviewTest {
 
     private PayrollPeriodDto periodFor(PayrollLineDto line) {
         return new PayrollPeriodDto(
-            // DECEMBER (changed 2026-07-29): the over-withholding notice is gated on the final period
-            // of the year, because mid-year the figure is provisional and later periods can still
-            // absorb it. December is the only month that prints the FINAL wording, which is what the
-            // ภ.ง.ด.91 assertion below needs.
-            //
-            // It is NOT the widest wording -- measured with the real font at 9pt, final = 579.78pt and
-            // provisional = 644.03pt, so the eleven provisional months are the harder geometry case.
-            // An earlier comment here claimed the opposite and used it to justify testing December
-            // only. PayslipProvisionalNoticeGeometryReviewTest covers all eleven.
+            // DECEMBER (changed 2026-07-29): the over-withholding notice is gated on the final period of the year, because
+            // mid-year the figure is provisional and later periods can still absorb it. December is the only month that
+            // prints the FINAL wording, which is what the ภ.ง.ด.91 assertion below needs.
             99L, LocalDate.of(2026, 12, 1), LocalDate.of(2026, 12, 1),
             LocalDate.of(2026, 12, 31), LocalDate.of(2026, 12, 31),
             "PROCESSED", OffsetDateTime.now(), 7L, 1,

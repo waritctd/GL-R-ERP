@@ -18,18 +18,6 @@ function setClock(iso) {
 afterEach(() => { vi.useRealTimers(); });
 
 // Commission page redesign (branch feat/commission-page-redesign), STEP 1: tests first.
-//
-// Pins the rep-facing "ค่าคอมของฉัน" STATEMENT (a ledger that builds the total limb by limb), the
-// receipt ledger under it, the month header that states the M-1 rule, the manager/CEO rep picker
-// that re-uses the same statement, and the HR payroll team-override column.
-//
-// MOCK-DRIVEN: every figure is a stub of the DTO the backend is being extended to return
-// (GET /api/commissions/monthly-summary: rawCommissionableBase, weightUpliftBase, stockBonusAmount,
-// teamOverrideAmount, companyCommissionableBase, teamOverrideThresholdBase,
-// teamOverrideRatePercent). These tests prove PLUMBING AND RENDERING of server figures -- they say
-// nothing about the commission maths (CommissionCalculator / CommissionService own that), and
-// nothing about who may call which endpoint (the "wrong-way" cases below pin what the UI OFFERS a
-// role, not what the Java service ENFORCES; authz stays UNVERIFIED here).
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   return {
@@ -206,9 +194,9 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     expect(text(note)).toMatch(/ยังไม่(ได้)?อนุมัติ/);
   });
 
-  // weightUpliftBase goes NEGATIVE when a weighted (x2) sale is clawed back in the month. The row is
-  // then a deduction: minus operator, its own label, the figure as a positive magnitude after the
-  // minus sign (never "฿-50,000.00" after a "+").
+  // weightUpliftBase goes NEGATIVE when a weighted (x2) sale is clawed back in the month. The row is then a
+  // deduction: minus operator, its own label, the figure as a positive magnitude after the minus sign (never
+  // "฿-50,000.00" after a "+").
   it('a NEGATIVE weightUpliftBase is shown as a deduction: minus sign, clawback label, positive magnitude', async () => {
     api.commissions.monthlySummary.mockResolvedValue({
       summary: summary({
@@ -271,14 +259,14 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     const team = await screen.findByTestId('statement-team-override');
     expect(text(team)).toContain('ค่าคอมทีม');
     expect(text(team)).toContain('฿4,875.00');
-    // "(ยอดรับทั้งบริษัท X − Y) × Z%": X, Y and Z all come from the DTO. 0.075 must NOT be rounded
-    // to 0.08 -- the recipient rate is three decimals.
+    // "(ยอดรับทั้งบริษัท X − Y) × Z%": X, Y and Z all come from the DTO. 0.075 must NOT be rounded to 0.08 -- the
+    // recipient rate is three decimals.
     expect(text(team)).toContain('(ยอดรับทั้งบริษัท ฿9,500,000.00 − ฿3,000,000.00) × 0.075%');
   });
 
-  // Review fix (MEDIUM): a 0.00 team row needs a reason, derived ONLY from API fields (the API has
-  // no suppression flag): company base <= threshold means the company total is under the bar;
-  // otherwise a 0 amount with a cleared bar means a hand-entered team commission replaced it.
+  // Review fix (MEDIUM): a 0.00 team row needs a reason, derived ONLY from API fields (the API has no
+  // suppression flag): company base <= threshold means the company total is under the bar; otherwise a 0 amount
+  // with a cleared bar means a hand-entered team commission replaced it.
   it('a recipient whose company total is BELOW the threshold: row stays, amount 0, with "ยอดรับทั้งบริษัทยังไม่ถึงเกณฑ์"', async () => {
     api.commissions.monthlySummary.mockResolvedValue({
       summary: summary({
@@ -328,8 +316,8 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
   });
 
   it('WRONG-WAY: a rep who is not an override recipient never sees ค่าคอมทีม, even if a stray teamOverrideAmount arrives', async () => {
-    // companyCommissionableBase null = not a recipient. The row must be gated on THAT, not on the
-    // amount being non-zero -- a stray amount on a non-recipient must not surface as a line.
+    // companyCommissionableBase null = not a recipient. The row must be gated on THAT, not on the amount being
+    // non-zero -- a stray amount on a non-recipient must not surface as a line.
     api.commissions.monthlySummary.mockResolvedValue({
       summary: summary({ teamOverrideAmount: 999, companyCommissionableBase: null }),
     });
@@ -357,8 +345,8 @@ describe('rep statement — "ค่าคอมของฉัน" builds the to
     });
     await openAugust();
     const warning = await screen.findByTestId('statement-below-floor');
-    // The ฿ floor itself is a policy number owned by the backend (see the existing comment in
-    // CommissionPage on MonthlyTierPanel), so the wording is pinned, not the figure.
+    // The ฿ floor itself is a policy number owned by the backend (see the existing comment in CommissionPage on
+    // MonthlyTierPanel), so the wording is pinned, not the figure.
     expect(text(warning)).toMatch(/ต่ำกว่า.*ยังไม่ได้ค่าคอมตามขั้น/);
   });
 
@@ -381,8 +369,8 @@ describe('rep month header — payroll month N is paid from money received in N-
     await openAugust();
     const expected = `รอบจ่าย ${formatThaiMonthYearFromMonthInputValue('2026-08')} · จากยอดรับเงินเดือน ${formatThaiMonthYearFromMonthInputValue('2026-07')}`;
     expect(await screen.findByText(expected)).not.toBeNull();
-    // Literal guard on the month names (the shared formatter abbreviates: ส.ค. / ก.ค.) so the
-    // helper cannot drift on both sides of the assertion together.
+    // Literal guard on the month names (the shared formatter abbreviates: ส.ค. / ก.ค.) so the helper cannot drift
+    // on both sides of the assertion together.
     expect(expected).toBe('รอบจ่าย ส.ค. 2569 · จากยอดรับเงินเดือน ก.ค. 2569');
   });
 
@@ -422,8 +410,8 @@ describe('rep tier-band disclosure', () => {
 
 describe('rep receipt ledger — where each figure comes from', () => {
   const plain = saleRecord({ id: 501, invoiceDetails: invoiceDetails({ id: 501, invoiceNumber: 'INV-PLAIN-501' }) });
-  // Weight 2 (effective, item-derived). Figures are internally consistent:
-  // 1,500,000 - 500 - 1,500 - 3,000 = 1,495,000 actual; / 1.07 = 1,397,196.26 ex-VAT; x2 = 2,794,392.52 into the base.
+  // Weight 2 (effective, item-derived). Figures are internally consistent: 1,500,000 - 500 - 1,500 - 3,000 =
+  // 1,495,000 actual; / 1.07 = 1,397,196.26 ex-VAT; x2 = 2,794,392.52 into the base.
   const weighted = saleRecord({
     id: 503,
     status: 'SUBMITTED',
@@ -476,8 +464,8 @@ describe('rep receipt ledger — where each figure comes from', () => {
     await openAugust();
     await screen.findByTestId('receipt-row-501');
     expect(text(screen.getByTestId('no-per-sale-note'))).toMatch(/ขั้นบันได.*ยอดรวม.*เดือน/);
-    // The ladder is marginal over the month, so a per-receipt baht figure would be invented.
-    // None of the month's commission figures may appear inside a receipt row.
+    // The ladder is marginal over the month, so a per-receipt baht figure would be invented. None of the month's
+    // commission figures may appear inside a receipt row.
     ['฿48,750.00', '฿66,250.00', '฿15,000.00'].forEach((figure) => {
       expect(text(screen.getByTestId('receipt-row-501'))).not.toContain(figure);
       expect(text(screen.getByTestId('receipt-row-503'))).not.toContain(figure);
@@ -747,9 +735,9 @@ describe('hr payroll summary — ค่าคอมทีม', () => {
     expect(text(screen.getByTestId('payroll-team-override-total'))).toContain('฿1,234.56');
   });
 
-  // The backend sends companyCommissionableBase = null when no override applies in the month, but
-  // ALWAYS sends totalTeamOverrideAmount (0.00) -- so a month before the override existed must not
-  // grow an all-zero ค่าคอมทีม column or a "รวมค่าคอมทีม 0.00" footer.
+  // The backend sends companyCommissionableBase = null when no override applies in the month, but ALWAYS sends
+  // totalTeamOverrideAmount (0.00) -- so a month before the override existed must not grow an all-zero ค่าคอมทีม
+  // column or a "รวมค่าคอมทีม 0.00" footer.
   it('no override in the month (companyCommissionableBase null, total 0): no ค่าคอมทีม column and no footer', async () => {
     api.commissions.payrollReady.mockResolvedValue({
       summary: {

@@ -111,9 +111,8 @@ describe('AssignmentsTab', () => {
   });
 
   // The case this branch's brief calls out by name: WorkScheduleAssignmentRepository
-  // #closeOverlappingPredecessors auto-closes an overlapping predecessor for the SAME scope, and
-  // the create response never echoes which ids -- that only lands in the audit log. This tab
-  // derives it by diffing the assignment list immediately before/after the POST.
+  // #closeOverlappingPredecessors auto-closes an overlapping predecessor for the SAME scope, and the create
+  // response never echoes which ids -- that only lands in the audit log.
   it('detects an auto-closed predecessor by diffing before/after, and shows it explicitly -- never silently', async () => {
     api.workScheduleAssignments.list
       .mockResolvedValueOnce({ assignments: [baseAssignment()] }) // initial load: assignmentId 1, still open
@@ -143,9 +142,9 @@ describe('AssignmentsTab', () => {
     expect(screen.getByText(/รหัสรายการที่ถูกปิด: 1/)).not.toBeNull();
   });
 
-  // Back-dating: the server is the authority even when the client-side `min` would normally have
-  // caught it (e.g. a timezone-boundary race between the browser's "today" and the server's) --
-  // the exact server message must render inline, and the dialog must stay open.
+  // Back-dating: the server is the authority even when the client-side `min` would normally have caught it (e.g.
+  // a timezone-boundary race between the browser's "today" and the server's) -- the exact server message must
+  // render inline, and the dialog must stay open.
   it('surfaces the server 400 back-dating rejection inline and keeps the create dialog open', async () => {
     api.workScheduleAssignments.list.mockResolvedValue({ assignments: [baseAssignment()] });
     api.workScheduleAssignments.create.mockRejectedValue(apiError(

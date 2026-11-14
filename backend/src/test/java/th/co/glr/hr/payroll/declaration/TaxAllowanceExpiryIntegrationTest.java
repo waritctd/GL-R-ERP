@@ -34,17 +34,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Yearly expiry (decision #10) — driven directly against {@code TaxAllowanceDeclarationService
- * #expireOverdueVerifications} (never the {@code @Scheduled} worker, per {@code
- * QuotationExpiryWorker}'s own house pattern of keeping all logic testable without a timer).
- *
- * <p>Pins THE trap from the plan doc a second time (PR A's {@code TaxAllowanceApplySeamIntegrationTest
- * #expiringDoesNotFallBackToAnOlderDatedRowForTheSameYear} already covers the raw repository method
- * in isolation; this class covers the SWEEP that calls it end to end) and the two guarantees the
- * task spec calls out explicitly: idempotency, and never retro-altering an already-processed
- * month's persisted {@code hr.payroll_line} row.
- */
+/** Yearly expiry (decision #10) — driven directly against TaxAllowanceDeclarationService
+ * #expireOverdueVerifications (never the @Scheduled worker, per QuotationExpiryWorker's own house pattern of
+ * keeping all logic testable without a timer). */
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.CeoApproverRepository;
 
@@ -99,8 +91,8 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             mock(FileStorageService.class),
             payrollService,
             new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP),
-            // Not under test here — this class is about the expiry SWEEP's own selection/timing
-            // logic (TaxAllowanceNotificationIntegrationTest covers the notification content).
+            // Not under test here — this class is about the expiry SWEEP's own selection/timing logic
+            // (TaxAllowanceNotificationIntegrationTest covers the notification content).
             mock(NotificationService.class),
             new AppProperties(), new LorYor01Renderer());
 
@@ -110,8 +102,8 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
     @Test
     void sweepExpiresAnOverdueApplicationOnBothTablesAndIsIdempotent() {
         long employeeId = seedEmployee("EXP-A", new BigDecimal("50000.00"));
-        // taxYear 2020: the promotion's expires_on default (31 Dec of the declaration's own tax year) is
-        // therefore 2020-12-31 -- safely in the past regardless of when this test actually runs.
+        // taxYear 2020: the promotion's expires_on default (31 Dec of the declaration's own tax year) is therefore
+        // 2020-12-31 -- safely in the past regardless of when this test actually runs.
         long declarationId = submitApprovedAndApplied(employeeId, 2020, new BigDecimal("60000"));
 
         int expiredCount = service.expireOverdueVerifications();
@@ -144,9 +136,9 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
         long employeeToExpire = seedEmployee("EXP-B", new BigDecimal("50000.00"));
         submitApprovedAndApplied(employeeToExpire, 2020, new BigDecimal("60000"));
 
-        // employeeProcessed: a COMPLETELY different employee whose June 2026 payroll has already
-        // been processed for real, with its own standing (non-expiring, non-declaration-backed)
-        // allowance context. The sweep must never reach into hr.payroll_line at all.
+        // employeeProcessed: a COMPLETELY different employee whose June 2026 payroll has already been processed for
+        // real, with its own standing (non-expiring, non-declaration-backed) allowance context. The sweep must never
+        // reach into hr.payroll_line at all.
         long employeeProcessed = seedEmployee("EXP-C", new BigDecimal("45000.00"));
         payrollService.process(new ProcessPayrollRequest(LocalDate.of(2026, 6, 1), List.of()), hrActor());
         PayrollLineDto before = reloadedLineFor(LocalDate.of(2026, 6, 1), employeeProcessed);
@@ -199,9 +191,9 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
             null,
             null);                   // lorYor01 — no ล.ย.01 form detail in this fixture
         TaxAllowanceDeclarationDto declaration = service.submitOwn(request, employeeActor(employeeId));
-        // One call, not two: approval promotes to payroll in its own transaction since the
-        // whole-year ruling (2026-08-31). The name keeps "AndApplied" because that is still exactly
-        // what this leaves behind -- an APPROVED declaration with applied_at set.
+        // One call, not two: approval promotes to payroll in its own transaction since the whole-year ruling
+        // (2026-08-31). The name keeps "AndApplied" because that is still exactly what this leaves behind -- an
+        // APPROVED declaration with applied_at set.
         approveSigned(declaration.declarationId());
         return declaration.declarationId();
     }
@@ -231,11 +223,9 @@ class TaxAllowanceExpiryIntegrationTest extends AbstractPostgresIntegrationTest 
         return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
     }
 
-    /**
-     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
-     * The failure cases below deliberately do NOT use this — they assert on the role and status
-     * checks, which both run before the signed-form check and so are unaffected by it.
-     */
+    /** Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3). The failure
+     * cases below deliberately do NOT use this — they assert on the role and status checks, which both run before
+     * the signed-form check and so are unaffected by it. */
     private void approveSigned(long declarationId) {
         TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
         service.approve(declarationId, null, hrActor());

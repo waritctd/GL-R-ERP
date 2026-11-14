@@ -15,12 +15,9 @@ import { SALES_ENABLED } from '../../app/features.js';
 import { TaxAllowanceActionRow } from '../taxAllowance/TaxAllowanceActionRow.jsx';
 import { ActionQueue } from './ActionQueue.jsx';
 
-/**
- * Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px;
- * align-items: start; ≤1040px: repeat(2, minmax(0, 1fr)); ≤720px: 1fr.
- * No shared primitive yet for this exact column ratio, so it's kept local
- * (matches the breakpoints of `.stat-grid`/`.dashboard-grid` in styles.css).
- */
+/** Reproduces `.dashboard-grid`: grid-template-columns: 1.15fr 0.85fr; gap: 18px; align-items: start; ≤1040px:
+ * repeat(2, minmax(0, 1fr)); ≤720px: 1fr. No shared primitive yet for this exact column ratio, so it's kept
+ * local (matches the breakpoints of `.stat-grid`/`.dashboard-grid` in styles.css). */
 const DASHBOARD_GRID = 'grid gap-[18px] items-start grid-cols-[1.15fr_0.85fr] nav-drawer:grid-cols-2 mobile:grid-cols-1';
 
 const COMPANY_ROLES = ['hr', 'ceo'];
@@ -42,10 +39,9 @@ function dashboardMode(user, summary) {
   return 'employee';
 }
 
-// Route access for each card/queue target, derived only from permissions.js
-// (the single source of truth for what a role may open) plus SALES_ENABLED —
-// never invented. `/attendance` has no path guard (any signed-in user may
-// open it), so it is always a valid click target.
+// Route access for each card/queue target, derived only from permissions.js (the single source of truth for
+// what a role may open) plus SALES_ENABLED — never invented. `/attendance` has no path guard (any signed-in
+// user may open it), so it is always a valid click target.
 function dashboardAccess(user) {
   const canOvertime = hasPermission(user?.role, 'canViewAllOvertime') || !!user?.employeeId;
   const canLeave = hasPermission(user?.role, 'canViewAllLeave') || !!user?.employeeId;
@@ -74,10 +70,8 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
     return [
       { icon: 'users', label: 'พนักงาน Active', value: numberValue(headcount.active), helper: 'Headcount', tone: 'indigo', onClick: go('/employees', access.employees()) },
       { icon: 'clipboard', label: 'รออนุมัติทั้งหมด', value: numberValue(pending.total), helper: 'Approvals', tone: 'rose' },
-      // Pending-work card (UX-04): "N need your review" is a false call to action for a
-      // role with no path to `/requests` — hide it rather than render it inert. This is
-      // unlike the headcount/attendance/notifications cards above and below, which are
-      // read-only context a viewer legitimately wants even without an onClick.
+      // Pending-work card (UX-04): "N need your review" is a false call to action for a role with no path to
+      // `/requests` — hide it rather than render it inert.
       ...(access.reviewRequests() ? [
         { icon: 'userCog', label: 'แก้ไขข้อมูล', value: numberValue(pending.profileRequests), helper: 'Profile requests', tone: 'amber', onClick: go('/requests', access.reviewRequests()) },
       ] : []),
@@ -96,10 +90,7 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
     return [
       { icon: 'users', label: 'พนักงานในฝ่าย', value: numberValue(headcount.active), helper: 'Active', tone: 'indigo' },
       { icon: 'clock', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), helper: 'Division', tone: 'amber', onClick: go('/overtime', access.overtime()) },
-      // Leave is scoped by reports-to, NOT by division -- see DashboardService#leaveScope. The OT
-      // row above keeps 'Division' because overtime genuinely does route ฝ่าย manager -> CEO; these
-      // two helpers deliberately differ now, and making them match again would relabel a number
-      // that is no longer division-wide.
+      // Leave is scoped by reports-to, NOT by division -- see DashboardService#leaveScope.
       { icon: 'calendar', label: 'ลารออนุมัติ', value: numberValue(pending.leave), helper: 'Direct reports', tone: 'teal', onClick: go('/leave', access.leave()) },
       { icon: 'badgeCheck', label: 'มาวันนี้', value: numberValue(attendance.todayPresent), helper: 'Attendance', tone: 'teal', onClick: go('/attendance', access.attendance()) },
       { icon: 'clock', label: 'มาสายวันนี้', value: numberValue(attendance.lateToday), helper: 'Late today', tone: numberValue(attendance.lateToday) > 0 ? 'amber' : 'indigo', onClick: go('/attendance', access.attendance()) },
@@ -110,55 +101,41 @@ function dashboardCards(mode, summary, pendingCount, { navigate, access }) {
     ];
   }
 
-  // Employee mode renders its own three-tier layout (identity facts → today →
-  // pending rows) instead of a flat card grid, so it does not use this list.
+  // Employee mode renders its own three-tier layout (identity facts → today → pending rows) instead of a flat
+  // card grid, so it does not use this list.
   return [];
 }
 
-/**
- * Employee mode, tier 3: the four pending counts as a compact list.
- *
- * Rendering these as equal-weight stat cards meant a `0` shouted exactly as
- * loud as a `1`, so nothing led the page. Here a zero recedes to a muted dash
- * and only a real count gets a badge — emphasis becomes a function of whether
- * something actually needs attention.
- */
+/** Employee mode, tier 3: the four pending counts as a compact list. Here a zero recedes to a muted dash and
+ * only a real count gets a badge — emphasis becomes a function of whether something actually needs attention. */
 function employeePendingRows(summary, pendingCount, { navigate, access }) {
   const pending = summary?.pendingApprovals ?? {};
   const notifications = summary?.notifications ?? {};
   const go = (path, allowed) => (allowed ? () => navigate(path) : undefined);
   return [
     { key: 'overtime', label: 'OT ของฉัน', value: numberValue(pending.overtime), tone: 'warning', onClick: go('/overtime', access.overtime()) },
-    // NOT 'ลาของฉัน'. A supervisor who has direct reports but whose position title lacks
-    // "ผู้จัดการ" lands in employee mode (dashboardMode: headcount.scope is 'none' and
-    // user.manager is false), yet DashboardService#leaveScope now counts their reports' pending
-    // leave alongside their own. "ลาของฉัน" would state that figure is only theirs. The OT row
-    // above keeps "ของฉัน" because overtime really is self-scoped for this mode.
+    // Leave counts can include direct reports even in employee mode, so the label must not imply self-only
+    // requests.
     { key: 'leave', label: 'ลารออนุมัติ', value: numberValue(pending.leave), tone: 'info', onClick: go('/leave', access.leave()) },
     { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูล', value: numberValue(pending.profileRequests ?? pendingCount), tone: 'warning', onClick: go('/profile', access.profile()) },
-    // No onClick: the topbar bell dropdown is the only UI for notifications,
-    // so a row that navigated nowhere would be a false affordance (UX-04).
+    // No onClick: the topbar bell dropdown is the only UI for notifications, so a row that navigated nowhere would
+    // be a false affordance (UX-04).
     { key: 'notifications', label: 'แจ้งเตือนยังไม่อ่าน', value: numberValue(notifications.unread), tone: 'info' },
   ];
 }
 
-// The needs-action queue only lists items the *viewer* can act on (approve,
-// review, pick up) — not status of their own already-submitted requests,
-// which is visibility-of-status, not an action for them. That is why this
-// is built only for 'company'/'manager' modes, never 'employee' mode.
+// The needs-action queue only lists items the *viewer* can act on (approve, review, pick up) — not status of
+// their own already-submitted requests, which is visibility-of-status, not an action for them. That is why
+// this is built only for 'company'/'manager' modes, never 'employee' mode.
 function actionQueueItems(mode, summary, { navigate, access }) {
   if (mode === 'employee') return [];
   const pending = summary?.pendingApprovals ?? {};
   const notifications = summary?.notifications ?? {};
   const go = (path, allowed) => (allowed ? () => navigate(path) : undefined);
   const items = [
-    // `actionable` is the explicit "the viewer has a way to act on this" signal (UX-04).
-    // It is deliberately separate from `to`: `to` is only the in-panel navigation target,
-    // and `notifications` below proves the two diverge — it has no `to` (the topbar bell
-    // dropdown is its only UI) yet is still actionable, so filtering on "has a `to`" would
-    // wrongly drop it. Filtered here (not in ActionQueue) because `access` — the only
-    // source of truth for reachability — is already in scope, keeping ActionQueue a plain
-    // renderer of whatever list it's handed.
+    // `actionable` is the explicit "the viewer has a way to act on this" signal (UX-04). Filtered here (not in
+    // ActionQueue) because `access` — the only source of truth for reachability — is already in scope, keeping
+    // ActionQueue a plain renderer of whatever list it's handed.
     { key: 'profileRequests', label: 'คำขอแก้ไขข้อมูลรออนุมัติ', value: numberValue(pending.profileRequests), to: go('/requests', access.reviewRequests()), actionable: access.reviewRequests() },
     { key: 'overtime', label: 'OT รออนุมัติ', value: numberValue(pending.overtime), to: go('/overtime', access.overtime()), actionable: access.overtime() },
     { key: 'leave', label: 'ลารออนุมัติ', value: numberValue(pending.leave), to: go('/leave', access.leave()), actionable: access.leave() },
@@ -196,14 +173,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
     : mode === 'manager'
       ? `${employee?.positionTh || 'Manager'} · ${employee?.divisionTh || ''}`
       : `${employee?.positionTh || ''} · ${employee?.divisionTh || ''}`;
-  // UX-04 (part 2): quickActions is filtered through `canAccessPath` — the
-  // exact predicate the router (RequireAccess) uses — so this panel can never
-  // offer a destination the router will reject. Filtering here, not by
-  // hand-picking per role, is what keeps this list from drifting out of sync
-  // with the router the way the stat cards/ActionQueue previously did.
-  // Employee mode has no quick-actions panel: every destination it offered was
-  // already one click away in the sidebar or the pending rows above, so it was
-  // duplicate navigation occupying half the lower dashboard.
+  // UX-04 (part 2): quickActions is filtered through `canAccessPath` — the exact predicate the router
+  // (RequireAccess) uses — so this panel can never offer a destination the router will reject.
   const quickActionCandidates = mode === 'company'
     ? [
       ['/hr', 'ภาพรวม HR'],
@@ -216,8 +187,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       ['/leave', 'รายการลา'],
     ];
   const quickActions = quickActionCandidates.filter(([path]) => canAccessPath(path, user));
-  // Same predicate gates "ดูทั้งหมด" — company mode points at /requests, which
-  // a CEO cannot reach (canReviewProfileRequests is hr-only).
+  // Same predicate gates "ดูทั้งหมด" — company mode points at /requests, which a CEO cannot reach
+  // (canReviewProfileRequests is hr-only).
   const requestsFeedPath = mode === 'company' ? '/requests' : '/profile';
   const canViewRequestsFeed = canAccessPath(requestsFeedPath, user);
   const latestPayrollPeriodId = dashboardSummary?.latestPayrollPeriodId;
@@ -256,8 +227,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
       {mode !== 'employee' ? <ActionQueue items={queueItems} /> : null}
 
       {/* Same ล.ย.01 nudge the plain-employee landing gets — warehouse/qc land here rather than on
-          EmployeeSelfService, and were the one self-service tier with no route to the form.
-          Renders nothing unless there is something to file. */}
+       * EmployeeSelfService, and were the one self-service tier with no route to the form. Renders nothing unless
+       * there is something to file. */}
       {mode === 'employee' ? <TaxAllowanceActionRow summary={taxAllowanceSummary} /> : null}
 
       {employee && mode !== 'employee' ? (
@@ -271,11 +242,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         </section>
       ) : null}
 
-      {/* Employee tier 1 — identity, with ตำแหน่ง/สังกัด/อายุงาน folded in as a
-          definition list. They are attributes of the person, so they belong
-          beside the person; as stat cards they both repeated the line above and
-          forced text into a numeric display slot. A bordered list inside this
-          card, never a nested card (DESIGN.md). */}
+      {/* Employee tier 1 — identity, with ตำแหน่ง/สังกัด/อายุงาน folded in as a definition list. A bordered list
+       * inside this card, never a nested card (DESIGN.md). */}
       {employee && mode === 'employee' ? (
         <section className="bg-surface border border-border rounded-md flex p-5 mobile:p-[14px] !flex-col !items-stretch !gap-0">
           <div className="flex items-center gap-[18px] mobile:flex-col mobile:items-start mobile:gap-2.5">
@@ -301,8 +269,8 @@ export function EmployeeDashboard({ user, employee, profileRequests = [], dashbo
         </section>
       ) : null}
 
-      {/* Employee tier 2 — the one fact that actually changes daily, given the
-          page's single largest value so there is somewhere obvious to look. */}
+      {/* Employee tier 2 — the one fact that actually changes daily, given the page's single largest value so there
+       * is somewhere obvious to look. */}
       {mode === 'employee' ? (
         <button
           type="button"

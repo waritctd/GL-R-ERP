@@ -2,12 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { api } from './hrApi.js';
 import { API_ROUTES } from './routes.js';
 
-// #H1: EmployeeSignatureController's PUT returns 204 with NO body on success
-// (EmployeeSignatureService.upload -> ResponseEntity.noContent().build()). The previous
-// hrApi.employees.uploadSignature called `res.json()` unconditionally after the `res.ok` check,
-// which throws "Unexpected end of JSON input" on an empty 204 body -- SignatureCard.jsx's
-// onSuccess never ran, and the UI silently looked like the upload failed (its onError fired
-// instead, with a generic parse-error message, not the real outcome).
+// #H1: EmployeeSignatureController's PUT returns 204 with NO body on success (EmployeeSignatureService.upload
+// -> ResponseEntity.noContent().build()).
 
 describe('hrApi.employees.uploadSignature -- 204 no-body response', () => {
   let fetchMock;
@@ -46,8 +42,8 @@ describe('hrApi.employees.uploadSignature -- 204 no-body response', () => {
       .rejects.toThrow('ไม่มีสิทธิ์อัปโหลดลายเซ็นนี้');
   });
 
-  // A non-2xx status can ALSO carry no body (e.g. a 413 from a body-size limit upstream of the
-  // controller) -- must not throw a second, unrelated parse error on top of the real failure.
+  // A non-2xx status can ALSO carry no body (e.g. a 413 from a body-size limit upstream of the controller) --
+  // must not throw a second, unrelated parse error on top of the real failure.
   it('a non-2xx response with no body throws the generic Thai fallback, not a parse error', async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 413 }));
     await expect(api.employees.uploadSignature(7, new Blob(['x'], { type: 'image/png' })))
@@ -55,11 +51,8 @@ describe('hrApi.employees.uploadSignature -- 204 no-body response', () => {
   });
 });
 
-// hasSignature is a PROBE (SignatureCard.jsx's #M1) -- it only ever reads `res.ok`, so it has no
-// reason to pull the image bytes over the wire. EmployeeSignatureController declares only
-// @GetMapping on this route; Spring MVC maps HEAD to the same handler transparently whenever GET
-// is mapped (no separate @RequestMapping needed), stripping the body before it reaches the
-// client -- so switching the probe from GET to HEAD changes nothing about what it observes.
+// hasSignature is a PROBE (SignatureCard.jsx's #M1) -- it only ever reads `res.ok`, so it has no reason to
+// pull the image bytes over the wire.
 describe('hrApi.employees.hasSignature -- probes with HEAD, not GET', () => {
   let fetchMock;
 

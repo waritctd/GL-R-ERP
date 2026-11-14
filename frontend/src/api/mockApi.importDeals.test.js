@@ -1,15 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// Mirrors th.co.glr.hr.importdeal.ImportDealService / ImportDealDtos -- GET /api/import/deals/{id},
-// the import-only per-deal projection. What this pins is the MOCK's own fidelity to that DTO
-// shape (fields present, price/cost fields absent, comment thread only) and the two authz edges
-// the mock can approximate cheaply. NOT authz evidence about production: the real role/row-scope
-// enforcement is ImportDealAuthzIntegrationTest against the Java service (CLAUDE.md -- the mock's
-// authz is never authoritative).
+// Mirrors th.co.glr.hr.importdeal.ImportDealService / ImportDealDtos -- GET /api/import/deals/{id}, the
+// import-only per-deal projection.
 
-// Every price/cost/margin/commission/weighting field TicketItemDto carries that the import view
-// must never expose. Deliberately a superset of what the mock's ticket items happen to hold.
+// Every price/cost/margin/commission/weighting field TicketItemDto carries that the import view must never
+// expose. Deliberately a superset of what the mock's ticket items happen to hold.
 const FORBIDDEN_ITEM_FIELDS = [
   'rawPrice', 'rawCurrency', 'rawUnit', 'proposedPrice', 'approvedPrice', 'currency',
   'calcedCost', 'calcedPrice', 'calcConfigVersion', 'manualPrice', 'manualOverrideReason',
@@ -104,9 +100,9 @@ describe('mock importDeals.get -- import-only projection of one deal', () => {
   });
 });
 
-// The backend now refuses import the whole-deal read (TicketService.get) and points it at
-// GET /api/import/deals/{id}. The mock must be no MORE permissive than that, or a mock-driven run
-// (and the frontend's own guard) never exercises the refusal. Authz here is an approximation only.
+// The backend now refuses import the whole-deal read (TicketService.get) and points it at GET
+// /api/import/deals/{id}. The mock must be no MORE permissive than that, or a mock-driven run (and the
+// frontend's own guard) never exercises the refusal. Authz here is an approximation only.
 describe('mock tickets.get -- import is refused the whole-deal read', () => {
   it('403s import on tickets.get even for a deal inside its import scope', async () => {
     await api.auth.login({ role: 'ceo' });
@@ -127,9 +123,8 @@ describe('mock tickets.get -- import is refused the whole-deal read', () => {
   });
 });
 
-// TicketAccessPolicy.canViewDocuments: import READS an in-scope deal's documents (all four
-// AttachTypes) and is refused an out-of-scope one; it never writes. The import deal page lists
-// attachments through this call.
+// TicketAccessPolicy.canViewDocuments: import READS an in-scope deal's documents (all four AttachTypes) and is
+// refused an out-of-scope one; it never writes. The import deal page lists attachments through this call.
 describe('mock attachments -- import reads in-scope deal documents only', () => {
   it('lets import list attachments on a deal in its import scope, and refuses one outside it', async () => {
     const outOfScopeId = await createDealWithCommentAsSales(); // pre-PROCUREMENT: outside import scope
@@ -137,16 +132,16 @@ describe('mock attachments -- import reads in-scope deal documents only', () => 
     const importUserId = (login.user ?? login).id;
     await expect(api.attachments.list(outOfScopeId)).rejects.toMatchObject({ status: 403 });
 
-    // A deal import is NOT a participant of: the read must come from the import-scope rule, not
-    // from having picked the deal up (which the participant check already grants).
+    // A deal import is NOT a participant of: the read must come from the import-scope rule, not from having picked
+    // the deal up (which the participant check already grants).
     const { tickets } = await api.tickets.list({});
     const nonParticipant = tickets.find((t) => t.assignedToId !== importUserId && t.createdById !== importUserId);
     expect(nonParticipant, 'seed must expose an in-scope deal import did not pick up').toBeDefined();
     await expect(api.attachments.list(nonParticipant.id)).resolves.toHaveProperty('attachments');
   });
 
-  // Reading is the ONLY thing the import-scope rule grants: a deal import did not pick up stays
-  // read-only (TicketAccessPolicy.canManageDocuments is participant OR sales_manager/ceo).
+  // Reading is the ONLY thing the import-scope rule grants: a deal import did not pick up stays read-only
+  // (TicketAccessPolicy.canManageDocuments is participant OR sales_manager/ceo).
   it('does not let import upload to an in-scope deal it did not pick up', async () => {
     const login = await api.auth.login({ role: 'import' });
     const importUserId = (login.user ?? login).id;

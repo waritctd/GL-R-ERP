@@ -8,18 +8,9 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Exercises {@link WorkScheduleAssignmentRepository} and {@link TieredWorkScheduleResolver}
- * against a real PostgreSQL database — the SQL join (assignment -&gt; schedule -&gt; aggregated
- * days) and the {@code array_agg} parsing are exactly the kind of thing a mocked repository would
- * happily "pass" while getting wrong; {@link TieredWorkScheduleResolverTest} covers the precedence
- * logic in isolation, this file proves the SQL underneath it.
- *
- * <p>V115's own seed data (OFFICE_5D / OPS_6D / WEEKEND_DUTY schedules, and their days) is applied
- * by the golden Flyway migrate this base class runs before every test — no need to insert those
- * again here. Only the assignment rows are inserted per test, since V115's seeded assignments key
- * off production {@code source_code}s (HR, WH, ...) that a fresh test database does not have.
- */
+/** Exercises WorkScheduleAssignmentRepository and TieredWorkScheduleResolver against a real PostgreSQL
+ * database. Only the assignment rows are inserted per test, since V115's seeded assignments key off production
+ * source_codes (HR, WH, ...) that a fresh test database does not have. */
 class WorkScheduleAssignmentRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final LocalDate WITHIN_WINDOW = LocalDate.of(2026, 8, 1); // a Saturday
@@ -35,12 +26,7 @@ class WorkScheduleAssignmentRepositoryIntegrationTest extends AbstractPostgresIn
             repository, new CompanyWideWorkScheduleResolver(properties), properties);
     }
 
-    /**
-     * The case CLAUDE.md's testing rules insist on: assert BOTH sides on ONE fixture. A one-sided
-     * assertion ("the warehouse employee's Saturday is a workday") would also pass if the resolver
-     * secretly ignored scope entirely and just always returned OPS_6D — only checking the HR
-     * employee's *same* Saturday comes back non-workday rules that out.
-     */
+    /** The case CLAUDE.md's testing rules insist on: assert BOTH sides on ONE fixture. */
     @Test
     void aWarehouseEmployeesSaturdayIsAWorkdayAndAnHrEmployeesSameSaturdayIsNot() {
         wire();
@@ -104,22 +90,9 @@ class WorkScheduleAssignmentRepositoryIntegrationTest extends AbstractPostgresIn
         assertThat(resolved.isWorkday(WITHIN_WINDOW)).isFalse();
     }
 
-    /**
-     * Overlapping rows for the SAME scope, both open-ended ({@code effective_to IS NULL}), both
-     * already effective: the schema does not forbid this, and it is exactly the state a hand-written
-     * "corrected schedule" INSERT leaves behind if the previous row's {@code effective_to} is not
-     * also closed out (there is no admin UI in this branch to do that automatically). The newer
-     * {@code effective_from} must win.
-     *
-     * <p>Inserted in the realistic — and adversarial — order: the OLDER row first, the NEWER
-     * (correct winner) row second, exactly as a human fixing a schedule later in time would type it.
-     * A lower {@code assignment_id} therefore belongs to the WRONG answer. If
-     * {@link WorkScheduleAssignmentRepository#findAllAssignments()} ever lost its
-     * {@code ORDER BY effective_from DESC, assignment_id DESC} and fell back to whatever order
-     * Postgres's GROUP BY/array_agg happens to produce, a physical/insertion-order-shaped result
-     * would return the OLDER row first and this test would go red — see the mutation-check recorded
-     * in the PR description for whether that actually happens on this table size.
-     */
+    /** Overlapping rows for the SAME scope, both open-ended, both already effective: the schema does not forbid
+     * this, and it is exactly the state a hand-written "corrected schedule" INSERT leaves behind if the previous
+     * row's effective_to is not also closed out. The newer effective_from must win. */
     @Test
     void ofTwoOverlappingAssignmentsForTheSameScopeTheNewerEffectiveFromWinsRegardlessOfInsertOrder() {
         wire();
@@ -138,24 +111,9 @@ class WorkScheduleAssignmentRepositoryIntegrationTest extends AbstractPostgresIn
             .isTrue();
     }
 
-    /**
-     * V117: {@code requires_check_out} must survive the join/{@code array_agg} round trip this
-     * repository does, and the DEPARTMENT-beats-DIVISION precedence already proven above must
-     * correctly separate ทีมขาย (field sales, scan-in-only) from Sales Support (back-office, both
-     * scans required) even though both departments sit under the same ฝ่ายขาย division.
-     *
-     * <p>Real production {@code source_code}s ('SA', 'SATM', 'SALES', 'SALES2') are not present in a
-     * fresh test database — V117's own seed INSERTs are no-ops here for the same reason V115's are
-     * (see this class's own javadoc) — so this test builds the identical SHAPE V117 seeds
-     * (DIVISION -&gt; SALES_5D, one DEPARTMENT overridden back to SALES_5D, a sibling DEPARTMENT left
-     * on OFFICE_5D) against synthetic test codes, proving the mechanism V117 relies on rather than
-     * the production data itself.
-     *
-     * <p>Assert BOTH sides on ONE fixture (CLAUDE.md's testing rule): the ทีมขาย employee resolves
-     * SALES_5D and the Sales Support employee — same division, same date — resolves OFFICE_5D. A
-     * one-sided assertion would also pass if DEPARTMENT precedence were broken and everyone in the
-     * division just inherited SALES_5D.
-     */
+    /** V117: requires_check_out must survive the join/array_agg round trip this repository does, and the
+     * DEPARTMENT-beats-DIVISION precedence already proven above must correctly separate ทีมขาย from Sales Support
+     * even though both departments sit under the same ฝ่ายขาย division. */
     @Test
     void teamSalesDepartmentResolvesSalesScheduleWhileSalesSupportDepartmentStaysOnOffice() {
         wire();
@@ -163,8 +121,8 @@ class WorkScheduleAssignmentRepositoryIntegrationTest extends AbstractPostgresIn
         long salesTeamDept = insertDepartment("SATMX", "ทีมขาย (test)", salesDivision);
         long salesSupportDept = insertDepartment("SALESX", "ฝ่ายสนับสนุนการขาย (test)", salesDivision);
 
-        // Mirrors V117's shape: DIVISION -> SALES_5D, ทีมขาย DEPARTMENT overridden to SALES_5D,
-        // Sales Support DEPARTMENT deliberately left on OFFICE_5D.
+        // Mirrors V117's shape: DIVISION -> SALES_5D, ทีมขาย DEPARTMENT overridden to SALES_5D, Sales Support
+        // DEPARTMENT deliberately left on OFFICE_5D.
         assignDivision(salesDivision, "SALES_5D", LocalDate.of(2024, 10, 1), null);
         assignDepartment(salesTeamDept, "SALES_5D", LocalDate.of(2024, 10, 1), null);
         assignDepartment(salesSupportDept, "OFFICE_5D", LocalDate.of(2024, 10, 1), null);

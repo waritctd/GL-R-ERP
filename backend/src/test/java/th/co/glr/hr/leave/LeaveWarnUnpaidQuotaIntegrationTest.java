@@ -17,30 +17,9 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * V164 (owner-approved change, 2026-09-09): real-Postgres proof of owner ruling #1 -- "the single
- * most important correctness property of this change" -- that a WARN_UNPAID_ALL/WARN_UNPAID_EXCESS
- * request consumes NO quota, through the REAL {@link LeaveRepository} and REAL SQL. Mockito cannot
- * prove this: {@code LeaveServiceTest}'s equivalent tests stub {@code sumUsedDays} directly, so they
- * can only prove {@link LeaveService#computeQuotaSplit}'s OWN arithmetic is right for the request
- * under test -- they cannot catch a bug in the SQL a LATER request's quota computation reads. This
- * class is written specifically to catch that class of bug: {@link
- * #aWarnedRequestsUnpaidByRuleDaysNeverReduceALaterRequestsRemainingQuota} submits a WARN-triggering
- * request FIRST, then a second, ordinary, full-quota request SECOND, and asserts the second one is
- * unaffected -- proving the exclusion survives into {@code hr.leave_request_quota_year} and back out
- * through {@link LeaveRepository#sumUsedDays}, not merely into the first request's own persisted
- * split. See that test's Javadoc for the concrete bug this construction is shaped to catch (found
- * and fixed while implementing this same change -- {@code sumUsedDays} originally summed the child
- * table's plain {@code total_days}, which does not know about {@code unpaid_by_rule_days} at all).
- *
- * <p>Uses REAL seeded {@code hr.leave_type} data (VACATION: advance_notice_days=3,
- * annual_quota_days=6.00, min_service_months=0, prorated_first_year=TRUE -- V116/V120), not a
- * Mockito fixture, so this is proof against the actual production rule data, not an approximation
- * of it. Every employee here has NO department ({@code insertEmployee}'s null third argument), so
- * §5.3.2 department coverage (still BLOCK, unrelated to this test) never fires and cannot confound
- * the result -- see {@code LeaveRelationalRulesIntegrationTest}'s identical "no work_schedule_assignment
- * rows for an ad-hoc department" reasoning for why every date below is a weekday.
- */
+/** V164 (owner-approved change, 2026-09-09): real-Postgres proof of owner ruling #1 -- "the single most
+ * important correctness property of this change" -- that a WARN_UNPAID_ALL/WARN_UNPAID_EXCESS request consumes
+ * NO quota, through the REAL LeaveRepository and REAL SQL. */
 class LeaveWarnUnpaidQuotaIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
     // Wednesday 2026-07-01 09:00 Asia/Bangkok.
@@ -64,18 +43,17 @@ class LeaveWarnUnpaidQuotaIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void aWarnedRequestsUnpaidByRuleDaysNeverReduceALaterRequestsRemainingQuota() {
-        // Hired long ago -- clears VACATION's real prorated_first_year scaling (full 6.00/year quota,
-        // not a fraction of it) and its (now-zero) min_service_months, isolating this test to the
-        // ADVANCE_NOTICE gate alone.
+        // Hired long ago -- clears VACATION's real prorated_first_year scaling (full 6.00/year quota, not a fraction
+        // of it) and its (now-zero) min_service_months, isolating this test to the ADVANCE_NOTICE gate alone.
         long employeeId = insertEmployee("WARN-QUOTA-001", LocalDate.parse("2015-01-01"), null);
-        // §5.3.5 VACATION carry-forward (V127): pin 2025's carry-OUT to ZERO so 2026's quota is
-        // exactly the flat 6.00 annual figure, not 6.00 + an unused-2025 carry-in -- carry-forward
-        // arithmetic is exercised elsewhere; this test is about unpaid-by-rule exclusion specifically.
+        // §5.3.5 VACATION carry-forward (V127): pin 2025's carry-OUT to ZERO so 2026's quota is exactly the flat 6.00
+        // annual figure, not 6.00 + an unused-2025 carry-in -- carry-forward arithmetic is exercised elsewhere; this
+        // test is about unpaid-by-rule exclusion specifically.
         leaveRepository.insertCarryoverIfAbsent(
             employeeId, "VACATION", 2025, 2026, new BigDecimal("6.00"), BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO);
 
-        // ── Request 1: 1 working day, filed with ZERO days' notice (today == FIXED_NOW's date, well
-        // inside VACATION's real 3-working-day requirement) -- fires ADVANCE_NOTICE, WARN_UNPAID_ALL.
+        // Request 1: 1 working day, filed with ZERO days' notice (today == FIXED_NOW's date, well inside VACATION's
+        // real 3-working-day requirement) -- fires ADVANCE_NOTICE, WARN_UNPAID_ALL.
         SubmitLeaveRequest lateRequest = submitRequest(employeeId, "2026-07-01", "2026-07-01");
         LeaveRequestDto warned = leaveService.submit(lateRequest, employee(employeeId));
 
@@ -91,17 +69,13 @@ class LeaveWarnUnpaidQuotaIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(warned.unpaidByRuleDays()).isEqualByComparingTo("1.00");
         assertThat(warned.paidDays()).isEqualByComparingTo("0.00");
         assertThat(warned.unpaidDays()).isEqualByComparingTo("1.00");
-        // Wrong-way-round assertion #2: quota_remaining_before == quota_remaining_after on the SAME
-        // request -- nothing was consumed by submitting it, even though it went through.
+        // Wrong-way-round assertion #2: quota_remaining_before == quota_remaining_after on the SAME request -- nothing
+        // was consumed by submitting it, even though it went through.
         assertThat(warned.quotaRemainingBefore()).isEqualByComparingTo("6.00");
         assertThat(warned.quotaRemainingAfter()).isEqualByComparingTo("6.00");
 
-        // ── Request 2: a SEPARATE, later, properly-noticed request for the FULL 6.00-day annual
-        // quota (2026-08-03 Mon .. 2026-08-10 Mon, 6 working days -- comfortably >3 working days'
-        // notice from FIXED_NOW). If request 1's unpaid-by-rule day had wrongly counted as "used"
-        // (the bug this test is shaped to catch -- see this class's Javadoc), request 2 would show
-        // paidDays=5.00/unpaidDays=1.00 (quota short by exactly the first request's 1 day) instead of
-        // the correct paidDays=6.00/unpaidDays=0.00.
+        // Request 2: a SEPARATE, later, properly-noticed request for the FULL 6.00-day annual quota (2026-08-03 Mon ..
+        // 2026-08-10 Mon, 6 working days -- comfortably >3 working days' notice from FIXED_NOW).
         SubmitLeaveRequest fullQuotaRequest = submitRequest(employeeId, "2026-08-03", "2026-08-10");
         LeaveRequestDto second = leaveService.submit(fullQuotaRequest, employee(employeeId));
 
@@ -114,9 +88,9 @@ class LeaveWarnUnpaidQuotaIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(second.unpaidDays()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(second.quotaRemainingAfter()).isEqualByComparingTo(BigDecimal.ZERO);
 
-        // Direct SQL proof, independent of the DTO mapping: hr.leave_request_quota_year's own
-        // unpaid_by_rule_days column (V164) for request 1's row, and LeaveRepository#sumUsedDays
-        // (what request 2's own quota computation actually read) reflect the SAME exclusion.
+        // Direct SQL proof, independent of the DTO mapping: hr.leave_request_quota_year's own unpaid_by_rule_days
+        // column (V164) for request 1's row, and LeaveRepository#sumUsedDays (what request 2's own quota computation
+        // actually read) reflect the SAME exclusion.
         var splits = leaveRepository.findQuotaYearSplits(warned.id());
         assertThat(splits).hasSize(1);
         assertThat(splits.get(0).unpaidByRuleDays()).isEqualByComparingTo("1.00");
@@ -126,9 +100,8 @@ class LeaveWarnUnpaidQuotaIntegrationTest extends AbstractPostgresIntegrationTes
     @Test
     void aWeddingExcessWarningLeavesOnlyTheExcessDaysUnpaidAndUnconsumedFromQuota() {
         // WARN_UNPAID_EXCESS companion: real PERSONAL (min_service_months=0, prorated_first_year=TRUE,
-        // annual_quota_days=7.00 -- V116/V120), WEDDING_LEAVE_MAX_DAYS=3 (a Java constant, not a
-        // column -- see LeaveService#autoRejectNote's wedding-cap comment). 4 working days
-        // (Mon-Thu), 1 over the cap.
+        // annual_quota_days=7.00 -- V116/V120), WEDDING_LEAVE_MAX_DAYS=3 (a Java constant, not a column -- see
+        // LeaveService#autoRejectNote's wedding-cap comment). 4 working days (Mon-Thu), 1 over the cap.
         long employeeId = insertEmployee("WARN-QUOTA-002", LocalDate.parse("2015-01-01"), null);
 
         SubmitLeaveRequest weddingRequest = new SubmitLeaveRequest(

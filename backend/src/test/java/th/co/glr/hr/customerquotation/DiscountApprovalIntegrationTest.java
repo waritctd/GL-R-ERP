@@ -73,24 +73,8 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155) — real Postgres, real
- * services, no Mockito on the path under test. Builds on {@code CustomerQuotationIntegrationTest}'s
- * own fixtures/style (this repo's convention is one self-contained fixture per file, e.g. {@code
- * PricingDecisionMinimumPriceAutoPopulationIntegrationTest} does not share {@code
- * CustomerQuotationIntegrationTest}'s either).
- *
- * <p><b>The single most important test in this file</b> is {@link
- * #approvalIsBoundToTheExactPrice_priceChangeAfterApprovalInvalidatesIt} — written wrong-way-round
- * per the task brief: approve a line, change its price, assert {@code issue()} is STILL refused.
- *
- * <p><b>Authorization</b> ({@link #onlyCeoMayApproveOrReject_everyOtherRoleIsRefused}) is also
- * written wrong-way-round: it asserts {@code sales}, {@code sales_manager}, {@code account} and
- * {@code import} all CANNOT approve/reject, not merely that the CEO can. {@code sales_manager} is
- * deliberately included in the refused set — the owner's words were "must be approved by CEO", and
- * nothing in the task brief grants sales_manager write access here (see {@code
- * DiscountApprovalService}'s own class Javadoc for the same statement).
- */
+/** CEO discount-approval workflow, Phase 2 (owner ruling 2026-08-16, V155) — real Postgres, real services, no
+ * Mockito on the path under test. */
 class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
     private PricingRequestService pricingRequestService;
     private FactoryQuoteService factoryQuoteService;
@@ -151,8 +135,8 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         long importUserId = createEmployee(employees, "ฝ่ายนำเข้า ส่วนลด", "import-discount-approval@glr.co.th",
             "PCIM", "ฝ่ายนำเข้า");
         // createManagingDirector-equivalent: a real position (กรรมการผู้จัดการ) is required for
-        // CeoApproverRule.SQL_PREDICATE (notification routing) to match — plain division "MD"
-        // alone is not enough, exactly as CustomerQuotationIntegrationTest's own comment explains.
+        // CeoApproverRule.SQL_PREDICATE (notification routing) to match — plain division "MD" alone is not enough,
+        // exactly as CustomerQuotationIntegrationTest's own comment explains.
         ceoUserId = employees.create(new UpsertEmployeeRequest(
             null, null, "ผู้บริหาร ส่วนลด", null, null, null, null, null, null, null,
             "ceo-discount-approval@glr.co.th", null, "MD", "ผู้บริหาร", "ผู้บริหาร",
@@ -184,9 +168,7 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // THE critical invariant — wrong-way-round
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void approvalIsBoundToTheExactPrice_priceChangeAfterApprovalInvalidatesIt() {
@@ -195,8 +177,8 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
             new CreateCustomerQuotationRequest(null, null, null, null, null, null), salesActor);
         CustomerQuotationItemDto item = draft.items().get(0);
 
-        // Sales discounts to ฿1 off (below minimum, since minimum == approved price here) and the
-        // CEO approves it AT THIS EXACT PRICE.
+        // Sales discounts to ฿1 off (below minimum, since minimum == approved price here) and the CEO approves it AT
+        // THIS EXACT PRICE.
         CustomerQuotationDto atPriceA = discountItem(draft.id(), item.id(), new BigDecimal("1.00"));
         BigDecimal priceA = itemById(atPriceA, item.id()).finalUnitPrice();
         DiscountApprovalDto pendingA = currentApprovalFor(atPriceA.id(), item.id());
@@ -215,16 +197,16 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         BigDecimal priceB = itemById(atPriceB, item.id()).finalUnitPrice();
         assertThat(priceB).isNotEqualByComparingTo(priceA);
 
-        // ─── THE assertion this task is about ───────────────────────────────────────────
-        // The approval granted at price A must NOT carry over to price B — issue() must
-        // STILL be refused, even though this exact line WAS approved a moment ago.
+        // THE assertion this task is about ─────────────────────────────────────────── The approval granted at price A
+        // must NOT carry over to price B — issue() must STILL be refused, even though this exact line WAS approved a
+        // moment ago.
         assertThatThrownBy(() -> quotationService.issue(atPriceB.id(), new IssueCustomerQuotationRequest(null), salesActor))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
         // ─────────────────────────────────────────────────────────────────────────────────
 
-        // The line correctly reads as needing approval again — a FRESH request exists for price
-        // B, distinct from the one already decided for price A.
+        // The line correctly reads as needing approval again — a FRESH request exists for price B, distinct from the
+        // one already decided for price A.
         DiscountApprovalDto pendingB = currentApprovalFor(atPriceB.id(), item.id());
         assertThat(pendingB.status()).isEqualTo("PENDING");
         assertThat(pendingB.requestedFinalUnitPrice()).isEqualByComparingTo(priceB);
@@ -236,9 +218,9 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    /** If sales bounces back to a price the CEO already approved earlier (not the most recent
-     * decision on this line), issue() succeeds without asking again — the gate is "was THIS
-     * price approved", not "is the most recent decision an approval". */
+    /** If sales bounces back to a price the CEO already approved earlier (not the most recent decision on this
+     * line), issue() succeeds without asking again — the gate is "was THIS price approved", not "is the most
+     * recent decision an approval". */
     @Test
     void revertingToAPreviouslyApprovedPrice_issuesWithoutANewApproval() {
         long pricingRequestId = approvedOneItemPricingRequest();
@@ -267,9 +249,7 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authorization — wrong-way-round (real DB, real service — not mocked)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void onlyCeoMayApproveOrReject_everyOtherRoleIsRefused() {
@@ -313,9 +293,7 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(discountApprovalService.listPending(ceoActor)).isNotEmpty();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Rejection: mandatory reason, recorded, shown to Sales, quotation stays blocked
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void rejection_requiresAReason_recordsIt_leavesTheQuotationBlocked_andReRequestOpensAFreshRow() {
@@ -363,8 +341,8 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT));
 
-        // Sales revises the price and re-requests — a FRESH pending row opens (not the rejected
-        // one silently reopened) at the new price.
+        // Sales revises the price and re-requests — a FRESH pending row opens (not the rejected one silently reopened)
+        // at the new price.
         CustomerQuotationDto revised = discountItem(discounted.id(), item.id(), new BigDecimal("0.50"));
         DiscountApprovalDto reopened = currentApprovalFor(revised.id(), item.id());
         assertThat(reopened.id()).isNotEqualTo(pending.id());
@@ -389,9 +367,7 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Per-line granularity — owner's explicit choice over per-quotation
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void approvalIsPerLine_approvingOneLineDoesNotApproveAnother() {
@@ -413,8 +389,8 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
 
         discountApprovalService.approve(pending1.id(), ceoActor);
 
-        // Still refused — item2 is unapproved. The message names item2 specifically ("a clear
-        // message naming the offending line", per the task brief).
+        // Still refused — item2 is unapproved. The message names item2 specifically ("a clear message naming the
+        // offending line", per the task brief).
         assertThatThrownBy(() -> quotationService.issue(discounted.id(), new IssueCustomerQuotationRequest(null), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
                 assertThat(e.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_CONTENT);
@@ -426,9 +402,7 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(issued.docStatus()).isEqualTo(QuotationStatus.ISSUED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private CustomerQuotationDto discountItem(long quotationId, long itemId, BigDecimal discount) {
         return quotationService.update(quotationId, new UpdateCustomerQuotationRequest(
@@ -436,9 +410,8 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
             List.of(new UpdateCustomerQuotationItemRequest(itemId, null, null, discount))), salesActor);
     }
 
-    /** The "current" per-line status a UI would show — see {@link
-     * DiscountApprovalRepository#findCurrentByQuotationId}'s own doc for why this is
-     * price-matched, not merely "the latest row". */
+    /** The "current" per-line status a UI would show — see DiscountApprovalRepository#findCurrentByQuotationId's
+     * own doc for why this is price-matched, not merely "the latest row". */
     private DiscountApprovalDto currentApprovalFor(long quotationId, long itemId) {
         return discountApprovalService.listForQuotation(quotationId, salesActor).stream()
             .filter(a -> a.quotationItemId() == itemId)
@@ -450,13 +423,12 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         return quotation.items().stream().filter(i -> i.id() == itemId).findFirst().orElseThrow();
     }
 
-    /** One-item deal driven to an APPROVED pricing decision at 20% margin — no explicit minimum
-     * set anywhere, so Phase 1's auto-population (minimum = approved price) means ANY positive
-     * discount is below minimum, exactly like {@code approvedPricingRequest} in
-     * {@code CustomerQuotationIntegrationTest}. */
+    /** One-item deal driven to an APPROVED pricing decision at 20% margin — no explicit minimum set anywhere, so
+     * Phase 1's auto-population (minimum = approved price) means ANY positive discount is below minimum, exactly
+     * like approvedPricingRequest in CustomerQuotationIntegrationTest. */
     private long approvedOneItemPricingRequest() {
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
         // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductId1, null, "SCG", "Tile DA1", "SCG Tile DA1", "White", "Matte", "60x60",
@@ -486,8 +458,8 @@ class DiscountApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
         return pricingRequestId;
     }
 
-    /** Two-item variant of {@link #approvedOneItemPricingRequest} — for the per-line granularity
-     * test, which needs two independently-approvable lines on the SAME quotation. */
+    /** Two-item variant of #approvedOneItemPricingRequest — for the per-line granularity test, which needs two
+     * independently-approvable lines on the SAME quotation. */
     private long approvedTwoItemPricingRequest() {
         PricingRequestRequests.CreatePricingRequestRequest request = new PricingRequestRequests.CreatePricingRequestRequest(
             PricingRequestRecipient.DESIGNER, null, "Designer Co.", LocalDate.now().plusDays(14),

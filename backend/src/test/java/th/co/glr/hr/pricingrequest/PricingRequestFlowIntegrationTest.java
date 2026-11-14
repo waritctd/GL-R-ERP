@@ -50,24 +50,8 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketStatus;
 
-/**
- * End-to-end acceptance walk for Step 1 of the sales pricing-request separation
- * (see docs/agent-handoffs/85_feat-sales-pricing-request-foundation.md, "commit 7").
- *
- * <p>Exercises {@link TicketService}, {@link PricingRequestService},
- * {@link PricingRequestRepository}, {@link NotificationRepository} and
- * {@link EmployeeRepository} together against a real PostgreSQL database — the gap
- * neither {@code TicketServiceTest}/{@code PricingRequestServiceTest} (Mockito, all
- * collaborators stubbed) nor {@code PricingRequestRepositoryIntegrationTest} (single
- * repository, no service-layer authz) can cover: whether the two aggregates
- * (deal/ticket vs pricing request) actually stay decoupled when driven through their
- * real service layer, not just through direct repository calls.
- *
- * <p>Every collaborator ({@link TicketRepository}, {@link PricingRequestRepository},
- * {@link PricingRequestService}, {@link NotificationRepository}, {@link EmployeeRepository},
- * {@link CustomerRepository}, {@link ProjectRepository}, {@link QuotationRenderer}) is real and
- * backed by the same {@code jdbc} the base class resets before every test.
- */
+/** End-to-end acceptance walk for Step 1 of the sales pricing-request separation (see
+ * docs/agent-handoffs/85_feat-sales-pricing-request-foundation.md, "commit 7"). */
 class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private TicketService ticketService;
@@ -91,9 +75,9 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     private UserPrincipal salesManagerActor;
 
     private long ticketId;
-    // Financial-integrity review Finding A (commit 3): submit() now requires every item's
-    // catalog snapshot to be fully resolved, so pricingItem() below must reference a real,
-    // ACTIVE catalog product rather than pure free text.
+    // Financial-integrity review Finding A (commit 3): submit() now requires every item's catalog snapshot to be
+    // fully resolved, so pricingItem() below must reference a real, ACTIVE catalog product rather than pure free
+    // text.
     private long catalogProductId;
 
     @BeforeEach
@@ -116,12 +100,11 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
 
         salesRepId = createEmployee(employees, "พนักงานขาย หนึ่ง", "sales1@glr.co.th", "SALES", "แผนกขาย");
         secondSalesRepId = createEmployee(employees, "พนักงานขาย สอง", "sales2@glr.co.th", "SALES", "แผนกขาย");
-        // source_code 'PCIM' matches NotificationRepository.notifyByRole("import", ...)'s
-        // "d.source_code ILIKE 'PCIM%'" filter — required for the "Import got a
-        // notification" assertion below to actually find a row.
+        // source_code 'PCIM' matches NotificationRepository.notifyByRole("import", ...)'s "d.source_code ILIKE
+        // 'PCIM%'" filter — required for the "Import got a notification" assertion below to actually find a row.
         importUserId = createEmployee(employees, "ฝ่ายนำเข้า ทดสอบ", "import@glr.co.th", "PCIM", "ฝ่ายนำเข้า");
-        // Principal role drives service authz; keep this employee out of PCIM so
-        // submit-notification tests still have exactly one Import recipient.
+        // Principal role drives service authz; keep this employee out of PCIM so submit-notification tests still have
+        // exactly one Import recipient.
         secondImportUserId = createEmployee(employees, "ฝ่ายนำเข้า สำรอง", "import2@glr.co.th", "OPS", "ฝ่ายปฏิบัติการ");
         ceoUserId = createManagingDirector(employees, "ผู้บริหาร ทดสอบ", "ceo@glr.co.th");
         accountUserId = createEmployee(employees, "ฝ่ายบัญชี ทดสอบ", "account@glr.co.th", "ACCT", "ฝ่ายบัญชี");
@@ -264,13 +247,7 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
     // ── 5. The information loop preserves ownership ────────────────────────
 
 
-    // ── 6. Gap 2 (review-remediation Commit F): the full pickup -> request-info ──
-    // -> respond sequence, driven through the real services with a status
-    // assertion after EVERY step, not just the two isolated fragments above
-    // (#4 stops at pickup; #5 fabricates its starting point via pickup() but
-    // never checks submit's/pickup's own returned status). Ends by proving
-    // pickedUpAt/assignedImportId survived the whole round trip byte-identical,
-    // per the task brief.
+    // Checks statuses and retained assignment data through pickup, information request, and response.
 
 
     // ── extra: a second sales rep cannot discover draft, then cannot read submitted ──
@@ -309,12 +286,8 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
-    /**
-     * Wrong-way-round: a second sales rep must never reach the first rep's Pricing Request
-     * attachments, at any status — this is the authz case the review explicitly calls out.
-     * Mirrors {@code aSecondSalesRep_cannotReadTheFirstReps_pricingRequest} above: 404 while
-     * DRAFT (draft privacy — indistinguishable from "no such id"), 403 once visible-but-not-owned.
-     */
+    /** Wrong-way-round: a second sales rep must never reach the first rep's Pricing Request attachments, at any
+     * status — this is the authz case the review explicitly calls out. */
     @Test
     void aSecondSalesRep_cannotUploadListDownloadOrDeleteTheFirstReps_pricingRequestAttachments() {
         long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
@@ -333,9 +306,6 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
         pricingRequestService.submit(id, salesActor);
         pricingRequestService.pickup(id, importActor);
         // V140: this used to walk on to MORE_INFO_REQUIRED before re-asserting the scoping below.
-        // That status no longer exists, so IMPORT_REVIEWING is the post-pickup state — what the
-        // block below actually cares about is that a NON-OWNER sales rep is refused once the
-        // request has left DRAFT, which is equally true here.
         assertThat(pricingRequestService.get(id, importActor).summary().status())
             .isEqualTo(PricingRequestStatus.IMPORT_REVIEWING);
 
@@ -353,21 +323,13 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             .extracting(PricingRequestAttachmentDto::id).contains(uploaded.id());
     }
 
-    /**
-     * MUTATION-CHECKABLE GUARD: {@code PricingRequestService.uploadAttachment}'s {@code
-     * requireRole(actor, SALES_ROLES)}. Deliberately exercised on a MORE_INFO_REQUIRED (not
-     * DRAFT) request, where Import is a normal VIEWER — so nothing else (draft privacy,
-     * ownership — which is role="sales"-gated in requireViewable) would coincidentally block
-     * Import here. If this role gate were ever removed, Import could upload directly to a
-     * Pricing Request whose attachments are meant to be Sales-authored evidence.
-     */
+    /** MUTATION-CHECKABLE GUARD: PricingRequestService.uploadAttachment's requireRole(actor, SALES_ROLES). If this
+     * role gate were ever removed, Import could upload directly to a Pricing Request whose attachments are meant
+     * to be Sales-authored evidence. */
     @Test
     void importCannotUploadOrDeletePricingRequestAttachments_evenWhileSalesStillCan() {
-        // V140: this used to reach MORE_INFO_REQUIRED first, because that was the one post-submit
-        // status where Sales could still attach. With that round-trip removed,
-        // ATTACHMENT_EDITABLE_STATUSES is {DRAFT} — so DRAFT is now the only status where the
-        // role split is observable at all, and it is where the assertion belongs. The claim is
-        // unchanged: even where SALES may attach, IMPORT may not.
+        // V140: this used to reach MORE_INFO_REQUIRED first, because that was the one post-submit status where Sales
+        // could still attach. The claim is unchanged: even where SALES may attach, IMPORT may not.
         long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
 
         assertThatThrownBy(() -> pricingRequestService.uploadAttachment(id, sampleFile(), importActor))
@@ -379,13 +341,8 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    /**
-     * MUTATION-CHECKABLE GUARD: {@code PricingRequestService.setAttachmentIncludeInFactoryEmail}'s
-     * {@code requireRole(actor, IMPORT_ROLES)} — a brand-new method/gate this commit adds. Nothing
-     * else in that method restricts by role (requireViewableAttachment only requires a VIEWER
-     * role, which Sales also has), so this is the sole guard standing between a Sales actor and
-     * marking their own attachment for inclusion in a factory email Import controls.
-     */
+    /** MUTATION-CHECKABLE GUARD: PricingRequestService.setAttachmentIncludeInFactoryEmail's requireRole(actor,
+     * IMPORT_ROLES) — a brand-new method/gate this commit adds. */
     @Test
     void salesCannotToggleIncludeInFactoryEmail_onlyImportCan() {
         long id = pricingRequestService.createDraft(ticketId, designerCreateRequest(), salesActor).summary().id();
@@ -467,8 +424,8 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
 
     @Test
     void accountingCannotReadTheTicketPaymentInfoOrPricingRequests() {
-        // H1 lockdown: account no longer reads a deal or its ledger through the ticket service at all
-        // (it reads the finance deal view); this used to assert it could read both.
+        // H1 lockdown: account no longer reads a deal or its ledger through the ticket service at all (it reads the
+        // finance deal view); this used to assert it could read both.
         assertThatThrownBy(() -> ticketService.get(ticketId, accountActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
         assertThatThrownBy(() -> ticketService.listPayments(ticketId, accountActor))
@@ -542,11 +499,8 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             List.of(pricingItem("Honda", "Civic")));
     }
 
-    // V185 (direct-deal-form parity): requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis
-    // are no longer sent — PricingRequestService#resolveItems derives them from the tile fields
-    // below. color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now REQUIRED
-    // (owner ruling), so this fixture supplies all of them (PIECES mode, 1 piece, no wastage, no
-    // box rounding) rather than the pre-V185 bare brand/model/requestedQty shape.
+    // V185 (direct-deal-form parity): requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis are no longer
+    // sent — PricingRequestService#resolveItems derives them from the tile fields below.
     private PricingRequestItemRequest pricingItem(String brand, String model) {
         return new PricingRequestItemRequest(null, catalogProductId, null, brand, model, brand + " " + model,
             "สีทดสอบ", "ผิวทดสอบ", "60x60", null,
@@ -573,10 +527,9 @@ class PricingRequestFlowIntegrationTest extends AbstractPostgresIntegrationTest 
             null, null, null, "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 
-    /** The CEO fixture -- needs a real position, see CustomerQuotationIntegrationTest for why:
-     *  CeoApproverRule keys the notified set on position กรรมการผู้จัดการ alone, and
-     *  {@link #createEmployee} leaves positionTh null. Division stays MD, so the `ceo` role and
-     *  every authz assertion here are unchanged. */
+    /** The CEO fixture -- needs a real position, see CustomerQuotationIntegrationTest for why: CeoApproverRule keys
+     * the notified set on position กรรมการผู้จัดการ alone, and #createEmployee leaves positionTh null. Division
+     * stays MD, so the `ceo` role and every authz assertion here are unchanged. */
     private long createManagingDirector(EmployeeRepository employees, String nameTh, String email) {
         return employees.create(new UpsertEmployeeRequest(
             null, null, nameTh, null, null, null, null, null, null, null,

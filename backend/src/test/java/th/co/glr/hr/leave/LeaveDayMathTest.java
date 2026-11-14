@@ -16,12 +16,9 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
 
-/**
- * Pure-math coverage for {@link LeaveDayMath}, the weekday-counting logic shared by the per-month
- * unpaid-day attribution query ({@link LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth}) and
- * the cancel-after-close reversal ({@link LeaveService#cancel}). No DB needed -- these are plain
- * date-arithmetic assertions.
- */
+/** Pure-math coverage for LeaveDayMath, the weekday-counting logic shared by the per-month unpaid-day
+ * attribution query (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth) and the cancel-after-close
+ * reversal (LeaveService#cancel). No DB needed -- these are plain date-arithmetic assertions. */
 class LeaveDayMathTest {
 
     @Test
@@ -48,11 +45,7 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthSplitsCorrectlyAcrossACalendarMonthBoundary() {
-        // Thu 2026-07-30 .. Wed 2026-08-05: working days are Thu 7/30, Fri 7/31, Mon 8/3, Tue 8/4,
-        // Wed 8/5 (Sat 8/1 + Sun 8/2 excluded) = 5 working days total, chronological order:
-        // rank1=7/30, rank2=7/31, rank3=8/3, rank4=8/4, rank5=8/5.
-        // paidDays=2 consumes the first 2 (both in July) -> July has 0 unpaid days, August has 3
-        // (ranks 3,4,5 all fall beyond the 2 paid days and all land in August).
+        // Five workdays span July/August; two paid July days leave three unpaid August days.
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
             LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-05"), new BigDecimal("2.00"), new BigDecimal("5.00"));
 
@@ -63,9 +56,9 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthSplitsPaidPortionAcrossTheBoundaryToo() {
-        // Same range as above but paidDays=4: ranks 1-4 (7/30, 7/31, 8/3, 8/4) are paid, only rank 5
-        // (8/5) is unpaid -- so July still contributes 0 unpaid days (its 2 working days were both
-        // paid) and August contributes exactly 1.
+        // Same range as above but paidDays=4: ranks 1-4 (7/30, 7/31, 8/3, 8/4) are paid, only rank 5 (8/5) is unpaid
+        // -- so July still contributes 0 unpaid days (its 2 working days were both paid) and August contributes
+        // exactly 1.
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
             LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-05"), new BigDecimal("4.00"), new BigDecimal("5.00"));
 
@@ -95,8 +88,7 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthSubDaySingleDateOverQuotaAttributesFractionalRemainder() {
-        // Half-day (0.50) leave, none of it covered by quota -> the whole 0.50 is unpaid, in that
-        // day's month.
+        // Half-day (0.50) leave, none of it covered by quota -> the whole 0.50 is unpaid, in that day's month.
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
             LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), new BigDecimal("0.00"), new BigDecimal("0.50"));
 
@@ -147,8 +139,8 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthWithExactWholePaidDaysStillProducesAWholeUnpaidDay() {
-        // Sanity check that the fractional-balance rewrite did not change the pre-existing exact-whole-
-        // number behaviour: paid=1.00 over 2 working days -> day 1 fully paid, day 2 fully unpaid.
+        // Sanity check that the fractional-balance rewrite did not change the pre-existing exact-whole- number
+        // behaviour: paid=1.00 over 2 working days -> day 1 fully paid, day 2 fully unpaid.
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
             LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-14"), new BigDecimal("1.00"), new BigDecimal("2.00"));
 
@@ -157,11 +149,7 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthWithFractionalPaidRunningOutMidSpanSplitsAcrossACalendarMonthBoundary() {
-        // Thu 2026-07-30 .. Mon 2026-08-03: working days are 7/30, 7/31, 8/3 (Sat 8/1 + Sun 8/2
-        // excluded) = 3 working days total. paidDays=1.50: day 1 (7/30) consumes 1.00 of it (0.50
-        // remains, 0 unpaid); day 2 (7/31) consumes the remaining 0.50 -> 0.50 unpaid, landing in
-        // July; day 3 (8/3) has nothing left -> 1.00 unpaid, landing in August. Proves the fractional
-        // remainder lands in the correct month, not just the correct total.
+        // Of three workdays, 1.5 paid days leave 0.5 unpaid in July and 1 unpaid in August.
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
             LocalDate.parse("2026-07-30"), LocalDate.parse("2026-08-03"), new BigDecimal("1.50"), new BigDecimal("3.00"));
 
@@ -187,23 +175,23 @@ class LeaveDayMathTest {
 
     @Test
     void totalDaysByYearSplitsCorrectlyAcrossThe31DecemberToJanuaryBoundary() {
-        // Thu 2026-12-31 (a working day) .. Fri 2027-01-01 (a working day too, no holiday calendar in
-        // v1): 1 day in 2026, 1 day in 2027.
+        // Thu 2026-12-31 (a working day) .. Fri 2027-01-01 (a working day too, no holiday calendar in v1): 1 day in
+        // 2026, 1 day in 2027.
         Map<Integer, BigDecimal> byYear = LeaveDayMath.totalDaysByYear(
             LocalDate.parse("2026-12-31"), LocalDate.parse("2027-01-01"), new BigDecimal("2.00"));
 
         assertThat(byYear)
             .containsExactly(Map.entry(2026, new BigDecimal("1.00")), Map.entry(2027, new BigDecimal("1.00")));
-        // Ascending-year order is a documented guarantee callers rely on (LeaveService#submit reads
-        // the first entry as the request's start year).
+        // Ascending-year order is a documented guarantee callers rely on (LeaveService#submit reads the first entry as
+        // the request's start year).
         assertThat(byYear.keySet()).containsExactly(2026, 2027);
     }
 
     @Test
     void totalDaysByYearOnASingleDateAttributesTheWholeAmountToThatYear() {
-        // Single-date range (whole-day or sub-day): no weekday-rank logic needed, just the one date's
-        // year -- proven with a fractional (sub-day) amount, since that is the case a naive
-        // working-day-count reimplementation would get wrong.
+        // Single-date range (whole-day or sub-day): no weekday-rank logic needed, just the one date's year -- proven
+        // with a fractional (sub-day) amount, since that is the case a naive working-day-count reimplementation would
+        // get wrong.
         Map<Integer, BigDecimal> byYear = LeaveDayMath.totalDaysByYear(
             LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), new BigDecimal("0.50"));
 
@@ -228,23 +216,9 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthAcrossYearsComposesEachYearIndependently() {
-        // The scenario that DEFINES the risk in LeaveQuotaYearSplit's Javadoc: year A (2026) is
-        // capped mid-way (an unpaid TAIL near year-end), year B (2027) is fully paid from its own
-        // fresh start. A single whole-request chronological-rank threshold over the AGGREGATE figures
-        // would put the unpaid days at the wrong end of the whole span -- this proves the per-year
-        // composition instead correctly keeps them in December.
-        //
-        // Full continuous range Mon 2026-12-21 .. Tue 2027-01-05, working days in chronological
-        // order: 12/21,22,23,24,25,28,29,30,31 (9, all 2026), then 1/1,1/4,1/5 (3, all 2027;
-        // 1/2-1/3 is a weekend, no holiday calendar in v1) -- 12 working days total.
-        //
-        // 2026 slice: 7 of its 9 working days paid -> unpaid = the LAST 2 chronologically, 12/30 and
-        // 12/31 (both December).
-        // 2027 slice: all 3 of its working days paid -> nothing unpaid.
-        //
-        // A NAIVE aggregate reading (paid=7+3=10 across the full 12-day span, single global rank
-        // threshold) would instead mark ranks 11-12 (1/4 and 1/5, both JANUARY) as unpaid -- the
-        // wrong month AND the wrong year. That divergence is exactly what this test guards against.
+        // The scenario that DEFINES the risk in LeaveQuotaYearSplit's Javadoc: year A (2026) is capped mid-way (an
+        // unpaid TAIL near year-end), year B (2027) is fully paid from its own fresh start. Full continuous range Mon
+        // 2026-12-21 ..
         List<LeaveQuotaYearSplit> perYear = List.of(
             new LeaveQuotaYearSplit(2026, new BigDecimal("9.00"), new BigDecimal("7.00"), new BigDecimal("2.00"),
                 new BigDecimal("9.00"), new BigDecimal("2.00"), BigDecimal.ZERO, new BigDecimal("7.00"), BigDecimal.ZERO),
@@ -257,8 +231,8 @@ class LeaveDayMathTest {
 
         assertThat(byMonth)
             .containsExactly(Map.entry(LocalDate.parse("2026-12-01"), new BigDecimal("2.00")));
-        // The critical negative assertion: January must NOT show up as unpaid, even though the naive
-        // aggregate-rank reading described above would have put 2 unpaid days there instead.
+        // The critical negative assertion: January must NOT show up as unpaid, even though the naive aggregate-rank
+        // reading described above would have put 2 unpaid days there instead.
         assertThat(byMonth).doesNotContainKey(LocalDate.parse("2027-01-01"));
     }
 
@@ -270,26 +244,24 @@ class LeaveDayMathTest {
 
     @Test
     void countCalendarDaysCountsEveryDayIncludingWeekends() {
-        // Mon 2026-07-13 .. Sun 2026-07-19 (a full week, both weekend days included) = 7 calendar
-        // days, vs. only 5 working days for the identical range (see countWorkingDaysExcludesWeekends
-        // for the same Mon-Fri span) -- proves this is a genuinely different count, not a renamed
-        // duplicate.
+        // Mon 2026-07-13 .. Sun 2026-07-19 (a full week, both weekend days included) = 7 calendar days, vs. only 5
+        // working days for the identical range (see countWorkingDaysExcludesWeekends for the same Mon-Fri span) --
+        // proves this is a genuinely different count, not a renamed duplicate.
         assertThat(LeaveDayMath.countCalendarDays(LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-19")))
             .isEqualTo(7);
         assertThat(LeaveDayMath.countCalendarDays(LocalDate.parse("2026-07-18"), LocalDate.parse("2026-07-19")))
             .isEqualTo(2);
-        // A 98-CALENDAR-day span (the exact §5.4 MATERNITY quota figure) -- the defect this branch
-        // fixes: under the old WORKING_DAYS-only counting this same range would have counted roughly
-        // 70 days (98 * 5/7), not 98.
+        // A 98-CALENDAR-day span (the exact §5.4 MATERNITY quota figure) -- the defect this branch fixes: under the
+        // old WORKING_DAYS-only counting this same range would have counted roughly 70 days (98 * 5/7), not 98.
         assertThat(LeaveDayMath.countCalendarDays(LocalDate.parse("2026-01-05"), LocalDate.parse("2026-04-12")))
             .isEqualTo(98);
     }
 
     @Test
     void totalDaysByYearOnCalendarBasisCountsWeekendsThatWorkingBasisWouldExclude() {
-        // THE vacuous-fixture guard: same Mon 2026-07-13 .. Sun 2026-07-19 range, asserted under BOTH
-        // bases on one fixture. If this ever regressed to always using the same counting logic
-        // regardless of basis, one of these two assertions would fail.
+        // THE vacuous-fixture guard: same Mon 2026-07-13 .. Sun 2026-07-19 range, asserted under BOTH bases on one
+        // fixture. If this ever regressed to always using the same counting logic regardless of basis, one of these
+        // two assertions would fail.
         LocalDate start = LocalDate.parse("2026-07-13");
         LocalDate end = LocalDate.parse("2026-07-19");
 
@@ -300,16 +272,15 @@ class LeaveDayMathTest {
 
         assertThat(calendarBasis).containsExactly(Map.entry(2026, new BigDecimal("7.00")));
         assertThat(workingBasis).containsExactly(Map.entry(2026, new BigDecimal("5.00")));
-        // The no-basis 3-arg overload (used by every WORKING_DAYS type) must be byte-identical to
-        // explicitly passing WORKING_DAYS -- pins that the delegation introduced no drift.
+        // The no-basis 3-arg overload (used by every WORKING_DAYS type) must be byte-identical to explicitly passing
+        // WORKING_DAYS -- pins that the delegation introduced no drift.
         assertThat(LeaveDayMath.totalDaysByYear(start, end, new BigDecimal("5.00"))).isEqualTo(workingBasis);
     }
 
     @Test
     void totalDaysByYearOnCalendarBasisSplitsCorrectlyAcrossThe31DecemberToJanuaryBoundaryIncludingTheWeekend() {
-        // Thu 2026-12-31 .. Mon 2027-01-04: CALENDAR_DAYS counts all 5 days (Thu,Fri,Sat,Sun,Mon) --
-        // 1 in 2026 (12/31), 4 in 2027 (1/1-1/4) -- including the weekend, which WORKING_DAYS would
-        // have skipped entirely.
+        // Thu 2026-12-31 .. Mon 2027-01-04: CALENDAR_DAYS counts all 5 days (Thu,Fri,Sat,Sun,Mon) -- 1 in 2026
+        // (12/31), 4 in 2027 (1/1-1/4) -- including the weekend, which WORKING_DAYS would have skipped entirely.
         Map<Integer, BigDecimal> byYear = LeaveDayMath.totalDaysByYear(
             LocalDate.parse("2026-12-31"), LocalDate.parse("2027-01-04"), new BigDecimal("5.00"),
             LeaveDayCountBasis.CALENDAR_DAYS);
@@ -320,9 +291,9 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthOnCalendarBasisCountsAnUnpaidWeekendDayTowardTheDeduction() {
-        // Mon 2026-07-13 .. Sun 2026-07-19 (7 calendar days), 5 paid -> under CALENDAR_DAYS the
-        // remaining 2 unpaid days are Sat 7/18 and Sun 7/19 -- both counted, unlike WORKING_DAYS
-        // (which would never even reach a weekend day to rank it).
+        // Mon 2026-07-13 .. Sun 2026-07-19 (7 calendar days), 5 paid -> under CALENDAR_DAYS the remaining 2 unpaid
+        // days are Sat 7/18 and Sun 7/19 -- both counted, unlike WORKING_DAYS (which would never even reach a weekend
+        // day to rank it).
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
             LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-19"), new BigDecimal("5.00"),
             new BigDecimal("7.00"), LeaveDayCountBasis.CALENDAR_DAYS);
@@ -332,9 +303,9 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthWithNoBasisArgumentIsByteIdenticalToExplicitWorkingDays() {
-        // Pins that the 4-arg overload (used by every WORKING_DAYS type today) delegates to
-        // WORKING_DAYS and produces an identical result to passing it explicitly -- the refactor that
-        // added the basis parameter must not have changed the default path.
+        // Pins that the 4-arg overload (used by every WORKING_DAYS type today) delegates to WORKING_DAYS and produces
+        // an identical result to passing it explicitly -- the refactor that added the basis parameter must not have
+        // changed the default path.
         LocalDate start = LocalDate.parse("2026-07-30");
         LocalDate end = LocalDate.parse("2026-08-05");
         BigDecimal paid = new BigDecimal("2.00");
@@ -377,9 +348,8 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthAcrossYearsSkipsAYearThatDoesNotIntersectTheRange() {
-        // Defensive: a LeaveQuotaYearSplit entry for a year the [startDate, endDate] range does not
-        // actually touch (should not happen in practice -- see clipToYear's Javadoc) is simply
-        // skipped rather than throwing.
+        // Defensive: a LeaveQuotaYearSplit entry for a year the [startDate, endDate] range does not actually touch
+        // (should not happen in practice -- see clipToYear's Javadoc) is simply skipped rather than throwing.
         List<LeaveQuotaYearSplit> perYear = List.of(
             new LeaveQuotaYearSplit(2025, new BigDecimal("1.00"), BigDecimal.ZERO, new BigDecimal("1.00"),
                 BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO),
@@ -401,13 +371,7 @@ class LeaveDayMathTest {
     // repository, which Mockito/plain-object fakes here cannot verify.
     // ─────────────────────────────────────────────────────────────────────
 
-    /**
-     * Direct coverage for the {@link LeaveDayMath#spanDayFractions} ledger itself. Every other test
-     * of the span path reaches it through {@code LeaveService#submit}, which proves the TOTAL but
-     * not the per-DATE shape -- and the per-date shape is what payroll-month attribution and the
-     * attendance summary both consume, so a ledger that summed correctly while bucketing wrongly
-     * would pass every existing test.
-     */
+    /** Direct coverage for the LeaveDayMath#spanDayFractions ledger itself. */
     @Test
     void spanDayFractionsPutsThePartialFractionOnTheBoundaryDatesAndAFullDayOnEveryDateBetween() {
         Predicate<LocalDate> everyDayIsWorking = date -> true;
@@ -417,9 +381,8 @@ class LeaveDayMathTest {
             LeaveDayCountBasis.WORKING_DAYS, everyDayIsWorking,
             FIVE_DAY_SCHEDULE, FIVE_DAY_SCHEDULE);
 
-        // First day 13:30-17:30 = 240 min, no break overlap -> 0.50.
-        // Last day 08:30-12:30 = 240 min, no break overlap -> 0.50.
-        // The two dates strictly between are full days.
+        // First day 13:30-17:30 = 240 min, no break overlap -> 0.50. Last day 08:30-12:30 = 240 min, no break overlap
+        // -> 0.50. The two dates strictly between are full days.
         assertThat(ledger).containsExactly(
             Map.entry(LocalDate.parse("2026-09-11"), new BigDecimal("0.50")),
             Map.entry(LocalDate.parse("2026-09-12"), new BigDecimal("1.00")),
@@ -444,13 +407,9 @@ class LeaveDayMathTest {
         assertThat(LeaveDayMath.sumFractions(ledger)).isEqualByComparingTo("2.00");
     }
 
-    /**
-     * {@link LeaveDayMath#unpaidByMonthFromFractionsAcrossYears} is the seam payroll reads when a
-     * timed span crosses BOTH a month and a calendar-year boundary: each year carries its own
-     * paidDays (quota is per year), so the unpaid remainder must be worked out per year and only
-     * then merged by month. Summing the whole span against one paidDays figure would silently
-     * mis-attribute the deduction.
-     */
+    /** LeaveDayMath#unpaidByMonthFromFractionsAcrossYears is the seam payroll reads when a timed span crosses BOTH
+     * a month and a calendar-year boundary: each year carries its own paidDays (quota is per year), so the unpaid
+     * remainder must be worked out per year and only then merged by month. */
     @Test
     void unpaidByMonthAcrossYearsResolvesEachYearAgainstItsOwnPaidDaysBeforeMergingByMonth() {
         Map<LocalDate, BigDecimal> ledger = new java.util.LinkedHashMap<>();
@@ -471,8 +430,8 @@ class LeaveDayMathTest {
         Map<LocalDate, BigDecimal> byMonth =
             LeaveDayMath.unpaidByMonthFromFractionsAcrossYears(ledger, perYear);
 
-        // Dec 2026: 2.00 in the ledger, 1.00 paid (earliest first) -> 1.00 unpaid.
-        // Jan 2027: nothing paid -> the whole 1.50 is unpaid.
+        // Dec 2026: 2.00 in the ledger, 1.00 paid (earliest first) -> 1.00 unpaid. Jan 2027: nothing paid -> the whole
+        // 1.50 is unpaid.
         assertThat(byMonth).containsExactly(
             Map.entry(LocalDate.parse("2026-12-01"), new BigDecimal("1.00")),
             Map.entry(LocalDate.parse("2027-01-01"), new BigDecimal("1.50")));
@@ -489,8 +448,8 @@ class LeaveDayMathTest {
 
     @Test
     void workingDayPredicateCountsASaturdayForASixDayEmployeeButNotForAFiveDayEmployeeOnTheSameDate() {
-        // Both sides on ONE fixture (the same Saturday), per this repo's vacuous-fixture rule: a
-        // predicate that always returned true (or always false) would pass only one of these.
+        // Both sides on ONE fixture (the same Saturday), per this repo's vacuous-fixture rule: a predicate that always
+        // returned true (or always false) would pass only one of these.
         LocalDate saturday = LocalDate.parse("2026-08-08");
         WorkScheduleResolver sixDayResolver = (employeeId, divisionId, departmentId, date) -> SIX_DAY_SCHEDULE;
         WorkScheduleResolver fiveDayResolver = (employeeId, divisionId, departmentId, date) -> FIVE_DAY_SCHEDULE;
@@ -506,8 +465,8 @@ class LeaveDayMathTest {
 
     @Test
     void workingDayPredicateExcludesASeededHolidayEvenOnASixDaySchedulesSaturday() {
-        // Holiday beats schedule: a date in `holidays` never counts, regardless of what the resolved
-        // WorkSchedule says about that day of week.
+        // Holiday beats schedule: a date in `holidays` never counts, regardless of what the resolved WorkSchedule says
+        // about that day of week.
         LocalDate holidaySaturday = LocalDate.parse("2026-08-08");
         WorkScheduleResolver sixDayResolver = (employeeId, divisionId, departmentId, date) -> SIX_DAY_SCHEDULE;
 
@@ -517,8 +476,8 @@ class LeaveDayMathTest {
         assertThat(isWorkingDay.test(holidaySaturday))
             .as("a seeded holiday is never a working day, even for a six-day schedule")
             .isFalse();
-        // Vacuous-fixture guard: the very next day (Sunday, not a holiday, not in either schedule)
-        // stays correctly excluded too -- proves this predicate is not just "always false".
+        // Vacuous-fixture guard: the very next day (Sunday, not a holiday, not in either schedule) stays correctly
+        // excluded too -- proves this predicate is not just "always false".
         assertThat(isWorkingDay.test(LocalDate.parse("2026-08-07")))
             .as("Friday -- neither a holiday nor excluded by the six-day schedule -- still counts")
             .isTrue();
@@ -530,9 +489,9 @@ class LeaveDayMathTest {
         Predicate<LocalDate> isWorkingDay =
             LeaveDayMath.workingDayPredicate(sixDayResolver, 1L, null, null, Set.of());
 
-        // Mon 2026-08-03 .. Sat 2026-08-08: 6 days, ALL of them working days under a six-day schedule
-        // -- the legacy Mon-Fri-only countWorkingDays(start, end) would have returned 5 for this exact
-        // range (see countWorkingDaysExcludesWeekends for the equivalent Mon-Fri assertion).
+        // Mon 2026-08-03 .. Sat 2026-08-08: 6 days, ALL of them working days under a six-day schedule -- the legacy
+        // Mon-Fri-only countWorkingDays(start, end) would have returned 5 for this exact range (see
+        // countWorkingDaysExcludesWeekends for the equivalent Mon-Fri assertion).
         assertThat(LeaveDayMath.countWorkingDays(
             LocalDate.parse("2026-08-03"), LocalDate.parse("2026-08-08"), isWorkingDay))
             .isEqualTo(6);
@@ -545,8 +504,8 @@ class LeaveDayMathTest {
         Predicate<LocalDate> isWorkingDay =
             LeaveDayMath.workingDayPredicate(fiveDayResolver, 1L, null, null, Set.of(holiday));
 
-        // Mon 2026-08-03 .. Wed 2026-08-05: 3 calendar weekdays, but 8/4 is a seeded holiday -- only
-        // 8/3 and 8/5 rank as working days. paidDays=0 -> both unpaid, entirely in August.
+        // Mon 2026-08-03 .. Wed 2026-08-05: 3 calendar weekdays, but 8/4 is a seeded holiday -- only 8/3 and 8/5 rank
+        // as working days. paidDays=0 -> both unpaid, entirely in August.
         Map<LocalDate, BigDecimal> byMonth = LeaveDayMath.unpaidWorkingDaysByMonth(
             LocalDate.parse("2026-08-03"), LocalDate.parse("2026-08-05"), BigDecimal.ZERO, new BigDecimal("2.00"),
             LeaveDayCountBasis.WORKING_DAYS, isWorkingDay);
@@ -556,9 +515,9 @@ class LeaveDayMathTest {
 
     @Test
     void unpaidWorkingDaysByMonthOnCalendarBasisNeverInvokesThePredicateEvenWhenGivenAHostileOne() {
-        // The double-handling guard at the pure-math level: a predicate that (wrongly) excludes
-        // EVERY date must have zero effect on CALENDAR_DAYS (MATERNITY) -- proves CALENDAR_DAYS truly
-        // never consults isWorkingDay, not merely that it happens to agree with a permissive one.
+        // The double-handling guard at the pure-math level: a predicate that (wrongly) excludes EVERY date must have
+        // zero effect on CALENDAR_DAYS (MATERNITY) -- proves CALENDAR_DAYS truly never consults isWorkingDay, not
+        // merely that it happens to agree with a permissive one.
         Predicate<LocalDate> rejectsEveryDate = date -> {
             throw new AssertionError("CALENDAR_DAYS must never invoke isWorkingDay, but it did for " + date);
         };
@@ -579,8 +538,8 @@ class LeaveDayMathTest {
 
     @Test
     void formatDurationOnAFractionalDayPrintsDaysAndHoursAndMinutes() {
-        // The brief's own worked example: 1.56 * 480 = 748.8min, snapped to the nearest 5-minute
-        // step = 750min = 1 whole day (480min) + a 270-minute (4h30m) remainder.
+        // The brief's own worked example: 1.56 * 480 = 748.8min, snapped to the nearest 5-minute step = 750min = 1
+        // whole day (480min) + a 270-minute (4h30m) remainder.
         assertThat(LeaveDayMath.formatDuration(new BigDecimal("1.56"))).isEqualTo("1 วัน 4 ชม. 30 น.");
     }
 
@@ -614,10 +573,8 @@ class LeaveDayMathTest {
 
     @Test
     void formatDurationNeverEmitsADecimalPoint() {
-        // A bare `doesNotContain(".")` is WRONG here and fails on correct output: the Thai unit
-        // abbreviations themselves end in a full stop ("6 วัน 3 ชม."). What must never appear is a
-        // DECIMAL point -- a digit, a dot, then another digit -- which is how "6.37" would leak
-        // through if the days->hours conversion were ever dropped.
+        // A bare `doesNotContain(".")` is WRONG here and fails on correct output: the Thai unit abbreviations
+        // themselves end in a full stop ("6 วัน 3 ชม.").
         assertThat(LeaveDayMath.formatDuration(new BigDecimal("6.37")))
             .isEqualTo("6 วัน 3 ชม.")
             .doesNotMatch(".*\\d\\.\\d.*");

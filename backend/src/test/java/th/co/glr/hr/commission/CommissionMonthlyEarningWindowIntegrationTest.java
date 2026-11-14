@@ -21,23 +21,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Real-DB proof that the commission "earning window" (ข้อ 11's ยอดรับเงินรวม "ในแต่ละเดือน") is
- * bound to the CALENDAR month, not to any 25th/26th-style cycle — see the reasoning and the
- * three-concept table (Earning window / Documentation cutoff / Payment date) in
- * this branch's PR body. Owner REJECTED shifting this to
- * a 26th–25th window (2026-07-30): doing so would move receipts between tier brackets and across
- * the ฿50,000 monthly floor and change what people are paid for identical sales — see {@link
- * CommissionMonthlyEarningWindowTest} for that consequence, worked through the calculator
- * directly.
- *
- * <p>This class drives the real {@link CommissionService#submit} (the same path a real
- * sales_manager/CEO/account submission takes) for receipts dated the 1st, 25th, 26th, and last
- * day of August, and proves every one of them lands in the SAME {@code payroll_month} bucket
- * (September) — the 25th/26th is not a boundary anywhere in this code path. It also proves the
- * boundary that DOES exist is exactly the calendar month edge (31 Jul vs 1 Aug bucket
- * differently).
- */
+/** Real-DB proof that the commission "earning window" (ข้อ 11's ยอดรับเงินรวม "ในแต่ละเดือน") is bound to the
+ * CALENDAR month, not to any 25th/26th-style cycle — see the reasoning and the three-concept table (Earning
+ * window / Documentation cutoff / Payment date) in this branch's PR body. */
 class CommissionMonthlyEarningWindowIntegrationTest extends AbstractPostgresIntegrationTest {
     private CommissionService commissionService;
     private EmployeeRepository employees;
@@ -108,17 +94,17 @@ class CommissionMonthlyEarningWindowIntegrationTest extends AbstractPostgresInte
     void augustReceiptsOnEitherSideOf25th26th_combineIntoOneMonthlyTierBase_notTwo() {
         wireService();
         long salesRepId = createEmployee("พนักงานขาย รวมยอด", "combined-base@glr.co.th", "SA", "แผนกขาย");
-        // The owner's worked example, submitted as two real receipts either side of where a
-        // 26th/25th window would have split them.
+        // The owner's worked example, submitted as two real receipts either side of where a 26th/25th window would
+        // have split them.
         submitReceipt(salesRepId, LocalDate.of(2026, 8, 20), new BigDecimal("240000.00"));
         submitReceipt(salesRepId, LocalDate.of(2026, 8, 28), new BigDecimal("30000.00"));
 
         BigDecimal weightedBase = new CommissionRepository(jdbc)
             .sumActiveWeightedActualReceived(salesRepId, LocalDate.of(2026, 9, 1));
 
-        // Both receipts landed in the SAME payroll_month bucket (September) and sum together —
-        // a shifted 26th/25th window would instead have split them into two smaller totals (see
-        // CommissionMonthlyEarningWindowTest for the resulting commission difference).
+        // Both receipts landed in the SAME payroll_month bucket (September) and sum together — a shifted 26th/25th
+        // window would instead have split them into two smaller totals (see CommissionMonthlyEarningWindowTest for the
+        // resulting commission difference).
         assertThat(weightedBase).isEqualByComparingTo(new BigDecimal("270000.00"));
     }
 

@@ -5,13 +5,9 @@ import java.time.Instant;
 import java.time.LocalDate;
 import java.util.List;
 
-/**
- * Finance-only read model of one deal (GET /api/finance/deals/{id}) for the account and ceo roles.
- *
- * <p>Deliberately NOT built from {@code TicketDto}: that carries pricing/cost internals, deal
- * tracking and the activity feed, none of which finance may see. Every field here is an explicit
- * allowlist -- adding one is a decision, not a side effect of a shared DTO growing.
- */
+/** Finance-only read model of one deal (GET /api/finance/deals/{id}) for the account and ceo roles.
+ * Deliberately NOT built from TicketDto: that carries pricing/cost internals, deal tracking and the activity
+ * feed, none of which finance may see. */
 public record FinanceDealDto(
     long id,
     String code,
@@ -35,20 +31,9 @@ public record FinanceDealDto(
     /** The deal's non-VOID SALE commission INVOICE record (no commission amounts); null when none. */
     CommissionInvoice commissionInvoice
 ) {
-    /**
-     * VAT basis of every amount, stated once so a UI never has to guess (they differ on purpose --
-     * each figure is copied from the document/column it is defined on):
-     * <ul>
-     *   <li>{@code INCLUDING_VAT}: {@code money.amountPayable/amountOutstanding} (the quotation's VAT-inclusive
-     *       grand total the deal is billed against, owner ruling 2026-09-30; {@code amountPaid} is the sum of
-     *       receipts, compared against it), deposit-notice {@code totalPayable}, remaining-invoice
-     *       {@code grandTotal}, billing-note {@code amountForThisDeal};</li>
-     *   <li>{@code EXCLUDING_VAT}: the quotation's {@code totalAmount} (its subtotal) and every
-     *       {@code items[].unitPrice/lineTotal}.</li>
-     * </ul>
-     * A deposit notice's {@code depositAmount} is the pre-VAT deposit; payments are recorded as
-     * received, with no VAT split.
-     */
+    /** VAT basis of every amount, stated once so a UI never has to guess: INCLUDING_VAT:
+     * money.amountPayable/amountOutstanding, deposit-notice totalPayable, remaining-invoice grandTotal, billing-note
+     * amountForThisDeal; EXCLUDING_VAT: the quotation's totalAmount and every items[].unitPrice/lineTotal. */
     public static final String EXCLUDING_VAT = "EXCLUDING_VAT";
     public static final String INCLUDING_VAT = "INCLUDING_VAT";
 
@@ -70,17 +55,15 @@ public record FinanceDealDto(
         BigDecimal amountPayable, BigDecimal amountPayableExVat, BigDecimal amountPaid, BigDecimal amountOutstanding,
         String depositPolicy, String paymentStatus, String paymentStage, String fulfillmentStatus,
         // When the balance is due, from the payable quotation's terms + the delivery date (NOT the stored billing
-        // column): null until the deal is delivered, or when the quotation has no structured term.
-        // paymentDueBasis is CREDIT_FROM_DELIVERY (with paymentDueCreditDays) or ON_DELIVERY.
+        // column): null until the deal is delivered, or when the quotation has no structured term. paymentDueBasis is
+        // CREDIT_FROM_DELIVERY (with paymentDueCreditDays) or ON_DELIVERY.
         LocalDate paymentDueDate, String paymentDueBasis, Integer paymentDueCreditDays,
         boolean overdue, Instant closeConfirmedAt,
         boolean invoiceOnFile, boolean commissionRecorded, String amountVatBasis, List<Payment> payments) {}
 
-    /**
-     * The invoice the account recorded for the deal's commission, as finance may see it: the invoice
-     * fields and the approval status only -- never a commission amount, weight, tier or payroll month.
-     * {@code downloadPath} is {@code /api/attachments/{ticketAttachmentId}/file}.
-     */
+    /** The invoice the account recorded for the deal's commission, as finance may see it: the invoice fields and
+     * the approval status only -- never a commission amount, weight, tier or payroll month. downloadPath is
+     * /api/attachments/{ticketAttachmentId/file}. */
     public record CommissionInvoice(
         String invoiceNumber, LocalDate invoiceDate,
         BigDecimal grossAmount, BigDecimal bankFees, BigDecimal suspenseVat, BigDecimal transportFee,

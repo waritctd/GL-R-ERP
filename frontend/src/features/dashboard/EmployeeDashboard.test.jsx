@@ -24,9 +24,8 @@ const hrUser = { employeeId: 2, name: 'ฝ่ายบุคคล ทดสอ�
 const employeeUser = { employeeId: 3, name: 'พนักงาน ทดสอบ', role: 'employee' };
 const employee = { nameTh: 'ทดสอบ ทดสอบ', positionTh: 'ตำแหน่ง', divisionTh: 'ฝ่าย' };
 
-// UX-04: a role can see pending-work counts for surfaces it has no path to
-// (CEO has no /requests, /employees route access — see permissions.js
-// ROLE_PERMISSIONS: canReviewProfileRequests/canViewEmployees are hr-only,
+// UX-04: a role can see pending-work counts for surfaces it has no path to (CEO has no /requests, /employees
+// route access — see permissions.js ROLE_PERMISSIONS: canReviewProfileRequests/canViewEmployees are hr-only,
 // while canViewAllOvertime/canViewAllLeave/canViewCommissions include ceo).
 const fullPendingSummary = {
   headcount: { scope: 'all', active: 28 },
@@ -36,8 +35,8 @@ const fullPendingSummary = {
   tickets: { total: 0 },
 };
 
-// Only the item CEO cannot reach (profileRequests) has a positive count;
-// everything CEO *can* reach is at zero. The queue should end up empty.
+// Only the item CEO cannot reach (profileRequests) has a positive count; everything CEO *can* reach is at
+// zero. The queue should end up empty.
 const onlyUnreachablePendingSummary = {
   headcount: { scope: 'all', active: 1 },
   pendingApprovals: { total: 1, profileRequests: 1, overtime: 0, leave: 0, commissions: 0 },
@@ -46,9 +45,9 @@ const onlyUnreachablePendingSummary = {
   tickets: { total: 0 },
 };
 
-// Several labels (OT/leave/notifications) are shared between a StatCard and its
-// matching ต้องดำเนินการ row, so plain getByText would match both — scope each
-// query to the element that actually carries that role's semantics.
+// Several labels (OT/leave/notifications) are shared between a StatCard and its matching ต้องดำเนินการ row, so
+// plain getByText would match both — scope each query to the element that actually carries that role's
+// semantics.
 function statCardLabel(label) {
   return screen.getAllByText(label).find((el) => el.classList.contains('stat-label'));
 }
@@ -114,9 +113,8 @@ describe('EmployeeDashboard — company mode, CEO (UX-04)', () => {
     expect(screen.queryByText('คำขอแก้ไขข้อมูลรออนุมัติ')).toBeNull();
   });
 
-  // UX-04 follow-up: quickActions/"ดูทั้งหมด" are now filtered through
-  // canAccessPath (the same predicate RequireAccess uses), so a CEO can no
-  // longer be offered buttons the router would bounce straight back from /.
+  // UX-04 follow-up: quickActions/"ดูทั้งหมด" are now filtered through canAccessPath (the same predicate
+  // RequireAccess uses), so a CEO can no longer be offered buttons the router would bounce straight back from /.
   it('offers no quick-action button whose destination the router would reject', () => {
     renderDashboard({ user: ceoUser, dashboardSummary: fullPendingSummary });
     const panel = quickActionsSection();
@@ -154,8 +152,8 @@ describe('EmployeeDashboard — company mode, HR (regression guard)', () => {
     expect(queue.getByText('ลารออนุมัติ').closest('button')).not.toBeNull();
   });
 
-  // Regression guard: HR can reach /hr, /employees, /requests, /attendance,
-  // so canAccessPath filtering must not remove any of these for HR.
+  // Regression guard: HR can reach /hr, /employees, /requests, /attendance, so canAccessPath filtering must not
+  // remove any of these for HR.
   it('still renders all four quick-action buttons and "ดูทั้งหมด"', () => {
     renderDashboard({ user: hrUser, dashboardSummary: fullPendingSummary });
     const actions = within(quickActionsSection());
@@ -168,15 +166,15 @@ describe('EmployeeDashboard — company mode, HR (regression guard)', () => {
 });
 
 describe('EmployeeDashboard — employee mode: three-tier hierarchy', () => {
-  // The quick-actions panel offered only duplicate navigation (every target was
-  // already in the sidebar or the pending rows), so employee mode drops it.
+  // The quick-actions panel offered only duplicate navigation (every target was already in the sidebar or the
+  // pending rows), so employee mode drops it.
   it('renders no quick-actions panel', () => {
     renderDashboard({ user: employeeUser, dashboardSummary: undefined });
     expect(quickActionsSection()).toBeNull();
   });
 
-  // Tier 1: position/division/tenure live beside the person, not as stat cards
-  // that repeated the identity line and forced text into a numeric slot.
+  // Tier 1: position/division/tenure live beside the person, not as stat cards that repeated the identity line
+  // and forced text into a numeric slot.
   it('shows employment facts as a definition list, not stat cards', () => {
     renderDashboard({ user: employeeUser, dashboardSummary: undefined });
     const term = screen.getAllByText('ตำแหน่ง').find((el) => el.tagName === 'DT');
@@ -186,8 +184,8 @@ describe('EmployeeDashboard — employee mode: three-tier hierarchy', () => {
     expect(statCardLabel('อายุงาน')).toBeUndefined();
   });
 
-  // Tier 3 is the core fix: a zero must not carry the same weight as a real
-  // count, otherwise nothing on the page leads.
+  // Tier 3 is the core fix: a zero must not carry the same weight as a real count, otherwise nothing on the page
+  // leads.
   it('renders a zero pending count as a muted dash and a real count as a badge', () => {
     renderDashboard({
       user: employeeUser,
@@ -196,8 +194,8 @@ describe('EmployeeDashboard — employee mode: three-tier hierarchy', () => {
     const pendingPanel = screen.getByText('รอดำเนินการ').closest('section');
     const rows = within(pendingPanel);
 
-    // 'ลารออนุมัติ', not 'ลาของฉัน': in employee mode the leave figure can include a non-titled
-    // supervisor's direct reports, so the label must not claim the count is only the viewer's own.
+    // 'ลารออนุมัติ', not 'ลาของฉัน': in employee mode the leave figure can include a non-titled supervisor's
+    // direct reports, so the label must not claim the count is only the viewer's own.
     expect(rows.getByText('ลารออนุมัติ')).not.toBeNull();
     expect(rows.getByText('2 รายการ')).not.toBeNull();
     // Three zero rows (OT, profile requests, notifications) all render as dashes.

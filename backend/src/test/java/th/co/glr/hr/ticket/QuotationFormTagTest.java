@@ -19,26 +19,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import th.co.glr.hr.support.WorkbookTexts;
 
-/**
- * Sales feedback, Admin #6 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06): "เลขแบบฟอร์มเอกสาร ISO
- * F-SM-002 (03) จำเป็นต้องใส่หรือไม่ // ต้องเพิ่ม". Owner the same day: "just put the ISO F-SM-002 (03)
- * as a footer on the bottom right of the page".
- *
- * <p>The number was never missing from the FORM: {@code quotation_template.xls} — the company's
- * own controlled form — carries it in the last cell of its last row (I47 in the raw file), which
- * is the bottom-right corner of the printed page. The renderer blanked that cell on every Thai
- * document ("F-SM-002 tag, not customer-facing", a decision that predates the English form) while
- * writing {@code F-SM-008 (01)} into the very same cell on English ones. These tests pin the Thai
- * document getting its own number back, in that cell, in every layout the renderer has.
- *
- * <p>"Bottom right" is asserted structurally, not by eye: the cell is in the LAST COLUMN and the
- * LAST ROW of the sheet's print area, so nothing that prints is below it or to its right; on a
- * document that runs to several pages it is on the last one, after the signature block. (What the
- * page looks like is checked on a real PDF, by hand — see the PR body. No test here opens one.)
- *
- * <p>The fixtures are {@link QuotationRendererNoPictureGoldenTest#model}'s — the same five that
- * pin every layout branch — so this cannot pass on a layout the golden test does not know about.
- */
+/** Sales feedback, Admin #6 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06): "เลขแบบฟอร์มเอกสาร ISO F-SM-002 (03)
+ * จำเป็นต้องใส่หรือไม่ // ต้องเพิ่ม". Owner the same day: "just put the ISO F-SM-002 (03) as a footer on the
+ * bottom right of the page". */
 class QuotationFormTagTest {
     private static final String THAI_FORM = "F-SM-002 (03)";
     private static final String ENGLISH_FORM = "F-SM-008 (01)";
@@ -79,8 +62,8 @@ class QuotationFormTagTest {
         assertThat(row.getHeight()).as("height").isPositive();
     }
 
-    /** It stands alone on its row, UNDER the signature block — it must never share a line with (and
-     * so crowd, or be mistaken for part of) a signature, a date or a total. */
+    /** It stands alone on its row, UNDER the signature block — it must never share a line with (and so crowd, or be
+     * mistaken for part of) a signature, a date or a total. */
     @ParameterizedTest
     @ValueSource(strings = {"single-page", "one-page-scaled", "paginated", "legacy-shape"})
     void theFormNumber_standsAloneOnItsRow(String fixture) throws Exception {
@@ -94,8 +77,8 @@ class QuotationFormTagTest {
         assertThat(others).as("other text on the form number's row").isEmpty();
     }
 
-    /** Several pages: the number is at the foot of the document, i.e. after the last page break —
-     * not stranded at the foot of page 1 while the signatures move on. */
+    /** Several pages: the number is at the foot of the document, i.e. after the last page break — not stranded at
+     * the foot of page 1 while the signatures move on. */
     @Test
     void onADocumentOfSeveralPages_theFormNumberIsOnTheLastOne() throws Exception {
         Sheet sheet = render("paginated");
@@ -107,8 +90,8 @@ class QuotationFormTagTest {
 
     // ── each form keeps its OWN number ──────────────────────────────────────────────────────
 
-    /** F-SM-002 is the Thai form. The English document is F-SM-008 and must not start printing
-     * the Thai number because the Thai one now prints. */
+    /** F-SM-002 is the Thai form. The English document is F-SM-008 and must not start printing the Thai number
+     * because the Thai one now prints. */
     @Test
     void anEnglishQuotation_keepsItsOwnFormNumber_andNeverCarriesTheThaiOne() throws Exception {
         Sheet sheet = render("english");
@@ -128,8 +111,8 @@ class QuotationFormTagTest {
         Cell thai = theOnlyCellReading(render("single-page"), THAI_FORM);
         Cell english = theOnlyCellReading(render("english"), ENGLISH_FORM);
         assertThat(thai.getColumnIndex()).isEqualTo(english.getColumnIndex());
-        // Same row too: the two fixtures differ only in language (and item count below the native
-        // capacity, which does not move the footer).
+        // Same row too: the two fixtures differ only in language (and item count below the native capacity, which does
+        // not move the footer).
         assertThat(thai.getRowIndex()).isEqualTo(english.getRowIndex());
     }
 

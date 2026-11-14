@@ -19,23 +19,9 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * GET /api/leave/attachments/{attachmentId} (Phase A0b): real-Postgres coverage of {@link
- * LeaveService#resolveAttachmentForDownload} -- the authorization decision that gates reading back a
- * leave attachment (e.g. a SICK medical certificate). Before this phase, a leave attachment was
- * upload-only: nothing could read one back, so this is a NEW authorization surface, not a refactor
- * of an existing one.
- *
- * <p>Mockito cannot reach this: {@link LeaveAttachmentRepository#findAttachmentLocation} and {@link
- * LeaveRepository#findById} are both real dynamic SQL joined against real {@code hr.employee}/{@code
- * hr.leave_request} rows -- a mocked repository would happily return whatever the test told it to,
- * proving nothing about whether the real JOIN/WHERE actually enforces the boundary. Only a real
- * database proves the decision survives into the query.
- *
- * <p>Written WRONG-WAY-ROUND, per CLAUDE.md's rule for authorization changes: every 403 case here
- * asserts what the caller CANNOT reach, not merely that the intended caller can reach their own (the
- * HR/requester/direct-manager cases below are regression guards, not the point of this class).
- */
+/** GET /api/leave/attachments/{attachmentId} (Phase A0b): real-Postgres coverage of
+ * LeaveService#resolveAttachmentForDownload -- the authorization decision that gates reading back a leave
+ * attachment (e.g. a SICK medical certificate). */
 class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private LeaveService leaveService;
@@ -62,13 +48,13 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
         long department = insertDepartment("Warehouse");
         requesterManager = insertEmployee("MGR-REQ", department, null, null, true);
         requester = insertEmployee("REQ-001", department, null, requesterManager, true);
-        // Same department as the requester, but reports to nobody in particular -- proves
-        // department membership ALONE grants no access, only the direct-manager relationship does.
+        // Same department as the requester, but reports to nobody in particular -- proves department membership ALONE
+        // grants no access, only the direct-manager relationship does.
         sameDepartmentPeer = insertEmployee("PEER-001", department, null, null, true);
         unrelatedEmployee = insertEmployee("UNRELATED-001", null, null, null, true);
         otherEmployeeManager = insertEmployee("MGR-OTHER", null, null, null, true);
-        // Seeded only so otherEmployeeManager genuinely IS someone's direct manager -- just not the
-        // requester's -- proving "a manager, but of the wrong employee" is still refused.
+        // Seeded only so otherEmployeeManager genuinely IS someone's direct manager -- just not the requester's --
+        // proving "a manager, but of the wrong employee" is still refused.
         insertEmployee("OTHER-001", null, null, otherEmployeeManager, true);
 
         long leaveRequestId = insertLeaveRequest(requester);
@@ -101,14 +87,7 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
             .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
-    // --- V134 storage-durability fix: availability (410) must never leak past authz (403) --------
-    //
-    // This is the existence-leak guard the ordering in LeaveService#resolveAttachmentForDownload
-    // exists for: if availability were checked before authorization, an unauthorized caller could
-    // tell a MISSING attachment (which would 410 for someone permitted) apart from one that simply
-    // doesn't exist (404) -- without ever being allowed to know the id exists. Both cases below
-    // exercise the SAME MISSING row so the fixture cannot silently supply only the state that
-    // happens to pass.
+    // Checks authorization precedes file availability, preventing attachment existence leaks.
 
     @Test
     void authorizedCallerAgainstAMissingAttachmentGetsGoneNotServerError() {
@@ -124,9 +103,9 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
     void unauthorizedCallerAgainstAMissingAttachmentStillGetsForbiddenNeverGone() {
         long missingAttachmentId = insertAttachmentWithState(insertLeaveRequest(requester), requester, "MISSING");
 
-        // THE point of this test: an unauthorized caller must see the exact same 403 they would see
-        // against a perfectly healthy attachment -- never 410, which would only be reachable by
-        // someone authorized and would therefore leak that this id exists and is specifically MISSING.
+        // THE point of this test: an unauthorized caller must see the exact same 403 they would see against a
+        // perfectly healthy attachment -- never 410, which would only be reachable by someone authorized and would
+        // therefore leak that this id exists and is specifically MISSING.
         assertThatThrownBy(() -> leaveService.resolveAttachmentForDownload(missingAttachmentId, employee(unrelatedEmployee)))
             .isInstanceOf(ApiException.class)
             .extracting(e -> ((ApiException) e).getStatus())
@@ -209,20 +188,16 @@ class LeaveAttachmentDownloadAuthzIntegrationTest extends AbstractPostgresIntegr
             """, new MapSqlParameterSource("employeeId", employeeId), Long.class);
     }
 
-    // V134: the shared fixture attachment is DATABASE-backed (a real blob row, not a disk path
-    // pointing at a file this test never creates) -- matching what every NEW leave attachment
-    // actually looks like post-migration, and avoiding a spurious 410 from the new availability
-    // check for every regression test below that expects a plain successful download.
+    // V134: the shared fixture attachment is DATABASE-backed -- matching what every NEW leave attachment actually
+    // looks like post-migration, and avoiding a spurious 410 from the new availability check for every regression
+    // test below that expects a plain successful download.
     private long insertAttachment(long leaveRequestId, long uploadedBy) {
         return insertAttachmentWithState(leaveRequestId, uploadedBy, "DATABASE");
     }
 
-    /**
-     * V134: inserts a leave attachment already in the given {@code storage_state}. For {@code
-     * DATABASE}, also inserts the matching {@code hr.file_attachment_blob} row -- a real
-     * DATABASE-state row can never exist without one, and a fixture that skipped it would prove
-     * nothing about the real write path.
-     */
+    /** V134: inserts a leave attachment already in the given storage_state. For DATABASE, also inserts the matching
+     * hr.file_attachment_blob row -- a real DATABASE-state row can never exist without one, and a fixture that
+     * skipped it would prove nothing about the real write path. */
     private long insertAttachmentWithState(long leaveRequestId, long uploadedBy, String storageState) {
         long newAttachmentId = jdbc.queryForObject("""
             INSERT INTO hr.file_attachment

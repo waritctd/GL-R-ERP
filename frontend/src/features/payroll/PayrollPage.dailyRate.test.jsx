@@ -5,8 +5,8 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
 
-// Issue #422 B1: PayrollPage now reads through react-query, so every render below needs a real
-// QueryClient in context.
+// Issue #422 B1: PayrollPage now reads through react-query, so every render below needs a real QueryClient in
+// context.
 function renderWithClient(ui) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -14,18 +14,15 @@ function renderWithClient(ui) {
   return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
 }
 
-// Daily-rate (pay_type = 'D') support (2026-07-30): a NEW test file (does not edit
-// PayrollPage.test.jsx / PayrollPage.carryForward.test.jsx) proving the reachability chain the
-// backend fix needs on the frontend: the days-worked field is rendered ONLY for a daily-rate
-// employee (gated on the new `payType` field the backend now echoes onto each line), the value
-// reaches the backend in the submitted `inputs` payload, and it survives a reload (hydrated back
-// from a persisted line's own `daysWorked`, exactly like every other one-off field on this page).
+// Daily-rate support: a NEW test file proving the reachability chain the backend fix needs on the frontend:
+// the days-worked field is rendered ONLY for a daily-rate employee, the value reaches the backend in the
+// submitted `inputs` payload, and it survives a reload.
 
 globalThis.React = React;
 
-// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 --
-// canManage is an allowlist off ROLE_PERMISSIONS), so every render below passes a real HR user
-// explicitly rather than relying on an implicit default.
+// hasPermission(user?.role, 'canManagePayroll') reads false for an absent user (issue #390 -- canManage is an
+// allowlist off ROLE_PERMISSIONS), so every render below passes a real HR user explicitly rather than relying
+// on an implicit default.
 const hrUser = { role: 'hr', employeeId: 10 };
 
 vi.mock('../../api/index.js', () => ({
@@ -38,10 +35,9 @@ vi.mock('../../api/index.js', () => ({
       downloadPayslip: vi.fn(),
       distributePayslips: vi.fn(),
       suggestedInputs: vi.fn(),
-      // Issue #422 A1/A2: getInputDraft is now fetched unconditionally on every load, and
-      // saveInputDraft is called directly (not optional-chained) from saveDraft() and from the
-      // month-change/unmount flush -- both must exist on this mock or a render (or even just an
-      // unmount with a dirty form) throws "is not a function".
+      // Issue #422 A1/A2: getInputDraft is now fetched unconditionally on every load, and saveInputDraft is called
+      // directly from saveDraft and from the month-change/unmount flush -- both must exist on this mock or a render
+      // throws "is not a function".
       getInputDraft: vi.fn(),
       saveInputDraft: vi.fn(),
       getComponentTaxTreatments: vi.fn(),
@@ -184,11 +180,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
     await waitFor(() => expect(daysWorked.value).toBe('25'));
   });
 
-  // Finding 1/4 fixes (Opus review, 2026-07-30). The server-side guard
-  // (PayrollService#requireEveryDailyRateEmployeeHasDaysWorked) is the real enforcement -- these two
-  // only cover the cheap client-side pieces: the days-worked input carries the frontend max bound,
-  // and a nudge warning is visible (both list row and detail panel) whenever a daily-rate employee
-  // has no positive day count, and disappears the moment one is typed.
+  // Finding 1/4 fixes (Opus review, 2026-07-30).
 
   it('the days-worked input is bounded to 31 (matching the backend @Max/DB CHECK)', async () => {
     api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
@@ -209,10 +201,7 @@ describe('PayrollPage daily-rate (pay_type = D) support', () => {
   });
 
   it('the detail-panel warning clears once a positive days-worked value is typed', async () => {
-    // Scoped to the detail-panel-specific message (tied live to the in-progress draft,
-    // selectedAdjustment.daysWorked) rather than the list-row one (tied to the last-loaded/computed
-    // `period` snapshot, same as every other column in that row -- it only refreshes on
-    // Preview/Process, by design, exactly like grossEarnings/netPay do).
+    // Scoped to the detail-panel-specific message rather than the list-row one.
     api.payroll.current.mockResolvedValue({ period: previewPeriodWith(dailyRateLine()) });
 
     renderWithClient(<PayrollPage user={hrUser} showToast={vi.fn()} />);

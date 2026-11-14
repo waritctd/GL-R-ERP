@@ -144,15 +144,9 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
             input(employeeId, specialPays(BigDecimal.ZERO), BigDecimal.ZERO, null, null, BigDecimal.ZERO,
                 new BigDecimal("60000.00"), null, false, null, null));
 
-        // Hand trace: regularAnnualProjection = 30,000 x 12 = 360,000; taxExpenseDeduction caps at
-        // 100,000; SSO allowance = min(10,500, 875x12) = 10,500; allowance total = 70,500;
-        // taxableRegularOnly = 360,000 - 100,000 - 70,500 = 189,500; annualTaxRegular =
-        // (189,500-150,000)@5% = 1,975.00; withholdRegular = 1,975/12 = 164.5833 -> 164.58.
-        // taxableWithKnown = 189,500 + 60,000 = 249,500; annualTaxWithKnown =
-        // (249,500-150,000)@5% = 4,975.00; withholdKnown = 4,975 - 1,975 = 3,000.00 (withheld IN FULL
-        // this period, no division, no reprojection -- it is a one-off, not a recurring wage).
-        // Total withholding = 164.58 + 3,000.00 = 3,164.58 -> whole baht 3,165.00; the +0.42 residual
-        // lands on the regular limb (164.58 -> 165.00), so the two limbs still sum to the total.
+        // Hand trace: regularAnnualProjection = 30,000 x 12 = 360,000; taxExpenseDeduction caps at 100,000; SSO
+        // allowance = min = 10,500; allowance total = 70,500; taxableRegularOnly = 360,000 - 100,000 - 70,500 =
+        // 189,500; annualTaxRegular =@5% = 1,975.00; withholdRegular = 1,975/12 = 164.5833 -> 164.58.
         assertThat(line.withholdingTaxRegularLimb()).isEqualByComparingTo("165.00");
         assertThat(line.withholdingTax()).isEqualByComparingTo("3165.00");
         assertThat(line.taxableAnnualIncome()).isEqualByComparingTo("249500.00");
@@ -168,8 +162,8 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
             new ComponentTaxTreatmentUpsertRequest(employeeId, PayrollComponent.SPECIAL_PAY_2, PayrollTaxTreatment.EXTRA_CUMULATIVE_ACTUAL)
         ), employeeId);
 
-        // Month 1 (January): special_pay_2 = 50,000, processed (not just previewed) so it feeds
-        // month 2's year-to-date.
+        // Month 1 (January): special_pay_2 = 50,000, processed (not just previewed) so it feeds month 2's
+        // year-to-date.
         PayrollEmployeeInputRequest januaryInput = input(employeeId,
             specialPays2(new BigDecimal("50000.00")), BigDecimal.ZERO, null, null, BigDecimal.ZERO,
             null, null, false, null, null);
@@ -177,12 +171,8 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
             new ProcessPayrollRequest(LocalDate.of(2026, 1, 1), List.of(januaryInput)), hr());
         PayrollLineDto januaryLine = onlyLine(januaryPeriod, employeeId);
 
-        // Hand trace (identical regular-limb baseline to the REGULAR_REPROJECT test above, since
-        // salary is the same 30,000 -- taxableRegularOnly = 189,500, annualTaxRegular = 1,975.00,
-        // withholdRegular = 164.58): taxableWithCumulative = 189,500 + 50,000 = 239,500;
-        // annualTaxWithCumulative = (239,500-150,000)@5% = 4,475.00; withholdCumulative = 4,475 -
-        // 1,975 - 0 (nothing withheld on this limb before) = 2,500.00. Total = 164.58 + 2,500.00 =
-        // 2,664.58.
+        // Hand trace: taxableWithCumulative = 189,500 + 50,000 = 239,500; annualTaxWithCumulative =@5% = 4,475.00;
+        // withholdCumulative = 4,475 - 1,975 - 0 = 2,500.00. Total = 164.58 + 2,500.00 = 2,664.58.
         assertThat(januaryLine.withholdingTaxCumulativeLimb()).isEqualByComparingTo("2500.00");
         assertThat(januaryLine.withholdingTax()).isEqualByComparingTo("2665.00");
 
@@ -194,13 +184,9 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
             new ProcessPayrollRequest(LocalDate.of(2026, 2, 1), List.of(februaryInput)), hr());
         PayrollLineDto februaryLine = onlyLine(februaryPeriod, employeeId);
 
-        // Hand trace: regular limb reprojects to the SAME 360,000 (flat salary: YTD 30,000 + this
-        // month 30,000 x 11 = 360,000), so taxableRegularOnly/annualTaxRegular are unchanged at
-        // 189,500 / 1,975.00; withholdRegular = (1,975 - 164.58 already withheld) / 11 = 164.58.
-        // taxableWithCumulative = 189,500 + 70,000 (YTD cumulative actual) = 259,500;
-        // annualTaxWithCumulative = (259,500-150,000)@5% = 5,475.00; withholdCumulative = 5,475 -
-        // 1,975 - 2,500 (already withheld on this limb in January) = 1,000.00. Total = 164.58 +
-        // 1,000.00 = 1,164.58 -> whole baht 1,165.00.
+        // Hand trace: regular limb reprojects to the SAME 360,000 (flat salary: YTD 30,000 + this month 30,000 x 11 =
+        // 360,000), so taxableRegularOnly/annualTaxRegular are unchanged at 189,500 / 1,975.00; withholdRegular =
+        // (1,975 - 164.58 already withheld) / 11 = 164.58.
         assertThat(februaryLine.withholdingTaxCumulativeLimb()).isEqualByComparingTo("1000.00");
         assertThat(februaryLine.withholdingTax()).isEqualByComparingTo("1165.00");
     }
@@ -221,8 +207,8 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
             specialPays3(new BigDecimal("10000.00")), BigDecimal.ZERO, null, null, BigDecimal.ZERO,
             null, null, false, null, null);
         PayrollLineDto includedLine = previewLineFor(LocalDate.of(2026, 1, 1), employeeId, withSpecialPay);
-        // Wage base 10,000 (salary) + 10,000 (special_pay_3, included) = 20,000, clamped at the
-        // 17,500 ceiling -> 875.00.
+        // Wage base 10,000 (salary) + 10,000 (special_pay_3, included) = 20,000, clamped at the 17,500 ceiling ->
+        // 875.00.
         assertThat(includedLine.ssoWageBase()).isEqualByComparingTo("17500.00");
         assertThat(includedLine.socialSecurity()).isEqualByComparingTo("875.00");
 
@@ -247,9 +233,8 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
 
         PayrollLineDto noParents = previewLineFor(month, employeeId, baseline);
 
-        // Declare 2 qualifying parents AND a legacy baht figure that would give the wrong answer if
-        // it were used instead (999,999, capped at 120,000 under the OLD flat-cap rule) -- count must
-        // win.
+        // Declare 2 qualifying parents AND a legacy baht figure that would give the wrong answer if it were used
+        // instead (999,999, capped at 120,000 under the OLD flat-cap rule) -- count must win.
         payrollRepository.upsertTaxAllowances(TAX_YEAR, List.of(
             new EmployeeTaxAllowanceUpsertRequest(
                 employeeId,
@@ -260,8 +245,8 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         ), employeeId);
         PayrollLineDto twoParents = previewLineFor(month, employeeId, baseline);
 
-        // Isolate the parent allowance's own contribution to taxAllowanceTotal -- everything else
-        // (personal allowance, SSO allowance) is identical between the two lines.
+        // Isolate the parent allowance's own contribution to taxAllowanceTotal -- everything else (personal allowance,
+        // SSO allowance) is identical between the two lines.
         BigDecimal parentAllowanceContribution = twoParents.taxAllowanceTotal().subtract(noParents.taxAllowanceTotal());
         assertThat(parentAllowanceContribution)
             .withFailMessage("2 heads x 30,000 = 60,000 -- NOT the legacy baht field (999,999, capped 120,000)")
@@ -301,8 +286,8 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
         BigDecimal expectedCap = capByRate.min(capByFloor).setScale(2);
 
         assertThat(line.legalExecutionDeduction()).isEqualByComparingTo(expectedCap);
-        // The requested 50,000 exceeds the cap -- proves the cap actually bound, not just "whatever
-        // was requested came through".
+        // The requested 50,000 exceeds the cap -- proves the cap actually bound, not just "whatever was requested came
+        // through".
         assertThat(line.legalExecutionDeduction()).isLessThan(new BigDecimal("50000.00"));
     }
 
@@ -346,10 +331,8 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
 
         PayrollLineDto line = previewLineFor(LocalDate.of(2026, 1, 1), employeeId, input);
 
-        // Lawful cap: 30% of OT(0) + special-pay-5/เบี้ยขยัน(2,000) = 600.00 -- less than the 5,000
-        // requested, so the cap binds. Before the fix, the calculator read special-pay-4/ค่าตำแหน่ง
-        // (5,000) instead and allowed 1,500.00 -- an unlawfully large garnishment against a payment
-        // type ป.วิ.พ. ม.302 caps at 30%, and against the WRONG money.
+        // Lawful cap: 30% of OT(0) + special-pay-5/เบี้ยขยัน(2,000) = 600.00 -- less than the 5,000 requested, so the
+        // cap binds.
         assertThat(line.legalExecutionDeduction()).isEqualByComparingTo("600.00");
     }
 
@@ -377,37 +360,9 @@ class PayrollClassifiedEngineIntegrationTest extends AbstractPostgresIntegration
 
     // ---- 12-month simulation: totals to the correct annual liability -------------------------------
 
-    /**
-     * Engineered so the arithmetic is exactly checkable without re-deriving progressive-tax brackets
-     * by hand every month: flat salary all year (so the REGULAR limb's annual projection is constant
-     * once expense deduction saturates), a single EXTRA_KNOWN_FREQUENCY bonus in one month, and a
-     * recurring EXTRA_CUMULATIVE_ACTUAL special-pay component. Salary alone (80,000 x 12 = 960,000)
-     * already saturates the ฿100,000 expense-deduction cap from month 1, so neither limb's baseline
-     * drifts month to month for reasons unrelated to the limb's own math.
-     *
-     * <p>Deliberately REGULAR + CUMULATIVE only, no EXTRA_KNOWN_FREQUENCY event in this scenario
-     * (that limb is already covered on its own terms by {@link
-     * #extraKnownFrequencyIsTaxedAsTheDifferenceBetweenAnnualTaxWithAndWithoutIt}). A known-frequency
-     * payment is, by ป.96 ข้อ 1(5)'s own design, taxed and FULLY SETTLED the moment it is paid --
-     * unlike the regular and cumulative limbs, nothing about it is carried into later months'
-     * projections, so its marginal tax does not appear in ANY later month's {@code annualTax} field
-     * (that field reports "what the year's ongoing liability projects to", not "everything ever
-     * withheld"). Mixing a known-frequency event into a whole-year telescoping sum would therefore
-     * require also tracking every settled known-limb amount separately -- correct, but a second
-     * assertion this test does not need in order to prove the regular/cumulative telescoping
-     * property, which is the property most exposed to month-to-month drift (SSO cap, expense-
-     * deduction saturation) and therefore the one most worth a real 12-period regression.
-     *
-     * <p>Algebraic guarantee (see the task-2 handoff progress notes for the full derivation): with a
-     * constant regular-limb annual tax figure AR every month (guaranteed here because salary is flat
-     * and the ฿100,000 expense-deduction cap saturates from month 1 onward), the running total
-     * withheld on the cumulative limb through period t always collapses to {@code
-     * annualTaxWithCumulative(t) - annualTaxRegular(t)} regardless of intermediate drift, and the
-     * regular limb's own reprojection method (unchanged from the pre-task-2 engine) always reconciles
-     * exactly to whatever the FINAL month's annual figure is. So the year's total withheld must equal
-     * December's own {@code annualTax} -- exactly what this test asserts, without needing to
-     * independently recompute 12 months of tax brackets.
-     */
+    /** Engineered so the arithmetic is exactly checkable without re-deriving progressive-tax brackets by hand every
+     * month: flat salary all year, a single EXTRA_KNOWN_FREQUENCY bonus in one month, and a recurring
+     * EXTRA_CUMULATIVE_ACTUAL special-pay component. */
     @Test
     void twelveMonthSimulationTotalsToTheCorrectAnnualLiability() {
         long employeeId = seedEmployee("SIM-12M-001", "จำลองสิบสองเดือน", "ทดสอบ", new BigDecimal("80000.00"));

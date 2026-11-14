@@ -75,15 +75,9 @@ public record PayrollYearToDate(
         );
     }
 
-    /**
-     * Legacy 5-arg constructor {@code (regularIncome, variableIncome, socialSecurity,
-     * regularWithholdingTax, variableWithholdingTax)}, kept so every call site written before task 2's
-     * three-limb breakdown (including {@code PayrollCalculatorTest} and the other
-     * {@code PayrollCalculator#calculate}-only review tests) still compiles. {@code withholdingTax}
-     * defaults to the sum of the two known limbs; the three-limb-only fields default to zero -- a
-     * no-op for {@code calculate()}, which never reads them, matching how the classified engine's own
-     * legacy constructor below defaults fields it does not know about.
-     */
+    /** Legacy 5-arg constructor (regularIncome, variableIncome, socialSecurity, regularWithholdingTax,
+     * variableWithholdingTax), kept so every call site written before task 2's three-limb breakdown (including
+     * PayrollCalculatorTest and the other PayrollCalculator#calculate-only review tests) still compiles. */
     public PayrollYearToDate(
         BigDecimal regularIncome,
         BigDecimal variableIncome,
@@ -98,16 +92,8 @@ public record PayrollYearToDate(
         );
     }
 
-    /**
-     * Legacy 3-arg constructor {@code (taxableIncome, socialSecurity, withholdingTax)}, kept so every
-     * call site written before EITHER limb split existed still compiles.
-     *
-     * <p>The un-split figures are attributed ENTIRELY to the regular limb of the two-limb model
-     * (regularIncome/regularWithholdingTax) -- the correct reading for pre-split history rather than a
-     * guess: months processed before that change annualised everything as if it were regular pay. The
-     * three-limb-only fields default to zero, exactly as the classified engine's own original 3-arg
-     * legacy constructor already did -- unknown at this arity, not fabricated.
-     */
+    /** Legacy 3-arg constructor (taxableIncome, socialSecurity, withholdingTax), kept so every call site written
+     * before EITHER limb split existed still compiles. */
     public PayrollYearToDate(
         BigDecimal taxableIncome,
         BigDecimal socialSecurity,

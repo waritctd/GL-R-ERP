@@ -13,20 +13,9 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import th.co.glr.hr.support.WorkbookTexts;
 
-/**
- * Sales feedback, Admin 1d (แจ้งปัญหาการใช้งาน เสนอราคา): the ฝ่าย box — "ไม่มีดีกว่า", reps filled it
- * wrongly and some typed their own name into it; take it off the form AND the printout. Owner,
- * 2026-10-06: "remove ฝ่าย field completely".
- *
- * <p>The printed form's header has three lines top right — ฝ่าย / เลขที่อ้างอิง / หน่วยงาน (Dept. /
- * Ref. / D.Co. on the English form). These tests pin the first one being gone from EVERY document
- * this renderer produces, label and value both, and the other two being exactly where they were.
- *
- * <p>Written wrong-way-round on purpose: every fixture here CARRIES a department ("P003" — the
- * five {@link QuotationRendererNoPictureGoldenTest#model} fixtures, i.e. every layout branch plus
- * the English form and the legacy shape). A rule that merely hid the line when the value was
- * blank — which is what the renderer did before this — passes none of them.
- */
+/** Sales feedback, Admin 1d (แจ้งปัญหาการใช้งาน เสนอราคา): the ฝ่าย box — "ไม่มีดีกว่า", reps filled it wrongly
+ * and some typed their own name into it; take it off the form AND the printout. Owner, 2026-10-06: "remove
+ * ฝ่าย field completely". */
 class QuotationDeptLineRemovedTest {
     private static final int HEADER_LABEL_COL = 7; // H
     private static final int HEADER_VALUE_COL = 8; // I
@@ -63,9 +52,8 @@ class QuotationDeptLineRemovedTest {
         assertThat(text(sheet, DEPT_ROW, HEADER_VALUE_COL)).as("I3 — the value").isEmpty();
     }
 
-    /** Only ฝ่าย went. The reference number and the designer / unit code beside it still print,
-     * label and value, on both forms — a fix that cleared the whole block would pass the three
-     * tests above. */
+    /** Only ฝ่าย went. The reference number and the designer / unit code beside it still print, label and value, on
+     * both forms — a fix that cleared the whole block would pass the three tests above. */
     @ParameterizedTest
     @ValueSource(strings = {"single-page", "one-page-scaled", "paginated", "english", "legacy-shape"})
     void theReferenceNumberAndTheUnitCode_stillPrintWithTheirLabels(String fixture) throws Exception {

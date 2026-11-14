@@ -8,14 +8,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * V153: the per-sqm basis, the thickness fallback chain, and the view the pricing engine will read.
- *
- * <p>The formula works entirely in square metres ({@code UC = TC / Q}, and both the freight and
- * clearance bands key off Q in sqm) while the catalogue stores whatever unit each factory quotes
- * in. These tests pin the conversion in each direction, and pin that a row which cannot be
- * converted is reported as unpriceable rather than silently given a wrong number.
- */
+/** V153: the per-sqm basis, the thickness fallback chain, and the view the pricing engine will read. These
+ * tests pin the conversion in each direction, and pin that a row which cannot be converted is reported as
+ * unpriceable rather than silently given a wrong number. */
 class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private record Row(String status, BigDecimal pricePerSqm, BigDecimal thickness) {}
@@ -64,14 +59,9 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(view(id).pricePerSqm()).isEqualByComparingTo("50.00");
     }
 
-    /**
-     * The worked example from the design doc: CITY {@code RQ81 AVORIO BATTISCOPA R.}, 7x60 cm,
-     * EUR 22.00 per linear metre. One linear metre of a 7 cm profile covers 0.07 m2, so the
-     * per-sqm equivalent is 22.00 / 0.07 = EUR 314.285714.
-     *
-     * <p>min(width, height) rather than max: for a 7x60 battiscopa the 7 cm is the profile and the
-     * 60 cm is the piece length, which "per linear metre" already accounts for.
-     */
+    /** The worked example from the design doc: CITY RQ81 AVORIO BATTISCOPA R., 7x60 cm, EUR 22.00 per linear metre.
+     * One linear metre of a 7 cm profile covers 0.07 m2, so the per-sqm equivalent is 22.00 / 0.07 = EUR
+     * 314.285714. */
     @Test
     void linearMetrePriceIsDividedByTheProfileHeight() {
         long id = insertCatalogProduct("V153 F3", "IT", "ML-1",
@@ -114,8 +104,8 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
         jdbc.update("UPDATE price_catalog.product_prices SET collection = 'ALTEA' WHERE price_id = :id",
             Map.of("id", id));
 
-        // No default anywhere: refuse, never guess -- a wrong thickness picks a freight band that
-        // can differ by 50,000 THB per shipment.
+        // No default anywhere: refuse, never guess -- a wrong thickness picks a freight band that can differ by 50,000
+        // THB per shipment.
         assertThat(view(id).status()).isEqualTo("NO_THICKNESS");
         assertThat(view(id).thickness()).isNull();
 
@@ -142,10 +132,9 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
             "SELECT factory_id FROM price_catalog.product_prices WHERE price_id = :id",
             Map.of("id", id), Long.class);
 
-        // Three overlapping defaults, deliberately inserted least-specific first so a naive
-        // "first row wins" implementation would pick the wrong one. '300X600' is the V172
-        // canonical form (from width_mm=300/height_mm=600 above), not the pre-V172 raw-text
-        // form ('30X60' from size_raw) -- the override must match whatever size_norm actually is.
+        // Three overlapping defaults, deliberately inserted least-specific first so a naive "first row wins"
+        // implementation would pick the wrong one. '300X600' is the V172 canonical form, not the pre-V172 raw-text
+        // form -- the override must match whatever size_norm actually is.
         jdbc.update("""
             INSERT INTO price_catalog.collection_thickness_default
                 (factory_id, collection, size_norm, thickness_mm)
@@ -155,19 +144,15 @@ class PriceableProductViewIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(view(id).thickness()).isEqualByComparingTo("12");
     }
 
-    /**
-     * V172 regression guard: recanonicalising size_norm (from raw text to
-     * {@code width_mm}x{@code height_mm}) must not disturb the ONE shape actually in production
-     * today — a collection-level default ({@code size_norm IS NULL}), which matches regardless of
-     * {@code size_norm}'s value or format. Measured on production before V172: all 37 rows in
-     * {@code collection_thickness_default} are collection-level; none key on a specific size.
-     */
+    /** V172 regression guard: recanonicalising size_norm (from raw text to width_mmxheight_mm) must not disturb the
+     * ONE shape actually in production today — a collection-level default (size_norm IS NULL), which matches
+     * regardless of size_norm's value or format. */
     @Test
     void collectionLevelDefaultStillMatchesAfterSizeNormCanonicalisation() {
         long id = insertCatalogProduct("V172 F1", "IT", "SN-1",
             new BigDecimal("55.00"), "EUR", "per_sqm", "ACTIVE");
-        // Deliberately messy size_raw (the exact shape V172's header describes size_norm used to
-        // mishandle) — collection-level matching must not care what size_norm resolves to here.
+        // Deliberately messy size_raw (the exact shape V172's header describes size_norm used to mishandle) —
+        // collection-level matching must not care what size_norm resolves to here.
         setGeometry(id, "60x120 9MM", 600, 1200, null, null, null);
         jdbc.update("UPDATE price_catalog.product_prices SET collection = 'SN-COLL' WHERE price_id = :id",
             Map.of("id", id));

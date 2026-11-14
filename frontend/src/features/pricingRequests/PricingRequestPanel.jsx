@@ -15,16 +15,12 @@ import {
 } from './pricingRequestMeta.js';
 import { PricingRequestCreateModal } from './PricingRequestCreateModal.jsx';
 
-/**
- * Every action in this panel is a react-query mutation whose failure used to go NOWHERE: none of
- * them had an onError or rendered `.error`, so a rejected call left the button looking like it
- * simply did nothing, with the reason visible only in the browser console. That is how a real backend 422 ("ต้องเลือกสินค้าจาก Price Catalog…") reached a UAT user
- * as silence. The service already returns a Thai, user-facing message for every one of these
- * failures, so showing it is all that was missing.
- */
+/** Every action in this panel is a react-query mutation whose failure used to go NOWHERE: none of them had an
+ * onError or rendered `.error`, so a rejected call left the button looking like it simply did nothing, with
+ * the reason visible only in the browser console. */
 function MutationError({ mutation, match }) {
-  // One mutation instance serves every row, so `variables` is what says WHICH row the in-flight
-  // call belonged to — without this check a failure would print under all of them at once.
+  // One mutation instance serves every row, so `variables` is what says WHICH row the in-flight call belonged to
+  // — without this check a failure would print under all of them at once.
   if (!mutation.isError || (match !== undefined && !match)) return null;
   return (
     <p role="alert" className="basis-full text-2xs font-bold text-danger-dark">
@@ -33,8 +29,8 @@ function MutationError({ mutation, match }) {
   );
 }
 
-// Mirrors PricingRequestEventKind — labels for this request's own event log
-// (rendered here, per-request, NOT merged into the deal's main timeline).
+// Mirrors PricingRequestEventKind — labels for this request's own event log (rendered here, per-request, NOT
+// merged into the deal's main timeline).
 const EVENT_LABEL = {
   PRICING_REQUEST_CREATED: 'สร้างคำขอราคา (ร่าง)',
   PRICING_REQUEST_UPDATED: 'แก้ไขคำขอราคา',
@@ -45,26 +41,9 @@ const EVENT_LABEL = {
   PRICING_REQUEST_CANCELLED: 'ยกเลิกคำขอราคา',
 };
 
-/**
- * Per-deal PricingRequest section (commit 6): the deal's own pricing requests,
- * with per-row expansion showing that request's items + its own event log.
- * Mounted on TicketDetailPage right after the items table — a deal's product
- * lines here are preliminary; nothing reaches Import until a PricingRequest is
- * created and submitted (see TicketService.create/submit, commit 5).
- *
- * `deal` is the ticket's summary (createdById + lifecycle) — used only for the
- * create gate; this component does not know about ticket status/stage.
- *
- * Ticket-detail IA rebuild Phase 1 clutter follow-up: this panel no longer
- * renders its own "สร้างคำขอราคา" button — the sticky header's primary CTA
- * (TicketDetailPage's `workState`-derived `CREATE_PCR` action) owns that
- * action outright now, and opens THIS panel's create modal via the forwardRef
- * below (same "parent triggers, panel stays the sole gate + mutation owner"
- * convention DealStagePanel already uses for openEditStage/openHold/...).
- * Before this, the same "สร้างคำขอราคา" label rendered twice on one page (the
- * sticky bar's own copy, plus this panel's) — the Phase-1 follow-up audit's
- * FIX 1.
- */
+/** Per-deal PricingRequest section (commit 6): the deal's own pricing requests, with per-row expansion showing
+ * that request's items + its own event log. `deal` is the ticket's summary (createdById + lifecycle) — used
+ * only for the create gate; this component does not know about ticket status/stage. */
 export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ ticketId, deal, ticketItems = [], user, showToast }, ref) {
   const queryClient = useQueryClient();
   const [createOpen, setCreateOpen] = useState(false);
@@ -86,9 +65,9 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
     enabled: expandedId != null,
   });
 
-  // Shares its query key with detailQuery above when expandedId === editingId
-  // (both key off queryKeys.pricingRequestDetail(id)), so expanding a row and
-  // then editing it reuses the same cached fetch rather than doubling up.
+  // Shares its query key with detailQuery above when expandedId === editingId (both key off
+  // queryKeys.pricingRequestDetail(id)), so expanding a row and then editing it reuses the same cached fetch
+  // rather than doubling up.
   const editDetailQuery = useQuery({
     queryKey: queryKeys.pricingRequestDetail(editingId),
     queryFn: () => api.pricingRequests.get(editingId).then((r) => r.pricingRequest),
@@ -109,10 +88,8 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
     mutationFn: ({ id, reason }) => api.pricingRequests.cancel(id, { reason }),
     onSuccess: () => { invalidate(); setCancelDraft(null); },
   });
-  // Import รับเรื่อง (pickup) straight from the deal, not only from the คิวขอราคา queue — a
-  // SUBMITTED request on a deal an import user is looking at had no รับเรื่อง affordance here at
-  // all. Same api.pricingRequests.pickup + canPickupPricingRequest gate the queue page uses; the
-  // server (PricingRequestService.pickup: any import user, SUBMITTED only) stays the authority.
+  // Import รับเรื่อง (pickup) straight from the deal, not only from the คิวขอราคา queue — a SUBMITTED request on
+  // a deal an import user is looking at had no รับเรื่อง affordance here at all.
   const pickupMutation = useMutation({
     mutationFn: (id) => api.pricingRequests.pickup(id),
     onSuccess: invalidate,
@@ -120,9 +97,8 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
 
   const canCreate = canCreatePricingRequest(user, deal);
 
-  // Defensive re-check before acting (same convention as DealStagePanel's
-  // ref-exposed openers): a stale or over-eager caller cannot force the
-  // create modal open past the real gate.
+  // Defensive re-check before acting (same convention as DealStagePanel's ref-exposed openers): a stale or
+  // over-eager caller cannot force the create modal open past the real gate.
   useImperativeHandle(ref, () => ({
     openCreate: (opts) => {
       if (!canCreate) return;
@@ -216,9 +192,8 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
                         ยกเลิก
                       </Button>
                     ) : null}
-                    {/* Cancel renders its own error inside the modal that stays open on failure;
-                        submit is the only action fired straight from this row, so it is the only
-                        one that reports here. */}
+                    {/* Cancel renders its own error inside the modal that stays open on failure; submit is the only action fired
+                     * straight from this row, so it is the only one that reports here. */}
                     <MutationError mutation={submitMutation} match={submitMutation.variables === pr.id} />
                     <MutationError mutation={pickupMutation} match={pickupMutation.variables === pr.id} />
                   </div>
@@ -279,9 +254,8 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           onCreated={() => { setCreateOpen(false); setCreateRecipientType(null); invalidate(); }}
           createFn={(payload) => api.pricingRequests.create(ticketId, payload)}
           submitFn={(id) => api.pricingRequests.submit(id)}
-          // Wired even in create mode so the modal's duplicate-draft retry
-          // guard (Fix 1) can push a retry's edits onto an already-created
-          // draft via PUT instead of calling createFn a second time.
+          // Wired even in create mode so the modal's duplicate-draft retry guard (Fix 1) can push a retry's edits onto
+          // an already-created draft via PUT instead of calling createFn a second time.
           updateFn={(id, payload) => api.pricingRequests.update(id, payload)}
         />
       ) : null}

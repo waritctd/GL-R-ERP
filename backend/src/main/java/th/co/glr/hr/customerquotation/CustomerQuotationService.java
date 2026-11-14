@@ -80,13 +80,9 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
 @Service
 public class CustomerQuotationService {
     private static final Set<String> SALES_ROLES = Set.of("sales");
-    // Read-only for ceo/import/sales_manager — mirrors RAW_DECISION_ROLES/RAW_QUOTE_ROLES'
-    // {import, ceo} precedent, plus sales_manager's documented read-only oversight role
-    // (TicketService's own VIEWER_ROLES comment). account is deliberately excluded: "account
-    // role: no quotation editing" in the task brief, and Step 3 already excludes account from
-    // every raw-pricing-adjacent view on this same chain (accountRole_cannotReach... test) —
-    // there is no positive grant for account to read a customer quotation either, so it stays
-    // forbidden end-to-end, not just for writes.
+    // Read-only for ceo/import/sales_manager — mirrors RAW_DECISION_ROLES/RAW_QUOTE_ROLES' {import, ceo}
+    // precedent, plus sales_manager's documented read-only oversight role (TicketService's own VIEWER_ROLES
+    // comment).
     private static final Set<String> VIEW_ROLES = Set.of("sales", "sales_manager", "ceo", "import");
     // Package-private: CustomerQuotationRepository#mapQuotation (R-H)
     // reuses this exact constant for its own document-level VAT rather than declaring a second
@@ -132,9 +128,7 @@ public class CustomerQuotationService {
         this.dealQuotations = dealQuotations;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Create (rule 6: never moves the deal stage or the pricing request status)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
     public CustomerQuotationDto create(long pricingRequestId, CreateCustomerQuotationRequest request, UserPrincipal actor) {
@@ -150,8 +144,7 @@ public class CustomerQuotationService {
                 return requireQuotation(replay.get());
             }
         }
-        // Input gate (spine of Step 4): only from APPROVED_FOR_QUOTATION with a current
-        // APPROVED pricing_decision.
+        // Input gate (spine of Step 4): only from APPROVED_FOR_QUOTATION with a current APPROVED pricing_decision.
         if (!PricingRequestStatus.APPROVED_FOR_QUOTATION.equals(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำขอราคาต้องอยู่ในสถานะ 'อนุมัติราคาขายแล้ว' ก่อนจึงจะออกใบเสนอราคาลูกค้าได้ (ปัจจุบัน: " + summary.status() + ")");
@@ -192,16 +185,14 @@ public class CustomerQuotationService {
         addPricingRequestEvent(summary, actor, PricingRequestEventKind.CUSTOMER_QUOTATION_CREATED,
             "สร้างร่างใบเสนอราคาลูกค้า");
         CustomerQuotationDto created = requireQuotation(id);
-        // Currently inert: buildItem's only callers here and in createRevision() both pass a
-        // ZERO discount, so no line created this way is ever below minimum today. Wired anyway so
-        // the invariant holds regardless of entry point — see the class javadoc.
+        // Currently inert: buildItem's only callers here and in createRevision() both pass a ZERO discount, so no line
+        // created this way is ever below minimum today. Wired anyway so the invariant holds regardless of entry point
+        // — see the class javadoc.
         raiseDiscountApprovalsIfNeeded(summary, created, actor);
         return created;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Read
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     public CustomerQuotationDto get(long quotationId, UserPrincipal actor) {
         CustomerQuotationDto quotation = requireQuotation(quotationId);
@@ -218,20 +209,13 @@ public class CustomerQuotationService {
         return quotations.findByPricingRequest(pricingRequestId);
     }
 
-    /**
-     * Rule 12: a GET-like recompute of the CURRENT persisted state — performs zero writes. Every
-     * mutation (create/update) already server-recomputes and persists totals, so "preview" is the
-     * same read as {@link #get}; this method exists as its own endpoint only so the frontend has
-     * an explicit, unambiguous "no side effect" call to make before offering PDF/XLSX download.
-     */
+    /** Rule 12: a GET-like recompute of the CURRENT persisted state — performs zero writes. */
     public CustomerQuotationDto preview(long quotationId, UserPrincipal actor) {
         return get(quotationId, actor);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Update (draft-only; rules 4/5: only customer-facing description/notes/discount are
-    // editable — no cost/FX/margin field exists anywhere on this aggregate to edit)
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Update (draft-only; rules 4/5: only customer-facing description/notes/discount are editable — no
+    // cost/FX/margin field exists anywhere on this aggregate to edit)
 
     @Transactional
     public CustomerQuotationDto update(long quotationId, UpdateCustomerQuotationRequest request, UserPrincipal actor) {
@@ -322,9 +306,7 @@ public class CustomerQuotationService {
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Issue (rules 7/8/13/14)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
     public CustomerQuotationDto issue(long quotationId, IssueCustomerQuotationRequest request, UserPrincipal actor) {
@@ -345,9 +327,8 @@ public class CustomerQuotationService {
         CustomerQuotationDto quotation = requireQuotation(quotationId);
         if (!isOpenForIssue(quotation.docStatus())) {
             if (QuotationStatus.ISSUED.equals(quotation.docStatus())) {
-                // Idempotent replay without a clientRequestId (or a fresh one never seen
-                // before) against an already-ISSUED quotation is a clean conflict, not a
-                // silent second "success" — mirrors PricingDecisionService.approve()'s
+                // Idempotent replay without a clientRequestId (or a fresh one never seen before) against an already-ISSUED
+                // quotation is a clean conflict, not a silent second "success" — mirrors PricingDecisionService.approve()'s
                 // "Decision is not open for approval" 409.
                 throw new ApiException(HttpStatus.CONFLICT, "ใบเสนอราคานี้ออกไปแล้ว");
             }
@@ -382,9 +363,8 @@ public class CustomerQuotationService {
         // something to fall back to. Deliberately placed AFTER the issue compare-and-set above:
         // a failed issue must not retire the old offer.
         quotations.supersedeSupersededChainQuotations(summary.id());
-        // Only the FIRST issue moves the pricing request — a revision's re-issue is a no-op
-        // transition (the request is already QUOTATION_ISSUED); see PricingRequestStatus's own
-        // Javadoc on QUOTATION_ISSUED.
+        // Only the FIRST issue moves the pricing request — a revision's re-issue is a no-op transition (the request is
+        // already QUOTATION_ISSUED); see PricingRequestStatus's own Javadoc on QUOTATION_ISSUED.
         if (PricingRequestStatus.APPROVED_FOR_QUOTATION.equals(summary.status())) {
             int transitioned = pricingRequests.transition(summary.id(), PricingRequestStatus.APPROVED_FOR_QUOTATION,
                 PricingRequestStatus.QUOTATION_ISSUED, null, null);
@@ -393,9 +373,8 @@ public class CustomerQuotationService {
             }
         }
 
-        // Rule 7: reuse the EXISTING stage transition generateQuotation already performs — not
-        // a second path. Rule 6 (drafts never move the stage) holds because this is the only
-        // call site in this whole service.
+        // Rule 7: reuse the EXISTING stage transition generateQuotation already performs — not a second path. Rule 6
+        // (drafts never move the stage) holds because this is the only call site in this whole service.
         ticketService.advanceStageForCustomerQuotationIssue(summary.ticketId(), quotation.recipientType(), actor);
 
         tickets.addEventWithDocument(summary.ticketId(), actor.id(), actor.name(), TicketEventKind.QUOTATION_ISSUED,
@@ -403,10 +382,9 @@ public class CustomerQuotationService {
             RelatedDocumentType.QUOTATION, quotationId);
         addPricingRequestEvent(summary, actor, PricingRequestEventKind.CUSTOMER_QUOTATION_ISSUED,
             "ออกใบเสนอราคาลูกค้า " + quotation.number());
-        // "Customer notification" — this system has no customer user account to notify
-        // in-app, so the closest equivalent is a CEO-visibility notification documenting the
-        // issuance (CEO read-only on the final document, per the task brief). Documented
-        // explicitly in the branch handoff's Known Risks, not silently substituted.
+        // "Customer notification" — this system has no customer user account to notify in-app, so the closest
+        // equivalent is a CEO-visibility notification documenting the issuance (CEO read-only on the final document,
+        // per the task brief).
         notifications.notifyByRoleForPricingRequest("ceo", summary.id(),
             PricingRequestEventKind.CUSTOMER_QUOTATION_ISSUED,
             "ใบเสนอราคาลูกค้า " + quotation.number() + " ถูกออกแล้ว");
@@ -417,9 +395,7 @@ public class CustomerQuotationService {
         return QuotationStatus.DRAFT.equals(docStatus) || QuotationStatus.READY_TO_ISSUE.equals(docStatus);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Cancel (draft-only — an ISSUED quotation cannot be cancelled, only revised)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
     public CustomerQuotationDto cancel(long quotationId, CancelCustomerQuotationRequest request, UserPrincipal actor) {
@@ -436,9 +412,7 @@ public class CustomerQuotationService {
         return requireQuotation(quotationId);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Revision (rule 9: corrections after issue create a new revision; old ones stay readable)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Transactional
     public CustomerQuotationDto createRevision(long quotationId, CreateRevisionRequest request, UserPrincipal actor) {
@@ -463,9 +437,9 @@ public class CustomerQuotationService {
                 return requireQuotation(replay.get());
             }
         }
-        // Re-source fresh from the (single, immutable-once-approved) approved decision — there
-        // is only ever one APPROVED decision per pricing request (V72's own partial unique
-        // index), so this is a re-read of the same prices, not a second decision to reconcile.
+        // Re-source fresh from the (single, immutable-once-approved) approved decision — there is only ever one
+        // APPROVED decision per pricing request (V72's own partial unique index), so this is a re-read of the same
+        // prices, not a second decision to reconcile.
         PricingDecisionSalesViewDto salesView = decisions.findApprovedSalesView(summary.id())
             .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ยังไม่มีราคาขายที่ CEO อนุมัติ"));
 
@@ -517,8 +491,8 @@ public class CustomerQuotationService {
             customer != null ? customer.address() : null, customer != null ? customer.taxId() : null,
             customer != null ? customer.phone() : null, ticket.projectName(), items));
 
-        // Supersede the prior ISSUED revision only after the new draft exists, so a failure
-        // partway through never leaves a pricing request with zero readable current quotation.
+        // Supersede the prior ISSUED revision only after the new draft exists, so a failure partway through never
+        // leaves a pricing request with zero readable current quotation.
         quotations.supersede(source.id());
 
         addPricingRequestEvent(summary, actor, PricingRequestEventKind.CUSTOMER_QUOTATION_REVISED,
@@ -603,8 +577,8 @@ public class CustomerQuotationService {
             throw new ApiException(HttpStatus.CONFLICT,
                 "คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขแล้ว — บันทึกผลลูกค้าที่ใบเสนอราคาของรอบแก้ไขแทน");
         }
-        // R8: refused when ANY quotation on this TICKET is already ACCEPTED — the new
-        // PRICING_REQUEST-origin engine included, since both write the SAME sales.quotation table.
+        // refused when ANY quotation on this TICKET is already ACCEPTED — the new PRICING_REQUEST-origin engine
+        // included, since both write the SAME sales.quotation table.
         if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
@@ -718,18 +692,16 @@ public class CustomerQuotationService {
 
     private record RenderContext(TicketDto ticket, th.co.glr.hr.ticket.QuotationDto quotation, CustomerDto customer) {}
 
-    // Rule 12: this is a pure read — no status/state is ever written here, so downloading a
-    // preview (before issue) can never issue.
+    // Rule 12: this is a pure read — no status/state is ever written here, so downloading a preview (before issue)
+    // can never issue.
     private RenderContext loadRenderContext(long quotationId, UserPrincipal actor) {
         CustomerQuotationDto quotation = requireQuotation(quotationId);
         requireFileViewAccess(quotation, actor);
         TicketSummaryDto liveTicketSummary = requireTicketSummary(quotation.ticketId());
         List<TicketItemDto> snapshotItems = tickets.findQuotationItemsByQuotationId(quotationId, quotation.ticketId());
-        // Rule 8 (issued quotations are immutable): render against the FROZEN customer/project
-        // header captured at creation time (sales.quotation.customer_name/project_name), not the
-        // ticket's current live values — a later customer-record edit must never change how an
-        // already-issued quotation renders. Mirrors TicketService.loadQuotationContext's own
-        // legacy-flow substitution exactly (see TicketSummaryDto.withCustomerAndProject).
+        // Rule 8 (issued quotations are immutable): render against the FROZEN customer/project header captured at
+        // creation time (sales.quotation.customer_name/project_name), not the ticket's current live values — a later
+        // customer-record edit must never change how an already-issued quotation renders.
         TicketRepository.QuotationHeaderSnapshot header = tickets.findQuotationHeaderSnapshot(quotationId)
             .orElse(new TicketRepository.QuotationHeaderSnapshot(null, null, null, null, null));
         String frozenCustomerName = header.customerName() != null ? header.customerName() : liveTicketSummary.customerName();
@@ -748,9 +720,7 @@ public class CustomerQuotationService {
         return new RenderContext(ticket, legacyDto, customer);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private NewItem buildItem(PricingDecisionSalesItemDto item, BigDecimal salesDiscount) {
         BigDecimal approvedUnitPrice = item.approvedSellingPricePerRequestedUnit();
@@ -782,9 +752,9 @@ public class CustomerQuotationService {
         BigDecimal lineTotal = lineSubtotal.add(vat);
         String description = firstText(item.productDescription(),
             (firstText(item.brand(), "") + " " + firstText(item.model(), "")).trim());
-        // brand/model/color/texture/size all flow straight from the sales-view DTO into the
-        // legacy render columns — see NewItem's own field comment and V74's migration comment
-        // for why these five (and only these five) exist on quotation_item.
+        // brand/model/color/texture/size all flow straight from the sales-view DTO into the legacy render columns —
+        // see NewItem's own field comment and V74's migration comment for why these five (and only these five) exist
+        // on quotation_item.
         return new NewItem(item.pricingRequestItemId(), item.pricingDecisionItemId(), description,
             item.requestedUnitBasis(), item.requestedQuantity(), approvedUnitPrice, discount, finalUnitPrice,
             lineSubtotal, vat, lineTotal, item.brand(), item.model(), item.color(), item.texture(), item.size(),
@@ -810,23 +780,8 @@ public class CustomerQuotationService {
     // Discount-approval gate (V155)
     // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * For every line on {@code quotation} currently priced below its CEO-approved minimum,
-     * ensures a live discount-approval request exists at exactly that price ({@link
-     * DiscountApprovalRepository#ensureRequested} — idempotent per (item, exact price): a repeat
-     * save at an unchanged price, or a price that reverts to one already APPROVED, is a no-op and
-     * notifies nobody). Notifies the CEO exactly once per line for which this is a genuinely NEW
-     * ask, naming every such line in a single combined event/notification rather than one per
-     * line, so saving several discounted lines at once does not spam the CEO's inbox.
-     *
-     * <p>Called from every writer that can leave a line below minimum: {@link #applyItemUpdates}
-     * via {@link #update} (the only currently-reachable path — site "~254" in the task brief), and
-     * {@link #buildItem} via {@link #create}/{@link #createRevision} (site "~641" — currently
-     * inert, since both callers pass a ZERO discount into buildItem, but wired here too so the
-     * invariant holds regardless of entry point). Does not itself decide anything about issue() —
-     * that gate is {@link #issue}'s own {@code discountApprovals.isApproved} check, which asks the
-     * SAME question this method answers, independently, at issue time.
-     */
+    /** For every line on quotation currently priced below its CEO-approved minimum, ensures a live
+     * discount-approval request exists at exactly that price (DiscountApprovalRepository#ensureRequested. */
     private void raiseDiscountApprovalsIfNeeded(PricingRequestSummaryDto summary, CustomerQuotationDto quotation,
                                                 UserPrincipal actor) {
         List<CustomerQuotationItemDto> newlyRequested = new ArrayList<>();

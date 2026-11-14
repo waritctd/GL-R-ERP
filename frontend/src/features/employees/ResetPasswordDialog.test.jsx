@@ -5,10 +5,7 @@ import { ResetPasswordDialog } from './ResetPasswordDialog.jsx';
 
 globalThis.React = React;
 
-// Isolated component tests — no host page, no router, no react-query. EmployeeDetailPage.test.jsx
-// covers the real wiring (HR-only visibility, the actual api.employees.resetPassword call,
-// showToast never carrying the password); this file pins ResetPasswordDialog's own prop contract
-// and internal state handling directly, so a break here is attributable to the dialog itself.
+// Isolated component tests — no host page, no router, no react-query.
 
 const employee = { id: 9, nameTh: 'สมชาย ใจดี', code: 'EMP009' };
 const TEMP_PASSWORD = 'Kbn7RtWq3xZmDp';

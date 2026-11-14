@@ -238,16 +238,16 @@ class AuthServiceTest {
             isNull(), details.capture());
         assertThat(actor.getValue().email()).isEqualTo("hr@glr.co.th");
         assertThat(actor.getValue().id()).isEqualTo(42L);
-        // The role is derived from the division at login time and the division can change later,
-        // so capturing it here is a historical record, not something re-derivable from the row.
+        // The role is derived from the division at login time and the division can change later, so capturing it here
+        // is a historical record, not something re-derivable from the row.
         assertThat(details.getValue()).containsEntry("role", "hr");
         assertThat(details.getValue()).containsEntry("mustChangePassword", false);
     }
 
     @Test
     void recordsNoAuditRowWhenTheCredentialsAreRejected() {
-        // Wrong-way-round: the audit trail must not imply a login that never happened. Every
-        // rejection path in login() is exercised, because each returns before the record call.
+        // Wrong-way-round: the audit trail must not imply a login that never happened. Every rejection path in login()
+        // is exercised, because each returns before the record call.
         when(employees.findByEmail("missing@glr.co.th")).thenReturn(Optional.empty());
         when(employees.findByEmail("hr@glr.co.th"))
             .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
@@ -276,8 +276,8 @@ class AuthServiceTest {
 
     @Test
     void stillLogsInWhenTheAuditWriteFails() {
-        // An audit-table problem must never become a company-wide lockout: a login mutates
-        // nothing, so there is no half-written state to protect by failing the request.
+        // An audit-table problem must never become a company-wide lockout: a login mutates nothing, so there is no
+        // half-written state to protect by failing the request.
         when(employees.findByEmail("hr@glr.co.th"))
             .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
         doThrow(new RuntimeException("audit_log unavailable"))
@@ -298,8 +298,8 @@ class AuthServiceTest {
     }
 
     private EmployeeLoginRecord employee(long divisionId, String positionName) {
-        // Role-derivation tests log in with "GLR-42"; give them a matching hash so
-        // Wave 1's BCrypt auth lets the login through to the role check.
+        // Role-derivation tests log in with "GLR-42"; give them a matching hash so Wave 1's BCrypt auth lets the login
+        // through to the role check.
         return employee(divisionId, positionName, encoder.encode("GLR-42"), false);
     }
 
@@ -329,8 +329,8 @@ class AuthServiceTest {
         );
     }
 
-    // Maps the legacy division ids used by these tests to the ฝ่าย source_code that the
-    // data-driven DivisionAccessPolicy now keys on (role no longer depends on division_id).
+    // Maps the legacy division ids used by these tests to the ฝ่าย source_code that the data-driven
+    // DivisionAccessPolicy now keys on (role no longer depends on division_id).
     private static String divisionCodeFor(long divisionId) {
         return switch ((int) divisionId) {
             case 17 -> "HR";   // HR-บุคคล

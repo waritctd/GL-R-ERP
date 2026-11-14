@@ -96,15 +96,9 @@ public class CommissionRepository {
         }
     }
 
-    /**
-     * True once payroll has been run for the month. Commission payroll derives what a rep is owed
-     * by {@code payroll_month} ({@code CommissionService#computeRepPayrollCommissions}), and a
-     * processed period is written once (see {@code hr.payroll_period}) -- so a commission that
-     * lands in a processed month is approved and then never paid, silently distorting {@code
-     * payrollReadySummary} for that month. Mirrors {@code OvertimeRepository#payrollMonthProcessed}
-     * exactly (same table, same condition) so the two guards cannot drift apart -- copy-paste is
-     * deliberate here, not an oversight.
-     */
+    /** True once payroll has been run for the month. Mirrors OvertimeRepository#payrollMonthProcessed exactly (same
+     * table, same condition) so the two guards cannot drift apart -- copy-paste is deliberate here, not an
+     * oversight. */
     public boolean payrollMonthProcessed(LocalDate payrollMonth) {
         Boolean processed = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -117,16 +111,9 @@ public class CommissionRepository {
         return Boolean.TRUE.equals(processed);
     }
 
-    /**
-     * True when {@code payrollMonth} was already paid outside the ERP and is covered by {@code
-     * hr.payroll_year_to_date_seed} (V114) -- distinct from {@link #payrollMonthProcessed}, which
-     * is true only once THIS system has run payroll for the month. A seed-covered month is never
-     * {@code PROCESSED} here (the guard trigger on {@code hr.payroll_period} refuses that, to avoid
-     * double-counting year-to-date withholding), so checking {@link #payrollMonthProcessed} alone
-     * would report such a month as open and let a commission be filed into it -- money that would
-     * then never be paid by anything. Mirrors {@code OvertimeRepository#payrollMonthSeedCovered}
-     * exactly.
-     */
+    /** True when payrollMonth was already paid outside the ERP and is covered by hr.payroll_year_to_date_seed
+     * (V114) -- distinct from #payrollMonthProcessed, which is true only once THIS system has run payroll for the
+     * month. */
     public boolean payrollMonthSeedCovered(LocalDate payrollMonth) {
         Boolean covered = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -317,16 +304,8 @@ public class CommissionRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    /**
-     * Manager TEAM OVERRIDE (V199): the generation active for {@code payrollMonth} -- the latest
-     * {@code effective_from} &le; the month, the same generation-selection rule as {@link
-     * #findIncentiveTiers} / {@link #findStockBonusConfig}. A generation that exists but is
-     * {@code enabled = FALSE} IS returned (with its {@code enabled} flag) -- the caller decides
-     * what disabled means; empty only when no generation has started yet. Recipients are joined to
-     * {@code hr.employee} for a display name (same first/last-name expression the record queries
-     * use, falling back to the employee code for a nameless row), ordered by employee_id so the
-     * list is deterministic.
-     */
+    /** Manager TEAM OVERRIDE (V199): the generation active for payrollMonth -- the latest effective_from &le; the
+     * month, the same generation-selection rule as #findIncentiveTiers / #findStockBonusConfig. */
     public Optional<TeamOverrideConfig> findTeamOverrideConfig(LocalDate payrollMonth) {
         record Header(long id, boolean enabled, BigDecimal threshold, BigDecimal rate) {}
         List<Header> headers = jdbc.query("""
@@ -361,19 +340,9 @@ public class CommissionRepository {
         return Optional.of(new TeamOverrideConfig(header.enabled(), header.threshold(), header.rate(), recipients));
     }
 
-    /**
-     * Manager TEAM OVERRIDE (V199): the COMPANY-WIDE, UNWEIGHTED sum of {@code actual_received}
-     * for the month -- SALE and CLAWBACK records only (manual kinds carry {@code actual_received =
-     * 0} but are excluded by kind anyway, so a future non-zero manual row could never leak in).
-     * Unweighted on purpose: the workbook's base is real cash, the x2/x3 uplift is not included.
-     *
-     * <p>{@code approvedOnly = true} is the PAYROLL path ({@code status = 'APPROVED'}, the same
-     * filter {@link #findApprovedRecordsByMonth} and {@link #sumActiveStockActualReceived} use --
-     * unapproved money must never reach a payroll figure; a payroll-path sum on the preview filter
-     * once paid a bonus on an unapproved receipt). {@code false} is the live-ESTIMATE path
-     * ({@code monthlySummary}), the broader {@code NOT IN ('VOID','REJECTED')} preview filter
-     * {@link #sumActiveWeightedActualReceived} uses.
-     */
+    /** Manager TEAM OVERRIDE (V199): the COMPANY-WIDE, UNWEIGHTED sum of actual_received for the month -- SALE and
+     * CLAWBACK records only (manual kinds carry actual_received = 0 but are excluded by kind anyway, so a future
+     * non-zero manual row could never leak in). */
     public BigDecimal sumCompanyActualReceived(LocalDate payrollMonth, boolean approvedOnly) {
         BigDecimal value = jdbc.queryForObject("""
             SELECT COALESCE(SUM(actual_received), 0)
@@ -562,10 +531,8 @@ public class CommissionRepository {
         return keyHolder.getKey().longValue();
     }
 
-    /** Sets the real attachment AND clears the {@link #PENDING_ATTACHMENT_SENTINEL} written by
-     * {@link #createInvoice} in the SAME statement — the row always has at least one of the two
-     * evidence columns non-null, satisfying {@code chk_invoice_details_evidence_present} at every
-     * individual statement, not just at the end of the transaction. */
+    /** Sets the real attachment AND clears the #PENDING_ATTACHMENT_SENTINEL written by #createInvoice in the SAME
+     * statement. */
     public void attachInvoiceFile(long invoiceId, long attachmentId) {
         jdbc.update("""
             UPDATE sales.invoice_details
@@ -718,21 +685,9 @@ public class CommissionRepository {
         return keyHolder.getKey().longValue();
     }
 
-    /**
-     * Manual commission entries (feat/commission-manual-adjustments, V84): a sales_manager/CEO
-     * hand-typed amount for kind ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE -- never computed by {@link
-     * CommissionCalculator}, no {@code invoice_id} (nullable since V84), no {@code
-     * source_ticket_id}. {@code actual_received}/{@code commissionable_base} are stored as ZERO,
-     * deliberately: those are the tier-calc columns, and manual entries must never bleed into
-     * {@link #sumActiveWeightedActualReceived} or the monthly tier base -- {@code manual_amount}
-     * is the sole source of truth, added on top of the tier commission only in {@link
-     * CommissionService#payrollReadySummary}.
-     *
-     * <p>Created by a sales_manager lands {@code MANAGER_APPROVED} (still needs CEO sign-off,
-     * reusing the existing {@code approve()}/{@code ceoApprove()} chain verbatim -- no separate
-     * approval path is added). Created by the CEO lands {@code APPROVED} directly, mirroring how
-     * {@link #managerApprove} and {@link #ceoApprove} each stamp their own approval columns.
-     */
+    /** Manual commission entries (feat/commission-manual-adjustments, V84): a sales_manager/CEO hand-typed amount
+     * for kind ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE -- never computed by CommissionCalculator, no
+     * invoice_id (nullable since V84), no source_ticket_id. */
     public long createManualCommission(
         String kind,
         long salesRepId,
@@ -811,13 +766,9 @@ public class CommissionRepository {
                 .addValue("overpayment", money(overpayment)));
     }
 
-    /**
-     * Commission redesign calc-refine: sets a commission record's tier-base weight multiplier
-     * (1/2/3). Separate statement from {@link #updateDeductions} because the multiplier lives on
-     * {@code sales.commission_record}, not {@code sales.invoice_details}. Only reachable through
-     * {@link CommissionService#updateDeductions} (sales-manager/CEO review path) -- sales has no
-     * access to that endpoint at all, so no separate role check is needed here.
-     */
+    /** Commission redesign calc-refine: sets a commission record's tier-base weight multiplier (1/2/3). Only
+     * reachable through CommissionService#updateDeductions (sales-manager/CEO review path) -- sales has no access
+     * to that endpoint at all, so no separate role check is needed here. */
     public void updateWeightMultiplier(long commissionId, int weightMultiplier) {
         jdbc.update("""
             UPDATE sales.commission_record
@@ -828,19 +779,11 @@ public class CommissionRepository {
             Map.of("commissionId", commissionId, "weightMultiplier", weightMultiplier));
     }
 
-    /**
-     * Slice A2 duplicate guard for the accountant auto-create trigger ({@code
-     * CommissionService#createFromDeal}): a deal that already has a live (non-VOID, non-REJECTED)
-     * SALE commission must not get a second one, regardless of the invoice number used the second
-     * time (the invoice_number UNIQUE constraint alone would not catch a genuine second invoice
-     * number for the same deal).
-     */
-    /**
-     * Takes a row lock on the commission record ({@code SELECT ... FOR UPDATE}), held until the
-     * surrounding transaction ends -- so it only serialises anything when called inside a real
-     * transaction ({@link CommissionService#adjustItemWeights} is {@code @Transactional}). Returns
-     * whether the row exists.
-     */
+    /** Slice A2 duplicate guard for the accountant auto-create trigger: a deal that already has a live SALE
+     * commission must not get a second one, regardless of the invoice number used the second time. */
+    /** Takes a row lock on the commission record (SELECT ... FOR UPDATE), held until the surrounding transaction
+     * ends -- so it only serialises anything when called inside a real transaction
+     * (CommissionService#adjustItemWeights is @Transactional). Returns whether the row exists. */
     public boolean lockRecordForUpdate(long commissionId) {
         return !jdbc.queryForList(
             "SELECT commission_id FROM sales.commission_record WHERE commission_id = :id FOR UPDATE",
@@ -1038,12 +981,9 @@ public class CommissionRepository {
         );
     }
 
-    /**
-     * Manual entries (kind ADJUSTMENT/MANAGER, V84) have no invoice -- the LEFT JOIN in {@code
-     * RECORD_SELECT} yields NULLs across every {@code inv.*} column for those rows. Returns {@code
-     * null} in that case rather than an {@link InvoiceDetails} full of nulls (which would NPE on
-     * {@code invoice_created_at.toInstant()} regardless).
-     */
+    /** Manual entries (kind ADJUSTMENT/MANAGER, V84) have no invoice -- the LEFT JOIN in RECORD_SELECT yields NULLs
+     * across every inv.* column for those rows. Returns null in that case rather than an InvoiceDetails full of
+     * nulls (which would NPE on invoice_created_at.toInstant() regardless). */
     private InvoiceDetails mapInvoiceDetails(ResultSet rs) throws SQLException {
         long invoiceIdRaw = rs.getLong("invoice_id");
         if (rs.wasNull()) {

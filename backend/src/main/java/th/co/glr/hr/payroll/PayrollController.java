@@ -125,15 +125,8 @@ public class PayrollController {
             .body(response);
     }
 
-    /**
-     * Download one of HR's payroll export files for a processed period:
-     * {@code kind} ∈ {@code kbank} | {@code pnd1} | {@code sso} | {@code payroll-detail}. Optional
-     * {@code effectiveDate} (YYYY-MM-DD) is the KBank transfer / PND1 / SSO pay date (or, for
-     * {@code payroll-detail}, just the date stamped into the filename); omitted falls back to the
-     * configured default day (the 26th) of the payroll month. The three statutory kinds return raw
-     * CP874 bytes (octet-stream) so the legacy Thai encoding survives the download intact;
-     * {@code payroll-detail} returns a real xlsx workbook — see {@link PayrollExportKind#contentType()}.
-     */
+    /** Download one of HR's payroll export files for a processed period: kind ∈ kbank | pnd1 | sso |
+     * payroll-detail. */
     @GetMapping("/{periodId}/export/{kind}")
     @PreAuthorize("hasAnyRole('HR','CEO')")
     public ResponseEntity<byte[]> export(

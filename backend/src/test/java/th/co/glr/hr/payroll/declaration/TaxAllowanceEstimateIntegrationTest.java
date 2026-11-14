@@ -35,14 +35,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Tax-effect estimate (decision #4, "what this saves me") — driven through the real {@link
- * PayrollService#estimateAllowanceEffect}, real {@link PayrollCalculator}, and real Postgres, per
- * {@code AttendanceScopeIntegrationTest}'s house standard. This is the pin against ever
- * reimplementing Thai tax math anywhere else: every assertion compares the estimate's own numbers
- * against a REAL {@link PayrollService#preview} run for the same employee/month, never a
- * hand-computed expectation.
- */
+/** Tax-effect estimate (decision #4, "what this saves me") — driven through the real
+ * PayrollService#estimateAllowanceEffect, real PayrollCalculator, and real Postgres, per
+ * AttendanceScopeIntegrationTest's house standard. */
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.CeoApproverRepository;
 
@@ -104,14 +99,8 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
         hrEmployeeId = seedEmployee("EST-HR", new BigDecimal("50000.00"), "M");
     }
 
-    /**
-     * The request DTO ({@code TaxAllowanceDeclarationSubmitRequest}, reused verbatim as the
-     * estimate body) has no {@code employeeId} field at all — {@code estimateOwn} resolves the
-     * employee EXCLUSIVELY from {@code actor.employeeId()}. Pinned here not by trying to forge a
-     * field that does not exist, but by proving the numbers themselves never cross between two
-     * employees with deliberately different salaries: if the guard were broken and one call could
-     * read the other's data, these two results would collide.
-     */
+    /** The request DTO (TaxAllowanceDeclarationSubmitRequest, reused verbatim as the estimate body) has no
+     * employeeId field at all — estimateOwn resolves the employee EXCLUSIVELY from actor.employeeId(). */
     @Test
     void employeeCannotEstimateForAnotherEmployeeTheNumbersNeverCrossOver() {
         long employeeA = seedEmployee("EST-A", new BigDecimal("30000.00"), "M");
@@ -145,22 +134,9 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(result.proposedWithholdingTax()).isNull();
     }
 
-    /**
-     * THE anti-drift pin: estimate, then actually submit and approve the SAME declaration and run
-     * a real {@link PayrollService#preview} for the same month — {@code withholdingTax} must be
-     * byte-for-byte equal.
-     *
-     * <p>The month is JANUARY on both sides, and deliberately hardcoded rather than derived from the
-     * clock. {@code estimateOwn} simulates {@code WHOLE_YEAR_EFFECTIVE_MONTH} since the whole-year
-     * ruling removed the employee's month choice — which is the same January every blank
-     * "มีผลตั้งแต่งวดเดือน" select already produced before it. This test previewed June while the
-     * fixture explicitly declared month 6; with no month to declare, keeping June would compare a
-     * January-shaped estimate against a June preview and fail for a reason that has nothing to do
-     * with drift. If the estimate's private calculation ever diverged from the real
-     * {@code calculateLine} path (a different collaborator wired, a merge-order bug), this is the
-     * test that would catch it — no other assertion in this suite compares an estimate against a
-     * real run.
-     */
+    /** THE anti-drift pin: estimate, then actually submit and approve the SAME declaration and run a real
+     * PayrollService#preview for the same month — withholdingTax must be byte-for-byte equal. The month is JANUARY
+     * on both sides, and deliberately hardcoded rather than derived from the clock. */
     @Test
     void estimateIsByteForByteEqualToARealApprovalAndPreviewForTheSameMonth() {
         long employeeId = seedEmployee("EST-P", new BigDecimal("50000.00"), "M");
@@ -172,8 +148,8 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
 
         TaxAllowanceDeclarationDto declaration =
             service.submitOwn(submitRequest(spouseAllowance), employeeActor(employeeId));
-        // Approval promotes to payroll on its own since the whole-year ruling (2026-08-31); a
-        // follow-up apply() would 409 on markApplied's applied_at IS NULL guard.
+        // Approval promotes to payroll on its own since the whole-year ruling (2026-08-31); a follow-up apply() would
+        // 409 on markApplied's applied_at IS NULL guard.
         approveSigned(declaration.declarationId());
 
         PayrollPeriodDto realPeriod = payrollService.preview(
@@ -232,11 +208,9 @@ class TaxAllowanceEstimateIntegrationTest extends AbstractPostgresIntegrationTes
         return new UserPrincipal(hrEmployeeId, "hr@glr.co.th", "HR", "hr", hrEmployeeId, true, LocalDate.now(), false, null, false);
     }
 
-    /**
-     * Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3).
-     * The failure cases below deliberately do NOT use this — they assert on the role and status
-     * checks, which both run before the signed-form check and so are unaffected by it.
-     */
+    /** Approves the way HR now has to: the signed ล.ย.01 must be attached first (owner decision #3). The failure
+     * cases below deliberately do NOT use this — they assert on the role and status checks, which both run before
+     * the signed-form check and so are unaffected by it. */
     private void approveSigned(long declarationId) {
         TaxAllowanceTestSupport.attachSignedForm(jdbc, declarationId);
         service.approve(declarationId, null, hrActor());

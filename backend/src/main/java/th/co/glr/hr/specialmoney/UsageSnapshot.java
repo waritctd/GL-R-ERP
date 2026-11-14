@@ -3,21 +3,9 @@ package th.co.glr.hr.specialmoney;
 import java.math.BigDecimal;
 import java.util.Map;
 
-/**
- * The requesting employee's prior usage, pre-aggregated by the caller so the evaluator stays a pure
- * function with no repository access.
- *
- * <p>The maps are counted over deliberately different status sets:
- *
- * <ul>
- *   <li><b>amounts</b> — {@code status = 'APPROVED'} only. This is money, and an unapproved request
- *       has not consumed any of the annual balance.
- *   <li><b>counts</b> — {@code SUBMITTED}, {@code MANAGER_APPROVED} and {@code APPROVED}. These back
- *       the "once per lifetime" / "once per year" guards, which must also see requests still in
- *       flight: counting approved rows only would let an employee file the same claim twice before
- *       either had been decided, and both would then be approvable.
- * </ul>
- */
+/** The requesting employee's prior usage, pre-aggregated by the caller so the evaluator stays a pure function
+ * with no repository access. The maps are counted over deliberately different status sets: amounts — status =
+ * 'APPROVED' only. */
 public record UsageSnapshot(
     Map<SpecialMoneyType, BigDecimal> approvedAmountThisYearByType,
     Map<SpecialMoneyType, Integer> activeCountLifetimeByType,

@@ -35,16 +35,8 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * V184's factory-resolution cascade (owner decision 2, revised 09-18 — country is now REQUIRED for
- * an auto-created factory, with {@code 'ZZ'}/อื่นๆ as the one catch-all), the per-factory rollup
- * ({@code TicketService#applyImportRequestRollup}), and the legacy one-shot import actions'
- * refusal on an IR-tracked deal — against real Postgres, through the real service.
- *
- * <p>Every case here is either a WRITE to the real {@code price_catalog.factories} master (the
- * auto-create path) or a scope/authorisation-shaped decision, so per CLAUDE.md this needs real-DB
- * evidence, not a mocked repository.
- */
+/** V184's factory-resolution cascade, the per-factory rollup, and the legacy one-shot import actions' refusal
+ * on an IR-tracked deal — against real Postgres, through the real service. */
 class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private ImportRequestService service;
@@ -86,12 +78,9 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
 
     // ── factory resolution cascade (owner decision 2) ────────────────────────────────────────────
 
-    /**
-     * Step 5 of the plan's cascade: no direct id anywhere AND no name anywhere for a line refuses
-     * outright, naming the line, rather than silently deriving a factory from {@code brand} (the
-     * 2026-09-18 correction). Zero rows must land in the factory master — a refused create must not
-     * have side effects.
-     */
+    /** Step 5 of the plan's cascade: no direct id anywhere AND no name anywhere for a line refuses outright, naming
+     * the line, rather than silently deriving a factory from brand (the 2026-09-18 correction). Zero rows must
+     * land in the factory master — a refused create must not have side effects. */
     @Test
     void aLineWithNoFactoryAnywhereIsRefused_andCreatesNoFactoryRow() {
         long ticketId = insertTicket("RESOLV-1");
@@ -106,13 +95,9 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         assertThat(countFactories()).isEqualTo(factoriesBefore);
     }
 
-    /**
-     * A typed name matching an EXISTING master row apart from case, internal whitespace, or Unicode
-     * NFC-vs-NFD combining-mark form reuses that row rather than creating a near-duplicate — each
-     * axis checked separately, against its own deal, so a failure names which one broke. None of
-     * these need {@code newFactoryCountries}: the line resolves to an EXISTING factory, so the
-     * auto-create path (and its country requirement) is never reached.
-     */
+    /** A typed name matching an EXISTING master row apart from case, internal whitespace, or Unicode NFC-vs-NFD
+     * combining-mark form reuses that row rather than creating a near-duplicate — each axis checked separately,
+     * against its own deal, so a failure names which one broke. */
     @Test
     void aTypedNameMatchingAnExistingFactoryByCase_reusesTheRow_andCreatesNothing() {
         long factoryId = insertFactory("Ceramica Digitale", "IT", null);
@@ -141,11 +126,9 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         assertThat(countFactories()).isEqualTo(before);
     }
 
-    /**
-     * é (U+00E9, precomposed) vs. e + combining acute accent (U+0065 U+0301) — the same visible text,
-     * two different byte sequences, which is exactly what NFC normalization must reconcile. Thai
-     * script has no canonical precomposition to decompose from, so this needs a script that does.
-     */
+    /** é (U+00E9, precomposed) vs. e + combining acute accent (U+0065 U+0301) — the same visible text, two
+     * different byte sequences, which is exactly what NFC normalization must reconcile. Thai script has no
+     * canonical precomposition to decompose from, so this needs a script that does. */
     @Test
     void aTypedNameMatchingAnExistingFactoryByNfcVsNfdForm_reusesTheRow_andCreatesNothing() {
         String nfcName = "Café Ceramica"; // precomposed é
@@ -166,10 +149,8 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
 
     // ── auto-create requires a country (owner decision 09-18) ───────────────────────────────────
 
-    /**
-     * The headline rule: a factory name matching NOTHING existing, with NO country supplied for it,
-     * refuses the whole call — 409, naming the factory — and creates ZERO rows (no factory, no IR).
-     */
+    /** The headline rule: a factory name matching NOTHING existing, with NO country supplied for it, refuses the
+     * whole call — 409, naming the factory — and creates ZERO rows (no factory, no IR). */
     @Test
     void aNewFactoryWithNoCountrySupplied_isRefused_andCreatesNothing() {
         long ticketId = insertTicket("RESOLV-3-NOCOUNTRY");
@@ -186,11 +167,9 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         assertThat(service.list(ticketId, owner)).isEmpty();
     }
 
-    /**
-     * A typed name matching NOTHING existing, WITH a supplied real country, creates exactly one row
-     * — country set, country_other NULL — with the auto-create provenance V184 added ({@code
-     * created_source='IMPORT_REQUEST'}, {@code created_by_id}, {@code created_at}).
-     */
+    /** A typed name matching NOTHING existing, WITH a supplied real country, creates exactly one row — country set,
+     * country_other NULL — with the auto-create provenance V184 added (created_source='IMPORT_REQUEST',
+     * created_by_id, created_at). */
     @Test
     void aTypedNameMatchingNothing_withARealCountry_createsExactlyOneFactoryRow_withProvenance() {
         long ticketId = insertTicket("RESOLV-3");
@@ -217,9 +196,9 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         assertThat(row.get("country")).isEqualTo("IT");
         assertThat(row.get("country_other")).isNull();
 
-        // Calling createDrafts again for a NEW deal with the SAME typed name must reuse, not
-        // duplicate — proves the normalized-name match also covers what this test itself created,
-        // and needs no newFactoryCountries entry this time (nothing left to create).
+        // Calling createDrafts again for a NEW deal with the SAME typed name must reuse, not duplicate — proves the
+        // normalized-name match also covers what this test itself created, and needs no newFactoryCountries entry this
+        // time (nothing left to create).
         long ticketId2 = insertTicket("RESOLV-3B");
         insertItem(ticketId2, "AnyBrand", "Second Deal Same Factory", "60x60", "5", "pcs", 0,
             "โรงงานใหม่เอี่ยม");
@@ -283,10 +262,8 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    /**
-     * Several new factories on one deal: ALL must be supplied and valid before ANY is created — one
-     * missing name refuses the whole call even though the others were supplied correctly.
-     */
+    /** Several new factories on one deal: ALL must be supplied and valid before ANY is created — one missing name
+     * refuses the whole call even though the others were supplied correctly. */
     @Test
     void severalNewFactories_oneMissingCountry_refusesTheWholeCall_createsNone() {
         long ticketId = insertTicket("RESOLV-3-PARTIAL");
@@ -337,15 +314,8 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
 
     // ── F-SM-001 line prefill (owner decision 09-18 #3 §A) ──────────────────────────────────────
 
-    /**
-     * A realistic fictional fixture with one catalog-linked line and one hand-typed line, asserting
-     * every prefilled field the plan calls out: code, size, qty, unit and the derived colour/surface
-     * note. The catalog-linked line's code comes from {@code price_catalog.product_prices
-     * .product_code} via {@code ticket_item.catalog_price_id} (NOT the hand-typed model, which is
-     * deliberately given a DIFFERENT value here so a test bug that reads the wrong column would show
-     * up as the wrong string); the hand-typed line has no catalog link at all, so its code falls all
-     * the way to {@code ticket_item.model}.
-     */
+    /** A realistic fictional fixture with one catalog-linked line and one hand-typed line, asserting every
+     * prefilled field the plan calls out: code, size, qty, unit and the derived colour/surface note. */
     @Test
     void createDrafts_prefillsCodeSizeQtyUnitAndNote_forCatalogLinkedAndHandTypedLines() {
         long catalogPriceId = insertCatalogProduct("Prefill Catalog Factory", "IT", "CAT-CODE-001",
@@ -482,8 +452,8 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         long irId = service.createDrafts(ticketId, null, owner).get(0).id();
         assertThat(fulfillmentStatus(ticketId)).isEqualTo(FulfilmentStatus.IR_ISSUED);
 
-        // Simulate: while this factory's goods were still in transit, the deal's stock-sourced lines
-        // were already delivered, putting the deal on the DELIVERY axis.
+        // Simulate: while this factory's goods were still in transit, the deal's stock-sourced lines were already
+        // delivered, putting the deal on the DELIVERY axis.
         jdbc.update("UPDATE sales.ticket SET fulfillment_status = :s WHERE ticket_id = :id",
             Map.of("s", FulfilmentStatus.PARTIALLY_DELIVERED, "id", ticketId));
 
@@ -523,8 +493,8 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
         service.createDrafts(ticketId, null, owner);
 
         // The legacy one-shot action itself 409s once fulfillment_status is already IR_ISSUED —
-        // recordFirstImportRequestIssued sets exactly that, so the deal cannot tell which path
-        // raised its first import request.
+        // recordFirstImportRequestIssued sets exactly that, so the deal cannot tell which path raised its first import
+        // request.
         assertThatThrownBy(() -> ticketService.issueImportRequest(ticketId, importUser))
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
@@ -743,8 +713,8 @@ class ImportRequestFactoryResolutionIntegrationTest extends AbstractPostgresInte
             null, null, null);
     }
 
-    /** Line-prefill fixture builder (owner decision 09-18 #3 §A): adds a catalog link and/or
-     * colour/texture on top of {@link #insertItem}'s shape. */
+    /** Line-prefill fixture builder (owner decision 09-18 #3 §A): adds a catalog link and/or colour/texture on top
+     * of #insertItem's shape. */
     private void insertItemWithCatalogAndColor(long ticket, String brand, String model, String size,
             String qty, String unit, int sortOrder, String factory, Long catalogPriceId,
             String color, String texture) {

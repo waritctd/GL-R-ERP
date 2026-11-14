@@ -39,9 +39,8 @@ describe('RequireAccess', () => {
     expect(screen.getByText('รายชื่อพนักงาน')).not.toBeNull();
   });
 
-  // Import no longer opens the whole-deal page (its GET 403s). A stale link to it — a backend
-  // notification deep-link, a bookmark — lands on the import user's OWN page for that deal
-  // rather than a dead end.
+  // Import no longer opens the whole-deal page (its GET 403s). A stale link to it — a backend notification
+  // deep-link, a bookmark — lands on the import user's OWN page for that deal rather than a dead end.
   function renderDealRoutes(user) {
     return render(
       <MemoryRouter initialEntries={['/tickets/12']}>

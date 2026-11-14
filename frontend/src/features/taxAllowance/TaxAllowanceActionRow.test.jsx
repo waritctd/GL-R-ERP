@@ -16,8 +16,8 @@ function renderRow(declaration) {
 }
 
 describe('TaxAllowanceActionRow', () => {
-  // Absent summary means "status unknown, still loading" — not "nothing filed". Prompting here
-  // would flash "you haven't filed" at an employee who has, on every landing-page load.
+  // Absent summary means "status unknown, still loading" — not "nothing filed". Prompting here would flash "you
+  // haven't filed" at an employee who has, on every landing-page load.
   it('renders nothing while the status is still unknown', () => {
     const { container } = render(
       <MemoryRouter>
@@ -43,8 +43,8 @@ describe('TaxAllowanceActionRow', () => {
     expect(screen.getByText('แบบแจ้ง ล.ย.01 หมดอายุแล้ว')).not.toBeNull();
   });
 
-  // The whole point of the row: it is an action, not a permanent tile. Nothing to do, nothing
-  // rendered — otherwise it would occupy landing-page space on every visit to say "all good".
+  // The whole point of the row: it is an action, not a permanent tile. Nothing to do, nothing rendered —
+  // otherwise it would occupy landing-page space on every visit to say "all good".
   it('renders nothing while pending review', () => {
     const { container } = renderRow({ status: 'PENDING' });
     expect(container.firstChild).toBeNull();

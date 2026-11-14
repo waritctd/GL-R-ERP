@@ -33,8 +33,8 @@ public final class PricingRequestRequests {
         String targetCurrency,
         String note,
         String clientRequestId,
-        /** CREDIT | ON_DELIVERY — validated in Java (PricingRequestService), not a bean
-         * annotation, matching quantityMode/wastageMode's own posture on the item record. */
+        /** CREDIT | ON_DELIVERY — validated in Java (PricingRequestService), not a bean annotation, matching
+         * quantityMode/wastageMode's own posture on the item record. */
         String paymentTermMode,
         @Min(0) @Max(32767) Integer creditDays,
         @Min(0) @Max(32767) Integer validityDays,
@@ -119,30 +119,27 @@ public final class PricingRequestRequests {
         @DecimalMin("0.0001") BigDecimal requestedQty,
         @DecimalMin("0.0000") BigDecimal requestedQtySqm,
         String requestedUnit,
-        // See PricingRequestItemDto.requestedUnitBasis's javadoc — required so submit()/
-        // PricingCostingService can normalize this line's requested quantity onto the same
-        // basis as the factory-quoted price (financial-integrity review Finding B). No longer
-        // @NotBlank -- see this record's own class-level Javadoc: resolveItems() always derives
-        // this to PER_PIECE for a new-form item now, so a client no longer sends it.
+        // See PricingRequestItemDto.requestedUnitBasis's javadoc — required so submit()/ PricingCostingService can
+        // normalize this line's requested quantity onto the same basis as the factory-quoted price
+        // (financial-integrity review Finding B).
         String requestedUnitBasis,
         @NotBlank String quantityType,
         LocalDate targetDeliveryDate,
         String deliveryLocation,
         String specialRequirement,
 
-        // ── Direct-deal-form parity (V185) — mirrors DealQuotationRequests.ItemInput's TILE
-        // fields, minus price/discount/lineType/description/adjustment/id/locationLabel, none of
-        // which this phase brings over (see V185's own migration header for the full list of what
-        // is deliberately excluded). ─────────────────────────────────────────────────────────────
-        /** Sales-typed รหัสสินค้า — distinct from {@code catalogProductCode}, the catalog
-         * SNAPSHOT taken at submit() time. See V185's migration header. */
+        // Direct-deal-form parity (V185) — mirrors DealQuotationRequests.ItemInput's TILE fields, minus
+        // price/discount/lineType/description/adjustment/id/locationLabel, none of which this phase brings over (see
+        // V185's own migration header for the full list of what is deliberately excluded).
+        /** Sales-typed รหัสสินค้า — distinct from catalogProductCode, the catalog SNAPSHOT taken at submit() time. See
+         * V185's migration header. */
         @Size(max = 255) String productCode,
         /** ความหนา (มม.) — required. {@code @Digits}/{@code @DecimalMax} mirror
          * {@code sales.pricing_request_item.thickness_mm} (NUMERIC(6,2)) so an out-of-range value
          * 400s here instead of overflowing the column as a raw 500. */
         @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 2) BigDecimal thicknessMm,
-        /** ตร.ม./แผ่น — required. {@code @Digits} matches {@code sales.quotation_item.sqm_per_piece}
-         * (NUMERIC(10,6)), the same column this mirrors. */
+        /** ตร.ม./แผ่น — required. @Digits matches sales.quotation_item.sqm_per_piece (NUMERIC(10,6)), the same column
+         * this mirrors. */
         @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerPiece,
         /** "AREA" | "PIECES" — which of areaSqm/piecesInput is the entered quantity. */
         String quantityMode,
@@ -155,8 +152,8 @@ public final class PricingRequestRequests {
         @Min(1) @Max(1000) Integer piecesPerBox,
         /** ตร.ม./กล่อง — optional, matching the direct-deal form. */
         @DecimalMin("0") @DecimalMax("9999") @Digits(integer = 4, fraction = 6) BigDecimal sqmPerBox,
-        /** ขายแผ่นไม่เต็มกล่อง (inverted) — null reads as {@code true} (round up to a full box),
-         * exactly {@code DealQuotationRequests.ItemInput#roundToFullBox}'s own convention. */
+        /** ขายแผ่นไม่เต็มกล่อง (inverted) — null reads as true (round up to a full box), exactly
+         * DealQuotationRequests.ItemInput#roundToFullBox's own convention. */
         Boolean roundToFullBox,
         @Size(max = 40) String originCountry,
         // SMALLINT columns (V185) -- @Max(32767) stops an overflow value reaching the column as a
@@ -165,11 +162,8 @@ public final class PricingRequestRequests {
         @Min(0) @Max(32767) Integer leadTimeMinDays,
         @Min(0) @Max(32767) Integer leadTimeMaxDays,
 
-        // Server-computed (WastageCalculator#calculate, via PricingRequestService#resolveItem) —
-        // NEVER client-supplied; any value a caller sends here is overwritten on every
-        // create/update. Carried on this record (rather than a separate insert-only type) purely
-        // so PricingRequestRepository.replaceItems can read them off the same object it already
-        // reads every other column from — see resolveItem's own Javadoc.
+        // Server-computed (WastageCalculator#calculate, via PricingRequestService#resolveItem) — NEVER
+        // client-supplied; any value a caller sends here is overwritten on every create/update.
         Integer piecesBeforeWastage,
         Integer piecesAfterWastage,
         Integer boxes,
@@ -180,11 +174,9 @@ public final class PricingRequestRequests {
         // ctor below, and every hand-wired test call site — keeps compiling unchanged.
         @Size(max = 500) String originCountryOther,
 
-        // Slice 1 of the stock-line feature (V194, IA .design/stock-item-pricing): the line's
-        // SOURCE. null = สั่งนำเข้า (import, the default), "IN_THAILAND" = สต็อกในไทย, "IN_TRANSIT" =
-        // สต็อกกำลังเดินทาง. Appended at the END so every existing positional call keeps compiling
-        // via the compat constructors below. TEST-FIRST SCAFFOLDING: the field is carried and
-        // persisted, nothing validates or acts on it yet.
+        // Slice 1 of the stock-line feature (V194, IA .design/stock-item-pricing): the line's SOURCE. null =
+        // สั่งนำเข้า (import, the default), "IN_THAILAND" = สต็อกในไทย, "IN_TRANSIT" = สต็อกกำลังเดินทาง. Appended at
+        // the END so every existing positional call keeps compiling via the compat constructors below.
         String stockSource,
         // Currency + price unit Sales fixes on the line; import may not override them
         // (FactoryQuoteService#receive enforces it). Normalized in PricingRequestService#resolveItem.
@@ -219,8 +211,8 @@ public final class PricingRequestRequests {
                 piecesAfterWastage, boxes, originCountryOther, stockSource, null, null);
         }
 
-        /** The pre-stock-line shape - the canonical 36-field constructor that existed before
-         * stockSource was appended. Defaults it to null (สั่งนำเข้า). */
+        /** The pre-stock-line shape - the canonical 36-field constructor that existed before stockSource was appended.
+         * Defaults it to null (สั่งนำเข้า). */
         public PricingRequestItemRequest(Long sourceTicketItemId, Long productId, Long variantId,
                                          String brand, String model, String productDescription,
                                          String color, String texture, String size, String factory,
@@ -246,9 +238,9 @@ public final class PricingRequestRequests {
                 piecesAfterWastage, boxes, originCountryOther, null);
         }
 
-        /** The pre-V185 shape — kept so every existing construction site (tests, mostly) compiles
-         * unchanged. Defaults every new field to null; {@code resolveItems} then requires the
-         * caller to have supplied the tile fields directly, same as any other item. */
+        /** The pre-V185 shape — kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
+         * every new field to null; resolveItems then requires the caller to have supplied the tile fields directly,
+         * same as any other item. */
         public PricingRequestItemRequest(Long sourceTicketItemId, Long productId, Long variantId,
                                          String brand, String model, String productDescription,
                                          String color, String texture, String size, String factory,
@@ -260,9 +252,8 @@ public final class PricingRequestRequests {
                 texture, size, factory, requestedQty, requestedQtySqm, requestedUnit,
                 requestedUnitBasis, quantityType, targetDeliveryDate, deliveryLocation,
                 specialRequirement,
-                // productCode, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput,
-                // wastageMode, wastageValue, piecesPerBox, sqmPerBox, roundToFullBox,
-                // originCountry, leadTimeMinDays, leadTimeMaxDays (14):
+                // productCode, thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
+                // piecesPerBox, sqmPerBox, roundToFullBox, originCountry, leadTimeMinDays, leadTimeMaxDays (14):
                 null, null, null, null, null, null, null, null, null, null, null, null, null, null,
                 // piecesBeforeWastage, piecesAfterWastage, boxes (3):
                 null, null, null,

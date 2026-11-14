@@ -883,8 +883,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       fireEvent.click(submit);
 
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(2));
-      // Both factories from the WIDER retry set must render their own country picker — this
-      // would throw reading `entries['New Factory']` off stale state without the remount.
+      // Both factories from the WIDER retry set must render their own country picker — this would throw reading
+      // `entries['New Factory']` off stale state without the remount.
       expect(await screen.findAllByLabelText(/^ประเทศ/)).toHaveLength(2);
       expect(screen.getByText('New Factory')).not.toBeNull();
     });
@@ -1018,8 +1018,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       fireEvent.click(submit);
 
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(2));
-      // The SAME missing set came back a second time — the modal must not still be open (it would
-      // loop with an empty country picker forever otherwise); a plain error surfaces instead.
+      // The SAME missing set came back a second time — the modal must not still be open (it would loop with an empty
+      // country picker forever otherwise); a plain error surfaces instead.
       await waitFor(() => expect(screen.queryByTestId('new-factory-country-submit')).toBeNull());
       expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('ยังระบุโรงงานไม่ครบ'));
     });
@@ -1066,8 +1066,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       api.storedImportRequests.deleteDraft.mockResolvedValue({ status: 'deleted' });
       renderPanel(OWNER, [draftRow()]);
       fireEvent.click(await screen.findByTestId('ir-delete-10'));
-      // Two "ลบร่าง" buttons exist once the dialog opens (the row action + the dialog's own
-      // confirm) — the LAST one is the dialog's.
+      // Two "ลบร่าง" buttons exist once the dialog opens (the row action + the dialog's own confirm) — the LAST one
+      // is the dialog's.
       const buttons = await screen.findAllByRole('button', { name: 'ลบร่าง' });
       fireEvent.click(buttons[buttons.length - 1]);
       await waitFor(() => expect(api.storedImportRequests.deleteDraft).toHaveBeenCalledWith(10));

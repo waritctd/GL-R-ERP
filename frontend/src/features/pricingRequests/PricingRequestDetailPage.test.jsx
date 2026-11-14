@@ -8,18 +8,9 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { formatThaiDate, pricingDecisionStatusLabel, pricingRequestStatusLabel } from '../../utils/format.js';
 
-// This component (and PricingRequestCreateModal, which it opens in mode="revision"
-// for the customer-change-revision flow) is exercised here against a hand-rolled
-// api mock, not the real Java backend and not even mockApi.js. Per CLAUDE.md's
-// "Mock API contract" / "Authz verify against Java, not the mock": every
-// role-visibility assertion below (what Sales/sales_manager/Import/CEO can see or
-// click) is UI-LEVEL ONLY — it proves the component's own conditional rendering,
-// not that the server actually enforces it. The authoritative role/scope checks
-// are the real-DB integration tests in
-// backend/src/test/java/th/co/glr/hr/pricingrequest/PricingFactoryQuoteCostingIntegrationTest.java
-// and PricingRequestFlowIntegrationTest.java (COMMIT 4's attachment authz section
-// in particular), added across this branch's commits 1-5. Nothing in this file is
-// evidence for or against those Java-side guards.
+// This component (and PricingRequestCreateModal, which it opens in mode="revision" for the
+// customer-change-revision flow) is exercised here against a hand-rolled api mock, not the real Java backend
+// and not even mockApi.js.
 
 globalThis.React = React;
 
@@ -345,8 +336,8 @@ function setApiDefaults() {
     { countryCode: 'TH', nameEn: 'Thailand', nameTh: 'ไทย' },
     { countryCode: 'IT', nameEn: 'Italy', nameTh: 'อิตาลี' },
   ]);
-  // Mirrors UnitBasisMetaController's GET /api/meta/unit-bases — the backend catalog the
-  // factory-quote response unit select is built from at runtime (item 3 of this task's brief).
+  // Mirrors UnitBasisMetaController's GET /api/meta/unit-bases — the backend catalog the factory-quote response
+  // unit select is built from at runtime (item 3 of this task's brief).
   api.meta.unitBases.mockResolvedValue({
     unitBases: [
       { code: 'PER_PIECE', label: 'แผ่น' },
@@ -358,8 +349,8 @@ function setApiDefaults() {
 }
 
 // Step 4 (Customer Quotation Generation and Issuance) fixture. Mirrors
-// CustomerQuotationDtos.CustomerQuotationDto/CustomerQuotationItemDto — deliberately has no
-// cost/margin/FX field anywhere (design correction 2's own precedent, carried into Step 4).
+// CustomerQuotationDtos.CustomerQuotationDto/CustomerQuotationItemDto — deliberately has no cost/margin/FX
+// field anywhere (design correction 2's own precedent, carried into Step 4).
 function buildCustomerQuotationItem(overrides = {}) {
   return {
     id: 9001,
@@ -531,8 +522,8 @@ function renderDetailPage({
   costings = [],
   attachments = [],
   // CEO discount-approval workflow, Phase 2: defaults to empty like every other list query here
-  // (listFactoryQuotes/listCostings/listAttachments) so a test that doesn't care about this
-  // feature never has to know it exists — only tests exercising it pass discountApprovals.
+  // (listFactoryQuotes/listCostings/listAttachments) so a test that doesn't care about this feature never has to
+  // know it exists — only tests exercising it pass discountApprovals.
   discountApprovals = [],
   // Lead-time change requests (LeadTimeChangeDto[]).
   leadTimeChanges = [],
@@ -704,8 +695,8 @@ describe('PricingRequestDetailPage role-scoped raw quote/costing visibility (UI-
     expect(screen.queryByText('ต้นทุนนำเข้า')).toBeNull();
     expect(screen.queryByRole('button', { name: 'สร้างร่างอีเมล' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'สร้างร่างต้นทุน' })).toBeNull();
-    // The raw-data queries are gated (`enabled: canSeeRaw(user)`), not just hidden in the DOM —
-    // sales never even fetches factory-quote/costing detail.
+    // The raw-data queries are gated (`enabled: canSeeRaw(user)`), not just hidden in the DOM — sales never even
+    // fetches factory-quote/costing detail.
     await waitFor(() => expect(api.pricingRequests.listFactoryQuotes).not.toHaveBeenCalled());
     expect(api.pricingRequests.listCostings).not.toHaveBeenCalled();
   });
@@ -881,8 +872,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(within(preview).queryByText('SCG Ceramics')).toBeNull();     // A/B's factory does not
     // (The lock reason sits in each factory card's terms row; there is no amber pre-draft banner.)
 
-    // A and B still render as their own quote-grid rows (locked, since request stays
-    // IMPORT_REVIEWING and the quote stays DRAFT) rather than being hidden by C's preview.
+    // A and B still render as their own quote-grid rows (locked, since request stays IMPORT_REVIEWING and the
+    // quote stays DRAFT) rather than being hidden by C's preview.
     expect(screen.getAllByLabelText(/^ราคาที่เสนอ/).length).toBe(2);
 
     // The progress strip's สินค้า figure counts all three items (2 quoted + 1 previewed), not just
@@ -954,9 +945,9 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     const priceInput = screen.getByLabelText(/^ราคาที่เสนอ/);
     fireEvent.change(priceInput, { target: { value: '55.5' } });
 
-    // ยืนยันราคาเสนอ (factory-price-import-ui redesign) replaces บันทึกคำตอบ/รอบแก้ไข: a REQUESTED
-    // quote has no response on file yet, so confirming calls receiveFactoryQuote (this assertion)
-    // and then markFactoryQuoteReady — see confirmFactoryQuote's own doc comment.
+    // ยืนยันราคาเสนอ (factory-price-import-ui redesign) replaces บันทึกคำตอบ/รอบแก้ไข: a REQUESTED quote has no
+    // response on file yet, so confirming calls receiveFactoryQuote (this assertion) and then
+    // markFactoryQuoteReady — see confirmFactoryQuote's own doc comment.
     fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
 
     await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
@@ -967,8 +958,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
         items: [expect.objectContaining({ pricingRequestItemId: 1, rawUnitPrice: 55.5 })],
       }),
     ));
-    // ...then marks the (in-place-updated, same-id) quote ready for the CEO — one click, both
-    // calls, ending at READY_FOR_COSTING as the task brief specifies.
+    // ...then marks the (in-place-updated, same-id) quote ready for the CEO — one click, both calls, ending at
+    // READY_FOR_COSTING as the task brief specifies.
     await waitFor(() => expect(api.pricingRequests.markFactoryQuoteReady).toHaveBeenCalledWith(quote.id));
     // The removed fields must not be resurrected as inputs.
     expect(screen.queryByLabelText('เลขอ้างอิงใบเสนอราคา')).toBeNull();
@@ -976,8 +967,8 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     expect(screen.queryByLabelText('ระยะเวลาผลิต/ส่งมอบ')).toBeNull();
   });
 
-  // Reported from UAT: two items of the same model in different sizes rendered identically, so
-  // Import could not tell which price box belonged to which item.
+  // Reported from UAT: two items of the same model in different sizes rendered identically, so Import could not
+  // tell which price box belonged to which item.
   it('shows size and colour/texture in the row summary, not just brand + model', async () => {
     const baseItem = buildRequest().items[0];
     const request = buildRequest({ items: [{ ...baseItem, color: 'ขาว' }] });
@@ -1201,10 +1192,8 @@ describe('PricingRequestDetailPage Import costing workflow', () => {
     expect(screen.queryByRole('button', { name: 'ยืนยันราคาเสนอ' })).toBeNull();
   });
 
-  // An edit on an already-READY_FOR_COSTING quote (Import revising an already-sent price) DOES
-  // re-offer ยืนยันราคาเสนอ — confirming it must go through receiveFactoryQuote again (a genuine
-  // revision, matching FactoryQuoteService.receive's own supersede-and-create-new-row branch for
-  // this exact status) before re-marking ready.
+  // An edit on an already-READY_FOR_COSTING quote DOES re-offer ยืนยันราคาเสนอ — confirming it must go through
+  // receiveFactoryQuote again before re-marking ready.
   it('re-offers ยืนยันราคาเสนอ once Import edits an already-READY_FOR_COSTING quote, and revises through receiveFactoryQuote', async () => {
     const quote = buildFactoryQuote({
       status: 'READY_FOR_COSTING',
@@ -1315,8 +1304,8 @@ describe('PricingRequestDetailPage shared ConfirmDialog copy (the three survivin
     expect(within(dialog).queryByLabelText('เหตุผลที่ตีกลับ')).toBeNull();
   });
 
-  // The deleted branch must not come back through the dialog either: no action on this page can
-  // still produce a submitCosting confirmation, for any role.
+  // The deleted branch must not come back through the dialog either: no action on this page can still produce a
+  // submitCosting confirmation, for any role.
   it('offers no submitCosting confirmation to the CEO, who is the only role the costing panel renders for', async () => {
     renderDetailPage({ user: ceoUser, costings: [buildCosting()] });
     await waitForLoaded();
@@ -1342,8 +1331,8 @@ describe('PricingRequestDetailPage customer-change revision editing', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'สร้างรอบแก้ไข' }));
 
-    // mode="revision" seeds every field from the CURRENT request, same as edit mode
-    // (PricingRequestCreateModal, COMMIT 5 finding 3) — not an unchanged blank clone.
+    // mode="revision" seeds every field from the CURRENT request, same as edit mode (PricingRequestCreateModal,
+    // COMMIT 5 finding 3) — not an unchanged blank clone.
     const dialog = await screen.findByRole('dialog', { name: 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' });
     expect(within(dialog).getByDisplayValue('ผู้ออกแบบ ก.')).not.toBeNull();
     expect(within(dialog).getByDisplayValue('กระเบื้องพื้น SCG A1')).not.toBeNull();
@@ -1358,8 +1347,8 @@ describe('PricingRequestDetailPage customer-change revision editing', () => {
       request.summary.id,
       expect.objectContaining({
         revisionReason: 'ลูกค้าเปลี่ยนจำนวน',
-        // V185: the client no longer sends requestedQty at all (the server derives it via
-        // WastageCalculator) — piecesInput is the wire field the edited "จำนวน" input feeds.
+        // V185: the client no longer sends requestedQty at all (the server derives it via WastageCalculator) —
+        // piecesInput is the wire field the edited "จำนวน" input feeds.
         items: [expect.objectContaining({ piecesInput: 30 })],
       }),
     ));
@@ -1530,8 +1519,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(screen.queryByPlaceholderText('ราคาขั้นต่ำ')).toBeNull();
     expect(screen.queryByPlaceholderText('ส่วนลดสูงสุด เช่น 0.10 = 10%')).toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกการเปลี่ยนแปลง' })).toBeNull();
-    // The only two actions left — asserted by role name so a stray extra button would show up as
-    // "found 2" against getByRole's own strictness, not silently pass.
+    // The only two actions left — asserted by role name so a stray extra button would show up as "found 2" against
+    // getByRole's own strictness, not silently pass.
     expect(screen.getByRole('button', { name: 'อนุมัติราคาขาย' })).not.toBeNull();
     expect(screen.getByRole('button', { name: 'ตีกลับให้ฝ่ายนำเข้าแก้ไข' })).not.toBeNull();
   });
@@ -1605,10 +1594,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
         items: [buildDecision({ items: [buildDecisionItem({ pricingCostingItemId: costingItem.id })] })],
       });
-      // buildDecision()'s default pricingCostingId (601) does NOT match buildCosting()'s default
-      // id (21) — id: 601 here is deliberate, not incidental, so the decision-to-costing join
-      // (costings.find(c => c.id === currentDecision.pricingCostingId)) actually has to match
-      // rather than silently landing on an empty decisionCostingItems map.
+      // buildDecision's default pricingCostingId does NOT match buildCosting's default id — id: 601 here is
+      // deliberate, not incidental, so the decision-to-costing join (costings.find) actually has to match rather
+      // than silently landing on an empty decisionCostingItems map.
       return renderDetailPage({ user, request, costings: [buildCosting({ id: 601, items: [costingItem] })] });
     }
 
@@ -1626,9 +1614,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.getByText('฿75.00')).not.toBeNull();
       expect(screen.getByText('ปรับเอง')).not.toBeNull();
       expect(screen.getByText('(ราคาต้นทุนจริงจากใบขนสินค้า)')).not.toBeNull();
-      // The per-requested-unit basis (a different number, 60) still renders in the main
-      // (collapsed) view under its Phase-1-simplification label — a substring match against the
-      // combined "label: value" text of that line.
+      // The per-requested-unit basis (a different number, 60) still renders in the main (collapsed) view under its
+      // Phase-1-simplification label — a substring match against the combined "label: value" text of that line.
       expect(screen.getByText(byCombinedText(/ต้นทุนรวมนำเข้า.*฿60\.00/))).not.toBeNull();
     });
 
@@ -1647,8 +1634,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(api.pricingRequests.overridePricingDecisionItemCost).not.toHaveBeenCalled();
     });
 
-    // The direction that is easy to miss (per CLAUDE.md's own note on this endpoint): clearing is
-    // money-affecting too, so it needs the same reason gate as setting — not a lighter one.
+    // The direction that is easy to miss (per CLAUDE.md's own note on this endpoint): clearing is money-affecting
+    // too, so it needs the same reason gate as setting — not a lighter one.
     it('refuses to CLEAR an override with a blank reason, client-side, without calling the API', async () => {
       renderWithCostingItem({ manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม' });
       await waitForLoaded(buildRequest({ summary: { status: 'CEO_REVIEWING' } }));
@@ -1696,8 +1683,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       ));
     });
 
-    // The stale-override badge is deliberately in the MAIN (collapsed) header row, not inside the
-    // derivation disclosure — a CEO must see it without expanding anything.
+    // The stale-override badge is deliberately in the MAIN (collapsed) header row, not inside the derivation
+    // disclosure — a CEO must see it without expanding anything.
     it('renders the stale-override warning badge (uncollapsed) and disables approval when a fixture has overrideStale: true', async () => {
       renderWithCostingItem({
         manualLandedCostPerUnitThb: 75, overrideReason: 'เหตุผลเดิม',
@@ -1851,8 +1838,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       expect(screen.queryByText(/ราคาขาย.*฿72\.00/)).toBeNull();
     });
 
-    // Mirrors PricingDecisionService#approve's own missingMargin exemption for an overridden
-    // item: a "ปรับราคาเอง" line needs no margin at all to approve.
+    // Mirrors PricingDecisionService#approve's own missingMargin exemption for an overridden item: a "ปรับราคาเอง"
+    // line needs no margin at all to approve.
     it('does not require a margin on an overridden line to enable approval', async () => {
       const request = buildRequest({ summary: { status: 'CEO_REVIEWING' } });
       api.pricingRequests.listPricingDecisions.mockResolvedValue({
@@ -1948,8 +1935,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
     expect(await screen.findByText('ราคาขายที่อนุมัติ')).not.toBeNull();
     // The approved selling price (72 THB) is shown...
     expect(screen.getByText(/72/)).not.toBeNull();
-    // ...but the underlying frozen cost (60 THB) never appears anywhere — the sales-view DTO
-    // this page renders structurally has no cost/margin field at all (design correction 2).
+    // ...but the underlying frozen cost (60 THB) never appears anywhere — the sales-view DTO this page renders
+    // structurally has no cost/margin field at all (design correction 2).
     expect(screen.queryByText(/ต้นทุน/)).toBeNull();
     expect(screen.queryByText(/อัตรากำไร/)).toBeNull();
     // "20 แผ่น", not the raw basis enum (the request-items list renders one already; the
@@ -2267,12 +2254,11 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
       const alert = await screen.findByTestId('pcr-ceo-costing-error');
       expect(alert.getAttribute('role')).toBe('alert');
-      // All three lines survive as distinct lines, not one run-on sentence — the '\n' in the
-      // server's message is still literally '\n' in the DOM (only CSS decides how it wraps).
+      // All three lines survive as distinct lines, not one run-on sentence — the '\n' in the server's message is
+      // still literally '\n' in the DOM (only CSS decides how it wraps).
       expect(alert.textContent.split('\n')).toEqual(multiLineError.split('\n'));
-      // The element that actually renders it preserves line breaks via the Tailwind utility the
-      // task calls for — not Toast.jsx's plain <span>, which has no such class and collapses '\n'
-      // to a space.
+      // The element that actually renders it preserves line breaks via the Tailwind utility the task calls for — not
+      // Toast.jsx's plain <span>, which has no such class and collapses '\n' to a space.
       const messageEl = alert.querySelector('p');
       expect(messageEl.className).toContain('whitespace-pre-line');
       // Toast-regression guard: every OTHER useActionMutation call site still reports its error via
@@ -2287,10 +2273,9 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       fireEvent.click(screen.getByTestId('pcr-ceo-recalculate-cost'));
       await screen.findByTestId('pcr-ceo-costing-error');
 
-      // Real timers on purpose (fake timers stall @testing-library's own setTimeout-based
-      // polling — see the repo's other date/timer test comments) — long enough that
-      // useToast.js's 3200ms auto-dismiss would already have fired had this gone through the
-      // toast instead.
+      // Real timers on purpose (fake timers stall @testing-library's own setTimeout-based polling — see the repo's
+      // other date/timer test comments) — long enough that useToast.js's 3200ms auto-dismiss would already have
+      // fired had this gone through the toast instead.
       await new Promise((resolve) => { setTimeout(resolve, 3300); });
 
       expect(screen.getByTestId('pcr-ceo-costing-error')).not.toBeNull();
@@ -2374,8 +2359,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
 
       await waitFor(() => expect(button.getAttribute('aria-busy')).toBe('true'));
       expect(button.disabled).toBe(true);
-      // Button's `loading` hides the children visually (opacity), not from the accessibility
-      // tree, so the accessible name reflects the in-progress state too.
+      // Button's `loading` hides the children visually (opacity), not from the accessibility tree, so the accessible
+      // name reflects the in-progress state too.
       expect(button.textContent).toContain('กำลังคำนวณ…');
 
       resolveStart({});
@@ -2394,9 +2379,8 @@ describe('PricingRequestDetailPage CEO Selling Price Decision (Step 3, UI-level 
       await waitForLoaded(request);
       await screen.findByText('PCD-2026-0001');
 
-      // Visible without expanding "วิธีคำนวณราคานี้" — this assertion runs before any
-      // expandDerivation() call in this test, unlike the collapsible-only mention of the
-      // multiplier elsewhere in this panel.
+      // Visible without expanding "วิธีคำนวณราคานี้" — this assertion runs before any expandDerivation() call in
+      // this test, unlike the collapsible-only mention of the multiplier elsewhere in this panel.
       expect(screen.getByText(/ราคาขายทุกรายการในหน้านี้เป็นราคาก่อน VAT/)).not.toBeNull();
       expect(screen.getByText(/ราคาขาย \(ก่อน VAT\).*฿72\.00/)).not.toBeNull();
     });
@@ -2816,8 +2800,8 @@ describe('PricingRequestDetailPage header terms — ฝ่าย is not shown (o
     expect(screen.queryByText(/P003/)).toBeNull();
   });
 
-  // A request whose ONLY header term is a stored ฝ่าย has nothing left to say there — the block
-  // must not open just to show an empty set of dashes.
+  // A request whose ONLY header term is a stored ฝ่าย has nothing left to say there — the block must not open
+  // just to show an empty set of dashes.
   it('a request whose only stored header term is a ฝ่าย opens no header-terms block at all', async () => {
     const request = buildRequest({ summary: { deptCode: 'P003' } });
     renderDetailPage({ user: salesOwner, request });
@@ -3065,10 +3049,8 @@ describe('PricingRequestDetailPage item card — V185 sales-entered fields', () 
 });
 
 describe('PricingRequestDetailPage accessibility: no nested interactive controls', () => {
-  // eslint-plugin-jsx-a11y (wired into this repo's lint) flags a <button> containing another
-  // <button> as invalid HTML / unreachable-by-keyboard nesting. Render the richest scenario
-  // (Import, with attachments + an editable DRAFT factory quote + an open costing) to maximize
-  // the number of interactive controls on screen, then assert none of them nest another button.
+  // eslint-plugin-jsx-a11y (wired into this repo's lint) flags a <button> containing another <button> as invalid
+  // HTML / unreachable-by-keyboard nesting.
   it('has no <button> nested inside another <button> anywhere on the page', async () => {
     const { container } = renderDetailPage({
       user: importUser,
@@ -3087,10 +3069,8 @@ describe('PricingRequestDetailPage accessibility: no nested interactive controls
   });
 });
 
-// Step 4 (Customer Quotation Generation and Issuance). UI-LEVEL ONLY, same caveat as this
-// file's own header: proves this component's conditional rendering/wiring, not server-side
-// enforcement. The authoritative checks are the real-DB tests in
-// backend/src/test/java/th/co/glr/hr/customerquotation/CustomerQuotationIntegrationTest.java.
+// Step 4 (Customer Quotation Generation and Issuance). UI-LEVEL ONLY, same caveat as this file's own header:
+// proves this component's conditional rendering/wiring, not server-side enforcement.
 describe('PricingRequestDetailPage Step 4: Customer Quotation', () => {
   it('offers "สร้างร่างใบเสนอราคาลูกค้า" to the owning sales rep only once APPROVED_FOR_QUOTATION, and creates on click', async () => {
     const request = buildRequest({ summary: { status: 'APPROVED_FOR_QUOTATION' } });
@@ -3710,9 +3690,9 @@ describe('PricingRequestDetailPage Step 5: Customer Decision and Commercial Revi
       expect.objectContaining({ clientRequestId: expect.any(String) }),
     ));
 
-    // Cost-affecting: opens the existing customer-change revision modal (mode="revision") — no
-    // second modal built for this. Matched via the modal's own dialog role/title (distinct from
-    // the always-present static customer-change section heading elsewhere on the page).
+    // Cost-affecting: opens the existing customer-change revision modal (mode="revision") — no second modal built
+    // for this. Matched via the modal's own dialog role/title (distinct from the always-present static
+    // customer-change section heading elsewhere on the page).
     fireEvent.click(screen.getByRole('button', { name: 'สร้างรอบแก้ไขสินค้า/จำนวน/โรงงาน' }));
     expect(await screen.findByRole('dialog', { name: 'สร้างรอบแก้ไขตามการเปลี่ยนแปลงของลูกค้า' })).not.toBeNull();
   });
@@ -4199,8 +4179,8 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
 
     expect(screen.getByText(/ฝ่ายนำเข้าเป็นผู้ระบุโรงงานให้ในขั้นตอนนี้/)).toBeTruthy();
     expect(screen.queryByLabelText('ระบุโรงงาน')).toBeNull();
-    // B6: the inline "add a brand-new factory" affordance is part of the same import-only
-    // control — Sales must not see it either, not merely the picker's input.
+    // the inline "add a brand-new factory" affordance is part of the same import-only control — Sales must not see
+    // it either, not merely the picker's input.
     expect(screen.queryByRole('button', { name: /เพิ่มโรงงานใหม่/ })).toBeNull();
   });
 
@@ -4217,10 +4197,9 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
       factoryId: 603, name: 'New Factory Co', country: 'TH', countryOther: null,
       defaultCurrency: 'THB', email: null, unit: 'piece',
     });
-    // The picker's initial fetch already ran (and resolved with setApiDefaults' 601/602 pair)
-    // before this point — this ONE queued value is for the invalidate-triggered REFETCH that
-    // follows onFactoryAdded, so the picker's options genuinely come from a fresh server read,
-    // not a client-side splice of the create response into stale cache data.
+    // The picker's initial fetch already ran before this point — this ONE queued value is for the
+    // invalidate-triggered REFETCH that follows onFactoryAdded, so the picker's options genuinely come from a
+    // fresh server read, not a client-side splice of the create response into stale cache data.
     api.priceImport.factories.mockResolvedValueOnce([
       { factoryId: 601, name: 'SCG Ceramics', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
       { factoryId: 602, name: 'Cotto Industry', country: 'TH', countryOther: null, defaultCurrency: 'THB', email: null, unit: 'piece' },
@@ -4264,8 +4243,8 @@ describe('PricingRequestDetailPage blank-factory lines', () => {
 });
 
 describe('PricingRequestDetailPage deal link', () => {
-  // Import cannot open /tickets/:id any more (the whole-deal GET 403s it) — its deal link must
-  // land on its OWN per-deal page instead. Sales/CEO keep the whole-deal page.
+  // Import cannot open /tickets/:id any more (the whole-deal GET 403s it) — its deal link must land on its OWN
+  // per-deal page instead. Sales/CEO keep the whole-deal page.
   it('links import to /import/deals/:id, not the whole-deal page', async () => {
     renderDetailPage({ user: importUser });
     await waitForLoaded();

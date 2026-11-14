@@ -123,10 +123,9 @@ describe('nextAccountAction', () => {
     expect(action.to).toBe('/finance/deals/42');
   });
 
-  // Issue #736 pair, wrong-way-round: commissionRecorded:true is the interesting half — the
-  // "still yields recordInvoiceCommission" half alone would have passed before this change too,
-  // since a CLOSED_PAID deal always resolved to step 5 regardless of whether the commission
-  // already existed.
+  // Issue #736 pair, wrong-way-round: commissionRecorded:true is the interesting half — the "still yields
+  // recordInvoiceCommission" half alone would have passed before this change too, since a CLOSED_PAID deal
+  // always resolved to step 5 regardless of whether the commission already existed.
   it('CLOSED_PAID with commissionRecorded:true is no longer account’s action', () => {
     const t = ticket({
       id: 42,
@@ -195,10 +194,8 @@ describe('nextAccountAction', () => {
     });
   });
 
-  // GLA-118 (owner ruling 2026-09-20, part A): recording a payment — confirmDeposit/
-  // confirmFinalPayment — is account only now, no CEO fallback. The CEO still reaches /finance
-  // (canConfirmPayments is unchanged), so the worklist must stop offering those two CTAs to
-  // anyone but account, or it hands the CEO a button the server now refuses with 403.
+  // GLA-118 (owner ruling 2026-09-20, part A): recording a payment — confirmDeposit/ confirmFinalPayment — is
+  // account only now, no CEO fallback.
   describe('viewerRole (GLA-118 part A: CEO no longer records payments)', () => {
     it('deposit-notice-issued: ceo gets no CTA (no other step applies), account still gets ยืนยันรับมัดจำ', () => {
       const t = ticket({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' });
@@ -213,9 +210,9 @@ describe('nextAccountAction', () => {
     });
 
     it('omitting viewerRole entirely keeps the pre-existing (account-assumed) behaviour', () => {
-      // workState.js calls nextAccountAction(deal) with no second argument, but only inside a
-      // `role === 'account'` branch — this pins that the one-argument call site still resolves
-      // exactly as before, so that caller needs no change.
+      // workState.js calls nextAccountAction(deal) with no second argument, but only inside a `role === 'account'`
+      // branch — this pins that the one-argument call site still resolves exactly as before, so that caller needs no
+      // change.
       const t = ticket({ paymentStatus: 'DEPOSIT_NOTICE_ISSUED' });
       expect(nextAccountAction(t).key).toBe('confirmDeposit');
     });

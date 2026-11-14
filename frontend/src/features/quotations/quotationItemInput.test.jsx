@@ -69,10 +69,8 @@ describe('itemInputFromRow — only the QUOTATION\'s price mode travels', () => 
     });
   });
 
-  // D1 (owner decision, 2026-09-16): a PLAIN row's OPTIONAL import lead time must reach the wire —
-  // this is the round-trip the review flagged as missing (QuotationPlainItemRow had no input for
-  // it at all). Mutation check: drop leadTimeMinDays/leadTimeMaxDays from itemInputFromRow's PLAIN
-  // branch and this assertion goes red.
+  // D1 (owner decision, 2026-09-16): a PLAIN row's OPTIONAL import lead time must reach the wire — this is the
+  // round-trip the review flagged as missing (QuotationPlainItemRow had no input for it at all).
   it('a PLAIN row\'s optional lead time travels to the payload when the rep fills it in', () => {
     const input = itemInputFromRow({
       lineType: 'PLAIN', description: 'สุขภัณฑ์', quantity: '1', unit: 'ชุด', unitPrice: 5000,
@@ -112,10 +110,9 @@ describe('rowFromServerItem — the GET half of the GET→PUT round trip', () =>
     expect(rowFromServerItem({ id: 5, unitPrice: 1 }).lineType).toBe('TILE');
   });
 
-  // D1 (owner decision, 2026-09-16): the GET→row→PUT round trip for a PLAIN row's optional lead
-  // time — `base`'s own `...item` spread already carries the DTO fields through untouched, so this
-  // pins that end to end rather than merely trusting the spread (same reasoning as the
-  // roundToFullBox test below).
+  // D1 (owner decision, 2026-09-16): the GET→row→PUT round trip for a PLAIN row's optional lead time — `base`'s
+  // own `...item` spread already carries the DTO fields through untouched, so this pins that end to end rather
+  // than merely trusting the spread (same reasoning as the roundToFullBox test below).
   it('round-trips a PLAIN row\'s optional lead time — GET → row → PUT', () => {
     const row = rowFromServerItem({
       id: 8, lineType: 'PLAIN', descriptionLine: 'สุขภัณฑ์', quantity: 2, unit: 'ชุด', unitPrice: 5000,
@@ -124,15 +121,15 @@ describe('rowFromServerItem — the GET half of the GET→PUT round trip', () =>
     expect(row).toMatchObject({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
     expect(itemInputFromRow(row, 'NET')).toMatchObject({ leadTimeMinDays: 75, leadTimeMaxDays: 90 });
 
-    // A PLAIN row with none set still round-trips to null, not undefined -- a blank row must save
-    // exactly as it always did.
+    // A PLAIN row with none set still round-trips to null, not undefined -- a blank row must save exactly as it
+    // always did.
     const blankRow = rowFromServerItem({ id: 9, lineType: 'PLAIN', descriptionLine: 'ค่าขนส่ง', quantity: 1, unit: 'งาน', unitPrice: 500 });
     expect(itemInputFromRow(blankRow, 'NET')).toMatchObject({ leadTimeMinDays: null, leadTimeMaxDays: null });
   });
 
-  // Owner-approved "sell loose pieces" (V182): roundToFullBox is a plain DTO field — `...item`
-  // in the base spread already carries it through, so this pins that the round trip actually
-  // works end to end (GET → row → PUT) rather than merely trusting the spread.
+  // Owner-approved "sell loose pieces" (V182): roundToFullBox is a plain DTO field — `...item` in the base
+  // spread already carries it through, so this pins that the round trip actually works end to end (GET → row →
+  // PUT) rather than merely trusting the spread.
   it('round-trips roundToFullBox — false stays false, true stays true', () => {
     const looseRow = rowFromServerItem({ id: 6, lineType: 'TILE', unitPrice: 100, roundToFullBox: false });
     expect(looseRow.roundToFullBox).toBe(false);
@@ -169,8 +166,8 @@ describe('QuotationItemRow price fields follow the quotation\'s mode', () => {
   });
 
   it('DIRECT_NET: ราคาสุทธิ/ตร.ม. (รวม VAT) is required and the list price is optional', () => {
-    // A blank ราคาตั้ง — the state the "leave it blank" hint is for (it steps aside once filled:
-    // see quotationPerSqmPrice.test.jsx).
+    // A blank ราคาตั้ง — the state the "leave it blank" hint is for (it steps aside once filled: see
+    // quotationPerSqmPrice.test.jsx).
     renderRow('DIRECT_NET', { ...tile, unitPrice: '' });
     expect(screen.getByLabelText(/^ราคาสุทธิ\/ตร\.ม\. \(รวม VAT\)/)).not.toBeNull();
     expect(screen.getByText('เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)')).not.toBeNull();

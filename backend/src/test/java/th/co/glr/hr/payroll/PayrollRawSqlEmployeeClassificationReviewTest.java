@@ -21,34 +21,9 @@ import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * REVIEWER-ADDED (fourth Opus review, 2026-07-30). The narrower half of the P0 that task 5's
- * three-layer fix does NOT cover.
- *
- * <p>{@link PayrollClassificationReachabilityIntegrationTest
- * #payrollRunsForAnEmployeeConfiguredOnlyThroughThePathsAProductionDeploymentActuallyHas} calls
- * {@code payrollRepository.seedSsoInclusionDefaults(...)} explicitly on its employee before
- * previewing. That single line is load-bearing: {@code PayrollService#hasBeenOnboardedForPayroll}
- * decides whether layer 3's read-time default fires by looking for at least one NON-SALARY row in
- * {@code hr.payroll_component_sso_inclusion}. With that call, layer 3 fires and the run previews.
- *
- * <p>Take the call away and the employee has zero rows in BOTH matrices -- which is exactly the
- * shape of an employee inserted by raw SQL after the backfills have already run:
- *
- * <ul>
- *   <li>{@code db/migration-uat/V900__uat_reference_and_employees.sql} inserts 93 employees with
- *       raw {@code INSERT INTO hr.employee}. Flyway orders merged locations by version, so on a
- *       FRESH uat database V96 (SSO backfill), V97 and V100 (tax-treatment backfill) all run
- *       BEFORE V900 and reach zero of those 93 rows.
- *   <li>{@code db/migration-uat/V902} then seeds fully-approved overtime that feeds payroll -- so
- *       {@code OVERTIME_PAY} is non-zero for those employees on the payroll page's own initial GET,
- *       with no HR input typed at all.
- * </ul>
- *
- * <p>This test asserts the behaviour that fix's own stated goal requires: an employee nothing has
- * ever seeded must still be payroll-runnable, because production has insert paths that seed
- * nothing. It is deliberately written wrong-way-round against the CURRENT implementation.
- */
+/** REVIEWER-ADDED (fourth Opus review, 2026-07-30). This test asserts the behaviour that fix's own stated goal
+ * requires: an employee nothing has ever seeded must still be payroll-runnable, because production has insert
+ * paths that seed nothing. */
 class PayrollRawSqlEmployeeClassificationReviewTest extends AbstractPostgresIntegrationTest {
 
     private PayrollRepository payrollRepository;
@@ -85,16 +60,13 @@ class PayrollRawSqlEmployeeClassificationReviewTest extends AbstractPostgresInte
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * The uat-V900 / bulk-import population: inserted by raw SQL, seeded through NOTHING. Same
-     * ฿407 พิเศษ 1 the reachability test uses (handoff section 9d, employee 10012's real June
-     * figure).
-     */
+    /** The uat-V900 / bulk-import population: inserted by raw SQL, seeded through NOTHING. Same ฿407 พิเศษ 1 the
+     * reachability test uses (handoff section 9d, employee 10012's real June figure). */
     @Test
     void payrollRunsForAnEmployeeInsertedByRawSqlAfterTheBackfillsAlreadyRan() {
         long employeeId = seedEmployeeByRawSql("RAWSQL-001", "อดิเทพ", "ดิบ", new BigDecimal("30000.00"));
-        // Deliberately NOTHING seeded: no seedSsoInclusionDefaults, no seedComponentTaxTreatmentDefaults,
-        // no seedRegularTaxTreatment. This is the uat V900 / demo bulk-import shape.
+        // Deliberately NOTHING seeded: no seedSsoInclusionDefaults, no seedComponentTaxTreatmentDefaults, no
+        // seedRegularTaxTreatment. This is the uat V900 / demo bulk-import shape.
 
         PayrollEmployeeInputRequest input = specialPayOneOf(employeeId, new BigDecimal("407.00"));
 

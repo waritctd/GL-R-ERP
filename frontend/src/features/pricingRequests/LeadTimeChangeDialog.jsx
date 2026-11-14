@@ -5,16 +5,9 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { isValidLeadTimeRange, leadTimeWithUnit } from './factoryContactMeta.js';
 
-/**
- * CR-1 (GLA-167) R2 / R10 (option C) — import asks to change ระยะเวลานำเข้า for ONE factory.
- *
- * One request per factory: a new min/max and a required reason at the top, then every import
- * (non-stock) line of that factory PRE-TICKED with that value. Import can untick a line or type
- * that line's own min/max; the owning rep / a sales manager later approves or rejects the request
- * once, as a whole. `lines` are the factory's pricing-request lines (current values shown as the
- * "old" range); `existing` is the PENDING change being edited, if any (then the dialog seeds from
- * it and saves through update instead of create).
- */
+/** CR-1 (GLA-167) R2 / R10 (option C) — import asks to change ระยะเวลานำเข้า for ONE factory. One request per
+ * factory: a new min/max and a required reason at the top, then every import (non-stock) line of that factory
+ * PRE-TICKED with that value. */
 export function LeadTimeChangeDialog({ factoryName, lines, existing = null, pending, onCancel, onSubmit }) {
   const seeded = useMemo(() => {
     const byItem = new Map((existing?.lines ?? []).map((line) => [line.pricingRequestItemId, line]));
@@ -35,8 +28,8 @@ export function LeadTimeChangeDialog({ factoryName, lines, existing = null, pend
 
   function changeBulk(field, value) {
     if (field === 'min') setBulkMin(value); else setBulkMax(value);
-    // The bulk value is what every TICKED line is pre-filled with; a line's own override is typed
-    // after it (typing the bulk value again resets the ticked lines to it).
+    // The bulk value is what every TICKED line is pre-filled with; a line's own override is typed after it (typing
+    // the bulk value again resets the ticked lines to it).
     setRows((current) => Object.fromEntries(Object.entries(current).map(([id, row]) => [
       id, row.ticked ? { ...row, [field]: value } : row,
     ])));

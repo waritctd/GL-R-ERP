@@ -109,25 +109,23 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const canEditStage = hasAction('UPDATE_STAGE')
     && stageDecisions.some((decision) => decision.allowed) && !lost;
   const canLost = hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
-  // `next` is on-route by construction; the explicit onRoute check is the belt to that braces — an
-  // off-route stage must never be one click away, whatever else the server listed.
+  // `next` is on-route by construction; the explicit onRoute check is the belt to that braces — an off-route
+  // stage must never be one click away, whatever else the server listed.
   const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
   const canAdvance = Boolean(next) && !next.auto && nextDecision?.onRoute !== false
     && hasAction('ADVANCE_STAGE', next.code);
-  // The next stage is reachable EXCEPT the readiness gate (a follow-up date + a logged activity
-  // since the last stage change) is unmet — the ONE block the acting sales rep clears themselves.
-  // Detected off the server's own reason (STAGE_ADVANCE_GATE_MESSAGE verbatim) so it can never
-  // disagree with the backend; distinct from an auto stage or a block owned by another role, which
-  // the rep cannot act on. When true, the guided-advance flow replaces the dead "อัปเดตโดย…" hint.
+  // The next stage is reachable EXCEPT the readiness gate (a follow-up date + a logged activity since the last
+  // stage change) is unmet — the ONE block the acting sales rep clears themselves. When true, the guided-advance
+  // flow replaces the dead "อัปเดตโดย…" hint.
   const readinessBlocked = Boolean(next) && !next.auto && !canAdvance
     && Boolean(nextDecision) && !nextDecision.allowed
     && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
   // The page's main button carries เลื่อนไป on ขั้น 1–2; one copy on the page.
   // No เลื่อนไป beside a main button that leads elsewhere (ยืนยันคำสั่งซื้อ → 10).
   const showGuidedOpener = readinessBlocked && !advanceInHeader && !(ctaStage === 'ORDER_RECEIVED' && ctaStage !== next?.code);
-  // One click, three writes IN ORDER: set the follow-up date (+ optional win%), log the activity,
-  // then advance through the PARENT's own onUpdateStage so its invalidation + toast still run. The
-  // gate itself is unchanged — this just satisfies it in one place instead of two scattered panels.
+  // One click, three writes IN ORDER: set the follow-up date (+ optional win%), log the activity, then advance
+  // through the PARENT's own onUpdateStage so its invalidation + toast still run. The gate itself is unchanged —
+  // this just satisfies it in one place instead of two scattered panels.
   const guidedAdvance = useMutation({
     mutationFn: async () => {
       await api.tickets.updateTracking(summary.id, {
@@ -188,10 +186,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     },
   }));
 
-  // When the next stage isn't one this user can one-click into, explain who or
-  // what advances it instead of showing a dead end.
-  // Suppressed while the guided-advance button stands in for it: that button IS the way forward, so
-  // "อัปเดตโดย<ฝ่าย>" would be a misleading dead end next to it.
+  // When the next stage isn't one this user can one-click into, explain who or what advances it instead of
+  // showing a dead end. Suppressed while the guided-advance button stands in for it: that button IS the way
+  // forward, so "อัปเดตโดย<ฝ่าย>" would be a misleading dead end next to it.
   const nextHint = next && !canAdvance && !readinessBlocked
     ? (next.auto ? AUTO_STAGE_HINT[next.code] : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
     : null;
@@ -361,9 +358,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
             ) : primaryAction || showGuidedOpener ? (
               <div className="flex flex-wrap items-center gap-2">
                 {primaryAction}
-                {/* Not a dead hint: the rep CAN advance — they just have to log the follow-up + an
-                    activity first, which this button collects and then advances, in one go. The
-                    "who moves it" hint for everyone else is part of the ถัดไป line above. */}
+                {/* Not a dead hint: the rep CAN advance — they just have to log the follow-up + an activity first, which this
+                 * button collects and then advances, in one go. The "who moves it" hint for everyone else is part of the ถัดไป
+                 * line above. */}
                 {showGuidedOpener ? (
                   <Button
                     type="button"
@@ -395,9 +392,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
               </div>
             ) : null}
 
-            {/* Stage-gated documents: the doc that belongs to THIS stage of the
-                deal (quotation at the quote stages, deposit notice at order,
-                IR at procurement...) — parent renders them from real `can` flags. */}
+            {/* Stage-gated documents: the doc that belongs to THIS stage of the deal (quotation at the quote stages,
+             * deposit notice at order, IR at procurement...) — parent renders them from real `can` flags. */}
             {docActions ? (
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs font-bold text-text-muted">เอกสารของขั้นนี้:</span>

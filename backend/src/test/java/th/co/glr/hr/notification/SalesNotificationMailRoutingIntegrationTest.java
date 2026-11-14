@@ -12,55 +12,9 @@ import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.mail.Mailer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Where a sales-pipeline notification email actually lands, against a real PostgreSQL database and
- * the real {@link NotificationRepository} → {@link SalesNotificationMailRouter} →
- * {@link NotificationEmailService} chain. Only the transport is a double: {@link CapturingMailer}
- * stands in for {@code ResendMailer}/{@code SmtpMailer}, so every routing, subject and link decision
- * above it is the production one.
- *
- * <p><b>Written wrong-way-round on purpose.</b> "The import box got mail" is the cheap half of each
- * rule and would stay green if the router also copied the whole division; what these tests assert is
- * the half that can actually be got wrong — that an import notification reaches <b>no individual</b>,
- * that a sales notification reaches <b>no shared box</b>, and that the CEO mail goes to the hardcoded
- * address <b>whatever the employee record says</b>. Every seeded person carries a distinct, real-looking
- * personal address precisely so a leak has somewhere to show up.
- *
- * <p><b>MUTATION-CHECK RECORD (actually run against a real Postgres, not simulated).</b> Each routing
- * rule was broken in turn, the suite re-run, and the source restored and verified byte-identical by
- * SHA-256 before the next one. Exactly the listed tests went red in every case; nothing else moved.
- *
- * <table>
- *   <caption>Mutations applied and the tests that caught them</caption>
- *   <tr><th>#</th><th>Mutation</th><th>Went red</th></tr>
- *   <tr><td>1</td><td>{@code SalesNotificationMailRouter#routeResolved}'s {@code import} arm emptied,
- *       so an import staffer falls through to personal delivery</td>
- *       <td>{@code anImportStafferAddressedByIdIsStillOnlyReachedThroughTheSharedBox}</td></tr>
- *   <tr><td>2</td><td>the {@code ceo} arm resolves each notified employee's own address instead of
- *       using {@code CEO_MAILBOX}</td>
- *       <td>{@code ceoNotificationGoesToTheHardcodedAddressRegardlessOfTheEmployeeRecord},
- *       {@code ceoNotificationStillMailsWhenNoManagingDirectorExistsToReceiveAnInAppRow}, and
- *       {@code SalesNotificationEmailRollbackIntegrationTest#aCommittedPricingRequestSubmissionEmailsImportAndTheCeo}</td></tr>
- *   <tr><td>3</td><td>the {@code hasManagerEmail()} branch disabled</td>
- *       <td>{@code aRepWithNoAddressFallsBackToTheirManager}</td></tr>
- *   <tr><td>4</td><td>{@code SalesMailRecipientRepository}'s manager join extended a second hop and
- *       {@code COALESCE}d, so the fallback chains up the reporting line</td>
- *       <td>{@code theFallbackStopsAtTheDirectManagerAndDoesNotChainUpTheReportingLine}</td></tr>
- *   <tr><td>5</td><td>{@code AfterCommit.run(...)} removed from both router entry points, so mail
- *       sends inline instead of after commit</td>
- *       <td>{@code SalesNotificationEmailRollbackIntegrationTest#aRolledBackPricingRequestSubmissionEmailsNobody}</td></tr>
- *   <tr><td>6</td><td>{@code NotificationRepository#notifyEmployeeAt} passes {@code type} to the
- *       mailer instead of {@code title}</td>
- *       <td>{@code theSubjectIsTheThaiTitleAndNeverTheMachineType}</td></tr>
- *   <tr><td>7</td><td>the both-addresses-missing branch "safely" mails the shared import box instead
- *       of dropping</td>
- *       <td>{@code aRepAndManagerBothWithoutAnAddressSendsNothingAtAll},
- *       {@code theFallbackStopsAtTheDirectManagerAndDoesNotChainUpTheReportingLine}</td></tr>
- *   <tr><td>8</td><td>{@code link} nulled on its way to the mailer</td>
- *       <td>{@code theEmailCarriesAWorkingPortalLinkToTheNotificationsOwnTarget},
- *       {@code aTicketNotificationLinksToTheTicketRouteNotThePricingRequestRoute}</td></tr>
- * </table>
- */
+/** Where a sales-pipeline notification email actually lands, against a real PostgreSQL database and the real
+ * NotificationRepository → SalesNotificationMailRouter → NotificationEmailService chain. MUTATION-CHECK RECORD
+ * (actually run against a real Postgres, not simulated). */
 class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String PORTAL = "https://portal.test.glr";
@@ -93,11 +47,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
             .doesNotContain("somsak.import@glr.co.th", "malee.import@glr.co.th");
     }
 
-    /**
-     * The {@code assignedImportId} path — {@code PricingDecisionService} returns a costing to the
-     * one import staffer who owns it, by employee id. Ruling 1 still applies: they are reached
-     * through the shared box, not personally.
-     */
+    /** The assignedImportId path — PricingDecisionService returns a costing to the one import staffer who owns it,
+     * by employee id. Ruling 1 still applies: they are reached through the shared box, not personally. */
     @Test
     void anImportStafferAddressedByIdIsStillOnlyReachedThroughTheSharedBox() {
         long importDivision = insertDivision("PCIM", "จัดซื้อต่างประเทศ");
@@ -121,18 +72,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(mailer.recipients()).doesNotContain("wichai.account@glr.co.th");
     }
 
-    /**
-     * GLA-32 (2026-09-19): {@code notifyByRoleInternal}'s division switch used to cover only
-     * {@code import}, {@code hr}, {@code ceo}, {@code sales} and {@code sales_manager} — no
-     * {@code account} arm at all, so an account-role fan-out wrote no in-app row and the early
-     * {@code return} meant {@code salesMailer.emailForRole} was never even reached (this test used
-     * to be named {@code anAccountRoleFanOutIsANoOpInBothChannelsToday} and asserted exactly that).
-     * {@code th.co.glr.hr.deposit.DepositNoticeService#issue} (deposit-notice notification, GLA-32)
-     * is the fan-out's first real caller, so the gap is now closed: an {@code account}-division employee gets an
-     * in-app row, and — ruling 1, unchanged — is reached by mail only through the shared box, never
-     * personally. {@link #theRouterSendsAccountRoleMailToTheSharedBoxDirectly} pins
-     * the router half of this same contract in isolation.
-     */
+    /** GLA-32: notifyByRoleInternal's division switch used to cover only import, hr, ceo, sales and sales_manager —
+     * no account arm at all, so an account-role fan-out wrote no in-app row and the early return meant
+     * salesMailer.emailForRole was never even reached. */
     @Test
     void accountRoleFanOutInsertsAnInAppRowAndMailsOnlyTheSharedBox() {
         long accountEmployee = insertEmployee("ACC-2", insertDivision("AC", "ฝ่ายบัญชี"), "wichai.account@glr.co.th");
@@ -147,14 +89,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(mailer.recipients()).doesNotContain("wichai.account@glr.co.th");
     }
 
-    /**
-     * The precedence guard mirrors {@code DivisionAccessPolicy#roleFor}: an executive-titled
-     * AC-division employee resolves to {@code ceo} in Java (isExecutive is checked BEFORE the
-     * account branch), so this predicate must exclude them too rather than double-notifying — same
-     * shape as {@link #ceoNotificationStillMailsWhenNoManagingDirectorExistsToReceiveAnInAppRow}:
-     * the shared-box email still goes out (ruling 1's "mail even when nobody matched" behaviour),
-     * only the in-app fan-out is empty.
-     */
+    /** The precedence guard mirrors DivisionAccessPolicy#roleFor: an executive-titled AC-division employee resolves
+     * to ceo in Java, so this predicate must exclude them too rather than double-notifying. */
     @Test
     void accountRoleFanOutExcludesAnExecutiveTitledAcDivisionEmployee() {
         long accountDivision = insertDivision("AC", "ฝ่ายบัญชี");
@@ -168,16 +104,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(mailer.recipients()).doesNotContain("exec.account@glr.co.th");
     }
 
-    /**
-     * Opus review (2026-09-19): pins the predicate against the naive alternative — a division
-     * coded {@code ACX} would satisfy {@code d.source_code ILIKE 'AC%'} but must NOT satisfy the
-     * exact match this predicate actually uses (mirroring {@code DivisionAccessPolicy#roleFor}'s
-     * {@code "ac".equals(divisionCode(employee))}, not a prefix test).
-     *
-     * <p><b>MUTATION-CHECK (actually run).</b> Swapping the predicate's {@code = 'ac'} for
-     * {@code LIKE 'ac%'} turned this test red (the ACX employee got a row) with nothing else in
-     * the class affected; restored and confirmed byte-identical by SHA-256 before continuing.
-     */
+    /** Opus review: pins the predicate against the naive alternative — a division coded ACX would satisfy
+     * d.source_code ILIKE 'AC%' but must NOT satisfy the exact match this predicate actually uses (mirroring
+     * DivisionAccessPolicy#roleFor's "ac".equals(divisionCode), not a prefix test). */
     @Test
     void accountRoleFanOutExcludesADivisionCodedAcxNotJustAc() {
         long acxDivision = insertDivision("ACX", "ฝ่ายอื่นที่ขึ้นต้นด้วยเอซี");
@@ -188,17 +117,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(countNotificationRows()).isZero();
     }
 
-    /**
-     * The fallback half of the SAME predicate: {@code DivisionAccessPolicy#roleFor}'s
-     * {@code divisionCode} falls back to the {@code name_th} prefix (split on the FIRST
-     * {@code '-'}) whenever {@code source_code} is blank/NULL — real production rows take this
-     * path (see the "hr" case's own Javadoc a few lines up, which this account case mirrors).
-     *
-     * <p><b>MUTATION-CHECK (actually run).</b> Replacing the {@code COALESCE(NULLIF(...), split_part
-     * (...))} fallback with a bare {@code d.source_code = 'ac'} (dropping the name_th fallback
-     * entirely) turned this test red — zero rows instead of one — with nothing else in the class
-     * affected; restored and confirmed byte-identical by SHA-256 before continuing.
-     */
+    /** The fallback half of the SAME predicate: DivisionAccessPolicy#roleFor's divisionCode falls back to the
+     * name_th prefix (split on the FIRST '-') whenever source_code is blank/NULL — real production rows take this
+     * path (see the "hr" case's own Javadoc a few lines up, which this account case mirrors). */
     @Test
     void accountRoleFanOutMatchesTheNameThPrefixFallbackWhenSourceCodeIsNull() {
         long fallbackDivision = insertDivisionWithNullCode("AC-ฝ่ายบัญชี");
@@ -212,8 +133,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
             Map.of("id", accountEmployee), Long.class)).isEqualTo(accountEmployee);
     }
 
-    /** The pre-existing {@code e.is_active = TRUE} guard (shared by every role, not new to this
-     *  predicate) must still exclude a deactivated account-division employee. */
+    /** The pre-existing e.is_active = TRUE guard (shared by every role, not new to this predicate) must still
+     * exclude a deactivated account-division employee. */
     @Test
     void accountRoleFanOutExcludesAnInactiveAccountEmployee() {
         long accountDivision = insertDivision("AC", "ฝ่ายบัญชี");
@@ -224,12 +145,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(countNotificationRows()).isZero();
     }
 
-    /**
-     * Isolates the ROUTER half of the account contract from the fan-out's own division predicate
-     * above — GLA-32 renamed this from {@code theRouterSendsAccountRoleMailToTheSharedBoxIfThe
-     * FanOutEverGainsIt} once {@code DepositNoticeService.issue} became that real caller, so "if
-     * it ever gains one" is no longer accurate.
-     */
+    /** Isolates the ROUTER half of the account contract from the fan-out's own division predicate above — GLA-32
+     * renamed this from theRouterSendsAccountRoleMailToTheSharedBoxIfThe FanOutEverGainsIt once
+     * DepositNoticeService.issue became that real caller, so "if it ever gains one" is no longer accurate. */
     @Test
     void theRouterSendsAccountRoleMailToTheSharedBoxDirectly() {
         SalesNotificationMailRouter router = new SalesNotificationMailRouter(
@@ -247,9 +165,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
     void ceoNotificationGoesToTheHardcodedAddressRegardlessOfTheEmployeeRecord() {
         long executiveDivision = insertDivision("MD", "ผู้บริหาร");
         long managingDirectorPosition = insertPosition("MD1", "กรรมการผู้จัดการ");
-        // The real กรรมการผู้จัดการ row, carrying an address that is NOT the hardcoded one. If the
-        // router ever resolved the CEO address from hr.employee — the thing ruling 2 forbids — this
-        // address is what would show up instead.
+        // The real กรรมการผู้จัดการ row, carrying an address that is NOT the hardcoded one. If the router ever
+        // resolved the CEO address from hr.employee — the thing ruling 2 forbids — this address is what would show up
+        // instead.
         insertEmployee("MD-1", executiveDivision, managingDirectorPosition, "someone.else@example.com", null);
 
         notifications.notifyByRoleForPricingRequest("ceo", 42L, "PRICING_COSTING_SUBMITTED",
@@ -259,11 +177,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(mailer.recipients()).doesNotContain("someone.else@example.com");
     }
 
-    /**
-     * {@link CeoApproverRule}'s documented empty set: with no active กรรมการผู้จัดการ the in-app
-     * queue goes silent. Hardcoding the address is what keeps the email arriving anyway — which is
-     * the stated reason the owner ruled for it, so it is pinned rather than assumed.
-     */
+    /** CeoApproverRule's documented empty set: with no active กรรมการผู้จัดการ the in-app queue goes silent.
+     * Hardcoding the address is what keeps the email arriving anyway — which is the stated reason the owner ruled
+     * for it, so it is pinned rather than assumed. */
     @Test
     void ceoNotificationStillMailsWhenNoManagingDirectorExistsToReceiveAnInAppRow() {
         notifications.notifyByRoleForPricingRequest("ceo", 42L, "PRICING_COSTING_SUBMITTED",
@@ -297,8 +213,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
             "คำขอราคา PCR-2026-0001 ถูกรับเรื่องแล้ว");
 
         assertThat(mailer.recipients()).containsExactly("praphan.manager@glr.co.th");
-        // The mail is landing in the MANAGER's inbox, so it greets the manager — not the rep whose
-        // notification it is, and not the generic fallback.
+        // The mail is landing in the MANAGER's inbox, so it greets the manager — not the rep whose notification it is,
+        // and not the generic fallback.
         assertThat(mailer.last().textBody()).contains("เรียน คุณประพันธ์,");
     }
 
@@ -316,10 +232,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(countNotificationRows()).isEqualTo(1);
     }
 
-    /**
-     * Owner ruling 3 stops at the direct manager: "do not chain further up". The grandmanager here
-     * has a perfectly good address and must still receive nothing.
-     */
+    /** Owner ruling 3 stops at the direct manager: "do not chain further up". The grandmanager here has a perfectly
+     * good address and must still receive nothing. */
     @Test
     void theFallbackStopsAtTheDirectManagerAndDoesNotChainUpTheReportingLine() {
         long salesDivision = insertDivision("SA", "ฝ่ายขาย");
@@ -350,12 +264,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
 
     // ── The two traps this surface has already paid for ───────────────────────────────────────
 
-    /**
-     * The subject is the Thai title the in-app row carries, never the machine {@code type}. The last
-     * copy round shipped {@code TRAVEL_PER_DIEM} at employees as a raw enum string; here {@code
-     * PRICING_DECISION_APPROVED} is exactly the same shape of value, sitting one field away from the
-     * subject line.
-     */
+    /** The subject is the Thai title the in-app row carries, never the machine type. The last copy round shipped
+     * TRAVEL_PER_DIEM at employees as a raw enum string; here PRICING_DECISION_APPROVED is exactly the same shape
+     * of value, sitting one field away from the subject line. */
     @Test
     void theSubjectIsTheThaiTitleAndNeverTheMachineType() {
         long salesDivision = insertDivision("SA", "ฝ่ายขาย");
@@ -387,12 +298,7 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         assertThat(mailer.last().subject()).doesNotContain("FACTORY_PO_CREATED");
     }
 
-    /**
-     * Not one email in the previous programme carried a portal link; 3,548 unit tests passed and an
-     * e2e caught it. An actionable notification is the link, so both the HTML CTA and the plain-text
-     * alternative are pinned to the notification's own target — {@code /pricing-requests/42} here,
-     * which is a real frontend route ({@code App.jsx}), not a path that 404s.
-     */
+    /** Not one email in the previous programme carried a portal link; 3,548 unit tests passed and an e2e caught it. */
     @Test
     void theEmailCarriesAWorkingPortalLinkToTheNotificationsOwnTarget() {
         long salesDivision = insertDivision("SA", "ฝ่ายขาย");
@@ -461,8 +367,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         return id.longValue();
     }
 
-    /** {@code Map.of} rejects a null value outright, so a NULL {@code source_code} — the
-     *  name_th-prefix fallback's own precondition — needs {@link MapSqlParameterSource} instead. */
+    /** Map.of rejects a null value outright, so a NULL source_code — the name_th-prefix fallback's own precondition
+     * — needs MapSqlParameterSource instead. */
     private long insertDivisionWithNullCode(String name) {
         Number id = jdbc.queryForObject("""
             INSERT INTO hr.division (source_code, name_th) VALUES (:code, :name) RETURNING division_id
@@ -470,8 +376,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         return id.longValue();
     }
 
-    /** {@code hr.position.source_code} is VARCHAR(10), so the code is short and the Thai title —
-     *  the string {@link CeoApproverRule#SQL_PREDICATE} actually matches on — goes in {@code name_th}. */
+    /** hr.position.source_code is VARCHAR(10), so the code is short and the Thai title — the string
+     * CeoApproverRule#SQL_PREDICATE actually matches on — goes in name_th. */
     private long insertPosition(String code, String nameTh) {
         Number id = jdbc.queryForObject("""
             INSERT INTO hr.position (source_code, name_th, is_active)
@@ -488,11 +394,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         return insertEmployee(code, divisionId, null, email, managerId);
     }
 
-    /**
-     * {@code first_name_th} is seeded from a fixed map so the greeting assertions have a real Thai
-     * first name to match; {@code email} and {@code reports_to_employee_id} are genuinely nullable
-     * here, which is the whole point of the fallback cases.
-     */
+    /** first_name_th is seeded from a fixed map so the greeting assertions have a real Thai first name to match;
+     * email and reports_to_employee_id are genuinely nullable here, which is the whole point of the fallback
+     * cases. */
     private long insertEmployee(String code, long divisionId, Long positionId, String email, Long managerId) {
         Number id = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, email, division_id, position_id,
@@ -511,8 +415,8 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         return id.longValue();
     }
 
-    /** Same shape as {@link #insertEmployee(String, long, String)}, {@code is_active = FALSE} —
-     *  for pinning the pre-existing {@code e.is_active = TRUE} guard against the account branch. */
+    /** Same shape as #insertEmployee(String, long, String), is_active = FALSE — for pinning the pre-existing
+     * e.is_active = TRUE guard against the account branch. */
     private long insertInactiveEmployee(String code, long divisionId, String email) {
         Number id = jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, email, division_id, is_active)
@@ -534,11 +438,9 @@ class SalesNotificationMailRoutingIntegrationTest extends AbstractPostgresIntegr
         "SA-MGR3", "สมพร",
         "SA-GM", "อนันต์");
 
-    /**
-     * Records what would have gone on the wire. Deliberately a hand-written double rather than a
-     * Mockito mock: the assertions here are about the exact recipient string and the rendered
-     * body/subject, and a captor chain over four overloads reads far worse than a list of records.
-     */
+    /** Records what would have gone on the wire. Deliberately a hand-written double rather than a Mockito mock: the
+     * assertions here are about the exact recipient string and the rendered body/subject, and a captor chain over
+     * four overloads reads far worse than a list of records. */
     private static final class CapturingMailer implements Mailer {
         record SentMail(String to, String subject, String htmlBody, String textBody) {}
 

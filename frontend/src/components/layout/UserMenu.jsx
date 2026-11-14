@@ -2,11 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../common/Avatar.jsx';
 import { Icon } from '../common/Icon.jsx';
 
-/**
- * Structure mirrors NotificationBell (open state, outside-click close, popover
- * anchored in the topbar) so the two header popovers behave identically. The
- * topbar sits outside `.content-scroll`, so absolute positioning is not clipped.
- */
+/** Structure mirrors NotificationBell (open state, outside-click close, popover anchored in the topbar) so the
+ * two header popovers behave identically. The topbar sits outside `.content-scroll`, so absolute positioning
+ * is not clipped. */
 export function UserMenu({
   user,
   employee,

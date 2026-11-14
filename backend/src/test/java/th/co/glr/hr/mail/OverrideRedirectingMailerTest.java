@@ -13,21 +13,8 @@ import static org.mockito.Mockito.verify;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * Issue #782: this class is THE single implementation of {@code app.mail.override-to} redirection -
- * every {@link Mailer} method is covered here, exhaustively, which is what makes a future sender safe
- * without a new test being written for it: a sender can only ever reach a transport through one of
- * these four methods (see {@link Mailer}'s own class Javadoc - "Callers... depend on this interface,
- * never a concrete transport"), so proving all four redirect proves every caller does, present or
- * future. {@code MailOverrideContainmentTest} additionally drives TODAY's two known senders
- * end-to-end through this exact class, as a concrete (not just structural) confirmation.
- *
- * <p>Every assertion here is written wrong-way-round per the issue: it asserts the caller-supplied
- * address is NOT what the delegate receives, not merely that the override address IS - the failure
- * mode this is guarding is a silent pass-through, and "the override address showed up somewhere"
- * would not catch a bug that sends to BOTH addresses, or that only checks its own argument in
- * isolation from the real one.
- */
+/** this class is THE single implementation of app.mail.override-to redirection. depend on this interface, never
+ * a concrete transport"), so proving all four redirect proves every caller does, present or future. */
 class OverrideRedirectingMailerTest {
     private static final String OVERRIDE_TO = "qa-inbox@example.com";
     private static final String REAL_RECIPIENT = "real-person@example.com";
@@ -105,9 +92,9 @@ class OverrideRedirectingMailerTest {
             eq(pdf));
     }
 
-    // The exact path #782 named as completely unguarded: FactoryEmailService.send(...) with
-    // attachments calls Mailer.sendWithAttachments (plural) - not the singular sendWithAttachment
-    // NotificationEmailService's payslip path uses. Both must redirect; they are different methods.
+    // The exact path #782 named as completely unguarded: FactoryEmailService.send(...) with attachments calls
+    // Mailer.sendWithAttachments (plural) - not the singular sendWithAttachment NotificationEmailService's payslip
+    // path uses. Both must redirect; they are different methods.
     @Test
     void sendWithAttachmentsPluralRedirectsAwayFromTheRealRecipient() {
         List<Mailer.Attachment> attachments = List.of(new Mailer.Attachment("quote.pdf", "%PDF".getBytes(), "application/pdf"));
@@ -124,10 +111,8 @@ class OverrideRedirectingMailerTest {
             eq(attachments));
     }
 
-    // The interface's 4-arg sendHtml is a DEFAULT method that delegates to `this.sendHtml(..., List.of())`
-    // - not overridden separately in OverrideRedirectingMailer. This pins that Java's default-method
-    // dispatch really does route it through the 5-arg override above (and therefore through the
-    // redirect), rather than silently reaching some other implementation.
+    // The interface's 4-arg sendHtml is a DEFAULT method that delegates to `this.sendHtml(..., List.of())` - not
+    // overridden separately in OverrideRedirectingMailer.
     @Test
     void fourArgSendHtmlDefaultMethodStillRedirects() {
         mailer.sendHtml(REAL_RECIPIENT, "subject", "<html><body>hi</body></html>", "hi");
@@ -135,10 +120,8 @@ class OverrideRedirectingMailerTest {
         verify(delegate).sendHtml(eq(OVERRIDE_TO), eq("subject"), anyString(), anyString(), eq(List.of()));
     }
 
-    // The rich send path (leave-submission email): the CC list must be DROPPED, not redirected, so a
-    // UAT run never mails a real manager via CC. Asserted wrong-way-round: the delegate's OutgoingEmail
-    // carries an EMPTY cc and the override as its to, and neither the real requester nor the real
-    // manager appears as an actual recipient - they appear only in the disclosure note.
+    // The rich send path (leave-submission email): the CC list must be DROPPED, not redirected, so a UAT run never
+    // mails a real manager via CC.
     @Test
     void richSendDropsCcAndRedirectsToTheOverrideInbox() {
         String manager = "manager@example.com";
@@ -170,8 +153,8 @@ class OverrideRedirectingMailerTest {
     }
 
     // The old bracketed "[Redirected for testing - ...]" shape was a classic spam-filter trigger -
-    // NotificationEmailService was already fixed to drop it (see its test history). Pin that this
-    // class - the new single home for the note - never reintroduces that shape.
+    // NotificationEmailService was already fixed to drop it (see its test history). Pin that this class - the new
+    // single home for the note - never reintroduces that shape.
     @Test
     void theNoteIsNeverBracketed() {
         mailer.send(REAL_RECIPIENT, "subject", "body");

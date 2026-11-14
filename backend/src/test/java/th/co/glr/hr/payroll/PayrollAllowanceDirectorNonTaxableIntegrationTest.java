@@ -24,13 +24,8 @@ import th.co.glr.hr.payroll.PayrollReconciliationDtos.EmployeeTaxAllowanceUpsert
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * P8 + P10 + P12: three independent inputs to {@link PayrollService#preview} that all feed
- * {@link PayrollCalculator}, each proven through the real DB seam that only {@link
- * PayrollService#preview} exercises: stored {@code hr.employee_tax_allowance} declarations (C1),
- * director remuneration on {@code hr.employee} (C3), and per-run non-taxable income from the
- * request body.
- */
+/** Verifies stored allowances, director remuneration, and request-body non-taxable income reach payroll preview
+ * through the database. */
 class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -47,9 +42,8 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             mock(NotificationService.class),
             mock(TicketRepository.class),
             mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
-        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix --
-        // PayrollService gained a LeaveRepository dependency for #suggestedInputs, unrelated to what
-        // this test exercises.
+        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix -- PayrollService
+        // gained a LeaveRepository dependency for #suggestedInputs, unrelated to what this test exercises.
         payrollService = new PayrollService(
             payrollRepository,
             new PayrollCalculator(),
@@ -71,19 +65,9 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
 
     // ---- P8: a stored tax-allowance declaration changes the bracket/amount through preview -----
 
-    /**
-     * Salary 40,000, January (monthsRemaining = 12), no YTD. Baseline (no stored allowance):
-     * taxableAnnualIncome 309,500.00 sits in the 10% bracket, annualTax 8,450.00, withholdingTax
-     * 704.00 (whole baht since 2026-08-28; see {@link PayrollPersistedPayslipIntegrationTest} for the full trace -- identical
-     * inputs).
-     *
-     * <p>With a stored {@code childAllowance} of 100,000.00 for the same employee/tax-year: family
-     * allowance = 100,000.00, taxAllowanceTotal = 60,000 (personal) + 10,500 (SSO) + 100,000 (family)
-     * = 170,500.00; taxableAnnualIncome = 480,000 - 100,000 - 170,500 = 209,500.00 -- now entirely
-     * inside the 5% bracket; annualTax = (209,500 - 150,000) x 5% = 2,975.00; withholdingTax =
-     * 2,975 / 12 = 247.9166... -> HALF_UP 247.92. The allowance doesn't just shave the total, it
-     * moves the employee out of the 10% bracket entirely.
-     */
+    /** Salary 40,000, January (monthsRemaining = 12), no YTD. Baseline (no stored allowance): taxableAnnualIncome
+     * 309,500.00 sits in the 10% bracket, annualTax 8,450.00, withholdingTax 704.00 (whole baht since 2026-08-28;
+     * see PayrollPersistedPayslipIntegrationTest for the full trace -- identical inputs). */
     @Test
     void storedTaxAllowanceChangesTheBracketAndAmountThroughPreview() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -126,20 +110,9 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
 
     // ---- P10: director remuneration through preview: gross + tax rise, SSO stays zero -----------
 
-    /**
-     * A director has base salary 0 and only {@code director_remuneration} (150,000.00/month,
-     * January, no YTD). Trace: grossEarnings = grossTaxableIncome = 150,000.00; {@code ssoWageBase}
-     * is derived from base salary alone (0 - 0 = 0), so it floors at zero rather than the 1,650
-     * minimum -- socialSecurity = 0.00; projectedAnnualIncome = 1,800,000.00; taxExpenseDeduction
-     * caps at 100,000.00; SSO allowance = 0 (no contribution to allow for); taxAllowanceTotal =
-     * 60,000.00; taxableAnnualIncome = 1,640,000.00; annualTax = 150k@5+200k@10+250k@15+250k@20+
-     * 640k@25 = 7,500+20,000+37,500+50,000+160,000 = 275,000.00; withholdingTax = 275,000/12 =
-     * 22,916.6666... -> HALF_UP 22,916.67.
-     *
-     * <p>A plain salaried employee previewed in the same run keeps paying ordinary SSO (875.00),
-     * proving the zero-SSO result is specific to the director's remuneration type, not some
-     * preview-wide default.
-     */
+    /** A director has base salary 0 and only director_remuneration (150,000.00/month, January, no YTD). A plain
+     * salaried employee previewed in the same run keeps paying ordinary SSO (875.00), proving the zero-SSO result
+     * is specific to the director's remuneration type, not some preview-wide default. */
     @Test
     void directorRemunerationRaisesGrossAndTaxButSocialSecurityStaysZeroThroughPreview() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -164,15 +137,7 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
 
     // ---- P12: non-taxable income through preview: excluded from tax/SSO, added back to net ------
 
-    /**
-     * Salary 30,000, January, nonTaxableIncome 5,000 supplied in the request body. Reuses the exact
-     * scenario and pinned figures from {@code PayrollCalculatorTest#nonTaxableIncomeIsExcludedFromTaxAndSsoButAddedBackToNet}
-     * (grossEarnings 30,000.00 -- non-taxable income never joins gross earnings; grossTaxableIncome
-     * 30,000.00; socialSecurity 875.00; withholdingTax 165.00 (whole baht); netPay = 30,000 - 1,040.00 + 5,000 =
-     * 33,960.42) but drives it through {@link PayrollService#preview} against real Postgres via a
-     * {@link PayrollEmployeeInputRequest}, rather than constructing {@link PayrollCalculationInput}
-     * directly.
-     */
+    /** Salary 30,000, January, nonTaxableIncome 5,000 supplied in the request body. */
     @Test
     void nonTaxableIncomeThroughPreviewIsExcludedFromTaxAndSsoButAddedBackToNet() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -194,20 +159,9 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
         assertThat(line.netPay()).isEqualByComparingTo("33960.00");
     }
 
-    /**
-     * A per-run ค่าลดหย่อนบุตร typed by HR for an employee with NO stored ล.ย.01 row.
-     *
-     * <p>Regression test for a defect found in review. V93 caps บุตร per head, but the amount and the
-     * head count travel by different routes: {@link PayrollService#mergeAllowances} took the amount
-     * from the request body and the count from the stored declaration only. With no stored row the
-     * count was zero, so the cap was zero, and the whole declaration was erased — no error, no
-     * warning, just a larger tax bill. Only the stored-declaration path was covered before, which is
-     * why this passed review the first time.
-     *
-     * <p>Runs through the real {@link PayrollService#preview} against real Postgres, because the
-     * defect lived in the service's merge and not in the calculator: the calculator is right to
-     * enforce a zero cap on a zero count, otherwise any amount could be claimed by declaring nobody.
-     */
+    /** A per-run ค่าลดหย่อนบุตร typed by HR for an employee with NO stored ล.ย.01 row. V93 caps บุตร per head, but
+     * the amount and the head count travel by different routes: PayrollService#mergeAllowances took the amount
+     * from the request body and the count from the stored declaration only. */
     @Test
     void aPerRunChildAllowanceSurvivesWhenTheEmployeeHasNoStoredDeclaration() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -305,9 +259,9 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
-        // SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless), but SSO
-        // inclusion has no calculator-layer default -- seed it so socialSecurity comes out non-zero,
-        // matching every assertion in this file that expects the pre-task-2 salary-only SSO base.
+        // SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless), but SSO inclusion has no
+        // calculator-layer default -- seed it so socialSecurity comes out non-zero, matching every assertion in this
+        // file that expects the pre-task-2 salary-only SSO base.
         seedSsoIncluded(employeeId, 2026, PayrollComponent.SALARY);
         return employeeId;
     }
@@ -322,9 +276,9 @@ class PayrollAllowanceDirectorNonTaxableIntegrationTest extends AbstractPostgres
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "directorRemuneration", directorRemuneration),
             Long.class);
-        // DIRECTOR_REMUNERATION is non-zero and HR-classified per the handoff -- REGULAR_REPROJECT
-        // here (directors are typically paid the same amount every month). Deliberately NOT SSO-
-        // included: this test's whole point is that director remuneration stays outside the SSO base.
+        // DIRECTOR_REMUNERATION is non-zero and HR-classified per the handoff -- REGULAR_REPROJECT here (directors are
+        // typically paid the same amount every month). Deliberately NOT SSO- included: this test's whole point is that
+        // director remuneration stays outside the SSO base.
         seedRegularTaxTreatment(employeeId, 2026, PayrollComponent.DIRECTOR_REMUNERATION);
         return employeeId;
     }

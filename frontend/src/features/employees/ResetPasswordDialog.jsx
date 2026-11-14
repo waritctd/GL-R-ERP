@@ -4,28 +4,9 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 
-/**
- * HR's two-step reset-password flow for a single employee (issue #744).
- *
- * Step 1 confirms, because the reset is destructive: `EmployeeAuthRepository#setTemporaryPassword`
- * replaces the password hash immediately, so the employee's existing password stops working at
- * once. Their current session is not what breaks — their next login is.
- *
- * Step 2 shows the plaintext temporary password. `EmployeeService#resetPassword` returns it exactly
- * once and stores only its BCrypt hash, so there is no second chance to read it: if HR loses the
- * value the only remedy is another reset. That is why this step is a blocking dialog with a copy
- * button and a loud one-time warning rather than a toast.
- *
- * Handling rules for the plaintext, all deliberate:
- *   - it lives in this component's state only, and this component is conditionally rendered, so
- *     unmounting drops it. `dismiss()` also clears it explicitly before calling `onClose`.
- *   - it is never logged, never put in a URL/query, never written to storage, and never passed to
- *     `showToast` (toast text is retained and re-rendered by the app shell).
- *   - it is never written into the react-query cache — the caller uses a plain async handler, not
- *     a `useQuery`, so nothing persists it past this dialog.
- *   - it renders as a `<code>` block rather than an `<input>`, so browser password managers are
- *     never offered a credential to save.
- */
+/** HR's two-step reset-password flow for a single employee (issue #744). Step 1 confirms, because the reset is
+ * destructive: `EmployeeAuthRepository#setTemporaryPassword` replaces the password hash immediately, so the
+ * employee's existing password stops working at once. */
 export function ResetPasswordDialog({ employee, onConfirm, onClose }) {
   const [temporaryPassword, setTemporaryPassword] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -39,11 +20,9 @@ export function ResetPasswordDialog({ employee, onConfirm, onClose }) {
       const issued = await onConfirm();
       setTemporaryPassword(issued);
     } catch (err) {
-      // `err.message || fallback` is the repo's established shape for surfacing an API failure, and
-      // it matters here: EmployeeService throws user-facing Thai (404 "ไม่พบข้อมูลพนักงาน",
-      // 403 "ไม่มีสิทธิ์เข้าถึงรายการนี้"), which a generic fallback would throw away.
-      // Deliberately no console logging anywhere in this component — the success body is the
-      // credential itself, and a logger here would be one refactor away from capturing it.
+      // `err.message || fallback` is the repo's established shape for surfacing an API failure, and it matters here:
+      // EmployeeService throws user-facing Thai (404 "ไม่พบข้อมูลพนักงาน", 403 "ไม่มีสิทธิ์เข้าถึงรายการนี้"), which
+      // a generic fallback would throw away.
       setError(err?.message || 'ตั้งรหัสผ่านชั่วคราวไม่สำเร็จ');
     } finally {
       setBusy(false);
@@ -63,9 +42,9 @@ export function ResetPasswordDialog({ employee, onConfirm, onClose }) {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2000);
     } catch {
-      // Clipboard access fails on a non-secure context or when the user denies permission. The
-      // password is already on screen and selectable, so this is recoverable — say so instead of
-      // throwing, and never fall back to logging the value.
+      // Clipboard access fails on a non-secure context or when the user denies permission. The password is already
+      // on screen and selectable, so this is recoverable — say so instead of throwing, and never fall back to
+      // logging the value.
       setError('คัดลอกอัตโนมัติไม่สำเร็จ กรุณาเลือกข้อความแล้วคัดลอกด้วยตนเอง');
     }
   }

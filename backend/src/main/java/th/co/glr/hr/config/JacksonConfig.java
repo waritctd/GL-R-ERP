@@ -6,12 +6,8 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.client.RestClient;
 
-/**
- * Spring Boot 4 defaults to Jackson 3 and stopped auto-configuring a classic
- * {@code com.fasterxml.jackson.databind.ObjectMapper} bean. Several services here
- * (audit trail JSON, ticket item snapshots, attendance raw payloads, the login
- * rate-limit filter) inject that Jackson 2 type directly, so it's provided explicitly.
- */
+/** Spring Boot 4 defaults to Jackson 3 and stopped auto-configuring a classic
+ * com.fasterxml.jackson.databind.ObjectMapper bean. */
 @Configuration
 public class JacksonConfig {
 

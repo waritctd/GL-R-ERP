@@ -83,14 +83,14 @@ describe('QuotationDocumentView -- mobile card reflow (F2)', () => {
       expect(cell.textContent).toContain(expectedText);
     }
 
-    // The head row must still declare the same six labels so the CSS's `.table-head { display:
-    // none }` / `[data-label]::before` pairing stays in sync if a column is ever reordered.
+    // The head row must still declare the same six labels so the CSS's `.table-head { display: none }` /
+    // `[data-label]::before` pairing stays in sync if a column is ever reordered.
     const headRow = container.querySelector('.table-head');
     expect(headRow.textContent).toContain('รายละเอียด');
     expect(headRow.textContent).toContain('เป็นเงิน');
 
-    // The reflow itself is CSS (`.reflow-cards`, styles.css ~L1330) -- confirm the row carries the
-    // class the mobile stylesheet keys off, since jsdom does not evaluate styles.css directly.
+    // The reflow itself is CSS (`.reflow-cards`, styles.css ~L1330) -- confirm the row carries the class the
+    // mobile stylesheet keys off, since jsdom does not evaluate styles.css directly.
     expect(dataRow.className).toContain('reflow-cards');
     expect(headRow.className).toContain('reflow-cards');
   });
@@ -217,9 +217,9 @@ describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10
   it('floors every money column at a fixed width and lets only รายละเอียด be squeezed', () => {
     const { container } = render(<QuotationDocumentView quotation={quotation} />);
 
-    // Asserted on the head row AND a data row. They share one constant today, so this cannot
-    // diverge — but splitting ITEM_GRID and flooring only one is exactly how the columns would
-    // stop lining up, and a guard that only reads the head row would stay green through it.
+    // Asserted on the head row AND a data row. They share one constant today, so this cannot diverge — but
+    // splitting ITEM_GRID and flooring only one is exactly how the columns would stop lining up, and a guard that
+    // only reads the head row would stay green through it.
     for (const [el, what] of [
       [container.querySelector('.table-head'), '.table-head'],
       [container.querySelector('.data-row'), '.data-row'],
@@ -264,8 +264,8 @@ describe('QuotationDocumentView money-column floors (owner review V5, 2026-09-10
     ]) {
       const classes = gridClasses(el, what);
       expect(classes, `${what}: the shared 900px floor must be released`).toContain('tablet:min-w-0');
-      // Still opted into the card reflow: below 721px these rows must become labelled cards,
-      // which the mobile-card-reflow suite above is what actually proves.
+      // Still opted into the card reflow: below 721px these rows must become labelled cards, which the
+      // mobile-card-reflow suite above is what actually proves.
       expect(classes).toContain('reflow-cards');
     }
   });
@@ -283,8 +283,8 @@ describe('QuotationDocumentView ตำแหน่งติดตั้ง group
     expect(headings).toEqual(['ชั้น 1', 'ชั้น 2']);
   });
 
-  // Two separate runs of the same label print TWICE — the heading marks where a run starts, and
-  // deduping by value would silently drop the second one's heading from the customer's document.
+  // Two separate runs of the same label print TWICE — the heading marks where a run starts, and deduping by
+  // value would silently drop the second one's heading from the customer's document.
   it('prints the label again when a second, non-adjacent run of it starts', () => {
     const { container } = render(<QuotationDocumentView quotation={docQuotation({
       items: [docItem(1, 'ชั้น 1', 'A'), docItem(2, 'ชั้น 2', 'B'), docItem(3, 'ชั้น 1', 'C')],

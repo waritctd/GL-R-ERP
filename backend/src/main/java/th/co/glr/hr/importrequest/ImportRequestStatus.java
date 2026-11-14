@@ -2,22 +2,8 @@ package th.co.glr.hr.importrequest;
 
 import java.util.Set;
 
-/**
- * Lifecycle of a ใบขอซื้อ (F-SM-001), mirroring {@code sales.deposit_notice}'s own
- * DRAFT/ISSUED/SUPERSEDED rather than inventing a fourth vocabulary for the same idea.
- *
- * <p>Backs the STORED import-request aggregate ({@link ImportRequestService}'s {@code
- * createDrafts}/{@code issue}/{@code revise}/{@code deleteDraft} onward) — cheap nit, REVIEW ROUND
- * 2: this used to say "WIP — nothing reads this yet... the shipped feature is stateless and has no
- * lifecycle at all", true only of the original preview-only cut of this feature and stale since the
- * stored aggregate landed.
- *
- * <p>There is deliberately no {@code CANCELLED}. A draft that should not exist is DELETED — it has
- * no number and no audit weight, so a tombstone would be litter. An ISSUED form cannot be cancelled
- * at all: it is a controlled document that has left the building, and the only correction is a new
- * version that SUPERSEDES it. {@code chk_import_request_status} (V154) accepts exactly these three,
- * so adding a constant here without a migration would produce a value the column rejects.
- */
+/** Lifecycle of a ใบขอซื้อ (F-SM-001), mirroring sales.deposit_notice's own DRAFT/ISSUED/SUPERSEDED rather than
+ * inventing a fourth vocabulary for the same idea. There is deliberately no CANCELLED. */
 public final class ImportRequestStatus {
     /** No number, no issue date, freely editable, deletable. */
     public static final String DRAFT = "DRAFT";
@@ -28,16 +14,9 @@ public final class ImportRequestStatus {
 
     public static final Set<String> VALUES = Set.of(DRAFT, ISSUED, SUPERSEDED);
 
-    /**
-     * Not superseded — i.e. this row is still part of the live picture for its (deal, brand).
-     *
-     * <p><strong>Deliberately NOT a uniqueness predicate.</strong> V154 enforces at most one ISSUED
-     * <em>and</em> at most one DRAFT per (deal, brand) with TWO partial indexes, precisely so a
-     * correction can be prepared as a DRAFT while the previous version is still ISSUED. An earlier
-     * draft of that migration used a single index over "not superseded", which forbade exactly that
-     * pair and made revisions impossible; do not reintroduce the idea that "live" means "at most
-     * one".
-     */
+    /** Not superseded — i.e. this row is still part of the live picture for its (deal, brand). An earlier draft of
+     * that migration used a single index over "not superseded", which forbade exactly that pair and made revisions
+     * impossible; do not reintroduce the idea that "live" means "at most one". */
     public static boolean isLive(String status) {
         return DRAFT.equals(status) || ISSUED.equals(status);
     }

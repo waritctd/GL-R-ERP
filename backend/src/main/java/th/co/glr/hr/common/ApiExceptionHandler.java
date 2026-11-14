@@ -55,10 +55,9 @@ public class ApiExceptionHandler {
         HttpMessageNotReadableException.class,
         MissingServletRequestParameterException.class,
         MethodArgumentTypeMismatchException.class,
-        // A multipart request that arrived without the file part the handler declares. Spring
-        // raises this (not MissingServletRequestParameterException) for an absent
-        // @RequestParam MultipartFile, so without it here an empty multipart envelope fell
-        // through to handleUnexpected and was reported as a server error.
+        // A multipart request that arrived without the file part the handler declares. Spring raises this (not
+        // MissingServletRequestParameterException) for an absent @RequestParam MultipartFile, so without it here an
+        // empty multipart envelope fell through to handleUnexpected and was reported as a server error.
         MissingServletRequestPartException.class
     })
     ResponseEntity<ErrorResponse> handleBadRequest(Exception exception) {
@@ -81,9 +80,8 @@ public class ApiExceptionHandler {
             .body(new ErrorResponse("ไม่มีสิทธิ์เข้าถึงรายการนี้", HttpStatus.FORBIDDEN.value()));
     }
 
-    // Thrown for any request path with no matching controller or static resource (e.g. GET / on
-    // this API-only backend). Without this handler it falls into handleUnexpected below and gets
-    // misreported as a 500.
+    // Thrown for any request path with no matching controller or static resource (e.g. GET / on this API-only
+    // backend). Without this handler it falls into handleUnexpected below and gets misreported as a 500.
     @ExceptionHandler(NoResourceFoundException.class)
     ResponseEntity<ErrorResponse> handleNoResourceFound(NoResourceFoundException exception) {
         return ResponseEntity
@@ -91,19 +89,9 @@ public class ApiExceptionHandler {
             .body(new ErrorResponse("ไม่พบรายการนี้", HttpStatus.NOT_FOUND.value()));
     }
 
-    // A known verb on a known path, but the wrong one — GET on a POST-only endpoint, say.
-    //
-    // Without this handler the exception falls through to handleUnexpected and the client is told
-    // 500 "เกิดข้อผิดพลาดภายในระบบ", which says the server broke when in fact the request was
-    // malformed. That mattered beyond politeness: the real-stack sweep in
-    // frontend/e2e-real/api-surface.spec.js exists to find endpoints that answer a server error,
-    // and this one defect made ~130 endpoints report one. Its `surface.js` had to read each
-    // endpoint's real verb out of hrApi.js purely to avoid asking the wrong question and burying
-    // the single genuine finding underneath the noise.
-    //
-    // RFC 9110 §15.5.6 requires an Allow header on a 405; Spring populates
-    // getSupportedHttpMethods() from the handler mapping, but it is nullable when no candidate
-    // handler was resolved, so it is only set when actually present.
+    // A known verb on a known path, but the wrong one — GET on a POST-only endpoint, say. Without this handler the
+    // exception falls through to handleUnexpected and the client is told 500 "เกิดข้อผิดพลาดภายในระบบ", which says
+    // the server broke when in fact the request was malformed.
     @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
     ResponseEntity<ErrorResponse> handleMethodNotSupported(HttpRequestMethodNotSupportedException exception) {
         ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.METHOD_NOT_ALLOWED);
@@ -115,40 +103,24 @@ public class ApiExceptionHandler {
             new ErrorResponse("เมธอดนี้ไม่รองรับสำหรับรายการนี้", HttpStatus.METHOD_NOT_ALLOWED.value()));
     }
 
-    // The request reached a known handler with a Content-Type that handler does not consume —
-    // typically application/json posted to one of the five multipart endpoints that declare
-    // `consumes = MULTIPART_FORM_DATA_VALUE`.
-    //
-    // Same defect shape as handleMethodNotSupported above, and found the same way: without this
-    // handler the exception reaches handleUnexpected and the client is told 500 "เกิดข้อผิดพลาด
-    // ภายในระบบ" — the server reporting itself broken for a request the caller malformed. The
-    // audit that found it measured all nine roles hitting this on every upload endpoint, because
-    // content negotiation runs before any role gate.
-    //
-    // RFC 9110 §15.5.16 recommends an Accept header advertising what the resource does support;
-    // getSupportedMediaTypes() is populated from the handler mapping but is empty when no
-    // candidate handler was resolved, so it is only set when actually present.
+    // The request reached a known handler with a Content-Type that handler does not consume — typically
+    // application/json posted to one of the five multipart endpoints that declare `consumes =
+    // MULTIPART_FORM_DATA_VALUE`.
     @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
     ResponseEntity<ErrorResponse> handleMediaTypeNotSupported(HttpMediaTypeNotSupportedException exception) {
         ResponseEntity.BodyBuilder response = ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE);
         List<MediaType> supported = exception.getSupportedMediaTypes();
         if (supported != null && !supported.isEmpty()) {
-            // No BodyBuilder.accept(..) exists — allow(..) is the only such shortcut — so the
-            // Accept header is set through the HttpHeaders callback.
+            // No BodyBuilder.accept(..) exists — allow(..) is the only such shortcut — so the Accept header is set through
+            // the HttpHeaders callback.
             response.headers(headers -> headers.setAccept(supported));
         }
         return response.body(
             new ErrorResponse("ชนิดเนื้อหาของคำขอนี้ไม่รองรับ", HttpStatus.UNSUPPORTED_MEDIA_TYPE.value()));
     }
 
-    // The upload exceeded spring.servlet.multipart.max-file-size / max-request-size
-    // (${APP_MAX_FILE_SIZE:10MB} / ${APP_MAX_REQUEST_SIZE:12MB} in application.yml).
-    //
-    // Declared BEFORE the MultipartException handler below matters only for readability — Spring
-    // resolves the most specific handler by class hierarchy, and this is a MultipartException
-    // subclass, so it wins regardless of order. It is separate because "your file is too large"
-    // is 413 and recoverable by sending a smaller one; collapsing it into the generic 400 would
-    // tell the caller their request was malformed when it was merely too big.
+    // The upload exceeded spring.servlet.multipart.max-file-size / max-request-size (${APP_MAX_FILE_SIZE:10MB} /
+    // ${APP_MAX_REQUEST_SIZE:12MB} in application.yml).
     @ExceptionHandler(MaxUploadSizeExceededException.class)
     ResponseEntity<ErrorResponse> handleUploadTooLarge(MaxUploadSizeExceededException exception) {
         return ResponseEntity
@@ -157,9 +129,9 @@ public class ApiExceptionHandler {
                 HttpStatus.CONTENT_TOO_LARGE.value()));
     }
 
-    // A non-multipart request to an upload endpoint that does NOT declare `consumes` — the
-    // multipart resolver raises "Current request is not a multipart request" once binding starts.
-    // The six endpoints in that shape answered 500 for the same reason as the 415 case above.
+    // A non-multipart request to an upload endpoint that does NOT declare `consumes` — the multipart resolver
+    // raises "Current request is not a multipart request" once binding starts. The six endpoints in that shape
+    // answered 500 for the same reason as the 415 case above.
     @ExceptionHandler(MultipartException.class)
     ResponseEntity<ErrorResponse> handleMultipart(MultipartException exception) {
         return ResponseEntity
@@ -173,9 +145,9 @@ public class ApiExceptionHandler {
         log.error("Database error method={} path={} userId={}",
             request.getMethod(), request.getRequestURI(), currentUserId(request), exception);
         String msg = exception.getMostSpecificCause().getMessage();
-        // The prefix is translated; `msg` itself is the raw JDBC driver message (untranslatable,
-        // and arguably shouldn't be echoed to the client at all — that's a pre-existing behavior
-        // this i18n sweep does not change, see PR notes).
+        // The prefix is translated; `msg` itself is the raw JDBC driver message (untranslatable, and arguably
+        // shouldn't be echoed to the client at all — that's a pre-existing behavior this i18n sweep does not change,
+        // see PR notes).
         return ResponseEntity
             .status(HttpStatus.INTERNAL_SERVER_ERROR)
             .body(new ErrorResponse("เกิดข้อผิดพลาดกับฐานข้อมูล: " + msg, HttpStatus.INTERNAL_SERVER_ERROR.value()));
@@ -190,10 +162,8 @@ public class ApiExceptionHandler {
             .body(new ErrorResponse("เกิดข้อผิดพลาดภายในระบบ", HttpStatus.INTERNAL_SERVER_ERROR.value()));
     }
 
-    // Best-effort acting-user lookup for the log line above. Defensive: the session may not exist,
-    // may not carry the expected attribute, or (in unit tests calling the handler directly) the
-    // request may not be a real servlet request at all — any of these fall back to "anonymous".
-    // Never throws, and never logs anything beyond the numeric user id (no PII).
+    // Best-effort acting-user lookup for the log line above. Never throws, and never logs anything beyond the
+    // numeric user id (no PII).
     private static String currentUserId(HttpServletRequest request) {
         HttpSession session = request.getSession(false);
         if (session == null) {
@@ -207,24 +177,13 @@ public class ApiExceptionHandler {
     }
 
     private static String fieldMessage(FieldError error) {
-        // NOTE (#393 follow-up): error.getDefaultMessage() is Jakarta Bean Validation's own message
-        // — for the ~230 @NotBlank/@NotNull/@Size/etc. fields in this codebase that carry no custom
-        // `message=`, that is Jakarta's built-in English text ("must not be blank", "must not be
-        // null", ...), not a literal in this file. Translating those needs a
-        // ValidationMessages.properties bundle (or per-annotation message= overrides), a different
-        // and much larger mechanism than the literal-string sweep done here — tracked as a known
-        // gap, not fixed in this change.
+        // NOTE: error.getDefaultMessage is Jakarta Bean Validation's own message — for the ~230
+        // @NotBlank/@NotNull/@Size/etc. fields in this codebase that carry no custom `message=`, that is Jakarta's
+        // built-in English text, not a literal in this file.
         return error.getField() + " " + (error.getDefaultMessage() == null ? "ไม่ถูกต้อง" : error.getDefaultMessage());
     }
 
-    /**
-     * The one JSON error body. {@code details} is NOT a JSON key: it is {@code @JsonIgnore}d, and
-     * its entries are flattened to TOP-LEVEL fields by {@link #extraFields()} — so an ordinary
-     * refusal (empty details, which is every constructor call but one) serializes exactly as it did
-     * before details existed, {@code {"message":…,"status":…}}, while a structured refusal
-     * ({@link ApiException#ApiException(HttpStatus, String, java.util.Map)}) gains its fields beside
-     * them. {@code ApiErrorBodyTest} pins both shapes byte-for-byte through the real HTTP converter.
-     */
+    /** The one JSON error body. ApiErrorBodyTest pins both shapes byte-for-byte through the real HTTP converter. */
     public record ErrorResponse(String message, int status,
                                 @com.fasterxml.jackson.annotation.JsonIgnore java.util.Map<String, Object> details) {
         public ErrorResponse(String message, int status) {

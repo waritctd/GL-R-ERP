@@ -5,10 +5,8 @@ import { QuotaBar } from './QuotaBar.jsx';
 
 globalThis.React = React;
 
-// The reason this component was promoted out of TaxAllowanceForm rather than reimplemented: it is
-// the one quota readout in the app that is legible without seeing the bar. These pin that, not the
-// pixels -- a rewrite that keeps the fill and drops the progressbar role or the numeric readout
-// would look identical in a screenshot and be unusable with a screen reader.
+// The reason this component was promoted out of TaxAllowanceForm rather than reimplemented: it is the one
+// quota readout in the app that is legible without seeing the bar.
 describe('QuotaBar', () => {
   it('exposes the fill as a real progressbar with an accessible name', () => {
     render(<QuotaBar label="ค่ารักษาพยาบาล" used={750} cap={3000} />);

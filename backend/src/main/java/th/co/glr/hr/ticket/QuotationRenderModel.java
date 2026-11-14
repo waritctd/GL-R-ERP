@@ -33,8 +33,8 @@ public record QuotationRenderModel(
     String deptCode,
     String unitCode,
     String salesLine,
-    /** The full B5 cell value ("เรียน" itself is a separate template label cell, A5, never
-     * touched) — "คุณ{contact}   /   {customerName}   เลขที่ผู้เสียภาษี : {taxId}". */
+    /** The full B5 cell value ("เรียน" itself is a separate template label cell, A5, never touched) — "คุณ{contact}
+     * / {customerName} เลขที่ผู้เสียภาษี : {taxId}". */
     String attnLine,
     /** The full B6 cell value: "โทร. {phone}", and both the Thai and English branches may fold the
      * customer address onto this SAME line too — "ที่อยู่ {address}   โทร. {phone}" (TH) / "Address : {address}   E : {email}
@@ -67,8 +67,8 @@ public record QuotationRenderModel(
      * {@link #isEnglish()} so a null can only ever mean TH in one place.
      */
     String documentLanguage,
-    /** {@code "THB"} | {@code "USD"} — printed in the เป็นเงิน/Amount column heading and in the
-     * grand-total label. Null falls back to THB via {@link #currencyCode()}. */
+    /** "THB" | "USD" — printed in the เป็นเงิน/Amount column heading and in the grand-total label. Null falls back
+     * to THB via #currencyCode(). */
     String currency,
     /**
      * "Sanitaryware"/non-tile documents print a different, shorter หมายเหตุ block. This flag
@@ -152,13 +152,8 @@ public record QuotationRenderModel(
         return isEnglish() ? "USD" : "THB";
     }
 
-    /**
-     * One printed item. Rows emitted: an optional heading row (only when {@code headingLabel} is
-     * non-null AND differs from the PREVIOUS item's raw {@code headingLabel} — consecutive items
-     * sharing a label are grouped under one heading), then one row per
-     * {@code descriptionLines} entry (1..3). Qty/unit/price/discount/net/amount are printed on the
-     * FIRST description row only; continuation rows carry only column B text.
-     */
+    /** A printed item with an optional grouped heading and description rows; quantities and prices appear only on
+     * its first row. */
     public record RenderItem(
         String headingLabel,
         List<String> descriptionLines,

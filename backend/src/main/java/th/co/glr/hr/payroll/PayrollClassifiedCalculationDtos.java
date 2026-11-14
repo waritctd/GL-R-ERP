@@ -27,15 +27,12 @@ public final class PayrollClassifiedCalculationDtos {
         // Employee code + name, used only to name the employee in the unclassified-component
         // rejection message (names the employee and the component).
         String employeeLabel,
-        // This period's amount per component. A component absent from this map is treated as zero --
-        // NOT as "unclassified and blocking" (only a component with amount().signum() > 0 and no
-        // treatment blocks the run).
+        // This period's amount per component. A component absent from this map is treated as zero -- NOT as
+        // "unclassified and blocking" (only a component with amount().signum() > 0 and no treatment blocks the run).
         Map<PayrollComponent, BigDecimal> componentAmounts,
         // Per-component tax treatment for this employee/tax-year (PayrollRepository
-        // #findComponentTaxTreatmentsByEmployee). A component absent from this map, or present with a
-        // null value, both mean "not yet classified" -- both block a non-zero amount identically.
-        // SALARY is exempt from this map entirely: it is locked to REGULAR_REPROJECT regardless of
-        // what (if anything) is stored, matching the V95 CHECK constraint.
+        // #findComponentTaxTreatmentsByEmployee). A component absent from this map, or present with a null value, both
+        // mean "not yet classified" -- both block a non-zero amount identically.
         Map<PayrollComponent, PayrollTaxTreatment> componentTaxTreatments,
         // Per-component SSO wage-base inclusion for this employee/tax-year (PayrollRepository
         // #findComponentSsoInclusionByEmployee). A component absent from THIS map is excluded from the
@@ -71,9 +68,9 @@ public final class PayrollClassifiedCalculationDtos {
         // entry points. payrollMonthValue is month-only (1-12), hence this separate field, threaded
         // from PayrollService#calculateLine (payrollMonth.getYear()). See PayrollCalculator#allowanceBreakdown.
         int taxYear,
-        // Resolved effective withholding-tax override (per-run typed value if present, else the
-        // employee's standing override, else null). Same semantics as PayrollCalculationInput's field
-        // of the same name -- see that record's javadoc.
+        // Resolved effective withholding-tax override (per-run typed value if present, else the employee's standing
+        // override, else null). Same semantics as PayrollCalculationInput's field of the same name -- see that
+        // record's javadoc.
         BigDecimal withholdingTaxOverride,
         // Daily-rate support: the employee's actual PER-DAY rate (hr.employee
         // .current_salary for a pay_type = 'D' employee), or null for a monthly employee. When

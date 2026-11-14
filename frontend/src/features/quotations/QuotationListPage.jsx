@@ -378,10 +378,9 @@ const COLUMNS = [
     key: 'salesRepName',
     header: 'พนักงานขาย',
     searchAccessor: (row) => (row.isGroup ? null : row.salesRepName),
-    // Wrapped in a <span> for the same reason as ลูกค้า above: a bare string leaves the cell with
-    // no child element, so styles.css's wrap escape hatch has nothing to match and a two-word Thai
-    // name is truncated rather than broken across two lines. `ภิญญาดา วงศ์ประเสริฐ` needs 147.8px
-    // on one line and this column is floored at 64px, so wrapping is what keeps it whole.
+    // Wrapped in a <span> for the same reason as ลูกค้า above: a bare string leaves the cell with no child
+    // element, so styles.css's wrap escape hatch has nothing to match and a two-word Thai name is truncated rather
+    // than broken across two lines.
     render: (row) => (row.isGroup ? null : <span className="text-xs">{row.salesRepName ?? '-'}</span>),
   },
   {
@@ -502,11 +501,9 @@ export function QuotationListPage({ user }) {
     ?? DEAL_QUOTATION_STATUS_TABS[0];
 
   function selectTab(key) {
-    // ALWAYS writes the key, ทั้งหมด included. Clearing the param instead would mean "the role
-    // default" — so an approver clicking ทั้งหมด would silently bounce straight back to รออนุมัติ,
-    // making that tab unreachable for exactly the role that has a default other than it.
-    // `replace` so clicking through five tabs does not bury the page the rep arrived from under
-    // five history entries.
+    // ALWAYS writes the key, ทั้งหมด included. Clearing the param instead would mean "the role default" — so an
+    // approver clicking ทั้งหมด would silently bounce straight back to รออนุมัติ, making that tab unreachable for
+    // exactly the role that has a default other than it.
     setSearchParams({ status: key }, { replace: true });
   }
 
@@ -556,9 +553,9 @@ export function QuotationListPage({ user }) {
     [rows, collapsedVersions],
   );
 
-  // One request for all five tab counts, scoped server-side exactly like the list itself. Counts
-  // are advisory chrome: a failed or in-flight counts call renders the tabs with NO number rather
-  // than blocking the list or showing a zero that would read as "nothing here".
+  // One request for all five tab counts, scoped server-side exactly like the list itself. Counts are advisory
+  // chrome: a failed or in-flight counts call renders the tabs with NO number rather than blocking the list or
+  // showing a zero that would read as "nothing here".
   const periodFrom = periodFilter ? dealQuotationPeriodStart(periodFilter, bangkokTodayIso()) : '';
   const countsQuery = useQuery({
     queryKey: queryKeys.dealQuotationCounts(periodFrom || undefined),
@@ -606,9 +603,9 @@ export function QuotationListPage({ user }) {
         )}
       />
 
-      {/* `role="tablist"` rather than a bare row of buttons: these five ARE tabs over one list,
-          and arrow-key semantics plus aria-selected is what a screen reader needs to say so. The
-          panel they control is the table below. */}
+      {/* `role="tablist"` rather than a bare row of buttons: these five ARE tabs over one list, and arrow-key
+       * semantics plus aria-selected is what a screen reader needs to say so. The panel they control is the table
+       * below. */}
       <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-surface p-3">
       <div className="flex flex-wrap items-center gap-2" role="tablist" aria-label="สถานะใบเสนอราคา">
         <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">สถานะ</span>

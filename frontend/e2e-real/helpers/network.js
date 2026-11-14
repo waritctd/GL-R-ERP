@@ -39,18 +39,11 @@
 // point the API exposes and the "read the body before triggering any navigation" the error asks
 // for. Callers get plain data, so there is no live Response handle left to misuse afterwards.
 
-/**
- * Waits for a browser-issued response matching `matches` and returns its status and parsed JSON,
- * buffered eagerly so a concurrent navigation cannot evict the body.
- *
- * Prefer this over `waitForResponse` + a later `.json()` for anything raced against `page.goto()`
- * or another navigation. Returns `{ status, json }` rather than the Response itself, deliberately.
- *
+/** Waits for a browser-issued response matching `matches` and returns its status and parsed JSON, buffered eagerly so a concurrent navigation cannot evict the body. Prefer this over `waitForResponse` + a later `.json()` for anything raced against `page.goto()` or another navigation.
  * @param {import('@playwright/test').Page} page
  * @param {(response: import('@playwright/test').Response) => boolean} matches
  * @param {{ timeout?: number }} [options] forwarded to page.waitForResponse
- * @returns {Promise<{ status: number, json: any }>}
- */
+ * @returns {Promise<{ status: number, json: any }>} */
 export function captureJson(page, matches, options) {
   let captured;
   return page
@@ -59,8 +52,8 @@ export function captureJson(page, matches, options) {
       try {
         captured = { status: response.status(), json: await response.json() };
       } catch (cause) {
-        // Without this the caller sees a bare CDP protocol error with no URL in it, which is
-        // what made the original flake expensive to diagnose. Name the request instead.
+        // Without this the caller sees a bare CDP protocol error with no URL in it, which is what made the original
+        // flake expensive to diagnose. Name the request instead.
         throw new Error(
           `Could not buffer the body of ${response.request().method()} ${response.url()} ` +
             `(status ${response.status()}): ${cause.message}`,

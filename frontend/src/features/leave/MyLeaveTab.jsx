@@ -23,9 +23,9 @@ import { LeaveRequestsSection } from './leaveRequestTable.jsx';
 import { summarizeLeaveRequests, useCancelLeave, useLeaveFilters } from './useLeaveTabState.jsx';
 import { UpcomingLeaveList } from './UpcomingLeaveList.jsx';
 
-// How far ahead "วันลาที่กำลังจะถึง" looks. Same ~90-day forward window UpcomingHolidays renders
-// with directly above it -- the two panels answer the same shape of question ("what is coming up")
-// and would read as inconsistent if one looked 90 days ahead and the other some other distance.
+// How far ahead "วันลาที่กำลังจะถึง" looks. Same ~90-day forward window UpcomingHolidays renders with directly
+// above it -- the two panels answer the same shape of question ("what is coming up") and would read as
+// inconsistent if one looked 90 days ahead and the other some other distance.
 const UPCOMING_LEAVE_WINDOW_DAYS = 90;
 
 // The everyday-vs-rare balance split. SICK/PERSONAL/VACATION are what employees file day to day;
@@ -35,12 +35,8 @@ const UPCOMING_LEAVE_WINDOW_DAYS = 90;
 // its step-1 primary/secondary type disclosure.
 export const EVERYDAY_LEAVE_TYPE_CODES = new Set(['SICK', 'PERSONAL', 'VACATION']);
 
-// A rare type's meaningful figures are the paid-days cap and the eligibility gate, never a quota
-// or a remaining-days count -- both are derived from annualQuotaDays, and MILITARY's is the 366
-// sentinel above. minServiceMonths/oncePerEmployment mirror the hr.leave_type columns (see
-// mockApi.js's db.leaveTypes comment); maxConsecutiveDays/firstYearMaxDays are not surfaced here
-// because the seeded rare types never set them, and this file is not the place to invent copy for
-// fields no rare type currently uses.
+// A rare type's meaningful figures are the paid-days cap and the eligibility gate, never a quota or a
+// remaining-days count -- both are derived from annualQuotaDays, and MILITARY's is the 366 sentinel above.
 function rareLeaveConditionText(leaveType) {
   if (!leaveType) return null;
   const parts = [];
@@ -64,10 +60,8 @@ function everydayBalanceSummary(balance) {
   return `ใช้แล้ว ${formatDays(balance.approvedDays)} · รออนุมัติ ${formatDays(balance.pendingDays)} · สิทธิ์ ${formatDays(balance.annualQuotaDays)}${carryNote} · เหลือ ${formatDays(balance.remainingDays)}`;
 }
 
-// Deliberately never reads balance.annualQuotaDays/remainingDays -- see rareLeaveConditionText's
-// comment above on why (MILITARY's 366 sentinel). approved/pending stay real, request-driven
-// counts regardless of the sentinel, so they stay meaningful for every rare type; paidDaysCap and
-// the eligibility gate come from the leave-type record, not the balance.
+// Deliberately never reads balance.annualQuotaDays/remainingDays -- see rareLeaveConditionText's comment above
+// on why (MILITARY's 366 sentinel).
 function rareBalanceSummary(balance, leaveType) {
   const parts = [`ใช้แล้ว ${formatDays(balance.approvedDays)}`, `รออนุมัติ ${formatDays(balance.pendingDays)}`];
   if (leaveType?.paidDaysCap != null) {
@@ -149,9 +143,9 @@ function PrimaryLeaveBalanceCard({ loading, balance, leaveType, isEveryday }) {
         formatValue={formatDays}
         overMessage="ใช้วันลาเกินโควตาประจำปีแล้ว ส่วนที่เกินอาจถูกปฏิเสธอัตโนมัติ"
       />
-      {/* Rare types (MATERNITY/MILITARY/ORDINATION): QuotaBar renders nothing above (cap=null),
-          so the paid-cap headline is the meaningful figure instead. See rareBalanceSummary's
-          comment on why this never reads annualQuotaDays/remainingDays. */}
+      {/* Rare types (MATERNITY/MILITARY/ORDINATION): QuotaBar renders nothing above (cap=null), so the paid-cap
+       * headline is the meaningful figure instead. See rareBalanceSummary's comment on why this never reads
+       * annualQuotaDays/remainingDays. */}
       {!isEveryday ? (
         <>
           <span className="mt-1 block text-xs font-bold uppercase tracking-wide text-text-muted">สิทธิ์จ่ายค่าจ้างสูงสุด</span>
@@ -255,10 +249,9 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
     return { submitted, approved, approvedDays, remainingDays };
   }, [requests, everydayBalances]);
 
-  // The forward window shared by BOTH "what's coming up" panels below -- company holidays
-  // (UpcomingHolidays) and the employee's own leave (UpcomingLeaveList). Computed once so the two
-  // can never drift to different horizons; they sit adjacent and would read as inconsistent.
-  // Same ~90-day convention OvertimePanel.jsx's own UpcomingHolidays call uses.
+  // The forward window shared by BOTH "what's coming up" panels below -- company holidays (UpcomingHolidays) and
+  // the employee's own leave (UpcomingLeaveList). Computed once so the two can never drift to different
+  // horizons; they sit adjacent and would read as inconsistent.
   const upcomingFrom = todayIso();
   const upcomingTo = addDaysIso(upcomingFrom, UPCOMING_LEAVE_WINDOW_DAYS);
 
@@ -279,8 +272,8 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
   });
   const upcomingRequests = useMemo(() => upcomingQuery.data ?? [], [upcomingQuery.data]);
 
-  // Seed the balance-preview select once leave types load (preserves the pre-A2 behavior: default
-  // to the first everyday type, falling back to whatever the API returns first).
+  // Seed the balance-preview select once leave types load (preserves the pre-A2 behavior: default to the first
+  // everyday type, falling back to whatever the API returns first).
   useEffect(() => {
     if (previewTypeCode || leaveTypes.length === 0) return;
     const everyday = leaveTypes.find((type) => EVERYDAY_LEAVE_TYPE_CODES.has(type.code));
@@ -294,9 +287,9 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           { key: 'total', label: 'คำขอทั้งหมด', value: requests.length, helper: 'ในช่วงที่เลือก' },
           { key: 'submitted', label: 'รออนุมัติ', value: totals.submitted, helper: 'Submitted' },
           { key: 'approved', label: 'อนุมัติแล้ว', value: totals.approved, helper: formatDays(totals.approvedDays) },
-          // `wrapValue`: this is a SUM across leave types, so it is the one tile that reliably
-          // carries all three units ("39 วัน 3 ชั่วโมง 10 นาที") -- long enough to be ellipsised
-          // by the default truncation at desktop width, never mind a phone. See CompactStatRow.
+          // `wrapValue`: this is a SUM across leave types, so it is the one tile that reliably carries all three units
+          // ("39 วัน 3 ชั่วโมง 10 นาที") -- long enough to be ellipsised by the default truncation at desktop width,
+          // never mind a phone. See CompactStatRow.
           { key: 'remaining', label: 'โควตาคงเหลือ', value: formatDays(totals.remainingDays), helper: 'รวมประเภทที่เลือกได้', wrapValue: true },
         ]}
       />
@@ -341,10 +334,9 @@ export function MyLeaveTab({ user, currentEmployee, showToast }) {
           leaveType={selectedLeaveType}
           isEveryday={EVERYDAY_LEAVE_TYPE_CODES.has(previewTypeCode)}
         />
-        {/* Statutory floor, not GL&R's own quota -- a footnote to the figures above, so it is
-            separated by a hairline and kept to one paragraph. It stays here rather than moving to
-            LeavePolicyBar: that bar points at the COMPANY's §5 announcement, which is a different
-            document saying different numbers. */}
+        {/* Statutory floor, not GL&R's own quota -- a footnote to the figures above, so it is separated by a hairline
+         * and kept to one paragraph. It stays here rather than moving to LeavePolicyBar: that bar points at the
+         * COMPANY's §5 announcement, which is a different document saying different numbers. */}
         <p className="mt-4 border-t border-border-subtle pt-3 text-sm text-text-muted">
           อ้างอิง พ.ร.บ. คุ้มครองแรงงาน พ.ศ. 2541: ลากิจธุระจำเป็นไม่น้อยกว่า 3 วันต่อปี,
           ลาป่วยได้รับค่าจ้างไม่เกิน 30 วันทำงานต่อปี และลาพักร้อนไม่น้อยกว่า 6 วันต่อปีหลังทำงานครบ 1 ปี.

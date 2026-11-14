@@ -29,20 +29,9 @@ import th.co.glr.hr.ticket.TicketController;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
-/**
- * Quotation ↔ deal linking slice 2 — the API wiring PR #1090 codes against, proven over HTTP: the
- * REAL {@link TicketController}, {@link DealQuotationController}, {@link PricingRequestController} and
- * {@link DealStageMetaController}, over the REAL services and real Postgres, through the SAME
- * Jackson-3 HTTP converter production uses and the real {@link ApiExceptionHandler}. Requests are the
- * JSON the frontend sends ({@code QuotationEditorPage#buildUpsertPayload} /
- * {@code #handleInlineCreate}); assertions read the JSON back the way the frontend reads it
- * ({@code r.quotation.*}, {@code r.ticket.summary.*}, {@code r.tickets[*]}, {@code r.items[*]}, and
- * for an error {@code ApiError.details} = the whole body, {@code frontend/src/api/client.js}).
- *
- * <p>The live pricing request is created through {@code POST /api/tickets/{id}/pricing-requests} with
- * the same body {@code frontend/e2e-real/write-quotation-deal-link.spec.js} sends, so a green run here
- * is also evidence that the e2e spec's fixture is accepted by the real service.
- */
+/** Quotation ↔ deal linking slice 2. The live pricing request is created through POST
+ * /api/tickets/{id/pricing-requests} with the same body frontend/e2e-real/write-quotation-deal-link.spec.js
+ * sends, so a green run here is also evidence that the e2e spec's fixture is accepted by the real service. */
 class DealQuotationSlice2HttpIntegrationTest extends AbstractDealQuotationSlice2IntegrationTest {
 
     private final ObjectMapper json = new ObjectMapper();
@@ -112,7 +101,7 @@ class DealQuotationSlice2HttpIntegrationTest extends AbstractDealQuotationSlice2
     }
 
     /** N6 over the wire: the three fields sit at the TOP level, beside message/status — which is where
-     * {@code error.details.liveQuotationId} (details = the whole body) finds them. */
+     * error.details.liveQuotationId (details = the whole body) finds them. */
     @Test
     void n6_is409_andTheBodyCarriesLiveQuotationIdNumberAndDocStatusAtTopLevel() throws Exception {
         long ticketId = createDealOverHttp("OWNER_DIRECT");
@@ -230,8 +219,8 @@ class DealQuotationSlice2HttpIntegrationTest extends AbstractDealQuotationSlice2
         return read(result).get("ticket").get("summary").get("id").asLong();
     }
 
-    /** {@code QuotationEditorPage#buildUpsertPayload}'s shape; {@code recipientType} OMITTED (never
-     * null) when there is none, exactly as that method spreads it. */
+    /** QuotationEditorPage#buildUpsertPayload's shape; recipientType OMITTED (never null) when there is none,
+     * exactly as that method spreads it. */
     private static String quotationBody(String recipientType) {
         String recipient = recipientType == null ? "" : ",\"recipientType\":\"" + recipientType + "\"";
         return """

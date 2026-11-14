@@ -10,14 +10,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Exercises {@link PayrollRepository#findCarryForwardSuggestions} against a real PostgreSQL database
- * — the special-pay carry-forward feature (2026-07-23). New test class (does not touch the existing
- * {@code PayrollRepositoryIntegrationTest}, which a concurrent branch also edits).
- *
- * <p>Written as a NEW test class per the branch's collision-avoidance instructions, since
- * {@code feat/payroll-statutory-export-files} concurrently edits {@code PayrollRepositoryIntegrationTest}.
- */
+/** Exercises PayrollRepository#findCarryForwardSuggestions against a real PostgreSQL database — the special-pay
+ * carry-forward feature (2026-07-23). New test class (does not touch the existing
+ * PayrollRepositoryIntegrationTest, which a concurrent branch also edits). */
 class PayrollCarryForwardSuggestionsIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository repository;
 
@@ -30,22 +25,17 @@ class PayrollCarryForwardSuggestionsIntegrationTest extends AbstractPostgresInte
     void returnsTheCarriedFieldsFromTheLatestPriorProcessedLineAndExcludesEventDrivenAndCommissionFields() {
         long alice = seedEmployee("EMP-CF-001", "อลิสา", "แครี่", true);
 
-        // June: processed period, all carried fields populated, PLUS specialPay6 (ค่า GPRS),
-        // specialPay7 (the historical คอมมิชชั่น พิเศษ slot -- F7 correction, Opus review 2026-07-30:
-        // this comment previously said "commission (specialPay6) ... KPI (specialPay7)", the numbering
-        // from before the accountant's-workbook renumbering, handoff section 9d), specialPay8 (ทำได้
-        // ตาม KPI), and an event-driven unpaid-leave-deduction. None of these five are flagged to carry
-        // for Alice below (only SPECIAL_PAY_1-5 are), so none of them should appear in the suggestion
-        // -- NOT because the DTO lacks the fields (it has carried specialPay6-9 since task 3's Fix 5;
-        // see SuggestedInputRow), but because the carry-forward flag governs it per V98.
+        // June: processed period, all carried fields populated, PLUS specialPay6 (ค่า GPRS), specialPay7 (the
+        // historical คอมมิชชั่น พิเศษ slot -- F7 correction, Opus review 2026-07-30: this comment previously said
+        // "commission (specialPay6) ...
         repository.saveProcessedPeriod(LocalDate.of(2026, 6, 1), alice, List.of(
             fullLine(alice, "EMP-CF-001", "อลิสา แครี่",
                 "111.11", "222.22", "333.33", "444.44", "555.55",
                 "9999.00", "8888.00", "7777.00",
                 "600.00", "700.00", "800.00")));
 
-        // Alice's five slots are configured to carry. V98 made this per employee per component, so
-        // the flags are part of the fixture now rather than an assumption baked into the query.
+        // Alice's five slots are configured to carry. V98 made this per employee per component, so the flags are part
+        // of the fixture now rather than an assumption baked into the query.
         seedCarryForward(alice, 2026, PayrollComponent.SPECIAL_PAY_1, PayrollComponent.SPECIAL_PAY_2,
             PayrollComponent.SPECIAL_PAY_3, PayrollComponent.SPECIAL_PAY_4, PayrollComponent.SPECIAL_PAY_5);
 
@@ -131,12 +121,9 @@ class PayrollCarryForwardSuggestionsIntegrationTest extends AbstractPostgresInte
         assertThat(rows).isEmpty();
     }
 
-    /**
-     * Defect fix (Opus review, 2026-07-29): {@link PayrollRepository#findCarryForwardSuggestions}
-     * used to join only {@code cf1}-{@code cf5} (special_pay_1..5) even though V98 seeds
-     * carry-forward flags for SPECIAL_PAY_6/9 and MEAL_ALLOWANCE too -- those flags were stored,
-     * never read. Extended to all nine พิเศษ slots plus meal allowance.
-     */
+    /** Defect fix (Opus review, 2026-07-29): PayrollRepository#findCarryForwardSuggestions used to join only
+     * cf1-cf5 (special_pay_1..5) even though V98 seeds carry-forward flags for SPECIAL_PAY_6/9 and MEAL_ALLOWANCE
+     * too -- those flags were stored, never read. */
     @Test
     void carriesAllNineSpecialPaySlotsPlusMealAllowanceWhenTheirFlagsAreSet() {
         long alice = seedEmployee("EMP-CF-006", "ครบเก้า", "แครี่", true);
@@ -167,8 +154,8 @@ class PayrollCarryForwardSuggestionsIntegrationTest extends AbstractPostgresInte
         assertThat(row.mealAllowance()).isEqualByComparingTo("1000.00");
     }
 
-    /** Wrong-way-round companion: a slot whose flag is OFF must carry ZERO, not last month's figure,
-     *  proving the extension does not silently make every slot carry unconditionally. */
+    /** Wrong-way-round companion: a slot whose flag is OFF must carry ZERO, not last month's figure, proving the
+     * extension does not silently make every slot carry unconditionally. */
     @Test
     void aSlotWithNoCarryForwardFlagCarriesZeroEvenWhenTheOtherEightDo() {
         long bob = seedEmployee("EMP-CF-007", "ไม่ครบ", "แครี่", true);
@@ -176,8 +163,8 @@ class PayrollCarryForwardSuggestionsIntegrationTest extends AbstractPostgresInte
         repository.saveProcessedPeriod(LocalDate.of(2026, 6, 1), bob, List.of(
             lineWithAllNineSlotsAndMeal(bob, "EMP-CF-007", "ไม่ครบ แครี่")));
 
-        // Every slot EXCEPT special_pay_7 (คอมมิชชั่น -- V98's own ledger evidence: carries for ZERO
-        // of 8 employees) and MEAL_ALLOWANCE is flagged to carry.
+        // Every slot EXCEPT special_pay_7 (คอมมิชชั่น -- V98's own ledger evidence: carries for ZERO of 8 employees)
+        // and MEAL_ALLOWANCE is flagged to carry.
         seedCarryForward(bob, 2026,
             PayrollComponent.SPECIAL_PAY_1, PayrollComponent.SPECIAL_PAY_2, PayrollComponent.SPECIAL_PAY_3,
             PayrollComponent.SPECIAL_PAY_4, PayrollComponent.SPECIAL_PAY_5, PayrollComponent.SPECIAL_PAY_6,
@@ -192,20 +179,15 @@ class PayrollCarryForwardSuggestionsIntegrationTest extends AbstractPostgresInte
         assertThat(row.mealAllowance())
             .as("MEAL_ALLOWANCE has no carry-forward flag and must NOT carry last month's 1000.00")
             .isEqualByComparingTo(BigDecimal.ZERO);
-        // The eight flagged components still carry, proving the zero above is the flag working, not
-        // a bug that zeroes everything.
+        // The eight flagged components still carry, proving the zero above is the flag working, not a bug that zeroes
+        // everything.
         assertThat(row.specialPay6()).isEqualByComparingTo("600.00");
         assertThat(row.specialPay9()).isEqualByComparingTo("900.00");
     }
 
-    /**
-     * Defect fix (Opus review, 2026-07-29), second half: the per-slot join used to match {@code
-     * cfN.tax_year} against the SOURCE row's own year with no fallback, so a carry-forward flag
-     * seeded only for 2026 (V98's actual seed year) stopped applying the instant a source period
-     * crossed into 2027 -- carry-forward "surviving" through December 2026 and then stopping dead
-     * from January 2027 onward. Reproduces exactly that: the flag is seeded for 2026 only, but the
-     * SOURCE period being carried FROM is already January 2027.
-     */
+    /** Defect fix, second half: the per-slot join used to match cfN.tax_year against the SOURCE row's own year with
+     * no fallback, so a carry-forward flag seeded only for 2026 stopped applying the instant a source period
+     * crossed into 2027. */
     @Test
     void aTwentyTwentySixCarryForwardFlagStillAppliesToASourcePeriodInTheFollowingYear() {
         long carol = seedEmployee("EMP-CF-008", "ข้ามปี", "แครี่", true);
@@ -213,8 +195,8 @@ class PayrollCarryForwardSuggestionsIntegrationTest extends AbstractPostgresInte
         repository.saveProcessedPeriod(LocalDate.of(2027, 1, 1), carol, List.of(
             lineWithAllNineSlotsAndMeal(carol, "EMP-CF-008", "ข้ามปี แครี่")));
 
-        // Flag seeded for 2026 ONLY -- no 2027 row at all, reproducing V98's real seed (a one-time
-        // 2026 backfill with nothing written for 2027 yet).
+        // Flag seeded for 2026 ONLY -- no 2027 row at all, reproducing V98's real seed (a one-time 2026 backfill with
+        // nothing written for 2027 yet).
         seedCarryForward(carol, 2026, PayrollComponent.SPECIAL_PAY_1);
 
         PayrollCarryForwardDtos.SuggestedInputRow row =

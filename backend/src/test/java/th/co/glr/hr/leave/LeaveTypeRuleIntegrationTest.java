@@ -21,20 +21,14 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * §5 leave-rules-as-data (V116): real-Postgres coverage of the per-leave-type rule columns and
- * their enforcement in {@link LeaveService#submit} -- the SQL (V116's seeded {@code hr.leave_type}
- * rows, the {@code chk_leave_type_*} constraints, and above all {@code
- * ux_leave_once_per_employment}) is exactly what Mockito-based {@code LeaveServiceTest} cannot
- * reach; see that class for the gate-by-gate unit coverage (Mockito can fake any {@link
- * LeaveTypeDto}, but not real calendar math or a real unique index).
- */
+/** §5 leave-rules-as-data: real-Postgres coverage of the per-leave-type rule columns and their enforcement in
+ * LeaveService#submit -- the SQL is exactly what Mockito-based LeaveServiceTest cannot reach; see that class
+ * for the gate-by-gate unit coverage. */
 class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- matches the fixed clock used by the other leave
-    // integration tests, so every date below is comfortably past every seeded advance-notice value
-    // (SICK/MATERNITY/MILITARY/LEAVE_WITHOUT_PAY=0, PERSONAL=1, VACATION=3) unless a test is
-    // specifically about notice.
+    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- matches the fixed clock used by the other leave integration tests, so
+    // every date below is comfortably past every seeded advance-notice value
+    // (SICK/MATERNITY/MILITARY/LEAVE_WITHOUT_PAY=0, PERSONAL=1, VACATION=3) unless a test is specifically about notice.
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
 
     private LeaveRepository leaveRepository;
@@ -72,11 +66,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(result.totalDays()).isEqualByComparingTo("98.00");
         assertThat(result.paidDays()).isEqualByComparingTo("45.00");
         assertThat(result.unpaidDays()).isEqualByComparingTo("53.00");
-        // Review fix regression guard: quotaRemainingAfter tracks QUOTA consumption (98-day request
-        // against a 98-day quota -> 0 remaining), NOT the paid-cap-narrowed paidDays figure. Before
-        // the fix this stored 98 - 45 = 53.00 here -- a number that lied about how much MATERNITY
-        // quota was actually left, contradicted by the very next balances() call (which sums
-        // total_days, not paid_days, and would report 0).
+        // Review fix regression guard: quotaRemainingAfter tracks QUOTA consumption (98-day request against a 98-day
+        // quota -> 0 remaining), NOT the paid-cap-narrowed paidDays figure.
         assertThat(result.quotaRemainingAfter()).isEqualByComparingTo("0.00");
     }
 
@@ -112,14 +103,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void aSeededTraditionalHolidayInsideAMaternityRangeIsStillJustOneCountedDay() {
-        // §5.4's calendar-day counting explicitly names "วันหยุดตามประเพณี" (traditional/public
-        // holidays) alongside weekly holidays. CALENDAR_DAYS counts every date in the range with no
-        // hr.holiday lookup at all (see LeaveDayCountBasis's Javadoc) -- so a real seeded holiday
-        // landing on an ordinary WEEKDAY inside the range changes nothing: it was already going to be
-        // counted as a plain calendar day. This test proves the presence of a real hr.holiday row
-        // does not cause a double-count, an exclusion, or any other special-cased behaviour -- Mon
-        // 2026-07-13 .. Fri 2026-07-17 (5 calendar days) with Wed 2026-07-15 seeded as a company
-        // holiday must still total exactly 5.
+        // §5.4's calendar-day counting explicitly names "วันหยุดตามประเพณี" (traditional/public holidays) alongside
+        // weekly holidays. Fri 2026-07-17 (5 calendar days) with Wed 2026-07-15 seeded as a company holiday must still
+        // total exactly 5.
         long employeeId = insertEmployee("MAT-HOLIDAY-001", LocalDate.parse("2015-01-01"));
         jdbc.update("""
             INSERT INTO hr.holiday (holiday_date, name_th, source)
@@ -152,8 +138,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         // trap) -- quotaRemainingAfter is the assertion that actually pins it.
         long employeeId = insertEmployee("MIL-001", LocalDate.parse("2015-01-01"));
 
-        // Mon 2026-01-05 .. Fri 2026-05-08: exactly 90 working weekdays (verified independently of
-        // LeaveDayMath, same method as the MATERNITY test below).
+        // Mon 2026-01-05 .. Fri 2026-05-08: exactly 90 working weekdays (verified independently of LeaveDayMath, same
+        // method as the MATERNITY test below).
         LeaveRequestDto result = leaveService.submit(
             submitRequest(employeeId, "MILITARY", "2026-01-05", "2026-05-08"),
             employee(employeeId));
@@ -167,9 +153,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void ordinationLeaveWithinTheFifteenDayPaidCapIsFullyPaid() {
-        // Wrong-way-round complement to the maternity test: a SHORT ordination request (10 of the
-        // 60-day quota, under the 15-day paid cap) must be entirely paid -- the cap must not bind
-        // when it doesn't need to.
+        // Wrong-way-round complement to the maternity test: a SHORT ordination request (10 of the 60-day quota, under
+        // the 15-day paid cap) must be entirely paid -- the cap must not bind when it doesn't need to.
         long employeeId = insertEmployee("ORD-CAP-001", LocalDate.parse("2015-01-01"));
 
         LeaveRequestDto result = leaveService.submit(
@@ -217,10 +202,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void ordinationIsGrantedAtExactlyTwelveMonthsOfServiceWithNoWarning() {
-        // Wrong-way-round complement, pinned at the boundary itself: hired EXACTLY 12 completed
-        // months before the request start must be ELIGIBLE ("at least 12 months", not "more than
-        // 12") and must carry NO MIN_SERVICE_MONTHS warning at all -- genuinely did not warn, not
-        // merely "warned but was still approved anyway".
+        // Wrong-way-round complement, pinned at the boundary itself: hired EXACTLY 12 completed months before the
+        // request start must be ELIGIBLE and must carry NO MIN_SERVICE_MONTHS warning at all -- genuinely did not
+        // warn, not merely "warned but was still approved anyway".
         long employeeId = insertEmployee("ORD-MINSVC-002", LocalDate.parse("2025-07-13"));
 
         LeaveRequestDto result = leaveService.submit(
@@ -259,8 +243,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(underOneYearResult.unpaidDays()).isEqualByComparingTo("1.00");
         assertThat(underOneYearResult.quotaRemainingAfter()).isEqualByComparingTo("0.00");
 
-        // Wrong-way-round complement, IDENTICAL request shape: an employee comfortably past a year
-        // of service gets the FULL 6.00-day quota, so all 4 working days are paid.
+        // Wrong-way-round complement, IDENTICAL request shape: an employee comfortably past a year of service gets the
+        // FULL 6.00-day quota, so all 4 working days are paid.
         LeaveRequestDto overOneYearResult = leaveService.submit(
             submitRequest(overOneYear, "VACATION", "2026-07-13", "2026-07-16"),
             employee(overOneYear));
@@ -271,8 +255,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void vacationIsGrantedAtExactlyTwelveMonthsOfService() {
-        // Wrong-way-round complement: hired exactly 12 completed months before the request start
-        // date must be ELIGIBLE ("at least 12 months", not "more than 12").
+        // Wrong-way-round complement: hired exactly 12 completed months before the request start date must be ELIGIBLE
+        // ("at least 12 months", not "more than 12").
         long employeeId = insertEmployee("VAC-EXACT-001", LocalDate.parse("2025-07-13"));
 
         LeaveRequestDto result = leaveService.submit(
@@ -284,11 +268,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void vacationIsRefusedWhenTheEmployeeHasNoHireDateOnFile() {
-        // DECISION (V116): a NULL hire_date does NOT silently pass a min-service gate. This is the
-        // real-DB proof that LeaveRepository#findHireDate's NULL mapping (rs.getObject returning
-        // null -> Optional.empty()) actually reaches LeaveService's fail-closed branch -- a
-        // Mockito-mocked repository could return Optional.empty() "correctly" even if the real SQL
-        // NULL-handling were broken.
+        // DECISION (V116): a NULL hire_date does NOT silently pass a min-service gate.
         long employeeId = insertEmployeeWithNoHireDate("VAC-NOHIRE-001");
 
         LeaveRequestDto result = leaveService.submit(
@@ -296,8 +276,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        // VACATION is prorated_first_year (V120), so the categorical HIRE_DATE_MISSING_PRORATED gate
-        // fires here -- not the (narrower, min-service-only) HIRE_DATE_MISSING_MIN_SERVICE code.
+        // VACATION is prorated_first_year (V120), so the categorical HIRE_DATE_MISSING_PRORATED gate fires here -- not
+        // the (narrower, min-service-only) HIRE_DATE_MISSING_MIN_SERVICE code.
         assertThat(result.systemNoteCode()).isEqualTo("HIRE_DATE_MISSING_PRORATED");
         assertThat(result.systemNote()).isNotBlank();
     }
@@ -344,11 +324,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void personalLeaveFirstYearCapIsBoundByTheProratedQuotaWhenItIsBelowThreeDays() {
-        // Hired 2026-05-13, probation_days=30 (ends 2026-06-12, comfortably before the requests
-        // below) -- isolates this test from the SEPARATE probation gate. 2 completed months of
-        // service by 2026-07-13 -> prorated quota = 7.00 * 2/12 = 1.1667, rounded to the nearest 0.5
-        // = 1.00 -- BELOW the flat 3-day ceiling, so the prorated figure is what actually binds
-        // (effectiveCap = min(1.00, 3.00) = 1.00), not the flat 3.
+        // Hired 2026-05-13, probation_days=30 (ends 2026-06-12, comfortably before the requests below) -- isolates
+        // this test from the SEPARATE probation gate.
         long employeeId = insertEmployee("PERS-CAP-LOW-001", LocalDate.parse("2026-05-13"), 30);
 
         LeaveRequestDto allowed = leaveService.submit(
@@ -373,10 +350,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void personalLeaveFirstYearCapIsBoundByTheFlatThreeDaysWhenTheProratedQuotaIsAboveIt() {
-        // Hired 2025-10-13, probation_days=30 -- 9 completed months of service by 2026-07-13 ->
-        // prorated quota = 7.00 * 9/12 = 5.25, rounded to the nearest 0.5 = 5.50 -- ABOVE the flat
-        // 3-day ceiling, so the flat figure is what actually binds (effectiveCap = min(5.50, 3.00) =
-        // 3.00), the other side of the min() from the test above.
+        // Hired 2025-10-13, probation_days=30.
         long employeeId = insertEmployee("PERS-CAP-HIGH-001", LocalDate.parse("2025-10-13"), 30);
 
         LeaveRequestDto allowed = leaveService.submit(
@@ -427,8 +401,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
         assertThat(first.status()).isEqualTo("SUBMITTED");
 
-        // A second ORDINATION request, in a LATER quota year even -- once-per-employment is NOT
-        // per-year -- must be refused by the Java-level check (hasOutstandingOrGrantedRequest).
+        // A second ORDINATION request, in a LATER quota year even -- once-per-employment is NOT per-year -- must be
+        // refused by the Java-level check (hasOutstandingOrGrantedRequest).
         LeaveRequestDto second = leaveService.submit(
             submitRequest(employeeId, "ORDINATION", "2026-08-10", "2026-08-11"),
             employee(employeeId));
@@ -439,8 +413,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void aDifferentEmployeesFirstOrdinationRequestIsUnaffectedByAnotherEmployeesGrant() {
-        // Wrong-way-round complement: the once-per-employment guard is scoped PER employee, not
-        // global -- proves the SQL predicate includes employee_id, not just leave_type_code.
+        // Wrong-way-round complement: the once-per-employment guard is scoped PER employee, not global -- proves the
+        // SQL predicate includes employee_id, not just leave_type_code.
         long employeeA = insertEmployee("ORD-A-001", LocalDate.parse("2015-01-01"));
         long employeeB = insertEmployee("ORD-B-001", LocalDate.parse("2015-01-01"));
 
@@ -457,12 +431,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void theDatabaseItselfRefusesASecondLiveOrdinationClaimEvenBypassingTheJavaCheck() {
-        // The test above proves the NORMAL path (LeaveService's Java-level pre-check). This proves
-        // the OTHER half the task calls for: that ux_leave_once_per_employment (V116) is a REAL
-        // constraint, not just documentation -- by calling LeaveRepository#create directly, TWICE,
-        // bypassing LeaveService#autoRejectNote entirely (the same way two concurrent requests would
-        // both pass the Java check before either commits). If this constraint were ever dropped or
-        // its WHERE clause narrowed, this is the test that would catch it; LeaveServiceTest's
+        // The test above proves the NORMAL path (LeaveService's Java-level pre-check). If this constraint were ever
+        // dropped or its WHERE clause narrowed, this is the test that would catch it; LeaveServiceTest's
         // DuplicateKeyException-catch test only proves the CATCH works, not that the INDEX exists.
         long employeeId = insertEmployee("ORD-RACE-001", LocalDate.parse("2015-01-01"));
 
@@ -474,12 +444,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(DataAccessException.class);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // §5.2 leave purpose + wedding cap (V125). Real-Postgres coverage of purpose_code's CHECK
-    // constraint and the wedding-leave cap enforcement in LeaveService#autoRejectNote -- the SQL
-    // (chk_leave_request_purpose_code) is exactly what LeaveServiceTest's Mockito-level companion
-    // cannot reach.
-    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 leave purpose + wedding cap (V125). Real-Postgres coverage of purpose_code's CHECK constraint and the
+    // wedding-leave cap enforcement in LeaveService#autoRejectNote -- the SQL (chk_leave_request_purpose_code) is
+    // exactly what LeaveServiceTest's Mockito-level companion cannot reach.
 
     @Test
     void weddingLeaveIsAllowedAtExactlyThreeDaysAndRefusedAtFour() {
@@ -509,9 +476,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void anOtherPurposePersonalLeaveRequestIsNotCappedAtThreeDays() {
-        // §5.2 non-exhaustive list ("เป็นต้น"/"etc."): the wedding cap must not leak onto every
-        // purpose -- the identical 4-day span the test above refuses under WEDDING must be approved
-        // in full under OTHER.
+        // §5.2 non-exhaustive list ("เป็นต้น"/"etc."): the wedding cap must not leak onto every purpose -- the
+        // identical 4-day span the test above refuses under WEDDING must be approved in full under OTHER.
         long employeeId = insertEmployee("OTHERPURPOSE-001", LocalDate.parse("2015-01-01"));
 
         LeaveRequestDto result = leaveService.submit(
@@ -525,12 +491,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void theDatabaseItselfRefusesAPurposeCodeThatIsNotInTheAllowedList() {
         // Real-DB companion to LeaveServiceTest's Java-level normalizePurposeCode validation:
-        // chk_leave_request_purpose_code is a REAL, independent backstop -- proven by calling
-        // LeaveRepository#create directly, bypassing LeaveService#normalizePurposeCode entirely (the
-        // same "call the repository directly" technique
-        // theDatabaseItselfRefusesASecondLiveOrdinationClaimEvenBypassingTheJavaCheck above uses for
-        // ux_leave_once_per_employment). If this constraint were ever dropped or its list narrowed,
-        // this is the test that would catch it.
+        // chk_leave_request_purpose_code is a REAL, independent backstop -- proven by calling LeaveRepository#create
+        // directly, bypassing LeaveService#normalizePurposeCode entirely.
         long employeeId = insertEmployee("BADPURPOSE-001", LocalDate.parse("2015-01-01"));
         SubmitLeaveRequest request = submitRequestWithPurpose(
             employeeId, "PERSONAL", "2026-07-13", "2026-07-13", "NOT_A_REAL_PURPOSE");
@@ -542,25 +504,20 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOf(DataAccessException.class);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // §5.2 emergency-filing exception (V125). Real-Postgres coverage of the rolling monthly COUNT
-    // (LeaveRepository#countEmergencyFilings) -- the one thing LeaveServiceTest's Mockito-level
-    // companion cannot prove: that the count is computed from real hr.leave_request rows and
-    // genuinely resets across a real calendar-month boundary, not from a shared/global counter.
-    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 emergency-filing exception (V125).
 
     @Test
     void emergencyPersonalLeaveIsApprovedAndPaidForTheFirstThreeOccasionsThisMonthAndWarnsUnpaidForTheFourth() {
-        // FIXED_NOW is Wed 2026-07-01 09:00; PERSONAL requires 1 day of notice, so any date before
-        // 2026-07-02 is late. Four distinct Mondays in June 2026 (all before that cutoff, all in the
-        // SAME calendar month) stand in for four occasions of the same emergency-filing month.
+        // FIXED_NOW is Wed 2026-07-01 09:00; PERSONAL requires 1 day of notice, so any date before 2026-07-02 is late.
+        // Four distinct Mondays in June 2026 (all before that cutoff, all in the SAME calendar month) stand in for
+        // four occasions of the same emergency-filing month.
         long employeeId = insertEmployee("EMERGENCY-001", LocalDate.parse("2015-01-01"));
 
         for (String date : new String[] {"2026-06-01", "2026-06-08", "2026-06-15"}) {
             LeaveRequestDto result = leaveService.submit(submitRequestAsEmergency(employeeId, date), employee(employeeId));
             assertThat(result.status()).isEqualTo("SUBMITTED");
-            // "โดยไม่หักเงิน" ("without deduction"): a genuine emergency filing within the tolerance
-            // is fully PAID, not split into an unpaid portion because it arrived late.
+            // "โดยไม่หักเงิน" ("without deduction"): a genuine emergency filing within the tolerance is fully PAID, not
+            // split into an unpaid portion because it arrived late.
             assertThat(result.paidDays()).isEqualByComparingTo("1.00");
             assertThat(result.unpaidDays()).isEqualByComparingTo("0.00");
         }
@@ -580,11 +537,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void emergencyPersonalLeaveToleranceResetsAcrossACalendarMonthBoundary() {
-        // Wrong-way-round complement to the test above: three occasions in June fully use up June's
-        // allowance for this employee; a LATE May request (a different calendar month, also before
-        // the 2026-07-02 notice cutoff) must still be approved -- proving
-        // countEmergencyFilings' start_date >= monthStart AND start_date < monthStartNext bounds are
-        // real, not an accidental global/lifetime count.
+        // Wrong-way-round complement to the test above: three occasions in June fully use up June's allowance for this
+        // employee; a LATE May request must still be approved.
         long employeeId = insertEmployee("EMERGENCY-002", LocalDate.parse("2015-01-01"));
         for (String date : new String[] {"2026-06-01", "2026-06-08", "2026-06-15"}) {
             LeaveRequestDto result = leaveService.submit(submitRequestAsEmergency(employeeId, date), employee(employeeId));
@@ -603,13 +557,7 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(mayFirst.status()).isEqualTo("SUBMITTED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // §5.2 PERSONAL "passed probation" gate (review fix, V116). Real-DB proof that
-    // LeaveRepository#findProbationDays' NULL-column mapping and LeaveService's
-    // hire_date+probation_days arithmetic hold through the actual repository -- Mockito can fake
-    // any Optional<Integer> a test wants, but not whether the SQL genuinely reads NULL as
-    // Optional.empty() the way LeaveServiceTest's fallback tests assume.
-    // ─────────────────────────────────────────────────────────────────────
+    // §5.2 PERSONAL "passed probation" gate (review fix, V116).
 
     @Test
     void personalLeaveWarnsUnpaidWhileTheEmployeeIsStillInProbation() {
@@ -665,10 +613,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void personalLeaveFallsBackToTheDefaultProbationPeriodWhenProbationDaysIsNullOnTheEmployee() {
-        // probation_days genuinely NULL in the database (not just an unstubbed mock) -> falls back
-        // to SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS (119). Hired exactly 119 days before
-        // the request date -> probation ends ON the request date -- "at least", not "strictly more
-        // than" -- so this must be APPROVED.
+        // probation_days genuinely NULL in the database (not just an unstubbed mock) -> falls back to
+        // SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS (119).
         long employeeId = insertEmployee("PERS-PROB-003", LocalDate.parse("2026-03-16"), null);
 
         LeaveRequestDto result = leaveService.submit(
@@ -697,10 +643,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void personalLeaveIsRefusedWhenTheEmployeeHasNoHireDateOnFileEitherForProbation() {
-        // Real-DB companion to LeaveServiceTest's Mockito version -- proves a genuinely NULL
-        // hire_date column does not silently pass PERSONAL's probation gate either (a separate code
-        // path from the generic min-service NULL-hire_date check covered by
-        // vacationIsRefusedWhenTheEmployeeHasNoHireDateOnFile above).
+        // Real-DB companion to LeaveServiceTest's Mockito version -- proves a genuinely NULL hire_date column does not
+        // silently pass PERSONAL's probation gate either (a separate code path from the generic min-service
+        // NULL-hire_date check covered by vacationIsRefusedWhenTheEmployeeHasNoHireDateOnFile above).
         long employeeId = insertEmployeeWithNoHireDate("PERS-PROB-005");
 
         LeaveRequestDto result = leaveService.submit(
@@ -708,13 +653,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             employee(employeeId));
 
         assertThat(result.status()).isEqualTo("AUTO_REJECTED");
-        // PERSONAL is ALSO prorated_first_year (V120), so the categorical
-        // HIRE_DATE_MISSING_PRORATED gate (autoRejectNote, runs before the PERSONAL-probation branch
-        // this test's name references) fires first -- personalProbationRuleOutcome's own,
-        // narrower NULL-hire_date branch (PROBATION_HIRE_DATE_MISSING) is unreachable in practice for
-        // this exact scenario; see autoRejectNote's own comment on that gate for why it is kept as a
-        // defensive fallback anyway. Both branches produced byte-identical English text before this
-        // phase, which is why this distinction was invisible under the old plain-String assertion.
+        // PERSONAL is ALSO prorated_first_year, so the categorical HIRE_DATE_MISSING_PRORATED gate fires first. Both
+        // branches produced byte-identical English text before this phase, which is why this distinction was invisible
+        // under the old plain-String assertion.
         assertThat(result.systemNoteCode()).isEqualTo("HIRE_DATE_MISSING_PRORATED");
     }
 
@@ -791,11 +732,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             """, new MapSqlParameterSource().addValue("code", code).addValue("hireDate", hireDate), Long.class);
     }
 
-    /**
-     * probation_days is genuinely nullable on hr.employee (V1) -- pass {@code null} to leave it
-     * NULL in the database and exercise LeaveRepository#findProbationDays' real NULL-column
-     * mapping, not a mocked Optional.empty().
-     */
+    /** probation_days is genuinely nullable on hr.employee (V1) -- pass null to leave it NULL in the database and
+     * exercise LeaveRepository#findProbationDays' real NULL-column mapping, not a mocked Optional.empty(). */
     private long insertEmployee(String code, LocalDate hireDate, Integer probationDays) {
         return jdbc.queryForObject("""
             INSERT INTO hr.employee (employee_code, first_name_th, last_name_th, current_salary, is_active, hire_date, probation_days)
@@ -808,11 +746,8 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             Long.class);
     }
 
-    /**
-     * confirm_date is genuinely nullable on hr.employee (V1) -- exercises
-     * LeaveRepository#findConfirmDate's real NULL-column mapping the same way {@link
-     * #insertEmployee(String, LocalDate, Integer)} does for probation_days.
-     */
+    /** confirm_date is genuinely nullable on hr.employee (V1) -- exercises LeaveRepository#findConfirmDate's real
+     * NULL-column mapping the same way #insertEmployee(String, LocalDate, Integer) does for probation_days. */
     private long insertEmployeeWithConfirmDate(
             String code, LocalDate hireDate, Integer probationDays, LocalDate confirmDate) {
         return jdbc.queryForObject("""
@@ -837,11 +772,9 @@ class LeaveTypeRuleIntegrationTest extends AbstractPostgresIntegrationTest {
             """, Map.of("code", code), Long.class);
     }
 
-    /**
-     * Calls {@link LeaveRepository#create} directly, bypassing every {@link LeaveService} check --
-     * the point is to prove {@code ux_leave_once_per_employment} fires on its own, not that
-     * LeaveService's Java-level guard works (that is covered elsewhere).
-     */
+    /** Calls LeaveRepository#create directly, bypassing every LeaveService check -- the point is to prove
+     * ux_leave_once_per_employment fires on its own, not that LeaveService's Java-level guard works (that is
+     * covered elsewhere). */
     private long createOrdinationRequestDirectly(long employeeId, String startDate, String endDate, LeaveStatus status) {
         SubmitLeaveRequest request = submitRequest(employeeId, "ORDINATION", startDate, endDate);
         return leaveRepository.create(

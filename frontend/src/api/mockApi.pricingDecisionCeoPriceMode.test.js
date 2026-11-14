@@ -1,17 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// Mock coverage for Phase 2 (CEO pricing method, owner rulings 2026-09-18/19, V187) and the
-// Opus-review follow-up (2026-09-19), review finding #7 in particular: SPECIAL_SQM used to be a
-// permanent dead end in mock mode (always null) — the mock is this repo's DEFAULT QA/demo
-// surface (CLAUDE.md "Mock API contract"), so a mode nobody can ever see a number for here is a
-// mode nobody can demo. It is now a genuine (non-authoritative — see mockApi.js's own header on
-// this) mirror of WastageCalculator#netPerPieceFromSpecialSqm, pinned against the SAME 4 owner
-// documents WastageCalculatorTest pins the real engine against.
-//
-// NOT authz/permission coverage (nothing here substitutes for a real-DB Java test) — this only
-// verifies the mock's OWN arithmetic/plumbing, which is exactly what CLAUDE.md says a mock can be
-// evidence for and no more.
+// Mock coverage for Phase 2 and the Opus-review follow-up, review finding #7 in particular: SPECIAL_SQM used
+// to be a permanent dead end in mock mode — the mock is this repo's DEFAULT QA/demo surface, so a mode nobody
+// can ever see a number for here is a mode nobody can demo.
 
 let clientRequestSeq = 0;
 function nextClientRequestId() {
@@ -19,12 +11,8 @@ function nextClientRequestId() {
   return `77777777-7777-4777-8777-${String(clientRequestSeq).padStart(12, '0')}`;
 }
 
-/** Drives a fresh PCR (Phase 1 new-form shape: sqmPerPiece set) all the way to a DRAFT
- * pricing_decision (CEO_REVIEWING), mirroring mockApi.pricingRequests.test.js's own
- * numbering-helper flow -- including creating its OWN ticket/customer/project (rather than
- * reusing a seeded one), because generateFactoryEmailDrafts requires every item to already carry
- * a `factory`, which is not reliably true of every seeded demo ticket item. Returns the raw
- * decision (never approved — every test below edits it). */
+/** Drives a fresh PCR all the way to a DRAFT pricing_decision, mirroring mockApi.pricingRequests.test.js's own
+ * numbering-helper flow. Returns the raw decision (never approved — every test below edits it). */
 async function startNewFormDecision(sqmPerPiece = 0.36) {
   await api.auth.login({ role: 'sales' });
   const { customer } = await api.customers.create({
@@ -162,11 +150,9 @@ describe('mockApi.pricingRequests CEO price mode — SPECIAL_SQM (review finding
 });
 
 describe('mockApi.pricingRequests CEO price mode — mode switch + clear semantics', () => {
-  // Owner correction (2026-09-19): listUnitPrice is no longer a field this payload accepts at
-  // all (the CEO never types it, ruling A) -- these three tests used to send a hand-picked
-  // listUnitPrice: 1000 to pin a round expected net. They now read the item's own
-  // SERVER-derived listUnitPrice (already populated by startNewFormDecision) and compute the
-  // expected net FROM that real value instead, same as the equivalent real-DB Java tests do.
+  // Owner correction (2026-09-19): listUnitPrice is no longer a field this payload accepts at all (the CEO never
+  // types it, ruling A) -- these three tests used to send a hand-picked listUnitPrice: 1000 to pin a round
+  // expected net.
   it('switching mode recomputes every item net from its own stored inputs (never freezes a stale value)', async () => {
     const decision = await startNewFormDecision();
     const item = decision.items[0];
@@ -218,13 +204,8 @@ describe('mockApi.pricingRequests CEO price mode — mode switch + clear semanti
 });
 
 describe('mockApi.pricingRequests CEO price mode — owner correction 2026-09-19 (list price refresh)', () => {
-  // The real-DB Java IT (PricingDecisionCeoPriceModeIntegrationTest) proves the full "starts
-  // uncosted -> overrideItemCost -> list price populated -> NET approves" scenario end to end;
-  // the mock has no concept of a V156 "uncostable" line at all (CLAUDE.md's own guidance is
-  // against reimplementing an algorithm the mock does not need), so this instead proves the
-  // narrower, always-reachable claim: a cost-driven recompute (overrideItemCost /
-  // recalculateCost) REFRESHES listUnitPrice/netUnitPrice here too, closing the same staleness
-  // gap the Java fix closes, for the mock's own plumbing.
+  // Checks mock cost overrides refresh list and net prices; real uncostable-line behavior is covered by Java
+  // integration tests.
   it('overridePricingDecisionItemCost refreshes listUnitPrice and netUnitPrice', async () => {
     const decision = await startNewFormDecision();
     const item = decision.items[0];
@@ -239,8 +220,8 @@ describe('mockApi.pricingRequests CEO price mode — owner correction 2026-09-19
     const overriddenItem = overridden.items.find((i) => i.id === item.id);
     expect(overriddenItem.listUnitPrice).not.toBeNull();
     expect(overriddenItem.listUnitPrice).toBeCloseTo(overriddenItem.proposedSellingPricePerRequestedUnit, 2);
-    // discountPct (10%) survived the cost change -- net re-derives from the FRESH list price,
-    // not the pre-override one.
+    // discountPct (10%) survived the cost change -- net re-derives from the FRESH list price, not the pre-override
+    // one.
     const expectedNet = Math.round(overriddenItem.listUnitPrice * 0.9 * 100) / 100;
     expect(overriddenItem.netUnitPrice).toBeCloseTo(expectedNet, 2);
   });
@@ -257,9 +238,8 @@ describe('mockApi.pricingRequests CEO price mode — owner correction 2026-09-19
 
     const { decision: recalculated } = await api.pricingRequests.recalculatePricingDecisionCost(decision.id);
     const afterItem = recalculated.items.find((i) => i.id === item.id);
-    // Nothing about the underlying cost/margin/discount changed -- the refreshed figures must
-    // come back identical, proving the refresh path runs (not merely leaves stale values alone
-    // by accident) and is stable.
+    // Nothing about the underlying cost/margin/discount changed -- the refreshed figures must come back identical,
+    // proving the refresh path runs (not merely leaves stale values alone by accident) and is stable.
     expect(afterItem.listUnitPrice).toBeCloseTo(beforeItem.listUnitPrice, 2);
     expect(afterItem.netUnitPrice).toBeCloseTo(beforeItem.netUnitPrice, 2);
   });

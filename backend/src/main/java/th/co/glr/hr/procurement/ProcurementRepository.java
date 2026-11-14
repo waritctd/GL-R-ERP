@@ -16,12 +16,9 @@ import org.springframework.stereotype.Repository;
 import th.co.glr.hr.procurement.ProcurementDtos.FactoryPurchaseOrderDto;
 import th.co.glr.hr.procurement.ProcurementDtos.FactoryPurchaseOrderItemDto;
 
-/**
- * Persistence for the Step 7 aggregate (V77): {@code sales.factory_purchase_order}, {@code
- * sales.factory_purchase_order_item}. Persistence only, mirroring every prior step's own
- * repository/service split — no permission checks, no workflow validation; see {@link
- * ProcurementService} for all of that.
- */
+/** Persistence for the Step 7 aggregate (V77): sales.factory_purchase_order, sales.factory_purchase_order_item.
+ * Persistence only, mirroring every prior step's own repository/service split — no permission checks, no
+ * workflow validation; see ProcurementService for all of that. */
 @Repository
 public class ProcurementRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -35,13 +32,11 @@ public class ProcurementRepository {
         return "FPO-" + Year.now() + "-" + String.format("%04d", seq == null ? 0 : seq);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Source-of-truth read: the APPROVED decision's own costing items, grouped by factory.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** The pricing_costing_id the pricing request's currently-APPROVED decision references —
-     * this and only this costing version's items may ever become a PO line (see this class's
-     * own Javadoc and V77's header comment). Empty if no decision has been approved yet. */
+    /** The pricing_costing_id the pricing request's currently-APPROVED decision references — this and only this
+     * costing version's items may ever become a PO line (see this class's own Javadoc and V77's header comment).
+     * Empty if no decision has been approved yet. */
     public Optional<Long> findApprovedPricingCostingId(long pricingRequestId) {
         try {
             Long id = jdbc.queryForObject("""
@@ -60,8 +55,8 @@ public class ProcurementRepository {
         BigDecimal rawUnitPrice, String rawCurrency, BigDecimal requestedQuantity
     ) {}
 
-    /** Every line of the APPROVED costing version, ordered by factory so the caller can group
-     * them into one PO per factory without a second pass. */
+    /** Every line of the APPROVED costing version, ordered by factory so the caller can group them into one PO per
+     * factory without a second pass. */
     public List<CostingItemForPo> findCostingItemsForPo(long pricingCostingId) {
         return jdbc.query("""
             SELECT pricing_costing_item_id, pricing_request_item_id, factory_id, factory_name,
@@ -80,9 +75,7 @@ public class ProcurementRepository {
             });
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Create.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     public Optional<Long> findOpenIdByFactory(long pricingRequestId, String factoryName) {
         try {
@@ -124,20 +117,9 @@ public class ProcurementRepository {
         return id;
     }
 
-    /**
-     * Inserts one PO line per costing item, but ONLY for costing items that actually belong to
-     * {@code pricingRequestId} (the {@code pc.pricing_request_id = :pricingRequestId} join
-     * condition) — the cross-tenant/cross-request reference guard. A caller that (by bug or
-     * malicious input) passes a costing-item id belonging to a DIFFERENT pricing request gets it
-     * silently filtered out of the {@code SELECT}, not inserted; the returned count then falls
-     * short of {@code pricingCostingItemIds.size()}, which {@link ProcurementService} treats as a
-     * hard failure. Also silently skips any id already consumed by an earlier PO (the {@code
-     * uq_factory_po_item_costing_item} unique constraint backs this with {@code ON CONFLICT DO
-     * NOTHING}, defense-in-depth against a concurrent double-insert of the same line).
-     *
-     * @return the number of rows actually inserted — the caller must compare this against the
-     *         requested id list, not assume success.
-     */
+    /** Inserts one PO line per costing item, but ONLY for costing items that actually belong to pricingRequestId
+     * (the pc.pricing_request_id = :pricingRequestId join condition) — the cross-tenant/cross-request reference
+     * guard. */
     public int insertItems(long factoryPurchaseOrderId, long pricingRequestId, List<Long> pricingCostingItemIds) {
         if (pricingCostingItemIds.isEmpty()) {
             return 0;
@@ -187,12 +169,10 @@ public class ProcurementRepository {
         return result;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Status updates.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Compare-and-set guard: only a PO NOT already CLOSED (RECEIVED/CANCELLED) may be touched.
-     * Returns the affected row count — 0 means the PO was already closed. */
+    /** Compare-and-set guard: only a PO NOT already CLOSED (RECEIVED/CANCELLED) may be touched. Returns the
+     * affected row count — 0 means the PO was already closed. */
     public int recordSupplierProforma(long id, String supplierProformaRef, String supplierPaymentScheduleNote) {
         return jdbc.update("""
             UPDATE sales.factory_purchase_order
@@ -202,9 +182,9 @@ public class ProcurementRepository {
             new MapSqlParameterSource().addValue("id", id).addValue("ref", supplierProformaRef).addValue("note", supplierPaymentScheduleNote));
     }
 
-    /** Records whichever shipping fields are supplied (each nullable — see {@code
-     * RecordShippingDetailRequest}'s own Javadoc) and advances OPEN -&gt; SHIPPING. Idempotent:
-     * calling this again while already SHIPPING just updates the fields, no error. */
+    /** Records whichever shipping fields are supplied (each nullable — see RecordShippingDetailRequest's own
+     * Javadoc) and advances OPEN -> SHIPPING. Idempotent: calling this again while already SHIPPING just updates
+     * the fields, no error. */
     public int recordShippingDetail(long id, String containerRef, LocalDate etd, LocalDate eta, String customsStatus) {
         return jdbc.update("""
             UPDATE sales.factory_purchase_order
@@ -229,15 +209,7 @@ public class ProcurementRepository {
             """, new MapSqlParameterSource().addValue("id", id).addValue("cost", actualLandedCostThb));
     }
 
-    /**
-     * Step 8: records the ACTUAL quantity Import counted for one PO line, plus any QC/damage
-     * note. Scoped to {@code factoryPurchaseOrderId} — an itemId belonging to a DIFFERENT PO is
-     * silently not updated (0 rows), which {@link ProcurementService#recordGoodsReceived} treats
-     * as a hard failure (the caller must not have been able to reach this at all in practice,
-     * since it validates every itemId against THIS PO's own item set first — this is
-     * defense-in-depth, mirroring Step 7's own cross-tenant guard on
-     * {@code insertItems}).
-     */
+    /** Step 8: records the ACTUAL quantity Import counted for one PO line, plus any QC/damage note. */
     public int recordItemReceipt(long factoryPurchaseOrderId, long itemId, BigDecimal qtyReceived, String qcNote) {
         return jdbc.update("""
             UPDATE sales.factory_purchase_order_item
@@ -259,9 +231,7 @@ public class ProcurementRepository {
             """, new MapSqlParameterSource().addValue("id", id).addValue("reason", reason));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Reads.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private static final String SELECT_PO = """
         SELECT po.*, pr.request_code AS pricing_request_code, t.code AS ticket_code,
@@ -288,8 +258,8 @@ public class ProcurementRepository {
         return pos.stream().map(this::withItems).toList();
     }
 
-    /** Import/CEO's own list view (no ticket/pricing-request scoping — every PO is theirs to
-     * see, matching {@code FactoryQuoteService}'s own list-everything shape for that role pair). */
+    /** Import/CEO's own list view (no ticket/pricing-request scoping — every PO is theirs to see, matching
+     * FactoryQuoteService's own list-everything shape for that role pair). */
     public List<FactoryPurchaseOrderDto> findAll(String status) {
         String sql = SELECT_PO + (status != null && !status.isBlank() ? " WHERE po.status = :status" : "") + " ORDER BY po.created_at DESC";
         List<FactoryPurchaseOrderDto> pos = jdbc.query(sql,

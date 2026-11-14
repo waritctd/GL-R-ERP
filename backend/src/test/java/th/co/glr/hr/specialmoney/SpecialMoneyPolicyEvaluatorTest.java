@@ -12,11 +12,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
-/**
- * Pure unit tests for {@link SpecialMoneyPolicyEvaluator} -- no Mockito, no Postgres, just plain
- * function calls against hand-built inputs. Matches the 2018 welfare-policy seed in {@code
- * V66__special_money_request_schema.sql}.
- */
+/** Pure unit tests for SpecialMoneyPolicyEvaluator -- no Mockito, no Postgres, just plain function calls
+ * against hand-built inputs. Matches the 2018 welfare-policy seed in V66__special_money_request_schema.sql. */
 class SpecialMoneyPolicyEvaluatorTest {
 
     private static final LocalDate TODAY = LocalDate.of(2026, 7, 20);
@@ -24,9 +21,7 @@ class SpecialMoneyPolicyEvaluatorTest {
     private static final Set<String> EXCLUDED_PROVINCES =
         Set.of("สมุทรปราการ", "สมุทรสาคร", "นนทบุรี", "นครปฐม", "ปทุมธานี", "ฉะเชิงเทรา", "ลาดกระบัง");
 
-    // ---------------------------------------------------------------------
     // Helpers
-    // ---------------------------------------------------------------------
 
     private static Map<String, BigDecimal> defaultAmountsMap() {
         Map<String, BigDecimal> m = new HashMap<>();
@@ -55,10 +50,8 @@ class SpecialMoneyPolicyEvaluatorTest {
         return new PolicyAmounts(m, 1);
     }
 
-    /**
-     * The department code is a VARCHAR (hr.department.source_code) carried in
-     * special_money_policy.text_value, not in the numeric amount column — it need not be numeric.
-     */
+    /** The department code is a VARCHAR (hr.department.source_code) carried in special_money_policy.text_value, not
+     * in the numeric amount column — it need not be numeric. */
     /** Configures the kit's eligible DEPARTMENT list (V129 replaced the old singular key). */
     private static PolicyAmounts amountsWithConfiguredSalesSupportCode(String code) {
         return new PolicyAmounts(
@@ -83,9 +76,7 @@ class SpecialMoneyPolicyEvaluatorTest {
         return BigDecimal.valueOf(value);
     }
 
-    // ---------------------------------------------------------------------
     // MEDICAL
-    // ---------------------------------------------------------------------
 
     @Test
     void medicalOverYtdCapClampsToRemainingBalance() {
@@ -159,12 +150,8 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(kitDecision.violations()).isEmpty();
     }
 
-    // ---------------------------------------------------------------------
-    // Shared probation resolution (owner ruling, 2026-08-03): confirm_date, when present, is
-    // authoritative and the employee is eligible the day AFTER it -- NOT on confirm_date itself.
-    // Both sides pinned on the SAME fixture so a boundary bug (e.g. reverting to "eligible on
-    // confirm_date") cannot pass silently on only one direction.
-    // ---------------------------------------------------------------------
+    // Shared probation resolution (owner ruling, 2026-08-03): confirm_date, when present, is authoritative and the
+    // employee is eligible the day AFTER it -- NOT on confirm_date itself.
 
     @Test
     void confirmDateBoundaryIsNotEligibleOnConfirmDateButEligibleTheDayAfter() {
@@ -245,11 +232,9 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(SpecialMoneyPolicyEvaluator.hasPassedProbation(null, 90, null, TODAY)).isFalse();
     }
 
-    /**
-     * hr.department.source_code is a VARCHAR(10) and is not guaranteed to be numeric, so the gate
-     * compares strings. An earlier implementation parsed both sides as BigDecimal, which silently
-     * refused every employee whose department code contained a letter.
-     */
+    /** hr.department.source_code is a VARCHAR(10) and is not guaranteed to be numeric, so the gate compares
+     * strings. An earlier implementation parsed both sides as BigDecimal, which silently refused every employee
+     * whose department code contained a letter. */
     @Test
     void preprobationKitAcceptsANonNumericDepartmentCode() {
         EmployeeEligibilitySnapshot probationer =
@@ -288,11 +273,9 @@ class SpecialMoneyPolicyEvaluatorTest {
             .anySatisfy(v -> assertThat(v).contains("แผนกหรือตำแหน่งที่มีสิทธิ์"));
     }
 
-    /**
-     * §2.1.3's สนับสนุนฝ่ายขาย is TWO departments in production (SALES "Sales Support 1" and SALES2
-     * "Sales Support 2"), which the retired singular key could not express -- it would have covered
-     * whichever one was configured and silently refused the other half of the staff.
-     */
+    /** §2.1.3's สนับสนุนฝ่ายขาย is TWO departments in production (SALES "Sales Support 1" and SALES2 "Sales Support
+     * 2"), which the retired singular key could not express -- it would have covered whichever one was configured
+     * and silently refused the other half of the staff. */
     @Test
     void preprobationKitAcceptsAnyOfSeveralConfiguredDepartments() {
         for (String department : new String[] {"SALES", "SALES2"}) {
@@ -309,10 +292,8 @@ class SpecialMoneyPolicyEvaluatorTest {
         }
     }
 
-    /**
-     * พนักงานขับรถ is a POSITION in production, not a department -- the retired key could not have
-     * gated it at all, whatever value it held.
-     */
+    /** พนักงานขับรถ is a POSITION in production, not a department -- the retired key could not have gated it at
+     * all, whatever value it held. */
     @Test
     void preprobationKitAcceptsAnEligiblePositionEvenWhenTheDepartmentDoesNotMatch() {
         EmployeeEligibilitySnapshot driver = new EmployeeEligibilitySnapshot(
@@ -327,11 +308,9 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.violations()).isEmpty();
     }
 
-    /**
-     * The wrong-way-round half: a colleague in the SAME department as an eligible driver, but not
-     * holding an eligible position, is still refused. Matching on position must not leak to the
-     * whole department -- that is exactly the over-broad gate V129's comment refuses to write.
-     */
+    /** The wrong-way-round half: a colleague in the SAME department as an eligible driver, but not holding an
+     * eligible position, is still refused. Matching on position must not leak to the whole department -- that is
+     * exactly the over-broad gate V129's comment refuses to write. */
     @Test
     void preprobationKitStillRefusesANonEligiblePositionInTheSameDepartment() {
         EmployeeEligibilitySnapshot warehouseClerk = new EmployeeEligibilitySnapshot(
@@ -361,9 +340,7 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.violations()).anyMatch(v -> v.contains("ยังไม่เปิดใช้งาน"));
     }
 
-    // ---------------------------------------------------------------------
     // UNIFORM_ANNUAL
-    // ---------------------------------------------------------------------
 
     @Test
     void uniformSelfBuyAprilReceiptRejected() {
@@ -390,11 +367,9 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.violations()).anyMatch(v -> v.contains("เดือนพฤษภาคม"));
     }
 
-    /**
-     * The other half of the May rule: it binds the SELF_BUY route only. The document ties May to
-     * buying it yourself; it says nothing about when the ร้านคุณลำพอง tailor bills. Requiring May of
-     * both -- as this used to -- refused a perfectly valid tailored claim receipted in June.
-     */
+    /** The other half of the May rule: it binds the SELF_BUY route only. The document ties May to buying it
+     * yourself; it says nothing about when the ร้านคุณลำพอง tailor bills. Requiring May of both -- as this used to
+     * -- refused a perfectly valid tailored claim receipted in June. */
     @Test
     void uniformTailoredJuneReceiptAccepted() {
         SubmitSpecialMoneyRequest request =
@@ -423,8 +398,8 @@ class SpecialMoneyPolicyEvaluatorTest {
 
     @Test
     void uniformTailoredOverFourPiecesRejected() {
-        // The 4-piece limit used to be checked in SELF_BUY only, so a tailored claim for 10 pieces
-        // under the ฿1,300 cap sailed through.
+        // The 4-piece limit used to be checked in SELF_BUY only, so a tailored claim for 10 pieces under the ฿1,300
+        // cap sailed through.
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(
                 1L,
@@ -540,9 +515,7 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1200));
     }
 
-    // ---------------------------------------------------------------------
     // UNIFORM_PREPROBATION_KIT
-    // ---------------------------------------------------------------------
 
     @Test
     void preprobationKitAcceptedForSalesSupportAfterSevenDays() {
@@ -587,14 +560,12 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(1960));
     }
 
-    // ---------------------------------------------------------------------
     // UNIFORM_NEW_STAFF (§2.1.2)
-    // ---------------------------------------------------------------------
 
     @Test
     void newStaffUniformOverSixPiecesRejected() {
-        // max_pieces=6 was seeded in V66 and then ignored entirely: this type used to pass the
-        // requested amount straight through with no checks at all.
+        // max_pieces=6 was seeded in V66 and then ignored entirely: this type used to pass the requested amount
+        // straight through with no checks at all.
         SubmitSpecialMoneyRequest request =
             new SubmitSpecialMoneyRequest(1L, TODAY, null, null, BigDecimal.ONE, bd(3000), "new staff uniform",
                 Map.of("shirtCount", "5", "trouserCount", "4"));
@@ -691,9 +662,7 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.violations()).anyMatch(v -> v.contains("ยังทำงานไม่ครบ 7 วัน"));
     }
 
-    // ---------------------------------------------------------------------
     // AID_*
-    // ---------------------------------------------------------------------
 
     @Test
     void weddingRejectedWhenAlreadyClaimedOnce() {
@@ -755,9 +724,7 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.violations()).anyMatch(v -> v.contains("ไม่เข้าเงื่อนไขเงินช่วยเหลืองานศพ"));
     }
 
-    // ---------------------------------------------------------------------
     // TRAVEL_PER_DIEM
-    // ---------------------------------------------------------------------
 
     @Test
     void perDiemRejectedForSamutPrakan() {
@@ -819,14 +786,10 @@ class SpecialMoneyPolicyEvaluatorTest {
         assertThat(decision.eligibleAmount()).isEqualByComparingTo(bd(800));
     }
 
-    // ---------------------------------------------------------------------
     // Universal safety net
-    // ---------------------------------------------------------------------
 
-    /**
-     * Catches a new {@link SpecialMoneyType} added without wiring an eligibility rule: no matter
-     * the cap-rule shape, an inactive employee must never be found eligible.
-     */
+    /** Catches a new SpecialMoneyType added without wiring an eligibility rule: no matter the cap-rule shape, an
+     * inactive employee must never be found eligible. */
     @ParameterizedTest
     @EnumSource(SpecialMoneyType.class)
     void inactiveEmployeeAlwaysRejected(SpecialMoneyType type) {

@@ -64,17 +64,9 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(divisionHeadcount.inactive()).isEqualTo(1);
         assertThat(divisionHeadcount.byDivision()).hasSize(1);
 
-        // leaveScope (5th arg) is deliberately the SAME value as employeeScope (1st arg) in both
-        // calls below, NOT a DashboardQueryScope.ownOrDirectReports(...) -- this fixture's
-        // insertEmployee never populates reports_to_employee_id (see its helper below), so an
-        // OWN_OR_DIRECT_REPORTS scope would just count 0 here regardless of correctness and prove
-        // nothing. That is fine: this test's job is to confirm pendingApprovals(...) wires each
-        // counter through to its SQL
-        // under a GIVEN scope (ALL/DIVISION here still exercise whereEmployeeScope's shared
-        // branches via countLeave, same as before this parameter existed) -- it is not a scope
-        // authorization test. The reports-to boundary itself (a manager must NOT see a
-        // same-division employee outside their direct reports) is covered by the dedicated
-        // DashboardLeaveScopeIntegrationTest, whose fixture does populate reports_to_employee_id.
+        // leaveScope is deliberately the SAME value as employeeScope in both calls below, NOT a
+        // DashboardQueryScope.ownOrDirectReports -- this fixture's insertEmployee never populates reports_to_employee_id,
+        // so an OWN_OR_DIRECT_REPORTS scope would just count 0 here regardless of correctness and prove nothing.
         PendingApprovalsSummaryDto allPending = repository.pendingApprovals(
             DashboardQueryScope.all(),
             new DashboardPendingVisibility(true, true, true, true, true),
@@ -340,11 +332,7 @@ class DashboardRepositoryIntegrationTest extends AbstractPostgresIntegrationTest
     }
 
     private void insertCommission(long salesRepId, LocalDate payrollMonth) {
-        // V102 (chk_invoice_details_evidence_present) requires every row to show a real
-        // attachment OR a recognized evidence_provenance -- this fixture has neither an
-        // attachment nor any interest in ข้อ 15 evidence, so it supplies the same
-        // PRE_ERP_PAPER_APPROVAL value V102's own inline backfill uses for exactly this shape
-        // (attachment-less, dashboard/reporting-only test data), rather than leaving it NULL.
+        // V102 requires every row to show a real attachment OR a recognized evidence_provenance.
         Number invoiceId = jdbc.queryForObject("""
             INSERT INTO sales.invoice_details (
                 invoice_number, invoice_date, gross_amount, evidence_provenance

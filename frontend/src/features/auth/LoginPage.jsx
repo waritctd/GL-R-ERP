@@ -5,23 +5,8 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 
-// ── WHY ONE OF THESE LOGS IN BY EMAIL AND THE REST BY ROLE ──────────────────
-// The mock resolves `{ role }` with `db.users.find(u => u.role === r && u.active)` —
-// the FIRST match. A division manager is not a role: it is `role: 'employee'` with
-// direct reports (permissions.js `isDivisionManager`, driven by the org chart, see
-// demoData.js). So `{ role: 'employee' }` always resolves to the plain employee
-// (`employee@glr.co.th`, employees[8]) and `warehouse.manager@glr.co.th`
-// (employees[5], the WHL division manager) was unreachable — which meant the whole
-// "ทีมของฉัน" nav group and every team-scoped self-service view had no way to be
-// opened in mock mode at all.
-//
-// Logging that one in by email+password rather than by role is also the honest
-// shape: it is an ordinary credential login, so it works the same way against the
-// real backend, whereas `{ role }` is a mock-only affordance.
-//
-// employees[5] manages employees[8] (both are WHL — see divAssign), so these two
-// personas are a real manager/report pair: what the employee submits is what the
-// manager sees waiting.
+// WHY ONE OF THESE LOGS IN BY EMAIL AND THE REST BY ROLE ────────────────── The mock resolves `{ role }` with
+// `db.users.find(u => u.role === r && u.active)` — the FIRST match.
 const quickAccounts = [
   { role: 'hr', label: 'ฝ่ายบุคคล', helper: 'พนักงานทั้งหมด · อนุมัติคำขอ', icon: 'badgeCheck' },
   { role: 'employee', label: 'พนักงาน', helper: 'โปรไฟล์ของฉัน · ส่งคำขอแก้ไข', icon: 'user' },
@@ -40,13 +25,9 @@ const quickAccounts = [
   { role: 'ceo', label: 'CEO', helper: 'อนุมัติคำขอราคา · ภาพรวมทั้งหมด', icon: 'shield' },
 ];
 
-// One-click sign-in for the accounts the backend's `demo` profile seeds (db/migration-demo V21 +
-// V139, one per role, shared password — a committed showcase credential, not a real one). Lets a
-// dev on `npm run dev` against a local backend switch persona without typing.
-//
-// Shown ONLY on the dev server against a real backend: `import.meta.env.DEV` is false in
-// `vite build`, so this row (and the password literal) is dead-code-eliminated from every deployed
-// bundle. The mock row above covers mock mode, so the two never render together.
+// One-click sign-in for the accounts the backend's `demo` profile seeds (db/migration-demo V21 + V139, one per
+// role, shared password — a committed showcase credential, not a real one). The mock row above covers mock
+// mode, so the two never render together.
 const DEMO_PASSWORD = 'Demo@2026';
 const devQuickAccounts = [
   { key: 'employee', label: 'พนักงาน' },
@@ -72,12 +53,9 @@ export function LoginPage({ onLogin, loading, error }) {
 
   function submit(event) {
     event.preventDefault();
-    // Trim here as well as in LoginRequest's constructor, because the two halves of this repo ship
-    // on different clocks: merging to `main` deploys this bundle immediately, while the backend runs
-    // a pinned pre-built image that only changes when someone builds and deploys a new tag
-    // (CLAUDE.md, "main IS production, but the two halves deploy DIFFERENTLY"). Trimming client-side
-    // means a pasted-with-a-space address logs in as soon as the frontend is live, rather than
-    // waiting on an image bump. Only the email — a password's spaces are the user's, not ours.
+    // Trim here as well as in LoginRequest's constructor, because the two halves of this repo ship on different
+    // clocks: merging to `main` deploys this bundle immediately, while the backend runs a pinned pre-built image
+    // that only changes when someone builds and deploys a new tag.
     onLogin({ ...form, email: form.email.trim() });
   }
 
@@ -114,16 +92,9 @@ export function LoginPage({ onLogin, loading, error }) {
                 type="text"
                 inputMode="email"
                 autoComplete="email"
-                // A phone keyboard capitalises the first letter of a plain text field and runs
-                // autocorrect over it, so `somchai@glr.co.th` is offered back as `Somchai@glr.co.th`
-                // — often with a trailing space once the correction is accepted. Case alone is
-                // harmless (EmployeeAuthRepository#findByEmail folds it), but the space is not: it
-                // fails LoginRequest's @Email before the lookup runs. Turning both off is what stops
-                // the field editing the address behind the user.
-                //
-                // Left as type="text" on purpose. type="email" would add native browser validation
-                // on top of the server's, changing which inputs are rejected and where the message
-                // comes from — a bigger behaviour change than this fix is asking for.
+                // A phone keyboard capitalises the first letter of a plain text field and runs autocorrect over it, so
+                // `somchai@glr.co.th` is offered back as `Somchai@glr.co.th` — often with a trailing space once the correction
+                // is accepted.
                 autoCapitalize="none"
                 autoCorrect="off"
                 spellCheck={false}
@@ -156,22 +127,9 @@ export function LoginPage({ onLogin, loading, error }) {
             เข้าสู่ระบบ
           </Button>
 
-          {/* Bottom-of-card nav link, not inline with the password field: a plain-text
-              variant="text" Button (no box - see LoginPage's submit button above for the boxed
-              contrast), sized to match the field labels' own font-size token
-              (index.css's base `label` rule: font-size: var(--text-sm)) rather than a smaller
-              muted caption size, since this is a primary navigation option, not decoration - but
-              NOT bold: the label's font-weight:700 is what makes it read as a form caption, and
-              this is a link, not one. `!font-normal` (not plain `font-normal`) is required to win
-              against Button's own base `!font-bold`: cn()'s tailwind-merge only dedupes utilities
-              whose "important" modifier matches, so an unmarked `font-normal` is left stacked
-              alongside `!font-bold` rather than replacing it, and the `!important` rule always
-              wins regardless of source order. `self-end`: SafeForm is `flex flex-col`, whose
-              default `align-items: stretch` would otherwise stretch the button to the full card
-              width (centering the text within it via Button's own `justify-center`); `self-end`
-              overrides that for just this item so it shrinks to its own content width and sits at
-              the right edge - the same right alignment it had before moving here, when it used to
-              sit inside the password label's grid via `justify-self-end`. */}
+          {/* Bottom-of-card nav link, not inline with the password field: a plain-text variant="text" Button, sized to
+           * match the field labels' own font-size token (index.css's base `label` rule: font-size: var) rather than a
+           * smaller muted caption size, since this is a primary navigation option, not decoration. */}
           <Button
             type="button"
             variant="text"

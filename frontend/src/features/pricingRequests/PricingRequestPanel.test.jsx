@@ -20,13 +20,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         submit: vi.fn(),
         cancel: vi.fn(),
         pickup: vi.fn(),
-        // PricingRequestCreateModal (V69, review remediation COMMIT 4) fetches attachments
-        // whenever it has a persisted id — including edit mode, which this file's "seed the
-        // modal from request detail" test exercises.
+        // PricingRequestCreateModal (V69, review remediation COMMIT 4) fetches attachments whenever it has a persisted
+        // id — including edit mode, which this file's "seed the modal from request detail" test exercises.
         listAttachments: vi.fn().mockResolvedValue({ items: [] }),
       },
-      // GLA-125: the header-terms section fetches the same eligible-display-name list the
-      // direct-deal quotation editor uses (not under test here).
+      // GLA-125: the header-terms section fetches the same eligible-display-name list the direct-deal quotation
+      // editor uses (not under test here).
       dealQuotations: {
         displayNameOptions: vi.fn().mockResolvedValue({ items: [] }),
       },
@@ -79,8 +78,8 @@ describe('PricingRequestPanel', () => {
     vi.clearAllMocks();
   });
 
-  // #1 (owner ask 2026-09-24): a SUBMITTED request waiting for import had no รับเรื่อง affordance
-  // on the deal itself — only in the คิวขอราคา queue. Same gate/endpoint the queue uses.
+  // #1 (owner ask 2026-09-24): a SUBMITTED request waiting for import had no รับเรื่อง affordance on the deal
+  // itself — only in the คิวขอราคา queue. Same gate/endpoint the queue uses.
   it('lets an import user รับเรื่อง a SUBMITTED request straight from the deal', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
     api.pricingRequests.pickup.mockResolvedValue({
@@ -99,12 +98,9 @@ describe('PricingRequestPanel', () => {
     expect(screen.queryByTestId('pcr-pickup-1')).toBeNull();
   });
 
-  // Ticket-detail IA rebuild Phase 1 clutter follow-up (FIX 1): this panel no
-  // longer renders its own "สร้างคำขอราคา" button — TicketDetailPage's sticky
-  // header CTA owns that action now (opening this panel's create modal via
-  // its forwardRef, see the "imperative handle" describe block below), so
-  // the same label no longer appears twice on one page. The empty state
-  // still explains what the section is for, just without a duplicate CTA.
+  // Ticket-detail IA rebuild Phase 1 clutter follow-up: this panel no longer renders its own "สร้างคำขอราคา"
+  // button — TicketDetailPage's sticky header CTA owns that action now, so the same label no longer appears
+  // twice on one page.
   it('shows an empty state for the deal owner when there are no requests, with no create button of its own', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     renderPanel();
@@ -200,9 +196,9 @@ describe('PricingRequestPanel', () => {
     api.pricingRequests.get.mockResolvedValue({
       pricingRequest: {
         summary: summary(),
-        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
-        // required on every item PricingRequestCreateModal can save — see that component's own
-        // validateItemFields (mirrors PricingRequestService#requireItemFieldsComplete).
+        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required on every item
+        // PricingRequestCreateModal can save — see that component's own validateItemFields (mirrors
+        // PricingRequestService#requireItemFieldsComplete).
         items: [{
           id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
           thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10,
@@ -275,10 +271,9 @@ describe('PricingRequestPanel', () => {
     expect(screen.queryByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).toBeNull();
   });
 
-  // Regression, reported from UAT 2026-08-11: submit() 422'd and the user saw NOTHING — the
-  // button appeared to do nothing and the reason existed only in the browser console, because
-  // submitMutation had no onError and the component rendered `.error` nowhere. The service always
-  // returns a Thai, user-facing message; this asserts it actually reaches the screen.
+  // Regression, reported from UAT 2026-08-11: submit() 422'd and the user saw NOTHING — the button appeared to
+  // do nothing and the reason existed only in the browser console, because submitMutation had no onError and the
+  // component rendered `.error` nowhere.
   it('shows the server error message when submitting to Import fails, instead of failing silently', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'DRAFT' })] });
     api.pricingRequests.submit.mockRejectedValue(new Error('รายการที่ 1: ไม่ผ่านเงื่อนไขการส่ง'));
@@ -290,8 +285,8 @@ describe('PricingRequestPanel', () => {
     expect(alert.textContent).toContain('รายการที่ 1: ไม่ผ่านเงื่อนไขการส่ง');
   });
 
-  // The mutation instance is shared by every row, so an unscoped render would print one row's
-  // failure under all of them. Two DRAFTs, submit the second, assert exactly one alert.
+  // The mutation instance is shared by every row, so an unscoped render would print one row's failure under all
+  // of them. Two DRAFTs, submit the second, assert exactly one alert.
   it('reports a submit failure only under the row it was fired from', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({
       items: [
@@ -309,19 +304,16 @@ describe('PricingRequestPanel', () => {
     expect(screen.getAllByRole('alert')).toHaveLength(1);
   });
 
-  // Fix 2 (review-remediation plan): a saved draft had no path to fix a wrong
-  // quantity/recipient/date before this — only submit or cancel. The edit
-  // modal reuses PricingRequestCreateModal in mode="edit", seeded from
-  // api.pricingRequests.get, and calls update() with the full editable
-  // representation (full-replacement PUT, not a sparse patch).
+  // Fix 2 (review-remediation plan): a saved draft had no path to fix a wrong quantity/recipient/date before
+  // this — only submit or cancel.
   it('lets the owner edit an existing DRAFT via "แก้ไขร่าง", seeding the modal from the request detail', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'DRAFT' })] });
     api.pricingRequests.get.mockResolvedValue({
       pricingRequest: {
         summary: summary({ status: 'DRAFT', recipientLabel: 'ผู้ออกแบบ ก.' }),
-        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
-        // required on every item PricingRequestCreateModal can save — see that component's own
-        // validateItemFields (mirrors PricingRequestService#requireItemFieldsComplete).
+        // V185: color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required on every item
+        // PricingRequestCreateModal can save — see that component's own validateItemFields (mirrors
+        // PricingRequestService#requireItemFieldsComplete).
         items: [{
           id: 11, brand: 'SCG', model: 'A1', color: 'ขาว', texture: 'ด้าน', size: '60x60',
           thicknessMm: 10, sqmPerPiece: 0.36, quantityMode: 'PIECES', piecesInput: 10,
@@ -352,8 +344,8 @@ describe('PricingRequestPanel', () => {
     })));
   });
 
-  // canUpdatePricingRequest is DRAFT-only (mirrors PricingRequestService.updateDraft)
-  // — once submitted, editing must disappear the same way "ส่งให้ฝ่ายนำเข้า" does.
+  // canUpdatePricingRequest is DRAFT-only (mirrors PricingRequestService.updateDraft) — once submitted, editing
+  // must disappear the same way "ส่งให้ฝ่ายนำเข้า" does.
   it('does not offer "แก้ไขร่าง" once a request is past DRAFT', async () => {
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [summary({ status: 'SUBMITTED' })] });
     renderPanel();
@@ -367,30 +359,18 @@ describe('PricingRequestPanel', () => {
     renderPanel({ user: { id: 9, name: 'CEO', role: 'ceo' } });
 
     await screen.findByText('PCR-2026-0001');
-    // Submit is DRAFT-only and owner-sales-only (PricingRequestService.submit) —
-    // the CEO never gets it, regardless of status.
+    // Submit is DRAFT-only and owner-sales-only (PricingRequestService.submit) — the CEO never gets it, regardless
+    // of status.
     expect(screen.queryByRole('button', { name: 'ส่งให้ฝ่ายนำเข้า' })).toBeNull();
-    // Cancel is the one action the CEO gets on ANY cancellable status, as an
-    // explicit override (PricingRequestService.cancel).
+    // Cancel is the one action the CEO gets on ANY cancellable status, as an explicit override
+    // (PricingRequestService.cancel).
     expect(screen.getByRole('button', { name: 'ยกเลิก' })).not.toBeNull();
   });
 
 
-  // V140 deleted the ขอข้อมูลเพิ่มเติม round-trip from the product — the service methods,
-  // the API surface, the canRequestInformation/canRespondInformation predicates and both
-  // modals are gone.
-  //
-  // This REPLACES three earlier tests ("does not offer ขอข้อมูลเพิ่มเติม to sales, even the
-  // deal owner", and two ตอบข้อมูลเพิ่มเติม ones) that pinned WHO got each button. Those
-  // discriminated on role and ownership; with the buttons gone for everyone they passed no
-  // matter which user was rendered, so they had stopped testing their own subject. Two of
-  // them also drove a MORE_INFO_REQUIRED fixture, a status V140 removed from the DB
-  // constraint entirely.
-  //
-  // What replaces them is deliberately a removal guard, not a permission test: it asserts
-  // the surface is ABSENT for every role that could ever have reached it, and it still goes
-  // red if anyone re-adds either button. IMPORT_REVIEWING is the status the request-side
-  // button used to appear in, so the fixture is the one most likely to bring it back.
+  // V140 deleted the ขอข้อมูลเพิ่มเติม round-trip from the product — the service methods, the API surface, the
+  // canRequestInformation/canRespondInformation predicates and both modals are gone. Two of them also drove a
+  // MORE_INFO_REQUIRED fixture, a status V140 removed from the DB constraint entirely.
   it('offers no ขอข้อมูลเพิ่มเติม surface to any role — the whole round-trip was removed', async () => {
     const roles = [
       salesOwner,

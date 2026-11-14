@@ -7,15 +7,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// `browser-image-compression` genuinely returns a plain **Blob**, not a File -- it does not carry
-// `file.name` through. Reproduced faithfully here (a Blob, deliberately NOT a File) because that is
-// the exact shape that exposed the bug this file's compression test guards: an unnamed Blob appended
-// to FormData defaults its multipart filename to the literal string "blob" per spec, so every
-// compressed JPG/PNG landed in the backend -- and in every list and download UI thereafter -- named
-// "blob" instead of e.g. "receipt-medical.jpg". Found live against the real backend, and fixed
-// identically in features/specialmoney/AttachmentList.jsx (#498) and here (#504).
-//
-// A `vi.fn()` returning a File would make the test pass with the fix REMOVED -- the mock must be the
+// `browser-image-compression` genuinely returns a plain **Blob**, not a File -- it does not carry `file.name`
+// through. A `vi.fn()` returning a File would make the test pass with the fix REMOVED -- the mock must be the
 // unhelpful shape the real library actually produces, or it proves nothing.
 vi.mock('browser-image-compression', () => ({
   default: vi.fn((file) => Promise.resolve(new Blob([file], { type: file.type }))),
@@ -127,8 +120,8 @@ describe('TaxAllowanceEvidencePanel — mode: staging (filling in a not-yet-subm
 
   it('a chosen PDF is staged via onStageFile rather than uploaded immediately -- the fix for "cannot attach while first filling in"', async () => {
     const onStageFile = vi.fn();
-    // No declarationId at all -- a brand-new declaration, exactly the case the reported complaint
-    // was about ("I couldn't attach a PDF while first filling in the form").
+    // No declarationId at all -- a brand-new declaration, exactly the case the reported complaint was about ("I
+    // couldn't attach a PDF while first filling in the form").
     renderPanel({ mode: 'staging', declarationId: null, sectionKey: 'family', onStageFile });
 
     const file = new File(['x'], 'cert.pdf', { type: 'application/pdf' });
@@ -141,9 +134,9 @@ describe('TaxAllowanceEvidencePanel — mode: staging (filling in a not-yet-subm
     expect(api.payroll.uploadTaxAllowanceAttachment).not.toHaveBeenCalled();
   });
 
-  // The regression this file previously had no guard for. The PDF case above cannot catch it:
-  // `prepareFile` returns non-images untouched, so a PDF never reaches the compression branch at
-  // all. Only an image/* file does -- and that is the branch where the name used to be lost.
+  // The regression this file previously had no guard for. The PDF case above cannot catch it: `prepareFile`
+  // returns non-images untouched, so a PDF never reaches the compression branch at all. Only an image/* file
+  // does -- and that is the branch where the name used to be lost.
   it('an image keeps its real filename through compression, rather than becoming "blob"', async () => {
     const onStageFile = vi.fn();
     renderPanel({ mode: 'staging', declarationId: null, sectionKey: 'family', onStageFile });
@@ -154,8 +147,8 @@ describe('TaxAllowanceEvidencePanel — mode: staging (filling in a not-yet-subm
 
     await waitFor(() => expect(onStageFile).toHaveBeenCalledTimes(1));
     const staged = onStageFile.mock.calls[0][0];
-    // Asserting the NAME is the point -- `instanceof File` alone would pass on any re-wrap, and a
-    // bare truthiness check would pass on the literal "blob" the bug produced.
+    // Asserting the NAME is the point -- `instanceof File` alone would pass on any re-wrap, and a bare truthiness
+    // check would pass on the literal "blob" the bug produced.
     expect(staged.name).toBe('receipt-medical.jpg');
     expect(staged.type).toBe('image/jpeg');
   });

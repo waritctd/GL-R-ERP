@@ -27,8 +27,8 @@ vi.mock('../../api/index.js', () => ({
   },
 }));
 
-// BRANCH 1 sample config, small enough to be readable: 1 country x 1 thickness band x 1 qty
-// band, so tests can pin exact matrix cell text without a 39-row fixture.
+// BRANCH 1 sample config, small enough to be readable: 1 country x 1 thickness band x 1 qty band, so tests can
+// pin exact matrix cell text without a 39-row fixture.
 function sampleFormulaConfig() {
   return {
     formulaConfigId: 1,
@@ -39,9 +39,9 @@ function sampleFormulaConfig() {
     insuranceBuffer: 1.07,
     costBuffer: 1.07,
     sellingBuffer: 1.07,
-    // Deliberately NOT 0.2 -- the pre-existing priceCalcConfigs fixture below also has
-    // marginPct: 0.2, which renders via the same pctDisplay helper ("20.00%"); a distinct value
-    // here keeps this section's assertions from colliding with that pre-existing table's text.
+    // Deliberately NOT 0.2 -- the pre-existing priceCalcConfigs fixture below also has marginPct: 0.2, which
+    // renders via the same pctDisplay helper ("20.00%"); a distinct value here keeps this section's assertions
+    // from colliding with that pre-existing table's text.
     defaultMarginPct: 0.24,
     sellingPriceRoundUpTo: 10,
     freightRates: [
@@ -53,9 +53,9 @@ function sampleFormulaConfig() {
     clearanceFees: [
       { clearanceFeeId: 1, qtyMinSqm: 1, qtyMaxSqm: 100, amountThb: 8000 },
     ],
-    // V151: the freight editor's country <select> is populated from this, not from the countries
-    // already present in freightRates -- otherwise a new supplier country could never be added.
-    // 'ES' is here but absent from freightRates above, which is exactly the case that matters.
+    // V151: the freight editor's country <select> is populated from this, not from the countries already present
+    // in freightRates -- otherwise a new supplier country could never be added. 'ES' is here but absent from
+    // freightRates above, which is exactly the case that matters.
     availableCountries: [
       { countryCode: 'CN', nameEn: 'China', nameTh: 'จีน' },
       { countryCode: 'ES', nameEn: 'Spain', nameTh: 'สเปน' },
@@ -64,11 +64,8 @@ function sampleFormulaConfig() {
   };
 }
 
-// Issue #436: extends sampleFormulaConfig with two more rows that leave ONE cell genuinely blank
-// (China thickness [7,12) x qty [100, null)) -- mirrors V109's own "trailing blank, never an
-// interior hole" seed shape. A DISTINCT fixture, not a mutation of sampleFormulaConfig's shared
-// default, so the existing "saves with the exact payload" test's exact 1-row freightRates
-// assertion is untouched by this file.
+// extends sampleFormulaConfig with two more rows that leave ONE cell genuinely blank (China thickness [7,12) x
+// qty [100, null)) -- mirrors V109's own "trailing blank, never an interior hole" seed shape.
 function sampleFormulaConfigWithBlankCell() {
   const base = sampleFormulaConfig();
   return {
@@ -82,8 +79,8 @@ function sampleFormulaConfigWithBlankCell() {
   };
 }
 
-// Mirrors HolidaysTab.test.jsx's identical helper -- both features' BOT fetchers throw the same
-// { message, status } shape (apiRequest's real error object) for a non-2xx response.
+// Mirrors HolidaysTab.test.jsx's identical helper -- both features' BOT fetchers throw the same { message,
+// status } shape (apiRequest's real error object) for a non-2xx response.
 function apiError(message, status) {
   const error = new Error(message);
   error.status = status;
@@ -132,10 +129,9 @@ describe('CeoSettingsPage', () => {
     });
   });
 
-  // The "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)" panel (V153 thickness defaults) and its tests stood
-  // here until 2026-09-17, removed on request alongside the panel itself — see the frontend-only
-  // removal note in CeoSettingsPage.jsx. The backend endpoint, table, and pricing-engine dependency
-  // are untouched; this only deleted coverage of a UI that no longer exists.
+  // The "ความหนาเริ่มต้นตามคอลเลกชัน (มม.)" panel (V153 thickness defaults) and its tests stood here until
+  // 2026-09-17, removed on request alongside the panel itself — see the frontend-only removal note in
+  // CeoSettingsPage.jsx.
 
   it('renders fx rates from a mocked api.fxRates.list', async () => {
     renderCeoSettingsPage();
@@ -162,9 +158,8 @@ describe('CeoSettingsPage', () => {
     expect(showToast).toHaveBeenCalledWith('success', 'อัปเดตอัตรา USD แล้ว');
   });
 
-  // UX-03: an invalid FX rate override must be marked inline on that
-  // currency's own input (aria-invalid + aria-describedby -> role="alert"),
-  // and must never reach api.fxRates.upsert.
+  // UX-03: an invalid FX rate override must be marked inline on that currency's own input (aria-invalid +
+  // aria-describedby -> role="alert"), and must never reach api.fxRates.upsert.
   it('marks an invalid FX rate inline on that currency row and does not call the FX save', async () => {
     renderCeoSettingsPage();
 
@@ -182,30 +177,25 @@ describe('CeoSettingsPage', () => {
     expect(api.fxRates.upsert).not.toHaveBeenCalled();
   });
 
-  // P0 support fix (2026-09): FxResolver no longer requires source === 'BOT', so a non-THB rate's
-  // ONLY remaining refusal-by-age path is staleness (effectiveDate more than
-  // FxResolver.MAX_RATE_AGE_DAYS days old). This flags that here, before it ever blocks costing on
-  // a pricing request.
+  // P0 support fix (2026-09): FxResolver no longer requires source === 'BOT', so a non-THB rate's ONLY remaining
+  // refusal-by-age path is staleness (effectiveDate more than FxResolver.MAX_RATE_AGE_DAYS days old). This flags
+  // that here, before it ever blocks costing on a pricing request.
   describe('FX rate staleness badge (P0 support fix)', () => {
-    // Deliberately PURE UTC day arithmetic (setUTCDate + toISOString), matching exactly how
-    // isFxRateStale() itself computes "today" (`new Date().toISOString().slice(0, 10)`) — so this
-    // helper's "n days ago" and the component's own age-in-days computation can never disagree by
-    // a day depending on the test runner's TZ, unlike a local-calendar-day helper would (see this
-    // repo's own Bangkok-timezone test-flake history).
+    // Deliberately PURE UTC day arithmetic, matching exactly how isFxRateStale itself computes "today" (`new
+    // Date.toISOString.slice`).
     function isoDaysAgo(n) {
       const date = new Date();
       date.setUTCDate(date.getUTCDate() - n);
       return date.toISOString().slice(0, 10);
     }
 
-    // Both sides asserted on the SAME render/fixture (CLAUDE.md's own testing rule) — a badge
-    // that always renders, or one that never does, fails this either way.
+    // Both sides asserted on the SAME render/fixture (CLAUDE.md's own testing rule) — a badge that always renders,
+    // or one that never does, fails this either way.
     it('flags a non-THB row older than 7 days as stale and leaves a fresher one, and THB itself, unflagged', async () => {
       api.fxRates.list.mockResolvedValue({
         fxRates: [
-          // THB is exempt from the check entirely (FxResolver.resolve short-circuits it before
-          // ever looking at effectiveDate) — deliberately given a very old date to prove that,
-          // not just one that happens to be fresh.
+          // THB is exempt from the check entirely (FxResolver.resolve short-circuits it before ever looking at
+          // effectiveDate) — deliberately given a very old date to prove that, not just one that happens to be fresh.
           { currency: 'THB', rateToThb: 1, effectiveDate: isoDaysAgo(400), source: 'MANUAL' },
           { currency: 'USD', rateToThb: 36.5, effectiveDate: isoDaysAgo(8), source: 'MANUAL' },
           { currency: 'EUR', rateToThb: 39.2, effectiveDate: isoDaysAgo(3), source: 'BOT' },
@@ -219,8 +209,8 @@ describe('CeoSettingsPage', () => {
       expect(screen.queryByTestId('fx-rate-stale-THB')).toBeNull();
     });
 
-    // Mirrors FxResolver.resolve()'s own `isBefore` (strict) rather than `isBefore`-or-equal — a
-    // rate dated EXACTLY on the 7-day boundary is still accepted, so it must not be flagged.
+    // Mirrors FxResolver.resolve()'s own `isBefore` (strict) rather than `isBefore`-or-equal — a rate dated
+    // EXACTLY on the 7-day boundary is still accepted, so it must not be flagged.
     it('does not flag a row exactly on the 7-day boundary', async () => {
       api.fxRates.list.mockResolvedValue({
         fxRates: [
@@ -235,8 +225,8 @@ describe('CeoSettingsPage', () => {
     });
   });
 
-  // Review fix (2026-09-28): S2 -- fetchNow had zero test coverage. Modelled on
-  // HolidaysTab.test.jsx's identical BOT-fetch coverage (success/zero-row/cooldown).
+  // Review fix (2026-09-28): S2 -- fetchNow had zero test coverage. Modelled on HolidaysTab.test.jsx's identical
+  // BOT-fetch coverage (success/zero-row/cooldown).
   describe('BOT FX fetch-now button (review fix)', () => {
     it('calls api.fxRates.fetchNow exactly once when clicked', async () => {
       api.fxRates.fetchNow.mockResolvedValue({ result: { updated: 2, total: 5, asOf: '2026-09-28', updatedCurrencies: ['USD', 'EUR'] } });
@@ -256,9 +246,9 @@ describe('CeoSettingsPage', () => {
       await screen.findByText('USD');
       fireEvent.click(screen.getByTestId('fx-fetch-now'));
 
-      // isPending only flips a render AFTER the mutate() call has started (react-query's own
-      // async dispatch, not synchronous with fireEvent.click) -- waitFor rather than asserting
-      // immediately, mirroring this repo's own documented gotcha (see SpecialMoneyPanel.test.jsx).
+      // isPending only flips a render AFTER the mutate() call has started (react-query's own async dispatch, not
+      // synchronous with fireEvent.click) -- waitFor rather than asserting immediately, mirroring this repo's own
+      // documented gotcha (see SpecialMoneyPanel.test.jsx).
       await waitFor(() => expect(screen.getByTestId('fx-fetch-now')).toHaveProperty('disabled', true));
       expect(screen.getByTestId('fx-fetch-now').textContent).toContain('กำลังดึงเรต');
 
@@ -278,10 +268,8 @@ describe('CeoSettingsPage', () => {
       await waitFor(() => expect(api.fxRates.list).toHaveBeenCalledTimes(2)); // invalidated + refetched
     });
 
-    // The exact production failure mode this review fix names: HTTP 200, updated: 0 (BOT hasn't
-    // published DAILY_AVG_EXG_RATE yet, or the token is bad) -- must never render as success.
-    // Mutation-check for S1: reverting the `r.updated === 0` branch back to an unconditional
-    // success toast turns THIS test red (and no other test in this file) -- see the PR body.
+    // The exact production failure mode this review fix names: HTTP 200, updated: 0 (BOT hasn't published
+    // DAILY_AVG_EXG_RATE yet, or the token is bad) -- must never render as success.
     it('reports a zero-currency fetch honestly -- no success toast, an info toast instead', async () => {
       api.fxRates.fetchNow.mockResolvedValue({ result: { updated: 0, total: 5, asOf: '2026-09-28', updatedCurrencies: [] } });
       const showToast = vi.fn();
@@ -314,9 +302,9 @@ describe('CeoSettingsPage', () => {
     });
   });
 
-  // P0 support fix (2026-09): this used to read "...ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งานการดึง
-  // อัตราอัตโนมัติ", implying the CEO had to wait on an admin before costing would work — no
-  // longer true now that a MANUAL rate is fully usable on its own.
+  // P0 support fix (2026-09): this used to read "...ติดต่อผู้ดูแลระบบหากยังไม่เปิดใช้งานการดึง อัตราอัตโนมัติ",
+  // implying the CEO had to wait on an admin before costing would work — no longer true now that a MANUAL rate
+  // is fully usable on its own.
   it('rewords the FX panel subheading so a manually entered rate reads as fully usable, not gated on an admin', async () => {
     renderCeoSettingsPage();
     await screen.findByText('USD');
@@ -325,9 +313,8 @@ describe('CeoSettingsPage', () => {
     expect(screen.getByText(/ใช้คำนวณต้นทุนได้ตามปกติทันที/)).not.toBeNull();
   });
 
-  // UX-08: the config editor is now built on the shared Modal — real dialog
-  // semantics, and Escape closes it (was: hand-rolled overlay with none of
-  // this).
+  // UX-08: the config editor is now built on the shared Modal — real dialog semantics, and Escape closes it
+  // (was: hand-rolled overlay with none of this).
   it('opens the config editor as a real dialog and closes it on Escape', async () => {
     renderCeoSettingsPage();
 
@@ -343,11 +330,8 @@ describe('CeoSettingsPage', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   });
 
-  // UX-03: this is the silent-zero regression guard. Before this fix,
-  // Number('') === 0, so clearing a pricing field and saving silently
-  // persisted 0 for that pricing input (e.g. zeroing freight/margin would
-  // under-price every deal for that country). It must now be rejected
-  // inline instead, and the save must never fire.
+  // UX-03: this is the silent-zero regression guard. It must now be rejected inline instead, and the save must
+  // never fire.
   it('rejects a blank pricing field inline and does not call priceCalcConfigs.update', async () => {
     renderCeoSettingsPage();
 
@@ -364,11 +348,8 @@ describe('CeoSettingsPage', () => {
     expect(api.priceCalcConfigs.update).not.toHaveBeenCalled();
   });
 
-  // Pricing round-trip guard: importDutyPct/marginPct are stored as
-  // fractions but edited as percents. openConfigEdit multiplies by 100 for
-  // display; saveConfig must divide back by 100 on save. This asserts the
-  // exact outbound payload, including that round-trip, so a future edit
-  // can't silently change the scaling or the payload shape.
+  // Pricing round-trip guard: importDutyPct/marginPct are stored as fractions but edited as percents.
+  // openConfigEdit multiplies by 100 for display; saveConfig must divide back by 100 on save.
   it('saves a valid config with the exact payload, including the percent round-trip', async () => {
     renderCeoSettingsPage();
 
@@ -396,8 +377,8 @@ describe('CeoSettingsPage', () => {
       renderCeoSettingsPage();
 
       const heading = await screen.findByText('สูตรคำนวณราคาขาย (ดีล)');
-      // Scoped to this new section -- "เวอร์ชัน 1" / "20.00%"-shaped text also appears in the
-      // pre-existing price-calc-config table above it, on the same page.
+      // Scoped to this new section -- "เวอร์ชัน 1" / "20.00%"-shaped text also appears in the pre-existing
+      // price-calc-config table above it, on the same page.
       const section = within(heading.closest('section'));
 
       expect(section.getByText('เวอร์ชัน 1')).not.toBeNull();
@@ -430,8 +411,8 @@ describe('CeoSettingsPage', () => {
       // NON-NEGOTIABLE round-trip guard: the multiplier input must show "1.15", never "115".
       expect(screen.getByLabelText('ตัวคูณมูลค่าสินค้าเพื่อประกันภัย').value).toBe('1.15');
       expect(screen.getByLabelText('อัตราค่าประกันภัย').value).toBe('0.0045');
-      // The percent field must show the SCALED value ("24"), matching the existing page's
-      // fraction->percent convention exactly.
+      // The percent field must show the SCALED value ("24"), matching the existing page's fraction->percent
+      // convention exactly.
       expect(screen.getByLabelText('อัตรากำไรเริ่มต้น').value).toBe('24');
     });
 
@@ -483,8 +464,8 @@ describe('CeoSettingsPage', () => {
     });
   });
 
-  // Issue #436, commit 3: freight-row ADD. Lives on the READ-ONLY matrix panel — see
-  // AddFreightRateModal's own doc comment for why it is never inside FormulaConfigEditModal.
+  // Issue #436, commit 3: freight-row ADD. Lives on the READ-ONLY matrix panel — see AddFreightRateModal's own
+  // doc comment for why it is never inside FormulaConfigEditModal.
   describe('freight-row add (issue #436)', () => {
     it('renders an add control on a blank matrix cell; clicking it opens the modal prefilled with that cell\'s coordinates', async () => {
       api.pricingFormulaConfig.get.mockResolvedValue({ formulaConfig: sampleFormulaConfigWithBlankCell() });
@@ -502,8 +483,8 @@ describe('CeoSettingsPage', () => {
       expect(within(dialog).getByLabelText('ความหนาตั้งแต่ (มม.)').value).toBe('7');
       expect(within(dialog).getByLabelText('ถึง (<) (มม.)').value).toBe('12');
       expect(within(dialog).getByLabelText('จำนวนตั้งแต่ (ตร.ม.)').value).toBe('100');
-      // qtyMaxSqm is null on the target cell (open-ended top band) -- prefilled BLANK, not '0'
-      // and not the string 'null'.
+      // qtyMaxSqm is null on the target cell (open-ended top band) -- prefilled BLANK, not '0' and not the string
+      // 'null'.
       expect(within(dialog).getByLabelText('ถึง (<) (ตร.ม.)').value).toBe('');
     });
 
@@ -566,10 +547,6 @@ describe('CeoSettingsPage', () => {
   });
 
   // Issue #436, commit 4: freight-row DELETE. Same read-only-matrix-only placement as add.
-  // sampleFormulaConfig's single populated cell (China, freightRateId 1) is the row under test in
-  // every case below -- its delete control's accessible name is matched by PREFIX regex rather
-  // than the literal en-dash-bearing band labels, so a transcription slip in a dash character
-  // cannot make these tests pass or fail for the wrong reason.
   describe('freight-row delete (issue #436)', () => {
     async function openDeleteConfirm() {
       const deleteButton = await screen.findByRole('button', { name: /^ลบค่าขนส่ง จีน/ });
@@ -623,7 +600,7 @@ describe('CeoSettingsPage', () => {
     });
   });
 
-  // The "ตัวคูณราคาตั้งประมาณการ" panel and its five tests were removed on 2026-08-10 along with
-  // the ราคาตั้ง (ประมาณการ) estimate the multiplier fed. `api.dealEstimateMarkup` no longer
-  // exists on either hrApi or mockApi, so there is nothing left to mock or assert here.
+  // The "ตัวคูณราคาตั้งประมาณการ" panel and its five tests were removed on 2026-08-10 along with the ราคาตั้ง
+  // (ประมาณการ) estimate the multiplier fed. `api.dealEstimateMarkup` no longer exists on either hrApi or
+  // mockApi, so there is nothing left to mock or assert here.
 });

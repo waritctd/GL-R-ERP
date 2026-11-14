@@ -13,14 +13,9 @@ import th.co.glr.hr.common.PageRequest;
 import th.co.glr.hr.ticket.RecordPaymentRequest;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * OWNER RULINGS 2026-09-30 (money business logic, real Postgres through the real service + repository):
- * <ol>
- *   <li>A. A deal's PAYABLE is the quotation's VAT-INCLUSIVE grand total (commission stays pre-VAT --
- *       pinned in CommissionAutoCreateIntegrationTest).</li>
- *   <li>B. OVERDUE is derived from the payable quotation's own terms, not the billing due_date column.</li>
- * </ol>
- */
+/** OWNER RULINGS 2026-09-30 (money business logic, real Postgres through the real service + repository): A. A
+ * deal's PAYABLE is the quotation's VAT-INCLUSIVE grand total (commission stays pre-VAT -- pinned in
+ * CommissionAutoCreateIntegrationTest). */
 class FinancePayableVatAndDueIntegrationTest extends FinanceDealTestBase {
 
     private static final ZoneId BKK = ZoneId.of("Asia/Bangkok");

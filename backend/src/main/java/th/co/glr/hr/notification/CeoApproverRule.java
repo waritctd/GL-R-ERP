@@ -30,26 +30,9 @@ public final class CeoApproverRule {
     private CeoApproverRule() {
     }
 
-    /**
-     * Alias expected in the caller's {@code FROM}/{@code JOIN} clause: {@code p = hr.position}. No
-     * {@code hr.division} alias is needed -- this predicate is division-independent by design (see
-     * class Javadoc).
-     *
-     * <p>Two details that are easy to get wrong:
-     * <ul>
-     *   <li><b>Whitespace is stripped before matching</b>, exactly like {@code
-     *       DivisionAccessPolicy#contains} ({@code position.replaceAll("\\s+", "")}). {@code
-     *       regexp_replace(..., '\s+', '', 'g')} is the established SQL mirror for that -- already
-     *       used in {@code approval-routing-gap-audit.sql} and {@code
-     *       PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL}. Reuse that spelling verbatim. This is
-     *       what makes กรรมการ ผู้จัดการ (a real spelling variant with an internal space) still
-     *       match.</li>
-     *   <li><b>{@code LEFT JOIN hr.position} is required.</b> {@code position_id} is nullable on
-     *       {@code hr.employee} -- an inner join would silently exclude an active employee with no
-     *       position from the result set. Hence {@code COALESCE(p.name_th, '')} rather than a bare
-     *       column reference.</li>
-     * </ul>
-     */
+    /** Alias expected in the caller's FROM/JOIN clause: p = hr.position. No hr.division alias is needed -- this
+     * predicate is division-independent by design (see class Javadoc). Reuse that spelling verbatim. This is what
+     * makes กรรมการ ผู้จัดการ (a real spelling variant with an internal space) still match. */
     public static final String SQL_PREDICATE = """
         (regexp_replace(COALESCE(p.name_th, ''), '\\s+', '', 'g') LIKE '%กรรมการผู้จัดการ%')
         """;

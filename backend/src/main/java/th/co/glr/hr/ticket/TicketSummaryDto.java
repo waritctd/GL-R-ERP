@@ -37,8 +37,8 @@ public record TicketSummaryDto(
     String lostReason,
     Instant lostAt,
     Instant stageUpdatedAt,
-    // Deal lifecycle and policy fields (V51): lifecycle gates mutations, policy
-    // fields drive tender/deposit/entry-channel workflow choices.
+    // Deal lifecycle and policy fields (V51): lifecycle gates mutations, policy fields drive
+    // tender/deposit/entry-channel workflow choices.
     String lifecycle,
     String tenderRequirement,
     String depositPolicy,
@@ -99,11 +99,8 @@ public record TicketSummaryDto(
      * the authoritative current state either way.
      */
     Instant reopenedAt,
-    /**
-     * Times this deal has been reopened after being marked lost (V58, {@code
-     * sales.ticket.reopen_count}, {@code INTEGER NOT NULL DEFAULT 0}). {@code 0} for a deal that
-     * has never been lost-then-reopened. See {@link #reopenedAt}.
-     */
+    /** Times this deal has been reopened after being marked lost (V58, sales.ticket.reopen_count, INTEGER NOT NULL
+     * DEFAULT 0). 0 for a deal that has never been lost-then-reopened. See #reopenedAt. */
     int reopenCount,
     /**
      * V193 {@code sales.ticket.quotation_only} — PROVENANCE ONLY: {@code true} when the deal was

@@ -5,10 +5,8 @@ import io.swagger.v3.oas.models.info.Info;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/**
- * Labels the springdoc-generated OpenAPI contract (served at {@code /v3/api-docs}, browsable via
- * Swagger UI at {@code /swagger-ui.html}) with basic API metadata.
- */
+/** Labels the springdoc-generated OpenAPI contract (served at /v3/api-docs, browsable via Swagger UI at
+ * /swagger-ui.html) with basic API metadata. */
 @Configuration
 public class OpenApiConfig {
 

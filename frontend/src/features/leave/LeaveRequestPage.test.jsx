@@ -126,9 +126,9 @@ function installDefaultLeaveMocks() {
   api.leave.preview.mockImplementation((payload) => Promise.resolve(
     payload?.startDate ? approvedPreview(payload) : dateless_ok_preview,
   ));
-  // Default: no holidays anywhere -- keeps every test below on the empty-state วันหยุดที่จะถึง
-  // panel and the "all working days" calendar-context note, uninvolved with what each test
-  // actually asserts on. The holiday-visibility cases below override this per-test.
+  // Default: no holidays anywhere -- keeps every test below on the empty-state วันหยุดที่จะถึง panel and the
+  // "all working days" calendar-context note, uninvolved with what each test actually asserts on. The
+  // holiday-visibility cases below override this per-test.
   api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
 }
 
@@ -164,9 +164,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     renderComposer();
     fireEvent.click(await screen.findByRole('button', { name: /ประเภทอื่นๆ/ }));
 
-    // Two buttons match /ลาอุปสมบท/: the "ประเภทอื่นๆ" disclosure toggle (its subtitle lists
-    // "ลาคลอด ลาทหาร ลาอุปสมบท") and the actual type-choice button -- disambiguate by picking the
-    // one that is itself the disabled type button, not the toggle.
+    // Two buttons match /ลาอุปสมบท/: the "ประเภทอื่นๆ" disclosure toggle (its subtitle lists "ลาคลอด ลาทหาร
+    // ลาอุปสมบท") and the actual type-choice button -- disambiguate by picking the one that is itself the disabled
+    // type button, not the toggle.
     await waitFor(() => {
       const matches = screen.getAllByRole('button', { name: /ลาอุปสมบท/ });
       const ordinationButton = matches.find((button) => button.hasAttribute('disabled'));
@@ -237,9 +237,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     fireEvent.change(screen.getByLabelText(/เหตุผลการลา/), { target: { value: 'ท้องเสีย + ปวดหัวไมเกรน' } });
     expect(screen.queryByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).toBeNull();
 
-    // Both guards, not just the visible one: `disabled` on the button AND advanceFromStep2's own
-    // `if (!valid || startDateInPast) return`. Asserting only the attribute would stay green if a
-    // second, independent past-date check were ever added inside the handler.
+    // Both guards, not just the visible one: `disabled` on the button AND advanceFromStep2's own `if (!valid ||
+    // startDateInPast) return`. Asserting only the attribute would stay green if a second, independent past-date
+    // check were ever added inside the handler.
     expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(false);
     fireEvent.click(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }));
     expect(await screen.findByText(/ขั้นตอนที่ 3\/3/)).not.toBeNull();
@@ -271,16 +271,16 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
   // change.
   it('step 2: PERSONAL start date in the past is blocked until ลากิจฉุกเฉิน is ticked, then advances to step 3', async () => {
     renderComposer();
-    // No "ประเภทอื่นๆ" disclosure needed -- ลากิจ (PERSONAL) is a top-level type button, same as
-    // the "preview call that fails outright" test above confirms with the same query.
+    // No "ประเภทอื่นๆ" disclosure needed -- ลากิจ (PERSONAL) is a top-level type button, same as the "preview call
+    // that fails outright" test above confirms with the same query.
     fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
     fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
     await screen.findByText(/ขั้นตอนที่ 2\/3/);
 
     fireEvent.change(screen.getByLabelText(/วันที่เริ่ม/), { target: { value: '2020-01-01' } });
     fireEvent.blur(screen.getByLabelText(/วันที่เริ่ม/));
-    // Anchored so this doesn't ALSO match PERSONAL's own "เหตุผลการลากิจ (ถ้ามี)" select, which
-    // shares the same leading substring -- a plain /เหตุผลการลา/ is ambiguous only on this type.
+    // Anchored so this doesn't ALSO match PERSONAL's own "เหตุผลการลากิจ (ถ้ามี)" select, which shares the same
+    // leading substring -- a plain /เหตุผลการลา/ is ambiguous only on this type.
     fireEvent.change(screen.getByLabelText(/^เหตุผลการลา(?!กิจ)/), { target: { value: 'ธุระด่วนที่บ้าน' } });
     expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้ หากเป็นลากิจฉุกเฉิน ให้เลือก “ลากิจฉุกเฉิน” ด้านล่างก่อน')).not.toBeNull();
     expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
@@ -322,11 +322,8 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
   });
 
-  // Wrong-way-round: the exemption is keyed on `leaveTypeCode === 'PERSONAL'` AND the checkbox, not
-  // on "the employee ticked the box at some point in this session" -- selectType already resets
-  // requestedAsEmergency to false and re-triggers startDate on every type switch (see its own
-  // comment), so this pins that a leftover tick from PERSONAL cannot silently carry over as an
-  // exemption for a type that never earned one.
+  // Wrong-way-round: the exemption is keyed on `leaveTypeCode === 'PERSONAL'` AND the checkbox, not on "the
+  // employee ticked the box at some point in this session".
   it('step 2: the ลากิจฉุกเฉิน exemption does not leak into another type', async () => {
     renderComposer();
     fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
@@ -347,11 +344,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     expect(await screen.findByText('วันที่เริ่มลาต้องไม่ก่อนวันนี้')).not.toBeNull();
     expect(screen.getByRole('button', { name: /ถัดไป: ตรวจสอบก่อนส่ง/ }).disabled).toBe(true);
 
-    // The leg that actually exercises selectType's reset. The VACATION leg above is satisfied by
-    // the type gate alone (VACATION is never exempt, ticked or not), so on its own it stays green
-    // with the reset deleted -- found by the reviewer's own mutation check. Coming BACK to PERSONAL
-    // is where a surviving tick would re-open the exemption: the past date must be blocked again
-    // and the box must render unticked, or the reset is not doing its job.
+    // The leg that actually exercises selectType's reset. The VACATION leg above is satisfied by the type gate
+    // alone (VACATION is never exempt, ticked or not), so on its own it stays green with the reset deleted --
+    // found by the reviewer's own mutation check.
     fireEvent.click(screen.getByRole('button', { name: 'ย้อนกลับ' }));
     fireEvent.click(await screen.findByRole('button', { name: /ลากิจ/ }));
     fireEvent.click(screen.getByRole('button', { name: 'ถัดไป' }));
@@ -383,9 +378,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     api.leave.calendarContext.mockResolvedValue({
       calendarContext: {
         holidays: [{ holidayDate: '2026-08-15', nameTh: 'วันหยุดทดสอบ' }],
-        // Empty on purpose: the reactive per-selection note further down only lists holiday
-        // NAMES once nonWorkingDates is non-empty (see that block's own comment) -- keeping it
-        // empty here means any "วันหยุดทดสอบ" on screen can only be coming from the panel.
+        // Empty on purpose: the reactive per-selection note further down only lists holiday NAMES once nonWorkingDates
+        // is non-empty (see that block's own comment) -- keeping it empty here means any "วันหยุดทดสอบ" on screen can
+        // only be coming from the panel.
         nonWorkingDates: [],
       },
     });
@@ -406,11 +401,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     const start = '2099-12-07';
     const end = '2099-12-08';
 
-    // Keyed on params so only the note's own SELECTED-range query (start..end) returns these
-    // holidays -- the วันหยุดที่จะถึง panel's separate ~90-day-forward query stays empty, which
-    // isolates this assertion to the note under test instead of also matching the panel's own
-    // (legitimately duplicate, per OvertimePage.test.jsx's own precedent) render of the same
-    // names.
+    // Keyed on params so only the note's own SELECTED-range query returns these holidays -- the วันหยุดที่จะถึง
+    // panel's separate ~90-day-forward query stays empty, which isolates this assertion to the note under test
+    // instead of also matching the panel's own render of the same names.
     api.leave.calendarContext.mockImplementation((params) => Promise.resolve({
       calendarContext: params?.from === start && params?.to === end
         ? {
@@ -434,9 +427,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     });
     const note = screen.getByTestId('calendar-context-note');
 
-    // Each long name is its OWN element (an exact-text match only succeeds if some element's
-    // full text is exactly this string, not a substring of a longer run-on sentence) sitting in
-    // its own list row -- never comma-joined into the same element as the other.
+    // Each long name is its OWN element (an exact-text match only succeeds if some element's full text is exactly
+    // this string, not a substring of a longer run-on sentence) sitting in its own list row -- never comma-joined
+    // into the same element as the other.
     const firstNameEl = within(note).getByText(LONG_NAME_1);
     const secondNameEl = within(note).getByText(LONG_NAME_2);
     expect(firstNameEl.closest('li')).not.toBeNull();
@@ -509,8 +502,8 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     await waitFor(() => expect(api.leave.create).toHaveBeenCalledTimes(1));
     const { attachmentFile } = api.leave.create.mock.calls[0][0];
 
-    // The regression this guards: without the File re-wrap, `attachmentFile.name` is undefined (a
-    // bare Blob has no `.name`), and FormData/fetch would send "blob" to the real backend.
+    // The regression this guards: without the File re-wrap, `attachmentFile.name` is undefined (a bare Blob has no
+    // `.name`), and FormData/fetch would send "blob" to the real backend.
     expect(attachmentFile.name).toBe('sick-note.jpg');
     expect(attachmentFile).toBeInstanceOf(File);
     expect(attachmentFile.type).toBe('image/jpeg');
@@ -710,19 +703,16 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       api.leave.balances.mockResolvedValue(carryInBalance({ carriedInRemainingDays: 0 }));
       await goToStep2ForVacation();
 
-      // Let the resolved balances promise's state update actually commit before asserting the
-      // negative -- otherwise "absent" would be trivially true before the query even settles,
-      // proving nothing about the gate itself (the vacuous-test shape CLAUDE.md warns about).
+      // Let the resolved balances promise's state update actually commit before asserting the negative -- otherwise
+      // "absent" would be trivially true before the query even settles, proving nothing about the gate itself (the
+      // vacuous-test shape CLAUDE.md warns about).
       await waitFor(() => expect(api.leave.balances).toHaveBeenCalled());
       await new Promise((resolve) => { setTimeout(resolve, 50); });
       expect(screen.queryByText(/เลือกโควตาที่จะหักก่อน/)).toBeNull();
     });
 
-    // Wrong-way-round on purpose: this SICK balance carries a positive carriedInRemainingDays (a
-    // figure real SICK data would never have), so this test only passes for the right reason if
-    // the render gate genuinely checks carriesForward -- a gate that dropped that check (leaving
-    // only carriedInRemainingDays > 0) would make this test fail loudly instead of passing by
-    // accident, the way a fixture that also zeroed carriedInRemainingDays could.
+    // Wrong-way-round on purpose: this SICK balance carries a positive carriedInRemainingDays, so this test only
+    // passes for the right reason if the render gate genuinely checks carriesForward.
     it('does NOT render for a type that does not carry forward, even when its balance carries a positive carriedInRemainingDays', async () => {
       api.leave.balances.mockResolvedValue({
         balances: [{
@@ -750,8 +740,8 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       expect(carriedInRadio.checked).toBe(true);
       expect(ownRadio.checked).toBe(false);
 
-      // BE years are derived from carriedInFromYear alone (2025 -> 2568 carry-in pool, 2026 ->
-      // 2569 own pool -- see QuotaPoolPreferenceField's own comment on why never "today").
+      // BE years are derived from carriedInFromYear alone (2025 -> 2568 carry-in pool, 2026 -> 2569 own pool -- see
+      // QuotaPoolPreferenceField's own comment on why never "today").
       expect(carriedInRadio.closest('label').textContent).toMatch(/ปี 2568/);
       expect(carriedInRadio.closest('label').textContent).toMatch(/เหลือ 2\u00A0วัน/);
       expect(carriedInRadio.closest('label').textContent).toMatch(/หมดอายุ 31 ธ\.ค\. 2569/);
@@ -803,9 +793,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
     // 6 + 2 = 8 (the combined pool), so the bar must read the request as fitting.
     it("step 3's QuotaBar cap folds in carriedInDays, so a request within the combined pool does not fire the over-quota warning", async () => {
       api.leave.balances.mockResolvedValue(carryInBalance());
-      // Overrides the default installDefaultLeaveMocks() preview (fixed totalDays: 1) -- both
-      // the step-2 QUICK and step-3 FULL calls resolve through this, but only step 3's FULL
-      // result reaches the QuotaBar (`step3Preview.totalDays`), which is all this test reads.
+      // Overrides the default installDefaultLeaveMocks() preview (fixed totalDays: 1) -- both the step-2 QUICK and
+      // step-3 FULL calls resolve through this, but only step 3's FULL result reaches the QuotaBar
+      // (`step3Preview.totalDays`), which is all this test reads.
       api.leave.preview.mockImplementation((payload) => Promise.resolve({
         preview: {
           blocking: null,
@@ -828,12 +818,8 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       await screen.findByText(/ขั้นตอนที่ 3\/3/);
 
       const progressBar = await screen.findByRole('progressbar');
-      // cap is annualQuotaDays (6) + carriedInDays (2) = 8, not the bare 6 -- used (7, this
-      // request's own totalDays) no longer exceeds it. Read via the raw DOM textContent, not
-      // screen.findByText/getByText -- their default normalizer collapses the NBSP formatDays
-      // puts between a number and its unit into a plain space, so a pattern containing a literal
-      // \u00A0 never matches through them (same reason MyLeaveTab.test.jsx's equivalent
-      // assertion reads card.textContent directly instead of querying through screen).
+      // cap is annualQuotaDays (6) + carriedInDays (2) = 8, not the bare 6 -- used (7, this request's own totalDays)
+      // no longer exceeds it.
       const quotaBarRoot = progressBar.parentElement;
       expect(quotaBarRoot.textContent).toMatch(/7\u00A0วัน \/ 8\u00A0วัน/);
       expect(quotaBarRoot.textContent).not.toMatch(/เกินโควตาประจำปี/);
@@ -842,9 +828,9 @@ describe('LeaveRequestPage (Phase A2, #485)', () => {
       expect(progressBar.getAttribute('aria-valuemax')).toBe('100');
     });
 
-    // Wrong-way-round, on purpose: a request that genuinely exceeds the COMBINED pool
-    // (annualQuotaDays + carriedInDays = 8) must still warn -- proves the carry-in fold-in only
-    // narrows the false positive above and does not silently disable the real check.
+    // Wrong-way-round, on purpose: a request that genuinely exceeds the COMBINED pool (annualQuotaDays +
+    // carriedInDays = 8) must still warn -- proves the carry-in fold-in only narrows the false positive above and
+    // does not silently disable the real check.
     it("step 3's QuotaBar still fires the over-quota warning once a request exceeds annualQuotaDays + carriedInDays", async () => {
       api.leave.balances.mockResolvedValue(carryInBalance());
       api.leave.preview.mockImplementation((payload) => Promise.resolve({
@@ -947,8 +933,8 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
     await advanceToStep3WithFutureDate();
 
     expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
-    // Not rendered inside role="alert" (that's step3Blocking/step3Error's own terminal wrapper) --
-    // a warning does not stop submission, so it must not be announced the same way.
+    // Not rendered inside role="alert" (that's step3Blocking/step3Error's own terminal wrapper) -- a warning does
+    // not stop submission, so it must not be announced the same way.
     expect(screen.queryByRole('alert')).toBeNull();
 
     const submitButton = await screen.findByRole('button', { name: /ส่งคำขอ/ });
@@ -974,9 +960,9 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
 
     // The warning itself IS shown at step 2...
     expect(await screen.findByText(/ต้องยื่นล่วงหน้าอย่างน้อย 3 วัน/)).not.toBeNull();
-    // ...and the green "passed" line must NOT sit above it. A request carrying a warning does pass
-    // (nothing blocks submission), but telling someone their leave cleared the checks immediately
-    // before telling them it will be unpaid is the wrong thing for them to take away.
+    // ...and the green "passed" line must NOT sit above it. A request carrying a warning does pass (nothing blocks
+    // submission), but telling someone their leave cleared the checks immediately before telling them it will be
+    // unpaid is the wrong thing for them to take away.
     expect(screen.queryByText(/ผ่านเงื่อนไขที่ตรวจแบบเร็วแล้ว/)).toBeNull();
   });
 
@@ -1011,10 +997,9 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
   });
 
   it('step 3: a BLOCK still disables submit and shows only the danger panel, even alongside warnings', async () => {
-    // Defensive: LeavePreviewDto's own contract says a non-null `blocking` always pairs with an
-    // EMPTY ruleWarnings (a BLOCK wins outright) -- this proves the FRONTEND enforces that
-    // dominance itself rather than trusting a well-behaved backend, in case a future response ever
-    // sends both.
+    // Defensive: LeavePreviewDto's own contract says a non-null `blocking` always pairs with an EMPTY ruleWarnings
+    // (a BLOCK wins outright) -- this proves the FRONTEND enforces that dominance itself rather than trusting a
+    // well-behaved backend, in case a future response ever sends both.
     const blockingOutcome = {
       code: 'DEPARTMENT_COVERAGE',
       params: { uncoveredDate: '2099-12-31' },
@@ -1052,10 +1037,9 @@ describe('LeaveRequestPage: §5 WARN_UNPAID_* gates (V164 follow-up, 2026-09-09)
   });
 
   it('a dateless preview renders no warning, even if (incorrectly) the response carried one', async () => {
-    // The real LeavePreviewDto contract is that ruleWarnings is ALWAYS empty for a dateless call
-    // (LeavePreviewDto's own Javadoc: a dateless preview cannot know totalDays, so there is no
-    // honest day count a WARN_UNPAID_TAIL sentence could quote) -- step 1's TypeChoice never reads
-    // ruleWarnings at all, so this holds even if a misbehaving response broke that contract.
+    // The real LeavePreviewDto contract is that ruleWarnings is ALWAYS empty for a dateless call -- step 1's
+    // TypeChoice never reads ruleWarnings at all, so this holds even if a misbehaving response broke that
+    // contract.
     api.leave.preview.mockImplementation((payload) => {
       if (payload?.leaveTypeCode === 'VACATION' && !payload?.startDate) {
         return Promise.resolve({

@@ -151,8 +151,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
       if (idChanged) return record; // a different contact — the rep's dirty text belonged to the old one
       const merged = { ...prev };
       for (const field of CONTACT_EDIT_FIELDS) {
-        if (prev[field] === wasSeeded[field]) merged[field] = record[field]; // clean — take the record
-        // else: the rep has typed something else since it was seeded — keep their text
+        if (prev[field] === wasSeeded[field]) merged[field] = record[field]; // clean — take the record else: the rep has typed something else since it was seeded — keep their text
       }
       return merged;
     });
@@ -160,12 +159,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selected?.id, selected?.phone, selected?.email]);
 
-  /** Persists ONE field on blur, sending only that field (PATCH semantics — an omitted key is
-   * left alone). Updates the local options list too, so the picker's own list reflects the edit
-   * without a refetch, and hands the result up through `onChange` — the SAME callback a newly
-   * created contact uses — so the parent marks the quotation dirty and the next draft save
-   * re-snapshots it (DealQuotationService#resolveContact re-reads the live contact by id on
-   * every save; see CustomerController#updateContact's own Javadoc). */
+  /** Persists ONE field on blur, sending only that field (PATCH semantics — an omitted key is left alone). */
   function saveContactField(field) {
     if (!selected?.id) return;
     // Without a customer to save against (a quotation-grant holder who cannot load the ticket:
@@ -187,8 +181,7 @@ export const QuotationContactPicker = forwardRef(function QuotationContactPicker
     const optimistic = { ...selected, [field]: next || null };
     setOptions((prev) => prev.map((c) => (String(c.id) === String(selected.id) ? { ...c, [field]: next || null } : c)));
     onChange(optimistic);
-    // Tracked so the editor's submit pre-save can await this exact request — see
-    // `flushPendingContactSave` above.
+    // Tracked so the editor's submit pre-save can await this exact request — see `flushPendingContactSave` above.
     const promise = (async () => {
       try {
         const res = await api.customers.updateContact(customerId, selected.id, { [field]: next });

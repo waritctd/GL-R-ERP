@@ -84,15 +84,8 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.pricingcosting.LandedCostCalculator;
 
-/**
- * Change 1 (guard hardening plan): {@code DepositNoticeRepository.issue} must refuse a
- * concurrent/duplicate issue against a row that is no longer DRAFT, rather than silently re-minting
- * {@code doc_number} in place. Drives a deal through the REAL Steps 1-6 services (no shortcuts) —
- * same wiring and fixture-building approach as {@code
- * InventoryDeliveryFulfilmentIntegrationTest#fullChain_reserveStockAndCompleteDelivery_...} — up to
- * a successfully issued deposit notice, then exercises both the pre-existing service-level guard
- * ({@code DepositNoticeService.requireDraft}) and the new repository-level SQL guard directly.
- */
+/** Change 1 (guard hardening plan): DepositNoticeRepository.issue must refuse a concurrent/duplicate issue
+ * against a row that is no longer DRAFT, rather than silently re-minting doc_number in place. */
 class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -129,9 +122,9 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
             pricingRequests, tickets, notifications, objectMapper, new ContactRepository(jdbc), fileStorage, factoryQuoteCarryForward());
 
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
-        // Costing moved from Import to CEO: the landed-cost calculation is now a shared
-        // LandedCostCalculator that FactoryQuoteService and PricingDecisionService both take,
-        // and PricingCostingService no longer owns the repositories it used to compute from.
+        // Costing moved from Import to CEO: the landed-cost calculation is now a shared LandedCostCalculator that
+        // FactoryQuoteService and PricingDecisionService both take, and PricingCostingService no longer owns the
+        // repositories it used to compute from.
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
@@ -176,14 +169,12 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     private void insertFactory(String name) {
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Change 1 tests
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void issue_secondServiceCallOnAlreadyIssuedNoticeIsRefused_rowUnchanged() {
-        // NEGATIVE (the one that matters): this currently passes via requireDraft — pins the
-        // pre-existing rule, which is unaffected by the new repository predicate.
+        // NEGATIVE (the one that matters): this currently passes via requireDraft — pins the pre-existing rule, which
+        // is unaffected by the new repository predicate.
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
 
         assertThatThrownBy(() -> depositNoticeService.issue(fixture.docId(), salesActor))
@@ -197,9 +188,9 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
 
     @Test
     void issue_repositoryLevelCallOnAlreadyIssuedRowRefusesWithoutRemintingDocNumber() {
-        // NEGATIVE, repository-level: this is what proves the NEW guard. Calling the repository
-        // directly bypasses requireDraft entirely — without "AND status = 'DRAFT'" in the UPDATE's
-        // WHERE, this returns a fresh doc number and rewrites the row.
+        // NEGATIVE, repository-level: this is what proves the NEW guard. Calling the repository directly bypasses
+        // requireDraft entirely — without "AND status = 'DRAFT'" in the UPDATE's WHERE, this returns a fresh doc
+        // number and rewrites the row.
         IssuedNoticeFixture fixture = buildTicketWithIssuedDepositNotice();
 
         Optional<String> result = depositNoticeRepository.issue(fixture.docId(), salesRepId, "Someone Else");
@@ -384,10 +375,8 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         assertThat(reread.items()).isEqualTo(before.items());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Fixture helpers — mirrors InventoryDeliveryFulfilmentIntegrationTest's approach for
-    // driving a deal to an issued deposit notice through the real Steps 1-6 services.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Fixture helpers — mirrors InventoryDeliveryFulfilmentIntegrationTest's approach for driving a deal to an
+    // issued deposit notice through the real Steps 1-6 services.
 
     private record IssuedNoticeFixture(long ticketId, long pricingRequestId, long docId, String docNumber) {}
 
@@ -448,10 +437,9 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         long ticketItemId = created.items().get(0).id();
 
         BigDecimal quantity = new BigDecimal("10");
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             ticketItemId, catalogProductId, null, "SCG", "Tile Guard1", "SCG Tile Guard1",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -496,9 +484,9 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
 
-        // V141 ("CEO owns costing"): Import's last act is markReadyForCosting above. The three
-        // costing write calls that used to sit here are severed (@Deprecated, 409) — startReview
-        // now computes the landed cost itself when the CEO opens the review.
+        // V141 ("CEO owns costing"): Import's last act is markReadyForCosting above. The three costing write calls
+        // that used to sit here are severed (@Deprecated, 409) — startReview now computes the landed cost itself when
+        // the CEO opens the review.
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
         List<UpdatePricingDecisionItemRequest> updates = decision.items().stream()
@@ -518,10 +506,9 @@ class DepositNoticeIssueGuardIntegrationTest extends AbstractPostgresIntegration
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

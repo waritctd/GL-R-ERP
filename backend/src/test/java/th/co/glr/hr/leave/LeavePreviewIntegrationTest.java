@@ -27,31 +27,14 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * POST /api/leave/preview (Phase A0b): the single claim this phase's whole design rests on, proven
- * against the real repository -- {@link LeaveService#preview}'s blocking {@link LeaveRuleCode} (or
- * lack of one) agrees with the {@code system_note_code} {@link LeaveService#submit} actually persists
- * for the IDENTICAL request, across a fixture matrix spanning every bucket of {@code
- * LeaveService#autoRejectNote}'s gate chain (categorical eligibility, request-shape, document/timing,
- * and the one relational gate). If preview and submit could disagree, the feature would be worse than
- * useless -- it would tell an employee a request is fine and then reject it once they actually file.
- *
- * <p>Each test calls {@link LeaveService#preview} FIRST, then {@link LeaveService#submit} on the
- * SAME arguments -- preview writes nothing, so calling it first can never change what submit sees.
- *
- * <p>Also proves the one KNOWN, DOCUMENTED exception to "preview agrees with submit": QUICK-depth
- * preview deliberately skips {@link LeaveService#departmentCoverageRuleOutcome} and says so via
- * {@code coverageEvaluated == false} -- see {@code
- * quickDepthSkipsDepartmentCoverageAndSaysSoExplicitly} below. This is not a violation of the "same
- * code" claim above (that claim is about FULL depth, which is what every other test in this class
- * uses); it is the documented, opt-in cost of the cheap debounced read.
- */
+/** POST /api/leave/preview: the single claim this phase's whole design rests on, proven against the real
+ * repository. Each test calls LeaveService#preview FIRST, then LeaveService#submit on the SAME arguments --
+ * preview writes nothing, so calling it first can never change what submit sees. */
 class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- comfortably past VACATION's 3-day and PERSONAL's
-    // 1-day seeded advance notice for every "should be approved" date used below, and the same fixed
-    // instant LeaveRelationalRulesIntegrationTest uses (so the reused date fixtures below match it
-    // exactly).
+    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- comfortably past VACATION's 3-day and PERSONAL's 1-day seeded
+    // advance notice for every "should be approved" date used below, and the same fixed instant
+    // LeaveRelationalRulesIntegrationTest uses (so the reused date fixtures below match it exactly).
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
 
     private LeaveRepository leaveRepository;
@@ -76,9 +59,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             Clock.fixed(FIXED_NOW, BUSINESS_ZONE));
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // Baseline: no blocking gate on either side
-    // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void approvedVacationRequestAgreesOnBothSides() {
@@ -120,9 +101,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(submitted.paidDays()).isEqualByComparingTo(preview.paidDays());
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // Categorical eligibility (LeaveService#eligibilityRuleOutcome)
-    // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void oncePerEmploymentAgreesOnBothSides() {
@@ -151,9 +130,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             employeeId, "PERSONAL", "2026-07-13", "2026-07-13", null, false, "PROBATION_NOT_PASSED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // Request-shape gates
-    // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void weddingMaxDaysNeitherBlocksButSubmitStillWarns() {
@@ -167,23 +144,21 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void contiguousLeavePairAgreesOnBothSides() {
         long employeeId = insertEmployee("PREV-CONTIG-001", LocalDate.parse("2015-01-01"), null);
-        // Fri 2026-07-10 PERSONAL already taken; Mon 2026-07-13 VACATION is contiguous across the
-        // weekend -- see LeaveService#isContiguous's Javadoc for why a plain weekend does not break it.
+        // Fri 2026-07-10 PERSONAL already taken; Mon 2026-07-13 VACATION is contiguous across the weekend -- see
+        // LeaveService#isContiguous's Javadoc for why a plain weekend does not break it.
         seedActiveRequest(employeeId, "PERSONAL", "2026-07-10", "2026-07-10", LeaveStatus.APPROVED);
         assertPreviewAgreesWithSubmit(
             employeeId, "VACATION", "2026-07-13", "2026-07-13", null, false, "CONTIGUOUS_LEAVE_PAIR");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // Document/timing gates
-    // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void sickNoCertificateToleranceExhaustedNeitherBlocksButSubmitStillWarns() {
         // SICK_NO_CERT_TOLERANCE_EXHAUSTED is WARN_UNPAID_ALL, not BLOCK.
         long employeeId = insertEmployee("PREV-SICK-001", LocalDate.parse("2015-01-01"), null);
-        // 3 certificate-less SICK occasions already used this month (the seeded tolerance) -- the 4th
-        // still fires the gate on both sides, just no longer as a rejection.
+        // 3 certificate-less SICK occasions already used this month (the seeded tolerance) -- the 4th still fires the
+        // gate on both sides, just no longer as a rejection.
         seedActiveRequest(employeeId, "SICK", "2026-07-02", "2026-07-02", LeaveStatus.APPROVED);
         seedActiveRequest(employeeId, "SICK", "2026-07-03", "2026-07-03", LeaveStatus.APPROVED);
         seedActiveRequest(employeeId, "SICK", "2026-07-06", "2026-07-06", LeaveStatus.APPROVED);
@@ -195,8 +170,8 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     void advanceNoticeNeitherBlocksButSubmitStillWarns() {
         // ADVANCE_NOTICE is WARN_UNPAID_ALL, not BLOCK.
         long employeeId = insertEmployee("PREV-NOTICE-001", LocalDate.parse("2015-01-01"), null);
-        // PERSONAL requires 1 day's notice; "today" (2026-07-01, the fixed clock) has none at all,
-        // and the request is not declared emergency, so the plain notice gate fires.
+        // PERSONAL requires 1 day's notice; "today" (2026-07-01, the fixed clock) has none at all, and the request is
+        // not declared emergency, so the plain notice gate fires.
         assertPreviewAgreesNeitherBlocksButSubmitWarns(
             employeeId, "PERSONAL", "2026-07-01", "2026-07-01", null, false, "ADVANCE_NOTICE");
     }
@@ -205,9 +180,9 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
     void emergencyToleranceExhaustedNeitherBlocksButSubmitStillWarns() {
         // EMERGENCY_TOLERANCE_EXHAUSTED is WARN_UNPAID_ALL, not BLOCK.
         long employeeId = insertEmployee("PREV-EMERG-001", LocalDate.parse("2015-01-01"), null);
-        // 3 prior PERSONAL requests this month already used the emergency exception (emergency_filing
-        // = TRUE) -- the 4th same-day, no-notice, emergency-declared request still fires the
-        // tolerance-exhausted gate on both sides, not the plain notice one.
+        // 3 prior PERSONAL requests this month already used the emergency exception (emergency_filing = TRUE) -- the
+        // 4th same-day, no-notice, emergency-declared request still fires the tolerance-exhausted gate on both sides,
+        // not the plain notice one.
         markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-02", "2026-07-02", LeaveStatus.APPROVED));
         markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-03", "2026-07-03", LeaveStatus.APPROVED));
         markEmergencyFiling(seedActiveRequest(employeeId, "PERSONAL", "2026-07-06", "2026-07-06", LeaveStatus.APPROVED));
@@ -215,9 +190,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             employeeId, "PERSONAL", "2026-07-01", "2026-07-01", null, true, "EMERGENCY_TOLERANCE_EXHAUSTED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // The one relational gate (§5.3.2 department coverage)
-    // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void departmentCoverageAgreesOnBothSidesUnderFullDepth() {
@@ -232,15 +205,8 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             requester, "VACATION", "2026-07-13", "2026-07-13", null, false, "DEPARTMENT_COVERAGE");
     }
 
-    /**
-     * The documented exception, proven explicitly (not merely asserted-away): under QUICK depth,
-     * preview does NOT run {@link LeaveService#departmentCoverageRuleOutcome} at all, so it reports
-     * {@code blocking == null} / {@code coverageEvaluated == false} for the EXACT SAME request that
-     * {@link #departmentCoverageAgreesOnBothSidesUnderFullDepth} above proves {@code submit} (and a
-     * FULL-depth preview) refuses. This is {@code LeaveService#preview}'s stated contract, not a bug
-     * -- a caller reading {@code coverageEvaluated == false} knows not to trust a clean QUICK verdict
-     * for this specific gate.
-     */
+    /** Checks QUICK preview explicitly skips department coverage even when FULL preview and submission block the
+     * same request. */
     @Test
     void quickDepthSkipsDepartmentCoverageAndSaysSoExplicitly() {
         long departmentId = insertDepartment("PREV-DEPT-COVER-QUICK-001");
@@ -258,8 +224,8 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quickPreview.coverageEvaluated()).as("must explicitly say the gate did not run").isFalse();
         assertThat(quickPreview.datesEvaluated()).isTrue();
 
-        // The SAME request, for real, IS refused -- confirming the QUICK read above was genuinely
-        // optimistic, not merely "also happens to be approved".
+        // The SAME request, for real, IS refused -- confirming the QUICK read above was genuinely optimistic, not
+        // merely "also happens to be approved".
         LeaveRequestDto submitted = leaveService.submit(
             new SubmitLeaveRequest(requester, "VACATION", LocalDate.parse("2026-07-13"), LocalDate.parse("2026-07-13"), "Integration test leave"),
             employee(requester));
@@ -294,13 +260,13 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
         long requester = insertEmployee("PREV-WCOV-EMP-001", LocalDate.parse("2015-01-01"), departmentId);
         long colleagueA = insertEmployee("PREV-WCOV-EMP-002", LocalDate.parse("2015-01-01"), departmentId);
         long colleagueB = insertEmployee("PREV-WCOV-EMP-003", LocalDate.parse("2015-01-01"), departmentId);
-        // Same-day PERSONAL leave for both colleagues -- the requester's own same-day PERSONAL request
-        // below would leave nobody else in the department at work on 2026-07-01.
+        // Same-day PERSONAL leave for both colleagues -- the requester's own same-day PERSONAL request below would
+        // leave nobody else in the department at work on 2026-07-01.
         seedActiveRequest(colleagueA, "PERSONAL", "2026-07-01", "2026-07-01", LeaveStatus.SUBMITTED);
         seedActiveRequest(colleagueB, "PERSONAL", "2026-07-01", "2026-07-01", LeaveStatus.APPROVED);
 
-        // FULL depth: department coverage BLOCKs, and must not leak the ADVANCE_NOTICE warning that
-        // accumulated before it (today, 2026-07-01, is inside PERSONAL's 1-day notice requirement).
+        // FULL depth: department coverage BLOCKs, and must not leak the ADVANCE_NOTICE warning that accumulated before
+        // it (today, 2026-07-01, is inside PERSONAL's 1-day notice requirement).
         LeavePreviewDto fullPreview = leaveService.preview(new LeavePreviewRequest(
             "PERSONAL", LocalDate.parse("2026-07-01"), LocalDate.parse("2026-07-01"), requester,
             null, false, false, LeavePreviewDepth.FULL, null), employee(requester));
@@ -312,8 +278,8 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             .as("a BLOCK must not leak the ADVANCE_NOTICE warning that accumulated before it")
             .isEmpty();
 
-        // QUICK depth, IDENTICAL request: coverage is skipped, so nothing blocks -- and the
-        // ADVANCE_NOTICE warning (unaffected by the skip) correctly surfaces instead.
+        // QUICK depth, IDENTICAL request: coverage is skipped, so nothing blocks -- and the ADVANCE_NOTICE warning
+        // (unaffected by the skip) correctly surfaces instead.
         LeavePreviewDto quickPreview = leaveService.preview(new LeavePreviewRequest(
             "PERSONAL", LocalDate.parse("2026-07-01"), LocalDate.parse("2026-07-01"), requester,
             null, false, false, LeavePreviewDepth.QUICK, null), employee(requester));
@@ -329,9 +295,7 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo(BigDecimal.ONE);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // Nullable dates: only the eligibility gates can run
-    // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void previewWithNoDatesYetOnlyEvaluatesEligibilityGatesAndReportsNoBlockForAWarnOnlyEmployee() {
@@ -491,13 +455,9 @@ class LeavePreviewIntegrationTest extends AbstractPostgresIntegrationTest {
             .addValue("resignDate", LocalDate.parse("2026-08-15")));
     }
 
-    /**
-     * Seeds an "existing" leave request directly through {@link LeaveRepository#create} -- bypassing
-     * every {@link LeaveService} gate, since the point is to construct pre-existing state for the
-     * request UNDER TEST to react to, not to prove the seeded request's own submission was valid.
-     * Returns the new id so callers that need to mark it as an emergency filing (see {@link
-     * #markEmergencyFiling}) can do so.
-     */
+    /** Seeds an "existing" leave request directly through LeaveRepository#create -- bypassing every LeaveService
+     * gate, since the point is to construct pre-existing state for the request UNDER TEST to react to, not to
+     * prove the seeded request's own submission was valid. */
     private long seedActiveRequest(long employeeId, String leaveTypeCode, String startDate, String endDate, LeaveStatus status) {
         LocalDate start = LocalDate.parse(startDate);
         LocalDate end = LocalDate.parse(endDate);

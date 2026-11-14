@@ -19,18 +19,9 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * CEO leave-approval reach (2026-09-01), owner ruling: "make it so that ceo can approve everyone
- * leaves". Real-Postgres pin for {@code LeaveService#REVIEW_ALL_ROLES} gaining {@code "ceo"}
- * alongside {@code "hr"}.
- *
- * <p>Mockito cannot reach this -- see {@code LeaveServiceTest#ceoCanApproveLeave} for the
- * decision-level twin (CLAUDE.md's "Permission changes must ship evidence" requires both: a unit
- * test proves the right branch was chosen, this class proves the decision survives into a real
- * {@code UPDATE ... WHERE status = 'SUBMITTED'} against real Postgres, including the
- * {@code reviewed_by_id} foreign key to {@code hr.employee} that a mocked repository would never
- * exercise). Runs the real {@link LeaveService} against a real {@link LeaveRepository}.
- */
+/** CEO leave-approval reach (2026-09-01), owner ruling: "make it so that ceo can approve everyone leaves".
+ * WHERE status = 'SUBMITTED' against real Postgres, including the reviewed_by_id foreign key to hr.employee
+ * that a mocked repository would never exercise). */
 class LeaveCeoApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private LeaveService leaveService;
@@ -58,17 +49,14 @@ class LeaveCeoApprovalIntegrationTest extends AbstractPostgresIntegrationTest {
             requestId, new ReviewLeaveRequest("ok"), ceo(ceoEmployeeId));
 
         assertThat(approved.status()).isEqualTo("APPROVED");
-        // Read back independently of the returned DTO -- proves the real UPDATE landed in
-        // Postgres (and satisfied the reviewed_by_id FK to hr.employee), not just that the
-        // in-memory return value looks right.
+        // Read back independently of the returned DTO -- proves the real UPDATE landed in Postgres (and satisfied the
+        // reviewed_by_id FK to hr.employee), not just that the in-memory return value looks right.
         assertThat(persistedStatus(requestId)).isEqualTo("APPROVED");
     }
 
-    /**
-     * Wrong-way-round, the case that actually distinguishes "reach widened to ceo" from "reach
-     * widened to everyone": a sales actor with no reports_to relationship to the filer must still
-     * 403, and the row must stay SUBMITTED.
-     */
+    /** Wrong-way-round, the case that actually distinguishes "reach widened to ceo" from "reach widened to
+     * everyone": a sales actor with no reports_to relationship to the filer must still 403, and the row must stay
+     * SUBMITTED. */
     @Test
     void nonReviewerRoleStillCannotApproveSomeoneElsesLeave() {
         long salesActor = insertEmployee("CEOAPR-SLS1");

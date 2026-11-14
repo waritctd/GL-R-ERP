@@ -121,9 +121,8 @@ describe('DealDocumentRegister', () => {
     expect(screen.queryByTestId('register-attachments')).toBeNull();
     expect(screen.queryByTestId('register-import-requests')).toBeNull();
     expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
-    // Never fire a query that would 403 — a swallowed 403 rendering an empty
-    // register reads as "no documents exist", which is worse than the
-    // honest "not available in this view" above.
+    // Never fire a query that would 403 — a swallowed 403 rendering an empty register reads as "no documents
+    // exist", which is worse than the honest "not available in this view" above.
     expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
     expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
   });
@@ -414,9 +413,9 @@ describe('DealDocumentRegister', () => {
     expect(row.queryByRole('button')).toBeNull();
   });
 
-  // Backend RemainingInvoiceRepository#lockIssuedPredecessor continues a base ONLY from an ISSUED
-  // row with the same customer_quotation_id (null matches null). issue() supersedes every other
-  // ISSUED row, so a SUPERSEDED-only group must NOT adopt a draft.
+  // Backend RemainingInvoiceRepository#lockIssuedPredecessor continues a base ONLY from an ISSUED row with the
+  // same customer_quotation_id (null matches null). issue() supersedes every other ISSUED row, so a
+  // SUPERSEDED-only group must NOT adopt a draft.
   const ACCOUNT = { user: { id: 5, role: 'account' }, sections: ACCOUNT_SECTIONS, canViewPricingRequests: false, canViewDocumentsTab: true };
   const groupOf = (id) => screen.getByTestId(`document-version-remaining-${id}`).closest('[data-testid="document-group"]');
   const idsIn = (group) => within(group).getAllByTestId(/^document-version-remaining-/).map((e) => e.getAttribute('data-testid'));
@@ -629,8 +628,8 @@ describe('DealDocumentRegister', () => {
     expect(row.queryByText(/ไม่ระบุผู้รับ/)).toBeNull();
   });
 
-  // Deploy safety: the frontend ships before the backend image, so an older backend omits the
-  // field. No chip is better than a wrong one.
+  // Deploy safety: the frontend ships before the backend image, so an older backend omits the field. No chip is
+  // better than a wrong one.
   it('direct: recipientType absent (older backend) renders NO chip', async () => {
     api.dealQuotations.listForTicket.mockResolvedValue({
       items: [{ id: 93, number: 'QT-2026-0930-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 1, origin: 'DEAL_DIRECT' }],
@@ -686,8 +685,8 @@ describe('DealDocumentRegister', () => {
     expect(screen.getByText('QT-2026-0901')).not.toBeNull();
   });
 
-  // Wrong-way-round: viewers failing `canViewQuotations && canViewDealQuotation(user)` must never
-  // trigger the direct-quotation fetch (it would 403).
+  // Wrong-way-round: viewers failing `canViewQuotations && canViewDealQuotation(user)` must never trigger the
+  // direct-quotation fetch (it would 403).
   it.each([
     ['account', { id: 5, role: 'account' }, ACCOUNT_SECTIONS, false],
     ['import', { id: 7, role: 'import' }, IMPORT_SECTIONS, true],
@@ -742,8 +741,8 @@ describe('DealDocumentRegister', () => {
     expect(draft.queryByRole('button')).toBeNull();
   });
 
-  // Wrong-way-round: same gate as the deposit notice (sections.depositNotice) — import is refused
-  // outright, so the stored-invoice query must never fire for it.
+  // Wrong-way-round: same gate as the deposit notice (sections.depositNotice) — import is refused outright, so
+  // the stored-invoice query must never fire for it.
   it('does not fetch stored remaining invoices for a viewer without sections.depositNotice', async () => {
     renderRegister({ user: { id: 7, role: 'import' }, sections: IMPORT_SECTIONS, canViewPricingRequests: true, canViewDocumentsTab: true });
     expect(await screen.findByTestId('register-attachments')).not.toBeNull();
@@ -818,9 +817,9 @@ describe('DealDocumentRegister', () => {
 
     const section = within(await screen.findByTestId('register-deposit'));
 
-    // The bug: SUPERSEDED must read ถูกแทนที่, and never fall back to ฉบับร่าง. Wait for the
-    // deposit-notice rows themselves (the section testid mounts immediately in its loading
-    // skeleton, before the listByTicket query resolves).
+    // The bug: SUPERSEDED must read ถูกแทนที่, and never fall back to ฉบับร่าง. Wait for the deposit-notice rows
+    // themselves (the section testid mounts immediately in its loading skeleton, before the listByTicket query
+    // resolves).
     expect(await section.findByText('ถูกแทนที่')).not.toBeNull();
     expect(section.getByText('ออกแล้ว')).not.toBeNull();
     expect(section.queryByText('ฉบับร่าง')).toBeNull();
@@ -1003,9 +1002,9 @@ describe('DealDocumentRegister', () => {
     const section = within(await screen.findByTestId('register-remaining-invoice'));
     fireEvent.click(section.getByRole('button', { name: 'Excel' }));
 
-    // account is not this deal's owning sales rep, so R4 shows the "waiting for sales" state
-    // rather than the create-flow options preview — either way, the register itself never
-    // downloads directly; it only ever opens the dialog.
+    // account is not this deal's owning sales rep, so R4 shows the "waiting for sales" state rather than the
+    // create-flow options preview — either way, the register itself never downloads directly; it only ever opens
+    // the dialog.
     expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
   });
 

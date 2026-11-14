@@ -63,60 +63,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Pins the INPUT VALIDATION on {@code PUT /api/pricing-decisions/{}/items/{}/cost-override}
- * ({@link PricingDecisionService#overrideItemCost}) — the mandatory {@code reason} and the
- * non-negative {@code manualLandedCostPerUnitThb} — which until now nothing tested at all.
- *
- * <p><b>Why this file exists.</b> V141 ("CEO owns costing") shipped the guard, and PR #769 built
- * the CEO override UI on top of it, enforcing the same reason client-side. But the backend side of
- * that contract rested on two things only: reading the code, and the {@code CHECK} constraints
- * in {@code V141__ceo_owns_pricing_costing.sql}. {@link PricingCostingAuthzIntegrationTest}
- * covers <i>who may call</i> {@code overrideItemCost}; {@link PricingDecisionIntegrationTest}
- * covers the happy path and override staleness. Neither ever passes a blank, whitespace-only, or
- * null reason, nor a negative cost, and no test anywhere asserted either rejection message.
- *
- * <p><b>Where the guard actually lives, and why the CHECK constraints are not a substitute.</b>
- * Enforcement is in the SERVICE ({@code PricingDecisionService#overrideItemCost}, the two guards
- * at the top of the method), which is what makes the refusal a clean {@code 400} the UI can render.
- * The database backstops it, but only partially. Three of the tests below exist specifically to pin
- * the places the constraints cannot reach, and the last point governs how all of them assert:
- * <ul>
- *   <li>{@code chk_pricing_costing_item_override_reason} is conditioned on
- *       {@code manual_landed_cost_per_unit_thb IS NOT NULL}, so on the CLEAR path
- *       ({@code manualLandedCostPerUnitThb == null}) the database requires no reason whatsoever —
- *       the service guard is the ONLY thing enforcing it there. See
- *       {@link #overrideItemCost_requiresAReasonOnTheClearPathToo_whereNoCheckConstraintApplies}.</li>
- *   <li>That same constraint tests {@code btrim(override_reason) <> ''}, and one-argument
- *       {@code btrim} strips <b>spaces only</b> — a tab- or newline-only reason satisfies it. Java's
- *       {@code isBlank()} does not, so on the SET path the service is strictly stronger than the
- *       constraint, not merely faster. See
- *       {@link #overrideItemCost_refusesAWhitespaceOnlyReason_andWritesNothing}.</li>
- *   <li>{@code chk_pricing_costing_item_override_nonnegative} sees the value only AFTER
- *       {@code money4} rounds it to 4dp, so a negative smaller than half a satang
- *       ({@code -0.00004}) reaches the database as {@code 0.0000} and is accepted. See
- *       {@link #overrideItemCost_refusesANegativeCostTooSmallForTheCheckConstraintToCatch}.</li>
- *   <li>A constraint violation surfaces as a {@code DataIntegrityViolationException} → 500, not a
- *       400 with a Thai message. Every negative test here therefore asserts the {@link ApiException}
- *       <b>status AND message</b>, not merely that something was thrown — a test that accepts any
- *       exception passes just as happily when the guard is gone and Postgres is doing the refusing.</li>
- * </ul>
- *
- * <p>Written wrong-way-round throughout, per CLAUDE.md: each refusal test asserts the write did
- * <b>not</b> happen, with a direct query against the real row (all six override columns still
- * untouched, no {@code PRICING_COSTING_ITEM_COST_OVERRIDDEN} event), rather than trusting the
- * thrown status code. {@link #overrideItemCost_acceptsAValidReason_onBothTheSetAndTheClearPath} is
- * the positive control that keeps the whole file honest: it proves the guard discriminates rather
- * than simply refusing everything, which is the failure mode a suite of negative-only tests cannot
- * distinguish from a correct one.
- *
- * <p>Real service, real repository, real Postgres — no Mockito on the path under test. The service
- * is reached through {@link AbstractPostgresIntegrationTest#transactional} because
- * {@code overrideItemCost} is {@code @Transactional} and this suite hand-wires services with
- * {@code new} (no Spring context, so a bare annotation would otherwise be inert): with the proxy in
- * place a refusal rolls back exactly as it does in production, which is what makes the
- * "nothing was written" assertions mean something.
- */
+/** Pins the INPUT VALIDATION on PUT /api/pricing-decisions/{/items/{}/cost-override}
+ * (PricingDecisionService#overrideItemCost) — the mandatory reason and the non-negative
+ * manualLandedCostPerUnitThb — which until now nothing tested at all. */
 class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostgresIntegrationTest {
     /** The two messages under test, quoted from {@code PricingDecisionService#overrideItemCost}. */
     private static final String REASON_REQUIRED =
@@ -188,13 +137,9 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // The mandatory reason. Three shapes, because a guard can be wrong in three different ways:
-    // absent entirely (`reason == null`), present but empty (`""`), and present but only
-    // whitespace — the last being the one a naive `reason != null` or `reason.isEmpty()` check
-    // waves straight through. The whitespace value is "  \t \n  " rather than plain spaces on
-    // purpose; see that test's own Javadoc for why the choice is load-bearing.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // The mandatory reason. Three shapes, because a guard can be wrong in three different ways: absent entirely
+    // (`reason == null`), present but empty (`""`), and present but only whitespace — the last being the one a
+    // naive `reason != null` or `reason.isEmpty()` check waves straight through.
 
     @Test
     void overrideItemCost_refusesANullReason_andWritesNothing() {
@@ -224,23 +169,9 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         assertNothingWasOverridden(fixture);
     }
 
-    /**
-     * The case that separates {@code isBlank()} from {@code isEmpty()}, and the reason this test is
-     * written separately rather than folded into the empty-string one above: a guard weakened to
-     * {@code reason.isEmpty()} — or to a bare null check — leaves every other test in this file
-     * green while letting a CEO record a money-affecting override justified by nothing.
-     *
-     * <p><b>This is the one refusal in the file with no database backstop on the SET path either,
-     * and the reason is a genuine asymmetry worth knowing.</b> {@code
-     * chk_pricing_costing_item_override_reason} tests {@code btrim(override_reason) <> ''}, and
-     * one-argument {@code btrim} in PostgreSQL strips <i>spaces only</i> — not tabs, not newlines.
-     * Java's {@code String#isBlank()} uses {@code Character.isWhitespace} and strips all of them. So
-     * a pure-space reason is caught by both (the database as a 500, the service as this 400), while
-     * the {@code "  \t \n  "} used here escapes the constraint entirely and is caught by the service
-     * alone. Verified, not assumed: removing the service guard and re-running this test writes the
-     * tab-and-newline reason to the row with no exception at all, and {@code
-     * SELECT btrim(E'  \t \n  ') = ''} returns false on PostgreSQL 16.
-     */
+    /** The case that separates isBlank from isEmpty, and the reason this test is written separately rather than
+     * folded into the empty-string one above: a guard weakened to reason.isEmpty. Java's String#isBlank() uses
+     * Character.isWhitespace and strips all of them. */
     @Test
     void overrideItemCost_refusesAWhitespaceOnlyReason_andWritesNothing() {
         Fixture fixture = draftDecisionWithOneItem();
@@ -255,27 +186,18 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         assertNothingWasOverridden(fixture);
     }
 
-    /**
-     * The CLEAR direction ({@code manualLandedCostPerUnitThb == null}) needs a reason just as much
-     * as the SET direction — clearing an override is money-affecting too, which is the whole point
-     * of {@code CostOverrideRequest}'s "mandatory in BOTH directions" contract.
-     *
-     * <p>This is the case with no database backstop at all: {@code
-     * chk_pricing_costing_item_override_reason} only fires when {@code
-     * manual_landed_cost_per_unit_thb IS NOT NULL}, and a clear sets it to NULL. Delete the service
-     * guard and {@code clearOverride} — which does not take a reason argument in the first place —
-     * wipes a live override with no justification recorded anywhere, and Postgres accepts it
-     * without complaint.
-     */
+    /** The CLEAR direction (manualLandedCostPerUnitThb == null) needs a reason just as much as the SET direction —
+     * clearing an override is money-affecting too, which is the whole point of CostOverrideRequest's "mandatory in
+     * BOTH directions" contract. */
     @Test
     void overrideItemCost_requiresAReasonOnTheClearPathToo_whereNoCheckConstraintApplies() {
         Fixture fixture = draftDecisionWithOneItem();
         decisions.overrideItemCost(fixture.decisionId(), fixture.itemId(),
             new CostOverrideRequest(new BigDecimal("888.0000"), "ต่อรองกับโรงงานได้ราคาที่ดีกว่า"), ceoActor);
 
-        // Deliberately an EMPTY reason, not a whitespace one: this test is about the clear path
-        // having no database backstop, and reusing the whitespace case here would make it go red
-        // alongside the isBlank() test under the same mutation instead of isolating its own guard.
+        // Deliberately an EMPTY reason, not a whitespace one: this test is about the clear path having no database
+        // backstop, and reusing the whitespace case here would make it go red alongside the isBlank() test under the
+        // same mutation instead of isolating its own guard.
         assertThatThrownBy(() -> decisions.overrideItemCost(fixture.decisionId(), fixture.itemId(),
             new CostOverrideRequest(null, ""), ceoActor))
             .isInstanceOfSatisfying(ApiException.class, e -> {
@@ -294,9 +216,7 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
             .isEqualTo(1L);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The non-negative cost.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void overrideItemCost_refusesANegativeCost_andWritesNothing() {
@@ -312,18 +232,9 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         assertNothingWasOverridden(fixture);
     }
 
-    /**
-     * {@code -0.00004} is the value that proves the service guard is load-bearing rather than
-     * decorative: {@code money4} ({@code setScale(4, HALF_UP)}) rounds it to {@code 0.0000} BEFORE
-     * {@code applyOverride} ever sees it, so {@code chk_pricing_costing_item_override_nonnegative}
-     * ({@code >= 0}) is satisfied and Postgres stores a perfectly valid zero-cost override. Only
-     * the service's own comparison — which runs against the RAW request value, before rounding —
-     * catches it.
-     *
-     * <p>Zero itself is legitimate (a free sample, a factory absorbing the cost), so the guard is
-     * deliberately {@code < 0} and not {@code <= 0}; this test pins the sign check, not a
-     * "must be positive" rule that does not exist.
-     */
+    /** -0.00004 is the value that proves the service guard is load-bearing rather than decorative: money4 (setScale)
+     * rounds it to 0.0000 BEFORE applyOverride ever sees it, so chk_pricing_costing_item_override_nonnegative is
+     * satisfied and Postgres stores a perfectly valid zero-cost override. */
     @Test
     void overrideItemCost_refusesANegativeCostTooSmallForTheCheckConstraintToCatch() {
         Fixture fixture = draftDecisionWithOneItem();
@@ -338,15 +249,10 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         assertNothingWasOverridden(fixture);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Positive control.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Without this test the six above are indistinguishable from a method that refuses every
-     * request it is ever given. It drives both directions end to end and asserts the writes
-     * actually landed in the real row.
-     */
+    /** Without this test the six above are indistinguishable from a method that refuses every request it is ever
+     * given. It drives both directions end to end and asserts the writes actually landed in the real row. */
     @Test
     void overrideItemCost_acceptsAValidReason_onBothTheSetAndTheClearPath() {
         Fixture fixture = draftDecisionWithOneItem();
@@ -378,20 +284,13 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         assertThat(overrideEventCount(fixture)).isEqualTo(3L);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** The three ids every assertion below needs, resolved once per test. */
     private record Fixture(long pricingRequestId, long decisionId, long itemId, long costingItemId) {}
 
-    /**
-     * Wrong-way-round assertion shared by every refusal test: not just "no manual cost", but ALL SIX
-     * override columns still untouched. {@code overridden_by}/{@code overridden_at} matter
-     * independently — {@code clearOverride} stamps those two even when it nulls everything else, so
-     * checking the manual cost alone would not distinguish "nothing happened" from "the row was
-     * cleared". And no event, since {@code overrideItemCost} writes one on every successful call.
-     */
+    /** Wrong-way-round assertion shared by every refusal test: not just "no manual cost", but ALL SIX override
+     * columns still untouched. And no event, since overrideItemCost writes one on every successful call. */
     private void assertNothingWasOverridden(Fixture fixture) {
         assertThat(overrideColumn(fixture, "manual_landed_cost_per_unit_thb", BigDecimal.class)).isNull();
         assertThat(overrideColumn(fixture, "override_reason", String.class)).isNull();
@@ -401,9 +300,8 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         assertThat(overrideColumn(fixture, "override_calc_config_version", Integer.class)).isNull();
         assertThat(overrideEventCount(fixture)).isZero();
 
-        // The decision item's frozen cost is derived from the effective cost, so a refused override
-        // must leave it on the computed figure too — read back through the real service, not the DTO
-        // captured before the call.
+        // The decision item's frozen cost is derived from the effective cost, so a refused override must leave it on
+        // the computed figure too — read back through the real service, not the DTO captured before the call.
         PricingDecisionItemDto item = decisionService.get(fixture.decisionId(), ceoActor).items().stream()
             .filter(i -> i.id() == fixture.itemId()).findFirst().orElseThrow();
         assertThat(item.frozenLandedCostPerPieceThb()).isEqualByComparingTo(
@@ -428,12 +326,8 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
         return count == null ? 0L : count;
     }
 
-    /**
-     * One-item deal driven all the way to a DRAFT pricing decision on a CEO_REVIEWING request —
-     * the precondition {@code overrideItemCost} needs before its own validation is even reachable
-     * ({@code requireOpenDecisionForMutation}). One item rather than two: nothing here depends on
-     * a second line, and the factory-quote round trip is the expensive part of the setup.
-     */
+    /** One-item deal driven all the way to a DRAFT pricing decision on a CEO_REVIEWING request — the precondition
+     * overrideItemCost needs before its own validation is even reachable (requireOpenDecisionForMutation). */
     private Fixture draftDecisionWithOneItem() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, oneItemPricingRequest(), salesActor)
             .summary().id();
@@ -460,8 +354,8 @@ class PricingDecisionCostOverrideValidationIntegrationTest extends AbstractPostg
             UUID.randomUUID().toString());
     }
 
-    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-    // quantity are now required on every item PricingRequestService#createDraft persists —
+    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+    // required on every item PricingRequestService#createDraft persists —
     // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
     private PricingRequestRequests.CreatePricingRequestRequest oneItemPricingRequest() {
         return new PricingRequestRequests.CreatePricingRequestRequest(

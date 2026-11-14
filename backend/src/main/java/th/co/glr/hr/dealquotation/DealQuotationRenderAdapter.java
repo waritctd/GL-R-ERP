@@ -14,19 +14,8 @@ import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 
-/**
- * Quotation v2 (direct deal quotation, V165) — builds {@link QuotationRenderer}'s rich model
- * ({@link QuotationRenderModel}) straight from a {@link DealQuotationDto}, per
- * docs/sales/quotation-v2-plan.md's "Printed lines" section. Every field the renderer needs (customer/rep/
- * creator/approver names, phone, dept/unit codes, per-item lead times) already lives on
- * {@code DealQuotationDto} / {@code DealQuotationItemDto}, so unlike pass 1's version of this
- * class, there is no more adaptation into the legacy {@code TicketDto}/{@code QuotationDto}
- * shapes — this builds the real model directly.
- *
- * <p>A pure function: no DB access. The approver's signature bytes are a DB read (the V175
- * snapshot frozen at approval), so the caller ({@code DealQuotationService}) resolves them and
- * passes the bytes in.
- */
+/** Quotation v2 (direct deal quotation, V165) — builds QuotationRenderer's rich model (QuotationRenderModel)
+ * straight from a DealQuotationDto, per docs/sales/quotation-v2-plan.md's "Printed lines" section. */
 public final class DealQuotationRenderAdapter {
     private DealQuotationRenderAdapter() {}
 
@@ -42,21 +31,14 @@ public final class DealQuotationRenderAdapter {
         return stored != null ? stored : DEFAULT_DEPOSIT_PERCENT;
     }
 
-    /** Overload for callers with no configured bank block — the English document then prints the
-     * proforma-invoice line instead. Kept so tests and any hand-wired caller need not thread a
-     * config value they do not care about. */
+    /** Overload for callers with no configured bank block — the English document then prints the proforma-invoice
+     * line instead. Kept so tests and any hand-wired caller need not thread a config value they do not care about. */
     public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
                                                       String approverSignatureMime) {
         return toRenderModel(quotation, approverSignaturePng, approverSignatureMime, List.of());
     }
 
-    /**
-     * @param bankBlockLines the unnumbered bank block for an ENGLISH document, from
-     *     {@code app.quotation.bank-block-line1..3}. EMPTY or partially filled prints the
-     *     proforma-invoice line instead — half a set of wire instructions is worse than none, so
-     *     there is no "best effort" here. Ignored entirely on a Thai document, whose หมายเหตุ block
-     *     carries no bank details.
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public static QuotationRenderModel toRenderModel(DealQuotationDto quotation, byte[] approverSignaturePng,
                                                       String approverSignatureMime,
                                                       List<String> bankBlockLines) {
@@ -261,20 +243,16 @@ public final class DealQuotationRenderAdapter {
             remarks, signatories, true,
             english ? WastageCalculator.DOCUMENT_LANGUAGE_EN : WastageCalculator.DOCUMENT_LANGUAGE_TH,
             quotation.currency(),
-            // forceCompactRemarks: this class ALWAYS builds the direct-deal v2 render (tile OR
-            // non-tile) and always wants the packed/compacted remark-box layout — see
-            // QuotationRenderModel#forceCompactRemarks's own Javadoc for why the non-tile set (3 or
-            // 4 lines, well under QuotationRenderer#REMARK_V2_MIN_LINES) needs this rather than
-            // relying on the size check the tile set has always passed on its own.
+            // forceCompactRemarks: this class ALWAYS builds the direct-deal v2 render and always wants the
+            // packed/compacted remark-box layout.
             true,
             // hideProjectLine — see the projectName argument above.
             quotation.hideProjectName());
     }
 
-    /** {@code true} when {@code item} is a TILE row — {@code lineType} null or {@link
-     * WastageCalculator#LINE_TYPE_TILE} — the same question {@link #printedUnit}/{@link
-     * #discountLabel} each ask inline for their own reasons. Shared here for the non-tile
-     * remark-set gate below. */
+    /** true when item is a TILE row — lineType null or WastageCalculator#LINE_TYPE_TILE — the same question
+     * #printedUnit/#discountLabel each ask inline for their own reasons. Shared here for the non-tile remark-set
+     * gate below. */
     private static boolean isTileLine(DealQuotationItemDto item) {
         return item.lineType() == null || WastageCalculator.LINE_TYPE_TILE.equals(item.lineType());
     }
@@ -334,13 +312,7 @@ public final class DealQuotationRenderAdapter {
             item.netUnitPrice(), item.lineAmount(), picture, perSqmRow ? QTY_FORMAT_SQM : null);
     }
 
-    /**
-     * The หน่วย cell. The distinction between {@code null} and {@code ""} is load-bearing here and
-     * must not be collapsed: {@code QuotationRenderer#fillItemMainRow} treats a NULL unit as "use
-     * the default แผ่น" and an EMPTY unit as "print nothing". An ADJUSTMENT row stores no unit at
-     * all (raw_unit NULL), and the owner's ส่วนลดพิเศษ line prints a BLANK หน่วย — so a non-tile
-     * row's missing unit is mapped to "" here, never passed through as null.
-     */
+    /** Pass an empty unit for non-tile adjustments: null would print the renderer's default unit. */
     static final String QTY_FORMAT_SQM = "#,##0.00";
 
     private static String printedUnit(DealQuotationItemDto item, boolean english) {
@@ -369,9 +341,8 @@ public final class DealQuotationRenderAdapter {
      * row that IS the discount rather than a row carrying one.
      */
     private static String discountLabel(DealQuotationItemDto item, String priceMode, boolean english) {
-        // English: "Special", never "พิเศษ" — the English form carries no Thai in its item table.
-        // The SAME word QuotationDocumentView prints on screen (quotationMeta#documentDiscountLabel),
-        // so the page and the PDF agree.
+        // English: "Special", never "พิเศษ" — the English form carries no Thai in its item table. The SAME word
+        // QuotationDocumentView prints on screen (quotationMeta#documentDiscountLabel), so the page and the PDF agree.
         String special = english ? "Special" : "พิเศษ";
         BigDecimal pct = item.discountPct();
         if (WastageCalculator.LINE_TYPE_ADJUSTMENT.equals(item.lineType())) {
@@ -417,9 +388,8 @@ public final class DealQuotationRenderAdapter {
             .toList());
     }
 
-    /** Same rule, over the rows about to be WRITTEN — {@code DealQuotationService#create}/{@code
-     * #update} call this so DATE mode is refused BEFORE anything is saved, rather than needing a
-     * round trip through a persisted read. */
+    /** Same rule, over the rows about to be WRITTEN — DealQuotationService#create/#update call this so DATE mode is
+     * refused BEFORE anything is saved, rather than needing a round trip through a persisted read. */
     public static boolean hasSpecialPricingForNewItems(String priceMode,
                                                         List<DealQuotationRepository.NewItem> items) {
         return hasSpecialPricingCore(priceMode, items.stream()
@@ -469,9 +439,9 @@ public final class DealQuotationRenderAdapter {
         return v != null && v.signum() > 0;
     }
 
-    // ── remarks (8 lines) — docs/sales/quotation-v2-plan.md "Printed lines"; 4/5/6/8 are the template's own
-    // fixed text (two rows concatenated where the template splits a sentence across a "head" row
-    // and an unnumbered continuation row). ─────────────────────────────────────────────────────
+    // remarks (8 lines) — docs/sales/quotation-v2-plan.md "Printed lines"; 4/5/6/8 are the template's own fixed
+    // text (two rows concatenated where the template splits a sentence across a "head" row and an unnumbered
+    // continuation row).
 
     // No country and no stock wording is printed at all when nothing on the document carries a
     // lead time — submit() makes that case rare (every TILE row must carry one), but a DRAFT
@@ -569,10 +539,9 @@ public final class DealQuotationRenderAdapter {
     private static final String NON_TILE_LINE1 =
         "1.ราคาข้างต้นรวมค่าขนส่งถึงชั้น 1 ของหน่วยงานในเขตกทม. แต่ไม่รวมค่าติดตั้ง";
 
-    /** Remark 3 when NO row on a non-tile document carries a lead time — discarded by {@link
-     * #dropLeadTimeLineAndRenumber} in exactly the same way {@link #LINE3_FALLBACK} is for the
-     * tile set (see that constant's own Javadoc); kept only as the value {@link
-     * #nonTileLeadTimeLine} must return something for while composing the full line list. */
+    /** Remark 3 when NO row on a non-tile document carries a lead time — discarded by #dropLeadTimeLineAndRenumber
+     * in exactly the same way #LINE3_FALLBACK is for the tile set; kept only as the value #nonTileLeadTimeLine
+     * must return something for while composing the full line list. */
     private static final String NON_TILE_LINE3_FALLBACK = "3.ระยะเวลานำเข้า : ประมาณ ...... วัน";
 
     /**
@@ -609,10 +578,9 @@ public final class DealQuotationRenderAdapter {
         return "3.กรณีโรงงานผู้ผลิตมีสินค้าพร้อมจัดส่ง ระยะเวลานำเข้า " + groups + depositClause;
     }
 
-    /** Renumbers {@link #LINE6}'s own "no exchange or return" sentence to {@code number} (4
-      * normally, 3 when {@link #nonTileLeadTimeLine} above it was dropped) — REUSES the constant's
-      * text (only its leading digit differs) rather than retyping it, so the tile and non-tile
-      * remark sets can never print two different translations of the same rule. */
+    /** Renumbers #LINE6's own "no exchange or return" sentence to number — REUSES the constant's text rather than
+     * retyping it, so the tile and non-tile remark sets can never print two different translations of the same
+     * rule. */
     private static String noReturnLine(int number) {
         return number + LINE6.substring(LINE6.indexOf('.'));
     }
@@ -735,14 +703,8 @@ public final class DealQuotationRenderAdapter {
     // ── When ระยะเวลานำเข้า is not chosen on any item, the line is removed from the
     // หมายเหตุ ───────────────────────────────────────────────────────────────────────────────────
 
-    /** {@code true} when ANY item on the document carries a lead time (both
-     * {@code leadTimeMinDays}/{@code leadTimeMaxDays} set) — the SAME question
-     * {@link #leadTimeLine}/{@link #englishLeadTimeLine}'s own grouping already asks (an item
-     * contributes to a group iff it has both fields set), asked ONCE here and shared by both of
-     * those methods AND {@link #dropLeadTimeLineAndRenumber}'s callers, so "does the fallback
-     * print" and "should the line be dropped" can never disagree. A document made entirely of
-     * PLAIN rows (no lead-time fields at all) or a DRAFT preview before any TILE row's lead time
-     * has been filled in both answer {@code false} here. */
+    /** true when ANY item on the document carries a lead time. A document made entirely of PLAIN rows (no lead-time
+     * fields at all) or a DRAFT preview before any TILE row's lead time has been filled in both answer false here. */
     private static boolean hasAnyLeadTime(List<DealQuotationItemDto> items) {
         return items.stream().anyMatch(DealQuotationRenderAdapter::hasImportLeadTime);
     }
@@ -753,26 +715,15 @@ public final class DealQuotationRenderAdapter {
             && !th.co.glr.hr.pricingrequest.PricingRequestService.STOCK_IN_THAILAND.equals(item.stockSource());
     }
 
-    // Matches the leading "N." numbering convention every OTHER remark line (LINE4/5/6/7/8 and
-    // their English twins) carries as a literal prefix baked into the string — never a digit that
-    // is merely part of the sentence, since none of those constants opens with one for any other
-    // reason (checked by reading each literal, not inferred).
+    // Matches the leading "N." numbering convention every OTHER remark line carries as a literal prefix baked into
+    // the string — never a digit that is merely part of the sentence, since none of those constants opens with one
+    // for any other reason.
     private static final java.util.regex.Pattern LEADING_REMARK_NUMBER =
         java.util.regex.Pattern.compile("^(\\d+)\\.");
 
-    /**
-     * Drops the lead-time line at {@code leadTimeLineIndex} from {@code lines} when
-     * {@code hasLeadTime} is {@code false} — ENTIRELY, not blanked — and renumbers every
-     * subsequent line's leading {@code "N."} digit down by one, so e.g. old 4→3, 5→4, 6→5, 7→6,
-     * 8→7 with NO gap. A line with no leading number (an unnumbered bank-block line on the English
-     * form) is left untouched by the renumbering pass — {@link #LEADING_REMARK_NUMBER} simply does
-     * not match it, so it is never mistaken for one of the numbered remarks.
-     *
-     * <p>Shared by the Thai {@code remarkLines} builder and both branches of
-     * {@code englishRemarkLines} — each passes the FULL (today's) 8-line list and the index of its
-     * own lead-time line, so the 8-line construction itself never changes and this is the ONLY
-     * place that decides whether/how to shrink it to 7.
-     */
+    /** Drops the lead-time line at leadTimeLineIndex from lines when hasLeadTime is false — ENTIRELY, not blanked —
+     * and renumbers every subsequent line's leading "N." digit down by one, so e.g. old 4→3, 5→4, 6→5, 7→6, 8→7
+     * with NO gap. */
     private static List<String> dropLeadTimeLineAndRenumber(List<String> lines, boolean hasLeadTime,
                                                               int leadTimeLineIndex) {
         if (hasLeadTime) {
@@ -795,10 +746,8 @@ public final class DealQuotationRenderAdapter {
         return newNumber + "." + line.substring(m.end());
     }
 
-    /** Formats and appends ONE flushed group (Thai or English, per {@code english}) — shared by
-     * {@link #leadTimeGroups}, the ONE place either language's grouping traversal lives now. A
-     * {@code null min} means there is no pending group to flush (the very first item, or the item
-     * right after one that already flushed) — a no-op, not an empty group. */
+    /** Formats and appends ONE flushed group (Thai or English, per english) — shared by #leadTimeGroups, the ONE
+     * place either language's grouping traversal lives now. */
     private static void flushLeadTimeGroup(List<String> groups, Integer min, Integer max,
                                             Integer first, Integer last, boolean english) {
         if (min == null) {
@@ -850,10 +799,7 @@ public final class DealQuotationRenderAdapter {
      * proforma-invoice line at 4. The bank lines themselves come from configuration, not from this
      * class — see {@code app.quotation.bank-block-line1..3}.
      */
-    /** The English twin of {@link #depositLine} -- same zero-deposit rule, same two {@code
-     * remainderMode} variants, English words. See that method's Javadoc for the full reasoning;
-     * kept as its own method for the same "two flat methods read better than one with language
-     * ternaries" reason {@link #englishLeadTimeLine} gives for its own Thai twin. */
+    /** The English twin of #depositLine -- same zero-deposit rule, same two remainderMode variants, English words. */
     private static String englishDepositLine(int depositPct, String fullPaymentTerm, String remainderMode,
                                               Integer creditDays, String remainderText) {
         // English twin of the Thai branch above; see its own comment for why 100% and the 0%
@@ -878,8 +824,7 @@ public final class DealQuotationRenderAdapter {
         return "2.Full payment is due before or upon delivery.";
     }
 
-    /** The English twin of {@link #fullPaymentTermThaiText} — same three codes, same
-     * null-for-unrecognised/legacy contract. */
+    /** The English twin of #fullPaymentTermThaiText — same three codes, same null-for-unrecognised/legacy contract. */
     private static String fullPaymentTermEnglishText(String code) {
         if (WastageCalculator.FULL_PAYMENT_TERM_BEFORE_DELIVERY.equals(code)) {
             return "Full payment (100%) is required before delivery.";
@@ -907,20 +852,14 @@ public final class DealQuotationRenderAdapter {
         }
         int validityDays = quotation.validityDays() != null ? quotation.validityDays() : 30;
         String validityDayWord = DealQuotationLines.plural(validityDays, "day", "days");
-        // V178, English twin of the Thai line7 branch above — same guard, same byte-identical
-        // DAYS-mode output.
+        // V178, English twin of the Thai line7 branch above — same guard, same byte-identical DAYS-mode output.
         boolean validityIsDate = WastageCalculator.VALIDITY_MODE_DATE.equals(quotation.validityMode())
             && quotation.validityUntil() != null
             && hasSpecialPricing(quotation);
         String validityUntilEn = validityIsDate ? shortEnglishDate(quotation.validityUntil()) : null;
 
-        // ⚠️ EXACTLY 8 lines either way — QuotationRenderer#REMARK_HEAD_ROWS has 8 slots and fewer
-        // falls back to the legacy 3-line layout, which leaves the template's Thai continuation
-        // rows visible on an English page. The bank block costs THREE of those 8, so the two
-        // layouts below are not the same text with a line swapped: with the block configured, the
-        // validity/tolerance and colour/returns remarks each merge into one line to make room.
-        // That merging is why this is written as two explicit lists rather than a conditional
-        // insert — the alternative silently overflows the box.
+        // ⚠️ EXACTLY 8 lines either way — QuotationRenderer#REMARK_HEAD_ROWS has 8 slots and fewer falls back to the
+        // legacy 3-line layout, which leaves the template's Thai continuation rows visible on an English page.
         boolean hasBankBlock = bankBlockLines != null && bankBlockLines.size() == 3
             && bankBlockLines.stream().noneMatch(DealQuotationRenderAdapter::blank);
 
@@ -931,18 +870,14 @@ public final class DealQuotationRenderAdapter {
             quotation.creditDays(), remainderText));
         int leadTimeLineIndex;
         if (hasBankBlock) {
-            // The block sits straight after the PAYMENT remark, unnumbered, as it does in both of
-            // her samples. Numbering then runs on 3, 4, 5 — NOT her 5, 6, 7: her skipped 4 is a
-            // spreadsheet artefact rather than intent, and reproducing it would print a gap a
-            // customer reads as a missing term.
+            // The block sits straight after the PAYMENT remark, unnumbered, as it does in both of her samples. Numbering
+            // then runs on 3, 4, 5 — NOT her 5, 6, 7: her skipped 4 is a spreadsheet artefact rather than intent, and
+            // reproducing it would print a gap a customer reads as a missing term.
             lines.addAll(bankBlockLines);
             leadTimeLineIndex = lines.size();
             lines.add(englishLeadTimeLine(quotation.items()));
-            // ⚠️ Each remark is ONE merged B..I cell that NEVER wraps, so an over-long line is not
-            // wrapped but CUT at the border. The first version of these two merged lines ran to 145
-            // and 151 characters and printed "…within ISO and TIS toler" and "…not returnab" — with
-            // every content test green, because the text in the cell was intact. Both are now well
-            // inside the 130 that the pre-existing line 1 proves fits in both PDF engines, and
+            // ⚠️ Each remark is ONE merged B..I cell that NEVER wraps, so an over-long line is not wrapped but CUT at the
+            // border. Both are now well inside the 130 that the pre-existing line 1 proves fits in both PDF engines, and
             // DealQuotationEnglishFormTest guards the length of every line in both layouts.
             lines.add(validityIsDate
                 ? "4.Special price for orders with deposit paid by " + validityUntilEn
@@ -972,12 +907,8 @@ public final class DealQuotationRenderAdapter {
         return dropLeadTimeLineAndRenumber(lines, hasAnyLeadTime(quotation.items()), leadTimeLineIndex);
     }
 
-    /** The standalone "no exchange or return" sentence — the English twin of {@link #LINE6},
-      * reused (not retyped) by both the tile no-bank-block layout above (remark 8) and the
-      * non-tile set below, so the two can never drift apart. NOT the same sentence as the
-      * bank-block layout's merged remark 5 ("Colours may vary... Goods sold are not returnable or
-      * exchangeable."), which folds colour-variance and no-return into one sentence to fit the
-      * bank block's row budget — that one stays a one-off literal. */
+    /** The standalone "no exchange or return" sentence — the English twin of #LINE6, reused (not retyped) by both
+     * the tile no-bank-block layout above (remark 8) and the non-tile set below, so the two can never drift apart. */
     private static final String EN_LINE_NO_RETURN =
         "Goods sold are not returnable or exchangeable. Please check the order "
         + "carefully before confirming or signing for delivery.";
@@ -997,8 +928,8 @@ public final class DealQuotationRenderAdapter {
         "1.The price above includes delivery to the ground floor within the Bangkok Metropolitan "
         + "Area, but excludes installation.";
 
-    /** The English twin of {@link #NON_TILE_LINE3_FALLBACK} — same unreachable-in-practice
-      * contract (see that constant's Javadoc). */
+    /** The English twin of #NON_TILE_LINE3_FALLBACK — same unreachable-in-practice contract (see that constant's
+     * Javadoc). */
     private static final String EN_NON_TILE_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
 
     /** The English twin of {@link #nonTileLeadTimeLine} — same {@link #leadTimeGroups} grouping
@@ -1080,8 +1011,7 @@ public final class DealQuotationRenderAdapter {
      */
     private static final String EN_LINE3_FALLBACK = "3.Delivery : approximately ...... days";
 
-    /** The English twin of {@link #leadTimeLine} — same {@link #leadTimeGroups} grouping, same
-     * source data, English words. */
+    /** The English twin of #leadTimeLine — same #leadTimeGroups grouping, same source data, English words. */
     private static String englishLeadTimeLine(List<DealQuotationItemDto> items) {
         return hasAnyLeadTime(items)
             ? "3.Delivery : " + String.join("  ", leadTimeGroups(items, true))
@@ -1108,8 +1038,8 @@ public final class DealQuotationRenderAdapter {
     // otherwise falls back to the real-name fields, so createdById/salesRepId (deal ownership,
     // access, commission) never change and a quotation with no *DisplayId prints the real names.
 
-    /** The ผู้พิมพ์ signature-slot name: {@code printedByDisplayName(En)} when
-     * {@code printedByDisplayId} is set, else the real {@code createdByName(En)}. */
+    /** The ผู้พิมพ์ signature-slot name: printedByDisplayName(En) when printedByDisplayId is set, else the real
+     * createdByName(En). */
     static String printedByName(DealQuotationDto quotation, boolean english) {
         if (quotation.printedByDisplayId() != null) {
             return displayName(quotation.printedByDisplayName(), quotation.printedByDisplayNameEn(), english);
@@ -1117,8 +1047,8 @@ public final class DealQuotationRenderAdapter {
         return displayName(quotation.createdByName(), quotation.createdByNameEn(), english);
     }
 
-    /** The พนักงานขาย signature-slot / header "Sales/{name}" name: {@code salesRepDisplayName(En)}
-     * when {@code salesRepDisplayId} is set, else the real {@code salesRepName(En)}. */
+    /** The พนักงานขาย signature-slot / header "Sales/{name}" name: salesRepDisplayName(En) when salesRepDisplayId
+     * is set, else the real salesRepName(En). */
     static String salesRepDisplayNameOrReal(DealQuotationDto quotation, boolean english) {
         if (quotation.salesRepDisplayId() != null) {
             return displayName(quotation.salesRepDisplayName(), quotation.salesRepDisplayNameEn(), english);
@@ -1126,9 +1056,8 @@ public final class DealQuotationRenderAdapter {
         return displayName(quotation.salesRepName(), quotation.salesRepNameEn(), english);
     }
 
-    /** The header "T.{phone}" that pairs with {@link #salesRepDisplayNameOrReal} — the SAME
-     * {@code salesRepDisplayId} decides both, so the printed name and phone can never come from
-     * two different employees. */
+    /** The header "T.{phone}" that pairs with #salesRepDisplayNameOrReal — the SAME salesRepDisplayId decides both,
+     * so the printed name and phone can never come from two different employees. */
     static String salesRepDisplayPhoneOrReal(DealQuotationDto quotation) {
         return quotation.salesRepDisplayId() != null ? quotation.salesRepDisplayPhone() : quotation.salesRepPhone();
     }
@@ -1139,10 +1068,9 @@ public final class DealQuotationRenderAdapter {
         return String.format("%02d/%02d/%d", d.getDayOfMonth(), d.getMonthValue(), d.getYear() + 543);
     }
 
-    /** ⚠️ The English remark date. {@code dd/MM/yyyy} — a <b>CE</b> year, where
-     * {@link #shortThaiDate} adds 543 for the Buddhist era. Getting this wrong is the single
-     * easiest mistake on the English form (the owner's spec says so in as many words), so the two
-     * live next to each other here rather than one being reused with a flag. */
+    /** ⚠️ The English remark date. dd/MM/yyyy — a CE year, where #shortThaiDate adds 543 for the Buddhist era.
+     * Getting this wrong is the single easiest mistake on the English form (the owner's spec says so in as many
+     * words), so the two live next to each other here rather than one being reused with a flag. */
     private static String shortEnglishDate(LocalDate d) {
         return String.format("%02d/%02d/%d", d.getDayOfMonth(), d.getMonthValue(), d.getYear());
     }
@@ -1189,11 +1117,9 @@ public final class DealQuotationRenderAdapter {
         "บริษัท", "บจก", "บ.จ.ก", "หจก", "ห.จ.ก", "ห้างหุ้นส่วน", "ร้าน", "สำนักงาน",
         "มูลนิธิ", "สมาคม", "โรงแรม", "โรงเรียน", "โรงพยาบาล", "องค์การ", "การไฟฟ้า", "การประปา",
     };
-    // These are checked as a SUBSTRING anywhere in the (lower-cased) name — a Thai "จำกัด"/"(มหาชน)"
-    // suffix, or an English company-type phrase, can trail after a name a leading-prefix check
-    // alone would miss (e.g. a contact typed as "นันทวัน จำกัด" with no "บริษัท"). Each is already
-    // distinctive/multi-character enough that a bare substring match is safe (unlike the short
-    // WORD markers below).
+    // These are checked as a SUBSTRING anywhere in the (lower-cased) name — a Thai "จำกัด"/"(มหาชน)" suffix, or an
+    // English company-type phrase, can trail after a name a leading-prefix check alone would miss (e.g. a contact
+    // typed as "นันทวัน จำกัด" with no "บริษัท").
     private static final String[] ORG_NAME_MARKERS = {
         "จำกัด", "(มหาชน)", "co., ltd", "co.,ltd",
     };
@@ -1228,10 +1154,9 @@ public final class DealQuotationRenderAdapter {
 
     // ── "คุณ" double-prefix guard ────────────────────────────────────────────────────────────
 
-    // Longest-prefix-first so "นางสาว" (Ms.) is never left matching only as far as "นาง" (Mrs.) --
-    // doesn't actually change which names match (either entry alone already answers "starts with
-    // ONE of these" correctly), but keeps the list read in the same "most specific first" order as
-    // #ORG_NAME_PREFIXES above rather than inviting a future maintainer to wonder why it isn't.
+    // Longest-prefix-first so "นางสาว" is never left matching only as far as "นาง" -- doesn't actually change
+    // which names match, but keeps the list read in the same "most specific first" order as #ORG_NAME_PREFIXES
+    // above rather than inviting a future maintainer to wonder why it isn't.
     private static final String[] THAI_HONORIFIC_PREFIXES = {
         "นางสาว", "นาย", "นาง", "คุณ", "ดร.",
     };
@@ -1266,13 +1191,8 @@ public final class DealQuotationRenderAdapter {
         return false;
     }
 
-    /** {@code true} when index {@code afterPrefix} of {@code trimmed} is either past the end of
-     * the string, or a character that is NOT a Thai "following" vowel sign or tone/diacritic mark
-     * (U+0E30–U+0E3A: ะ ั า ำ ิ ี ึ ื ุ ู ฺ; U+0E47–U+0E4E: ็ ่ ้ ๊ ๋ ์ ํ ๎) -- those marks attach
-     * to the PRECEDING consonant and so mean the candidate prefix is the opening of one longer
-     * word, not a standalone honorific followed by a name. Everything else -- a consonant, a
-     * LEADING vowel (เ แ โ ใ ไ, U+0E40–U+0E44), whitespace, a Latin character, or end of string --
-     * is a genuine word boundary. */
+    /** true when index afterPrefix of trimmed is either past the end of the string, or a character that is NOT a
+     * Thai "following" vowel sign or tone/diacritic mark. */
     private static boolean isThaiHonorificBoundary(String trimmed, int afterPrefix) {
         if (afterPrefix >= trimmed.length()) {
             return true;
@@ -1303,16 +1223,9 @@ public final class DealQuotationRenderAdapter {
 
     // ── the customer phone's own label ──────────────────────────────────────────────────────
 
-    /** A phone value that OPENS with its own label, which both header branches above then prefix a
-     * second one onto. Matched case-insensitively, with an optional "."/":" separator, and — this
-     * is the safety catch — only when what FOLLOWS is the start of an actual number ({@code 0-9},
-     * {@code +} or {@code (}), or nothing at all. Without that lookahead "โทรสาร 02-…" (fax) would
-     * lose its "สาร", which changes the meaning of the line rather than tidying it. The
-     * end-of-string alternative covers a value that is ONLY a label ("โทร."), which carries no
-     * number and so must leave nothing behind for the caller to print.
-     *
-     * <p>Alternatives are longest-first, because Java's alternation takes the first that matches:
-     * "โทรศัพท์" must be tried before "โทร", and "เบอร์โทรศัพท์" before "เบอร์โทร" before "เบอร์". */
+    /** A phone value that OPENS with its own label, which both header branches above then prefix a second one onto.
+     * Matched case-insensitively, with an optional "."/":" separator, and — this is the safety catch — only when
+     * what FOLLOWS is the start of an actual number (0-9, + or (), or nothing at all. */
     private static final java.util.regex.Pattern PHONE_LABEL_PREFIX = java.util.regex.Pattern.compile(
         "^(?:โทรศัพท์|เบอร์โทรศัพท์|เบอร์โทร|เบอร์|โทร|telephone|tel|phone)\\s*[.:：]?\\s*(?=[0-9+(]|$)",
         java.util.regex.Pattern.CASE_INSENSITIVE);

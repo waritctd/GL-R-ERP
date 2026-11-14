@@ -77,8 +77,8 @@ describe('QuotationChecklist', () => {
   });
 });
 
-// focusQuotationField is shared: the checklist entries above use it, and (sales feedback #3,
-// 2026-10-06) so does the editor every time a "เพิ่ม…" action lands the rep on a new row.
+// focusQuotationField is shared: the checklist entries above use it, and (sales feedback #3, 2026-10-06) so
+// does the editor every time a "เพิ่ม…" action lands the rep on a new row.
 describe('focusQuotationField', () => {
   const originalScrollIntoView = Element.prototype.scrollIntoView;
   const originalMatchMedia = window.matchMedia;
@@ -101,8 +101,8 @@ describe('focusQuotationField', () => {
     expect(document.activeElement?.id).toBe('target-field');
   });
 
-  // DESIGN.md §11/§19: "Reduced motion is not optional." An explicit `behavior: 'smooth'` is NOT
-  // overridden by CSS, so the preference has to be read here.
+  // DESIGN.md §11/§19: "Reduced motion is not optional." An explicit `behavior: 'smooth'` is NOT overridden by
+  // CSS, so the preference has to be read here.
   it('jumps instead of animating when the user asked for reduced motion', () => {
     const scrollIntoView = fieldWithScrollSpy();
     window.matchMedia = vi.fn((query) => ({ matches: query === '(prefers-reduced-motion: reduce)' }));

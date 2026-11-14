@@ -9,10 +9,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
-/**
- * The employee-code temp-password backfill must be OFF by default (guessable low-entropy password)
- * and only present when a dev explicitly opts in via {@code app.auth.seed-employee-code-passwords=true}.
- */
+/** The employee-code temp-password backfill must be OFF by default (guessable low-entropy password) and only
+ * present when a dev explicitly opts in via app.auth.seed-employee-code-passwords=true. */
 class PasswordBackfillRunnerGatingTest {
     // Import the runner as a component so its class-level @ConditionalOnProperty is evaluated.
     private final ApplicationContextRunner runner = new ApplicationContextRunner()

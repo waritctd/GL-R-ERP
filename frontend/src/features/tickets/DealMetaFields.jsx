@@ -1,12 +1,8 @@
 import { Icon } from '../../components/common/Icon.jsx';
 
-// Lifted verbatim from the now-deleted TicketContextPanel.jsx (ticket-workspace
-// IA rebuild, Slice B "retire the context rail, one comment composer"): small
-// presentational helpers for a label/value row and a titled section, used by
-// the ภาพรวม tab's "วันสำคัญ" / "ผู้เกี่ยวข้อง" blocks in TicketDetailPage.jsx —
-// the two sections that used to live in the sticky rail. Kept in a shared
-// module rather than re-authored inline since TicketDetailPage.jsx is already
-// large and these are pure presentation, no state of their own.
+// Lifted verbatim from the now-deleted TicketContextPanel.jsx: small presentational helpers for a label/value
+// row and a titled section, used by the ภาพรวม tab's "วันสำคัญ" / "ผู้เกี่ยวข้อง" blocks in
+// TicketDetailPage.jsx — the two sections that used to live in the sticky rail.
 export function FieldRow({ label, value, danger = false }) {
   return (
     <div className="grid grid-cols-[8.25rem_minmax(0,1fr)] gap-3 border-b border-border-subtle py-2 text-xs last:border-b-0">

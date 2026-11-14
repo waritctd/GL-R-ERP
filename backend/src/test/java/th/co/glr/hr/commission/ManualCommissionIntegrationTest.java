@@ -24,23 +24,7 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Manual commission entries (feat/commission-manual-adjustments) — real-DB acceptance coverage.
- *
- * <p>Per CLAUDE.md's "permission changes must ship evidence": {@link
- * CommissionService#createManualCommission} is a NEW authorization boundary (only
- * {@code sales_manager}/{@code ceo} may create a manual entry), so this class proves it
- * wrong-way-round against the real {@link CommissionService} backed by a real {@link
- * CommissionRepository} on real Postgres — Mockito cannot prove the {@code chk_commission_kind}/
- * {@code chk_commission_manual_fields} CHECK constraints (V84) actually accept the new kinds, or
- * that the LEFT JOIN change in {@code RECORD_SELECT} correctly returns a null {@code
- * invoiceDetails} for a manual row instead of silently excluding it. {@link AuditService} and
- * {@link NotificationService} are mocked deliberately (side effects of an already-decided
- * authorization/business decision, same rationale as every other commission integration test in
- * this package); every collaborator that participates in the authz decision or its persistence
- * (real {@link CommissionRepository}, real {@link CommissionCalculator}, real {@link
- * EmployeeRepository}) is real.
- */
+/** Manual commission entries (feat/commission-manual-adjustments) — real-DB acceptance coverage. */
 class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate PAYROLL_MONTH = LocalDate.of(2026, 6, 1);
     private static final LocalDate INVOICE_DATE = LocalDate.of(2026, 6, 15);
@@ -78,10 +62,8 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
             999_777L, true, LocalDate.now(), false, null, false);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // AUTHZ — wrong-way-round: a sales actor and a plain rep must NOT be able to create a
-    // manual commission entry. Zero rows created, not just a 403 status code.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // AUTHZ — wrong-way-round: a sales actor and a plain rep must NOT be able to create a manual commission entry.
+    // Zero rows created, not just a 403 status code.
 
     @Test
     void salesActor_cannotCreateManualCommission_zeroRowsCreated() {
@@ -101,9 +83,8 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void plainRepRole_cannotCreateManualCommission_zeroRowsCreated() {
         wireService();
-        // A plain rep with none of the special-division roles (sales/sales_manager/ceo/account/
-        // hr/import) — the DivisionAccessPolicy fallback role. Explicitly NOT in
-        // CommissionService.MANUAL_CREATE_ROLES.
+        // A plain rep with none of the special-division roles (sales/sales_manager/ceo/account/ hr/import) — the
+        // DivisionAccessPolicy fallback role. Explicitly NOT in CommissionService.MANUAL_CREATE_ROLES.
         long employeeId = createEmployee("พนักงานทั่วไป แมนนวล", "employee-manual@glr.co.th", "WH", "คลังสินค้า");
         UserPrincipal employeeActor = new UserPrincipal(employeeId, employeeId + "@glr.co.th", "Warehouse Staff",
             "employee", employeeId, true, LocalDate.now(), false, null, false);
@@ -116,10 +97,8 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Positive-side sales_manager/ceo access, both are allowed (right-way-round sanity check
-    // alongside the wrong-way-round tests above).
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Positive-side sales_manager/ceo access, both are allowed (right-way-round sanity check alongside the
+    // wrong-way-round tests above).
 
     @Test
     void managerAndCeo_canCreateManualCommission() {
@@ -135,18 +114,16 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(byCeo.status()).isEqualTo(CommissionStatus.APPROVED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Positive ADJUSTMENT: manager creates it (MANAGER_APPROVED, not yet in payroll), CEO
-    // approves it via the EXISTING approve() chain (reused, not reimplemented), and payroll
-    // rises by EXACTLY the manual amount, on top of the rep's tier commission.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Positive ADJUSTMENT: manager creates it (MANAGER_APPROVED, not yet in payroll), CEO approves it via the
+    // EXISTING approve() chain (reused, not reimplemented), and payroll rises by EXACTLY the manual amount, on top
+    // of the rep's tier commission.
 
     @Test
     void managerCreatesPositiveAdjustment_ceoApproves_addsExactlyToPayrollOnTopOfTierCommission() {
         wireService();
         long salesRepId = createEmployee("พนักงานขาย ปรับเพิ่ม", "adjust-plus@glr.co.th", "SA", "แผนกขาย");
-        // Tier baseline: a real APPROVED SALE commission so there is a genuine non-zero tier
-        // commission to add the manual amount "on top of".
+        // Tier baseline: a real APPROVED SALE commission so there is a genuine non-zero tier commission to add the
+        // manual amount "on top of".
         long saleCommissionId = seedApprovedTierCommission(salesRepId, new BigDecimal("857288.28"));
 
         BigDecimal beforeCommission = repSummaryFor(payrollReadySummary(), salesRepId).commissionAmount();
@@ -172,16 +149,15 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
         SalesRepCommissionSummaryDto after = repSummaryFor(payrollReadySummary(), salesRepId);
         assertThat(after.commissionAmount().subtract(beforeCommission)).isEqualByComparingTo(new BigDecimal("5000.00"));
         assertThat(after.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("5000.00"));
-        // The tier base itself is untouched by the manual entry -- only the final commission total
-        // gained the manual amount.
+        // The tier base itself is untouched by the manual entry -- only the final commission total gained the manual
+        // amount.
         assertThat(after.commissionableBase()).isEqualByComparingTo(beforeBase);
         assertThat(saleCommissionId).isPositive();
     }
 
-    // The two additional manual kinds (owner: "manual across the UI for now, until the
-    // CEO-confirmed config lands") ride the identical path — this proves the V84 CHECK accepts
-    // their literal string values and they feed payroll exactly like ADJUSTMENT/MANAGER, so no
-    // per-kind logic diverged when the set was widened.
+    // The two additional manual kinds ride the identical path — this proves the V84 CHECK accepts their literal
+    // string values and they feed payroll exactly like ADJUSTMENT/MANAGER, so no per-kind logic diverged when the
+    // set was widened.
     @Test
     void stockBonusAndIncentive_manualKinds_acceptedAndFeedPayrollOnceApproved() {
         wireService();
@@ -204,9 +180,7 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(after.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("16000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Negative ADJUSTMENT: reduces the payroll total by exactly the (negative) manual amount.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void negativeAdjustment_reducesPayrollTotalByExactAmount() {
@@ -246,17 +220,15 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // MANAGER-kind entry: targets the manager and lands in payroll the same way. Created
-    // directly by the CEO -- lands APPROVED immediately, no manager-review step needed.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // MANAGER-kind entry: targets the manager and lands in payroll the same way. Created directly by the CEO --
+    // lands APPROVED immediately, no manager-review step needed.
 
     @Test
     void managerKindEntry_forTheManager_landsInPayroll() {
         wireService();
-        // managerEmployeeId has NO SALE commission this month -- the manual MANAGER entry is
-        // their only commission this month, so payrollReadySummary must synthesize a summary row
-        // (base 0.00) rather than only handling reps who already have a tier-calc row.
+        // managerEmployeeId has NO SALE commission this month -- the manual MANAGER entry is their only commission
+        // this month, so payrollReadySummary must synthesize a summary row (base 0.00) rather than only handling reps
+        // who already have a tier-calc row.
         CommissionRecord created = commissionService.createManualCommission(
             managerEmployeeId, CommissionKind.MANAGER, new BigDecimal("15000.00"),
             "July team/manager commission", PAYROLL_MONTH, ceoActor);
@@ -268,11 +240,9 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(summary.manualAdjustmentAmount()).isEqualByComparingTo(new BigDecimal("15000.00"));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Manual entries never touch the tier calc: no invoice required, amount stored verbatim,
-    // and the weighted tier-base sum (the input to simulate()/progressiveCommission) is
-    // completely unaffected by a manual entry, even while it is active (MANAGER_APPROVED).
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Manual entries never touch the tier calc: no invoice required, amount stored verbatim, and the weighted
+    // tier-base sum (the input to simulate()/progressiveCommission) is completely unaffected by a manual entry,
+    // even while it is active (MANAGER_APPROVED).
 
     @Test
     void manualEntry_neverFeedsTierCalc_amountStoredVerbatim() {
@@ -293,15 +263,13 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(reloaded.actualReceived()).isEqualByComparingTo(BigDecimal.ZERO);
         assertThat(reloaded.commissionableBase()).isEqualByComparingTo(BigDecimal.ZERO);
 
-        // The weighted tier-base sum (what simulate()/payrollReadySummary's tier math consumes)
-        // must be completely unaffected by this manual entry, active or not.
+        // The weighted tier-base sum (what simulate()/payrollReadySummary's tier math consumes) must be completely
+        // unaffected by this manual entry, active or not.
         BigDecimal weightedAfter = commissions.sumActiveWeightedActualReceived(salesRepId, PAYROLL_MONTH);
         assertThat(weightedAfter).isEqualByComparingTo(BigDecimal.ZERO);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private PayrollCommissionSummaryDto payrollReadySummary() {
         return commissionService.payrollReadySummary(PAYROLL_MONTH, hrActor);
@@ -314,12 +282,8 @@ class ManualCommissionIntegrationTest extends AbstractPostgresIntegrationTest {
             .orElseThrow();
     }
 
-    /**
-     * Seeds one real, fully APPROVED (manager + CEO) SALE commission via the real repository —
-     * mirroring what {@code CommissionService#submit} persists, without the full ticket/deal
-     * fixture chain this task doesn't touch. Copied from the same pattern used by {@code
-     * CommissionCalcRefineIntegrationTest#seedCommissionRecord}/{@code approveThroughManagerAndCeo}.
-     */
+    /** Seeds one real, fully APPROVED (manager + CEO) SALE commission via the real repository — mirroring what
+     * CommissionService#submit persists, without the full ticket/deal fixture chain this task doesn't touch. */
     private long seedApprovedTierCommission(long salesRepId, BigDecimal actualReceived) {
         SubmitCommissionRequest request = new SubmitCommissionRequest(
             null, salesRepId, "INV-MANUAL-" + UUID.randomUUID(), INVOICE_DATE, actualReceived,

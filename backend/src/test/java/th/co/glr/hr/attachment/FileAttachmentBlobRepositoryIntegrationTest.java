@@ -8,12 +8,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * V134 storage-durability fix: real-Postgres coverage of {@link FileAttachmentBlobRepository} --
- * the byte round-trip through {@code hr.file_attachment_blob}, and the structural guarantee the
- * migration's whole point depends on: listing/resolving an {@code hr.file_attachment} row never
- * loads its payload, because the payload lives in a SIBLING table, not a column on that row.
- */
+/** V134 storage-durability fix: real-Postgres coverage of FileAttachmentBlobRepository. */
 class FileAttachmentBlobRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
@@ -61,13 +56,9 @@ class FileAttachmentBlobRepositoryIntegrationTest extends AbstractPostgresIntegr
             .containsExactly(legacy);
     }
 
-    /**
-     * The structural guarantee this whole migration depends on: {@code hr.file_attachment} itself
-     * has NO {@code content}/bytea column -- the payload can only ever live in the sibling blob
-     * table, so no existing (or future) plain {@code SELECT ... FROM hr.file_attachment} query can
-     * accidentally start loading payloads. A regression here would mean someone added a bytea
-     * column directly onto the row table instead of using the sibling.
-     */
+    /** The structural guarantee this whole migration depends on: hr.file_attachment itself has NO content/bytea
+     * column -- the payload can only ever live in the sibling blob table, so no existing (or future) plain SELECT
+     * ... FROM hr.file_attachment query can accidentally start loading payloads. */
     @Test
     void fileAttachmentTableItselfHasNoContentColumn() {
         Integer count = jdbc.queryForObject("""

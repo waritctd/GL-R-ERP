@@ -10,11 +10,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Exercises the batched .dat import SQL (multi-row INSERT ... ON CONFLICT DO NOTHING RETURNING,
- * plus employee resolution) against a real PostgreSQL database. The Mockito unit tests cannot cover
- * the dynamically built SQL. V7 seeds the SHOWROOM site and SHOWROOM_SC700 device.
- */
+/** Exercises the batched .dat import SQL (multi-row INSERT ... ON CONFLICT DO NOTHING RETURNING, plus employee
+ * resolution) against a real PostgreSQL database. The Mockito unit tests cannot cover the dynamically built
+ * SQL. V7 seeds the SHOWROOM site and SHOWROOM_SC700 device. */
 class AttendanceRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private AttendanceRepository repository;
 
@@ -83,9 +81,9 @@ class AttendanceRepositoryIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Test
     void findPunchesReturnsAscendingChronologicalOrder() {
-        // The drill-down labels the first returned punch as the clock-in and the last as the
-        // clock-out, so findPunches must hand rows back oldest-first regardless of how they were
-        // inserted. Insert deliberately out of chronological order.
+        // The drill-down labels the first returned punch as the clock-in and the last as the clock-out, so findPunches
+        // must hand rows back oldest-first regardless of how they were inserted. Insert deliberately out of
+        // chronological order.
         Long employeeId = jdbc.queryForObject(
             "INSERT INTO hr.employee (employee_code, badge_card_no) VALUES ('20044','20044') RETURNING employee_id",
             Map.of(), Long.class);

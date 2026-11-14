@@ -29,33 +29,9 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * GLA-118 (owner ruling 2026-09-20, part A). Real-DB enforcement coverage for
- * {@link TicketService#recordPayment} (both {@code DEPOSIT} and {@code BALANCE} receipt kinds) —
- * recording ANY payment is now {@code account} ONLY, via the new {@code PAYMENT_RECORD_ROLES}
- * constant. This used to be {@code TicketService.ACCOUNT_ROLES} ({@code account}/{@code ceo}); the
- * CEO fallback, and the owning sales rep's own deal, both grant nothing here any more.
- *
- * <p>This is the required evidence under {@code CLAUDE.md}'s "permission changes must ship
- * evidence": {@link TicketServiceTest}'s Mockito-based companion cases
- * ({@code recordPayment_rejectsCeoRole}, {@code recordPayment_rejectsOwningSalesRep},
- * {@code recordPayment_rejectsNonAccountAndInactiveDeals},
- * {@code actions_neverOffersFinalPaymentToCeo_onlyToAccount}) pin which branch is chosen; only a
- * real {@link TicketRepository} against real Postgres proves the decision survives into the
- * {@code INSERT} — a mocked repository happily "passes" while the SQL does something else.
- *
- * <p><b>Written wrong-way-round on purpose.</b> Every refusal case re-reads
- * {@code sales.payment_receipt}'s row count, {@code sales.ticket.payment_status} and
- * {@code sales.ticket.sales_stage} straight out of Postgres afterwards, so "account can record a
- * payment on any deal" is necessary but is never the evidence on its own.
- *
- * <p>Mirrors {@link DepositPolicyAuthzIntegrationTest} and
- * {@code th.co.glr.hr.attendance.AttendanceScopeIntegrationTest}. Note the suite-wide trap
- * documented on {@link AbstractPostgresIntegrationTest}: services here are hand-wired with
- * {@code new}, so {@code @Transactional} is inert and no rollback is ever exercised — the
- * "unchanged" assertions hold because the guard throws before any write, not because a transaction
- * rolled back.
- */
+/** GLA-118 (owner ruling 2026-09-20, part A). Real-DB enforcement coverage for TicketService#recordPayment
+ * (both DEPOSIT and BALANCE receipt kinds) — recording ANY payment is now account ONLY, via the new
+ * PAYMENT_RECORD_ROLES constant. */
 class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -74,9 +50,9 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
 
-        // PricingRequestService is mocked exactly as in DepositPolicyAuthzIntegrationTest:
-        // recordPayment never calls it. The two things under test — the TicketService gate and the
-        // TicketRepository INSERT it protects — are both real.
+        // PricingRequestService is mocked exactly as in DepositPolicyAuthzIntegrationTest: recordPayment never calls
+        // it. The two things under test — the TicketService gate and the TicketRepository INSERT it protects — are
+        // both real.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -98,11 +74,9 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
 
     // ── the refusals (this is the evidence) ──────────────────────────────────────────────
 
-    /**
-     * The case the account-only gate must NOT open. Even the deal's OWNING sales rep is refused —
-     * recording money received was never a sales-side action, and Rule A has no ownership clause
-     * at all (unlike deposit-policy Rule B).
-     */
+    /** The case the account-only gate must NOT open. Even the deal's OWNING sales rep is refused — recording money
+     * received was never a sales-side action, and Rule A has no ownership clause at all (unlike deposit-policy
+     * Rule B). */
     @Test
     void nonAccountRoles_areRefusedRecordingADepositReceipt_andNothingChanges() {
         long ticketId = createPricedDeal();
@@ -139,13 +113,13 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(paymentStatus(ticketId)).isNull();
     }
 
-    /** {@link TicketService#confirmFinalPayment} is a payment-recording entry point too — same
-     * account-only gate, pinned separately because it can advance payment_status WITHOUT ever
-     * calling recordPaymentInternal (the "nothing outstanding" branch). */
+    /** TicketService#confirmFinalPayment is a payment-recording entry point too — same account-only gate, pinned
+     * separately because it can advance payment_status WITHOUT ever calling recordPaymentInternal (the "nothing
+     * outstanding" branch). */
     @Test
     void nonAccountRoles_areRefusedConfirmingFinalPayment_andPaymentStatusIsUnchanged() {
-        // A deal genuinely awaiting final payment, so without the gate these callers would SUCCEED —
-        // the refusal (and the unchanged-state assertions) are then meaningful, not a 409 in disguise.
+        // A deal genuinely awaiting final payment, so without the gate these callers would SUCCEED — the refusal (and
+        // the unchanged-state assertions) are then meaningful, not a 409 in disguise.
         long ticketId = createPricedDealAwaitingFinalPayment();
         long receiptsBefore = paymentReceiptCount(ticketId);
         String statusBefore = paymentStatus(ticketId);
@@ -187,8 +161,8 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(paymentReceiptCount(ticketId)).isEqualTo(1);
     }
 
-    // H1 lockdown: account may record a payment only on a deal inside its list scope. A fresh deal is at the
-    // lead stage with no payment status, so it is OUTSIDE it -- refused, and no receipt row is written.
+    // H1 lockdown: account may record a payment only on a deal inside its list scope. A fresh deal is at the lead
+    // stage with no payment status, so it is OUTSIDE it -- refused, and no receipt row is written.
     @Test
     void account_isRefusedRecordingPayments_onADealOutsideItsListScope_andNothingIsWritten() {
         long ticketId = createPricedDeal();
@@ -213,8 +187,8 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
 
     // ── helpers ───────────────────────────────────────────────────────────────────────
 
-    // H1 lockdown: account no longer reaches TicketService.actions (the /tickets path); its action list
-    // comes from financeActions -- the SAME gate logic, built without the ticket view-access check.
+    // H1 lockdown: account no longer reaches TicketService.actions (the /tickets path); its action list comes from
+    // financeActions -- the SAME gate logic, built without the ticket view-access check.
     private List<String> actionCodes(long ticketId, UserPrincipal actor) {
         var response = "account".equals(actor.role())
             ? ticketService.financeActions(ticketId, actor)
@@ -227,8 +201,8 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
             Map.of("id", ticketId));
     }
 
-    /** A deal priced at ฿1,000 (approved_price × qty), so {@code payableAmount} is nonzero and
-     * {@code recordPayment}'s validation never rejects the amount as unpayable. */
+    /** A deal priced at ฿1,000 (approved_price × qty), so payableAmount is nonzero and recordPayment's validation
+     * never rejects the amount as unpayable. */
     private long createPricedDeal() {
         CreateTicketRequest request = new CreateTicketRequest(
             "ดีลทดสอบบันทึกรับชำระ", "NORMAL", "ลูกค้าทดสอบ", null, null, null, null, null,
@@ -240,8 +214,8 @@ class PaymentRecordingAuthzIntegrationTest extends AbstractPostgresIntegrationTe
         return ticketId;
     }
 
-    /** Walks the real {@link PaymentTrack} machine to {@code AWAITING_FINAL_PAYMENT} — the state
-     * {@code canConfirmFinalPaymentNow} requires before FINAL_PAYMENT is advertised. */
+    /** Walks the real PaymentTrack machine to AWAITING_FINAL_PAYMENT — the state canConfirmFinalPaymentNow requires
+     * before FINAL_PAYMENT is advertised. */
     private long createPricedDealAwaitingFinalPayment() {
         long ticketId = createPricedDeal();
         advancePaymentStatus(ticketId, null, PaymentTrack.CUSTOMER_CONFIRMED);

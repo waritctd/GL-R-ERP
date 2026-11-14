@@ -13,13 +13,9 @@ function Harness({ showToast } = {}) {
   return <CustomerDetailsFields customer={customer} onChange={setCustomer} showToast={showToast} />;
 }
 
-// The real caller (QuotationEditorPage's `summaryCustomer`) swaps the `customer` prop out from
-// under the component whenever the live record query resolves -- independently of anything
-// CustomerDetailsFields itself does through `onChange`. `Harness` above ties `customer` to
-// `onChange` one-for-one, which can never reproduce that: the only way `customer` changes there is
-// a save response this component made itself. This ref-controlled harness lets a test push a new
-// `customer` prop the way the page does (a record refresh), while `onChange` still flows to the
-// same state so a save's own optimistic/rollback updates behave exactly as in the app.
+// The real caller (QuotationEditorPage's `summaryCustomer`) swaps the `customer` prop out from under the
+// component whenever the live record query resolves -- independently of anything CustomerDetailsFields itself
+// does through `onChange`.
 const ResyncHarness = forwardRef(function ResyncHarness({ initial, showToast }, ref) {
   const [customer, setCustomer] = useState(initial);
   useImperativeHandle(ref, () => ({ setCustomer }));
@@ -52,10 +48,8 @@ it('preserves legacy text on cancel, then saves a complete structured address ex
   expect(screen.getByLabelText('ที่อยู่').readOnly).toBe(true);
 });
 
-// Reproduces the resync race: QuotationEditorPage's `summaryCustomer` first renders the
-// quotation's frozen snapshot, then the live customer record query resolves with different
-// values for the SAME customer id. The effect that re-seeds `edits` from every `customer.*`
-// change used to overwrite whatever the rep had typed but not yet blurred.
+// Reproduces the resync race: QuotationEditorPage's `summaryCustomer` first renders the quotation's frozen
+// snapshot, then the live customer record query resolves with different values for the SAME customer id.
 it('a dirty edit survives a record refresh for the SAME customer', async () => {
   const ref = React.createRef();
   const snapshot = { id: 5, name: 'Test', taxId: '', phone: '', address: 'ข้อความเดิม' };
@@ -114,15 +108,14 @@ it('a refused save rolls back the field, then a later refresh applies cleanly', 
   await waitFor(() => expect(taxId.value).toBe('0105551234567')); // rolled back to the previous value
   expect(showToast).toHaveBeenCalledWith('error', 'บันทึกข้อมูลลูกค้าไม่สำเร็จ');
 
-  // A later record refresh with a DIFFERENT value for that field now applies -- the field is
-  // clean again after the rollback, not stuck "dirty" forever.
+  // A later record refresh with a DIFFERENT value for that field now applies -- the field is clean again after
+  // the rollback, not stuck "dirty" forever.
   act(() => { ref.current.setCustomer({ id: 5, name: 'Test', taxId: '0207778889990', phone: '', address: '' }); });
   expect(taxId.value).toBe('0207778889990');
 });
 
-// Owner feedback (2026-09-14): "sometimes there's a typo in the name so they should be able to
-// correct it" — ชื่อลูกค้า joins the same generic save-on-blur mechanism the other three fields
-// already use.
+// Owner feedback (2026-09-14): "sometimes there's a typo in the name so they should be able to correct it" —
+// ชื่อลูกค้า joins the same generic save-on-blur mechanism the other three fields already use.
 it('saves a corrected customer name on blur', async () => {
   render(<QueryClientProvider client={new QueryClient()}><Harness /></QueryClientProvider>);
   const name = screen.getByLabelText('ชื่อลูกค้า');
@@ -136,9 +129,9 @@ it('saves a corrected customer name on blur', async () => {
   await waitFor(() => expect(name.value).toBe('บริษัท เต็มชื่อ จำกัด'));
 });
 
-// The backend refuses a blank name (NOT NULL column, "กรุณาระบุชื่อลูกค้า") — this pins that
-// saveField's EXISTING generic rollback/toast path covers it with no special-casing, the same way
-// it already covers a refused taxId (the test just above this one).
+// The backend refuses a blank name (NOT NULL column, "กรุณาระบุชื่อลูกค้า") — this pins that saveField's
+// EXISTING generic rollback/toast path covers it with no special-casing, the same way it already covers a
+// refused taxId (the test just above this one).
 it('a blank name is refused by the server and rolled back', async () => {
   const showToast = vi.fn();
   render(<QueryClientProvider client={new QueryClient()}><Harness showToast={showToast} /></QueryClientProvider>);
@@ -152,9 +145,9 @@ it('a blank name is refused by the server and rolled back', async () => {
   expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุชื่อลูกค้า');
 });
 
-// Bug fix (prod customer_id 4326 "DONG NGO GROUP..." / QT-2026-0039-1): a customer already saved
-// with a Thai structured address could never become a foreign/free-text one. The shape below
-// mirrors 4326's real prod row (fake structured codes standing in for a Vietnamese address).
+// Bug fix (prod customer_id 4326 "DONG NGO GROUP..." / QT-2026-0039-1): a customer already saved with a Thai
+// structured address could never become a foreign/free-text one. The shape below mirrors 4326's real prod row
+// (fake structured codes standing in for a Vietnamese address).
 const structuredForeignCandidate = {
   id: 4326,
   name: 'DONG NGO GROUP INVESTMENT AND DEVELOPMENT JSC',
@@ -195,8 +188,8 @@ describe('switching a structured customer to ลูกค้าต่างป�
     const sentPayload = api.customers.update.mock.calls.at(-1)[1];
     expect(Object.keys(sentPayload)).toEqual(['address']);
 
-    // Reflects the SERVER's returned record: provinceCode is now null, so readOnly drops on its
-    // own and the switch checkbox — having nothing left to switch — is gone.
+    // Reflects the SERVER's returned record: provinceCode is now null, so readOnly drops on its own and the switch
+    // checkbox — having nothing left to switch — is gone.
     await waitFor(() => expect(address.readOnly).toBe(false));
     expect(screen.queryByRole('checkbox', { name: /ลูกค้าต่างประเทศ/ })).toBeNull();
   });

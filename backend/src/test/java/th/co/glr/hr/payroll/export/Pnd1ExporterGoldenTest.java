@@ -10,15 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Pins the ภ.ง.ด.1 line assembler to a real GL&amp;R {@code Pnd1.txt} byte-for-byte, line by line. Each
- * golden line is parsed into its tokens and fed back through {@link Pnd1Exporter#formatLine} with the
- * sample's own sequence number and income-type code, so the token order, two-decimal amounts, digit
- * cleaning, Buddhist-Era date and CP874 encoding are all verified against real bytes. (The whole-file
- * business mapping — one line per employee at income type 1 — is checked separately in
- * {@link #exportAppliesDefaultsOneLinePerEmployee()}, because the sample deliberately splits the owner
- * across two income-type rows, which the ERP does not reproduce.)
- */
+/** Pins the ภ.ง.ด.1 line assembler to a real GL&R Pnd1.txt byte-for-byte, line by line. */
 class Pnd1ExporterGoldenTest {
     private final Pnd1Exporter exporter = new Pnd1Exporter();
 

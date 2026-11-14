@@ -51,26 +51,9 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Quotation ↔ deal linking, slice 1 (IA §5/§8/§10, owner decision D4 "show legacy, read-only") —
- * {@code GET /api/deal-quotations} ({@link DealQuotationService#search}) and its tab-count sibling
- * ({@link DealQuotationService#counts}) return ALL origins, against real Postgres:
- *
- * <ul>
- *   <li>{@code DEAL_DIRECT} and {@code PRICING_REQUEST} rows as before, {@code readOnly = false};</li>
- *   <li>legacy v1 rows ({@code sales.quotation.origin IS NULL}) tagged {@code origin = "LEGACY"},
- *       {@code readOnly = true} — never presented as DEAL_DIRECT;</li>
- *   <li>every row carries its deal's {@code ticketCode} and live {@code dealStage};</li>
- *   <li>the optional {@code origin} filter narrows to exactly one origin; anything else is 400.</li>
- * </ul>
- *
- * <p>Scope is unchanged and applies to every origin (owner ruling 2026-09-24,
- * {@code listOwnerScope}). The price-bearing origins (PRICING_REQUEST, LEGACY) keep their existing
- * narrower READ rule on the list too — sales-owner / sales_manager / ceo only, no import/account/
- * grant bypass — so widening the list cannot leak a CEO price the by-id path would refuse.
- *
- * <p>Authz cases are wrong-way-round: they assert what a caller does NOT get.
- */
+/** Quotation ↔ deal linking, slice 1. The price-bearing origins (PRICING_REQUEST, LEGACY) keep their existing
+ * narrower READ rule on the list too — sales-owner / sales_manager / ceo only, no import/account/ grant bypass
+ * — so widening the list cannot leak a CEO price the by-id path would refuse. */
 class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrationTest {
     private DealQuotationService quotationService;
     private TicketService ticketService;
@@ -91,8 +74,7 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
     private long dealA2;
     private long directA;   // DEAL_DIRECT on dealA (PENDING_APPROVAL)
     private long legacyA;   // origin NULL on dealA
-    private long prA2;      // PRICING_REQUEST on dealA2 (APPROVED)
-    // Rep B's deal and rows
+    private long prA2;      // PRICING_REQUEST on dealA2 (APPROVED) Rep B's deal and rows
     private long dealB;
     private long directB;   // DEAL_DIRECT on dealB (DRAFT)
     private long prB;       // PRICING_REQUEST on dealB (CANCELLED)
@@ -160,9 +142,7 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         prB = pricingRequestOrigin(dealB, salesB, "CANCELLED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // All origins, legacy tagged read-only, ticketCode on every row.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void salesManagerList_returnsOneRowOfEachOrigin_legacyTaggedReadOnly_withTicketCode() {
@@ -252,9 +232,7 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Scope — wrong-way-round.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void salesRep_seesOnlyOwnDealRows_acrossAllOrigins_anotherRepsPricingRequestQuotationIsAbsent() {
@@ -269,12 +247,9 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
             .containsExactlyInAnyOrder(directB, prB).doesNotContain(directA, legacyA, prA2);
     }
 
-    /**
-     * The price-bearing origins keep their narrower READ rule on the widened list: import and a
-     * {@code can_create_quotation} grant-holder see only DEAL_DIRECT rows, even on a deal they
-     * created themselves — exactly what {@code requireViewAccess} lets them open by id. Without this
-     * the widened list would print a CEO-approved price/discount the detail endpoint refuses (403).
-     */
+    /** The price-bearing origins keep their narrower READ rule on the widened list: import and a
+     * can_create_quotation grant-holder see only DEAL_DIRECT rows, even on a deal they created themselves —
+     * exactly what requireViewAccess lets them open by id. */
     @Test
     void importAndGrantHolder_neverSeePricingRequestOrLegacyRows_evenOnTheirOwnDeal() {
         for (UserPrincipal reader : List.of(importActor, grantedQc)) {
@@ -290,9 +265,7 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Counts — widened identically, so a tab's count is the size of the list it shows.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void counts_matchTheWidenedList_perTab() {
@@ -318,9 +291,7 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         assertThat(queue.pendingApproval()).isEqualTo(1);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Detail carries the deal link.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void findById_carriesTicketCodeAndDealStage() {
@@ -337,9 +308,7 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
             .allSatisfy(q -> assertThat(q.ticketCode()).isEqualTo(code(dealA)));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Read-only is enforced: a LEGACY id never reaches a read-by-id or mutation path.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void legacyId_throughRequireQuotation_isStill404() {
@@ -360,18 +329,16 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
             Map.of("id", legacyA), String.class)).isNull();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private long deal(UserPrincipal creator) {
         return ticketService.create(new CreateTicketRequest("ดีลลิงก์", "NORMAL", customer.name(), customer.id(),
             projectId, null, null, null, List.of(), LocalDate.now().plusDays(7)), creator).summary().id();
     }
 
-    /** A PRICING_REQUEST-origin row in {@code status}: an ordinary direct draft re-tagged and linked
-     * to a real pricing_request row (the origin/pricing_request_id columns are what every read keys
-     * on) — the same device {@code DealQuotationConfirmOrderIntegrationTest} uses. */
+    /** A PRICING_REQUEST-origin row in status: an ordinary direct draft re-tagged and linked to a real
+     * pricing_request row (the origin/pricing_request_id columns are what every read keys on) — the same device
+     * DealQuotationConfirmOrderIntegrationTest uses. */
     private long pricingRequestOrigin(long ticketId, UserPrincipal creator, String status) {
         // Slice 2's N6: dealB already holds a live direct draft — see LegacyDirectQuotationFixtures.
         long id = LegacyDirectQuotationFixtures.createAlongsideLive(jdbc, quotationService, ticketId, directDraft(),
@@ -391,8 +358,8 @@ class DealQuotationSearchOriginsIntegrationTest extends AbstractPostgresIntegrat
         return id;
     }
 
-    /** A pre-v2 row as {@code customerquotation/} wrote it: {@code origin IS NULL}, issued_by, no
-     * created_by, a stored total_amount. */
+    /** A pre-v2 row as customerquotation/ wrote it: origin IS NULL, issued_by, no created_by, a stored
+     * total_amount. */
     private long insertLegacyQuotation(long ticketId, long issuedBy, String number, String customerName,
                                        BigDecimal totalAmount) {
         return jdbc.queryForObject("""

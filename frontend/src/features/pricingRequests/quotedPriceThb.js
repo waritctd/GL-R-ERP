@@ -1,14 +1,6 @@
-/**
- * Import's quoted factory price for one item, in Thai baht, for the quantity that was requested.
- *
- * `quoteItem` is the item on the CURRENT factory quote (rawUnitPrice / currency / unitBasis typed by
- * Import); `requestItem` is Sales' line (quantities, sqmPerPiece). Only a per-ตร.ม. or per-แผ่น
- * price is converted — a per-box / per-metre price cannot become a total without guessing, so it
- * returns null and the caller shows nothing. Also null when there is no price yet, no FX rate, no
- * ตร.ม./แผ่น to convert between แผ่น and ตร.ม., or no requested quantity.
- *
- * Raw price x FX x quantity only — no duty, freight or margin; that is the costing's job.
- */
+/** Import's quoted factory price for one item, in Thai baht, for the quantity that was requested. Only a
+ * per-ตร.ม. or per-แผ่น price is converted — a per-box / per-metre price cannot become a total without
+ * guessing, so it returns null and the caller shows nothing. */
 const positive = (value) => (Number(value) > 0 ? Number(value) : null);
 
 /** The FX row for a currency, THB being 1 by definition (no row needed). */

@@ -18,23 +18,9 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Proves a successful login actually lands a row in {@code hr.audit_log}, through the real
- * {@link AuthService}, the real {@link AuditService} and the real {@link AuditLogRepository},
- * against real PostgreSQL.
- *
- * <p>A Mockito {@code verify(audit).record(...)} — which {@code AuthServiceTest} also does — proves
- * only that the service <em>called</em> the collaborator. It cannot prove the INSERT is accepted:
- * {@code action} and {@code entity} are NOT NULL, {@code before_json}/{@code after_json} are
- * {@code jsonb} fed through a {@code CAST(... AS jsonb)}, and the table carries an append-only
- * trigger. Any of those could reject the write while every mock-based test stayed green. That gap
- * is exactly the failure shape CLAUDE.md's mock-contract section warns about, so the assertion has
- * to reach the database.
- *
- * <p>Note {@code hr.audit_log} is append-only by trigger ({@code V18}), so this test cannot clean up
- * after itself. Every assertion is therefore scoped to the employee row it created rather than to a
- * table-wide count.
- */
+/** Proves a successful login actually lands a row in hr.audit_log, through the real AuthService, the real
+ * AuditService and the real AuditLogRepository, against real PostgreSQL. A Mockito verify(audit).record(...) —
+ * which AuthServiceTest also does — proves only that the service called the collaborator. */
 class LoginAuditIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String PASSWORD = "Str0ngPass!";
@@ -67,8 +53,8 @@ class LoginAuditIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(row.get("entity_id")).isEqualTo(employeeId);
         assertThat(row.get("before_json")).isNull();
         assertThat(row.get("at")).isNotNull();
-        // The role travels in after_json because it is derived from the division at login time;
-        // if the employee later moves division, the row still says what they were when they logged in.
+        // The role travels in after_json because it is derived from the division at login time; if the employee later
+        // moves division, the row still says what they were when they logged in.
         assertThat(row.get("role")).isEqualTo("hr");
         assertThat(row.get("must_change_password")).isEqualTo("false");
     }

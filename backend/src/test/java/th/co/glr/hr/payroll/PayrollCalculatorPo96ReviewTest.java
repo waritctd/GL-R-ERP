@@ -7,15 +7,8 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-/**
- * REVIEWER-authored adversarial coverage for the ป.96/2543 withholding split
- * (branch {@code fix/payroll-wht-po96-compliance}).
- *
- * <p>These are deliberately NOT the author's scenarios. Each one targets a seam the author's own
- * tests leave open: a negative variable limb, a full-year reconciliation with percentage-capped
- * allowances that differ between the two ข้อ 2.2 passes, an employee with no regular pay at all,
- * and a joiner-plus-leaver in the same year.
- */
+/** REVIEWER-authored adversarial coverage for the ป.96/2543 withholding split (branch
+ * fix/payroll-wht-po96-compliance). These are deliberately NOT the author's scenarios. */
 class PayrollCalculatorPo96ReviewTest {
     private final PayrollCalculator calculator = new PayrollCalculator();
 
@@ -88,18 +81,7 @@ class PayrollCalculatorPo96ReviewTest {
         return new YearRun(total, last);
     }
 
-    // -------------------------------------------------------------------------------------------
-    // 1. NEGATIVE VARIABLE LIMB (commission clawback).
-    //
-    // PayrollService feeds commissionPay straight from CommissionService#payrollCommissionTotalsByEmployee,
-    // and CommissionRepository stores CLAWBACK actual_received / commissionable_base NEGATED
-    // (CommissionRepository.java:459-460). A month whose clawbacks exceed its sales therefore reaches
-    // the calculator as a NEGATIVE commissionPay.
-    //
-    // Before this change grossTaxableIncome was max(0, salary + commission - preTaxDeductions), so a
-    // -10,000 clawback genuinely reduced the month's assessable income. After the split the variable
-    // limb is floored at zero on its own, so the reduction disappears.
-    // -------------------------------------------------------------------------------------------
+    // Checks commission clawbacks do not reduce the month's taxable income.
     @Test
     @DisplayName("REVIEW: a commission clawback no longer reduces the month's taxable income")
     void aNegativeCommissionIsSwallowedByTheVariableLimbFloor() {
@@ -113,12 +95,8 @@ class PayrollCalculatorPo96ReviewTest {
             .isEqualByComparingTo(new BigDecimal("40000.00"));
     }
 
-    // -------------------------------------------------------------------------------------------
-    // 2. FULL-YEAR RECONCILIATION with a percentage-capped allowance that DIFFERS between the two
-    //    ข้อ 2.2 passes. RMF is capped at 30% of เงินได้, so the regular-only pass and the
-    //    with-เงินพิเศษ pass allow different RMF amounts. This is the exact scenario the review
-    //    brief flags as a possible double-count / under-count.
-    // -------------------------------------------------------------------------------------------
+    // Checks full-year reconciliation when percentage-capped RMF relief differs between regular and variable
+    // income passes.
     @Test
     @DisplayName("REVIEW: a large RMF plus a large mid-year bonus still lands on the year's actual liability")
     void aLargeRmfAndALargeBonusStillReconcileOverTheYear() {
@@ -143,11 +121,9 @@ class PayrollCalculatorPo96ReviewTest {
             .isEqualByComparingTo(year.lastMonth().annualTax());
     }
 
-    // -------------------------------------------------------------------------------------------
-    // 3. AN EMPLOYEE WITH NO REGULAR PAY AT ALL (pure-commission rep). Every baht is ข้อ 2.5, so the
-    //    regular limb's annual tax is zero and the whole liability lives in the variable limb --
-    //    which is NOT divided by จำนวนคราว. Does the year still reconcile?
-    // -------------------------------------------------------------------------------------------
+    // 3. AN EMPLOYEE WITH NO REGULAR PAY AT ALL (pure-commission rep). Every baht is ข้อ 2.5, so the regular
+    // limb's annual tax is zero and the whole liability lives in the variable limb -- which is NOT divided by
+    // จำนวนคราว. Does the year still reconcile?
     @Test
     @DisplayName("REVIEW: a pure-commission rep with zero base salary still reconciles over the year")
     void aPureCommissionRepReconcilesOverTheYear() {
@@ -162,10 +138,8 @@ class PayrollCalculatorPo96ReviewTest {
             .isEqualByComparingTo(year.lastMonth().annualTax());
     }
 
-    // -------------------------------------------------------------------------------------------
-    // 4. JOINS IN APRIL, LEAVES IN SEPTEMBER. remainingPayPeriods is hand-passed here; production does NOT cap it at a resignation (ข้อ 2.10 known gap),
-    //    so September resolves to 1 and must true up the whole year.
-    // -------------------------------------------------------------------------------------------
+    // 4. JOINS IN APRIL, LEAVES IN SEPTEMBER. remainingPayPeriods is hand-passed here; production does NOT cap it
+    // at a resignation (ข้อ 2.10 known gap), so September resolves to 1 and must true up the whole year.
     @Test
     @DisplayName("REVIEW: an employee who joins in April and leaves in September trues up in September")
     void aJoinerWhoAlsoLeavesInTheSameYearTruesUpInTheirFinalPeriod() {
@@ -183,20 +157,7 @@ class PayrollCalculatorPo96ReviewTest {
             .isEqualByComparingTo(year.lastMonth().annualTax());
     }
 
-    // -------------------------------------------------------------------------------------------
-    // 5. NEGATIVE REGULAR LIMB, POSITIVE VARIABLE LIMB.
-    //
-    // The regular limb's CREDIT is divided by จำนวนคราวที่ต้องจ่าย; the variable limb's CHARGE is
-    // taken in full immediately. When an employee is already over-withheld for the year, only 1/N of
-    // the available credit can offset the whole ข้อ 2.5 charge, so the engine withholds MORE tax in a
-    // period in which it can already see that no further tax is owed. December then clamps at zero
-    // and the money never comes back.
-    //
-    // 300,000/month to June then a cut to 20,000, plus a 150,000 bonus in September:
-    //   m1-m6  66,154.17/month  -> 396,925.01 withheld
-    //   m9     13,862.50 withheld, while the assessed annual liability is only 339,875.00
-    //   m12    0.00 (clamped) -- 70,912.51 permanently over-withheld
-    // -------------------------------------------------------------------------------------------
+    // Checks no additional tax is withheld once year-to-date withholding exceeds full-year liability.
     @Test
     @DisplayName("REVIEW: no period may withhold once the year is already over-withheld")
     void anAlreadyOverWithheldYearMustNotWithholdMoreOnAMidYearBonus() {
@@ -233,23 +194,7 @@ class PayrollCalculatorPo96ReviewTest {
         }
     }
 
-    // -------------------------------------------------------------------------------------------
-    // 6. THE ล.ย.01 PER-HEAD CAP APPLIED TO A REQUEST-BODY ALLOWANCE.
-    //
-    //    Review finding, and the resolution after re-review. The DEFECT was real but it lived in
-    //    PayrollService#mergeAllowances, which took childAllowance from the request body and
-    //    childCount from the stored declaration only -- so an employee with no stored ล.ย.01 row had
-    //    a cap of zero and lost the whole allowance. That is now fixed at the service layer
-    //    (#headCountFor) and pinned by
-    //    PayrollAllowanceDirectorNonTaxableIntegrationTest#aPerRunChildAllowanceSurvivesWhenTheEmployeeHasNoStoredDeclaration,
-    //    through the real service against real Postgres.
-    //
-    //    The CALCULATOR must keep clamping, and this test now pins that instead. Deriving a head
-    //    count here would defeat the per-head cap entirely: any amount could be claimed by declaring
-    //    nobody, which is exactly the uncapped behaviour V93 exists to end. Callers that legitimately
-    //    hold an amount but no count resolve it BEFORE this point. What was fair in the original
-    //    finding is that the clamp was SILENT -- it now names itself in the calculation note.
-    // -------------------------------------------------------------------------------------------
+    // Checks an allowance contradicted by a zero head count is capped with a visible warning.
     @Test
     @DisplayName("a child allowance contradicted by a zero head count is clamped, and says so")
     void aChildAllowanceWithAZeroHeadCountIsWipedRatherThanCapped() {
@@ -280,20 +225,7 @@ class PayrollCalculatorPo96ReviewTest {
             .contains("cap");
     }
 
-    // -------------------------------------------------------------------------------------------
-    // 7. SECOND-PASS REVIEW: the clamp warning does not reach the payslip it claims to be visible on.
-    //
-    // PayslipRenderer.java:137 draws the note as ONE unwrapped line at 9pt from the left margin:
-    //     pdf.textAt(regular, 9, left, "หมายเหตุ: " + line.calculationNote());
-    // PdfDocumentWriter neither wraps nor measures it. A4 gives 495.28pt of printable width.
-    //
-    // The note the calculator now always emits measures 568.0pt in Sarabun 9pt -- 72.7pt off the
-    // right edge on EVERY payslip, before any warning. With both WARNING clauses appended it is
-    // 1,387.5pt: the warning text itself is drawn ~900pt past the page edge, so the one thing the
-    // fix exists to surface is the one thing nobody can read.
-    //
-    // Not a crash -- PDFBox happily draws off-page -- which is why PayslipRendererTest stays green.
-    // -------------------------------------------------------------------------------------------
+    // Checks calculation warnings fit within the payslip's printable width.
     @Test
     @DisplayName("REVIEW: the calculation note must fit the payslip line it is printed on")
     void theClampWarningMustActuallyFitOnThePayslip() throws Exception {
@@ -316,11 +248,9 @@ class PayrollCalculatorPo96ReviewTest {
                 pdf.loadFont(th.co.glr.hr.common.PdfDocumentWriter.FONT_REGULAR);
             float printable = pdf.right() - pdf.left();
 
-            // RESOLVED 2026-07-29 by WRAPPING the note in PayslipRenderer rather than shortening it.
-            // The original assertion -- that the whole note fit one line -- encoded the unwrapped
-            // renderer, and could never hold for a note carrying a withholding-override clause plus two
-            // clamp warnings. What the finding actually required is that the note be VISIBLE, so that
-            // is what is asserted: every wrapped line fits the printable width, and nothing is lost.
+            // RESOLVED 2026-07-29 by WRAPPING the note in PayslipRenderer rather than shortening it. The original
+            // assertion -- that the whole note fit one line -- encoded the unwrapped renderer, and could never hold for a
+            // note carrying a withholding-override clause plus two clamp warnings.
             PayslipRenderer renderer = new PayslipRenderer();
             for (String note : new String[] {plainNote, warningNote}) {
                 List<String> wrapped = renderer.wrapToWidth(pdf, regular, 9f, printable, "หมายเหตุ: " + note);
@@ -340,18 +270,7 @@ class PayrollCalculatorPo96ReviewTest {
         }
     }
 
-    // -------------------------------------------------------------------------------------------
-    // 8. SECOND-PASS REVIEW: the clamp warning only fires when the head count is ZERO.
-    //
-    // PayrollService#headCountFor derives a count only when the stored count is 0, so an employee
-    // with ONE child on their stored ล.ย.01 for whom HR types a per-run 90,000 (they now have three)
-    // meets a cap of 30,000. 60,000 of a real declaration is discarded, and
-    // PayrollCalculator#clampedAllowanceNote is guarded on `childCount() <= 0`, so nothing is said.
-    //
-    // This is the same failure mode as the F2 defect, one step over: the fix closed the count == 0
-    // case and left the count > 0 case silent. Either the clamp must warn whenever it actually
-    // clamps, or the merge must reconcile a per-run amount against a stale stored count.
-    // -------------------------------------------------------------------------------------------
+    // Checks allowance caps also warn when a nonzero stored head count is stale.
     @Test
     @DisplayName("REVIEW: a child allowance clamped against a STALE head count must also say so")
     void aClampAgainstANonZeroButStaleHeadCountIsStillSilent() {
@@ -373,8 +292,8 @@ class PayrollCalculatorPo96ReviewTest {
         PayrollCalculation exact = run(new BigDecimal("100000.00"), NO_SPECIAL, BigDecimal.ZERO,
             BigDecimal.ZERO, oneChildDeclaredExactly, PayrollYearToDate.empty(), 1, 12);
 
-        // 60,000 of the declaration is discarded -- this part is the CURRENT behaviour, pinned so the
-        // scenario is unambiguous.
+        // 60,000 of the declaration is discarded -- this part is the CURRENT behaviour, pinned so the scenario is
+        // unambiguous.
         assertThat(clamped.taxAllowanceTotal())
             .as("90,000 against a stored count of 1 is clamped to 30,000")
             .isEqualByComparingTo(exact.taxAllowanceTotal());

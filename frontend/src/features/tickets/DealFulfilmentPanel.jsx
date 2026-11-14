@@ -155,9 +155,9 @@ function FactoryLeadTimeModal({ factoryNames, onClose, onSubmit, submitting }) {
 // ที่มาของสินค้าที่ส่งมอบ — the select and the history read the same words; the wire value stays the code.
 const DELIVERY_SOURCE_LABELS = { WAREHOUSE: 'คลังสินค้า', STOCK: 'สต็อก' };
 
-// One frame + one title style for every block on the tab (①, the per-factory tracker, the legacy
-// preview, ②): 16px padding (12px on a phone), 12px between rows, radius-md. The tracker block adds
-// `border-border-strong` on top of this so it is the one that leads.
+// One frame + one title style for every block on the tab (①, the per-factory tracker, the legacy preview, ②):
+// 16px padding (12px on a phone), 12px between rows, radius-md. The tracker block adds `border-border-strong`
+// on top of this so it is the one that leads.
 const STEP_BOX = 'flex flex-col gap-3 rounded-md border border-border bg-surface p-4 mobile:p-3';
 const STEP_TITLE = 'text-md font-extrabold text-text';
 
@@ -253,8 +253,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
 
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
-  // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from
-  // the stock-declaration modal above, matching the backend's separate authorization boundary
+  // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from the
+  // stock-declaration modal above, matching the backend's separate authorization boundary
   // (TicketService#setItemWeightMultipliers, gated to a DIFFERENT role set than reserveStock).
   const [weightOpen, setWeightOpen] = useState(false);
   const [weightDraft, setWeightDraft] = useState({});
@@ -304,11 +304,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // resurrect the legacy per-brand block. Treating an ERROR as "has stored IRs" is the safe
   // direction: the legacy block stays hidden and the real error shows.
   const hasStoredIrs = storedIrRows.length > 0 || storedIrQuery.isError;
-  // Yang's rollup chip (origin/feat/per-factory-import-tracking's FactoryImportProgressPanel,
-  // "ถึงไทย X/N โรงงาน") ported onto THIS deal's stored rows — reuses storedIrQuery above rather
-  // than adding a second query. N = live (non-SUPERSEDED) rows that have actually been ISSUED
-  // (carry an importStep at all); X = how many of those reached Thailand, i.e. AWAITING_CUSTOMS
-  // (S16) or later. A DRAFT row has no importStep yet, so it does not count toward N.
+  // Yang's rollup chip (origin/feat/per-factory-import-tracking's FactoryImportProgressPanel, "ถึงไทย X/N
+  // โรงงาน") ported onto THIS deal's stored rows — reuses storedIrQuery above rather than adding a second query.
   const issuedIrRows = liveStoredIrRows.filter((r) => r.importStep != null);
   const arrivedIrCount = issuedIrRows
     .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS')).length;
@@ -488,8 +485,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const brandsQuery = useQuery({
     queryKey: queryKeys.importRequestBrands(ticketId),
     queryFn: () => api.importRequests.brands(ticketId).then((r) => r.brands ?? []),
-    // Import/CEO only — the same pair ImportRequestService.IR_ROLES enforces. Gating the QUERY, not
-    // just the markup, keeps a 403 out of the console for every sales viewer of this tab.
+    // Import/CEO only — the same pair ImportRequestService.IR_ROLES enforces. Gating the QUERY, not just the
+    // markup, keeps a 403 out of the console for every sales viewer of this tab.
     enabled: !!ticketId && isFulfilment,
   });
   const irBrands = brandsQuery.data ?? [];
@@ -515,8 +512,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const downloadIrMutation = useMutation({
     mutationFn: (brand) => api.importRequests.download(ticketId, brand, irRef.trim() || null, null),
     onSuccess: (blob, brand) => {
-      // Hand the file over rather than navigating: the response is an authenticated GET, so an
-      // <a href> would issue a second unauthenticated request in some browsers.
+      // Hand the file over rather than navigating: the response is an authenticated GET, so an would issue a second
+      // unauthenticated request in some browsers.
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -614,10 +611,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     // Same ownership-aware server answer as recordDelivery (TicketService#canDeclareStockCoverage).
     reserveStock:       hasAction('RESERVE_STOCK'),
     completeDelivery:   hasAction('COMPLETE_DELIVERY'),
-    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock
-    // above, this DOES keep a local role check alongside hasAction(), matching every other entry
-    // in this object except reserveStock's own documented exception. The backend gate
-    // (TicketService#ITEM_WEIGHT_ROLES) is sales_manager/ceo, never isFulfilment (import/ceo).
+    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock above, this DOES
+    // keep a local role check alongside hasAction(), matching every other entry in this object except
+    // reserveStock's own documented exception.
     setItemWeight:      hasAction('SET_ITEM_WEIGHT_MULTIPLIER') && (role === 'sales_manager' || role === 'ceo'),
   };
   // The server refuses the deal-level chain once ANY live per-factory row exists, DRAFT included
@@ -702,8 +698,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               <strong className={STEP_TITLE}>นำเข้าสินค้า</strong>
               <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
             </div>
-            {/* The same at-a-glance strip import's own per-deal page shows (fulfilment status →
-                ถึงไทย X/N โรงงาน → ส่งมอบ N%), so the two surfaces read as one system. */}
+            {/* The same at-a-glance strip import's own per-deal page shows (fulfilment status → ถึงไทย X/N โรงงาน → ส่งมอบ
+             * N%), so the two surfaces read as one system. */}
             <ImportStatusStrip
               testIdPrefix="deal-fulfilment"
               fulfilment={fs ? fsLabel : null}

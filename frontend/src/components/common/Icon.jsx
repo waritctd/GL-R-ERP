@@ -63,10 +63,9 @@ const icons = {
   clipboard: ClipboardCheck,
   clock: Clock3,
   close: X,
-  // "void / withdraw", NOT "reject". Added 2026-08-10 because the leave review queue rendered
-  // ปฏิเสธ (reject a pending request) and ยกเลิก (void an already-decided one) as two IDENTICAL
-  // `close` ✕ glyphs side by side, told apart only by border colour and a tooltip -- owner-reported
-  // as confusing. `close` stays reject; `ban` (circle-with-slash) is cancel.
+  // "void / withdraw", NOT "reject". Added 2026-08-10 because the leave review queue rendered ปฏิเสธ (reject a
+  // pending request) and ยกเลิก (void an already-decided one) as two IDENTICAL `close` ✕ glyphs side by side,
+  // told apart only by border colour and a tooltip -- owner-reported as confusing.
   ban: Ban,
   moreHorizontal: Ellipsis,
   externalLink: ExternalLink,

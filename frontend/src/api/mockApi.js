@@ -34,9 +34,9 @@ import {
   lastStageChangeAt as dealLastStageChangeAt,
   STAGE_ADVANCE_GATE_MESSAGE as DEAL_STAGE_ADVANCE_GATE_MESSAGE,
 } from '../features/tickets/dealTrackingMeta.js';
-// PricingRequest (commit 6): status transition table + option lists shared
-// with the UI so the mock's gates can't drift from PricingRequestService's —
-// the authoritative rules live in the backend pricingrequest/ package.
+// PricingRequest (commit 6): status transition table + option lists shared with the UI so the mock's gates
+// can't drift from PricingRequestService's — the authoritative rules live in the backend pricingrequest/
+// package.
 import {
   canTransition as pricingRequestCanTransition,
   QUANTITY_TYPE_OPTIONS as PRICING_REQUEST_QUANTITY_TYPE_OPTIONS,
@@ -48,8 +48,8 @@ import {
 // of QuotationStatus.
 import {
   canTransitionDealQuotation, isDealQuotationNeedingRework, adjustmentDescriptionPreview,
-  // V178: the SAME hasSpecialPricing quotationMeta.js exports for the editor's own toggle — not a
-  // second copy, so the mock's create/update gate cannot drift from what the toggle itself hides.
+  // V178: the SAME hasSpecialPricing quotationMeta.js exports for the editor's own toggle — not a second copy,
+  // so the mock's create/update gate cannot drift from what the toggle itself hides.
   hasSpecialPricing,
   // The recipient table (code -> Thai label) and the live DEAL_DIRECT status set, shared with the
   // editor so the mock validates and labels recipients exactly as the pills do.
@@ -95,8 +95,8 @@ function normalizeQuotation(q, ticket, index = 0) {
   };
 }
 
-// Deal pipeline backfill — mirrors V50__deal_sales_pipeline.sql's UPDATE so the
-// demo deals always land exactly where the real migration would put them.
+// Deal pipeline backfill — mirrors V50__deal_sales_pipeline.sql's UPDATE so the demo deals always land exactly
+// where the real migration would put them.
 for (const t of db.tickets) {
   if (t.salesStage) continue;
   if (t.paymentStatus === 'FULLY_PAID' || t.status === 'closed') t.salesStage = 'CLOSED_PAID';
@@ -139,13 +139,12 @@ for (const t of db.tickets) {
     qtyDelivered: item.qtyDelivered ?? 0,
     qtyFromStock: item.qtyFromStock ?? 0,
     stockNote: item.stockNote ?? null,
-    // V148 (per-item stock-commission weighting): mirrors sales.ticket_item.weight_multiplier's
-    // own DEFAULT 1 -- every mock item gets the same "no weighting" default a brand-new real row
-    // gets, regardless of which code path created it.
+    // V148 (per-item stock-commission weighting): mirrors sales.ticket_item.weight_multiplier's own DEFAULT 1 --
+    // every mock item gets the same "no weighting" default a brand-new real row gets, regardless of which code
+    // path created it.
     weightMultiplier: item.weightMultiplier ?? 1,
-    // V183 (stock-sourced deal-line pricing): mirrors sales.ticket_item's own
-    // sourced_from_stock/stock_sale_price DEFAULT false/NULL pair for every mock item,
-    // regardless of which code path created it.
+    // V183 (stock-sourced deal-line pricing): mirrors sales.ticket_item's own sourced_from_stock/stock_sale_price
+    // DEFAULT false/NULL pair for every mock item, regardless of which code path created it.
     sourcedFromStock: item.sourcedFromStock ?? false,
     stockSalePrice: item.stockSalePrice ?? null,
   }));
@@ -155,15 +154,9 @@ db.paymentReceipts = db.paymentReceipts || [
   { receiptId: 2, ticketId: 13, kind: 'DEPOSIT', amount: 66250, currency: 'THB', receivedAt: '2026-06-02T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-13-DEP', createdAt: '2026-06-02T08:00:00Z' },
   { receiptId: 3, ticketId: 14, kind: 'DEPOSIT', amount: 312000, currency: 'THB', receivedAt: '2026-05-20T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-14-DEP', createdAt: '2026-05-20T08:00:00Z' },
   { receiptId: 4, ticketId: 14, kind: 'BALANCE', amount: 312000, currency: 'THB', receivedAt: '2026-07-05T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ', depositNoticeId: null, receiptRef: 'MOCK-14-BAL', createdAt: '2026-07-05T08:00:00Z' },
-  // Tickets 19-25 (ฝ่ายบัญชี money-cycle deals, demoSales.js). These rows are
-  // what put each deal in its intended bucket: derivePaymentFields derives
-  // amountOutstanding as payable - sum(receipts), and both `overdue` and
-  // closeReady() gate on that number, not on paymentStatus. So a half-paid
-  // deal needs exactly one DEPOSIT row and a closed one needs DEPOSIT+BALANCE
-  // summing to the quotation total, or the bucket silently changes.
-  //
-  // Deliberately absent: 19, 20 (notice issued, nothing banked yet) and 22
-  // (credit customer, whole invoice outstanding and overdue).
+  // Tickets 19-25 (ฝ่ายบัญชี money-cycle deals, demoSales.js). These rows are what put each deal in its intended
+  // bucket: derivePaymentFields derives amountOutstanding as payable - sum(receipts), and both `overdue` and
+  // closeReady() gate on that number, not on paymentStatus.
   { receiptId: 5, ticketId: 21, kind: 'DEPOSIT', amount: 445000, currency: 'THB', receivedAt: '2026-06-30T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50% ตามใบแจ้งยอด', depositNoticeId: null, receiptRef: 'MOCK-21-DEP', createdAt: '2026-06-30T08:00:00Z' },
   { receiptId: 6, ticketId: 23, kind: 'DEPOSIT', amount: 780000, currency: 'THB', receivedAt: '2026-06-09T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50%', depositNoticeId: null, receiptRef: 'MOCK-23-DEP', createdAt: '2026-06-09T08:00:00Z' },
   { receiptId: 7, ticketId: 24, kind: 'DEPOSIT', amount: 324000, currency: 'THB', receivedAt: '2026-06-01T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ 50%', depositNoticeId: null, receiptRef: 'MOCK-24-DEP', createdAt: '2026-06-01T08:00:00Z' },
@@ -223,9 +216,9 @@ db.commissions = db.commissions?.length ? db.commissions : buildDemoCommissions(
 db.payrollInputDrafts = db.payrollInputDrafts || new Map();
 if (db.payrollInputDrafts.size === 0) {
   for (const { employeeId, payrollMonth, input } of buildDemoPayrollInputDrafts(db.employees)) {
-    // `version: 0` matches what saveDraft writes for a brand-new row (priorVersion -1 + 1), so a
-    // seeded draft is shaped exactly like a saved one and computeDraftEtag below sees a real
-    // version rather than falling through its `?? 0`.
+    // `version: 0` matches what saveDraft writes for a brand-new row (priorVersion -1 + 1), so a seeded draft is
+    // shaped exactly like a saved one and computeDraftEtag below sees a real version rather than falling through
+    // its `?? 0`.
     db.payrollInputDrafts.set(`${employeeId}-${payrollMonth}`, { payrollMonth, input, version: 0 });
   }
 }
@@ -290,21 +283,13 @@ db.deductionConsents = db.deductionConsents || [];
 // any environment.
 db.leavePolicyDocuments = db.leavePolicyDocuments || [];
 db.leavePolicyDocumentSeq = db.leavePolicyDocumentSeq || 1;
-// LeaveController.MAX_POLICY_DOCUMENT_BYTES (10 * 1024 * 1024). Mirrored by value, so it is pinned
-// against the Java constant by mockApi.leavePolicyDocument.test.js — contract.test.js compares
-// method names and parameter counts, never values.
+// LeaveController.MAX_POLICY_DOCUMENT_BYTES (10 * 1024 * 1024). Mirrored by value, so it is pinned against the
+// Java constant by mockApi.leavePolicyDocument.test.js — contract.test.js compares method names and parameter
+// counts, never values.
 const MAX_POLICY_DOCUMENT_BYTES = 10 * 1024 * 1024;
 
-/**
- * Mirrors LeavePolicyDocumentRepository#findCurrent: the latest `effective_from` that is NOT in the
- * future, tie-broken by document_id DESC.
- *
- * The `<= today` half is the load-bearing part and the easy one to drop. A document uploaded with a
- * FUTURE effective date is stored and returns 200, yet is deliberately not "current" — the previous
- * version keeps being served until that date arrives. An upload that appears to have done nothing
- * is exactly the outcome a user would misread as a failure, so the mock reproduces it rather than
- * treating "most recently uploaded" as current.
- */
+/** Mirrors LeavePolicyDocumentRepository#findCurrent: the latest `effective_from` that is NOT in the future,
+ * tie-broken by document_id DESC. The `<= today` half is the load-bearing part and the easy one to drop. */
 function currentLeavePolicyDocument() {
   const today = bangkokTodayIso();
   return [...db.leavePolicyDocuments]
@@ -314,15 +299,8 @@ function currentLeavePolicyDocument() {
     ))[0] || null;
 }
 db.deductionConsentSeq = db.deductionConsentSeq || 1;
-// Mirrors DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS, which is itself V107's
-// `CHECK (deduction_kind IN (...))` constraint. The other four PayrollDeductionKind values are
-// excluded on purpose: WITHHOLDING_TAX / SOCIAL_SECURITY / STUDENT_LOAN are ม.76 item (1), where no
-// consent question arises, and LEGAL_EXECUTION_GARNISHMENT is compelled by court order regardless
-// of consent.
-//
-// A value mirrored into this file has NO automatic guard — contract.test.js compares method names
-// and parameter COUNTS, never values — so this list is pinned against the one the UI offers by
-// mockApi.deductionConsents.test.js.
+// Mirrors DeductionWrittenConsentService.CONSENT_APPLICABLE_KINDS, which is itself V107's `CHECK
+// (deduction_kind IN (...))` constraint.
 const CONSENT_APPLICABLE_KINDS = ['WARNING_LETTER', 'CUSTOMER_RETURN', 'OTHER_PRETAX', 'OTHER_POST_TAX'];
 // §5 leave-rules-as-data:
 // paidDaysCap/advanceNoticeDays/minServiceMonths/maxConsecutiveDays/oncePerEmployment/dayCountBasis/proratedFirstYear/firstYearMaxDays
@@ -372,8 +350,8 @@ db.leaveTypes = db.leaveTypes || [
     certificateFilingWindowDays: null, noCertificateMonthlyTolerance: 0, emergencyMonthlyAllowance: 3,
     carriesForward: false,
   },
-  // certificateFilingWindowDays: 3 / noCertificateMonthlyTolerance: 3 (V124, §5.1) -- SHAPE parity
-  // only, see the file-level note above this array: create() below does NOT enforce either of these.
+  // certificateFilingWindowDays: 3 / noCertificateMonthlyTolerance: 3 (V124, §5.1) -- SHAPE parity only, see the
+  // file-level note above this array: create() below does NOT enforce either of these.
   {
     code: 'SICK', nameTh: 'ลาป่วย', nameEn: 'Sick leave', annualQuotaDays: 30, requiresAttachment: true,
     paidDaysCap: null, advanceNoticeDays: 0, minServiceMonths: 0, maxConsecutiveDays: null, oncePerEmployment: false,
@@ -433,9 +411,9 @@ db.specialMoneyRequests = db.specialMoneyRequests || [];
 // Evidence uploads live only for the life of the mock session -- there is no file store here.
 db.specialMoneyAttachments = db.specialMoneyAttachments || [];
 let sessionUser = null;
-// Self-service forgot-password (ลืมรหัสผ่าน) — token -> { userId, expiresAt }. In-memory only, for
-// the life of the mock session; see auth.forgotPassword/resetPassword below for what this does
-// and does not mirror from the real backend.
+// Self-service forgot-password (ลืมรหัสผ่าน) — token -> { userId, expiresAt }. In-memory only, for the life of
+// the mock session; see auth.forgotPassword/resetPassword below for what this does and does not mirror from
+// the real backend.
 const passwordResetTokens = new Map();
 
 // ── Mock in-memory document store ─────────────────────────────────────────────
@@ -489,8 +467,8 @@ const mockContacts = [
   { id: 3, customerId: 2, firstName: 'ปรีชา',  lastName: 'วงศ์สกุล', position: 'จัดซื้อ',          email: 'preecha@tld.co.th',     phone: '083-555-6666' },
   { id: 4, customerId: 3, firstName: 'สุภาพร', lastName: 'ทองดี',    position: 'ผู้อำนวยการ',       email: 'supaporn@pdg.co.th',    phone: '084-777-8888' },
   { id: 5, customerId: 4, firstName: 'กมล',    lastName: 'เรืองศรี', position: 'ผู้จัดการ',         email: 'kamol@rp.co.th',        phone: '085-999-0000' },
-  // ผู้สั่งซื้อ for customer 5 / ticket 18 — see that customer's own comment above. Two of them,
-  // so the picker on the seeded deal has something to CHANGE to and not just one forced answer.
+  // ผู้สั่งซื้อ for customer 5 / ticket 18 — see that customer's own comment above. Two of them, so the picker
+  // on the seeded deal has something to CHANGE to and not just one forced answer.
   { id: 6, customerId: 5, firstName: 'ณัฐพงศ์', lastName: 'ศรีวิไล',  position: 'ฝ่ายจัดซื้อ',      email: 'nattapong@fashionisland.co.th', phone: '086-222-3333' },
   { id: 7, customerId: 5, firstName: 'พิมพ์ใจ', lastName: 'บุญมาก',   position: 'ผู้จัดการโครงการ', email: 'pimjai@fashionisland.co.th',    phone: '086-444-5555' },
   // Customer 6 has no contact row. resolveDealQuotationContact skips the ownership check when
@@ -528,9 +506,9 @@ const mockFxRates = [
   { id: 6, currency: 'USD', rateToThb: 33.6264, effectiveDate: '2026-07-10', updatedAt: new Date().toISOString(), source: 'BOT',    fetchedAt: new Date().toISOString() },
 ];
 
-// V153 thickness gaps. Shaped like the real derivation (see the catalogThicknessDefaults namespace
-// for why these are seeds rather than a re-derived query): Vives ALTEA really is the biggest single
-// gap in prod, and one entry already has a default so the panel's "already set" state is drivable.
+// V153 thickness gaps. Shaped like the real derivation (see the catalogThicknessDefaults namespace for why
+// these are seeds rather than a re-derived query): Vives ALTEA really is the biggest single gap in prod, and
+// one entry already has a default so the panel's "already set" state is drivable.
 const mockThicknessGaps = [
   { factoryId: 8, factoryName: 'Vives',  collection: 'ALTEA',     rowsMissingThickness: 312, currentDefaultMm: null, hasSizeLevelOverride: false },
   { factoryId: 3, factoryName: 'Padana', collection: 'UNICOLORE', rowsMissingThickness: 188, currentDefaultMm: null, hasSizeLevelOverride: true },
@@ -539,8 +517,8 @@ const mockThicknessGaps = [
 ];
 
 function mockThicknessGapsResponse() {
-  // Mirrors ThicknessDefaultRepository#listGaps's ORDER BY count(*) DESC — the panel is built
-  // around biggest-impact-first, so a differently-ordered mock would let a broken sort pass.
+  // Mirrors ThicknessDefaultRepository#listGaps's ORDER BY count(*) DESC — the panel is built around
+  // biggest-impact-first, so a differently-ordered mock would let a broken sort pass.
   const gaps = [...mockThicknessGaps].sort((a, b) => b.rowsMissingThickness - a.rowsMissingThickness);
   return {
     gaps: structuredClone(gaps),
@@ -568,16 +546,9 @@ const mockPriceCalcConfigs = [
 ];
 let mockPriceConfigSeq = mockPriceCalcConfigs.length + 1;
 
-// BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only). Mirrors
-// V109__pricing_formula_config.sql's seed data exactly -- see that migration's comment for the
-// formula this config parameterizes and why deliberately-blank sheet cells are ABSENT rows here,
-// never a zero-amount row. One parent object owns three child arrays; a new version always
-// replaces the whole object (never mutates children of an existing version in place).
-//
-// BAND CONVENTION: freight thickness/qty bands and clearance qty bands are HALF-OPEN [min, max) --
-// min inclusive, max EXCLUSIVE, null max = +infinity. Bands are contiguous (band N's max == band
-// N+1's min) so every quantity/thickness value, including fractional sqm/mm, falls in exactly one
-// band. See V109's BAND CONVENTION comment for the full rationale.
+// BRANCH 1 of the sales pricing-formula redesign (config storage + CEO editing UI only). One parent object
+// owns three child arrays; a new version always replaces the whole object (never mutates children of an
+// existing version in place).
 let mockFormulaFreightRateSeq = 1;
 let mockFormulaDutyRateSeq = 1;
 let mockFormulaClearanceFeeSeq = 1;
@@ -688,8 +659,8 @@ function buildSeedFormulaConfig() {
       formulaFreightRow('IT', 17, 21, 1, 101, 60000),
       formulaFreightRow('IT', 17, 21, 101, 451, 100000),
 
-      // Spain: identical values to Italy (the sheet groups them; separate rows let the CEO
-      // diverge them later without a schema change).
+      // Spain: identical values to Italy (the sheet groups them; separate rows let the CEO diverge them later
+      // without a schema change).
       formulaFreightRow('ES', 3, 8, 1, 101, 80000),
       formulaFreightRow('ES', 3, 8, 101, 451, 90000),
       formulaFreightRow('ES', 3, 8, 451, 801, 100000),
@@ -722,8 +693,8 @@ function buildSeedFormulaConfig() {
       // China 17-21 band3/band4 are blank in the sheet -- no rows.
     ],
     dutyRates: [
-      // ก็อกน้ำ 20% / ยาแนว 10% are on the CEO's sheet but confirmed OUT OF SCOPE for this
-      // flow -- deliberately not seeded.
+      // ก็อกน้ำ 20% / ยาแนว 10% are on the CEO's sheet but confirmed OUT OF SCOPE for this flow -- deliberately not
+      // seeded.
       formulaDutyRow('TILE', 'กระเบื้อง', 0.30),
       formulaDutyRow('GLASS_MOSAIC', 'โมเสคแก้ว', 0.10),
     ],
@@ -744,15 +715,14 @@ function currentFormulaConfig() {
   return mockPricingFormulaConfigVersions.find((c) => c.isCurrent);
 }
 
-// Mirrors PricingFormulaConfigRepository's deterministic ORDER BY: freight by
-// (origin_country, thickness_min_mm, qty_min_sqm), duty by product_type, clearance by qty_min_sqm.
+// Mirrors PricingFormulaConfigRepository's deterministic ORDER BY: freight by (origin_country,
+// thickness_min_mm, qty_min_sqm), duty by product_type, clearance by qty_min_sqm.
 function sortedFormulaConfig(config) {
   return {
     ...config,
     // 'ZZ' อื่นๆ (V184) is excluded from the freight-origin picker specifically — mirrors
-    // PricingFormulaConfigRepository, which excludes it because a ZZ factory has no freight rate
-    // row to key on (no real origin to look one up for). Only this list excludes it; the factory
-    // editor's own country picker (priceImport.countries() below) keeps it.
+    // PricingFormulaConfigRepository, which excludes it because a ZZ factory has no freight rate row to key on (no
+    // real origin to look one up for).
     availableCountries: MOCK_COUNTRIES.filter((c) => c.countryCode !== 'ZZ'),
     freightRates: [...config.freightRates].sort((a, b) =>
       a.originCountryCode.localeCompare(b.originCountryCode)
@@ -769,14 +739,7 @@ function sortedFormulaConfig(config) {
 // clearance). This validation is a NON-AUTHORITATIVE approximation of the server's; a green run
 // here is never evidence the real endpoint would accept the payload.
 
-/**
- * Rebuilds the whole config as a NEW version, substituting `freightRows` in for the freight
- * child list. Every scalar (buffers, margin, effectiveFrom, ...) and every duty/clearance row
- * carries over from `current` verbatim in VALUE — but duty/clearance rows are still re-keyed with
- * a fresh id via formulaDutyRow/formulaClearanceRow, same as pricingFormulaConfig.update above,
- * because "never mutate an existing version's children in place" applies to every child table,
- * not just the one this call happens to be touching.
- */
+/** Rebuilds the whole config as a NEW version, substituting `freightRows` in for the freight child list. */
 function createNewFormulaConfigVersion(current, freightRows) {
   const maxVersion = Math.max(0, ...mockPricingFormulaConfigVersions.map((c) => c.version));
   mockPricingFormulaConfigVersions.forEach((c) => { c.isCurrent = false; });
@@ -802,19 +765,16 @@ function createNewFormulaConfigVersion(current, freightRows) {
   return newConfig;
 }
 
-/**
- * Half-open [min, max) overlap test — mirrors PricingFormulaConfigController#bandsOverlap
- * exactly, including the strict "<" that keeps contiguous bands ([1,101) and [101,451)) from
- * being flagged as overlapping.
- */
+/** Half-open [min, max) overlap test — mirrors PricingFormulaConfigController#bandsOverlap exactly, including
+ * the strict "<" that keeps contiguous bands ([1,101) and [101,451)) from being flagged as overlapping. */
 function freightBandsOverlap(aMin, aMax, bMin, bMax) {
   const aMinLtBMax = bMax == null || aMin < bMax;
   const bMinLtAMax = aMax == null || bMin < aMax;
   return aMinLtBMax && bMinLtAMax;
 }
 
-/** Mirrors PricingFormulaConfigController#validate's band-ordering + per-country pairwise overlap
- * check, run against the WHOLE resulting matrix (not just the row being added). */
+/** Mirrors PricingFormulaConfigController#validate's band-ordering + per-country pairwise overlap check, run
+ * against the WHOLE resulting matrix (not just the row being added). */
 function validateFreightRates(rows) {
   for (const row of rows) {
     if (row.thicknessMinMm >= row.thicknessMaxMm) {
@@ -849,13 +809,9 @@ function validateFreightRates(rows) {
   }
 }
 
-/**
- * Mirrors PricingFormulaConfigController#validateRemovalLeavesNoInteriorGap: a row is deletable
- * only at the lowest or highest qtyMinSqm of its (country, thickness) ladder — and, only when it
- * is the last row of its thickness band, that thickness band must itself be the lowest or highest
- * for the country. Trimming an edge is how V109's own seed is shaped (every existing hole is a
- * trailing one); punching a hole in the middle would silently mis-price an order that lands there.
- */
+/** Mirrors PricingFormulaConfigController#validateRemovalLeavesNoInteriorGap: a row is deletable only at the
+ * lowest or highest qtyMinSqm of its ladder — and, only when it is the last row of its thickness band, that
+ * thickness band must itself be the lowest or highest for the country. */
 function validateFreightRemovalLeavesNoInteriorGap(all, target) {
   const sameThicknessBand = all
     .filter((r) => r.originCountryCode === target.originCountryCode
@@ -863,8 +819,8 @@ function validateFreightRemovalLeavesNoInteriorGap(all, target) {
     .sort((a, b) => a.qtyMinSqm - b.qtyMinSqm);
 
   if (sameThicknessBand.length > 1) {
-    // Compare by id, not by value: two rows can share a qtyMinSqm only if they overlap, which
-    // validateFreightRates already rejects, but an id comparison cannot be fooled either way.
+    // Compare by id, not by value: two rows can share a qtyMinSqm only if they overlap, which validateFreightRates
+    // already rejects, but an id comparison cannot be fooled either way.
     const lowestId = sameThicknessBand[0].freightRateId;
     const highestId = sameThicknessBand[sameThicknessBand.length - 1].freightRateId;
     if (target.freightRateId !== lowestId && target.freightRateId !== highestId) {
@@ -878,8 +834,8 @@ function validateFreightRemovalLeavesNoInteriorGap(all, target) {
     return;
   }
 
-  // The row is the last one in its thickness band, so removing it empties that band. Apply the
-  // same edge-only rule one level up, across the country's thickness ladder.
+  // The row is the last one in its thickness band, so removing it empties that band. Apply the same edge-only
+  // rule one level up, across the country's thickness ladder.
   const thicknessMins = [...new Set(
     all.filter((r) => r.originCountryCode === target.originCountryCode).map((r) => r.thicknessMinMm),
   )].sort((a, b) => a - b);
@@ -898,8 +854,8 @@ function validateFreightRemovalLeavesNoInteriorGap(all, target) {
 const mockAttachments = [];
 let mockAttachSeq = 1;
 
-// hr.employee_signature (V166, Quotation v2's approver signature image). Keyed by employee id,
-// one row max per employee (PK), object-URL-backed — see employees.uploadSignature above.
+// hr.employee_signature (V166, Quotation v2's approver signature image). Keyed by employee id, one row max per
+// employee (PK), object-URL-backed — see employees.uploadSignature above.
 const mockEmployeeSignatures = new Map();
 
 // The deal_activity log. Its own store, not on the ticket, mirroring sales.deal_activity being its
@@ -942,9 +898,9 @@ const mockCatalog = [
   { id: 14, brand: 'Panaria',  collection: 'Frame',             color: 'Ash',         surface: 'Naturale',     size: '80x80 cm',   factory: 'Panaria SpA',       sqmPerPiece: 0.64 },
 ];
 
-// Bumped past the three domestic factories added below. This counter mints ids for
-// factories a user creates at runtime, so leaving it at 10 would have re-issued 10/11/12
-// and collided with them on the first `priceImport` factory creation.
+// Bumped past the three domestic factories added below. This counter mints ids for factories a user creates at
+// runtime, so leaving it at 10 would have re-issued 10/11/12 and collided with them on the first `priceImport`
+// factory creation.
 let mockPriceImportFactorySeq = 13;
 // country is a price_catalog.country CODE (see MOCK_COUNTRIES), not free text: the real column is
 // NOT NULL + FK, and the factory form offers a validated <select> of real codes, so a seeded name
@@ -958,11 +914,7 @@ const mockPriceImportFactories = [
   { factoryId: 2, name: 'REFIN',          country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
   { factoryId: 3, name: 'Equipe',         country: 'ES', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'sqm' },
   { factoryId: 4, name: 'Vives',          country: 'ES', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
-  // Country is 'CN', not 'DE'/Germany, even though Bode is a German factory name (review
-  // remediation, BLOCKER 2) — V40__catalog_import_schema.sql:114 seeds Bode's real
-  // sales.factories row with country 'CN', and that is what production actually carries.
-  // 'DE' does not exist in price_catalog.country (V151); a mock value the backend cannot accept
-  // would have been invisible here and a 400 in production.
+  // Country is 'CN', not 'DE'/Germany, even though Bode is a German factory name.
   { factoryId: 5, name: 'Bode',           country: 'CN', defaultCurrency: 'USD', numberFormat: 'us', email: null, unit: 'piece' },
   { factoryId: 6, name: 'CDE',            country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
   { factoryId: 7, name: 'Padana Marmi',   country: 'IT', defaultCurrency: 'EUR', numberFormat: 'eu', email: null, unit: 'piece' },
@@ -983,13 +935,9 @@ const mockPriceImportFactories = [
 let mockProductPriceSeq = 100;
 let mockPriceVersionSeq = 100;
 const mockProductPrices = [
-  // Quotation v2 direct-deal-quotation (V166, docs/sales/quotation-v2-plan.md): thicknessMm/
-  // pcsPerBox are additive ProductPriceDto fields the item editor's catalog typeahead autofills
-  // (QuotationItemRow.pickCatalog). Carried on just these two fixture rows so the autofill has
-  // something real to demonstrate in the browser -- every other row leaving them undefined is
-  // the honest "catalog gap" case (roughly a third of the prod catalog lacks thickness per
-  // prod-catalog-41pct-unpriceable-no-thickness.md), which sales must still be able to complete
-  // by hand.
+  // Quotation v2 direct-deal-quotation (V166, docs/sales/quotation-v2-plan.md): thicknessMm/ pcsPerBox are
+  // additive ProductPriceDto fields the item editor's catalog typeahead autofills
+  // (QuotationItemRow.pickCatalog).
   { priceId: 1, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-IVO', grade: null,  collection: 'Trilogy',      productName: 'Ivory Lappato',    color: 'Ivory',   surface: 'Lappato',   sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72, thicknessMm: 10, pcsPerBox: 3 },
   { priceId: 2, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-T600-GRY', grade: null,  collection: 'Trilogy',      productName: 'Grigio Naturale',  color: 'Grigio',  surface: 'Naturale',  sizeRaw: '60x120', price: 43.00, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.72, thicknessMm: 10, pcsPerBox: 3 },
   { priceId: 3, factoryId: 1, factoryName: 'Panaria SpA',  productCode: 'PAN-F800-ASH', grade: null,  collection: 'Frame',        productName: 'Ash',              color: 'Ash',     surface: 'Naturale',  sizeRaw: '80x80',  price: 38.50, currency: 'EUR', priceUnit: 'per_sqm',   sqmPerPiece: 0.64 },
@@ -1019,16 +967,16 @@ const mockProductPrices = [
   { priceId: 18,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-MTS-3030-CR',  grade: 'A',   collection: 'Metro Square',      productName: 'Metro ครีม',        color: 'ครีม',        surface: 'ด้าน',        sizeRaw: '30x30',  price: 245.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.09 },
   { priceId: 19,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-STN-6060-DG',  grade: 'A',   collection: 'Stone Series',      productName: 'Stone เทาเข้ม',     color: 'เทาเข้ม',     surface: 'หยาบ',        sizeRaw: '60x60',  price: 505.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
   { priceId: 20,factoryId: 11,factoryName: 'Cotto Industry',    productCode: 'CT-TMB-20120-LB', grade: 'A',   collection: 'Timber Line',       productName: 'Timber น้ำตาลอ่อน', color: 'น้ำตาลอ่อน',  surface: 'ลายไม้',      sizeRaw: '20x120', price: 610.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.24 },
-  // Same product at two grades — the domestic mirror of Padana Marmi's A01/A02 rows above,
-  // so grade handling is exercised on a THB list too and a search on the code returns two rows.
+  // Same product at two grades — the domestic mirror of Padana Marmi's A01/A02 rows above, so grade handling is
+  // exercised on a THB list too and a search on the code returns two rows.
   { priceId: 21,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-MG',  grade: 'A',   collection: 'Granite Plus',      productName: 'Granite เทากลาง',   color: 'เทากลาง',     surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 470.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
   { priceId: 22,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-MG',  grade: 'B',   collection: 'Granite Plus',      productName: 'Granite เทากลาง',   color: 'เทากลาง',     surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 395.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
   { priceId: 23,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-GRP-6060-BK',  grade: 'A',   collection: 'Granite Plus',      productName: 'Granite ดำ',        color: 'ดำ',          surface: 'หยาบกึ่งมัน', sizeRaw: '60x60',  price: 470.00, currency: 'THB', priceUnit: 'per_sqm',   sqmPerPiece: 0.36 },
-  // Priced per PIECE, not per sqm — the only domestic row that is, so the unit-basis branch
-  // (and the per-piece -> per-sqm conversion a costing has to do) is reachable in THB.
+  // Priced per PIECE, not per sqm — the only domestic row that is, so the unit-basis branch (and the per-piece
+  // -> per-sqm conversion a costing has to do) is reachable in THB.
   { priceId: 24,factoryId: 12,factoryName: 'Duragres Thailand', productCode: 'DG-POR-8080-WH',  grade: 'A',   collection: 'Porcelain Pro',     productName: 'Porcelain ขาวเนียน',color: 'ขาวเนียน',    surface: 'มัน',         sizeRaw: '80x80',  price: 545.00, currency: 'THB', priceUnit: 'per_piece', sqmPerPiece: 0.64 },
-  // A row with NULL optional fields, mirroring REFIN's above: no product code, no colour, no
-  // surface. /catalog must render it without holes, and it must not match a code search.
+  // A row with NULL optional fields, mirroring REFIN's above: no product code, no colour, no surface. /catalog
+  // must render it without holes, and it must not match a code search.
   { priceId: 25,factoryId: 11,factoryName: 'Cotto Industry',    productCode: null,              grade: null,  collection: 'Trim & Accessories',productName: 'บัวเชิงผนัง',       color: null,          surface: null,          sizeRaw: '10x60',  price: 175.00, currency: 'THB', priceUnit: 'per_piece', sqmPerPiece: null },
 ];
 
@@ -1066,10 +1014,8 @@ let mockFactoryQuoteItemSeq = 1;
 let mockFactoryQuoteAttachmentSeq = 1;
 let mockPricingRequestAttachmentSeq = 1;
 let mockPricingCostingSeq = 1;
-// PricingCostingItemDto's own id (sales.pricing_costing_item.id) — distinct from
-// pricingRequestItemId, which is a FK a costing item merely CARRIES. PricingDecisionItemDto's
-// pricingCostingItemId points at THIS, not at pricingRequestItemId (see startPricingDecision
-// below and PricingDecisionDtos.PricingDecisionItemDto's own field list).
+// PricingCostingItemDto's own id (sales.pricing_costing_item.id) — distinct from pricingRequestItemId, which
+// is a FK a costing item merely CARRIES.
 let mockPricingCostingItemSeq = 1;
 // Step 3: CEO Selling Price Decision (sales.pricing_decision / pricing_decision_item).
 const mockPricingDecisions = [];
@@ -1091,11 +1037,9 @@ let mockCustomerQuotationItemSeq = 1;
 const mockDiscountApprovals = [];
 let mockDiscountApprovalSeq = 1;
 
-// Sales/CRM state-matrix seed (chore/mock-demo-seed-state-matrix): this whole aggregate
-// (mockPricingRequests through mockCustomerQuotations, plus mockDealActivities and
-// mockAttachments above) starts completely empty every session — demoSales.js is the only
-// source of rows for it. Every counter below is advanced past the highest seeded id so the
-// first user-created row after boot can never collide with one of these.
+// Sales/CRM state-matrix seed (chore/mock-demo-seed-state-matrix): this whole aggregate (mockPricingRequests
+// through mockCustomerQuotations, plus mockDealActivities and mockAttachments above) starts completely empty
+// every session — demoSales.js is the only source of rows for it.
 {
   const salesSeed = db.salesSeed;
   mockAttachments.push(...salesSeed.attachments);
@@ -1122,9 +1066,9 @@ let mockDiscountApprovalSeq = 1;
   mockCustomerQuotations.push(...salesSeed.customerQuotations);
   mockQuotationSeq = salesSeed.nextSeq.customerQuotation;
   mockCustomerQuotationItemSeq = salesSeed.nextSeq.customerQuotationItem;
-  // Deal-tracking readiness gate (dealIsReadyToAdvance) needs `ticket.nextFollowUpAt` set —
-  // not part of the ticket's own literal object in demoSales.js since it's normally written
-  // by tickets.setBilling, not ticket creation.
+  // Deal-tracking readiness gate (dealIsReadyToAdvance) needs `ticket.nextFollowUpAt` set — not part of the
+  // ticket's own literal object in demoSales.js since it's normally written by tickets.setBilling, not ticket
+  // creation.
   for (const { ticketId, nextFollowUpAt } of salesSeed.followUpOverrides) {
     const ticket = db.tickets.find((t) => t.id === ticketId);
     if (ticket) ticket.nextFollowUpAt = nextFollowUpAt;
@@ -1139,9 +1083,7 @@ let mockDiscountApprovalSeq = 1;
 const CUSTOMER_VIEWER_ROLES = ['sales', 'import', 'ceo', 'account', 'sales_manager'];
 
 // Read gate for the three customer/contact/project reads below: CUSTOMER_VIEWER_ROLES, OR'd with
-// DealEntryAccess.canEnterDeal's canCreateQuotation grant (sales/sales_manager are already
-// members of CUSTOMER_VIEWER_ROLES, so the grant is the only thing this OR adds — e.g. a
-// non-sales employee who can enter a deal but has no standing viewer role).
+// DealEntryAccess.canEnterDeal's canCreateQuotation grant.
 function requireCustomerViewer() {
   const user = requireSession();
   if (!CUSTOMER_VIEWER_ROLES.includes(user.role) && !user.canCreateQuotation) {
@@ -1152,9 +1094,9 @@ function requireCustomerViewer() {
 const PRICING_REQUEST_VIEWER_ROLES = ['sales', 'import', 'ceo', 'sales_manager'];
 const PRICING_REQUEST_RECIPIENT_VALUES = PRICING_REQUEST_RECIPIENT_OPTIONS.map((o) => o.code);
 const PRICING_REQUEST_QUANTITY_TYPE_VALUES = PRICING_REQUEST_QUANTITY_TYPE_OPTIONS.map((o) => o.code);
-// V185: requestedUnitBasis is no longer client-supplied (resolvePricingRequestItem always
-// derives it to PER_PIECE), so the UnitBasis.VALUES membership check this constant fed is gone
-// too — see requirePricingRequestItemFieldsValid's own comment.
+// V185: requestedUnitBasis is no longer client-supplied (resolvePricingRequestItem always derives it to
+// PER_PIECE), so the UnitBasis.VALUES membership check this constant fed is gone too — see
+// requirePricingRequestItemFieldsValid's own comment.
 
 function nextPricingRequestCode() {
   return `PCR-2026-${String(mockPricingRequestSeq).padStart(4, '0')}`;
@@ -1181,10 +1123,9 @@ function findPricingRequestRaw(id) {
 // manual-only, and markFactoryQuoteContacted below performs its DRAFT -> REQUESTED transition
 // synchronously in one call, matching FactoryQuoteService#markContacted.
 
-// Step 3, design correction 3 ("freeze factory mutations from CEO_REVIEWING"): mirrors
-// FactoryQuoteService's RESPONSE_STATUSES/MUTABLE_STATUSES/DRAFT_STATUSES all deliberately
-// excluding CEO_REVIEWING (the CEO owns the request from here until approve/return). Called at
-// the top of every factory-quote mutation this branch touches.
+// Step 3, design correction 3 ("freeze factory mutations from CEO_REVIEWING"): mirrors FactoryQuoteService's
+// RESPONSE_STATUSES/MUTABLE_STATUSES/DRAFT_STATUSES all deliberately excluding CEO_REVIEWING (the CEO owns the
+// request from here until approve/return).
 function mockRequireNotCeoReviewing(pr) {
   if (pr.status === 'CEO_REVIEWING') {
     fail('คำขอราคานี้อยู่ระหว่างการพิจารณาของ CEO — ไม่สามารถแก้ไขราคาโรงงานได้ในขณะนี้', 409);
@@ -1214,8 +1155,8 @@ function mockLeadTimeReason(raw) {
   return reason;
 }
 
-// Every ticked line must be an IMPORT (non-stock) line of THIS factory quote, listed once, with
-// 1 <= min <= max <= 3650. The old range is snapshotted here, from the item as it is right now.
+// Every ticked line must be an IMPORT (non-stock) line of THIS factory quote, listed once, with 1 <= min <=
+// max <= 3650. The old range is snapshotted here, from the item as it is right now.
 function mockLeadTimeLines(quote, pr, inputs) {
   if (!Array.isArray(inputs) || inputs.length === 0) fail('กรุณาเลือกอย่างน้อยหนึ่งรายการ', 400);
   const onQuote = new Set((quote?.items ?? []).map((i) => i.pricingRequestItemId));
@@ -1251,8 +1192,8 @@ function mockRequireLiveRequest(pr) {
   }
 }
 
-// B-R3: the owning rep (role sales AND ticket creator) or a sales manager -- NOT the CEO, import,
-// account or another rep.
+// B-R3: the owning rep (role sales AND ticket creator) or a sales manager -- NOT the CEO, import, account or
+// another rep.
 function mockRequireLeadTimeDecider(pr) {
   const user = requireSession();
   const owns = user.role === 'sales' && buildPricingRequestSummary(pr).ticketCreatedById === user.id;
@@ -1283,13 +1224,8 @@ function round2(n) {
 }
 
 // "Today" in the business zone, as "YYYY-MM-DD" -- the mock stand-in for the backend's
-// `LocalDate.now(ZoneId.of("Asia/Bangkok"))`.
-//
-// Deliberately NOT `new Date().toISOString().slice(0, 10)`, which is the convention elsewhere in
-// this file: that is UTC, and UTC runs up to 7 hours behind Bangkok. Any endpoint whose default
-// window is derived from "today" (see specialMoney.list) would otherwise pick a different day --
-// and on the 1st of a month before 07:00 Bangkok, a different MONTH -- than the service it mirrors.
-// Uses en-CA because it formats as ISO "YYYY-MM-DD".
+// `LocalDate.now(ZoneId.of("Asia/Bangkok"))`. Deliberately NOT `new Date().toISOString().slice(0, 10)`, which
+// is the convention elsewhere in this file: that is UTC, and UTC runs up to 7 hours behind Bangkok.
 function bangkokTodayIso() {
   return new Intl.DateTimeFormat('en-CA', {
     timeZone: 'Asia/Bangkok',
@@ -1299,23 +1235,14 @@ function bangkokTodayIso() {
   }).format(new Date());
 }
 
-// Mirrors LeaveService.DEFAULT_WINDOW_MONTHS -- see leave.list's own comment for why this default
-// exists and what it fixes. A plain number here rather than an import: this file has no build-time
-// link to the Java source, so the two are kept in step by the cross-references in both comments.
-// CLAUDE.md's warning applies -- contract.test.js checks the method surface and arity, never a
+// Mirrors LeaveService.DEFAULT_WINDOW_MONTHS -- see leave.list's own comment for why this default exists and
+// what it fixes. CLAUDE.md's warning applies -- contract.test.js checks the method surface and arity, never a
 // constant's VALUE, so nothing fails if these two drift.
 const LEAVE_DEFAULT_WINDOW_MONTHS = 12;
 
-/**
- * "YYYY-MM-DD" shifted by whole months, clamping to the target month's last day.
- *
- * Clamping is the point, and it is why this is not `new Date(y, m + n, d)`: JS OVERFLOWS a
- * too-large day into the following month (2028-02-29 shifted -12 months would give 2027-03-01),
- * whereas Java's LocalDate.plusMonths/minusMonths -- the thing this mirrors -- CLAMPS to the last
- * valid day (2027-02-28). Only reachable on a leap day at the current +/-12-month usage, but the
- * helper is written to match the semantics it claims to mirror rather than to match today's
- * single call site.
- */
+/** "YYYY-MM-DD" shifted by whole months, clamping to the target month's last day. Only reachable on a leap day
+ * at the current +/-12-month usage, but the helper is written to match the semantics it claims to mirror
+ * rather than to match today's single call site. */
 function shiftMonthsIso(iso, months) {
   const [year, month, day] = iso.split('-').map(Number);
   const target = new Date(Date.UTC(year, month - 1 + months, 1));
@@ -1324,8 +1251,8 @@ function shiftMonthsIso(iso, months) {
   return target.toISOString().slice(0, 10);
 }
 
-// Step 6: mirrors OrderConfirmationService's own private unitLabel(), used when building a
-// deposit-notice item from a customer-quotation item's requestedUnitBasis.
+// Step 6: mirrors OrderConfirmationService's own private unitLabel(), used when building a deposit-notice item
+// from a customer-quotation item's requestedUnitBasis.
 function mockUnitBasisLabel(unitBasis) {
   switch (unitBasis) {
     case 'PER_SQM': return 'ตร.ม.';
@@ -1444,10 +1371,9 @@ function mockPickLiveQuotationForItemFallback(ticketId) {
   return candidates[0];
 }
 
-// TicketItemDto's full read shape (see TicketRepository#findPricingChainFallbackItems on the
-// backend) with every pricing-approval-history field at its "not a real ticket_item row"
-// default -- these lines are borrowed from a quotation, not something CEO/import approved on
-// THIS ticket.
+// TicketItemDto's full read shape (see TicketRepository#findPricingChainFallbackItems on the backend) with
+// every pricing-approval-history field at its "not a real ticket_item row" default -- these lines are borrowed
+// from a quotation, not something CEO/import approved on THIS ticket.
 function mockPricingChainFallbackItemShape({ id, brand, model, color, texture, size, qty, sortOrder }) {
   return {
     id, brand: brand ?? null, model: model ?? null, color: color ?? null, texture: texture ?? null,
@@ -1472,8 +1398,8 @@ function mockPricingChainFallbackItems(ticketId) {
   if (!picked) return [];
   if (picked.origin === 'PRICING_REQUEST') {
     // mockCustomerQuotations items carry no brand/model/color/texture/size of their own (only
-    // description/requestedQuantity/requestedUnitBasis) -- resolve via the linked
-    // pricingRequestItemId, mirroring buildDealQuotationDto's removedCeoItems lookup above.
+    // description/requestedQuantity/requestedUnitBasis) -- resolve via the linked pricingRequestItemId, mirroring
+    // buildDealQuotationDto's removedCeoItems lookup above.
     const pr = mockPricingRequests.find((p) => p.id === picked.quotation.pricingRequestId);
     const priById = new Map((pr?.items ?? []).map((i) => [i.id, i]));
     return (picked.quotation.items ?? []).map((it, idx) => {
@@ -1521,14 +1447,9 @@ function mockDepositNoticeHeaderAutofill(ticket, payload) {
   return { customerTaxId, customerAddress, projectName };
 }
 
-/**
- * Step 8: mirrors OrderConfirmationService.reconcileTicketItems — sales.ticket_item.qty is set
- * once at ticket creation and never touched by the PricingRequest chain, so it can drift from
- * what the chain actually settled on (both on a first submission and further after a
- * cost-affecting customer-change revision, which is reachable even from QUOTATION_ACCEPTED — see
- * that Java method's own Javadoc for the full account). Called once from confirmOrder, before any
- * delivery machinery becomes reachable, exactly like the real bridge.
- */
+/** Step 8: mirrors OrderConfirmationService.reconcileTicketItems — sales.ticket_item.qty is set once at ticket
+ * creation and never touched by the PricingRequest chain, so it can drift from what the chain actually settled
+ * on. */
 function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
   let anyChange = false;
   for (const item of pr.items ?? []) {
@@ -1539,10 +1460,9 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
       const qtyDelivered = Number(ticketItem.qtyDelivered ?? 0);
       const stockLine = item.stockSource === 'IN_THAILAND';
       if (newQty < qtyDelivered || (!stockLine && newQty < Number(ticketItem.qtyFromStock ?? 0))) {
-        // Mirrors the DB's chk_ticket_item_qty_delivered/chk_ticket_item_qty_from_stock CHECK
-        // constraints (V54) that back the real reconcileItemQty call — a downward reconciliation
-        // that would drop qty below an already-recorded delivered/reserved amount is refused, not
-        // silently applied.
+        // Mirrors the DB's chk_ticket_item_qty_delivered/chk_ticket_item_qty_from_stock CHECK constraints (V54) that
+        // back the real reconcileItemQty call — a downward reconciliation that would drop qty below an
+        // already-recorded delivered/reserved amount is refused, not silently applied.
         fail(`ไม่สามารถปรับจำนวนสินค้า (item ${item.sourceTicketItemId}) ให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อได้ `
           + 'เนื่องจากมีการส่งมอบหรือจองสต็อกไปแล้วเกินจำนวนใหม่', 409);
       }
@@ -1556,8 +1476,8 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
         anyChange = true;
       }
     } else {
-      // A wholly new line added by a customer-change revision — no original ticket_item to
-      // reconcile against, so one is created now.
+      // A wholly new line added by a customer-change revision — no original ticket_item to reconcile against, so one
+      // is created now.
       const nextId = Math.max(0, ...ticket.items.map((ti) => ti.id)) + 1;
       ticket.items.push({
         id: nextId, ticketId: ticket.id,
@@ -1616,10 +1536,8 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
   }
 }
 
-/** Builds a fresh Step 4 DRAFT quotation, snapshotting prices from the current APPROVED
- * pricing_decision — mirrors CustomerQuotationService.create/createRevision's item-building
- * (buildItem). `priorDiscounts` (keyed by pricingRequestItemId) is empty for a first-ever
- * create and carries forward each line's discount for a revision. */
+/** Builds a fresh Step 4 DRAFT quotation, snapshotting prices from the current APPROVED pricing_decision —
+ * mirrors CustomerQuotationService.create/createRevision's item-building (buildItem). */
 function buildMockCustomerQuotationDraft(pr, decision, ticket, user, payload, parentQuotationId, revisionNo, priorDiscounts, number) {
   const customer = ticket?.customerId ? mockCustomers.find((c) => c.id === ticket.customerId) : null;
   const project = ticket?.projectId ? mockProjects.find((p) => p.id === ticket.projectId) : null;
@@ -1700,9 +1618,9 @@ function recalcMockCustomerQuotationTotals(quotation) {
   quotation.grandTotal = round2(quotation.subtotalAmount + quotation.vatAmount);
 }
 
-// Read access: sales/sales_manager/ceo/import, sales scoped to their own deal. account is
-// deliberately excluded end-to-end (task brief: "account role: no quotation editing", and
-// Step 3's own precedent excludes account from every raw-pricing-adjacent view on this chain).
+// Read access: sales/sales_manager/ceo/import, sales scoped to their own deal. account is deliberately
+// excluded end-to-end (task brief: "account role: no quotation editing", and Step 3's own precedent excludes
+// account from every raw-pricing-adjacent view on this chain).
 function mockCustomerQuotationViewAccess(id) {
   const user = hasRole('sales', 'sales_manager', 'ceo', 'import');
   const quotation = mockCustomerQuotations.find((q) => q.id === Number(id));
@@ -1715,8 +1633,8 @@ function mockCustomerQuotationViewAccess(id) {
   return quotation;
 }
 
-// Write access: sales, ticket owner only — ceo/import/sales_manager are read-only everywhere
-// on this aggregate (caller must already have called hasRole('sales') for `user`).
+// Write access: sales, ticket owner only — ceo/import/sales_manager are read-only everywhere on this aggregate
+// (caller must already have called hasRole('sales') for `user`).
 function mockCustomerQuotationEditAccess(id, user) {
   const quotation = mockCustomerQuotations.find((q) => q.id === Number(id));
   if (!quotation) fail('ไม่พบใบเสนอราคาลูกค้านี้', 404);
@@ -1781,11 +1699,7 @@ function ensureMockDiscountApprovalsRaised(quotation, user) {
   ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'DISCOUNT_APPROVAL_REQUESTED', message));
 }
 
-// The "current" per-line status a UI shows for one quotation — restricted to rows whose
-// requestedFinalUnitPrice equals the item's CURRENT finalUnitPrice (not simply "the latest row"),
-// mirroring DiscountApprovalRepository#findCurrentByQuotationId's own doc comment exactly: a line
-// that bounced back to an already-decided price shows THAT decision, and an abandoned PENDING ask
-// from a price the line has since moved off never shows.
+// The "current" per-line status a UI shows for one quotation.
 function mockCurrentDiscountApprovals(quotation) {
   const byItem = new Map();
   for (const item of quotation.items) {
@@ -1798,9 +1712,9 @@ function mockCurrentDiscountApprovals(quotation) {
   return quotation.items.map((item) => byItem.get(item.id)).filter(Boolean);
 }
 
-// Demo-mode file preview for a Step 4 quotation — mirrors buildMockQuotationXlsx/
-// buildMockQuotationHtml's own placeholder pattern (same styling/colors, same "real file comes
-// from the server template" banner) rather than inventing a second preview style.
+// Demo-mode file preview for a Step 4 quotation — mirrors buildMockQuotationXlsx/ buildMockQuotationHtml's own
+// placeholder pattern (same styling/colors, same "real file comes from the server template" banner) rather
+// than inventing a second preview style.
 function buildMockCustomerQuotationDocument(quotation, format) {
   if (format === 'xlsx') {
     const lines = [
@@ -1835,10 +1749,9 @@ td{border:1px solid #e2e8f0;padding:8px 10px;font-size:13px}
   return Promise.resolve(new Blob([html], { type: 'text/html;charset=utf-8' }));
 }
 
-// Mirrors PricingRequestService.detail()'s join: the ticket a request belongs
-// to is looked up fresh every time (never cached on the request record), same
-// as PricingRequestSummaryDto's ticketCode/projectName/customerName/
-// ticketCreatedById fields.
+// Mirrors PricingRequestService.detail()'s join: the ticket a request belongs to is looked up fresh every time
+// (never cached on the request record), same as PricingRequestSummaryDto's
+// ticketCode/projectName/customerName/ ticketCreatedById fields.
 function buildPricingRequestSummary(pr) {
   const ticket = db.tickets.find((t) => t.id === pr.ticketId);
   return {
@@ -1923,9 +1836,8 @@ function requirePricingRequestDealActive(ticket) {
   }
 }
 
-// Mirrors PricingRequestRepository.normalizeCurrency: trim + uppercase,
-// blank collapses to null. Applied on both insert and update so the mock
-// never stores a raw/mixed-case currency the real column wouldn't have.
+// Mirrors PricingRequestRepository.normalizeCurrency: trim + uppercase, blank collapses to null. Applied on
+// both insert and update so the mock never stores a raw/mixed-case currency the real column wouldn't have.
 function normalizePricingRequestCurrency(targetCurrency) {
   if (targetCurrency == null || targetCurrency.trim() === '') return null;
   return targetCurrency.trim().toUpperCase();
@@ -1952,12 +1864,8 @@ function requirePricingRequestItemFieldsValid(items) {
     if (item.requestedUnitBasis != null && !PRICING_REQUEST_UNIT_BASIS_OPTIONS.some((u) => u.code === item.requestedUnitBasis)) {
       fail(`ไม่รองรับ requestedUnitBasis '${item.requestedUnitBasis}'`, 400);
     }
-    // Mirrors PricingRequestService.validateItems: an item must actually name
-    // a product somehow — a link to an existing deal line, a catalog
-    // product, a model name, or a dedicated product description. Brand alone
-    // is deliberately NOT sufficient (a brand with no model does not
-    // identify a product), so Import never receives a request for a line
-    // nobody can actually source.
+    // Mirrors PricingRequestService.validateItems: an item must actually name a product somehow — a link to an
+    // existing deal line, a catalog product, a model name, or a dedicated product description.
     const identified = item.sourceTicketItemId != null || item.productId != null
       || Boolean(item.model?.trim()) || Boolean(item.productDescription?.trim());
     if (!identified) {
@@ -2067,10 +1975,9 @@ function resolvePricingRequestItem(item, rowNumber = 0) {
     wastageValue: item.wastageValue,
     piecesPerBox: item.piecesPerBox,
     roundToFullBox: item.roundToFullBox,
-    // Price-free: this derivation only ever reads the PIECE-count fields off the result
-    // (piecesFinal/piecesBeforeWastage/piecesAfterWastage/boxes) below, never netUnitPrice/
-    // lineAmount/calculationLine — see PricingRequestService#resolveItem's own comment on why the
-    // real backend calls WastageCalculator.calculate with a zero price for the identical reason.
+    // Price-free: this derivation only ever reads the PIECE-count fields off the result below, never netUnitPrice/
+    // lineAmount/calculationLine — see PricingRequestService#resolveItem's own comment on why the real backend
+    // calls WastageCalculator.calculate with a zero price for the identical reason.
     unitPrice: 0,
   });
   // Mirrors PricingRequestService#resolveItem's piecesFinal < 1 rejection: a small AREA input
@@ -2120,8 +2027,8 @@ function pricingRequestItemFactory(item) {
 }
 
 // Mirrors PricingRequestItemDto.displayName(): the same fields, in the same precedence, that the
-// pricing-request detail page prints on each row — so an error naming a line points at text the
-// reader can actually see.
+// pricing-request detail page prints on each row — so an error naming a line points at text the reader can
+// actually see.
 function pricingRequestItemDisplayName(item) {
   const brand = item.catalogBrand?.trim() || item.brand?.trim() || '';
   const model = item.catalogModel?.trim() || item.model?.trim() || '';
@@ -2130,12 +2037,9 @@ function pricingRequestItemDisplayName(item) {
   return item.productDescription?.trim() || '(ไม่มีชื่อสินค้า)';
 }
 
-// Mirrors PricingRequestRepository.snapshotCatalogSelections: for each item whose productId
-// matches an ACTIVE catalog price, populates the catalog snapshot fields the same way the real
-// UPDATE...FROM does — including catalog_brand = COALESCE(pri.brand, pp.grade) and
-// factory = COALESCE(NULLIF(BTRIM(pri.factory), ''), f.name). An item whose productId does not
-// resolve (null productId, or no ACTIVE price_list_version for that product's factory) is left
-// untouched — submitPricingRequestCatalogGate below is what rejects those.
+// Mirrors PricingRequestRepository.snapshotCatalogSelections: for each item whose productId matches an ACTIVE
+// catalog price, populates the catalog snapshot fields the same way the real UPDATE...FROM does — including
+// catalog_brand = COALESCE and factory = COALESCE(NULLIF(BTRIM, ''), f.name).
 function snapshotPricingRequestCatalogSelections(pr) {
   for (const item of pr.items) {
     if (item.productId == null) continue;
@@ -2160,9 +2064,9 @@ function snapshotPricingRequestCatalogSelections(pr) {
   }
 }
 
-// Mirrors PricingCostingService.requireFactor/missingFactor (financial-integrity review
-// Finding B): 422 naming both the item and the missing conversion factor, rather than letting
-// a null factor silently propagate into a wrong number (or a NaN).
+// Mirrors PricingCostingService.requireFactor/missingFactor (financial-integrity review Finding B): 422 naming
+// both the item and the missing conversion factor, rather than letting a null factor silently propagate into a
+// wrong number (or a NaN).
 function mockRequireConversionFactor(value, pricingRequestItemId, factorName) {
   const numeric = Number(value);
   if (value == null || !(numeric > 0)) {
@@ -2171,8 +2075,8 @@ function mockRequireConversionFactor(value, pricingRequestItemId, factorName) {
   return numeric;
 }
 
-// Mirrors PricingCostingService.pricePerPiece: converts a raw factory-quoted price to a
-// per-PIECE figure using the QUOTE's own unit basis.
+// Mirrors PricingCostingService.pricePerPiece: converts a raw factory-quoted price to a per-PIECE figure using
+// the QUOTE's own unit basis.
 function mockPricePerPiece(rawPrice, quotedUnitBasis, factors, pricingRequestItemId) {
   switch (quotedUnitBasis) {
     case 'PER_PIECE': return Number(rawPrice);
@@ -2183,8 +2087,8 @@ function mockPricePerPiece(rawPrice, quotedUnitBasis, factors, pricingRequestIte
   }
 }
 
-// Mirrors PricingCostingService.quantityToPieces: converts a requested quantity to a PIECE
-// count using the REQUEST's own unit basis — independent of the quote's own basis above.
+// Mirrors PricingCostingService.quantityToPieces: converts a requested quantity to a PIECE count using the
+// REQUEST's own unit basis — independent of the quote's own basis above.
 function mockQuantityToPieces(requestedQty, requestedUnitBasis, factors, pricingRequestItemId) {
   switch (requestedUnitBasis) {
     case 'PER_PIECE': return Number(requestedQty);
@@ -2195,12 +2099,9 @@ function mockQuantityToPieces(requestedQty, requestedUnitBasis, factors, pricing
   }
 }
 
-// V141 ("CEO owns costing") — mirrors PricingCostingRepository#mapItem's three DERIVED, NEVER
-// STORED fields: recomputed fresh every time a costing item is read, never cached on the item
-// itself, so none of the three can drift out of sync with the raw columns they describe. Applied
-// wherever a costing (or a costing item) is returned to a caller — see listCostings/getCosting
-// below — and reused directly inside recalculatePricingDecisionCost/overridePricingDecisionItemCost
-// to re-derive a decision item's frozen cost right after mutating the bound costing item.
+// V141 ("CEO owns costing") — mirrors PricingCostingRepository#mapItem's three DERIVED, NEVER STORED fields:
+// recomputed fresh every time a costing item is read, never cached on the item itself, so none of the three
+// can drift out of sync with the raw columns they describe.
 function deriveCostingItemEffective(item) {
   const effectiveLandedCostPerUnitThb = item.manualLandedCostPerUnitThb != null
     ? item.manualLandedCostPerUnitThb
@@ -2564,10 +2465,8 @@ let mockBillingNoteSeq = 1;
 const mockBillingNotes = []; // BillingNoteDocumentDto-shaped rows, each with its own `lines`.
 const MOCK_BILLING_NOTE_MAX_LINES = 15; // mirrors BillingNoteRenderer.MAX_LINE_ROWS
 
-// Mirrors BillingNoteService#hasWriteGrant: ceo, or any employee holding the live
-// can_issue_billing_note grant (App.jsx's userFromAuthResponse flattens it onto `user`, same as
-// canCreateQuotation). Unlike requireRemainingInvoiceWriteGate above, this is NOT ticket-scoped —
-// a billing note is a customer-level document with no single owning deal.
+// Mirrors BillingNoteService#hasWriteGrant: ceo, or any employee holding the live can_issue_billing_note grant
+// (App.jsx's userFromAuthResponse flattens it onto `user`, same as canCreateQuotation).
 function requireBillingNoteWriteGate() {
   const user = requireSession();
   if (user.role !== 'ceo' && !user.canIssueBillingNote) {
@@ -2578,8 +2477,8 @@ function requireBillingNoteWriteGate() {
 
 const MOCK_BILLING_NOTE_READ_ROLES = ['account', 'sales_manager', 'ceo'];
 
-// Mirrors BillingNoteService#requireReadAccess: the write set, plus account/sales_manager
-// unconditionally, plus a sales rep who owns at least one deal referenced by the note's own lines.
+// Mirrors BillingNoteService#requireReadAccess: the write set, plus account/sales_manager unconditionally,
+// plus a sales rep who owns at least one deal referenced by the note's own lines.
 function requireBillingNoteReadAccess(note) {
   const user = requireSession();
   const hasWriteGrant = user.role === 'ceo' || Boolean(user.canIssueBillingNote);
@@ -2611,17 +2510,15 @@ function toBillingNoteResponse(note) {
   return clone;
 }
 
-// Signed payment-receipt sum, mirroring both OUTSTANDING_EXPRs' shared
-// `SUM(CASE WHEN kind = 'ADJUSTMENT' THEN -amount ELSE amount END)` — an ADJUSTMENT receipt
-// INCREASES outstanding (it is stored as a reduction elsewhere, so negating it here restores the
-// balance owed), every other kind reduces it at face value.
+// Signed payment-receipt sum, mirroring both OUTSTANDING_EXPRs' shared `SUM` — an ADJUSTMENT receipt INCREASES
+// outstanding, every other kind reduces it at face value.
 function mockBillingNoteSignedReceiptSum(receipts) {
   return receipts.reduce((sum, r) => sum + (r.kind === 'ADJUSTMENT' ? -Number(r.amount || 0) : Number(r.amount || 0)), 0);
 }
 
-// Every ISSUED remaining invoice / deposit notice across this customer's deals, with its
-// VAT-inclusive outstanding amount — mirrors BillingNoteRepository#candidatesForCustomer's own
-// CANDIDATES_SQL (see this section's own header comment for the simplifications this mock keeps).
+// Every ISSUED remaining invoice / deposit notice across this customer's deals, with its VAT-inclusive
+// outstanding amount — mirrors BillingNoteRepository#candidatesForCustomer's own CANDIDATES_SQL (see this
+// section's own header comment for the simplifications this mock keeps).
 function mockBillingNoteCandidateRows(customerId) {
   const rows = [];
   for (const ri of mockRemainingInvoices) {
@@ -2641,9 +2538,9 @@ function mockBillingNoteCandidateRows(customerId) {
     if (dn.status !== 'ISSUED') continue;
     const ticket = findTicketRaw(dn.ticketId);
     if (ticket.customerId !== Number(customerId)) continue;
-    // DEPOSIT_NOTICE_OUTSTANDING_EXPR: EVERY receipt linked by deposit_notice_id, no kind filter
-    // at all (unlike the remaining-invoice half above) — a DEPOSIT-kind receipt from
-    // confirmDepositPaid counts here just as a BALANCE one would.
+    // DEPOSIT_NOTICE_OUTSTANDING_EXPR: EVERY receipt linked by deposit_notice_id, no kind filter at all (unlike
+    // the remaining-invoice half above) — a DEPOSIT-kind receipt from confirmDepositPaid counts here just as a
+    // BALANCE one would.
     const paid = mockBillingNoteSignedReceiptSum(db.paymentReceipts.filter((r) => r.depositNoticeId === dn.id));
     rows.push({
       sourceType: 'DEPOSIT_NOTICE', sourceId: dn.id, ticketId: dn.ticketId,
@@ -2651,8 +2548,8 @@ function mockBillingNoteCandidateRows(customerId) {
       outstandingAmount: Math.round((dn.totalPayable - paid) * 100) / 100,
     });
   }
-  // ORDER BY doc_date NULLS LAST, doc_number — a plain localeCompare on a possibly-null docDate
-  // would sort nulls FIRST, the opposite of the real query.
+  // ORDER BY doc_date NULLS LAST, doc_number — a plain localeCompare on a possibly-null docDate would sort nulls
+  // FIRST, the opposite of the real query.
   return rows.sort((a, b) => {
     if (a.docDate == null && b.docDate != null) return 1;
     if (a.docDate != null && b.docDate == null) return -1;
@@ -2660,10 +2557,8 @@ function mockBillingNoteCandidateRows(customerId) {
   });
 }
 
-// Mirrors BillingNoteRepository#findLiveClaimsForCustomer / #findLiveClaim: which (sourceType,
-// sourceId) pairs are already claimed by a DRAFT or ISSUED note's line, keyed "TYPE:id" — global,
-// not customer-scoped, same as the real unique index (a document belongs to exactly one customer
-// anyway, so scoping would change nothing).
+// Mirrors BillingNoteRepository#findLiveClaimsForCustomer / #findLiveClaim: which pairs are already claimed by
+// a DRAFT or ISSUED note's line, keyed "TYPE:id" — global, not customer-scoped, same as the real unique index.
 function mockBillingNoteLiveClaims() {
   const claims = new Map();
   for (const note of mockBillingNotes) {
@@ -2676,9 +2571,9 @@ function mockBillingNoteLiveClaims() {
   return claims;
 }
 
-// Mirrors BillingNoteService#resolveLine — validates one requested line against the customer's
-// live candidate pool (ERP-sourced) or the request's own manual* fields, refusing a source that is
-// fully paid, unknown, or already claimed by a DIFFERENT live note.
+// Mirrors BillingNoteService#resolveLine — validates one requested line against the customer's live candidate
+// pool (ERP-sourced) or the request's own manual* fields, refusing a source that is fully paid, unknown, or
+// already claimed by a DIFFERENT live note.
 function mockResolveBillingNoteLine(sel, candidatesByKey, claims, excludeNoteId) {
   const type = (sel?.sourceType ?? '').trim().toUpperCase();
   if (!['REMAINING_INVOICE', 'DEPOSIT_NOTICE', 'MANUAL'].includes(type)) {
@@ -2715,9 +2610,9 @@ function mockResolveBillingNoteLine(sel, candidatesByKey, claims, excludeNoteId)
   };
 }
 
-// Whole-value replace of a note's lines, mirroring BillingNoteService#writeLines — validates the
-// row-count cap, resolves every selection, then overwrites `lines` atomically (no partial write on
-// a validation failure, since every fail() throws before this function returns).
+// Whole-value replace of a note's lines, mirroring BillingNoteService#writeLines — validates the row-count
+// cap, resolves every selection, then overwrites `lines` atomically (no partial write on a validation failure,
+// since every fail() throws before this function returns).
 function mockWriteBillingNoteLines(note, selections) {
   if (selections.length > MOCK_BILLING_NOTE_MAX_LINES) {
     fail(`ใบวางบิลมีรายการ ${selections.length} รายการ เกินความจุของแบบฟอร์ม (สูงสุด ${MOCK_BILLING_NOTE_MAX_LINES} แถว) กรุณาลดจำนวนรายการหรือออกเอกสารหลายฉบับ`, 409);
@@ -2754,8 +2649,7 @@ function mockLeadTimeDefaults(countryCode) {
   }
 }
 
-// Mirrors ImportRequestService.normalizeFactoryName: trim, collapse whitespace, case-insensitive,
-// Thai NFC.
+// Mirrors ImportRequestService.normalizeFactoryName: trim, collapse whitespace, case-insensitive, Thai NFC.
 function mockNormalizeFactoryName(name) {
   return (name ?? '').normalize('NFC').trim().replace(/\s+/g, ' ').toLowerCase();
 }
@@ -2790,8 +2684,8 @@ function requireStoredIrRead(ticket, user) {
   fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 }
 
-// The ORDER-EMAIL draft's write gate — mirrors ImportRequestService#requireFooterWrite: full-write
-// (owning rep/CEO) PLUS import. Distinct from the CEO-only PRINTED footer gate below.
+// The ORDER-EMAIL draft's write gate — mirrors ImportRequestService#requireFooterWrite: full-write (owning
+// rep/CEO) PLUS import. Distinct from the CEO-only PRINTED footer gate below.
 function requireStoredIrEmailWrite(ticket, user) {
   if (user.role === 'ceo' || user.role === 'import') return;
   if (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id)) return;
@@ -2814,8 +2708,8 @@ function mockDefaultVesselEtaNote(anchorIso, minDays, maxDays) {
   return `ประมาณ ${fmt(addDays(anchorIso, minDays))} – ${fmt(addDays(anchorIso, maxDays))} (${minDays}–${maxDays} วัน)`;
 }
 
-// "IR-<doc>-<factory>[-internal].pdf" — mirrors ImportRequestService.downloadFileName, shared by
-// the (stubbed) download route and the order-email draft's own "Attached:" line below.
+// "IR-<doc>-<factory>[-internal].pdf" — mirrors ImportRequestService.downloadFileName, shared by the (stubbed)
+// download route and the order-email draft's own "Attached:" line below.
 function mockImportRequestFileName(docNumber, id, factoryName, brand, factoryCopy) {
   return `IR-${docNumber ?? `draft-${id}`}-${factoryName ?? brand ?? ''}${factoryCopy ? '' : '-internal'}.pdf`;
 }
@@ -3013,8 +2907,8 @@ function mockImportRequestDto(row) {
     expectedArrivalFrom: addDays(anchor, row.leadTimeMinDays),
     expectedArrivalTo: addDays(anchor, row.leadTimeMaxDays),
     // The real renderer's block-wise pagination is not reproduced in mock mode (see the legacy
-    // importRequests.pages above) — a stable placeholder is honest here since nothing in this UI
-    // acts differently above 1 page except a "N แผ่น" hint.
+    // importRequests.pages above) — a stable placeholder is honest here since nothing in this UI acts differently
+    // above 1 page except a "N แผ่น" hint.
     pageCount: row.items.length > 20 ? 2 : 1,
   };
 }
@@ -3203,25 +3097,8 @@ function taxAllowanceDeclarationPublic(row) {
   };
 }
 
-/**
- * ล.ย.01 header prefill. Mirrors TaxAllowanceDeclarationService#headerPrefill +
- * EmployeeRepository#findLorYor01HeaderSource.
- *
- * ⚠️ SHAPE ONLY — this is not evidence about the real prefill, and three things differ:
- *
- *  - **The real read is scoped by SQL** (`WHERE e.employee_id = :employeeId` against
- *    `hr_restricted.employee_pii`). CLAUDE.md is explicit that this mock's authorization is not
- *    authoritative; `TaxAllowanceHeaderPrefillIntegrationTest` is where the scoping is proven,
- *    wrong-way-round, against real Postgres.
- *  - **`hr_restricted` has no analogue here.** The mock employee's `sensitive` block is `{}`, so a
- *    faithful mirror would return a null `taxpayerId` and mock-mode click-through would show the
- *    one field this feature exists for as permanently empty — indistinguishable from the bug.
- *    A fabricated, obviously-fake demo tax ID is returned instead, and it is fake on purpose.
- *  - **`employee_address` has thirteen columns here and four.** The real query selects all
- *    thirteen; the mock employee record can only hold `line1`/`district`/`province`/`postalCode`,
- *    and `line1` is itself a CONCAT of four of them on the real side. Mapping it onto `houseNo` is
- *    the closest honest approximation; the remaining eight slots are null, not invented.
- */
+/** ล.ย.01 header prefill. Mapping it onto `houseNo` is the closest honest approximation; the remaining eight
+ * slots are null, not invented. */
 function lorYor01HeaderPrefillFor(employeeId) {
   const employee = db.employees.find((item) => item.id === employeeId);
   const emptyAddress = {
@@ -3240,8 +3117,8 @@ function lorYor01HeaderPrefillFor(employeeId) {
     taxpayerId: '1100000000001',
     firstNameTh: blank(firstNameTh),
     lastNameTh: blank(rest.join(' ')),
-    // Mirrors maritalStateFromMaster: only the two values the write-back can produce are mapped,
-    // and anything else leaves ข้อ 1 un-ticked rather than guessing a legal status.
+    // Mirrors maritalStateFromMaster: only the two values the write-back can produce are mapped, and anything else
+    // leaves ข้อ 1 un-ticked rather than guessing a legal status.
     maritalState: { 'โสด': 'SINGLE', 'สมรส': 'MARRIED' }[String(employee.maritalStatus ?? '').trim()] ?? null,
     address: {
       ...emptyAddress,
@@ -3294,13 +3171,9 @@ function deductionObligationPublic(row) {
   };
 }
 
-/**
- * Mirrors DeductionObligationService#buildProgress. totalRemitted is always 0 here -- see
- * db.deductionObligationRemittances' own comment on why mock mode never populates real remittance
- * rows -- so remaining always equals instructedTotal verbatim and the estimate is computed off
- * that. instructedTotal === null (no stated total, see V106's header) correctly leaves
- * remaining/estimatedPeriodsRemaining/estimatedEndMonth all null, same as the real service.
- */
+/** Mirrors DeductionObligationService#buildProgress. totalRemitted is always 0 here -- see
+ * db.deductionObligationRemittances' own comment on why mock mode never populates real remittance rows -- so
+ * remaining always equals instructedTotal verbatim and the estimate is computed off that. */
 function deductionObligationProgressPublic(row) {
   const totalRemitted = 0;
   const obligation = deductionObligationPublic(row);
@@ -3330,13 +3203,9 @@ function deductionObligationProgressPublic(row) {
   };
 }
 
-/**
- * Evidence access rule (decision #5) -- mirrors TaxAllowanceDeclarationService#requireOwnerOrHr
- * exactly: owning employee OR hr, re-checked fresh on every call, never the uploader (no
- * AttachmentController#requireAttachmentAccess-style short-circuit), never ceo (evidence is a
- * personal medical/insurance/family document; ceo's read of the declaration REGISTER's amounts via
- * getTaxAllowanceDeclarations is unaffected). 404, never 403, so a foreign id does not leak.
- */
+/** Evidence access rule -- mirrors TaxAllowanceDeclarationService#requireOwnerOrHr exactly: owning employee OR
+ * hr, re-checked fresh on every call, never the uploader, never ceo. 404, never 403, so a foreign id does not
+ * leak. */
 function requireTaxAllowanceAttachmentAccess(declaration, user) {
   const isOwner = user.employeeId != null && user.employeeId === declaration.employeeId;
   const isHr = user.role === 'hr';
@@ -3353,20 +3222,13 @@ const TAX_ALLOWANCE_SECTION_KEYS = new Set([
   'item12', 'item14', 'item15', 'signed_form',
 ]);
 
-// Mirrors TaxAllowanceCapCatalog#capsFor exactly -- a lookup TABLE, not a computation, so this is a
-// faithful stand-in rather than the "mock reimplements the algorithm" trap CLAUDE.md warns about.
-// Both year conditions below have a named counterpart in the Java catalogue AND in PayrollCalculator;
-// all three are kept in sync by hand, and TaxAllowanceCapCatalogTest drives the real calculator so
-// the two Java copies cannot drift silently. This third copy has no such guard -- when a cap changes,
-// change it here too or mock-mode UI quietly shows a different number than production.
+// Mirrors TaxAllowanceCapCatalog#capsFor exactly -- a lookup TABLE, not a computation, so this is a faithful
+// stand-in rather than the "mock reimplements the algorithm" trap CLAUDE.md warns about.
 function taxAllowanceCapsFor(taxYear) {
   const ssfDeductible = taxYear < 2025;
-  // Thai ESG's enhanced ฿300,000 ceiling covers units bought 1 Jan 2024 - 31 Dec 2026 (ปีภาษี
-  // 2567-2569); ฿100,000 outside that window on EITHER side. Unlike SSF this is not a sunset to
-  // zero -- the deduction continues, only the ceiling steps down, and the 30% income rate is
-  // unchanged either way. Mirrors THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR / _LAST_TAX_YEAR.
-  // The closed range is deliberate: SSF's cutoff is a one-way sunset so one comparison suffices,
-  // but this enhancement is temporary at both ends -- don't "simplify" it to a single inequality.
+  // Thai ESG's enhanced ฿300,000 ceiling covers units bought 1 Jan 2024 - 31 Dec 2026 (ปีภาษี 2567-2569);
+  // ฿100,000 outside that window on EITHER side. Unlike SSF this is not a sunset to zero -- the deduction
+  // continues, only the ceiling steps down, and the 30% income rate is unchanged either way.
   const thaiEsgEnhanced = taxYear >= 2024 && taxYear <= 2026;
   const thaiEsgCeiling = thaiEsgEnhanced ? 300000 : 100000;
   return [
@@ -3455,9 +3317,9 @@ function mockPayrollLine(employee) {
     leaveDeductionRefund: 0,
     withholdingTaxOverride: null,
     mealAllowance: 0,
-    // V128: auto-fed from approved welfare in production (PayrollRepository
-    // #findApprovedWelfarePayByEmployee). The mock has no welfare->payroll pipeline, so this stays
-    // 0 rather than pretending to compute it -- see this file's header on not mirroring backend math.
+    // V128: auto-fed from approved welfare in production (PayrollRepository #findApprovedWelfarePayByEmployee).
+    // The mock has no welfare->payroll pipeline, so this stays 0 rather than pretending to compute it -- see this
+    // file's header on not mirroring backend math.
     welfarePay: 0,
     perDiemExempt: 0,
     perDiemTaxable: 0,
@@ -3474,16 +3336,16 @@ function mockPayrollLine(employee) {
 
 // --- ticket helpers ---
 
-// Mirrors TicketService.requireViewAccess: viewer role required, sales reps
-// only see their own tickets. Used by every read/render path. sales_manager is
-// read+comment-only oversight — never add it to a write-action role list.
+// Mirrors TicketService.requireViewAccess: viewer role required, sales reps only see their own tickets. Used
+// by every read/render path. sales_manager is read+comment-only oversight — never add it to a write-action
+// role list.
 function requireTicketViewer(id, { accountScoped = false } = {}) {
   const user = hasRole('sales', 'import', 'ceo', 'account', 'sales_manager');
   const ticket = findTicketRaw(Number(id));
   if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-  // H1 lockdown: account no longer reads a deal through the ticket routes (get / actions / payments /
-  // deliveries / comments) at all. The row-scoped document reads (deposit notices, remaining invoices) opt in
-  // with accountScoped, where account is admitted only inside its list scope.
+  // H1 lockdown: account no longer reads a deal through the ticket routes (get / actions / payments / deliveries
+  // / comments) at all. The row-scoped document reads (deposit notices, remaining invoices) opt in with
+  // accountScoped, where account is admitted only inside its list scope.
   if (user.role === 'account') {
     if (!accountScoped) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
     requireMockAccountScope(user, ticket);
@@ -3491,31 +3353,25 @@ function requireTicketViewer(id, { accountScoped = false } = {}) {
   return { user, ticket };
 }
 
-// Phase B (role-scoped views): deposit notices are a customer financial document
-// end to end — mirrors DepositNoticeService.requireTicketViewer, which denies
-// import outright (unlike requireTicketViewer above, which still lets import see
-// the rest of the ticket). Not just a "same gate, plus one check" wrapper: keep
-// this separate from requireTicketViewer so listDeliveries/actions (which import
-// DOES need) never accidentally inherit the deposit-notice denial.
+// Phase B (role-scoped views): deposit notices are a customer financial document end to end — mirrors
+// DepositNoticeService.requireTicketViewer, which denies import outright (unlike requireTicketViewer above,
+// which still lets import see the rest of the ticket).
 function requireDepositNoticeViewer(ticketId) {
   const result = requireTicketViewer(ticketId, { accountScoped: true });
   if (result.user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return result;
 }
 
-// Phase B: import has no business reading the quotation chain — mirrors
-// TicketService.projectForRole. A projection, not a wholesale redaction: every
-// other field of the ticket detail response is untouched.
+// Phase B: import has no business reading the quotation chain — mirrors TicketService.projectForRole. A
+// projection, not a wholesale redaction: every other field of the ticket detail response is untouched.
 function projectTicketDetailForRole(detail, role) {
   if (role !== 'import') return detail;
   return { ...detail, quotation: null, quotations: [] };
 }
 
-// Phase B: role-scoped list membership — mirrors TicketRepository.appendRoleScope
-// (backend ticket/ package), the actual enforcement; salesViewScope.js#dealInScope
-// is presentation-only. import: an active (non-terminal) pricing request exists for
-// the deal, OR the deal has reached PROCUREMENT or later. A closed/lost/cancelled
-// deal is never in scope, even at a late stage.
+// Phase B: role-scoped list membership — mirrors TicketRepository.appendRoleScope (backend ticket/ package),
+// the actual enforcement; salesViewScope.js#dealInScope is presentation-only. A closed/lost/cancelled deal is
+// never in scope, even at a late stage.
 const IMPORT_STAGE_SCOPE_START = dealStageIndex('PROCUREMENT');
 // Mirrors DealQuotationService#recordOutcome's refusal on a SUPERSEDED request's ISSUED quotation.
 const SUPERSEDED_PR_OUTCOME_MESSAGE = 'คำขอราคานี้ถูกแทนที่ด้วยรอบแก้ไขแล้ว — บันทึกผลลูกค้าที่ใบเสนอราคาของรอบแก้ไขแทน';
@@ -3843,8 +3699,8 @@ function deliveryComplete(status) {
   return status === 'FULLY_DELIVERED';
 }
 
-// Attachments live in their own store (mockAttachments), not on the ticket —
-// mirrors sales.attachment being its own table.
+// Attachments live in their own store (mockAttachments), not on the ticket — mirrors sales.attachment being
+// its own table.
 function hasInvoiceAttachment(ticket) {
   return mockAttachments.some((a) => a.ticketId === ticket.id && a.attachType === 'INVOICE');
 }
@@ -3946,9 +3802,9 @@ function routeAllStockDealToDelivery(ticket, user) {
   }
 }
 
-// V148 (per-item stock-commission weighting): the manager-approved counterpart to
-// reserveStockForTicket above -- same absolute-SET-keyed-on-item-id shape. Mirrors
-// TicketService#setItemWeightMultipliers / TicketRepository#updateItemWeightMultipliers.
+// V148 (per-item stock-commission weighting): the manager-approved counterpart to reserveStockForTicket above
+// -- same absolute-SET-keyed-on-item-id shape. Mirrors TicketService#setItemWeightMultipliers /
+// TicketRepository#updateItemWeightMultipliers.
 function updateItemWeightMultipliersForTicket(ticket, user, payload = {}) {
   const lines = payload.lines ?? [];
   if (!lines.length) fail('ต้องระบุรายการสินค้า', 400);
@@ -4024,8 +3880,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
     ticket.fulfillmentStatus = 'FULLY_DELIVERED';
     pushEvent(ticket, user, 'DELIVERY_COMPLETED', ticket.status, ticket.status, completing ? 'ส่งมอบครบ' : message);
     autoAdvanceStage(ticket, 'DELIVERED', user);
-    // Second CLOSED_PAID gate: a deal paid in full before delivery closes exactly
-    // when delivery completes.
+    // Second CLOSED_PAID gate: a deal paid in full before delivery closes exactly when delivery completes.
     maybeAdvanceClosedPaid(ticket, user);
   } else {
     ticket.fulfillmentStatus = 'PARTIALLY_DELIVERED';
@@ -4122,8 +3977,8 @@ async function buildMockQuotationXlsx(ticketId, quotationId) {
   return mockDocPlaceholderBlob(lines);
 }
 
-// ── Quotation HTML preview — shown when "PDF" is clicked in demo mode ────────
-// Same snapshot-first / live-data-fallback rule as buildMockQuotationXlsx above.
+// Quotation HTML preview — shown when "PDF" is clicked in demo mode ──────── Same snapshot-first /
+// live-data-fallback rule as buildMockQuotationXlsx above.
 function buildMockQuotationHtml(ticketId, quotationId) {
   const ticket = findTicketRaw(Number(ticketId));
   const quotation = (ticket.quotations ?? []).find((q) => q.id === Number(quotationId));
@@ -4177,9 +4032,9 @@ function buildMockRemainingInvoiceXlsxFromRow(row) {
   return mockDocPlaceholderBlob(lines);
 }
 
-// ── Billing note XLSX (demo placeholder) — real file from BillingNoteRenderer.java ────────────
-// Same discipline as buildMockRemainingInvoiceXlsxFromRow above: renders from THIS row's own
-// stored lines, never recomputed from live ticket/customer data.
+// Billing note XLSX (demo placeholder) — real file from BillingNoteRenderer.java ──────────── Same discipline
+// as buildMockRemainingInvoiceXlsxFromRow above: renders from THIS row's own stored lines, never recomputed
+// from live ticket/customer data.
 function buildMockBillingNoteXlsxFromRow(row) {
   const lines = [
     `ใบวางบิล  เลขที่ ${row.docNumber ?? '(ร่าง)'}`,
@@ -4224,9 +4079,9 @@ function addNotification(userId, ticketId, ticketCode, type, message) {
   db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, read: false, createdAt: new Date().toISOString() });
 }
 
-// Mirrors ThaiText.money (backend/src/main/java/th/co/glr/hr/common/ThaiText.java): "," grouping,
-// no decimals for a whole amount, ".2f" for anything else — not a bare toLocaleString(), which
-// always shows either 0 or 2 decimals regardless of the amount.
+// Mirrors ThaiText.money (backend/src/main/java/th/co/glr/hr/common/ThaiText.java): "," grouping, no decimals
+// for a whole amount, ".2f" for anything else — not a bare toLocaleString(), which always shows either 0 or 2
+// decimals regardless of the amount.
 function mockThaiMoney(amount) {
   const rounded = Math.round((Number(amount) || 0) * 100) / 100;
   return Number.isInteger(rounded)
@@ -4434,13 +4289,9 @@ function mockCanDealOwnership(user, ticket) {
     || (user?.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
 }
 
-/**
- * The mock's answer to GET /api/tickets/{id}/actions -> stageDecisions. One entry per stage, in
- * pipeline order, matching the real StageDecisionDto shape exactly.
- *
- * The single place the mock decides anything stage-shaped: mockApi.updateStage consults this
- * rather than re-deriving, so the mock cannot advertise an option it would then refuse.
- */
+/** The mock's answer to GET /api/tickets/{id}/actions -> stageDecisions. The single place the mock decides
+ * anything stage-shaped: mockApi.updateStage consults this rather than re-deriving, so the mock cannot
+ * advertise an option it would then refuse. */
 function mockStageDecisions(ticket, user) {
   return DEAL_STAGE_CATALOG.stages.map(({ code, no }) => {
     let blockedReason = null;
@@ -4490,11 +4341,11 @@ function mockStageDecisions(ticket, user) {
   });
 }
 
-// Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic
-// forward-only, no-op while lost. Called from the 4 milestone transitions.
+// Deal pipeline (V50): mirrors TicketService.autoAdvanceStage — monotonic forward-only, no-op while lost.
+// Called from the 4 milestone transitions.
 function autoAdvanceStage(ticket, targetStage, user) {
-  // ACTIVE is the whole test — since V57 lost_reason SURVIVES a reopen, so keying
-  // on it would silently disable auto-advance on every reopened deal.
+  // ACTIVE is the whole test — since V57 lost_reason SURVIVES a reopen, so keying on it would silently disable
+  // auto-advance on every reopened deal.
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
   if (dealStageIndex(targetStage) <= dealStageIndex(ticket.salesStage)) return;
   // The deal's ROUTE — one of the Java's three silent no-ops. TicketService.autoAdvanceStage
@@ -4540,11 +4391,9 @@ export function retireLivePricingRequestsForTests(ticketId) {
   }
 }
 
-/**
- * TEST-ONLY seam — not part of `api`, never called by the app. Puts one pricing request straight
- * into `status`, for the states a test cannot cheaply drive through the real chain (SUPERSEDED,
- * QUOTATION_ACCEPTED). contract.test.js compares `api` only, so this cannot widen the mocked API.
- */
+/** TEST-ONLY seam — not part of `api`, never called by the app. Puts one pricing request straight into
+ * `status`, for the states a test cannot cheaply drive through the real chain (SUPERSEDED,
+ * QUOTATION_ACCEPTED). contract.test.js compares `api` only, so this cannot widen the mocked API. */
 export function setPricingRequestStatusForTests(prId, status) {
   const pr = mockPricingRequests.find((row) => row.id === Number(prId));
   if (!pr) throw new Error(`no pricing request ${prId}`);
@@ -4582,8 +4431,8 @@ function mockLiveDirectQuotation(ticketId) {
     : null;
 }
 
-// Mirrors FulfilmentStatus.IMPORT_SEQUENCE (backend/src/main/java/th/co/glr/hr/ticket/
-// FulfilmentStatus.java) — the import axis, in progression order, exactly these four values.
+// Mirrors FulfilmentStatus.IMPORT_SEQUENCE (backend/src/main/java/th/co/glr/hr/ticket/ FulfilmentStatus.java)
+// — the import axis, in progression order, exactly these four values.
 const MOCK_IMPORT_FULFILMENT_SEQUENCE = ['IR_ISSUED', 'IR_SENT', 'SHIPPING', 'GOODS_RECEIVED'];
 
 // Mirrors TicketService#applyImportRequestRollup's own firewall guards (backend
@@ -4701,16 +4550,13 @@ function commissionMonth(value) {
 // VITE_USE_MOCKS=true says NOTHING about any commission figure.
 // ──────────────────────────────────────────────────────────────────────────
 
-// Thai VAT strip used ONLY to fabricate a plausible commissionableBase column on demo/mock
-// records below -- named distinctly from a "policy" constant on purpose: it is not read from
-// sales.tier_config, does not represent any CEO-configurable rate, and nothing else in this file
-// may add a tier table, rate, floor, or incentive/stock-bonus config alongside it.
+// Thai VAT strip used ONLY to fabricate a plausible commissionableBase column on demo/mock records below.
 const MOCK_VAT_DIVISOR = 1.07;
 
 
-// Mirrors ONLY CommissionCalculator.calculateInvoice's subtraction formula -- arithmetic over the
-// caller's OWN input fields (gross minus each deduction, plus overpayment), not policy. The VAT
-// strip below uses MOCK_VAT_DIVISOR (see above), not a re-import of the deleted commissionCalc.js.
+// Mirrors ONLY CommissionCalculator.calculateInvoice's subtraction formula -- arithmetic over the caller's OWN
+// input fields (gross minus each deduction, plus overpayment), not policy. The VAT strip below uses
+// MOCK_VAT_DIVISOR (see above), not a re-import of the deleted commissionCalc.js.
 function mockInvoiceCalculation(payload) {
   const actualReceived = round2(
     Number(payload.grossAmount || 0)
@@ -4734,9 +4580,9 @@ function mockInvoiceCalculation(payload) {
 // since mock mode cannot read either.
 const MOCK_MONTHLY_SUMMARY_FIXTURE = { commissionableBase: 116822.43, tierCommission: 292.06, incentiveAmount: 0 };
 
-// Canned simulate() monthly-aggregate fields -- arbitrary, clearly-fixture numbers (not derived
-// from any tier table). actualReceived/commissionableBase above them are NOT canned: those are
-// mockInvoiceCalculation's honest arithmetic over the caller's own typed-in invoice fields.
+// Canned simulate() monthly-aggregate fields -- arbitrary, clearly-fixture numbers (not derived from any tier
+// table). actualReceived/commissionableBase above them are NOT canned: those are mockInvoiceCalculation's
+// honest arithmetic over the caller's own typed-in invoice fields.
 const MOCK_SIMULATION_FIXTURE = {
   existingMonthlyBase: 500000.00,
   projectedMonthlyBase: 650000.00,
@@ -4745,15 +4591,12 @@ const MOCK_SIMULATION_FIXTURE = {
 };
 
 // Canned payrollReady() per-rep tier/incentive/stock-bonus figures -- WHICH reps appear and their
-// manualAdjustmentAmount stay real (grouped from db.commissions, summed honestly; "who has
-// activity this month" and "sum their manual amounts" are not policy). commissionableBase and the
-// tier/incentive/stock-bonus portions of commissionAmount are this one fixed fixture, reused for
-// every rep -- the real per-rep math lives only in CommissionService#computeRepPayrollCommissions.
+// manualAdjustmentAmount stay real (grouped from db.commissions, summed honestly; "who has activity this
+// month" and "sum their manual amounts" are not policy).
 const MOCK_PAYROLL_READY_TIER_FIXTURE = { commissionableBase: 87654.32, tierCommission: 219.14, incentiveAmount: 0, stockBonusAmount: 0 };
 
-// Step 9 cross-check threshold: flag (never block) when the hand-typed grossAmount diverges from
-// the linked deal's actual payableAmount by more than this fraction. Mirrors
-// CommissionService.MISMATCH_THRESHOLD.
+// Step 9 cross-check threshold: flag (never block) when the hand-typed grossAmount diverges from the linked
+// deal's actual payableAmount by more than this fraction. Mirrors CommissionService.MISMATCH_THRESHOLD.
 const COMMISSION_MISMATCH_THRESHOLD = 0.05;
 
 function commissionDealMismatch(grossAmount, payable) {
@@ -4774,8 +4617,8 @@ function isManualCommissionKind(kind) {
 }
 
 // CommissionService#PendingCommissionDto shape. Item rows mirror the real query (description =
-// brand/model/color/texture/size; qtyFromStock; weightMultiplier). The three figures are NOT recomputed here -- see
-// commissions.pendingApproval.
+// brand/model/color/texture/size; qtyFromStock; weightMultiplier). The three figures are NOT recomputed here
+// -- see commissions.pendingApproval.
 function buildMockPendingCommission(record) {
   const ticket = db.tickets.find((t) => t.id === record.sourceTicketId);
   const commission = buildCommissionRecord(record);
@@ -4797,13 +4640,13 @@ function buildMockPendingCommission(record) {
 }
 
 function buildCommissionRecord(record) {
-  // A manual-kind record has no invoice_id on the real backend, so RECORD_SELECT's LEFT JOIN
-  // yields a null CommissionRecord.invoiceDetails() — mirror that exactly rather than defaulting
-  // to a stub invoice object, so CommissionPage's manual-vs-SALE branches can key off `null`.
+  // A manual-kind record has no invoice_id on the real backend, so RECORD_SELECT's LEFT JOIN yields a null
+  // CommissionRecord.invoiceDetails() — mirror that exactly rather than defaulting to a stub invoice object, so
+  // CommissionPage's manual-vs-SALE branches can key off `null`.
   const isManual = isManualCommissionKind(record.kind);
   return structuredClone({
-    // Commission redesign calc-refine (V82): 1x is the default weight for any record created
-    // before this field existed (or omitted in a test fixture) — matches the column's DB default.
+    // Commission redesign calc-refine (V82): 1x is the default weight for any record created before this field
+    // existed (or omitted in a test fixture) — matches the column's DB default.
     weightMultiplier: 1,
     managerApprovedBy: null,
     managerApprovedByName: null,
@@ -4857,16 +4700,14 @@ function dashboardEmployeeScope(user) {
   return { label: employee ? 'self' : 'none', employees: employee ? [employee] : [] };
 }
 
-/**
- * Who this caller may see, mirroring AttendanceService.resolveScope. A non-manager asking for
- * someone else is a 403; a manager is silently narrowed to their division instead.
- */
+/** Who this caller may see, mirroring AttendanceService.resolveScope. A non-manager asking for someone else is
+ * a 403; a manager is silently narrowed to their division instead. */
 function mockAttendanceScope(user, params = {}) {
   if (['hr', 'ceo'].includes(user.role)) {
     const requested = params.employeeId ? Number(params.employeeId) : null;
-    // divisionId is a convenience filter for roles that already see everything — never a grant.
-    // Compared as a string: the demo dataset keys divisions by code ('HRD'), while the real schema
-    // uses an integer id. Number() would turn 'HRD' into NaN and silently disable the filter.
+    // divisionId is a convenience filter for roles that already see everything — never a grant. Compared as a
+    // string: the demo dataset keys divisions by code ('HRD'), while the real schema uses an integer id. Number()
+    // would turn 'HRD' into NaN and silently disable the filter.
     const requestedDivision = params.divisionId ? String(params.divisionId) : null;
     let employees = db.employees;
     if (requestedDivision) {
@@ -4916,10 +4757,8 @@ function bangkokStamp(date, hour, minute) {
   return `${isoDate(date)}T${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}:00+07:00`;
 }
 
-/**
- * The eight shapes the day table has to render, cycled deterministically by (employee, day) so a
- * given date always looks the same and every badge is reachable without hunting.
- */
+/** The eight shapes the day table has to render, cycled deterministically by (employee, day) so a given date
+ * always looks the same and every badge is reachable without hunting. */
 const MOCK_DAY_SHAPES = [
   { kind: 'present', inAt: [8, 24], outAt: [17, 35] },
   { kind: 'late', inAt: [8, 47], outAt: [17, 32], late: 17, midAt: [[12, 3], [13, 10], [15, 30]] },
@@ -4933,11 +4772,9 @@ const MOCK_DAY_SHAPES = [
   { kind: 'none' },
 ];
 
-/**
- * Keyed on the employee's own id, never their position in the array. The drill-down fetches punches
- * for a single employee, so a position-based key would pick a different shape there than the day
- * list used and the expanded scans would contradict the row they came from.
- */
+/** Keyed on the employee's own id, never their position in the array. The drill-down fetches punches for a
+ * single employee, so a position-based key would pick a different shape there than the day list used and the
+ * expanded scans would contradict the row they came from. */
 function mockDayShape(employee, date) {
   return MOCK_DAY_SHAPES[(date.getDate() + Number(employee.id)) % MOCK_DAY_SHAPES.length];
 }
@@ -4982,8 +4819,8 @@ function mockAttendanceDay(employee, date, shape, weekend) {
   if (shape.kind === 'nonWorkday') {
     return { ...base, status: 'NON_WORKDAY', flags: ['NON_WORKDAY'] };
   }
-  // A CEO/HR "marked present" day: no scans, site_code 'WFH', manual override — this is how the
-  // backend's upsertWfhPresent + toDto render, so the source column has a WFH row to show.
+  // A CEO/HR "marked present" day: no scans, site_code 'WFH', manual override — this is how the backend's
+  // upsertWfhPresent + toDto render, so the source column has a WFH row to show.
   if (shape.kind === 'wfh') {
     return { ...base, site_code: 'WFH', is_manual_override: true, status: 'WFH', flags: ['WFH'] };
   }
@@ -5020,8 +4857,8 @@ function mockAttendanceDay(employee, date, shape, weekend) {
     late_minutes: shape.late ?? 0,
     early_leave_minutes: shape.early ?? 0,
     overtime_minutes: shape.overtime ?? 0,
-    // Counts every scan, not just the two that became check-in/out — that difference is exactly
-    // what the day row's "N ครั้ง" affordance surfaces.
+    // Counts every scan, not just the two that became check-in/out — that difference is exactly what the day row's
+    // "N ครั้ง" affordance surfaces.
     punch_count: (checkIn ? 1 : 0) + (checkOut ? 1 : 0) + (shape.midAt?.length ?? 0),
     // Alternate the scanner site by employee so the source column shows both Showroom and Warehouse.
     site_code: Number(employee.id) % 2 === 0 ? 'WAREHOUSE' : 'SHOWROOM',
@@ -5214,9 +5051,9 @@ function dashboardNotifications(user) {
   };
 }
 
-// Reads the stored reports-to link — mirrors hr.employee.reports_to_employee_id
-// (the self-FK), not a live org-chart scan. Division managers carry managerId:
-// null in the seed (no row above them), same as the real NULL-FK state.
+// Reads the stored reports-to link — mirrors hr.employee.reports_to_employee_id (the self-FK), not a live
+// org-chart scan. Division managers carry managerId: null in the seed (no row above them), same as the real
+// NULL-FK state.
 function managerIdForEmployee(employee) {
   return employee?.managerId ?? null;
 }
@@ -5298,26 +5135,15 @@ function hasManagerApproverFor(employeeId) {
     && isManagerPosition(peer));
 }
 
-// feat/pending-approver-info: mirrors PendingApproverSql on the backend -- "who this is waiting on"
-// for a SUBMITTED/MANAGER_APPROVED leave/overtime/special-money request, computed READ-ONLY
-// (never gates an approval decision here, same as the backend resolvers). Simplified but not
-// misleadingly different: the real backend derives the "ceo"/"hr" ROLE from division+position
-// (DivisionAccessPolicy.roleFor), but this mock already has each account's role stored directly on
-// db.users -- reading that field is the honest mock-mode equivalent, not a separate reimplementation
-// of the derivation itself.
-//
-// Ambiguity handling matches the backend exactly: a name is shown only when there is EXACTLY ONE
-// active account holding that role; with zero or more than one, the name is omitted (role shown
-// alone). See PendingApproverSql's Javadoc for the backend-side reasoning this mirrors.
+// feat/pending-approver-info: mirrors PendingApproverSql on the backend -- "who this is waiting on" for a
+// SUBMITTED/MANAGER_APPROVED leave/overtime/special-money request, computed READ-ONLY (never gates an approval
+// decision here, same as the backend resolvers).
 function activeUsersWithRole(role) {
   return db.users.filter((candidate) => candidate.role === role && candidate.active !== false);
 }
 
-// Name preference: nickname, falling back to a first-name-shaped stand-in, mirroring the backend's
-// "nickname, else first_name_th, never blank" preference (PendingApproverSql). db.users has no
-// separate first-name field, so the user's own `name` (already a full display name, e.g. "คุณวิชัย
-// ธนาคาร") is the fallback here -- a simplification, not a shape mismatch, since it is used only
-// when nickName is missing.
+// Name preference: nickname, falling back to a first-name-shaped stand-in, mirroring the backend's "nickname,
+// else first_name_th, never blank" preference (PendingApproverSql).
 function approverDisplayName(userAccount) {
   if (!userAccount) return null;
   const employee = userAccount.employeeId ? findEmployee(userAccount.employeeId) : null;
@@ -5329,9 +5155,9 @@ function singleActiveApproverName(role) {
   return candidates.length === 1 ? approverDisplayName(candidates[0]) : null;
 }
 
-// The SAME peer set hasManagerApproverFor's own EXISTS check counts (division match + not-inactive
-// + manager position) -- kept literally identical so the two can never disagree about who the
-// division-manager candidates are.
+// The SAME peer set hasManagerApproverFor's own EXISTS check counts (division match + not-inactive + manager
+// position) -- kept literally identical so the two can never disagree about who the division-manager
+// candidates are.
 function divisionManagerPeers(employeeId) {
   const employee = findEmployee(employeeId);
   if (!employee || employee.divisionId == null) return [];
@@ -5345,9 +5171,8 @@ function singleDivisionManagerName(employeeId) {
   return peers.length === 1 ? (peers[0].nickName || peers[0].nameTh || null) : null;
 }
 
-// Leave: mirrors LeaveRepository#resolvePendingApproverRole/Name -- SUBMITTED only (leave has no
-// CEO stage). An active direct manager (managerIdForEmployee) if present; otherwise "hr"
-// generically.
+// Leave: mirrors LeaveRepository#resolvePendingApproverRole/Name -- SUBMITTED only (leave has no CEO stage).
+// An active direct manager (managerIdForEmployee) if present; otherwise "hr" generically.
 function pendingApproverForLeave(record, managerEmployeeId) {
   if (record.status !== 'SUBMITTED') return { pendingApproverRole: null, pendingApproverName: null };
   if (managerEmployeeId) {
@@ -5360,9 +5185,8 @@ function pendingApproverForLeave(record, managerEmployeeId) {
   return { pendingApproverRole: 'hr', pendingApproverName: singleActiveApproverName('hr') };
 }
 
-// Overtime: mirrors OvertimeRepository#resolvePendingApproverRole/Name -- SUBMITTED with a manager
-// stage (hasManagerApproverFor) routes to "manager"; SUBMITTED with none, or MANAGER_APPROVED,
-// routes to "ceo".
+// Overtime: mirrors OvertimeRepository#resolvePendingApproverRole/Name -- SUBMITTED with a manager stage
+// (hasManagerApproverFor) routes to "manager"; SUBMITTED with none, or MANAGER_APPROVED, routes to "ceo".
 function pendingApproverForOvertime(record) {
   if (record.status === 'SUBMITTED') {
     return hasManagerApproverFor(record.employeeId)
@@ -5375,9 +5199,8 @@ function pendingApproverForOvertime(record) {
   return { pendingApproverRole: null, pendingApproverName: null };
 }
 
-// Special money: mirrors SpecialMoneyRepository#resolvePendingApproverRole/Name -- welfare is
-// CEO-only, single-stage (SpecialMoneyService's class Javadoc), so both pending statuses resolve
-// to "ceo".
+// Special money: mirrors SpecialMoneyRepository#resolvePendingApproverRole/Name -- welfare is CEO-only,
+// single-stage (SpecialMoneyService's class Javadoc), so both pending statuses resolve to "ceo".
 function pendingApproverForSpecialMoney(record) {
   if (record.status === 'SUBMITTED' || record.status === 'MANAGER_APPROVED') {
     return { pendingApproverRole: 'ceo', pendingApproverName: singleActiveApproverName('ceo') };
@@ -5513,24 +5336,9 @@ function leaveBalance(employeeId, type, quotaYear) {
   const approvedDays = leaveUsedDays(employeeId, type.code, quotaYear, ['APPROVED']);
   const pendingDays = leaveUsedDays(employeeId, type.code, quotaYear, ['SUBMITTED']);
   const remainingDays = Math.max(0, Number(type.annualQuotaDays || 0) - approvedDays - pendingDays);
-  // §5.3.5 VACATION carry-forward (V127, widened V161): carriedInDays/carriedInFromYear/
-  // carriedInExpiresOn/carriedInRemainingDays/ownQuotaRemainingDays are SHAPE parity only, always
-  // the "nothing carried in" reading in mock mode -- see the db.leaveTypes carriesForward comment
-  // above for why (the real grant needs hr.leave_carryover's year-end memoization,
-  // LeaveService#ensureCarryoverGrant, a business computation this mock deliberately does not
-  // reimplement -- a mirrored computation is never independent evidence, see this file's own
-  // header note). remainingDays above is therefore also always the un-boosted figure in mock mode,
-  // never reflecting a real carry-in even for VACATION.
-  //
-  // carriedInFromYear/carriedInExpiresOn stay `null` (not e.g. `quotaYear - 1`/a fabricated date)
-  // for the same reason: the real DTO's Javadoc ties both to whether a carry-in grant actually
-  // exists, and inventing values here would assert a grant this mock never computed. Consequently
-  // carriedInRemainingDays is always 0 and ownQuotaRemainingDays always equals remainingDays (there
-  // is only ever one pool in mock mode) -- LeaveRequestPage.jsx's pool-choice control keys its
-  // render gate on carriedInRemainingDays > 0, so it can never appear under VITE_USE_MOCKS=true.
-  // Anyone testing the carry-in pool choice itself must do so against the real backend, or by
-  // injecting a fixture directly in a component test (see LeaveRequestPage.test.jsx) -- not by
-  // driving this mock harder.
+  // §5.3.5 VACATION carry-forward: carriedInDays/carriedInFromYear/
+  // carriedInExpiresOn/carriedInRemainingDays/ownQuotaRemainingDays are SHAPE parity only, always the "nothing
+  // carried in" reading in mock mode -- see the db.leaveTypes carriesForward comment above for why.
   return {
     leaveTypeCode: type.code,
     leaveTypeNameTh: type.nameTh,
@@ -5548,9 +5356,9 @@ function leaveBalance(employeeId, type, quotaYear) {
   };
 }
 
-// Paper-form (ใบลาหยุด F-HR-020) contact-during-leave autofill. Coarser than the real
-// hr.employee_address schema (no house-number/subdistrict split) -- an accepted mock fidelity gap,
-// see LeaveRepository#findContactDefaults for the real (backend) shape.
+// Paper-form (ใบลาหยุด F-HR-020) contact-during-leave autofill. Coarser than the real hr.employee_address
+// schema (no house-number/subdistrict split) -- an accepted mock fidelity gap, see
+// LeaveRepository#findContactDefaults for the real (backend) shape.
 function leaveContactDefaults(employee) {
   return {
     employeeId: employee.id,
@@ -5567,9 +5375,7 @@ function leaveContactDefaults(employee) {
 
 // `user` is the acting caller (not the request's own employee) -- mirrors LeaveService's
 // withCanReviewFlag(dto, user), which stamps canReview per-caller onto every returned DTO in
-// list/create/approve/reject/cancel. Reuses canReviewLeave(), the same hr-bypass-or-direct-manager
-// predicate the mock already gates approve/reject/cancel on, so the flag and the actual gate can
-// never diverge.
+// list/create/approve/reject/cancel.
 function buildLeaveRecord(record, user) {
   const employee = db.employees.find((item) => item.id === record.employeeId);
   const managerEmployeeId = managerIdForEmployee(employee);
@@ -5616,9 +5422,9 @@ function bangkokDateOf(isoValue) {
   }).format(new Date(isoValue));
 }
 
-// Pure calendar-day arithmetic on a "YYYY-MM-DD" string -- same technique as utils/format.js's
-// addDaysIso (Date.UTC used purely as neutral day-count math, never as a timezone conversion,
-// since a bare calendar date has no zone attached).
+// Pure calendar-day arithmetic on a "YYYY-MM-DD" string -- same technique as utils/format.js's addDaysIso
+// (Date.UTC used purely as neutral day-count math, never as a timezone conversion, since a bare calendar date
+// has no zone attached).
 function addCalendarDaysIso(iso, deltaDays) {
   const [year, month, day] = iso.split('-').map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
@@ -5636,14 +5442,9 @@ function validateOvertimePlannedWindowSpan(payload) {
   }
 }
 
-// Mirrors OvertimeService.validateRetroactiveWindow(). Advance notice was removed, so same-day and
-// backdated requests are accepted — bounded by how far back they reach and by a reason that
-// explains the delay.
-//
-// KNOWN GAP: the Java service also refuses a work date whose payroll month is already PROCESSED
-// (OvertimeService.requirePayrollMonthOpen). There is no payroll_period collection in this mock, so
-// that rule is absent here. The mock is therefore more permissive than prod on that one case — the
-// dangerous direction, so do not read a successful mock submit as proof the backend would accept it.
+// Mirrors OvertimeService.validateRetroactiveWindow(). The mock is therefore more permissive than prod on that
+// one case — the dangerous direction, so do not read a successful mock submit as proof the backend would
+// accept it.
 const OT_RETROACTIVE_WINDOW_DAYS = 60;
 const OT_BACKDATED_REASON_MIN_LENGTH = 20;
 
@@ -5713,17 +5514,13 @@ const MOCK_HOLIDAY_DATES = new Map([
   ['2026-12-10', 'วันรัฐธรรมนูญ'],
   ['2026-12-31', 'วันสิ้นปี'],
 ]);
-// Years the mock calendar is considered "loaded" for -- distinct from a date simply being absent
-// from the set above, same distinction HolidayCalendar#hasHolidaysForYear's Javadoc draws in the
-// real service (an empty-for-this-date calendar vs. a calendar nobody has loaded yet).
+// Years the mock calendar is considered "loaded" for -- distinct from a date simply being absent from the set
+// above, same distinction HolidayCalendar#hasHolidaysForYear's Javadoc draws in the real service (an
+// empty-for-this-date calendar vs. a calendar nobody has loaded yet).
 const MOCK_HOLIDAY_LOADED_YEARS = new Set([2026]);
 
-// Mirrors the plain Sat/Sun arithmetic `leave.calendarContext` above already uses for
-// `nonWorkingDates` -- NOT schedule-aware (no OPS_6D six-day awareness, no
-// hr.work_schedule_assignment equivalent). Reproduced here rather than shared, because
-// suggestOvertimeDayType below takes a single ISO date, not a [from, to] range. LOCAL date
-// components via `new Date(...).getDay()` on a bare (no offset) ISO string -- same technique,
-// same caveat as calendarContext's own loop above.
+// Mirrors the plain Sat/Sun arithmetic `leave.calendarContext` above already uses for `nonWorkingDates` -- NOT
+// schedule-aware (no OPS_6D six-day awareness, no hr.work_schedule_assignment equivalent).
 function isWeekendIso(dateIso) {
   const day = new Date(`${dateIso}T00:00:00`).getDay();
   return day === 0 || day === 6;
@@ -5751,12 +5548,9 @@ function suggestOvertimeDayType(workDate) {
   return MOCK_HOLIDAY_DATES.has(workDate) || isWeekendIso(workDate) ? 'HOLIDAY' : 'WORKDAY';
 }
 
-// Parses `value` as WORKDAY/HOLIDAY (case-insensitive), or null for "nothing supplied"
-// (blank/undefined/null). Throws 400 for anything non-blank that isn't recognised -- a 400 about
-// SYNTAX, not about the value being wrong. Pure parsing shared by BOTH the submit-time claim
-// (resolveOvertimeDayTypeSubmitNote, untrusted for pay) and the approve-time override (approve()
-// below, trusted AS the pay input) -- mirrors OvertimeService#parseOvertimeDayType's identical
-// dual-use: the trust boundary lives at the CALL SITE, not in this parser.
+// Parses `value` as WORKDAY/HOLIDAY (case-insensitive), or null for "nothing supplied" (blank/undefined/null).
+// Throws 400 for anything non-blank that isn't recognised -- a 400 about SYNTAX, not about the value being
+// wrong.
 function parseOvertimeDayTypeValue(value) {
   if (!value) return null;
   const normalized = String(value).trim().toUpperCase();
@@ -5806,9 +5600,9 @@ function buildOvertimeRecord(record) {
     managerName: manager?.nameTh || null,
     managerApprovedByName: managerApprover?.nameTh || null,
     ceoApprovedByName: ceoApprover?.nameTh || null,
-    // Projected per row by OvertimeRepository.baseSelect(); the panel keys its approve button off
-    // it. Omitting it here would leave the field undefined, which the panel reads as "has a manager
-    // stage" -- the CEO would then never see the button on a manager-less request under mocks.
+    // Projected per row by OvertimeRepository.baseSelect(); the panel keys its approve button off it. Omitting it
+    // here would leave the field undefined, which the panel reads as "has a manager stage" -- the CEO would then
+    // never see the button on a manager-less request under mocks.
     hasManagerApprover: hasManagerApproverFor(record.employeeId),
     // feat/ot-nonworkday-rate-suggestion: computed fresh on every read, mirroring
     // OvertimeRequestDto#suggestedDayType -- never persisted, never a pay input by itself. See
@@ -5818,9 +5612,9 @@ function buildOvertimeRecord(record) {
   };
 }
 
-// Mirrors SpecialMoneyType.java (name -> label/bucket/evidence). Kept as a plain
-// object here (not derived from db) since GET /api/special-money/types is a
-// static catalog, same as the Java controller's `Arrays.stream(SpecialMoneyType.values())`.
+// Mirrors SpecialMoneyType.java (name -> label/bucket/evidence). Kept as a plain object here (not derived from
+// db) since GET /api/special-money/types is a static catalog, same as the Java controller's
+// `Arrays.stream(SpecialMoneyType.values())`.
 const SPECIAL_MONEY_TYPES = [
   { requestType: 'UNIFORM_ANNUAL', thaiLabel: 'ชุดฟอร์มประจำปี', payrollBucket: 'NON_TAXABLE', evidenceRequired: true },
   { requestType: 'UNIFORM_NEW_STAFF', thaiLabel: 'ชุดฟอร์มพนักงานใหม่', payrollBucket: 'NON_TAXABLE', evidenceRequired: true },
@@ -5856,11 +5650,9 @@ function canAccessSpecialMoneyEmployee(user, employeeId) {
   return canViewAllSpecialMoney(user) || employeeId === user.employeeId;
 }
 
-// Mirrors AttendanceCorrectionService: CEO-only, single stage, NO manager routing at all (unlike
-// overtime's manager -> CEO pipeline, and unlike specialMoney's own read scope, which is at least
-// "hr/ceo see everyone" -- this feature's canViewAll is CEO alone, no hr carve-out). Submit is
-// always self-only -- there is no employeeId-on-behalf branch anywhere in this feature, so there
-// is nothing here for a manager (or HR) to be granted.
+// Mirrors AttendanceCorrectionService: CEO-only, single stage, NO manager routing at all (unlike overtime's
+// manager -> CEO pipeline, and unlike specialMoney's own read scope, which is at least "hr/ceo see everyone"
+// -- this feature's canViewAll is CEO alone, no hr carve-out).
 function canViewAllAttendanceCorrection(user) {
   return user.role === 'ceo';
 }
@@ -5875,11 +5667,8 @@ function buildAttendanceCorrectionRecord(record, user) {
     employeeName: employee?.nameTh || null,
     requestedByName: requestedBy?.nameTh || null,
     reviewedByName: reviewedBy?.nameTh || null,
-    // Mirrors AttendanceCorrectionService#withCanReviewFlag: true only for the CEO role, only
-    // while the request is still open (status must be SUBMITTED). Role-only, like requireCeo
-    // itself -- there is no self-exclusion, so a CEO reviewing their OWN correction request also
-    // gets canReview: true here (review #attendance-correction-request; matches the rest of this
-    // app's convention of role-only approval gates with no self-check).
+    // Mirrors AttendanceCorrectionService#withCanReviewFlag: true only for the CEO role, only while the request is
+    // still open (status must be SUBMITTED).
     canReview: Boolean(user) && canViewAllAttendanceCorrection(user) && record.status === 'SUBMITTED',
   };
 }
@@ -5906,18 +5695,17 @@ function buildSpecialMoneyRecord(record) {
     managerApprovedByName: managerApprover?.nameTh || null,
     ceoApprovedByName: ceoApprover?.nameTh || null,
     reviewedByName: reviewer?.nameTh || null,
-    // Projected per row by SpecialMoneyRepository.baseSelect(): a reviewer sees the document trail
-    // before opening the request, and the panel can warn before an approval the server will refuse.
+    // Projected per row by SpecialMoneyRepository.baseSelect(): a reviewer sees the document trail before opening
+    // the request, and the panel can warn before an approval the server will refuse.
     attachmentCount: specialMoneyAttachmentsFor(record.id).length,
     ...pendingApproverForSpecialMoney(record),
   };
 }
 
 function specialMoneyPayrollMonth() {
-  // Mirrors SpecialMoneyService#ceoApprove's 25th-of-month cutoff
-  // (app.special-money.payroll-cutoff-day, default 25): approved on/before the
-  // 25th lands in the current month, after rolls to next month. The mock has
-  // no payroll-period table to roll further past, so it stops there.
+  // Mirrors SpecialMoneyService#ceoApprove's 25th-of-month cutoff (app.special-money.payroll-cutoff-day, default
+  // 25): approved on/before the 25th lands in the current month, after rolls to next month. The mock has no
+  // payroll-period table to roll further past, so it stops there.
   const now = new Date();
   const cutoffDay = 25;
   const target = now.getDate() <= cutoffDay
@@ -5939,10 +5727,8 @@ function findEmployee(id) {
   return employee;
 }
 
-// Mirrors TemporaryPasswordGenerator's alphabet and length exactly (14 chars, alphanumeric with
-// the visually ambiguous O/0/I/l/1 removed) so ResetPasswordDialog is exercised against a
-// realistic value. Uses Math.random, NOT SecureRandom — this is a demo-fixture generator for
-// exercising the UI, not a security-grade one; only the real backend's SecureRandom is that.
+// Mirrors TemporaryPasswordGenerator's alphabet and length exactly (14 chars, alphanumeric with the visually
+// ambiguous O/0/I/l/1 removed) so ResetPasswordDialog is exercised against a realistic value.
 const TEMPORARY_PASSWORD_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
 function mockTemporaryPassword() {
   let password = '';
@@ -6028,11 +5814,9 @@ function createEmployeeRecord(payload) {
 
 // --- price import helpers ---
 
-// Mirrors the version transition in PriceImportService.commit(): the committed
-// version becomes ACTIVE and the factory's previous ACTIVE version is ARCHIVED —
-// kept for history, never deleted. Shared by priceImport.commit and
-// priceImport.uploadAndCommit so the two cannot drift apart.
-// Returns the number of versions archived.
+// Mirrors the version transition in PriceImportService.commit(): the committed version becomes ACTIVE and the
+// factory's previous ACTIVE version is ARCHIVED — kept for history, never deleted. Shared by
+// priceImport.commit and priceImport.uploadAndCommit so the two cannot drift apart.
 function activateVersion(versionId) {
   const version = mockPriceImportVersions.find((item) => item.versionId === versionId);
   if (!version) return 0;
@@ -6075,9 +5859,9 @@ function pgAsc(a, b) {
   return String(a).localeCompare(String(b));
 }
 
-// Row caps that are HARDCODED in the Java repositories — no caller-supplied limit reaches them,
-// so the mock must apply the same constant or it hands callers a larger set than production ever
-// would. See CatalogRepository.search, CustomerRepository.search, NotificationRepository.
+// Row caps that are HARDCODED in the Java repositories — no caller-supplied limit reaches them, so the mock
+// must apply the same constant or it hands callers a larger set than production ever would. See
+// CatalogRepository.search, CustomerRepository.search, NotificationRepository.
 const CATALOG_SEARCH_LIMIT = 30;
 const CUSTOMER_SEARCH_LIMIT = 30;
 // CatalogController clamps the caller's ?limit to [1, 200] and defaults it to 50.
@@ -6112,11 +5896,9 @@ const LEAVE_PREVIEW_COUNTERS_FIXTURE = {
 };
 const LEAVE_PREVIEW_DEFAULT_COUNTERS = { emergencyFilingsRemaining: 0, noCertificateOccasionsRemaining: 0 };
 
-// Exactly one type renders "blocked before you type anything" in mock mode, so step 1 of the
-// composer has something to demonstrate — every other type's fixture is `null` (no gate hit),
-// which illustrates only "not blocked in this fixture", never a real verdict. messageTh below is
-// copied VERBATIM from LeaveRuleMessages' real ONCE_PER_EMPLOYMENT template (not re-worded here),
-// for the same reason CLAUDE.md gives for never hand-translating backend copy.
+// Exactly one type renders "blocked before you type anything" in mock mode, so step 1 of the composer has
+// something to demonstrate — every other type's fixture is `null` (no gate hit), which illustrates only "not
+// blocked in this fixture", never a real verdict.
 const LEAVE_PREVIEW_BLOCKING_FIXTURE = {
   ORDINATION: {
     code: 'ONCE_PER_EMPLOYMENT',
@@ -6126,16 +5908,15 @@ const LEAVE_PREVIEW_BLOCKING_FIXTURE = {
   },
 };
 
-// ── Deal Direct Quotations (Quotation v2, QUOTATION-V2-PLAN.md) ──────────────────────────────
-// Mirrors th.co.glr.hr.dealquotation package. See quotationMeta.js for the shared status/authz
-// table this mock imports rather than re-deriving.
+// Deal Direct Quotations (Quotation v2, QUOTATION-V2-PLAN.md) ────────────────────────────── Mirrors
+// th.co.glr.hr.dealquotation package. See quotationMeta.js for the shared status/authz table this mock imports
+// rather than re-deriving.
 
 const DEAL_QUOTATION_VIEWER_ROLES = ['sales', 'sales_manager', 'ceo', 'import', 'account'];
 
-// #H4: `user.canCreateQuotation` (mirrors AuthResponse.canCreateQuotation / DealQuotationService
-// #hasQuotationGrant) grants "any deal" the same way sales_manager does, for view AND write --
-// but never for approve/reject, which stay role-only (see approve/reject below, which call
-// hasRole('sales_manager', 'ceo') directly and never consult this).
+// #H4: `user.canCreateQuotation` grants "any deal" the same way sales_manager does, for view AND write -- but
+// never for approve/reject, which stay role-only (see approve/reject below, which call hasRole directly and
+// never consult this).
 function hasDealQuotationMockGrant(user) {
   return Boolean(user?.canCreateQuotation);
 }
@@ -6240,10 +6021,9 @@ function isMockEligibleQuotationDisplayName(id) {
   return mockEligibleQuotationDisplayNameUsers().some((u) => u.id === Number(id));
 }
 
-// Validates one printedByDisplayId/salesRepDisplayId candidate before it is written -- null
-// passes straight through (means "use the real name", the default); a non-null id must be in the
-// eligible union above or the request is refused with 400. Mirrors
-// DealQuotationService#requireEligibleDisplayEmployeeId, same message string.
+// Validates one printedByDisplayId/salesRepDisplayId candidate before it is written -- null passes straight
+// through (means "use the real name", the default); a non-null id must be in the eligible union above or the
+// request is refused with 400.
 function resolveDealQuotationDisplayId(rawId) {
   if (rawId == null) return null;
   const id = Number(rawId);
@@ -6253,11 +6033,9 @@ function resolveDealQuotationDisplayId(rawId) {
   return id;
 }
 
-// The display id's name (+phone) snapshot -- looked up FRESH on every read (never frozen), which
-// mirrors DealQuotationRepository#baseSelect's plain LEFT JOIN on printed_by_display_id/
-// sales_rep_display_id (unlike the V175 approver snapshot, this join is not frozen at any point).
-// This fixture's demo employees carry no English names anywhere, so `nameEn` is always null here
-// -- the same as createdByNameEn/salesRepNameEn a few lines below in buildDealQuotationDto.
+// The display id's name (+phone) snapshot -- looked up FRESH on every read (never frozen), which mirrors
+// DealQuotationRepository#baseSelect's plain LEFT JOIN on printed_by_display_id/ sales_rep_display_id (unlike
+// the V175 approver snapshot, this join is not frozen at any point).
 function mockDealQuotationDisplayEmployee(id) {
   if (id == null) return { name: null, nameEn: null, phone: null };
   const user = db.users.find((u) => u.id === Number(id));
@@ -6404,10 +6182,8 @@ function quotationRevisionNumber(baseNumber, revisionNo) {
   return `${baseNumber}-${revisionNo}`;
 }
 
-// M3 (DealQuotationRepository#hasOpenRevision's own Javadoc): a caller double-tapping "สร้าง
-// ฉบับแก้ไข"/"ส่งใหม่" on the SAME parent must not silently mint two children sharing the same
-// {base}-{n} number (the real backend's UNIQUE index would refuse the second INSERT; nothing in
-// this in-memory array does). Shared by createRevision() and submit()'s resubmit-after-rejection
+// a caller double-tapping "สร้าง ฉบับแก้ไข"/"ส่งใหม่" on the SAME parent must not silently mint two children
+// sharing the same {base}-{n} number. Shared by createRevision() and submit()'s resubmit-after-rejection
 // branch below -- both mint a revision the same way.
 function hasOpenDealQuotationRevision(parentId) {
   return mockDealQuotations.some((q) => q.parentQuotationId === parentId
@@ -6548,8 +6324,8 @@ function mintDealQuotationRevision(parent, user) {
     validityDate: null,
     quotationDate: now.slice(0, 10),
     createdAt: now, updatedAt: now,
-    // v3: copied VERBATIM, adjustments included, exactly as DealQuotationService's revision
-    // does ("a copy, not a recalculation") — recomputing here would also re-run the stub.
+    // v3: copied VERBATIM, adjustments included, exactly as DealQuotationService's revision does ("a copy, not a
+    // recalculation") — recomputing here would also re-run the stub.
     items: parent.items.map((item) => ({ ...structuredClone(item), id: mockDealQuotationItemSeq++ })),
   };
 }
@@ -6597,8 +6373,8 @@ function submitDealQuotationRow(row, user) {
   row.docStatus = 'PENDING_APPROVAL';
   row.submittedAt = now;
   row.submittedBy = user.id;
-  // "cleared on the next submit" -- QUOTATION-V2-PLAN.md's approval_note column comment. A no-op
-  // for a freshly-minted revision, which never had one.
+  // "cleared on the next submit" -- QUOTATION-V2-PLAN.md's approval_note column comment. A no-op for a
+  // freshly-minted revision, which never had one.
   row.approvalNote = null;
   row.updatedAt = now;
   return delay({ quotation: buildDealQuotationDto(row) });
@@ -6699,8 +6475,8 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
   row.docStatus = 'ISSUED';
   row.approvedById = user.employeeId ?? null;
   row.approvedByName = user.name;
-  // V175: snapshot the approver's signature presence at approval (DealQuotationRepository#approve),
-  // shared verbatim with the DEAL_DIRECT branch below.
+  // V175: snapshot the approver's signature presence at approval (DealQuotationRepository#approve), shared
+  // verbatim with the DEAL_DIRECT branch below.
   row.approverSignatureSnapshot = row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById));
   row.approvedAt = now;
   row.approvalDecidedAt = now;
@@ -6723,9 +6499,9 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
     advanceDealToQuotationRecipientStage(ticket, recipient, user);
     pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติและออกใบเสนอราคา ${row.number}`);
     pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคา ${row.number}`);
-    // Parity with the real service's unconditional CEO-visibility notification on issue (redundant
-    // when the ceo is the one approving, kept anyway — see DealQuotationService
-    // #approveAndIssuePricingRequestOrigin's own comment for why).
+    // Parity with the real service's unconditional CEO-visibility notification on issue (redundant when the ceo is
+    // the one approving, kept anyway — see DealQuotationService #approveAndIssuePricingRequestOrigin's own comment
+    // for why).
     db.users.filter((u) => u.role === 'ceo' && u.active).forEach((ceoUser) => addNotification(
       ceoUser.id, row.ticketId, ticket.code, 'DEAL_QUOTATION_APPROVED', `ใบเสนอราคา ${row.number} ถูกออกแล้ว`));
   }
@@ -6798,9 +6574,9 @@ function computeDealQuotationLine(input = {}, documentLanguage = 'TH') {
     ? (roundToFullBox ? Math.ceil(piecesAfterWastage / piecesPerBox) * piecesPerBox : piecesAfterWastage)
     : piecesAfterWastage;
   const boxes = piecesPerBox > 0 ? Math.floor(piecesFinal / piecesPerBox) : null;
-  // The frontend's own arithmetic (not a wire field — see DealQuotationItemDto's Javadoc on
-  // roundToFullBox): the remainder that does not make a full box. Always 0 when roundToFullBox is
-  // true (piecesFinal is then itself a multiple of piecesPerBox).
+  // The frontend's own arithmetic (not a wire field — see DealQuotationItemDto's Javadoc on roundToFullBox): the
+  // remainder that does not make a full box. Always 0 when roundToFullBox is true (piecesFinal is then itself a
+  // multiple of piecesPerBox).
   const loosePieces = piecesPerBox > 0 ? piecesFinal - boxes * piecesPerBox : null;
   const unitPrice = Number(input.unitPrice) || 0;
   const discountPct = Number(input.discountPct) || 0;
@@ -6937,17 +6713,17 @@ function dealQuotationLineType(input) {
 // — a mock more permissive than the service is the dangerous direction. As everywhere in this
 // section the MATH is not: each row is handed to the same per-mode stub a single-mode document uses.
 
-/** ItemInput#priceMode's @Pattern — bean validation, so it bites on EVERY row that states a mode,
- * whatever the document's own mode and whether or not that mode will be consulted. */
+/** ItemInput#priceMode's @Pattern — bean validation, so it bites on EVERY row that states a mode, whatever the
+ * document's own mode and whether or not that mode will be consulted. */
 function requireMockRowPriceModeWellFormed(input) {
   if (input?.priceMode != null && !ROW_PRICE_MODES.includes(input.priceMode)) {
     fail('วิธีคิดราคาของรายการต้องเป็น NET, SPECIAL_SQM หรือ DIRECT_NET', 400);
   }
 }
 
-/** DealQuotationService#rowPriceMode: the mode ONE row of a document being written is priced in.
- * On a MIXED document a tile row that states none is REFUSED, naming the row — never guessed from
- * its fields; a PLAIN / ADJUSTMENT row has no price mode and is handed NET, as always. */
+/** DealQuotationService#rowPriceMode: the mode ONE row of a document being written is priced in. On a MIXED
+ * document a tile row that states none is REFUSED, naming the row — never guessed from its fields; a PLAIN /
+ * ADJUSTMENT row has no price mode and is handed NET, as always. */
 function mockRowPriceMode(input, documentPriceMode, rowNumber) {
   requireMockRowPriceModeWellFormed(input);
   if (documentPriceMode !== PRICE_MODE_MIXED) return documentPriceMode;
@@ -7113,14 +6889,9 @@ function computeDealQuotationV3Line(rawInput = {}, priceMode = 'NET', documentLa
   return common;
 }
 
-// Mirrors DealQuotationService#update's item upsert: a sent row whose `id` matches one of the
-// quotation's CURRENT item ids is kept (updated in place); anything else — no id, or an id that
-// belongs to some other quotation entirely — is treated as a new row and gets a freshly-minted
-// one. `existingIds` is null on create (nothing exists yet, so every row is new) and the current
-// row's own item-id set on update. The `id`/`seq` keys are spread in AFTER
-// computeDealQuotationV3Line(...) rather than before: that function's PLAIN/ADJUSTMENT branches
-// spread `...input` (which carries whatever `id` the CLIENT sent, including `null` for a brand-new
-// row), and spreading before it would let that client value silently clobber the id decided here.
+// Mirrors DealQuotationService#update's item upsert: a sent row whose `id` matches one of the quotation's
+// CURRENT item ids is kept (updated in place); anything else — no id, or an id that belongs to some other
+// quotation entirely — is treated as a new row and gets a freshly-minted one.
 function buildDealQuotationItemRow(input, seq, priceMode = 'NET', existingIds = null, documentLanguage = 'TH') {
   const requestedId = input?.id != null ? Number(input.id) : null;
   const id = existingIds && requestedId != null && existingIds.has(requestedId)
@@ -7201,16 +6972,9 @@ function resolveDealQuotationDepositTerms(payload) {
   return { depositPercent, remainderMode, creditDays, fullPaymentTerm };
 }
 
-/**
- * V178 — DealQuotationService#requireValidityUntilForMode, mirrored exactly, same message
- * strings, same order of checks. `current` is the stored row on UPDATE (a missing
- * `validityMode` keeps the stored one, same "missing keeps stored" discipline as priceMode/
- * documentLanguage above); null on CREATE, where missing means DAYS. `quotationDate` is the
- * quotation's OWN date — today on create, the frozen `current.quotationDate` on update — used
- * for the "not before the document's own date" refusal. `items` are the rows ABOUT TO BE
- * WRITTEN (this function's caller always passes the post-`buildDealQuotationItems` list), so
- * "has special pricing" is decided from what is actually being saved, never from stale state.
- */
+/** V178 — DealQuotationService#requireValidityUntilForMode, mirrored exactly, same message strings, same order
+ * of checks. `quotationDate` is the quotation's OWN date — today on create, the frozen `current.quotationDate`
+ * on update — used for the "not before the document's own date" refusal. */
 function resolveDealQuotationValidity(payload, priceMode, items, quotationDate, current = null) {
   // No .toUpperCase() here — the real @Pattern(regexp = "DAYS|DATE") rejects lowercase
   // (DealQuotationRequestsValidationTest pins this), so uppercasing would make the mock MORE
@@ -7227,10 +6991,9 @@ function resolveDealQuotationValidity(payload, priceMode, items, quotationDate, 
   return { validityMode, validityUntil };
 }
 
-/** DealQuotationService#buildItems' ordering and refusals: ADJUSTMENT rows move LAST (stably),
- * an adjustment-only document is refused, each adjustment must be exactly one of percent / flat,
- * and a document whose total goes negative is refused — checked only where the mock KNOWS the
- * total (every adjustment flat); a percentage adjustment is not computed here at all. */
+/** DealQuotationService#buildItems' ordering and refusals: ADJUSTMENT rows move LAST, an adjustment-only
+ * document is refused, each adjustment must be exactly one of percent / flat, and a document whose total goes
+ * negative is refused. */
 function buildDealQuotationItems(inputs, priceMode, existingItems = null, documentLanguage = 'TH') {
   const list = inputs ?? [];
   if (list.length === 0) fail('ใบเสนอราคาต้องมีอย่างน้อยหนึ่งรายการ', 400);
@@ -7245,9 +7008,9 @@ function buildDealQuotationItems(inputs, priceMode, existingItems = null, docume
       fail('ส่วนลดพิเศษต้องมากกว่าศูนย์', 400);
     }
   });
-  // update() passes its row's CURRENT items here (pre-overwrite) so an id the client echoed back
-  // can be recognised as "keep this row" rather than minted fresh — see buildDealQuotationItemRow.
-  // null on create, where nothing exists yet.
+  // update() passes its row's CURRENT items here (pre-overwrite) so an id the client echoed back can be
+  // recognised as "keep this row" rather than minted fresh — see buildDealQuotationItemRow. null on create,
+  // where nothing exists yet.
   const existingIds = existingItems ? new Set(existingItems.map((it) => it.id)) : null;
   // V192.5: each row is built in the mode IT is priced in, and that mode is STORED on the row only
   // where it is the row's to decide — a tile row of a MIXED document. Everywhere else the stored
@@ -7459,8 +7222,8 @@ function buildDealQuotationDto(row) {
     salesRepDisplayPhone: mockDealQuotationDisplayEmployee(row.salesRepDisplayId).phone,
     ...dealQuotationTotals(row.items, row.documentLanguage || 'TH'),
     currency: row.currency ?? (row.documentLanguage === 'EN' ? 'USD' : 'THB'),
-    // Mirrors DealQuotationRepository#baseSelect (V175): frozen at approval, live only for a row
-    // with no snapshot (seed rows approved before this mock tracked one).
+    // Mirrors DealQuotationRepository#baseSelect (V175): frozen at approval, live only for a row with no snapshot
+    // (seed rows approved before this mock tracked one).
     approverHasSignature: row.approverSignatureSnapshot
       ?? (row.approvedById != null && mockEmployeeSignatures.has(Number(row.approvedById))),
     items: row.items.map((item) => mockDealQuotationItemDto(item, decision, row.priceMode || 'NET')),
@@ -7531,9 +7294,9 @@ function mockDealQuotationDocLines(row) {
   ];
 }
 
-// Seed: 2 quotations on ticket 18 (SALES1's "ศูนย์การค้า Fashion Island" deal, an existing mock
-// ticket with 4 catalog-flavoured items already seeded in demoSales.js) -- one DRAFT, one
-// PENDING_APPROVAL, per the implementation brief.
+// Seed: 2 quotations on ticket 18 (SALES1's "ศูนย์การค้า Fashion Island" deal, an existing mock ticket with 4
+// catalog-flavoured items already seeded in demoSales.js) -- one DRAFT, one PENDING_APPROVAL, per the
+// implementation brief.
 let mockDealQuotationItemSeq = 1;
 const mockDealQuotations = [
   {
@@ -7888,12 +7651,8 @@ function mockForkChildDeal(parent, party, user) {
 function leavePreviewWarnings(leaveType, totalDays) {
   if (leaveType.code !== 'PERSONAL') return { warnings: [], unpaidByRuleDays: 0 };
   const days = String(totalDays);
-  // noticeDays is read from the SEEDED leave type, never hardcoded: PERSONAL's
-  // advance_notice_days is 1 (V116), and VACATION's is 3. An earlier draft of this fixture
-  // hardcoded '3' here, which rendered "การลากิจต้องยื่นล่วงหน้าอย่างน้อย 3 วัน" -- a sentence
-  // stating company policy that the real backend would never produce for ลากิจ. That is the
-  // mirrored-constant drift CLAUDE.md warns about, and nothing guards it: contract.test.js
-  // compares method surface and arity only, so a wrong VALUE here fails no test at all.
+  // noticeDays is read from the SEEDED leave type, never hardcoded: PERSONAL's advance_notice_days is 1 (V116),
+  // and VACATION's is 3.
   const noticeDays = String(Math.max(0, Number(leaveType.advanceNoticeDays || 0)));
   return {
     warnings: [{
@@ -7905,24 +7664,25 @@ function leavePreviewWarnings(leaveType, totalDays) {
         + 'คำขอนี้ยื่นไม่ทันกำหนด '
         + `แต่ยังส่งให้หัวหน้างานพิจารณาได้ หากอนุมัติ วันลา ${days} วันจะไม่ได้รับค่าจ้าง`,
     }],
-    // WARN_UNPAID_ALL (LeaveRuleEnforcement) -- the whole request is unpaid if approved, same
-    // dominance-rule reading LeaveService#autoRejectNote documents: with only one WARN code firing
-    // here, unpaid_by_rule_days is simply that code's own full-request figure.
+    // WARN_UNPAID_ALL (LeaveRuleEnforcement) -- the whole request is unpaid if approved, same dominance-rule
+    // reading LeaveService#autoRejectNote documents: with only one WARN code firing here, unpaid_by_rule_days is
+    // simply that code's own full-request figure.
     unpaidByRuleDays: totalDays,
   };
 }
 
 // H1 lockdown -- the account role's ROW scope on the finance paths. Mirrors TicketRepository#isInAccountScope
 // (the SAME predicate as the list scope, accountListScopeIncludes above), plus the quotation-only container
-// exclusion the list applies. Enforced inside the shared money functions, like TicketService.requireAccountScope.
+// exclusion the list applies.
 function requireMockAccountScope(user, ticket) {
   if (user.role === 'account' && (ticket.quotationOnly === true || !accountListScopeIncludes(ticket))) {
     fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   }
 }
 
-// The shared money-action bodies (payment / close / billing / stage). Each is the ONE implementation behind both
-// its /api/tickets entrypoint and its finance entrypoint (api.finance.*), like the Java TicketService methods.
+// The shared money-action bodies (payment / close / billing / stage). Each is the ONE implementation behind
+// both its /api/tickets entrypoint and its finance entrypoint (api.finance.*), like the Java TicketService
+// methods.
 async function mockRecordPayment(id, payload) {
   // account only — no CEO fallback. Mirrors TicketService's PAYMENT_RECORD_ROLES, for every receipt
   // kind (deposit, balance, ...) alike.
@@ -8039,8 +7799,8 @@ async function mockConfirmFinalPayment(id) {
 
 async function mockUpdateStage(id, payload, viaFinance = false) {
   const user = requireSession();
-  // /api/tickets entrypoint refuses account outright (H1 lockdown); account reaches a MONEY stage only via
-  // the finance entrypoint (TicketService.financeUpdateStage).
+  // /api/tickets entrypoint refuses account outright (H1 lockdown); account reaches a MONEY stage only via the
+  // finance entrypoint (TicketService.financeUpdateStage).
   if (user.role === 'account' && !viaFinance) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   if (viaFinance) {
     if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -8052,17 +7812,14 @@ async function mockUpdateStage(id, payload, viaFinance = false) {
   requireMockAccountScope(user, ticket);
   requireActive(ticket);
   if (dealStageIndex(payload.stage) < 0) fail(`ไม่รองรับสถานะขั้นตอนการขาย '${payload.stage}'`, 400);
-  // Enforced from the SAME decision list actions() serves, never re-derived — so an option the
-  // mock offered is an option the mock accepts, and there is one place to read. The status is
-  // approximated (403 for the permission message, 409 otherwise) because the mock's decisions
-  // carry a reason, not a status code; the real service's codes are pinned by
-  // StageDecisionIntegrationTest.
+  // Enforced from the SAME decision list actions() serves, never re-derived — so an option the mock offered is
+  // an option the mock accepts, and there is one place to read.
   const decision = mockStageDecisions(ticket, user).find((d) => d.stage === payload.stage);
   if (!decision.allowed) {
     fail(decision.blockedReason, decision.blockedReason === 'ไม่มีสิทธิ์เข้าถึงรายการนี้' ? 403 : 409);
   }
-  // NO note requirement here. DealStage.requiresJustification is a backend decision and the
-  // mock does not mirror it — see the "what this mock will and will not decide" block above.
+  // NO note requirement here. DealStage.requiresJustification is a backend decision and the mock does not mirror
+  // it — see the "what this mock will and will not decide" block above.
   const fromStage = ticket.salesStage;
   ticket.salesStage = payload.stage;
   ticket.stageUpdatedAt = new Date().toISOString();
@@ -8074,8 +7831,8 @@ async function mockUpdateStage(id, payload, viaFinance = false) {
 // (api.finance.getDeal's availableActions), like TicketService.buildActions.
 function buildTicketActions(user, ticket) {
   const active = (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE';
-  // Computed once and used for both halves of the response: the ADVANCE_STAGE/UPDATE_STAGE
-  // verbs below are derived from it, and it ships to the client as stageDecisions.
+  // Computed once and used for both halves of the response: the ADVANCE_STAGE/UPDATE_STAGE verbs below are
+  // derived from it, and it ships to the client as stageDecisions.
   const stageDecisions = mockStageDecisions(ticket, user);
   const availableActions = [];
   const add = (action, kind, label, extra = {}) => availableActions.push({ action, kind, label, ...extra });
@@ -8110,8 +7867,8 @@ function buildTicketActions(user, ticket) {
     if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'IR_SENT') add('SHIPPING', 'fulfillment', 'สินค้าเดินทาง');
     if (['import', 'ceo'].includes(user.role) && !irTracked && ticket.fulfillmentStatus === 'SHIPPING') add('GOODS_RECEIVED', 'fulfillment', 'รับสินค้า');
     // V148 (per-item stock-commission weighting): sales_manager/ceo only -- mirrors
-    // TicketService#canSetItemWeightMultiplier exactly (ITEM_WEIGHT_ROLES, no ownership/stage
-    // nuance beyond the ticket being ACTIVE, which the enclosing `if (active)` already is).
+    // TicketService#canSetItemWeightMultiplier exactly (ITEM_WEIGHT_ROLES, no ownership/stage nuance beyond the
+    // ticket being ACTIVE, which the enclosing `if (active)` already is).
     if (['sales_manager', 'ceo'].includes(user.role)) {
       add('SET_ITEM_WEIGHT_MULTIPLIER', 'fulfillment', 'ตั้งน้ำหนักคอมมิชชั่นต่อรายการ', { requiredFields: ['lines'] });
     }
@@ -8206,8 +7963,8 @@ function buildTicketActions(user, ticket) {
 }
 
 // The money actions THIS caller can take on the deal right now -- the ticket action list (buildTicketActions,
-// the mock's one readiness rule) narrowed to money actions, and to ADVANCE_STAGE / UPDATE_STAGE only for the two
-// money stages. Mirrors FinanceDealService#availableActions.
+// the mock's one readiness rule) narrowed to money actions, and to ADVANCE_STAGE / UPDATE_STAGE only for the
+// two money stages. Mirrors FinanceDealService#availableActions.
 function mockFinanceAvailableActions(user, ticket) {
   const all = buildTicketActions(user, ticket).availableActions;
   const MONEY = ['DEPOSIT_PAID', 'RECORD_PAYMENT', 'FINAL_PAYMENT', 'CONFIRM_CLOSE', 'REVOKE_CLOSE_CONFIRM'];
@@ -8219,7 +7976,8 @@ function mockFinanceAvailableActions(user, ticket) {
     .filter((a) => MONEY.includes(a.action) || moneyStage(a) || (a.action === 'UPDATE_STAGE' && anyMoneyStage))
     .map((a) => ({ action: a.action, label: a.label, targetStage: a.targetStage ?? null, requiredFields: a.requiredFields ?? [] }))
     // RECORD_INVOICE is not a ticket action: FinanceDealService appends it when actor is account AND the deal is
-    // CLOSED_PAID AND no live SALE commission exists (the write itself is the existing POST /api/commissions/from-deal).
+    // CLOSED_PAID AND no live SALE commission exists (the write itself is the existing POST
+    // /api/commissions/from-deal).
     .concat(user.role === 'account' && ticket.salesStage === 'CLOSED_PAID' && !hasRecordedCommission(ticket)
       ? [{ action: 'RECORD_INVOICE', label: 'บันทึกใบกำกับ', targetStage: null, requiredFields: [] }]
       : []);
@@ -8289,11 +8047,8 @@ function buildFinanceDeal(raw, user) {
       vatBasis: 'EXCLUDING_VAT',
     })),
     money: {
-      // Mirrors FinanceDealDto's VAT-basis javadoc (FinanceDealService): `amountPayable` is the VAT-INCLUSIVE
-      // grand total with amountVatBasis 'INCLUDING_VAT', and `amountPayableExVat` is
-      // TicketRepository#payableAmountExVat. The mock's own summary figure is the pre-VAT sum, so it becomes
-      // amountPayableExVat and the inclusive payable is that x 1.07 (2dp) -- a shape stand-in only; the real VAT
-      // math stays on the server. Outstanding = max(payable - paid, 0).
+      // Mirrors FinanceDealDto's VAT-basis javadoc (FinanceDealService): `amountPayable` is the VAT-INCLUSIVE grand
+      // total with amountVatBasis 'INCLUDING_VAT', and `amountPayableExVat` is TicketRepository#payableAmountExVat.
       amountPayable: payableInclVat,
       amountPayableExVat: s.amountPayable,
       amountPaid: s.amountPaid,
@@ -8301,8 +8056,8 @@ function buildFinanceDeal(raw, user) {
       amountVatBasis: 'INCLUDING_VAT',
       depositPolicy: s.depositPolicy, paymentStatus: s.paymentStatus, paymentStage: s.paymentStage,
       fulfillmentStatus: s.fulfillmentStatus,
-      // The real server derives these from the quotation's terms + the delivery date. The mock has no
-      // delivery-based terms, so it only echoes its demo billing date as the due date (no basis).
+      // The real server derives these from the quotation's terms + the delivery date. The mock has no delivery-based
+      // terms, so it only echoes its demo billing date as the due date (no basis).
       paymentDueDate: s.paymentDueDate ?? null, paymentDueBasis: s.paymentDueBasis ?? null,
       paymentDueCreditDays: s.paymentDueCreditDays ?? null, overdue: s.overdue,
       closeConfirmedAt: s.closeConfirmedAt, invoiceOnFile: s.invoiceOnFile,
@@ -8358,15 +8113,15 @@ export const api = {
         ? db.users.find((item) => item.role === requestedRole && item.active)
         : db.users.find((item) => item.email.toLowerCase() === email && item.active);
 
-      // Collapsed to one message (matches AuthService.INVALID_CREDENTIALS): must not
-      // reveal whether the email exists, only whether the credential pair is valid.
+      // Collapsed to one message (matches AuthService.INVALID_CREDENTIALS): must not reveal whether the email
+      // exists, only whether the credential pair is valid.
       if (!user) fail('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 401);
       if (!requestedRole && payload?.password && payload.password !== user.password) fail('อีเมลหรือรหัสผ่านไม่ถูกต้อง', 401);
 
       sessionUser = user;
 
-      // Fire-and-forget: also create a real backend session so document downloads
-      // (quotation XLS/PDF, deposit notice, remaining invoice) return real files.
+      // Fire-and-forget: also create a real backend session so document downloads (quotation XLS/PDF, deposit
+      // notice, remaining invoice) return real files.
       const demoEmail = DEMO_ROLE_EMAIL[requestedRole ?? user.role];
       if (demoEmail) {
         fetch('/api/auth/login', {
@@ -8412,21 +8167,21 @@ export const api = {
     async forgotPassword(payload) {
       const email = payload?.email?.trim().toLowerCase();
       const user = db.users.find((item) => item.email.toLowerCase() === email && item.active);
-      // Same generic message whether or not the address matched — never reveal account
-      // existence via the response, mirroring the real endpoint's anti-enumeration contract.
+      // Same generic message whether or not the address matched — never reveal account existence via the response,
+      // mirroring the real endpoint's anti-enumeration contract.
       const genericMessage = 'หากอีเมลนี้มีอยู่ในระบบ เราได้ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปให้แล้ว กรุณาตรวจสอบกล่องอีเมลของคุณ';
       if (user) {
         const token = `mock-reset-${user.id}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
         passwordResetTokens.set(token, { userId: user.id, expiresAt: Date.now() + 30 * 60 * 1000 });
-        // Deliberate console log: this is the mock's stand-in for the real email, so a
-        // developer/QA session can copy the token straight out of devtools instead of needing a
-        // real mailbox. Never logged in a real deployment (mock-only file).
+        // Deliberate console log: this is the mock's stand-in for the real email, so a developer/QA session can copy
+        // the token straight out of devtools instead of needing a real mailbox. Never logged in a real deployment
+        // (mock-only file).
         console.info(`[mockApi] would have emailed ${user.email} a reset link: /reset-password?token=${token}`);
       }
       return delay({ message: genericMessage });
     },
-    // Mirrors AuthController#resetPassword / PasswordResetService#resetPassword — see
-    // forgotPassword's comment above for what is and is not mirrored here.
+    // Mirrors AuthController#resetPassword / PasswordResetService#resetPassword — see forgotPassword's comment
+    // above for what is and is not mirrored here.
     async resetPassword(payload) {
       const entry = payload?.token ? passwordResetTokens.get(payload.token) : null;
       if (!entry || entry.expiresAt < Date.now()) {
@@ -8533,17 +8288,15 @@ export const api = {
       }
       return delay({ employee: employeeWithRequestMeta(employee) });
     },
-    // Mirrors EmployeeController#resetPassword + EmployeeService#resetPassword.
-    // hr ONLY — the Java side is `sessions.requireAnyRole(user, "hr")`, so ceo is deliberately NOT
-    // allowed here either. 404s on an unknown employee exactly as the service does.
+    // Mirrors EmployeeController#resetPassword + EmployeeService#resetPassword. hr ONLY — the Java side is
+    // `sessions.requireAnyRole(user, "hr")`, so ceo is deliberately NOT allowed here either. 404s on an unknown
+    // employee exactly as the service does.
     async resetPassword(id) {
       hasRole('hr');
       const employee = findEmployee(id);
       const temporaryPassword = mockTemporaryPassword();
-      // Mirrors EmployeeAuthRepository#setTemporaryPassword: the row's password is replaced and
-      // must_change_password is set, so the next login is forced through ChangePasswordModal.
-      // The real backend writes hr.employee directly, so an employee with no login row is still a
-      // successful reset — hence the optional match rather than a failure.
+      // Mirrors EmployeeAuthRepository#setTemporaryPassword: the row's password is replaced and must_change_password
+      // is set, so the next login is forced through ChangePasswordModal.
       const account = db.users.find((user) => user.employeeId === employee.id);
       if (account) {
         account.password = temporaryPassword;
@@ -8551,11 +8304,8 @@ export const api = {
       }
       return delay({ temporaryPassword });
     },
-    // Quotation v2's approver signature (hr.employee_signature, V166, QUOTATION-V2-PLAN.md).
-    // Mirrors EmployeeSignatureController: write is self/ceo/admin; everyone else 403 on write.
-    // There is no separate read-gate check here — signature imagery is not sensitive the way
-    // employee master data is, and the plan states no read restriction — but every caller still
-    // needs a session (requireSession, inside findEmployee's 404 path via a live employee row).
+    // Quotation v2's approver signature (hr.employee_signature, V166, QUOTATION-V2-PLAN.md). Mirrors
+    // EmployeeSignatureController: write is self/ceo/admin; everyone else 403 on write.
     async uploadSignature(id, file) {
       const user = requireSession();
       const employee = findEmployee(id);
@@ -8567,21 +8317,19 @@ export const api = {
       const record = {
         employeeId: employee.id,
         mimeType: file?.type || 'image/png',
-        // In-memory only — no persisted byte store in mock mode (same caveat as
-        // attachments.upload above). Survives this tab's session, gone on reload.
+        // In-memory only — no persisted byte store in mock mode (same caveat as attachments.upload above). Survives
+        // this tab's session, gone on reload.
         url: file ? URL.createObjectURL(file) : null,
         uploadedBy: user.id,
         uploadedAt: new Date().toISOString(),
       };
       mockEmployeeSignatures.set(employee.id, record);
-      // Mirrors the real PUT's 204-no-body response (#H1) -- the mock must NOT resolve a JSON
-      // body the real endpoint never sends, or a mock-only assertion on the resolved value would
-      // pass while the real hrApi.uploadSignature threw "Unexpected end of JSON input".
+      // Mirrors the real PUT's 204-no-body response (#H1) -- the mock must NOT resolve a JSON body the real endpoint
+      // never sends, or a mock-only assertion on the resolved value would pass while the real hrApi.uploadSignature
+      // threw "Unexpected end of JSON input".
       return delay(null);
     },
-    // Returns the URL to render, not a fetch — same idiom as hrApi.js's getSignature. Placeholder
-    // anchor when nothing has been uploaded this session, matching attachments.fileUrl's
-    // convention of always returning SOMETHING rather than null. Existence is a SEPARATE call
+    // Returns the URL to render, not a fetch — same idiom as hrApi.js's getSignature. Existence is a SEPARATE call
     // (hasSignature, below) — this one never tells a caller whether the URL is live.
     getSignature(id) {
       const record = mockEmployeeSignatures.get(Number(id));
@@ -8620,10 +8368,9 @@ export const api = {
       return delay({ profileRequests });
     },
     async create(payload) {
-      // Identity-gated, not role-gated -- mirrors ProfileRequestController#create /
-      // ProfileRequestService#create exactly (the role check moved out of the controller; the
-      // service's own employeeId != null guard is what remains). Same idiom as
-      // mockAttendanceScope's self-service branch.
+      // Identity-gated, not role-gated -- mirrors ProfileRequestController#create / ProfileRequestService#create
+      // exactly (the role check moved out of the controller; the service's own employeeId != null guard is what
+      // remains). Same idiom as mockAttendanceScope's self-service branch.
       const user = requireSession();
       if (!user.employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
       const employee = findEmployee(user.employeeId);
@@ -8656,9 +8403,9 @@ export const api = {
   tickets: {
     async list(params = {}) {
       const user = requireSession();
-      // sales_manager: read+comment oversight only — kept here (not routed through
-      // requireTicketViewer) to match the existing inline-array pattern; must move
-      // in lockstep with requireTicketViewer/get() and TicketService.VIEWER_ROLES.
+      // sales_manager: read+comment oversight only — kept here (not routed through requireTicketViewer) to match the
+      // existing inline-array pattern; must move in lockstep with requireTicketViewer/get() and
+      // TicketService.VIEWER_ROLES.
       if (!['sales', 'import', 'ceo', 'account', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // A quotation-first deal is listed like any other deal ("Nothing hidden").
       let list = structuredClone(db.tickets);
@@ -8669,8 +8416,8 @@ export const api = {
       if (user.role === 'import') list = list.filter(importListScopeIncludes);
       if (user.role === 'account') list = list.filter(accountListScopeIncludes);
       if (params.status) list = list.filter((t) => t.status === params.status);
-      // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — mirrors
-      // TicketController's new `salesStage` query param, used by the commission "Linked Deal" picker.
+      // Step 9 addition: additive filter on the deal pipeline stage (e.g. CLOSED_PAID) — mirrors TicketController's
+      // new `salesStage` query param, used by the commission "Linked Deal" picker.
       if (params.salesStage) list = list.filter((t) => t.salesStage === params.salesStage);
       // Mirrors TicketController's movementFrom/movementTo (inclusive Asia/Bangkok days; both or neither, from <= to).
       const { movementFrom, movementTo } = params;
@@ -8773,8 +8520,8 @@ export const api = {
     },
 
     async listPayments(id) {
-      // Phase B: the payment ledger is ฝ่ายบัญชี's own document — import has no
-      // business reading it (mirrors TicketService.listPayments).
+      // Phase B: the payment ledger is ฝ่ายบัญชี's own document — import has no business reading it (mirrors
+      // TicketService.listPayments).
       const { user } = requireTicketViewer(id);
       if (user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ items: receiptsForTicket(id) });
@@ -8853,9 +8600,9 @@ export const api = {
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
-    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a DIFFERENT gate from
-    // reserveStock above (import/ceo), matching TicketService#setItemWeightMultipliers's own
-    // Javadoc on why this is a separate role set, not a reuse of STOCK_DECLARATION_ROLES.
+    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a DIFFERENT gate from reserveStock
+    // above (import/ceo), matching TicketService#setItemWeightMultipliers's own Javadoc on why this is a separate
+    // role set, not a reuse of STOCK_DECLARATION_ROLES.
     async updateItemWeightMultipliers(id, payload) {
       const user = hasRole('sales_manager', 'ceo');
       const ticket = findTicketRaw(Number(id));
@@ -8937,11 +8684,8 @@ export const api = {
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
       const code = `DL-2026-${String(nextId).padStart(4, '0')}`;
       const now = new Date().toISOString();
-      // Every deal begins as a DRAFT at the lead stage, regardless of whether
-      // products were attached at creation time — pricing no longer starts at
-      // ticket creation (commit 5). Items attached here are preliminary deal
-      // products only; nothing reaches Import (no notification, no status
-      // change) until a PricingRequest is created and submitted separately.
+      // Every deal begins as a DRAFT at the lead stage, regardless of whether products were attached at creation
+      // time — pricing no longer starts at ticket creation (commit 5).
       const ticket = {
         id: nextId, code, type: 'PRICE_REQUEST',
         title: payload.title, status: 'draft',
@@ -9018,18 +8762,15 @@ export const api = {
       requireActive(ticket);
       const st = ticket.status;
       const isOwner = isOwnerOrKeyer(ticket, user.id);
-      // 'draft' included since V50: a lightweight lead-stage deal gets its product
-      // items here before submit().
+      // 'draft' included since V50: a lightweight lead-stage deal gets its product items here before submit().
       const salesCanEdit = user.role === 'sales' && isOwner
         && ['draft', 'submitted', 'in_review', 'price_proposed'].includes(st);
       // Mirrors TicketService.editItems' DirectQuotationLocks check, after the authz check: while a
       // live direct quotation holds the deal's lines, they are edited on the quotation.
       if (salesCanEdit) requireNoLiveDirectQuotation(ticket);
-      // KNOWN MOCK-MORE-PERMISSIVE GAP (pre-existing, not touched by V183): the real
-      // TicketService.editItems only ever checks `SALES_ROLES.contains(actor.role()) && isOwner`
-      // — there is no import branch at all — so role 'import' gets a real 403 here, regardless of
-      // status. This mock's importCanEdit has no equivalent in the Java service. Do not read a
-      // green mock-driven "import can edit items" test as evidence about the backend.
+      // KNOWN MOCK-MORE-PERMISSIVE GAP (pre-existing, not touched by V183): the real TicketService.editItems only
+      // ever checks `SALES_ROLES.contains(actor.role()) && isOwner` — there is no import branch at all — so role
+      // 'import' gets a real 403 here, regardless of status.
       const importCanEdit = user.role === 'import'
         && ['in_review', 'price_proposed'].includes(st);
       if (!salesCanEdit && !importCanEdit) fail('ไม่มีสิทธิ์แก้ไขรายการสินค้าในสถานะนี้', 403);
@@ -9075,8 +8816,8 @@ export const api = {
     // with their routes — see the comment above editItems(). Download stays; both legacy and
     // PCR-issued quotations render from the same TicketService.loadQuotationContext path.
     async downloadQuotationXlsx(ticketId, quotationId) {
-      // Phase B: mirrors TicketService.loadQuotationContext's explicit import denial —
-      // a permission question, not a lookup miss, so it must not silently 404 instead.
+      // Phase B: mirrors TicketService.loadQuotationContext's explicit import denial — a permission question, not a
+      // lookup miss, so it must not silently 404 instead.
       const { user } = requireTicketViewer(ticketId);
       if (user.role === 'import') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const blob = await tryBackendBlob(`/api/tickets/${ticketId}/quotations/${quotationId}/file?format=xlsx`);
@@ -9090,8 +8831,8 @@ export const api = {
       return blob ?? buildMockQuotationHtml(ticketId, quotationId);
     },
 
-    // Three-party close (V55). Mirrors TicketService.confirmCloseReady /
-    // revokeCloseConfirmation / verifyClose. Sales is not part of the sequence.
+    // Three-party close (V55). Mirrors TicketService.confirmCloseReady / revokeCloseConfirmation / verifyClose.
+    // Sales is not part of the sequence.
     async confirmCloseReady(id) {
       return api.finance.confirmCloseReady(id);
     },
@@ -9126,8 +8867,8 @@ export const api = {
         fail(`ไม่รองรับเหตุผลการยกเลิก '${payload.reason}'`, 400);
       }
       if (ticket.status === 'closed' || ticket.status === 'cancelled') fail('ไม่สามารถยกเลิกได้', 409);
-      // Ownership gate — the Java service has always had this; the mock did not,
-      // which made it MORE permissive than production (the dangerous direction).
+      // Ownership gate — the Java service has always had this; the mock did not, which made it MORE permissive than
+      // production (the dangerous direction).
       if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const prev = ticket.status;
       ticket.status = 'cancelled';
@@ -9228,8 +8969,8 @@ export const api = {
           netAmount,
           vatAmount,
           totalPayable,
-          // Not reimplemented in the mock (see this method's own header comment) — a deal with
-          // several qualifying quotations never shows the picker under VITE_USE_MOCKS=true.
+          // Not reimplemented in the mock (see this method's own header comment) — a deal with several qualifying
+          // quotations never shows the picker under VITE_USE_MOCKS=true.
           quotationOptions: [],
           defaultQuotationId: null,
           blockingReason: null,
@@ -9318,8 +9059,8 @@ export const api = {
       }
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'GOODS_RECEIVED', ticket.status, ticket.status, null);
-      // Goods are at the warehouse (S17) — advance to DELIVERY_SCHEDULING (S18) so
-      // the "schedule delivery / collect balance" step is reached before DELIVERED.
+      // Goods are at the warehouse (S17) — advance to DELIVERY_SCHEDULING (S18) so the "schedule delivery / collect
+      // balance" step is reached before DELIVERED.
       autoAdvanceStage(ticket, 'DELIVERY_SCHEDULING', user);
       return delay({ ticket: buildTicketDetail(ticket) });
     },
@@ -9328,9 +9069,8 @@ export const api = {
       return api.finance.confirmFinalPayment(id);
     },
 
-    // ── Deal pipeline (V50): mirrors TicketService.updateStage/markLost/reopenDeal.
-    // Gates come from stageMeta (shared with the pages); authz here approximates
-    // the Java service and is NOT authoritative (CLAUDE.md).
+    // Deal pipeline (V50): mirrors TicketService.updateStage/markLost/reopenDeal. Gates come from stageMeta
+    // (shared with the pages); authz here approximates the Java service and is NOT authoritative (CLAUDE.md).
 
     async updateStage(id, payload) {
       // /api/tickets entrypoint: refuses account (H1 lockdown); account uses api.finance.updateStage.
@@ -9359,9 +9099,8 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('ดีลนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน', 409);
-      // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row
-      // indistinguishable from one never lost, so "why did we lose this before we
-      // reopened it" needed parsing Thai free text out of an event message.
+      // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row indistinguishable from one never
+      // lost, so "why did we lose this before we reopened it" needed parsing Thai free text out of an event message.
       ticket.lifecycle = 'ACTIVE';
       ticket.reopenedAt = new Date().toISOString();
       ticket.reopenCount = (ticket.reopenCount ?? 0) + 1;
@@ -9439,9 +9178,9 @@ export const api = {
       // The OWNING sales rep or a sales_manager — not account, not ceo. See
       // requireDepositPolicyOwner's comment above.
       const user = requireDepositPolicyOwner(ticket);
-      // Mirrors TicketService.waiveDeposit Rule 4 (FR-A-05): once a deposit notice has been issued
-      // (payment track past CUSTOMER_CONFIRMED), the policy can't be waived after the fact — that
-      // is a credit note, not a policy change. Same position as Java: after the owner check.
+      // Mirrors TicketService.waiveDeposit Rule 4 (FR-A-05): once a deposit notice has been issued (payment track
+      // past CUSTOMER_CONFIRMED), the policy can't be waived after the fact — that is a credit note, not a policy
+      // change. Same position as Java: after the owner check.
       if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('ยกเลิกนโยบายมัดจำไม่ได้: มีการออกใบแจ้งรับมัดจำแล้ว — การแก้ไขต้องออกเป็นใบลดหนี้ ไม่ใช่การเปลี่ยนนโยบาย', 409);
       }
@@ -9465,8 +9204,8 @@ export const api = {
     async addActivity(id, payload) {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
-      // Deliberately NOT requireActive: a rep can still log why a deal went quiet
-      // on a non-ACTIVE deal (mirrors TicketService.addActivity — see handoff 103).
+      // Deliberately NOT requireActive: a rep can still log why a deal went quiet on a non-ACTIVE deal (mirrors
+      // TicketService.addActivity — see handoff 103).
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!payload?.activityDate) fail('ต้องระบุวันที่ทำกิจกรรม', 400);
       if (!dealIsValidActivityKind(payload?.kind)) fail(`ไม่รองรับประเภทกิจกรรม '${payload?.kind}'`, 400);
@@ -9500,9 +9239,8 @@ export const api = {
         && (Number(payload.winProbability) < 0 || Number(payload.winProbability) > 100)) {
         fail('win probability ต้องอยู่ระหว่าง 0-100', 400);
       }
-      // Full-replace semantics (PUT), not a merge — mirrors TrackingUpdateRequest:
-      // an omitted/null field CLEARS it (null winProbability = "fall back to the
-      // stage default", the intended way to clear an override).
+      // Full-replace semantics (PUT), not a merge — mirrors TrackingUpdateRequest: an omitted/null field CLEARS it
+      // (null winProbability = "fall back to the stage default", the intended way to clear an override).
       ticket.winProbabilityOverride = payload?.winProbability ?? null;
       ticket.designerName = (payload?.designerName || '').trim() || null;
       ticket.ownerName = (payload?.ownerName || '').trim() || null;
@@ -9711,10 +9449,9 @@ export const api = {
 
   // Mirrors LeaveController + LeaveService (leave/).
   leave: {
-    // Mirrors LeaveRepository.findEmployeeOptions() — scope is self + stored-FK
-    // reports only (reports_to_employee_id). Deliberately NO division term:
-    // unlike overtime, a ฝ่าย manager's leave dropdown does not widen to their
-    // whole division.
+    // Mirrors LeaveRepository.findEmployeeOptions() — scope is self + stored-FK reports only
+    // (reports_to_employee_id). Deliberately NO division term: unlike overtime, a ฝ่าย manager's leave dropdown
+    // does not widen to their whole division.
     async employees() {
       const user = requireSession();
       const includeAll = ['hr', 'ceo'].includes(user.role);
@@ -9805,8 +9542,8 @@ export const api = {
       if (!includeAll) list = list.filter((item) => item.employeeId === user.employeeId || canReviewLeave(user, item.employeeId));
       if (params.employeeId) list = list.filter((item) => item.employeeId === Number(params.employeeId));
       if (params.status) list = list.filter((item) => item.status === params.status);
-      // Each bound defaults independently, exactly as LeaveService#list does -- passing only
-      // `from` must still get the default `to`.
+      // Each bound defaults independently, exactly as LeaveService#list does -- passing only `from` must still get
+      // the default `to`.
       const from = params.from || shiftMonthsIso(bangkokTodayIso(), -LEAVE_DEFAULT_WINDOW_MONTHS);
       const to = params.to || shiftMonthsIso(bangkokTodayIso(), LEAVE_DEFAULT_WINDOW_MONTHS);
       // Overlap, not containment -- mirrors `start_date <= :toDate AND end_date >= :fromDate`.
@@ -9870,8 +9607,8 @@ export const api = {
       const remainingAfter = systemNote ? remainingBefore : remainingBefore - totalDays;
       const id = Math.max(0, ...db.leaveRequests.map((item) => item.id)) + 1;
       const now = new Date().toISOString();
-      // Paper-form contact-during-leave block: request value if non-blank, else the employee's
-      // profile default (mirrors LeaveService#resolveContact).
+      // Paper-form contact-during-leave block: request value if non-blank, else the employee's profile default
+      // (mirrors LeaveService#resolveContact).
       const contactDefaults = leaveContactDefaults(employee);
       const pickContact = (value, fallback) => (value && String(value).trim() ? String(value).trim() : fallback);
       const request = {
@@ -9906,10 +9643,7 @@ export const api = {
         contactDistrict: pickContact(payload.contactDistrict, contactDefaults.contactDistrict),
         contactProvince: pickContact(payload.contactProvince, contactDefaults.contactProvince),
         contactPhone: pickContact(payload.contactPhone, contactDefaults.contactPhone),
-        // §5.2 purpose/emergency-filing (V125): purposeCode passthrough (shape parity only -- see
-        // the comment above). emergencyFiling is always false here -- the mock never grants the
-        // emergency exception, so it can never legitimately be true; a late request stays
-        // AUTO_REJECTED above regardless of requestedAsEmergency.
+        // §5.2 purpose/emergency-filing (V125): purposeCode passthrough (shape parity only -- see the comment above).
         purposeCode: payload.purposeCode || null,
         emergencyFiling: false,
         // §5 WARN_UNPAID_* gates: shape parity only, same stance as systemNote/emergencyFiling
@@ -9975,20 +9709,9 @@ export const api = {
       return delay({ request: buildLeaveRecord(request, user) });
     },
 
-    // Phase A4: certificate-download button in ReviewQueueTab.jsx/MyLeaveTab.jsx. Mirrors
-    // LeaveController#downloadAttachment's real access predicate
-    // (LeaveService#resolveAttachmentForDownload: the owning employee, or a canReviewEmployee
-    // reviewer of them). attachmentId is 1:1 with the owning leave_request's own id in this mock
-    // (see create() above, `attachmentId: hasAttachment ? id : null`) — there is no separate
-    // hr.leave_attachment table here. No real file bytes are ever kept (only attachmentFileName,
-    // the name string, for shape parity), so this returns the same kind of demo placeholder Blob
-    // every other document-download endpoint in this file already does (see
-    // mockDocPlaceholderBlob's own comment) rather than the honest-404 "not supported" stance a
-    // couple of newer attachment endpoints take (e.g. downloadTaxAllowanceAttachment) — the real
-    // backend always has real bytes once attachmentId is non-null, so a reviewer opening a
-    // legitimate certificate should see the download SUCCEED under mocks, not fail every time. Do
-    // not read a mock-mode download as proof the real file/mime type streams correctly — verify
-    // against the real Java service.
+    // Phase A4: certificate-download button in ReviewQueueTab.jsx/MyLeaveTab.jsx. Do not read a mock-mode download
+    // as proof the real file/mime type streams correctly — verify against the real Java service. id : null`) —
+    // there is no separate hr.leave_attachment table here.
     async downloadAttachment(attachmentId) {
       const user = requireSession();
       const request = db.leaveRequests.find((item) => item.attachmentId === Number(attachmentId));
@@ -10059,9 +9782,9 @@ export const api = {
         ? spanTotalDays(payload.startDate, payload.endDate, payload.startTime, payload.endTime)
         : workingDaysBetween(payload.startDate, payload.endDate);
       const quotaYear = Number(String(payload.startDate).slice(0, 4));
-      // A BLOCKing gate always reports an empty ruleWarnings/0 unpaidByRuleDays -- same dominance
-      // reading LeavePreviewDto's own Javadoc documents ("a BLOCK wins outright"; this DTO never has
-      // both a non-null `blocking` and a non-empty `ruleWarnings` at once).
+      // A BLOCKing gate always reports an empty ruleWarnings/0 unpaidByRuleDays -- same dominance reading
+      // LeavePreviewDto's own Javadoc documents ("a BLOCK wins outright"; this DTO never has both a non-null
+      // `blocking` and a non-empty `ruleWarnings` at once).
       const { warnings: ruleWarnings, unpaidByRuleDays } = blocking
         ? { warnings: [], unpaidByRuleDays: 0 }
         : leavePreviewWarnings(leaveType, totalDays);
@@ -10071,9 +9794,9 @@ export const api = {
         preview: {
           blocking,
           datesEvaluated: true,
-          // Mirrors the real coverageEvaluated contract structurally (false under QUICK, false
-          // once an earlier gate already blocked) without running any department-coverage fan-out
-          // of its own -- there is nothing here TO run; see this namespace's header comment.
+          // Mirrors the real coverageEvaluated contract structurally (false under QUICK, false once an earlier gate
+          // already blocked) without running any department-coverage fan-out of its own -- there is nothing here TO run;
+          // see this namespace's header comment.
           coverageEvaluated: depth === 'FULL' && !blocking,
           totalDays: blocking ? null : totalDays,
           paidDays,
@@ -10120,12 +9843,12 @@ export const api = {
     async downloadPolicyDocument() {
       requireSession();
       const current = currentLeavePolicyDocument();
-      // Same message and same 404 the controller raises when findCurrent has nothing to serve —
-      // including the case where a document EXISTS but is future-dated, which is not "current".
+      // Same message and same 404 the controller raises when findCurrent has nothing to serve — including the case
+      // where a document EXISTS but is future-dated, which is not "current".
       if (!current) fail('ยังไม่มีการอัปโหลดเอกสารประกาศฉบับนี้ กรุณาติดต่อฝ่ายบุคคล', 404);
-      // NOT wrapped in delay(): that helper round-trips through structuredClone, which does not
-      // preserve a Blob — it arrives as a bare `{}` with no size, type or bytes. Every other
-      // blob-returning method in this file returns directly for the same reason.
+      // NOT wrapped in delay(): that helper round-trips through structuredClone, which does not preserve a Blob — it
+      // arrives as a bare `{}` with no size, type or bytes. Every other blob-returning method in this file returns
+      // directly for the same reason.
       return new Blob([current.content], { type: current.mimeType });
     },
 
@@ -10135,14 +9858,14 @@ export const api = {
       hasRole('hr', 'ceo');
       // The controller's three 400s, in its own order, with its own messages.
       if (!file || !file.size) fail('ไฟล์ว่างเปล่า', 400);
-      // Mirrors `MediaType.APPLICATION_PDF_VALUE.equals(file.getContentType())` — the CLIENT-DECLARED
-      // type, exactly as weak on the real backend as it is here. The mock deliberately does not
-      // sniff the bytes: being STRICTER than production would hide a request production accepts.
+      // Mirrors `MediaType.APPLICATION_PDF_VALUE.equals(file.getContentType())` — the CLIENT-DECLARED type, exactly
+      // as weak on the real backend as it is here. The mock deliberately does not sniff the bytes: being STRICTER
+      // than production would hide a request production accepts.
       if (file.type !== 'application/pdf') fail('รองรับเฉพาะไฟล์ PDF', 400);
       if (file.size > MAX_POLICY_DOCUMENT_BYTES) fail('ไฟล์มีขนาดใหญ่เกินไป', 400);
 
-      // INSERT, never UPDATE — LeavePolicyDocumentRepository#insert keeps every superseded version
-      // (V133), so this appends rather than replacing. `content` stands in for the blob table.
+      // INSERT, never UPDATE — LeavePolicyDocumentRepository#insert keeps every superseded version (V133), so this
+      // appends rather than replacing. `content` stands in for the blob table.
       const document = {
         documentId: db.leavePolicyDocumentSeq++,
         fileName: file.name || 'leave-policy-announcement.pdf',
@@ -10186,10 +9909,9 @@ export const api = {
       const end = new Date(`${to}T00:00:00`);
       while (cursor <= end) {
         const day = cursor.getDay();
-        // LOCAL date components, not toISOString() (UTC) -- see bangkokTodayIso's comment above
-        // on why that conversion silently shifts a date backward for any positive UTC offset
-        // (Bangkok is UTC+7): local midnight becomes the previous UTC day, which would report the
-        // wrong non-working dates here.
+        // LOCAL date components, not toISOString() (UTC) -- see bangkokTodayIso's comment above on why that conversion
+        // silently shifts a date backward for any positive UTC offset (Bangkok is UTC+7): local midnight becomes the
+        // previous UTC day, which would report the wrong non-working dates here.
         if (day === 0 || day === 6) {
           const y = cursor.getFullYear();
           const m = String(cursor.getMonth() + 1).padStart(2, '0');
@@ -10232,15 +9954,13 @@ export const api = {
     },
   },
 
-  // Mirrors OvertimeController + OvertimeService (overtime/) — see
-  // requireManager()/managesEmployee() for the review gate, and
-  // submit() -> resolveTargetEmployee() for filing on another employee's behalf.
-  // Neither has an hr/admin bypass; use canReviewOvertime(), never canReviewLeave().
+  // Mirrors OvertimeController + OvertimeService (overtime/) — see requireManager()/managesEmployee() for the
+  // review gate, and submit() -> resolveTargetEmployee() for filing on another employee's behalf. Neither has an
+  // hr/admin bypass; use canReviewOvertime(), never canReviewLeave().
   overtime: {
-    // Mirrors OvertimeRepository.findEmployeeOptions() — unlike leave, scope AND
-    // directReport both add a division term (self + FK reports + same-division,
-    // when the actor is a position-derived division manager): a ฝ่าย manager's OT
-    // dropdown flags their whole division as ลูกทีม, matching prod.
+    // Mirrors OvertimeRepository.findEmployeeOptions() — unlike leave, scope AND directReport both add a division
+    // term (self + FK reports + same-division, when the actor is a position-derived division manager): a ฝ่าย
+    // manager's OT dropdown flags their whole division as ลูกทีม, matching prod.
     async employees() {
       const user = requireSession();
       const includeAll = ['hr', 'ceo'].includes(user.role);
@@ -10290,10 +10010,9 @@ export const api = {
       const user = requireSession();
       const employeeId = payload.employeeId ? Number(payload.employeeId) : user.employeeId;
       if (!employeeId) fail('บัญชีผู้ใช้นี้ยังไม่ได้ผูกกับข้อมูลพนักงาน กรุณาติดต่อฝ่ายบุคคล', 400);
-      // Filing OT on another employee's behalf is manager-only, not HR. Verified
-      // against OvertimeService.submit() → resolveTargetEmployee(), which calls the
-      // same managesEmployee() helper as requireManager() and has no hr/admin bypass
-      // ("Employees can only request their own overtime").
+      // Filing OT on another employee's behalf is manager-only, not HR. Verified against OvertimeService.submit() →
+      // resolveTargetEmployee(), which calls the same managesEmployee() helper as requireManager() and has no
+      // hr/admin bypass ("Employees can only request their own overtime").
       if (employeeId !== user.employeeId && !canReviewOvertime(user, employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       findEmployee(employeeId);
       validateOvertimeRetroactiveWindow(payload);
@@ -10348,19 +10067,17 @@ export const api = {
       if (!request) fail('ไม่พบคำขอทำงานล่วงเวลานี้', 404);
       const now = new Date().toISOString();
       if (request.status === 'SUBMITTED') {
-        // Manager-less route: SUBMITTED straight to APPROVED, doing the manager step's minute
-        // calculation as well as the CEO's status flip. Mirrors OvertimeService.ceoDirectApprove.
+        // Manager-less route: SUBMITTED straight to APPROVED, doing the manager step's minute calculation as well as
+        // the CEO's status flip. Mirrors OvertimeService.ceoDirectApprove.
         if (!hasManagerApproverFor(request.employeeId)) {
           if (user.role !== 'ceo') {
             // Mirrors OvertimeService#requireCeoForManagerlessRequest -- state the outcome
             // positively rather than naming the missing manager stage.
             fail('คำขอนี้ต้องให้ CEO พิจารณาเท่านั้น', 403);
           }
-          // The APPROVER's decision (feat/ot-nonworkday-rate-suggestion) -- parsed only AFTER the
-          // authorization check above, mirroring OvertimeService#ceoDirectApprove's own ordering
-          // (calculate() runs AFTER requireCeoForManagerlessRequest), so a REJECTED approve
-          // attempt never mutates dayType as a side effect. Falls back to the suggestion when
-          // absent/blank -- see suggestOvertimeDayType's comment for that default source.
+          // The APPROVER's decision (feat/ot-nonworkday-rate-suggestion) -- parsed only AFTER the authorization check
+          // above, mirroring OvertimeService#ceoDirectApprove's own ordering (calculate() runs AFTER
+          // requireCeoForManagerlessRequest), so a REJECTED approve attempt never mutates dayType as a side effect.
           const approverDayType = parseOvertimeDayTypeValue(payload.dayType);
           request.dayType = approverDayType || suggestOvertimeDayType(request.workDate);
           const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
@@ -10378,8 +10095,8 @@ export const api = {
           return delay({ request: buildOvertimeRecord(request) });
         }
         if (!canReviewOvertime(user, request.employeeId)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        // Same authorized-decision ordering as the manager-less branch above, matching
-        // OvertimeService.managerApprove calling calculate() after requireManager().
+        // Same authorized-decision ordering as the manager-less branch above, matching OvertimeService.managerApprove
+        // calling calculate() after requireManager().
         const approverDayType = parseOvertimeDayTypeValue(payload.dayType);
         request.dayType = approverDayType || suggestOvertimeDayType(request.workDate);
         const multiplier = request.dayType === 'HOLIDAY' ? 3 : 1.5;
@@ -10397,10 +10114,9 @@ export const api = {
       }
       if (request.status === 'MANAGER_APPROVED') {
         if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถอนุมัติคำขอทำงานล่วงเวลาที่หัวหน้างานอนุมัติแล้วได้', 403);
-        // Freeze point does not move (feat/ot-nonworkday-rate-suggestion): payload.dayType is
-        // DELIBERATELY never read on this branch -- day_type/multiplier were already frozen at
-        // the SUBMITTED->MANAGER_APPROVED step above, and this final CEO sign-off inherits that
-        // decision, mirroring OvertimeService#ceoApprove (which never re-derives either).
+        // Freeze point does not move: payload.dayType is DELIBERATELY never read on this branch -- day_type/multiplier
+        // were already frozen at the SUBMITTED->MANAGER_APPROVED step above, and this final CEO sign-off inherits that
+        // decision, mirroring OvertimeService#ceoApprove.
         request.status = 'APPROVED';
         request.ceoApprovedBy = user.employeeId;
         request.ceoApprovedAt = now;
@@ -10476,16 +10192,8 @@ export const api = {
     },
   },
 
-  // Mirrors AttendanceCorrectionController + AttendanceCorrectionService
-  // (attendance/correction/) -- an employee who missed a clock-in/clock-out scan requests the
-  // correct time; CEO approves or rejects. NO manager stage at all (simpler than overtime's
-  // manager -> CEO pipeline; unlike specialMoney, this feature's canViewAll is CEO alone, with no
-  // hr carve-out -- submit here is always self-only). Approving in the real backend also writes a
-  // hr.attendance_punch row and flips hr.attendance_daily.is_manual_override; this mock does NOT
-  // reimplement that write (there is no mock attendance_daily table to write into) -- it only
-  // flips status/reviewer fields, same as every other request-review mock in this file. Never
-  // treat a mock "approved" attendance correction as evidence the attendance-side write happened;
-  // that is backend-only and covered by AttendanceCorrectionScopeIntegrationTest.
+  // Mirrors AttendanceCorrectionController + AttendanceCorrectionService (attendance/correction/) -- an employee
+  // who missed a clock-in/clock-out scan requests the correct time; CEO approves or rejects.
   attendanceCorrection: {
     async list(params = {}) {
       const user = requireSession();
@@ -10558,8 +10266,8 @@ export const api = {
       const request = db.attendanceCorrectionRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอแก้ไขเวลานี้', 404);
       if (request.status !== 'SUBMITTED') fail('คำขอแก้ไขเวลานี้ได้รับการพิจารณาไปแล้ว', 409);
-      // CEO-only, no self-approval carve-out -- mirrors AttendanceCorrectionService#requireCeo
-      // exactly (a plain role check, not "unless it's your own request").
+      // CEO-only, no self-approval carve-out -- mirrors AttendanceCorrectionService#requireCeo exactly (a plain role
+      // check, not "unless it's your own request").
       if (user.role !== 'ceo') fail('เฉพาะ CEO เท่านั้นที่สามารถพิจารณาคำขอแก้ไขเวลาเข้า-ออกงานได้', 403);
       const now = new Date().toISOString();
       request.status = 'APPROVED';
@@ -10585,9 +10293,8 @@ export const api = {
       return delay({ request: buildAttendanceCorrectionRecord(request, user) });
     },
 
-    // Requester-only -- unlike overtime/specialMoney there is no reviewer-side cancel (the CEO's
-    // only actions on an open request are approve/reject). Mirrors
-    // AttendanceCorrectionService#cancel.
+    // Requester-only -- unlike overtime/specialMoney there is no reviewer-side cancel (the CEO's only actions on
+    // an open request are approve/reject). Mirrors AttendanceCorrectionService#cancel.
     async cancel(id) {
       const user = requireSession();
       const request = db.attendanceCorrectionRequests.find((item) => item.id === Number(id));
@@ -10631,13 +10338,9 @@ export const api = {
   // Closing this would mean reimplementing the evaluator's per-type cap maths here, which the Mock
   // API contract in CLAUDE.md asks us not to do.
   specialMoney: {
-    // Mirrors SpecialMoneyRepository.findEmployeeOptions (~line 486): includeAll (hr/ceo) is a
-    // LIST FILTER roster, not an on-behalf picker -- they cannot submit for anyone but themselves
-    // either (see create() below). Everyone else gets exactly themselves.
-    // `directReport` is ALWAYS false, on every row, for every caller -- see
-    // SpecialMoneyEmployeeOption.java's Javadoc: welfare has no submit-on-behalf, so no option is
-    // ever flagged as one, even in the hr/ceo roster. Sorted by employeeCode, matching the
-    // repository's `ORDER BY e.employee_code`.
+    // Mirrors SpecialMoneyRepository.findEmployeeOptions (~line 486): includeAll (hr/ceo) is a LIST FILTER roster,
+    // not an on-behalf picker -- they cannot submit for anyone but themselves either (see create() below).
+    // Everyone else gets exactly themselves.
     async employees() {
       const user = requireSession();
       const includeAll = canViewAllSpecialMoney(user);
@@ -10732,16 +10435,15 @@ export const api = {
       const includeAll = canViewAllSpecialMoney(user);
       if (!includeAll) {
         if (params.employeeId && !canAccessSpecialMoneyEmployee(user, Number(params.employeeId))) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        // Own rows only -- no manager branch. Mirrors SpecialMoneyService.list(): a non-view-all
-        // caller's ownEmployeeId is the sole scope, never a division-wide read (see this
-        // namespace's header comment and canAccessSpecialMoneyEmployee's).
+        // Own rows only -- no manager branch. Mirrors SpecialMoneyService.list(): a non-view-all caller's
+        // ownEmployeeId is the sole scope, never a division-wide read (see this namespace's header comment and
+        // canAccessSpecialMoneyEmployee's).
         list = list.filter((item) => item.employeeId === user.employeeId);
       }
 
-      // Asia/Bangkok, not `new Date().toISOString()`: the backend reads the business zone, and UTC
-      // runs up to 7 hours behind it. On the 1st of a month before 07:00 Bangkok the two disagree
-      // about which month "today" is in, so a UTC default would silently window a different month
-      // than production.
+      // Asia/Bangkok, not `new Date().toISOString()`: the backend reads the business zone, and UTC runs up to 7
+      // hours behind it. On the 1st of a month before 07:00 Bangkok the two disagree about which month "today" is
+      // in, so a UTC default would silently window a different month than production.
       const effectiveTo = params.to || bangkokTodayIso();
       const effectiveFrom = params.from || `${effectiveTo.slice(0, 7)}-01`;
       // SpecialMoneyService.list() throws 400 before touching the repository.
@@ -10865,13 +10567,12 @@ export const api = {
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
       if (!request) fail('ไม่พบคำขอเงินพิเศษนี้', 404);
       const now = new Date().toISOString();
-      // Welfare is CEO-only in ONE stage for every employee -- no manager stage. MANAGER_APPROVED
-      // is still accepted so rows written before that rule can be cleared. Mirrors
-      // SpecialMoneyService.approve().
+      // Welfare is CEO-only in ONE stage for every employee -- no manager stage. MANAGER_APPROVED is still accepted
+      // so rows written before that rule can be cleared. Mirrors SpecialMoneyService.approve().
       if (['SUBMITTED', 'MANAGER_APPROVED'].includes(request.status)) {
         if (user.role !== 'ceo') fail('คำขอสวัสดิการทุกประเภทต้องได้รับการพิจารณาจาก CEO เท่านั้น', 403);
-        // Mirrors SpecialMoneyService.requireEvidence(): an evidence-required type cannot be
-        // approved with an empty document trail.
+        // Mirrors SpecialMoneyService.requireEvidence(): an evidence-required type cannot be approved with an empty
+        // document trail.
         const typeMeta = SPECIAL_MONEY_TYPES.find((item) => item.requestType === request.requestType);
         if (typeMeta?.evidenceRequired && specialMoneyAttachmentsFor(request.id).length === 0) {
           fail(`คำขอประเภท ${typeMeta.thaiLabel} ต้องแนบเอกสารหลักฐานก่อนจึงจะอนุมัติได้`, 400);
@@ -10883,12 +10584,9 @@ export const api = {
           ? payload.capOverrideReason.trim()
           : '';
         const capOverrideReason = trimmedCapOverrideReason === '' ? null : trimmedCapOverrideReason;
-        // Mirrors SpecialMoneyService.ceoApproveFrom's post-evidence guard (~line 272-278):
-        // `approvedAmount > recheck.eligibleAmount()` with a blank/missing capOverrideReason ->
-        // 400, checked in the same order as Java (after the CEO-role and evidence checks, before
-        // the row is mutated). The mock approximates `eligibleAmount` with `requestedAmount` --
-        // see this namespace's header comment: that is stricter than Java
-        // for some rows and MORE permissive for over-cap ones.
+        // Mirrors SpecialMoneyService.ceoApproveFrom's post-evidence guard (~line 272-278): `approvedAmount >
+        // recheck.eligibleAmount()` with a blank/missing capOverrideReason -> 400, checked in the same order as Java
+        // (after the CEO-role and evidence checks, before the row is mutated).
         if (approvedAmount > request.requestedAmount && !capOverrideReason) {
           fail(
             'ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามนโยบายหรือเกินจำนวนที่พนักงานขอเบิก',
@@ -10911,21 +10609,8 @@ export const api = {
       fail('คำขอเงินพิเศษนี้ได้รับการพิจารณาไปแล้ว', 409);
     },
 
-    // Mirrors SpecialMoneyService.approvalPreview(): 404 (missing) -> CEO-only 403 -> 409 unless
-    // still SUBMITTED/MANAGER_APPROVED. Same MESSAGES as approve() above, but NOT the same order:
-    // approve() checks status BEFORE role (a non-CEO caller on an already-decided row gets 409
-    // there, since the role check is nested inside the "still SUBMITTED/MANAGER_APPROVED" branch),
-    // while this method checks role before status, matching the real
-    // SpecialMoneyService#approvalPreview's own 404 -> requireCeo -> 409 ordering exactly (see its
-    // Javadoc for why: id-exists, then may-you-act-on-it, then is-it-still-actionable).
-    //
-    // eligibleAmount/payrollMonth come back null: the real ceiling is computed by
-    // SpecialMoneyService#computeApprovalCeiling, which re-runs SpecialMoneyPolicyEvaluator against
-    // eligibility/usage/policy-amounts/excluded-provinces snapshots this mock does not model (see
-    // CLAUDE.md's "Mock API contract" section -- welfare/payroll math is deliberately NOT
-    // reimplemented here, a mirrored algorithm is not independent evidence). `null` is the honest
-    // "not available in mock mode" signal; ApproveSpecialMoneyDialog.jsx must treat a null
-    // eligibleAmount exactly like a failed/absent preview and show no ceiling UI.
+    // Mirrors SpecialMoneyService.approvalPreview(): 404 (missing) -> CEO-only 403 -> 409 unless still
+    // SUBMITTED/MANAGER_APPROVED.
     async approvalPreview(id) {
       const user = requireSession();
       const request = db.specialMoneyRequests.find((item) => item.id === Number(id));
@@ -10981,15 +10666,12 @@ export const api = {
     },
   },
 
-  // Mirrors CommissionController + CommissionService (commission/), including GET /pending-approval and
-  // POST /{id}/item-weights (CommissionService#listPendingApproval / #adjustItemWeights), and the
-  // monthly-summary / payroll-ready DTOs including their team-override fields
-  // (CommissionMonthlySummaryDto / PayrollCommissionSummaryDto) -- shape only, never the maths.
+  // Mirrors CommissionController + CommissionService, including GET /pending-approval and POST
+  // /{id}/item-weights, and the monthly-summary / payroll-ready DTOs including their team-override fields --
+  // shape only, never the maths.
   commissions: {
-    // Mirrors CommissionController#list PreAuthorize exactly: SALES, SALES_MANAGER, CEO only.
-    // Neither ACCOUNT nor HR may call this — account only ever gets createFromDeal, hr reads via
-    // payrollReady instead. Do not loosen this to match ROLE_PERMISSIONS.canViewCommissions
-    // (route access), which is deliberately broader for the two roles above.
+    // Mirrors CommissionController#list PreAuthorize exactly: SALES, SALES_MANAGER, CEO only. Neither ACCOUNT nor
+    // HR may call this — account only ever gets createFromDeal, hr reads via payrollReady instead.
     async list(params = {}) {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -11014,12 +10696,9 @@ export const api = {
       return delay({ commissions: pending });
     },
 
-    // Mirrors CommissionService#adjustItemWeights. sales_manager ONLY (ceo is refused), before any read; the record
-    // must exist (404), be a ticket-linked SALE and still SUBMITTED (409), lines non-empty and each item must belong
-    // to the record's deal (400). Writes the per-item weight multipliers (same store as the ticket's own
-    // setItemWeightMultipliers). The real service then re-derives the record's effective weight with
-    // CommissionCalculator#itemDerivedWeight; the mock does NOT recompute it (not supported in mock mode) --
-    // effectiveWeight / estimatedCommission stay whatever the record already had.
+    // Mirrors CommissionService#adjustItemWeights. sales_manager ONLY (ceo is refused), before any read; the
+    // record must exist (404), be a ticket-linked SALE and still SUBMITTED (409), lines non-empty and each item
+    // must belong to the record's deal (400).
     async adjustItemWeights(id, payload = {}) {
       const user = requireSession();
       if (user.role !== 'sales_manager') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -11063,8 +10742,8 @@ export const api = {
       ))) {
         fail('เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว', 409);
       }
-      // Step 9 gate + cross-check — mirrors CommissionService#resolveDealLinkage exactly. Unlinked
-      // (sourceTicketId absent) commissions are unaffected: snapshot stays null, mismatch false.
+      // Step 9 gate + cross-check — mirrors CommissionService#resolveDealLinkage exactly. Unlinked (sourceTicketId
+      // absent) commissions are unaffected: snapshot stays null, mismatch false.
       let dealPayableAmountSnapshot = null;
       let dealAmountMismatch = false;
       if (payload.sourceTicketId != null) {
@@ -11159,8 +10838,8 @@ export const api = {
         && !['VOID', 'REJECTED'].includes(item.status))) {
         fail('มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว', 409);
       }
-      // Same null guard, same reason as commissions.create() above — a manual commission's
-      // `invoiceDetails` is null and both call sites walked into it.
+      // Same null guard, same reason as commissions.create() above — a manual commission's `invoiceDetails` is null
+      // and both call sites walked into it.
       if (db.commissions.some((item) => (
         item.invoiceDetails?.invoiceNumber && item.invoiceDetails.invoiceNumber === payload.invoiceNumber
       ))) {
@@ -11225,8 +10904,8 @@ export const api = {
         },
       };
       db.commissions.unshift(record);
-      // Dual write, mirrors CommissionService#createFromDeal saving the same file as an
-      // AttachType.INVOICE ticket attachment so hasInvoiceAttachment(ticket) becomes true.
+      // Dual write, mirrors CommissionService#createFromDeal saving the same file as an AttachType.INVOICE ticket
+      // attachment so hasInvoiceAttachment(ticket) becomes true.
       mockAttachments.push({
         id: mockAttachSeq++,
         ticketId,
@@ -11273,15 +10952,9 @@ export const api = {
       if (record.status === 'APPROVED') {
         fail('รายการค่าคอมมิชชั่นที่อนุมัติแล้วไม่สามารถแก้ไขได้ กรุณาใช้การเรียกคืนค่าคอมมิชชั่นแทน', 409);
       }
-      // KNOWN GAP (same shape as the OvertimeService one near OT_RETROACTIVE_WINDOW_DAYS above):
-      // the Java service also refuses this write once the record's payroll month is already
-      // PROCESSED or seed-covered (CommissionService#requireCommissionPayrollMonthOpen). There is
-      // no payroll_period collection in this mock, and none of the other six commission call
-      // sites that guard is called from (createManualCommission/submit/createFromDeal/
-      // createClawback/managerApprove/ceoApprove, all below) mirror it here either -- this is not
-      // a new gap, just the existing one restated for a seventh site. The mock is therefore more
-      // permissive than prod on a record whose month has already closed -- do not read a
-      // successful mock edit as proof the backend would accept it.
+      // KNOWN GAP (same shape as the OvertimeService one near OT_RETROACTIVE_WINDOW_DAYS above): the Java service
+      // also refuses this write once the record's payroll month is already PROCESSED or seed-covered
+      // (CommissionService#requireCommissionPayrollMonthOpen).
       const valueOrExisting = (value, existing) => (value === null || value === undefined || value === '' ? existing : Number(value));
       Object.assign(record.invoiceDetails, {
         grossAmount: valueOrExisting(payload.grossAmount, record.invoiceDetails.grossAmount),
@@ -11294,10 +10967,9 @@ export const api = {
         overpayment: valueOrExisting(payload.overpayment, record.invoiceDetails.overpayment),
         updatedAt: new Date().toISOString(),
       });
-      // weightMultiplier lives on commission_record, not invoice_details, and is scoped to only
-      // THIS commission (never shared across other records on the same invoice) — mirrors
-      // CommissionRepository#updateWeightMultiplier being keyed on commission_id, unlike the
-      // amount fields below which key on invoice_id and can touch a shared clawback pair.
+      // weightMultiplier lives on commission_record, not invoice_details, and is scoped to only THIS commission —
+      // mirrors CommissionRepository#updateWeightMultiplier being keyed on commission_id, unlike the amount fields
+      // below which key on invoice_id and can touch a shared clawback pair.
       if (payload.weightMultiplier !== null && payload.weightMultiplier !== undefined && payload.weightMultiplier !== '') {
         const weight = Number(payload.weightMultiplier);
         if (![1, 2, 3].includes(weight)) fail('weightMultiplier ต้องเป็น 1, 2 หรือ 3', 400);
@@ -11458,17 +11130,9 @@ export const api = {
       return delay({ reps });
     },
 
-    /**
-     * Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a
-     * hand-typed, signed amount for kind ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE against
-     * salesRepId's payrollMonth — no invoice, never touches the commission tier calculation.
-     * Mirrors CommissionService#createManualCommission +
-     * CommissionRepository#createManualCommission's two INSERT branches exactly.
-     *
-     * Authz here only APPROXIMATES the Java service (CLAUDE.md "Mock API contract") — the real
-     * boundary (only sales_manager/ceo, zero rows for anyone else) is proven by
-     * ManualCommissionIntegrationTest against real Postgres, not by this check.
-     */
+    /** Manual commission entries (feat/commission-manual-adjustments): sales_manager/CEO adds a hand-typed, signed
+     * amount for kind ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE against salesRepId's payrollMonth — no invoice,
+     * never touches the commission tier calculation. */
     async createManualCommission(payload) {
       const user = hasRole('sales_manager', 'ceo');
       const salesRepId = Number(payload.salesRepId);
@@ -11483,10 +11147,9 @@ export const api = {
       if (!payload.reason || !String(payload.reason).trim()) {
         fail('ต้องระบุเหตุผลสำหรับรายการค่าคอมมิชชั่นแบบกรอกเอง', 400);
       }
-      // A MANAGER-kind entry represents team/manager commission earned, not a correction — never
-      // negative. An ADJUSTMENT may legitimately be negative (a deduction/clawback-style
-      // correction). Mirrors CommissionService's sign check exactly (STOCK_BONUS/INCENTIVE have
-      // no backend sign check either — the form keeps them non-negative client-side only).
+      // A MANAGER-kind entry represents team/manager commission earned, not a correction — never negative. Mirrors
+      // CommissionService's sign check exactly (STOCK_BONUS/INCENTIVE have no backend sign check either — the form
+      // keeps them non-negative client-side only).
       if (payload.kind === 'MANAGER' && amount < 0) {
         fail('รายการค่าคอมมิชชั่นประเภท MANAGER ต้องไม่ติดลบ', 400);
       }
@@ -11533,12 +11196,9 @@ export const api = {
       return delay({ commission: buildCommissionRecord(record) });
     },
 
-    // MOCK COMMISSION FIXTURE (see the header above `commissions`): actualReceived/
-    // commissionableBase below are honest arithmetic over the caller's own typed-in invoice
-    // fields (mockInvoiceCalculation). existingMonthlyBase/projectedMonthlyBase/
-    // projectedMonthlyCommission/incrementalCommission are NOT -- mock mode has no tier config to
-    // compute them from, so they are MOCK_SIMULATION_FIXTURE's canned numbers regardless of the
-    // caller's rep/month/history. The real figures come from CommissionService#simulate.
+    // MOCK COMMISSION FIXTURE (see the header above `commissions`): actualReceived/ commissionableBase below are
+    // honest arithmetic over the caller's own typed-in invoice fields (mockInvoiceCalculation). The real figures
+    // come from CommissionService#simulate.
     async simulate(payload) {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -11563,21 +11223,16 @@ export const api = {
     },
 
     // MOCK COMMISSION FIXTURE (see the header above `commissions`): WHICH reps appear, and their
-    // manualAdjustmentAmount, are real -- grouped from db.commissions and summed honestly ("who
-    // has approved activity this month" and "sum their manual amounts" are not policy). Every
-    // tier/incentive/stock-bonus figure is MOCK_PAYROLL_READY_TIER_FIXTURE, the one fixed fixture
-    // reused for every rep -- the real per-rep math lives only in
-    // CommissionService#computeRepPayrollCommissions.
+    // manualAdjustmentAmount, are real -- grouped from db.commissions and summed honestly ("who has approved
+    // activity this month" and "sum their manual amounts" are not policy).
     async payrollReady(params = {}) {
       hasRole('hr');
       const month = commissionMonth(params.payrollMonth || new Date().toISOString());
       const approved = db.commissions.filter((item) => item.status === 'APPROVED' && commissionMonth(item.payrollMonth) === month);
       const reps = new Map();
-      // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual-
-      // adjustments) never feed the tier calc — accumulated separately and added to each rep's
-      // FINAL commission total only, on top of the (canned) tier commission. Only APPROVED
-      // records reach this point (the `approved` filter above), so a manual entry still sitting
-      // at MANAGER_APPROVED correctly does not count yet.
+      // Manual entries (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE, feat/commission-manual- adjustments) never feed
+      // the tier calc — accumulated separately and added to each rep's FINAL commission total only, on top of the
+      // (canned) tier commission.
       const manualTotals = new Map();
       approved.forEach((item) => {
         if (isManualCommissionKind(item.kind)) {
@@ -11603,15 +11258,14 @@ export const api = {
           manualAdjustmentAmount: round2(manualAmount),
           incentiveAmount,
           stockBonusAmount,
-          // The mock has no override-recipient list (that lives in sales config on the real
-          // backend), so no mock rep is ever a team-override recipient: honest 0, never invented.
+          // The mock has no override-recipient list (that lives in sales config on the real backend), so no mock rep is
+          // ever a team-override recipient: honest 0, never invented.
           teamOverrideAmount: 0,
         };
       });
-      // A rep whose ONLY approved commission this month is a manual entry (e.g. a MANAGER
-      // commission for someone with no SALE commission yet) still needs a summary row: no tier
-      // activity, so commissionableBase/incentive/stockBonus are all zero and the manual amount
-      // is the whole total — mirrors CommissionService#payrollReadySummary's second loop exactly.
+      // A rep whose ONLY approved commission this month is a manual entry still needs a summary row: no tier
+      // activity, so commissionableBase/incentive/stockBonus are all zero and the manual amount is the whole total —
+      // mirrors CommissionService#payrollReadySummary's second loop exactly.
       manualTotals.forEach((entry, salesRepId) => {
         salesReps.push({
           salesRepId,
@@ -11634,8 +11288,8 @@ export const api = {
           totalIncentiveAmount: salesReps.reduce((sum, item) => sum + item.incentiveAmount, 0),
           totalStockBonusAmount: salesReps.reduce((sum, item) => sum + item.stockBonusAmount, 0),
           totalTeamOverrideAmount: salesReps.reduce((sum, item) => sum + item.teamOverrideAmount, 0),
-          // Mirrors the backend: null when no override applies in the month. The mock has no
-          // override-recipient list, so it never applies here.
+          // Mirrors the backend: null when no override applies in the month. The mock has no override-recipient list, so
+          // it never applies here.
           companyCommissionableBase: null,
           salesReps,
         },
@@ -11674,17 +11328,16 @@ export const api = {
         summary: {
           payrollMonth: `${month}-01`,
           salesRepId,
-          // No stock uplift and no stock bonus are fabricated (the mock has no weighting or
-          // stock-bonus config), so the raw pre-weighting base IS the canned base.
+          // No stock uplift and no stock bonus are fabricated (the mock has no weighting or stock-bonus config), so the
+          // raw pre-weighting base IS the canned base.
           rawCommissionableBase: commissionableBase,
           weightUpliftBase: 0,
           commissionableBase,
           tierCommission,
           incentiveAmount,
           stockBonusAmount: 0,
-          // Team override is for a configured recipient list the mock does not have: a mock rep is
-          // never a recipient, so the company figures are null (the UI then hides the row) and the
-          // amount is 0 -- never an invented override.
+          // Team override is for a configured recipient list the mock does not have: a mock rep is never a recipient, so
+          // the company figures are null (the UI then hides the row) and the amount is 0 -- never an invented override.
           teamOverrideAmount: 0,
           companyCommissionableBase: null,
           teamOverrideThresholdBase: null,
@@ -11855,9 +11508,9 @@ export const api = {
         .filter((row) => row.employeeId === user.employeeId && row.taxYear === taxYear)
         .sort((a, b) => new Date(b.submittedAt) - new Date(a.submittedAt))
         .map(taxAllowanceDeclarationPublic);
-      // `headerPrefill` rides on this envelope and NOT on the declaration DTO, matching the real
-      // response — see MyTaxAllowanceDeclarationsResponse. getTaxAllowanceDeclarations (HR's
-      // register, below) must therefore NEVER grow one: that would be a bulk tax-ID export.
+      // `headerPrefill` rides on this envelope and NOT on the declaration DTO, matching the real response — see
+      // MyTaxAllowanceDeclarationsResponse. getTaxAllowanceDeclarations (HR's register, below) must therefore NEVER
+      // grow one: that would be a bulk tax-ID export.
       return delay({ taxYear, items, headerPrefill: lorYor01HeaderPrefillFor(user.employeeId) });
     },
     async submitMyTaxAllowanceDeclaration(body = {}) {
@@ -11902,13 +11555,9 @@ export const api = {
       requireSession();
       throw new Error('การประมาณการผลของค่าลดหย่อนต่อภาษีไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
-    // Both ล.ย.01 PDF endpoints are honest stubs rather than a fake Blob.
-    //
-    // The real ones fill the Revenue Department's own AcroForm with an embedded Thai font in
-    // PDFBox — there is no faithful browser-side stand-in, and returning a placeholder PDF would
-    // make mock-mode click-through look like evidence that the generated form is correct. It is
-    // exactly the "mock mirrors a backend computation" trap CLAUDE.md documents: verify the output
-    // against the real Java service, never against this file.
+    // Both ล.ย.01 PDF endpoints are honest stubs rather than a fake Blob. It is exactly the "mock mirrors a
+    // backend computation" trap CLAUDE.md documents: verify the output against the real Java service, never
+    // against this file.
     async renderMyTaxAllowanceForm(declaration) {  // eslint-disable-line no-unused-vars
       requireSession();
       throw new Error('การสร้างไฟล์ PDF แบบ ล.ย.01 ไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
@@ -12010,8 +11659,8 @@ export const api = {
       hasRole('hr');
       throw new Error('การยืนยันแบบแจ้งค่าลดหย่อนที่หมดอายุใหม่ไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
-    // Caps metadata, mirroring TaxAllowanceCapCatalog -- approximate for the UI, NOT authoritative;
-    // verify every cap figure against the Java service before trusting it (CLAUDE.md).
+    // Caps metadata, mirroring TaxAllowanceCapCatalog -- approximate for the UI, NOT authoritative; verify every
+    // cap figure against the Java service before trusting it (CLAUDE.md).
     async getTaxAllowanceCaps(params = {}) {
       requireSession();
       const taxYear = params.year ? Number(params.year) : new Date().getFullYear();
@@ -12058,9 +11707,9 @@ export const api = {
       const items = db.taxAllowanceAttachments.filter((row) => row.declarationId === declaration.declarationId);
       return delay({ items });
     },
-    // No real bytes to serve in mock mode (there is no server-side file store here) -- this exists
-    // only so the contract surface matches; a mock caller gets a rejected promise rather than a
-    // fabricated blob. Access is still checked first, so a scoping bug surfaces even here.
+    // No real bytes to serve in mock mode (there is no server-side file store here) -- this exists only so the
+    // contract surface matches; a mock caller gets a rejected promise rather than a fabricated blob. Access is
+    // still checked first, so a scoping bug surfaces even here.
     async downloadTaxAllowanceAttachment(attachmentId) {
       const user = requireSession();
       const attachment = db.taxAllowanceAttachments.find((row) => row.attachmentId === Number(attachmentId));
@@ -12266,9 +11915,8 @@ export const api = {
       let items = db.deductionShortfalls;
       if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
       if (params.kind) items = items.filter((row) => row.deductionKind === params.kind);
-      // Mirrors PayrollDeductionShortfallRepository#findAll's
-      // `ORDER BY s.payroll_month DESC, e.employee_code` — and its absence of any LIMIT, so the
-      // mock returns every matching row exactly as the server does.
+      // Mirrors PayrollDeductionShortfallRepository#findAll's `ORDER BY s.payroll_month DESC, e.employee_code` — and
+      // its absence of any LIMIT, so the mock returns every matching row exactly as the server does.
       items = [...items].sort((a, b) => (
         b.payrollMonth.localeCompare(a.payrollMonth) || a.employeeCode.localeCompare(b.employeeCode)
       ));
@@ -12285,8 +11933,8 @@ export const api = {
       let items = db.deductionConsents;
       if (params.employeeId) items = items.filter((row) => row.employeeId === Number(params.employeeId));
       if (params.kind) items = items.filter((row) => row.deductionKind === params.kind);
-      // Mirrors DeductionWrittenConsentRepository#findAll's `ORDER BY e.employee_code,
-      // c.deduction_kind` — and its absence of any LIMIT, so every matching row comes back.
+      // Mirrors DeductionWrittenConsentRepository#findAll's `ORDER BY e.employee_code, c.deduction_kind` — and its
+      // absence of any LIMIT, so every matching row comes back.
       items = [...items].sort((a, b) => (
         a.employeeCode.localeCompare(b.employeeCode) || a.deductionKind.localeCompare(b.deductionKind)
       ));
@@ -12299,8 +11947,8 @@ export const api = {
     // very same rows.
     async upsertDeductionConsent(payload = {}) {
       const actor = hasRole('hr');
-      // The real service validates the kind BEFORE checking the employee exists, and returns 400
-      // rather than silently ignoring the row. Order matters for a caller that sends both wrong.
+      // The real service validates the kind BEFORE checking the employee exists, and returns 400 rather than
+      // silently ignoring the row. Order matters for a caller that sends both wrong.
       if (!CONSENT_APPLICABLE_KINDS.includes(payload.deductionKind)) {
         fail(
           `ประเภทการหัก ${payload.deductionKind} ไม่ใช่ประเภทที่ต้องมีหนังสือยินยอม `
@@ -12312,11 +11960,8 @@ export const api = {
       if (!employee) fail('ไม่พบข้อมูลพนักงาน', 404);
 
       const now = new Date().toISOString();
-      // ON CONFLICT (employee_id, deduction_kind) DO UPDATE — one row per pair, so re-recording the
-      // same pair overwrites rather than appending. recorded_by_id / recorded_at are set on INSERT
-      // only and deliberately NOT re-stamped on update, matching the repository's DO UPDATE SET
-      // column list exactly (it lists consent_on_file, consent_document_reference, consent_date,
-      // notes, updated_by_id, updated_at — and nothing else).
+      // ON CONFLICT (employee_id, deduction_kind) DO UPDATE — one row per pair, so re-recording the same pair
+      // overwrites rather than appending.
       const existing = db.deductionConsents.find((row) => (
         row.employeeId === employee.id && row.deductionKind === payload.deductionKind
       ));
@@ -12337,29 +11982,16 @@ export const api = {
       row.updatedAt = now;
       if (!existing) db.deductionConsents.push(row);
 
-      // ⚠️ Returns findAll(employeeId, deductionKind) — the ONE row just written, NOT the whole
-      // register. Mirrored exactly, because a caller that treated this as the full list would blank
-      // its own table; see hrApi.upsertDeductionConsent's note. Nothing in any payroll calculation
-      // reads what this just wrote.
+      // ⚠️ Returns findAll(employeeId, deductionKind) — the ONE row just written, NOT the whole register. Mirrored
+      // exactly, because a caller that treated this as the full list would blank its own table; see
+      // hrApi.upsertDeductionConsent's note. Nothing in any payroll calculation reads what this just wrote.
       return delay({ items: [row] });
     },
   },
 
-  // Mirrors AttendanceController + AttendanceService (attendance/).
-  //
-  // `daily` and `list` have no top-level role gate — AttendanceService.resolveScope
-  // scopes by role instead (hr/ceo see all; a ฝ่าย manager — dashboardManager() —
-  // is scoped to their division with no 403; everyone else is 403'd for requesting
-  // another employeeId). `unmapped`, `devices`, `importDat` and `backfillCards` are
-  // hr/ceo-only at the controller (AttendanceController.java).
-  //
-  // Days are generated rather than stored so the fixture never goes stale, and the
-  // pattern deliberately produces every flag the UI renders — on time, late, early
-  // out, missing each scan, approved OT, unapproved late stay, non-workday and
-  // no-record — so the whole status vocabulary is reachable in mock mode.
-  //
-  // AUTHZ IS NOT AUTHORITATIVE HERE: verify permission behaviour against the Java
-  // service, never against this file.
+  // Mirrors AttendanceController + AttendanceService (attendance/). `unmapped`, `devices`, `importDat` and
+  // `backfillCards` are hr/ceo-only at the controller (AttendanceController.java). AUTHZ IS NOT AUTHORITATIVE
+  // HERE: verify permission behaviour against the Java service, never against this file.
   attendance: {
     async daily(params = {}) {
       const user = requireSession();
@@ -12394,14 +12026,11 @@ export const api = {
     },
     async recalculate() {
       hasRole('hr', 'ceo');
-      // The mock generates days on the fly, so there is nothing to roll up — report zero rather
-      // than pretending work happened. The real endpoint returns the count actually written.
+      // The mock generates days on the fly, so there is nothing to roll up — report zero rather than pretending work
+      // happened. The real endpoint returns the count actually written.
       return delay({ recalculatedDays: 0 });
     },
-    // Mirrors AttendanceController.markPresent — hr/ceo only. Not implemented here because the mock
-    // has no persisted attendance_daily store to write into (days are generated on the fly, see the
-    // block comment above); a fake "marked" count would look verified without proving anything about
-    // the real write path or the real role gate. AUTHZ IS NOT AUTHORITATIVE HERE regardless — see the
+    // Mirrors AttendanceController.markPresent — hr/ceo only. AUTHZ IS NOT AUTHORITATIVE HERE regardless — see the
     // block comment above.
     async markPresent() {
       hasRole('hr', 'ceo');
@@ -12419,26 +12048,16 @@ export const api = {
       hasRole('hr', 'ceo');
       throw new Error('นำเข้าข้อมูลจากเครื่องสแกนไม่รองรับในโหมดทดลองใช้งาน (mock mode)');
     },
-    // HR monthly attendance summary export (xlsx). Mirrors AttendanceController.monthlySummary --
-    // no role gate here either (see this block's own comment above): resolveScope decides what a
-    // real export contains, but this mock has no persisted attendance_daily/leave_request store to
-    // aggregate a real monthly rollup from. Returns the same "the real file renders server-side"
-    // placeholder every other xlsx/pdf demo download in this file returns (see
-    // mockDocPlaceholderBlob's own comment) rather than fabricating a believable-looking summary --
-    // a fake workbook would look verified without proving anything about the real aggregation or
-    // the real role gate. AUTHZ IS NOT AUTHORITATIVE HERE regardless -- see the block comment above.
+    // HR monthly attendance summary export (xlsx). AUTHZ IS NOT AUTHORITATIVE HERE regardless -- see the block
+    // comment above.
     async monthlySummary(params = {}) {
       requireSession();
       return mockDocPlaceholderBlob([`สรุปเวลาทำงานประจำเดือน ${params.month ?? ''}`]);
     },
   },
 
-  // Mirrors HolidayController (attendance/schedule/) -- hr.holiday admin CRUD, HR/CEO only.
-  // AUTHZ IS NOT AUTHORITATIVE HERE -- see CLAUDE.md "Mock API contract". No persisted hr.holiday
-  // store exists in the mock, so reads return empty rather than faking data that was never written,
-  // and writes throw the same "not supported in mock mode" stub already used above for
-  // markPresent/backfillCards/importDat -- a fake success would look verified without proving
-  // anything about the real write path or the real role gate.
+  // Mirrors HolidayController (attendance/schedule/) -- hr.holiday admin CRUD, HR/CEO only. AUTHZ IS NOT
+  // AUTHORITATIVE HERE -- see CLAUDE.md "Mock API contract".
   holidays: {
     async list(params) {
       void params;
@@ -12474,8 +12093,8 @@ export const api = {
     },
   },
 
-  // Mirrors WorkScheduleAssignmentController (attendance/schedule/) -- hr.work_schedule_assignment
-  // admin CRUD, HR/CEO only. Same "no persisted store, honest stub" rationale as holidays above.
+  // Mirrors WorkScheduleAssignmentController (attendance/schedule/) -- hr.work_schedule_assignment admin CRUD,
+  // HR/CEO only. Same "no persisted store, honest stub" rationale as holidays above.
   workScheduleAssignments: {
     async list() {
       hasRole('hr', 'ceo');
@@ -12558,20 +12177,9 @@ export const api = {
     },
   },
 
-  // Mirrors ImportRequestController — the ใบขอซื้อ (F-SM-001) generator.
-  //
-  // `brands` is faithful: it reads the deal's own item brands, which is exactly what
+  // Mirrors ImportRequestController — the ใบขอซื้อ (F-SM-001) generator. `pages` and `download` DELIBERATELY DO
+  // NOT WORK. `brands` is faithful: it reads the deal's own item brands, which is exactly what
   // ImportRequestQueryRepository.brandLinesForTicket does, and involves no computation to get wrong.
-  //
-  // `pages` and `download` DELIBERATELY DO NOT WORK. Per CLAUDE.md, "a 'not supported in mock mode'
-  // stub is the honest option" where a mock would otherwise have to reimplement backend behaviour:
-  //   - download would need PDFBox, the F-SM-001 template, and every measured coordinate. A mock
-  //     that returned some other PDF would be worse than one that refuses, because a click would
-  //     "succeed" and the tester would conclude the form works.
-  //   - pages is ImportRequestRenderer's block-wise pagination over a 26-row grid. Mirroring it is
-  //     the `computeDraftEtag` mistake — if the algorithm is wrong the same way on both sides, every
-  //     mock-driven test passes while telling you nothing.
-  // Both therefore fail with a message saying so. The download button surfaces it verbatim.
   importRequests: {
     brands(ticketId) {
       hasRole('import', 'ceo');
@@ -12594,15 +12202,7 @@ export const api = {
     },
   },
 
-  // Mirrors ImportDealService / ImportDealDtos — GET /api/import/deals/{id}, the import-only
-  // per-deal view. The DTO is built FIELD BY FIELD from the mock ticket (never a spread of the
-  // ticket item), so a price/cost/margin/weighting field the mock item happens to hold can never
-  // leak through — the same "fresh projection, nothing to forget to strip" construction the Java
-  // side uses. Authz here is an APPROXIMATION of the service (NOT authoritative — real coverage is
-  // ImportDealAuthzIntegrationTest): role import/ceo checked FIRST; import is then row-scoped to
-  // the SAME set the import worklist (tickets.list) returns, via importListScopeIncludes, and a
-  // deal outside it or missing both answer 403 (no existence oracle); ceo is unscoped, so a
-  // missing deal is an ordinary 404.
+  // Mirrors ImportDealService / ImportDealDtos — GET /api/import/deals/{id}, the import-only per-deal view.
   importDeals: {
     async get(ticketId) {
       const user = hasRole('import', 'ceo');
@@ -12611,8 +12211,8 @@ export const api = {
         fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
       if (!raw) fail('ไม่พบดีลนี้', 404);
-      // Same display-only fallback tickets.get() applies: ticket_item stays empty until order
-      // confirmation, so a pricing-phase deal shows the live quotation's lines instead.
+      // Same display-only fallback tickets.get() applies: ticket_item stays empty until order confirmation, so a
+      // pricing-phase deal shows the live quotation's lines instead.
       let lines = raw.items ?? [];
       if (lines.length === 0) lines = mockPricingChainFallbackItems(raw.id);
       const project = raw.projectId ? mockProjects.find((p) => p.id === raw.projectId) : null;
@@ -12764,9 +12364,9 @@ export const api = {
       requireStoredIrRead(findTicketRaw(row.ticketId), requireSession());
       return delay({ importRequest: mockImportRequestDto(row) });
     },
-    // PATCH semantics — an absent field is left alone. Body fields (owning rep/CEO) move only
-    // while DRAFT; the printed footer (checked/approved/vessel ETA) is CEO-only regardless of
-    // status — mirrors ImportRequestService#update.
+    // PATCH semantics — an absent field is left alone. Body fields (owning rep/CEO) move only while DRAFT; the
+    // printed footer (checked/approved/vessel ETA) is CEO-only regardless of status — mirrors
+    // ImportRequestService#update.
     async update(id, request = {}) {
       const row = findStoredImportRequestRaw(id);
       const ticket = findTicketRaw(row.ticketId);
@@ -12860,8 +12460,8 @@ export const api = {
       const seqForYear = mockImportRequests.filter((r) => r.docNumber?.startsWith(`IR${thaiYear}`)).length + 1;
       const docNumber = override || `IR${thaiYear}${String(seqForYear).padStart(3, '0')}`;
 
-      // The predecessor this issue supersedes (this row's OWN previous version, if any) carries
-      // its progress step and first-issue date forward — mirrors lockIssuedPredecessor.
+      // The predecessor this issue supersedes (this row's OWN previous version, if any) carries its progress step
+      // and first-issue date forward — mirrors lockIssuedPredecessor.
       const predecessor = mockImportRequests.find((r) => r.ticketId === row.ticketId
         && r.factoryId === row.factoryId && r.status === 'ISSUED');
       let step; let stepAt; let stepById; let stepByName; let stepNote; let firstIssuedDate;
@@ -13164,8 +12764,7 @@ export const api = {
       const pid = Number(priceId);
       const product = mockProductPrices.find((p) => p.priceId === pid);
       if (!product) fail(`ไม่พบสินค้า price_id=${pid}`, 404);
-      // factoryId is deliberately not reassignable — PriceImportService.updateProduct
-      // does not touch it either.
+      // factoryId is deliberately not reassignable — PriceImportService.updateProduct does not touch it either.
       Object.assign(product, {
         productCode: input.productCode ?? null,
         grade: input.grade ?? null,
@@ -13201,8 +12800,8 @@ export const api = {
   // approximates the Java one and is NOT authoritative — verify against DealEntryAccess, never
   // here.
   designers: {
-    // Ordering mirrors DesignerRepository.search: `ORDER BY code LIMIT 30`. Active-only, exactly
-    // like the Java WHERE clause — a designer marked ยกเลิก must not be offered for a NEW pick.
+    // Ordering mirrors DesignerRepository.search: `ORDER BY code LIMIT 30`. Active-only, exactly like the Java
+    // WHERE clause — a designer marked ยกเลิก must not be offered for a NEW pick.
     async search(q) {
       requireSession();
       const lower = (q ?? '').toLowerCase();
@@ -13214,19 +12813,16 @@ export const api = {
       const ordered = [...results].sort((a, b) => pgAsc(a.code, b.code));
       return delay({ items: ordered.slice(0, 30) });
     },
-    // Resolves ANY code, active or not — mirrors DesignerRepository.findByCode exactly, so an
-    // existing quotation whose unit_code names a since-cancelled designer still resolves for the
-    // editor's own display (never for a new pick — that stays search()'s job above).
+    // Resolves ANY code, active or not — mirrors DesignerRepository.findByCode exactly, so an existing quotation
+    // whose unit_code names a since-cancelled designer still resolves for the editor's own display (never for a
+    // new pick — that stays search()'s job above).
     async getByCode(code) {
       requireSession();
       const found = mockDesigners.find((d) => d.code === String(code ?? '').trim());
       if (!found) fail('ไม่พบผู้ออกแบบรหัสนี้', 404);
       return delay({ ...found });
     },
-    // NEW (reversal, see this namespace's own comment above). Mirrors DesignerController#create:
-    // gated by requireDealEntry() (same as customers.create), a duplicate code is a 409 mirroring
-    // the real controller's DuplicateKeyException→CONFLICT mapping, and a brand-new row is always
-    // active: true — there is no way to create one pre-cancelled, matching DesignerRepository#create.
+    // NEW (reversal, see this namespace's own comment above).
     async create(payload = {}) {
       requireDealEntry();
       const code = String(payload.code ?? '').trim();
@@ -13249,11 +12845,8 @@ export const api = {
       requireSession();
       return delay(DEAL_STAGE_CATALOG);
     },
-    // Mirrors UnitBasisMetaController (pricingrequest/) — GET /api/meta/unit-bases. Reuses
-    // PRICING_REQUEST_UNIT_BASIS_OPTIONS (pricingRequestMeta.js's existing hand-maintained
-    // UnitBasis.java mirror, already imported above for the pricing-request gates) rather than a
-    // second copy, so this fixture cannot drift from the other frontend consumers of the same
-    // vocabulary. Authenticated-only on the real endpoint, no role gate — no business data.
+    // Mirrors UnitBasisMetaController (pricingrequest/) — GET /api/meta/unit-bases. Authenticated-only on the real
+    // endpoint, no role gate — no business data.
     async unitBases() {
       requireSession();
       return delay({ unitBases: PRICING_REQUEST_UNIT_BASIS_OPTIONS });
@@ -13273,8 +12866,8 @@ export const api = {
       hasRole('ceo', 'import', 'sales', 'sales_manager', 'account');
       return delay({ factories: mockPriceImportFactories.map((f) => ({ id: f.factoryId, factoryName: f.name })) });
     },
-    // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory
-    // RFQ email is manual-only). See priceImport.updateFactory / pricingRequests.markFactoryQuoteContacted.
+    // sendEmail is retired — POST /api/tickets/{id}/factory-emails/send no longer exists (factory RFQ email is
+    // manual-only). See priceImport.updateFactory / pricingRequests.markFactoryQuoteContacted.
   },
 
   // Mirrors FxRateController + BotFxFetchService (pricing/). list() is ceo/import plus sales (so
@@ -13309,16 +12902,13 @@ export const api = {
       mockFxRates.push(newRate);
       return delay({ fxRate: structuredClone(newRate) });
     },
-    // Mirrors FxRateController.fetchNow -> BotFxFetchService.fetchNow (CEO-only). The real path
-    // calls the Bank of Thailand API; the mock cannot, so this SIMULATES a successful fetch:
-    // it refreshes each tracked currency's row to today with source=BOT (clearing the staleness
-    // warning) without inventing new rates, and returns the same {result} shape. Not a rate
-    // computation — just plumbing so the button, toast and refetch are exercisable in mock mode.
+    // Mirrors FxRateController.fetchNow -> BotFxFetchService.fetchNow (CEO-only). Not a rate computation — just
+    // plumbing so the button, toast and refetch are exercisable in mock mode.
     async fetchNow() {
       hasRole('ceo');
-      // Hardcodes BotFxFetchService.TRACKED_CURRENCIES's five currencies rather than importing it
-      // (this file has no access to backend source) -- contract.test.js's arity check cannot see
-      // this drift if the real list ever changes, so keep this in sync by hand.
+      // Hardcodes BotFxFetchService.TRACKED_CURRENCIES's five currencies rather than importing it (this file has no
+      // access to backend source) -- contract.test.js's arity check cannot see this drift if the real list ever
+      // changes, so keep this in sync by hand.
       const tracked = ['USD', 'EUR', 'JPY', 'CNY', 'GBP'];
       const asOf = new Date().toISOString().slice(0, 10);
       const now = new Date().toISOString();
@@ -13372,16 +12962,9 @@ export const api = {
     },
   },
 
-  // Mirrors ThicknessDefaultController + ThicknessDefaultRepository (catalog/).
-  //
-  // The real gap list is DERIVED from the catalogue: (factory, collection) pairs whose ACTIVE-version
-  // rows have a NULL thickness_mm, ordered by how many rows each would unblock. There is no
-  // catalogue in mock mode, so these are fixed seeds shaped like the real thing (Vives ALTEA is the
-  // real biggest gap) rather than a reimplementation of that query — mirroring the derivation would
-  // make any mock-driven test evidence about the mock, not the backend.
-  //
-  // Ordering IS mirrored (rowsMissingThickness DESC), because the panel's whole point is
-  // biggest-impact-first and a differently-ordered mock would let a broken sort pass.
+  // Mirrors ThicknessDefaultController + ThicknessDefaultRepository (catalog/). The real gap list is DERIVED
+  // from the catalogue: (factory, collection) pairs whose ACTIVE-version rows have a NULL thickness_mm, ordered
+  // by how many rows each would unblock.
   catalogThicknessDefaults: {
     async list() {
       hasRole('ceo');
@@ -13393,8 +12976,8 @@ export const api = {
         const gap = mockThicknessGaps.find(
           (g) => g.factoryId === entry.factoryId && g.collection === entry.collection);
         if (!gap) continue;
-        // null CLEARS rather than storing 0 — a stored zero would silently select the lowest
-        // freight band instead of refusing to price (ThicknessDefaultRepository#saveAll).
+        // null CLEARS rather than storing 0 — a stored zero would silently select the lowest freight band instead of
+        // refusing to price (ThicknessDefaultRepository#saveAll).
         gap.currentDefaultMm = entry.thicknessMm == null || entry.thicknessMm === ''
           ? null : Number(entry.thicknessMm);
       }
@@ -13476,15 +13059,9 @@ export const api = {
     },
   },
 
-  // Mirrors FinanceDealController + FinanceDealService (finance/): GET /api/finance/deals/{id} (incl. money.amountPayableExVat,
-  // commissionInvoice and the RECORD_INVOICE action) and the money
-  // actions under it (H1 lockdown), for `account` and `ceo` ONLY. account is row-scoped to the same scope as the
-  // deal list (accountListScopeIncludes, never a quotation-only container); ceo reads any deal. Each action is the
-  // SAME shared body as its /api/tickets twin (mockRecordPayment, mockSetBilling, ...), which keeps TODAY's role gate
-  // (deposit-paid / final-payment / payments / close-confirm: account only; billing / close-revoke / stage:
-  // account + ceo). The mock APPROXIMATES the documents block (items at approved price, billing notes not
-  // modelled); authz here is never authoritative -- FinanceDealIntegrationTest / FinanceDealLockdownIntegrationTest
-  // are the evidence.
+  // Mirrors FinanceDealController + FinanceDealService (finance/): GET /api/finance/deals/{id} (incl.
+  // money.amountPayableExVat, commissionInvoice and the RECORD_INVOICE action) and the money actions under it
+  // (H1 lockdown), for `account` and `ceo` ONLY.
   finance: {
     async getDeal(id) {
       const { user, raw } = requireMockFinanceAccess(id);
@@ -13569,8 +13146,8 @@ export const api = {
       const user = requireSession();
       const idx = mockAttachments.findIndex((a) => a.id === Number(id));
       if (idx < 0) fail('ไม่พบไฟล์', 404);
-      // Mirrors AttachmentController.requireAttachmentWriteAccess: the uploader may always remove
-      // their own file; everyone else goes through the deal's WRITE gate.
+      // Mirrors AttachmentController.requireAttachmentWriteAccess: the uploader may always remove their own file;
+      // everyone else goes through the deal's WRITE gate.
       if (mockAttachments[idx].uploadedBy !== user.id) {
         requireAttachmentTicketAccess(mockAttachments[idx].ticketId, { write: true });
       }
@@ -13709,8 +13286,8 @@ export const api = {
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
       requireDepositNoticePath(ticket);
 
-      // Legacy path: auto-build from approved ticket items (sales.ticket_item.approved_price —
-      // written only by the @Deprecated, routeless TicketService.approve).
+      // Legacy path: auto-build from approved ticket items (sales.ticket_item.approved_price — written only by the
+      // @Deprecated, routeless TicketService.approve).
       const legacyItems = ticket.items
         .filter((it) => it.approvedPrice != null)
         .map((it, idx) => {
@@ -13842,9 +13419,9 @@ export const api = {
       const other = mockDepositNotices.find((d) => d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED');
       if (other) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${other.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`, 409);
 
-      // Mirrors DepositNoticeService.issue: the document IS the payment-track step.
-      // Requires a customer-confirmed quotation; advances paymentStatus and leaves
-      // the main status at quotation_issued (no more document_issued flip).
+      // Mirrors DepositNoticeService.issue: the document IS the payment-track step. Requires a customer-confirmed
+      // quotation; advances paymentStatus and leaves the main status at quotation_issued (no more document_issued
+      // flip).
       if (ticket.status !== 'quotation_issued' || ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('ออกใบแจ้งรับมัดจำได้เฉพาะเมื่อออกใบเสนอราคาแล้วและลูกค้ายืนยันคำสั่งซื้อแล้วเท่านั้น', 409);
       }
@@ -14010,9 +13587,9 @@ export const api = {
       return delay({ remainingInvoice: structuredClone(row) });
     },
 
-    // PATCH: an absent field is left alone. Re-snapshots items/money from the ticket's OWN current
-    // data every call — mirrors RemainingInvoiceService#updateDraft's "re-snapshot from source"
-    // step (never re-selects a different source quotation mid-edit).
+    // PATCH: an absent field is left alone. Re-snapshots items/money from the ticket's OWN current data every call
+    // — mirrors RemainingInvoiceService#updateDraft's "re-snapshot from source" step (never re-selects a different
+    // source quotation mid-edit).
     async update(id, payload = {}) {
       const row = findStoredRemainingInvoiceRaw(id);
       const ticket = findTicketRaw(row.ticketId);
@@ -14030,9 +13607,9 @@ export const api = {
       return delay({ remainingInvoice: structuredClone(row) });
     },
 
-    // DRAFT -> ISSUED: mints/carries base_number the same way the real
-    // RemainingInvoiceService#issue does (see this file's mockArGlrSeqByYear comment) — a
-    // revision's issue keeps the predecessor's base_number and only bumps version.
+    // DRAFT -> ISSUED: mints/carries base_number the same way the real RemainingInvoiceService#issue does (see
+    // this file's mockArGlrSeqByYear comment) — a revision's issue keeps the predecessor's base_number and only
+    // bumps version.
     async issue(id) {
       const row = findStoredRemainingInvoiceRaw(id);
       const ticket = findTicketRaw(row.ticketId);
@@ -14124,9 +13701,9 @@ export const api = {
       return delay({ deleted: true });
     },
 
-    // Binary, so it goes through fetch directly — same shape as storedImportRequests.download
-    // above. Renders from THIS row's own stored snapshot (buildMockRemainingInvoiceXlsxFromRow),
-    // never recomputed from the ticket's current state — see that function's own header comment.
+    // Binary, so it goes through fetch directly — same shape as storedImportRequests.download above. Renders from
+    // THIS row's own stored snapshot (buildMockRemainingInvoiceXlsxFromRow), never recomputed from the ticket's
+    // current state — see that function's own header comment.
     async download(id) {
       const row = findStoredRemainingInvoiceRaw(id);
       requireDepositNoticeViewer(row.ticketId);
@@ -14175,9 +13752,9 @@ export const api = {
         const ticketIds = [...new Set(n.lines.map((l) => l.ticketId).filter((id) => id != null))];
         return ticketIds.some((id) => isOwnerOrKeyer(findTicketRaw(id), user.id));
       });
-      // Mirrors findByCustomer's own ORDER BY COALESCE(base_number, ''), type, version — groups a
-      // revision chain together (same base_number) and puts a not-yet-issued draft (base_number
-      // null -> '') first within it, not newest-created-first.
+      // Mirrors findByCustomer's own ORDER BY COALESCE(base_number, ''), type, version — groups a revision chain
+      // together (same base_number) and puts a not-yet-issued draft (base_number null -> '') first within it, not
+      // newest-created-first.
       return delay({
         billingNotes: visible.sort((a, b) =>
           (a.baseNumber ?? '').localeCompare(b.baseNumber ?? '')
@@ -14210,11 +13787,9 @@ export const api = {
         settledById: null, settledByName: null, settledAt: null,
         lines: [],
       };
-      // Resolve/validate lines BEFORE pushing the note — mirrors @Transactional: a line-validation
-      // failure (cap, unknown source, already-claimed, fully-paid, bad MANUAL fields) must leave no
-      // trace, not an orphan DRAFT with zero lines. mockWriteBillingNoteLines only reads OTHER
-      // notes' claims via mockBillingNotes, so calling it before this note is in that array is safe
-      // — excludeNoteId is a plain id comparison, not a presence check.
+      // Resolve/validate lines BEFORE pushing the note — mirrors @Transactional: a line-validation failure (cap,
+      // unknown source, already-claimed, fully-paid, bad MANUAL fields) must leave no trace, not an orphan DRAFT
+      // with zero lines.
       mockWriteBillingNoteLines(note, payload.lines ?? []);
       mockBillingNotes.push(note);
       return delay({ billingNote: toBillingNoteResponse(note) });
@@ -14249,9 +13824,9 @@ export const api = {
       return delay({ billingNote: toBillingNoteResponse(row) });
     },
 
-    // DRAFT -> ISSUED: mints/carries base_number the same way RemainingInvoiceService#issue does,
-    // via ITS OWN revisionOfId pointer (B1) — never by scanning for "the" ISSUED note of this
-    // customer+type, since several may legitimately coexist across credit cycles.
+    // DRAFT -> ISSUED: mints/carries base_number the same way RemainingInvoiceService#issue does, via ITS OWN
+    // revisionOfId pointer (B1) — never by scanning for "the" ISSUED note of this customer+type, since several may
+    // legitimately coexist across credit cycles.
     async issue(id) {
       const user = requireBillingNoteWriteGate();
       const row = findStoredBillingNoteRaw(id);
@@ -14296,11 +13871,8 @@ export const api = {
       return delay({ billingNote: toBillingNoteResponse(row) });
     },
 
-    // Prepares a correction: a new DRAFT tied to its predecessor via revisionOfId (B1), copying the
-    // ISSUED note's own body/lines VERBATIM — mirrors BillingNoteService#revise. The predecessor
-    // stays ISSUED until the replacement is actually issued (issue() above does the supersede), but
-    // its LINES release their live claim immediately (mirrors stored.releaseLines) so a corrected
-    // draft that drops a line frees it for another note right away, rather than waiting for issue().
+    // Prepares a correction: a new DRAFT tied to its predecessor via revisionOfId (B1), copying the ISSUED note's
+    // own body/lines VERBATIM — mirrors BillingNoteService#revise.
     async revise(id) {
       const user = requireBillingNoteWriteGate();
       const issued = findStoredBillingNoteRaw(id);
@@ -14317,8 +13889,8 @@ export const api = {
         ...clone, id: newId, baseNumber: null, version: 1, docNumber: null, status: 'DRAFT',
         supersededById: null, revisionOfId: issued.id,
         cancelReason: null, cancelledById: null, cancelledByName: null, cancelledAt: null,
-        // Neither the predecessor's receivedByName/receivedAt NOR its paymentAppointmentDate carry
-        // to the correction draft — mirrors insertDraft, which never passes any of the three.
+        // Neither the predecessor's receivedByName/receivedAt NOR its paymentAppointmentDate carry to the correction
+        // draft — mirrors insertDraft, which never passes any of the three.
         receivedByName: null, receivedAt: null, paymentAppointmentDate: null,
         createdById: user.id, createdByName: user.name, createdAt: now, updatedAt: now,
         issuedById: null, issuedByName: null, issuedAt: null,
@@ -14326,9 +13898,9 @@ export const api = {
         lines: clone.lines.map((l, i) => ({ ...l, id: `${newId}-${i + 1}`, billingNoteId: newId, released: false })),
       };
       mockBillingNotes.push(note);
-      // Release the predecessor's OWN lines (the live object, not the clone) so their sources
-      // become billable again immediately — mirrors stored.releaseLines(id) in BillingNoteService
-      // #revise, run before the new draft's lines are written on the real side too.
+      // Release the predecessor's OWN lines (the live object, not the clone) so their sources become billable again
+      // immediately — mirrors stored.releaseLines(id) in BillingNoteService #revise, run before the new draft's
+      // lines are written on the real side too.
       issued.lines.forEach((l) => { l.released = true; });
       return delay({ billingNote: toBillingNoteResponse(note) });
     },
@@ -14354,8 +13926,8 @@ export const api = {
       if (!payload.receivedByName || !String(payload.receivedByName).trim()) fail('ต้องระบุชื่อผู้รับวางบิล', 400);
       row.receivedByName = payload.receivedByName;
       row.receivedAt = new Date().toISOString();
-      // Unconditional, matching the real UPDATE — omitting paymentAppointmentDate on a SECOND
-      // markReceived call clears it, it does not keep the first call's value.
+      // Unconditional, matching the real UPDATE — omitting paymentAppointmentDate on a SECOND markReceived call
+      // clears it, it does not keep the first call's value.
       row.paymentAppointmentDate = payload.paymentAppointmentDate ?? null;
       row.updatedAt = row.receivedAt;
       return delay({ billingNote: toBillingNoteResponse(row) });
@@ -14405,16 +13977,14 @@ export const api = {
         }
       }
       mockBillingNotes.splice(mockBillingNotes.indexOf(row), 1);
-      // Abandoning a correction-in-progress restores the predecessor's own lines to their live
-      // ISSUED claim — mirrors restoreLinesToIssued, the counterpart of revise()'s own release
-      // above. Skipped (silently, matching the real no-op) when the predecessor is no longer
-      // ISSUED — its lines are already excluded from mockBillingNoteLiveClaims by status alone.
+      // Abandoning a correction-in-progress restores the predecessor's own lines to their live ISSUED claim —
+      // mirrors restoreLinesToIssued, the counterpart of revise()'s own release above.
       if (predecessorIsLive) predecessor.lines.forEach((l) => { l.released = false; });
       return delay({ deleted: true });
     },
 
-    // Binary, so it goes through fetch directly — same shape as storedRemainingInvoices.download
-    // above. Renders from THIS row's own stored snapshot, never recomputed from live data.
+    // Binary, so it goes through fetch directly — same shape as storedRemainingInvoices.download above. Renders
+    // from THIS row's own stored snapshot, never recomputed from live data.
     async download(id) {
       const row = findStoredBillingNoteRaw(id);
       requireBillingNoteReadAccess(row);
@@ -14613,8 +14183,8 @@ export const api = {
     async commit(versionId) {
       hasRole('ceo', 'import');
       const vid = Number(versionId);
-      // Mirrors PriceImportService.commit()'s requireDraft() — re-committing an
-      // already-ACTIVE/ARCHIVED version is a 409, not a silent re-activation.
+      // Mirrors PriceImportService.commit()'s requireDraft() — re-committing an already-ACTIVE/ARCHIVED version is a
+      // 409, not a silent re-activation.
       const version = mockPriceImportVersions.find((item) => item.versionId === vid);
       if (version && version.status !== 'DRAFT') {
         fail(`version ${vid} สถานะ ${version.status} (ต้อง DRAFT)`, 409);
@@ -14754,8 +14324,7 @@ export const api = {
       if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
-      // Mirrors PricingRequestService.listForTicket: sales may only see requests
-      // on tickets they created.
+      // Mirrors PricingRequestService.listForTicket: sales may only see requests on tickets they created.
       if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
       const items = mockPricingRequests
@@ -14767,17 +14336,10 @@ export const api = {
 
     async queue(params = {}) {
       const user = requireSession();
-      // Mirrors PricingRequestService.list: same viewer roles as a single
-      // request, plus sales is scoped to only its own created tickets.
+      // Mirrors PricingRequestService.list: same viewer roles as a single request, plus sales is scoped to only its
+      // own created tickets.
       if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      // The real gate is PricingRequestStatus.isValid (PricingRequestService.list 400s anything
-      // else). V140 removed COSTING_IN_PROGRESS and MORE_INFO_REQUIRED from that set, so they are
-      // removed here too — a mock that still accepted them would be MORE permissive than
-      // production, which is the direction CLAUDE.md calls out as the dangerous one. This list is
-      // still a strict SUBSET of PricingRequestStatus.VALUES (the Step 3/4/5 statuses —
-      // CEO_REVIEWING, APPROVED_FOR_QUOTATION, COSTING_REVISION_REQUIRED, QUOTATION_ISSUED,
-      // QUOTATION_ACCEPTED — were never mirrored here); stricter than production is the safe
-      // direction, and closing that pre-existing gap is out of scope for V140.
+      // The real gate is PricingRequestStatus.isValid (PricingRequestService.list 400s anything else).
       if (params.status && ![
         'DRAFT',
         'SUBMITTED',
@@ -14822,8 +14384,8 @@ export const api = {
     },
 
     async create(ticketId, payload) {
-      // Mirrors PricingRequestService.createDraft: sales (deal owner), deal
-      // must be ACTIVE, and every field is validated BEFORE persisting.
+      // Mirrors PricingRequestService.createDraft: sales (deal owner), deal must be ACTIVE, and every field is
+      // validated BEFORE persisting.
       const user = hasRole('sales');
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
       if (!ticket) fail('ไม่พบดีลนี้', 404);
@@ -14889,16 +14451,16 @@ export const api = {
         texture: item.texture ?? null,
         size: item.size ?? null,
         factory: item.factory ?? null,
-        // V185: requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis are DERIVED, never
-        // the client-sent value — see resolvePricingRequestItem's own Javadoc.
+        // V185: requestedQty/requestedQtySqm/requestedUnit/requestedUnitBasis are DERIVED, never the client-sent value
+        // — see resolvePricingRequestItem's own Javadoc.
         ...resolvePricingRequestItem(item, i),
         quantityType: item.quantityType,
         targetDeliveryDate: item.targetDeliveryDate ?? null,
         deliveryLocation: item.deliveryLocation ?? null,
         specialRequirement: item.specialRequirement ?? null,
         sortOrder: i,
-        // V185 (direct-deal-form parity) — sales-entered tile fields, mirrors
-        // sales.pricing_request_item's new columns (V185).
+        // V185 (direct-deal-form parity) — sales-entered tile fields, mirrors sales.pricing_request_item's new columns
+        // (V185).
         productCode: item.productCode ?? null,
         thicknessMm: item.thicknessMm ?? null,
         sqmPerPiece: item.sqmPerPiece ?? null,
@@ -14918,9 +14480,9 @@ export const api = {
         originCountryOther: item.originCountry === 'อื่นๆ' ? (item.originCountryOther ?? null) : null,
         // Stock line (IN_THAILAND) or null = สั่งนำเข้า: the one writer of ticket qtyFromStock reads it on confirmOrder.
         stockSource: item.stockSource ?? null,
-        // Catalog snapshot (Finding A, financial-integrity review commit 3) — populated only
-        // by submit()'s snapshotCatalogSelections mirror below, never at create/update time,
-        // matching PricingRequestRepository.create/updateDraft/snapshotCatalogSelections.
+        // Catalog snapshot (Finding A, financial-integrity review commit 3) — populated only by submit()'s
+        // snapshotCatalogSelections mirror below, never at create/update time, matching
+        // PricingRequestRepository.create/updateDraft/snapshotCatalogSelections.
         priceListVersionId: null,
         catalogPriceId: null,
         catalogBasePrice: null,
@@ -14956,19 +14518,18 @@ export const api = {
         unitCode: payload.unitCode ?? null,
         omitContactHonorific: payload.omitContactHonorific ?? false,
         clientRequestId: payload.clientRequestId,
-        // DB column is `revision_no INTEGER NOT NULL DEFAULT 1` with
-        // `chk_pricing_request_revision CHECK (revision_no >= 1)` (V58) — a
-        // mock row starting at 0 would violate that constraint in production.
+        // DB column is `revision_no INTEGER NOT NULL DEFAULT 1` with `chk_pricing_request_revision CHECK (revision_no
+        // >= 1)` (V58) — a mock row starting at 0 would violate that constraint in production.
         revisionNo: 1, parentPricingRequestId: null,
         submittedAt: null, pickedUpAt: null, cancelledAt: null,
         createdAt: now, updatedAt: now,
         items, events: [],
-        // Sales-level supporting attachments (V69, review remediation COMMIT 4) — distinct from
-        // a factory quote's own `attachments` array above.
+        // Sales-level supporting attachments (V69, review remediation COMMIT 4) — distinct from a factory quote's own
+        // `attachments` array above.
         attachments: [],
       };
-      // Deliberately no notification, no ticket status change — a draft is the
-      // rep's private scratchpad until submit() (mirrors createDraft's Javadoc).
+      // Deliberately no notification, no ticket status change — a draft is the rep's private scratchpad until
+      // submit() (mirrors createDraft's Javadoc).
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_CREATED', null, 'DRAFT');
       mockPricingRequests.push(pr);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
@@ -15354,8 +14915,8 @@ export const api = {
         updatedAt: now,
       });
       const fromStatus = pr.status;
-      // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is
-      // the only status still needing promotion — mirrors FactoryQuoteService#markContacted.
+      // V140 merged COSTING_IN_PROGRESS into AWAITING_FACTORY_RESPONSE, so IMPORT_REVIEWING is the only status still
+      // needing promotion — mirrors FactoryQuoteService#markContacted.
       if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
       pushPricingRequestEvent(pr, user, 'FACTORY_CONTACTED', fromStatus, pr.status,
         `Factory contacted: ${quote.factoryName} on ${contactedOn}`);
@@ -15367,9 +14928,9 @@ export const api = {
       const quote = mockFactoryQuotes.find((q) => q.id === Number(id));
       if (!quote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
       if (!payload.clientRequestId) fail('clientRequestId ต้องเป็น UUID', 400);
-      // Idempotency replay: a lost-response retry (same actor + clientRequestId)
-      // must not be treated as a new commercial revision. Look this up BEFORE any
-      // mutation and short-circuit with the quote the original call landed on.
+      // Idempotency replay: a lost-response retry (same actor + clientRequestId) must not be treated as a new
+      // commercial revision. Look this up BEFORE any mutation and short-circuit with the quote the original call
+      // landed on.
       const chainId = (q) => q.rootFactoryQuoteId ?? q.id;
       const existingReceipt = mockFactoryQuoteResponseReceipts.find(
         (r) => r.createdBy === user.id && r.clientRequestId === payload.clientRequestId
@@ -15377,9 +14938,9 @@ export const api = {
       if (existingReceipt) {
         const receiptQuote = mockFactoryQuotes.find((q) => q.id === existingReceipt.factoryQuoteId);
         if (!receiptQuote) fail('ไม่พบใบเสนอราคาโรงงานนี้', 404);
-        // Compare the QUOTE CHAIN, not the pricing request: a pricing request has one quote
-        // per factory, so reusing a clientRequestId against a DIFFERENT factory's quote in the
-        // same pricing request must 409, not silently return the wrong factory's quote.
+        // Compare the QUOTE CHAIN, not the pricing request: a pricing request has one quote per factory, so reusing a
+        // clientRequestId against a DIFFERENT factory's quote in the same pricing request must 409, not silently
+        // return the wrong factory's quote.
         if (chainId(receiptQuote) !== chainId(quote)) {
           fail('clientRequestId นี้ถูกใช้ไปแล้วกับใบเสนอราคาโรงงานอื่น', 409);
         }
@@ -15426,18 +14987,16 @@ export const api = {
           minimumOrderQuantity: item.minimumOrderQuantity ?? null,
           sqmPerUnit: item.sqmPerUnit ?? null,
           piecesPerBox: item.piecesPerBox ?? null,
-          // Mirrors FactoryQuoteItemDto.linearMPerUnit (V68, financial-integrity review
-          // Finding B) — the PER_LINEAR_M conversion factor, same role as sqmPerUnit/
-          // piecesPerBox above for PER_SQM/PER_BOX.
+          // Mirrors FactoryQuoteItemDto.linearMPerUnit (V68, financial-integrity review Finding B) — the PER_LINEAR_M
+          // conversion factor, same role as sqmPerUnit/ piecesPerBox above for PER_SQM/PER_BOX.
           linearMPerUnit: item.linearMPerUnit ?? null,
           sortOrder: i,
         }));
       };
       if (['DRAFT', 'REQUESTED'].includes(quote.status)) {
         applyResponse(quote);
-        // First/partial factory response only confirms the request is awaiting
-        // (or still awaiting) factory replies. COSTING_IN_PROGRESS is entered only
-        // by createCosting(), once every request item's factory has a current
+        // First/partial factory response only confirms the request is awaiting (or still awaiting) factory replies.
+        // COSTING_IN_PROGRESS is entered only by createCosting(), once every request item's factory has a current
         // READY_FOR_COSTING quote — see PricingCostingService.resolveSources.
         if (pr.status === 'IMPORT_REVIEWING') pr.status = 'AWAITING_FACTORY_RESPONSE';
         pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_RECEIVED', pr.status, pr.status);
@@ -15452,9 +15011,9 @@ export const api = {
       const revision = { ...quote, id: mockFactoryQuoteSeq++, quoteCode: `FQ-2026-${String(mockFactoryQuoteSeq).padStart(4, '0')}`, status: 'RESPONSE_RECEIVED', parentFactoryQuoteId: quote.id, revisionNo: quote.revisionNo + 1, current: true, createdAt: new Date().toISOString() };
       applyResponse(revision);
       mockFactoryQuotes.push(revision);
-      // A revision no longer marks open costings: V141 deleted FactoryQuoteService's
-      // markOpenCostingsStale together with the pricing_costing.stale/stale_reason columns it
-      // wrote, so mirroring it here would invent a state the real service cannot produce.
+      // A revision no longer marks open costings: V141 deleted FactoryQuoteService's markOpenCostingsStale together
+      // with the pricing_costing.stale/stale_reason columns it wrote, so mirroring it here would invent a state the
+      // real service cannot produce.
       pushPricingRequestEvent(pr, user, 'FACTORY_RESPONSE_REVISED', pr.status, pr.status);
       mockFactoryQuoteResponseReceipts.push({ factoryQuoteId: revision.id, createdBy: user.id, clientRequestId: payload.clientRequestId });
       return delay({ factoryQuote: revision });
@@ -15542,10 +15101,9 @@ export const api = {
       if (existing) return delay({ costing: existing });
       const costing = { id: mockPricingCostingSeq++, costingCode: `PCO-2026-${String(mockPricingCostingSeq).padStart(4, '0')}`, pricingRequestId: pr.id, versionNo: mockPricingCostingSeq, status: 'DRAFT', note: payload.note ?? null, createdBy: user.id, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), calculatedAt: null, submittedBy: null, submittedAt: null, totalLandedCostThb: null, items: [] };
       mockPricingCostings.push(costing);
-      // Mirrors PricingCostingService.createDraft after V140: starting a costing settles the
-      // request into AWAITING_FACTORY_RESPONSE when it is not already there (Import creating one
-      // straight from IMPORT_REVIEWING, or reopening one the CEO returned via
-      // COSTING_REVISION_REQUIRED). It never moves a request that is already there.
+      // Mirrors PricingCostingService.createDraft after V140: starting a costing settles the request into
+      // AWAITING_FACTORY_RESPONSE when it is not already there (Import creating one straight from IMPORT_REVIEWING,
+      // or reopening one the CEO returned via COSTING_REVISION_REQUIRED).
       const costingFromStatus = pr.status;
       if (pr.status !== 'AWAITING_FACTORY_RESPONSE') pr.status = 'AWAITING_FACTORY_RESPONSE';
       pushPricingRequestEvent(pr, user, 'PRICING_COSTING_STARTED', costingFromStatus, 'AWAITING_FACTORY_RESPONSE');
@@ -15585,8 +15143,8 @@ export const api = {
         const pricePerPiece = mockPricePerPiece(raw, quoteItem.unitBasis, factors, item.id);
         const normalizedQuantityPieces = mockQuantityToPieces(item.requestedQty, item.requestedUnitBasis, factors, item.id);
         return {
-          // PricingCostingItemDto's own id (distinct from pricingRequestItemId below, which this
-          // row merely carries as a FK) — see mockPricingCostingItemSeq's own comment.
+          // PricingCostingItemDto's own id (distinct from pricingRequestItemId below, which this row merely carries as a
+          // FK) — see mockPricingCostingItemSeq's own comment.
           id: mockPricingCostingItemSeq++,
           pricingRequestItemId: item.id,
           factoryQuoteId: quote.id,
@@ -15607,11 +15165,7 @@ export const api = {
           goodsCostThb: pricePerPiece,
           landedCostPerUnitThb: pricePerPiece,
           totalLandedCostThb: pricePerPiece * normalizedQuantityPieces,
-          // V141 ("CEO owns costing") cost-override provenance — mirrors PricingCostingItemDto.
-          // The mock's FX is always 1 (no BOT lookup in mock mode, same simplification the rest of
-          // this costing builder already makes), so only the calculationConfigVersion half of
-          // overrideStale is reachable under VITE_USE_MOCKS=true: override -> CEO saves a new
-          // formula-config version -> recalculate cost -> stale. Do not fake the FX half.
+          // V141 ("CEO owns costing") cost-override provenance — mirrors PricingCostingItemDto. Do not fake the FX half.
           fxRate: 1,
           fxSource: 'THB',
           calculationConfigVersion: currentFormulaConfig()?.version ?? 1,
@@ -15645,19 +15199,15 @@ export const api = {
       costing.submittedAt = new Date().toISOString();
       costing.note = payload.note ?? costing.note;
       pr.status = 'READY_FOR_CEO_REVIEW';
-      // Mirrors PricingCostingService.submit after V140: the request leaves
-      // AWAITING_FACTORY_RESPONSE (not the retired COSTING_IN_PROGRESS) for READY_FOR_CEO_REVIEW.
+      // Mirrors PricingCostingService.submit after V140: the request leaves AWAITING_FACTORY_RESPONSE (not the
+      // retired COSTING_IN_PROGRESS) for READY_FOR_CEO_REVIEW.
       pushPricingRequestEvent(pr, user, 'PRICING_COSTING_SUBMITTED', 'AWAITING_FACTORY_RESPONSE', 'READY_FOR_CEO_REVIEW');
       return delay({ costing });
     },
 
-    // ── Step 3: CEO Selling Price Decision — mirrors PricingDecisionController +
-    // PricingDecisionService (pricingdecision/). Authorization is NOT authoritative (CLAUDE.md);
-    // verify role/scope behavior against the real Java service.
-    //
-    // Simplifications vs the real backend (documented, not silent): FX is always THB (rate 1) —
-    // the same simplification the costing mock above already makes (no fxRate/fxSource fields on
-    // a mock costing item, no BOT validation); selling price is computed in THB only.
+    // Step 3: CEO Selling Price Decision — mirrors PricingDecisionController + PricingDecisionService
+    // (pricingdecision/). Authorization is NOT authoritative (CLAUDE.md); verify role/scope behavior against the
+    // real Java service.
 
     async startPricingDecision(id, payload = {}) {
       const user = hasRole('ceo');
@@ -15746,14 +15296,13 @@ export const api = {
             decisionNote: null,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
-            // Phase 1 UI simplification ("ปรับราคาเอง") — mirrors
-            // PricingDecisionRepository#mapItem's manualSellingPricePerRequestedUnit /
-            // effectiveSellingPricePerRequestedUnit pair. NULL = no override, the formula drives
-            // this line's price.
+            // Phase 1 UI simplification ("ปรับราคาเอง") — mirrors PricingDecisionRepository#mapItem's
+            // manualSellingPricePerRequestedUnit / effectiveSellingPricePerRequestedUnit pair. NULL = no override, the
+            // formula drives this line's price.
             manualSellingPricePerRequestedUnit: null,
-            // Phase 2 (V187) — sqmPerPiece is NOT new/CEO-only info (Sales already typed it on
-            // the item form, V185); carried through so the mode picker's eligibility check and
-            // the SPECIAL_SQM preview both have it, mirroring PricingDecisionItemDto's own field.
+            // Phase 2 (V187) — sqmPerPiece is NOT new/CEO-only info (Sales already typed it on the item form, V185);
+            // carried through so the mode picker's eligibility check and the SPECIAL_SQM preview both have it, mirroring
+            // PricingDecisionItemDto's own field.
             sqmPerPiece: prItem?.sqmPerPiece ?? null,
             // CEO-only price-mode inputs + server-derived net. Stripped for import on get/list
             // below (see stripCeoPriceModeFields).
@@ -15795,8 +15344,8 @@ export const api = {
       if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
       if (!decision) fail('ยังไม่มีมติราคาที่ได้รับอนุมัติ', 404);
-      // Design correction 2 ("never leak cost to Sales"): a fresh object literal per item with
-      // ONLY these fields — never a spread of the raw (cost/margin-bearing) decision item.
+      // Design correction 2 ("never leak cost to Sales"): a fresh object literal per item with ONLY these fields —
+      // never a spread of the raw (cost/margin-bearing) decision item.
       return delay({
         decision: {
           pricingRequestId: pr.id,
@@ -16124,9 +15673,9 @@ export const api = {
       costingItem.overriddenAt = new Date().toISOString();
       if (manualCost != null) {
         costingItem.manualLandedCostPerUnitThb = Number(manualCost);
-        // Re-stamp: snapshot THIS row's CURRENT computed provenance. Re-confirming the SAME value
-        // after a recalculate re-stamps these to whatever is current then — that is how staleness
-        // clears, and it is the CEO's only escape hatch besides clearing the override outright.
+        // Re-stamp: snapshot THIS row's CURRENT computed provenance. Re-confirming the SAME value after a recalculate
+        // re-stamps these to whatever is current then — that is how staleness clears, and it is the CEO's only escape
+        // hatch besides clearing the override outright.
         costingItem.overrideFxRate = costingItem.fxRate;
         costingItem.overrideCalcConfigVersion = costingItem.calculationConfigVersion;
       } else {
@@ -16154,14 +15703,7 @@ export const api = {
       return delay({ decision });
     },
 
-    // V152 (V109 engine wiring). Mirrors PricingDecisionService.overrideItemProductType's shape
-    // (role -> decision open-for-mutation -> item-belongs-to-decision), but does NOT recompute
-    // duty/cost from a formula: this mock has no freight/duty/clearance band engine at all (V109
-    // is real backend-only money math — CLAUDE.md's own guidance is not to reimplement that
-    // here). It only updates the displayed productType and stamps updatedAt, so mock-mode
-    // verification can exercise the UI plumbing (the control renders, calls this endpoint, the
-    // label updates) but is NOT evidence the resulting duty/price is correct — that is proven by
-    // the real Java tests only (LandedCostCalculatorFormulaIntegrationTest).
+    // V152 (V109 engine wiring).
     async overridePricingDecisionItemProductType(decisionId, itemId, payload = {}) {
       hasRole('ceo');
       const decision = mockPricingDecisions.find((d) => d.id === Number(decisionId));
@@ -16194,10 +15736,7 @@ export const api = {
       const pr = findPricingRequestRaw(decision.pricingRequestId);
       if (pr.status !== 'CEO_REVIEWING') fail('คำขอราคานี้ไม่ได้อยู่ระหว่างการพิจารณาของ CEO', 409);
       // V141: refuse while ANY line of the bound costing carries a stale override — mirrors
-      // PricingDecisionService.approve's staleItemIds guard, including its message shape. Keeps
-      // the mock from being MORE PERMISSIVE than production, which is the dangerous direction
-      // (CLAUDE.md "Mock API contract") — approvePricingDecision must never accept here what the
-      // real service would 409 on.
+      // PricingDecisionService.approve's staleItemIds guard, including its message shape.
       const costing = mockPricingCostings.find((c) => c.id === decision.pricingCostingId);
       const decisionItemIdByCostingItemId = new Map(decision.items.map((i) => [i.pricingCostingItemId, i.id]));
       const staleItemIds = (costing?.items ?? [])
@@ -16220,9 +15759,8 @@ export const api = {
           fail(`ทุกรายการต้องมีราคาตามวิธีกรอกราคาที่เลือกก่อนอนุมัติ — รายการที่ยังไม่มีราคา: [${missingPrice}]`, 422);
         }
       } else {
-        // Phase 1 UI simplification: ราคาขั้นต่ำ is no longer a CEO input, so it can never be
-        // "missing" any more (see the auto-population below) — and an item with an active
-        // "ปรับราคาเอง" override needs no margin at all, mirroring
+        // Phase 1 UI simplification: ราคาขั้นต่ำ is no longer a CEO input, so it can never be "missing" any more — and
+        // an item with an active "ปรับราคาเอง" override needs no margin at all, mirroring
         // PricingDecisionService#approve's own missingMargin exemption for an overridden item.
         const missingMargin = decision.items
           .filter((i) => i.proposedMarginPct == null && i.manualSellingPricePerRequestedUnit == null)
@@ -16231,11 +15769,9 @@ export const api = {
           fail(`ทุกรายการต้องระบุ margin ก่อนอนุมัติ (หรือปรับราคาเอง) — รายการที่ยังไม่มี margin: [${missingMargin}]`, 422);
         }
       }
-      // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin,
-      // UNLESS an explicit "ปรับราคาเอง" override is active, in which case that value freezes in
-      // verbatim and the formula never runs for this line at all (mirrors
-      // PricingDecisionService#approve's own override-vs-formula precedence). A new-form item
-      // freezes its own net price instead — never a margin, never the formula.
+      // Never trust a stored/client-supplied selling price — recompute from frozen cost + margin, UNLESS an explicit
+      // "ปรับราคาเอง" override is active, in which case that value freezes in verbatim and the formula never runs
+      // for this line at all.
       for (const item of decision.items) {
         if (newForm) {
           // The CEO's own discount is PRE-approved — approved and minimum freeze to the SAME net
@@ -16301,12 +15837,9 @@ export const api = {
       return delay({ decision });
     },
 
-    // ── Step 4: Customer Quotation Generation and Issuance — mirrors
-    // CustomerQuotationController + CustomerQuotationService (customerquotation/).
-    // Authorization is NOT authoritative (CLAUDE.md); verify against the real Java service.
-    // Simplification vs the real backend (documented, not silent): FX/currency mirrors Step 3's
-    // own mock simplification — THB only, rate 1 (no fxRate/fxSource fields anywhere on this
-    // aggregate either, same as the pricing-decision mock above).
+    // Step 4: Customer Quotation Generation and Issuance — mirrors CustomerQuotationController +
+    // CustomerQuotationService (customerquotation/). Authorization is NOT authoritative (CLAUDE.md); verify
+    // against the real Java service.
 
     async createCustomerQuotation(id, payload = {}) {
       const user = hasRole('sales');
@@ -16427,8 +15960,8 @@ export const api = {
 
       const pr = findPricingRequestRaw(preview.pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      // Only the FIRST issue moves the pricing request — a revision's re-issue is a no-op
-      // transition (mirrors PricingRequestStatus.QUOTATION_ISSUED being terminal).
+      // Only the FIRST issue moves the pricing request — a revision's re-issue is a no-op transition (mirrors
+      // PricingRequestStatus.QUOTATION_ISSUED being terminal).
       if (pr.status === 'APPROVED_FOR_QUOTATION') {
         pr.status = 'QUOTATION_ISSUED';
       }
@@ -16439,9 +15972,8 @@ export const api = {
       pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null,
         `ออกใบเสนอราคาลูกค้า ${preview.number} (revision ${preview.quotationRevisionNo})`);
       pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคาลูกค้า ${preview.number}`);
-      // "Customer notification" — no customer user account exists in this system to notify
-      // in-app, so (matching the real service) the closest equivalent is a CEO-visibility
-      // notification. Documented, not silently substituted.
+      // "Customer notification" — no customer user account exists in this system to notify in-app, so (matching the
+      // real service) the closest equivalent is a CEO-visibility notification. Documented, not silently substituted.
       const ceoUsers = db.users.filter((u) => u.role === 'ceo');
       ceoUsers.forEach((ceo) => addNotification(ceo.id, pr.ticketId, ticket?.code, 'CUSTOMER_QUOTATION_ISSUED',
         `ใบเสนอราคาลูกค้า ${preview.number} ถูกออกแล้ว`));
@@ -16463,9 +15995,9 @@ export const api = {
     async createCustomerQuotationRevision(id, payload = {}) {
       const user = hasRole('sales');
       const source = mockCustomerQuotationEditAccess(id, user);
-      // Step 5 (design correction 3): a commercial-only correction is reachable from ISSUED OR
-      // REVISION_REQUESTED (recordOutcome writes ISSUED -> REVISION_REQUESTED immediately, before
-      // Sales picks commercial-only vs cost-affecting) — nothing else.
+      // Step 5 (design correction 3): a commercial-only correction is reachable from ISSUED OR REVISION_REQUESTED
+      // (recordOutcome writes ISSUED -> REVISION_REQUESTED immediately, before Sales picks commercial-only vs
+      // cost-affecting) — nothing else.
       if (!['ISSUED', 'REVISION_REQUESTED'].includes(source.docStatus)) {
         fail('แก้ไข revision ใหม่ได้จากใบเสนอราคาที่ออกแล้วเท่านั้น', 409);
       }
@@ -16499,9 +16031,9 @@ export const api = {
       return delay({ quotation: revision });
     },
 
-    // ── Step 5: Customer Decision and Commercial Revisions — mirrors
-    // CustomerQuotationController.recordOutcome + CustomerQuotationService.recordOutcome.
-    // Authorization is NOT authoritative (CLAUDE.md); verify against the real Java service.
+    // Step 5: Customer Decision and Commercial Revisions — mirrors CustomerQuotationController.recordOutcome +
+    // CustomerQuotationService.recordOutcome. Authorization is NOT authoritative (CLAUDE.md); verify against the
+    // real Java service.
 
     async recordCustomerQuotationOutcome(id, payload = {}) {
       const user = hasRole('sales');
@@ -16567,9 +16099,9 @@ export const api = {
     // real Java service.
 
     async listDiscountApprovalsForQuotation(quotationId) {
-      // Reuses the SAME view-access check listCustomerQuotations/getCustomerQuotation use — one
-      // implementation of "who may view this quotation", mirroring DiscountApprovalService's own
-      // choice to delegate to CustomerQuotationService#get rather than a second copy.
+      // Reuses the SAME view-access check listCustomerQuotations/getCustomerQuotation use — one implementation of
+      // "who may view this quotation", mirroring DiscountApprovalService's own choice to delegate to
+      // CustomerQuotationService#get rather than a second copy.
       const quotation = mockCustomerQuotationViewAccess(quotationId);
       return delay({ items: mockCurrentDiscountApprovals(quotation) });
     },
@@ -16583,8 +16115,8 @@ export const api = {
       approval.decidedBy = user.id;
       approval.decidedByName = user.name;
       approval.decidedAt = new Date().toISOString();
-      // Price-binding invariant: copied from THIS row's own requestedFinalUnitPrice, never from
-      // any other input — there is no "counter-offer" concept.
+      // Price-binding invariant: copied from THIS row's own requestedFinalUnitPrice, never from any other input —
+      // there is no "counter-offer" concept.
       approval.approvedFinalUnitPrice = approval.requestedFinalUnitPrice;
       const pr = findPricingRequestRaw(approval.pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
@@ -16613,16 +16145,16 @@ export const api = {
       return delay({ approval });
     },
 
-    // ── Step 6: Deposit, Payment, and Order Confirmation — mirrors
-    // OrderConfirmationController/OrderConfirmationService. Authorization is NOT authoritative
-    // (CLAUDE.md); verify against the real Java service.
+    // Step 6: Deposit, Payment, and Order Confirmation — mirrors
+    // OrderConfirmationController/OrderConfirmationService. Authorization is NOT authoritative (CLAUDE.md); verify
+    // against the real Java service.
 
     async confirmOrder(id, payload = {}) {
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
-      // Owner-only, mirrors OrderConfirmationService.requireOwner (ticket owner, not merely the
-      // pricing request's own requestedById).
+      // Owner-only, mirrors OrderConfirmationService.requireOwner (ticket owner, not merely the pricing request's
+      // own requestedById).
       if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
 
       if (pr.orderConfirmedAt) {
@@ -16640,8 +16172,8 @@ export const api = {
       pr.orderConfirmedBy = user.id;
       pr.orderConfirmClientRequestId = payload.clientRequestId ?? null;
 
-      // The one deliberate bridge write (mirrors TicketRepository
-      // .markQuotationIssuedForOrderConfirmation): guarded FROM 'draft' only.
+      // The one deliberate bridge write (mirrors TicketRepository .markQuotationIssuedForOrderConfirmation): guarded
+      // FROM 'draft' only.
       if (ticket.status === 'draft') {
         const fromStatus = ticket.status;
         ticket.status = 'quotation_issued';
@@ -16650,9 +16182,9 @@ export const api = {
           `ยืนยันคำสั่งซื้อจากใบเสนอราคาลูกค้าที่ยอมรับแล้ว (คำขอราคา ${pr.requestCode})`);
       }
 
-      // Step 8: reconcile ticket_item.qty to what THIS pricing request actually settled on,
-      // before any delivery machinery becomes reachable — mirrors OrderConfirmationService
-      // .reconcileTicketItems, called at the same point in the real bridge.
+      // Step 8: reconcile ticket_item.qty to what THIS pricing request actually settled on, before any delivery
+      // machinery becomes reachable — mirrors OrderConfirmationService .reconcileTicketItems, called at the same
+      // point in the real bridge.
       reconcileTicketItemsFromPricingRequest(ticket, pr, user);
 
       // confirmOrder runs once PER ACCEPTED PRICING REQUEST — reconciliation above must happen for
@@ -16703,9 +16235,9 @@ export const api = {
         ? mockDepositNoticeItemsFromQuotation(accepted.items)
         : mockDepositNoticeItemsFromDealQuotation(newEngine);
 
-      // Requires quotation_issued (one of DepositNoticeService.requireApprovedTicket's three
-      // accepted statuses) — mirrors what confirmOrder above already left in place; calling this
-      // BEFORE confirmOrder fails here exactly like the real backend's requireApprovedTicket.
+      // Requires quotation_issued (one of DepositNoticeService.requireApprovedTicket's three accepted statuses) —
+      // mirrors what confirmOrder above already left in place; calling this BEFORE confirmOrder fails here exactly
+      // like the real backend's requireApprovedTicket.
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) {
         fail('สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น', 409);
@@ -16753,9 +16285,8 @@ export const api = {
     },
 
     async submit(id) {
-      // Mirrors PricingRequestService.submit: owner sales, DRAFT only, deal
-      // ACTIVE, >=1 item, recipient identifiable, requiredDate not in the past,
-      // no duplicate sourceTicketItemId across lines.
+      // Mirrors PricingRequestService.submit: owner sales, DRAFT only, deal ACTIVE, >=1 item, recipient
+      // identifiable, requiredDate not in the past, no duplicate sourceTicketItemId across lines.
       const user = hasRole('sales');
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
@@ -16768,9 +16299,8 @@ export const api = {
       if (pr.requiredDate && new Date(pr.requiredDate) < new Date(new Date().toDateString())) {
         fail('วันที่ต้องการต้องไม่ใช่วันที่ผ่านมาแล้ว', 400);
       }
-      // Re-check item identity against the PERSISTED items, not just at
-      // create()/update() time — a draft saved before this rule existed (or
-      // one whose items were never touched again) must still be blocked here.
+      // Re-check item identity against the PERSISTED items, not just at create()/update() time — a draft saved
+      // before this rule existed (or one whose items were never touched again) must still be blocked here.
       requirePricingRequestItemFieldsValid(pr.items);
       // Snapshot the catalog selection for every catalog-backed item — mirrors
       // PricingRequestService.submit calling snapshotCatalogSelections. An item naming a product
@@ -16790,18 +16320,16 @@ export const api = {
       pr.submittedAt = now;
       pr.updatedAt = now;
       pushPricingRequestEvent(pr, user, 'PRICING_REQUEST_SUBMITTED', 'DRAFT', 'SUBMITTED');
-      // NotificationRepository.notifyByRole('import', ...) has no single mock
-      // equivalent (no per-role broadcast helper here) — hardcoded to the demo
-      // import user (id 7), same convention as the existing ceo hardcode
-      // (id 8) elsewhere in this file for PRICE_PROPOSED.
+      // NotificationRepository.notifyByRole('import', ...) has no single mock equivalent (no per-role broadcast
+      // helper here) — hardcoded to the demo import user (id 7), same convention as the existing ceo hardcode (id 8)
+      // elsewhere in this file for PRICE_PROPOSED.
       addNotification(7, pr.ticketId, ticket?.code, 'PRICING_REQUEST_SUBMITTED', `คำขอราคา ${pr.requestCode} รอการรับเรื่อง`);
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
     async pickup(id) {
-      // Mirrors PricingRequestService.pickup: any import user, SUBMITTED only.
-      // Assigns the PRICING REQUEST only — never sales.ticket.assigned_to (two
-      // pricing requests on the same deal may go to two different Import users).
+      // Mirrors PricingRequestService.pickup: any import user, SUBMITTED only. Assigns the PRICING REQUEST only —
+      // never sales.ticket.assigned_to (two pricing requests on the same deal may go to two different Import users).
       const user = hasRole('import');
       const pr = findPricingRequestRaw(id);
       if (pr.status !== 'SUBMITTED') fail('รับเรื่องได้เฉพาะคำขอราคาที่ถูกยื่นแล้วเท่านั้น', 409);
@@ -16893,21 +16421,21 @@ export const api = {
           // values the payload carried.
           ...resolvePricingRequestItem(item, i),
           // `id`/`pricingRequestId` spread LAST — this mock has no stable-item-id concept
-          // (PricingRequestRepository.replaceItems always regenerates ids), so a fresh id here
-          // must never be overwritten by anything the payload item happened to carry.
+          // (PricingRequestRepository.replaceItems always regenerates ids), so a fresh id here must never be overwritten
+          // by anything the payload item happened to carry.
           id: mockPricingRequestItemSeq++,
           pricingRequestId: revisionId,
           sortOrder: i,
         })),
         events: [],
-        // A revision starts with no attachments of its own — the `...parent` spread above must
-        // NOT carry the parent's attachments array forward.
+        // A revision starts with no attachments of its own — the `...parent` spread above must NOT carry the parent's
+        // attachments array forward.
         attachments: [],
       };
       mockPricingRequests.push(revision);
-      // Step 5 (design correction 1, "the cascade gap"): also supersede any DRAFT/APPROVED
-      // pricing_decision and any non-terminal quotation left over from Steps 3/4 — without this,
-      // both stayed silently readable as current after the parent pricing request superseded.
+      // Step 5 (design correction 1, "the cascade gap"): also supersede any DRAFT/APPROVED pricing_decision and any
+      // non-terminal quotation left over from Steps 3/4 — without this, both stayed silently readable as current
+      // after the parent pricing request superseded.
       mockPricingDecisions
         .filter((d) => d.pricingRequestId === parent.id && ['DRAFT', 'APPROVED'].includes(d.status))
         .forEach((d) => { d.status = 'SUPERSEDED'; });
@@ -16921,9 +16449,8 @@ export const api = {
     },
 
     async cancel(id, payload) {
-      // Mirrors PricingRequestService.cancel: owner sales OR ceo (an explicit
-      // override — unlike TicketService.cancel, which has none), any status the
-      // transition table allows into CANCELLED.
+      // Mirrors PricingRequestService.cancel: owner sales OR ceo (an explicit override — unlike
+      // TicketService.cancel, which has none), any status the transition table allows into CANCELLED.
       const user = requireSession();
       const pr = findPricingRequestRaw(id);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
@@ -16941,11 +16468,9 @@ export const api = {
       return delay({ pricingRequest: buildPricingRequestDetail(pr) });
     },
 
-    // ── Pricing Request attachments (V69, review remediation COMMIT 4) ──────
-    // Sales-level supporting attachments on the Pricing Request itself — distinct from the raw
-    // factory-quote attachments above (uploadFactoryQuoteAttachment etc.), which stay
-    // Import/CEO-only. Mirrors PricingRequestService's new uploadAttachment/listAttachments/
-    // attachmentFilePath/deleteAttachment/setAttachmentIncludeInFactoryEmail.
+    // Pricing Request attachments (V69, review remediation COMMIT 4) ────── Sales-level supporting attachments on
+    // the Pricing Request itself — distinct from the raw factory-quote attachments above
+    // (uploadFactoryQuoteAttachment etc.), which stay Import/CEO-only.
 
     async uploadAttachment(id, file) {
       // Mirrors PricingRequestService.uploadAttachment: owner sales only, and
@@ -17001,10 +16526,9 @@ export const api = {
     },
 
     async setAttachmentIncludeInFactoryEmail(id, includeInFactoryEmail) {
-      // Mirrors PricingRequestService.setAttachmentIncludeInFactoryEmail: import only. No extra
-      // status gate — requirePricingRequestViewable already makes a DRAFT request invisible to
-      // import entirely, so import can only ever reach an attachment on an already-submitted
-      // request.
+      // Mirrors PricingRequestService.setAttachmentIncludeInFactoryEmail: import only. No extra status gate —
+      // requirePricingRequestViewable already makes a DRAFT request invisible to import entirely, so import can only
+      // ever reach an attachment on an already-submitted request.
       const user = hasRole('import');
       const owningPr = mockPricingRequests.find((p) => (p.attachments ?? []).some((a) => a.id === Number(id)));
       if (!owningPr) fail('ไม่พบไฟล์แนบของคำขอราคานี้', 404);
@@ -17049,11 +16573,9 @@ export const api = {
       return delay({ items, orderConfirmedQuotationId });
     },
 
-    // Approver queue / role-scoped list -- `status` is the only server-side filter the plan
-    // documents (`GET /deal-quotations?status=...`). sales is scoped to its own deals, same
-    // ownership rule as every other sales-scoped list in this file. A canCreateQuotation grant
-    // sees everything, same as sales_manager -- the grant is "any deal", not "own deal only"
-    // (mirrors DealQuotationService.list's own comment, #H4).
+    // Approver queue / role-scoped list -- `status` is the only server-side filter the plan documents (`GET
+    // /deal-quotations?status=...`). sales is scoped to its own deals, same ownership rule as every other
+    // sales-scoped list in this file.
     async list(params = {}) {
       const list = scopedDealQuotationsFor(requireSession());
       // `status` may be one code or an array (the อนุมัติแล้ว tab sends several), like the real List<String>.
@@ -17165,8 +16687,8 @@ export const api = {
       const now = new Date().toISOString();
       const header = resolveDealQuotationV3Header(payload);
       const items = buildDealQuotationItems(payload.items, header.priceMode, null, header.documentLanguage);
-      // quotationDate check uses the SAME `now.slice(0, 10)` the row's own quotationDate below is
-      // set from, so the two can never disagree about "today".
+      // quotationDate check uses the SAME `now.slice(0, 10)` the row's own quotationDate below is set from, so the
+      // two can never disagree about "today".
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
         payload, header.priceMode, items, now.slice(0, 10));
       // V192.3 — refused before a number is taken or a row exists, as DealQuotationService#create does.
@@ -17185,15 +16707,13 @@ export const api = {
         ticketId: ticket.id,
         docStatus: 'DRAFT',
         parentQuotationId: null,
-        // createdById/approvedById are hr.employee ids (V166's FK), NOT the login-account id --
-        // see this file's own comment on employees.uploadSignature for why approverHasSignature
-        // below has to key off the same space.
+        // createdById/approvedById are hr.employee ids (V166's FK), NOT the login-account id -- see this file's own
+        // comment on employees.uploadSignature for why approverHasSignature below has to key off the same space.
         createdById: user.employeeId ?? null,
         createdByName: user.name,
-        // salesRepId literally IS ticket.created_by, per the plan's own migration section -- kept
-        // in the login-account id space (not employeeId) so quotationMeta.js's ownership
-        // predicates can compare it against `user.id` the same way every other sales-scoped
-        // ownership check in this codebase does (TicketDetailPage.jsx, DealDepositPanel.jsx, ...).
+        // salesRepId literally IS ticket.created_by, per the plan's own migration section -- kept in the login-account
+        // id space so quotationMeta.js's ownership predicates can compare it against `user.id` the same way every
+        // other sales-scoped ownership check in this codebase does.
         salesRepId: ticket.createdById,
         salesRepName: ticket.createdByName,
         salesRepPhone: mockSalesRepPhone(ticket.createdById),
@@ -17316,13 +16836,9 @@ export const api = {
           leadTimeMaxDays: pri.leadTimeMaxDays, itemNotes: pri.productDescription ?? null,
         };
         const built = buildDealQuotationItemRow(input, index, decision.priceMode, null, 'TH');
-        // The mock's own deal-quotation money math (computeDealQuotationLine) is a documented
-        // PLACEHOLDER, not a mirror of WastageCalculator (see that function's own header comment)
-        // — unlike pricing-decision math (computeMockCeoNetUnitPrice), which IS mirrored. Reusing
-        // buildDealQuotationItemRow above for its quantity/wastage/description derivation only,
-        // then overwriting the money fields with the DECISION's own already-computed, mirrored
-        // netUnitPrice, is what keeps "net === decision net" true in mock mode even though the
-        // underlying per-line formula the two call sites use is not the same implementation.
+        // The mock's own deal-quotation money math (computeDealQuotationLine) is a documented PLACEHOLDER, not a
+        // mirror of WastageCalculator (see that function's own header comment) — unlike pricing-decision math
+        // (computeMockCeoNetUnitPrice), which IS mirrored.
         return {
           ...built,
           netUnitPrice: di.netUnitPrice,
@@ -17407,8 +16923,8 @@ export const api = {
       return delay({ quotation: forDealQuotationViewer(buildDealQuotationDto(row), user) });
     },
 
-    // Full replace of `items` (plan: "PUT ... body = UpsertDealQuotationRequest (FULL replace of
-    // items)"), DRAFT-only.
+    // Full replace of `items` (plan: "PUT ... body = UpsertDealQuotationRequest (FULL replace of items)"),
+    // DRAFT-only.
     async update(id, payload = {}) {
       const user = requireSession();
       const row = mockDealQuotations.find((q) => q.id === Number(id));
@@ -17485,10 +17001,9 @@ export const api = {
         : resolveDealQuotationContact(snapTicket, payload, row);
       const header = resolveDealQuotationV3Header(payload, row);
       const items = buildDealQuotationItems(payload.items, header.priceMode, row.items, header.documentLanguage);
-      // Carry the pricing-request/decision-item LINK forward across the save, keyed by the
-      // (stable) item id — the client payload has no field for either, so a link can only ever
-      // be established at createFromPricingRequest, never here. Mirrors
-      // DealQuotationService#update's own #withDecisionLink device.
+      // Carry the pricing-request/decision-item LINK forward across the save, keyed by the (stable) item id — the
+      // client payload has no field for either, so a link can only ever be established at createFromPricingRequest,
+      // never here. Mirrors DealQuotationService#update's own #withDecisionLink device.
       const linkByItemId = new Map(row.items.map((it) => [it.id, {
         pricingRequestItemId: it.pricingRequestItemId ?? null, pricingDecisionItemId: it.pricingDecisionItemId ?? null,
       }]));
@@ -17498,9 +17013,9 @@ export const api = {
         // A PRICING_REQUEST row's pricing-request line is the truth for stockSource; the client's tick is ignored.
         if (row.origin === 'PRICING_REQUEST') it.stockSource = row.items.find((x) => x.id === it.id)?.stockSource ?? null;
       });
-      // V178: decided from the rows about to be WRITTEN (`items`, post-buildDealQuotationItems),
-      // same as DealQuotationService#update — a discount cleared on THIS save already refuses
-      // DATE mode here, before anything is persisted.
+      // V178: decided from the rows about to be WRITTEN (`items`, post-buildDealQuotationItems), same as
+      // DealQuotationService#update — a discount cleared on THIS save already refuses DATE mode here, before
+      // anything is persisted.
       const { validityMode, validityUntil } = resolveDealQuotationValidity(
         payload, header.priceMode, items, row.quotationDate, row);
       // Refused before the row is touched, so a refused phone or email leaves the stored pair (and
@@ -17530,8 +17045,8 @@ export const api = {
         // fallback here either.
         printedByDisplayId: resolveDealQuotationDisplayId(payload.printedByDisplayId),
         salesRepDisplayId: resolveDealQuotationDisplayId(payload.salesRepDisplayId),
-        // Item 2 (V180) — same DIRECT-assignment discipline: the editor always sends its CURRENT
-        // value (the checkbox is always rendered), so a missing/false value clears it.
+        // Item 2 (V180) — same DIRECT-assignment discipline: the editor always sends its CURRENT value (the checkbox
+        // is always rendered), so a missing/false value clears it.
         omitContactHonorific: payload.omitContactHonorific === true,
         // Without this, editing โครงการ would silently never persist under VITE_USE_MOCKS=true
         // ("mock omits a field the feature keys on"). Same DIRECT-assignment discipline as every
@@ -17637,13 +17152,13 @@ export const api = {
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
-    // Stateless preview -- same STUB calc `create`/`update` apply per line, run against one item
-    // input with nothing persisted. See computeDealQuotationLine's own warning: this is a demo
-    // placeholder, not WastageCalculator.
+    // Stateless preview -- same STUB calc `create`/`update` apply per line, run against one item input with
+    // nothing persisted. See computeDealQuotationLine's own warning: this is a demo placeholder, not
+    // WastageCalculator.
     async calculateLine(payload = {}, documentLanguage = 'TH') {
       requireSession();
-      // v3: no quotation, so the mode is inferred FROM THE ROW, as DealQuotationService does; an
-      // ADJUSTMENT previews with no base (the service passes ZERO) — here, with no number at all.
+      // v3: no quotation, so the mode is inferred FROM THE ROW, as DealQuotationService does; an ADJUSTMENT previews
+      // with no base (the service passes ZERO) — here, with no number at all.
       const language = String(documentLanguage || 'TH').toUpperCase();
       if (!['TH', 'EN'].includes(language)) fail(`ภาษาเอกสารไม่ถูกต้อง: ${language}`, 400);
       return delay({ item: { id: 0, seq: 0, ...computeDealQuotationV3Line(payload ?? {}, inferMockPriceMode(payload), language) } });
@@ -17677,9 +17192,9 @@ export const api = {
       if (row.remainderMode === 'CREDIT' && row.creditDays == null) {
         fail('กรุณาระบุจำนวนวันเครดิต อย่างน้อย 1 วัน', 400);
       }
-      // V178: time moves on after a DATE-mode draft is saved -- create/update already refuse a
-      // date before the quotation's OWN date, so this is the re-check against TODAY, the last
-      // gate before an approver ever sees the document. Mirrors DealQuotationService#submit.
+      // V178: time moves on after a DATE-mode draft is saved -- create/update already refuse a date before the
+      // quotation's OWN date, so this is the re-check against TODAY, the last gate before an approver ever sees the
+      // document. Mirrors DealQuotationService#submit.
       if (row.validityMode === 'DATE' && row.validityUntil && row.validityUntil < bangkokTodayIso()) {
         fail('วันที่ยืนราคาผ่านไปแล้ว', 400);
       }
@@ -17742,11 +17257,8 @@ export const api = {
       // reads the UTC calendar day off a UTC instant and is one day behind Bangkok on any approval
       // made between 00:00-06:59 Bangkok time (UTC+7).
       row.quotationDate = bangkokTodayIso();
-      // V178: a DATE-mode document WITH special pricing keeps its OWN validity_until verbatim
-      // (approval never recomputes it); every other case falls back to the existing day-count
-      // rule. Mirrors DealQuotationService#approve exactly, hasSpecialPricing re-checked here
-      // (rather than trusted from `validityMode` alone) for the same defensive reason the real
-      // service does.
+      // V178: a DATE-mode document WITH special pricing keeps its OWN validity_until verbatim (approval never
+      // recomputes it); every other case falls back to the existing day-count rule.
       row.validityDate = row.validityMode === 'DATE' && hasSpecialPricing(row.priceMode, row.items)
         ? row.validityUntil
         : (row.validityDays ? addDaysIso(row.quotationDate, row.validityDays) : null);
@@ -17888,9 +17400,9 @@ export const api = {
       return delay({ quotation: buildDealQuotationDto(row) });
     },
 
-    // "APPROVED -> (revise) -> new DRAFT child (revision_no+1, number `{base}-{n}`, everything
-    // copied)". The parent is untouched here -- it only becomes SUPERSEDED once THIS child is
-    // itself approved (see approve() above).
+    // "APPROVED -> (revise) -> new DRAFT child (revision_no+1, number `{base}-{n}`, everything copied)". The
+    // parent is untouched here -- it only becomes SUPERSEDED once THIS child is itself approved (see approve()
+    // above).
     async createRevision(id, payload = {}) {
       void payload;
       const user = requireSession();
@@ -17917,8 +17429,8 @@ export const api = {
           fail('ใบเสนอราคานี้ยืนยันคำสั่งซื้อแล้ว จึงสร้างฉบับแก้ไขไม่ได้', 409);
         }
       }
-      // M3: mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap must not
-      // silently mint two children sharing the same {base}-{n} number.
+      // mirrors DealQuotationRepository#hasOpenRevision's own guard -- a double-tap must not silently mint two
+      // children sharing the same {base}-{n} number.
       if (hasOpenDealQuotationRevision(parent.id)) {
         fail('มีฉบับแก้ไขของใบเสนอราคานี้อยู่แล้ว', 409);
       }
@@ -17984,8 +17496,8 @@ export const api = {
       if (ticket.status !== 'draft') {
         fail(`ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (${ticket.status}) ผ่านขั้นออกใบเสนอราคาไปแล้ว`, 409);
       }
-      // The backend runs this guard LAST and rolls the whole transaction back when it fails; the
-      // mock has no transaction, so it checks it up front to leave the same (untouched) state.
+      // The backend runs this guard LAST and rolls the whole transaction back when it fails; the mock has no
+      // transaction, so it checks it up front to leave the same (untouched) state.
       if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
         fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
       }

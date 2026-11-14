@@ -8,31 +8,8 @@ import org.junit.jupiter.api.Test;
 import org.springframework.dao.DataIntegrityViolationException;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * The full history of {@code hr.employee_tax_allowance.provident_fund_allowance}, and the CHECK
- * constraints that both migrations touching it could have silently destroyed.
- *
- * <p><b>V93 added it, V99 removed it, V137 put it back.</b> V99 (owner decision, 2026-07-29) dropped
- * the column after verifying against production that no employee holds a {@code provident_fund_no}
- * and GL&amp;R runs no provident fund. V137 (owner decision, 2026-08-08) restores it, because
- * ข้อ 9 of แบบ ล.ย.01 is broader than employer-run PVD — it also covers กองทุนการออมแห่งชาติ (กอช.),
- * an individual membership an employee can hold regardless of their employer, and the form prints a
- * single box for all four funds. This class replaces {@code PayrollProvidentFundRemovalIntegrationTest},
- * whose name and assertions both became wrong at V137.
- *
- * <p><b>Why the constraint tests are the important half.</b> Postgres drops a CHECK constraint IN
- * ITS ENTIRETY when any column it references is dropped, so a bare {@code DROP COLUMN} in V99 would
- * have silently taken every other guard in {@code chk_eta_counts_non_negative} with it — including
- * {@code child_count_double <= child_count}, without which HR could declare more second-or-later
- * children than the stored {@code child_count} and the ค่าลดหย่อนบุตร cap would hand back an
- * unlawfully large figure. V137 runs the same risky shape again on {@code chk_eta_non_negative}:
- * drop it, add the column, rebuild it with one extra term. Both rebuilds are pinned below,
- * wrong-way-round — asserting the invalid row is REJECTED, not that a valid one is accepted.
- *
- * <p><b>NOT touched by any of this:</b> {@code hr_restricted.employee_pii.provident_fund_no} (V1), a
- * genuine pre-existing employee PII field that predates the tax-allowance column and merely shares
- * part of its name.
- */
+/** The full history of hr.employee_tax_allowance.provident_fund_allowance, and the CHECK constraints that both
+ * migrations touching it could have silently destroyed. V93 added it, V99 removed it, V137 put it back. */
 class PayrollProvidentFundAllowanceLifecycleIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
@@ -70,10 +47,8 @@ class PayrollProvidentFundAllowanceLifecycleIntegrationTest extends AbstractPost
         assertThat(count).isEqualTo(1);
     }
 
-    /**
-     * V99's rebuild survived. Unchanged by V137, and kept because it is the invariant whose silent
-     * loss would be most expensive.
-     */
+    /** V99's rebuild survived. Unchanged by V137, and kept because it is the invariant whose silent loss would be
+     * most expensive. */
     @Test
     void theCountsCheckStillRejectsChildCountDoubleExceedingChildCount() {
         long employeeId = seedEmployee("PVD-LIFECYCLE-001");
@@ -88,11 +63,9 @@ class PayrollProvidentFundAllowanceLifecycleIntegrationTest extends AbstractPost
             .isInstanceOf(DataIntegrityViolationException.class);
     }
 
-    /**
-     * V137's own rebuild. It dropped {@code chk_eta_non_negative} (sixteen {@code >= 0} terms) to
-     * add a seventeenth. Had it forgotten to re-add the constraint, or re-added a shorter version,
-     * every negative-amount guard on the table would be gone and nothing else would notice.
-     */
+    /** V137's own rebuild. It dropped chk_eta_non_negative (sixteen >= 0 terms) to add a seventeenth. Had it
+     * forgotten to re-add the constraint, or re-added a shorter version, every negative-amount guard on the table
+     * would be gone and nothing else would notice. */
     @Test
     void theRebuiltNonNegativeCheckStillRejectsANegativeAmount() {
         long employeeId = seedEmployee("PVD-LIFECYCLE-002");

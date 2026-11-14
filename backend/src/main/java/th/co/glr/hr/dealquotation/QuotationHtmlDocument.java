@@ -11,17 +11,9 @@ import th.co.glr.hr.common.sheet.SheetPlan;
 import th.co.glr.hr.ticket.QuotationRenderModel;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
-/**
- * Quotation v2 HTML/Chromium PDF — the direct-deal quotation drawn as HTML. There is NO separate
- * HTML layout of the quotation: the document is the POI workbook the XLS engine
- * ({@link QuotationRenderer#toXls(QuotationRenderModel)}) just wrote, read back as ONE row plan
- * ({@link SheetPlan}) and drawn cell-for-cell, rule-for-rule by {@link SheetHtmlRenderer} with
- * LibreOffice's page geometry. Whatever the XLS path emits — its v2 row arithmetic, cloned item
- * rows, compacted remark rows, relocated footer block, money-column sizing, fit zoom, row breaks,
- * signature rows and the anchored approver image — is what prints here, by construction. The
- * owner's acceptance ("visually EXACTLY the same as the Excel render, including border coverage
- * and line thickness") is pinned by {@code HtmlXlsFidelityTest}.
- */
+/** Quotation v2 HTML/Chromium PDF — the direct-deal quotation drawn as HTML. The owner's acceptance ("visually
+ * EXACTLY the same as the Excel render, including border coverage and line thickness") is pinned by
+ * HtmlXlsFidelityTest. */
 public final class QuotationHtmlDocument {
     private QuotationHtmlDocument() {}
 
@@ -32,8 +24,8 @@ public final class QuotationHtmlDocument {
         return render(new QuotationRenderer().toXls(model), model);
     }
 
-    /** Draws an already-rendered quotation workbook. {@code model} (nullable) only lets the
-     * approver's signature picture be tagged {@code sig-image} for readers of the HTML. */
+    /** Draws an already-rendered quotation workbook. model (nullable) only lets the approver's signature picture be
+     * tagged sig-image for readers of the HTML. */
     public static String render(byte[] xlsBytes, QuotationRenderModel model) {
         return rendered(xlsBytes, model).html();
     }
@@ -57,10 +49,9 @@ public final class QuotationHtmlDocument {
         }
     }
 
-    // The template embeds exactly two pictures — the GL&R wordmark (a JPEG) and the URS/UKAS badge
-    // pair (a PNG); the XLS path adds the approver's signature and (GLA-75) each item's picture.
-    // Item pictures are matched by content BEFORE the mime fallback, or a JPEG product photo would
-    // be tagged "logo".
+    // The template embeds exactly two pictures — the GL&R wordmark (a JPEG) and the URS/UKAS badge pair (a PNG);
+    // the XLS path adds the approver's signature and (GLA-75) each item's picture. Item pictures are matched by
+    // content BEFORE the mime fallback, or a JPEG product photo would be tagged "logo".
     private static String classify(SheetPlan.Picture pic, byte[] signature, java.util.List<byte[]> itemPictures) {
         if (signature != null && Arrays.equals(signature, pic.data())) return "sig-image";
         for (byte[] itemPicture : itemPictures) {

@@ -5,43 +5,8 @@ import {
 } from './taxAllowanceStatus.js';
 
 // Guards `resolvePayrollAllowance`/`applicablePayrollMonth` against
-// `PayrollRepository#findTaxAllowancesByEmployee` (backend/.../payroll/PayrollRepository.java,
-// ~lines 407-427):
-//
-//   SELECT DISTINCT ON (employee_id) ...
-//     FROM hr.employee_tax_allowance
-//    WHERE tax_year = :taxYear AND effective_month <= :payrollMonthValue
-//      AND verification_status <> 'EXPIRED_UNVERIFIED'
-//    ORDER BY employee_id, effective_month DESC
-//
-// This file did not exist before the review that produced it (CLAUDE.md F2): every OTHER fixture in
-// this codebase that exercises this mirror (TaxAllowanceReviewPage.test.jsx, demoPayroll.js) happens
-// to give each employee exactly one row at effective_month 1, so the interesting behaviour --
-// multi-row resolution, the expired-fallback, the `<=` boundary, and the past/current/future `today`
-// threading -- was never actually exercised. Run alone, each of these left every existing test green:
-// killing the expired-fallback (returning `null` instead of `{ expired }`), inverting all three
-// `applicablePayrollMonth` branches, and deleting the `effective_month <=` filter entirely.
-//
-// Mutation-checked during development (2026-08) directly against this file plus
-// TaxAllowanceReviewPage.test.jsx, one mutation at a time, restored from a golden copy and
-// re-verified via `diff` back to byte-identical before moving to the next -- see this branch's PR
-// body for the exact commands run:
-//   - Deleting the `effective_month <=` filter (`resolvePayrollAllowance`'s `candidates` predicate
-//     reduced to just the employeeId match) turned exactly 3 tests red: this file's "excludes a row
-//     dated AFTER the resolved month", and both FUTURE-tax-year cases under "tax-year threading
-//     (F3)" ("never resolves any row" / "also resolves to null, not the expired fallback") -- a
-//     future year's month-0 threshold is where dropping the filter first stops mattering to admit a
-//     bogus candidate. All 50 other tests in both files stayed green, including "includes a row
-//     dated EXACTLY on the resolved month", which this mutation cannot break (dropping a filter only
-//     ever ADDS false candidates, never removes a true one).
-//   - Removing the expired-fallback (`return { expired: latestOf(candidates) };` replaced with
-//     `return null;`) turned exactly 4 tests red: this file's "falls back to EXPIRED when every
-//     qualifying candidate is EXPIRED_UNVERIFIED", plus three TaxAllowanceReviewPage.test.jsx
-//     integration tests that depend on the `{ expired }` shape actually reaching the UI --
-//     "distinguishes an EXPIRED_UNVERIFIED payroll row from both the applying and the empty state",
-//     the F4 cross-surface regression test, and the F6 GRANDFATHERED_EXPIRED chip test. 49 other
-//     tests stayed green.
-// `today` is passed explicitly throughout so none of this depends on the real clock.
+// `PayrollRepository#findTaxAllowancesByEmployee` (backend/.../payroll/PayrollRepository.java, ~lines
+// 407-427): SELECT DISTINCT ON (employee_id) ...
 
 function row({ employeeId = 1, effectiveMonth, verificationStatus = 'VERIFIED', allowances = {} }) {
   return { employeeId, effectiveMonth, verificationStatus, allowances };
@@ -106,10 +71,8 @@ describe('resolvePayrollAllowance', () => {
   });
 
   it('falls BACK to an earlier qualifying row when only the LATEST-dated row is expired -- never to "nothing"', () => {
-    // Mirrors the SQL exactly: the WHERE clause excludes EXPIRED_UNVERIFIED rows before DISTINCT ON
-    // ever picks a winner, so an employee whose latest row lapsed still resolves to their earlier,
-    // still-qualifying row -- not to "no row at all" the way a naive "just take the latest row and
-    // check its status" implementation would.
+    // Mirrors the SQL exactly: the WHERE clause excludes EXPIRED_UNVERIFIED rows before DISTINCT ON ever picks a
+    // winner, so an employee whose latest row lapsed still resolves to their earlier, still-qualifying row.
     const items = [
       row({ employeeId: 1, effectiveMonth: 3, verificationStatus: 'VERIFIED' }),
       row({ employeeId: 1, effectiveMonth: 7, verificationStatus: 'EXPIRED_UNVERIFIED' }),
@@ -128,8 +91,8 @@ describe('resolvePayrollAllowance', () => {
         row({ employeeId: 1, effectiveMonth: 6 }),
         row({ employeeId: 1, effectiveMonth: 11 }),
       ];
-      // `today` is August 2026 -- if month resolution ignored `taxYear` and just used the real
-      // calendar month, effectiveMonth 11 (November) would be wrongly excluded (11 > 8).
+      // `today` is August 2026 -- if month resolution ignored `taxYear` and just used the real calendar month,
+      // effectiveMonth 11 (November) would be wrongly excluded (11 > 8).
       expect(resolvePayrollAllowance(items, 1, 2025, today)).toEqual({ applying: items[1] });
     });
 
@@ -139,8 +102,8 @@ describe('resolvePayrollAllowance', () => {
     });
 
     it('a FUTURE tax year with an EXPIRED_UNVERIFIED-only row also resolves to null, not the expired fallback', () => {
-      // The expired fallback only exists among CANDIDATES (effective_month <= month); month 0 for a
-      // future year admits no candidates at all, so there is nothing to fall back to.
+      // The expired fallback only exists among CANDIDATES (effective_month <= month); month 0 for a future year
+      // admits no candidates at all, so there is nothing to fall back to.
       const items = [row({ employeeId: 1, effectiveMonth: 1, verificationStatus: 'EXPIRED_UNVERIFIED' })];
       expect(resolvePayrollAllowance(items, 1, 2027, today)).toBeNull();
     });
@@ -160,10 +123,9 @@ describe('hasAllowanceDisagreement (F4) — the one predicate both register surf
     expect(hasAllowanceDisagreement(declaration, applying)).toBe(false);
   });
 
-  // The F4 fix itself: TaxAllowanceReviewPage's summary badge already excluded an EXPIRED_UNVERIFIED
-  // row from this flag; TaxAllowanceBreakdown's expanded panel did not, and nothing caught the two
-  // surfaces disagreeing with EACH OTHER. Both now call this same function, so this one case pins
-  // the correct answer for both at once.
+  // The F4 fix itself: TaxAllowanceReviewPage's summary badge already excluded an EXPIRED_UNVERIFIED row from
+  // this flag; TaxAllowanceBreakdown's expanded panel did not, and nothing caught the two surfaces disagreeing
+  // with EACH OTHER.
   it('false against an EXPIRED_UNVERIFIED row, even when the totals plainly differ', () => {
     const expired = { verificationStatus: 'EXPIRED_UNVERIFIED', allowances: { spouseAllowance: 999999 } };
     expect(hasAllowanceDisagreement(declaration, expired)).toBe(false);
@@ -218,11 +180,9 @@ describe('GRANDFATHERED_EXPIRED short label + verification copy (F6)', () => {
 });
 
 describe('taxAllowanceStatusInfo — the APPLIED badge after the whole-year ruling', () => {
-  // Owner ruling 2026-08-31: approval promotes the declaration for its whole tax year, always at
-  // effective month 1. Naming that month would put a meaningless "ตั้งแต่เดือน 1" on every current
-  // declaration, so month 1 reads as ทั้งปีภาษี instead. Pre-ruling rows dated 2–12 must keep
-  // naming their month — they genuinely only apply from there on, and collapsing them into
-  // "ทั้งปีภาษี" would claim a coverage the payroll SQL does not give them.
+  // Owner ruling 2026-08-31: approval promotes the declaration for its whole tax year, always at effective month
+  // 1. Naming that month would put a meaningless "ตั้งแต่เดือน 1" on every current declaration, so month 1 reads
+  // as ทั้งปีภาษี instead.
   const applied = (appliedEffectiveMonth) => taxAllowanceStatusInfo(
     { status: 'APPROVED', appliedAt: '2026-08-31T00:00:00.000Z', appliedEffectiveMonth }, null,
   );

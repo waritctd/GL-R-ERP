@@ -21,16 +21,9 @@ import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligati
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationProgressDto;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms deduction-obligation authorization against the real service and the real SQL (issue
- * #373) -- the gap Mockito-based unit tests ({@link DeductionObligationServiceTest}) cannot cover.
- * A mocked repository happily "finds" whatever a test tells it to; only a real {@code WHERE
- * employee_id = :employeeId} clause proves employee B's row can never surface for employee A.
- *
- * <p>Every case here asks the question the wrong way round -- can this caller reach data/actions
- * they should not -- rather than confirming they can reach their own. Copy of {@code
- * AttendanceScopeIntegrationTest}'s shape.
- */
+/** Confirms deduction-obligation authorization against the real service and the real SQL (issue #373) -- the
+ * gap Mockito-based unit tests (DeductionObligationServiceTest) cannot cover. Copy of
+ * AttendanceScopeIntegrationTest's shape. */
 class DeductionObligationScopeIntegrationTest extends AbstractPostgresIntegrationTest {
     private DeductionObligationRepository repository;
     private DeductionObligationService service;
@@ -82,10 +75,8 @@ class DeductionObligationScopeIntegrationTest extends AbstractPostgresIntegratio
 
     @Test
     void anEmployeeCannotReadHrProgressForTheirOwnObligationById() {
-        // The HR/CEO id-based progress route is deliberately closed to every employee, including the
-        // owner -- getOwn() is the only employee-facing read. This is the id-enumeration case the
-        // attendance suite's "out-of-division employee" test is the analogue of: closing the route
-        // categorically is stronger than trying to scope it per-id.
+        // The HR/CEO id-based progress route is deliberately closed to every employee, including the owner -- getOwn()
+        // is the only employee-facing read.
         assertForbidden(() -> service.progress(obligationForA, employee(employeeA)));
     }
 

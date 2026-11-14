@@ -78,19 +78,16 @@ function isStartDateBlockedAsPast(leaveTypeCode, startDate, minStartDate, reques
   return startDate < minStartDate;
 }
 
-// Paired with isStartDateBlockedAsPast above -- PERSONAL gets its own message pointing at the
-// ลากิจฉุกเฉิน checkbox as the way out, since "just wait" is not the right instruction for a type
-// that DOES have an exemption, unlike every other still-blocked type.
+// Paired with isStartDateBlockedAsPast above -- PERSONAL gets its own message pointing at the ลากิจฉุกเฉิน
+// checkbox as the way out, since "just wait" is not the right instruction for a type that DOES have an
+// exemption, unlike every other still-blocked type.
 function pastStartMessage(leaveTypeCode) {
   return EMERGENCY_BACKDATE_LEAVE_TYPE_CODES.has(leaveTypeCode) ? LEAVE_START_PAST_PERSONAL_MESSAGE : LEAVE_START_PAST_MESSAGE;
 }
 
-// Step 1's secondary disclosure leads each rare type with its own gating condition (the brief's
-// own framing: "each leading with its *gating condition*") -- this only echoes each type's OWN
-// metadata columns (minServiceMonths/oncePerEmployment/requiresAttachment, already present on the
-// LeaveTypeDto the /types endpoint returns), never a computed eligibility DECISION about whether
-// THIS employee clears them -- that verdict comes only from the real preview call (`outcomeQuery`
-// in `TypeChoice` below), never from this text.
+// Step 1's secondary disclosure leads each rare type with its own gating condition -- this only echoes each
+// type's OWN metadata columns, never a computed eligibility DECISION about whether THIS employee clears them
+// -- that verdict comes only from the real preview call, never from this text.
 function typeGatingConditionText(leaveType) {
   if (!leaveType) return null;
   const parts = [];
@@ -146,11 +143,8 @@ function defaultForm({
     contactPhone: '',
     purposeCode: '',
     requestedAsEmergency: false,
-    // §5.3.5 pool choice (V161): defaults to carry-in first -- see QuotaPoolPreferenceField's own
-    // comment on why, and LeaveQuotaPoolPreference.orDefault on the backend for the same default.
-    // Set unconditionally (not only when a carry-in balance is known to exist): this is a form
-    // field like any other, and its value is only ever ACTED on -- rendered as a real choice, sent
-    // as something other than the default -- once showQuotaPoolSelector is true.
+    // §5.3.5 pool choice (V161): defaults to carry-in first -- see QuotaPoolPreferenceField's own comment on why,
+    // and LeaveQuotaPoolPreference.orDefault on the backend for the same default.
     quotaPoolPreference: 'CARRIED_IN_FIRST',
   };
 }
@@ -172,11 +166,8 @@ function createLeaveFormSchema({ requireEmployeeId, minStartDate }) {
     contactPhone: z.string().optional(),
     purposeCode: z.string().optional(),
     requestedAsEmergency: z.boolean().optional(),
-    // §5.3.5 pool choice (V161): always one of the two enum names once touched (the radio group
-    // only ever writes 'CARRIED_IN_FIRST'/'OWN_FIRST'), but left as a bare optional string rather
-    // than z.enum([...]) -- this schema only validates what a human can mistype into a text/date/
-    // select field; a radio group's own `value` attributes are the real constraint here, and this
-    // field is never rendered, let alone required, for a type with nothing to choose between.
+    // §5.3.5 pool choice: always one of the two enum names once touched, but left as a bare optional string rather
+    // than z.enum.
     quotaPoolPreference: z.string().optional(),
   }).superRefine((data, context) => {
     if (requireEmployeeId && !data.employeeId) {
@@ -223,12 +214,8 @@ function StepHeading({ innerRef, step, total, title }) {
 }
 
 // A preview call can fail outright instead of returning a LeaveRuleOutcome -- most notably
-// LeaveService#resolveTargetEmployee's plain 403 ApiException when the acting employee is HR/CEO
-// requesting for themselves (SELF_SUBMIT_BLOCKED_ROLES). That has no `code` to look up in
-// LeaveRulePanel's RULE_META and no §5 section to link to, so it is never routed through
-// LeaveRulePanel -- doing so would render an "undefined" heading and a rules-tab link that goes
-// nowhere useful. `error.message` is already the backend's own Thai sentence (ApiExceptionHandler
-// serializes ApiException.getMessage() verbatim), so this only decides where/how to show it.
+// LeaveService#resolveTargetEmployee's plain 403 ApiException when the acting employee is HR/CEO requesting
+// for themselves (SELF_SUBMIT_BLOCKED_ROLES).
 function previewErrorMessage(error) {
   return error?.message || 'ไม่สามารถตรวจสอบคำขอลานี้ได้ กรุณาลองใหม่อีกครั้ง';
 }
@@ -248,11 +235,8 @@ function PreviewErrorNotice({ message, className }) {
   );
 }
 
-// Step 1's type button -- a blocked type is disabled and shows the real backend verdict instead
-// of a guess; an unresolved (still-loading) type shows a skeleton rather than a false "available".
-// A type whose preview call errored outright (see PreviewErrorNotice above) stays disabled too,
-// with its own real reason -- never falls through to looking selectable just because `blocking`
-// happens to read null on an errored query.
+// Step 1's type button -- a blocked type is disabled and shows the real backend verdict instead of a guess; an
+// unresolved (still-loading) type shows a skeleton rather than a false "available".
 function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
   const loading = outcomeQuery.isPending;
   const blocking = outcomeQuery.data?.blocking ?? null;
@@ -294,10 +278,9 @@ function TypeChoice({ type, outcomeQuery, selected, onSelect, showCondition }) {
 // split of a request straddling 31 Dec, a different axis. Option labels therefore never lead with a
 // bare "ปี {number}"; each names the pool (สะสม / ปีนี้) first.
 function QuotaPoolPreferenceField({ register, balance }) {
-  // Both years are derived from carriedInFromYear alone (never "today"): the Javadoc on
-  // LeaveBalanceDto ties carriedInExpiresOn to `31 Dec of carriedInFromYear + 1` by construction
-  // (hr.leave_carryover's own earned_year/usable_year columns), so re-deriving from the clock could
-  // only ever disagree with the balance this control is actually describing.
+  // Both years are derived from carriedInFromYear alone: the Javadoc on LeaveBalanceDto ties carriedInExpiresOn
+  // to `31 Dec of carriedInFromYear + 1` by construction, so re-deriving from the clock could only ever disagree
+  // with the balance this control is actually describing.
   const carriedInYearBe = Number(balance.carriedInFromYear) + 543;
   const ownYearBe = Number(balance.carriedInFromYear) + 1 + 543;
   return (
@@ -421,9 +404,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
 
   const selectedLeaveType = useMemo(() => leaveTypes.find((t) => t.code === leaveTypeCode), [leaveTypes, leaveTypeCode]);
 
-  // --- Step 1: dateless eligibility preview, one call per type, so a categorically-ineligible
-  // type (once-per-employment already used, min-service not met, probation not passed, missing
-  // hire date) is disabled with its real reason BEFORE the employee picks anything else. ---
+  // Step 1: dateless eligibility preview, one call per type, so a categorically-ineligible type
+  // (once-per-employment already used, min-service not met, probation not passed, missing hire date) is disabled
+  // with its real reason BEFORE the employee picks anything else.
   const eligibilityQueries = useQueries({
     queries: leaveTypes.map((type) => ({
       queryKey: queryKeys.leavePreview({ employeeId, leaveTypeCode: type.code }),
@@ -460,18 +443,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const step1Blocking = leaveTypeCode ? (eligibilityByCode.get(leaveTypeCode)?.data?.blocking ?? null) : null;
   const canAdvanceStep1 = Boolean(leaveTypeCode) && !step1Blocking && (!hasMultipleSubmitOptions || Boolean(employeeId));
 
-  // --- §5.3.5 pool choice (V161): the acting employee's real per-type balance, so the composer
-  // can tell whether there is a real carry-in to choose between at all (see showQuotaPoolSelector
-  // below) and can label/caption the two pools with real numbers -- QuotaPoolPreferenceField never
-  // fabricates them. Nothing before this queried balances(): step 3's own QuotaBar further down
-  // only ever compares the requested days against the TYPE's flat annualQuotaDays, never this
-  // employee's actual balance, so this is a new read, not a reuse of an existing one.
-  //
-  // Scoped to whatever calendar year `startDate` currently falls in (`yearFrom`, the same helper
-  // MyLeaveTab.jsx's own balancesQuery uses) rather than always "this year": a leave request dated
-  // into a different year must read THAT year's own carry-in figures. `enabled` waits for a leave
-  // type too -- nothing on step 1 needs this yet, and firing it per-type would be wasted work
-  // mirroring eligibilityQueries above for no reason (this is one call, not one per type). ---
+  // §5.3.5 pool choice (V161): the acting employee's real per-type balance, so the composer can tell whether
+  // there is a real carry-in to choose between at all (see showQuotaPoolSelector below) and can label/caption
+  // the two pools with real numbers -- QuotaPoolPreferenceField never fabricates them.
   const balancesQuery = useQuery({
     queryKey: queryKeys.leaveBalances(employeeId, yearFrom(startDate)),
     queryFn: () => api.leave.balances({
@@ -492,8 +466,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   const showQuotaPoolSelector = Boolean(selectedLeaveType?.carriesForward)
     && Number(selectedTypeBalance?.carriedInRemainingDays || 0) > 0;
 
-  // --- Step 2: debounced QUICK preview (department coverage skipped -- coverageEvaluated will
-  // read false, and that is shown honestly rather than as a clean pass). ---
+  // Step 2: debounced QUICK preview (department coverage skipped -- coverageEvaluated will read false, and that
+  // is shown honestly rather than as a clean pass).
   const step2Params = useMemo(() => {
     if (!employeeId || !leaveTypeCode || !startDate || !endDate) return null;
     return {
@@ -502,19 +476,17 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       startDate,
       // A timed span may cover more than one calendar day, so endDate is sent as chosen.
       endDate,
-      // Partial-day span (V166): widened from "no sub-day times in this shape at all" -- see
-      // LeavePreviewRequest's own Javadoc on the backend. undefined (not sent) when allDay, exactly
-      // like every other "only relevant sometimes" field this params object already builds.
+      // Partial-day span (V166): widened from "no sub-day times in this shape at all" -- see LeavePreviewRequest's
+      // own Javadoc on the backend. undefined (not sent) when allDay, exactly like every other "only relevant
+      // sometimes" field this params object already builds.
       startTime: !allDay && startTime ? startTime : undefined,
       endTime: !allDay && endTime ? endTime : undefined,
       purposeCode: leaveTypeCode === 'PERSONAL' && purposeCode ? purposeCode : undefined,
       requestedAsEmergency: leaveTypeCode === 'PERSONAL' ? Boolean(requestedAsEmergency) : undefined,
       hasAttachment: Boolean(attachmentFile),
       depth: 'QUICK',
-      // §5.3.5 pool choice (V161): sent unconditionally, even when showQuotaPoolSelector is false
-      // for the currently-selected type -- LeaveQuotaPoolPreference's own Javadoc says the backend
-      // "ignores it entirely" for a type with no second pool, so there is no need to strip it back
-      // out here just because this particular type/employee has nothing to choose between.
+      // §5.3.5 pool choice: sent unconditionally, even when showQuotaPoolSelector is false for the
+      // currently-selected type.
       quotaPoolPreference,
     };
   }, [
@@ -535,8 +507,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   // ruleWarnings); a dateless call returns `[]`, which already reads as "nothing to show".
   const step2Warnings = !step2Blocking ? (step2Preview?.ruleWarnings ?? []) : [];
   const step2Fetching = step2PreviewQuery.isFetching;
-  // Same "not every failure is a LeaveRuleOutcome" gap as step 1's TypeChoice -- see
-  // previewErrorMessage's own comment.
+  // Same "not every failure is a LeaveRuleOutcome" gap as step 1's TypeChoice -- see previewErrorMessage's own
+  // comment.
   const step2Error = step2PreviewQuery.isError ? previewErrorMessage(step2PreviewQuery.error) : null;
 
   const previewCounters = step2Preview?.counters
@@ -612,10 +584,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
   });
   const step3Preview = step3PreviewQuery.data ?? null;
   const step3Blocking = step3Preview?.blocking ?? null;
-  // Same "not every failure is a LeaveRuleOutcome" gap as step 1/2 -- see previewErrorMessage's
-  // own comment. This is the terminal, submit-gating checkpoint: an errored FULL preview must
-  // keep the submit button disabled exactly like a real `blocking` verdict would, not silently
-  // read as a clean pass because `step3Blocking` happens to be null on an errored query.
+  // Same "not every failure is a LeaveRuleOutcome" gap as step 1/2 -- see previewErrorMessage's own comment.
   const step3Error = step3PreviewQuery.isError ? previewErrorMessage(step3PreviewQuery.error) : null;
   // Same "blocking and ruleWarnings are never both set" contract as step2Warnings. This decides the
   // submit button's label ("ส่งคำขอ (ไม่รับค่าจ้าง)" once any warning exists): step 3 is the
@@ -684,18 +653,14 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
       purposeCode: values.leaveTypeCode === 'PERSONAL' && values.purposeCode ? values.purposeCode : null,
       requestedAsEmergency: values.leaveTypeCode === 'PERSONAL' ? Boolean(values.requestedAsEmergency) : null,
       // §5.3.5 pool choice (V161): same "always send" reasoning as step2Params/step3Params above.
-      // Falls back to the CARRIED_IN_FIRST default defensively -- defaultForm() already seeds this,
-      // so values.quotaPoolPreference should never actually be empty, but a submission must never
-      // go out with NO stated preference when the backend's own null-default reads identically.
       quotaPoolPreference: values.quotaPoolPreference || 'CARRIED_IN_FIRST',
       attachmentFile: preparedAttachment,
     });
   }
 
-  // Partial-day span (V166): endDate is no longer force-locked to startDate while timed -- only
-  // bumped forward when it would otherwise fall BEFORE the new startDate (the one invariant that
-  // must always hold, mirrors chk_leave_date_order/validateDateRange on the backend), regardless
-  // of allDay.
+  // Partial-day span (V166): endDate is no longer force-locked to startDate while timed -- only bumped forward
+  // when it would otherwise fall BEFORE the new startDate (the one invariant that must always hold, mirrors
+  // chk_leave_date_order/validateDateRange on the backend), regardless of allDay.
   function handleStartDateChange(event) {
     const value = event.target.value;
     if (getValues('endDate') < value) {
@@ -716,11 +681,7 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
     }
   }
 
-  // Same trap as selectType's own trigger('startDate') above: `setValue`/RHF's internal onChange
-  // for THIS field rewrites only requestedAsEmergency's own error, never startDate's, so a past-
-  // date error already written into errors.startDate (rendered via startDateInPast, which reads
-  // requestedAsEmergency) would otherwise survive ticking or unticking the ลากิจฉุกเฉิน checkbox
-  // until some OTHER field's change happened to re-run validation. Re-validate startDate here too.
+  // Revalidate the start date when emergency status changes so past-date errors do not remain stale.
   function handleEmergencyToggle() {
     if (getValues('startDate')) trigger('startDate');
   }
@@ -831,11 +792,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
         {step === 2 ? (
           <Panel>
             <StepHeading innerRef={step2HeadingRef} step={2} total={3} title={`วันที่และรายละเอียด · ${selectedLeaveType?.nameTh || ''}`} />
-            {/* Single aria-live region for every dynamic verdict step 2 produces (per-field FormField
-                hint/error text below, plus the one LeaveRulePanel this response can ever carry) --
-                "polite", never "assertive": this updates on every keystroke via the 400ms debounce
-                and would machine-gun a screen reader otherwise. aria-busy mirrors the in-flight
-                fetch so a screen reader knows a re-check is running, not that nothing changed. */}
+            {/* Single aria-live region for every dynamic verdict step 2 produces -- "polite", never "assertive": this
+             * updates on every keystroke via the 400ms debounce and would machine-gun a screen reader otherwise. */}
             <div className="mt-4 grid gap-4" aria-live="polite" aria-busy={step2Fetching}>
               <div className={formGridSpan2}>
                 <p className="m-0 rounded-md border border-info-border bg-info-bg-alt px-3 py-2 text-xs text-info">
@@ -878,12 +836,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
-              {/* Calendar context (#leave-calendar-context, Phase C): why totalDays can be smaller
-                  than the calendar span -- lists which selected dates are holidays/non-working per
-                  the employee's OWN resolved schedule, not a full calendar widget. Answers "what
-                  did I just select" -- a different question from the วันหยุดที่จะถึง panel above
-                  ("what's coming up", visible before any date is picked) -- so this stays,
-                  restyled to sit under it rather than replaced by it. */}
+              {/* Calendar context (#leave-calendar-context, Phase C): why totalDays can be smaller than the calendar span --
+               * lists which selected dates are holidays/non-working per the employee's OWN resolved schedule, not a full
+               * calendar widget. */}
               {calendarContextParams ? (
                 <div className={formGridSpan2} data-testid="calendar-context-note">
                   {nonWorkingDates.length > 0 ? (
@@ -965,12 +920,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 ) : null}
               </div>
 
-              {/* §5.3.5 pool choice (V161): sits with the other "mechanics of this request" fields
-                  (dates, sub-day), above เหตุผลการลา -- same field-order reasoning as the note
-                  right below: this is part of WHAT is being asked for, not WHY. Gated on
-                  showQuotaPoolSelector alone (computed once, above) rather than re-checking
-                  carriesForward/carriedInRemainingDays inline here, so there is exactly one place
-                  that decides whether this control exists at all. */}
+              {/* §5.3.5 pool choice (V161): sits with the other "mechanics of this request" fields (dates, sub-day), above
+               * เหตุผลการลา -- same field-order reasoning as the note right below: this is part of WHAT is being asked for,
+               * not WHY. */}
               {showQuotaPoolSelector ? (
                 <div className={formGridSpan2}>
                   <QuotaPoolPreferenceField register={register} balance={selectedTypeBalance} />
@@ -1003,10 +955,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                     </select>
                   </FormField>
                   <div className={formGridSpan2}>
-                    {/* FormField's own `label` (not an inline <label> wrapping the checkbox) --
-                        its id-match augmentation only inspects DIRECT children, so the <input>
-                        must be the direct child for the hint/error aria-describedby wiring below
-                        to actually land on the control a screen reader focuses, not on a wrapper. */}
+                    {/* FormField's own `label` (not an inline <label> wrapping the checkbox) -- its id-match augmentation only
+                     * inspects DIRECT children, so the <input> must be the direct child for the hint/error aria-describedby wiring
+                     * below to actually land on the control a screen reader focuses, not on a wrapper. */}
                     <FormField
                       label="ลากิจฉุกเฉิน (แจ้งหัวหน้างานก่อนเริ่มงานแล้ว และจะยื่นใบลาในวันแรกที่กลับมาทำงาน)"
                       htmlFor="leave-requested-as-emergency"
@@ -1059,12 +1010,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
-              {/* §5 WARN_UNPAID_* gates (V164 follow-up): the request would still submit, but part
-                  (or all) of it becomes unpaid if approved -- shown as early as step 2's own
-                  debounced check, not held back until step 3's terminal review, so the employee
-                  sees the consequence while they can still change dates/attachments to avoid it.
-                  Same aria-live="polite" region as the rest of step 2 -- see that div's own
-                  comment. */}
+              {/* §5 WARN_UNPAID_* gates: the request would still submit, but part of it becomes unpaid if approved -- shown
+               * as early as step 2's own debounced check, not held back until step 3's terminal review, so the employee sees
+               * the consequence while they can still change dates/attachments to avoid it. */}
               {step2Warnings.length > 0 ? (
                 <div className={formGridSpan2}>
                   <LeaveRuleWarningList warnings={step2Warnings} />
@@ -1091,8 +1039,8 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
-              {/* Terminal, blocking verdict: role="alert" (unlike step 2's polite live region) --
-                  this is the final word, requires action, and does not update on every keystroke. */}
+              {/* Terminal, blocking verdict: role="alert" (unlike step 2's polite live region) -- this is the final word,
+               * requires action, and does not update on every keystroke. */}
               {step3Blocking ? (
                 <div role="alert">
                   <LeaveRulePanel outcome={step3Blocking} tone="blocking" />
@@ -1105,13 +1053,9 @@ export function LeaveRequestPage({ user, currentEmployee, showToast }) {
                 </div>
               ) : null}
 
-              {/* §5 WARN_UNPAID_* gates (V164 follow-up): non-blocking -- submit stays enabled --
-                  but this is the LAST thing shown before the employee commits, so it sits with the
-                  same prominence as a blocking verdict would (right below it, ahead of the plain
-                  totalDays/paidDays/unpaidDays summary box further down) rather than folded into
-                  that box. aria-live="polite" rather than role="alert": nothing here BLOCKS the
-                  action a screen reader user is about to take, so it should not interrupt like the
-                  step3Blocking/step3Error alerts above. */}
+              {/* §5 WARN_UNPAID_* gates: non-blocking -- submit stays enabled -- but this is the LAST thing shown before the
+               * employee commits, so it sits with the same prominence as a blocking verdict would rather than folded into
+               * that box. */}
               {step3Warnings.length > 0 ? (
                 <div aria-live="polite">
                   <LeaveRuleWarningList warnings={step3Warnings} />

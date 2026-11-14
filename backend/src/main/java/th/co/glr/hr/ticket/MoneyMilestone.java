@@ -4,21 +4,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/**
- * The five money milestones finance tracks a deal through (H1, owner decision A2), derived from
- * {@code sales_stage}. This is the ONE place the stage-to-milestone mapping lives -- a client
- * renders {@link #TRACK} and highlights {@link #of}'s result rather than re-deriving it.
- *
- * <pre>
- *   1 ORDER_RECEIVED    S10        ได้รับคำสั่งซื้อ
- *   2 DEPOSIT_RECEIVED  S11        ได้รับมัดจำ            (skipped when the deposit policy bypasses the notice)
- *   3 PROCUREMENT       S12-S17    รอสินค้า / นำเข้า
- *   4 DELIVERY          S18-S19    ส่งมอบ — รอชำระส่วนที่เหลือ
- *   5 CLOSED_PAID       S20        ชำระครบ ปิดงาน
- * </pre>
- *
- * A stage below ORDER_RECEIVED has no money milestone yet.
- */
+/** The five money milestones finance tracks a deal through (H1, owner decision A2), derived from sales_stage.
+ * This is the ONE place the stage-to-milestone mapping lives -- a client renders #TRACK and highlights #of's
+ * result rather than re-deriving it. */
 public final class MoneyMilestone {
     public record Step(String key, int index, String label) {}
 

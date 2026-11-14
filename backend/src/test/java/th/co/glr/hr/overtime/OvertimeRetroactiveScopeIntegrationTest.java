@@ -28,32 +28,14 @@ import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Authorization evidence for the removal of the retroactive-submission gate.
- *
- * <p>Advance notice was removed on CEO instruction, and with it the rule that only a manager could
- * file overtime for a past date. That deletion <em>relaxes</em> authorization, so per CLAUDE.md it
- * needs proof through the real service and the real SQL rather than a claim — a mocked repository
- * would happily agree with whatever the service believes.
- *
- * <p>What must still hold: filing on behalf of someone else is governed by
- * {@code resolveTargetEmployee}, which was deliberately left untouched. Backdating must not have
- * become a side door into another employee's overtime.
- *
- * <p>Cases are written the wrong way round — can this caller reach what they should not.
- */
+/** Authorization evidence for the removal of the retroactive-submission gate. Advance notice was removed on CEO
+ * instruction, and with it the rule that only a manager could file overtime for a past date. Backdating must
+ * not have become a side door into another employee's overtime. */
 class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    /**
-     * feat/ot-nonworkday-rate-suggestion: this class is about WHO may file/reach whose overtime,
-     * not about the day-of-week-derived suggestion -- but its fixture dates (backdated relative to
-     * whatever "today" the suite happens to run on) carry no guarantee of landing on a weekday. A
-     * real Mon-Fri resolver would make this class's pass/fail depend on which day of the week it
-     * runs on, which is exactly the flake shape this repo's CLAUDE.md warns about elsewhere
-     * (bangkok-timezone-test-flake). This fake keeps every day a workday so day-of-week never
-     * enters this class's concern at all -- see {@code
-     * OvertimeDayTypeDerivedFromCalendarIntegrationTest} for the real schedule-aware coverage.
-     */
+    /** feat/ot-nonworkday-rate-suggestion: this class is about WHO may file/reach whose overtime, not about the
+     * day-of-week-derived suggestion -- but its fixture dates (backdated relative to whatever "today" the suite
+     * happens to run on) carry no guarantee of landing on a weekday. */
     private static final WorkSchedule ALWAYS_WORKDAY_SCHEDULE = new WorkSchedule(
         ZoneId.of("Asia/Bangkok"), LocalTime.of(8, 30), LocalTime.of(17, 30), 15,
         EnumSet.allOf(DayOfWeek.class));
@@ -68,8 +50,8 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
 
     @BeforeEach
     void wireRealCollaborators() {
-        // Audit, notification and attendance re-derivation are downstream of the guard; stubbing
-        // them keeps this test about who may write whose rows. The repository is real.
+        // Audit, notification and attendance re-derivation are downstream of the guard; stubbing them keeps this test
+        // about who may write whose rows. The repository is real.
         service = new OvertimeService(
             new OvertimeRepository(jdbc),
             new ManagerApproverRepository(jdbc),
@@ -99,11 +81,9 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
 
     // --- what must still be refused -----------------------------------------
 
-    /**
-     * The guard this branch had to leave standing. Backdating is now open to everyone, so if
-     * {@code resolveTargetEmployee} ever stopped checking, an employee could file overtime onto a
-     * colleague's record and it would be paid to them.
-     */
+    /** The guard this branch had to leave standing. Backdating is now open to everyone, so if resolveTargetEmployee
+     * ever stopped checking, an employee could file overtime onto a colleague's record and it would be paid to
+     * them. */
     @Test
     void anEmployeeCannotSelfFileRetroactiveOvertimeForSomeoneTheyDoNotManage() {
         assertThatThrownBy(() -> service.submit(backdated(factoryStaff, 3, LATE_REASON), employee(salesStaff)))
@@ -125,10 +105,8 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
         assertThat(storedCountFor(factoryStaff)).isZero();
     }
 
-    /**
-     * HR has {@code VIEW_ALL_ROLES} read access but no write path, and never gained one here.
-     * Issue #199 was exactly this shape for approval — HR reading as more powerful than it is.
-     */
+    /** HR has VIEW_ALL_ROLES read access but no write path, and never gained one here. Issue #199 was exactly this
+     * shape for approval — HR reading as more powerful than it is. */
     @Test
     void hrCannotFileRetroactiveOvertimeOnBehalfOfAnArbitraryEmployee() {
         assertThatThrownBy(() -> service.submit(backdated(factoryStaff, 3, LATE_REASON), hr()))
@@ -139,10 +117,8 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
         assertThat(storedCountFor(factoryStaff)).isZero();
     }
 
-    /**
-     * The payroll lock, proved against a real {@code hr.payroll_period} row rather than a stub:
-     * overtime that could never be paid must not be accepted in the first place.
-     */
+    /** The payroll lock, proved against a real hr.payroll_period row rather than a stub: overtime that could never
+     * be paid must not be accepted in the first place. */
     @Test
     void retroactiveOvertimeIsRefusedOnceItsPayrollMonthHasBeenProcessed() {
         LocalDate workDate = bangkokToday().minusDays(3);
@@ -218,14 +194,8 @@ class OvertimeRetroactiveScopeIntegrationTest extends AbstractPostgresIntegratio
             """, params, Long.class);
     }
 
-    /**
-     * A ผู้จัดการ position is what makes an employee a manager <em>in the database</em>, which is
-     * what {@code ManagerApproverRepository} reads when deciding whether a manager stage exists at
-     * all. It must agree with the {@code manager} flag on the {@link UserPrincipal} used for that
-     * person -- in production both derive from the same position via {@code DivisionAccessPolicy},
-     * so a fixture where they disagree models a state that cannot occur, and would quietly send
-     * requests down the CEO-direct route instead of the manager route under test.
-     */
+    /** A ผู้จัดการ position is what makes an employee a manager in the database, which is what
+     * ManagerApproverRepository reads when deciding whether a manager stage exists at all. */
     private long insertPosition(String code, String nameTh) {
         return jdbc.queryForObject("""
             INSERT INTO hr.position (source_code, name_th, is_active)

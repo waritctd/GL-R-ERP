@@ -44,9 +44,9 @@
 import { isOwnerOrKeyer } from '../tickets/dealOwnership.js';
 export const ALLOWED_TRANSITIONS = {
   DRAFT: ['SUBMITTED', 'CANCELLED'],
-  // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: a customer-change
-  // revision whose items are identical to its parent's copies the parent's factory quotes and has
-  // nothing left for Import to do (PricingRequestService.carryFactoryQuotesForwardOnSubmit).
+  // SUBMITTED -> READY_FOR_CEO_REVIEW is the factory-quote carry-forward edge: a customer-change revision whose
+  // items are identical to its parent's copies the parent's factory quotes and has nothing left for Import to do
+  // (PricingRequestService.carryFactoryQuotesForwardOnSubmit).
   SUBMITTED: ['IMPORT_REVIEWING', 'READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
   // Import's states. COSTING_IN_PROGRESS merged into AWAITING_FACTORY_RESPONSE
   // (เจรจาราคากับโรงงาน) and MORE_INFO_REQUIRED left the product.
@@ -56,9 +56,9 @@ export const ALLOWED_TRANSITIONS = {
   // FactoryQuoteService.markReadyForCosting auto-advances straight to READY_FOR_CEO_REVIEW
   // once every item's quote is resolvable — there is no Import-driven costing step in between.
   AWAITING_FACTORY_RESPONSE: ['READY_FOR_CEO_REVIEW', 'CANCELLED', 'SUPERSEDED'],
-  // The back-edge to AWAITING_FACTORY_RESPONSE is FactoryQuoteService.receive()'s revision branch:
-  // a factory sends a revised price while the request already sits with the CEO, so the request is
-  // pulled back until Import re-marks the revised quote ready.
+  // The back-edge to AWAITING_FACTORY_RESPONSE is FactoryQuoteService.receive()'s revision branch: a factory
+  // sends a revised price while the request already sits with the CEO, so the request is pulled back until
+  // Import re-marks the revised quote ready.
   READY_FOR_CEO_REVIEW: ['CEO_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'CANCELLED', 'SUPERSEDED'],
   // PricingDecisionService.returnToImport sends the request to AWAITING_FACTORY_RESPONSE,
   // not to a dedicated "revise the costing" status — the CEO's next startReview recomputes cost.
@@ -144,9 +144,9 @@ export function canStartCeoReview(user, pr) {
   return user?.role === 'ceo' && pr?.status === 'READY_FOR_CEO_REVIEW';
 }
 
-/** Mirrors PricingDecisionService.update/recalculate/approve/returnToImport: ceo only, and
- * only while the request is CEO_REVIEWING (the decision itself must also be DRAFT — the caller
- * passes the decision, not just the pricing request, when that distinction matters). */
+/** Mirrors PricingDecisionService.update/recalculate/approve/returnToImport: ceo only, and only while the
+ * request is CEO_REVIEWING (the decision itself must also be DRAFT — the caller passes the decision, not just
+ * the pricing request, when that distinction matters). */
 export function canActOnPricingDecision(user, pr) {
   return user?.role === 'ceo' && pr?.status === 'CEO_REVIEWING';
 }
@@ -167,34 +167,32 @@ export function canSeePricingDecisionSalesView(user, pr) {
 
 // ── Step 4: Customer Quotation Generation and Issuance. Mirrors CustomerQuotationService. ──
 
-/** Mirrors CustomerQuotationService.create's gate: sales (ticket owner) only, and only once the
- * pricing request is APPROVED_FOR_QUOTATION (the very first quotation for this request — a
- * correction after issue instead goes through createRevision, gated by
- * canManageCustomerQuotation on the existing ISSUED quotation, not this). */
+/** Mirrors CustomerQuotationService.create's gate: sales only, and only once the pricing request is
+ * APPROVED_FOR_QUOTATION. */
 export function canCreateCustomerQuotation(user, pr) {
   if (user?.role !== 'sales') return false;
   if (!isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user.id)) return false;
   return pr?.status === 'APPROVED_FOR_QUOTATION';
 }
 
-/** Mirrors CustomerQuotationService's edit/issue/cancel/createRevision owner gate: sales (ticket
- * owner) only — ceo/import/sales_manager are always read-only on this aggregate, never just
- * hidden buttons on an otherwise-writable page. */
+/** Mirrors CustomerQuotationService's edit/issue/cancel/createRevision owner gate: sales (ticket owner) only —
+ * ceo/import/sales_manager are always read-only on this aggregate, never just hidden buttons on an
+ * otherwise-writable page. */
 export function canManageCustomerQuotation(user, pr) {
   if (user?.role !== 'sales') return false;
   return isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user.id);
 }
 
-/** Mirrors CustomerQuotationService.VIEW_ROLES: sales (owner-scoped)/sales_manager/ceo/import may
- * read; account has no positive grant anywhere on this aggregate and stays forbidden. */
+/** Mirrors CustomerQuotationService.VIEW_ROLES: sales (owner-scoped)/sales_manager/ceo/import may read; account
+ * has no positive grant anywhere on this aggregate and stays forbidden. */
 export function canViewCustomerQuotation(user, pr) {
   if (!user || !['sales', 'sales_manager', 'ceo', 'import'].includes(user.role)) return false;
   if (user.role === 'sales') return isOwnerOrKeyer({ createdById: pr?.ticketCreatedById, keyedById: pr?.ticketKeyedById }, user.id);
   return true;
 }
 
-/** Mirrors CustomerQuotationService.requireDraft: only a DRAFT/READY_TO_ISSUE quotation may be
- * edited, previewed-for-editing, or cancelled — an ISSUED one is immutable (rule 8). */
+/** Mirrors CustomerQuotationService.requireDraft: only a DRAFT/READY_TO_ISSUE quotation may be edited,
+ * previewed-for-editing, or cancelled — an ISSUED one is immutable (rule 8). */
 export function isCustomerQuotationEditable(quotation) {
   return ['DRAFT', 'READY_TO_ISSUE'].includes(quotation?.docStatus);
 }
@@ -221,21 +219,18 @@ export function isCustomerQuotationDiscountEditable(quotation) {
 // ── CEO discount-approval workflow. Mirrors
 // DiscountApprovalService. ──────────────────────────────────────────────────────────────
 
-/**
- * Mirrors DiscountApprovalService.CEO_ROLES: CEO only — explicitly NOT sales_manager. The
- * owner's words were "must be approved by CEO"; unlike sales_manager's read-only oversight
- * elsewhere on this chain, nothing grants it write access here. No status precondition beyond
- * the request row itself being PENDING, which the backend enforces (a stale/decided row 409s).
- */
+/** Mirrors DiscountApprovalService.CEO_ROLES: CEO only — explicitly NOT sales_manager. The owner's words were
+ * "must be approved by CEO"; unlike sales_manager's read-only oversight elsewhere on this chain, nothing
+ * grants it write access here. */
 export function canDecideDiscountApproval(user) {
   return user?.role === 'ceo';
 }
 
 // ── Step 5: Customer Decision and Commercial Revisions. Mirrors CustomerQuotationService.recordOutcome. ──
 
-/** Mirrors CustomerQuotationService.recordOutcome's gate: sales (ticket owner) only, and only
- * while the quotation is ISSUED — the same owner scoping as canManageCustomerQuotation, plus the
- * docStatus gate recordOutcome's own WHERE clause enforces server-side. */
+/** Mirrors CustomerQuotationService.recordOutcome's gate: sales (ticket owner) only, and only while the
+ * quotation is ISSUED — the same owner scoping as canManageCustomerQuotation, plus the docStatus gate
+ * recordOutcome's own WHERE clause enforces server-side. */
 export function canRecordCustomerQuotationOutcome(user, pr, quotation) {
   return canManageCustomerQuotation(user, pr) && quotation?.docStatus === 'ISSUED'
     && !['SUPERSEDED', 'CANCELLED'].includes(pr?.status);
@@ -254,18 +249,17 @@ export function canCreateCommercialOnlyRevision(user, pr, quotation) {
 
 // ── Step 6: Deposit, Payment, and Order Confirmation. Mirrors OrderConfirmationService. ──
 
-/** Mirrors OrderConfirmationService.confirmOrder's gate: sales (ticket owner) only, reachable
- * ONLY from QUOTATION_ACCEPTED (Step 5's terminal status), and only until the bridge has already
- * run once (orderConfirmedAt is set on the FIRST successful call and never cleared). */
+/** Mirrors OrderConfirmationService.confirmOrder's gate: sales (ticket owner) only, reachable ONLY from
+ * QUOTATION_ACCEPTED (Step 5's terminal status), and only until the bridge has already run once
+ * (orderConfirmedAt is set on the FIRST successful call and never cleared). */
 export function canConfirmOrder(user, pr) {
   return canManageCustomerQuotation(user, pr) && pr?.status === 'QUOTATION_ACCEPTED' && !pr?.orderConfirmedAt
     && !confirmOrderBlockedReason(pr);
 }
 
-/** Mirrors OrderConfirmationService.isBridgeableTicketStatus: the bridge can only advance a
- * ticket sitting at 'draft' (or already at 'quotation_issued'). Any other ticket status makes
- * confirmOrder 409, so the UI refuses first. An absent ticketStatus (older payload / mock) is not
- * blocked here — the server's own preflight still guards it. */
+/** Mirrors OrderConfirmationService.isBridgeableTicketStatus: the bridge can only advance a ticket sitting at
+ * 'draft' (or already at 'quotation_issued'). Any other ticket status makes confirmOrder 409, so the UI
+ * refuses first. */
 const BRIDGEABLE_TICKET_STATUSES = ['draft', 'quotation_issued'];
 
 /** Why "ยืนยันคำสั่งซื้อ" cannot work on an accepted request, or null when nothing blocks it. */
@@ -323,9 +317,8 @@ export function activePricingRequestsSummary(pricingRequests = []) {
   return {
     total: active.length,
     counts,
-    // Stable order (creation order, oldest first) rather than re-sorting by
-    // status, so the strip doesn't reshuffle every time one request's status
-    // changes.
+    // Stable order (creation order, oldest first) rather than re-sorting by status, so the strip doesn't reshuffle
+    // every time one request's status changes.
     requests: [...active].sort((a, b) => a.id - b.id),
   };
 }

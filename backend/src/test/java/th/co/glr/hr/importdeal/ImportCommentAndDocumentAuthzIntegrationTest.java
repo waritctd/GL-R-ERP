@@ -48,36 +48,9 @@ import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * Authorization evidence for the two cost leaks that survived the import per-deal page slice, and
- * for the document widening that goes with them (owner rulings 2026-09-30: import must see NO
- * internal cost; import comment access is row-scoped to its import scope; import may download all
- * four attachment types for deals in its scope).
- *
- * <ul>
- *   <li><b>Leak A</b> — {@code POST /api/tickets/{id}/comments} returned {@code projectForRole(…,
- *       "import")}, which stripped the quotation chain but passed every item's cost columns
- *       through. The response must now be cost-free.
- *   <li><b>Leak B</b> — the same route used {@code requireViewAccess}, which has no import row
- *       scope, so import could comment on (and read back) any deal in the pipeline.
- *   <li><b>Documents</b> — {@code TicketAccessPolicy#canViewDocuments} refused every non-participant
- *       import; it must admit import for deals inside {@code TicketRepository#isInImportScope}
- *       (all four {@code AttachType}s) and still refuse it outside.
- * </ul>
- *
- * <p>Real Postgres, real services and repositories — Mockito cannot show that the scope predicate
- * reaches the WHERE clause. Written wrong-way-round: what import CANNOT reach. Sentinels are
- * planted in every cost column so an accidentally-empty DTO cannot make an absence check vacuous.
- *
- * <p>{@code @EnabledIf} is declared HERE, not inherited (JUnit's {@code @EnabledIf} is not
- * {@code @Inherited}; see {@link AbstractPostgresIntegrationTest}).
- *
- * <p>NOT covered, deliberately: the {@code summary} money fields ({@code amountPayable} etc.) that
- * the import worklist ({@code GET /api/tickets}) already returned to import before this change —
- * customer payment amounts, not item cost, and a separate ruling; import as the deal's
- * <i>assignee</i> (a participant — unchanged pre-#389 grant, pinned by TicketAccessPolicyTest);
- * the frontend.
- */
+/** Authorization evidence for the two cost leaks that survived the import per-deal page slice, and for the
+ * document widening that goes with them. The response must now be cost-free. Real Postgres, real services and
+ * repositories — Mockito cannot show that the scope predicate reaches the WHERE clause. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -271,8 +244,8 @@ class ImportCommentAndDocumentAuthzIntegrationTest extends AbstractPostgresInteg
             TicketSummaryDto viaComment = ticketService.comment(inScopeId, new CommentRequest("hi"), actor).summary();
             assertThat(viaComment.amountPayable()).as(actor.role() + " comment payable").isEqualByComparingTo(PAYABLE);
         }
-        // account reads the deal's money through its finance view since the H1 lockdown (GET /tickets/{id}
-        // refuses account); the deal sits at S10, inside account's list scope.
+        // account reads the deal's money through its finance view since the H1 lockdown (GET /tickets/{id} refuses
+        // account); the deal sits at S10, inside account's list scope.
         th.co.glr.hr.finance.FinanceDealService finance = new th.co.glr.hr.finance.FinanceDealService(tickets,
             new th.co.glr.hr.finance.FinanceDealRepository(jdbc), new th.co.glr.hr.deposit.DepositNoticeRepository(jdbc),
             new th.co.glr.hr.deposit.RemainingInvoiceRepository(jdbc), new AttachmentRepository(jdbc), ticketService);

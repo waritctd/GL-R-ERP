@@ -35,12 +35,9 @@ public class OvertimeRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /**
-     * True once payroll has been run for the month. Approved overtime is picked up by
-     * {@code PayrollRepository#findApprovedOvertimePayByEmployee}, which keys on
-     * {@code payroll_month}, and a processed period is written once — so anything that lands in a
-     * processed month would never be paid.
-     */
+    /** True once payroll has been run for the month. Approved overtime is picked up by
+     * PayrollRepository#findApprovedOvertimePayByEmployee, which keys on payroll_month, and a processed period is
+     * written once — so anything that lands in a processed month would never be paid. */
     public boolean payrollMonthProcessed(LocalDate payrollMonth) {
         Boolean processed = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -53,15 +50,9 @@ public class OvertimeRepository {
         return Boolean.TRUE.equals(processed);
     }
 
-    /**
-     * True when {@code payrollMonth} was already paid outside the ERP and is covered by
-     * {@code hr.payroll_year_to_date_seed} (V114) -- distinct from {@link
-     * #payrollMonthProcessed}, which is true only once THIS system has run payroll for the month.
-     * A seed-covered month is never {@code PROCESSED} here (the guard trigger on {@code
-     * hr.payroll_period} refuses that, to avoid double-counting year-to-date withholding), so
-     * without this check {@code payrollMonthProcessed} alone would report such a month as open and
-     * let overtime be filed into it -- money that would then never be paid by anything.
-     */
+    /** True when payrollMonth was already paid outside the ERP and is covered by hr.payroll_year_to_date_seed
+     * (V114) -- distinct from #payrollMonthProcessed, which is true only once THIS system has run payroll for the
+     * month. */
     public boolean payrollMonthSeedCovered(LocalDate payrollMonth) {
         Boolean covered = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -122,8 +113,8 @@ public class OvertimeRepository {
             .addValue("managerEmployeeId", managerEmployeeId)
             .addValue("managerDivisionId", managerDivisionId);
         if (!includeAll) {
-            // Kept in step with findRequests' scope and OvertimeService.managesEmployee: offering an
-            // employee here that submit() would then refuse turns a picker choice into a 403.
+            // Kept in step with findRequests' scope and OvertimeService.managesEmployee: offering an employee here that
+            // submit() would then refuse turns a picker choice into a 403.
             sql.append(" AND (e.employee_id = :managerEmployeeId");
             if (managerDivisionId != null) {
                 sql.append(" OR e.division_id = :managerDivisionId");
@@ -156,16 +147,7 @@ public class OvertimeRepository {
         });
     }
 
-    /**
-     * @param submitTimeCalculationNote nullable. Written straight into {@code calculation_note} at
-     *     INSERT time -- normally {@code null} (nothing to say yet; a real calculation note is only
-     *     produced at approval, see {@link #managerApprove}/{@link #ceoDirectApprove}). Non-null
-     *     exactly when {@code OvertimeService#resolveDayTypeSubmitNote} found the calendar has zero
-     *     rows for the work date's year at all -- the day-type DERIVATION is unverified, so this
-     *     fires regardless of what (if anything) {@code SubmitOvertimeRequest.dayType} claimed.
-     *     Approval must APPEND to this, never overwrite it wholesale -- see {@code
-     *     OvertimeService#preserveDayTypeClaimFlag}.
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public long create(
             long employeeId,
             Long requestedById,
@@ -274,12 +256,7 @@ public class OvertimeRepository {
             .findFirst();
     }
 
-    /**
-     * The employee's division, needed to resolve their {@code WorkSchedule} for {@code
-     * OvertimeService#suggestDayType}. Single-row twin of {@link #findDivisionIdsByEmployee} for
-     * the submit/approve paths, which act on exactly one employee at a time -- mirrors {@code
-     * AttendanceDailyRepository#findDivisionId}, do not reimplement the query differently here.
-     */
+    /** The employee's division, needed to resolve their WorkSchedule for OvertimeService#suggestDayType. */
     public Long findDivisionId(long employeeId) {
         List<Long> found = jdbc.query(
             "SELECT division_id FROM hr.employee WHERE employee_id = :employeeId",
@@ -288,11 +265,9 @@ public class OvertimeRepository {
         return found.isEmpty() ? null : found.get(0);
     }
 
-    /**
-     * The employee's department, needed alongside division to resolve their {@code WorkSchedule}.
-     * Mirrors {@code AttendanceDailyRepository#findDepartmentId} -- see {@link #findDivisionId}'s
-     * Javadoc for why this is a separate single-row method rather than folded into one query.
-     */
+    /** The employee's department, needed alongside division to resolve their WorkSchedule. Mirrors
+     * AttendanceDailyRepository#findDepartmentId -- see #findDivisionId's Javadoc for why this is a separate
+     * single-row method rather than folded into one query. */
     public Long findDepartmentId(long employeeId) {
         List<Long> found = jdbc.query(
             "SELECT department_id FROM hr.employee WHERE employee_id = :employeeId",
@@ -301,19 +276,13 @@ public class OvertimeRepository {
         return found.isEmpty() ? null : found.get(0);
     }
 
-    /**
-     * Division per employee, in ONE query -- {@code OvertimeService#list}'s suggestion needs it for
-     * every row, and a per-row {@link #findDivisionId} call there would be an N+1 (see that
-     * method's own comment). Mirrors {@code AttendanceDailyRepository#findDivisionIdsByEmployee}
-     * exactly; do not diverge the SQL between the two twins.
-     */
+    /** Division per employee, in ONE query -- OvertimeService#list's suggestion needs it for every row, and a
+     * per-row #findDivisionId call there would be an N+1 (see that method's own comment). */
     public Map<Long, Long> findDivisionIdsByEmployee() {
         Map<Long, Long> byEmployee = new HashMap<>();
-        // Block-statement lambda, not an expression lambda -- Map.put's return value would
-        // otherwise make this ambiguous between NamedParameterJdbcTemplate's
-        // RowCallbackHandler and ResultSetExtractor<T> overloads (both accept a
-        // SqlParameterSource + a lambda; only the void/statement shape picks RowCallbackHandler
-        // unambiguously). Same shape AttendanceDailyRepository's twin already uses.
+        // Block-statement lambda, not an expression lambda -- Map.put's return value would otherwise make this
+        // ambiguous between NamedParameterJdbcTemplate's RowCallbackHandler and ResultSetExtractor<T> overloads. Same
+        // shape AttendanceDailyRepository's twin already uses.
         jdbc.query(
             "SELECT employee_id, division_id FROM hr.employee",
             new MapSqlParameterSource(),
@@ -321,11 +290,8 @@ public class OvertimeRepository {
         return byEmployee;
     }
 
-    /**
-     * Department per employee, in ONE query -- the bulk twin of {@link #findDepartmentId}, same
-     * reasoning and same SQL shape as {@link #findDivisionIdsByEmployee}. Mirrors {@code
-     * AttendanceDailyRepository#findDepartmentIdsByEmployee}.
-     */
+    /** Department per employee, in ONE query -- the bulk twin of #findDepartmentId, same reasoning and same SQL
+     * shape as #findDivisionIdsByEmployee. Mirrors AttendanceDailyRepository#findDepartmentIdsByEmployee. */
     public Map<Long, Long> findDepartmentIdsByEmployee() {
         Map<Long, Long> byEmployee = new HashMap<>();
         // See findDivisionIdsByEmployee's comment on why this must stay a block-statement lambda.
@@ -336,26 +302,9 @@ public class OvertimeRepository {
         return byEmployee;
     }
 
-    /**
-     * The salary an overtime request should be priced from, resolved as of the work date rather
-     * than at approval or payroll time. Overtime is paid at the rate in force when the work was
-     * done, so this reads {@code hr.salary_history} in three steps, most authoritative first:
-     *
-     * <ol>
-     *   <li>the latest row <em>effective on or before</em> the work date — its {@code new_amount}
-     *       is the salary that was in force;</li>
-     *   <li>otherwise the earliest row <em>effective after</em> the work date — its
-     *       {@code old_amount} (เงินเก่า) is by definition the salary that preceded that change,
-     *       i.e. the one in force on the work date. This is the case that matters for a backdated
-     *       request filed after a raise: {@code current_salary} is already the new figure, and
-     *       looking only backwards would silently pay the new rate for old work;</li>
-     *   <li>otherwise {@code hr.employee.current_salary}, because the ETL-loaded history table does
-     *       not cover every employee, and finally zero.</li>
-     * </ol>
-     *
-     * <p>Ties on {@code effective_date} are broken by {@code salary_id} so the result is
-     * deterministic when two changes share a date.
-     */
+    /** The salary an overtime request should be priced from, resolved as of the work date rather than at approval
+     * or payroll time. Ties on effective_date are broken by salary_id so the result is deterministic when two
+     * changes share a date. */
     public BigDecimal findSalaryBasisAsOf(long employeeId, LocalDate workDate) {
         BigDecimal basis = jdbc.queryForObject("""
             SELECT COALESCE(
@@ -409,8 +358,7 @@ public class OvertimeRepository {
             .addValue("id", id)
             .addValue("reviewedById", reviewedById)
             // Re-derived and frozen here, not carried over from whatever submit() stored -- see
-            // OvertimeService#calculate's Javadoc. Same source of truth (OvertimeDayType), never
-            // caller input.
+            // OvertimeService#calculate's Javadoc. Same source of truth (OvertimeDayType), never caller input.
             .addValue("dayType", calculation.dayType().name())
             .addValue("payRateMultiplier", calculation.dayType().multiplier())
             .addValue("actualStartAt", calculation.actualStartAt())
@@ -422,16 +370,9 @@ public class OvertimeRepository {
             .addValue("reviewerNote", cleanNote(reviewerNote)));
     }
 
-    /**
-     * The manager-less route: SUBMITTED straight to APPROVED in one statement.
-     *
-     * <p>Writes the calculation and salary basis that {@link #managerApprove} would have written,
-     * because payroll reads those off an APPROVED row regardless of which route produced it.
-     *
-     * <p>{@code manager_approved_by} / {@code manager_approved_at} are deliberately left NULL —
-     * no manager approved this, and stamping the CEO into those columns would forge a review stage
-     * that never happened. Those NULLs are what tell the two routes apart in the audit trail.
-     */
+    /** The manager-less route: SUBMITTED straight to APPROVED in one statement. manager_approved_by /
+     * manager_approved_at are deliberately left NULL — no manager approved this, and stamping the CEO into those
+     * columns would forge a review stage that never happened. */
     public int ceoDirectApprove(
             long id, Long reviewedById, OvertimeCalculation calculation, BigDecimal salaryBasis, String reviewerNote) {
         return jdbc.update("""
@@ -456,8 +397,8 @@ public class OvertimeRepository {
             """, new MapSqlParameterSource()
             .addValue("id", id)
             .addValue("reviewedById", reviewedById)
-            // See managerApprove's comment -- same re-derive-and-freeze treatment for the
-            // manager-less route, which is this class's one-step equivalent of that same stage.
+            // See managerApprove's comment -- same re-derive-and-freeze treatment for the manager-less route, which is
+            // this class's one-step equivalent of that same stage.
             .addValue("dayType", calculation.dayType().name())
             .addValue("payRateMultiplier", calculation.dayType().multiplier())
             .addValue("actualStartAt", calculation.actualStartAt())
@@ -573,15 +514,13 @@ public class OvertimeRepository {
                    e.reports_to_employee_id,
                    concat_ws(' ', manager.first_name_th, manager.last_name_th) AS manager_name,
                    """
-            // Projected per row so the UI can tell a manager-less request apart without a second
-            // round trip. Same expression the approve/reject gate uses, so the button the CEO sees
-            // and the gate the server enforces cannot disagree.
+            // Projected per row so the UI can tell a manager-less request apart without a second round trip. Same
+            // expression the approve/reject gate uses, so the button the CEO sees and the gate the server enforces cannot
+            // disagree.
             + ManagerApproverRepository.hasManagerApproverSql("e") + " AS has_manager_approver,"
-            // feat/pending-approver-info: read-only "who this is waiting on" names -- built from the
-            // SAME PEER_IS_MANAGER_APPROVER predicate has_manager_approver above already uses (see
-            // ManagerApproverRepository#managerApproverSingleNameSql's Javadoc), plus the generic
-            // single-active-ceo lookup PendingApproverSql provides. Neither is an authorization
-            // decision.
+            // feat/pending-approver-info: read-only "who this is waiting on" names -- built from the SAME
+            // PEER_IS_MANAGER_APPROVER predicate has_manager_approver above already uses, plus the generic
+            // single-active-ceo lookup PendingApproverSql provides. Neither is an authorization decision.
             + ManagerApproverRepository.managerApproverSingleNameSql("e") + " AS division_manager_single_name,"
             + PendingApproverSql.SINGLE_ACTIVE_CEO_NAME_SQL + " AS ceo_single_name,"
             + """
@@ -639,24 +578,15 @@ public class OvertimeRepository {
             rs.getObject("updated_at", OffsetDateTime.class),
             resolvePendingApproverRole(rs),
             resolvePendingApproverName(rs),
-            // feat/ot-nonworkday-rate-suggestion: NOT computed here on purpose. This is a plain SQL
-            // row mapper with no WorkScheduleResolver, and the suggestion needs one (see
-            // OvertimeService#suggestDayType). OvertimeService reconstructs every DTO this
-            // repository returns with the real value attached before it reaches a controller --
-            // see OvertimeService#withSuggestedDayType / #requireRequest / #attachSuggestions. A
-            // caller reading this field directly off a bare OvertimeRepository result (bypassing
-            // OvertimeService) would see null, never a wrong answer.
+            // feat/ot-nonworkday-rate-suggestion: NOT computed here on purpose. A caller reading this field directly off a
+            // bare OvertimeRepository result (bypassing OvertimeService) would see null, never a wrong answer.
             null
         );
     }
 
-    /**
-     * feat/pending-approver-info: mirrors {@code OvertimeService#approve}'s own
-     * SUBMITTED/MANAGER_APPROVED branching exactly -- SUBMITTED with a manager stage routes to
-     * "manager"; SUBMITTED with none, or MANAGER_APPROVED, routes to "ceo" (the same {@code
-     * hasManagerApprover} column the approve endpoint's button visibility already keys off). Any
-     * other status (APPROVED/REJECTED/CANCELLED) has nobody left to wait on.
-     */
+    /** feat/pending-approver-info: mirrors OvertimeService#approve's own SUBMITTED/MANAGER_APPROVED branching
+     * exactly -- SUBMITTED with a manager stage routes to "manager"; SUBMITTED with none, or MANAGER_APPROVED,
+     * routes to "ceo". Any other status (APPROVED/REJECTED/CANCELLED) has nobody left to wait on. */
     String resolvePendingApproverRole(ResultSet rs) throws SQLException {
         String status = rs.getString("status");
         if ("SUBMITTED".equals(status)) {
@@ -668,13 +598,9 @@ public class OvertimeRepository {
         return null;
     }
 
-    /**
-     * feat/pending-approver-info: the paired display name -- {@code null} whenever the resolved
-     * role's candidate set is not exactly one active person (see {@code
-     * ManagerApproverRepository#managerApproverSingleNameSql} and {@code
-     * PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL}'s Javadoc). Deliberate ambiguity handling, not
-     * a bug -- see this feature's PR body.
-     */
+    /** feat/pending-approver-info: the paired display name -- null whenever the resolved role's candidate set is
+     * not exactly one active person (see ManagerApproverRepository#managerApproverSingleNameSql and
+     * PendingApproverSql#SINGLE_ACTIVE_CEO_NAME_SQL's Javadoc). */
     String resolvePendingApproverName(ResultSet rs) throws SQLException {
         String role = resolvePendingApproverRole(rs);
         if ("manager".equals(role)) {

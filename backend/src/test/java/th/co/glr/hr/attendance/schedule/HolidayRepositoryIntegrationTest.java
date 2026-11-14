@@ -9,13 +9,9 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.attendance.schedule.HolidayRepository.BankHoliday;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage of {@link HolidayRepository#reconcileBankHolidaysForYear} — this is SQL
- * (an {@code ON CONFLICT ... WHERE} upsert plus a scoped {@code DELETE}), so a Mockito-mocked
- * repository would happily "pass" while the SQL did something else. Every case here proves the
- * reconciliation contract from {@link HolidayRepository}'s class javadoc, not just that a row went
- * in.
- */
+/** Real-Postgres coverage of HolidayRepository#reconcileBankHolidaysForYear — this is SQL (an ON CONFLICT ...
+ * WHERE upsert plus a scoped DELETE), so a Mockito-mocked repository would happily "pass" while the SQL did
+ * something else. */
 class HolidayRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private HolidayRepository repository;
@@ -24,16 +20,9 @@ class HolidayRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         repository = new HolidayRepository(jdbc);
     }
 
-    /**
-     * V129: {@code name_th} was {@code VARCHAR(120)} and production's reconcile write failed with
-     * {@code value too long for type character varying(120)} on a real BOT holiday. This is a
-     * genuine Thai holiday name -- a substitution-day prefix plus the King's full formal royal
-     * title, the exact combination that triggered the production failure -- not padding, since the
-     * point is that the column must now accept what BOT actually sends, not merely accept 120
-     * arbitrary characters. Round-trips through the real upsert so both the {@code INSERT} and the
-     * {@code ON CONFLICT ... DO UPDATE} branch are proven, not just whichever one a mocked
-     * repository would have let through either way.
-     */
+    /** V129: name_th was VARCHAR(120) and production's reconcile write failed with value too long for type
+     * character varying(120) on a real BOT holiday. Round-trips through the real upsert so both the INSERT and the
+     * ON CONFLICT ... */
     @Test
     void aHolidayNameLongerThan120CharactersRoundTripsThroughReconcile() {
         wire();
@@ -46,8 +35,8 @@ class HolidayRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         Map<String, Object> inserted = rowFor(date).orElseThrow();
         assertThat(inserted.get("name_th")).isEqualTo(longName);
 
-        // Also exercise the ON CONFLICT ... DO UPDATE branch with the same long value, not only the
-        // plain INSERT -- V129 widened the column type, and both write paths reference it.
+        // Also exercise the ON CONFLICT ... DO UPDATE branch with the same long value, not only the plain INSERT --
+        // V129 widened the column type, and both write paths reference it.
         repository.reconcileBankHolidaysForYear(2026, List.of(new BankHoliday(date, longName)));
         Map<String, Object> updated = rowFor(date).orElseThrow();
         assertThat(updated.get("name_th")).isEqualTo(longName);
@@ -80,11 +69,8 @@ class HolidayRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(rows.get(0)).containsEntry("name_th", "วันแรงงาน");
     }
 
-    /**
-     * The core reconciliation contract, asserted on one fixture as required: a BANK row the new
-     * fetch no longer returns is deleted, while a COMPANY row for the same year is left completely
-     * untouched by the same call.
-     */
+    /** The core reconciliation contract, asserted on one fixture as required: a BANK row the new fetch no longer
+     * returns is deleted, while a COMPANY row for the same year is left completely untouched by the same call. */
     @Test
     void aStaleBankRowIsDeletedWhileACompanyRowInTheSameYearSurvives() {
         wire();

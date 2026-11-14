@@ -13,10 +13,9 @@ import { SALES_ENABLED } from './app/features.js';
 import { hasPermission, isDivisionManager, isSelfServiceLocked } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
 
-// Route pages are code-split: each import() becomes its own chunk, loaded on
-// navigation. This keeps the entry bundle lean (heavy deps like zod, react-hook-form,
-// and @tanstack/react-table travel with the pages that use them, not the initial load).
-// LoginPage stays eager — it is the first paint for logged-out users.
+// Route pages are code-split: each import() becomes its own chunk, loaded on navigation. This keeps the entry
+// bundle lean (heavy deps like zod, react-hook-form, and @tanstack/react-table travel with the pages that use
+// them, not the initial load).
 const toDefault = (name) => (module) => ({ default: module[name] });
 const ChangePasswordModal = lazy(() => import('./features/auth/ChangePasswordModal.jsx').then(toDefault('ChangePasswordModal')));
 const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').then(toDefault('HrDashboard')));
@@ -126,10 +125,8 @@ export function App() {
   const location = useLocation();
   const { toast, showToast, dismissToast } = useToast();
   // A session that still owes a password change is confined by the backend to /api/auth/{me,
-  // logout,change-password} (MustChangePasswordFilter) — every other endpoint 403s. useHrData's
-  // reads are all `enabled`-gated on a truthy `user`, so withholding it here is what stops this
-  // shell firing a fistful of requests that can only fail while the forced modal is the sole
-  // thing rendered below. They start the moment handleChangePassword clears the flag.
+  // logout,change-password} (MustChangePasswordFilter) — every other endpoint 403s. They start the moment
+  // handleChangePassword clears the flag.
   const dataUser = user?.mustChangePassword ? null : user;
   const {
     currentEmployee,
@@ -189,9 +186,8 @@ export function App() {
       setUser(userFromAuthResponse(response));
       showToast('success', 'เข้าสู่ระบบสำเร็จ');
     } catch (error) {
-      // Never surface the raw server message on the login screen (it's English —
-      // see AuthService.INVALID_CREDENTIALS / mockApi's matching 401). Map by
-      // HTTP status (client.js's ApiError carries one) to Thai copy instead.
+      // Never surface the raw server message on the login screen (it's English — see AuthService.INVALID_CREDENTIALS
+      // / mockApi's matching 401). Map by HTTP status (client.js's ApiError carries one) to Thai copy instead.
       setLoginError(
         error.status === 401
           ? 'อีเมลหรือรหัสผ่านไม่ถูกต้อง'
@@ -225,11 +221,9 @@ export function App() {
   }
 
   if (!user) {
-    // Self-service forgot-password: /forgot-password and /reset-password are handled as
-    // alternate views WITHIN this logged-out branch, switched on the raw pathname, rather than
-    // as entries in the authenticated <Routes> tree below. App.jsx never routes /login itself
-    // through <Route> either (LoginPage is returned directly above) - these two follow the same
-    // shape rather than introducing a second, inconsistent way to gate a logged-out page.
+    // Self-service forgot-password: /forgot-password and /reset-password are handled as alternate views WITHIN
+    // this logged-out branch, switched on the raw pathname, rather than as entries in the authenticated <Routes>
+    // tree below.
     let loggedOutView;
     if (location.pathname === '/forgot-password') {
       loggedOutView = <ForgotPasswordPage onNavigateToLogin={() => navigate('/login')} />;
@@ -283,23 +277,9 @@ export function App() {
           <Route
             path="/"
             element={(
-              // Role-scoped views: each role's landing branches off `/` to its own
-              // Overview instead of the generic EmployeeDashboard — this generalizes
-              // into a role -> Overview map as more roles ship their own (see
-              // docs/role-scoped-views.md). Sales-gated roles degrade to
-              // EmployeeDashboard whenever SALES_ENABLED is off (SALES_ENABLED is
-              // the off-switch — see app/features.js), same as every other
-              // sales-gated surface in this file; hr is people-ops and is NOT gated
-              // on SALES_ENABLED. The base `employee` role further splits by
-              // manager flag: a division manager lands on DivisionManagerOverview,
-              // a plain employee on EmployeeSelfService; any other/unknown role
-              // (or a manager-flagged non-employee role, which shouldn't happen)
-              // falls through to the generic EmployeeDashboard as a safety net.
-              // Locked roles never reach the chain below — employeeId decides only
-              // WHICH self-service landing they get. EmployeeSelfService reads the
-              // employee's own attendance/leave/OT, so a user row with no linked
-              // employee (an admin-only login) has nothing to show there and falls
-              // back to EmployeeDashboard, exactly as the unlocked path does.
+              // Role-scoped views: each role's landing branches off `/` to its own Overview instead of the generic
+              // EmployeeDashboard — this generalizes into a role -> Overview map as more roles ship their own (see
+              // docs/role-scoped-views.md).
               selfServiceLocked ? (
                 user.employeeId ? (
                   <EmployeeSelfService
@@ -398,11 +378,10 @@ export function App() {
               path="/requests"
               element={<ProfileRequestsPage profileRequests={profileRequests} onReview={reviewProfileRequest} showToast={showToast} />}
             />
-            {/* The request table now lives on /profile. This route stays
-                registered as an alias so existing notification deep-links
-                resolve instead of falling through to the 404 route. */}
-            {/* Admin-only. permissions.js guards it on user.admin and exempts it narrowly from
-                the self-service lockdown; the server re-checks hr.employee.is_admin per call. */}
+            {/* The request table now lives on /profile. This route stays registered as an alias so existing notification
+             * deep-links resolve instead of falling through to the 404 route. */}
+            {/* Admin-only. permissions.js guards it on user.admin and exempts it narrowly from the self-service lockdown;
+             * the server re-checks hr.employee.is_admin per call. */}
             <Route path="/activity-log" element={<ActivityLogPage />} />
             <Route path="/my-requests" element={<Navigate to="/profile" replace />} />
             <Route
@@ -432,10 +411,9 @@ export function App() {
               path="/employee-requests"
               element={<RequestsPage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
             />
-            {/* /overtime moves into the combined /employee-requests tab bar (OT +
-                welfare). This alias keeps existing notification deep-links
-                (OvertimeService hardcodes "/overtime") resolving to the OT tab
-                instead of falling through to the 404 route. */}
+            {/* /overtime moves into the combined /employee-requests tab bar (OT + welfare). This alias keeps existing
+             * notification deep-links (OvertimeService hardcodes "/overtime") resolving to the OT tab instead of falling
+             * through to the 404 route. */}
             <Route path="/overtime" element={<Navigate to="/employee-requests?tab=ot" replace />} />
             <Route
               path="/leave"
@@ -518,17 +496,14 @@ export function App() {
                   path="/quotations/:id"
                   element={<QuotationEditorPage user={user} showToast={showToast} />}
                 />
-                {/* Import's cross-deal fulfilment workspace (งานนำเข้า) — the four
-                    stage-12 transitions performed in place. Guarded by
-                    canActOnFulfilment in PATH_GUARDS; see
-                    .design/import-fulfilment/INFORMATION_ARCHITECTURE.md. */}
+                {/* Import's cross-deal fulfilment workspace (งานนำเข้า) — the four stage-12 transitions performed in place.
+                 * Guarded by canActOnFulfilment in PATH_GUARDS; see .design/import-fulfilment/INFORMATION_ARCHITECTURE.md. */}
                 <Route
                   path="/fulfilment"
                   element={<ImportFulfilmentPage user={user} showToast={showToast} />}
                 />
-                {/* Import's OWN per-deal page (GET /api/import/deals/{id}). Import is refused the
-                    whole-deal /tickets/:id, so this is where its deal links land. Guarded by
-                    canViewImportDeal (import/ceo) in PATH_GUARDS. */}
+                {/* Import's OWN per-deal page (GET /api/import/deals/{id}). Import is refused the whole-deal /tickets/:id, so
+                 * this is where its deal links land. Guarded by canViewImportDeal (import/ceo) in PATH_GUARDS. */}
                 <Route
                   path="/import/deals/:ticketId"
                   element={<ImportDealPage user={user} showToast={showToast} />}
@@ -542,8 +517,8 @@ export function App() {
                   path="/finance"
                   element={<AccountFinancePage user={user} showToast={showToast} />}
                 />
-                {/* One deal's money view (H1): the finance-only read model + money actions. Guarded
-                    like /finance by the `/finance` prefix rule in PATH_GUARDS. */}
+                {/* One deal's money view (H1): the finance-only read model + money actions. Guarded like /finance by the
+                 * `/finance` prefix rule in PATH_GUARDS. */}
                 <Route
                   path="/finance/deals/:id"
                   element={<FinanceDealPage user={user} showToast={showToast} />}
@@ -556,15 +531,9 @@ export function App() {
                   path="/ceo-settings"
                   element={<CeoSettingsPage showToast={showToast} />}
                 />
-                {/* Catalog browsing — the `canViewCatalog` guard in PATH_GUARDS
-                    (sales/import/ceo/account/sales_manager) is only enforced if the
-                    route is INSIDE RequireAccess. It previously sat outside (dead
-                    guard — any logged-in user could reach /catalog); moved in here
-                    (fix/catalog-route-guard). This guard is a UX choice about who
-                    sees the screen, NOT a security boundary: GET /api/catalog and
-                    /api/catalog/prices are open to any authenticated user by
-                    product decision (#205; owner ruling 2026-08-01 closing #388).
-                    Nothing here is protecting the data. */}
+                {/* Catalog browsing — the `canViewCatalog` guard in PATH_GUARDS (sales/import/ceo/account/sales_manager) is
+                 * only enforced if the route is INSIDE RequireAccess. It previously sat outside (dead guard — any logged-in
+                 * user could reach /catalog); moved in here (fix/catalog-route-guard). */}
                 <Route
                   path="/catalog"
                   element={<CatalogSearchPage user={user} showToast={showToast} />}

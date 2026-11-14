@@ -35,9 +35,8 @@ import { bangkokTodayIso } from '../../utils/format.js';
 export const DEAL_QUOTATION_TRANSITIONS = {
   DRAFT: ['PENDING_APPROVAL', 'CANCELLED', 'SUPERSEDED'],
   PENDING_APPROVAL: ['APPROVED', 'DRAFT', 'ISSUED'],
-  // The APPROVED/DRAFT -> SUPERSEDED edges are the side effect of a child revision being
-  // approved, not a status a caller ever requests directly (there is no "supersede" endpoint in
-  // the plan).
+  // The APPROVED/DRAFT -> SUPERSEDED edges are the side effect of a child revision being approved, not a status
+  // a caller ever requests directly (there is no "supersede" endpoint in the plan).
   APPROVED: ['SUPERSEDED'],
   SUPERSEDED: [],
   CANCELLED: [],
@@ -49,11 +48,8 @@ export function canTransitionDealQuotation(from, to) {
   return !!from && !!to && (DEAL_QUOTATION_TRANSITIONS[from] ?? []).includes(to);
 }
 
-// Thai status labels + StatusBadge tone. Canonical source -- do not re-add a page-local copy.
-// Distinct map from utils/format.js's quotationStatusLabel, which is the PCR-chain
-// CustomerQuotation's own (different) enum -- DRAFT/READY_TO_ISSUE/ISSUED/SENT/ACCEPTED/
-// REJECTED/REVISION_REQUESTED/EXPIRED/CANCELLED/SUPERSEDED. The two share some keys with
-// different meanings; never import one where the other belongs.
+// Thai status labels + StatusBadge tone. Canonical source -- do not re-add a page-local copy. The two share
+// some keys with different meanings; never import one where the other belongs.
 const DEAL_QUOTATION_STATUS_LABELS = {
   DRAFT: { label: 'ร่าง', tone: 'neutral' },
   PENDING_APPROVAL: { label: 'รออนุมัติ', tone: 'warning' },
@@ -77,15 +73,9 @@ export function dealQuotationStatusLabel(status) {
   return DEAL_QUOTATION_STATUS_LABELS[status] ?? { label: status, tone: 'neutral' };
 }
 
-// ── Ownership / role predicates. Mirrors QUOTATION-V2-PLAN.md's Authz section. ────────────────
-//
-// "ticket.created_by = actor" throughout the plan is the SAME comparison every other sales-scoped
-// ownership check in this codebase makes -- `user.id === ticket.createdById` (see
-// TicketDetailPage.jsx:703, DealDepositPanel.jsx:89, TicketService.java's actor.id() checks) --
-// NOT user.employeeId. A DealQuotationDto's own `salesRepId` field is defined by the plan to
-// literally equal `ticket.created_by` at creation time, so predicates that only receive the
-// quotation (not the ticket) compare against `salesRepId` instead -- same comparison, one hop
-// removed.
+// Ownership / role predicates. A DealQuotationDto's own `salesRepId` field is defined by the plan to literally
+// equal `ticket.created_by` at creation time, so predicates that only receive the quotation (not the ticket)
+// compare against `salesRepId` instead -- same comparison, one hop removed.
 
 /** The per-employee "can create quotations" capability (`AuthResponse.canCreateQuotation` /
  * `hr.employee.can_create_quotation`). A CAPABILITY, not a role (App.jsx's userFromAuthResponse
@@ -140,10 +130,7 @@ export function canCancelDealQuotation(user, quotation) {
   return canEditDealQuotation(user, quotation) && canTransitionDealQuotation(quotation?.docStatus, 'CANCELLED');
 }
 
-/** "APPROVED -> (revise) -> new DRAFT child": a DEAL_DIRECT quotation may be revised only when
- * APPROVED. A PRICING_REQUEST-origin quotation may be revised when ISSUED or REVISION_REQUESTED, and
- * ONLY by its owning sales rep (mirrors DealQuotationService#createRevision, which reuses the
- * recordOutcome gate there) -- sales_manager / granted employees may NOT, unlike for DEAL_DIRECT.
+/** "APPROVED -> (revise) -> new DRAFT child": a DEAL_DIRECT quotation may be revised only when APPROVED.
  * Display-only; the server re-checks. */
 export function canReviseDealQuotation(user, quotation, order) {
   if (quotation?.origin === 'PRICING_REQUEST') {
@@ -213,16 +200,15 @@ export function canChangeDealCustomer(user, ticket, quotation) {
   return user.role === 'sales' && isOwnerOrKeyer(ticket, user.id);
 }
 
-/** Mirrors DealQuotationService.approve/reject's gate: sales_manager or ceo, role-only (the
- * plan states "No self-exclusion (matches repo convention; flagged)") -- the caller combines
- * this with canDecideDealQuotation below, or its own PENDING_APPROVAL check, before rendering a
- * button. Kept role-only (no `quotation` param) per this file's own contract with the caller. */
+/** Mirrors DealQuotationService.approve/reject's gate: sales_manager or ceo, role-only (the plan states "No
+ * self-exclusion (matches repo convention; flagged)") -- the caller combines this with canDecideDealQuotation
+ * below, or its own PENDING_APPROVAL check, before rendering a button. */
 export function canApproveDealQuotation(user) {
   return user?.role === 'sales_manager' || user?.role === 'ceo';
 }
 
-/** canApproveDealQuotation ANDed with the one status a decision may actually be made against --
- * the button-gating shape most callers want. */
+/** canApproveDealQuotation ANDed with the one status a decision may actually be made against -- the
+ * button-gating shape most callers want. */
 export function canDecideDealQuotation(user, quotation) {
   return canApproveDealQuotation(user) && quotation?.docStatus === 'PENDING_APPROVAL';
 }
@@ -234,11 +220,9 @@ export function canDecideDealQuotation(user, quotation) {
 // block) a sales_manager's disabled button.
 // ─────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Whether this PRICING_REQUEST-origin quotation no longer matches the CEO's own decision — ANY
- * line's price/discount, the header price mode, or a removed CEO-linked line — mirrors
- * DealQuotationService#requireCeoApprovalIfChanged's own comparison exactly (client-side echo for
- * UI wording ONLY; the server recomputes this itself and never trusts a flag from here). Always
- * `false` for a DEAL_DIRECT quotation, which has no CEO decision to compare against. */
+/** Whether this PRICING_REQUEST-origin quotation no longer matches the CEO's own decision — ANY line's
+ * price/discount, the header price mode, or a removed CEO-linked line — mirrors
+ * DealQuotationService#requireCeoApprovalIfChanged's own comparison exactly. */
 function dealQuotationRequiresCeoApproval(quotation) {
   if (!quotation || quotation.origin !== 'PRICING_REQUEST') return false;
   return Boolean(quotation.priceModeChangedFromCeo)
@@ -246,29 +230,22 @@ function dealQuotationRequiresCeoApproval(quotation) {
     || (quotation.itemsRemovedFromCeoCount ?? 0) > 0;
 }
 
-/** canDecideDealQuotation, further refused for a sales_manager once the quotation no longer
- * matches the CEO's decision — the one case an otherwise-eligible sales_manager may NOT approve.
- * Always agrees with canDecideDealQuotation for a ceo (the CEO's own authority is never gated by
- * this) or a DEAL_DIRECT quotation (dealQuotationRequiresCeoApproval is always false there). */
+/** canDecideDealQuotation, further refused for a sales_manager once the quotation no longer matches the CEO's
+ * decision — the one case an otherwise-eligible sales_manager may NOT approve. */
 export function canApproveDealQuotationNow(user, quotation) {
   if (!canDecideDealQuotation(user, quotation)) return false;
   return user?.role === 'ceo' || !dealQuotationRequiresCeoApproval(quotation);
 }
 
-/** Mirrors the plan's "view/list/download" role set exactly: sales (own deals), sales_manager,
- * ceo, import, account (the latter two read-only) -- OR a canCreateQuotation-granted employee,
- * who may view any deal (DealQuotationService.requireViewAccess: the grant already lets them
- * act on any deal, so it lets them view any deal too). Role-only, per this file's contract with
- * the caller -- per-row "own deals only" scoping for `sales` happens server-side (and in
- * mockApi.js's list/listForTicket filters), the same split canViewCustomerQuotation-style
- * predicates elsewhere in this codebase draw between the route guard and the row filter. */
+/** Mirrors the plan's "view/list/download" role set exactly: sales, sales_manager, ceo, import, account -- OR a
+ * canCreateQuotation-granted employee, who may view any deal. */
 export function canViewDealQuotation(user) {
   if (!user) return false;
   return hasDealQuotationGrant(user) || ['sales', 'sales_manager', 'ceo', 'import', 'account'].includes(user.role);
 }
 
-/** Read-only viewers per the plan ("import, account read-only") -- never see write actions
- * regardless of docStatus, distinct from canEditDealQuotation's sales/sales_manager audience. */
+/** Read-only viewers per the plan ("import, account read-only") -- never see write actions regardless of
+ * docStatus, distinct from canEditDealQuotation's sales/sales_manager audience. */
 export function isDealQuotationReadOnlyViewer(user) {
   return user?.role === 'import' || user?.role === 'account';
 }
@@ -320,8 +297,8 @@ export function stageForQuotationRecipient(code) {
   return quotationRecipientOption(code)?.stage ?? null;
 }
 
-/** The inverse, for flow B's preselect: a deal already AT a quote stage names its recipient.
- * '' for every other stage — the rep is then asked, never guessed for. */
+/** The inverse, for flow B's preselect: a deal already AT a quote stage names its recipient. '' for every other
+ * stage — the rep is then asked, never guessed for. */
 export function recipientForDealStage(stage) {
   return QUOTATION_RECIPIENT_OPTIONS.find((o) => o.stage === stage)?.code ?? '';
 }
@@ -578,8 +555,8 @@ export const QUANTITY_MODE_OPTIONS = [
 ];
 
 // เผื่อ (wastage) mode switch — mirrors QUANTITY_MODE_OPTIONS' own segmented-control shape exactly
-// (QuotationItemRow renders both with the same styling). PERCENT/PIECES are WastageCalculator's
-// own mode codes; this is a label mapping only, not a source of truth for validation.
+// (QuotationItemRow renders both with the same styling). PERCENT/PIECES are WastageCalculator's own mode
+// codes; this is a label mapping only, not a source of truth for validation.
 export const WASTAGE_MODE_OPTIONS = [
   { code: 'PERCENT', label: '%' },
   { code: 'PIECES', label: 'แผ่น' },
@@ -622,8 +599,8 @@ const ORIGIN_COUNTRY_BY_ISO_CODE = {
   TH: 'ไทย-สต็อก',
 };
 
-/** '' (never null) when the code is unknown/absent, so a caller can spread the result into a
- * patch and have `originCountry: ''` mean "still unset" exactly like emptyQuotationItem does. */
+/** '' (never null) when the code is unknown/absent, so a caller can spread the result into a patch and have
+ * `originCountry: ''` mean "still unset" exactly like emptyQuotationItem does. */
 export function originCountryFromCode(originCountryCode) {
   if (!originCountryCode) return '';
   return ORIGIN_COUNTRY_BY_ISO_CODE[String(originCountryCode).trim().toUpperCase()] ?? '';
@@ -651,9 +628,9 @@ export const DEAL_QUOTATION_STATUS_TABS = [
   { key: 'APPROVED', label: 'อนุมัติแล้ว', countKey: 'approved', params: { status: ['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED'] } },
 ];
 
-/** Approvers (sales_manager/ceo) land on the queue that is waiting on THEM; everyone else on
- * ทั้งหมด. Only used when the URL carries no `?status=` -- an explicit tab in the URL always
- * wins, so a shared link opens the same tab for whoever follows it. */
+/** Approvers (sales_manager/ceo) land on the queue that is waiting on THEM; everyone else on ทั้งหมด. Only used
+ * when the URL carries no `?status=` -- an explicit tab in the URL always wins, so a shared link opens the
+ * same tab for whoever follows it. */
 export function defaultDealQuotationStatusTab(user) {
   return canApproveDealQuotation(user) ? 'PENDING_APPROVAL' : 'all';
 }
@@ -676,11 +653,9 @@ export function dealQuotationListSeesAll(user) {
   return user?.role === 'sales_manager' || user?.role === 'ceo';
 }
 
-/** Distinct `{ id, name }` options for the rep filter dropdown, derived from the ROWS actually on
- * the list (not a department/role listing) -- so a non-sales grant-holder who owns a visible
- * quotation is offered as an option too, and no option is ever offered for someone who owns
- * nothing on the current list. Skips rows with no `salesRepId`, dedupes by id, and sorts by name
- * with Thai collation. */
+/** Distinct `{ id, name }` options for the rep filter dropdown, derived from the ROWS actually on the list --
+ * so a non-sales grant-holder who owns a visible quotation is offered as an option too, and no option is ever
+ * offered for someone who owns nothing on the current list. */
 export function dealQuotationRepOptions(rows) {
   const byId = new Map();
   (rows ?? []).forEach((row) => {
@@ -696,8 +671,8 @@ export function dealQuotationRepOptions(rows) {
  * unclassifiable between the two buckets. */
 const DEAL_QUOTATION_AMOUNT_THRESHOLD = 1000000;
 
-/** The two ยอดรวม filter options offered to see-all roles (sales_manager/ceo), in display order.
- * `''` ("ทั้งหมด") is added by the caller as the leading option. */
+/** The two ยอดรวม filter options offered to see-all roles (sales_manager/ceo), in display order. `''`
+ * ("ทั้งหมด") is added by the caller as the leading option. */
 export const DEAL_QUOTATION_AMOUNT_OPTIONS = [
   { value: 'lt1m', label: 'ต่ำกว่าหนึ่งล้าน' },
   { value: 'gte1m', label: 'มากกว่าหนึ่งล้านบาท' },
@@ -784,9 +759,9 @@ export function filterDealQuotationRows(rows, { repId = '', text = '', amount = 
 // maintains the invariant that items sharing a groupId are CONTIGUOUS in that array, in group order.
 // Save is then `items.map(...)` with no re-sorting, and load is the reverse walk below.
 
-/** What a blank ตำแหน่งติดตั้ง label reads as in the editor. A blank label prints NO heading row on
- * the document (the renderer groups only non-blank labels), so this text is UI-only and is never
- * sent to the server -- `locationLabel` stays null for such a group. */
+/** What a blank ตำแหน่งติดตั้ง label reads as in the editor. A blank label prints NO heading row on the
+ * document (the renderer groups only non-blank labels), so this text is UI-only and is never sent to the
+ * server -- `locationLabel` stays null for such a group. */
 export const UNLABELLED_LOCATION_TEXT = 'ไม่ระบุตำแหน่ง';
 
 let locationGroupSeq = 0;
@@ -795,17 +770,8 @@ export function newLocationGroupId() {
   return `loc-${locationGroupSeq}`;
 }
 
-/**
- * Rebuilds the editor's groups from a flat, ordered item list — "loading rebuilds groups from
- * consecutive equal labels". Returns `{ groups, items }` where every item carries the `groupId`
- * of the run it belongs to; the returned items keep their input order, so the contiguity
- * invariant above holds by construction.
- *
- * A null/undefined/'' label is its own value, so two blank-labelled items that are ADJACENT share
- * one unlabelled group, while a blank item between two "ชั้น 1" items splits ชั้น 1 into two
- * groups — which is precisely what the printed document does with the same rows. Never
- * "collect all blanks together": that would reorder the items and change the document.
- */
+/** Rebuilds the editor's groups from a flat, ordered item list — "loading rebuilds groups from consecutive
+ * equal labels". Never "collect all blanks together": that would reorder the items and change the document. */
 export function locationGroupsFromItems(items) {
   const groups = [];
   let previousLabel = null;
@@ -836,9 +802,9 @@ export function locationGroupsFromItems(items) {
 // empty group is a visible warning, and neither is silently swallowed. Both helpers are pure
 // functions of the editor's own state.
 
-/** Group ids whose trimmed label duplicates an EARLIER group's — blank counts as a value, since
- * two blank-labelled groups merge exactly like two "ชั้น 1" ones. The first occurrence is never
- * reported: it is the one that is fine, and the later one is what the rep has to rename. */
+/** Group ids whose trimmed label duplicates an EARLIER group's — blank counts as a value, since two
+ * blank-labelled groups merge exactly like two "ชั้น 1" ones. The first occurrence is never reported: it is
+ * the one that is fine, and the later one is what the rep has to rename. */
 export function duplicateLocationLabelGroupIds(groups) {
   const seen = new Set();
   const duplicates = new Set();
@@ -850,8 +816,8 @@ export function duplicateLocationLabelGroupIds(groups) {
   return duplicates;
 }
 
-/** Group ids holding no items — they print nothing and do not survive a save, so the editor says
- * so out loud rather than letting one quietly disappear on the next reload. */
+/** Group ids holding no items — they print nothing and do not survive a save, so the editor says so out loud
+ * rather than letting one quietly disappear on the next reload. */
 export function emptyLocationGroupIds(groups, items) {
   const populated = new Set((items ?? []).map((item) => item.groupId));
   return new Set((groups ?? []).filter((g) => !populated.has(g.groupId)).map((g) => g.groupId));
@@ -887,11 +853,8 @@ export function isDealQuotationNeedingRework(row) {
 // client-side mirror of the same comparison against the CURRENT (possibly unsaved) local field
 // values, so the marker updates the instant the field changes.
 
-/** Null-safe numeric equality for a CEO-comparison field. Mirrors
- * `DealQuotationRepository#moneyEquals`'s BigDecimal `compareTo` (scale-insensitive: 10 and 10.00
- * are the same value) using a tiny epsilon instead of a decimal type, since these are plain typed
- * JS numbers, not persisted NUMERIC columns — there is no scale to normalize, only float
- * representation to tolerate. Treats `''`/`null`/`undefined` uniformly as "nothing typed yet". */
+/** Null-safe numeric equality for a CEO-comparison field. Treats `''`/`null`/`undefined` uniformly as "nothing
+ * typed yet". */
 function localMoneyEquals(a, b) {
   const na = a === '' || a == null ? null : Number(a);
   const nb = b === '' || b == null ? null : Number(b);
@@ -917,8 +880,8 @@ function localMoneyEquals(a, b) {
 export function isTilePriceChangedFromCeoLocally(item, priceMode) {
   if (item.ceoListUnitPrice == null && item.ceoDiscountPct == null
       && item.ceoSpecialPriceSqm == null && item.ceoDirectNetPrice == null) {
-    // Unlinked row (no decision item) — nothing to compare against, mirrors the backend's own
-    // "every ceo_* column came back null" short-circuit.
+    // Unlinked row (no decision item) — nothing to compare against, mirrors the backend's own "every ceo_* column
+    // came back null" short-circuit.
     return false;
   }
   if (priceMode === 'SPECIAL_SQM') {
@@ -932,8 +895,8 @@ export function isTilePriceChangedFromCeoLocally(item, priceMode) {
     return !localMoneyEquals(net, item.ceoDirectNetPrice);
   }
   if (priceMode === 'NET') {
-    // unitPrice is per แผ่น either way: the rep's own on a row priced per แผ่น, the server's
-    // derivation on one priced per ตร.ม. (see usesListPriceSqm).
+    // unitPrice is per แผ่น either way: the rep's own on a row priced per แผ่น, the server's derivation on one
+    // priced per ตร.ม. (see usesListPriceSqm).
     return !localMoneyEquals(item.unitPrice, item.ceoListUnitPrice)
       || !localMoneyEquals(item.discountPct ?? 0, item.ceoDiscountPct ?? 0);
   }
@@ -957,14 +920,14 @@ export function isTilePriceChangedFromCeoLocally(item, priceMode) {
 //     retyped cannot move by a satang.
 // ราคาสุทธิ works the same way with `directNetPriceSqm` / `directNetPrice`.
 
-/** "Has the rep typed something here?" — '' and null/undefined are both "no". 0 is "yes": it is a
- * typed value the validator then refuses. */
+/** "Has the rep typed something here?" — '' and null/undefined are both "no". 0 is "yes": it is a typed value
+ * the validator then refuses. */
 export function hasTypedPrice(value) {
   return value !== '' && value != null;
 }
 
-/** Whether this row's ราคาตั้ง is the per-ตร.ม. figure in `listPriceSqm`. Never on an English
- * document, whatever a row happens to be carrying — see the block comment above. */
+/** Whether this row's ราคาตั้ง is the per-ตร.ม. figure in `listPriceSqm`. Never on an English document,
+ * whatever a row happens to be carrying — see the block comment above. */
 export function usesListPriceSqm(item, documentLanguage = 'TH') {
   return documentLanguage !== 'EN' && hasTypedPrice(item?.listPriceSqm);
 }
@@ -994,8 +957,8 @@ export function ceilPieces(n) {
   return Math.ceil(n - 1e-9);
 }
 
-/** ตร.ม./แผ่น (stored `item.sqmPerPiece`) → แผ่น/ตร.ม. (what the field shows). `null` when there
- * is nothing to invert yet, so an empty/zero field reads as empty rather than as `Infinity`. */
+/** ตร.ม./แผ่น (stored `item.sqmPerPiece`) → แผ่น/ตร.ม. (what the field shows). `null` when there is nothing to
+ * invert yet, so an empty/zero field reads as empty rather than as `Infinity`. */
 export function piecesPerSqmFromSqmPerPiece(sqmPerPiece) {
   const n = Number(sqmPerPiece);
   return n > 0 ? round2(1 / n) : null;
@@ -1098,15 +1061,15 @@ const SIZE_TEXT_WHITESPACE = /[\p{Z}\uFEFF\u2028\u2029]/gu;
  * pinned identically in `DealQuotationLinesTest`.
  */
 function normalizeSizeText(text) {
-  // Intentional control-character range: mirrors String#trim()'s own "<= U+0020" definition
-  // (control bytes included), see this function's own doc.
+  // Intentional control-character range: mirrors String#trim()'s own "<= U+0020" definition (control bytes
+  // included), see this function's own doc.
   // eslint-disable-next-line no-control-regex
   return text.replace(SIZE_TEXT_WHITESPACE, ' ').replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '');
 }
 
-/** `cm`/`cm.`/`ซม`/`ซม.`/`ซ.ม.` → `'cm'`; `mm`/`mm.`/`มม`/`มม.`/`ม.ม.` → `'mm'`; no token captured
- * → `null` ("unspecified"). Thai ซ (cm) and ม (mm) never share a leading character, so a plain
- * `startsWith` is unambiguous. */
+/** `cm`/`cm.`/`ซม`/`ซม.`/`ซ.ม.` → `'cm'`; `mm`/`mm.`/`มม`/`มม.`/`ม.ม.` → `'mm'`; no token captured → `null`
+ * ("unspecified"). Thai ซ (cm) and ม (mm) never share a leading character, so a plain `startsWith` is
+ * unambiguous. */
 function unitFamily(token) {
   if (!token) return null;
   const t = token.toLowerCase();
@@ -1117,22 +1080,9 @@ function unitFamily(token) {
   return null;
 }
 
-/**
- * The shared size grammar — see `SIZE_PATTERN` above for the full spec (separators, per-number/
- * trailing units, decimal comma, ignored third dimension, ignored trailing parenthetical). Exported
- * so `quotationMeta.test.js` can pin the shared vector table directly against the parse RESULT
- * (same inputs, same {width, height, unit} shape as the backend's package-private
- * `DealQuotationLines#parseTwoDimensions`), not just against a derived value.
- *
- * Unit resolution: an explicit unit on EITHER number wins outright and becomes `unit`. When both
- * numbers carry one and they genuinely conflict (a shape no real rep types, e.g. "30cm x 60mm")
- * there is no sane single reading, so this falls back to `null` ("unspecified") rather than
- * silently preferring one side.
- *
- * @return `{width, height, unit}` (unit is `'cm'`, `'mm'`, or `null`), or `null` when `sizeText` is
- *     blank, exceeds `MAX_SIZE_TEXT_LENGTH`, does not match the grammar, or either number is not
- *     strictly positive.
- */
+/** The shared size grammar — see `SIZE_PATTERN` above for the full spec (separators, per-number/ trailing
+ * units, decimal comma, ignored third dimension, ignored trailing parenthetical). Unit resolution: an explicit
+ * unit on EITHER number wins outright and becomes `unit`. */
 export function parseSizeText(sizeText) {
   const normalized = normalizeSizeText(sizeText ?? '');
   // Reject BEFORE the regex runs (ReDoS guard), independent of the grammar above.
@@ -1234,16 +1184,8 @@ function compareToCatalogFaceSize(sizeText, catalogSizeText) {
     || (checkMm && matchesPair(typedWidth, typedHeight, catalogWidth * 10, catalogHeight * 10));
 }
 
-/**
- * Whether `sizeText` states the SAME face size as `catalogSizeText` — see
- * {@link compareToCatalogFaceSize} for the comparison itself.
- *
- * @return `true` only when both parse AND match; `false` otherwise, INCLUDING when either text
- *     fails to parse — "matches" and "can't tell" both read as "not confirmed to match" here. Do
- *     not use this to decide whether to KEEP a catalogue-resolved value on an unparseable edit —
- *     use {@link sizeTextDiffersFromCatalogFaceSize} for that (its `false` on "can't tell" means
- *     the opposite thing this function's `false` does).
- */
+/** Whether `sizeText` states the SAME face size as `catalogSizeText` — see compareToCatalogFaceSize for the
+ * comparison itself. */
 export function sizeTextMatchesCatalogFaceSize(sizeText, catalogSizeText) {
   return compareToCatalogFaceSize(sizeText, catalogSizeText) === true;
 }
@@ -1337,8 +1279,8 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
       } else if (!(Number(item?.directNetPrice) > 0)) {
         errors.directNetPrice = thai ? 'กรุณาระบุราคาสุทธิ (บาท/ตร.ม.)' : 'กรุณาระบุราคาสุทธิ/แผ่น';
       }
-      // Optional here, but a typed one must still be positive — the server refuses a non-positive
-      // list price on every TILE row whatever the mode.
+      // Optional here, but a typed one must still be positive — the server refuses a non-positive list price on
+      // every TILE row whatever the mode.
       if (listSqm) {
         const error = sqmPriceError(item.listPriceSqm, 'ราคาตั้งต้องมากกว่าศูนย์');
         if (error) errors.unitPrice = error;
@@ -1351,8 +1293,8 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
           priceMode === 'SPECIAL_SQM' ? 'ราคาตั้งต้องมากกว่าศูนย์' : 'ราคาต้องมากกว่าศูนย์');
         if (error) errors.unitPrice = error;
       } else if (!(Number(item?.unitPrice) > 0)) {
-        // An English SPECIAL_SQM row is `perSqm` and never reaches here, so the only list price
-        // ราคาพิเศษ mode ever asks for is the Thai, per-ตร.ม. one.
+        // An English SPECIAL_SQM row is `perSqm` and never reaches here, so the only list price ราคาพิเศษ mode ever
+        // asks for is the Thai, per-ตร.ม. one.
         errors.unitPrice = priceMode === 'SPECIAL_SQM' ? 'กรุณาระบุราคาตั้ง (บาท/ตร.ม.)'
           : thai ? 'กรุณาระบุราคา/ตร.ม.' : 'กรุณาระบุราคา/หน่วย';
       }
@@ -1415,10 +1357,7 @@ export function validateQuotationItem(item, priceMode = 'NET', documentLanguage 
   return errors;
 }
 
-// Short Thai field labels for the per-row "รายการที่ N: ขาด X, Y" summary -- deliberately shorter
-// than validateQuotationItem's own full sentences ("กรุณาระบุความหนา (มม.)" -> "ความหนา"), and in
-// the same left-to-right order the item row itself lays the fields out in, so the summary reads
-// in the order the rep will actually scan the row.
+// Short Thai field labels for the per-row "รายการที่ N: ขาด X, Y" summary.
 const QUOTATION_ITEM_FIELD_ORDER = [
   'description', 'model', 'color', 'texture', 'sizeText', 'thicknessMm', 'sqmPerPiece', 'piecesPerBox',
   'sqmPerBox', 'unitPrice', 'specialPriceSqm', 'directNetPrice', 'quantity', 'unit', 'areaSqm', 'piecesInput',
@@ -1441,10 +1380,8 @@ const QUOTATION_ITEM_FIELD_LABELS = {
   wastageValue: 'เผื่อ (จำนวนแผ่น)',
 };
 
-/** "รายการที่ {index+1}: ขาด {field1}, {field2}" or null once `errors` (validateQuotationItem's
- * own return value) is empty. Kept a separate, tiny function rather than folded into
- * validateQuotationItem so a caller that only wants the per-field errors (QuotationItemRow's
- * inline hints) never pays for string-building it does not use. */
+/** "รายการที่ {index+1}: ขาด {field1}, {field2}" or null once `errors` (validateQuotationItem's own return
+ * value) is empty. */
 export function quotationItemMissingSummary(errors, index) {
   const keys = Object.keys(errors ?? {});
   if (keys.length === 0) return null;
@@ -1464,8 +1401,8 @@ export const LINE_TYPE_TILE = 'TILE';
 export const LINE_TYPE_PLAIN = 'PLAIN';
 export const LINE_TYPE_ADJUSTMENT = 'ADJUSTMENT';
 
-/** A pre-v3 row (and every mock/fixture row that predates V168) carries no lineType; the server
- * normalises a stored NULL to TILE on read, and so does this. */
+/** A pre-v3 row (and every mock/fixture row that predates V168) carries no lineType; the server normalises a
+ * stored NULL to TILE on read, and so does this. */
 export function lineTypeOf(item) {
   return item?.lineType || LINE_TYPE_TILE;
 }
@@ -1475,8 +1412,8 @@ export const DOCUMENT_LANGUAGE_OPTIONS = [
   { code: 'EN', label: 'English', currency: 'USD', hint: 'ใบเสนอราคาภาษาอังกฤษ (F-SM-008) · USD · ไม่มี VAT' },
 ];
 
-/** TH→THB, EN→USD — DealQuotationService#resolveCurrency refuses any other pairing, so the UI
- * derives the currency rather than offering it as a second choice. */
+/** TH→THB, EN→USD — DealQuotationService#resolveCurrency refuses any other pairing, so the UI derives the
+ * currency rather than offering it as a second choice. */
 export function currencyForLanguage(documentLanguage) {
   return documentLanguage === 'EN' ? 'USD' : 'THB';
 }
@@ -1620,28 +1557,23 @@ export function rowPriceMode(documentPriceMode, item) {
   return ROW_PRICE_MODES.includes(item?.priceMode) ? item.priceMode : 'NET';
 }
 
-/**
- * Whether the editor offers "ผสมหลายวิธี" at all. Mirrors
- * {@code DealQuotationService#requirePriceModeAllowed}: Thai documents only (on English, ราคา
- * USD/ตร.ม. changes a row's unit and quantity, not just its price), and never a quotation that came
- * from a คำขอราคา (its mode is the CEO's decision). A UI courtesy — the server is what refuses.
- */
+/** Whether the editor offers "ผสมหลายวิธี" at all. Mirrors DealQuotationService#requirePriceModeAllowed: Thai
+ * documents only (on English, ราคา USD/ตร.ม. changes a row's unit and quantity, not just its price), and never
+ * a quotation that came from a คำขอราคา (its mode is the CEO's decision). */
 export function mixedPriceModeAvailable(documentLanguage, origin) {
   return documentLanguage !== 'EN' && origin !== 'PRICING_REQUEST';
 }
 
 /** Whether a document in `documentLanguage` may be in `priceMode` — the three row modes per
- * {@link availablePriceModes}, and MIXED on a Thai document. */
+ * availablePriceModes, and MIXED on a Thai document. */
 export function isPriceModeAvailable(priceMode, documentLanguage) {
   if (priceMode === PRICE_MODE_MIXED) return documentLanguage !== 'EN';
   return availablePriceModes(documentLanguage).some((opt) => opt.code === priceMode);
 }
 
-/**
- * "ราคาตั้ง − ส่วนลด % 2 รายการ · ราคาพิเศษ บาท/ตร.ม. 1 รายการ" — how many tile rows of a mixed
- * document use each mode, in the order the modes are offered. The line under the mixed option, so
- * the rep can see the mix at a glance without scrolling the rows.
- */
+/** "ราคาตั้ง − ส่วนลด % 2 รายการ · ราคาพิเศษ บาท/ตร.ม. 1 รายการ" — how many tile rows of a mixed document use
+ * each mode, in the order the modes are offered. The line under the mixed option, so the rep can see the mix
+ * at a glance without scrolling the rows. */
 export function summarizeRowPriceModes(rows, documentLanguage = 'TH') {
   const tiles = (rows ?? []).filter((row) => lineTypeOf(row) === LINE_TYPE_TILE);
   if (tiles.length === 0) return 'ยังไม่มีรายการกระเบื้อง';
@@ -1709,8 +1641,8 @@ export function rowHasPriceForPreview(row, priceMode = 'NET', documentLanguage =
   const hasList = usesListPriceSqm(row, documentLanguage) ? hasArea : hasTypedPrice(row?.unitPrice);
   if (priceMode === 'DIRECT_NET') {
     const hasNet = usesDirectNetPriceSqm(row, documentLanguage) ? hasArea : hasTypedPrice(row?.directNetPrice);
-    // The list price is optional here — but a per-ตร.ม. one, when given, travels with the net and
-    // needs the same area to mean anything.
+    // The list price is optional here — but a per-ตร.ม. one, when given, travels with the net and needs the same
+    // area to mean anything.
     return hasNet && (!usesListPriceSqm(row, documentLanguage) || hasArea);
   }
   if (priceMode === 'SPECIAL_SQM') {
@@ -1784,13 +1716,9 @@ function formatPlainNumber(value) {
   return amount.toLocaleString('en-US', { maximumFractionDigits: 2 });
 }
 
-/**
- * The ส่วนลดพิเศษ description, for the EDITOR's preview only — the saved row's `descriptionLine`
- * comes from DealQuotationLines#adjustmentDescription and is what is printed. Same phrasing and the
- * same zero-padded dd/MM/BE date that method emits ("31/07/2569"), so the preview and the saved
- * line read identically. A flat adjustment with the rep's own wording keeps that wording, exactly
- * as the service does.
- */
+/** The ส่วนลดพิเศษ description, for the EDITOR's preview only — the saved row's `descriptionLine` comes from
+ * DealQuotationLines#adjustmentDescription and is what is printed. A flat adjustment with the rep's own
+ * wording keeps that wording, exactly as the service does. */
 export function adjustmentDescriptionPreview(adjustment, documentLanguage = 'TH') {
   if (adjustment?.adjustmentKind === 'AMOUNT' && adjustment?.description?.trim()) {
     return adjustment.description.trim();
@@ -1813,8 +1741,8 @@ export function adjustmentDescriptionPreview(adjustment, documentLanguage = 'TH'
   return `${head} สำหรับการสั่งซื้อภายใน ${String(day).padStart(2, '0')}/${String(month).padStart(2, '0')}/${year + 543}`;
 }
 
-// A literal list rather than Intl/toLocaleDateString: the backend pins Locale.US, and a browser
-// locale must not be able to print a Thai or Buddhist-era month on the English preview.
+// A literal list rather than Intl/toLocaleDateString: the backend pins Locale.US, and a browser locale must
+// not be able to print a Thai or Buddhist-era month on the English preview.
 const ENGLISH_MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
   'September', 'October', 'November', 'December'];
 
@@ -1906,17 +1834,17 @@ export function hasSpecialPricing(documentPriceMode, rows) {
   return false;
 }
 
-/** Up to `places` decimals — the backend's `@Digits(fraction = N)` bounds (quantity 2, the
- * ราคาพิเศษ 2, adjustmentPct 3). A value beyond them is a 400 from bean validation, so the editor
- * says so on the field instead of letting the save fail. */
+/** Up to `places` decimals — the backend's `@Digits(fraction = N)` bounds (quantity 2, the ราคาพิเศษ 2,
+ * adjustmentPct 3). A value beyond them is a 400 from bean validation, so the editor says so on the field
+ * instead of letting the save fail. */
 function withinDecimals(value, places) {
   const text = String(value ?? '');
   const dot = text.indexOf('.');
   return dot < 0 || text.length - dot - 1 <= places;
 }
 
-/** PLAIN row completeness — DealQuotationService#buildPlainItem's own list (รายละเอียด, จำนวน,
- * หน่วย) plus the positive price #requirePriceValidForType demands of every non-adjustment row. */
+/** PLAIN row completeness — DealQuotationService#buildPlainItem's own list (รายละเอียด, จำนวน, หน่วย) plus the
+ * positive price #requirePriceValidForType demands of every non-adjustment row. */
 export function validatePlainItem(item) {
   const errors = {};
   if (!item?.description?.trim()) errors.description = 'กรุณาระบุรายละเอียด';
@@ -1937,8 +1865,8 @@ export function validatePlainItem(item) {
   return errors;
 }
 
-/** ส่วนลดพิเศษ completeness — #requirePriceValidForType's "exactly one of percent / flat, and
- * positive". The deadline is optional on the server (the description simply omits the date). */
+/** ส่วนลดพิเศษ completeness — #requirePriceValidForType's "exactly one of percent / flat, and positive". The
+ * deadline is optional on the server (the description simply omits the date). */
 export function validateAdjustment(adjustment) {
   const errors = {};
   if (adjustment?.adjustmentKind === 'AMOUNT') {
@@ -2058,9 +1986,8 @@ export function splitQuotationChecklist(entries) {
   return { blocking, submitBlocking, warnings };
 }
 
-/** DOM id of each editor field the checklist can focus. The three customer-detail ids are the
- * shared CustomerDetailsFields' (the same ids on every entry path — only one path renders at a
- * time). */
+/** DOM id of each editor field the checklist can focus. The three customer-detail ids are the shared
+ * CustomerDetailsFields' (the same ids on every entry path — only one path renders at a time). */
 export const QUOTATION_FIELD_IDS = Object.freeze({
   deal: 'deal-picker',
   // The FIRST radio of ผู้รับใบเสนอราคา — a radiogroup <div> is not focusable itself.
@@ -2074,9 +2001,9 @@ export const QUOTATION_FIELD_IDS = Object.freeze({
   customerPhone: 'deal-customer-phone',
 });
 
-// Per-row field → the id prefix the row component gives that control (`${prefix}-${index}`).
-// Kept beside QUOTATION_ITEM_FIELD_ORDER so a new required field cannot be added to the summary
-// without the checklist being able to jump to it.
+// Per-row field → the id prefix the row component gives that control (`${prefix}-${index}`). Kept beside
+// QUOTATION_ITEM_FIELD_ORDER so a new required field cannot be added to the summary without the checklist
+// being able to jump to it.
 const ITEM_FIELD_ID_PREFIX = {
   TILE: {
     model: 'model', color: 'color', texture: 'texture', sizeText: 'size', thicknessMm: 'thickness',
@@ -2095,8 +2022,8 @@ const ITEM_FIELD_ID_PREFIX = {
   ADJUSTMENT: { adjustmentPct: 'adj-pct', adjustmentAmount: 'adj-amount' },
 };
 
-/** The DOM id of the FIRST missing field in a row's `errors` (validateQuotationItem /
- * validateAdjustment output), in the row's own left-to-right order — or null if none. */
+/** The DOM id of the FIRST missing field in a row's `errors` (validateQuotationItem / validateAdjustment
+ * output), in the row's own left-to-right order — or null if none. */
 function firstMissingItemFieldId(item, errors, index) {
   const prefixes = ITEM_FIELD_ID_PREFIX[lineTypeOf(item)] ?? ITEM_FIELD_ID_PREFIX.TILE;
   const first = QUOTATION_ITEM_FIELD_ORDER.find((key) => errors?.[key] && prefixes[key]);
@@ -2155,17 +2082,9 @@ export function orderedByEmailError(value) {
   return !email || ORDERED_BY_EMAIL_SHAPE.test(email) ? undefined : 'รูปแบบอีเมลไม่ถูกต้อง';
 }
 
-/**
- * The checklist, as `{ check, message, targetId, blocking }` entries, in the order the editor
- * reads top to bottom. Pure: every input is editor state the caller already holds.
- *
- * `customer` carries the details the document prints. A field whose value is `undefined` is
- * UNKNOWN (still loading) and produces no warning — only a known-empty one (null / '') does, so
- * the list never flashes "missing" at a value that simply has not arrived yet.
- *
- * The blocking messages are the exact strings the editor showed before this checklist existed, so
- * a rep sees one sentence for one problem.
- */
+/** The checklist, as `{ check, message, targetId, blocking }` entries, in the order the editor reads top to
+ * bottom. Pure: every input is editor state the caller already holds. `customer` carries the details the
+ * document prints. */
 export function buildQuotationChecklist({
   isInlineCreate = false,
   customer = null,
@@ -2296,8 +2215,8 @@ export function buildQuotationChecklist({
   }
 
   if (items.length === 0) {
-    // An adjustment is a percentage of the rows ABOVE it, so a quotation that is only a
-    // ส่วนลดพิเศษ is refused by the server — said specifically when that is the case.
+    // An adjustment is a percentage of the rows ABOVE it, so a quotation that is only a ส่วนลดพิเศษ is refused by
+    // the server — said specifically when that is the case.
     push(QUOTATION_CHECK.ITEMS, adjustments.length
       ? 'ส่วนลดพิเศษต้องมีรายการสินค้าอย่างน้อย 1 รายการอยู่ด้านบน'
       : 'ต้องมีรายการสินค้าอย่างน้อย 1 รายการ');
@@ -2307,8 +2226,8 @@ export function buildQuotationChecklist({
     const summary = quotationItemMissingSummary(itemErrorsByRow[index], index);
     if (summary) push(QUOTATION_CHECK.ITEMS, summary, firstMissingItemFieldId(item, itemErrorsByRow[index], index));
   });
-  // Adjustments print after every product row, so their "รายการที่ N" continues the count — the
-  // same N the server's own 400 would name (it numbers rows after moving these last).
+  // Adjustments print after every product row, so their "รายการที่ N" continues the count — the same N the
+  // server's own 400 would name (it numbers rows after moving these last).
   adjustments.forEach((adjustment, adjIndex) => {
     const index = items.length + adjIndex;
     const summary = quotationItemMissingSummary(adjustmentErrorsByRow[adjIndex], index);
@@ -2317,8 +2236,8 @@ export function buildQuotationChecklist({
   return entries;
 }
 
-/** Joins only the parts that are present — so a missing value leaves no dangling separator
- * ("คุณธนพล · โทร. 081…" with no " · " when there is no email, and '' when there is nothing). */
+/** Joins only the parts that are present — so a missing value leaves no dangling separator ("คุณธนพล · โทร.
+ * 081…" with no " · " when there is no email, and '' when there is nothing). */
 export function joinPresent(parts, separator = ' · ') {
   return (parts ?? []).filter((part) => !blankValue(part)).map((part) => String(part).trim()).join(separator);
 }

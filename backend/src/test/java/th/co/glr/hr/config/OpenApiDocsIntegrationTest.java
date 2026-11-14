@@ -22,15 +22,9 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Verifies the P2-1 OpenAPI documentation exposure under default-deny. The docs are intentionally
- * NOT allowlisted in {@code SecurityConfig}: an anonymous {@code GET /v3/api-docs} must be rejected
- * with 401 (no anonymous endpoint enumeration), while an authenticated session can read the
- * generated OpenAPI contract with the expected API title (proving springdoc actually serves it).
- * Boots the real context over the real {@code SecurityFilterChain}, mirroring
- * {@link SecurityAuthorizationIntegrationTest}; needs a real Postgres, resolved by
- * {@link PostgresTestSupport} (TEST_DB_URL override, else a throwaway Testcontainers Postgres).
- */
+/** Verifies the P2-1 OpenAPI documentation exposure under default-deny. Boots the real context over the real
+ * SecurityFilterChain, mirroring SecurityAuthorizationIntegrationTest; needs a real Postgres, resolved by
+ * PostgresTestSupport (TEST_DB_URL override, else a throwaway Testcontainers Postgres). */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")

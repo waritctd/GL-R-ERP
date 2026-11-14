@@ -29,19 +29,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * CR-1 (GLA-167), owner rulings R2 + R10 (option C): import raises ONE lead-time change request per
- * factory quote (every ticked line carries its own new min/max); the OWNING sales rep or a sales
- * manager approves or rejects it once, as a whole. Approving writes the new range onto the listed
- * {@code pricing_request_item} rows; until then the old value stands.
- *
- * <p><b>Non-blocking by design:</b> nothing in the pricing chain (receive, mark-ready, costing, CEO
- * decision) reads these rows, so a PENDING change never holds a request back from the CEO.
- *
- * <p><b>Authz (B-R3):</b> create/update/withdraw are import-only. approve/reject are the ticket's
- * owning rep (role {@code sales} AND {@code ticket.created_by = actor}) or role {@code sales_manager};
- * the CEO is deliberately NOT allowed. Reading is import, ceo, the owning rep, sales_manager.
- */
+/** CR-1 (GLA-167), owner rulings R2 + R10 (option C): import raises ONE lead-time change request per factory
+ * quote (every ticked line carries its own new min/max); the OWNING sales rep or a sales manager approves or
+ * rejects it once, as a whole. */
 @Service
 public class LeadTimeChangeService {
     private static final Set<String> IMPORT_ROLES = Set.of("import");
@@ -80,8 +70,8 @@ public class LeadTimeChangeService {
                 "ขอเปลี่ยนระยะเวลานำเข้าได้เฉพาะใบเสนอราคาโรงงานฉบับล่าสุดที่ยังไม่ถูกยกเลิก");
         }
         PricingRequestSummaryDto summary = requirePricingRequest(quote.pricingRequestId());
-        // the quote row can still be "current" while its request is already dead (status forced or
-        // cascade not yet reached it); a dead request or an inactive deal takes no new changes
+        // the quote row can still be "current" while its request is already dead (status forced or cascade not yet
+        // reached it); a dead request or an inactive deal takes no new changes
         if (DEAD_REQUEST_STATUSES.contains(summary.status())) {
             throw new ApiException(HttpStatus.CONFLICT, "คำขอราคานี้ถูกยกเลิกหรือถูกแทนที่แล้ว ไม่สามารถขอเปลี่ยนระยะเวลานำเข้าได้");
         }
@@ -251,10 +241,8 @@ public class LeadTimeChangeService {
         return reason;
     }
 
-    /**
-     * Every ticked line must be an IMPORT line (not a stock line) of THIS factory quote, listed once,
-     * with 1 <= min <= max. The old range is snapshotted here, from the item as it is right now.
-     */
+    /** Every ticked line must be an IMPORT line (not a stock line) of THIS factory quote, listed once, with 1 <=
+     * min <= max. The old range is snapshotted here, from the item as it is right now. */
     private List<LineWrite> validLines(FactoryQuoteDto quote, PricingRequestSummaryDto summary, List<LineInput> inputs) {
         if (inputs == null || inputs.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกอย่างน้อยหนึ่งรายการ");

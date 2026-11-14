@@ -18,23 +18,13 @@ import th.co.glr.hr.common.sheet.SheetPlan.Page;
 import th.co.glr.hr.common.sheet.SheetPlan.Picture;
 import th.co.glr.hr.common.sheet.SheetPlan.PlannedCell;
 
-/**
- * Draws a {@link SheetPlan} as a self-contained HTML document whose printed pages are the
- * LibreOffice render of the same sheet: one absolutely positioned A4 {@code div.page} per plan
- * page, the content box at the plan's origin, every cell an absolutely positioned box (font,
- * alignment, wrap, shrink-to-fit) and every border a separately positioned rule of the exact
- * LibreOffice stroke width, centred on the grid line — no CSS table, no {@code border-collapse},
- * no {@code 1px}. Shared edges are resolved before drawing: an edge two cells both declare is
- * drawn once, the heavier style wins, and collinear runs of equal weight merge into one rule.
- * Pictures are inlined as {@code data:} URIs at their anchors; the sheet footer/header ("หน้า
- * &P/&N") is drawn in-page at LibreOffice's position, so the printer needs no header/footer
- * template and no page margins of its own.
- */
+/** Renders SheetPlan as printable HTML with LibreOffice-aligned cells, merged borders, images, and page
+ * headers/footers. */
 public final class SheetHtmlRenderer {
     private SheetHtmlRenderer() {}
 
-    /** A classifier turning a picture into an extra CSS class ("logo", "sig-image", …) so callers
-     * and tests can tell the pictures apart; may return null. */
+    /** A classifier turning a picture into an extra CSS class ("logo", "sig-image", …) so callers and tests can
+     * tell the pictures apart; may return null. */
     public interface PictureClassifier extends Function<Picture, String> {}
 
     public record Rendered(String html, SheetPlan plan) {
@@ -96,8 +86,8 @@ public final class SheetHtmlRenderer {
         }
         int pageContentHmm = y;
 
-        // Cells live in a clipping box the size of the printed range — LibreOffice clips text
-        // that spills past the print range's edge (e.g. a long reference number in column I).
+        // Cells live in a clipping box the size of the printed range — LibreOffice clips text that spills past the
+        // print range's edge (e.g. a long reference number in column I).
         html.append(String.format(Locale.US, "<div class=\"sheet\" style=\"left:%spt;top:%spt;width:%spt;height:%spt\">",
             fmt(originX), fmt(originY), fmt(pt(plan.contentWidthHmm())), fmt(pt(pageContentHmm))));
         // Backgrounds first, then text, then rules on top (LibreOffice draws borders last).
@@ -126,27 +116,15 @@ public final class SheetHtmlRenderer {
             if (!rowTop.containsKey(pic.row1())) continue;
             renderPicture(html, plan, pic, rowTop, originX, originY, classifier);
         }
-        // Rules go into ONE SVG per page, as STROKED lines in pt: Chromium pixel-snaps CSS box
-        // backgrounds to its 96-dpi layout grid (a 0.54 pt rule became 0.75 pt on a 0.75 pt
-        // grid — measured), but SVG geometry keeps its floating-point coordinates in the PDF.
-        // Strokes rather than filled rects because that is what LibreOffice's PDF carries
-        // (`w … m … l S`), and the two only measure alike in a raster when they are the same
-        // kind of path: a rasteriser normalises a ~1 px STROKE onto one pixel row however often
-        // it is drawn, while two overlapping anti-aliased FILLS compound (0.65 pt of LibreOffice
-        // ink read 0.96 pt from doubled rects at 87% zoom — measured) — which matters for the
-        // rules LibreOffice draws twice, below.
+        // Rules go into ONE SVG per page, as STROKED lines in pt: Chromium pixel-snaps CSS box backgrounds to its
+        // 96-dpi layout grid (a 0.54 pt rule became 0.75 pt on a 0.75 pt grid — measured), but SVG geometry keeps its
+        // floating-point coordinates in the PDF.
         html.append(String.format(Locale.US, "<svg class=\"rules\" "
                 + "width=\"%spt\" height=\"%spt\" viewBox=\"0 0 %s %s\" shape-rendering=\"geometricPrecision\">",
             fmt(pt(plan.pageWidthHmm)), fmt(pt(plan.pageHeightHmm)), fmt(pt(plan.pageWidthHmm)), fmt(pt(plan.pageHeightHmm))));
-        // LibreOffice strokes the OUTLINE of every printed range twice — read out of its own PDF
-        // content streams (two identical `m … l S` paths, both environments): the print range's
-        // right-hand edge on every page, the bottom edge of the repeated title block on pages 2+,
-        // and the page-bottom closer on every page but the last (the last page's body ends on
-        // the signature rows, which have no bottom border, so nothing is drawn there to double).
-        // Top and left edges are never doubled. Mirrored by emitting those strokes twice: at a
-        // 0.42 pt rule (56% zoom, CI's substitute fonts) LibreOffice's pair reads 0.94 px of ink
-        // where a single line reads 0.62 — a 0.20 pt gap in measured stroke — and at ≥ 1 px the
-        // doubling is invisible in both engines alike.
+        // LibreOffice strokes the OUTLINE of every printed range twice — read out of its own PDF content streams: the
+        // print range's right-hand edge on every page, the bottom edge of the repeated title block on pages 2+, and
+        // the page-bottom closer on every page but the last.
         int rightEdgeHmm = plan.columnLeftHmm(plan.lastCol) + plan.column(plan.lastCol).scaledHmm();
         java.util.Set<Integer> doubledBottoms = new java.util.HashSet<>();
         List<Integer> pageRows = page.rowIndices();
@@ -160,8 +138,8 @@ public final class SheetHtmlRenderer {
         }
         for (Rule rule : rules(plan, page, rowTop)) {
             double lw = rule.widthPt;
-            // Each run extended by half the stroke at both ends, as LibreOffice draws it, so
-            // perpendicular rules meet in a full corner.
+            // Each run extended by half the stroke at both ends, as LibreOffice draws it, so perpendicular rules meet in a
+            // full corner.
             String line;
             if (rule.horizontal) {
                 line = String.format(Locale.US, "<line x1=\"%s\" y1=\"%s\" x2=\"%s\" y2=\"%s\" stroke-width=\"%s\"/>",
@@ -198,10 +176,9 @@ public final class SheetHtmlRenderer {
 
     private static void renderCell(StringBuilder html, SheetPlan plan, PlannedCell cell, Box box) {
         Facets f = cell.facets();
-        // LibreOffice lays the text out at the cell font's EXACT scaled size (advances of a
-        // 14 pt run at 80% span 11.2 pt-worth) and only draws the glyphs at the floored integer
-        // size — measured on the signature underscores (1.8% longer than an 11 pt run). The
-        // exact size reproduces LibreOffice's text extents; the glyphs come out ≤ 2% larger.
+        // LibreOffice lays the text out at the cell font's EXACT scaled size (advances of a 14 pt run at 80% span 11.2
+        // pt-worth) and only draws the glyphs at the floored integer size — measured on the signature underscores
+        // (1.8% longer than an 11 pt run).
         double fontPt = f.fontPt() * plan.zoomPercent / 100.0;
         double inset = pt(LibreOfficeMetrics.scaledHmm(LibreOfficeMetrics.TEXT_INSET_TWIPS, plan.zoomPercent));
         String justify = switch (f.hAlign()) {
@@ -232,8 +209,8 @@ public final class SheetHtmlRenderer {
             .append(esc(cell.text())).append("</span></div>");
     }
 
-    /** LibreOffice lets unwrapped text spill over EMPTY neighbours and clips it at the first
-     * non-empty one. The neighbour in the direction the text would spill decides. */
+    /** LibreOffice lets unwrapped text spill over EMPTY neighbours and clips it at the first non-empty one. The
+     * neighbour in the direction the text would spill decides. */
     private static boolean overflowBlocked(SheetPlan plan, PlannedCell cell) {
         return switch (cell.facets().hAlign()) {
             case LEFT -> neighbourHasText(plan, cell.row(), cell.col() + 1);
@@ -320,8 +297,8 @@ public final class SheetHtmlRenderer {
 
     private record Rule(boolean horizontal, int pos, int from, int to, double widthPt) {}
 
-    /** Every border edge on the page, resolved: interior edges of merged regions dropped, a
-     * shared edge drawn once at the heavier of the two declared weights, collinear runs merged. */
+    /** Every border edge on the page, resolved: interior edges of merged regions dropped, a shared edge drawn once
+     * at the heavier of the two declared weights, collinear runs merged. */
     private static List<Rule> rules(SheetPlan plan, Page page, Map<Integer, Integer> rowTop) {
         // horizontal: keyed by y (1/100 mm) → column index → weight; vertical: x → row → weight
         Map<Integer, TreeMap<Integer, Double>> horizontal = new TreeMap<>();
@@ -412,8 +389,8 @@ public final class SheetHtmlRenderer {
 
     // ── helpers ──────────────────────────────────────────────────────────────────────────
 
-    /** Excel's shrink-to-fit, done by the browser before printing: scale the font of every
-     * {@code .shrink} cell down until its text fits the cell's inner width. */
+    /** Excel's shrink-to-fit, done by the browser before printing: scale the font of every .shrink cell down until
+     * its text fits the cell's inner width. */
     private static String shrinkScript() {
         return "<script>(function(){var cs=document.querySelectorAll('.c.shrink');for(var i=0;i<cs.length;i++){"
             + "var c=cs[i],s=c.firstElementChild;if(!s)continue;var st=getComputedStyle(c);"
@@ -422,17 +399,8 @@ public final class SheetHtmlRenderer {
             + "s.style.fontSize=(fs*avail/w)+'px';}}})();</script>";
     }
 
-    /**
-     * Single-quoted family names: the stack lives inside a double-quoted {@code style="…"}. The
-     * requested family comes first; when the host's fontconfig substitutes it (no licensed Cordia
-     * New — CI, a fontless image), the family fontconfig actually resolved is placed SECOND, so
-     * Chromium draws the same substitute LibreOffice drew ({@link FontResolver}). Both engines
-     * consult the same fontconfig, but whether a browser follows a fontconfig alias for a family
-     * it cannot find depends on that alias's binding — naming the resolved family here removes
-     * the question, instead of leaving Chromium to walk the static chain below and possibly pick
-     * a different Thai face than LibreOffice's. The static Thai-capable chain stays as the last
-     * resort.
-     */
+    /** Single-quoted family names: the stack lives inside a double-quoted style="…". The static Thai-capable chain
+     * stays as the last resort. */
     private static String fontStack(String name) {
         String n = name == null ? "" : name.replace("\"", "").replace("'", "");
         String fallback = switch (n) {

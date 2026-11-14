@@ -75,9 +75,9 @@ public class RemainingInvoiceService {
         return doc;
     }
 
-    /** Renders THIS document's own frozen snapshot — never a live recompute, and available
-     * regardless of status (a DRAFT downloads its own in-progress content for review; an ISSUED or
-     * SUPERSEDED copy downloads exactly what was actually issued). See {@link #toRenderable}. */
+    /** Renders THIS document's own frozen snapshot — never a live recompute, and available regardless of status (a
+     * DRAFT downloads its own in-progress content for review; an ISSUED or SUPERSEDED copy downloads exactly what
+     * was actually issued). See #toRenderable. */
     public byte[] file(long id, UserPrincipal actor) {
         RemainingInvoiceDocumentDto doc = requireStored(id);
         depositNoticeService.requireTicketViewer(doc.ticketId(), actor);
@@ -123,12 +123,9 @@ public class RemainingInvoiceService {
             throw new ApiException(HttpStatus.CONFLICT, resolved.blockingReason());
         }
 
-        // The quotation actually used: a caller-supplied id (already validated against this
-        // ticket's own qualifying set by resolveRemainingInvoiceSnapshot -> resolveRemainingInvoice
-        // itself, 400 otherwise), or — when omitted — resolved.defaultQuotationId(), which is
-        // computed as "the newest qualifying quotation" BEFORE resolveRemainingInvoice ever looks
-        // at the caller's own id, i.e. is exactly what an omitted id resolves to. See
-        // RemainingInvoiceOptionsDto's own quotationOptions/defaultQuotationId Javadoc.
+        // The quotation actually used: a caller-supplied id, or — when omitted — resolved.defaultQuotationId, which is
+        // computed as "the newest qualifying quotation" BEFORE resolveRemainingInvoice ever looks at the caller's own
+        // id, i.e. is exactly what an omitted id resolves to.
         Long quotationId = (req != null && req.quotationId() != null) ? req.quotationId() : resolved.defaultQuotationId();
 
         List<RemainingInvoiceDocumentDto> existingForTicket = stored.findByTicket(ticketId);
@@ -185,10 +182,9 @@ public class RemainingInvoiceService {
         return requireStored(id);
     }
 
-    /** Re-snapshots items/deposit-deduction/customer header from the draft's OWN already-chosen
-     * source quotation (never re-selects a different one — plan: "re-snapshot items from latest
-     * issued deposit notice"), then applies whichever dialog fields the request actually supplied,
-     * carrying every omitted one forward from the existing row. */
+    /** Re-snapshots items/deposit-deduction/customer header from the draft's OWN already-chosen source quotation,
+     * then applies whichever dialog fields the request actually supplied, carrying every omitted one forward from
+     * the existing row. */
     @Transactional
     public RemainingInvoiceDocumentDto updateDraft(long id, RemainingInvoiceDraftRequest req, UserPrincipal actor) {
         RemainingInvoiceDocumentDto existing = requireDraft(id);
@@ -272,8 +268,8 @@ public class RemainingInvoiceService {
         DepositNoticeService.CustomerHeaderInfo header = snap.header();
         TicketSummaryDto snapSummary = snap.ticketSummary();
 
-        // Freeze the REFRESHED content onto this row before minting — the user-typed dialog
-        // fields (reference/depositReference/docDate/notes) are untouched by this call.
+        // Freeze the REFRESHED content onto this row before minting — the user-typed dialog fields
+        // (reference/depositReference/docDate/notes) are untouched by this call.
         stored.updateSnapshot(id, resolved.matchedDepositNoticeId(), snapSummary.customerName(), header.taxId(),
             header.branch(), header.addressOnly(), header.projectName(),
             itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal());
@@ -391,8 +387,8 @@ public class RemainingInvoiceService {
         return requireStored(draftId);
     }
 
-    /** A draft that should not exist is deleted, not tombstoned — it has no number and no audit
-     * weight, matching {@code ImportRequestService#deleteDraft}'s own reasoning. */
+    /** A draft that should not exist is deleted, not tombstoned — it has no number and no audit weight, matching
+     * ImportRequestService#deleteDraft's own reasoning. */
     @Transactional
     public void deleteDraft(long id, UserPrincipal actor) {
         RemainingInvoiceDocumentDto existing = requireDraft(id);

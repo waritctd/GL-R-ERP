@@ -16,15 +16,9 @@ import {
   LIVE_PRICING_REQUEST_BLOCK_MESSAGE,
 } from './quotationMeta.js';
 
-/**
- * One pricing route per deal (owner ruling 2026-09-30): does the deal `ticketId` hold a LIVE pricing
- * request (quotationMeta.hasLivePricingRequest — any status but CANCELLED / SUPERSEDED)? Reads the
- * deal's own requests through the existing api.pricingRequests.listForTicket (the same read the deal
- * page makes; ticket list rows carry no pricing-request info, and one deal's list is exact where the
- * rep-wide queue would be N rows to filter). Shared by DealPicker's notice and the editor's checklist
- * under one query key, so it is one request. retry:false — a role that cannot read pricing requests
- * (403) reads as "none known", and DealQuotationService#create's own 409 is the backstop.
- */
+/** One pricing route per deal (owner ruling 2026-09-30): does the deal `ticketId` hold a LIVE pricing request
+ * (quotationMeta.hasLivePricingRequest — any status but CANCELLED / SUPERSEDED)? Shared by DealPicker's notice
+ * and the editor's checklist under one query key, so it is one request. */
 export function useDealHasLivePricingRequest(ticketId, enabled = true) {
   const query = useQuery({
     queryKey: queryKeys.pricingRequestsByTicket(ticketId),
@@ -47,14 +41,14 @@ function matches(deal, needle) {
     .some((value) => value && String(value).toLowerCase().includes(needle));
 }
 
-/** One deal's identity, used by both the option rows and the picked chip so the two always read
- * the same: code (mono) · customer (bold) · project (muted), with the stage as a Thai badge. */
+/** One deal's identity, used by both the option rows and the picked chip so the two always read the same: code
+ * (mono) · customer (bold) · project (muted), with the stage as a Thai badge. */
 function DealIdentity({ deal }) {
   const stage = dealStageLabel(deal.salesStage);
   return (
     <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-      {/* Wraps (never collides) on a narrow phone: the badge drops under the code rather than
-          overlapping whatever sits beside this identity block. */}
+      {/* Wraps (never collides) on a narrow phone: the badge drops under the code rather than overlapping whatever
+       * sits beside this identity block. */}
       <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <code className="shrink-0 font-mono text-xs text-text-muted">{deal.code ?? `#${deal.id}`}</code>
         <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
@@ -227,9 +221,9 @@ export function DealPicker({
           </div>
         ) : null}
         {livePricingRequest ? (
-          // One pricing route per deal (owner ruling 2026-09-30) — the same inline-notice pattern as
-          // the live direct quotation above: never a modal (DESIGN.md §16), and the editor disables
-          // บันทึกร่าง with this exact sentence (DESIGN.md §14).
+          // One pricing route per deal (owner ruling 2026-09-30) — the same inline-notice pattern as the live direct
+          // quotation above: never a modal (DESIGN.md §16), and the editor disables บันทึกร่าง with this exact sentence
+          // (DESIGN.md §14).
           <div
             role="status"
             data-testid="deal-picker-live-pricing-request"
@@ -252,8 +246,8 @@ export function DealPicker({
         htmlFor="deal-picker"
         required
         error={error}
-        // A list this role cannot read (e.g. a quotation grant-holder with no deal pipeline access)
-        // is said up front, beside the field, with the way round it — not discovered on focus.
+        // A list this role cannot read (e.g. a quotation grant-holder with no deal pipeline access) is said up front,
+        // beside the field, with the way round it — not discovered on focus.
         hint={dealsQuery.isError ? 'โหลดรายการดีลไม่ได้ — เลือก “สร้างดีลใหม่” แทน' : undefined}
       >
         <input
@@ -277,9 +271,8 @@ export function DealPicker({
           id={LIST_ID}
           role="listbox"
           aria-label="ผลการค้นหาดีล"
-          // Same popup voice as the ลูกค้า/โครงการ typeaheads beside it. `max-h` in viewport units so
-          // the list never runs off a short phone screen; `w-full` of the field keeps it inside the
-          // 16px page gutter at 320px.
+          // Same popup voice as the ลูกค้า/โครงการ typeaheads beside it. `max-h` in viewport units so the list never
+          // runs off a short phone screen; `w-full` of the field keeps it inside the 16px page gutter at 320px.
           className="absolute z-10 mt-1 max-h-[min(20rem,60vh)] w-full list-none overflow-auto rounded-md border border-border bg-surface pl-0 shadow-[var(--shadow-lg-heavy)]"
         >
           {dealsQuery.isLoading ? (
@@ -290,16 +283,16 @@ export function DealPicker({
             <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบดีลที่ตรงกับคำค้น</li>
           ) : null}
           {filtered.map((deal, index) => (
-            // The OPTION is the button, not the <li> — same reasoning as DealCustomerCard's own
-            // listboxes: a listbox child must be an option, never a wrapper around a control.
+            // The OPTION is the button, not the — same reasoning as DealCustomerCard's own listboxes: a listbox child must
+            // be an option, never a wrapper around a control.
             <li key={deal.id} role="presentation" className="border-b border-border-subtle last:border-b-0">
               <button
                 type="button"
                 id={optionId(deal)}
                 role="option"
                 aria-selected={index === activeIndex}
-                // Explicit flat row (surface, no border, no radius): a bare <button> otherwise picks
-                // up the legacy global button chrome, which drew every option as a grey card.
+                // Explicit flat row (surface, no border, no radius): a bare <button> otherwise picks up the legacy global
+                // button chrome, which drew every option as a grey card.
                 className={cn(
                   'flex min-h-11 w-full items-start gap-2 rounded-none border-0 bg-surface px-3 py-2 text-left font-normal hover:bg-surface-hover',
                   index === activeIndex && 'bg-surface-hover',

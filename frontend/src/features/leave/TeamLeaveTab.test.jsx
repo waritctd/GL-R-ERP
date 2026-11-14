@@ -29,11 +29,9 @@ vi.mock('../../utils/download.js', () => ({
   downloadBlob: vi.fn(),
 }));
 
-// Tab visibility itself ("ลูกทีม" shows only for an actor with a direct report) is covered by
-// leaveSurfaceTabs.test.js (the pure `isVisible`/`visibleLeaveSurfaceTabIds` rule) and
-// LeaveSurfacePage.test.jsx (the rendered tab list) -- same split ReviewQueueTab's own "รอพิจารณา"
-// visibility uses (ReviewQueueTab.test.jsx never tests its own tab's visibility either). This file
-// covers only what TeamLeaveTab.jsx itself renders once mounted.
+// Tab visibility itself is covered by leaveSurfaceTabs.test.js and LeaveSurfacePage.test.jsx -- same split
+// ReviewQueueTab's own "รอพิจารณา" visibility uses. This file covers only what TeamLeaveTab.jsx itself renders
+// once mounted.
 
 const manager = { employeeId: 5, name: 'หัวหน้างาน', role: 'employee', manager: true };
 
@@ -111,15 +109,9 @@ function renderTeamLeaveTab(user = manager, showToast = vi.fn()) {
   return queryClient;
 }
 
-// DataTable only renders `mobileCard` when useIsMobile() is true, and that hook reads
-// window.matchMedia -- which jsdom does not implement, so it returns false and the DESKTOP table
-// renders instead. A "mobile card" assertion written without this stub therefore passes against
-// leaveRequestTable.jsx's shared desktop status column (which has carried the unpaid badge since
-// before this branch) and proves NOTHING about the card. Verified by mutation: with the gate in
-// mobileCard forced permanently true, an unstubbed test stayed green.
-// Restored in afterEach: assigning window.matchMedia is a GLOBAL mutation that otherwise leaks
-// into every later test in this file, silently flipping them to the mobile card and breaking
-// assertions that look for desktop-table controls. Observed exactly that before this cleanup existed.
+// DataTable only renders `mobileCard` when useIsMobile() is true, and that hook reads window.matchMedia --
+// which jsdom does not implement, so it returns false and the DESKTOP table renders instead. Observed exactly
+// that before this cleanup existed.
 const originalMatchMedia = window.matchMedia;
 
 function stubMobileViewport() {
@@ -159,11 +151,9 @@ describe('TeamLeaveTab', () => {
     expect(await screen.findByText('ธุระของลูกทีมอีกคน')).not.toBeNull();
   });
 
-  // V164 follow-up: this tab's DESKTOP table already showed the unpaid badge (it uses
-  // leaveRequestTable.jsx's shared status column), while its own mobileCard did not -- so a manager
-  // scanning their team on a phone saw no unpaid signal at all for rows their desktop flagged.
-  // Both badges render in the DOM here regardless of viewport; jsdom cannot evaluate the
-  // `flex-col` that stacks them, so this asserts PRESENCE only, never visual placement.
+  // V164 follow-up: this tab's DESKTOP table already showed the unpaid badge (it uses leaveRequestTable.jsx's
+  // shared status column), while its own mobileCard did not -- so a manager scanning their team on a phone saw
+  // no unpaid signal at all for rows their desktop flagged.
   it("the MOBILE CARD shows the ไม่รับค่าจ้าง badge beside its status badge", async () => {
     stubMobileViewport();
     api.leave.list.mockResolvedValue({
@@ -214,10 +204,8 @@ describe('TeamLeaveTab', () => {
     expect(screen.queryByLabelText('พนักงาน')).toBeNull();
   });
 
-  // Renamed from "ปฏิทินวันลา" and re-scoped to a forward window by the 2026-08-10 IA restructure
-  // -- see UpcomingLeaveList.jsx (defect D1). Unlike the old test, the fixtures here are dated
-  // AFTER today and the mock honours the requested window, so the panel's forward query is
-  // actually exercised rather than being handed rows it would never have received.
+  // Renamed from "ปฏิทินวันลา" and re-scoped to a forward window by the 2026-08-10 IA restructure -- see
+  // UpcomingLeaveList.jsx (defect D1).
   it('"วันลาที่กำลังจะถึงของทีม" lists upcoming SUBMITTED/APPROVED requests across the team, not just the actor\'s own', async () => {
     const daysFromToday = (offset) => {
       const date = new Date();
@@ -236,9 +224,9 @@ describe('TeamLeaveTab', () => {
     renderTeamLeaveTab();
 
     const calendarHeading = await screen.findByRole('heading', { name: 'วันลาที่กำลังจะถึงของทีม' });
-    // The heading's own immediate ancestor is only PanelHeader's wrapper `<div>` (the header
-    // row) -- the list content is a SIBLING of that div, both inside the Panel's `<section>`.
-    // Must walk up to `section` specifically, not the nearer `div`.
+    // The heading's own immediate ancestor is only PanelHeader's wrapper `<div>` (the header row) -- the list
+    // content is a SIBLING of that div, both inside the Panel's `<section>`. Must walk up to `section`
+    // specifically, not the nearer `div`.
     const calendarPanel = calendarHeading.closest('section');
     await waitFor(() => expect(calendarPanel.textContent).toMatch(/ลูกทีม หนึ่ง/));
     expect(calendarPanel.textContent).toMatch(/หัวหน้างาน/);
@@ -262,8 +250,8 @@ describe('TeamLeaveTab', () => {
     renderTeamLeaveTab();
 
     await screen.findByText('ลาของหัวหน้างานเอง');
-    // Exactly one cancel action on screen (the actor's own SUBMITTED row) even though a second
-    // SUBMITTED row (the direct report's) is also visible in the table.
+    // Exactly one cancel action on screen (the actor's own SUBMITTED row) even though a second SUBMITTED row (the
+    // direct report's) is also visible in the table.
     expect(screen.getAllByRole('button', { name: 'ยกเลิก' })).toHaveLength(1);
   });
 
@@ -302,11 +290,9 @@ describe('TeamLeaveTab', () => {
     expect(await screen.findByText('ยังเปิดหน้านี้ไม่ได้')).not.toBeNull();
   });
 
-  // Review fix (2026-08): api.leave.employees() genuinely returns the whole company for hr/ceo
-  // (VIEW_ALL_ROLES), so this tab stays visible for them -- but its manager-flavoured copy
-  // ("ลูกทีม" / "...ที่รายงานตรงต่อคุณ") is false when the viewer is hr/ceo looking at every
-  // employee, not a set of direct reports. hasPermission(role, 'canViewAllLeave') is the same
-  // check ROLE_PERMISSIONS.canViewAllLeave (['hr','ceo']) exposes elsewhere in this app.
+  // Review fix: api.leave.employees genuinely returns the whole company for hr/ceo, so this tab stays visible
+  // for them -- but its manager-flavoured copy is false when the viewer is hr/ceo looking at every employee, not
+  // a set of direct reports.
   describe('role-aware copy for hr/ceo (canViewAllLeave) vs a real division manager', () => {
     const hr = { employeeId: 99, name: 'ฝ่ายบุคคล', role: 'hr' };
 
@@ -344,12 +330,9 @@ describe('TeamLeaveTab', () => {
     });
   });
 
-  // Manager team-quota summary (2026-09): TeamQuotaSummary.jsx, reading GET
-  // /api/leave/balances/team (LeaveService#teamBalances). Backend scope enforcement -- direct
-  // reports only, never a colleague's -- is proven server-side by
-  // LeaveTeamBalancesIntegrationTest against real Postgres (CLAUDE.md: never claim a permission
-  // fact from mock-driven rendering). These tests cover only what this component RENDERS from
-  // whatever api.leave.teamBalances() returns.
+  // Manager team-quota summary (2026-09): TeamQuotaSummary.jsx, reading GET /api/leave/balances/team
+  // (LeaveService#teamBalances). These tests cover only what this component RENDERS from whatever
+  // api.leave.teamBalances() returns.
   describe('team quota summary panel', () => {
     const teamBalancesResponse = {
       team: [
