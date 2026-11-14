@@ -12,6 +12,8 @@ import { isManualKind } from '../commissions/commissionRecord.js';
 import { Figure, WorklistGroup, WorklistTotal, failed } from './dashboardParts.jsx';
 import { defaultRange } from '../tickets/movementRange.js';
 import { TeamMovementPanel } from './TeamMovementPanel.jsx';
+import { SALES_ENABLED } from '../../app/features.js';
+import { TeamOverview } from '../salesBoard/TeamOverview.jsx';
 
 /** CEO exec-cockpit landing (plan: docs/agent-handoffs/valiant-watching-map.md "6. Every row here deep-links to
  * the real page that owns the mutation — this component never calls an approve/verify/decide endpoint itself
@@ -260,6 +262,9 @@ export function CeoOverview({ user, employee, dashboardSummary }) {
   return (
     <PageStack>
       <PageHeader title="ภาพรวมผู้บริหาร" subtitle={`${greeting} · ${today}`} />
+
+      {/* Spec 2026-11-15 §7.4: the team's deals and quiet list first. */}
+      {SALES_ENABLED ? <TeamOverview /> : null}
 
       <section className="rounded-md border border-border bg-surface p-5 mobile:p-3.5" aria-label="ผลบริษัทเดือนนี้">
         <dl className="m-0 grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-x-6 nav-drawer:grid-cols-2 nav-drawer:gap-y-4 mobile:grid-cols-1 mobile:divide-y mobile:divide-border mobile:[&>div]:py-2.5">

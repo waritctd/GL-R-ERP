@@ -22,6 +22,7 @@ vi.mock('../../api/index.js', () => ({
     commissions: { list: vi.fn(), pendingApproval: vi.fn() },
     overtime: { list: vi.fn() },
     leave: { list: vi.fn() },
+    salesBoard: { teamOverview: vi.fn() },
   },
 }));
 
@@ -58,6 +59,11 @@ function leaveRequest(id) {
 }
 
 function mockAllData() {
+  api.salesBoard.teamOverview.mockResolvedValue({
+    quietDays: 14,
+    reps: [{ employeeId: 21, name: 'สมชาย ขายดี', openDeals: 3, openValue: 450000, quietDeals: 1, lastUpdateAt: null }],
+    stale: [],
+  });
   api.pricingRequests.queue.mockResolvedValue({
     items: [
       { id: 501, status: 'READY_FOR_CEO_REVIEW', customerName: 'บริษัท ทดสอบราคา', requestCode: 'PR-501', ticketCode: 'TK-501' },
@@ -238,6 +244,17 @@ describe('CeoOverview', () => {
       expect(await screen.findByTestId('location-probe')).toBeTruthy();
       expect(probeText()).toBe(`/tickets?owner=22&week=silent&from=${addDays(TODAY, -6)}&to=${TODAY}`);
     });
+  });
+
+  // Spec 2026-11-15 §7.4: the CEO sees ภาพรวมทีมขาย first (SALES_ENABLED is on in the test env).
+  it('opens with ภาพรวมทีมขาย, before the company money band', async () => {
+    renderOverview();
+
+    const team = await screen.findByRole('region', { name: 'ภาพรวมทีมขาย' });
+    await within(team).findByTestId('tile-held');
+    expect(api.salesBoard.teamOverview).toHaveBeenCalledTimes(1);
+    const money = screen.getByRole('region', { name: 'ผลบริษัทเดือนนี้' });
+    expect(team.compareDocumentPosition(money) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('fetches each worklist source once, with the same filters as before', async () => {

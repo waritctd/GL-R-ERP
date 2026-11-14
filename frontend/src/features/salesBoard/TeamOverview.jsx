@@ -1,0 +1,145 @@
+import { useQuery } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
+import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
+import { Panel } from '../../components/common/Layout.jsx';
+import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { baht, columnLabel, sinceLabel, sumValue } from './boardFormat.js';
+
+const ROW = 'px-5 py-3 mobile:px-3.5';
+
+function Tile({ testId, label, value, sub, warn }) {
+  return (
+    <div data-testid={testId} className="grid gap-1 rounded-md border border-border bg-surface p-4 mobile:p-3.5">
+      <small className="text-xs font-bold text-text-muted">{label}</small>
+      <strong className={`text-2xl font-extrabold tabular-nums ${warn ? 'text-warning' : 'text-text'}`}>{value}</strong>
+      <span className="text-xs text-text-muted">{sub}</span>
+    </div>
+  );
+}
+
+function QuietChip({ count }) {
+  return count > 0
+    ? <span className="whitespace-nowrap rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">{count} ดีล</span>
+    : <span className="whitespace-nowrap rounded-full bg-surface-subtle px-2 py-px text-2xs font-bold text-text-muted">ไม่มี</span>;
+}
+
+/**
+ * ภาพรวมทีมขาย (spec 2026-11-15 §7.4, slice 1): two tiles, one row per rep, and the team's quiet deals ranked by
+ * value × days quiet. All numbers are served by GET /api/sales/team-overview (sales_manager / ceo). Cash and visit
+ * tiles belong to slices 2–3 and are not shown. A rep's name opens the deal list's existing ?owner= filter.
+ */
+export function TeamOverview({ showTitle = true }) {
+  const query = useQuery({ queryKey: queryKeys.salesBoardTeam(), queryFn: () => api.salesBoard.teamOverview() });
+  const team = query.data;
+
+  const openDeals = team?.reps.reduce((sum, r) => sum + r.openDeals, 0) ?? 0;
+  const openValue = team?.reps.reduce((sum, r) => sum + Number(r.openValue ?? 0), 0) ?? 0;
+  const quietDeals = team?.reps.reduce((sum, r) => sum + r.quietDeals, 0) ?? 0;
+  const quietDays = team?.quietDays ?? 14;
+
+  return (
+    <section aria-label="ภาพรวมทีมขาย" className="grid gap-[18px]">
+      {showTitle ? <h2 className="m-0 text-xl font-extrabold text-text">ภาพรวมทีมขาย</h2> : null}
+
+      {query.isError ? (
+        <p className="m-0 text-sm font-bold text-danger">โหลดไม่สำเร็จ</p>
+      ) : !team ? (
+        <div className="grid gap-2" role="status" aria-busy="true" aria-label="กำลังโหลดภาพรวมทีมขาย">
+          <Skeleton height={72} />
+          <Skeleton height={160} />
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <Tile testId="tile-held" label="ดีลที่ถืออยู่" value={`${openDeals} ดีล`} sub={`มูลค่า ${baht(openValue)}`} />
+            <Tile
+              testId="tile-quiet"
+              label={`ดีลเงียบเกิน ${quietDays} วัน`}
+              value={`${quietDeals} ดีล`}
+              sub={quietDeals > 0 ? 'รายชื่อด้านล่าง' : 'ทุกดีลมีความเคลื่อนไหว'}
+              warn={quietDeals > 0}
+            />
+          </div>
+
+          <Panel flush title="รายคน">
+            {team.reps.length === 0 ? (
+              <p className={`m-0 text-sm text-text-muted ${ROW}`}>ยังไม่มีดีลที่เปิดอยู่</p>
+            ) : (
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="text-left text-xs text-text-muted">
+                    <th scope="col" className="px-5 py-2.5 font-bold mobile:px-3.5">พนักงานขาย</th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">ดีล</th>
+                    <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">มูลค่า</th>
+                    <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-bold mobile:px-1.5">ดีลเงียบ</th>
+                    <th scope="col" className="whitespace-nowrap px-5 py-2.5 font-bold mobile:px-3.5">อัปเดตล่าสุด</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {team.reps.map((rep) => (
+                    <tr key={rep.employeeId} className="border-t border-border-subtle">
+                      <td className="px-5 py-3 mobile:px-3.5">
+                        <Link
+                          to={`/tickets?owner=${rep.employeeId}`}
+                          className="font-bold text-text no-underline hover:underline focus-visible:underline"
+                        >
+                          {rep.name || `#${rep.employeeId}`}
+                        </Link>
+                      </td>
+                      <td className="px-3 py-3 text-right tabular-nums mobile:px-1.5">{rep.openDeals}</td>
+                      <td className="px-3 py-3 text-right font-bold tabular-nums whitespace-nowrap mobile:px-1.5">{baht(rep.openValue)}</td>
+                      <td className="px-3 py-3 mobile:px-1.5"><QuietChip count={rep.quietDeals} /></td>
+                      <td className="px-5 py-3 whitespace-nowrap text-text-muted mobile:px-3.5">{sinceLabel(rep.lastUpdateAt)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Panel>
+
+          <Panel
+            flush
+            title={(
+              <span className="grid gap-0.5">
+                <span>ดีลที่ควรโทรตาม</span>
+                <small className="text-xs font-normal text-text-muted">เรียงตามมูลค่า × วันที่เงียบ</small>
+              </span>
+            )}
+            actions={<span className="text-sm tabular-nums text-text-muted">{baht(sumValue(team.stale))}</span>}
+          >
+            {team.stale.length === 0 ? (
+              <p className={`m-0 text-sm font-bold text-text-muted ${ROW}`}>
+                ไม่มีดีลเงียบ — ทุกดีลมีความเคลื่อนไหวใน {quietDays} วันที่ผ่านมา
+              </p>
+            ) : (
+              <ul data-testid="team-stale" className="m-0 list-none p-0">
+                {team.stale.map((deal) => (
+                  <li key={deal.ticketId} className={`flex items-start justify-between gap-3 border-t border-border-subtle first:border-t-0 ${ROW}`}>
+                    <div className="grid min-w-0 gap-0.5">
+                      <Link
+                        to={`/tickets/${deal.ticketId}`}
+                        className="min-w-0 break-words text-sm font-bold text-text no-underline hover:underline focus-visible:underline"
+                      >
+                        {deal.title || deal.customerName}
+                      </Link>
+                      <span className="min-w-0 break-words text-xs text-text-muted">
+                        {[deal.ownerName, columnLabel(deal.boardColumn)].filter(Boolean).join(' · ')}
+                      </span>
+                    </div>
+                    <span className="grid shrink-0 justify-items-end gap-1">
+                      <span className="text-sm font-bold tabular-nums text-text">{baht(deal.value)}</span>
+                      <span className="rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">
+                        เงียบ {deal.daysQuiet} วัน
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Panel>
+        </>
+      )}
+    </section>
+  );
+}
