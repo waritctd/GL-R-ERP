@@ -107,6 +107,10 @@ export const queryKeys = {
   ticketDetail: (id) => ['tickets', 'detail', id == null ? id : Number(id)],
   // Immutable server enumeration — fetched once, never invalidated. See stageCatalog.js.
   dealStageCatalog: () => ['meta', 'deal-stages'],
+  // Under 'tickets' so every existing ['tickets'] invalidation (an activity, a stage move, a lost deal) refreshes
+  // the boards too.
+  salesBoardMyWork: () => ['tickets', 'salesBoard', 'myWork'],
+  salesBoardTeam: () => ['tickets', 'salesBoard', 'team'],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
   unitBasisCatalog: () => ['meta', 'unit-bases'],
   // See ticketDetail's comment above for why Number() matters.

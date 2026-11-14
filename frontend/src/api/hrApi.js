@@ -622,6 +622,12 @@ export const api = {
     // Mirrors UnitBasisMetaController (pricingrequest/) — UnitBasis's four codes with their Thai display units.
     unitBases: () => apiRequest(API_ROUTES.meta.unitBases),
   },
+  // Mirrors SalesBoardController (salesboard/). myWork: the caller's own ACTIVE deals (followUp + board), sales /
+  // sales_manager / ceo. teamOverview: per-rep rows + the team's quiet deals, sales_manager / ceo only.
+  salesBoard: {
+    myWork: () => apiRequest(API_ROUTES.salesBoard.myWork),
+    teamOverview: () => apiRequest(API_ROUTES.salesBoard.teamOverview),
+  },
   // Lead-time change requests. Import raises ONE per factory quote
   // (`{ reason, lines: [{ pricingRequestItemId, newMinDays, newMaxDays }] }`); the owning rep or a
   // sales manager approves/rejects it as a whole, quoting the `version` they loaded

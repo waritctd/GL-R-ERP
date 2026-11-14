@@ -1,3 +1,4 @@
+import { isQuiet } from '../salesBoard/quietRule.js';
 // Shares stage probabilities, activity kinds, and advancement readiness across deal screens and mocks.
 
 /** Mirrors WinProbabilityDefaults.java's stage → % map exactly — in pipeline order (DealStage.ORDER), so the
@@ -92,12 +93,7 @@ export const STAGE_ADVANCE_GATE_MESSAGE =
 export const STAGE_ADVANCE_GATE_HINT =
   'ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการก่อนเลื่อนสถานะ';
 
-// Staleness window (V83): mirrors TicketRepository#isStale's 7-day interval.
-const STALE_ACTIVITY_DAYS = 7;
-
-/** Mirrors TicketRepository.enrichSummary's `stale` computation. */
-export function computeStale(lifecycle, activities) {
-  if (lifecycle !== 'ACTIVE') return false;
-  const sinceIso = new Date(Date.now() - STALE_ACTIVITY_DAYS * 86400000).toISOString();
-  return !hasActivitySince(activities, sinceIso);
+/** Mirrors TicketSummaryDto.stale, which is the one 14-day QuietRule (salesBoard/quietRule.js). */
+export function computeStale(ticket, activities) {
+  return isQuiet(ticket, activities);
 }

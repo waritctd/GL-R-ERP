@@ -22,6 +22,14 @@ import { createDemoDatabase } from '../data/demoData.js';
 // GET /api/meta/deal-stages — and nothing more. Stage rules live in TicketService, not here; see
 // mockStageDecisions below for what the mock refuses to decide.
 import { DEAL_STAGE_CATALOG } from '../data/dealStageCatalog.js';
+import {
+  QUIET_DAYS as MOCK_QUIET_DAYS,
+  boardColumnOf as mockBoardColumnOf,
+  daysQuietOf as mockDaysQuietOf,
+  isQuiet as mockIsQuiet,
+  lastTouchedMs as mockLastTouchedMs,
+  repCodeOf as mockRepCodeOf,
+} from '../features/salesBoard/quietRule.js';
 // Deal tracking: win% defaults, the activity-kind taxonomy, and the stage-advance-gate readiness
 // check, shared with the UI so the mock's numbers/gate can't drift from
 // WinProbabilityDefaults.java / DealActivityKind.java / TicketService.updateStage.
@@ -4249,6 +4257,17 @@ function advanceDealToQuotationRecipientStage(ticket, recipientType, user) {
   if (stage) autoAdvanceStage(ticket, stage, user);
 }
 
+/** Mirrors TicketService#applyApprovedQuotation: stage onto the recipient's (forward-only), then the addressee into
+ * the matching designerName / ownerName / buyerName only when that field is blank. */
+const MOCK_PARTY_NAME_FIELD = { DESIGNER: 'designerName', OWNER: 'ownerName', BUYER: 'buyerName' };
+function mockApplyApprovedQuotation(ticket, recipientType, partyName, user) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+  advanceDealToQuotationRecipientStage(ticket, recipientType, user);
+  const field = MOCK_PARTY_NAME_FIELD[recipientType];
+  const name = (partyName ?? '').trim();
+  if (field && name && !(ticket[field] ?? '').trim()) ticket[field] = name;
+}
+
 function dealStageIndex(code) {
   return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
 }
@@ -4520,7 +4539,7 @@ function buildTicketDetail(ticket) {
       designerName: ticket.designerName ?? null,
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
-      stale: dealComputeStale(ticket.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(ticket.id)),
+      stale: dealComputeStale(ticket, dealActivitiesForTicket(ticket.id)),
       // Existence-only flag — see hasRecordedCommission's comment. Never an amount; amounts stay
       // behind commissions.list()'s own role gate.
       commissionRecorded: hasRecordedCommission(ticket),
@@ -8103,6 +8122,53 @@ function buildFinanceDeal(raw, user) {
   return deal;
 }
 
+// ── salesBoard read model (mirrors SalesBoardRepository) ──
+const MOCK_BOARD_VALUE_STATUSES = new Set(['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED']);
+
+/** The grand total of the deal's latest APPROVED/ISSUED/SENT/ACCEPTED quotation, else null. */
+function mockBoardValue(ticketId) {
+  const latest = mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && MOCK_BOARD_VALUE_STATUSES.has(q.docStatus))
+    .sort((a, b) => String(b.approvedAt ?? '').localeCompare(String(a.approvedAt ?? '')) || b.id - a.id)[0];
+  return latest ? dealQuotationTotals(latest.items ?? [], latest.documentLanguage ?? 'TH').grandTotal : null;
+}
+
+/** Every ACTIVE deal as a BoardDeal. */
+function mockBoardDeals() {
+  const now = Date.now();
+  return db.tickets
+    .filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE')
+    .map((t) => {
+      const activities = dealActivitiesForTicket(t.id);
+      const last = mockLastTouchedMs(t, activities);
+      return {
+        ticketId: t.id,
+        title: t.title,
+        customerName: t.customerName ?? null,
+        projectName: t.projectId ? (mockProjects.find((p) => p.id === t.projectId)?.name ?? null) : null,
+        ownerId: t.createdById,
+        ownerName: t.createdByName ?? null,
+        salesStage: t.salesStage ?? null,
+        repCode: mockRepCodeOf(t.salesStage),
+        boardColumn: mockBoardColumnOf(t.salesStage),
+        value: mockBoardValue(t.id),
+        designerName: t.designerName ?? null,
+        winProbability: dealEffectiveWinProbability(t.winProbabilityOverride, t.salesStage),
+        expectedQuarter: t.expectedQuarter ?? null,
+        lastTouchedAt: Number.isNaN(last) ? null : new Date(last).toISOString(),
+        daysQuiet: mockDaysQuietOf(t, activities, now),
+        quiet: mockIsQuiet(t, activities, now),
+      };
+    });
+}
+
+/** SalesBoardService's ranking: quiet only, daysQuiet × value (null = 0) desc, then daysQuiet desc. */
+function mockRankQuiet(deals) {
+  const score = (d) => d.daysQuiet * Number(d.value ?? 0);
+  return deals.filter((d) => d.quiet)
+    .sort((a, b) => score(b) - score(a) || b.daysQuiet - a.daysQuiet || a.ticketId - b.ticketId);
+}
+
 export const api = {
   // Mirrors AuthController + AuthService (auth/).
   auth: {
@@ -8476,7 +8542,7 @@ export const api = {
         designerName: t.designerName ?? null,
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
-        stale: dealComputeStale(t.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(t.id)),
+        stale: dealComputeStale(t, dealActivitiesForTicket(t.id)),
         // Same existence-only flag as buildTicketDetail's summary — served on the LIST projection
         // too because accountActions.js's worklist is built from list rows, not detail fetches.
         commissionRecorded: hasRecordedCommission(t),
@@ -12850,6 +12916,37 @@ export const api = {
     async unitBases() {
       requireSession();
       return delay({ unitBases: PRICING_REQUEST_UNIT_BASIS_OPTIONS });
+    },
+  },
+
+  // Mirrors SalesBoardService / SalesBoardRepository (salesboard/). AUTHZ NOTE: these role gates and the own-deals
+  // scope approximate the Java service and are NOT evidence — SalesBoardScopeIntegrationTest is. my-work is the
+  // caller's OWN deals (created_by only, not keyed_by), sales / sales_manager / ceo; team-overview is
+  // sales_manager / ceo. Quiet uses the same 14-day rule (features/salesBoard/quietRule.js).
+  salesBoard: {
+    async myWork() {
+      const user = requireSession();
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const board = mockBoardDeals().filter((d) => d.ownerId === user.id);
+      return delay({ followUp: mockRankQuiet(board).slice(0, 5), board, quietDays: MOCK_QUIET_DAYS });
+    },
+    async teamOverview() {
+      const user = requireSession();
+      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const deals = mockBoardDeals();
+      const byRep = new Map();
+      for (const d of deals) {
+        const row = byRep.get(d.ownerId) ?? {
+          employeeId: d.ownerId, name: d.ownerName, openDeals: 0, openValue: 0, quietDeals: 0, lastUpdateAt: null,
+        };
+        row.openDeals += 1;
+        row.openValue = round2(row.openValue + Number(d.value ?? 0));
+        if (d.quiet) row.quietDeals += 1;
+        if (!row.lastUpdateAt || d.lastTouchedAt > row.lastUpdateAt) row.lastUpdateAt = d.lastTouchedAt;
+        byRep.set(d.ownerId, row);
+      }
+      const reps = [...byRep.values()].sort((a, b) => b.openValue - a.openValue || a.employeeId - b.employeeId);
+      return delay({ reps, stale: mockRankQuiet(deals).slice(0, 20), quietDays: MOCK_QUIET_DAYS });
     },
   },
 
@@ -17283,6 +17380,14 @@ export const api = {
           ancestor.updatedAt = now;
         }
         ancestorId = ancestor.parentQuotationId;
+      }
+      // Mirrors DealQuotationService#approve's QUOTATION_ISSUED event and TicketService#applyApprovedQuotation
+      // (spec 2026-11-15 §7.2): advance onto the recipient's stage (forward-only) and fill a blank party name with
+      // the quotation's addressee. A non-ACTIVE deal is left alone.
+      const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
+      if (dealTicket) {
+        pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
+        mockApplyApprovedQuotation(dealTicket, row.recipientType, row.customerName, user);
       }
       return delay({ quotation: buildDealQuotationDto(row) });
     },
