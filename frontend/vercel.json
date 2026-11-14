@@ -5,9 +5,9 @@
   "outputDirectory": "dist",
   "redirects": [
     {
-      "source": "/:path*",
+      "source": "/(.*)",
       "has": [{ "type": "host", "value": "(www\\.)?glr-portal\\.com" }],
-      "destination": "https://glr-hub.com/:path*",
+      "destination": "https://glr-hub.com/$1",
       "permanent": false
     }
   ],
