@@ -28,7 +28,7 @@
 | Local | Vite dev server (`:5173/5174`) | `mvn spring-boot:run` (`:8080`) | Local Postgres or Docker | Development |
 | Docker | — | `docker-compose` backend (`:8080`) | `docker-compose` Postgres 16 (`:5432`) | Integrated local run |
 | Cloud demo | Vercel | Render (Docker, Singapore) | Supabase Postgres (ap-northeast-1) | Showcase — `gl-r-erp.onrender.com`; schema at head **V30** plus the demo-only **V21** seed accounts (applied only under the `prod` profile) |
-| Production (target) | LAN / domain | Dell T360 | T360 Postgres | On-premise go-live (pending) |
+| Production | Vercel (`glr-hub.com`) | Dell T360, Docker in a Hyper-V VM (`api.glr-hub.com`) | Postgres 17 in the same stack | Live since 14 Nov 2026. Runbook: [`ops/onprem/README.md`](../ops/onprem/README.md) |
 
 ## 2. Prerequisites
 
@@ -134,9 +134,11 @@ Local secrets belong in `backend/.env.local` (git-ignored); commit only `backend
 - **Never edit an applied migration** — add a new version (forward-fix). The V13 fresh-DB collision was fixed this way (PR #52).
 - CI runs the full migration chain against a real Postgres on every PR (PR #53) to catch ordering/collision issues before merge.
 
-## 8. Target Production — On-Premise T360
+## 8. Production — On-Premise T360
 
-Planned go-live (not yet executed — see [01 Overview, Appendix A.4](01_ERP_Overview.md#a4-production-go-live-on-premises-)):
+> **Done on 14 Nov 2026, and the plan below was changed.** The website stayed on Vercel; only the backend and database moved to the T360, and the VM is reached through a Cloudflare Tunnel instead of a public IP. The current runbook (releases, backups, restore, cutover record) is [`ops/onprem/README.md`](../ops/onprem/README.md). The list below is the original plan, kept for history.
+
+Original plan (not followed as written — see [01 Overview, Appendix A.4](01_ERP_Overview.md#a4-production-go-live-on-premises-)):
 
 1. Install PostgreSQL 16 and deploy the backend on the Dell T360 (the compose file is a starting point).
 2. Register a domain (`~500–800 THB/yr`) and issue TLS via Let's Encrypt (free).
