@@ -477,43 +477,23 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem({ quantityMode: 'PIECES', areaSqm: '', piecesInput: 50 }))).toEqual({});
   });
 
-  it('flags a missing รุ่น', () => {
-    expect(validateQuotationItem(completeItem({ model: '' }))).toEqual({ model: 'กรุณาระบุรุ่น' });
-    expect(validateQuotationItem(completeItem({ model: '   ' }))).toEqual({ model: 'กรุณาระบุรุ่น' });
-  });
-
-  it('flags a missing สี', () => {
-    expect(validateQuotationItem(completeItem({ color: '' }))).toEqual({ color: 'กรุณาระบุสี' });
-  });
-
-  it('flags a missing ผิว', () => {
-    expect(validateQuotationItem(completeItem({ texture: '' }))).toEqual({ texture: 'กรุณาระบุผิว' });
-  });
-
-  it('flags a missing ขนาด', () => {
-    expect(validateQuotationItem(completeItem({ sizeText: '' }))).toEqual({ sizeText: 'กรุณาระบุขนาด' });
-  });
-
-  it('flags a missing or non-positive ความหนา', () => {
-    expect(validateQuotationItem(completeItem({ thicknessMm: null }))).toEqual({ thicknessMm: 'กรุณาระบุความหนา (มม.)' });
-    expect(validateQuotationItem(completeItem({ thicknessMm: 0 }))).toEqual({ thicknessMm: 'กรุณาระบุความหนา (มม.)' });
-  });
-
-  it('flags a missing or non-positive แผ่น/ตร.ม.', () => {
-    expect(validateQuotationItem(completeItem({ sqmPerPiece: null }))).toEqual({ sqmPerPiece: 'กรุณาระบุแผ่น/ตร.ม.' });
-    expect(validateQuotationItem(completeItem({ sqmPerPiece: 0 }))).toEqual({ sqmPerPiece: 'กรุณาระบุแผ่น/ตร.ม.' });
-  });
-
-  it('flags a missing or sub-1 แผ่น/กล่อง', () => {
-    expect(validateQuotationItem(completeItem({ piecesPerBox: null }))).toEqual({ piecesPerBox: 'กรุณาระบุแผ่น/กล่อง' });
-    expect(validateQuotationItem(completeItem({ piecesPerBox: 0 }))).toEqual({ piecesPerBox: 'กรุณาระบุแผ่น/กล่อง' });
-  });
-
-  // The box this names on a Thai tile row is ราคา/ตร.ม.; the error KEY is still `unitPrice`
-  // (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
-  it('flags a missing or non-positive price', () => {
-    expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
-    expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
+  // One row per required field: blanking it (each listed bad value in turn) must produce exactly that field's
+  // error and nothing else. Columns: test name, field, bad values, expected message.
+  it.each([
+    ['flags a missing รุ่น', 'model', ['', '   '], 'กรุณาระบุรุ่น'],
+    ['flags a missing สี', 'color', [''], 'กรุณาระบุสี'],
+    ['flags a missing ผิว', 'texture', [''], 'กรุณาระบุผิว'],
+    ['flags a missing ขนาด', 'sizeText', [''], 'กรุณาระบุขนาด'],
+    ['flags a missing or non-positive ความหนา', 'thicknessMm', [null, 0], 'กรุณาระบุความหนา (มม.)'],
+    ['flags a missing or non-positive แผ่น/ตร.ม.', 'sqmPerPiece', [null, 0], 'กรุณาระบุแผ่น/ตร.ม.'],
+    ['flags a missing or sub-1 แผ่น/กล่อง', 'piecesPerBox', [null, 0], 'กรุณาระบุแผ่น/กล่อง'],
+    // The box this names on a Thai tile row is ราคา/ตร.ม.; the error KEY is still `unitPrice`
+    // (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
+    ['flags a missing or non-positive price', 'unitPrice', [null, 0], 'กรุณาระบุราคา/ตร.ม.'],
+  ])('%s', (_name, field, badValues, message) => {
+    for (const value of badValues) {
+      expect(validateQuotationItem(completeItem({ [field]: value }))).toEqual({ [field]: message });
+    }
   });
 
   it('AREA mode requires a positive พื้นที่, ignoring piecesInput entirely', () => {

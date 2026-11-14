@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingClearanceFeeDto;
 import th.co.glr.hr.pricing.PricingFormulaConfigDtos.PricingDutyRateDto;
@@ -39,16 +41,18 @@ class PricingFormulaEngineTest {
         assertThat(match.qtyMinSqm()).isEqualByComparingTo("101");
     }
 
-    @Test
-    void freightQtyBand_justBelowMax_staysInFirstBand() {
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("100.99"), "test");
-        assertThat(match.amountThb()).isEqualByComparingTo("50000");
-    }
-
-    @Test
-    void freightQtyBand_exactMin_1FallsInFirstBand() {
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("1"), "test");
-        assertThat(match.amountThb()).isEqualByComparingTo("50000");
+    // Single-assertion band-edge cases: columns are case name, thickness mm, quantity sqm, expected amountThb.
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "freightQtyBand_justBelowMax_staysInFirstBand,             10,   100.99, 50000",
+        "freightQtyBand_exactMin_1FallsInFirstBand,                10,   1,      50000",
+        // 8 is band2's min and band1's max — must land in [8,12), never [3,8).
+        "freightThicknessBand_minIsInclusive_8FallsInSecondBandNotFirst, 8, 50,  50000",
+        "freightThicknessBand_justBelowMax_staysInFirstBand,       7.99, 50,     80000",
+    })
+    void freightBandEdge(String caseName, String thickness, String quantity, String expectedAmount) {
+        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd(thickness), bd(quantity), "test");
+        assertThat(match.amountThb()).isEqualByComparingTo(expectedAmount);
     }
 
     @Test
@@ -60,19 +64,6 @@ class PricingFormulaEngineTest {
         // And the band just below the NULL-max band's start is still the PREVIOUS (finite) band.
         PricingFreightRateDto justBelow = engine.selectFreightRate(italyFreightRates(), "IT", bd("10"), bd("800.99"), "test");
         assertThat(justBelow.amountThb()).isEqualByComparingTo("90000");
-    }
-
-    @Test
-    void freightThicknessBand_minIsInclusive_8FallsInSecondBandNotFirst() {
-        // 8 is band2's min and band1's max — must land in [8,12), never [3,8).
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("8"), bd("50"), "test");
-        assertThat(match.amountThb()).isEqualByComparingTo("50000");
-    }
-
-    @Test
-    void freightThicknessBand_justBelowMax_staysInFirstBand() {
-        PricingFreightRateDto match = engine.selectFreightRate(italyFreightRates(), "IT", bd("7.99"), bd("50"), "test");
-        assertThat(match.amountThb()).isEqualByComparingTo("80000");
     }
 
     /** V151's whole point: the country match is now EXACT on the canonical ISO code, no fuzzy matching — "Italy" (a
@@ -229,28 +220,26 @@ class PricingFormulaEngineTest {
         assertThat(result).isEqualByComparingTo("128.40");
     }
 
-    /** The OLD round-up brief's own worked example, now under the NEW rule: ฿191.96 in (margin=0, buffer=1, so the
-     * raw figure equals exactly 191.96) stays ฿191.96 — it no longer bumps to ฿200. This is the owner's own stated
-     * correction (2026-09-19): "฿191.96 no longer becomes ฿200; it prints as ฿191.96." */
-    @Test
-    void sellingPrice_19196_noLongerRoundsUpTo200_stays19196() {
-        BigDecimal result = engine.sellingPrice(bd("191.96"), BigDecimal.ZERO, BigDecimal.ONE);
-        assertThat(result).isEqualByComparingTo("191.96");
-    }
-
-    /** HALF_UP at the 2dp boundary: a third-decimal exactly at 5 rounds up (191.965 -> 191.97). */
-    @Test
-    void sellingPrice_halfUpAtThirdDecimal_roundsUp() {
-        BigDecimal result = engine.sellingPrice(bd("191.965"), BigDecimal.ZERO, BigDecimal.ONE);
-        assertThat(result).isEqualByComparingTo("191.97");
-    }
-
-    /** Companion: just under the halfway point rounds down (191.964 -> 191.96) — HALF_UP is not "always up", only
-     * exact halves are. */
-    @Test
-    void sellingPrice_justBelowHalfUpAtThirdDecimal_roundsDown() {
-        BigDecimal result = engine.sellingPrice(bd("191.964"), BigDecimal.ZERO, BigDecimal.ONE);
-        assertThat(result).isEqualByComparingTo("191.96");
+    /** margin=0, buffer=1, so the raw figure equals the cost exactly and only the HALF_UP 2dp rounding acts. Columns:
+     * case name, cost, expected selling price.
+     *
+     * <ul>
+     *   <li>19196: the OLD round-up brief's own worked example, now under the NEW rule: ฿191.96 in stays ฿191.96 —
+     *       it no longer bumps to ฿200. This is the owner's own stated correction (2026-09-19): "฿191.96 no longer
+     *       becomes ฿200; it prints as ฿191.96."</li>
+     *   <li>halfUp: HALF_UP at the 2dp boundary: a third-decimal exactly at 5 rounds up (191.965 -> 191.97).</li>
+     *   <li>justBelowHalfUp: companion — just under the halfway point rounds down (191.964 -> 191.96) — HALF_UP is
+     *       not "always up", only exact halves are.</li>
+     * </ul> */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "sellingPrice_19196_noLongerRoundsUpTo200_stays19196,  191.96,  191.96",
+        "sellingPrice_halfUpAtThirdDecimal_roundsUp,           191.965, 191.97",
+        "sellingPrice_justBelowHalfUpAtThirdDecimal_roundsDown, 191.964, 191.96",
+    })
+    void sellingPrice_zeroMarginUnitBuffer_roundsHalfUpToTwoDp(String caseName, String cost, String expected) {
+        BigDecimal result = engine.sellingPrice(bd(cost), BigDecimal.ZERO, BigDecimal.ONE);
+        assertThat(result).isEqualByComparingTo(expected);
     }
 
     /** The owner's own worked example (2026-09-19, Phase 2 CEO pricing UAT): UC per แผ่น 1,061.20 x margin 20% x
