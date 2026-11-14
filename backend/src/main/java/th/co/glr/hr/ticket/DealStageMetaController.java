@@ -28,7 +28,8 @@ public class DealStageMetaController {
             "stages", DealStage.ORDER.stream()
                 .map(code -> new DealStageMetaDto(code, DealStage.displayNoOf(code),
                     DealStage.businessCodeOf(code), DealStage.phaseOf(code),
-                    DealStage.gateOf(code), DealStage.isAutoAdvanced(code)))
+                    DealStage.gateOf(code), DealStage.isAutoAdvanced(code),
+                    DealStage.repCodeOf(code), DealStage.boardColumnOf(code)))
                 .toList(),
             "phases", DealStage.ORDER.stream().map(DealStage::phaseOf).distinct().sorted().toList(),
             "lostReasons", DealLostReason.ORDER,
@@ -48,5 +49,5 @@ public class DealStageMetaController {
 
     /** One pipeline stage's structure. */
     public record DealStageMetaDto(String code, int no, String businessCode, int phase,
-                                   String gate, boolean auto) {}
+                                   String gate, boolean auto, String repCode, int boardColumn) {}
 }

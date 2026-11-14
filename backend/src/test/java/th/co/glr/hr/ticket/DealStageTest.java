@@ -260,4 +260,61 @@ class DealStageTest {
                 .isFalse();
         }
     }
+
+    // ── Slice 1: reps' S-codes and the five board columns ────────────────────
+
+    @Test
+    void repCodeOf_matchesRepWorkbookCodes() {
+        java.util.Map<String, String> expected = java.util.Map.ofEntries(
+            java.util.Map.entry("LEAD_APPROACH", "S1"), java.util.Map.entry("PRESENTATION", "S1"),
+            java.util.Map.entry("SPEC_APPROVED", "S2"),
+            java.util.Map.entry("QUOTE_DESIGN_SIDE", "S3"), java.util.Map.entry("QUOTE_OWNER", "S3"),
+            java.util.Map.entry("OWNER_SIGNOFF", "S3"),
+            java.util.Map.entry("AWAITING_BUYER", "S5"),
+            java.util.Map.entry("QUOTE_BUYER", "S6"), java.util.Map.entry("NEGOTIATION", "S6"),
+            java.util.Map.entry("ORDER_RECEIVED", "S6"),
+            java.util.Map.entry("DEPOSIT_RECEIVED", "S7"), java.util.Map.entry("PROCUREMENT", "S7"),
+            java.util.Map.entry("DELIVERY_SCHEDULING", "S8"),
+            java.util.Map.entry("DELIVERED", "S9"), java.util.Map.entry("CLOSED_PAID", "S9"));
+        expected.forEach((stage, code) ->
+            assertThat(DealStage.repCodeOf(stage)).as("repCodeOf(%s)", stage).isEqualTo(code));
+    }
+
+    @Test
+    void boardColumnOf_groupsIntoFive() {
+        java.util.Map<String, Integer> byCode = java.util.Map.of(
+            "S1", 1, "S2", 2, "S3", 3, "S5", 3, "S6", 4, "S7", 5, "S8", 5, "S9", 5);
+        for (String stage : DealStage.ORDER) {
+            assertThat(DealStage.boardColumnOf(stage)).as("boardColumnOf(%s)", stage)
+                .isEqualTo(byCode.get(DealStage.repCodeOf(stage)));
+        }
+        assertThat(DealStage.boardColumnOf("QUOTE_OWNER")).isEqualTo(3);
+        assertThat(DealStage.boardColumnOf("DELIVERED")).isEqualTo(5);
+    }
+
+    @Test
+    void everyStageHasARepCodeAndColumn() {
+        for (String stage : DealStage.ORDER) {
+            assertThat(DealStage.repCodeOf(stage)).as("repCodeOf(%s)", stage).isNotNull();
+            assertThat(DealStage.boardColumnOf(stage)).as("boardColumnOf(%s)", stage).isBetween(1, 5);
+        }
+    }
+
+    @Test
+    void boardColumnIsMonotonicInPipelineOrder() {
+        int previous = 0;
+        for (String stage : DealStage.ORDER) {
+            int column = DealStage.boardColumnOf(stage);
+            assertThat(column).as("column of %s after %d", stage, previous).isGreaterThanOrEqualTo(previous);
+            previous = column;
+        }
+    }
+
+    @Test
+    void unknownStage_returnsNullAndZero() {
+        assertThat(DealStage.repCodeOf("NOPE")).isNull();
+        assertThat(DealStage.repCodeOf(null)).isNull();
+        assertThat(DealStage.boardColumnOf("NOPE")).isZero();
+        assertThat(DealStage.boardColumnOf(null)).isZero();
+    }
 }

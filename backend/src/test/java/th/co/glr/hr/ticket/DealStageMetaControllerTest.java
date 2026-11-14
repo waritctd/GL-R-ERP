@@ -124,4 +124,15 @@ class DealStageMetaControllerTest {
         assertThatThrownBy(() -> controller.dealStages(new MockHttpSession()))
             .isInstanceOf(ApiException.class);
     }
+
+    @Test
+    void everyStageCarriesItsRepCodeAndBoardColumn() {
+        List<?> stages = (List<?>) controller.dealStages(signedIn()).get("stages");
+        for (Object o : stages) {
+            DealStageMetaController.DealStageMetaDto dto = (DealStageMetaController.DealStageMetaDto) o;
+            assertThat(dto.repCode()).as("repCode of %s", dto.code()).isEqualTo(DealStage.repCodeOf(dto.code()));
+            assertThat(dto.boardColumn()).as("boardColumn of %s", dto.code())
+                .isEqualTo(DealStage.boardColumnOf(dto.code())).isBetween(1, 5);
+        }
+    }
 }
