@@ -4440,6 +4440,15 @@ export function setPricingRequestStatusForTests(prId, status) {
   pr.status = status;
 }
 
+/** TEST-ONLY seam — not part of `api`. Puts every deposit notice on a deal into `status` (e.g. SUPERSEDED), returning
+ * the previous statuses so a test can restore them. */
+export function setDepositNoticeStatusesForTests(ticketId, status) {
+  const rows = mockDepositNotices.filter((n) => n.ticketId === Number(ticketId));
+  const before = rows.map((n) => n.status);
+  rows.forEach((n) => { n.status = status; });
+  return () => rows.forEach((n, i) => { n.status = before[i]; });
+}
+
 /** TEST-ONLY seam — not part of `api`. Patches raw ticket fields (e.g. lifecycle, legacyStockSource). */
 export function patchTicketForTests(ticketId, patch) {
   Object.assign(findTicketRaw(Number(ticketId)), patch);
@@ -8351,16 +8360,16 @@ seedMockExpectedPayments();
 
 /**
  * TicketRepository#applyReceiptToExpectedPayments — the ONE rule for manual and Express receipts alike (review M1),
- * owner ruling N5: a deal WITH an issued, non-cancelled deposit notice fills the rows matching the receipt's kind first
+ * owner ruling N5: a deal WITH an ISSUED deposit notice (same test as expressReceiptKind) fills the rows matching the receipt's kind first
  * (DEPOSIT receipt -> DEPOSIT rows; anything else -> ON_DELIVERY, then BALANCE), each by expected week then id, and the
  * overflow goes to the remaining OPEN rows by week; a deal with NO notice fills every OPEN row purely by week, then id.
  * RECEIVED only once the cumulative amount reaches it within +-1% / +-฿10; carry what a completed row does not need to
- * the next one. ADJUSTMENT touches nothing.
+ * the next one. ADJUSTMENT deliberately touches no row (a refund lowers received cash; rows stay closed).
  */
 const MOCK_BALANCE_ORDER = { ON_DELIVERY: 0, BALANCE: 1 };
 function mockApplyReceiptToExpected(ticketId, kind, amount, dayIso, receiptId, receiptRef = null) {
   if (!(amount > 0) || kind === 'ADJUSTMENT') return;
-  const hasNotice = mockDepositNotices.some((n) => n.ticketId === Number(ticketId) && !['DRAFT', 'CANCELLED'].includes(n.status));
+  const hasNotice = mockDepositNotices.some((n) => n.ticketId === Number(ticketId) && n.status === 'ISSUED');
   const tier = (p) => {
     if (!hasNotice) return 0;
     if (kind === 'DEPOSIT') return p.kind === 'DEPOSIT' ? 0 : 1;

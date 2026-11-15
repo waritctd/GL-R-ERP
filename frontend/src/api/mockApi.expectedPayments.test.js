@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api } from './mockApi.js';
+import { api, setDepositNoticeStatusesForTests } from './mockApi.js';
 import { bangkokTodayIso } from '../utils/format.js';
 import { snapToMonday } from '../features/salesBoard/cashFormat.js';
 
@@ -117,6 +117,21 @@ describe('mockApi.expectedPayments', () => {
     expect(rows[balance.id].status).toBe('RECEIVED');
     expect(rows[onDelivery.id].status).toBe('RECEIVED');
     expect(rows[deposit.id]).toMatchObject({ status: 'OPEN', receivedAmount: 0 });
+  });
+
+  it('N5: a deal whose only notice is SUPERSEDED has no notice — a BALANCE receipt fills by week, not by kind', async () => {
+    const id = 19; // seeded with an ISSUED deposit notice; supersede it for this test
+    await api.auth.login({ role: 'sales_manager' });
+    for (const r of await api.expectedPayments.list(id)) if (r.status === 'OPEN') await api.expectedPayments.cancel(id, r.id);
+    const restore = setDepositNoticeStatusesForTests(id, 'SUPERSEDED');
+    try {
+      const [deposit, balance] = await plan(id, [['DEPOSIT', 30000, monday], ['BALANCE', 30000, plusDays(monday, 42)]]);
+      const rows = await pay(id, 'BALANCE', 30000);
+      expect(rows[deposit.id]).toMatchObject({ status: 'RECEIVED', receivedAmount: 30000 });
+      expect(rows[balance.id]).toMatchObject({ status: 'OPEN', receivedAmount: 0 });
+    } finally {
+      restore();
+    }
   });
 
   it('a new OPEN deposit this month shows in my-work cash as forecast and deposits expected', async () => {

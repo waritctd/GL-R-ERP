@@ -174,6 +174,33 @@ class ExpectedPaymentReceiptIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(status(deposit)).isEqualTo("RECEIVED");
     }
 
+    /**
+     * The fill rule must key on the same "has a deposit notice" as {@code expressReceiptKind}: an ISSUED one. A deal
+     * whose only notice is SUPERSEDED (WAIVED policy afterwards) has none, so a BALANCE Express receipt fills purely by
+     * expected week — the rep's DEPOSIT row this week — not the kind-first order.
+     */
+    @Test
+    void aSupersededOnlyNoticeIsNoNotice_theReceiptFillsByWeekNotByKind() {
+        long d = orderDeal("200000.00");
+        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'WAIVED' WHERE ticket_id = :t", Map.of("t", d));
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable, doc_number)
+            VALUES (:t, 1, 'SUPERSEDED', 'x', 0.3, 32100, 32100, 0, 0, 32100, :n)""",
+            Map.of("t", d, "n", "DN-SUP-" + d));
+        long deposit = expectedRow(d, "DEPOSIT", "30000.00", monday);
+        long balance = expectedRow(d, "BALANCE", "30000.00", monday.plusWeeks(6));
+
+        ticketService.recordExpressReceipt(d, new BigDecimal("30000.00"), Instant.now(), "RE-SUP-1", null, account);
+
+        assertThat(jdbc.queryForObject("SELECT kind FROM sales.payment_receipt WHERE ticket_id = :t",
+            Map.of("t", d), String.class)).isEqualTo("BALANCE");
+        assertThat(status(deposit)).isEqualTo("RECEIVED");
+        assertThat(received(deposit)).isEqualByComparingTo("30000");
+        assertThat(status(balance)).isEqualTo("OPEN");
+        assertThat(received(balance)).isEqualByComparingTo("0");
+    }
+
     @Test
     void withinToleranceCountsAsReceived() {
         long d = orderDeal("200000.00");

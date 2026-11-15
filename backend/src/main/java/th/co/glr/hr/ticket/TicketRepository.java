@@ -1756,7 +1756,8 @@ public class TicketRepository {
      * <p>Which OPEN rows the amount fills first (owner ruling N5 — it replaced the fixed DEPOSIT, ON_DELIVERY, BALANCE
      * order, which paid a far-off deposit row before this week's on-delivery one):
      * <ul>
-     *   <li>the deal HAS an issued, non-cancelled deposit notice: first the rows matching the receipt's kind — a DEPOSIT
+     *   <li>the deal HAS an ISSUED deposit notice (a DRAFT, CANCELLED or SUPERSEDED one is no notice — the same test as
+     *       {@code TicketService#expressReceiptKind}): first the rows matching the receipt's kind — a DEPOSIT
      *       receipt fills DEPOSIT rows; a BALANCE (any non-deposit) receipt fills ON_DELIVERY rows, then BALANCE rows —
      *       each by expected week then oldest; whatever overflows goes to the remaining OPEN rows of any kind by
      *       expected week;</li>
@@ -1766,7 +1767,8 @@ public class TicketRepository {
      * The receipt's own kind keeps its meaning for the payment track only. A row turns RECEIVED (linking this receipt)
      * only when its cumulative {@code received_amount} reaches its amount minus the matcher's tolerance (±1% or ±฿10,
      * whichever is wider); otherwise it stays OPEN with the rest still expected. What a completed row does not need
-     * carries to the next row in that order. ADJUSTMENT receipts touch nothing.
+     * carries to the next row in that order. ADJUSTMENT receipts deliberately touch no expected-payment row: a refund
+     * lowers the received cash, and the rows stay closed.
      */
     @SuppressWarnings("unused") // receiptDate: kept for callers and for a future tie-break
     public void applyReceiptToExpectedPayments(long ticketId, String receiptKind, BigDecimal amount,
@@ -1776,8 +1778,8 @@ public class TicketRepository {
         }
         boolean hasNotice = Boolean.TRUE.equals(jdbc.queryForObject("""
             SELECT EXISTS (SELECT 1 FROM sales.deposit_notice d
-                            WHERE d.ticket_id = :t AND d.status NOT IN ('DRAFT', 'CANCELLED'))
-            """, Map.of("t", ticketId), Boolean.class));
+                            WHERE d.ticket_id = :t AND d.status = 'ISSUED')
+            """, Map.of("t", ticketId), Boolean.class)); // same predicate as TicketService#expressReceiptKind
         String order;
         if (!hasNotice) {
             order = "expected_week, expected_payment_id";
