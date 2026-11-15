@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -11,14 +12,25 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { failed, moneySum } from './dashboardParts.jsx';
 import { TeamOverview } from '../salesBoard/TeamOverview.jsx';
+import { defaultRange } from '../tickets/movementRange.js';
+import { TeamMovementPanel } from './TeamMovementPanel.jsx';
 
 /**
  * Sales Manager landing: ภาพรวมทีมขาย (spec 2026-11-15 §7.4, slice 1) — TeamOverview's two tiles, per-rep table and
  * the team's quiet deals, all from GET /api/sales/team-overview — then ค่าคอมรอคุณตรวจ (deep-links into
- * CommissionPage's approve flow, never duplicates the approval mutation). The former money band (a misleading
- * ฿0.00 cash figure when nothing was recorded), the blanket 7-day ดีลที่ต้องดูแล flags, the 7-day movement panel and
- * อัตราปิดงาน were replaced by it. Cash and visit tiles come with slices 2–3. Manager keeps every existing nav item.
+ * CommissionPage's approve flow, never duplicates the approval mutation). Below the team table, compactly (review
+ * H3): the 7-day movement panel and อัตราปิดงาน, unchanged. The former money band (a misleading ฿0.00 cash figure
+ * when nothing was recorded) and the blanket 7-day ดีลที่ต้องดูแล flags were replaced by TeamOverview's quiet rule.
+ * Cash and visit tiles come with slices 2–3. Manager keeps every existing nav item.
  */
+
+// Won once it reaches the terminal pipeline stage; lost once its lifecycle/legacy status marks it lost or cancelled.
+function isDealWon(ticket) {
+  return ticket.salesStage === 'CLOSED_PAID';
+}
+function isDealLost(ticket) {
+  return ticket.lifecycle === 'CLOSED_LOST' || ticket.lifecycle === 'CANCELLED' || ticket.status === 'cancelled';
+}
 
 const MAX_COMMISSIONS = 5;
 
@@ -62,8 +74,19 @@ export function ManagerOverview({ user, employee }) {
     queryFn: () => api.commissions.pendingApproval().then((r) => r.commissions ?? []),
   });
 
+  // The team-movement panel and อัตราปิดงาน read the deal list with the default 7-day range (server flags per row).
+  const teamRange = useMemo(() => defaultRange(), []);
+  const ticketsQuery = useQuery({
+    queryKey: queryKeys.ticketListByRange(teamRange.from, teamRange.to),
+    queryFn: () => api.tickets.list({ movementFrom: teamRange.from, movementTo: teamRange.to }).then((r) => r.tickets ?? []),
+  });
+
   // null while loading: the panel shows its own skeleton, the rest of the page is already up.
   const pendingCommissions = commissionsQuery.data ?? null;
+  const tickets = ticketsQuery.data ?? null;
+  const wonCount = tickets?.filter(isDealWon).length ?? 0;
+  const lostCount = tickets?.filter(isDealLost).length ?? 0;
+  const closeRate = wonCount + lostCount > 0 ? (wonCount / (wonCount + lostCount)) * 100 : null;
   const today = formatThaiDate(new Date().toISOString());
   const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
   const commissionsShown = pendingCommissions?.slice(0, MAX_COMMISSIONS) ?? [];
@@ -77,6 +100,21 @@ export function ManagerOverview({ user, employee }) {
       />
 
       <TeamOverview showTitle={false} />
+
+      <TeamMovementPanel deals={tickets} range={teamRange} />
+
+      <Panel title="อัตราปิดงาน">
+        {failed(ticketsQuery) ? (
+          <Failed />
+        ) : tickets === null ? (
+          <Skeleton height={28} />
+        ) : (
+          <p className="m-0 flex flex-wrap items-baseline gap-x-3 text-sm text-text-muted">
+            <strong className="text-2xl font-extrabold tabular-nums text-text">{closeRate == null ? '—' : `${closeRate.toFixed(0)}%`}</strong>
+            {closeRate == null ? null : <span>ปิดสำเร็จ {wonCount} · เสีย {lostCount}</span>}
+          </p>
+        )}
+      </Panel>
 
       <Panel flush title="ค่าคอมรอคุณตรวจ" actions={pendingCommissions ? <CountPill count={pendingCommissions.length} /> : null}>
         {failed(commissionsQuery) ? (
