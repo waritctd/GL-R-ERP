@@ -317,7 +317,7 @@ export function App() {
                   dashboardSummary={dashboardSummary}
                 />
               ) : user.role === 'import' && SALES_ENABLED ? (
-                <ImportOverview user={user} employee={currentEmployee} />
+                <ImportOverview user={user} employee={currentEmployee} showToast={showToast} />
               ) : user.role === 'account' && SALES_ENABLED ? (
                 <AccountOverview user={user} employee={currentEmployee} dashboardSummary={dashboardSummary} showToast={showToast} />
               ) : isDivisionManager(user) ? (

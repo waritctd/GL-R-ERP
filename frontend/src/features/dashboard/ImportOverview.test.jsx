@@ -2,11 +2,9 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportOverview } from './ImportOverview.jsx';
 import { api } from '../../api/index.js';
-import { formatThaiDate, greetingName } from '../../utils/format.js';
-import { expectFigure, figureRows } from '../../test/fixtures/dashboardMoney.js';
 
 globalThis.React = React;
 
@@ -16,358 +14,237 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       tickets: { list: vi.fn() },
-      pricingRequests: { queue: vi.fn() },
+      pricingRequests: { queue: vi.fn(), pickup: vi.fn() },
       storedImportRequests: { listForTicket: vi.fn() },
     },
   };
 });
 
-const user = { id: 7, role: 'import', employeeId: 2, name: 'นำเข้า ทดสอบ' };
-const employee = { nickName: 'นำเข้า' };
+// Spec 2026-11-15 §7.11 item 1 / plan task 5.1 (design a-import-work): import's landing is ONE worklist grouped by
+// the next step — รอรับเรื่อง (claim inline), รอราคาโรงงาน, กำลังขนส่ง (step + ETA), ถึงโกดังแล้ว — built from the
+// two calls the page already made (api.pricingRequests.queue, api.tickets.list) plus the per-deal stored ใบขอซื้อ
+// rows /fulfilment reads. No new endpoint.
+
+const me = { id: 7, role: 'import', employeeId: 2, name: 'วรรณา นำเข้า' };
 const never = () => new Promise(() => {});
 
-// One ticket per fulfilment stage; D-005 (GOODS_RECEIVED) is delivery-ready, which is Sales' prompt:
-// no row and no count on this page. D-001 (no IR yet) is no import to-do either.
-const TICKETS = [
-  { id: 1, code: 'D-001', title: 'ดีล 1', customerName: 'บริษัท A', status: 'quotation_issued', fulfillmentStatus: null, overdue: false, updatedAt: '2026-07-01T00:00:00Z' },
-  { id: 2, code: 'D-002', title: 'ดีล 2', customerName: 'บริษัท B', status: 'quotation_issued', fulfillmentStatus: 'IR_ISSUED', overdue: true, updatedAt: '2026-07-02T00:00:00Z' },
-  { id: 3, code: 'D-003', title: 'ดีล 3', customerName: 'บริษัท C', status: 'quotation_issued', fulfillmentStatus: 'IR_SENT', overdue: false, updatedAt: '2026-07-03T00:00:00Z' },
-  { id: 4, code: 'D-004', title: 'ดีล 4', customerName: 'บริษัท D', status: 'quotation_issued', fulfillmentStatus: 'SHIPPING', overdue: false, updatedAt: '2026-07-04T00:00:00Z' },
-  { id: 5, code: 'D-005', title: 'ดีล 5', customerName: 'บริษัท E', status: 'quotation_issued', fulfillmentStatus: 'GOODS_RECEIVED', overdue: false, updatedAt: '2026-07-05T00:00:00Z' },
-  { id: 6, code: 'D-006', title: 'ดีล 6', customerName: 'บริษัท F', status: 'draft', fulfillmentStatus: null, overdue: false, updatedAt: '2026-07-06T00:00:00Z' },
-];
-
 const pcr = (id, status, o = {}) => ({
-  id, status, ticketId: 1, customerName: `ลูกค้า PCR ${id}`, requestCode: `PCR-${id}`, ticketCode: `PR-${id}`,
-  recipientType: 'DESIGNER', assignedImportId: null, ...o,
+  id, status, ticketId: 1, customerName: `ลูกค้า ${id}`, requestCode: `PCR-${id}`, ticketCode: `PR-${id}`,
+  recipientType: 'DESIGNER', assignedImportId: null, assignedImportName: null, requestedByName: 'คุณสมหมาย',
+  itemCount: 3, submittedAt: `2026-11-1${id % 10}T03:00:00Z`, ...o,
 });
-const PRICING_REQUESTS = [
-  // unclaimed inbox
-  pcr(101, 'SUBMITTED', { ticketId: 6 }),
-  pcr(102, 'SUBMITTED'),
-  // mine: 1 รับเรื่อง + 4 เจรจากับโรงงาน (one of them the retired COSTING_IN_PROGRESS) = 5, one past the cap of 3
-  pcr(111, 'IMPORT_REVIEWING', { assignedImportId: 7 }),
-  pcr(112, 'AWAITING_FACTORY_RESPONSE', { assignedImportId: 7 }),
-  pcr(113, 'AWAITING_FACTORY_RESPONSE', { assignedImportId: 7 }),
-  pcr(114, 'COSTING_IN_PROGRESS', { assignedImportId: 7 }),
-  pcr(115, 'AWAITING_FACTORY_RESPONSE', { assignedImportId: 7 }),
-  // somebody else's, and mine-but-already-with-the-CEO, and finished: none are "mine to work"
-  pcr(121, 'AWAITING_FACTORY_RESPONSE', { assignedImportId: 99 }),
+let queue;
+const QUEUE = () => [
+  pcr(102, 'SUBMITTED', { submittedAt: '2026-11-12T03:00:00Z', itemCount: 5 }),
+  pcr(101, 'SUBMITTED', { submittedAt: '2026-11-14T03:00:00Z', itemCount: 2 }),
+  pcr(111, 'IMPORT_REVIEWING', { assignedImportId: 7, assignedImportName: 'วรรณา นำเข้า' }),
+  pcr(112, 'AWAITING_FACTORY_RESPONSE', { assignedImportId: 7, assignedImportName: 'วรรณา นำเข้า' }),
+  pcr(121, 'AWAITING_FACTORY_RESPONSE', { assignedImportId: 99, assignedImportName: 'สมศรี นำเข้า' }),
+  // with the CEO, and done: not import's to work
   pcr(131, 'READY_FOR_CEO_REVIEW', { assignedImportId: 7 }),
-  pcr(132, 'CEO_REVIEWING', { assignedImportId: 99 }),
   pcr(141, 'APPROVED_FOR_QUOTATION', { assignedImportId: 7 }),
 ];
 
-// Answer like the server: honour status / assignedImportId / activeOnly, so the page may fetch one
-// list or several and still see the same data.
-function serveQueue(items = PRICING_REQUESTS) {
-  api.pricingRequests.queue.mockImplementation((params = {}) => Promise.resolve({
-    items: items.filter((r) => (params.status == null || r.status === params.status)
-      && (params.assignedImportId == null || r.assignedImportId === params.assignedImportId)
-      && (!params.activeOnly || !['APPROVED_FOR_QUOTATION', 'QUOTATION_ISSUED', 'CANCELLED', 'SUPERSEDED'].includes(r.status))),
-  }));
-}
+const TICKETS = [
+  { id: 3, code: 'PR-003', customerName: 'Siam Mall', fulfillmentStatus: 'IR_ISSUED' },
+  { id: 4, code: 'PR-004', customerName: 'บ้านพักชะอำ', fulfillmentStatus: 'IR_ISSUED' },
+  // pre-V184 chain, no stored rows: still in transit at deal level
+  { id: 5, code: 'PR-005', customerName: 'Legacy Co', fulfillmentStatus: 'SHIPPING' },
+  { id: 6, code: 'PR-006', customerName: 'Landmark', fulfillmentStatus: 'GOODS_RECEIVED' },
+  // not candidates
+  { id: 8, code: 'PR-008', customerName: 'Stock Only', fulfillmentStatus: 'FROM_STOCK' },
+  { id: 9, code: 'PR-009', customerName: 'Delivered', fulfillmentStatus: 'FULLY_DELIVERED' },
+];
+const ir = (id, ticketId, importStep, o = {}) => ({
+  id, ticketId, status: 'ISSUED', importStep, docNumber: `IR69${id}`, factoryName: `โรงงาน ${id}`,
+  expectedArrivalFrom: null, expectedArrivalTo: null, importStepAt: '2026-11-08', ...o,
+});
+const ROWS = {
+  3: [ir(31, 3, 'IN_TRANSIT', { factoryName: 'Mutina', expectedArrivalFrom: '2026-12-02', expectedArrivalTo: '2026-12-02' })],
+  4: [ir(41, 4, 'AWAITING_CUSTOMS', { factoryName: 'Equipe' }), ir(42, 4, 'RECEIVED', { factoryName: 'Peronda' }),
+    ir(43, 4, 'ORDERED', { status: 'SUPERSEDED' })],
+  5: [],
+  6: [ir(61, 6, 'RECEIVED', { factoryName: 'Fap', importStepAt: '2026-11-08' })],
+};
 
 function LocationProbe() {
   const location = useLocation();
-  return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
+  return <div data-testid="location-probe">{location.pathname}</div>;
 }
 
-function renderOverview() {
+function renderOverview(showToast = vi.fn()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(
+  render(
     <QueryClientProvider client={queryClient}>
       <MemoryRouter initialEntries={['/']}>
         <Routes>
-          <Route path="/" element={<ImportOverview user={user} employee={employee} />} />
+          <Route path="/" element={<ImportOverview user={me} showToast={showToast} />} />
           <Route path="*" element={<LocationProbe />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { showToast };
 }
 
-const group = (key) => screen.getByTestId(`worklist-group-${key}`);
-// Resolves once the group has settled (rows or failed), not merely once its loading skeleton is mounted.
-const findGroup = (key) => waitFor(() => {
-  const el = screen.getByTestId(`worklist-group-${key}`);
+const group = (key) => screen.getByTestId(`import-group-${key}`);
+const settled = (key) => waitFor(() => {
+  const el = group(key);
   expect(el.getAttribute('aria-busy')).toBeNull();
   return el;
 });
+const rowIds = (key) => within(group(key)).queryAllByTestId(/^import-row-/).map((el) => el.dataset.testid);
 const probe = () => screen.getByTestId('location-probe').textContent;
-const cta = (key, id) => within(screen.getByTestId(`worklist-row-${key}-${id}`)).getByRole('button');
 
-describe('ImportOverview', () => {
+describe('ImportOverview — the งานนำเข้า worklist', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    queue = QUEUE();
+    api.pricingRequests.queue.mockImplementation(() => Promise.resolve({ items: queue }));
     api.tickets.list.mockResolvedValue({ tickets: TICKETS });
-    serveQueue();
-    api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
+    api.storedImportRequests.listForTicket.mockImplementation((id) => Promise.resolve({ importRequests: ROWS[id] ?? [] }));
   });
+  afterEach(cleanup);
 
-  it('titles the page ภาพรวมงานนำเข้า with a greeting and today\'s date, and drops the old tile strip', async () => {
+  it('is titled งานนำเข้า and lists the four groups in next-step order with their counts', async () => {
     renderOverview();
-    await findGroup('import');
-    expect(screen.getByRole('heading', { name: 'ภาพรวมงานนำเข้า' })).not.toBeNull();
-    expect(screen.getByText(`สวัสดี, ${greetingName('นำเข้า')} · ${formatThaiDate(new Date().toISOString())}`)).not.toBeNull();
-    expect(screen.queryByText('สถานะงานทั้งหมด')).toBeNull();
-    // the finance flag is gone, and so is the clickable tile filter
-    expect(screen.queryByText('เกินกำหนด')).toBeNull();
-    expect(screen.queryByText('ล้างตัวกรอง')).toBeNull();
-    expect(document.querySelector('button[aria-pressed]')).toBeNull();
+    await settled('arrived');
+    await settled('pickup');
+    expect(screen.getByRole('heading', { name: 'งานนำเข้า' })).not.toBeNull();
+    const order = screen.getAllByTestId(/^import-group-[a-z]+$/).map((el) => el.dataset.testid.replace('import-group-', ''));
+    expect(order).toEqual(['pickup', 'pricing', 'transit', 'arrived']);
+    expect(within(group('pickup')).getByTestId('group-count').textContent).toBe('2');
+    expect(within(group('pricing')).getByTestId('group-count').textContent).toBe('2');
+    expect(within(group('transit')).getByTestId('group-count').textContent).toBe('3');
+    expect(within(group('arrived')).getByTestId('group-count').textContent).toBe('2');
+    expect(screen.getByText(/จัดกลุ่มตามขั้นต่อไป · 9 งาน/)).not.toBeNull();
+    // the old tile band and the separate panels are gone
+    expect(screen.queryByText('ภาพรวมงานนำเข้า')).toBeNull();
+    expect(screen.queryByTestId('in-transit-panel')).toBeNull();
+    expect(screen.queryByTestId('ceo-waiting-panel')).toBeNull();
   });
 
-  describe('loading and failure (per source)', () => {
-    it('renders the pricing groups as soon as the queue lands while the deal list is still loading; only นำเข้า waits', async () => {
-      api.tickets.list.mockImplementation(never);
+  describe('รอรับเรื่อง', () => {
+    it('lists SUBMITTED requests oldest first, with who sent it and how many lines', async () => {
       renderOverview();
-      await findGroup('pickup');
-      expect(group('import').getAttribute('aria-busy')).toBe('true');
-      expect(group('pickup').getAttribute('aria-busy')).toBeNull();
-      expectFigure('รอรับเรื่อง', '2 คำขอ');
-      expect(screen.queryByTestId('worklist-total')).toBeNull(); // would be a partial sum
+      await settled('pickup');
+      expect(rowIds('pickup')).toEqual(['import-row-pickup-102', 'import-row-pickup-101']);
+      const row = screen.getByTestId('import-row-pickup-102');
+      expect(row.textContent).toContain('PCR-102');
+      expect(row.textContent).toContain('ลูกค้า 102');
+      expect(row.textContent).toContain('คุณสมหมาย');
+      expect(row.textContent).toContain('5 รายการ');
     });
 
-    it('shows a failed pricing queue as โหลดไม่สำเร็จ on its groups while the fulfilment group still renders', async () => {
-      api.pricingRequests.queue.mockRejectedValue(new Error('boom'));
-      renderOverview();
-      await findGroup('import');
-      const failed = await screen.findAllByText('โหลดไม่สำเร็จ');
-      expect(failed.map((el) => el.closest('[data-testid^="worklist-group-"]').dataset.testid.replace('worklist-group-', '')).sort()).toEqual(['mine', 'pickup']);
-      expect(group('import').getAttribute('aria-busy')).toBeNull();
-      expect(within(group('import')).getByTestId('worklist-row-import-2')).not.toBeNull();
-    });
-  });
-
-  describe('figures band', () => {
-    it('shows four counts in chain order with the captions of the approved design', async () => {
-      renderOverview();
-      await findGroup('import');
-      const labels = [...document.querySelectorAll('dl dt')].map((el) => el.textContent);
-      expect(labels).toEqual(['รอรับเรื่อง', 'กำลังขอราคา (ของฉัน)', 'รอ CEO ตั้งราคา', 'นำเข้า / ขนส่ง']);
-      expect(figureRows('รอรับเรื่อง')[0]).toContain('2 คำขอ');
-      expect(figureRows('รอรับเรื่อง')[0]).toContain('ยังไม่มีใครรับ');
-      expect(figureRows('กำลังขอราคา (ของฉัน)')[0]).toContain('5 คำขอ');
-      expect(figureRows('กำลังขอราคา (ของฉัน)')[0]).toContain('รับเรื่อง 1 · เจรจากับโรงงาน 4');
-      expect(figureRows('รอ CEO ตั้งราคา')[0]).toContain('2 คำขอ');
-      expect(figureRows('รอ CEO ตั้งราคา')[0]).toContain('ส่งต่อแล้ว ไม่ต้องทำอะไร');
-      expect(figureRows('นำเข้า / ขนส่ง')[0]).toContain('3 ดีล');
-      expect(figureRows('นำเข้า / ขนส่ง')[0]).toContain('ออกใบขอซื้อ 1 · ขนส่ง 1 · ถึงคลัง 1');
-    });
-
-    it('every number equals the group or panel it summarises (and the queue page\'s own tab filter)', async () => {
-      renderOverview();
-      await findGroup('import');
-      const rowCount = (g) => within(g).queryAllByTestId(/^worklist-row-/).length;
-      // groups cap at 3 rows, so compare to the header count they print
-      expect(group('pickup').textContent).toContain('2 รายการ');
-      expect(group('mine').textContent).toContain('5 รายการ');
-      expect(group('import').textContent).toContain('3 รายการ');
-      expect(rowCount(group('pickup'))).toBe(2);
-      expect(rowCount(group('mine'))).toBe(3);
-      // รอ CEO panel lists exactly the band's 2
-      expect(within(screen.getByTestId('ceo-waiting-panel')).queryAllByTestId(/^ceo-waiting-row-/)).toHaveLength(2);
-    });
-
-    // Shipments are per factory, but this band counts DEALS: it must equal the นำเข้า group, and a deal
-    // with several in-transit rows counts once (in its furthest bucket), never once per row.
-    const transitRows = (ticketId, n) => Array.from({ length: n }, (_, i) => ({ id: i + 1, ticketId, status: 'ISSUED', importStep: 'IN_TRANSIT', factoryName: `โรงงาน ${i}` }));
-
-    it('a deal with 2 in-transit factory rows counts as 1 deal, equal to the นำเข้า group, filed under ขนส่ง', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [{ ...TICKETS[0], id: 21, code: 'D-021', fulfillmentStatus: 'IR_ISSUED' }] });
-      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [...transitRows(21, 2), { id: 3, ticketId: 21, status: 'ISSUED', importStep: 'ORDERED' }] });
-      renderOverview();
-      await findGroup('import');
-      await vi.waitFor(() => expect(figureRows('นำเข้า / ขนส่ง')[0]).toContain('ออกใบขอซื้อ 0 · ขนส่ง 1 · ถึงคลัง 0'));
-      expect(figureRows('นำเข้า / ขนส่ง')[0]).toContain('1 ดีล');
-      expect(group('import').textContent).toContain('1 รายการ');
-    });
-
-    it('a SHIPPING deal that also has in-transit rows is counted once, not in two buckets', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [{ ...TICKETS[3], id: 22, code: 'D-022' }] }); // SHIPPING
-      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: transitRows(22, 2) });
-      renderOverview();
-      await findGroup('import');
-      await vi.waitFor(() => expect(within(group('import')).getByTestId('worklist-row-import-22')).not.toBeNull());
-      const text = figureRows('นำเข้า / ขนส่ง')[0];
-      expect(text).toContain('1 ดีล');
-      expect(text).toContain('ออกใบขอซื้อ 0 · ขนส่ง 0 · ถึงคลัง 1');
-      expect(group('import').textContent).toContain('1 รายการ');
-    });
-
-    it('prints no zero captions while a figure is "—" (loading or failed)', async () => {
-      api.tickets.list.mockImplementation(never);
-      api.pricingRequests.queue.mockImplementation(never);
-      const { unmount } = renderOverview();
-      expect(figureRows('กำลังขอราคา (ของฉัน)')[0]).toBe('กำลังขอราคา (ของฉัน)—');
-      expect(figureRows('นำเข้า / ขนส่ง')[0]).toBe('นำเข้า / ขนส่ง—');
-      unmount();
-      api.pricingRequests.queue.mockRejectedValue(new Error('boom'));
-      renderOverview();
-      await screen.findAllByText('โหลดไม่สำเร็จ');
-      expect(figureRows('กำลังขอราคา (ของฉัน)')[0]).toBe('กำลังขอราคา (ของฉัน)—');
-      expect(figureRows('รอรับเรื่อง')[0]).toContain('—');
-    });
-  });
-
-  describe('กำลังขอราคา (ของฉัน) filter', () => {
-    it('keeps only my requests in an import-side status; others\' requests and CEO statuses are out', async () => {
-      renderOverview();
-      await findGroup('mine');
-      const shown = ['111', '112', '113'].map((id) => screen.queryByTestId(`worklist-row-mine-${id}`));
-      shown.forEach((el) => expect(el).not.toBeNull());
-      // 5 are mine; 121 (assigned to 99), 131 (mine but READY_FOR_CEO_REVIEW), 132, 141 never show up in this group
-      ['121', '131', '132', '141', '101'].forEach((id) => expect(within(group('mine')).queryByTestId(`worklist-row-mine-${id}`), id).toBeNull());
-      expectFigure('กำลังขอราคา (ของฉัน)', '5 คำขอ');
-    });
-
-    it('lists the oldest submission first, whatever the id or arrival order', async () => {
-      const at = (id, status, submittedAt, o = {}) => pcr(id, status, { submittedAt, ...o });
-      // arrives in id order 103,104,105 but was submitted 105 (oldest), 104, 103
-      serveQueue([
-        at(103, 'SUBMITTED', '2026-07-03'), at(104, 'SUBMITTED', '2026-07-02'), at(105, 'SUBMITTED', '2026-07-01'),
-        at(116, 'IMPORT_REVIEWING', '2026-07-03', { assignedImportId: 7 }),
-        at(117, 'IMPORT_REVIEWING', '2026-07-02', { assignedImportId: 7 }),
-        at(118, 'IMPORT_REVIEWING', '2026-07-01', { assignedImportId: 7 }),
-      ]);
-      renderOverview();
-      await findGroup('pickup');
-      const ids = (key) => within(group(key)).getAllByTestId(/^worklist-row-/).map((el) => el.dataset.testid.split('-').pop());
-      expect(ids('pickup')).toEqual(['105', '104', '103']);
-      expect(ids('mine')).toEqual(['118', '117', '116']);
-    });
-
-    it('reads 0 when nothing is assigned to me, even though other people have open requests', async () => {
-      serveQueue(PRICING_REQUESTS.filter((r) => r.assignedImportId !== 7));
-      renderOverview();
-      await findGroup('pickup');
-      expectFigure('กำลังขอราคา (ของฉัน)', '0 คำขอ');
-      expect(screen.queryByTestId('worklist-group-mine')).toBeNull();
-    });
-  });
-
-  describe('สิ่งที่ต้องทำ worklist', () => {
-    it('groups in the fixed order with a total badge counting every row', async () => {
-      renderOverview();
-      await findGroup('import');
-      const order = [...document.querySelectorAll('[data-testid^="worklist-group-"]')]
-        .map((el) => el.dataset.testid.replace('worklist-group-', ''));
-      expect(order).toEqual(['pickup', 'mine', 'import']);
-      ['รับเรื่องใหม่', 'ขอราคากับโรงงาน', 'นำเข้า'].forEach((label, i) => {
-        expect(group(['pickup', 'mine', 'import'][i]).textContent).toContain(label);
+    it('รับเรื่อง claims inline with the existing pickup call, stays on the page, and the row moves out', async () => {
+      const { showToast } = renderOverview();
+      await settled('pickup');
+      api.pricingRequests.pickup.mockImplementation((id) => {
+        queue = queue.map((r) => (r.id === id ? { ...r, status: 'IMPORT_REVIEWING', assignedImportId: 7 } : r));
+        return Promise.resolve({ pricingRequest: {} });
       });
-      expect(screen.getByTestId('worklist-total').textContent).toBe('10'); // 2 + 5 + 3
+      fireEvent.click(within(screen.getByTestId('import-row-pickup-102')).getByRole('button', { name: 'รับเรื่อง' }));
+      await waitFor(() => expect(api.pricingRequests.pickup).toHaveBeenCalledWith(102));
+      await waitFor(() => expect(rowIds('pickup')).toEqual(['import-row-pickup-101']));
+      expect(rowIds('pricing')).toContain('import-row-pricing-102');
+      expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('รับเรื่อง'));
+      expect(screen.queryByTestId('location-probe')).toBeNull();
     });
 
-    it('รับเรื่องใหม่: one row per SUBMITTED request, with PCR · PR · recipient, and a รับเรื่อง button to the request', async () => {
-      renderOverview();
-      await findGroup('pickup');
-      const row = screen.getByTestId('worklist-row-pickup-101');
-      expect(row.textContent).toContain('ลูกค้า PCR 101');
-      expect(row.textContent).toContain('PCR-101 · PR-101 · ผู้ออกแบบ');
-      expect(cta('pickup', 101).textContent).toBe('รับเรื่อง');
-      expect(screen.getByTestId('worklist-row-pickup-102')).not.toBeNull();
-      fireEvent.click(cta('pickup', 101));
-      expect(probe()).toBe('/pricing-requests/101');
+    it('a refused claim (someone else got it first) says so and keeps the row', async () => {
+      const { showToast } = renderOverview();
+      await settled('pickup');
+      api.pricingRequests.pickup.mockRejectedValue(new Error('รับเรื่องได้เฉพาะคำขอราคาที่ถูกยื่นแล้วเท่านั้น'));
+      fireEvent.click(within(screen.getByTestId('import-row-pickup-101')).getByRole('button', { name: 'รับเรื่อง' }));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'รับเรื่องได้เฉพาะคำขอราคาที่ถูกยื่นแล้วเท่านั้น'));
+      expect(rowIds('pickup')).toContain('import-row-pickup-101');
     });
+  });
 
-    it('ขอราคากับโรงงาน: my requests show PCR · status label and an เปิดคำขอ button; capped at 3 with อีก 2 รายการ', async () => {
+  describe('รอราคาโรงงาน', () => {
+    it('shows MY requests in import’s hands by default; CEO and finished requests are not here', async () => {
       renderOverview();
-      await findGroup('mine');
-      expect(screen.getByTestId('worklist-row-mine-111').textContent).toContain('PCR-111 · รับเรื่อง');
-      expect(screen.getByTestId('worklist-row-mine-112').textContent).toContain('PCR-112 · เจรจาราคากับโรงงาน');
-      expect(within(group('mine')).queryByTestId('worklist-row-mine-114')).toBeNull();
-      expect(within(group('mine')).getByText('อีก 2 รายการ')).not.toBeNull();
-      expect(cta('mine', 112).textContent).toBe('เปิดคำขอ');
-      fireEvent.click(cta('mine', 112));
+      await settled('pricing');
+      expect(rowIds('pricing').sort()).toEqual(['import-row-pricing-111', 'import-row-pricing-112']);
+      fireEvent.click(within(screen.getByTestId('import-row-pricing-112')).getByRole('button', { name: 'เปิด' }));
       expect(probe()).toBe('/pricing-requests/112');
     });
 
-    it('นำเข้า: the existing fulfilment rows, labels and targets unchanged, overdue deal first; delivery-ready and no-IR deals have no row', async () => {
+    it('ทั้งทีม adds the team’s requests, naming who holds each', async () => {
       renderOverview();
-      await findGroup('import');
-      const rows = within(group('import')).getAllByTestId(/^worklist-row-import-/).map((el) => el.dataset.testid);
-      expect(rows).toEqual(['worklist-row-import-2', 'worklist-row-import-3', 'worklist-row-import-4']);
-      expect(cta('import', 2).textContent).toBe('อัปเดตสถานะนำเข้า');
-      expect(cta('import', 3).textContent).toBe('บันทึกออกเดินทาง');
-      expect(cta('import', 4).textContent).toBe('ยืนยันรับเข้าคลัง');
-      ['1', '5', '6'].forEach((id) => expect(screen.queryByTestId(`worklist-row-import-${id}`), id).toBeNull());
-      fireEvent.click(cta('import', 3));
-      expect(probe()).toBe('/import/deals/3');
-      cleanup();
-      renderOverview();
-      await findGroup('import');
-      fireEvent.click(cta('import', 2));
-      expect(probe()).toBe('/fulfilment');
-    });
-
-    it('ดูทั้งหมด → opens the request queue for the two pricing groups and /fulfilment for นำเข้า', async () => {
-      const open = async (key) => {
-        renderOverview();
-        await findGroup('import');
-        fireEvent.click(within(group(key)).getByText('ดูทั้งหมด →'));
-        const where = probe();
-        cleanup();
-        return where;
-      };
-      expect(await open('pickup')).toBe('/pricing-requests');
-      expect(await open('mine')).toBe('/pricing-requests');
-      expect(await open('import')).toBe('/fulfilment');
-    });
-
-    it('hides empty groups and shows the empty line when there is nothing to do', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [] });
-      serveQueue([]);
-      renderOverview();
-      await screen.findByText('ไม่มีงานที่ต้องดำเนินการตอนนี้');
-      ['pickup', 'mine', 'import'].forEach((k) => expect(screen.queryByTestId(`worklist-group-${k}`), k).toBeNull());
+      await settled('pricing');
+      fireEvent.click(screen.getByRole('button', { name: 'ทั้งทีม' }));
+      expect(rowIds('pricing').sort()).toEqual(['import-row-pricing-111', 'import-row-pricing-112', 'import-row-pricing-121']);
+      expect(screen.getByTestId('import-row-pricing-121').textContent).toContain('สมศรี นำเข้า');
+      expect(screen.getByRole('button', { name: 'ทั้งทีม' }).getAttribute('aria-pressed')).toBe('true');
     });
   });
 
-  describe('right column', () => {
-    it('รอ CEO ตั้งราคา lists the READY_FOR_CEO_REVIEW / CEO_REVIEWING requests with a รอ CEO badge and no button', async () => {
+  describe('กำลังขนส่ง and ถึงโกดังแล้ว', () => {
+    it('lists every live factory shipment not yet at the warehouse with its step, n/6 and ETA; อัปเดต opens /fulfilment', async () => {
       renderOverview();
-      const panel = await screen.findByTestId('ceo-waiting-panel');
-      expect(within(panel).getByText('รอ CEO ตั้งราคา')).not.toBeNull();
-      const row = within(panel).getByTestId('ceo-waiting-row-131');
-      expect(row.textContent).toContain('ลูกค้า PCR 131');
-      expect(row.textContent).toContain('PCR-131 · PR-131');
-      expect(within(row).getByText('รอ CEO')).not.toBeNull();
-      expect(within(panel).getByTestId('ceo-waiting-row-132')).not.toBeNull(); // someone else's, still awareness
-      expect(within(panel).queryAllByRole('button')).toHaveLength(0);
+      await settled('transit');
+      expect(rowIds('transit').sort()).toEqual(['import-row-transit-31', 'import-row-transit-41', 'import-row-transit-legacy-5']);
+      const row = screen.getByTestId('import-row-transit-31');
+      expect(row.textContent).toContain('IR6931');
+      expect(row.textContent).toContain('Siam Mall');
+      expect(row.textContent).toContain('Mutina');
+      expect(row.textContent).toContain('กำลังเดินทาง');
+      expect(row.textContent).toContain('4/6');
+      expect(row.textContent).toContain('ETA');
+      fireEvent.click(within(row).getByRole('button', { name: 'อัปเดต' }));
+      expect(probe()).toBe('/fulfilment');
     });
 
-    it('hides รอ CEO ตั้งราคา when nothing is with the CEO', async () => {
-      serveQueue(PRICING_REQUESTS.filter((r) => !['READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'].includes(r.status)));
+    it('a pre-V184 deal with no stored rows is still listed, and opens its deal page', async () => {
       renderOverview();
-      await findGroup('pickup');
-      expect(screen.queryByTestId('ceo-waiting-panel')).toBeNull();
-      expect(screen.queryByText('รอ CEO ตั้งราคา', { selector: 'h2, h3' })).toBeNull();
+      await settled('transit');
+      const row = screen.getByTestId('import-row-transit-legacy-5');
+      expect(row.textContent).toContain('Legacy Co');
+      fireEvent.click(within(row).getByRole('button', { name: 'เปิด' }));
+      expect(probe()).toBe('/import/deals/5');
     });
 
-    it('กำลังขนส่ง lists in-transit deals and opens the import deal page', async () => {
+    it('ถึงโกดังแล้ว lists received shipments with no action (it is sales’ turn)', async () => {
       renderOverview();
-      const panel = await screen.findByTestId('in-transit-panel');
-      await vi.waitFor(() => expect(within(panel).getByText('บริษัท C')).not.toBeNull());
-      fireEvent.click(within(panel).getByText('บริษัท C').closest('button'));
-      expect(probe()).toBe('/import/deals/3');
+      await settled('arrived');
+      expect(rowIds('arrived').sort()).toEqual(['import-row-arrived-42', 'import-row-arrived-61']);
+      expect(within(group('arrived')).queryAllByRole('button')).toHaveLength(0);
+      expect(within(group('arrived')).getByText(/ไม่มีงานของคุณ/)).not.toBeNull();
+    });
+  });
+
+  describe('empty, loading and failure', () => {
+    it('an empty group keeps its header and says ไม่มีรายการ', async () => {
+      queue = queue.filter((r) => r.status !== 'SUBMITTED');
+      renderOverview();
+      await settled('pickup');
+      expect(within(group('pickup')).getByTestId('group-count').textContent).toBe('0');
+      expect(within(group('pickup')).getByText('ไม่มีรายการ')).not.toBeNull();
     });
 
-    it('กำลังขนส่ง lists a deal whose factory shipment is in transit even when the deal-level status is not', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [{ ...TICKETS[0], id: 21, code: 'D-021', customerName: 'บริษัท รายโรงงาน', fulfillmentStatus: 'IR_ISSUED' }] });
-      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [{ id: 1, ticketId: 21, status: 'ISSUED', importStep: 'IN_TRANSIT' }] });
+    it('nothing at all reads as one calm line', async () => {
+      queue = [];
+      api.tickets.list.mockResolvedValue({ tickets: [] });
       renderOverview();
-      const panel = await screen.findByTestId('in-transit-panel');
-      await vi.waitFor(() => expect(within(panel).getByText('บริษัท รายโรงงาน')).not.toBeNull());
+      expect(await screen.findByText('ไม่มีงานนำเข้าที่ต้องทำตอนนี้')).not.toBeNull();
     });
 
-    it('กำลังขนส่ง empty is one quiet line, not an EmptyState block', async () => {
-      api.tickets.list.mockResolvedValue({ tickets: [TICKETS[1]] }); // IR_ISSUED only: nothing on the water
+    it('a failed queue marks only the two request groups; shipments still render', async () => {
+      api.pricingRequests.queue.mockRejectedValue(new Error('boom'));
       renderOverview();
-      const panel = await screen.findByTestId('in-transit-panel');
-      expect(within(panel).getByText('ไม่มีสินค้าระหว่างขนส่งตอนนี้')).not.toBeNull();
-      expect(panel.querySelector('[class*="EmptyState"], .empty-state')).toBeNull();
-      expect(within(panel).queryAllByRole('button')).toHaveLength(0);
+      await settled('transit');
+      expect(within(group('pickup')).getByText('โหลดไม่สำเร็จ')).not.toBeNull();
+      expect(within(group('pricing')).getByText('โหลดไม่สำเร็จ')).not.toBeNull();
+      expect(rowIds('transit').length).toBe(3);
+    });
+
+    it('while the deal list loads, the shipment groups are busy and the request groups are not', async () => {
+      api.tickets.list.mockImplementation(never);
+      renderOverview();
+      await settled('pickup');
+      expect(group('transit').getAttribute('aria-busy')).toBe('true');
+      expect(group('arrived').getAttribute('aria-busy')).toBe('true');
     });
   });
 });

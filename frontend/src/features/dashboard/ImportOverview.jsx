@@ -1,264 +1,317 @@
-import { useMemo } from 'react';
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useMemo, useState } from 'react';
+import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
-import { PageStack, Panel } from '../../components/common/Layout.jsx';
+import { PageStack } from '../../components/common/Layout.jsx';
+import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
-import { formatThaiDate, fulfilmentStatusLabel, greetingName, pricingRequestStatusLabel } from '../../utils/format.js';
-import { pricingRequestRecipientLabel } from '../pricingRequests/pricingRequestMeta.js';
-import { nextImportAction } from '../tickets/importActions.js';
-import { Figure, WorklistGroup, WorklistTotal, failed } from './dashboardParts.jsx';
+import { cn } from '../../utils/cn.js';
+import { formatShortDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { IMPORT_STEPS, importStepIndex, importStepMeta } from '../importProgress/importSteps.js';
+import { formatShortThaiDay } from '../pricingRequests/factoryContactMeta.js';
+import { failed } from './dashboardParts.jsx';
 
 /**
- * Import's landing: a count band, then one worklist (new requests to claim, my requests with the
- * factory, fulfilment steps), with shipments and the requests waiting on the CEO on the right.
+ * งานนำเข้า — import's landing (spec 2026-11-15 §7.11 item 1, plan task 5.1, design a-import-work). One worklist,
+ * grouped by what happens next, replacing the 4-tile band and the three separate lists:
  *
- * Data comes from the two calls this page always made (api.tickets.list + api.pricingRequests.queue),
- * both already role-scoped server side; no new endpoint. "Mine" follows the queue page's งานของฉัน tab:
- * assigned to me and still in an import-side status (the retired COSTING_IN_PROGRESS included, for the
- * deploy-before-migration window), so the band and /pricing-requests agree.
+ *   รอรับเรื่อง    SUBMITTED pricing requests nobody holds yet — รับเรื่อง claims inline (the same
+ *                  api.pricingRequests.pickup the queue and request page use; the server decides who may).
+ *   รอราคาโรงงาน  requests in import's hands (IMPORT_REVIEWING / AWAITING_FACTORY_RESPONSE, plus the retired
+ *                  COSTING_IN_PROGRESS for the deploy-before-migration window). ของฉัน = assigned to me (the
+ *                  queue page's งานของฉัน rule); ทั้งทีม = everyone's.
+ *   กำลังขนส่ง    every live (ISSUED) per-factory ใบขอซื้อ row short of RECEIVED, with its step and ETA, plus a
+ *                  pre-V184 deal still on the deal-level chain (no stored rows). The step is advanced on
+ *                  /fulfilment only (§7.11 item 3), so the row's action goes there.
+ *   ถึงโกดังแล้ว  ISSUED rows at RECEIVED on a deal not yet fully delivered — sales' turn; no action here.
+ *
+ * Data: the two calls this page always made (both role-scoped server side) and the per-deal stored rows exactly as
+ * /fulfilment reads them (same candidate filter, same query keys, so the two pages share cache). No new endpoint.
  */
 
-const MY_WORK_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'];
-const CEO_STATUSES = ['READY_FOR_CEO_REVIEW', 'CEO_REVIEWING'];
-
-// fulfillmentStatus values that mean "physically in transit".
-//
-// CUSTOMS_CLEARANCE used to sit third here and was removed as dead (issue #749): nothing has ever
-// written it into sales.ticket.fulfillment_status. Do not re-add it for symmetry with the factory PO
-// statuses; those describe the factory PO's own sequence, not this column.
-const IN_TRANSIT_STATUSES = ['IR_SENT', 'SHIPPING'];
-
-// Fulfilment steps the page counts, in conveyor order (also the worklist tie-break). Delivery
-// (recordDelivery) is Sales' prompt now (owner ruling 2026-08-17): it has no entry here and no row.
-const FULFILMENT_ACTION_TO_BUCKET = {
-  issueImportRequest: 'procurement',
-  markIrSent: 'procurement',
-  markShipping: 'shipping',
-  markGoodsReceived: 'goodsReceived',
+const PRICING_STATUSES = ['IMPORT_REVIEWING', 'AWAITING_FACTORY_RESPONSE', 'COSTING_IN_PROGRESS'];
+const LEGACY_IN_TRANSIT = ['IR_ISSUED', 'IR_SENT', 'SHIPPING'];
+const PRICING_CHIP = {
+  IMPORT_REVIEWING: { label: 'รับเรื่องแล้ว', tone: 'neutral' },
+  AWAITING_FACTORY_RESPONSE: { label: 'รอโรงงานตอบ', tone: 'warning' },
+  COSTING_IN_PROGRESS: { label: 'รอโรงงานตอบ', tone: 'warning' },
 };
-const BUCKET_ORDER = ['procurement', 'shipping', 'goodsReceived'];
 
 const byOldest = (a, b) => String(a.submittedAt ?? '').localeCompare(String(b.submittedAt ?? '')) || a.id - b.id;
-const pcrName = (pr) => pr.customerName || pr.ticketCode || pr.requestCode;
-const count = (n, unit) => `${n} ${unit}`;
+const pcrName = (pr) => pr.customerName || pr.projectName || pr.ticketCode || pr.requestCode;
 
-export function ImportOverview({ user, employee }) {
+function etaText(row) {
+  if (row.expectedArrivalFrom) {
+    const to = row.expectedArrivalTo && row.expectedArrivalTo !== row.expectedArrivalFrom
+      ? `–${formatShortThaiDay(row.expectedArrivalTo)}` : '';
+    return `ETA ${formatShortThaiDay(row.expectedArrivalFrom)}${to}`;
+  }
+  if (row.leadTimeMinDays != null && row.leadTimeMaxDays != null) return `ETA ~${row.leadTimeMinDays}–${row.leadTimeMaxDays} วัน`;
+  return 'ยังไม่มี ETA';
+}
+
+function Group({ groupKey, label, hint, rows, isFailed, children }) {
+  const busy = rows === null && !isFailed;
+  return (
+    <section
+      data-testid={`import-group-${groupKey}`}
+      aria-busy={busy ? 'true' : undefined}
+      aria-label={label}
+      className="border-b border-border last:border-b-0"
+    >
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 bg-surface-subtle px-5 py-2.5 mobile:px-3.5">
+        <h2 className="m-0 text-sm font-extrabold text-text">{label}</h2>
+        {rows !== null && !isFailed ? (
+          <span data-testid="group-count" className="rounded-full bg-surface-muted px-2 text-xs font-bold tabular-nums text-text-secondary">
+            {rows.length}
+          </span>
+        ) : null}
+        <small className="min-w-0 text-xs text-text-muted">{hint}</small>
+      </div>
+      {isFailed ? (
+        <p className="m-0 px-5 py-3 text-sm font-semibold text-danger mobile:px-3.5">โหลดไม่สำเร็จ</p>
+      ) : busy ? (
+        <div className="grid gap-2 px-5 py-3 mobile:px-3.5" role="status" aria-label={`กำลังโหลด${label}`}>
+          <Skeleton height={36} />
+        </div>
+      ) : rows.length === 0 ? (
+        <p className="m-0 px-5 py-3 text-sm text-text-muted mobile:px-3.5">ไม่มีรายการ</p>
+      ) : children}
+    </section>
+  );
+}
+
+// One line of the worklist: id · who/what · detail · state · action. Five columns on a wide screen; on a phone the
+// id and name lead and the rest wraps beneath, never wider than the viewport.
+function Row({ testId, code, title, sub, detail, chip, action }) {
+  return (
+    <div
+      data-testid={testId}
+      className="grid grid-cols-[7.5rem_minmax(0,1.6fr)_minmax(0,1.3fr)_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1 border-t border-border-subtle px-5 py-2.5 first:border-t-0 nav-drawer:grid-cols-[7rem_minmax(0,1fr)_auto] mobile:grid-cols-[minmax(0,1fr)_auto] mobile:px-3.5"
+    >
+      <code className="truncate text-xs font-bold text-text-secondary mobile:col-span-2">{code}</code>
+      <span className="min-w-0">
+        <strong className="block truncate text-sm font-bold text-text">{title}</strong>
+        {sub ? <span className="block truncate text-xs text-text-muted">{sub}</span> : null}
+      </span>
+      <span className="min-w-0 text-sm text-text-secondary nav-drawer:col-start-2 nav-drawer:row-start-2 mobile:col-start-1 mobile:row-start-auto [overflow-wrap:anywhere]">{detail}</span>
+      <span className="min-w-0 nav-drawer:col-start-2 mobile:col-start-1">{chip}</span>
+      <span className="justify-self-end nav-drawer:col-start-3 nav-drawer:row-span-2 nav-drawer:row-start-1 mobile:col-start-2 mobile:row-start-2">{action}</span>
+    </div>
+  );
+}
+
+export function ImportOverview({ user, showToast }) {
   const navigate = useNavigate();
-  const onOpen = (to) => navigate(to);
+  const queryClient = useQueryClient();
+  const [scope, setScope] = useState('mine');
 
+  const queueQuery = useQuery({
+    queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
+    queryFn: () => api.pricingRequests.queue({ activeOnly: true }).then((r) => r?.items ?? []),
+  });
   const ticketsQuery = useQuery({
     queryKey: queryKeys.ticketList(''),
     queryFn: () => api.tickets.list({}).then((r) => r?.tickets ?? []),
   });
-  const pricingQueueQuery = useQuery({
-    queryKey: queryKeys.pricingRequestQueue({ activeOnly: true }),
-    queryFn: () => api.pricingRequests.queue({ activeOnly: true }).then((r) => r?.items ?? []),
-  });
-  const ticketsReady = ticketsQuery.data !== undefined;
-  const queueReady = pricingQueueQuery.data !== undefined;
+  const queue = useMemo(() => queueQuery.data ?? [], [queueQuery.data]);
   const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
-  const pricingRequests = useMemo(() => pricingQueueQuery.data ?? [], [pricingQueueQuery.data]);
 
-  // W3-02: shipments are PER FACTORY (one stored ใบขอซื้อ row each), so the ขนส่ง count and the
-  // กำลังขนส่ง list read the rows exactly as /fulfilment does — same candidate filter, same query key.
-  const candidateIds = useMemo(() => tickets
-    .filter((t) => t.fulfillmentStatus != null
-      && t.fulfillmentStatus !== 'FROM_STOCK'
-      && t.fulfillmentStatus !== 'FULLY_DELIVERED')
-    .map((t) => t.id), [tickets]);
+  // Same candidate filter and query keys as ImportFulfilmentPage (see its header for the bounded N+1).
+  const candidates = useMemo(() => tickets.filter((t) => t.fulfillmentStatus != null
+    && t.fulfillmentStatus !== 'FROM_STOCK' && t.fulfillmentStatus !== 'FULLY_DELIVERED'), [tickets]);
   const rowsQueries = useQueries({
-    queries: candidateIds.map((ticketId) => ({
-      queryKey: queryKeys.storedImportRequests(ticketId),
-      queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r?.importRequests ?? []),
+    queries: candidates.map((t) => ({
+      queryKey: queryKeys.storedImportRequests(t.id),
+      queryFn: () => api.storedImportRequests.listForTicket(t.id).then((r) => r?.importRequests ?? []),
     })),
   });
-  const inTransitShipments = useMemo(() => {
-    const byTicket = new Map();
-    candidateIds.forEach((id, i) => {
-      const n = (rowsQueries[i]?.data ?? [])
-        .filter((r) => r.status === 'ISSUED' && r.importStep === 'IN_TRANSIT').length;
-      if (n > 0) byTicket.set(id, n);
+
+  const queueReady = queueQuery.data !== undefined;
+  const queueFailed = failed(queueQuery);
+  const shipmentsReady = ticketsQuery.data !== undefined && rowsQueries.every((q) => q.data !== undefined || q.isError);
+  const shipmentsFailed = failed(ticketsQuery);
+
+  const pickup = useMemo(() => queue.filter((pr) => pr.status === 'SUBMITTED').sort(byOldest), [queue]);
+  const pricing = useMemo(() => queue
+    .filter((pr) => PRICING_STATUSES.includes(pr.status))
+    .filter((pr) => scope === 'team' || (pr.assignedImportId != null && Number(pr.assignedImportId) === Number(user?.id)))
+    .sort(byOldest), [queue, scope, user?.id]);
+
+  const { transit, arrived } = useMemo(() => {
+    const moving = [];
+    const done = [];
+    candidates.forEach((ticket, i) => {
+      const rows = rowsQueries[i]?.data;
+      if (!rows) return;
+      const issued = rows.filter((r) => r.status === 'ISSUED' && importStepIndex(r.importStep) >= 0);
+      if (issued.length === 0) {
+        if (LEGACY_IN_TRANSIT.includes(ticket.fulfillmentStatus)) moving.push({ legacy: true, ticket });
+        return;
+      }
+      issued.forEach((row) => (row.importStep === 'RECEIVED' ? done : moving).push({ legacy: false, ticket, row }));
     });
-    return byTicket;
-  }, [candidateIds, rowsQueries]);
+    const stepOf = (x) => (x.legacy ? -1 : importStepIndex(x.row.importStep));
+    moving.sort((a, b) => stepOf(b) - stepOf(a) || String(a.ticket.code).localeCompare(String(b.ticket.code)));
+    return { transit: moving, arrived: done };
+  }, [candidates, rowsQueries]);
 
-  const pickup = useMemo(() => pricingRequests.filter((pr) => pr.status === 'SUBMITTED').sort(byOldest), [pricingRequests]);
-  const mine = useMemo(() => pricingRequests
-    .filter((pr) => MY_WORK_STATUSES.includes(pr.status) && pr.assignedImportId != null && Number(pr.assignedImportId) === Number(user?.id))
-    .sort(byOldest), [pricingRequests, user?.id]);
-  const withCeo = useMemo(() => pricingRequests.filter((pr) => CEO_STATUSES.includes(pr.status)), [pricingRequests]);
+  const claim = useMutation({
+    mutationFn: (pr) => api.pricingRequests.pickup(pr.id),
+    onSuccess: (_d, pr) => {
+      showToast?.('success', `รับเรื่อง ${pr.requestCode} แล้ว`);
+      queryClient.invalidateQueries({ queryKey: ['pricingRequests'] });
+    },
+    onError: (e) => showToast?.('error', e?.message || 'รับเรื่องไม่สำเร็จ'),
+  });
 
-  // Fulfilment rows only: nextImportAction gets no pricing requests, so its pick-up branch never fires
-  // (those requests are the first two groups). Same helper DealFulfilmentPanel's `can.*` derive from.
-  const importRows = useMemo(() => tickets
-    .map((ticket) => ({ ticket, action: nextImportAction(ticket, []) }))
-    .filter((row) => row.action)
-    .sort((a, b) => {
-      if (Boolean(a.ticket.overdue) !== Boolean(b.ticket.overdue)) return a.ticket.overdue ? -1 : 1;
-      const stage = (row) => BUCKET_ORDER.indexOf(FULFILMENT_ACTION_TO_BUCKET[row.action.code]);
-      return stage(a) - stage(b) || new Date(a.ticket.updatedAt || 0) - new Date(b.ticket.updatedAt || 0);
-    }), [tickets]);
+  const settled = (queueReady || queueFailed) && (shipmentsReady || shipmentsFailed);
+  const total = pickup.length + pricing.length + transit.length + arrived.length;
+  const nothing = settled && !queueFailed && !shipmentsFailed && total === 0;
 
-  // Band breakdown: each deal of the นำเข้า group once, in its furthest bucket (an in-transit factory
-  // shipment makes it at least ขนส่ง). Per-factory shipments are the กำลังขนส่ง panel's business.
-  const fulfilment = useMemo(() => {
-    const counts = [0, 0, 0];
-    importRows.forEach(({ ticket, action }) => {
-      const byAction = BUCKET_ORDER.indexOf(FULFILMENT_ACTION_TO_BUCKET[action.code]);
-      counts[Math.max(byAction, inTransitShipments.has(ticket.id) ? 1 : -1)] += 1;
-    });
-    return counts;
-  }, [importRows, inTransitShipments]);
-
-  const inTransit = useMemo(
-    () => tickets.filter((t) => IN_TRANSIT_STATUSES.includes(t.fulfillmentStatus) || inTransitShipments.has(t.id)),
-    [tickets, inTransitShipments],
+  const scopeButton = (key, label) => (
+    <button
+      key={key}
+      type="button"
+      aria-pressed={scope === key}
+      onClick={() => setScope(key)}
+      className={cn(
+        'inline-flex min-h-9 items-center rounded-full border px-3 text-xs font-bold mobile:min-h-11',
+        scope === key ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text hover:bg-surface-hover',
+      )}
+    >
+      {label}
+    </button>
   );
-
-  const queueFailed = failed(pricingQueueQuery);
-  const groups = [
-    {
-      key: 'pickup', label: 'รับเรื่องใหม่', dot: 'bg-warning', to: '/pricing-requests',
-      list: queueReady ? pickup : null, isFailed: queueFailed,
-      toRow: (pr) => ({
-        testId: `worklist-row-pickup-${pr.id}`,
-        entity: pcrName(pr),
-        meta: [pr.requestCode, pr.ticketCode, pricingRequestRecipientLabel(pr.recipientType)].filter(Boolean).join(' · '),
-        ctaLabel: 'รับเรื่อง', ctaVariant: 'primary', to: `/pricing-requests/${pr.id}`,
-      }),
-    },
-    {
-      key: 'mine', label: 'ขอราคากับโรงงาน', dot: 'bg-primary', to: '/pricing-requests',
-      list: queueReady ? mine : null, isFailed: queueFailed,
-      toRow: (pr) => ({
-        testId: `worklist-row-mine-${pr.id}`,
-        entity: pcrName(pr),
-        meta: `${pr.requestCode} · ${pricingRequestStatusLabel(pr.status).label}`,
-        ctaLabel: 'เปิดคำขอ', to: `/pricing-requests/${pr.id}`,
-      }),
-    },
-    {
-      key: 'import', label: 'นำเข้า', dot: 'bg-accent', to: '/fulfilment',
-      list: ticketsReady ? importRows : null, isFailed: failed(ticketsQuery),
-      toRow: ({ ticket, action }) => ({
-        testId: `worklist-row-import-${ticket.id}`,
-        entity: ticket.customerName || ticket.title,
-        meta: `${ticket.code}${ticket.fulfillmentStatus ? ` · ${fulfilmentStatusLabel(ticket.fulfillmentStatus).label}` : ''}${ticket.dueDate ? ` · กำหนด ${formatThaiDate(ticket.dueDate)}` : ''}`,
-        ctaLabel: action.label, to: action.to,
-      }),
-    },
-  ].map((g) => ({ ...g, n: g.list?.length ?? 0 }));
-  const settled = groups.every((g) => g.list !== null || g.isFailed);
-  const total = groups.reduce((sum, g) => sum + g.n, 0);
-  const allEmpty = groups.every((g) => g.n === 0 && !g.isFailed);
-
-  const mineReviewing = mine.filter((pr) => pr.status === 'IMPORT_REVIEWING').length;
-  const pricingFigure = (n) => (queueReady ? count(n, 'คำขอ') : '—');
-
-  const today = formatThaiDate(new Date().toISOString());
-  const greeting = `สวัสดี, ${greetingName(employee?.nickName || employee?.nameTh || user?.name)}`;
 
   return (
     <PageStack>
-      <PageHeader title="ภาพรวมงานนำเข้า" subtitle={`${greeting} · ${today}`} />
+      <PageHeader
+        title="งานนำเข้า"
+        subtitle={settled ? `จัดกลุ่มตามขั้นต่อไป · ${total} งาน` : 'จัดกลุ่มตามขั้นต่อไป'}
+        actions={<div className="flex gap-2" role="group" aria-label="งานของใคร">{scopeButton('mine', 'ของฉัน')}{scopeButton('team', 'ทั้งทีม')}</div>}
+      />
 
-      <section className="rounded-md border border-border bg-surface p-5 mobile:p-3.5" aria-label="งานนำเข้าตอนนี้">
-        <dl className="m-0 grid grid-cols-[1.5fr_1fr_1fr_1fr] gap-x-6 nav-drawer:grid-cols-2 nav-drawer:gap-y-4 mobile:grid-cols-1 mobile:divide-y mobile:divide-border mobile:[&>div]:py-2.5">
-          <Figure lead label="รอรับเรื่อง" value={pricingFigure(pickup.length)} caption="ยังไม่มีใครรับ" />
-          <Figure
-            label="กำลังขอราคา (ของฉัน)"
-            value={pricingFigure(mine.length)}
-            caption={queueReady ? `รับเรื่อง ${mineReviewing} · เจรจากับโรงงาน ${mine.length - mineReviewing}` : ''}
-          />
-          <Figure label="รอ CEO ตั้งราคา" value={pricingFigure(withCeo.length)} caption="ส่งต่อแล้ว ไม่ต้องทำอะไร" />
-          <Figure
-            label="นำเข้า / ขนส่ง"
-            value={ticketsReady ? count(importRows.length, 'ดีล') : '—'}
-            caption={ticketsReady ? `ออกใบขอซื้อ ${fulfilment[0]} · ขนส่ง ${fulfilment[1]} · ถึงคลัง ${fulfilment[2]}` : ''}
-          />
-        </dl>
-      </section>
-
-      <div className="grid items-start gap-[18px] grid-cols-[1.6fr_1fr] nav-drawer:grid-cols-1">
-        <Panel flush title="สิ่งที่ต้องทำ" actions={settled ? <WorklistTotal total={total} /> : null}>
-          {settled && allEmpty ? (
-            <div className="flex items-center gap-3 p-5 text-text-muted">
-              <Icon name="check" size={18} />
-              <span className="text-sm font-bold">ไม่มีงานที่ต้องดำเนินการตอนนี้</span>
-            </div>
-          ) : groups.map((g) => (
-            <WorklistGroup
-              key={g.key}
-              groupKey={g.key}
-              label={g.label}
-              dot={g.dot}
-              count={g.n}
-              failed={g.isFailed}
-              to={g.to}
-              onOpen={onOpen}
-              summary={count(g.n, 'รายการ')}
-              rows={g.list?.map(g.toRow) ?? null}
-            />
-          ))}
-        </Panel>
-
-        <div className="grid gap-[18px]">
-          {ticketsReady ? (
-            <Panel
-              flush
-              data-testid="in-transit-panel"
-              title="กำลังขนส่ง"
-              actions={<span className="text-xs font-semibold text-text-muted">{inTransit.length}</span>}
-            >
-              {inTransit.length === 0 ? (
-                <p className="m-0 flex items-center gap-2 px-5 py-3 text-sm text-text-muted mobile:px-3.5">
-                  <Icon name="truck" size={16} />
-                  ไม่มีสินค้าระหว่างขนส่งตอนนี้
-                </p>
-              ) : inTransit.map((ticket) => {
-                const status = fulfilmentStatusLabel(ticket.fulfillmentStatus);
-                return (
-                  <button
-                    key={ticket.id}
-                    type="button"
-                    onClick={() => navigate(`/import/deals/${ticket.id}`)}
-                    className="flex w-full items-center justify-between gap-3 border-0 border-t border-border-subtle bg-transparent px-5 py-3 text-left text-text first:border-t-0 hover:bg-surface-hover mobile:min-h-[44px] mobile:px-3.5"
-                  >
-                    <span className="min-w-0">
-                      <strong className="block truncate text-sm text-text">{ticket.customerName || ticket.title}</strong>
-                      <code className="block truncate text-2xs text-text-muted">{ticket.code}</code>
-                    </span>
-                    <StatusBadge tone={status.tone}>{status.label}</StatusBadge>
-                  </button>
-                );
-              })}
-            </Panel>
-          ) : null}
-
-          {queueReady && withCeo.length > 0 ? (
-            <Panel
-              flush
-              data-testid="ceo-waiting-panel"
-              title="รอ CEO ตั้งราคา"
-              actions={<span className="text-xs font-semibold text-text-muted">{withCeo.length}</span>}
-            >
-              {withCeo.map((pr) => (
-                <div key={pr.id} data-testid={`ceo-waiting-row-${pr.id}`} className="flex items-center justify-between gap-3 border-t border-border-subtle px-5 py-2 first:border-t-0 mobile:px-3.5">
-                  <div className="min-w-0">
-                    <strong className="block truncate text-sm font-bold text-text">{pcrName(pr)}</strong>
-                    <span className="block truncate text-xs text-text-muted">{[pr.requestCode, pr.ticketCode].filter(Boolean).join(' · ')}</span>
-                  </div>
-                  <StatusBadge tone="info">รอ CEO</StatusBadge>
-                </div>
-              ))}
-            </Panel>
-          ) : null}
+      {nothing ? (
+        <div className="flex items-center gap-3 rounded-md border border-border bg-surface p-5 text-text-muted">
+          <Icon name="check" size={18} />
+          <span className="text-sm font-bold">ไม่มีงานนำเข้าที่ต้องทำตอนนี้</span>
         </div>
-      </div>
+      ) : (
+        <div className="overflow-hidden rounded-md border border-border bg-surface">
+          <Group groupKey="pickup" label="รอรับเรื่อง" hint="คำขอราคาใหม่จากฝ่ายขาย"
+            rows={queueReady ? pickup : null} isFailed={queueFailed}>
+            {pickup.map((pr) => (
+              <Row
+                key={pr.id}
+                testId={`import-row-pickup-${pr.id}`}
+                code={pr.requestCode}
+                title={pcrName(pr)}
+                sub={[pr.requestedByName, pr.submittedAt ? `ส่งมา ${formatShortDate(pr.submittedAt)}` : null].filter(Boolean).join(' · ')}
+                detail={`${pr.itemCount ?? 0} รายการ`}
+                chip={pr.ticketCode ? <span className="text-xs text-text-muted">{pr.ticketCode}</span> : null}
+                action={(
+                  <Button type="button" variant="primary" size="sm" className="mobile:min-h-11"
+                    disabled={claim.isPending} onClick={() => claim.mutate(pr)}>
+                    รับเรื่อง
+                  </Button>
+                )}
+              />
+            ))}
+          </Group>
+
+          <Group groupKey="pricing" label="รอราคาโรงงาน" hint={scope === 'team' ? 'ทั้งทีม · รับเรื่องแล้ว รอโรงงานตอบ' : 'ของฉัน · รับเรื่องแล้ว รอโรงงานตอบ'}
+            rows={queueReady ? pricing : null} isFailed={queueFailed}>
+            {pricing.map((pr) => {
+              const chip = PRICING_CHIP[pr.status];
+              return (
+                <Row
+                  key={pr.id}
+                  testId={`import-row-pricing-${pr.id}`}
+                  code={pr.requestCode}
+                  title={pcrName(pr)}
+                  sub={[pr.requestedByName, scope === 'team' && pr.assignedImportName ? `รับโดย ${pr.assignedImportName}` : null].filter(Boolean).join(' · ')}
+                  detail={`${pr.itemCount ?? 0} รายการ`}
+                  chip={chip ? <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge> : null}
+                  action={(
+                    <Button type="button" variant="secondary" size="sm" className="mobile:min-h-11"
+                      onClick={() => navigate(`/pricing-requests/${pr.id}`)}>
+                      เปิด
+                    </Button>
+                  )}
+                />
+              );
+            })}
+          </Group>
+
+          <Group groupKey="transit" label="กำลังขนส่ง" hint="เลื่อนขั้นตอนที่หน้า การขนส่ง"
+            rows={shipmentsReady ? transit : null} isFailed={shipmentsFailed}>
+            {transit.map((x) => (x.legacy ? (
+              <Row
+                key={`legacy-${x.ticket.id}`}
+                testId={`import-row-transit-legacy-${x.ticket.id}`}
+                code={x.ticket.code}
+                title={x.ticket.customerName || x.ticket.title || x.ticket.code}
+                sub="ดีลรูปแบบเดิม (ยังไม่ติดตามรายโรงงาน)"
+                detail={<StatusBadge tone={fulfilmentStatusLabel(x.ticket.fulfillmentStatus).tone}>{fulfilmentStatusLabel(x.ticket.fulfillmentStatus).label}</StatusBadge>}
+                chip={null}
+                action={(
+                  <Button type="button" variant="secondary" size="sm" className="mobile:min-h-11"
+                    onClick={() => navigate(`/import/deals/${x.ticket.id}`)}>
+                    เปิด
+                  </Button>
+                )}
+              />
+            ) : (
+              <Row
+                key={x.row.id}
+                testId={`import-row-transit-${x.row.id}`}
+                code={x.row.docNumber ?? x.ticket.code}
+                title={x.ticket.customerName || x.ticket.title || x.ticket.code}
+                sub={x.row.factoryName}
+                detail={(
+                  <span className="inline-flex flex-wrap items-center gap-1.5">
+                    <StatusBadge tone="info">{importStepMeta(x.row.importStep)?.label ?? x.row.importStep}</StatusBadge>
+                    <span className="text-xs tabular-nums text-text-muted">{importStepIndex(x.row.importStep) + 1}/{IMPORT_STEPS.length}</span>
+                  </span>
+                )}
+                chip={<span className="text-xs font-bold tabular-nums text-text-secondary">{etaText(x.row)}</span>}
+                action={(
+                  <Button type="button" variant="secondary" size="sm" className="mobile:min-h-11"
+                    onClick={() => navigate('/fulfilment')}>
+                    อัปเดต
+                  </Button>
+                )}
+              />
+            )))}
+          </Group>
+
+          <Group groupKey="arrived" label="ถึงโกดังแล้ว" hint="รอฝ่ายขายนัดส่งลูกค้า · ไม่มีงานของคุณ"
+            rows={shipmentsReady ? arrived : null} isFailed={shipmentsFailed}>
+            {arrived.map((x) => (
+              <Row
+                key={x.row.id}
+                testId={`import-row-arrived-${x.row.id}`}
+                code={x.row.docNumber ?? x.ticket.code}
+                title={x.ticket.customerName || x.ticket.title || x.ticket.code}
+                sub={x.row.factoryName}
+                detail={(
+                  <span className="inline-flex flex-wrap items-center gap-1.5">
+                    <StatusBadge tone="success">ถึงโกดัง</StatusBadge>
+                    <span className="text-xs tabular-nums text-text-muted">{IMPORT_STEPS.length}/{IMPORT_STEPS.length}</span>
+                  </span>
+                )}
+                chip={x.row.importStepAt ? <span className="text-xs text-text-muted">ถึง {formatShortThaiDay(x.row.importStepAt)}</span> : null}
+                action={null}
+              />
+            ))}
+          </Group>
+        </div>
+      )}
     </PageStack>
   );
 }
