@@ -14,6 +14,8 @@ export default defineConfig({
       // Release lockdown OFF for the suite, so the ~1300 existing tests keep exercising the FULL product (sales nav,
       // HR queues, payroll routes) rather than a self-service stub.
       VITE_SELF_SERVICE_ONLY: 'false',
+      // mockApi's simulated 140ms latency is dev-server realism; under the suite it only burns wall-clock time.
+      VITE_MOCK_LATENCY_MS: '0',
     },
   },
 });
