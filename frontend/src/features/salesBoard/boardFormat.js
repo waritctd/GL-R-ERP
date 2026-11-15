@@ -71,3 +71,13 @@ export function currentQuarter(now = new Date()) {
   const [year, month] = now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' }).split('-').map(Number);
   return `${year}-Q${Math.floor((month - 1) / 3) + 1}`;
 }
+
+/**
+ * The board's first filter (round-2 LOW 1): ไตรมาสนี้ only once at least half of the rep's open deals carry an expected
+ * quarter — before that most deals have none, and ไตรมาสนี้ would hide most of the board. A rep's own click wins.
+ */
+export function defaultBoardFilter(openDeals) {
+  const deals = openDeals ?? [];
+  const withQuarter = deals.filter((d) => d.expectedQuarter).length;
+  return deals.length > 0 && withQuarter * 2 >= deals.length ? 'quarter' : 'all';
+}

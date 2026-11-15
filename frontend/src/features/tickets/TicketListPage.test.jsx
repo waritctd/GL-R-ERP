@@ -41,6 +41,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         list: vi.fn(),
         create: vi.fn(),
       },
+      salesBoard: {
+        teamOverview: vi.fn(),
+      },
     },
   };
 });
@@ -244,6 +247,22 @@ describe('TicketListPage', () => {
 
     fireEvent.click(identityLink);
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/501'));
+  });
+
+  // Round-2 LOW 4: the quiet threshold is configurable (app.sales.quiet-days), so the copy reads it from the API.
+  it('the ภาพรวมทีม quiet badge names the threshold the API serves, not a hard-coded 14', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({ reps: [], stale: [], quietDays: 21 });
+    api.tickets.list.mockResolvedValue({
+      tickets: [{
+        id: 601, code: 'PR-2026-0601', title: 'ดีลเงียบ', customerName: 'บริษัท เงียบ จำกัด', status: 'submitted',
+        createdByName: 'สมชาย ใจดี', createdAt: '2026-07-01T09:00:00.000Z', salesStage: 'QUOTE_DESIGN_SIDE',
+        lifecycle: 'ACTIVE', lostReason: null, overdue: false, fulfillmentStatus: null, stale: true,
+        stageUpdatedAt: '2026-07-01T09:00:00.000Z',
+      }],
+    });
+    renderTicketListPage(managerUser);
+
+    expect(await screen.findByText(/1 ดีลเงียบ \(ไม่มีความเคลื่อนไหว 21 วัน\)/)).toBeTruthy();
   });
 
   it('shows create for Sales and hides it for non-Sales ticket-list roles', async () => {
