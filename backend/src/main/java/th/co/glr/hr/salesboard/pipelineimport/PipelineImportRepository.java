@@ -71,7 +71,14 @@ public class PipelineImportRepository {
 
     /** An owner's deal with what the import matches on: its title, its project name, and every quotation number it
      * carries (the imported one(s) and its own quotations'), all as raw text — the caller folds them. */
-    record OwnerDeal(ExistingDeal deal, String title, String projectName, String quotationNumbers) {}
+    record OwnerDeal(ExistingDeal deal, String title, String projectName, String quotationNumbers,
+                     List<String> quotationBases, String titleKey, String projectKey) {
+        /** Folds once, at load: matching then compares precomputed keys for every row (review round 2, perf). */
+        OwnerDeal(ExistingDeal deal, String title, String projectName, String quotationNumbers) {
+            this(deal, title, projectName, quotationNumbers, PipelineFields.quotationBases(quotationNumbers),
+                PipelineFields.normalise(title), projectName == null ? null : PipelineFields.normalise(projectName));
+        }
+    }
 
     /** Every deal of this owner, any lifecycle — the import decides; never another owner's deal. */
     List<OwnerDeal> ownerDeals(long ownerId) {

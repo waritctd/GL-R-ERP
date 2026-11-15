@@ -120,7 +120,13 @@ function javaFactGatedStages() {
     /public static String stageFactRefusal\([^)]*\)\s*\{([\s\S]*?)\n {4}\}/,
   );
   if (!method) throw new Error('could not find stageFactRefusal in TicketService.java');
-  const body = method[1];
+  // ...and ALSO the thin `requireStageFactsHold` wrapper around it, so a gate someone adds to the wrapper instead
+  // of to stageFactRefusal is still seen here (review round 2). Today the wrapper contributes no stage.
+  const wrapper = ticketServiceSource.match(
+    /private void requireStageFactsHold\([^)]*\)\s*\{([\s\S]*?)\n {4}\}/,
+  );
+  if (!wrapper) throw new Error('could not find requireStageFactsHold in TicketService.java');
+  const body = `${method[1]}\n${wrapper[1]}`;
   const stages = new Set();
   for (const hit of body.matchAll(/DealStage\.([A-Z_]+)\.equals\(targetStage\)/g)) {
     stages.add(hit[1]);

@@ -16,17 +16,23 @@ import java.util.regex.Pattern;
 final class PipelineFields {
 
     /** A parsed cell: {@code value} when it parsed, {@code error} when it did not, both null for a blank cell. */
-    record Parsed<T>(T value, String error) {
+    /** A parsed cell: {@code value} when it parsed, {@code error} when it did not, both null for a blank cell;
+     * {@code warning} when it parsed but the office should know how (e.g. a rounded percentage). */
+    record Parsed<T>(T value, String error, String warning) {
         static <T> Parsed<T> ok(T value) {
-            return new Parsed<>(value, null);
+            return new Parsed<>(value, null, null);
+        }
+
+        static <T> Parsed<T> okWithWarning(T value, String warning) {
+            return new Parsed<>(value, null, warning);
         }
 
         static <T> Parsed<T> fail(String error) {
-            return new Parsed<>(null, error);
+            return new Parsed<>(null, error, null);
         }
 
         static <T> Parsed<T> blank() {
-            return new Parsed<>(null, null);
+            return new Parsed<>(null, null, null);
         }
     }
 
@@ -136,6 +142,17 @@ final class PipelineFields {
                 return Parsed.fail("โอกาสขาย '" + shown + "' ต้องเป็นตัวเลข 0–100");
             }
             v = new BigDecimal(digits);
+            if (shown.contains("%")) {
+                // An explicit % is ALWAYS literal (review round 2): "0.6%" is 0.6 percent, rounded to 1 with a
+                // warning — never read as the fraction 0.6 = 60%. The fraction rule below is for bare numbers.
+                if (v.signum() < 0 || v.compareTo(BigDecimal.valueOf(100)) > 0) {
+                    return Parsed.fail("โอกาสขาย '" + shown + "' ต้องอยู่ระหว่าง 0–100%");
+                }
+                BigDecimal rounded = v.setScale(0, RoundingMode.HALF_UP);
+                return rounded.compareTo(v) == 0
+                    ? Parsed.ok(rounded.intValueExact())
+                    : Parsed.okWithWarning(rounded.intValueExact(), "ปัดเป็น " + rounded.toPlainString() + "%");
+            }
         }
         boolean integral = v.stripTrailingZeros().scale() <= 0;
         if (!integral && v.signum() > 0 && v.compareTo(BigDecimal.ONE) <= 0) {
@@ -207,6 +224,8 @@ final class PipelineFields {
 
     /** A quotation-number cell may hold several numbers ("QT-…-7 / QT-…-8", "a, b"); each is folded to its
      * revisionless base by {@link th.co.glr.hr.salesboard.SalesNames#normaliseDoc}. Distinct, in cell order. */
+    static final int MIN_QN_LENGTH = 4;
+
     static java.util.List<String> quotationBases(String cell) {
         if (cell == null || cell.isBlank()) {
             return java.util.List.of();
@@ -214,7 +233,9 @@ final class PipelineFields {
         java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
         for (String part : cell.split("[/,]")) {
             String base = th.co.glr.hr.salesboard.SalesNames.normaliseDoc(part);
-            if (base != null) {
+            // "QNSH100-7/8": after the slash "8" is revision shorthand, not a quotation number. A real number is
+            // never this short, so a base under MIN_QN_LENGTH characters is ignored (review round 2).
+            if (base != null && base.length() >= MIN_QN_LENGTH) {
                 out.add(base);
             }
         }

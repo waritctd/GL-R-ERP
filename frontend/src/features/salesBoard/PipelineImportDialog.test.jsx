@@ -88,6 +88,10 @@ describe('PipelineImportDialog', () => {
     expect(help).toContain('S7–S9');
     expect(help).toContain('ผู้ซื้อหรือเจ้าของโครงการ');
     expect(help).toContain('ไม่เปลี่ยนสถานะดีลที่มีอยู่');
+    expect(help).toContain('เก็บใน Excel ต่อจนกว่าจะบันทึกเอกสารจริง');
+    expect(help).toContain('ชื่อโครงการเดียวกัน = ดีลเดียว');
+    expect(help).toContain('เปลี่ยนชื่อโครงการ');
+    expect(help).toContain('-1 ถึง -99');
   });
 
   it('a dry run shows every row with its result and reasons, and the counts', async () => {

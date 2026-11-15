@@ -577,6 +577,51 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         assertThat(count("customers.customer")).isEqualTo(customersBefore);
     }
 
+    /** Round 2: reusing a customer under a differently written name is said out loud, never merged silently. */
+    @Test
+    void reusingACustomerUnderADifferentNameIsWarned() throws Exception {
+        customers.create("บริษัท ตัวอย่างสมมุติ จำกัด", null, null, "สำนักงานใหญ่", null);
+
+        JsonNode dry = upload(csv(row(repCode, "โครงการ ต่างชื่อ", "", "ห้างหุ้นส่วนจำกัด ตัวอย่างสมมุติ", "", "", "",
+            "S1", "", "", "")), true, salesManagerActor);
+
+        assertThat(messages(dry, "WARNING"))
+            .contains("ใช้ลูกค้าเดิม 'บริษัท ตัวอย่างสมมุติ จำกัด' แทน 'ห้างหุ้นส่วนจำกัด ตัวอย่างสมมุติ'");
+        assertThat(dry.get("plan").get(0).get("newCustomer").isNull()).isTrue();
+    }
+
+    /** Round 2: a percent-sign probability is literal; rounding is reported. */
+    @Test
+    void aTinyPercentIsRoundedWithAWarning() throws Exception {
+        JsonNode dry = upload(csv(row(repCode, "โครงการ เปอร์เซ็นต์", "", "เจ้าของสมมุติ", "", "", "", "S1", "0.6%", "",
+            "")), true, salesManagerActor);
+
+        assertThat(dry.get("toCreate").asInt()).isEqualTo(1);
+        assertThat(messages(dry, "WARNING")).contains("ปัดเป็น 1%");
+    }
+
+    /** Round 2 (MEDIUM): 2000 rows against 5000 customers must analyse quickly — the lock is held this long on
+     * commit. Generous bound for this PC; the time is logged. */
+    @Test
+    void aFullFileAgainstALargeCustomerRegisterAnalysesQuickly() throws Exception {
+        jdbc.getJdbcTemplate().execute("INSERT INTO customers.customer (name) SELECT 'บริษัท ลูกค้าทดสอบ ' || g"
+            + " || ' จำกัด' FROM generate_series(1, 5000) g");
+        String[][] rows = new String[2000][];
+        for (int i = 0; i < rows.length; i++) {
+            rows[i] = row(repCode, "โครงการเร็ว " + i, "", "บริษัท เจ้าของเร็ว " + (i % 300) + " จำกัด", "", "", "",
+                "S1", "", "", "");
+        }
+        byte[] file = csv(rows);
+
+        long started = System.nanoTime();
+        JsonNode dry = upload(file, true, salesManagerActor);
+        long millis = (System.nanoTime() - started) / 1_000_000;
+        System.out.println("PIPELINE-IMPORT-PERF dry run, 2000 rows x 5000 customers: " + millis + " ms");
+
+        assertThat(dry.get("toCreate").asInt()).isEqualTo(2000);
+        assertThat(millis).as("dry run took %d ms", millis).isLessThan(5_000);
+    }
+
     /** M6: two existing customers with the same folded name → warn, never pick silently. */
     @Test
     void duplicateCustomersAreWarnedAbout() throws Exception {

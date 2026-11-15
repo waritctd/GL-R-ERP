@@ -69,6 +69,15 @@ import th.co.glr.hr.ticket.TicketService;
  *   <li>The import's STAGE_CHANGED event is a touch for the 14-day quiet rule, so a freshly imported deal is not
  *   "quiet" until 14 days after the import, whatever the sheet's own history.</li>
  *   <li>A customer it creates holds a name only (branch = สำนักงานใหญ่); tax id and address are completed later.</li>
+ *   <li>S7–S9 rows are not imported at all: reps keep those deals in Excel until the real documents (deposit
+ *   notice, IR, delivery record) are recorded in the app, which moves the deal there by itself.</li>
+ *   <li>One project title is one deal per file: a second row with the same (normalised) title for the same rep is
+ *   skipped as a duplicate, even with a different quotation number.</li>
+ *   <li>A lost or closed deal with the same title (or quotation base) BLOCKS the row rather than being re-created;
+ *   to import a re-tender as a new deal, rename the project in the sheet.</li>
+ *   <li>Quotation numbers compare by base: a trailing "-1" … "-99" is a revision and is ignored
+ *   ({@code SalesNames#normaliseDoc}); a 3+ digit tail is part of the number. Bases under 4 characters (e.g. the
+ *   "8" in "QNSH100-7/8") are revision shorthand and ignored.</li>
  * </ul>
  */
 @Service
@@ -182,17 +191,24 @@ public class PipelineImportService {
     /** Per-analysis lookups, loaded once: an owner's deals, the customer register. */
     private final class Lookups {
         final Map<Long, List<OwnerDeal>> deals = new HashMap<>();
-        List<PipelineImportRepository.CustomerName> customerNames;
+        Map<String, List<PipelineImportRepository.CustomerName>> customersByFoldedName;
 
         List<OwnerDeal> deals(long ownerId) {
             return deals.computeIfAbsent(ownerId, repo::ownerDeals);
         }
 
-        List<PipelineImportRepository.CustomerName> customers() {
-            if (customerNames == null) {
-                customerNames = repo.customerNames();
+        /** Folded name → customers (lowest id first), built ONCE per analysis: re-folding the whole register for
+         * every row made a 2000-row file against 4500 customers take ~35 s, all of it inside the commit's advisory
+         * lock (review round 2). */
+        List<PipelineImportRepository.CustomerName> customersNamed(String foldedName) {
+            if (customersByFoldedName == null) {
+                customersByFoldedName = new HashMap<>();
+                for (PipelineImportRepository.CustomerName c : repo.customerNames()) {
+                    customersByFoldedName.computeIfAbsent(SalesNames.normaliseCustomer(c.name()),
+                        k -> new ArrayList<>()).add(c);
+                }
             }
-            return customerNames;
+            return customersByFoldedName.getOrDefault(foldedName, List.of());
         }
     }
 
@@ -253,6 +269,8 @@ public class PipelineImportService {
                 r.cell(Column.PROBABILITY).numeric(), r.cell(Column.PROBABILITY).percent());
             if (probability.error() != null) {
                 p.error(probability.error());
+            } else if (probability.warning() != null) {
+                p.warn(probability.warning());
             }
             Parsed<String> quarter = PipelineFields.quarter(r.cell(Column.QUARTER).text(),
                 r.cell(Column.QUARTER).date());
@@ -314,7 +332,7 @@ public class PipelineImportService {
                     p.action = PipelineImportDtos.SKIP;
                     continue;
                 }
-                List<String> theirs = PipelineFields.quotationBases(d.quotationNumbers());
+                List<String> theirs = d.quotationBases();
                 if (!bases.isEmpty() && !theirs.isEmpty() && theirs.stream().noneMatch(bases::contains)) {
                     p.warn("เลขที่ใบเสนอราคาไม่ตรงกับดีล " + d.deal().code() + " (ในระบบ " + String.join(", ", theirs)
                         + ") — ถือเป็นดีลเดียวกันตามชื่อโครงการ");
@@ -364,15 +382,14 @@ public class PipelineImportService {
             return List.of();
         }
         return deals.stream()
-            .filter(d -> PipelineFields.quotationBases(d.quotationNumbers()).stream().anyMatch(bases::contains))
+            .filter(d -> d.quotationBases().stream().anyMatch(bases::contains))
             .toList();
     }
 
     private static List<OwnerDeal> byTitle(List<OwnerDeal> deals, String project) {
         String title = PipelineFields.normalise(project);
         return deals.stream()
-            .filter(d -> title.equals(PipelineFields.normalise(d.title()))
-                || (d.projectName() != null && title.equals(PipelineFields.normalise(d.projectName()))))
+            .filter(d -> title.equals(d.titleKey()) || title.equals(d.projectKey()))
             .toList();
     }
 
@@ -384,8 +401,7 @@ public class PipelineImportService {
      * several do (the lowest id is used, and named — never a silent pick); otherwise announce the new customer. */
     private static void planCustomer(Planned p, Lookups lookups, Set<String> plannedNew) {
         String key = SalesNames.normaliseCustomer(p.customerName);
-        List<PipelineImportRepository.CustomerName> same = lookups.customers().stream()
-            .filter(c -> key.equals(SalesNames.normaliseCustomer(c.name()))).toList();
+        List<PipelineImportRepository.CustomerName> same = lookups.customersNamed(key);
         if (same.isEmpty()) {
             if (plannedNew.add(key)) {
                 p.newCustomer = p.customerName;
@@ -397,6 +413,9 @@ public class PipelineImportService {
         if (same.size() > 1) {
             p.warn("พบลูกค้าชื่อซ้ำ " + same.size() + " ราย ใช้ " + used.name() + " (#" + used.id()
                 + ") — รวมลูกค้าในระบบภายหลังได้");
+        } else if (!used.name().strip().equals(p.customerName.strip())) {
+            // Folding merges บริษัท / ห้างหุ้นส่วนจำกัด / Co.,Ltd. spellings — say so rather than merge silently.
+            p.warn("ใช้ลูกค้าเดิม '" + used.name().strip() + "' แทน '" + p.customerName.strip() + "'");
         }
     }
 

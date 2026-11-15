@@ -111,7 +111,7 @@ class PipelineFieldsTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"101", "-1", "สูง", "72.4", "1.5", "60.5%", "99999999999", "1e400"})
+    @CsvSource({"101", "-1", "สูง", "72.4", "1.5", "101%", "99999999999", "1e400"})
     void probabilityOutOfRangeIsAnError(String raw) {
         assertThat(PipelineFields.probability(raw, null, false).error()).isNotBlank();
     }
@@ -139,6 +139,26 @@ class PipelineFieldsTest {
     }
 
     // ── quotation numbers ─────────────────────────────────────────────────────
+
+    @Test
+    void aRevisionShorthandAfterASlashIsNotAQuotationNumber() {
+        // "QNSH100-7/8": the 8 is "revision 8" shorthand, not a second quotation number.
+        assertThat(PipelineFields.quotationBases("QNSH100-7/8")).containsExactly("QNSH100");
+        assertThat(PipelineFields.quotationBases("QT-1, 22, ABC")).isEmpty();
+    }
+
+    @Test
+    void textWithAPercentSignIsAlwaysLiteral() {
+        PipelineFields.Parsed<Integer> tiny = PipelineFields.probability("0.6%", null, false);
+        assertThat(tiny.value()).isEqualTo(1);
+        assertThat(tiny.warning()).isEqualTo("ปัดเป็น 1%");
+        PipelineFields.Parsed<Integer> half = PipelineFields.probability("60.5%", null, false);
+        assertThat(half.value()).isEqualTo(61);
+        assertThat(half.warning()).isEqualTo("ปัดเป็น 61%");
+        assertThat(PipelineFields.probability("60%", null, false).warning()).isNull();
+        // the fraction rule is for BARE numbers only
+        assertThat(PipelineFields.probability("0.6", null, false).value()).isEqualTo(60);
+    }
 
     @Test
     void aQuotationCellSplitsOnSlashAndCommaIntoRevisionlessBases() {
