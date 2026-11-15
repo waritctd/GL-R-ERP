@@ -2462,16 +2462,18 @@ public class TicketService {
     /**
      * Writes the SITE_VISIT activity for a visit that was ticked done, attributed to {@code visitOwnerId} — the
      * person who went. No actor check here: VisitService has already verified the caller may write the VISIT (its
-     * owner, or sales_manager / ceo). With {@code onlyIfStillOwner}, nothing is written when the visit's owner is no
-     * longer the deal's owner or keyer (review NEW-2): an ex-owner's tick must not reset the quiet clock on, or add
-     * history to, the deal now held by someone else — the tick stays on the visit. Returns whether it wrote.
+     * owner, or sales_manager / ceo). With {@code onlyIfStillOwner}, nothing is written unless the visit's owner is
+     * the deal's current owner ({@code created_by}) — NOT merely its keyer: a reassignment through
+     * TicketRepository#moveOwnerToSalesRep leaves the ex-owner as keyer (review NEW-A). An ex-owner's tick must not
+     * reset the quiet clock on, or add history to, the deal now held by someone else; the tick stays on the visit.
+     * Returns whether it wrote.
      * Only VisitService calls this; the deal write check stays on visit creation.
      */
     @Transactional
     public boolean recordVisitActivity(long ticketId, java.time.LocalDate activityDate, String note, long visitOwnerId,
                                        boolean onlyIfStillOwner) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
-        if (onlyIfStillOwner && !DealOwnership.isOwnerOrKeyer(s, visitOwnerId)) {
+        if (onlyIfStillOwner && s.createdById() != visitOwnerId) {
             return false;
         }
         tickets.insertDealActivity(ticketId, activityDate, DealActivityKind.SITE_VISIT, note, visitOwnerId);

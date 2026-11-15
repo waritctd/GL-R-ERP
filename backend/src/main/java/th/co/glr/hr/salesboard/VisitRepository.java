@@ -28,7 +28,6 @@ public class VisitRepository {
                v.ticket_id, COALESCE(NULLIF(TRIM(t.title), ''), t.customer_name) AS ticket_title,
                v.contact_name, v.planned_date, v.planned_time, v.status, v.done_at, v.note,
                CASE WHEN t.ticket_id IS NOT NULL AND v.owner_id <> t.created_by
-                         AND v.owner_id IS DISTINCT FROM t.keyed_by
                     THEN NULLIF(TRIM(CONCAT_WS(' ', de.first_name_th, de.last_name_th)), '') END
                  AS deal_moved_to_name
           FROM sales.visit v

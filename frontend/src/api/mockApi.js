@@ -8251,8 +8251,9 @@ function mockVisitDto(v) {
     status: v.status,
     doneAt: v.doneAt,
     note: v.note,
-    // VisitRepository: the deal's current owner's name when the deal has moved away from this visit's owner.
-    dealMovedToName: ticket && !isOwnerOrKeyer(ticket, v.ownerId)
+    // VisitRepository: the deal's current owner's name when this visit's owner is not its created_by (review NEW-A:
+    // the keyer does not count — reassignment leaves the ex-owner as keyer).
+    dealMovedToName: ticket && Number(ticket.createdById) !== Number(v.ownerId)
       ? (db.users.find((u) => u.id === ticket.createdById)?.name ?? ticket.createdByName ?? null)
       : null,
   };
@@ -8314,7 +8315,7 @@ function mockCleanVisitNote(note) {
   return trimmed || null;
 }
 
-/** QuietRule.upcomingVisitSql: a PLANNED visit on the deal, by its current owner (or keyer), dated from today
+/** QuietRule.upcomingVisitSql: a PLANNED visit on the deal, by its current owner (created_by only), dated from today
  * (Bangkok) to today + QUIET_DAYS — a far-future plan or an ex-owner's plan does not hold it (review NEW-1/NEW-2). */
 function mockHasUpcomingVisit(ticketId) {
   const ticket = db.tickets.find((t) => t.id === ticketId);
@@ -8322,7 +8323,7 @@ function mockHasUpcomingVisit(ticketId) {
   const today = mockTodayIso();
   const horizon = mockAddDaysIso(today, MOCK_QUIET_DAYS);
   return mockVisits.some((v) => v.ticketId === ticketId && v.status === 'PLANNED'
-    && v.plannedDate >= today && v.plannedDate <= horizon && isOwnerOrKeyer(ticket, v.ownerId));
+    && v.plannedDate >= today && v.plannedDate <= horizon && Number(ticket.createdById) === Number(v.ownerId));
 }
 
 /** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
@@ -13210,7 +13211,8 @@ export const api = {
         doneAt: done ? new Date().toISOString() : null, note, createdAt: new Date().toISOString(),
       };
       mockVisits.push(visit);
-      if (done && ticketId != null) mockLogSiteVisit(user.id, ticketId, note);
+      const ownsDeal = ticketId != null && Number(db.tickets.find((t) => t.id === ticketId)?.createdById) === user.id;
+      if (done && ownsDeal) mockLogSiteVisit(user.id, ticketId, note);
       return delay(mockVisitDto(visit));
     },
     async done(id, payload = {}) {
@@ -13226,8 +13228,8 @@ export const api = {
       visit.doneAt = new Date().toISOString();
       if (note) visit.note = note;
       const ticket = visit.ticketId == null ? null : db.tickets.find((t) => t.id === visit.ticketId);
-      // TicketService.recordVisitActivity: only onto a deal the visit's owner still owns (review NEW-2).
-      if (ticket && isOwnerOrKeyer(ticket, visit.ownerId)) {
+      // TicketService.recordVisitActivity: only onto a deal whose created_by is the visit's owner (review NEW-2/NEW-A).
+      if (ticket && Number(ticket.createdById) === Number(visit.ownerId)) {
         const recordedBy = visit.ownerId !== user.id ? `บันทึกโดย ${user.name}` : null;
         mockLogSiteVisit(visit.ownerId, visit.ticketId, [visit.note, recordedBy].filter(Boolean).join(' · ') || null);
       }

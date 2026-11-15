@@ -209,17 +209,29 @@ class QuietRuleIntegrationTest extends AbstractPostgresIntegrationTest {
     void anExOwnersUpcomingVisitDoesNotHoldTheNewOwnersDeal() {
         long id = dealCreatedDaysAgo(60);
         visit(id, "PLANNED", 2);
-        jdbc.update("UPDATE sales.ticket SET created_by = :o, keyed_by = NULL WHERE ticket_id = :id",
-            Map.of("o", otherRepId(), "id", id));
+        // The production reassignment path: the ex-owner becomes the keyer (keyed_by = COALESCE(keyed_by, created_by)).
+        assertThat(tickets.moveOwnerToSalesRep(id, otherRepId())).isEqualTo(1);
 
         assertThat(quietRule.isQuiet(id)).isTrue();
         assertThat(tickets.findSummaryById(id).orElseThrow().stale()).isTrue();
     }
 
+    @Test
+    void aKeyersVisitDoesNotHoldTheOwnersDeal() {
+        long id = dealCreatedDaysAgo(60);
+        long owner = otherRepId();
+        // Keyed in by repId for another rep, never reassigned: repId is the keyer, not the owner.
+        jdbc.update("UPDATE sales.ticket SET created_by = :owner, keyed_by = :keyer WHERE ticket_id = :id",
+            Map.of("owner", owner, "keyer", repId, "id", id));
+        visit(id, "PLANNED", 2); // booked by repId, the keyer
+
+        assertThat(quietRule.isQuiet(id)).isTrue();
+    }
+
     private long otherRepId() {
         return new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc))
             .create(new UpsertEmployeeRequest(null, null, "พนักงานขาย คนใหม่", null, null, null, null, null, null,
-                null, "quiet-rule-new-owner@glr.co.th", null, "SALES", "Sales Division", "แผนกขาย", null, null, null,
+                null, "quiet-rule-new-owner-" + System.nanoTime() + "@glr.co.th", null, "SALES", "Sales Division", "แผนกขาย", null, null, null,
                 "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
     }
 

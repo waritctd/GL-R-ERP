@@ -183,7 +183,8 @@ describe('mockApi.salesVisits', () => {
     const [deal] = (await api.salesBoard.myWork()).board;
     const ticked = await api.salesVisits.create({ ticketId: deal.ticketId, contactName: 'ก', plannedDate: today });
     const kept = await api.salesVisits.create({ ticketId: deal.ticketId, contactName: 'ข', plannedDate: today });
-    patchTicketForTests(deal.ticketId, { createdById: 12, keyedById: null });
+    // The production reassignment (moveOwnerToSalesRep): the ex-owner becomes the keyer.
+    patchTicketForTests(deal.ticketId, { createdById: 12, keyedById: deal.ownerId });
     try {
       expect((await api.salesVisits.done(ticked.id, {})).status).toBe('DONE');
       await api.auth.login({ email: 'sales2@glr.co.th', password: 'demo1234' });
@@ -230,7 +231,8 @@ describe('mockApi.salesVisits', () => {
     const [quiet] = (await api.salesBoard.myWork()).followUp;
     const ahead = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: plusDays(today, 2) });
     const due = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ข', plannedDate: today });
-    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: null });
+    // The production reassignment (moveOwnerToSalesRep): the ex-owner becomes the keyer.
+    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: quiet.ownerId });
     try {
       await api.auth.login({ role: 'ceo' });
       expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
@@ -247,6 +249,28 @@ describe('mockApi.salesVisits', () => {
       expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
     } finally {
       patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId });
+    }
+  });
+
+  it("a keyer who is not the owner neither holds the deal nor writes onto it (NEW-A)", async () => {
+    const { user: keyer } = await api.auth.login({ role: 'sales' });
+    const [quiet] = (await api.salesBoard.myWork()).followUp;
+    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: keyer.id });
+    try {
+      await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: plusDays(today, 2) });
+      const due = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ข', plannedDate: today });
+      await api.auth.login({ role: 'ceo' });
+      expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
+      const before = (await api.tickets.listActivities(quiet.ticketId)).items.length;
+
+      await api.auth.login({ role: 'sales' });
+      expect((await api.salesVisits.done(due.id, {})).dealMovedToName).toBeTruthy();
+      await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ค', plannedDate: today, done: true });
+
+      await api.auth.login({ role: 'ceo' });
+      expect((await api.tickets.listActivities(quiet.ticketId)).items.length).toBe(before);
+    } finally {
+      patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId, keyedById: quiet.ownerId });
     }
   });
 });

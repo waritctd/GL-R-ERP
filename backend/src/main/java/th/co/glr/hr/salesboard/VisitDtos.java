@@ -15,7 +15,8 @@ public final class VisitDtos {
     /**
      * {@code ticketTitle} is the linked deal's title, else its customer name; null when the visit has no deal.
      * {@code dealMovedToName} is the deal's current owner when the deal has moved away from this visit's owner
-     * (neither its owner nor its keyer any more); a tick then stays on the visit only (review NEW-2). Null otherwise.
+     * (the visit's owner is not its {@code created_by}, even if still its keyer); a tick then stays on the visit
+     * only (review NEW-2 / NEW-A). Null otherwise.
      */
     public record VisitDto(long id, long ownerId, String ownerName, Long ticketId, String ticketTitle,
                            String contactName, LocalDate plannedDate, LocalTime plannedTime, String status,

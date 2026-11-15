@@ -368,11 +368,32 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     }
 
     @Test
-    void creatingAVisitOnADealThatMovedAwayIsStill403() throws Exception {
+    void creatingAVisitOnAMovedDealIsStill403ForARepWhoWasNeverOnIt() throws Exception {
         long deal = deal(salesActor);
         reassign(deal, otherSalesActor);
+        UserPrincipal third = actor(createEmployee("พนักงานขาย คนที่สี่", "fourth-visit@glr.co.th", "SALES",
+            "แผนกขาย", null), "sales");
 
-        assertThat(status(createRequest(deal, "คุณอรุณ", today, null, false), salesActor)).isEqualTo(403);
+        // The ex-owner is the deal's keyer now and keeps TicketService's keyer access (deal policy, not visits');
+        // a rep who was never on the deal is refused.
+        assertThat(status(createRequest(deal, "คุณอรุณ", today, null, false), third)).isEqualTo(403);
+    }
+
+    // ── review NEW-A: a keyer who is not the owner neither holds nor writes onto the deal ──
+
+    @Test
+    void aKeyerWhoIsNotTheOwner_ticksWithoutWritingOntoTheDeal() throws Exception {
+        long deal = deal(salesActor);
+        // Keyed in by salesActor for otherSalesActor, never reassigned.
+        jdbc.update("UPDATE sales.ticket SET created_by = :owner, keyed_by = :keyer WHERE ticket_id = :id",
+            Map.of("owner", otherSalesActor.id(), "keyer", salesActor.id(), "id", deal));
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesActor);
+
+        assertThat(done.get("status").asText()).isEqualTo("DONE");
+        assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(siteVisitRows(deal)).isZero();
     }
 
     // ── done only on or before today (review M2) ─────────────────────────────
@@ -512,9 +533,9 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
             """, Map.of("id", who.id()), String.class);
     }
 
+    /** The production reassignment path (TicketRepository#moveOwnerToSalesRep): the ex-owner becomes the keyer. */
     private void reassign(long ticketId, UserPrincipal newOwner) {
-        jdbc.update("UPDATE sales.ticket SET created_by = :o, keyed_by = NULL WHERE ticket_id = :id",
-            Map.of("o", newOwner.id(), "id", ticketId));
+        assertThat(tickets.moveOwnerToSalesRep(ticketId, newOwner.id())).isEqualTo(1);
     }
 
     private Map<String, Object> siteVisit(long ticketId) {

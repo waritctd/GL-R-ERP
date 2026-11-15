@@ -127,8 +127,9 @@ public class VisitService {
         long id = visits.insert(actor.id(), request.ticketId(), contact, request.plannedDate(),
             request.plannedTime(), note, done);
         if (done && request.ticketId() != null) {
-            // The actor has just passed the deal write check above, so the log goes on the deal.
-            tickets.recordVisitActivity(request.ticketId(), today(), note, actor.id(), false);
+            // Same rule as a tick (review NEW-A): only the deal's current owner's visit goes onto the deal. A keyer,
+            // or a manager logging their own visit on a rep's deal, keeps it on the visit (dealMovedToName says so).
+            tickets.recordVisitActivity(request.ticketId(), today(), note, actor.id(), true);
         }
         return require(id);
     }
