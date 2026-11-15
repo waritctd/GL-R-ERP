@@ -198,6 +198,35 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
         assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
+    // ── round-2 N3 ───────────────────────────────────────────────────────────
+
+    /** N3: a deal the backfill moves takes a blank designer_name from its latest quotation's D.Co. directory entry. */
+    @Test
+    void movedDeal_fillsABlankDesignerNameFromTheDirectory() throws IOException {
+        jdbc.update("INSERT INTO sales.designer (code, name) VALUES ('ZT10', 'ทดสอบ ดีไซน์ ย้อนหลัง')", Map.of());
+        long ticket = stuckDeal(EntryChannel.DESIGNER_LED);
+        jdbc.update("UPDATE sales.quotation SET unit_code = ' ZT10 ' WHERE ticket_id = :id", Map.of("id", ticket));
+        jdbc.update("UPDATE sales.ticket SET designer_name = '  ' WHERE ticket_id = :id", Map.of("id", ticket));
+
+        runMigration();
+
+        assertThat(summary(ticket).designerName()).isEqualTo("ทดสอบ ดีไซน์ ย้อนหลัง");
+    }
+
+    @Test
+    void movedDeal_neverOverwritesATypedDesignerName_norFillsOwnerName() throws IOException {
+        jdbc.update("INSERT INTO sales.designer (code, name) VALUES ('ZT11', 'ทดสอบ ดีไซน์ สิบเอ็ด')", Map.of());
+        long ticket = stuckDeal(EntryChannel.DESIGNER_LED);
+        jdbc.update("UPDATE sales.quotation SET unit_code = 'ZT11' WHERE ticket_id = :id", Map.of("id", ticket));
+        jdbc.update("UPDATE sales.ticket SET designer_name = 'คุณบี', owner_name = NULL WHERE ticket_id = :id",
+            Map.of("id", ticket));
+
+        runMigration();
+
+        assertThat(summary(ticket).designerName()).isEqualTo("คุณบี");
+        assertThat(summary(ticket).ownerName()).isNull();
+    }
+
     @Test
     void rerunningIsANoOp() throws IOException {
         long ticket = stuckDeal(EntryChannel.DESIGNER_LED);

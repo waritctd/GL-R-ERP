@@ -20,6 +20,10 @@
 --     QUOTE_BUYER today. ApprovedQuotationStageBackfillMigrationIntegrationTest pins this to the Java for every channel.
 --   * FORWARD ONLY: the deal moves only if its current stage comes strictly before the target in DealStage.ORDER
 --     (the array below, in pipeline order). A deal already at or past the target is untouched.
+--   * fills a BLANK designer_name from the designer-directory entry (sales.designer) behind that quotation's D.Co.
+--     (unit_code) — round-2 N3, the same source the live path uses; a typed name is never overwritten, owner_name
+--     and buyer_name are not touched. (Rollback cannot tell these fills from a later identical hand entry; they are
+--     the moved deals whose designer_name equals that directory name.)
 --   * sets sales_stage and stage_updated_at, and writes one STAGE_CHANGED ticket_event noted
 --     'ย้ายอัตโนมัติจากใบเสนอราคาที่อนุมัติแล้ว (ย้อนหลัง)'.
 --   * Both timestamps are the quotation's own approval/issue time (COALESCE(approved_at, issued_at)), NOT the deploy
@@ -78,11 +82,14 @@ target AS (
                AND NOT EXISTS (SELECT 1 FROM off_route o WHERE o.channel = t.entry_channel AND o.stage = u.stage)
              ORDER BY u.pos DESC
              LIMIT 1) AS to_stage,
+           q.directory_designer,
            q.touched_at,
            q.actor_id
       FROM sales.ticket t
       CROSS JOIN LATERAL (
           SELECT vq.recipient_type,
+                 (SELECT NULLIF(TRIM(d.name), '') FROM sales.designer d WHERE d.code = TRIM(vq.unit_code))
+                     AS directory_designer,
                  COALESCE(vq.approved_at, vq.issued_at) AS touched_at,
                  COALESCE(vq.approved_by, vq.issued_by, t.created_by) AS actor_id
             FROM sales.quotation vq
@@ -108,7 +115,11 @@ target AS (
 moved AS (
     UPDATE sales.ticket t
        SET sales_stage      = target.to_stage,
-           stage_updated_at = COALESCE(target.touched_at, now())
+           stage_updated_at = COALESCE(target.touched_at, now()),
+           -- N3: a blank designer_name takes the latest quotation's D.Co. directory entry; never overwritten.
+           designer_name    = CASE WHEN COALESCE(TRIM(t.designer_name), '') = ''
+                                   THEN COALESCE(target.directory_designer, t.designer_name)
+                                   ELSE t.designer_name END
       FROM target, stage_order
      WHERE t.ticket_id = target.ticket_id
        AND target.to_stage IS NOT NULL
