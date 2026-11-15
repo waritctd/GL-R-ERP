@@ -4,17 +4,25 @@ import { useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
+import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
-import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
+import { addDaysIso, bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import { MarkLostModal } from '../tickets/MarkLostModal.jsx';
 import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
 import { useStageCatalog } from '../tickets/stageCatalog.js';
 import { currentQuarter, defaultBoardFilter, otherCurrencyTotals, sumValue, totalLabel } from './boardFormat.js';
 import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
+import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
+import { CarriedOverVisits, VisitsThisWeek } from './VisitsThisWeek.jsx';
+import { weekRangeLabel, weekStartIso } from './visitWeek.js';
+
+// ค้างจากสัปดาห์ก่อน looks back 31 days before this Monday — the ranged endpoint's cap. An older unticked visit is
+// still reachable with ‹ สัปดาห์ก่อน.
+const CARRY_OVER_DAYS = 31;
 
 function CountPill({ count }) {
   return (
@@ -42,10 +50,11 @@ const BOARD_FILTERS = [
 const BOARD_ID = 'my-work-board';
 
 /**
- * งานของฉัน — the rep's landing (spec 2026-11-15 §7.3, slice 1): ควรตามต่อ, then the five-column board, from
- * GET /api/sales/my-work (already scoped server-side to the caller's own deals). `before` is rendered between the
- * header and ควรตามต่อ — SalesOverview puts the money band and the next-action worklist there. Visits (slice 2) and
- * expected cash (slice 3) are not built yet, so they are not shown. Action failures use the app's toast.
+ * งานของฉัน — the rep's landing (spec 2026-11-15 §7.3): ควรตามต่อ and นัดเข้าพบสัปดาห์นี้ side by side, then the
+ * five-column board, from GET /api/sales/my-work (already scoped server-side to the caller's own deals and visits).
+ * `before` is rendered between the header and ควรตามต่อ — SalesOverview puts the money band and the next-action
+ * worklist there. บันทึกเข้าพบ is in the header on desktop and a sticky bottom button on phone. Expected cash
+ * (slice 3) is not built yet, so it is not shown. Action failures use the app's toast.
  */
 export function MyWork({ subtitle, before = null, user, showToast = () => {} }) {
   const navigate = useNavigate();
@@ -55,6 +64,32 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   const [creating, setCreating] = useState(false);
   // null until the rep picks one: the default follows the data (defaultBoardFilter).
   const [boardFilterChoice, setBoardFilter] = useState(null);
+  const [planning, setPlanning] = useState(null); // { deal } — deal is null for a visit with no deal yet
+  const [ticking, setTicking] = useState(null);
+  const [cancelling, setCancelling] = useState(null);
+  const [logging, setLogging] = useState(false);
+  const todayIso = bangkokTodayIso();
+  const thisMonday = weekStartIso(todayIso);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [landed, setLanded] = useState(null);
+  const shownMonday = addDaysIso(thisMonday, 7 * weekOffset);
+  const shownSunday = addDaysIso(shownMonday, 6);
+  const otherWeekQuery = useQuery({
+    queryKey: queryKeys.salesVisitsOwn(shownMonday, shownSunday),
+    queryFn: () => api.salesVisits.list({ from: shownMonday, to: shownSunday }),
+    enabled: weekOffset !== 0,
+  });
+  const carryFrom = addDaysIso(thisMonday, -CARRY_OVER_DAYS);
+  const carryTo = addDaysIso(thisMonday, -1);
+  const carriedQuery = useQuery({
+    queryKey: queryKeys.salesVisitsOwn(carryFrom, carryTo),
+    queryFn: () => api.salesVisits.list({ from: carryFrom, to: carryTo }),
+  });
+  const carriedOver = (carriedQuery.data ?? []).filter((v) => v.status === 'PLANNED');
+  const showWeek = (offset) => {
+    setWeekOffset(offset);
+    setLanded(null);
+  };
 
   const workQuery = useQuery({ queryKey: queryKeys.salesBoardMyWork(), queryFn: () => api.salesBoard.myWork() });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['tickets'] });
@@ -81,6 +116,28 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     },
   });
 
+  const createVisit = useMutation({ mutationFn: (payload) => api.salesVisits.create(payload), onSuccess: refresh });
+  const doneVisit = useMutation({
+    mutationFn: ({ visit, note }) => api.salesVisits.done(visit.id, { note }),
+    onSuccess: refresh,
+  });
+  const cancelVisit = useMutation({ mutationFn: (visit) => api.salesVisits.cancel(visit.id), onSuccess: refresh });
+
+  /** Runs a visit mutation; a failure is toasted and the dialog stays open with what was typed. */
+  async function attempt(mutation, variables, onDone, success) {
+    try {
+      const result = await mutation.mutateAsync(variables);
+      onDone();
+      // VisitDto.dealMovedToName: the deal belongs to someone else, so the tick stayed on the visit (NEW-2).
+      // dealMoved says why: it moved after the visit was planned, or the visit's owner never held it (review LOW).
+      showToast('success', !result?.dealMovedToName ? success : result.dealMoved
+        ? `ดีลนี้ย้ายไปให้ ${result.dealMovedToName} แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น`
+        : `บันทึกการเข้าพบไว้กับนัดเท่านั้น — ดีลนี้เป็นของ ${result.dealMovedToName}`);
+    } catch (error) {
+      fail(error);
+    }
+  }
+
   async function logCall(deal, note) {
     try {
       await callMutation.mutateAsync({ deal, note });
@@ -92,6 +149,18 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   }
 
   const work = workQuery.data;
+  const thisWeekVisits = work ? (work.visitsThisWeek ?? []) : null;
+  const visits = weekOffset === 0 ? thisWeekVisits : (otherWeekQuery.data ?? null);
+  const todaysPlanned = (thisWeekVisits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate === todayIso);
+
+  /** After a plan is saved: when it landed outside the week on screen, say where and offer the jump. */
+  function noteLanding(plannedDate) {
+    const monday = weekStartIso(plannedDate);
+    if (monday === shownMonday) return;
+    const offset = Math.round((Date.parse(`${monday}T00:00:00Z`) - Date.parse(`${thisMonday}T00:00:00Z`)) / (7 * 86_400_000));
+    setLanded({ weekOffset: offset, label: weekRangeLabel(monday, todayIso) });
+  }
+  const openLog = () => setLogging(true);
   const quietDays = work?.quietDays ?? 14;
   const quarter = currentQuarter();
   const boardFilter = boardFilterChoice ?? (work ? defaultBoardFilter(work.board) : 'all');
@@ -113,9 +182,13 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
         actions={(
           <>
             <Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูรายการดีลทั้งหมด</Button>
-            <Button type="button" onClick={() => setCreating(true)}>
+            <Button type="button" variant="secondary" onClick={() => setCreating(true)}>
               <Icon name="plus" size={16} />
               งานใหม่
+            </Button>
+            <Button type="button" data-testid="log-visit-header" className="mobile:hidden" onClick={openLog}>
+              <Icon name="calendar" size={16} />
+              บันทึกเข้าพบ
             </Button>
           </>
         )}
@@ -123,28 +196,47 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
 
       {before}
 
-      <Panel
-        flush
-        title={(
-          <span className="grid gap-0.5">
-            <span>ควรตามต่อ</span>
-            <small className="text-xs font-normal text-text-muted">ดีลที่เงียบเกิน {quietDays} วัน</small>
-          </span>
-        )}
-        actions={work ? <CountPill count={work.followUp.length} /> : null}
-      >
-        {workQuery.isError ? <Failed /> : !work ? <Loading label="กำลังโหลดดีลที่ควรตามต่อ" /> : (
-          <FollowUpList
-            deals={work.followUp}
-            quietDays={quietDays}
-            quietTotal={quietTotal}
-            onShowAll={showAllQuiet}
-            loggingCall={callMutation.isPending}
-            onLogCall={logCall}
-            onCloseDeal={setLosing}
-          />
-        )}
-      </Panel>
+      <div className="grid grid-cols-2 items-start gap-[18px] nav-drawer:grid-cols-1">
+        <Panel
+          flush
+          title={(
+            <span className="grid gap-0.5">
+              <span>ควรตามต่อ</span>
+              <small className="text-xs font-normal text-text-muted">ดีลที่เงียบเกิน {quietDays} วัน</small>
+            </span>
+          )}
+          actions={work ? <CountPill count={work.followUp.length} /> : null}
+        >
+          {workQuery.isError ? <Failed /> : !work ? <Loading label="กำลังโหลดดีลที่ควรตามต่อ" /> : (
+            <FollowUpList
+              deals={work.followUp}
+              quietDays={quietDays}
+              quietTotal={quietTotal}
+              onShowAll={showAllQuiet}
+              loggingCall={callMutation.isPending}
+              onLogCall={logCall}
+              onBookVisit={(deal) => setPlanning({ deal })}
+              onCloseDeal={setLosing}
+            />
+          )}
+        </Panel>
+
+        <VisitsThisWeek
+          visits={visits}
+          todayIso={todayIso}
+          mondayIso={shownMonday}
+          weekOffset={weekOffset}
+          onWeek={showWeek}
+          landed={landed}
+          loading={weekOffset === 0 ? !work : otherWeekQuery.isLoading}
+          failed={weekOffset === 0 ? workQuery.isError : otherWeekQuery.isError}
+          onPlan={() => setPlanning({ deal: null })}
+          onDone={setTicking}
+          onCancel={setCancelling}
+        />
+      </div>
+
+      <CarriedOverVisits visits={carriedOver} todayIso={todayIso} onDone={setTicking} onCancel={setCancelling} />
 
       <Panel
         id={BOARD_ID}
@@ -176,6 +268,61 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
       >
         {workQuery.isError ? <Failed /> : !work ? <Loading label="กำลังโหลดดีลทั้งหมด" /> : <DealBoard deals={boardDeals} />}
       </Panel>
+
+      {/* บันทึกเข้าพบ stays reachable on phone (spec §7.3): a sticky bottom button, with a spacer so it never covers
+          the last row. Toasts sit above it (Toast.jsx's mobile bottom offset is 72px). */}
+      <div aria-hidden="true" className="hidden h-14 mobile:block" />
+      <div className="hidden mobile:fixed mobile:inset-x-4 mobile:bottom-[max(12px,env(safe-area-inset-bottom))] mobile:z-20 mobile:grid">
+        <Button type="button" data-testid="log-visit-sticky" className="min-h-[48px] w-full shadow-lg" onClick={openLog}>
+          <Icon name="calendar" size={18} />
+          บันทึกเข้าพบ
+        </Button>
+      </div>
+
+      {planning ? (
+        <PlanVisitModal
+          deals={work?.board ?? []}
+          initialDeal={planning.deal}
+          todayIso={todayIso}
+          submitting={createVisit.isPending}
+          onClose={() => setPlanning(null)}
+          onSubmit={(payload) => attempt(createVisit, payload, () => {
+            setPlanning(null);
+            noteLanding(payload.plannedDate);
+          }, 'บันทึกนัดแล้ว')}
+        />
+      ) : null}
+      {ticking ? (
+        <VisitDoneModal
+          visit={ticking}
+          submitting={doneVisit.isPending}
+          onClose={() => setTicking(null)}
+          onSubmit={(note) => attempt(doneVisit, { visit: ticking, note }, () => setTicking(null), 'บันทึกเข้าพบแล้ว')}
+        />
+      ) : null}
+      {logging ? (
+        <LogVisitModal
+          todaysPlanned={todaysPlanned}
+          deals={work?.board ?? []}
+          submitting={doneVisit.isPending || createVisit.isPending}
+          onClose={() => setLogging(false)}
+          onSubmit={({ visit, contactName, ticketId, note }) => (visit
+            ? attempt(doneVisit, { visit, note }, () => setLogging(false), 'บันทึกเข้าพบแล้ว')
+            : attempt(createVisit, { contactName, ticketId, plannedDate: todayIso, note, done: true },
+              () => setLogging(false), 'บันทึกเข้าพบแล้ว'))}
+        />
+      ) : null}
+      <ConfirmDialog
+        open={Boolean(cancelling)}
+        title="ยกเลิกนัดนี้?"
+        message={cancelling ? `${cancelling.contactName} · ยกเลิกแล้วจะเปลี่ยนกลับไม่ได้` : ''}
+        confirmLabel="ยกเลิกนัด"
+        cancelLabel="ไม่ยกเลิก"
+        tone="danger"
+        busy={cancelVisit.isPending}
+        onConfirm={() => attempt(cancelVisit, cancelling, () => setCancelling(null), 'ยกเลิกนัดแล้ว')}
+        onCancel={() => setCancelling(null)}
+      />
 
       {losing ? (
         <MarkLostModal

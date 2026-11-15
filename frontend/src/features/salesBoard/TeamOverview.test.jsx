@@ -79,7 +79,7 @@ describe('TeamOverview', () => {
 
     const table = await screen.findByRole('table');
     const headers = within(table).getAllByRole('columnheader').map((th) => th.textContent);
-    expect(headers).toEqual(['พนักงานขาย', 'ดีล', 'มูลค่า', 'ดีลเงียบ', 'อัปเดตล่าสุด']);
+    expect(headers).toEqual(['พนักงานขาย', 'ดีล', 'มูลค่า', 'ดีลเงียบ', 'เข้าพบสัปดาห์นี้', 'อัปเดตล่าสุด']);
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows).toHaveLength(3);
     const somMai = rows[1];
@@ -107,11 +107,11 @@ describe('TeamOverview', () => {
     expect(within(items[2]).getByText('—')).toBeTruthy();
   });
 
-  it('has no cash or visit tiles (slices 2–3) and no ฿0.00', async () => {
+  it('has no cash tile (slice 3) and no ฿0.00', async () => {
     renderTeam();
 
     await screen.findByTestId('tile-held');
-    expect(screen.queryByText(/เงินเข้า|เข้าพบ/)).toBeNull();
+    expect(screen.queryByText(/เงินเข้า/)).toBeNull();
     expect(screen.queryByText('฿0.00')).toBeNull();
   });
 });

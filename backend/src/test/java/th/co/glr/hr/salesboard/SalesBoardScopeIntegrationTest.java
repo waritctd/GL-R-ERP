@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -45,13 +46,19 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
     private final ObjectMapper json = new ObjectMapper();
     private MockMvc mvc;
+    private static final LocalDate MONDAY = LocalDate.of(2026, 11, 9);
+    private static final LocalDate SUNDAY = LocalDate.of(2026, 11, 15);
 
     @BeforeEach
     void wireHttp() {
         SessionContext sessions = new SessionContext();
         QuietRule quietRule = new QuietRule(jdbc, 14);
+        // Fixed clock (review M5): Thursday 12 Nov 2026, 10:00 Bangkok. The week is hard-coded below
+        // (Mon 9 – Sun 15 Nov), never derived from VisitService.weekStart, so a wrong week computation fails here.
+        VisitService visits = new VisitService(new VisitRepository(jdbc), ticketService,
+            java.time.Clock.fixed(java.time.Instant.parse("2026-11-12T03:00:00Z"), VisitService.BANGKOK));
         SalesBoardService board = new SalesBoardService(new SalesBoardRepository(jdbc, quietRule), quietRule,
-            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), visits);
         // The base fixtures label the sales division "SALES"; the real role derivation reads "SA".
         jdbc.update("UPDATE hr.division SET source_code = 'SA' WHERE source_code = 'SALES'", Map.of());
         mvc = MockMvcBuilders
@@ -358,6 +365,79 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
         assertThat(rep(team, salesManagerActor.id()).get("role").asText()).isEqualTo("sales_manager");
         assertThat(rep(team, salesActor.id()).get("role").asText()).isEqualTo("sales");
+    }
+
+    // ── visits this week (slice 2) ───────────────────────────────────────────
+
+    @Test
+    void myWorkCarriesOnlyMyOwnVisitsThisWeek() throws Exception {
+        long mineMonday = visit(salesActor, MONDAY, "PLANNED");
+        long mineSunday = visit(salesActor, SUNDAY, "DONE");
+        long mineNextWeek = visit(salesActor, LocalDate.of(2026, 11, 16), "PLANNED");
+        long mineLastWeek = visit(salesActor, LocalDate.of(2026, 11, 8), "PLANNED");
+        long theirs = visit(otherSalesActor, LocalDate.of(2026, 11, 12), "PLANNED");
+
+        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
+
+        assertThat(visitIds(work.get("visitsThisWeek"))).containsExactly(mineMonday, mineSunday)
+            .doesNotContain(mineNextWeek, mineLastWeek, theirs);
+    }
+
+    @Test
+    void teamOverviewCarriesEveryRepsVisitsAndPerRepCounts() throws Exception {
+        deal(salesActor);
+        visit(salesActor, MONDAY, "DONE");
+        visit(salesActor, LocalDate.of(2026, 11, 10), "PLANNED");
+        visit(salesActor, LocalDate.of(2026, 11, 11), "CANCELLED");
+        visit(salesActor, LocalDate.of(2026, 11, 16), "DONE"); // next week: not counted
+        long noDealsVisit = visit(otherSalesActor, LocalDate.of(2026, 11, 12), "PLANNED");
+
+        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
+
+        JsonNode a = rep(team, salesActor.id());
+        assertThat(a.get("visitsDone").asInt()).isEqualTo(1);
+        assertThat(a.get("visitsPlanned").asInt()).as("booked and not cancelled, done included").isEqualTo(2);
+        // A rep with visits but no open deal still gets a row, so the manager sees them.
+        JsonNode b = rep(team, otherSalesActor.id());
+        assertThat(b.get("openDeals").asInt()).isZero();
+        assertThat(b.get("visitsPlanned").asInt()).isEqualTo(1);
+        assertThat(visitIds(team.get("teamVisitsThisWeek"))).hasSize(4).contains(noDealsVisit);
+    }
+
+    @Test
+    void aRepWithNeitherDealsNorVisitsHasNoRow() throws Exception {
+        deal(salesActor);
+
+        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
+
+        assertThat(team.get("reps")).hasSize(1);
+        assertThat(team.get("teamVisitsThisWeek")).isEmpty();
+    }
+
+    /** Review LOW: an owner whose only visits this week were cancelled has nothing to show, so no row. */
+    @Test
+    void anOwnerWhoseOnlyVisitsAreCancelledGetsNoRow() throws Exception {
+        deal(salesActor);
+        visit(otherSalesActor, MONDAY, "CANCELLED");
+
+        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
+
+        assertThat(team.get("reps")).hasSize(1);
+        assertThat(rep(team, salesActor.id())).isNotNull();
+    }
+
+    private long visit(UserPrincipal owner, LocalDate date, String status) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.visit (owner_id, contact_name, planned_date, status, done_at)
+            VALUES (:owner, 'ลูกค้า', :date, :status, CASE WHEN :status = 'DONE' THEN now() END)
+            RETURNING visit_id
+            """, Map.of("owner", owner.id(), "date", date, "status", status), Long.class);
+    }
+
+    private static List<Long> visitIds(JsonNode visits) {
+        List<Long> out = new ArrayList<>();
+        visits.forEach(v -> out.add(v.get("id").asLong()));
+        return out;
     }
 
     /** A copy of {@code sourceId} on the same ticket with the given status, number suffix and approval time. */

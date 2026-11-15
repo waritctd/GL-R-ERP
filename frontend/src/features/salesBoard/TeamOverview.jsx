@@ -7,8 +7,10 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { bangkokTodayIso } from '../../utils/format.js';
 import { PipelineImportDialog } from './PipelineImportDialog.jsx';
 import { columnLabel, money, otherCurrencyTotals, sinceLabel, sumValue, totalLabel } from './boardFormat.js';
+import { VisitDots, VisitWeekGrid } from './VisitWeekGrid.jsx';
 
 // A manager's or the CEO's own deals stay in the table, labelled (review LOW); a rep's row carries no label.
 const ROLE_LABEL = { sales_manager: 'ผจก.ขาย', ceo: 'CEO' };
@@ -41,9 +43,10 @@ function QuietChip({ count }) {
 }
 
 /**
- * ภาพรวมทีมขาย (spec 2026-11-15 §7.4, slice 1): two tiles, one row per rep, and the team's quiet deals ranked by
- * value × days quiet. All numbers are served by GET /api/sales/team-overview (sales_manager / ceo). Cash and visit
- * tiles belong to slices 2–3 and are not shown. A rep's name opens the deal list's existing ?owner= filter.
+ * ภาพรวมทีมขาย (spec 2026-11-15 §7.4): tiles (held, quiet, visits this week), one row per rep with the week's visit
+ * dots, the team's quiet deals ranked by value × days quiet, and the week visit grid. All numbers are served by
+ * GET /api/sales/team-overview (sales_manager / ceo). The cash tile belongs to slice 3 and is not shown. A rep's
+ * name opens the deal list's existing ?owner= filter.
  * นำเข้าจากชีท opens the one-time pipeline import (slice 4); this section only renders data for the two roles the
  * import also allows, and the server re-checks the role on every call.
  */
@@ -55,6 +58,8 @@ export function TeamOverview({ showTitle = true }) {
   const openValue = team?.reps.reduce((sum, r) => sum + Number(r.openValue ?? 0), 0) ?? 0;
   const quietDeals = team?.reps.reduce((sum, r) => sum + r.quietDeals, 0) ?? 0;
   const quietDays = team?.quietDays ?? 14;
+  const visitsDone = team?.reps.reduce((sum, r) => sum + (r.visitsDone ?? 0), 0) ?? 0;
+  const visitsPlanned = team?.reps.reduce((sum, r) => sum + (r.visitsPlanned ?? 0), 0) ?? 0;
   const [importing, setImporting] = useState(false);
 
   return (
@@ -81,7 +86,7 @@ export function TeamOverview({ showTitle = true }) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3 mobile:grid-cols-2">
             <Tile
               testId="tile-held"
               label="ดีลที่ถืออยู่"
@@ -94,6 +99,12 @@ export function TeamOverview({ showTitle = true }) {
               value={`${quietDeals} ดีล`}
               sub={quietDeals > 0 ? 'รายชื่อด้านล่าง' : 'ทุกดีลมีความเคลื่อนไหว'}
               warn={quietDeals > 0}
+            />
+            <Tile
+              testId="tile-visits"
+              label="เข้าพบสัปดาห์นี้"
+              value={`${visitsDone} / ${visitsPlanned}`}
+              sub="ไปแล้ว / นัดไว้"
             />
           </div>
 
@@ -108,6 +119,7 @@ export function TeamOverview({ showTitle = true }) {
                     <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">ดีล</th>
                     <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">มูลค่า</th>
                     <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-bold mobile:px-1.5">ดีลเงียบ</th>
+                    <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-bold mobile:hidden">เข้าพบสัปดาห์นี้</th>
                     <th scope="col" className="whitespace-nowrap px-5 py-2.5 font-bold mobile:px-3.5">อัปเดตล่าสุด</th>
                   </tr>
                 </thead>
@@ -130,6 +142,9 @@ export function TeamOverview({ showTitle = true }) {
                       <td className="px-3 py-3 text-right tabular-nums mobile:px-1.5">{rep.openDeals}</td>
                       <td className="px-3 py-3 text-right font-bold tabular-nums whitespace-nowrap mobile:px-1.5">{totalLabel(rep.openValue, rep.otherCurrencyValues)}</td>
                       <td className="px-3 py-3 mobile:px-1.5"><QuietChip count={rep.quietDeals} /></td>
+                      <td className="px-3 py-3 mobile:hidden">
+                        <VisitDots repId={rep.employeeId} done={rep.visitsDone ?? 0} planned={rep.visitsPlanned ?? 0} />
+                      </td>
                       <td className="px-5 py-3 whitespace-nowrap text-text-muted mobile:px-3.5">{sinceLabel(rep.lastUpdateAt)}</td>
                     </tr>
                   ))}
@@ -182,6 +197,8 @@ export function TeamOverview({ showTitle = true }) {
               </ul>
             )}
           </Panel>
+
+          <VisitWeekGrid reps={team.reps} visits={team.teamVisitsThisWeek ?? []} todayIso={bangkokTodayIso()} />
         </>
       )}
     </section>

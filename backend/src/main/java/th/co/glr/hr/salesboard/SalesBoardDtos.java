@@ -22,17 +22,30 @@ public final class SalesBoardDtos {
                             String expectedQuarter, Instant lastTouchedAt, int daysQuiet, boolean quiet,
                             String lastActivityKind, String lastActivityNote) {}
 
-    /** {@code followUp}: quiet deals, by daysQuiet × value then daysQuiet, max 5. {@code board}: every open deal. */
-    public record MyWork(List<BoardDeal> followUp, List<BoardDeal> board, int quietDays) {}
+    /**
+     * {@code followUp}: quiet deals, by daysQuiet × value then daysQuiet, max 5. {@code board}: every open deal.
+     * {@code visitsThisWeek}: the caller's own visits in this ISO week (Mon–Sun, Asia/Bangkok), in
+     * {@link VisitRepository}'s order.
+     */
+    public record MyWork(List<BoardDeal> followUp, List<BoardDeal> board, int quietDays,
+                         List<VisitDtos.VisitDto> visitsThisWeek) {}
 
     /**
      * One owner's open deals in aggregate. {@code openValue} sums THB values only; any other currency is summed per
      * code in {@code otherCurrencyValues} and never mixed into the ฿ figure. {@code role} labels a manager's or the
      * CEO's own deals ({@code DivisionAccessPolicy#roleFor}); null when the owner has no login record.
+     * {@code visitsDone} / {@code visitsPlanned} count this week's visits: DONE ones, and every one booked and not
+     * cancelled (done included), so done / planned reads as "3 of 5 made".
      */
     public record RepRow(long employeeId, String name, String role, int openDeals, BigDecimal openValue,
-                         Map<String, BigDecimal> otherCurrencyValues, int quietDeals, Instant lastUpdateAt) {}
+                         Map<String, BigDecimal> otherCurrencyValues, int quietDeals, Instant lastUpdateAt,
+                         int visitsDone, int visitsPlanned) {}
 
-    /** {@code stale}: quiet deals across the team, ordered as {@link MyWork#followUp}, max 20. */
-    public record TeamOverview(List<RepRow> reps, List<BoardDeal> stale, int quietDays) {}
+    /**
+     * {@code stale}: quiet deals across the team, ordered as {@link MyWork#followUp}, max 20.
+     * {@code teamVisitsThisWeek}: every rep's visits this ISO week. An owner with visits but no open deal still gets
+     * a {@link RepRow} (0 deals).
+     */
+    public record TeamOverview(List<RepRow> reps, List<BoardDeal> stale, int quietDays,
+                               List<VisitDtos.VisitDto> teamVisitsThisWeek) {}
 }

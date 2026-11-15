@@ -94,6 +94,6 @@ export const STAGE_ADVANCE_GATE_HINT =
   'ต้องระบุวันติดตามครั้งถัดไป และบันทึกกิจกรรมอย่างน้อย 1 รายการก่อนเลื่อนสถานะ';
 
 /** Mirrors TicketSummaryDto.stale, which is the one 14-day QuietRule (salesBoard/quietRule.js). */
-export function computeStale(ticket, activities) {
-  return isQuiet(ticket, activities);
+export function computeStale(ticket, activities, hasUpcomingVisit = false) {
+  return isQuiet(ticket, activities, undefined, undefined, hasUpcomingVisit);
 }

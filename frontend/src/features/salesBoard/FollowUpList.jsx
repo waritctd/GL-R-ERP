@@ -70,11 +70,12 @@ function CallModal({ deal, submitting, onClose, onSubmit }) {
 
 /**
  * ควรตามต่อ — the rep's quiet deals as served (SalesBoardService ranks them by days × value, max 5). One tap each:
- * โทรแล้ว logs a CALL activity (which clears the quiet clock), ปิดดีลนี้ hands off to the existing mark-lost flow.
+ * โทรแล้ว logs a CALL activity (which clears the quiet clock), นัดเข้าพบ opens the plan-visit dialog on this deal (the
+ * visit clears the clock once it is ticked done), ปิดดีลนี้ hands off to the existing mark-lost flow.
  * When the rep has more quiet deals than are listed ({@code quietTotal}), ดูทั้งหมด (n) calls {@code onShowAll}, which
  * opens the board filtered to quiet deals.
  */
-export function FollowUpList({ deals, quietDays, quietTotal = 0, onShowAll, onLogCall, onCloseDeal, loggingCall }) {
+export function FollowUpList({ deals, quietDays, quietTotal = 0, onShowAll, onLogCall, onBookVisit, onCloseDeal, loggingCall }) {
   const [calling, setCalling] = useState(null);
 
   if (deals.length === 0) {
@@ -123,6 +124,10 @@ export function FollowUpList({ deals, quietDays, quietTotal = 0, onShowAll, onLo
               <Button type="button" size="sm" variant="secondary" onClick={() => setCalling(deal)}>
                 <Icon name="phone" size={14} />
                 โทรแล้ว
+              </Button>
+              <Button type="button" size="sm" variant="secondary" onClick={() => onBookVisit(deal)}>
+                <Icon name="calendar" size={14} />
+                นัดเข้าพบ
               </Button>
               <Button type="button" size="sm" variant="secondary" onClick={() => onCloseDeal(deal)}>ปิดดีลนี้</Button>
             </div>

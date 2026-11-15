@@ -44,12 +44,14 @@ public class SalesBoardService {
     private final QuietRule quietRule;
 
     private final th.co.glr.hr.auth.EmployeeAuthRepository employees;
+    private final VisitService visits;
 
     public SalesBoardService(SalesBoardRepository repository, QuietRule quietRule,
-                             th.co.glr.hr.auth.EmployeeAuthRepository employees) {
+                             th.co.glr.hr.auth.EmployeeAuthRepository employees, VisitService visits) {
         this.repository = repository;
         this.quietRule = quietRule;
         this.employees = employees;
+        this.visits = visits;
     }
 
     public MyWork myWork(UserPrincipal actor) {
@@ -57,7 +59,7 @@ public class SalesBoardService {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
         List<BoardDeal> board = repository.activeDealsOwnedBy(actor.id());
-        return new MyWork(rankQuiet(board, FOLLOW_UP_LIMIT), board, quietRule.quietDays());
+        return new MyWork(rankQuiet(board, FOLLOW_UP_LIMIT), board, quietRule.quietDays(), visits.ownThisWeek(actor));
     }
 
     public TeamOverview teamOverview(UserPrincipal actor) {
@@ -65,7 +67,9 @@ public class SalesBoardService {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
         List<BoardDeal> deals = repository.activeDealsAllReps();
-        return new TeamOverview(repRows(deals), rankQuiet(deals, STALE_LIMIT), quietRule.quietDays());
+        List<VisitDtos.VisitDto> weekVisits = visits.teamThisWeek(actor);
+        return new TeamOverview(repRows(deals, weekVisits), rankQuiet(deals, STALE_LIMIT), quietRule.quietDays(),
+            weekVisits);
     }
 
     private static List<BoardDeal> rankQuiet(List<BoardDeal> deals, int limit) {
@@ -82,10 +86,20 @@ public class SalesBoardService {
      * One row per owner, ordered by THB open value desc, then employee id. Only THB values are added into
      * {@code openValue}; other currencies are summed per code. Each owner's role comes from the same derivation
      * login uses (DivisionAccessPolicy#roleFor), so a manager's or the CEO's own deals are labelled, not dropped.
+     * An owner with visits this week but no open deal still gets a row (0 deals), so the week grid has their name.
      */
-    private List<RepRow> repRows(List<BoardDeal> deals) {
+    private List<RepRow> repRows(List<BoardDeal> deals, List<VisitDtos.VisitDto> weekVisits) {
         Map<Long, List<BoardDeal>> byOwner = new LinkedHashMap<>();
-        deals.forEach(d -> byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d));
+        Map<Long, String> names = new LinkedHashMap<>();
+        deals.forEach(d -> {
+            byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d);
+            names.putIfAbsent(d.ownerId(), d.ownerName());
+        });
+        // Only a booked (not cancelled) visit earns a deal-less owner a row; cancelled-only is nothing to show.
+        weekVisits.stream().filter(v -> !VisitDtos.CANCELLED.equals(v.status())).forEach(v -> {
+            byOwner.computeIfAbsent(v.ownerId(), k -> new ArrayList<>());
+            names.putIfAbsent(v.ownerId(), v.ownerName());
+        });
         // One query for every rep's role, not one per rep.
         Map<Long, th.co.glr.hr.auth.EmployeeLoginRecord> owners =
             employees == null ? Map.of() : employees.findByEmployeeIds(byOwner.keySet());
@@ -113,7 +127,17 @@ public class SalesBoardService {
             }
             th.co.glr.hr.auth.EmployeeLoginRecord owner = owners.get(ownerId);
             String role = owner == null ? null : th.co.glr.hr.auth.DivisionAccessPolicy.roleFor(owner);
-            rows.add(new RepRow(ownerId, own.get(0).ownerName(), role, own.size(), thb, other, quiet, last));
+            int done = 0;
+            int booked = 0;
+            for (VisitDtos.VisitDto v : weekVisits) {
+                if (v.ownerId() == ownerId && !VisitDtos.CANCELLED.equals(v.status())) {
+                    booked++;
+                    if (VisitDtos.DONE.equals(v.status())) {
+                        done++;
+                    }
+                }
+            }
+            rows.add(new RepRow(ownerId, names.get(ownerId), role, own.size(), thb, other, quiet, last, done, booked));
         });
         rows.sort(Comparator.comparing(RepRow::openValue).reversed().thenComparingLong(RepRow::employeeId));
         return rows;

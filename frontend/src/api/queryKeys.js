@@ -111,6 +111,9 @@ export const queryKeys = {
   // the boards too.
   salesBoardMyWork: () => ['tickets', 'salesBoard', 'myWork'],
   salesBoardTeam: () => ['tickets', 'salesBoard', 'team'],
+  // Under 'tickets' so every deal/visit write's ['tickets'] invalidation refreshes them too.
+  salesVisitsOwn: (from, to) => ['tickets', 'salesVisits', 'own', from, to],
+  salesVisitsTeam: (from, to) => ['tickets', 'salesVisits', 'team', from, to],
   // The quiet threshold the deal list's ภาพรวมทีม badge names. Deliberately OUTSIDE 'tickets': it is near-static, so a
   // ['tickets'] invalidation (an activity, a stage move) must not refetch the whole team overview just to re-read it.
   salesBoardQuietDays: () => ['salesBoard', 'quietDays'],

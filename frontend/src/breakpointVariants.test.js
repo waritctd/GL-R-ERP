@@ -51,6 +51,7 @@ describe('inclusive breakpoint variants', () => {
       'nav-drawer',
       'attendance-scroll',
       'mobile',
+      'phone', // <640px: the visit log's bottom sheet (Modal placement="sheet-on-phone")
       'mobile-sm',
       'mobile-xs',
     ]);
