@@ -4415,7 +4415,10 @@ describe('TicketDetailPage', () => {
       await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
       await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
       const panel = screen.getByRole('tabpanel');
-      expect(within(panel).getAllByRole('heading', { level: 2 })).toHaveLength(1);
+      // One การชำระเงิน panel. The owner also gets เงินที่คาดว่าจะเข้า (design a-deal-money, slice 3) — a separate card
+      // for the rep's own cash plan; account never does (it reads expected cash on its finance page).
+      expect(within(panel).getAllByRole('heading', { level: 2 }).map((h) => h.textContent))
+        .toEqual(user === accountUser ? ['การชำระเงิน'] : ['การชำระเงิน', 'เงินที่คาดว่าจะเข้า']);
       expect(within(panel).getByTestId('payment-step-deposit')).toBeTruthy();
       expect(within(panel).getByTestId('payment-step-remaining')).toBeTruthy();
       expect(within(panel).getByTestId('payment-step-final')).toBeTruthy();

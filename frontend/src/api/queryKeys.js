@@ -111,6 +111,8 @@ export const queryKeys = {
   // the boards too.
   salesBoardMyWork: () => ['tickets', 'salesBoard', 'myWork'],
   salesBoardTeam: () => ['tickets', 'salesBoard', 'team'],
+  // Under 'tickets' too: a change to a deal's expected cash refreshes the boards' cash card through the same prefix.
+  expectedPayments: (ticketId) => ['tickets', 'expectedPayments', ticketId == null ? ticketId : Number(ticketId)],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
   unitBasisCatalog: () => ['meta', 'unit-bases'],
   // See ticketDetail's comment above for why Number() matters.

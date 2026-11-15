@@ -141,6 +141,11 @@ export const API_ROUTES = {
     myWork: '/api/sales/my-work',
     teamOverview: '/api/sales/team-overview',
   },
+  // ExpectedPaymentController (salesboard/): a deal's rep-entered expected cash (V212).
+  expectedPayments: {
+    list: (ticketId) => `/api/tickets/${ticketId}/expected-payments`,
+    detail: (ticketId, id) => `/api/tickets/${ticketId}/expected-payments/${id}`,
+  },
   salesVisits: {
     list: '/api/sales/visits',
     team: '/api/sales/visits/team',

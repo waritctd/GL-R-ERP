@@ -8302,6 +8302,69 @@ function mockLogSiteVisit(user, ticketId, note) {
   });
 }
 
+// ── expected payments (mirrors ExpectedPaymentService / ExpectedPaymentRepository, V212 sales.expected_payment) ──
+// Seeded on this Bangkok month's weeks so the cash card has something to show; invented amounts only.
+let mockExpectedPaymentSeq = 7001;
+const mockExpectedPayments = [];
+const MOCK_EXPECTED_KINDS = ['DEPOSIT', 'ON_DELIVERY', 'BALANCE'];
+
+function seedMockExpectedPayments() {
+  const monday = mockWeekStartIso(mockTodayIso());
+  const rows = [
+    [21, 'BALANCE', 445000, 0],
+    [23, 'ON_DELIVERY', 390000, 7],
+    [23, 'BALANCE', 390000, 14],
+    [12, 'DEPOSIT', 65000, -7],
+  ];
+  for (const [ticketId, kind, amount, offset] of rows) {
+    if (!db.tickets.some((t) => t.id === ticketId)) continue;
+    const at = new Date().toISOString();
+    mockExpectedPayments.push({
+      id: mockExpectedPaymentSeq++, ticketId, kind, amount, expectedWeek: mockAddDaysIso(monday, offset),
+      status: 'OPEN', receiptId: null, receiptRef: null, createdById: 6, createdAt: at, updatedAt: at,
+    });
+  }
+}
+seedMockExpectedPayments();
+
+/** ExpectedPaymentRepository.findByTicket: non-cancelled, ORDER BY expected_week, expected_payment_id. */
+function mockExpectedPaymentsOf(ticketId) {
+  return mockExpectedPayments
+    .filter((p) => p.ticketId === Number(ticketId) && p.status !== 'CANCELLED')
+    .sort((a, b) => a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id)
+    .map((p) => ({ ...p }));
+}
+
+/** ExpectedPaymentService.validate. */
+function mockValidExpectedPayment(payload) {
+  const kind = String(payload?.kind ?? '').trim().toUpperCase();
+  if (!MOCK_EXPECTED_KINDS.includes(kind)) fail('ประเภทต้องเป็น มัดจำ / ส่งของ / ส่วนที่เหลือ', 400);
+  const amount = Number(payload?.amount);
+  if (!Number.isFinite(amount) || amount <= 0) fail('จำนวนเงินต้องมากกว่า 0', 400);
+  if (Math.round(amount * 100) !== amount * 100) fail('จำนวนเงินไม่ถูกต้อง (ทศนิยมไม่เกิน 2 ตำแหน่ง)', 400);
+  const week = payload?.expectedWeek;
+  if (!week) fail('กรุณาเลือกสัปดาห์ที่คาด', 400);
+  if (mockWeekStartIso(week) !== week) fail('สัปดาห์ที่คาดต้องเป็นวันจันทร์ของสัปดาห์นั้น', 400);
+  return { kind, amount, expectedWeek: week };
+}
+
+/** TicketService#requireDealWriteAccess: 404, then the owner/keyer (sales), sales_manager or ceo. */
+function mockRequireDealWrite(user, ticketId) {
+  const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+  if (!ticket) fail('ไม่พบดีลนี้', 404);
+  if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return ticket;
+}
+
+function mockRequireOpenExpected(ticketId, id) {
+  const row = mockExpectedPayments.find((p) => p.id === Number(id) && p.ticketId === Number(ticketId));
+  if (!row) fail('ไม่พบรายการเงินที่คาดว่าจะเข้านี้', 404);
+  if (row.status !== 'OPEN') {
+    fail(`รายการนี้${row.status === 'RECEIVED' ? 'รับเงินแล้ว' : 'ยกเลิกแล้ว'} จึงแก้ไขหรือยกเลิกไม่ได้`, 409);
+  }
+  return row;
+}
+
 /** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
 function mockVisitsThisWeek(ownerId = null) {
   const monday = mockWeekStartIso(mockTodayIso());
@@ -13129,6 +13192,52 @@ export const api = {
       return delay({
         reps, stale: mockRankQuiet(deals).slice(0, 20), quietDays: MOCK_QUIET_DAYS, teamVisitsThisWeek,
       });
+    },
+  },
+  // Mirrors ExpectedPaymentController / ExpectedPaymentService (salesboard/, V212). AUTHZ NOTE: these gates
+  // approximate the Java service and are NOT evidence — ExpectedPaymentScopeIntegrationTest is. Write = the deal's
+  // owner/keyer (sales), sales_manager, ceo; read = those plus account inside its finance scope.
+  expectedPayments: {
+    async list(ticketId) {
+      const user = requireSession();
+      if (user.role === 'account') {
+        const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        requireMockAccountScope(user, ticket);
+      } else {
+        mockRequireDealWrite(user, ticketId);
+      }
+      return delay(mockExpectedPaymentsOf(ticketId));
+    },
+    async create(ticketId, payload) {
+      const user = requireSession();
+      const ticket = mockRequireDealWrite(user, ticketId);
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+        fail('ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงเพิ่มเงินที่คาดว่าจะเข้าไม่ได้', 409);
+      }
+      const valid = mockValidExpectedPayment(payload);
+      const at = new Date().toISOString();
+      const row = {
+        id: mockExpectedPaymentSeq++, ticketId: ticket.id, ...valid, status: 'OPEN', receiptId: null,
+        receiptRef: null, createdById: user.id, createdAt: at, updatedAt: at,
+      };
+      mockExpectedPayments.push(row);
+      return delay({ ...row });
+    },
+    async update(ticketId, id, payload) {
+      const user = requireSession();
+      mockRequireDealWrite(user, ticketId);
+      const row = mockRequireOpenExpected(ticketId, id);
+      Object.assign(row, mockValidExpectedPayment(payload), { updatedAt: new Date().toISOString() });
+      return delay({ ...row });
+    },
+    async cancel(ticketId, id) {
+      const user = requireSession();
+      mockRequireDealWrite(user, ticketId);
+      const row = mockRequireOpenExpected(ticketId, id);
+      row.status = 'CANCELLED';
+      row.updatedAt = new Date().toISOString();
+      return delay({ ...row });
     },
   },
   // Mirrors VisitController / VisitService / VisitRepository (salesboard/). AUTHZ NOTE: these gates approximate the

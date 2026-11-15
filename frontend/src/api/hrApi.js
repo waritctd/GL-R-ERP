@@ -628,6 +628,17 @@ export const api = {
     myWork: () => apiRequest(API_ROUTES.salesBoard.myWork),
     teamOverview: () => apiRequest(API_ROUTES.salesBoard.teamOverview),
   },
+  // Mirrors ExpectedPaymentController (salesboard/, V212). A deal's expected cash: `{ kind: DEPOSIT|ON_DELIVERY|BALANCE,
+  // amount, expectedWeek }` (expectedWeek = the ISO week's Monday, 400 otherwise). list = the non-cancelled rows by
+  // week; cancel (DELETE) soft-cancels an OPEN row; editing or cancelling a RECEIVED row is 409. Read: the deal's
+  // owner/keyer, sales_manager, ceo, account (in its finance scope); write: not account. Gates live in
+  // ExpectedPaymentService.
+  expectedPayments: {
+    list: (ticketId) => apiRequest(API_ROUTES.expectedPayments.list(ticketId)),
+    create: (ticketId, payload) => apiRequest(API_ROUTES.expectedPayments.list(ticketId), { method: 'POST', body: payload }),
+    update: (ticketId, id, payload) => apiRequest(API_ROUTES.expectedPayments.detail(ticketId, id), { method: 'PUT', body: payload }),
+    cancel: (ticketId, id) => apiRequest(API_ROUTES.expectedPayments.detail(ticketId, id), { method: 'DELETE' }),
+  },
   // Mirrors VisitController (salesboard/). list: the caller's own visits planned in [from, to] (ISO dates, at most
   // 31 days inclusive); team: every rep's, sales_manager / ceo only. create `{ ticketId?, contactName, plannedDate,
   // plannedTime?, note?, done? }` (done = log a visit that happened today, in one step); done `{ note? }` and cancel

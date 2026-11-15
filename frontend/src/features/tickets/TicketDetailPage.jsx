@@ -44,6 +44,7 @@ import { DealFulfilmentPanel } from './DealFulfilmentPanel.jsx';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 import { DealLegacyQuotations } from './DealLegacyQuotations.jsx';
 import { DealPaymentSection } from './DealPaymentSection.jsx';
+import { ExpectedPaymentsPanel } from '../salesBoard/ExpectedPaymentsPanel.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
   canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
@@ -2338,6 +2339,20 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 canRecordPayment={can.recordPayment}
                 actionLoading={actionLoading || createDepositNoticeMutation.isPending}
                 onRecordPayment={openPaymentModal}
+                showToast={showToast}
+              />
+            </div>
+          ) : null}
+
+          {/* เงินที่คาดว่าจะเข้า (spec 2026-11-15 §7.7): the deal's writers only — owner/keyer, sales_manager, ceo —
+              the same set ExpectedPaymentService lets write (account reads it on its own finance page). */}
+          {role === 'ceo' || role === 'sales_manager' || (role === 'sales' && isOwnerOrKeyer(summary, user.id)) ? (
+            <div className="mt-[18px]">
+              <ExpectedPaymentsPanel
+                ticketId={ticketId}
+                dealValue={summary.amountPayable ?? null}
+                dealTitle={summary.title || summary.customerName || ''}
+                canWrite
                 showToast={showToast}
               />
             </div>
