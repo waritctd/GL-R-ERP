@@ -271,7 +271,7 @@ function CardTerms({ card }) {
             </select>
           ) : <b className="text-text">{t.currency ? `${t.currency} ${t.symbol}` : 'หลายสกุลเงิน — ดูในแต่ละรายการ'}</b>}
           {t.fxNote ? <span className="text-sm text-text-secondary" data-testid={`pcr-factory-fx-${card.quoteId}`}>{t.fxNote}</span> : null}
-          {t.requestedCurrencies && !currencyChip ? <span className="text-sm text-text-muted">ฝ่ายขายขอ: {t.requestedCurrencies}</span> : null}
+          {t.requestedCurrencies ? <span className="text-sm text-text-muted">ฝ่ายขายขอ: {t.requestedCurrencies}</span> : null}
         </div>
         <p id={`pcr-currency-hint-${card.quoteId}`} className="m-0 text-sm text-text-muted mobile:text-base">
           {t.editable && !currencyChip ? 'ใช้กับทุกรายการในโรงงานนี้ · เปลี่ยนสกุลเงินแล้วตรวจสอบราคาก่อนยืนยัน · ' : ''}ยอดบาทเป็นค่าประมาณตามอัตราในระบบ ยังไม่รวมค่าขนส่งและภาษี

@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
@@ -121,7 +121,10 @@ export function ImportOverview({ user, showToast }) {
   const queue = useMemo(() => queueQuery.data ?? [], [queueQuery.data]);
   const tickets = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
 
-  // Same candidate filter and query keys as ImportFulfilmentPage (see its header for the bounded N+1).
+  // Review M5 (accepted): this page deliberately SHARES /fulfilment's per-deal reads — the same candidate filter, the
+  // same api.storedImportRequests.listForTicket call and the same queryKeys.storedImportRequests(ticketId) cache keys —
+  // so the two pages never disagree and opening one warms the other. It is the same bounded N+1 (see
+  // ImportFulfilmentPage's header); a cross-deal endpoint would replace it on both pages at once.
   const candidates = useMemo(() => tickets.filter((t) => t.fulfillmentStatus != null
     && t.fulfillmentStatus !== 'FROM_STOCK' && t.fulfillmentStatus !== 'FULLY_DELIVERED'), [tickets]);
   const rowsQueries = useQueries({
@@ -171,7 +174,12 @@ export function ImportOverview({ user, showToast }) {
 
   const settled = (queueReady || queueFailed) && (shipmentsReady || shipmentsFailed);
   const total = pickup.length + pricing.length + transit.length + arrived.length;
-  const nothing = settled && !queueFailed && !shipmentsFailed && total === 0;
+  // Review H2: a per-deal read that failed is NOT "nothing to do" — those deals are named, and the shipment counts are
+  // marked partial, exactly as /fulfilment shows its own per-deal failures.
+  const erroredDeals = candidates.filter((_t, i) => rowsQueries[i]?.isError);
+  const partial = erroredDeals.length > 0;
+  const nothing = settled && !queueFailed && !shipmentsFailed && !partial && total === 0;
+  const retryErrored = () => erroredDeals.forEach((t) => queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(t.id) }));
 
   const scopeButton = (key, label) => (
     <button
@@ -195,6 +203,24 @@ export function ImportOverview({ user, showToast }) {
         subtitle={settled ? `จัดกลุ่มตามขั้นต่อไป · ${total} งาน` : 'จัดกลุ่มตามขั้นต่อไป'}
         actions={<div className="flex gap-2" role="group" aria-label="งานของใคร">{scopeButton('mine', 'ของฉัน')}{scopeButton('team', 'ทั้งทีม')}</div>}
       />
+
+      {partial ? (
+        <div className="grid gap-2 rounded-md border border-danger-border bg-danger-bg p-4" data-testid="import-rows-error">
+          <p className="m-0 flex flex-wrap items-center justify-between gap-2 text-sm font-bold text-danger-dark" data-testid="import-partial">
+            <span>ข้อมูลไม่ครบ — โหลดบางดีลไม่สำเร็จ ลองใหม่</span>
+            <Button type="button" variant="secondary" size="sm" className="mobile:min-h-11" onClick={retryErrored}>ลองใหม่</Button>
+          </p>
+          <p className="m-0 text-xs font-bold text-danger-dark">โหลดใบขอซื้อของดีลต่อไปนี้ไม่สำเร็จ</p>
+          <ul className="m-0 list-disc pl-5 text-xs text-danger-dark">
+            {erroredDeals.map((t) => (
+              <li key={t.id}>
+                <Link to={`/import/deals/${t.id}`} className="underline">{t.customerName || t.title || t.code}</Link>
+                {' — '}{rowsQueries[candidates.indexOf(t)]?.error?.message ?? 'โหลดไม่สำเร็จ'}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {nothing ? (
         <div className="flex items-center gap-3 rounded-md border border-border bg-surface p-5 text-text-muted">

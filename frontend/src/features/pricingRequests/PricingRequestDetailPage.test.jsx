@@ -8397,6 +8397,8 @@ describe('PricingRequestDetailPage import workspace — terms Sales already set'
     expect(currencyChip.textContent).toContain('EUR');
     expect(currencyChip.textContent).toContain('ตามที่ฝ่ายขายระบุ');
     expect(screen.queryByRole('combobox', { name: 'สกุลเงินที่โรงงานเสนอ' })).toBeNull();
+    // Review LOW: what Sales asked for stays readable beside the chip.
+    expect(screen.getByTestId('pcr-factory-currency-91').textContent).toContain('ฝ่ายขายขอ: EUR');
     const unitChip = screen.getByTestId('pcr-sales-unit-91-1');
     expect(unitChip.textContent).toContain('/ ตร.ม.');
     expect(unitChip.textContent).toContain('ตามที่ฝ่ายขายระบุ');

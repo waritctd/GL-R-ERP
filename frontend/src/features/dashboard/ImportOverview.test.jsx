@@ -151,6 +151,19 @@ describe('ImportOverview — the งานนำเข้า worklist', () => {
       expect(screen.queryByTestId('location-probe')).toBeNull();
     });
 
+    it('รับเรื่อง is disabled while its claim is in flight, so a double tap claims once', async () => {
+      renderOverview();
+      await settled('pickup');
+      let resolve;
+      api.pricingRequests.pickup.mockReturnValue(new Promise((r) => { resolve = r; }));
+      const button = within(screen.getByTestId('import-row-pickup-102')).getByRole('button', { name: 'รับเรื่อง' });
+      fireEvent.click(button);
+      await waitFor(() => expect(button.disabled).toBe(true));
+      fireEvent.click(button);
+      expect(api.pricingRequests.pickup).toHaveBeenCalledTimes(1);
+      resolve({ pricingRequest: {} });
+    });
+
     it('a refused claim (someone else got it first) says so and keeps the row', async () => {
       const { showToast } = renderOverview();
       await settled('pickup');
@@ -237,6 +250,33 @@ describe('ImportOverview — the งานนำเข้า worklist', () => {
       expect(within(group('pickup')).getByText('โหลดไม่สำเร็จ')).not.toBeNull();
       expect(within(group('pricing')).getByText('โหลดไม่สำเร็จ')).not.toBeNull();
       expect(rowIds('transit').length).toBe(3);
+    });
+
+    // Review H2: a deal whose ใบขอซื้อ rows failed to load is NOT a deal with nothing to do.
+    it('every per-deal query failing shows the per-deal error, never the nothing-to-do line', async () => {
+      queue = [];
+      api.storedImportRequests.listForTicket.mockRejectedValue(new Error('boom'));
+      renderOverview();
+      const banner = await screen.findByTestId('import-rows-error');
+      expect(banner.textContent).toContain('โหลดใบขอซื้อของดีลต่อไปนี้ไม่สำเร็จ');
+      expect(within(banner).getByRole('link', { name: /Siam Mall/ }).getAttribute('href')).toBe('/import/deals/3');
+      expect(screen.queryByText('ไม่มีงานนำเข้าที่ต้องทำตอนนี้')).toBeNull();
+      expect(screen.getByTestId('import-partial').textContent).toContain('ข้อมูลไม่ครบ — โหลดบางดีลไม่สำเร็จ ลองใหม่');
+    });
+
+    it('some per-deal queries failing marks the shipment counts as partial, with a retry', async () => {
+      api.storedImportRequests.listForTicket.mockImplementation((id) => (id === 4
+        ? Promise.reject(new Error('boom'))
+        : Promise.resolve({ importRequests: ROWS[id] ?? [] })));
+      renderOverview();
+      await settled('transit');
+      expect(await screen.findByTestId('import-partial')).not.toBeNull();
+      expect(rowIds('transit')).toContain('import-row-transit-31');
+      expect(within(screen.getByTestId('import-rows-error')).getByRole('link', { name: /บ้านพักชะอำ/ })).not.toBeNull();
+      api.storedImportRequests.listForTicket.mockImplementation((id) => Promise.resolve({ importRequests: ROWS[id] ?? [] }));
+      fireEvent.click(screen.getByRole('button', { name: 'ลองใหม่' }));
+      await waitFor(() => expect(screen.queryByTestId('import-partial')).toBeNull());
+      expect(rowIds('transit')).toContain('import-row-transit-41');
     });
 
     it('while the deal list loads, the shipment groups are busy and the request groups are not', async () => {
