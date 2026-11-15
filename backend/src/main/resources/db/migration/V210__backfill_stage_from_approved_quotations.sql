@@ -24,6 +24,9 @@
 --     (unit_code) — round-2 N3, the same source the live path uses; a typed name is never overwritten, owner_name
 --     and buyer_name are not touched. (Rollback cannot tell these fills from a later identical hand entry; they are
 --     the moved deals whose designer_name equals that directory name.)
+--   * NEVER writes buyer_name (final review): the BUYER party V204 created for an UNSPECIFIED quotation is the deal's
+--     bill-to customer (ticket.customer_id), and the bill-to is never a name source — only a quotation ADDRESSED to a
+--     buyer names a bidder, and the live path handles those at approval.
 --   * sets sales_stage and stage_updated_at, and writes one STAGE_CHANGED ticket_event noted
 --     'ย้ายอัตโนมัติจากใบเสนอราคาที่อนุมัติแล้ว (ย้อนหลัง)'.
 --   * Both timestamps are the quotation's own approval/issue time (COALESCE(approved_at, issued_at)), NOT the deploy
@@ -43,22 +46,35 @@
 -- ── Safety ───────────────────────────────────────────────────────────────────────────────────
 -- Idempotent: a second run finds every moved deal already at its target and does nothing (the integration test
 -- runs it twice). No schema change.
--- Rollback — every row it wrote is identifiable by its event; the sales_stage guard leaves alone a deal that has
--- moved again since:
---   UPDATE sales.ticket t
---      SET sales_stage      = e.from_status,
---          stage_updated_at = COALESCE(
---              (SELECT max(p.created_at) FROM sales.ticket_event p
---                WHERE p.ticket_id = t.ticket_id AND p.kind = 'STAGE_CHANGED'
---                  AND p.to_status = e.from_status AND p.created_at < e.created_at),
---              t.stage_updated_at)
---     FROM sales.ticket_event e
---    WHERE e.ticket_id = t.ticket_id AND e.kind = 'STAGE_CHANGED'
---      AND e.message = 'ย้ายอัตโนมัติจากใบเสนอราคาที่อนุมัติแล้ว (ย้อนหลัง)'
---      AND t.sales_stage = e.to_status;
---   then DELETE those events. The old stage_updated_at was never stored: it is restored from the event's from-time
---   (the deal's latest earlier STAGE_CHANGED event INTO from_status) when one was recorded, and is otherwise NOT
---   recoverable — the COALESCE then leaves the approval-time value this migration wrote.
+-- Rollback — exact, two statements, run in this order (ApprovedQuotationStageBackfillMigrationIntegrationTest runs
+-- exactly the lines between the markers below, so this text cannot drift from what is tested). Every row the backfill
+-- wrote is identifiable by its STAGE_CHANGED event's note; a deal that has moved on from QUOTE_BUYER since is left
+-- where it is (its backfill event is still deleted, so it no longer explains that deal's history).
+--   * statement 1 restores sales_stage from the event's from_status, and stage_updated_at from the deal's latest
+--     earlier STAGE_CHANGED event INTO that stage (ordered by event_id, NOT created_at: this migration backdates its
+--     events to the approval time, so a created_at comparison would skip the real earlier entry), else, for a deal that
+--     never left LEAD_APPROACH, its created_at. Otherwise the old stage_updated_at was never stored and is NOT
+--     recoverable: the approval-time value written here stays.
+--   * statement 2 deletes the backfill's own events.
+--   * NOT reversible: designer_name fills. They are indistinguishable from a later identical hand entry; clear them
+--     by hand from the dry-run list if needed. buyer_name was never written (see below), nothing to undo.
+-- ROLLBACK-BEGIN
+-- UPDATE sales.ticket t
+--    SET sales_stage      = e.from_status,
+--        stage_updated_at = COALESCE(
+--            (SELECT p.created_at FROM sales.ticket_event p
+--              WHERE p.ticket_id = t.ticket_id AND p.kind = 'STAGE_CHANGED'
+--                AND p.to_status = e.from_status AND p.event_id < e.event_id
+--              ORDER BY p.event_id DESC LIMIT 1),
+--            CASE WHEN e.from_status = 'LEAD_APPROACH' THEN t.created_at END,
+--            t.stage_updated_at)
+--   FROM sales.ticket_event e
+--  WHERE e.ticket_id = t.ticket_id AND e.kind = 'STAGE_CHANGED'
+--    AND e.message = 'ย้ายอัตโนมัติจากใบเสนอราคาที่อนุมัติแล้ว (ย้อนหลัง)'
+--    AND e.to_status = 'QUOTE_BUYER' AND t.sales_stage = 'QUOTE_BUYER';
+-- DELETE FROM sales.ticket_event
+--  WHERE kind = 'STAGE_CHANGED' AND message = 'ย้ายอัตโนมัติจากใบเสนอราคาที่อนุมัติแล้ว (ย้อนหลัง)';
+-- ROLLBACK-END
 -- Dry run on prod before deploy (read-only): the `target` CTE below as a SELECT, filtered by the same forward-only
 -- predicate, gives the exact list.
 WITH stage_order AS (

@@ -24,19 +24,21 @@ import th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal;
 import th.co.glr.hr.salesboard.SalesBoardDtos.MyWork;
 import th.co.glr.hr.salesboard.SalesBoardDtos.RepRow;
 import th.co.glr.hr.salesboard.SalesBoardDtos.TeamOverview;
+import th.co.glr.hr.ticket.QuietRule;
 
 /** The role DECISION and the ranking, with the repository mocked. Whether the scope reaches the WHERE clause is
  * SalesBoardScopeIntegrationTest's job — a mocked repository cannot prove it. */
 class SalesBoardServiceTest {
 
     private SalesBoardRepository repository;
+    private th.co.glr.hr.auth.EmployeeAuthRepository employees;
     private SalesBoardService service;
 
     @BeforeEach
     void wire() {
         repository = mock(SalesBoardRepository.class);
-        service = new SalesBoardService(repository, new QuietRule(null, 14),
-            mock(th.co.glr.hr.auth.EmployeeAuthRepository.class));
+        employees = mock(th.co.glr.hr.auth.EmployeeAuthRepository.class);
+        service = new SalesBoardService(repository, new QuietRule(null, 14), employees);
     }
 
     @ParameterizedTest
@@ -113,6 +115,33 @@ class SalesBoardServiceTest {
         assertThat(team.stale()).extracting(BoardDeal::ticketId).containsExactly(1L);
     }
 
+    /** Final review: values in different currencies are not comparable, so only THB is weighted into the ranking;
+     * a USD 1,000 deal does not outrank a THB 900,000 deal of equal days, and a foreign deal ranks by days alone. */
+    @Test
+    void quietRanking_weightsOnlyThbValues() {
+        when(repository.activeDealsOwnedBy(1L)).thenReturn(List.of(
+            deal(1, 1L, 20, "1000", true, "USD"),
+            deal(2, 1L, 20, "900000", true, "THB"),
+            deal(3, 1L, 25, "5000000", true, "EUR"),
+            deal(4, 1L, 20, "10", true, null)));
+
+        MyWork work = service.myWork(actor(1L, "sales"));
+
+        // THB-weighted first (a null currency is THB, value 10 x 20 days < 900000 x 20), then days, then id.
+        assertThat(work.followUp()).extracting(BoardDeal::ticketId).containsExactly(2L, 4L, 3L, 1L);
+    }
+
+    /** Final review: one batched employee lookup for the reps, never one query per rep. */
+    @Test
+    void teamOverview_doesNotLookUpEmployeesOneByOne() {
+        when(repository.activeDealsAllReps()).thenReturn(List.of(
+            deal(1, 10L, 1, "100", false), deal(2, 20L, 1, "100", false), deal(3, 30L, 1, "100", false)));
+
+        service.teamOverview(actor(1L, "sales_manager"));
+
+        verify(employees, never()).findByEmployeeId(anyLong());
+    }
+
     @Test
     void teamOverview_staleIsCappedAtTwenty() {
         when(repository.activeDealsAllReps()).thenReturn(IntStream.rangeClosed(1, 25)
@@ -133,8 +162,12 @@ class SalesBoardServiceTest {
     }
 
     private static BoardDeal deal(long id, long owner, int daysQuiet, String value, boolean quiet) {
+        return deal(id, owner, daysQuiet, value, quiet, "THB");
+    }
+
+    private static BoardDeal deal(long id, long owner, int daysQuiet, String value, boolean quiet, String currency) {
         return new BoardDeal(id, "deal " + id, "cust", null, owner, "rep " + owner, "QUOTE_OWNER", "S3", 3,
-            value == null ? null : new BigDecimal(value), "THB", false, null, null, null, daysAgo(daysQuiet),
+            value == null ? null : new BigDecimal(value), currency, false, null, null, null, daysAgo(daysQuiet),
             daysQuiet, quiet, null, null);
     }
 

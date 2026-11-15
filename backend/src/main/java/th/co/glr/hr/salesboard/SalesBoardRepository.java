@@ -11,6 +11,7 @@ import org.springframework.stereotype.Repository;
 import th.co.glr.hr.dealquotation.WastageCalculator;
 import th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.QuietRule;
 import th.co.glr.hr.ticket.WinProbabilityDefaults;
 
 /**

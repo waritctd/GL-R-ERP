@@ -1,4 +1,4 @@
-package th.co.glr.hr.salesboard;
+package th.co.glr.hr.ticket;
 
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -6,9 +6,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
-import th.co.glr.hr.ticket.DealLifecycle;
-import th.co.glr.hr.ticket.DealStage;
-import th.co.glr.hr.ticket.TicketEventKind;
 
 /**
  * The one "quiet" (stale) rule for a deal — spec 2026-11-15 §7.5. A deal is last touched at the latest of its

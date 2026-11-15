@@ -69,7 +69,7 @@ public record TicketSummaryDto(
     String ownerName,
     String buyerName,
     /**
-     * Computed, not stored: true when this deal is quiet under {@code salesboard.QuietRule} — ACTIVE, not in
+     * Computed, not stored: true when this deal is quiet under {@code ticket.QuietRule} — ACTIVE, not in
      * deliver &amp; collect, and untouched (activity, stage change, quotation issue) for 14 days by default.
      */
     boolean stale,

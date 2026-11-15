@@ -34,9 +34,9 @@ import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.customer.ProjectRepository;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
-import th.co.glr.hr.salesboard.QuietRule;
 import th.co.glr.hr.salesboard.SalesBoardRepository;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.QuietRule;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
