@@ -66,8 +66,10 @@ function CallModal({ deal, submitting, onClose, onSubmit }) {
 /**
  * ควรตามต่อ — the rep's quiet deals as served (SalesBoardService ranks them by days × value, max 5). One tap each:
  * โทรแล้ว logs a CALL activity (which clears the quiet clock), ปิดดีลนี้ hands off to the existing mark-lost flow.
+ * When the rep has more quiet deals than are listed ({@code quietTotal}), ดูทั้งหมด (n) calls {@code onShowAll}, which
+ * opens the board filtered to quiet deals.
  */
-export function FollowUpList({ deals, quietDays, onLogCall, onCloseDeal, loggingCall }) {
+export function FollowUpList({ deals, quietDays, quietTotal = 0, onShowAll, onLogCall, onCloseDeal, loggingCall }) {
   const [calling, setCalling] = useState(null);
 
   if (deals.length === 0) {
@@ -122,6 +124,11 @@ export function FollowUpList({ deals, quietDays, onLogCall, onCloseDeal, logging
           </li>
         ))}
       </ul>
+      {quietTotal > deals.length && onShowAll ? (
+        <div className="border-t border-border-subtle px-5 py-2.5 mobile:px-3.5">
+          <Button type="button" size="sm" variant="secondary" onClick={onShowAll}>{`ดูทั้งหมด (${quietTotal})`}</Button>
+        </div>
+      ) : null}
       {calling ? (
         <CallModal
           deal={calling}

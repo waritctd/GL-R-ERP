@@ -12,7 +12,7 @@ import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import { MarkLostModal } from '../tickets/MarkLostModal.jsx';
 import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
 import { useStageCatalog } from '../tickets/stageCatalog.js';
-import { currentQuarter, otherCurrencyTotals, sumValue, totalLabel } from './boardFormat.js';
+import { currentQuarter, defaultBoardFilter, otherCurrencyTotals, sumValue, totalLabel } from './boardFormat.js';
 import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
 
@@ -36,7 +36,10 @@ const Failed = () => <p className="m-0 px-5 py-4 text-sm font-bold text-danger m
 const BOARD_FILTERS = [
   { key: 'quarter', label: 'ไตรมาสนี้' },
   { key: 'all', label: 'ทั้งหมด' },
+  { key: 'quiet', label: 'ดีลเงียบ' },
 ];
+
+const BOARD_ID = 'my-work-board';
 
 /**
  * งานของฉัน — the rep's landing (spec 2026-11-15 §7.3, slice 1): ควรตามต่อ, then the five-column board, from
@@ -50,7 +53,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   const { catalog } = useStageCatalog();
   const [losing, setLosing] = useState(null);
   const [creating, setCreating] = useState(false);
-  const [boardFilter, setBoardFilter] = useState('all');
+  // null until the rep picks one: the default follows the data (defaultBoardFilter).
+  const [boardFilterChoice, setBoardFilter] = useState(null);
 
   const workQuery = useQuery({ queryKey: queryKeys.salesBoardMyWork(), queryFn: () => api.salesBoard.myWork() });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['tickets'] });
@@ -90,9 +94,16 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   const work = workQuery.data;
   const quietDays = work?.quietDays ?? 14;
   const quarter = currentQuarter();
+  const boardFilter = boardFilterChoice ?? (work ? defaultBoardFilter(work.board) : 'all');
+  const quietTotal = work ? work.board.filter((d) => d.quiet).length : 0;
   const boardDeals = !work ? [] : boardFilter === 'quarter'
     ? work.board.filter((d) => d.expectedQuarter === quarter)
-    : work.board;
+    : boardFilter === 'quiet' ? work.board.filter((d) => d.quiet) : work.board;
+
+  function showAllQuiet() {
+    setBoardFilter('quiet');
+    document.getElementById(BOARD_ID)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }
 
   return (
     <PageStack>
@@ -126,6 +137,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           <FollowUpList
             deals={work.followUp}
             quietDays={quietDays}
+            quietTotal={quietTotal}
+            onShowAll={showAllQuiet}
             loggingCall={callMutation.isPending}
             onLogCall={logCall}
             onCloseDeal={setLosing}
@@ -134,6 +147,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
       </Panel>
 
       <Panel
+        id={BOARD_ID}
         title="ดีลทั้งหมดของฉัน"
         actions={work ? (
           <span className="flex flex-wrap items-center gap-2 text-sm text-text-muted">
@@ -143,7 +157,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
                 {totalLabel(sumValue(boardDeals), otherCurrencyTotals(boardDeals))}
               </b>
             </span>
-            <span className="flex gap-1" role="group" aria-label="กรองตามไตรมาส">
+            <span className="flex flex-wrap gap-1" role="group" aria-label="กรองดีล">
               {BOARD_FILTERS.map((f) => (
                 <Button
                   key={f.key}
