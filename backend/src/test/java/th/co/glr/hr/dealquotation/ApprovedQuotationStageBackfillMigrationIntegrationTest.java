@@ -136,6 +136,68 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
         assertThat(summary(accepted).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
+    // ── round-2 N4 ───────────────────────────────────────────────────────────
+
+    /** N4(a): a named recipient is the live path's job (applyApprovedQuotation already moved it at approval); the
+     * backfill only reaches deals whose latest customer-facing quotation is UNSPECIFIED. */
+    @Test
+    void dealWhoseLatestCustomerFacingQuotationNamesARecipient_isUntouched() throws IOException {
+        long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
+        approved(ticket, salesActor, "DESIGNER");
+        resetToLeadApproach(ticket);
+
+        runMigration();
+
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(eventCount(ticket, "STAGE_CHANGED")).isZero();
+    }
+
+    /** N4(a): an older UNSPECIFIED quotation does not count once a NEWER customer-facing one names its recipient. */
+    @Test
+    void anOlderUnspecifiedQuotationBehindANewerNamedOne_isUntouched() throws IOException {
+        long ticket = stuckDeal(EntryChannel.DESIGNER_LED);
+        // A second customer-facing document, approved after the UNSPECIFIED one and addressed to a designer.
+        // A copy of the row (every column), re-addressed and approved later.
+        jdbc.update("""
+            INSERT INTO sales.quotation OVERRIDING SYSTEM VALUE
+            SELECT (jsonb_populate_record(NULL::sales.quotation, to_jsonb(q) || jsonb_build_object(
+                       'quotation_id', nextval(pg_get_serial_sequence('sales.quotation', 'quotation_id')),
+                       'number', q.number || '-N', 'doc_status', 'SENT', 'recipient_type', 'DESIGNER',
+                       'approved_at', now() - interval '10 days'))).*
+              FROM sales.quotation q WHERE q.ticket_id = :id
+            """, Map.of("id", ticket));
+
+        runMigration();
+
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
+    }
+
+    /** N4(b): a rep who deliberately moved the deal BACK (a manual STAGE_CHANGED, backward) is not overridden. */
+    @Test
+    void dealWithAManualBackwardStageMove_isUntouched() throws IOException {
+        long ticket = stuckDeal(EntryChannel.DESIGNER_LED);
+        stageEvent(ticket, salesActor.name(), DealStage.QUOTE_DESIGN_SIDE, DealStage.LEAD_APPROACH, "ลูกค้าขอเริ่มใหม่");
+
+        runMigration();
+
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
+        assertThat(eventCount(ticket, "STAGE_CHANGED")).isEqualTo(1);
+    }
+
+    /** N4(b), the other side: a manual FORWARD move, and an automatic one, do not block the backfill. */
+    @Test
+    void manualForwardAndAutomaticMoves_doNotBlockTheBackfill() throws IOException {
+        long ticket = stuckDeal(EntryChannel.DESIGNER_LED);
+        stageEvent(ticket, salesActor.name(), DealStage.LEAD_APPROACH, DealStage.PRESENTATION, null);
+        stageEvent(ticket, "ระบบ (V201)", DealStage.PRESENTATION, DealStage.LEAD_APPROACH, null);
+        stageEvent(ticket, salesActor.name(), DealStage.SPEC_APPROVED, DealStage.LEAD_APPROACH,
+            "อัตโนมัติจากขั้นตอนของดีล");
+
+        runMigration();
+
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+    }
+
     @Test
     void rerunningIsANoOp() throws IOException {
         long ticket = stuckDeal(EntryChannel.DESIGNER_LED);
@@ -165,6 +227,16 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
             """, Map.of("id", approved.id()));
         resetToLeadApproach(ticket);
         return ticket;
+    }
+
+    private void stageEvent(long ticket, String actorName, String from, String to, String message) {
+        jdbc.update("""
+            INSERT INTO sales.ticket_event (ticket_id, actor_id, actor_name, kind, from_status, to_status, message,
+                                            created_at)
+            VALUES (:t, :a, :n, 'STAGE_CHANGED', :f, :to, :m, now() - interval '20 days')
+            """, new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("t", ticket)
+            .addValue("a", salesActor.id()).addValue("n", actorName).addValue("f", from).addValue("to", to)
+            .addValue("m", message));
     }
 
     private void resetToLeadApproach(long ticket) {

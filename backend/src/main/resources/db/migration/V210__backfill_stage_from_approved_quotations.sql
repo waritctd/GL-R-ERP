@@ -11,7 +11,9 @@
 -- (TicketService#stageForUnspecifiedRecipient); this migration does the same once for the deals approved before it.
 --
 -- ── What it does ─────────────────────────────────────────────────────────────────────────────
--- For every ACTIVE deal holding a quotation in APPROVED / ISSUED / SENT / ACCEPTED:
+-- For every ACTIVE deal whose LATEST customer-facing quotation (APPROVED / ISSUED / SENT / ACCEPTED, newest by
+-- COALESCE(approved_at, issued_at), then id) is recipient UNSPECIFIED (round-2 N4a — a named recipient was already
+-- handled by the live path at approval), and which has NO manual backward STAGE_CHANGED event (N4b — see below):
 --   * target stage = QUOTE_BUYER when it is on the deal's route, else the nearest on-route stage before it — the SQL
 --     restatement of TicketService#stageForUnspecifiedRecipient. `off_route` below restates DealRoute's OFF_ROUTE
 --     table verbatim; QUOTE_BUYER is on every route (incl. BUYER_DIRECT and UNSPECIFIED), so every channel targets
@@ -26,16 +28,35 @@
 --     (else the issuer, else the deal owner); actor_name 'ระบบ' marks it as automatic.
 -- Lost / cancelled / on-hold / dormant / completed deals (lifecycle <> 'ACTIVE') are untouched.
 --
+-- "Manual backward move" (N4b): a STAGE_CHANGED event whose to_status comes before its from_status in the order
+-- below, written by a person — the codebase's convention is that system moves carry either the message
+-- 'อัตโนมัติจากขั้นตอนของดีล' (TicketService#autoAdvanceStage) or an actor_name starting 'ระบบ' (V201, this
+-- migration); TicketService#updateStageInternal writes the rep's own name and note. A rep who deliberately moved a
+-- deal back is not overridden.
+--
 -- Edited in place (round-2 review): V210 is unmerged and has been applied nowhere but test databases.
 --
 -- ── Safety ───────────────────────────────────────────────────────────────────────────────────
 -- Idempotent: a second run finds every moved deal already at its target and does nothing (the integration test
--- runs it twice). No schema change. Rollback: every row it wrote is identifiable —
---   SELECT ticket_id, from_status FROM sales.ticket_event
---    WHERE kind = 'STAGE_CHANGED' AND message = 'ย้ายอัตโนมัติจากใบเสนอราคาที่อนุมัติแล้ว (ย้อนหลัง)';
--- and setting sales_stage back to from_status for those tickets (then deleting the events) reverses it.
--- Dry run on prod before deploy (read-only):
---   the `target` CTE below as a SELECT, filtered by the same forward-only predicate, gives the exact list.
+-- runs it twice). No schema change.
+-- Rollback — every row it wrote is identifiable by its event; the sales_stage guard leaves alone a deal that has
+-- moved again since:
+--   UPDATE sales.ticket t
+--      SET sales_stage      = e.from_status,
+--          stage_updated_at = COALESCE(
+--              (SELECT max(p.created_at) FROM sales.ticket_event p
+--                WHERE p.ticket_id = t.ticket_id AND p.kind = 'STAGE_CHANGED'
+--                  AND p.to_status = e.from_status AND p.created_at < e.created_at),
+--              t.stage_updated_at)
+--     FROM sales.ticket_event e
+--    WHERE e.ticket_id = t.ticket_id AND e.kind = 'STAGE_CHANGED'
+--      AND e.message = 'ย้ายอัตโนมัติจากใบเสนอราคาที่อนุมัติแล้ว (ย้อนหลัง)'
+--      AND t.sales_stage = e.to_status;
+--   then DELETE those events. The old stage_updated_at was never stored: it is restored from the event's from-time
+--   (the deal's latest earlier STAGE_CHANGED event INTO from_status) when one was recorded, and is otherwise NOT
+--   recoverable — the COALESCE then leaves the approval-time value this migration wrote.
+-- Dry run on prod before deploy (read-only): the `target` CTE below as a SELECT, filtered by the same forward-only
+-- predicate, gives the exact list.
 WITH stage_order AS (
     SELECT ARRAY['LEAD_APPROACH', 'PRESENTATION', 'SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER',
                  'OWNER_SIGNOFF', 'AWAITING_BUYER', 'QUOTE_BUYER', 'NEGOTIATION', 'ORDER_RECEIVED',
@@ -61,7 +82,8 @@ target AS (
            q.actor_id
       FROM sales.ticket t
       CROSS JOIN LATERAL (
-          SELECT COALESCE(vq.approved_at, vq.issued_at) AS touched_at,
+          SELECT vq.recipient_type,
+                 COALESCE(vq.approved_at, vq.issued_at) AS touched_at,
                  COALESCE(vq.approved_by, vq.issued_by, t.created_by) AS actor_id
             FROM sales.quotation vq
            WHERE vq.ticket_id = t.ticket_id
@@ -70,6 +92,18 @@ target AS (
            LIMIT 1
       ) q
      WHERE t.lifecycle = 'ACTIVE'
+       -- N4(a): only an UNSPECIFIED latest customer-facing quotation; a named recipient is the live path's job.
+       AND COALESCE(q.recipient_type, 'UNSPECIFIED') = 'UNSPECIFIED'
+       -- N4(b): no manual backward move (see the header for the system-move convention).
+       AND NOT EXISTS (
+           SELECT 1
+             FROM sales.ticket_event e, stage_order so
+            WHERE e.ticket_id = t.ticket_id
+              AND e.kind = 'STAGE_CHANGED'
+              AND array_position(so.stages, e.to_status::text) < array_position(so.stages, e.from_status::text)
+              AND e.message IS DISTINCT FROM 'อัตโนมัติจากขั้นตอนของดีล'
+              AND COALESCE(e.actor_name, '') NOT LIKE 'ระบบ%'
+       )
 ),
 moved AS (
     UPDATE sales.ticket t
