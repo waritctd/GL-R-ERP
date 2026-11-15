@@ -126,6 +126,15 @@ public class ImportRequestController {
         return Map.of("importRequest", service.advanceStep(id, request, user));
     }
 
+    /** Undoes the caller's own latest step advance within 30 s (V216, the /fulfilment undo snackbar) — same role gate
+     * as advance, plus actor-only and step-unchanged; see ImportRequestService#undoStep. */
+    @PostMapping("/import-requests/{id}/advance-step/undo")
+    Map<String, ImportRequestDto> undoStep(@PathVariable long id,
+            @RequestBody(required = false) ImportRequestRequests.UndoImportStepRequest request, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("importRequest", service.undoStep(id, request, user));
+    }
+
     /** Sets lead time on an ISSUED row (owner decision 09-18 #2) — import/CEO only. The DRAFT-stage edit for the
      * owning rep/CEO goes through PATCH .../import-requests/{id} instead
      * (UpdateImportRequestRequest#leadTimeMinDays/MaxDays). */

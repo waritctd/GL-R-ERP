@@ -410,14 +410,26 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       expect(screen.queryByTestId('ir-draft-hint-11')).toBeNull();
     });
 
-    it('a revision draft beside its still-ISSUED v1 is worded as a revision, and v1 stays advanceable', async () => {
+    it('a revision draft beside its still-ISSUED v1 is worded as a revision, and v1 keeps its tracker', async () => {
       renderPanel(CEO, [issuedRow(), draftRow({ id: 12, version: 2 })]);
       const hint = await screen.findByTestId('ir-draft-hint-12');
       expect(hint.textContent).toContain('ฉบับแก้ไข');
       // The first-issue sentence is false here: v1 has a step and is being advanced.
       expect(hint.textContent).not.toContain('ยังไม่มีขั้นนำเข้า');
-      expect(screen.getByTestId('advance-11')).not.toBeNull();
+      expect(screen.getByTestId('factory-progress-11')).not.toBeNull();
     });
+
+    // Spec 2026-11-15 §7.11 item 3: the deal tab shows the shipment tracker read-only for EVERY role — the CEO and
+    // import included — and says where it is advanced. UI only; ImportRequestService's gate is unchanged.
+    it.each([['CEO', CEO], ['the owning rep', OWNER], ['sales_manager', SALES_MANAGER]])(
+      'the deal tab tracker is read-only for %s: no advance control, and it says the step moves on การขนส่ง',
+      async (_label, user) => {
+        renderPanel(user, [issuedRow()]);
+        expect(await screen.findByTestId('factory-progress-11')).not.toBeNull();
+        expect(screen.queryByTestId('advance-11')).toBeNull();
+        expect(screen.getByTestId('ir-step-readonly-11').textContent).toContain('การขนส่ง');
+      },
+    );
 
     it('W3-11: ออกเลข opens a dialog naming the factory (cannot be undone) and calls no api; confirming issues exactly once', async () => {
       api.storedImportRequests.issue.mockReset();

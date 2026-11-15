@@ -13093,6 +13093,11 @@ export const api = {
       }
       const fromLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep ?? '—';
       const toLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[target] ?? target;
+      // V216: the stamp this advance replaces, for the 30 s undo (ImportRequestRepository#advanceStep).
+      row.stepUndo = {
+        importStep: row.importStep, importStepAt: row.importStepAt, importStepById: row.importStepById,
+        importStepByName: row.importStepByName, importStepNote: row.importStepNote, advancedAt: Date.now(),
+      };
       row.importStep = target; row.importStepAt = eventDate; row.importStepById = user.id;
       row.importStepByName = user.name; row.importStepNote = request?.note ?? null;
       row.updatedAt = new Date().toISOString();
@@ -13117,6 +13122,31 @@ export const api = {
           applyImportRequestRollupMock(ticket, user);
         }
       }
+      return delay({ importRequest: mockImportRequestDto(row) });
+    },
+    // Mirrors ImportRequestService#undoStep (V216): advance's role gate, actor-only, the step it set, within 30 s,
+    // one level, never RECEIVED. The undo is logged as IMPORT_STEP_ADVANCED with a เลิกทำ message.
+    async undoStep(id, request) {
+      const user = hasRole('import', 'ceo');
+      const expected = request?.expectedStep;
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(expected)) fail('ต้องระบุขั้นตอนที่จะเลิกทำ', 400);
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      requireActive(ticket);
+      const undo = row.stepUndo;
+      if (row.status !== 'ISSUED' || !undo) fail('ไม่มีการเลื่อนขั้นตอนให้เลิกทำ', 409);
+      if (row.importStep !== expected) fail('ขั้นตอนถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้', 409);
+      if (row.importStepById !== user.id) fail('เลิกทำได้เฉพาะผู้ที่เลื่อนขั้นตอนนี้', 403);
+      if (row.importStep === 'RECEIVED') fail('รับสินค้าเข้าคลังแล้ว เลิกทำไม่ได้ — แก้ไขด้วยการออกฉบับแก้ไข', 409);
+      if (Date.now() - undo.advancedAt > 30_000) fail('เลยเวลาเลิกทำแล้ว (30 วินาที)', 409);
+      const fromLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep;
+      Object.assign(row, {
+        importStep: undo.importStep, importStepAt: undo.importStepAt, importStepById: undo.importStepById,
+        importStepByName: undo.importStepByName, importStepNote: undo.importStepNote, stepUndo: null,
+        updatedAt: new Date().toISOString(),
+      });
+      pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
+        `โรงงาน ${row.factoryName}: เลิกทำ ${fromLabel} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep}`);
       return delay({ importRequest: mockImportRequestDto(row) });
     },
     async setLeadTime(id, request) {

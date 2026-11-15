@@ -573,6 +573,10 @@ export const api = {
     deleteDraft: (id) => apiRequest(API_ROUTES.storedImportRequests.get(id), { method: 'DELETE' }),
     advanceStep: (id, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.advanceStep(id), { method: 'POST', body: payload }),
+    // V216 (slice 5): undo the caller's OWN latest advance within 30 s. `payload` is { expectedStep } — the step that
+    // advance set; the server 409s once the row has moved on, 403s anyone but that advance's actor.
+    undoStep: (id, payload) =>
+      apiRequest(API_ROUTES.storedImportRequests.undoStep(id), { method: 'POST', body: payload }),
     setLeadTime: (id, payload) =>
       apiRequest(API_ROUTES.storedImportRequests.leadTime(id), { method: 'POST', body: payload }),
     updateEmailDraft: (id, payload) =>

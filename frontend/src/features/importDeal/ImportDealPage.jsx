@@ -140,7 +140,7 @@ export function ImportDealPage({ user, showToast }) {
           />
           <div className="mt-2 flex flex-wrap justify-center gap-2">
             {/* A real button-shaped link (not a bare underlined anchor) so it clears the 44px touch floor. */}
-            <Link to="/fulfilment" className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'no-underline')}>กลับไปงานนำเข้า</Link>
+            <Link to="/fulfilment" className={cn(buttonVariants({ variant: 'secondary', size: 'sm' }), 'no-underline')}>กลับไปหน้า การขนส่ง</Link>
             {status !== 403 && status !== 404 ? (
               <Button type="button" size="sm" variant="secondary" onClick={() => dealQuery.refetch()}>ลองใหม่</Button>
             ) : null}
@@ -191,7 +191,11 @@ export function ImportDealPage({ user, showToast }) {
   return (
     <PageStack className="gap-5">
       <PageHeader
-        breadcrumbs={[{ label: 'งานนำเข้า', to: '/fulfilment' }, { label: deal.code }]}
+        breadcrumbs={[{ label: 'การขนส่ง', to: '/fulfilment' }, { label: deal.code }]}
+        // Spec §7.11 item 3: the factory trackers below are read-only; a step is advanced on /fulfilment only.
+        actions={canAdvance && liveRows.length > 0 ? (
+          <Link to="/fulfilment" className={cn(buttonVariants({ variant: 'primary', size: 'sm' }), 'no-underline')}>ไปหน้า การขนส่ง →</Link>
+        ) : null}
         eyebrow={deal.code}
         title={deal.customerName || deal.title}
         subtitle={deal.projectName || deal.title}
@@ -241,7 +245,7 @@ export function ImportDealPage({ user, showToast }) {
                 ticketId={ticketId}
                 canFullWrite={isCeo}
                 canFooterWrite={isCeo}
-                canAdvance={canAdvance}
+                canSetLeadTime={canAdvance}
                 canEmailWrite={canEmailWrite}
                 showToast={showToast}
                 showInlineDownload

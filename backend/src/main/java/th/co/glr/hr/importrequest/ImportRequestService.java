@@ -1121,6 +1121,61 @@ public class ImportRequestService {
         return withPageCount(requireStored(id));
     }
 
+    /** How long after an advance its actor may still undo it (spec 2026-11-15 §7.11 item 3, the /fulfilment snackbar). */
+    static final int STEP_UNDO_WINDOW_SECONDS = 30;
+
+    /**
+     * Undoes the caller's OWN latest step advance within {@link #STEP_UNDO_WINDOW_SECONDS} (V216), new in slice 5.
+     *
+     * <p>Authorisation: the SAME role gate as {@link #advanceStep} ({@link #ADVANCE_STEP_ROLES}, 403), then
+     * actor-only: the advance must have been made by this caller (403 otherwise; the CEO cannot undo import's).
+     * Refused with 409: not ISSUED; nothing to undo (never advanced, or already undone: one level only); the row is no
+     * longer at {@code expectedStep} (a later advance by anyone ends the window); the advance reached RECEIVED (it may
+     * have rolled the deal up and notified the rep, so it is corrected by revision); the window has passed (database
+     * clock). Restores step, date, by and note exactly, and records an IMPORT_STEP_ADVANCED event saying "เลิกทำ" (no
+     * new event kind, so V216 need not re-declare chk_event_kind).
+     */
+    @Transactional
+    public ImportRequestDto undoStep(long id, ImportRequestRequests.UndoImportStepRequest request, UserPrincipal actor) {
+        if (!ADVANCE_STEP_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        String expected = request == null ? null : request.expectedStep();
+        if (!ImportRequestStep.isValid(expected)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุขั้นตอนที่จะเลิกทำ");
+        }
+        ImportRequestDto existing = requireStored(id);
+        requireDealActive(requireTicket(existing.ticketId()));
+        var state = stored.findStepUndoState(id, STEP_UNDO_WINDOW_SECONDS)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอซื้อ"));
+        if (!ImportRequestStatus.ISSUED.equals(state.status()) || state.undoFrom() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่มีการเลื่อนขั้นตอนให้เลิกทำ");
+        }
+        if (!expected.equals(state.importStep())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้");
+        }
+        if (state.advancedById() == null || state.advancedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "เลิกทำได้เฉพาะผู้ที่เลื่อนขั้นตอนนี้");
+        }
+        if (ImportRequestStep.RECEIVED.equals(state.importStep())) {
+            throw new ApiException(HttpStatus.CONFLICT, "รับสินค้าเข้าคลังแล้ว เลิกทำไม่ได้ — แก้ไขด้วยการออกฉบับแก้ไข");
+        }
+        if (!state.withinWindow()) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลยเวลาเลิกทำแล้ว (" + STEP_UNDO_WINDOW_SECONDS + " วินาที)");
+        }
+        tickets.lockTicketForUpdate(existing.ticketId());
+        if (stored.undoStep(id, expected, actor.id(), STEP_UNDO_WINDOW_SECONDS) == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้");
+        }
+        ImportRequestDto after = requireStored(id);
+        tickets.addEventWithDocument(existing.ticketId(), actor.id(), actor.name(),
+            TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
+            "โรงงาน " + existing.factoryName() + ": เลิกทำ " + ImportRequestStep.thaiLabel(expected)
+                + " → " + ImportRequestStep.thaiLabel(after.importStep()),
+            th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, id);
+        return withPageCount(after);
+    }
+
     /** Prints the INTERNAL stored form from ITS OWN snapshot — everything, unlike the FACTORY copy.
      * See {@link #renderStored(long, UserPrincipal, boolean)}. */
     public byte[] renderStored(long id, UserPrincipal actor) {

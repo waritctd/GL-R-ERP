@@ -163,7 +163,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Import's stream-2 workspace, placed immediately after stream 1 so its two obligations to Sales read as two
     // adjacent items in the order a deal travels (price, then goods). `building`, not `clipboard`: the neighbour
     // already owns that glyph, and the chain ends at the warehouse.
-    { path: '/fulfilment', label: 'งานนำเข้า', helper: 'Import fulfilment worklist', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
+    { path: '/fulfilment', label: 'การขนส่ง', helper: 'Import shipments — the one place a step is advanced', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item: the invoice+commission step (บันทึกใบกำกับ /
     // create-from-deal at close) is the LAST STAGE of the งานการเงิน money lifecycle + the
     // Overview worklist (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ), not a

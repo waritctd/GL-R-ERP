@@ -185,6 +185,14 @@ public final class ImportRequestRequests {
     ) {}
 
     /**
+     * Undoes the caller's own latest advance within 30 s (V216, spec 2026-11-15 §7.11 item 3).
+     *
+     * @param expectedStep the step that advance set — the undo is refused (409) once the row is no longer at it,
+     *                     so a later advance by anyone ends the window. Required (the service 400s a blank).
+     */
+    public record UndoImportStepRequest(String expectedStep) {}
+
+    /**
      * Sets an ISSUED row's lead time — import/CEO only (the DRAFT-stage
      * edit for the owning rep/CEO goes through {@link UpdateImportRequestRequest} instead, exactly
      * like the other body fields). Both fields REQUIRED, unlike the PATCH-optional pair on {@link

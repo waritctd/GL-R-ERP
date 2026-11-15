@@ -57,23 +57,24 @@ describe('AppShell navigation (role-scoped views)', () => {
     expect(screen.queryByText('ใบสั่งซื้อโรงงาน')).toBeNull();
     // งานนำเข้า is NOT that page coming back. The deleted one was a link list duplicating the dashboard worklist;
     // this one performs the four transitions. The retired LABEL must stay retired all the same.
-    expect(screen.getByText('งานนำเข้า')).toBeTruthy();
+    // Spec 2026-11-15 §7.11 (design a-fulfil): /fulfilment is labelled การขนส่ง; งานนำเข้า is import's landing title.
+    expect(screen.getByText('การขนส่ง')).toBeTruthy();
   });
 
   // งานนำเข้า's audience is canActOnFulfilment {import, ceo} — deliberately NARROWER than its คิวขอราคา
   // neighbour, which also admits sales_manager. Wrong-way-round: the refusals are what matter, since a nav item
   // pointing at a page whose every button 403s is worse than no nav item.
-  it('shows งานนำเข้า to import and ceo only', async () => {
+  it('shows การขนส่ง (/fulfilment) to import and ceo only', async () => {
     for (const role of ['sales', 'sales_manager', 'account', 'hr', 'employee']) {
       const { unmount } = renderShell({ role, employeeId: 4, name: 'ทดสอบ', email: `${role}@test.local` });
       await screen.findByText('เนื้อหา');
-      expect(screen.queryByText('งานนำเข้า'), `${role} must not see งานนำเข้า`).toBeNull();
+      expect(screen.queryByText('การขนส่ง'), `${role} must not see การขนส่ง`).toBeNull();
       unmount();
     }
 
     renderShell({ role: 'ceo', employeeId: 1, name: 'ซีอีโอ ทดสอบ', email: 'ceo@test.local' });
     await screen.findByText('เนื้อหา');
-    expect(screen.getByText('งานนำเข้า')).toBeTruthy();
+    expect(screen.getByText('การขนส่ง')).toBeTruthy();
   });
 
   it('keeps รายการดีล for sales', async () => {
@@ -380,7 +381,7 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.getByText('รายการดีล')).toBeTruthy();
     expect(screen.getByText('แคตตาล็อกสินค้า')).toBeTruthy();
     expect(screen.queryByText('งานการเงิน')).toBeNull();
-    expect(screen.queryByText('งานนำเข้า')).toBeNull();
+    expect(screen.queryByText('การขนส่ง')).toBeNull();
 
     expect(screen.getByText('บุคคลของฉัน')).toBeTruthy();
     expect(screen.getByText('แดชบอร์ด')).toBeTruthy();
@@ -392,11 +393,11 @@ describe('AppShell navigation under the release lockdown', () => {
 
   // Owner ruling 2026-10-22: import sees ONLY งานนำเข้า and คิวขอราคา; account ONLY งานการเงิน.
   // Asserted wrong-way-round: every other sales-group item must be gone.
-  it('leaves import งานนำเข้า + คิวขอราคา and account งานการเงิน, nothing else from the sales group', async () => {
+  it('leaves import การขนส่ง + คิวขอราคา and account งานการเงิน, nothing else from the sales group', async () => {
     await renderLockedShell({ role: 'import', employeeId: 42, name: 'นำเข้า ทดสอบ', email: 'import@test.local' });
     await screen.findByText('เนื้อหา');
     expect(screen.getByText('คิวขอราคา')).toBeTruthy();
-    expect(screen.getByText('งานนำเข้า')).toBeTruthy();
+    expect(screen.getByText('การขนส่ง')).toBeTruthy();
     expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
     expect(screen.queryByText('รายการดีล')).toBeNull();
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
@@ -412,7 +413,7 @@ describe('AppShell navigation under the release lockdown', () => {
     await screen.findByText('เนื้อหา');
     expect(screen.getByText('งานการเงิน')).toBeTruthy();
     expect(screen.queryByText('คิวขอราคา')).toBeNull();
-    expect(screen.queryByText('งานนำเข้า')).toBeNull();
+    expect(screen.queryByText('การขนส่ง')).toBeNull();
     expect(screen.queryByText('รายการดีล')).toBeNull();
     expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
     // account holds canViewCatalog; only the lock filter removes it.

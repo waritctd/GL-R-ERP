@@ -222,16 +222,17 @@ describe('ImportDealPage', () => {
     expect(screen.queryByLabelText(/ลบไฟล์แนบ/)).toBeNull();
   });
 
-  it('lets import advance a factory step, and refreshes the import deal AND the deal tab / worklist caches (sync)', async () => {
-    const { invalidateSpy } = renderPage();
-    fireEvent.click(await screen.findByTestId('advance-11'));
-
-    await waitFor(() => expect(api.storedImportRequests.advanceStep)
-      .toHaveBeenCalledWith(11, { targetStep: 'PICKED_UP' }));
-    await waitFor(() => expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.importDeal(1) }));
-    // The pre-existing surfaces keep being refreshed alongside it.
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.storedImportRequests(1) });
-    expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: queryKeys.ticketDetail(1) });
+  // Spec 2026-11-15 §7.11 item 3: a step is advanced in ONE place, the /fulfilment card. This page shows the tracker
+  // read-only, even to import and the CEO, and points there. UI narrowing only: the advance endpoint and its
+  // import/ceo gate are unchanged.
+  it.each(['import', 'ceo'])('shows the tracker read-only to %s (no advance control) and points to /fulfilment', async (role) => {
+    renderPage({ role });
+    expect(await screen.findByTestId('factory-progress-11')).not.toBeNull();
+    expect(screen.queryByTestId('advance-11')).toBeNull();
+    expect(screen.queryByTestId('advance-target-11')).toBeNull();
+    expect(screen.getByTestId('ir-step-readonly-11').textContent).toContain('การขนส่ง');
+    expect(screen.getByRole('link', { name: /ไปหน้า การขนส่ง/ }).getAttribute('href')).toBe('/fulfilment');
+    expect(api.storedImportRequests.advanceStep).not.toHaveBeenCalled();
   });
 
   it('gives import no issue / revise / delete control on the factory cards (those are owner/CEO only)', async () => {

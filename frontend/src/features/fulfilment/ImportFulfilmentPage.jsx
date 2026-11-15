@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -14,7 +14,35 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { FactoryProgressBar } from '../importProgress/FactoryProgressBar.jsx';
-import { IMPORT_STEPS } from '../importProgress/importSteps.js';
+import { IMPORT_STEPS, importStepMeta } from '../importProgress/importSteps.js';
+
+// Spec 2026-11-15 §7.11 item 3 (design a-fulfil): this page is the ONE place a factory step is advanced, and an
+// advance is reversible for this long through POST .../advance-step/undo (V216; the server enforces the same 30 s,
+// actor-only and step-unchanged rules). An advance to RECEIVED is not offered: it completes the shipment and may roll
+// the deal up, which the undo endpoint refuses.
+export const STEP_UNDO_WINDOW_MS = 30_000;
+
+function StepUndoSnackbar({ undo, busy, onUndo }) {
+  return (
+    <div
+      role="status"
+      data-testid="step-undo-snackbar"
+      className="fixed inset-x-4 bottom-4 z-40 mx-auto flex max-w-xl flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-md bg-text px-4 py-3 text-sm text-surface shadow-lg"
+    >
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        เลื่อนเป็น “{undo.label}”{undo.docNumber ? ` · ${undo.docNumber}` : ''}
+      </span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onUndo}
+        className="min-h-9 shrink-0 cursor-pointer rounded-md border-0 bg-transparent px-2 font-bold text-surface underline disabled:opacity-60 mobile:min-h-11"
+      >
+        เลิกทำ
+      </button>
+    </div>
+  );
+}
 
 /**
  * งานนำเข้า — Import's cross-deal fulfilment worklist, tracking per FACTORY (see
@@ -121,6 +149,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const [stepFilter, setStepFilter] = useState('ALL');
   const [search, setSearch] = useState('');
   const [emailRow, setEmailRow] = useState(null);
+  // The latest advance that can still be undone: { rowId, ticketId, targetStep, label, docNumber, key }.
+  const [undo, setUndo] = useState(null);
+  useEffect(() => {
+    if (!undo) return undefined;
+    const timer = setTimeout(() => setUndo((cur) => (cur?.key === undo.key ? null : cur)), STEP_UNDO_WINDOW_MS);
+    return () => clearTimeout(timer);
+  }, [undo]);
   // Field names MUST be emailTo/emailSubject/emailBody, matching Java's UpdateEmailDraftRequest
   // exactly — see ImportRequestFactoryCard.jsx's comment on the failure mode (`to`/`subject`/`body`
   // silently dropped, old value kept, 200 OK).
@@ -178,8 +213,17 @@ export function ImportFulfilmentPage({ user, showToast }) {
     // deal: TicketService#applyImportRequestRollup (backend/.../TicketService.java ~942-948)
     // writes only the GOODS_RECEIVED EVENT for that status, never fulfillment_status itself. Only
     // worth taking when the row could have completed the deal (targetStep RECEIVED).
-    onSuccess: async (_data, { ticketId, targetStep }) => {
+    onSuccess: async (_data, { rowId, ticketId, targetStep, docNumber }) => {
       invalidateAfterAdvance(ticketId);
+      if (targetStep !== 'RECEIVED') {
+        // The snackbar IS the confirmation here; it replaces the toast.
+        setUndo({
+          rowId, ticketId, targetStep, docNumber,
+          label: importStepMeta(targetStep)?.label ?? targetStep,
+          key: `${rowId}:${targetStep}:${Date.now()}`,
+        });
+        return;
+      }
       let completesDeal = false;
       if (targetStep === 'RECEIVED') {
         try {
@@ -206,6 +250,18 @@ export function ImportFulfilmentPage({ user, showToast }) {
         : 'อัปเดตสถานะรายโรงงานแล้ว');
     },
     onError: (e) => showToast?.('error', e?.message ?? 'อัปเดตไม่สำเร็จ'),
+  });
+  const undoStep = useMutation({
+    mutationFn: ({ rowId, targetStep }) => api.storedImportRequests.undoStep(rowId, { expectedStep: targetStep }),
+    onSuccess: (_d, { ticketId }) => {
+      invalidateAfterAdvance(ticketId);
+      setUndo(null);
+      showToast?.('success', 'เลิกทำการเลื่อนขั้นตอนแล้ว');
+    },
+    onError: (e) => {
+      setUndo(null);
+      showToast?.('error', e?.message ?? 'เลิกทำไม่สำเร็จ');
+    },
   });
   const setLeadTime = useMutation({
     mutationFn: ({ rowId, payload }) => api.storedImportRequests.setLeadTime(rowId, payload),
@@ -370,8 +426,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
   return (
     <PageStack>
       <PageHeader
-        title="งานนำเข้า"
-        subtitle="ติดตามและเลื่อนสถานะนำเข้ารายโรงงาน — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง"
+        title="การขนส่ง"
+        subtitle="ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้ — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง · ฝ่ายขายเห็นขั้นตอนเดียวกันในดีล (ดูอย่างเดียว)"
         actions={(
           <Button
             type="button"
@@ -507,6 +563,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
                           rowId: r.id,
                           targetStep,
                           ticketId: deal.ticketId,
+                          docNumber: row.docNumber,
                         })}
                         onOpenEmail={editable ? openEmail : undefined}
                       />
@@ -614,6 +671,14 @@ export function ImportFulfilmentPage({ user, showToast }) {
       <p className="text-2xs text-text-muted">
         การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ จัดซื้อ-ส่งมอบ ของดีลนั้น
       </p>
+
+      {undo ? (
+        <StepUndoSnackbar
+          undo={undo}
+          busy={undoStep.isPending}
+          onUndo={() => undoStep.mutate({ rowId: undo.rowId, targetStep: undo.targetStep, ticketId: undo.ticketId })}
+        />
+      ) : null}
 
       {emailRow ? (
         <Modal

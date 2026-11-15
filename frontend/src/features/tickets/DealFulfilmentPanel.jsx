@@ -866,7 +866,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     ticketId={ticketId}
                     canFullWrite={canFullWriteStoredIr}
                     canFooterWrite={canFooterWriteStoredIr}
-                    canAdvance={canAdvanceStoredIr}
+                    canSetLeadTime={canAdvanceStoredIr}
                     canEmailWrite={canEmailWriteStoredIr}
                     showOrderEmail={role !== 'sales'}
                     showToast={showToast}

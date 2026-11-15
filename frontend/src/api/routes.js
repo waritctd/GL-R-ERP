@@ -241,6 +241,7 @@ export const API_ROUTES = {
     issue: (id) => `/api/import-requests/${id}/issue`,
     revise: (id) => `/api/import-requests/${id}/revise`,
     advanceStep: (id) => `/api/import-requests/${id}/advance-step`,
+    undoStep: (id) => `/api/import-requests/${id}/advance-step/undo`,
     leadTime: (id) => `/api/import-requests/${id}/lead-time`,
     emailDraft: (id) => `/api/import-requests/${id}/email-draft`,
     markEmailSent: (id) => `/api/import-requests/${id}/mark-email-sent`,
