@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom';
 import { Icon } from '../../components/common/Icon.jsx';
-import { BOARD_COLUMNS, baht, quarterLabel, sumValue } from './boardFormat.js';
+import { BOARD_COLUMNS, money, otherCurrencyTotals, quarterLabel, sumValue, totalLabel } from './boardFormat.js';
 
 function Chip({ tone = 'neutral', children }) {
   const tones = {
@@ -34,7 +34,10 @@ function DealCard({ deal, showCode }) {
         </span>
       ) : null}
       <span className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-bold tabular-nums text-text">{baht(deal.value)}</span>
+        <span className="flex flex-wrap items-baseline gap-1.5">
+          <span className="text-sm font-bold tabular-nums text-text">{money(deal.value, deal.currency)}</span>
+          {deal.valueExpired ? <Chip>หมดอายุ</Chip> : null}
+        </span>
         <span className="flex flex-wrap gap-1">
           {deal.quiet ? <Chip tone="warning">เงียบ {deal.daysQuiet} วัน</Chip> : null}
           {deal.winProbability != null ? <Chip>{deal.winProbability}%</Chip> : null}
@@ -68,7 +71,7 @@ export function DealBoard({ deals }) {
                 <span className="text-2xs font-bold text-text-muted">· {col.code}</span>
               </h3>
               <small className="text-xs tabular-nums text-text-muted">
-                {inColumn.length} ดีล · {baht(sumValue(inColumn))}
+                {inColumn.length} ดีล · {totalLabel(sumValue(inColumn), otherCurrencyTotals(inColumn))}
               </small>
               {col.auto ? (
                 <span className="inline-flex items-center gap-1 text-2xs font-bold text-accent-dark">

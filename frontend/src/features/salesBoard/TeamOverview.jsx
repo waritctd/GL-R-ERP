@@ -4,7 +4,19 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
-import { baht, columnLabel, sinceLabel, sumValue } from './boardFormat.js';
+import { columnLabel, money, otherCurrencyTotals, sinceLabel, sumValue, totalLabel } from './boardFormat.js';
+
+// A manager's or the CEO's own deals stay in the table, labelled (review LOW); a rep's row carries no label.
+const ROLE_LABEL = { sales_manager: 'ผจก.ขาย', ceo: 'CEO' };
+
+/** Adds up each rep's per-currency map: { USD: 1000, … }. */
+function mergeOther(reps) {
+  const totals = {};
+  reps.forEach((r) => Object.entries(r.otherCurrencyValues ?? {}).forEach(([code, v]) => {
+    totals[code] = (totals[code] ?? 0) + Number(v);
+  }));
+  return totals;
+}
 
 const ROW = 'px-5 py-3 mobile:px-3.5';
 
@@ -52,7 +64,12 @@ export function TeamOverview({ showTitle = true }) {
       ) : (
         <>
           <div className="grid grid-cols-2 gap-3">
-            <Tile testId="tile-held" label="ดีลที่ถืออยู่" value={`${openDeals} ดีล`} sub={`มูลค่า ${baht(openValue)}`} />
+            <Tile
+              testId="tile-held"
+              label="ดีลที่ถืออยู่"
+              value={`${openDeals} ดีล`}
+              sub={`มูลค่า ${totalLabel(openValue, mergeOther(team.reps))}`}
+            />
             <Tile
               testId="tile-quiet"
               label={`ดีลเงียบเกิน ${quietDays} วัน`}
@@ -86,9 +103,14 @@ export function TeamOverview({ showTitle = true }) {
                         >
                           {rep.name || `#${rep.employeeId}`}
                         </Link>
+                        {ROLE_LABEL[rep.role] ? (
+                          <span className="ml-1.5 whitespace-nowrap rounded-full bg-surface-subtle px-1.5 py-px text-2xs font-bold text-text-muted">
+                            {ROLE_LABEL[rep.role]}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-3 py-3 text-right tabular-nums mobile:px-1.5">{rep.openDeals}</td>
-                      <td className="px-3 py-3 text-right font-bold tabular-nums whitespace-nowrap mobile:px-1.5">{baht(rep.openValue)}</td>
+                      <td className="px-3 py-3 text-right font-bold tabular-nums whitespace-nowrap mobile:px-1.5">{totalLabel(rep.openValue, rep.otherCurrencyValues)}</td>
                       <td className="px-3 py-3 mobile:px-1.5"><QuietChip count={rep.quietDeals} /></td>
                       <td className="px-5 py-3 whitespace-nowrap text-text-muted mobile:px-3.5">{sinceLabel(rep.lastUpdateAt)}</td>
                     </tr>
@@ -106,7 +128,11 @@ export function TeamOverview({ showTitle = true }) {
                 <small className="text-xs font-normal text-text-muted">เรียงตามมูลค่า × วันที่เงียบ</small>
               </span>
             )}
-            actions={<span className="text-sm tabular-nums text-text-muted">{baht(sumValue(team.stale))}</span>}
+            actions={(
+              <span className="text-sm tabular-nums text-text-muted">
+                {totalLabel(sumValue(team.stale), otherCurrencyTotals(team.stale))}
+              </span>
+            )}
           >
             {team.stale.length === 0 ? (
               <p className={`m-0 text-sm font-bold text-text-muted ${ROW}`}>
@@ -128,7 +154,7 @@ export function TeamOverview({ showTitle = true }) {
                       </span>
                     </div>
                     <span className="grid shrink-0 justify-items-end gap-1">
-                      <span className="text-sm font-bold tabular-nums text-text">{baht(deal.value)}</span>
+                      <span className="text-sm font-bold tabular-nums text-text">{money(deal.value, deal.currency)}</span>
                       <span className="rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">
                         เงียบ {deal.daysQuiet} วัน
                       </span>

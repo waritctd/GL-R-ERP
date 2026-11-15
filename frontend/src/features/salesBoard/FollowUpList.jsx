@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
-import { baht, columnLabel } from './boardFormat.js';
+import { activityKindLabel } from '../tickets/dealTrackingMeta.js';
+import { columnLabel, money } from './boardFormat.js';
 
 // The m-call dialog's four outcomes. Stored as the activity note's first line (deal_activity has no outcome
 // column); the rep's own note follows.
@@ -23,7 +24,8 @@ function CallModal({ deal, submitting, onClose, onSubmit }) {
         <>
           <span className="mr-auto text-xs text-text-muted mobile:hidden">บันทึกแล้วดีลนี้ออกจาก “ควรตามต่อ”</span>
           <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
-          <Button type="button" disabled={submitting} onClick={submit}>{submitting ? 'กำลังบันทึก…' : 'บันทึก'}</Button>
+          {/* An outcome is required (review M4): an empty save would clear the quiet clock with nothing logged. */}
+          <Button type="button" disabled={submitting || !outcome} onClick={submit}>{submitting ? 'กำลังบันทึก…' : 'บันทึก'}</Button>
         </>
       )}
     >
@@ -97,9 +99,14 @@ export function FollowUpList({ deals, quietDays, onLogCall, onCloseDeal, logging
                 <span className="min-w-0 break-words text-xs text-text-muted">
                   {[columnLabel(deal.boardColumn), deal.designerName ?? deal.customerName].filter(Boolean).join(' · ')}
                 </span>
+                {deal.lastActivityKind ? (
+                  <span className="min-w-0 break-words text-xs text-text-muted">
+                    {`ครั้งล่าสุด: ${[activityKindLabel(deal.lastActivityKind), deal.lastActivityNote].filter(Boolean).join(' · ')}`}
+                  </span>
+                ) : null}
               </div>
               <span className="grid shrink-0 justify-items-end gap-1">
-                <span className="text-sm font-bold tabular-nums text-text">{baht(deal.value)}</span>
+                <span className="text-sm font-bold tabular-nums text-text">{money(deal.value, deal.currency)}</span>
                 <span className="rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">
                   เงียบ {deal.daysQuiet} วัน
                 </span>
@@ -121,8 +128,8 @@ export function FollowUpList({ deals, quietDays, onLogCall, onCloseDeal, logging
           submitting={loggingCall}
           onClose={() => setCalling(null)}
           onSubmit={async (note) => {
-            await onLogCall(calling, note);
-            setCalling(null);
+            // A failure is reported by the caller (toast) and the dialog stays open with what was typed.
+            if (await onLogCall(calling, note)) setCalling(null);
           }}
         />
       ) : null}

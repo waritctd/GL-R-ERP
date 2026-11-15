@@ -112,3 +112,47 @@ describe('TeamOverview', () => {
     expect(screen.queryByText('฿0.00')).toBeNull();
   });
 });
+
+describe('TeamOverview — review fixes (M1 currency, role label)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('keeps a non-THB value out of the ฿ figures and shows it with its currency', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({
+      quietDays: 14,
+      reps: [{ employeeId: 6, name: 'คุณสมหมาย ขายดี', role: 'sales', openDeals: 2, openValue: 2000,
+        otherCurrencyValues: { USD: 1000 }, quietDeals: 1, lastUpdateAt: now.toISOString() }],
+      stale: [stale({ ticketId: 71, title: 'Dubai Lounge', value: 1000, currency: 'USD', daysQuiet: 30 })],
+    });
+    renderTeam();
+
+    const held = await screen.findByTestId('tile-held');
+    expect(within(held).getByText('มูลค่า ฿2,000 + USD 1,000')).toBeTruthy();
+    const row = within(screen.getByRole('table')).getAllByRole('row')[1];
+    expect(within(row).getByText('฿2,000 + USD 1,000')).toBeTruthy();
+    const item = within(screen.getByTestId('team-stale')).getAllByRole('listitem')[0];
+    expect(within(item).getByText('USD 1,000')).toBeTruthy();
+  });
+
+  it('labels a manager\'s or the CEO\'s own deals with their role', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({
+      quietDays: 14,
+      reps: [
+        { employeeId: 9, name: 'ผู้จัดการ ทดสอบ', role: 'sales_manager', openDeals: 1, openValue: 0,
+          otherCurrencyValues: {}, quietDeals: 0, lastUpdateAt: null },
+        { employeeId: 3, name: 'ซีอีโอ ทดสอบ', role: 'ceo', openDeals: 1, openValue: 0, otherCurrencyValues: {},
+          quietDeals: 0, lastUpdateAt: null },
+        { employeeId: 6, name: 'คุณสมหมาย ขายดี', role: 'sales', openDeals: 1, openValue: 0, otherCurrencyValues: {},
+          quietDeals: 0, lastUpdateAt: null },
+      ],
+      stale: [],
+    });
+    renderTeam();
+
+    const rows = within(await screen.findByRole('table')).getAllByRole('row').slice(1);
+    expect(within(rows[0]).getByText('ผจก.ขาย')).toBeTruthy();
+    expect(within(rows[1]).getByText('CEO')).toBeTruthy();
+    expect(within(rows[2]).queryByText(/ผจก\.ขาย|CEO/)).toBeNull();
+  });
+});

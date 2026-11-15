@@ -15,25 +15,31 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       salesBoard: { myWork: vi.fn() },
-      tickets: { addActivity: vi.fn(), markLost: vi.fn() },
+      tickets: { addActivity: vi.fn(), markLost: vi.fn(), create: vi.fn() },
       meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
     },
   };
 });
 
+// The real modal fetches customers/projects; this page only has to open it.
+vi.mock('../tickets/TicketCreateModal.jsx', () => ({
+  TicketCreateModal: () => <div role="dialog">สร้างดีลใหม่ (stub)</div>,
+}));
+
 const quiet = {
   ticketId: 31, title: 'สยามพารากอน · ห้องน้ำชั้น 3', customerName: 'สยามพิวรรธน์', projectName: null, ownerId: 6,
   ownerName: 'คุณสมหมาย', salesStage: 'QUOTE_DESIGN_SIDE', repCode: 'S3', boardColumn: 3, value: 1240000,
   designerName: 'เทพสตูดิโอ ดีไซน์', winProbability: 40, expectedQuarter: null,
-  lastTouchedAt: '2026-10-19T00:00:00Z', daysQuiet: 27, quiet: true,
+  lastTouchedAt: '2026-10-19T00:00:00Z', daysQuiet: 27, quiet: true, currency: 'THB', valueExpired: false,
+  lastActivityKind: null, lastActivityNote: null,
 };
 const fresh = { ...quiet, ticketId: 32, title: 'BMW Showroom', daysQuiet: 2, quiet: false };
 
-function renderMyWork() {
+function renderMyWork(props = {}) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter><MyWork /></MemoryRouter>
+      <MemoryRouter><MyWork showToast={vi.fn()} {...props} /></MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -108,5 +114,114 @@ describe('MyWork', () => {
     await screen.findByTestId('deal-board');
     expect(screen.getByTestId('board-card-31')).toBeTruthy();
     expect(screen.getByTestId('board-card-32')).toBeTruthy();
+  });
+});
+
+// ── review fixes (M1, M3, M4, LOW error toasts, design gaps) ─────────────────────────────────
+
+describe('MyWork — review fixes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.salesBoard.myWork.mockResolvedValue({ followUp: [quiet], board: [quiet, fresh], quietDays: 14 });
+    api.tickets.addActivity.mockResolvedValue({ id: 1 });
+    api.tickets.markLost.mockResolvedValue({});
+  });
+
+  it('the call dialog cannot save without an outcome (M4)', async () => {
+    renderMyWork();
+    const row = await screen.findByTestId('follow-up-31');
+    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
+    const dialog = await screen.findByRole('dialog');
+
+    const save = within(dialog).getByRole('button', { name: 'บันทึก' });
+    expect(save.disabled).toBe(true);
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'คุยแล้ว ยังสนใจ' }));
+    expect(save.disabled).toBe(false);
+  });
+
+  it('a failed call log shows the error toast and keeps the dialog open', async () => {
+    const showToast = vi.fn();
+    api.tickets.addActivity.mockRejectedValue(new Error('ไม่มีสิทธิ์'));
+    renderMyWork({ showToast });
+    const row = await screen.findByTestId('follow-up-31');
+    fireEvent.click(within(row).getByRole('button', { name: /โทรแล้ว/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่รับสาย' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ไม่มีสิทธิ์'));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+  });
+
+  it('a failed mark-lost shows the error toast', async () => {
+    const showToast = vi.fn();
+    api.tickets.markLost.mockRejectedValue(new Error('ปิดดีลไม่ได้'));
+    renderMyWork({ showToast });
+    const row = await screen.findByTestId('follow-up-31');
+    fireEvent.click(within(row).getByRole('button', { name: 'ปิดดีลนี้' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getAllByRole('radio')[1]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยันเสียงาน' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ปิดดีลไม่ได้'));
+  });
+
+  it('a follow-up row says what was done last (ครั้งล่าสุด)', async () => {
+    api.salesBoard.myWork.mockResolvedValue({
+      followUp: [{ ...quiet, lastActivityKind: 'CALL', lastActivityNote: 'ส่งตัวอย่าง' }], board: [quiet], quietDays: 14,
+    });
+    renderMyWork();
+
+    const row = await screen.findByTestId('follow-up-31');
+    expect(within(row).getByText('ครั้งล่าสุด: โทรศัพท์ · ส่งตัวอย่าง')).toBeTruthy();
+  });
+
+  it('the board filter ไตรมาสนี้ keeps only deals expected this quarter', async () => {
+    const now = new Date();
+    const thisQuarter = `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
+    api.salesBoard.myWork.mockResolvedValue({
+      followUp: [],
+      board: [{ ...fresh, ticketId: 41, expectedQuarter: thisQuarter }, { ...fresh, ticketId: 42, expectedQuarter: null }],
+      quietDays: 14,
+    });
+    renderMyWork();
+    await screen.findByTestId('board-card-42');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
+    expect(screen.getByTestId('board-card-41')).toBeTruthy();
+    expect(screen.queryByTestId('board-card-42')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'ทั้งหมด' }));
+    expect(screen.getByTestId('board-card-42')).toBeTruthy();
+  });
+
+  it('a USD deal shows USD and stays out of the ฿ total (M1)', async () => {
+    api.salesBoard.myWork.mockResolvedValue({
+      followUp: [],
+      board: [{ ...fresh, ticketId: 51, value: 1000, currency: 'USD' }, { ...fresh, ticketId: 52, value: 2000, currency: 'THB' }],
+      quietDays: 14,
+    });
+    renderMyWork();
+
+    const card = await screen.findByTestId('board-card-51');
+    expect(within(card).getByText('USD 1,000')).toBeTruthy();
+    expect(screen.getByTestId('board-total').textContent).toBe('฿2,000 + USD 1,000');
+  });
+
+  it('an expired quotation value is flagged หมดอายุ (M3)', async () => {
+    api.salesBoard.myWork.mockResolvedValue({
+      followUp: [], board: [{ ...fresh, ticketId: 61, value: 5000, currency: 'THB', valueExpired: true }], quietDays: 14,
+    });
+    renderMyWork();
+
+    const card = await screen.findByTestId('board-card-61');
+    expect(within(card).getByText('หมดอายุ')).toBeTruthy();
+  });
+
+  it('งานใหม่ opens the existing create-deal modal', async () => {
+    renderMyWork();
+    await screen.findByTestId('follow-up-31');
+
+    fireEvent.click(screen.getByRole('button', { name: /งานใหม่/ }));
+    expect(await screen.findByText('สร้างดีลใหม่ (stub)')).toBeTruthy();
   });
 });
