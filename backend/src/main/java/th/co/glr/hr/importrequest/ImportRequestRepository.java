@@ -363,9 +363,14 @@ public class ImportRequestRepository {
     /** Compare-and-set step advance: only succeeds WHERE status = 'ISSUED' AND import_step = :expected. */
     public int advanceStep(long id, String expectedCurrentStep, String targetStep,
                            LocalDate eventDate, long actorId, String actorName, String note) {
+        // V216: remember the stamp being replaced (Postgres SET reads the OLD row), so the actor can undo this one
+        // advance for 30 s. Every advance overwrites it, so the undo is one level only.
         return jdbc.update("""
             UPDATE sales.import_request
-               SET import_step = :target, import_step_at = :eventDate,
+               SET step_undo_from = import_step, step_undo_from_at = import_step_at,
+                   step_undo_from_by_id = import_step_by_id, step_undo_from_by_name = import_step_by_name,
+                   step_undo_from_note = import_step_note, step_advanced_at = now(),
+                   import_step = :target, import_step_at = :eventDate,
                    import_step_by_id = :actorId, import_step_by_name = :actorName,
                    import_step_note = :note, updated_at = now()
              WHERE import_request_id = :id AND status = 'ISSUED' AND import_step = :expected
@@ -373,6 +378,57 @@ public class ImportRequestRepository {
                 .addValue("eventDate", eventDate).addValue("actorId", actorId)
                 .addValue("actorName", actorName).addValue("note", note)
                 .addValue("expected", expectedCurrentStep));
+    }
+
+    /**
+     * What an undo needs to decide (V216). {@code advancedAt} is the database's stamp of the latest advance; the
+     * service compares it with its own clock, and {@link #undoStep}'s guarded UPDATE repeats the window against the
+     * database clock: two independent checks (review M3).
+     */
+    public record StepUndoState(String status, String importStep, Long advancedById, String undoFrom,
+                                java.time.Instant advancedAt) {}
+
+    public java.util.Optional<StepUndoState> findStepUndoState(long id) {
+        return jdbc.query("""
+            SELECT status, import_step, import_step_by_id, step_undo_from, step_advanced_at
+              FROM sales.import_request WHERE import_request_id = :id
+            """, new MapSqlParameterSource("id", id), (rs, n) -> {
+                long by = rs.getLong("import_step_by_id");
+                Long advancedBy = rs.wasNull() ? null : by;
+                java.sql.Timestamp at = rs.getTimestamp("step_advanced_at");
+                return new StepUndoState(rs.getString("status"), rs.getString("import_step"), advancedBy,
+                    rs.getString("step_undo_from"), at == null ? null : at.toInstant());
+            }).stream().findFirst();
+    }
+
+    /** Whether the rep was already told this deal's import started (TicketEventKind.IMPORT_STARTED, review M4): an
+     * undo back to CONTACTED followed by a re-advance must not tell them twice. */
+    public boolean importStartedNoticeSent(long ticketId, long repEmployeeId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM hr.notification
+                            WHERE employee_id = :e AND type = 'IMPORT_STARTED' AND link = :link)
+            """, new MapSqlParameterSource("e", repEmployeeId).addValue("link", "/tickets/" + ticketId),
+            Boolean.class));
+    }
+
+    /**
+     * Restores the stamp the latest advance replaced (V216), compare-and-set on everything the service checked: still
+     * ISSUED, still at {@code expectedStep}, advanced by {@code actorId}, inside the window. 0 rows = lost a race.
+     */
+    public int undoStep(long id, String expectedStep, long actorId, int windowSeconds) {
+        return jdbc.update("""
+            UPDATE sales.import_request
+               SET import_step = step_undo_from, import_step_at = step_undo_from_at,
+                   import_step_by_id = step_undo_from_by_id, import_step_by_name = step_undo_from_by_name,
+                   import_step_note = step_undo_from_note,
+                   step_undo_from = NULL, step_undo_from_at = NULL, step_undo_from_by_id = NULL,
+                   step_undo_from_by_name = NULL, step_undo_from_note = NULL, step_advanced_at = NULL,
+                   updated_at = now()
+             WHERE import_request_id = :id AND status = 'ISSUED' AND import_step = :expected
+               AND import_step_by_id = :actor AND step_undo_from IS NOT NULL
+               AND step_advanced_at >= now() - make_interval(secs => :w)
+            """, new MapSqlParameterSource("id", id).addValue("expected", expectedStep).addValue("actor", actorId)
+                .addValue("w", windowSeconds));
     }
 
     /** Every ISSUED row for a deal — the rollup's raw input (V184). */

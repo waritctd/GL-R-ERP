@@ -576,7 +576,22 @@ function CeoRenameItem({ requestItem, saving, onSave }) {
  * read-only view that can still copy. `attachments` are the request attachments ticked to travel
  * with the mail (read-only here; the tick lives in the request's own attachment list).
  */
-function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, savePending, onCopy, canEdit, attachments = [] }) {
+// Design m-email (spec §7.11 item 4): each field has its own คัดลอก, and คัดลอกทั้งหมด puts ถึง + หัวข้อ + เนื้อหา on
+// the clipboard at once. Copying changes no status — ติดต่อโรงงานแล้ว stays its own step.
+function CopyFieldButton({ label, value, onCopyText }) {
+  return (
+    <Button
+      type="button" variant="text" size="sm" className="justify-self-end whitespace-nowrap"
+      aria-label={`คัดลอก ${label}`} disabled={!value} onClick={() => onCopyText(value)}
+    >
+      คัดลอก
+    </Button>
+  );
+}
+
+function FactoryEmailDraftModal({
+  quote, draft, onChangeDraft, onClose, onSave, savePending, onCopy, onCopyText, canEdit, attachments = [],
+}) {
   return (
     <Modal
       title="สร้างเมล"
@@ -585,6 +600,7 @@ function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, 
       testId="factory-email-draft-modal"
       footer={
         <>
+          <span className="mr-auto min-w-0 text-xs text-text-muted mobile:basis-full">วางในอีเมลได้ทีเดียว ทั้งถึง หัวข้อ และเนื้อหา</span>
           <Button type="button" variant="secondary" onClick={onClose}>ปิด</Button>
           {canEdit ? (
             <Button type="button" variant="secondary" disabled={savePending} onClick={onSave}>
@@ -593,7 +609,7 @@ function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, 
           ) : null}
           <Button type="button" variant="primary" data-testid="pcr-copy-factory-email" onClick={() => onCopy(draft)}>
             <Icon name="clipboard" size={14} />
-            คัดลอกเมล
+            คัดลอกทั้งหมด
           </Button>
         </>
       }
@@ -604,32 +620,41 @@ function FactoryEmailDraftModal({ quote, draft, onChangeDraft, onClose, onSave, 
             ? 'ระบบไม่ได้ส่งเมลให้ — คัดลอกไปส่งจากโปรแกรมเมลของคุณ แล้วกลับมากด “ติดต่อโรงงานแล้ว”'
             : 'แก้ไขเมลฉบับนี้ไม่ได้แล้ว — ยังคัดลอกไปใช้ซ้ำได้'}
         </p>
-        <FormField label="ถึง" htmlFor="pcr-email-to" hint={canEdit ? 'ดึงจากอีเมลโรงงานในข้อมูลหลัก — ไม่บังคับ' : undefined}>
-          <input
-            id="pcr-email-to"
-            type="email"
-            disabled={!canEdit}
-            value={draft.emailTo}
-            onChange={(e) => onChangeDraft({ ...draft, emailTo: e.target.value })}
-          />
-        </FormField>
-        <FormField label="หัวข้อ" htmlFor="pcr-email-subject">
-          <input
-            id="pcr-email-subject"
-            disabled={!canEdit}
-            value={draft.emailSubject}
-            onChange={(e) => onChangeDraft({ ...draft, emailSubject: e.target.value })}
-          />
-        </FormField>
-        <FormField label="เนื้อหา" htmlFor="pcr-email-body">
-          <textarea
-            id="pcr-email-body"
-            className="min-h-40"
-            disabled={!canEdit}
-            value={draft.emailBody}
-            onChange={(e) => onChangeDraft({ ...draft, emailBody: e.target.value })}
-          />
-        </FormField>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-2">
+          <FormField label="ถึง" htmlFor="pcr-email-to" hint={canEdit ? 'ดึงจากอีเมลโรงงานในข้อมูลหลัก — ไม่บังคับ' : undefined}>
+            <input
+              id="pcr-email-to"
+              type="email"
+              disabled={!canEdit}
+              value={draft.emailTo}
+              onChange={(e) => onChangeDraft({ ...draft, emailTo: e.target.value })}
+            />
+          </FormField>
+          <CopyFieldButton label="ถึง" value={draft.emailTo} onCopyText={onCopyText} />
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-x-2">
+          <FormField label="หัวข้อ" htmlFor="pcr-email-subject">
+            <input
+              id="pcr-email-subject"
+              disabled={!canEdit}
+              value={draft.emailSubject}
+              onChange={(e) => onChangeDraft({ ...draft, emailSubject: e.target.value })}
+            />
+          </FormField>
+          <CopyFieldButton label="หัวข้อ" value={draft.emailSubject} onCopyText={onCopyText} />
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2">
+          <FormField label="เนื้อหา" htmlFor="pcr-email-body">
+            <textarea
+              id="pcr-email-body"
+              className="min-h-40"
+              disabled={!canEdit}
+              value={draft.emailBody}
+              onChange={(e) => onChangeDraft({ ...draft, emailBody: e.target.value })}
+            />
+          </FormField>
+          <CopyFieldButton label="เนื้อหา" value={draft.emailBody} onCopyText={onCopyText} />
+        </div>
         {attachments.length > 0 ? (
           <div className="grid gap-1 text-xs text-text-secondary" data-testid="pcr-email-attachments">
             <span className="font-bold text-text-muted">ไฟล์ที่แนบไปกับเมล</span>
@@ -1674,7 +1699,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
     },
     onError: (error) => showToast?.('error', error.message || 'ดำเนินการไม่สำเร็จ'),
   });
-  /** Copies the generated factory message so Import can paste it into its own mail client. */
+  /** Copies the generated factory message (ถึง + หัวข้อ + เนื้อหา) so Import can paste it into its own mail client. */
   async function copyFactoryEmail(emailDraft) {
     const text = [
       emailDraft.emailTo ? `To: ${emailDraft.emailTo}` : null,
@@ -1682,6 +1707,9 @@ export function PricingRequestDetailPage({ user, showToast }) {
       '',
       emailDraft.emailBody ?? '',
     ].filter((line) => line !== null).join('\n');
+    await copyText(text);
+  }
+  async function copyText(text) {
     try {
       if (!navigator.clipboard?.writeText) throw new Error('clipboard unavailable');
       await navigator.clipboard.writeText(text);
@@ -2903,6 +2931,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
             // A Sales-LOCKED per-กล่อง / per-เมตร line cannot switch at all (FactoryQuoteService 409s anything
             // but the ตร.ม.<->แผ่น pair on a locked line): show the unit read-only. Legacy lines are unconstrained.
             fixedUnit: ['PER_BOX', 'PER_LINEAR_M'].includes(requested?.requestedPriceUnitBasis) ? `/ ${unitName(line.unitBasis)}` : null,
+            // Spec §7.11 item 2: a unit Sales set (and import has not moved off) is a chip, not a re-ask; แก้ reveals
+            // the switch below. Display only — the line's unitBasis is what the confirm sends, either way.
+            salesUnit: requested?.requestedPriceUnitBasis && line.unitBasis === requested.requestedPriceUnitBasis
+              && !['PER_BOX', 'PER_LINEAR_M'].includes(requested.requestedPriceUnitBasis)
+              ? `/ ${unitName(line.unitBasis)}` : null,
             unitSwitch: {
               value: line.unitBasis,
               ariaLabel: `หน่วยราคา ${itemRef}`,
@@ -2995,6 +3028,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
             return { ...cur, [current.id]: { ...latest, defaultCurrency: currency, items: latest.items.map((line) => ({ ...line, currency })) } };
           }),
           requestedCurrencies: [...new Set(groupRequestItems.map((item) => item?.requestedCurrency).filter(Boolean))].join(', '),
+          // Spec §7.11 item 2: every line's Sales-set currency agrees and the draft still uses it -> a chip, not the
+          // select (แก้ reveals it). Display only: onCurrency and the payload are unchanged.
+          salesCurrency: (() => {
+            const asked = [...new Set(groupRequestItems.map((item) => item?.requestedCurrency ?? null))];
+            return asked.length === 1 && asked[0] && asked[0] === sharedCurrency ? asked[0] : null;
+          })(),
           fxNote: sharedCurrency === 'THB' ? '1 THB = 1 บาท'
             : fxRate > 0 ? `1 ${sharedCurrency} = ${Number(fxRate).toLocaleString('th-TH', { maximumFractionDigits: 6 })} บาท`
               + (sharedFx?.effectiveDate ? ` (ธปท. ${formatThaiDate(sharedFx.effectiveDate)})` : '')
@@ -3978,6 +4017,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
           })}
           savePending={updateQuote.isPending}
           onCopy={copyFactoryEmail}
+          onCopyText={copyText}
           // updateDraft is the contact roles' (import + CEO), DRAFT-only, and guarded by the same DRAFT_STATUSES window
           // as markContacted — outside any of those the modal is view + copy.
           canEdit={canContactFactory && emailModalQuote.status === 'DRAFT' && emailModalQuote.current && inSendWindow}

@@ -1756,12 +1756,132 @@ public class TicketRepository {
         return keys.getKey().longValue();
     }
 
+    /**
+     * THE one rule for what a receipt does to the deal's expected payments (spec 2026-11-15 §7.7, review M1) — called
+     * for a receipt account typed ({@code TicketService#recordPayment}, ยืนยันรับมัดจำ, ยืนยันรับชำระส่วนที่เหลือ) and
+     * for an uploaded Express one ({@code TicketService#recordExpressReceipt}) alike, so the two can never disagree.
+     *
+     * <p>Which OPEN rows the amount fills first (owner ruling N5 — it replaced the fixed DEPOSIT, ON_DELIVERY, BALANCE
+     * order, which paid a far-off deposit row before this week's on-delivery one):
+     * <ul>
+     *   <li>the deal HAS an ISSUED deposit notice (a DRAFT, CANCELLED or SUPERSEDED one is no notice — the same test as
+     *       {@code TicketService#expressReceiptKind}): first the rows matching the receipt's kind — a DEPOSIT
+     *       receipt fills DEPOSIT rows; a BALANCE (any non-deposit) receipt fills ON_DELIVERY rows, then BALANCE rows —
+     *       each by expected week then oldest; whatever overflows goes to the remaining OPEN rows of any kind by
+     *       expected week;</li>
+     *   <li>the deal has NO deposit notice (bypass policy): every OPEN row purely by expected week, then oldest,
+     *       whatever its kind (a rep-entered DEPOSIT row still gets closed by its earliest receipt).</li>
+     * </ul>
+     * The receipt's own kind keeps its meaning for the payment track only. A row turns RECEIVED (linking this receipt)
+     * only when its cumulative {@code received_amount} reaches its amount minus the matcher's tolerance (±1% or ±฿10,
+     * whichever is wider); otherwise it stays OPEN with the rest still expected. What a completed row does not need
+     * carries to the next row in that order. ADJUSTMENT receipts deliberately touch no expected-payment row: a refund
+     * lowers the received cash, and the rows stay closed.
+     */
+    @SuppressWarnings("unused") // receiptDate: kept for callers and for a future tie-break
+    public void applyReceiptToExpectedPayments(long ticketId, String receiptKind, BigDecimal amount,
+                                               java.time.LocalDate receiptDate, long receiptId) {
+        if (amount == null || amount.signum() <= 0 || receiptKind == null || "ADJUSTMENT".equals(receiptKind)) {
+            return;
+        }
+        boolean hasNotice = Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.deposit_notice d
+                            WHERE d.ticket_id = :t AND d.status = 'ISSUED')
+            """, Map.of("t", ticketId), Boolean.class)); // same predicate as TicketService#expressReceiptKind
+        String order;
+        if (!hasNotice) {
+            order = "expected_week, expected_payment_id";
+        } else if ("DEPOSIT".equals(receiptKind)) {
+            order = "CASE kind WHEN 'DEPOSIT' THEN 0 ELSE 1 END, expected_week, expected_payment_id";
+        } else {
+            order = "CASE kind WHEN 'ON_DELIVERY' THEN 0 WHEN 'BALANCE' THEN 1 ELSE 2 END,"
+                + " expected_week, expected_payment_id";
+        }
+        BigDecimal left = amount;
+        while (left.signum() > 0) {
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT expected_payment_id, amount, received_amount FROM sales.expected_payment"
+                    + " WHERE ticket_id = :t AND status = 'OPEN' ORDER BY " + order + " LIMIT 1 FOR UPDATE",
+                new MapSqlParameterSource().addValue("t", ticketId));
+            if (rows.isEmpty()) {
+                return;
+            }
+            Map<String, Object> row = rows.get(0);
+            BigDecimal rowAmount = (BigDecimal) row.get("amount");
+            BigDecimal got = (BigDecimal) row.get("received_amount");
+            BigDecimal applied = left.min(rowAmount.subtract(got));
+            BigDecimal newGot = got.add(applied);
+            BigDecimal tolerance = rowAmount.multiply(new BigDecimal("0.01")).max(BigDecimal.TEN);
+            boolean complete = newGot.compareTo(rowAmount.subtract(tolerance)) >= 0;
+            jdbc.update("""
+                UPDATE sales.expected_payment
+                   SET received_amount = :got, status = :status, receipt_id = :receipt, updated_at = now()
+                 WHERE expected_payment_id = :id
+                """, new MapSqlParameterSource().addValue("got", newGot)
+                    .addValue("status", complete ? "RECEIVED" : "OPEN")
+                    .addValue("receipt", complete ? receiptId : null)
+                    .addValue("id", ((Number) row.get("expected_payment_id")).longValue()));
+            left = left.subtract(applied);
+            if (!complete) {
+                return;
+            }
+        }
+    }
+
+    /**
+     * Review H1, reverse order: the Express document number of an EXPRESS receipt already on this deal with the exact
+     * same amount, received within ±{@code days} days of {@code day} (Bangkok) — the payment account is about to type
+     * may be that one. Nearest first.
+     */
+    public java.util.Optional<String> findExpressTwin(long ticketId, BigDecimal amount, java.time.LocalDate day,
+                                                       int days) {
+        return jdbc.query("""
+            SELECT receipt_ref FROM sales.payment_receipt
+             WHERE ticket_id = :t AND source = 'EXPRESS' AND amount = :a
+               AND abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)) <= :days
+             ORDER BY abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)), receipt_id
+             LIMIT 1
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("a", amount).addValue("d", day)
+                .addValue("days", days), (rs, n) -> rs.getString(1)).stream().findFirst();
+    }
+
+    /** The deal's DEPOSIT-kind receipts, net of nothing (ADJUSTMENT is its own kind). */
+    public BigDecimal sumDepositReceipts(long ticketId) {
+        BigDecimal v = jdbc.queryForObject(
+            "SELECT COALESCE(SUM(amount), 0) FROM sales.payment_receipt WHERE ticket_id = :t AND kind = 'DEPOSIT'",
+            Map.of("t", ticketId), BigDecimal.class);
+        return v == null ? BigDecimal.ZERO : v;
+    }
+
+    /** An uploaded Express receipt (V213): source EXPRESS, receipt_ref = the Express document number. */
+    public long insertExpressReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy, Instant receivedAt,
+                                     String expressDocNo, String customerName) {
+        GeneratedKeyHolder keys = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt
+                (ticket_id, kind, amount, currency, received_at, recorded_by, receipt_ref, source, customer_name)
+            VALUES
+                (:ticketId, :kind, :amount, 'THB', COALESCE(CAST(:receivedAt AS timestamptz), now()), :recordedBy,
+                 :ref, 'EXPRESS', :customerName)
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("kind", kind)
+                .addValue("amount", amount)
+                .addValue("receivedAt", receivedAt == null ? null : Timestamp.from(receivedAt))
+                .addValue("recordedBy", recordedBy)
+                .addValue("ref", expressDocNo)
+                .addValue("customerName", customerName),
+            keys, new String[]{"receipt_id"});
+        return keys.getKey().longValue();
+    }
+
     public List<PaymentReceiptDto> findReceiptsByTicket(long ticketId) {
         return jdbc.query("""
             SELECT r.receipt_id, r.ticket_id, r.kind, r.amount, r.currency,
                    r.received_at, r.recorded_by,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS recorded_by_name,
-                   r.note, r.deposit_notice_id, r.receipt_ref, r.created_at
+                   r.note, r.deposit_notice_id, r.receipt_ref, r.created_at, r.source, r.customer_name
               FROM sales.payment_receipt r
               JOIN hr.employee e ON e.employee_id = r.recorded_by
              WHERE r.ticket_id = :ticketId
@@ -1783,7 +1903,9 @@ public class TicketRepository {
                     rs.getString("note"),
                     depositNoticeId,
                     rs.getString("receipt_ref"),
-                    rs.getTimestamp("created_at").toInstant()
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getString("source"),
+                    rs.getString("customer_name")
                 );
             });
     }

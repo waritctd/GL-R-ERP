@@ -144,6 +144,26 @@ export const API_ROUTES = {
     pipelineImports: '/api/sales/pipeline-imports',
     pipelineImportTemplate: '/api/sales/pipeline-imports/template',
   },
+  // ExpectedPaymentController (salesboard/): a deal's rep-entered expected cash (V212).
+  expectedPayments: {
+    list: (ticketId) => `/api/tickets/${ticketId}/expected-payments`,
+    detail: (ticketId, id) => `/api/tickets/${ticketId}/expected-payments/${id}`,
+  },
+  // ReceiptImportController (salesboard/receipts/): the Express receipts upload and its unmatched queue (V213).
+  receiptImports: {
+    upload: '/api/sales/receipt-imports',
+    latest: '/api/sales/receipt-imports/latest',
+    template: '/api/sales/receipt-imports/template',
+    unmatched: '/api/sales/receipt-imports/unmatched',
+    ignored: '/api/sales/receipt-imports/ignored',
+    managerView: '/api/sales/receipt-imports/manager-view',
+    deals: '/api/sales/receipt-imports/deals',
+    resolve: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/resolve`,
+    ignore: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/ignore`,
+    unignore: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/unignore`,
+    flagManager: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/flag-manager`,
+    sameAsManual: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/same-as-manual`,
+  },
   salesVisits: {
     list: '/api/sales/visits',
     team: '/api/sales/visits/team',
@@ -230,6 +250,7 @@ export const API_ROUTES = {
     issue: (id) => `/api/import-requests/${id}/issue`,
     revise: (id) => `/api/import-requests/${id}/revise`,
     advanceStep: (id) => `/api/import-requests/${id}/advance-step`,
+    undoStep: (id) => `/api/import-requests/${id}/advance-step/undo`,
     leadTime: (id) => `/api/import-requests/${id}/lead-time`,
     emailDraft: (id) => `/api/import-requests/${id}/email-draft`,
     markEmailSent: (id) => `/api/import-requests/${id}/mark-email-sent`,

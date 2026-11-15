@@ -23,6 +23,7 @@ import { depositStatus } from './dealMoneyStatus.js';
 import { EVENT_KIND_LABEL, PAYMENT_TRACK_KINDS } from './DealHistoryPanel.jsx';
 import { isRemainingInvoiceReady, pickRemainingInvoice } from './remainingInvoiceReadiness.js';
 import { isOwnerOrKeyer } from './dealOwnership.js';
+import { ReceiptSourceChip } from '../finance/ReceiptSourceChip.jsx';
 
 /** `Date.parse`-safe timestamp, or `null`: an unparseable row sorts last rather than floating to the top as `NaN` would. */
 function toTimestamp(value) {
@@ -52,6 +53,7 @@ function MoneyReceiptRow({ receipt }) {
         <div className="flex flex-wrap items-baseline gap-2">
           <strong className="text-sm text-text">{PAYMENT_KIND_LABEL[receipt.kind] ?? receipt.kind}</strong>
           <span className="font-mono text-sm text-text">{formatMoney(receipt.amount)}</span>
+          <ReceiptSourceChip source={receipt.source} />
         </div>
         <small className="block text-2xs text-text-muted">
           {receipt.recordedByName || '-'}{receipt.note ? ` · ${receipt.note}` : ''}
@@ -156,7 +158,7 @@ export function DealPaymentSection({
   pricingRequests = [], dealQuotations = [], availableActions = [],
   canReadDepositNotices = true, canManageRemainingInvoice = false, onManageRemainingInvoice,
   mainButtonCreatesNotice = false, onCreateDepositNotice,
-  canRecordPayment = false, actionLoading = false, onRecordPayment, showToast,
+  actionLoading = false, showToast,
 }) {
   const queryClient = useQueryClient();
   const role = user?.role;
@@ -451,12 +453,6 @@ export function DealPaymentSection({
             />
           </div>
         </div>
-
-        {canRecordPayment ? (
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="primary" disabled={actionLoading} onClick={onRecordPayment}>บันทึกรับชำระเงิน</Button>
-          </div>
-        ) : null}
 
         <div className="border-t border-border pt-3">
           <h3 className="m-0 mb-2.5 text-sm font-bold">ไทม์ไลน์การชำระเงิน</h3>

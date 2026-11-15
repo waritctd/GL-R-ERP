@@ -120,10 +120,35 @@ public class ImportRequestController {
      * SERVER_ONLY in frontend/src/api/serverContract.test.js as of this PR (no frontend wiring yet — see that
      * file's entry for the reason). */
     @PostMapping("/import-requests/{id}/advance-step")
-    Map<String, ImportRequestDto> advanceStep(@PathVariable long id,
+    Map<String, Object> advanceStep(@PathVariable long id,
             @Valid @RequestBody AdvanceImportStepRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("importRequest", service.advanceStep(id, request, user));
+        Map<String, Object> body = new java.util.LinkedHashMap<>();
+        body.put("importRequest", asConflict(() -> service.advanceStep(id, request, user)));
+        // When the 30 s undo window closes, in SERVER time (V216); null when there is nothing to undo.
+        body.put("undoUntil", service.stepUndoUntil(id));
+        return body;
+    }
+
+    /** Review H1: a deadlock / lock / serialization victim on advance or undo is the same Thai 409 a lost
+     * compare-and-set gets, never a 500. Caught here, outside the @Transactional proxy, because a serialization
+     * failure can surface at commit. */
+    private static ImportRequestDto asConflict(java.util.function.Supplier<ImportRequestDto> call) {
+        try {
+            return call.get();
+        } catch (org.springframework.dao.ConcurrencyFailureException e) {
+            throw new th.co.glr.hr.common.ApiException(org.springframework.http.HttpStatus.CONFLICT,
+                "ขั้นตอนถูกเปลี่ยนแปลงโดยผู้ใช้อื่น หรือฉบับนี้ถูกแทนที่แล้ว");
+        }
+    }
+
+    /** Undoes the caller's own latest step advance within 30 s (V216, the /fulfilment undo snackbar) — same role gate
+     * as advance, plus actor-only and step-unchanged; see ImportRequestService#undoStep. */
+    @PostMapping("/import-requests/{id}/advance-step/undo")
+    Map<String, ImportRequestDto> undoStep(@PathVariable long id,
+            @RequestBody(required = false) ImportRequestRequests.UndoImportStepRequest request, HttpSession session) {
+        UserPrincipal user = sessions.requireUser(session);
+        return Map.of("importRequest", asConflict(() -> service.undoStep(id, request, user)));
     }
 
     /** Sets lead time on an ISSUED row (owner decision 09-18 #2) — import/CEO only. The DRAFT-stage edit for the

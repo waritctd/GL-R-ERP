@@ -185,7 +185,8 @@ describe('mockApi storedImportRequests — coverage names the uncovered factorie
     const after = await api.storedImportRequests.coverage(ticketId);
     expect(after.hasUncoveredFactories).toBe(false);
     expect(after.uncoveredFactoryNames).toEqual([]);
-  });
+    // It drives a whole deal through the mock (about 5 s on this PC), like the S3 case above: same 20 s budget.
+  }, 20000);
 });
 
 describe('mockApi storedImportRequests — S4: bypass issue gate requires EXACTLY CUSTOMER_CONFIRMED', () => {
@@ -270,4 +271,39 @@ describe('applyImportRequestRollupMock — X5: firewall guards mirror TicketServ
     expect(ticket.fulfillmentStatus).toBe('FROM_STOCK');
     expect(ticket.events.length).toBe(eventsBefore);
   });
+});
+
+// Mirrors ImportRequestService#undoStep (V216, slice 5 task 5.3). The mock's authz is NOT evidence about the Java
+// service — ImportStepUndoIntegrationTest is. This pins the shape and the rules the /fulfilment snackbar relies on.
+describe('mockApi storedImportRequests.undoStep — the 30-second undo of an advance', () => {
+  async function issuedRow() {
+    const { ticketId } = await driveTwoFactoryTicketToOrderReceived();
+    await api.tickets.setDepositPolicy(ticketId, { policy: 'NOT_REQUIRED', reason: 'ทดสอบเลิกทำ' });
+    const { importRequests } = await api.storedImportRequests.createDrafts(ticketId, {});
+    await api.auth.login({ role: 'import' });
+    return importRequests.find((r) => r.factoryName === 'Panaria SpA');
+  }
+
+  it('restores the step the actor’s own advance replaced, once; another user 403; after a later advance 409', async () => {
+    const row = await issuedRow();
+    expect(row.importStep).toBe('CONTACTED');
+    const advanced = await api.storedImportRequests.advanceStep(row.id, { targetStep: 'ORDERED' });
+    // ImportRequestController#advanceStep: the answer carries when the undo window closes (server time).
+    expect(Date.parse(advanced.undoUntil) - Date.now()).toBeGreaterThan(25_000);
+    const { importRequest } = await api.storedImportRequests.undoStep(row.id, { expectedStep: 'ORDERED' });
+    expect(importRequest.importStep).toBe('CONTACTED');
+    await expect(api.storedImportRequests.undoStep(row.id, { expectedStep: 'CONTACTED' })).rejects.toMatchObject({ status: 409 });
+
+    await api.storedImportRequests.advanceStep(row.id, { targetStep: 'ORDERED' });
+    await api.auth.login({ role: 'ceo' });
+    await expect(api.storedImportRequests.undoStep(row.id, { expectedStep: 'ORDERED' })).rejects.toMatchObject({ status: 403 });
+    await api.storedImportRequests.advanceStep(row.id, { targetStep: 'PICKED_UP' });
+    await api.auth.login({ role: 'import' });
+    await expect(api.storedImportRequests.undoStep(row.id, { expectedStep: 'ORDERED' })).rejects.toMatchObject({ status: 409 });
+
+    await api.auth.login({ role: 'sales' });
+    await expect(api.storedImportRequests.undoStep(row.id, { expectedStep: 'PICKED_UP' })).rejects.toMatchObject({ status: 403 });
+    await api.auth.login({ role: 'import' });
+    await expect(api.storedImportRequests.undoStep(row.id, {})).rejects.toMatchObject({ status: 400 });
+  }, 20000);
 });

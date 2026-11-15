@@ -89,6 +89,9 @@ const PATH_GUARDS = [
   // tab scoping, so opening this guard for a can_issue_billing_note grant holder would hand a
   // plain `employee` the WHOLE finance worklist, not just ใบวางบิล. Add the OR together with
   // the page's own tab-level gate.
+  // The Express receipts upload is account-ONLY: ReceiptImportService refuses the CEO, so the page must not be
+  // reachable by URL for them. Listed before the /finance prefix rule (first match wins).
+  { test: (p) => p.split(/[?#]/)[0] === '/finance/receipts-import', can: (u) => u.role === 'account' },
   { test: (p) => p === '/finance' || p.startsWith('/finance/'), can: (u) => hasPermission(u.role, 'canConfirmPayments') },
   // Mirrors PayrollController exactly: every GET plus the non-persisting POST /preview and
   // /preview/export/{kind} are hasAnyRole('HR','CEO'); every write stays hr-only and is gated

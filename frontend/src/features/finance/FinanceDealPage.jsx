@@ -20,6 +20,7 @@ import {
 } from './FinanceActionModals.jsx';
 import { MilestoneSections, money, vatCaption } from './FinanceMilestoneSections.jsx';
 import { orderActions, pickPrimaryAction } from './financeDealActions.js';
+import { paymentPrefill } from './paymentPrefill.js';
 
 const ACTION_LABEL = {
   DEPOSIT_PAID: 'ยืนยันรับมัดจำ',
@@ -188,16 +189,30 @@ function CommentsSection({ deal, onPosted }) {
 }
 
 /** /finance/deals/:id — one deal as finance sees it. Presentation only — the server enforces every gate. */
-export function FinanceDealPage() {
+export function FinanceDealPage({ user }) {
   const { id } = useParams();
   const queryClient = useQueryClient();
   const { catalog } = useStageCatalog();
   const key = queryKeys.financeDeal(id);
   const [flow, setFlow] = useState(null);
   const [flowError, setFlowError] = useState('');
+  // Review H1: the server refused a hand-typed receipt that may already be on the deal from an Express upload
+  // (409 POSSIBLE_DUPLICATE). Holds { call, expressDocNo } until account answers.
+  const [possibleDuplicate, setPossibleDuplicate] = useState(null);
   const [downloadError, setDownloadError] = useState('');
   const [invoiceForm, setInvoiceForm] = useState(null); // RECORD_INVOICE form state while it is open
   const [invoiceFileKey, setInvoiceFileKey] = useState(0);
+
+  // The Express-fallback header on the payment modal follows app.receipts.express-upload.enabled — read the same
+  // way the nav and the upload card do. Account-only endpoint: any other role just gets no flag.
+  const expressQuery = useQuery({
+    queryKey: queryKeys.receiptImportLatest(),
+    queryFn: () => api.receiptImports.latest(),
+    enabled: user?.role === 'account',
+    retry: false,
+  });
+
+  const expressUploadEnabled = expressQuery.data?.uploadEnabled === true;
 
   const dealQuery = useQuery({
     queryKey: key,
@@ -214,13 +229,21 @@ export function FinanceDealPage() {
   }
 
   const actionMutation = useMutation({
-    mutationFn: ({ call }) => call(),
+    mutationFn: ({ call, options }) => (options ? call(options) : call()),
     onSuccess: (response) => {
       applyDeal(response.deal);
       setFlow(null);
       setFlowError('');
+      setPossibleDuplicate(null);
     },
-    onError: (err) => setFlowError(err.message || 'ดำเนินการไม่สำเร็จ'),
+    onError: (err, { call }) => {
+      if (err?.status === 409 && err?.details?.code === 'POSSIBLE_DUPLICATE') {
+        setFlowError('');
+        setPossibleDuplicate({ call, expressDocNo: err.details.expressDocNo });
+        return;
+      }
+      setFlowError(err.message || 'ดำเนินการไม่สำเร็จ');
+    },
   });
   // RECORD_INVOICE: the existing POST /api/commissions/from-deal (account only), then the deal is re-read so
   // milestone 5 shows the recorded invoice and the action disappears. Not a finance endpoint: no new write API.
@@ -309,14 +332,15 @@ export function FinanceDealPage() {
       case 'DEPOSIT_PAID':
         return {
           title: 'ยืนยันรับมัดจำ', confirmLabel: 'ยืนยันรับมัดจำ',
-          text: `ยืนยันว่าได้รับเงินมัดจำของดีล ${deal.code} แล้ว? รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
-          call: () => api.finance.confirmDepositPaid(deal.id),
+          // Design m-deposit-confirm: a matched Express receipt confirms the deposit by itself.
+          text: `ยืนยันว่าได้รับเงินมัดจำของดีล ${deal.code} แล้ว? ${expressUploadEnabled ? 'จะยืนยันเองเมื่อจับคู่รายการจาก Express ได้ ใช้ปุ่มนี้เฉพาะเมื่อรับเงินนอก Express — ' : ''}รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
+          call: (options) => (options ? api.finance.confirmDepositPaid(deal.id, options) : api.finance.confirmDepositPaid(deal.id)),
         };
       case 'FINAL_PAYMENT':
         return {
           title: 'ยืนยันรับชำระส่วนที่เหลือ', confirmLabel: 'ยืนยันรับชำระส่วนที่เหลือ',
           text: `ยืนยันว่าได้รับเงินส่วนที่เหลือของดีล ${deal.code} ครบแล้ว? ยอดคงค้างปัจจุบัน ${money(deal.money.amountOutstanding)}`,
-          call: () => api.finance.confirmFinalPayment(deal.id),
+          call: (options) => (options ? api.finance.confirmFinalPayment(deal.id, options) : api.finance.confirmFinalPayment(deal.id)),
         };
       case 'CONFIRM_CLOSE':
         return {
@@ -337,9 +361,8 @@ export function FinanceDealPage() {
 
   const activeAction = flow?.action;
   const confirm = activeAction ? confirmConfig(activeAction) : null;
-  // Mirrors TicketDetailPage's openPaymentModal (something already paid -> BALANCE), plus a skipped deposit
-  // (nothing to collect up front, so the first payment is the balance).
-  const defaultPaymentKind = (Number(deal.money.amountPaid) > 0 || deal.milestoneTrack.some((step) => step.skipped)) ? 'BALANCE' : 'DEPOSIT';
+  // Design m-payment: the open notice/invoice's outstanding amount and kind (paymentPrefill's header has the rule).
+  const recordPaymentPrefill = paymentPrefill(deal);
 
   return (
     <div className="grid w-full min-w-0 max-w-[1200px] items-start gap-x-6 gap-y-4 grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)] nav-drawer:grid-cols-[minmax(0,1fr)]">
@@ -440,11 +463,30 @@ export function FinanceDealPage() {
 
       {activeAction?.action === 'RECORD_PAYMENT' ? (
         <RecordPaymentModal
-          defaultKind={defaultPaymentKind} busy={busy} error={flowError}
-          onSubmit={(body) => run(() => api.finance.recordPayment(deal.id, body))}
+          prefill={recordPaymentPrefill} expressUploadEnabled={expressUploadEnabled} busy={busy} error={flowError}
+          onSubmit={(body) => run((options) => api.finance.recordPayment(deal.id, options ? { ...body, ...options } : body))}
           onClose={() => setFlow(null)}
         />
       ) : null}
+      {/* Rendered AFTER the payment modal on purpose: both are fixed z-50 overlays, so the later one paints on top. Before
+          the warning sat above this modal in the source, which hid it (and its บันทึกต่อ button) behind the form. */}
+      {possibleDuplicate ? (
+        <ConfirmDialog
+          open
+          title="อาจซ้ำกับรายการที่อัปโหลดแล้ว"
+          confirmLabel="เป็นคนละรายการ บันทึกต่อ"
+          cancelLabel="ไม่บันทึก"
+          busy={busy}
+          message={(
+            <p className="m-0 text-text-secondary leading-normal">
+              {'อาจซ้ำกับ ' + possibleDuplicate.expressDocNo + ' ที่อัปโหลดแล้ว — ยอดเท่ากันและวันที่ใกล้กันบนดีลนี้ บันทึกต่อเฉพาะเมื่อเป็นเงินคนละรายการ'}
+            </p>
+          )}
+          onConfirm={() => actionMutation.mutate({ call: possibleDuplicate.call, options: { confirmPossibleDuplicate: true } })}
+          onCancel={() => { setPossibleDuplicate(null); setFlow(null); }}
+        />
+      ) : null}
+
       {activeAction?.action === 'REVOKE_CLOSE_CONFIRM' ? (
         <RevokeCloseModal
           busy={busy} error={flowError}

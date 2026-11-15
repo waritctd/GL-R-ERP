@@ -2,7 +2,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ImportFulfilmentPage } from './ImportFulfilmentPage.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -25,6 +25,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         updateEmailDraft: vi.fn(),
         markEmailSent: vi.fn(),
         download: vi.fn(),
+        undoStep: vi.fn(),
       },
     },
   };
@@ -149,6 +150,95 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
 
     await waitFor(() => expect(api.storedImportRequests.advanceStep)
       .toHaveBeenCalledWith(1, { targetStep: 'PICKED_UP' }));
+  });
+
+  // Spec 2026-11-15 §7.11 item 3 / plan task 5.3 (design a-fulfil): this page is the ONE place a step is advanced,
+  // and an advance offers a 30-second undo instead of being final at once.
+  describe('the undo snackbar', () => {
+    afterEach(() => vi.useRealTimers());
+
+    it('is titled การขนส่ง and says it is the one place a step moves', async () => {
+      renderPage();
+      await screen.findByTestId('fulfilment-deal');
+      expect(screen.getByRole('heading', { name: 'การขนส่ง' })).not.toBeNull();
+      expect(screen.getByText(/ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้/)).not.toBeNull();
+    });
+
+    it('an advance shows "เลื่อนเป็น … · IR · เลิกทำ"; เลิกทำ undoes THAT advance (expectedStep = its target)', async () => {
+      api.storedImportRequests.undoStep.mockResolvedValue({ importRequest: row() });
+      const { showToast } = renderPage();
+      const card = await screen.findByTestId('fulfilment-deal');
+      fireEvent.click(within(card).getByTestId('advance-1'));
+      const snack = await screen.findByTestId('step-undo-snackbar');
+      expect(snack.textContent).toContain('เลื่อนเป็น “ขนส่งรับของ”');
+      expect(snack.textContent).toContain('IR26001');
+      fireEvent.click(within(snack).getByRole('button', { name: 'เลิกทำ' }));
+      await waitFor(() => expect(api.storedImportRequests.undoStep).toHaveBeenCalledWith(1, { expectedStep: 'PICKED_UP' }));
+      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
+      expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('เลิกทำ'));
+    });
+
+    it('goes away after 30 seconds, and nothing is undone', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      renderPage();
+      const card = await screen.findByTestId('fulfilment-deal');
+      fireEvent.click(within(card).getByTestId('advance-1'));
+      await screen.findByTestId('step-undo-snackbar');
+      await vi.advanceTimersByTimeAsync(29_000);
+      expect(screen.getByTestId('step-undo-snackbar')).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(1_500);
+      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
+      expect(api.storedImportRequests.undoStep).not.toHaveBeenCalled();
+    });
+
+    it('counts down to the server’s undoUntil, not 30 s from the client clock', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      api.storedImportRequests.advanceStep.mockResolvedValue({
+        importRequest: row({ importStep: 'PICKED_UP' }), undoUntil: new Date(Date.now() + 10_000).toISOString(),
+      });
+      renderPage();
+      const card = await screen.findByTestId('fulfilment-deal');
+      fireEvent.click(within(card).getByTestId('advance-1'));
+      await screen.findByTestId('step-undo-snackbar');
+      await vi.advanceTimersByTimeAsync(11_000);
+      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
+    });
+
+    it('is announced politely, takes focus on its เลิกทำ, and gives focus back when it closes', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      renderPage();
+      const card = await screen.findByTestId('fulfilment-deal');
+      const advanceButton = within(card).getByTestId('advance-1');
+      advanceButton.focus();
+      fireEvent.click(advanceButton);
+      const snack = await screen.findByTestId('step-undo-snackbar');
+      expect(snack.getAttribute('role')).toBe('status');
+      expect(snack.getAttribute('aria-live')).toBe('polite');
+      await waitFor(() => expect(document.activeElement).toBe(within(snack).getByRole('button', { name: 'เลิกทำ' })));
+      await vi.advanceTimersByTimeAsync(31_000);
+      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
+      expect(document.activeElement).toBe(within(screen.getByTestId('fulfilment-deal')).getByTestId('advance-1'));
+    });
+
+    it('a refused undo (window passed / step moved) says so in a toast', async () => {
+      api.storedImportRequests.undoStep.mockRejectedValue(new Error('เลิกทำไม่ได้แล้ว'));
+      const { showToast } = renderPage();
+      const card = await screen.findByTestId('fulfilment-deal');
+      fireEvent.click(within(card).getByTestId('advance-1'));
+      fireEvent.click(within(await screen.findByTestId('step-undo-snackbar')).getByRole('button', { name: 'เลิกทำ' }));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'เลิกทำไม่ได้แล้ว'));
+    });
+
+    it('an advance to ถึงโกดัง offers no undo (it completes the shipment; the server refuses it too)', async () => {
+      mockRowsByTicket({ 1: [row({ importStep: 'AWAITING_CUSTOMS' })] });
+      api.storedImportRequests.advanceStep.mockResolvedValue({ importRequest: row({ importStep: 'RECEIVED' }) });
+      renderPage();
+      const card = await screen.findByTestId('fulfilment-deal');
+      fireEvent.click(within(card).getByTestId('advance-1'));
+      await waitFor(() => expect(api.storedImportRequests.advanceStep).toHaveBeenCalledWith(1, { targetStep: 'RECEIVED' }));
+      await waitFor(() => expect(api.importDeals.get).toHaveBeenCalled());
+      expect(screen.queryByTestId('step-undo-snackbar')).toBeNull();
+    });
   });
 
   // Import has its own per-deal page (GET /api/import/deals/{id}); the whole-deal GET /api/tickets/{id} 403s

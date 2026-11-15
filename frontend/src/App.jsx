@@ -46,6 +46,7 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 // Role-scoped views: Account's money Overview (landing) + งานการเงิน worklist.
 const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
 const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
+const ReceiptsImportPage = lazy(() => import('./features/finance/ReceiptsImportPage.jsx').then(toDefault('ReceiptsImportPage')));
 const FinanceDealPage = lazy(() => import('./features/finance/FinanceDealPage.jsx').then(toDefault('FinanceDealPage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DeductionShortfallsPage = lazy(() => import('./features/payroll/DeductionShortfallsPage.jsx').then(toDefault('DeductionShortfallsPage')));
@@ -316,7 +317,7 @@ export function App() {
                   dashboardSummary={dashboardSummary}
                 />
               ) : user.role === 'import' && SALES_ENABLED ? (
-                <ImportOverview user={user} employee={currentEmployee} />
+                <ImportOverview user={user} employee={currentEmployee} showToast={showToast} />
               ) : user.role === 'account' && SALES_ENABLED ? (
                 <AccountOverview user={user} employee={currentEmployee} dashboardSummary={dashboardSummary} showToast={showToast} />
               ) : isDivisionManager(user) ? (
@@ -522,6 +523,12 @@ export function App() {
                 <Route
                   path="/finance/deals/:id"
                   element={<FinanceDealPage user={user} showToast={showToast} />}
+                />
+                {/* The Express receipts upload (spec 2026-11-15 §7.8): account only (the backend refuses the CEO), guarded by its own
+                 * exact-path rule in PATH_GUARDS ahead of the `/finance` prefix rule. */}
+                <Route
+                  path="/finance/receipts-import"
+                  element={<ReceiptsImportPage showToast={showToast} />}
                 />
                 <Route
                   path="/price-import"

@@ -111,6 +111,10 @@ export const queryKeys = {
   // the boards too.
   salesBoardMyWork: () => ['tickets', 'salesBoard', 'myWork'],
   salesBoardTeam: () => ['tickets', 'salesBoard', 'team'],
+  // The Express upload's last summary + the owner switch; read by the account landing card, the page and the nav.
+  receiptImportLatest: () => ['tickets', 'receiptImports', 'latest'],
+  // Under 'tickets' too: a change to a deal's expected cash refreshes the boards' cash card through the same prefix.
+  expectedPayments: (ticketId) => ['tickets', 'expectedPayments', ticketId == null ? ticketId : Number(ticketId)],
   // Under 'tickets' so every deal/visit write's ['tickets'] invalidation refreshes them too.
   salesVisitsOwn: (from, to) => ['tickets', 'salesVisits', 'own', from, to],
   salesVisitsTeam: (from, to) => ['tickets', 'salesVisits', 'team', from, to],

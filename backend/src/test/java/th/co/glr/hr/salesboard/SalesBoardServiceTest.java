@@ -34,13 +34,15 @@ class SalesBoardServiceTest {
     private th.co.glr.hr.auth.EmployeeAuthRepository employees;
     private SalesBoardService service;
     private VisitService visits;
+    private CashRepository cash;
 
     @BeforeEach
     void wire() {
         repository = mock(SalesBoardRepository.class);
         visits = mock(VisitService.class);
         employees = mock(th.co.glr.hr.auth.EmployeeAuthRepository.class);
-        service = new SalesBoardService(repository, new QuietRule(null, 14), employees, visits);
+        cash = mock(CashRepository.class);
+        service = new SalesBoardService(repository, new QuietRule(null, 14), employees, visits, cash);
     }
 
     @ParameterizedTest
@@ -157,6 +159,25 @@ class SalesBoardServiceTest {
 
         service.teamOverview(actor(1L, "sales_manager"));
 
+        verify(employees, never()).findByEmployeeId(anyLong());
+    }
+
+    /** Review: a cash-only owner (no open deal, no visit) takes role AND name from the one batched lookup, like every
+     * other row — no per-owner findByEmployeeId. */
+    @Test
+    void teamOverview_cashOnlyOwner_usesTheBatchedLookupForNameAndNeverTheSingleLookup() {
+        when(repository.activeDealsAllReps()).thenReturn(List.of());
+        when(cash.receivedByDay(org.mockito.ArgumentMatchers.isNull(), org.mockito.ArgumentMatchers.any(),
+            org.mockito.ArgumentMatchers.any()))
+            .thenReturn(List.of(new CashRepository.ReceivedDayRow(77L, LocalDate.now(), new BigDecimal("500"))));
+        when(employees.findByEmployeeIds(org.mockito.ArgumentMatchers.anyCollection())).thenReturn(java.util.Map.of(
+            77L, new th.co.glr.hr.auth.EmployeeLoginRecord(77L, "E77", "e77@glr.co.th", "Cash Owner", true, null, null,
+                null, null, LocalDate.now(), "x", false, false)));
+
+        TeamOverview team = service.teamOverview(actor(1L, "sales_manager"));
+
+        RepRow row = team.reps().stream().filter(r -> r.employeeId() == 77L).findFirst().orElseThrow();
+        assertThat(row.name()).isEqualTo("Cash Owner");
         verify(employees, never()).findByEmployeeId(anyLong());
     }
 

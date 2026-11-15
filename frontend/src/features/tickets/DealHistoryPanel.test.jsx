@@ -32,6 +32,18 @@ describe('DealHistoryPanel', () => {
     expect(items[1]).toContain('ลูกค้ายืนยันคำสั่งซื้อ');
   });
 
+  // Slice 5 review M4: an undo is logged as IMPORT_STEP_ADVANCED with a "เลิกทำ" message (ImportRequestService#undoStep),
+  // so the history must not call it an advance.
+  it('an IMPORT_STEP_ADVANCED whose message is an undo reads ฝ่ายนำเข้าเลิกทำการเลื่อนขั้นตอน; a real advance keeps its label', () => {
+    render(<DealHistoryPanel events={[
+      { id: 2, kind: 'IMPORT_STEP_ADVANCED', actorName: 'นำเข้า', createdAt: '2026-11-10T09:01:00.000Z', message: 'โรงงาน Mutina: เลิกทำ สั่งซื้อแล้ว → ติดต่อโรงงาน' },
+      { id: 1, kind: 'IMPORT_STEP_ADVANCED', actorName: 'นำเข้า', createdAt: '2026-11-10T09:00:00.000Z', message: 'โรงงาน Mutina: ติดต่อโรงงาน → สั่งซื้อแล้ว' },
+    ]} activities={[]} />);
+    const [undo, advance] = screen.getAllByRole('listitem').map((li) => li.querySelector('strong').textContent);
+    expect(undo).toBe('ฝ่ายนำเข้าเลิกทำการเลื่อนขั้นตอน');
+    expect(advance).toBe('ฝ่ายนำเข้าเลื่อนขั้นตอน');
+  });
+
   it('PROCUREMENT_SOURCE_DECIDED has a Thai label (not the raw kind)', () => {
     render(<DealHistoryPanel events={[{ id: 1, kind: 'PROCUREMENT_SOURCE_DECIDED', actorName: 'พนักงานขาย', createdAt: '2026-11-10T09:00:00.000Z' }]} activities={[]} />);
     expect(screen.getByRole('listitem').textContent).toContain('เลือกที่มาสินค้า');

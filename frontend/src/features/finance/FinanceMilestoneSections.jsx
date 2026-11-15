@@ -1,6 +1,7 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Feature Stack (scrolling pane) · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
 /* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (rows and item table respond to the pane's own width via container queries, not the viewport) */
 import { useState } from 'react';
+import { ReceiptSourceChip } from './ReceiptSourceChip.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
@@ -123,6 +124,7 @@ function PaymentRows({ payments }) {
         <DocRow
           key={p.id}
           title={`รับ${PAYMENT_KIND_LABEL[p.kind] ?? p.kind ?? 'ชำระ'}`}
+          badge={<ReceiptSourceChip source={p.source} />}
           meta={[
             p.receivedAt ? formatThaiDate(p.receivedAt) : null,
             p.receiptRef ? `อ้างอิง ${p.receiptRef}` : null,

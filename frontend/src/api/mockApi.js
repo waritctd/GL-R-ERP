@@ -159,7 +159,7 @@ for (const t of db.tickets) {
   }));
 }
 db.paymentReceipts = db.paymentReceipts || [
-  { receiptId: 1, ticketId: 12, kind: 'DEPOSIT', amount: 65000, currency: 'THB', receivedAt: '2026-06-18T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำจากใบแจ้งยอด', depositNoticeId: null, receiptRef: 'MOCK-12-DEP', createdAt: '2026-06-18T08:00:00Z' },
+  { receiptId: 1, ticketId: 12, kind: 'DEPOSIT', amount: 65000, currency: 'THB', receivedAt: '2026-06-18T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำจากใบแจ้งยอด', depositNoticeId: null, receiptRef: 'MOCK-12-DEP', createdAt: '2026-06-18T08:00:00Z', source: 'MANUAL', customerName: null },
   { receiptId: 2, ticketId: 13, kind: 'DEPOSIT', amount: 66250, currency: 'THB', receivedAt: '2026-06-02T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-13-DEP', createdAt: '2026-06-02T08:00:00Z' },
   { receiptId: 3, ticketId: 14, kind: 'DEPOSIT', amount: 312000, currency: 'THB', receivedAt: '2026-05-20T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับมัดจำ', depositNoticeId: null, receiptRef: 'MOCK-14-DEP', createdAt: '2026-05-20T08:00:00Z' },
   { receiptId: 4, ticketId: 14, kind: 'BALANCE', amount: 312000, currency: 'THB', receivedAt: '2026-07-05T08:00:00Z', recordedById: 11, recordedByName: 'คุณบัญชี การเงิน', note: 'รับชำระส่วนที่เหลือ', depositNoticeId: null, receiptRef: 'MOCK-14-BAL', createdAt: '2026-07-05T08:00:00Z' },
@@ -3575,6 +3575,8 @@ function payableAmount(ticket) {
 function receiptsForTicket(ticketId) {
   return (db.paymentReceipts ?? [])
     .filter((r) => r.ticketId === Number(ticketId))
+    // PaymentReceiptDto.source / customerName (V213): every seeded / hand-typed receipt is MANUAL.
+    .map((r) => ({ source: 'MANUAL', customerName: null, ...r }))
     .sort((a, b) => new Date(a.receivedAt) - new Date(b.receivedAt) || a.receiptId - b.receiptId);
 }
 
@@ -3675,10 +3677,12 @@ function latestIssuedDepositNotice(ticketId) {
     .sort((a, b) => Number(b.version ?? 0) - Number(a.version ?? 0) || Number(b.id ?? 0) - Number(a.id ?? 0))[0] ?? null;
 }
 
-function reconcilePaymentStatus(ticket, user) {
+// allowFullyPaid = false: an Express upload (TicketService#recordExpressReceipt) never walks to FULLY_PAID, so it
+// can never reach CLOSED_PAID; only the deposit advance below runs.
+function reconcilePaymentStatus(ticket, user, allowFullyPaid = true) {
   const payable = payableAmount(ticket);
   const paid = sumPaid(ticket.id);
-  if (payable > 0 && paid >= payable) {
+  if (allowFullyPaid && payable > 0 && paid >= payable) {
     if (ticket.paymentStatus !== 'FULLY_PAID') {
       ticket.paymentStatus = 'FULLY_PAID';
       pushEvent(ticket, user, 'FULLY_PAID', ticket.status, ticket.status, null);
@@ -3912,6 +3916,19 @@ function recordPaymentForTicket(ticket, user, payload) {
   if (!['DEPOSIT', 'BALANCE', 'ADJUSTMENT'].includes(kind)) fail(`ไม่รองรับประเภทการรับชำระเงิน '${payload.kind}'`, 400);
   const amount = moneyValue(payload.amount);
   if (amount <= 0) fail('ยอดรับชำระต้องมากกว่า 0', 400);
+  if (kind !== 'ADJUSTMENT' && !payload.confirmPossibleDuplicate) {
+    // TicketService#recordPaymentInternal (review H1): an EXPRESS receipt of the same amount within ±7 days.
+    const day = mockBangkokDateOf(payload.receivedAt || new Date().toISOString());
+    const gapDays = (r) => Math.abs(new Date(`${mockBangkokDateOf(r.receivedAt)}T00:00:00Z`) - new Date(`${day}T00:00:00Z`)) / 86_400_000;
+    const twin = (db.paymentReceipts ?? []).find((r) => r.ticketId === ticket.id && r.source === 'EXPRESS'
+      && Number(r.amount) === amount && gapDays(r) <= 7);
+    if (twin) {
+      const error = new Error(`อาจซ้ำกับ ${twin.receiptRef} ที่อัปโหลดแล้ว — ยืนยันอีกครั้งถ้าเป็นเงินคนละรายการ`);
+      error.status = 409;
+      error.details = { code: 'POSSIBLE_DUPLICATE', expressDocNo: twin.receiptRef };
+      throw error;
+    }
+  }
   const payable = payableAmount(ticket);
   const paid = sumPaid(ticket.id);
   const signed = kind === 'ADJUSTMENT' ? -amount : amount;
@@ -3939,9 +3956,12 @@ function recordPaymentForTicket(ticket, user, payload) {
     depositNoticeId: payload.depositNoticeId ?? null,
     receiptRef,
     createdAt: now,
+    source: 'MANUAL',
+    customerName: null,
   });
   pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status,
     `kind=${kind}, amount=${amount}, paid=${newPaid}, payable=${payable}${note ? ` — ${note}` : ''}`);
+  mockApplyReceiptToExpected(ticket.id, kind, amount, mockBangkokDateOf(payload.receivedAt || now), nextId);
   reconcilePaymentStatus(ticket, user);
   ticket.updatedAt = now.slice(0, 10);
 }
@@ -4466,6 +4486,15 @@ export function setPricingRequestStatusForTests(prId, status) {
   const pr = mockPricingRequests.find((row) => row.id === Number(prId));
   if (!pr) throw new Error(`no pricing request ${prId}`);
   pr.status = status;
+}
+
+/** TEST-ONLY seam — not part of `api`. Puts every deposit notice on a deal into `status` (e.g. SUPERSEDED), returning
+ * the previous statuses so a test can restore them. */
+export function setDepositNoticeStatusesForTests(ticketId, status) {
+  const rows = mockDepositNotices.filter((n) => n.ticketId === Number(ticketId));
+  const before = rows.map((n) => n.status);
+  rows.forEach((n) => { n.status = status; });
+  return () => rows.forEach((n, i) => { n.status = before[i]; });
 }
 
 /** TEST-ONLY seam — not part of `api`. Patches raw ticket fields (e.g. lifecycle, legacyStockSource). */
@@ -7817,7 +7846,7 @@ async function mockRevokeCloseConfirmation(id, payload = {}, viaFinance = false)
   return delay({ ticket: buildTicketDetail(ticket) });
 }
 
-async function mockConfirmDepositPaid(id) {
+async function mockConfirmDepositPaid(id, options = {}) {
   // account only — no CEO fallback. Mirrors TicketService's DEPOSIT_CONFIRM_ROLES.
   // RECORD_PAYMENT/FINAL_PAYMENT are account-only too (PAYMENT_RECORD_ROLES); ACCOUNT_ROLES
   // (['account','ceo']) only covers SET_BILLING and similar non-payment actions.
@@ -7834,6 +7863,7 @@ async function mockConfirmDepositPaid(id) {
     amount,
     note: 'ยืนยันรับมัดจำ',
     depositNoticeId: notice?.id ?? null,
+    confirmPossibleDuplicate: options.confirmPossibleDuplicate === true,
   });
   return delay({ ticket: buildTicketDetail(ticket) });
 }
@@ -7843,7 +7873,7 @@ function mockPastProcurement(ticket) {
   return isPastProcurement(ticket.salesStage);
 }
 
-async function mockConfirmFinalPayment(id) {
+async function mockConfirmFinalPayment(id, options = {}) {
   // account only — no CEO fallback. Mirrors TicketService's PAYMENT_RECORD_ROLES
   // (confirmFinalPayment is a payment-recording entry point too, whether or not it ends up calling
   // recordPaymentInternal).
@@ -7868,6 +7898,7 @@ async function mockConfirmFinalPayment(id) {
       kind: 'BALANCE',
       amount: outstanding,
       note: 'ยืนยันชำระส่วนที่เหลือ',
+      confirmPossibleDuplicate: options.confirmPossibleDuplicate === true,
     });
   }
   return delay({ ticket: buildTicketDetail(ticket) });
@@ -8141,7 +8172,7 @@ function buildFinanceDeal(raw, user) {
       payments: receiptsForTicket(ticket.id).map((r) => ({
         id: r.receiptId, kind: r.kind, amount: r.amount, currency: r.currency ?? 'THB', receivedAt: r.receivedAt,
         receiptRef: r.receiptRef ?? null, note: r.note ?? null, depositNoticeId: r.depositNoticeId ?? null,
-        recordedByName: r.recordedByName ?? null,
+        recordedByName: r.recordedByName ?? null, source: r.source ?? 'MANUAL',
       })),
     },
     documents: {
@@ -8381,6 +8412,413 @@ function mockLogSiteVisit(ownerId, ticketId, note) {
     createdAt: new Date().toISOString(),
   });
 }
+
+// ── expected payments (mirrors ExpectedPaymentService / ExpectedPaymentRepository, V212 sales.expected_payment) ──
+// Seeded on this Bangkok month's weeks so the cash card has something to show; invented amounts only.
+let mockExpectedPaymentSeq = 7001;
+const mockExpectedPayments = [];
+const MOCK_EXPECTED_KINDS = ['DEPOSIT', 'ON_DELIVERY', 'BALANCE'];
+
+function seedMockExpectedPayments() {
+  const monday = mockWeekStartIso(mockTodayIso());
+  const rows = [
+    [21, 'BALANCE', 445000, 0],
+    [23, 'ON_DELIVERY', 390000, 7],
+    [23, 'BALANCE', 390000, 14],
+    [12, 'DEPOSIT', 65000, -7],
+  ];
+  for (const [ticketId, kind, amount, offset] of rows) {
+    if (!db.tickets.some((t) => t.id === ticketId)) continue;
+    const at = new Date().toISOString();
+    mockExpectedPayments.push({
+      id: mockExpectedPaymentSeq++, ticketId, kind, amount, expectedWeek: mockAddDaysIso(monday, offset),
+      status: 'OPEN', receivedAmount: 0, receiptId: null, receiptRef: null, createdById: 6, createdAt: at, updatedAt: at,
+    });
+  }
+}
+seedMockExpectedPayments();
+
+/**
+ * TicketRepository#applyReceiptToExpectedPayments — the ONE rule for manual and Express receipts alike (review M1),
+ * owner ruling N5: a deal WITH an ISSUED deposit notice (same test as expressReceiptKind) fills the rows matching the receipt's kind first
+ * (DEPOSIT receipt -> DEPOSIT rows; anything else -> ON_DELIVERY, then BALANCE), each by expected week then id, and the
+ * overflow goes to the remaining OPEN rows by week; a deal with NO notice fills every OPEN row purely by week, then id.
+ * RECEIVED only once the cumulative amount reaches it within +-1% / +-฿10; carry what a completed row does not need to
+ * the next one. ADJUSTMENT deliberately touches no row (a refund lowers received cash; rows stay closed).
+ */
+const MOCK_BALANCE_ORDER = { ON_DELIVERY: 0, BALANCE: 1 };
+function mockApplyReceiptToExpected(ticketId, kind, amount, dayIso, receiptId, receiptRef = null) {
+  if (!(amount > 0) || kind === 'ADJUSTMENT') return;
+  const hasNotice = mockDepositNotices.some((n) => n.ticketId === Number(ticketId) && n.status === 'ISSUED');
+  const tier = (p) => {
+    if (!hasNotice) return 0;
+    if (kind === 'DEPOSIT') return p.kind === 'DEPOSIT' ? 0 : 1;
+    return MOCK_BALANCE_ORDER[p.kind] ?? 2;
+  };
+  let left = amount;
+  while (left > 0) {
+    const row = mockExpectedPayments
+      .filter((p) => p.ticketId === Number(ticketId) && p.status === 'OPEN')
+      .sort((a, b) => tier(a) - tier(b) || a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id)[0];
+    if (!row) return;
+    const applied = Math.min(left, round2(row.amount - (row.receivedAmount ?? 0)));
+    row.receivedAmount = round2((row.receivedAmount ?? 0) + applied);
+    const complete = row.receivedAmount >= row.amount - Math.max(row.amount * 0.01, 10);
+    if (complete) Object.assign(row, { status: 'RECEIVED', receiptId, receiptRef });
+    row.updatedAt = new Date().toISOString();
+    left = round2(left - applied);
+    if (!complete) return;
+  }
+}
+
+/** ExpectedPaymentRepository.findByTicket: non-cancelled, ORDER BY expected_week, expected_payment_id. */
+function mockExpectedPaymentsOf(ticketId) {
+  return mockExpectedPayments
+    .filter((p) => p.ticketId === Number(ticketId) && p.status !== 'CANCELLED')
+    .sort((a, b) => a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id)
+    .map((p) => ({ ...p }));
+}
+
+/** ExpectedPaymentService.validate. */
+function mockValidExpectedPayment(payload) {
+  const kind = String(payload?.kind ?? '').trim().toUpperCase();
+  if (!MOCK_EXPECTED_KINDS.includes(kind)) fail('ประเภทต้องเป็น มัดจำ / ส่งของ / ส่วนที่เหลือ', 400);
+  const amount = Number(payload?.amount);
+  if (!Number.isFinite(amount) || amount <= 0) fail('จำนวนเงินต้องมากกว่า 0', 400);
+  if (Math.round(amount * 100) !== amount * 100) fail('จำนวนเงินไม่ถูกต้อง (ทศนิยมไม่เกิน 2 ตำแหน่ง)', 400);
+  const week = payload?.expectedWeek;
+  if (!week) fail('กรุณาเลือกสัปดาห์ที่คาด', 400);
+  if (mockWeekStartIso(week) !== week) fail('สัปดาห์ที่คาดต้องเป็นวันจันทร์ของสัปดาห์นั้น', 400);
+  return { kind, amount, expectedWeek: week };
+}
+
+/** TicketService#requireDealWriteAccess: 404, then the owner/keyer (sales), sales_manager or ceo. */
+function mockRequireDealWrite(user, ticketId) {
+  const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+  if (!ticket) fail('ไม่พบดีลนี้', 404);
+  if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return ticket;
+}
+
+/** ExpectedPaymentService.requireActive: rows on a deal that is not ACTIVE are read-only. */
+function mockRequireActiveExpectedDeal(ticket) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงแก้ไขเงินที่คาดว่าจะเข้าไม่ได้', 409);
+}
+
+function mockRequireOpenExpected(ticketId, id) {
+  const row = mockExpectedPayments.find((p) => p.id === Number(id) && p.ticketId === Number(ticketId));
+  if (!row) fail('ไม่พบรายการเงินที่คาดว่าจะเข้านี้', 404);
+  if (row.status !== 'OPEN') {
+    fail(`รายการนี้${row.status === 'RECEIVED' ? 'รับเงินแล้ว' : 'ยกเลิกแล้ว'} จึงแก้ไขหรือยกเลิกไม่ได้`, 409);
+  }
+  return row;
+}
+
+/** The Asia/Bangkok calendar date of an instant. */
+function mockBangkokDateOf(instant) {
+  return new Date(instant).toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
+}
+
+const MOCK_DEAD_LIFECYCLES = new Set(['CLOSED_LOST', 'CANCELLED']);
+
+/**
+ * SalesBoardService#cashForMonth over CashRepository's two reads: expected rows by their Monday in the month (not on a
+ * lost/cancelled deal), THB receipts by Bangkok day (ADJUSTMENT subtracts), owner = the deal's created_by;
+ * `ownerId` null = the team. Weeks are the month's Mondays; a receipt before the first Monday folds into week one.
+ */
+function mockCashForMonth(ownerId, yearMonth) {
+  const [y, m] = yearMonth.split('-').map(Number);
+  const first = `${yearMonth}-01`;
+  const last = `${yearMonth}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+  // ISO rule (review M6): a week belongs to the month holding its Thursday.
+  const mondays = [];
+  for (let d = mockWeekStartIso(first); d <= last; d = mockAddDaysIso(d, 7)) {
+    if (mockAddDaysIso(d, 3).slice(0, 7) === yearMonth) mondays.push(d);
+  }
+  const zero = () => mondays.map(() => 0);
+  const delivered = zero(); const scheduled = zero(); const deposits = zero(); const got = zero();
+  let forecast = 0;
+  const ticketOf = (id) => db.tickets.find((t) => t.id === id);
+  const inScope = (t) => t && (ownerId == null || t.createdById === ownerId);
+  for (const p of mockExpectedPayments) {
+    const t = ticketOf(p.ticketId);
+    const i = mondays.indexOf(p.expectedWeek);
+    const life = t?.lifecycle ?? 'ACTIVE';
+    if (p.status === 'CANCELLED' || i < 0 || !inScope(t)) continue;
+    if (p.status === 'OPEN' ? life !== 'ACTIVE' : MOCK_DEAD_LIFECYCLES.has(life)) continue;
+    forecast += Number(p.amount);
+    if (p.status !== 'OPEN') continue;
+    const amount = round2(Number(p.amount) - Number(p.receivedAmount ?? 0)); // only what is still to come
+    if (['ON_DELIVERY', 'BALANCE'].includes(p.kind) && t.salesStage === 'DELIVERED') delivered[i] += amount;
+    if (p.kind === 'ON_DELIVERY' && ['DELIVERY_SCHEDULING', 'PROCUREMENT'].includes(t.salesStage)) scheduled[i] += amount;
+    if (p.kind === 'DEPOSIT') deposits[i] += amount;
+  }
+  let received = 0;
+  for (const r of db.paymentReceipts ?? []) {
+    const day = mockBangkokDateOf(r.receivedAt);
+    if (day < first || day > last || (r.currency ?? 'THB') !== 'THB' || !inScope(ticketOf(r.ticketId)) || !mondays.length) continue;
+    let i = 0; // before the first week → the first; after the last week (30 Nov) → the last
+    while (i + 1 < mondays.length && day >= mondays[i + 1]) i += 1;
+    const signed = r.kind === 'ADJUSTMENT' ? -Number(r.amount) : Number(r.amount);
+    got[i] += signed;
+    received += signed;
+  }
+  const total = (a) => round2(a.reduce((x, v) => x + v, 0));
+  return {
+    month: yearMonth, forecast: round2(forecast), received: round2(received), deliveredAwaiting: total(delivered),
+    deliveriesScheduled: total(scheduled), depositsExpected: total(deposits),
+    weeks: mondays.map((weekStart, i) => ({
+      weekStart, deliveredAwaiting: round2(delivered[i]), deliveriesScheduled: round2(scheduled[i]),
+      depositsExpected: round2(deposits[i]), received: round2(got[i]),
+    })),
+  };
+}
+
+// ── Express receipts upload (mirrors ReceiptImportService / ReceiptMatcher / ReceiptFileParser, V213) ──
+// The mock reads .csv only (no xlsx parser in the browser bundle — see mockDocPlaceholderBlob's note on SheetJS);
+// .xlsx is refused with a mock-mode message. Matching mirrors ReceiptMatcher's three rules and "ambiguous → unmatched".
+const mockReceiptImports = [];
+const mockReceiptImportRows = [];
+const mockReceiptAllocations = [];
+// ReceiptImportSettings: app.receipts.express-upload.enabled defaults FALSE (review H4), cash doc types = RE.
+let mockReceiptUploadEnabled = false;
+const MOCK_CASH_DOC_TYPES = new Set(['RE']);
+/** Test/demo switch for the owner flag (not an api method: production has no such endpoint). */
+export function setMockReceiptUploadEnabled(enabled) { mockReceiptUploadEnabled = Boolean(enabled); }
+let mockReceiptImportSeq = 1;
+let mockReceiptRowSeq = 1;
+const MOCK_RECEIPT_ALIASES = {
+  docNo: ['เลขที่เอกสาร', 'doc no', 'document no', 'doc number', 'document number', 'เลขที่'],
+  docType: ['ประเภทเอกสาร', 'doc type', 'document type', 'ประเภท'],
+  date: ['วันที่', 'date', 'doc date', 'document date', 'วันที่เอกสาร', 'วันที่รับเงิน'],
+  customer: ['ลูกค้า', 'customer', 'customer name', 'ชื่อลูกค้า'],
+  amount: ['จำนวนเงิน', 'amount', 'ยอดเงิน', 'total', 'ยอดรับ'],
+  reference: ['อ้างอิง', 'reference', 'ref', 'เลขที่อ้างอิง'],
+};
+const mockHeaderKey = (h) => String(h ?? '').replace(/\uFEFF/g, '').toLowerCase().replace(/[\s._:#/-]/g, '');
+
+function mockParseCsv(text) {
+  const rows = []; let row = []; let field = ''; let quoted = false;
+  const src = text.replace(/^\uFEFF/, '');
+  for (let i = 0; i < src.length; i += 1) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') { field += '"'; i += 1; } else if (ch === '"') quoted = false; else field += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ',') { row.push(field); field = ''; } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && src[i + 1] === '\n') i += 1;
+      row.push(field); field = ''; rows.push(row); row = [];
+    } else field += ch;
+  }
+  if (field || row.length) { row.push(field); rows.push(row); }
+  return rows;
+}
+
+function mockReceiptDate(value) {
+  const v = String(value ?? '').trim();
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(v);
+  let y; let mo; let d;
+  if (m) [, y, mo, d] = m.map(Number);
+  else {
+    m = /^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/.exec(v);
+    if (!m) return null;
+    [, d, mo, y] = m.map(Number);
+  }
+  if (y > 2400) y -= 543;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  if (dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  return dt.toISOString().slice(0, 10);
+}
+
+/** ReceiptFileParser.parse over CSV text: header on the first of 15 rows carrying เลขที่เอกสาร / วันที่ / จำนวนเงิน. */
+function mockParseReceipts(text) {
+  const table = mockParseCsv(text);
+  const lookup = new Map();
+  Object.entries(MOCK_RECEIPT_ALIASES).forEach(([col, names]) => names.forEach((n) => lookup.set(mockHeaderKey(n), col)));
+  let header = -1; let index = null;
+  for (let r = 0; r < Math.min(15, table.length); r += 1) {
+    const found = {};
+    table[r].forEach((cell, i) => { const col = lookup.get(mockHeaderKey(cell)); if (col && found[col] == null) found[col] = i; });
+    if (found.docNo != null && found.date != null && found.amount != null) { header = r; index = found; break; }
+  }
+  if (!index) fail('ไม่พบหัวคอลัมน์ที่ต้องมี: เลขที่เอกสาร, วันที่, จำนวนเงิน — ดาวน์โหลดแม่แบบเพื่อดูรูปแบบ', 400);
+  const rows = []; const errors = [];
+  for (let r = header + 1; r < table.length; r += 1) {
+    const cells = table[r];
+    if (cells.every((c) => !String(c ?? '').trim())) continue;
+    const line = r + 1;
+    const get = (col) => (index[col] == null ? '' : String(cells[index[col]] ?? '').trim());
+    const docNo = get('docNo');
+    if (!docNo) { errors.push({ line, message: 'ไม่มีเลขที่เอกสาร' }); continue; }
+    if (docNo.length > 60) { errors.push({ line, message: 'เลขที่เอกสารยาวเกิน 60 ตัวอักษร' }); continue; }
+    const docDate = mockReceiptDate(get('date'));
+    if (!docDate) { errors.push({ line, message: `วันที่ไม่ถูกต้อง (${docNo})` }); continue; }
+    const amount = Number(get('amount').replace(/[,฿\s]|บาท/g, ''));
+    if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) !== amount * 100) {
+      errors.push({ line, message: `จำนวนเงินต้องมากกว่า 0 (${docNo})` }); continue;
+    }
+    if (amount > 999999999999.99) { errors.push({ line, message: `จำนวนเงินเกิน 999,999,999,999.99 (${docNo})` }); continue; }
+    // ReceiptFileParser.docType: the column when filled, else the number's leading letters.
+    const docType = (get('docType') || (/^([A-Za-z]+)/.exec(docNo)?.[1] ?? '')).toUpperCase() || null;
+    rows.push({ line, docNo, docType, docDate, customerName: get('customer') || null, amount, reference: get('reference') || null });
+  }
+  return { rows, errors };
+}
+
+const MOCK_COMPANY_TH = ['(มหาชน)', 'มหาชน', 'ห้างหุ้นส่วนจำกัด', 'ห้างหุ้นส่วน', 'บริษัท', 'บจก.', 'บจก', 'บมจ.', 'บมจ', 'จำกัด', 'หจก.', 'หจก'];
+/** ReceiptMatcher.normaliseCustomer. */
+function mockNormaliseCustomer(name) {
+  let s = ` ${String(name ?? '').normalize('NFC').toLowerCase().replace(/\s+/g, ' ').trim()} `;
+  MOCK_COMPANY_TH.forEach((w) => { s = s.split(w).join(' '); });
+  s = s.replace(/[.,()&]/g, ' ').replace(/(?<![a-z0-9])(co|ltd|limited|company|public|plc|inc|corp|corporation)(?![a-z0-9])/g, ' ');
+  return s.replace(/\s+/g, ' ').trim();
+}
+const mockNormaliseDoc = (v) => {
+  const s = String(v ?? '').replace(/\s/g, '').toUpperCase().replace(/-\d{1,2}$/, ''); // a revision, never "-0201"
+  return s || null;
+};
+const mockWithinTolerance = (amount, expected) => Math.abs(amount - expected) <= Math.max(Math.abs(expected) * 0.01, 10);
+
+/** ReceiptImportRepository.activeCandidates: ACTIVE deals inside ACCOUNT's scope (review M4); every customer name the
+ * deal's live documents print (M5); live document numbers only (M7). */
+function mockReceiptCandidates() {
+  const live = (n) => n.status === 'ISSUED';
+  return db.tickets.filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && accountListScopeIncludes(t)).map((t) => ({
+    ticketId: t.id,
+    title: (t.title ?? '').trim() || t.customerName || null,
+    customerName: t.customerName ?? null,
+    customerNames: [t.customerName, ...mockDepositNotices.filter((n) => n.ticketId === t.id && live(n)).map((n) => n.customerName),
+      ...mockRemainingInvoices.filter((n) => n.ticketId === t.id && live(n)).map((n) => n.customerName)].filter(Boolean),
+    ownerId: t.createdById,
+    keyedById: t.keyedById ?? null,
+    ownerName: t.createdByName ?? null,
+    invoiceNumbers: [
+      ...mockDepositNotices.filter((n) => n.ticketId === t.id && n.docNumber && live(n)).map((n) => n.docNumber),
+      ...mockRemainingInvoices.filter((n) => n.ticketId === t.id && n.docNumber && live(n)).map((n) => n.docNumber),
+    ],
+    quotationNumbers: mockDealQuotations.filter((q) => q.ticketId === t.id && q.number).map((q) => q.number),
+    openExpected: mockExpectedPayments.filter((p) => p.ticketId === t.id && p.status === 'OPEN')
+      .map((p) => ({ ...p, amount: round2(p.amount - (p.receivedAmount ?? 0)) })) // the OPEN remainder
+      .sort((a, b) => a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id),
+  }));
+}
+
+/** ReceiptMatcher.match. */
+function mockMatchReceipt(row, candidates) {
+  const ids = (list) => [...new Set(list.map((c) => c.ticketId))];
+  const decide = (list, rule) => (list.length === 1
+    ? { ticketId: list[0], rule, reason: null, candidateIds: list }
+    : { ticketId: null, rule, reason: 'AMBIGUOUS', candidateIds: list });
+  const ref = mockNormaliseDoc(row.reference);
+  if (ref) {
+    const byInvoice = ids(candidates.filter((c) => c.invoiceNumbers.some((n) => mockNormaliseDoc(n) === ref)));
+    if (byInvoice.length) return decide(byInvoice, 'INVOICE_NO');
+    const byQuote = ids(candidates.filter((c) => c.quotationNumbers.some((n) => mockNormaliseDoc(n) === ref)));
+    if (byQuote.length) return decide(byQuote, 'QUOTATION_NO');
+  }
+  const customer = mockNormaliseCustomer(row.customerName);
+  if (!customer) return { ticketId: null, rule: null, reason: 'NO_CANDIDATE', candidateIds: [] };
+  const same = candidates.filter((c) => (c.customerNames ?? [c.customerName]).some((n) => mockNormaliseCustomer(n) === customer));
+  const byAmount = ids(same.filter((c) => c.openExpected.some((p) => mockWithinTolerance(row.amount, Number(p.amount)))));
+  if (byAmount.length) return decide(byAmount, 'CUSTOMER_AMOUNT');
+  return { ticketId: null, rule: null, reason: 'NO_CANDIDATE', candidateIds: ids(same) };
+}
+
+/** TicketService#recordExpressReceipt + ReceiptPlacement.place. Throws 409 for overpayment / not active. */
+function mockRefusal(code, message) {
+  const error = new Error(message);
+  error.status = 409;
+  error.details = { code };
+  throw error;
+}
+
+function mockPlaceExpressReceipt(ticketId, row, user, amount = row.amount, ref = row.docNo.trim()) {
+  if (user.role !== 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403); // EXPRESS_RECEIPT_ROLES (H2/H3)
+  const ticket = findTicketRaw(Number(ticketId));
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') mockRefusal('DEAL_NOT_ACTIVE', 'ดีลไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้');
+  const payable = payableAmount(ticket);
+  if (moneyValue(sumPaid(ticket.id) + amount) > payable) mockRefusal('OVERPAYMENT', 'ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ');
+  // TicketService#expressReceiptKind (review N2): DEPOSIT while the latest issued deposit notice is still owed.
+  const settled = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus);
+  const notice = latestIssuedDepositNotice(ticket.id);
+  const depositSoFar = (db.paymentReceipts ?? []).filter((r) => r.ticketId === ticket.id && r.kind === 'DEPOSIT')
+    .reduce((x, r) => x + Number(r.amount), 0);
+  const kind = notice?.totalPayable != null
+    ? (Number(notice.totalPayable) > depositSoFar ? 'DEPOSIT' : 'BALANCE')
+    : (ticket.depositPolicy === 'REQUIRED' && !settled ? 'DEPOSIT' : 'BALANCE');
+  const receiptId = Math.max(0, ...(db.paymentReceipts ?? []).map((r) => r.receiptId)) + 1;
+  const now = new Date().toISOString();
+  db.paymentReceipts.push({
+    receiptId, ticketId: ticket.id, kind, amount, currency: 'THB', receivedAt: `${row.docDate}T05:00:00.000Z`,
+    recordedById: user.id, recordedByName: user.name, note: null, depositNoticeId: null, receiptRef: ref,
+    createdAt: now, source: 'EXPRESS', customerName: row.customerName ?? null,
+  });
+  pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=${kind}, amount=${amount} — Express ${ref}`);
+  reconcilePaymentStatus(ticket, user, false);
+  mockApplyReceiptToExpected(ticket.id, kind, amount, row.docDate, receiptId, ref);
+  return receiptId;
+}
+
+const mockKnownDocNo = (docNo) => {
+  const key = docNo.trim().toUpperCase();
+  return (db.paymentReceipts ?? []).some((r) => String(r.receiptRef ?? '').trim().toUpperCase() === key
+      || String(r.expressDocNo ?? '').trim().toUpperCase() === key)
+    || mockReceiptImportRows.some((r) => r.docNo.trim().toUpperCase() === key);
+};
+
+/** ReceiptImportRepository.findManualTwin (review H1): a MANUAL money receipt, same amount, within ±7 days, unlinked. */
+const mockManualTwin = (ticketId, row) => {
+  const gap = (r) => Math.abs(new Date(`${mockBangkokDateOf(r.receivedAt)}T00:00:00Z`) - new Date(`${row.docDate}T00:00:00Z`)) / 86_400_000;
+  return (db.paymentReceipts ?? [])
+    .filter((r) => r.ticketId === Number(ticketId) && (r.source ?? 'MANUAL') === 'MANUAL' && !r.expressDocNo
+      && ['DEPOSIT', 'BALANCE'].includes(r.kind) && Number(r.amount) === row.amount && gap(r) <= 7)
+    .sort((a, b) => gap(a) - gap(b) || a.receiptId - b.receiptId)[0] ?? null;
+};
+
+/** ReceiptImportService.offeredTo + candidate(): the deals offered for a queued row; a rep gets only their own. */
+function mockOfferedCandidates(row) {
+  const candidates = mockReceiptCandidates();
+  const match = mockMatchReceipt(row, candidates);
+  return match.candidateIds
+    .map((id) => candidates.find((c) => c.ticketId === id))
+    .filter(Boolean)
+    .map((c) => {
+      const nearest = [...c.openExpected].sort((a, b) => Math.abs(a.amount - row.amount) - Math.abs(b.amount - row.amount))[0] ?? null;
+      const fits = nearest && mockWithinTolerance(row.amount, Number(nearest.amount));
+      return {
+        ticketId: c.ticketId, title: c.title, customerName: c.customerName, ownerId: c.ownerId, ownerName: c.ownerName,
+        hint: match.rule === 'INVOICE_NO' || match.rule === 'QUOTATION_NO' ? 'เลขอ้างอิงตรง' : fits ? 'ลูกค้า + ยอดตรง' : 'ลูกค้าตรง',
+        expectedAmount: nearest?.amount ?? null, expectedWeek: nearest?.expectedWeek ?? null, expectedKind: nearest?.kind ?? null,
+      };
+    });
+}
+
+/** ReceiptImportService: ACCOUNT ONLY (review H2/H3). */
+function mockRequireAccount() {
+  const user = requireSession();
+  if (user.role !== 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+function mockRequireQueued(rowId, status) {
+  const row = mockReceiptImportRows.find((r) => r.rowId === Number(rowId));
+  if (!row) fail('ไม่พบรายการนี้', 404);
+  if (row.status !== status) fail('รายการนี้จับคู่หรือข้ามไปแล้ว', 409);
+  return row;
+}
+
+const mockQueuedDto = (r, candidates = []) => ({
+  rowId: r.rowId, importId: r.importId, docNo: r.docNo, docDate: r.docDate, customerName: r.customerName,
+  amount: r.amount, reference: r.reference, reason: r.reason, status: r.status,
+  resolvedTicketId: r.resolvedTicketId ?? null, managerFlaggedAt: r.managerFlaggedAt ?? null,
+  possibleManualReceiptId: r.suggestedReceiptId ?? null,
+  possibleManual: (() => {
+    const m = r.suggestedReceiptId == null ? null : (db.paymentReceipts ?? []).find((x) => x.receiptId === r.suggestedReceiptId);
+    return m ? { receiptId: m.receiptId, ticketId: m.ticketId, kind: m.kind, amount: m.amount, receivedAt: m.receivedAt,
+      recordedByName: m.recordedByName ?? null, alreadyLinked: Boolean(m.expressDocNo) } : null;
+  })(),
+  candidates,
+});
 
 /** VisitService.cleanNote: trimmed, null when blank, 400 over 2000 characters. */
 function mockCleanVisitNote(note) {
@@ -12877,6 +13315,11 @@ export const api = {
       }
       const fromLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep ?? '—';
       const toLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[target] ?? target;
+      // V216: the stamp this advance replaces, for the 30 s undo (ImportRequestRepository#advanceStep).
+      row.stepUndo = {
+        importStep: row.importStep, importStepAt: row.importStepAt, importStepById: row.importStepById,
+        importStepByName: row.importStepByName, importStepNote: row.importStepNote, advancedAt: Date.now(),
+      };
       row.importStep = target; row.importStepAt = eventDate; row.importStepById = user.id;
       row.importStepByName = user.name; row.importStepNote = request?.note ?? null;
       row.updatedAt = new Date().toISOString();
@@ -12901,6 +13344,32 @@ export const api = {
           applyImportRequestRollupMock(ticket, user);
         }
       }
+      // ImportRequestController#advanceStep: also says when the 30 s undo window closes (server time).
+      return delay({ importRequest: mockImportRequestDto(row), undoUntil: new Date(row.stepUndo.advancedAt + 30_000).toISOString() });
+    },
+    // Mirrors ImportRequestService#undoStep (V216): advance's role gate, actor-only, the step it set, within 30 s,
+    // one level, never RECEIVED. The undo is logged as IMPORT_STEP_ADVANCED with a เลิกทำ message.
+    async undoStep(id, request) {
+      const user = hasRole('import', 'ceo');
+      const expected = request?.expectedStep;
+      if (!MOCK_IMPORT_REQUEST_STEPS.includes(expected)) fail('ต้องระบุขั้นตอนที่จะเลิกทำ', 400);
+      const row = findStoredImportRequestRaw(id);
+      const ticket = findTicketRaw(row.ticketId);
+      requireActive(ticket);
+      const undo = row.stepUndo;
+      if (row.status !== 'ISSUED' || !undo) fail('ไม่มีการเลื่อนขั้นตอนให้เลิกทำ', 409);
+      if (row.importStep !== expected) fail('ขั้นตอนถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้', 409);
+      if (row.importStepById !== user.id) fail('เลิกทำได้เฉพาะผู้ที่เลื่อนขั้นตอนนี้', 403);
+      if (row.importStep === 'RECEIVED') fail('รับสินค้าเข้าคลังแล้ว เลิกทำไม่ได้ — แก้ไขด้วยการออกฉบับแก้ไข', 409);
+      if (Date.now() - undo.advancedAt > 30_000) fail('เลยเวลาเลิกทำแล้ว (30 วินาที)', 409);
+      const fromLabel = MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep;
+      Object.assign(row, {
+        importStep: undo.importStep, importStepAt: undo.importStepAt, importStepById: undo.importStepById,
+        importStepByName: undo.importStepByName, importStepNote: undo.importStepNote, stepUndo: null,
+        updatedAt: new Date().toISOString(),
+      });
+      pushEvent(ticket, user, 'IMPORT_STEP_ADVANCED', null, null,
+        `โรงงาน ${row.factoryName}: เลิกทำ ${fromLabel} → ${MOCK_IMPORT_REQUEST_STEP_LABELS_TH[row.importStep] ?? row.importStep}`);
       return delay({ importRequest: mockImportRequestDto(row) });
     },
     async setLeadTime(id, request) {
@@ -13186,6 +13655,7 @@ export const api = {
       return delay({
         followUp: mockRankQuiet(board).slice(0, 5), board, quietDays: MOCK_QUIET_DAYS,
         visitsThisWeek: mockVisitsThisWeek(user.id),
+        cash: mockCashForMonth(user.id, mockTodayIso().slice(0, 7)),
       });
     },
     async teamOverview() {
@@ -13221,7 +13691,27 @@ export const api = {
           });
         }
       }
+      // SalesBoardService.repRows: an owner with cash this month but no open deal and no visit still gets a row.
+      const month = mockTodayIso().slice(0, 7);
+      const owners = new Set([
+        ...mockExpectedPayments.map((p) => db.tickets.find((t) => t.id === p.ticketId)?.createdById),
+        ...(db.paymentReceipts ?? []).map((r) => db.tickets.find((t) => t.id === r.ticketId)?.createdById),
+      ].filter((id) => id != null));
+      for (const ownerId of owners) {
+        const c = mockCashForMonth(ownerId, month);
+        if (c.forecast === 0 && c.received === 0) continue;
+        if (!byRep.has(ownerId)) {
+          const u = db.users.find((x) => x.id === ownerId);
+          byRep.set(ownerId, {
+            employeeId: ownerId, name: u?.name ?? null, role: u?.role ?? null,
+            openDeals: 0, openValue: 0, otherCurrencyValues: {}, quietDeals: 0, lastUpdateAt: null,
+          });
+        }
+      }
       for (const row of byRep.values()) {
+        const c = mockCashForMonth(row.employeeId, month);
+        row.expected = c.forecast;
+        row.received = c.received;
         const own = teamVisitsThisWeek.filter((v) => v.ownerId === row.employeeId && v.status !== 'CANCELLED');
         row.visitsDone = own.filter((v) => v.status === 'DONE').length;
         row.visitsPlanned = own.length;
@@ -13229,6 +13719,7 @@ export const api = {
       const reps = [...byRep.values()].sort((a, b) => b.openValue - a.openValue || a.employeeId - b.employeeId);
       return delay({
         reps, stale: mockRankQuiet(deals).slice(0, 20), quietDays: MOCK_QUIET_DAYS, teamVisitsThisWeek,
+        cash: mockCashForMonth(null, month),
       });
     },
     // Mirrors PipelineImportController / PipelineImportService (salesboard/pipelineimport/). SHAPE ONLY: the mock does
@@ -13260,6 +13751,214 @@ export const api = {
     },
     pipelineImportTemplateUrl() {
       return '/api/sales/pipeline-imports/template';
+    },
+  },
+  // Mirrors ReceiptImportController / ReceiptImportService (salesboard/receipts/, V213/V214). AUTHZ NOTE: these gates
+  // approximate the Java service and are NOT evidence — ReceiptImportIntegrationTest is. Everything is ACCOUNT only
+  // except managerView (sales_manager / ceo, read-only). The upload is OFF by default (setMockReceiptUploadEnabled).
+  // Mock mode reads .csv only.
+  receiptImports: {
+    async upload(file) {
+      const user = mockRequireAccount();
+      if (!mockReceiptUploadEnabled) mockRefusal('UPLOAD_DISABLED', 'ยังไม่เปิดใช้การอัปโหลดไฟล์ Express');
+      const name = file?.name ?? 'upload';
+      if (!/\.csv$/i.test(name)) fail('โหมดทดลองอ่านได้เฉพาะไฟล์ .csv (ระบบจริงรับ .xlsx ด้วย)', 400);
+      const { rows, errors } = mockParseReceipts(await file.text());
+      const importId = mockReceiptImportSeq++;
+      const tally = () => ({ count: 0, amount: 0 });
+      const t = { matched: tally(), possibleManual: tally(), duplicates: tally(), unmatched: tally(), nonCash: tally() };
+      const add = (k, row) => { t[k].count += 1; t[k].amount = round2(t[k].amount + row.amount); };
+      const queue = (row, reason, suggestedReceiptId = null, into = 'unmatched') => {
+        mockReceiptImportRows.push({ rowId: mockReceiptRowSeq++, importId, ...row, reason, status: 'UNMATCHED',
+          resolvedTicketId: null, managerFlaggedAt: null, suggestedReceiptId });
+        add(into, row);
+      };
+      const seen = new Set();
+      let failed = 0;
+      for (const row of rows) {
+        try {
+          if (!MOCK_CASH_DOC_TYPES.has(row.docType ?? '')) { add('nonCash', row); continue; }
+          const key = row.docNo.trim().toUpperCase();
+          if (seen.has(key) || mockKnownDocNo(row.docNo)) { seen.add(key); add('duplicates', row); continue; }
+          seen.add(key);
+          const match = mockMatchReceipt(row, mockReceiptCandidates()); // reloaded per row (M1)
+          if (match.ticketId == null) { queue(row, match.reason); continue; }
+          // Review N1: never linked silently — queued for account to decide.
+          const twin = mockManualTwin(match.ticketId, row);
+          if (twin) { queue(row, 'POSSIBLE_MANUAL_DUPLICATE', twin.receiptId, 'possibleManual'); continue; }
+          try { mockPlaceExpressReceipt(match.ticketId, row, user); add('matched', row); } catch (error) {
+            if (error.status !== 409) throw error;
+            if (error.details?.code === 'DUPLICATE') add('duplicates', row); else queue(row, error.details?.code ?? 'DEAL_NOT_ACTIVE');
+          }
+        } catch {
+          failed += 1;
+          errors.push({ line: row.line, message: `บันทึกไม่สำเร็จ (${row.docNo}) — ลองอัปโหลดใหม่` });
+        }
+      }
+      const summary = {
+        importId, fileName: name, uploadedAt: new Date().toISOString(), uploadedByName: user.name,
+        totalRows: rows.length + errors.length - failed, matched: t.matched.count, matchedAmount: t.matched.amount,
+        possibleManualDuplicates: t.possibleManual.count, duplicates: t.duplicates.count, duplicateAmount: t.duplicates.amount,
+        unmatched: t.unmatched.count, unmatchedAmount: t.unmatched.amount, nonCash: t.nonCash.count,
+        invalid: errors.length - failed, failed,
+      };
+      mockReceiptImports.push(summary);
+      return delay({ ...summary, errors: [...errors].sort((x, y) => x.line - y.line) });
+    },
+    async latest() {
+      mockRequireAccount();
+      const last = mockReceiptImports[mockReceiptImports.length - 1] ?? null;
+      return delay({
+        uploadEnabled: mockReceiptUploadEnabled,
+        latest: last ? { ...last, errors: [] } : null,
+        openUnmatched: mockReceiptImportRows.filter((r) => r.status === 'UNMATCHED').length,
+      });
+    },
+    async template() {
+      mockRequireAccount();
+      return new Blob(['\uFEFFเลขที่เอกสาร,ประเภทเอกสาร,วันที่,ลูกค้า,จำนวนเงิน,อ้างอิง\r\n'], { type: 'text/csv;charset=utf-8' });
+    },
+    async unmatched() {
+      mockRequireAccount();
+      return delay(mockReceiptImportRows.filter((r) => r.status === 'UNMATCHED')
+        .sort((a, b) => a.docDate.localeCompare(b.docDate) || a.rowId - b.rowId)
+        .map((r) => mockQueuedDto(r, mockOfferedCandidates(r))));
+    },
+    async ignored() {
+      mockRequireAccount();
+      return delay(mockReceiptImportRows.filter((r) => r.status === 'IGNORED')
+        .sort((a, b) => a.docDate.localeCompare(b.docDate) || a.rowId - b.rowId).map((r) => mockQueuedDto(r)));
+    },
+    async managerView() {
+      const user = requireSession();
+      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const open = mockReceiptImportRows.filter((r) => r.status === 'UNMATCHED');
+      return delay({
+        openUnmatched: open.length,
+        flagged: open.filter((r) => r.managerFlaggedAt).map((r) => ({
+          rowId: r.rowId, docNo: r.docNo, docDate: r.docDate, customerName: r.customerName, amount: r.amount,
+          reference: r.reference, managerFlaggedAt: r.managerFlaggedAt,
+        })),
+      });
+    },
+    async deals(q) {
+      mockRequireAccount();
+      const needle = String(q ?? '').trim().toLowerCase();
+      return delay(db.tickets
+        .filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && accountListScopeIncludes(t))
+        .filter((t) => [t.code, t.title, t.customerName].some((v) => String(v ?? '').toLowerCase().includes(needle)))
+        .sort((a, b) => b.id - a.id).slice(0, 20)
+        .map((t) => ({ ticketId: t.id, code: t.code ?? null, title: (t.title ?? '').trim() || t.customerName || null,
+          customerName: t.customerName ?? null, ownerName: t.createdByName ?? null })));
+    },
+    async resolve(rowId, payload) {
+      const user = mockRequireAccount();
+      const row = mockReceiptImportRows.find((r) => r.rowId === Number(rowId));
+      if (!row) fail('ไม่พบรายการนี้', 404);
+      const lines = payload?.allocations?.length
+        ? payload.allocations.map((a) => ({ ticketId: Number(a.ticketId), amount: Number(a.amount) }))
+        : payload?.ticketId ? [{ ticketId: Number(payload.ticketId), amount: row.amount }] : null;
+      if (!lines) fail('กรุณาเลือกดีล', 400);
+      if (lines.length > 1) {
+        const sum = lines.reduce((x, l) => x + Math.round(l.amount * 100), 0);
+        if (lines.some((l) => !(l.amount > 0)) || new Set(lines.map((l) => l.ticketId)).size !== lines.length) {
+          fail('แต่ละดีลต้องมียอดมากกว่า 0 และไม่ซ้ำกัน', 400);
+        }
+        if (sum !== Math.round(row.amount * 100)) fail(`ยอดที่แบ่งรวมกันต้องเท่ากับยอดรายการพอดี (${row.amount})`, 400);
+      }
+      for (const l of lines) {
+        const ticket = db.tickets.find((x) => x.id === l.ticketId);
+        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || !accountListScopeIncludes(ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      if (row.status !== 'UNMATCHED') fail('รายการนี้จับคู่หรือข้ามไปแล้ว', 409);
+      lines.forEach((l, i) => {
+        const ref = lines.length > 1 ? `${row.docNo.trim()}#${i + 1}` : row.docNo.trim();
+        const receiptId = mockPlaceExpressReceipt(l.ticketId, row, user, l.amount, ref);
+        if (lines.length > 1) mockReceiptAllocations.push({ rowId: row.rowId, ticketId: l.ticketId, receiptId, amount: l.amount });
+      });
+      Object.assign(row, { status: 'RESOLVED', resolvedTicketId: lines[0].ticketId });
+      return delay(mockQueuedDto(row));
+    },
+    async ignore(rowId) {
+      mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'UNMATCHED');
+      row.status = 'IGNORED';
+      return delay(mockQueuedDto(row));
+    },
+    async unignore(rowId) {
+      mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'IGNORED');
+      row.status = 'UNMATCHED';
+      return delay(mockQueuedDto(row));
+    },
+    async sameAsManual(rowId) {
+      const user = mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'UNMATCHED');
+      const manual = (db.paymentReceipts ?? []).find((r) => r.receiptId === row.suggestedReceiptId && (r.source ?? 'MANUAL') === 'MANUAL');
+      if (row.reason !== 'POSSIBLE_MANUAL_DUPLICATE' || !manual) fail('รายการนี้ไม่ได้รอเลือกว่าเป็นรายการเดียวกับที่บันทึกเอง', 409);
+      if (manual.expressDocNo) fail('รายการที่บันทึกเองนี้ผูกกับเลขที่ Express อื่นแล้ว', 409);
+      manual.expressDocNo = row.docNo.trim();
+      Object.assign(row, { status: 'RESOLVED', resolvedTicketId: manual.ticketId, resolvedBy: user.id });
+      return delay(mockQueuedDto(row));
+    },
+    async flagManager(rowId) {
+      mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'UNMATCHED');
+      row.managerFlaggedAt = new Date().toISOString();
+      return delay(mockQueuedDto(row));
+    },
+  },
+  // Mirrors ExpectedPaymentController / ExpectedPaymentService (salesboard/, V212). AUTHZ NOTE: these gates
+  // approximate the Java service and are NOT evidence — ExpectedPaymentScopeIntegrationTest is. Write = the deal's
+  // owner/keyer (sales), sales_manager, ceo; read = those plus account inside its finance scope.
+  expectedPayments: {
+    async list(ticketId) {
+      const user = requireSession();
+      if (user.role === 'account') {
+        const ticket = db.tickets.find((t) => t.id === Number(ticketId));
+        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        requireMockAccountScope(user, ticket);
+      } else {
+        mockRequireDealWrite(user, ticketId);
+      }
+      return delay(mockExpectedPaymentsOf(ticketId));
+    },
+    async create(ticketId, payload) {
+      const user = requireSession();
+      const ticket = mockRequireDealWrite(user, ticketId);
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
+        fail('ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงเพิ่มเงินที่คาดว่าจะเข้าไม่ได้', 409);
+      }
+      const valid = mockValidExpectedPayment(payload);
+      const at = new Date().toISOString();
+      const row = {
+        id: mockExpectedPaymentSeq++, ticketId: ticket.id, ...valid, status: 'OPEN', receivedAmount: 0, receiptId: null,
+        receiptRef: null, createdById: user.id, createdAt: at, updatedAt: at,
+      };
+      mockExpectedPayments.push(row);
+      return delay({ ...row });
+    },
+    async update(ticketId, id, payload) {
+      const user = requireSession();
+      mockRequireActiveExpectedDeal(mockRequireDealWrite(user, ticketId));
+      const row = mockRequireOpenExpected(ticketId, id);
+      const valid = mockValidExpectedPayment(payload);
+      // ExpectedPaymentService.update (review N3): what came in is fixed — no lower plan, no kind change.
+      if ((row.receivedAmount ?? 0) > 0) {
+        if (valid.amount < row.receivedAmount) fail(`รับเงินรายการนี้มาแล้ว ${row.receivedAmount} บาท จึงลดยอดให้ต่ำกว่านั้นไม่ได้`, 409);
+        if (valid.kind !== row.kind) fail('รายการนี้รับเงินมาบางส่วนแล้ว จึงเปลี่ยนประเภทไม่ได้', 409);
+      }
+      Object.assign(row, valid, { updatedAt: new Date().toISOString() });
+      return delay({ ...row });
+    },
+    async cancel(ticketId, id) {
+      const user = requireSession();
+      mockRequireActiveExpectedDeal(mockRequireDealWrite(user, ticketId));
+      const row = mockRequireOpenExpected(ticketId, id);
+      row.status = 'CANCELLED';
+      row.updatedAt = new Date().toISOString();
+      return delay({ ...row });
     },
   },
   // Mirrors VisitController / VisitService / VisitRepository (salesboard/). AUTHZ NOTE: these gates approximate the
@@ -13573,15 +14272,15 @@ export const api = {
       return delay({ deal: buildFinanceDeal(raw, user) });
     },
 
-    async confirmDepositPaid(id) {
+    async confirmDepositPaid(id, options = {}) {
       const { user, raw } = requireMockFinanceAccess(id);
-      await mockConfirmDepositPaid(id);
+      await mockConfirmDepositPaid(id, options);
       return delay({ deal: buildFinanceDeal(raw, user) });
     },
 
-    async confirmFinalPayment(id) {
+    async confirmFinalPayment(id, options = {}) {
       const { user, raw } = requireMockFinanceAccess(id);
-      await mockConfirmFinalPayment(id);
+      await mockConfirmFinalPayment(id, options);
       return delay({ deal: buildFinanceDeal(raw, user) });
     },
 

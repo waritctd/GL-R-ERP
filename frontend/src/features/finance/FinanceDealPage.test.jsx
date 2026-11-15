@@ -640,6 +640,8 @@ describe('FinanceDealPage', () => {
       fireEvent.change(within(dialog).getByLabelText('ประเภท'), { target: { value: 'BALANCE' } });
       fireEvent.change(within(dialog).getByLabelText('จำนวนเงิน'), { target: { value: '60000' } });
       fireEvent.change(within(dialog).getByLabelText('เลขอ้างอิง'), { target: { value: ' RC-999 ' } });
+      // The note is collapsed behind "+ หมายเหตุ" (design m-payment).
+      fireEvent.click(within(dialog).getByRole('button', { name: '+ หมายเหตุ' }));
       fireEvent.change(within(dialog).getByLabelText('หมายเหตุ'), { target: { value: 'โอนเข้าบัญชี' } });
       fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกรับชำระ' }));
       await waitFor(() => expect(api.finance.recordPayment).toHaveBeenCalledTimes(1));
@@ -658,6 +660,8 @@ describe('FinanceDealPage', () => {
       renderPage();
       fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระ' }));
       const dialog = await screen.findByRole('dialog');
+      // The fixture's open invoice prefills the outstanding amount; clearing it is what this test is about.
+      fireEvent.change(within(dialog).getByLabelText('จำนวนเงิน'), { target: { value: '' } });
       fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกรับชำระ' }));
       expect(await within(dialog).findByRole('alert')).not.toBeNull();
       expect(api.finance.recordPayment).not.toHaveBeenCalled();
@@ -715,9 +719,28 @@ describe('FinanceDealPage', () => {
       return d;
     };
 
-    it('payment kind defaults to DEPOSIT when nothing has been paid on a deposit deal', async () => {
-      const dialog = await openPaymentDialog(payDeal({}, { amountPaid: 0 }));
+    it('payment kind defaults to DEPOSIT when nothing has been paid on a deposit deal with no open document', async () => {
+      const d = payDeal({}, { amountPaid: 0, paymentStatus: 'UNPAID' });
+      d.documents = { ...d.documents, depositNotices: [], remainingInvoices: [] };
+      const dialog = await openPaymentDialog(d);
       expect(within(dialog).getByLabelText('ประเภท').value).toBe('DEPOSIT');
+      expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('');
+    });
+
+    it('an open deposit notice prefills DEPOSIT and the notice total (design m-payment)', async () => {
+      const d = payDeal({}, { amountPaid: 0, paymentStatus: 'DEPOSIT_NOTICE_ISSUED', payments: [] });
+      d.documents = { ...d.documents, remainingInvoices: [] };
+      const dialog = await openPaymentDialog(d);
+      expect(within(dialog).getByLabelText('ประเภท').value).toBe('DEPOSIT');
+      expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('42800');
+      expect(within(dialog).getByTestId('payment-prefill-doc').textContent).toContain('ใบแจ้งมัดจำ DN-2026-0007');
+    });
+
+    it('an issued remaining invoice prefills BALANCE and THAT invoice’s outstanding (its total less balance taken)', async () => {
+      const dialog = await openPaymentDialog(payDeal());
+      expect(within(dialog).getByLabelText('ประเภท').value).toBe('BALANCE');
+      expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('85600');
+      expect(within(dialog).getByTestId('payment-prefill-doc').textContent).toContain('ใบแจ้งหนี้ส่วนที่เหลือ RI-2026-0012 · คงค้าง ฿85,600.00');
     });
 
     it('payment kind defaults to BALANCE once something has been paid', async () => {

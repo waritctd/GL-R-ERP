@@ -226,6 +226,12 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/finance', employee)).toBe(false);
   });
 
+  it('restricts the Express receipts upload to account only (backend refuses the CEO)', () => {
+    expect(canAccessPath('/finance/receipts-import', account)).toBe(true);
+    expect(canAccessPath('/finance/receipts-import', ceo)).toBe(false);
+    expect(canAccessPath('/finance/receipts-import', sales)).toBe(false);
+  });
+
   it('scopes the per-deal finance page /finance/deals/:id exactly like /finance (fails open if unclaimed)', () => {
     expect(canAccessPath('/finance/deals/501', account)).toBe(true);
     expect(canAccessPath('/finance/deals/501', ceo)).toBe(true);

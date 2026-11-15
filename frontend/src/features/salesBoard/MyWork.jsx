@@ -14,6 +14,7 @@ import { MarkLostModal } from '../tickets/MarkLostModal.jsx';
 import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
 import { useStageCatalog } from '../tickets/stageCatalog.js';
 import { currentQuarter, defaultBoardFilter, otherCurrencyTotals, sumValue, totalLabel } from './boardFormat.js';
+import { CashCard } from './CashCard.jsx';
 import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
@@ -53,8 +54,8 @@ const BOARD_ID = 'my-work-board';
  * งานของฉัน — the rep's landing (spec 2026-11-15 §7.3): ควรตามต่อ and นัดเข้าพบสัปดาห์นี้ side by side, then the
  * five-column board, from GET /api/sales/my-work (already scoped server-side to the caller's own deals and visits).
  * `before` is rendered between the header and ควรตามต่อ — SalesOverview puts the money band and the next-action
- * worklist there. บันทึกเข้าพบ is in the header on desktop and a sticky bottom button on phone. Expected cash
- * (slice 3) is not built yet, so it is not shown. Action failures use the app's toast.
+ * worklist there. เงินที่จะเข้า (slice 3) is card C beside them: the payload's `cash` month. บันทึกเข้าพบ is in the
+ * header on desktop and a sticky bottom button on phone. Action failures use the app's toast.
  */
 export function MyWork({ subtitle, before = null, user, showToast = () => {} }) {
   const navigate = useNavigate();
@@ -196,7 +197,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
 
       {before}
 
-      <div className="grid grid-cols-2 items-start gap-[18px] nav-drawer:grid-cols-1">
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,300px),1fr))] items-start gap-[18px]">
         <Panel
           flush
           title={(
@@ -234,6 +235,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           onDone={setTicking}
           onCancel={setCancelling}
         />
+
+        {work?.cash ? <CashCard cash={work.cash} /> : null}
       </div>
 
       <CarriedOverVisits visits={carriedOver} todayIso={todayIso} onDone={setTicking} onCancel={setCancelling} />

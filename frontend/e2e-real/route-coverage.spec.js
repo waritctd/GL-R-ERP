@@ -42,11 +42,12 @@ const ROUTES = [
   '/quotations',
   '/quotations/new',
   '/quotations/1',
-  '/fulfilment', // งานนำเข้า — Import's fulfilment workspace (import/ceo; every other role refuses)
+  '/fulfilment', // การขนส่ง — Import's fulfilment workspace (import/ceo; every other role refuses)
   '/import/deals/1', // Import's own per-deal page (GET /api/import/deals/{id}; import/ceo, import row-scoped)
   '/commissions',
   '/finance',
   '/finance/deals/1', // Account's own per-deal finance page (GET /api/finance/deals/{id}; account/ceo, account row-scoped)
+  '/finance/receipts-import', // Express receipts upload (GET /api/sales/receipt-imports/latest; account only — ceo refused by guard and service)
   '/price-import',
   '/ceo-settings',
   '/catalog',

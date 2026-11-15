@@ -334,7 +334,7 @@ class DepositNoticeServiceTest {
                 List.of(noticeItem))));
         when(ticketRepo.findReceiptsByTicket(10L)).thenReturn(List.of(
             new PaymentReceiptDto(1L, 10L, "DEPOSIT", new BigDecimal("4"), "THB",
-                Instant.now(), 1L, "Account", null, 5L, "AI2600145", Instant.now())));
+                Instant.now(), 1L, "Account", null, 5L, "AI2600145", Instant.now(), "MANUAL", null)));
 
         RemainingInvoiceOptionsDto options = service.getRemainingInvoiceOptions(10L, owner);
 

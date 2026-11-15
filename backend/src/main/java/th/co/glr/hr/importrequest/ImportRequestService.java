@@ -1111,7 +1111,10 @@ public class ImportRequestService {
                 "สิ่งที่ต้องทำต่อ: นัดวันส่งสินค้ากับลูกค้า");
         } else if (ImportRequestStep.CONTACTED.equals(existing.importStep())
             && stored.findIssuedByTicket(existing.ticketId()).stream()
-                .noneMatch(o -> o.id() != id && !ImportRequestStep.CONTACTED.equals(o.importStep()))) {
+                .noneMatch(o -> o.id() != id && !ImportRequestStep.CONTACTED.equals(o.importStep()))
+            // An undo back to CONTACTED, then a re-advance, must not tell the rep twice (review M4).
+            && !stored.importStartedNoticeSent(existing.ticketId(),
+                requireTicketSummary(existing.ticketId()).createdById())) {
             // Once per deal: only the first IR to leave CONTACTED tells the rep the import has started.
             notifyRepOfImportProgress(requireTicketSummary(existing.ticketId()), TicketEventKind.IMPORT_STARTED,
                 actor.name() + " เริ่มดำเนินการ" + ir + " กับโรงงาน " + existing.factoryName()
@@ -1119,6 +1122,89 @@ public class ImportRequestService {
                 "แจ้งเพื่อทราบ ระบบจะแจ้งอีกครั้งเมื่อสินค้าเข้าคลัง");
         }
         return withPageCount(requireStored(id));
+    }
+
+    /** How long after an advance its actor may still undo it (spec 2026-11-15 §7.11 item 3, the /fulfilment snackbar). */
+    static final int STEP_UNDO_WINDOW_SECONDS = 30;
+
+    /** The service-side window check's clock (review M3); the repository's guarded UPDATE uses the database clock. */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    /** Test seam for the service-side window check. */
+    void useClock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
+    /** When the latest advance's undo window closes (its database stamp + {@link #STEP_UNDO_WINDOW_SECONDS}), or null
+     * when there is nothing to undo. Read straight after an advance so the snackbar counts down to SERVER time. */
+    public java.time.Instant stepUndoUntil(long id) {
+        return stored.findStepUndoState(id)
+            .filter(s -> s.undoFrom() != null && s.advancedAt() != null)
+            .map(s -> s.advancedAt().plusSeconds(STEP_UNDO_WINDOW_SECONDS))
+            .orElse(null);
+    }
+
+    /**
+     * Undoes the caller's OWN latest step advance within {@link #STEP_UNDO_WINDOW_SECONDS} (V216), new in slice 5.
+     *
+     * <p>Authorisation: the SAME role gate as {@link #advanceStep} ({@link #ADVANCE_STEP_ROLES}, 403), then
+     * actor-only: the advance must have been made by this caller (403 otherwise; the CEO cannot undo import's).
+     * Refused with 409: not ISSUED; nothing to undo (never advanced, or already undone: one level only); the row is no
+     * longer at {@code expectedStep} (a later advance by anyone ends the window); the advance reached RECEIVED (it may
+     * have rolled the deal up and notified the rep, so it is corrected by revision); the window has passed (database
+     * clock). Restores step, date, by and note exactly, and records an IMPORT_STEP_ADVANCED event saying "เลิกทำ" (no
+     * new event kind, so V216 need not re-declare chk_event_kind; DealHistoryPanel labels it from that marker).
+     *
+     * <p>Locks in EXACTLY {@link #advanceStep}'s order: the row (the guarded UPDATE) first, then the deal, so an
+     * advance and an undo racing on one row cannot deadlock (review H1; ImportStepLockOrderIntegrationTest). The
+     * window is checked twice, independently: here against this service's clock, and again in the UPDATE against the
+     * database clock; a refusal by the UPDATE alone is the lost-race 409.
+     *
+     * <p>The rep is told nothing about an undo (deliberate, review M4): the advance itself notifies only on its first
+     * exit from CONTACTED or on the final RECEIVED, and neither is re-sent: RECEIVED is never undoable, and a
+     * re-advance out of CONTACTED skips an IMPORT_STARTED the rep already has.
+     */
+    @Transactional
+    public ImportRequestDto undoStep(long id, ImportRequestRequests.UndoImportStepRequest request, UserPrincipal actor) {
+        if (!ADVANCE_STEP_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        String expected = request == null ? null : request.expectedStep();
+        if (!ImportRequestStep.isValid(expected)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุขั้นตอนที่จะเลิกทำ");
+        }
+        ImportRequestDto existing = requireStored(id);
+        requireDealActive(requireTicket(existing.ticketId()));
+        var state = stored.findStepUndoState(id)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบใบขอซื้อ"));
+        if (!ImportRequestStatus.ISSUED.equals(state.status()) || state.undoFrom() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่มีการเลื่อนขั้นตอนให้เลิกทำ");
+        }
+        if (!expected.equals(state.importStep())) {
+            throw new ApiException(HttpStatus.CONFLICT, "ขั้นตอนถูกเปลี่ยนไปแล้ว จึงเลิกทำไม่ได้");
+        }
+        if (state.advancedById() == null || state.advancedById() != actor.id()) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "เลิกทำได้เฉพาะผู้ที่เลื่อนขั้นตอนนี้");
+        }
+        if (ImportRequestStep.RECEIVED.equals(state.importStep())) {
+            throw new ApiException(HttpStatus.CONFLICT, "รับสินค้าเข้าคลังแล้ว เลิกทำไม่ได้ — แก้ไขด้วยการออกฉบับแก้ไข");
+        }
+        if (state.advancedAt() == null
+            || clock.instant().isAfter(state.advancedAt().plusSeconds(STEP_UNDO_WINDOW_SECONDS))) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลยเวลาเลิกทำแล้ว (" + STEP_UNDO_WINDOW_SECONDS + " วินาที)");
+        }
+        // Row first, then the deal: advanceStep's order (review H1).
+        if (stored.undoStep(id, expected, actor.id(), STEP_UNDO_WINDOW_SECONDS) == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "มีผู้อื่นเปลี่ยนขั้นตอนนี้ไปก่อน หรือเลยเวลาเลิกทำแล้ว จึงเลิกทำไม่ได้");
+        }
+        tickets.lockTicketForUpdate(existing.ticketId());
+        ImportRequestDto after = requireStored(id);
+        tickets.addEventWithDocument(existing.ticketId(), actor.id(), actor.name(),
+            TicketEventKind.IMPORT_STEP_ADVANCED, null, null,
+            "โรงงาน " + existing.factoryName() + ": เลิกทำ " + ImportRequestStep.thaiLabel(expected)
+                + " → " + ImportRequestStep.thaiLabel(after.importStep()),
+            th.co.glr.hr.ticket.RelatedDocumentType.IMPORT_REQUEST, id);
+        return withPageCount(after);
     }
 
     /** Prints the INTERNAL stored form from ITS OWN snapshot — everything, unlike the FACTORY copy.

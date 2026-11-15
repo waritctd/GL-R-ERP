@@ -23,7 +23,7 @@ const PATH_LABELS = {
   // This map's own header requires it to mirror AppShell's nav label, so the refusal named a page that no longer
   // exists under that name.
   '/pricing-requests': 'คิวขอราคา',
-  '/fulfilment': 'งานนำเข้า',
+  '/fulfilment': 'การขนส่ง',
   '/ceo-settings': 'ตั้งค่าราคา',
   '/factory-purchase-orders': 'ใบสั่งซื้อโรงงาน',
   '/employee-requests': 'คำขอ (OT / สวัสดิการ)',

@@ -44,14 +44,16 @@ function downloadBlob(blob, filename) {
  * Role shape (mirrors ImportRequestService — see its own Javadoc for the authoritative matrix):
  *   - `canFullWrite` (owning sales rep or CEO): edit the draft body/lead-time, issue, revise, delete.
  *   - `canFooterWrite` (CEO only): Checked/Approved By+date, vessel ETA.
- *   - `canAdvance` (import/CEO): advance the per-factory step, set lead time AFTER issue.
+ *   - `canSetLeadTime` (import/CEO): set lead time AFTER issue. The per-factory STEP is never advanced here: the
+ *     tracker is read-only on both surfaces and the step moves on /fulfilment only (spec 2026-11-15 §7.11 item 3 —
+ *     a UI narrowing; ImportRequestService's import/ceo advance gate is unchanged).
  *   - `canEmailWrite` (owning rep, CEO, or import): edit/mark-sent the order-email draft.
  * `showOrderEmail` (import's surfaces only): the order-email row; the sales deal tab omits it (owner ruling 2026-10-29).
  * Everyone who can reach this card at all may read it and download the PDF — the buttons above
  * are an affordance; the server is the authority, so a 403/409 surfaces its own Thai message.
  */
 export function ImportRequestFactoryCard({
-  row, ticketId, canFullWrite, canFooterWrite, canAdvance, canEmailWrite, showToast,
+  row, ticketId, canFullWrite, canFooterWrite, canSetLeadTime, canEmailWrite, showToast,
   showInlineDownload = false, showOrderEmail = false,
 }) {
   const queryClient = useQueryClient();
@@ -106,11 +108,6 @@ export function ImportRequestFactoryCard({
   const deleteMutation = useMutation({
     mutationFn: () => api.storedImportRequests.deleteDraft(row.id),
     onSuccess: () => { showToast?.('success', 'ลบร่างแล้ว'); setDeleteConfirmOpen(false); invalidate(); },
-    onError,
-  });
-  const advanceMutation = useMutation({
-    mutationFn: (targetStep) => api.storedImportRequests.advanceStep(row.id, { targetStep }),
-    onSuccess: () => { showToast?.('success', 'อัปเดตสถานะรายโรงงานแล้ว'); invalidate(); },
     onError,
   });
   const setLeadTimeMutation = useMutation({
@@ -203,7 +200,7 @@ export function ImportRequestFactoryCard({
         {/* เนื้อหา (draft body): lead time + required-by, editable by the owning rep/CEO only while DRAFT. Post-issue
          * the min/max here is READ-ONLY — the edit control below (import/CEO) is the one that still writes. */}
         {(() => {
-          const canWriteLeadTimeNow = isDraft ? canFullWrite : canAdvance;
+          const canWriteLeadTimeNow = isDraft ? canFullWrite : canSetLeadTime;
           if (!canWriteLeadTimeNow) {
             return (
               <div className="flex flex-wrap items-center gap-3 text-xs" data-testid={`ir-lead-readonly-${row.id}`}>
@@ -303,9 +300,7 @@ export function ImportRequestFactoryCard({
             expectedArrivalFrom: row.expectedArrivalFrom, expectedArrivalTo: row.expectedArrivalTo,
             leadTimeMinDays: row.leadTimeMinDays, leadTimeMaxDays: row.leadTimeMaxDays,
           }}
-          editable={canAdvance}
-          advancing={advanceMutation.isPending}
-          onAdvance={(_r, targetStep) => advanceMutation.mutate(targetStep)}
+          editable={false}
         />
       ) : (
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -313,6 +308,12 @@ export function ImportRequestFactoryCard({
           {docMeta}
         </div>
       )}
+
+      {isIssued ? (
+        <p className="m-0 text-xs text-text-muted" data-testid={`ir-step-readonly-${row.id}`}>
+          ฝ่ายนำเข้าเลื่อนขั้นตอนนี้ที่หน้า การขนส่ง เท่านั้น หน้านี้แสดงผลให้เห็นตรงกัน
+        </p>
+      ) : null}
 
       {/* QA BUG-21: a DRAFT has no import step, so the tracker's slot says why instead of sitting
           empty. The wording is the same for every viewer and names no one to wait for: issuing can

@@ -490,16 +490,12 @@ describe('DealPaymentSection — the timeline (moved here unchanged)', () => {
     expect(timelineItems()).toHaveLength(0);
   });
 
-  it('shows บันทึกรับชำระเงิน only when granted, and never a ตั้งค่าการวางบิล button', async () => {
-    const onRecordPayment = vi.fn();
-    const first = renderSection({ summary, canRecordPayment: true, onRecordPayment });
-    await settled();
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกรับชำระเงิน' }));
-    expect(onRecordPayment).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: 'ตั้งค่าการวางบิล' })).toBeNull();
-    first.unmount();
-    renderSection({ summary, canRecordPayment: false });
+  // Spec 2026-11-15 §7.11 item 8: the sales page's payment form was unreachable dead UI (account records payments on
+  // /finance/deals/:id and never mounts the sales deal page), so this section never offers one.
+  it('never shows บันทึกรับชำระเงิน nor a ตั้งค่าการวางบิล button', async () => {
+    renderSection({ summary, user: { id: 1, role: 'account' } });
     await settled();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ตั้งค่าการวางบิล' })).toBeNull();
   });
 });

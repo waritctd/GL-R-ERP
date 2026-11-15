@@ -9,7 +9,9 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { bangkokTodayIso } from '../../utils/format.js';
 import { PipelineImportDialog } from './PipelineImportDialog.jsx';
-import { columnLabel, money, otherCurrencyTotals, sinceLabel, sumValue, totalLabel } from './boardFormat.js';
+import { baht, columnLabel, money, otherCurrencyTotals, sinceLabel, sumValue, totalLabel } from './boardFormat.js';
+import { monthLabel } from './cashFormat.js';
+import { UnmatchedReceiptsSummary } from './UnmatchedReceipts.jsx';
 import { VisitDots, VisitWeekGrid } from './VisitWeekGrid.jsx';
 
 // A manager's or the CEO's own deals stay in the table, labelled (review LOW); a rep's row carries no label.
@@ -25,6 +27,9 @@ function mergeOther(reps) {
 }
 
 const ROW = 'px-5 py-3 mobile:px-3.5';
+
+/** A zero in a per-rep money column is "nothing yet", not a figure: a dash, never ฿0. */
+const cashCell = (value) => (Number(value ?? 0) === 0 ? '—' : baht(value));
 
 function Tile({ testId, label, value, sub, warn }) {
   return (
@@ -45,8 +50,9 @@ function QuietChip({ count }) {
 /**
  * ภาพรวมทีมขาย (spec 2026-11-15 §7.4): tiles (held, quiet, visits this week), one row per rep with the week's visit
  * dots, the team's quiet deals ranked by value × days quiet, and the week visit grid. All numbers are served by
- * GET /api/sales/team-overview (sales_manager / ceo). The cash tile belongs to slice 3 and is not shown. A rep's
- * name opens the deal list's existing ?owner= filter.
+ * GET /api/sales/team-overview (sales_manager / ceo). The cash tile (slice 3) is received — Express and manual receipts
+ * alike — against the team's expected payments for the Bangkok month; each row carries that rep's two figures. A
+ * rep's name opens the deal list's existing ?owner= filter.
  * นำเข้าจากชีท opens the one-time pipeline import (slice 4); this section only renders data for the two roles the
  * import also allows, and the server re-checks the role on every call.
  */
@@ -60,6 +66,8 @@ export function TeamOverview({ showTitle = true }) {
   const quietDays = team?.quietDays ?? 14;
   const visitsDone = team?.reps.reduce((sum, r) => sum + (r.visitsDone ?? 0), 0) ?? 0;
   const visitsPlanned = team?.reps.reduce((sum, r) => sum + (r.visitsPlanned ?? 0), 0) ?? 0;
+  const cash = team?.cash ?? null;
+  const month = monthLabel(cash?.month);
   const [importing, setImporting] = useState(false);
 
   return (
@@ -86,7 +94,15 @@ export function TeamOverview({ showTitle = true }) {
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-3 gap-3 mobile:grid-cols-2">
+          <div className={`grid gap-3 mobile:grid-cols-2 ${cash ? 'grid-cols-4' : 'grid-cols-3'}`}>
+            {cash ? (
+              <Tile
+                testId="tile-cash"
+                label={`เงินเข้าแล้ว ${month}`}
+                value={baht(cash.received)}
+                sub={`จากที่ทีมคาด ${baht(cash.forecast)} · มาจาก Express`}
+              />
+            ) : null}
             <Tile
               testId="tile-held"
               label="ดีลที่ถืออยู่"
@@ -119,6 +135,10 @@ export function TeamOverview({ showTitle = true }) {
                     <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">ดีล</th>
                     <th scope="col" className="px-3 py-2.5 text-right font-bold mobile:px-1.5">มูลค่า</th>
                     <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-bold mobile:px-1.5">ดีลเงียบ</th>
+                    <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-right font-bold mobile:hidden">
+                      {month ? `คาดรับ ${month}` : 'คาดรับเดือนนี้'}
+                    </th>
+                    <th scope="col" className="whitespace-nowrap px-3 py-2.5 text-right font-bold mobile:hidden">รับแล้ว</th>
                     <th scope="col" className="whitespace-nowrap px-3 py-2.5 font-bold mobile:hidden">เข้าพบสัปดาห์นี้</th>
                     <th scope="col" className="whitespace-nowrap px-5 py-2.5 font-bold mobile:px-3.5">อัปเดตล่าสุด</th>
                   </tr>
@@ -142,6 +162,12 @@ export function TeamOverview({ showTitle = true }) {
                       <td className="px-3 py-3 text-right tabular-nums mobile:px-1.5">{rep.openDeals}</td>
                       <td className="px-3 py-3 text-right font-bold tabular-nums whitespace-nowrap mobile:px-1.5">{totalLabel(rep.openValue, rep.otherCurrencyValues)}</td>
                       <td className="px-3 py-3 mobile:px-1.5"><QuietChip count={rep.quietDeals} /></td>
+                      <td data-testid="rep-expected" className="px-3 py-3 text-right tabular-nums whitespace-nowrap mobile:hidden">
+                        {cashCell(rep.expected)}
+                      </td>
+                      <td data-testid="rep-received" className="px-3 py-3 text-right font-bold tabular-nums whitespace-nowrap mobile:hidden">
+                        {cashCell(rep.received)}
+                      </td>
                       <td className="px-3 py-3 mobile:hidden">
                         <VisitDots repId={rep.employeeId} done={rep.visitsDone ?? 0} planned={rep.visitsPlanned ?? 0} />
                       </td>
@@ -197,6 +223,9 @@ export function TeamOverview({ showTitle = true }) {
               </ul>
             )}
           </Panel>
+
+          {/* Read-only (review H3): how many Express rows wait for account, and the ones account sent to look at. */}
+          <UnmatchedReceiptsSummary />
 
           <VisitWeekGrid reps={team.reps} visits={team.teamVisitsThisWeek ?? []} todayIso={bangkokTodayIso()} />
         </>

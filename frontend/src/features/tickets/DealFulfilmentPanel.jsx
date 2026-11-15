@@ -588,7 +588,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // TicketDetailPage's shared actionMutation/doAction.
   //
   // The status/fulfillmentStatus matching for the four linear fulfilment-chain steps is
-  // importActions.js's nextFulfilmentActionCode, shared with ImportOverview's worklist CTA and
+  // importActions.js's nextFulfilmentActionCode, shared with
   // ImportFulfilmentPage (งานนำเข้า), so those surfaces never disagree with this panel about which
   // stage a deal is at. ImportFulfilmentPage performs the same four transitions from a list row,
   // so it invalidates the same query-key set as invalidateAfterFulfilmentChange above; change one
@@ -866,7 +866,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     ticketId={ticketId}
                     canFullWrite={canFullWriteStoredIr}
                     canFooterWrite={canFooterWriteStoredIr}
-                    canAdvance={canAdvanceStoredIr}
+                    canSetLeadTime={canAdvanceStoredIr}
                     canEmailWrite={canEmailWriteStoredIr}
                     showOrderEmail={role !== 'sales'}
                     showToast={showToast}

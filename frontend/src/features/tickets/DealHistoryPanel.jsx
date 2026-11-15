@@ -126,6 +126,16 @@ function toTimestamp(value) {
   return Number.isNaN(t) ? null : t;
 }
 
+// An undo of a per-factory step advance (V216) is written as IMPORT_STEP_ADVANCED with the message
+// "โรงงาน <name>: เลิกทำ <from> → <to>" (ImportRequestService#undoStep / mockApi undoStep) — no event kind of its own.
+const IMPORT_STEP_UNDO_MARKER = ': เลิกทำ ';
+function eventLabel(event) {
+  if (event.kind === 'IMPORT_STEP_ADVANCED' && (event.message ?? '').includes(IMPORT_STEP_UNDO_MARKER)) {
+    return 'ฝ่ายนำเข้าเลิกทำการเลื่อนขั้นตอน';
+  }
+  return EVENT_KIND_LABEL[event.kind] ?? event.kind;
+}
+
 function EventRow({ event }) {
   let snapItems = null;
   if (event.kind === 'PRICE_PROPOSED' && event.itemSnapshot) {
@@ -135,7 +145,7 @@ function EventRow({ event }) {
     <li className="ticket-event">
       <span className={eventDotClass(event.kind)} />
       <div className="min-w-0 flex-1">
-        <strong className="block text-sm text-text">{EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
+        <strong className="block text-sm text-text">{eventLabel(event)}</strong>
         <span className="text-xs text-icon-muted">{event.actorName}</span>
         {event.message ? (
           <p className="mt-1 rounded bg-surface-muted px-2 py-1 text-xs text-text-muted">{eventMessage(event)}</p>

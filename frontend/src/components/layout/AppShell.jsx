@@ -1,5 +1,8 @@
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
+import { api } from '../../api/index.js';
+import { queryKeys } from '../../api/queryKeys.js';
 import { SALES_ENABLED } from '../../app/features.js';
 import { hasPermission, isDivisionManager, isQuotationReleaseUser, isReleasedPath, isSelfServiceLocked } from '../../app/permissions.js';
 import { PRODUCT_NAME } from '../../app/product.js';
@@ -56,6 +59,13 @@ const CONTENT_SCROLL_CLASS = cn(
 );
 
 export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
+  const expressQuery = useQuery({
+    queryKey: queryKeys.receiptImportLatest(),
+    queryFn: () => api.receiptImports.latest(),
+    enabled: user.role === 'account' && SALES_ENABLED,
+    retry: false,
+  });
+  const expressUploadEnabled = expressQuery.data?.uploadEnabled === true;
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [activeTopbarPopover, setActiveTopbarPopover] = useState(null);
   const [isContentScrolled, setIsContentScrolled] = useState(false);
@@ -163,7 +173,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // Import's stream-2 workspace, placed immediately after stream 1 so its two obligations to Sales read as two
     // adjacent items in the order a deal travels (price, then goods). `building`, not `clipboard`: the neighbour
     // already owns that glyph, and the chain ends at the warehouse.
-    { path: '/fulfilment', label: 'งานนำเข้า', helper: 'Import fulfilment worklist', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
+    { path: '/fulfilment', label: 'การขนส่ง', helper: 'Import shipments — the one place a step is advanced', icon: 'building', group: 'sales', show: hasPermission(user.role, 'canActOnFulfilment') && SALES_ENABLED },
     // Account has NO ค่าคอมมิชชัน nav item: the invoice+commission step (บันทึกใบกำกับ /
     // create-from-deal at close) is the LAST STAGE of the งานการเงิน money lifecycle + the
     // Overview worklist (รับมัดจำ → รับชำระส่วนที่เหลือ → ยืนยันพร้อมปิดงาน → บันทึกใบกำกับ), not a
@@ -176,6 +186,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // record-invoice/commission, one page. Deliberately NOT OR'd with the per-employee
     // canIssueBillingNote grant: see permissions.js's isBillingNoteReleaseUser for why.
     { path: '/finance', label: 'งานการเงิน', helper: 'Finance worklist', icon: 'badgeDollar', group: 'finance', show: hasPermission(user.role, 'canConfirmPayments') && SALES_ENABLED },
+    // The Express receipts upload: the same audience as /finance (account, ceo = ReceiptImportService.UPLOAD_ROLES).
+    // The Express receipts page: ACCOUNT only (review H2/H3), and only once the owner has switched the upload on
+    // (app.receipts.express-upload.enabled, review H4) — read from GET /api/sales/receipt-imports/latest.
+    { path: '/finance/receipts-import', label: 'รับเงินจาก Express', helper: 'Express receipts', icon: 'upload', group: 'finance', show: user.role === 'account' && SALES_ENABLED && expressUploadEnabled },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in the topbar UserMenu, and the two
