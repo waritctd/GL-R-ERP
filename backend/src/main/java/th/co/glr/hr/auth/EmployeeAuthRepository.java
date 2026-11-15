@@ -74,6 +74,17 @@ public class EmployeeAuthRepository {
         }
     }
 
+    /** The login records for these employees in ONE query, keyed by id; an unknown id is simply absent. */
+    public Map<Long, EmployeeLoginRecord> findByEmployeeIds(java.util.Collection<Long> employeeIds) {
+        if (employeeIds.isEmpty()) {
+            return Map.of();
+        }
+        Map<Long, EmployeeLoginRecord> byId = new LinkedHashMap<>();
+        jdbc.query(LOGIN_SELECT + " WHERE e.employee_id IN (:ids)", Map.of("ids", employeeIds),
+            (rs, rowNum) -> mapEmployee(rs)).forEach(record -> byId.put(record.employeeId(), record));
+        return byId;
+    }
+
     /** Whether this employee holds the admin capability, for the UI hint on AuthResponse. That one is the security
      * gate and must not depend on the auth module; this one only decides whether a nav item renders. */
     public boolean isAdmin(long employeeId) {

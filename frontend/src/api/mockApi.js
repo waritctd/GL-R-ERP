@@ -8240,12 +8240,14 @@ function mockBoardDeals() {
     .map(({ lastTouchedMs, ...deal }) => deal);
 }
 
-/** SalesBoardService's ranking: quiet only, daysQuiet × value (null = 0) desc, then daysQuiet desc. */
+/** SalesBoardService's ranking: quiet only, daysQuiet × THB value desc, then daysQuiet desc. Values are weighted only
+ * when THB (a null currency is THB, as in repRows): a USD or EUR amount is not comparable, so it ranks by days alone. */
 function mockRankQuiet(deals) {
-  const score = (d) => d.daysQuiet * Number(d.value ?? 0);
+  const score = (d) => ((d.currency ?? 'THB') === 'THB' ? d.daysQuiet * Number(d.value ?? 0) : 0);
   return deals.filter((d) => d.quiet)
     .sort((a, b) => score(b) - score(a) || b.daysQuiet - a.daysQuiet || a.ticketId - b.ticketId);
 }
+export const rankQuietForTests = mockRankQuiet;
 
 export const api = {
   // Mirrors AuthController + AuthService (auth/).

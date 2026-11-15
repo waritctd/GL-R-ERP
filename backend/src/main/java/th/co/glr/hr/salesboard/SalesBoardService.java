@@ -29,10 +29,12 @@ public class SalesBoardService {
     static final int FOLLOW_UP_LIMIT = 5;
     static final int STALE_LIMIT = 20;
 
-    /** daysQuiet × value (null = 0) desc, then daysQuiet desc, then ticket id for a stable order. */
+    /** daysQuiet × THB value desc, then daysQuiet desc, then ticket id for a stable order. Only THB is weighted (a null
+     * currency is THB, as in repRows): amounts in different currencies are not comparable, so a non-THB deal's value
+     * counts as 0 and it ranks by days alone. */
     static final Comparator<BoardDeal> QUIET_RANK = Comparator
         .comparing((BoardDeal d) -> BigDecimal.valueOf(d.daysQuiet())
-            .multiply(d.value() == null ? BigDecimal.ZERO : d.value())).reversed()
+            .multiply(d.value() == null || !isThb(d.currency()) ? BigDecimal.ZERO : d.value())).reversed()
         .thenComparing(Comparator.comparingInt(BoardDeal::daysQuiet).reversed())
         .thenComparingLong(BoardDeal::ticketId);
 
@@ -72,6 +74,10 @@ public class SalesBoardService {
 
     static final String THB = "THB";
 
+    private static boolean isThb(String currency) {
+        return currency == null || THB.equals(currency);
+    }
+
     /**
      * One row per owner, ordered by THB open value desc, then employee id. Only THB values are added into
      * {@code openValue}; other currencies are summed per code. Each owner's role comes from the same derivation
@@ -80,6 +86,9 @@ public class SalesBoardService {
     private List<RepRow> repRows(List<BoardDeal> deals) {
         Map<Long, List<BoardDeal>> byOwner = new LinkedHashMap<>();
         deals.forEach(d -> byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d));
+        // One query for every rep's role, not one per rep.
+        Map<Long, th.co.glr.hr.auth.EmployeeLoginRecord> owners =
+            employees == null ? Map.of() : employees.findByEmployeeIds(byOwner.keySet());
         List<RepRow> rows = new ArrayList<>();
         byOwner.forEach((ownerId, own) -> {
             BigDecimal thb = BigDecimal.ZERO;
@@ -102,8 +111,8 @@ public class SalesBoardService {
                     last = d.lastTouchedAt();
                 }
             }
-            String role = employees == null ? null : employees.findByEmployeeId(ownerId)
-                .map(th.co.glr.hr.auth.DivisionAccessPolicy::roleFor).orElse(null);
+            th.co.glr.hr.auth.EmployeeLoginRecord owner = owners.get(ownerId);
+            String role = owner == null ? null : th.co.glr.hr.auth.DivisionAccessPolicy.roleFor(owner);
             rows.add(new RepRow(ownerId, own.get(0).ownerName(), role, own.size(), thb, other, quiet, last));
         });
         rows.sort(Comparator.comparing(RepRow::openValue).reversed().thenComparingLong(RepRow::employeeId));
