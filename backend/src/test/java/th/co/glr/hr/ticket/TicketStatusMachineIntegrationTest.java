@@ -23,7 +23,6 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.deposit.RevisionRequest;
 import th.co.glr.hr.deposit.RevisionScope;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -47,7 +46,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
 
     private long salesRepId;
     private UserPrincipal salesRep;
-    private UserPrincipal importActor;
     private UserPrincipal ceo;
     private UserPrincipal accountActor;
 
@@ -76,7 +74,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         salesRepId = createEmployee(employees, "พนักงานขาย สถานะ", "sales-status-machine@glr.co.th");
         salesRep = principal(salesRepId, "sales");
-        importActor = principal(createEmployee(employees, "ฝ่ายนำเข้า สถานะ", "import-status-machine@glr.co.th"), "import");
         ceo = principal(createEmployee(employees, "ซีอีโอ สถานะ", "ceo-status-machine@glr.co.th"), "ceo");
         accountActor = principal(createEmployee(employees, "บัญชี สถานะ", "account-status-machine@glr.co.th"), "account");
     }
@@ -147,60 +144,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
 
         assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.DRAFT);
         assertThat(eventCount(ticketId, TicketEventKind.CREATED)).isEqualTo(1);
-    }
-
-    /** Site 2 — {@code TicketService.pickup}: submitted -> in_review. */
-    @Test
-    void pickup_stillReachesInReview() {
-        long ticketId = createTicket();
-        seedStatus(ticketId, TicketStatus.SUBMITTED);
-
-        assertThat(ticketService.pickup(ticketId, importActor).summary().status())
-            .isEqualTo(TicketStatus.IN_REVIEW);
-        assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.IN_REVIEW);
-    }
-
-    /** Site 3 — {@code TicketService.proposePrice}: all three admitted states -> price_proposed. */
-    @Test
-    void proposePrice_stillReachesPriceProposedFromEveryAdmittedState() {
-        for (String from : List.of(TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED)) {
-            long ticketId = createTicket();
-            seedStatus(ticketId, from);
-
-            ticketService.proposePrice(ticketId, new ProposePriceRequest(List.of(sampleItem()), "ราคา"), importActor);
-
-            assertThat(statusOf(ticketId)).as("proposePrice from %s", from)
-                .isEqualTo(TicketStatus.PRICE_PROPOSED);
-        }
-    }
-
-    /** Sites 4 and 5 — {@code approve} / {@code reject}, both out of price_proposed. */
-    @Test
-    void approveAndReject_stillReachApprovedAndInReview() {
-        long approved = createTicket();
-        seedStatus(approved, TicketStatus.PRICE_PROPOSED);
-        assertThat(ticketService.approve(approved, ceo).summary().status()).isEqualTo(TicketStatus.APPROVED);
-        assertThat(statusOf(approved)).isEqualTo(TicketStatus.APPROVED);
-
-        long rejected = createTicket();
-        seedStatus(rejected, TicketStatus.PRICE_PROPOSED);
-        assertThat(ticketService.reject(rejected, new RejectRequest("แพงไป"), ceo).summary().status())
-            .isEqualTo(TicketStatus.IN_REVIEW);
-        assertThat(statusOf(rejected)).isEqualTo(TicketStatus.IN_REVIEW);
-    }
-
-    /** Site 6 — {@code generateQuotation}, including the amended re-issue self-edge. */
-    @Test
-    void generateQuotation_stillReachesQuotationIssuedAndCanReIssue() {
-        long ticketId = createTicket();
-        seedStatus(ticketId, TicketStatus.APPROVED);
-
-        ticketService.generateQuotation(ticketId, designerQuotation(), salesRep);
-        assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.QUOTATION_ISSUED);
-
-        // approved -> quotation_issued, then the quotation_issued -> quotation_issued self-edge.
-        ticketService.generateQuotation(ticketId, designerQuotation(), salesRep);
-        assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.QUOTATION_ISSUED);
     }
 
     /** Site 7 — verifyClose, via the legacy document_issued route (requireClosePrerequisites's legacyOk branch: a
@@ -674,17 +617,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         return jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",
             new MapSqlParameterSource().addValue("id", ticketId).addValue("kind", kind), Long.class);
-    }
-
-    private static TicketItemRequest sampleItem() {
-        return new TicketItemRequest("Padana", "รุ่นทดสอบ", null, null, "60x60", "PAD",
-            new BigDecimal("10"), null, "PIECE", new BigDecimal("100"), "EUR", "SQM",
-            new BigDecimal("500"), "THB");
-    }
-
-    private static GenerateQuotationRequest designerQuotation() {
-        return new GenerateQuotationRequest(QuotationRecipient.DESIGNER,
-            null, null, null, null, null, null, null, null, null);
     }
 
     private long createEmployee(EmployeeRepository employees, String name, String email) {

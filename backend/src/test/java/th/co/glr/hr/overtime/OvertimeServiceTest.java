@@ -25,6 +25,8 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.mockito.ArgumentCaptor;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.attendance.daily.AttendanceDailyService;
@@ -310,63 +312,37 @@ class OvertimeServiceTest {
             eq(workDate.withDayOfMonth(1)), anyString());
     }
 
-    /** The other claim-validation branch: the calendar has never been loaded for the work date's year at all, so a
-     * HOLIDAY claim can be neither confirmed nor refused. It is accepted (money still comes from deriveDayType
-     * alone, i.e. WORKDAY here) but flagged in calculation_note for HR. */
-    @Test
-    void holidayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged() {
+    /** A claim submitted while the calendar has never been loaded for the work date's year is accepted (money still
+     * comes from deriveDayType alone, i.e. WORKDAY here) but flagged in calculation_note for HR -- whatever the
+     * claim was. Columns: case name, claimed dayType (blank = null), stubbed request id.
+     *
+     * <ul>
+     *   <li>HOLIDAY -- the other claim-validation branch: with no calendar data a HOLIDAY claim can be neither
+     *       confirmed nor refused.</li>
+     *   <li>WORKDAY -- THE exact gap this fix closes. Before this change, validateDayTypeClaim returned null the
+     *       instant the claim was anything other than HOLIDAY -- so an unloaded calendar's silence was flagged ONLY
+     *       when the caller happened to claim HOLIDAY, which OvertimePanel.jsx's submit dropdown never defaults
+     *       to.</li>
+     *   <li>blank -- the other half of the exact gap: OvertimePanel.jsx's dropdown defaults to WORKDAY, but a caller
+     *       can also submit with dayType entirely blank/null ("no claim made" -- see SubmitOvertimeRequest's
+     *       Javadoc).</li>
+     * </ul> */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "holidayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged, HOLIDAY, 58",
+        "workdayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged, WORKDAY, 59",
+        "blankClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged,          , 62",
+    })
+    void claimWithNoCalendarDataForTheYearIsAcceptedAndFlagged(String caseName, String claimedDayType, long requestId) {
         LocalDate workDate = LocalDate.now().plusDays(4);
-        SubmitOvertimeRequest request = claimSubmit(workDate, "HOLIDAY");
+        SubmitOvertimeRequest request = claimSubmit(workDate, claimedDayType);
         when(overtimeRepository.employeeExists(10L)).thenReturn(true);
         when(holidayCalendar.hasHolidaysForYear(workDate.getYear())).thenReturn(false);
         when(overtimeRepository.create(
                 eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
                 eq(workDate.withDayOfMonth(1)), anyString()))
-            .thenReturn(58L);
-        when(overtimeRepository.findById(58L)).thenReturn(Optional.of(requestDto(58L, 10L, "SUBMITTED")));
-
-        overtimeService.submit(request, user("employee", 10L));
-
-        verify(overtimeRepository).create(
-            eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
-            eq(workDate.withDayOfMonth(1)), anyString());
-    }
-
-    /** THE exact gap this fix closes. Before this change, validateDayTypeClaim returned null the instant the claim
-     * was anything other than HOLIDAY -- so an unloaded calendar's silence was flagged ONLY when the caller
-     * happened to claim HOLIDAY, which OvertimePanel.jsx's submit dropdown never defaults to. */
-    @Test
-    void workdayClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged() {
-        LocalDate workDate = LocalDate.now().plusDays(4);
-        SubmitOvertimeRequest request = claimSubmit(workDate, "WORKDAY");
-        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
-        when(holidayCalendar.hasHolidaysForYear(workDate.getYear())).thenReturn(false);
-        when(overtimeRepository.create(
-                eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
-                eq(workDate.withDayOfMonth(1)), anyString()))
-            .thenReturn(59L);
-        when(overtimeRepository.findById(59L)).thenReturn(Optional.of(requestDto(59L, 10L, "SUBMITTED")));
-
-        overtimeService.submit(request, user("employee", 10L));
-
-        verify(overtimeRepository).create(
-            eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
-            eq(workDate.withDayOfMonth(1)), anyString());
-    }
-
-    /** The other half of the exact gap: OvertimePanel.jsx's dropdown defaults to WORKDAY, but a caller can also
-     * submit with dayType entirely blank/null ("no claim made" -- see SubmitOvertimeRequest's Javadoc). */
-    @Test
-    void blankClaimWithNoCalendarDataForTheYearIsAcceptedAndFlagged() {
-        LocalDate workDate = LocalDate.now().plusDays(4);
-        SubmitOvertimeRequest request = claimSubmit(workDate, null);
-        when(overtimeRepository.employeeExists(10L)).thenReturn(true);
-        when(holidayCalendar.hasHolidaysForYear(workDate.getYear())).thenReturn(false);
-        when(overtimeRepository.create(
-                eq(10L), eq(10L), eq(request), eq(120), eq(OvertimeDayType.WORKDAY),
-                eq(workDate.withDayOfMonth(1)), anyString()))
-            .thenReturn(62L);
-        when(overtimeRepository.findById(62L)).thenReturn(Optional.of(requestDto(62L, 10L, "SUBMITTED")));
+            .thenReturn(requestId);
+        when(overtimeRepository.findById(requestId)).thenReturn(Optional.of(requestDto(requestId, 10L, "SUBMITTED")));
 
         overtimeService.submit(request, user("employee", 10L));
 
