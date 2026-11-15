@@ -2931,6 +2931,11 @@ export function PricingRequestDetailPage({ user, showToast }) {
             // A Sales-LOCKED per-กล่อง / per-เมตร line cannot switch at all (FactoryQuoteService 409s anything
             // but the ตร.ม.<->แผ่น pair on a locked line): show the unit read-only. Legacy lines are unconstrained.
             fixedUnit: ['PER_BOX', 'PER_LINEAR_M'].includes(requested?.requestedPriceUnitBasis) ? `/ ${unitName(line.unitBasis)}` : null,
+            // Spec §7.11 item 2: a unit Sales set (and import has not moved off) is a chip, not a re-ask; แก้ reveals
+            // the switch below. Display only — the line's unitBasis is what the confirm sends, either way.
+            salesUnit: requested?.requestedPriceUnitBasis && line.unitBasis === requested.requestedPriceUnitBasis
+              && !['PER_BOX', 'PER_LINEAR_M'].includes(requested.requestedPriceUnitBasis)
+              ? `/ ${unitName(line.unitBasis)}` : null,
             unitSwitch: {
               value: line.unitBasis,
               ariaLabel: `หน่วยราคา ${itemRef}`,
@@ -3023,6 +3028,12 @@ export function PricingRequestDetailPage({ user, showToast }) {
             return { ...cur, [current.id]: { ...latest, defaultCurrency: currency, items: latest.items.map((line) => ({ ...line, currency })) } };
           }),
           requestedCurrencies: [...new Set(groupRequestItems.map((item) => item?.requestedCurrency).filter(Boolean))].join(', '),
+          // Spec §7.11 item 2: every line's Sales-set currency agrees and the draft still uses it -> a chip, not the
+          // select (แก้ reveals it). Display only: onCurrency and the payload are unchanged.
+          salesCurrency: (() => {
+            const asked = [...new Set(groupRequestItems.map((item) => item?.requestedCurrency ?? null))];
+            return asked.length === 1 && asked[0] && asked[0] === sharedCurrency ? asked[0] : null;
+          })(),
           fxNote: sharedCurrency === 'THB' ? '1 THB = 1 บาท'
             : fxRate > 0 ? `1 ${sharedCurrency} = ${Number(fxRate).toLocaleString('th-TH', { maximumFractionDigits: 6 })} บาท`
               + (sharedFx?.effectiveDate ? ` (ธปท. ${formatThaiDate(sharedFx.effectiveDate)})` : '')

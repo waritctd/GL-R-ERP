@@ -115,8 +115,20 @@ function SpecRow({ id, spec }) {
   );
 }
 
+// "EUR ตามที่ฝ่ายขายระบุ · แก้" (design a-import-pricing): what Sales already set, read-only until import asks to change it.
+function SalesSetChip({ testId, value, editLabel, onEdit }) {
+  return (
+    <span data-testid={testId} className="inline-flex flex-wrap items-center gap-x-1.5 text-sm text-text-secondary">
+      <b className="text-text">{value}</b>
+      <span>ตามที่ฝ่ายขายระบุ ·</span>
+      <Button type="button" variant="text" size="sm" className="min-h-0 px-0 underline" aria-label={editLabel} onClick={onEdit}>แก้</Button>
+    </span>
+  );
+}
+
 function PriceCell({ row, quoteId }) {
   const p = row.price;
+  const [unitRevealed, setUnitRevealed] = useState(false);
   return (
     <div data-testid={quoteId != null ? `pcr-quote-price-cell-${quoteId}-${row.itemId}` : undefined}>
       {p.mode === 'input' ? (
@@ -138,6 +150,11 @@ function PriceCell({ row, quoteId }) {
             {row.currencyNote ? <small data-testid={`pcr-quote-currency-${quoteId}-${row.itemId}`} className="text-xs text-text-muted">{row.currencyNote}</small> : null}
             {p.fixedUnit ? (
               <span data-testid={`pcr-quote-unit-${quoteId}-${row.itemId}`} className="text-sm font-bold text-text-secondary">{p.fixedUnit}</span>
+            ) : p.salesUnit && !unitRevealed ? (
+              <SalesSetChip
+                testId={`pcr-sales-unit-${quoteId}-${row.itemId}`} value={p.salesUnit}
+                editLabel={`แก้${p.unitSwitch.ariaLabel}`} onEdit={() => setUnitRevealed(true)}
+              />
             ) : (
             <span role="group" aria-label={p.unitSwitch.ariaLabel} className="inline-flex w-full overflow-hidden rounded-md border border-border-muted">
               {p.unitSwitch.options.map((o) => (
@@ -231,22 +248,33 @@ function FactoryRow({ row, quoteId }) {
 
 function CardTerms({ card }) {
   const t = card.terms;
+  const [currencyRevealed, setCurrencyRevealed] = useState(false);
+  const currencyChip = t.editable && t.salesCurrency && !currencyRevealed;
   return (
     <div data-testid={card.quoteId != null ? `pcr-factory-terms-row-${card.quoteId}` : undefined} className="flex flex-wrap items-center gap-x-4 gap-y-1.5 border-b border-border-subtle px-5 py-2.5 text-xs text-text-secondary mobile:px-4">
       <div className="grid w-full gap-2 sm:w-auto" data-testid={`pcr-factory-currency-${card.quoteId}`}>
         <div className="flex flex-wrap items-center gap-3">
-          <label htmlFor={`pcr-currency-${card.quoteId}`} className="font-bold text-text mobile:text-base">สกุลเงินที่โรงงานเสนอ</label>
-          {t.editable ? (
+          {currencyChip ? (
+            <span className="font-bold text-text mobile:text-base">สกุลเงินที่โรงงานเสนอ</span>
+          ) : (
+            <label htmlFor={`pcr-currency-${card.quoteId}`} className="font-bold text-text mobile:text-base">สกุลเงินที่โรงงานเสนอ</label>
+          )}
+          {currencyChip ? (
+            <SalesSetChip
+              testId={`pcr-sales-currency-${card.quoteId}`} value={`${t.salesCurrency} ${t.symbol ?? ''}`.trim()}
+              editLabel="แก้สกุลเงิน" onEdit={() => setCurrencyRevealed(true)}
+            />
+          ) : t.editable ? (
             <select id={`pcr-currency-${card.quoteId}`} className="min-h-11 w-auto cursor-pointer px-2 py-1 text-base sm:min-h-9 sm:text-sm" value={t.currency ?? ''} onChange={(e) => t.onCurrency(e.target.value)} aria-describedby={`pcr-currency-hint-${card.quoteId}`}>
               {!t.currency ? <option value="" disabled>หลายสกุลเงิน — เลือกเพื่อใช้ทั้งโรงงาน</option> : null}
               {t.options.map((currency) => <option key={currency} value={currency}>{currency}</option>)}
             </select>
           ) : <b className="text-text">{t.currency ? `${t.currency} ${t.symbol}` : 'หลายสกุลเงิน — ดูในแต่ละรายการ'}</b>}
           {t.fxNote ? <span className="text-sm text-text-secondary" data-testid={`pcr-factory-fx-${card.quoteId}`}>{t.fxNote}</span> : null}
-          {t.requestedCurrencies ? <span className="text-sm text-text-muted">ฝ่ายขายขอ: {t.requestedCurrencies}</span> : null}
+          {t.requestedCurrencies && !currencyChip ? <span className="text-sm text-text-muted">ฝ่ายขายขอ: {t.requestedCurrencies}</span> : null}
         </div>
         <p id={`pcr-currency-hint-${card.quoteId}`} className="m-0 text-sm text-text-muted mobile:text-base">
-          {t.editable ? 'ใช้กับทุกรายการในโรงงานนี้ · เปลี่ยนสกุลเงินแล้วตรวจสอบราคาก่อนยืนยัน · ' : ''}ยอดบาทเป็นค่าประมาณตามอัตราในระบบ ยังไม่รวมค่าขนส่งและภาษี
+          {t.editable && !currencyChip ? 'ใช้กับทุกรายการในโรงงานนี้ · เปลี่ยนสกุลเงินแล้วตรวจสอบราคาก่อนยืนยัน · ' : ''}ยอดบาทเป็นค่าประมาณตามอัตราในระบบ ยังไม่รวมค่าขนส่งและภาษี
         </p>
       </div>
       {t.lockReason ? (

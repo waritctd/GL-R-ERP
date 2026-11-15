@@ -4269,6 +4269,14 @@ const bangkokDay = (offsetDays = 0) => new Intl.DateTimeFormat('sv-SE', { timeZo
 
 const salesOtherRep = { id: 9, employeeId: 9, name: 'พนักงานขายคนอื่น', role: 'sales' };
 
+// Spec §7.11 item 2: a Sales-set currency / unit renders as a chip; these tests exercise the control behind its แก้.
+async function revealSalesCurrency() {
+  fireEvent.click(await screen.findByRole('button', { name: 'แก้สกุลเงิน' }));
+}
+function revealSalesUnit(n = 1) {
+  fireEvent.click(screen.getByRole('button', { name: new RegExp(`^แก้หน่วยราคา รายการ #${n}`) }));
+}
+
 function crItem(over = {}) {
   return {
     ...buildRequest().items[0],
@@ -4354,6 +4362,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
+    await revealSalesCurrency();
 
     const line = screen.getByTestId('pcr-factory-currency-91').textContent;
     expect(line).toContain('สกุลเงิน');
@@ -4378,6 +4387,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 40 }, { currency: 'USD', rateToThb: 35 }] }) };
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
+    await revealSalesCurrency();
     const currency = await screen.findByRole('combobox', { name: /^สกุลเงิน/ });
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '10' } });
     await waitFor(() => expect(screen.getByTestId('pcr-quote-thb-91-1').textContent).toContain('฿400.00/ตร.ม.'));
@@ -4394,6 +4404,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'USD', rateToThb: 35, effectiveDate: todayIso() }] }) };
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
     await waitForLoaded();
+    await revealSalesCurrency();
     const select = await screen.findByRole('combobox', { name: /^สกุลเงิน/ });
     await waitFor(() => expect([...select.options].map((o) => o.value)).toEqual(['THB', 'USD', 'EUR']));
   });
@@ -4550,6 +4561,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
 
     const price = screen.getByLabelText(/^ราคาที่เสนอ/);
     expect(price.getAttribute('placeholder')).toBe('ราคา/ตร.ม.');
+    revealSalesUnit();
     fireEvent.click(within(screen.getByRole('group', { name: /^หน่วยราคา รายการ/ })).getByRole('button', { name: '/ แผ่น' }));
     expect(screen.getByLabelText(/^ราคาที่เสนอ/).getAttribute('placeholder')).toBe('ราคา/แผ่น');
     expect(screen.queryByLabelText(/^ตร.ม.\/หน่วย/)).toBeNull();
@@ -4580,6 +4592,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] }); // per-ตร.ม. request
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
+    revealSalesUnit();
     expect(buttons()).toEqual(['/ แผ่น', '/ ตร.ม.']);
   });
 
@@ -4608,6 +4621,7 @@ describe('CR-1 factory card — status, terms, and the locked price grid (F1)', 
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '100' } });
     expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toContain('36 EUR/แผ่น');
 
+    revealSalesUnit();
     fireEvent.click(within(screen.getByRole('group', { name: /^หน่วยราคา รายการ/ })).getByRole('button', { name: '/ แผ่น' }));
     fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '36' } });
     expect(screen.getByTestId('pcr-quote-equiv-91-1').textContent).toContain('100 EUR/ตร.ม.');
@@ -7718,6 +7732,7 @@ describe('Import PCR redesign — factory-first page (import role)', () => {
       api.fxRates = { list: vi.fn().mockResolvedValue({ fxRates: [{ currency: 'EUR', rateToThb: 40 }, { currency: 'THB', rateToThb: 1 }] }) };
       renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
       await waitForLoaded();
+      await revealSalesCurrency();
       const row = within(await screen.findByTestId('pcr-factory-terms-row-91'));
       expect(row.getByTestId('pcr-factory-currency-91').textContent).toContain('ฝ่ายขายขอ:');
       expect((await row.findByTestId('pcr-factory-fx-91')).textContent).toContain('1 EUR = 40 บาท');
@@ -8369,3 +8384,71 @@ describe('CEO fixes during price review', () => {
   });
 });
 
+// Spec 2026-11-15 §7.11 item 2 / plan task 5.2: the currency and price unit Sales already set on the request are not
+// re-asked. They show as read-only chips "ตามที่ฝ่ายขายระบุ · แก้"; แก้ reveals today's control. The payload the
+// confirm sends is unchanged either way (still carries the line's currency and unitBasis).
+describe('PricingRequestDetailPage import workspace — terms Sales already set', () => {
+  it('shows the Sales-set currency and unit as chips, with no currency select and no unit switch', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    const currencyChip = screen.getByTestId('pcr-sales-currency-91');
+    expect(currencyChip.textContent).toContain('EUR');
+    expect(currencyChip.textContent).toContain('ตามที่ฝ่ายขายระบุ');
+    expect(screen.queryByRole('combobox', { name: 'สกุลเงินที่โรงงานเสนอ' })).toBeNull();
+    const unitChip = screen.getByTestId('pcr-sales-unit-91-1');
+    expect(unitChip.textContent).toContain('/ ตร.ม.');
+    expect(unitChip.textContent).toContain('ตามที่ฝ่ายขายระบุ');
+    expect(screen.queryByRole('group', { name: /^หน่วยราคา รายการ/ })).toBeNull();
+  });
+
+  it('แก้ reveals today’s currency select and unit switch', async () => {
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(within(screen.getByTestId('pcr-sales-currency-91')).getByRole('button', { name: 'แก้สกุลเงิน' }));
+    expect(screen.getByRole('combobox', { name: 'สกุลเงินที่โรงงานเสนอ' }).value).toBe('EUR');
+    fireEvent.click(within(screen.getByTestId('pcr-sales-unit-91-1')).getByRole('button', { name: /^แก้หน่วยราคา/ }));
+    expect(screen.getByRole('group', { name: /^หน่วยราคา รายการ #1/ })).not.toBeNull();
+  });
+
+  it('confirming with the chips sends the same payload as before: the line keeps Sales’ currency and unit', async () => {
+    const quote = contactedQuote();
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.change(screen.getByLabelText(/^ราคาที่เสนอ/), { target: { value: '32.5' } });
+    fireEvent.click(screen.getByRole('button', { name: 'ยืนยันราคาเสนอ' }));
+    await waitFor(() => expect(api.pricingRequests.receiveFactoryQuote).toHaveBeenCalledWith(
+      quote.id,
+      expect.objectContaining({
+        items: [expect.objectContaining({ currency: 'EUR', unitBasis: 'PER_SQM', quotedUnit: 'ตร.ม.', rawUnitPrice: 32.5 })],
+      }),
+    ));
+  });
+
+  it('a request that set neither keeps today’s controls, with no chip', async () => {
+    const request = crRequest({ items: [crItem({ requestedCurrency: null, requestedPriceUnitBasis: null })] });
+    renderDetailPage({ user: importUser, request, factoryQuotes: [contactedQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByTestId('pcr-sales-currency-91')).toBeNull();
+    expect(screen.queryByTestId('pcr-sales-unit-91-1')).toBeNull();
+    expect(screen.getByRole('combobox', { name: 'สกุลเงินที่โรงงานเสนอ' })).not.toBeNull();
+    expect(screen.getByRole('group', { name: /^หน่วยราคา รายการ #1/ })).not.toBeNull();
+  });
+
+  it('once import has moved off Sales’ terms the control stays visible, not a chip that hides the change', async () => {
+    const quote = contactedQuote({ items: [{ ...crQuote().items[0], unitBasis: 'PER_PIECE', quotedUnit: 'แผ่น', currency: 'USD', rawUnitPrice: 40 }], defaultCurrency: 'USD' });
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [quote] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    expect(screen.queryByTestId('pcr-sales-currency-91')).toBeNull();
+    expect(screen.queryByTestId('pcr-sales-unit-91-1')).toBeNull();
+  });
+});
