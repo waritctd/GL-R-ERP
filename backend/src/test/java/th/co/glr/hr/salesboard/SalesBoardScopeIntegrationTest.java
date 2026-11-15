@@ -55,7 +55,7 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
             java.time.Clock.system(VisitService.BANGKOK));
         today = LocalDate.now(java.time.Clock.system(VisitService.BANGKOK));
         SalesBoardService board = new SalesBoardService(new SalesBoardRepository(jdbc, quietRule), quietRule,
-            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), visits);
+            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), visits, new CashRepository(jdbc));
         // The base fixtures label the sales division "SALES"; the real role derivation reads "SA".
         jdbc.update("UPDATE hr.division SET source_code = 'SA' WHERE source_code = 'SALES'", Map.of());
         mvc = MockMvcBuilders

@@ -1,18 +1,23 @@
 package th.co.glr.hr.salesboard;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.YearMonth;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal;
+import th.co.glr.hr.salesboard.SalesBoardDtos.CashMonth;
 import th.co.glr.hr.salesboard.SalesBoardDtos.MyWork;
 import th.co.glr.hr.salesboard.SalesBoardDtos.RepRow;
 import th.co.glr.hr.salesboard.SalesBoardDtos.TeamOverview;
@@ -42,13 +47,113 @@ public class SalesBoardService {
 
     private final th.co.glr.hr.auth.EmployeeAuthRepository employees;
     private final VisitService visits;
+    private final CashRepository cash;
+    private final Clock clock;
 
+    @Autowired
     public SalesBoardService(SalesBoardRepository repository, QuietRule quietRule,
-                             th.co.glr.hr.auth.EmployeeAuthRepository employees, VisitService visits) {
+                             th.co.glr.hr.auth.EmployeeAuthRepository employees, VisitService visits,
+                             CashRepository cash) {
+        this(repository, quietRule, employees, visits, cash, Clock.system(VisitService.BANGKOK));
+    }
+
+    SalesBoardService(SalesBoardRepository repository, QuietRule quietRule,
+                      th.co.glr.hr.auth.EmployeeAuthRepository employees, VisitService visits,
+                      CashRepository cash, Clock clock) {
         this.repository = repository;
         this.quietRule = quietRule;
         this.employees = employees;
         this.visits = visits;
+        this.cash = cash;
+        this.clock = clock;
+    }
+
+    /** The current calendar month on the Asia/Bangkok clock. */
+    YearMonth thisMonth() {
+        return YearMonth.now(clock.withZone(VisitService.BANGKOK));
+    }
+
+    /** Cash for {@code month}: one owner's ({@code ownerId}) or, when null, the whole team's. See {@link CashMonth}. */
+    public CashMonth cashForMonth(Long ownerId, YearMonth month) {
+        LocalDate first = month.atDay(1);
+        LocalDate last = month.atEndOfMonth();
+        return assemble(month, cash.expectedByWeek(ownerId, first, last), cash.receivedByDay(ownerId, first, last));
+    }
+
+    /** Each owner's month: {@code [forecast, received]} for the team overview's per-rep columns. */
+    private Map<Long, CashMonth> cashByOwner(YearMonth month) {
+        LocalDate first = month.atDay(1);
+        LocalDate last = month.atEndOfMonth();
+        Map<Long, List<CashRepository.ExpectedWeekRow>> expected = new LinkedHashMap<>();
+        Map<Long, List<CashRepository.ReceivedDayRow>> received = new LinkedHashMap<>();
+        cash.expectedByWeek(null, first, last)
+            .forEach(r -> expected.computeIfAbsent(r.ownerId(), k -> new ArrayList<>()).add(r));
+        cash.receivedByDay(null, first, last)
+            .forEach(r -> received.computeIfAbsent(r.ownerId(), k -> new ArrayList<>()).add(r));
+        Map<Long, CashMonth> out = new LinkedHashMap<>();
+        java.util.Set<Long> owners = new java.util.LinkedHashSet<>(expected.keySet());
+        owners.addAll(received.keySet());
+        owners.forEach(o -> out.put(o, assemble(month, expected.getOrDefault(o, List.of()),
+            received.getOrDefault(o, List.of()))));
+        return out;
+    }
+
+    /**
+     * Folds the repository rows into the month. Weeks are every Monday inside the month; a receipt dated before the
+     * first Monday (the 1st falling mid-week) goes into the first week, so the weeks always add up to the month.
+     */
+    static CashMonth assemble(YearMonth month, List<CashRepository.ExpectedWeekRow> expected,
+                              List<CashRepository.ReceivedDayRow> received) {
+        List<LocalDate> mondays = new ArrayList<>();
+        LocalDate monday = month.atDay(1).with(java.time.temporal.TemporalAdjusters.nextOrSame(
+            java.time.DayOfWeek.MONDAY));
+        for (; !monday.isAfter(month.atEndOfMonth()); monday = monday.plusWeeks(1)) {
+            mondays.add(monday);
+        }
+        int n = mondays.size();
+        BigDecimal[] delivered = zeros(n);
+        BigDecimal[] scheduled = zeros(n);
+        BigDecimal[] deposits = zeros(n);
+        BigDecimal[] got = zeros(n);
+        BigDecimal forecast = BigDecimal.ZERO;
+        for (CashRepository.ExpectedWeekRow r : expected) {
+            int i = mondays.indexOf(r.week());
+            if (i < 0) {
+                continue;
+            }
+            forecast = forecast.add(r.forecast());
+            delivered[i] = delivered[i].add(r.deliveredAwaiting());
+            scheduled[i] = scheduled[i].add(r.deliveriesScheduled());
+            deposits[i] = deposits[i].add(r.depositsExpected());
+        }
+        BigDecimal receivedTotal = BigDecimal.ZERO;
+        for (CashRepository.ReceivedDayRow r : received) {
+            if (!YearMonth.from(r.day()).equals(month) || n == 0) {
+                continue;
+            }
+            int i = 0;
+            while (i + 1 < n && !r.day().isBefore(mondays.get(i + 1))) {
+                i++;
+            }
+            got[i] = got[i].add(r.received());
+            receivedTotal = receivedTotal.add(r.received());
+        }
+        List<SalesBoardDtos.CashWeek> weeks = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            weeks.add(new SalesBoardDtos.CashWeek(mondays.get(i), delivered[i], scheduled[i], deposits[i], got[i]));
+        }
+        return new CashMonth(month.toString(), forecast, receivedTotal, sum(delivered), sum(scheduled), sum(deposits),
+            weeks);
+    }
+
+    private static BigDecimal[] zeros(int n) {
+        BigDecimal[] a = new BigDecimal[n];
+        java.util.Arrays.fill(a, BigDecimal.ZERO);
+        return a;
+    }
+
+    private static BigDecimal sum(BigDecimal[] values) {
+        return java.util.Arrays.stream(values).reduce(BigDecimal.ZERO, BigDecimal::add);
     }
 
     public MyWork myWork(UserPrincipal actor) {
@@ -56,7 +161,8 @@ public class SalesBoardService {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
         List<BoardDeal> board = repository.activeDealsOwnedBy(actor.id());
-        return new MyWork(rankQuiet(board, FOLLOW_UP_LIMIT), board, quietRule.quietDays(), visits.ownThisWeek(actor));
+        return new MyWork(rankQuiet(board, FOLLOW_UP_LIMIT), board, quietRule.quietDays(), visits.ownThisWeek(actor),
+            cashForMonth(actor.id(), thisMonth()));
     }
 
     public TeamOverview teamOverview(UserPrincipal actor) {
@@ -65,8 +171,9 @@ public class SalesBoardService {
         }
         List<BoardDeal> deals = repository.activeDealsAllReps();
         List<VisitDtos.VisitDto> weekVisits = visits.teamThisWeek(actor);
-        return new TeamOverview(repRows(deals, weekVisits), rankQuiet(deals, STALE_LIMIT), quietRule.quietDays(),
-            weekVisits);
+        YearMonth month = thisMonth();
+        return new TeamOverview(repRows(deals, weekVisits, cashByOwner(month)), rankQuiet(deals, STALE_LIMIT),
+            quietRule.quietDays(), weekVisits, cashForMonth(null, month));
     }
 
     private static List<BoardDeal> rankQuiet(List<BoardDeal> deals, int limit) {
@@ -81,7 +188,8 @@ public class SalesBoardService {
      * login uses (DivisionAccessPolicy#roleFor), so a manager's or the CEO's own deals are labelled, not dropped.
      * An owner with visits this week but no open deal still gets a row (0 deals), so the week grid has their name.
      */
-    private List<RepRow> repRows(List<BoardDeal> deals, List<VisitDtos.VisitDto> weekVisits) {
+    private List<RepRow> repRows(List<BoardDeal> deals, List<VisitDtos.VisitDto> weekVisits,
+                                 Map<Long, CashMonth> cashByOwner) {
         Map<Long, List<BoardDeal>> byOwner = new LinkedHashMap<>();
         Map<Long, String> names = new LinkedHashMap<>();
         deals.forEach(d -> {
@@ -91,6 +199,13 @@ public class SalesBoardService {
         weekVisits.forEach(v -> {
             byOwner.computeIfAbsent(v.ownerId(), k -> new ArrayList<>());
             names.putIfAbsent(v.ownerId(), v.ownerName());
+        });
+        // An owner with cash this month but no open deal and no visit (every deal closed) still gets a row.
+        cashByOwner.keySet().forEach(ownerId -> {
+            byOwner.computeIfAbsent(ownerId, k -> new ArrayList<>());
+            if (!names.containsKey(ownerId) && employees != null) {
+                names.put(ownerId, employees.findByEmployeeId(ownerId).map(e -> e.name()).orElse(null));
+            }
         });
         List<RepRow> rows = new ArrayList<>();
         byOwner.forEach((ownerId, own) -> {
@@ -126,7 +241,10 @@ public class SalesBoardService {
                     }
                 }
             }
-            rows.add(new RepRow(ownerId, names.get(ownerId), role, own.size(), thb, other, quiet, last, done, booked));
+            CashMonth ownCash = cashByOwner.get(ownerId);
+            rows.add(new RepRow(ownerId, names.get(ownerId), role, own.size(), thb, other, quiet, last, done, booked,
+                ownCash == null ? BigDecimal.ZERO : ownCash.forecast(),
+                ownCash == null ? BigDecimal.ZERO : ownCash.received()));
         });
         rows.sort(Comparator.comparing(RepRow::openValue).reversed().thenComparingLong(RepRow::employeeId));
         return rows;

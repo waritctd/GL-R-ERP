@@ -8365,6 +8365,63 @@ function mockRequireOpenExpected(ticketId, id) {
   return row;
 }
 
+/** The Asia/Bangkok calendar date of an instant. */
+function mockBangkokDateOf(instant) {
+  return new Date(instant).toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
+}
+
+const MOCK_DEAD_LIFECYCLES = new Set(['CLOSED_LOST', 'CANCELLED']);
+
+/**
+ * SalesBoardService#cashForMonth over CashRepository's two reads: expected rows by their Monday in the month (not on a
+ * lost/cancelled deal), THB receipts by Bangkok day (ADJUSTMENT subtracts), owner = the deal's created_by;
+ * `ownerId` null = the team. Weeks are the month's Mondays; a receipt before the first Monday folds into week one.
+ */
+function mockCashForMonth(ownerId, yearMonth) {
+  const [y, m] = yearMonth.split('-').map(Number);
+  const first = `${yearMonth}-01`;
+  const last = `${yearMonth}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+  const mondays = [];
+  for (let d = mockWeekStartIso(first) < first ? mockAddDaysIso(mockWeekStartIso(first), 7) : first; d <= last; d = mockAddDaysIso(d, 7)) {
+    mondays.push(d);
+  }
+  const zero = () => mondays.map(() => 0);
+  const delivered = zero(); const scheduled = zero(); const deposits = zero(); const got = zero();
+  let forecast = 0;
+  const ticketOf = (id) => db.tickets.find((t) => t.id === id);
+  const inScope = (t) => t && (ownerId == null || t.createdById === ownerId);
+  for (const p of mockExpectedPayments) {
+    const t = ticketOf(p.ticketId);
+    const i = mondays.indexOf(p.expectedWeek);
+    if (p.status === 'CANCELLED' || i < 0 || !inScope(t) || MOCK_DEAD_LIFECYCLES.has(t.lifecycle ?? 'ACTIVE')) continue;
+    const amount = Number(p.amount);
+    forecast += amount;
+    if (p.status !== 'OPEN') continue;
+    if (['ON_DELIVERY', 'BALANCE'].includes(p.kind) && t.salesStage === 'DELIVERED') delivered[i] += amount;
+    if (p.kind === 'ON_DELIVERY' && ['DELIVERY_SCHEDULING', 'PROCUREMENT'].includes(t.salesStage)) scheduled[i] += amount;
+    if (p.kind === 'DEPOSIT') deposits[i] += amount;
+  }
+  let received = 0;
+  for (const r of db.paymentReceipts ?? []) {
+    const day = mockBangkokDateOf(r.receivedAt);
+    if (day < first || day > last || (r.currency ?? 'THB') !== 'THB' || !inScope(ticketOf(r.ticketId)) || !mondays.length) continue;
+    let i = 0;
+    while (i + 1 < mondays.length && day >= mondays[i + 1]) i += 1;
+    const signed = r.kind === 'ADJUSTMENT' ? -Number(r.amount) : Number(r.amount);
+    got[i] += signed;
+    received += signed;
+  }
+  const total = (a) => round2(a.reduce((x, v) => x + v, 0));
+  return {
+    month: yearMonth, forecast: round2(forecast), received: round2(received), deliveredAwaiting: total(delivered),
+    deliveriesScheduled: total(scheduled), depositsExpected: total(deposits),
+    weeks: mondays.map((weekStart, i) => ({
+      weekStart, deliveredAwaiting: round2(delivered[i]), deliveriesScheduled: round2(scheduled[i]),
+      depositsExpected: round2(deposits[i]), received: round2(got[i]),
+    })),
+  };
+}
+
 /** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
 function mockVisitsThisWeek(ownerId = null) {
   const monday = mockWeekStartIso(mockTodayIso());
@@ -13148,6 +13205,7 @@ export const api = {
       return delay({
         followUp: mockRankQuiet(board).slice(0, 5), board, quietDays: MOCK_QUIET_DAYS,
         visitsThisWeek: mockVisitsThisWeek(user.id),
+        cash: mockCashForMonth(user.id, mockTodayIso().slice(0, 7)),
       });
     },
     async teamOverview() {
@@ -13183,7 +13241,27 @@ export const api = {
           });
         }
       }
+      // SalesBoardService.repRows: an owner with cash this month but no open deal and no visit still gets a row.
+      const month = mockTodayIso().slice(0, 7);
+      const owners = new Set([
+        ...mockExpectedPayments.map((p) => db.tickets.find((t) => t.id === p.ticketId)?.createdById),
+        ...(db.paymentReceipts ?? []).map((r) => db.tickets.find((t) => t.id === r.ticketId)?.createdById),
+      ].filter((id) => id != null));
+      for (const ownerId of owners) {
+        const c = mockCashForMonth(ownerId, month);
+        if (c.forecast === 0 && c.received === 0) continue;
+        if (!byRep.has(ownerId)) {
+          const u = db.users.find((x) => x.id === ownerId);
+          byRep.set(ownerId, {
+            employeeId: ownerId, name: u?.name ?? null, role: u?.role ?? null,
+            openDeals: 0, openValue: 0, otherCurrencyValues: {}, quietDeals: 0, lastUpdateAt: null,
+          });
+        }
+      }
       for (const row of byRep.values()) {
+        const c = mockCashForMonth(row.employeeId, month);
+        row.expected = c.forecast;
+        row.received = c.received;
         const own = teamVisitsThisWeek.filter((v) => v.ownerId === row.employeeId && v.status !== 'CANCELLED');
         row.visitsDone = own.filter((v) => v.status === 'DONE').length;
         row.visitsPlanned = own.length;
@@ -13191,6 +13269,7 @@ export const api = {
       const reps = [...byRep.values()].sort((a, b) => b.openValue - a.openValue || a.employeeId - b.employeeId);
       return delay({
         reps, stale: mockRankQuiet(deals).slice(0, 20), quietDays: MOCK_QUIET_DAYS, teamVisitsThisWeek,
+        cash: mockCashForMonth(null, month),
       });
     },
   },

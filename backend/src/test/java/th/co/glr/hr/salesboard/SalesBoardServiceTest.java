@@ -38,7 +38,7 @@ class SalesBoardServiceTest {
         repository = mock(SalesBoardRepository.class);
         visits = mock(VisitService.class);
         service = new SalesBoardService(repository, new QuietRule(null, 14),
-            mock(th.co.glr.hr.auth.EmployeeAuthRepository.class), visits);
+            mock(th.co.glr.hr.auth.EmployeeAuthRepository.class), visits, mock(CashRepository.class));
     }
 
     @ParameterizedTest
