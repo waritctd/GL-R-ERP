@@ -1199,9 +1199,12 @@ describe('TicketDetailPage', () => {
   // ── Inline validation for the quotation/payment/delivery modals, mirroring the aria-invalid +
   // aria-describedby + role="alert" contract of TicketCreateModal.jsx / DepositNoticePage.jsx. ──
 
-  // recordPayment is account-only, but renderTicketDetailPage()'s default actor is ceoUser: render as
-  // accountUser so this test reaches the button.
-  it('payment modal: submitting with an empty amount marks the amount field inline and does not call recordPayment', async () => {
+  // Spec 2026-11-15 §7.11 item 8: the sales deal page's own บันทึกรับชำระเงิน dialog was dead UI — recording a payment
+  // is account-only (PAYMENT_RECORD_ROLES) and account never mounts this page (TicketDetailRoute.test.jsx: account is
+  // redirected to /finance/deals/:id before any ticket query; RequireAccess.test.jsx: the same under the self-service
+  // lock, query string included). Account records payments on FinanceDealPage. So even rendered for account with the
+  // server listing RECORD_PAYMENT, the page offers no payment form.
+  it('offers no บันทึกรับชำระเงิน dialog, even for account with RECORD_PAYMENT listed (account works on /finance/deals/:id)', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
         lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
@@ -1210,30 +1213,12 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage(accountUser);
-    // "บันทึกรับชำระเงิน" lives in the "การเงิน" tab's payment section; the Modal, once opened, stays
-    // mounted regardless of the active tab (it's not inside any TabPanel).
     await openTab(/การเงิน/);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระเงิน' }));
-    const dialog = await screen.findByRole('dialog', { name: 'บันทึกรับชำระเงิน' });
-
-    // buildTicket()'s default amountOutstanding is 0, so openPaymentModal() leaves the amount field blank (its own
-    // suggested-amount logic only fills in a value when amountOutstanding > 0) — submitting right away exercises
-    // the "empty amount" branch of the guard.
-    const amountInput = within(dialog).getByLabelText('จำนวนเงิน');
-    expect(amountInput.value).toBe('');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
-
-    const error = await within(dialog).findByText('กรุณากรอกยอดรับชำระ');
-    expect(error.getAttribute('role')).toBe('alert');
-    expect(amountInput.getAttribute('aria-invalid')).toBe('true');
-    expect(amountInput.getAttribute('aria-describedby')).toBe(error.id);
+    await screen.findByText('ไทม์ไลน์การชำระเงิน');
+    expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
     expect(api.tickets.recordPayment).not.toHaveBeenCalled();
-
-    // Fixing the field clears its inline error (and only that error).
-    fireEvent.change(amountInput, { target: { value: '500' } });
-    await waitFor(() => expect(within(dialog).queryByText('กรุณากรอกยอดรับชำระ')).toBeNull());
-    expect(amountInput.getAttribute('aria-invalid')).toBeNull();
   });
 
   // The delivery modal (and its "at least 1 line qty > 0" guard) lives in DealFulfilmentPanel, which

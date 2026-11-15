@@ -20,6 +20,7 @@ import {
 } from './FinanceActionModals.jsx';
 import { MilestoneSections, money, vatCaption } from './FinanceMilestoneSections.jsx';
 import { orderActions, pickPrimaryAction } from './financeDealActions.js';
+import { paymentPrefill } from './paymentPrefill.js';
 
 const ACTION_LABEL = {
   DEPOSIT_PAID: 'ยืนยันรับมัดจำ',
@@ -338,9 +339,8 @@ export function FinanceDealPage() {
 
   const activeAction = flow?.action;
   const confirm = activeAction ? confirmConfig(activeAction) : null;
-  // Mirrors TicketDetailPage's openPaymentModal (something already paid -> BALANCE), plus a skipped deposit
-  // (nothing to collect up front, so the first payment is the balance).
-  const defaultPaymentKind = (Number(deal.money.amountPaid) > 0 || deal.milestoneTrack.some((step) => step.skipped)) ? 'BALANCE' : 'DEPOSIT';
+  // Design m-payment: the open notice/invoice's outstanding amount and kind (paymentPrefill's header has the rule).
+  const recordPaymentPrefill = paymentPrefill(deal);
 
   return (
     <div className="grid w-full min-w-0 max-w-[1200px] items-start gap-x-6 gap-y-4 grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)] nav-drawer:grid-cols-[minmax(0,1fr)]">
@@ -441,7 +441,7 @@ export function FinanceDealPage() {
 
       {activeAction?.action === 'RECORD_PAYMENT' ? (
         <RecordPaymentModal
-          defaultKind={defaultPaymentKind} busy={busy} error={flowError}
+          prefill={recordPaymentPrefill} busy={busy} error={flowError}
           onSubmit={(body) => run(() => api.finance.recordPayment(deal.id, body))}
           onClose={() => setFlow(null)}
         />

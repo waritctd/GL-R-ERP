@@ -158,7 +158,7 @@ export function DealPaymentSection({
   pricingRequests = [], dealQuotations = [], availableActions = [],
   canReadDepositNotices = true, canManageRemainingInvoice = false, onManageRemainingInvoice,
   mainButtonCreatesNotice = false, onCreateDepositNotice,
-  canRecordPayment = false, actionLoading = false, onRecordPayment, showToast,
+  actionLoading = false, showToast,
 }) {
   const queryClient = useQueryClient();
   const role = user?.role;
@@ -453,12 +453,6 @@ export function DealPaymentSection({
             />
           </div>
         </div>
-
-        {canRecordPayment ? (
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="primary" disabled={actionLoading} onClick={onRecordPayment}>บันทึกรับชำระเงิน</Button>
-          </div>
-        ) : null}
 
         <div className="border-t border-border pt-3">
           <h3 className="m-0 mb-2.5 text-sm font-bold">ไทม์ไลน์การชำระเงิน</h3>

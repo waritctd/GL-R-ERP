@@ -1748,6 +1748,19 @@ public class TicketRepository {
         return keys.getKey().longValue();
     }
 
+    /**
+     * A receipt account recorded BY HAND settles the deal's nearest OPEN expected payment of a matching kind — the
+     * same ordering the Express matcher uses ({@link th.co.glr.hr.salesboard.ExpectedPaymentRepository
+     * #markNearestOpenReceived}), narrowed by {@link th.co.glr.hr.salesboard.ExpectedPaymentRepository
+     * #expectedKindsFor}. Lives here so TicketService (constructed in ~80 places) needs no new dependency.
+     */
+    public void markNearestOpenExpectedPaymentReceived(long ticketId, String receiptKind, BigDecimal amount,
+                                                       LocalDate receiptDate, long receiptId) {
+        new th.co.glr.hr.salesboard.ExpectedPaymentRepository(jdbc).markNearestOpenReceived(ticketId,
+            th.co.glr.hr.salesboard.ExpectedPaymentRepository.expectedKindsFor(receiptKind), amount, receiptDate,
+            receiptId);
+    }
+
     /** An uploaded Express receipt (V213): source EXPRESS, receipt_ref = the Express document number. */
     public long insertExpressReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy, Instant receivedAt,
                                      String expressDocNo, String customerName) {

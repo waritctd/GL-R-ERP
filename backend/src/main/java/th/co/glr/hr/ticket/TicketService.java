@@ -114,6 +114,8 @@ public class TicketService {
     private static final Set<String> PROPOSE_ALLOWED_STATUSES =
         Set.of(TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED);
     private static final Set<String> PAYMENT_RECEIPT_KINDS = Set.of("DEPOSIT", "BALANCE", "ADJUSTMENT");
+    /** The receipt's business day for matching it to an expected-payment week (slice 5). */
+    private static final java.time.ZoneId PAYMENT_ZONE = java.time.ZoneId.of("Asia/Bangkok");
     private static final Set<String> DELIVERY_SOURCES = Set.of("WAREHOUSE", "STOCK");
 
     private final TicketRepository tickets;
@@ -1991,6 +1993,10 @@ public class TicketService {
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable
                 + (note != null ? " — " + note : ""),
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
+        // Slice 5 (plan 5.5): cash typed by hand settles the rep's expectation too, not only a matched Express row.
+        tickets.markNearestOpenExpectedPaymentReceived(ticketId, kind, amount,
+            request.receivedAt() != null ? LocalDate.ofInstant(request.receivedAt(), PAYMENT_ZONE) : LocalDate.now(PAYMENT_ZONE),
+            receiptId);
         reconcilePaymentStatus(ticketId, actor, true);
         // Deposit settled (a notice alone is not money): an all-stock deal is ready to deliver.
         boolean settledNow = depositSettled(requireTicket(ticketId).summary());

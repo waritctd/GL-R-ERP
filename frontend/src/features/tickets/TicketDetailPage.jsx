@@ -83,7 +83,6 @@ import {
 } from './ticketItemFields.jsx';
 import { manualMoveLabel } from './stageMeta.js';
 import { quoteNextPartyBanner, resolveWorkState, secondaryWorkActions } from './workState.js';
-import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Ticket-detail IA rebuild Phase 1 (see
 // docs/ui-repair/02-information-architecture/TICKET_INFORMATION_ARCHITECTURE.md
@@ -336,15 +335,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     node.focus();
   }
 
-  const [paymentModal, setPaymentModal] = useState(false);
-  const [paymentDraft, setPaymentDraft] = useState({
-    kind: 'DEPOSIT',
-    amount: '',
-    receivedAt: '',
-    note: '',
-    receiptRef: '',
-    allowOverpayment: false,
-  });
   // Delivery/stock-reservation modal state lives in DealFulfilmentPanel.
 
   // Comment
@@ -568,7 +558,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     setEditNote('');
     setShowReviseForm(false);
     setReviseReason('');
-    setPaymentModal(false);
     setCommentText('');
   }
 
@@ -993,7 +982,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     // Dual-track (ข้อ 13)
     confirmCustomer:    hasAction('CONFIRM_CUSTOMER') && st === 'quotation_issued' && ps == null && isSales, // not at CUSTOMER_CONFIRMED: a re-confirm moves nothing and would hide สร้างใบแจ้งยอดเงินรับมัดจำ (2026-10-28)
     confirmFinalPayment:hasAction('FINAL_PAYMENT') && st === 'quotation_issued' && isMoneyRecorder,
-    recordPayment:      hasAction('RECORD_PAYMENT') && isMoneyRecorder,
     downloadRemainingInvoice: isRemainingInvoiceReady({ status: st, fulfillmentStatus: fs }) && isSales,
   };
 
@@ -1577,45 +1565,6 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   async function handleComment() {
     if (!commentText.trim()) return;
     await doAction(() => api.tickets.comment(ticketId, { message: commentText.trim() }), 'เพิ่มความคิดเห็นแล้ว');
-  }
-
-  async function handleRecordPayment() {
-    const amount = Number(paymentDraft.amount);
-    if (!amount || amount <= 0) {
-      setFieldErrorsForPrefix('payment.', { 'payment.amount': 'กรุณากรอกยอดรับชำระ' });
-      focusFirstInvalid('payment.amount');
-      return;
-    }
-    setFieldErrorsForPrefix('payment.', {});
-    const payload = {
-      kind: paymentDraft.kind,
-      amount,
-      receivedAt: paymentDraft.receivedAt ? new Date(paymentDraft.receivedAt).toISOString() : null,
-      note: paymentDraft.note.trim() || null,
-      receiptRef: paymentDraft.receiptRef.trim() || null,
-      allowOverpayment: paymentDraft.allowOverpayment,
-    };
-    await doAction(() => api.tickets.recordPayment(ticketId, payload), 'บันทึกรับชำระเงินแล้ว');
-  }
-
-  function openPaymentModal() {
-    const suggestedKind = summary.amountPaid > 0 ? 'BALANCE' : 'DEPOSIT';
-    setPaymentDraft({
-      kind: suggestedKind,
-      amount: summary.amountOutstanding != null && summary.amountOutstanding > 0 ? String(summary.amountOutstanding) : '',
-      receivedAt: '',
-      note: '',
-      receiptRef: '',
-      allowOverpayment: false,
-    });
-    setPaymentModal(true);
-    // Reset on open so a stale error never greets the user on reopen.
-    setFieldErrorsForPrefix('payment.', {});
-  }
-
-  function closePaymentModal() {
-    setPaymentModal(false);
-    setFieldErrorsForPrefix('payment.', {});
   }
 
   // openDeliveryModal/closeDeliveryModal/openStockModal live in DealFulfilmentPanel.
@@ -2336,9 +2285,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                 onManageRemainingInvoice={() => setRemainingInvoiceDialogOpen(true)}
                 mainButtonCreatesNotice={workStateAction?.key === 'create_deposit_notice'}
                 onCreateDepositNotice={() => createDepositNoticeMutation.mutate()}
-                canRecordPayment={can.recordPayment}
                 actionLoading={actionLoading || createDepositNoticeMutation.isPending}
-                onRecordPayment={openPaymentModal}
                 showToast={showToast}
               />
             </div>
@@ -2480,74 +2427,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       ) : null}
       </div>
 
-      {paymentModal && (
-        <Modal
-          title="บันทึกรับชำระเงิน"
-          onClose={closePaymentModal}
-          footer={(
-            <>
-              <Button type="button" variant="secondary" onClick={closePaymentModal}>ยกเลิก</Button>
-              <Button type="button" variant="primary" disabled={actionLoading} onClick={handleRecordPayment}>
-                บันทึก
-              </Button>
-            </>
-          )}
-        >
-          <div className="grid gap-3">
-            <label className="grid gap-1.5 text-sm font-semibold">
-              ประเภท
-              <select value={paymentDraft.kind} onChange={(e) => setPaymentDraft((draft) => ({ ...draft, kind: e.target.value }))}>
-                <option value="DEPOSIT">มัดจำ</option>
-                <option value="BALANCE">ส่วนที่เหลือ</option>
-                <option value="ADJUSTMENT">ปรับปรุงยอด/คืนเงิน</option>
-              </select>
-            </label>
-            <div className="grid grid-cols-[repeat(auto-fit,minmax(160px,1fr))] gap-2.5">
-              <label className="grid gap-1.5 text-sm font-semibold">
-                จำนวนเงิน
-                <input type="number" min="0" step="0.01"
-                  id="payment-amount"
-                  ref={(el) => { fieldRefs.current['payment.amount'] = el; }}
-                  value={paymentDraft.amount}
-                  onChange={(e) => {
-                    setPaymentDraft((draft) => ({ ...draft, amount: e.target.value }));
-                    clearFieldError('payment.amount');
-                  }}
-                  aria-invalid={fieldErrors['payment.amount'] ? true : undefined}
-                  aria-describedby={fieldErrors['payment.amount'] ? fieldErrorId('payment-amount') : undefined}
-                />
-                {fieldErrors['payment.amount'] ? (
-                  <p id={fieldErrorId('payment-amount')} role="alert" className="m-0 text-2xs font-bold text-danger">
-                    {fieldErrors['payment.amount']}
-                  </p>
-                ) : null}
-              </label>
-              <label className="grid gap-1.5 text-sm font-semibold">
-                วันที่รับเงิน
-                <ThaiDateInput value={paymentDraft.receivedAt}
-                  onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receivedAt: e.target.value }))} />
-              </label>
-            </div>
-            <label className="grid gap-1.5 text-sm font-semibold">
-              เลขอ้างอิง
-              <input value={paymentDraft.receiptRef}
-                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, receiptRef: e.target.value }))} />
-            </label>
-            <label className="grid gap-1.5 text-sm font-semibold">
-              หมายเหตุ
-              <textarea rows={3} value={paymentDraft.note}
-                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, note: e.target.value }))} />
-            </label>
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={paymentDraft.allowOverpayment}
-                onChange={(e) => setPaymentDraft((draft) => ({ ...draft, allowOverpayment: e.target.checked }))} />
-              ยืนยันรับชำระเกินยอด
-            </label>
-          </div>
-        </Modal>
-      )}
-
-      {/* ขอแก้ไข (Revise) is a modal, like paymentModal above: an inline section opened ~400px below
+      {/* ขอแก้ไข (Revise) is a modal: an inline section opened ~400px below
           its overflow-menu trigger and forced a tab switch plus scroll-into-view. handleOpenRevise
           is a plain flag flip (see its doc comment). */}
       {can.revise && showReviseForm && (
