@@ -47,6 +47,7 @@ const ROUTES = [
   '/commissions',
   '/finance',
   '/finance/deals/1', // Account's own per-deal finance page (GET /api/finance/deals/{id}; account/ceo, account row-scoped)
+  '/finance/receipts-import', // Express receipts upload (GET /api/sales/receipt-imports/latest; account only — ceo refused by guard and service)
   '/price-import',
   '/ceo-settings',
   '/catalog',

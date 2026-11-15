@@ -243,26 +243,23 @@ export const STAGE_FOR_RECIPIENT = {
 /** The literal STAGE_CHANGED message every AUTOMATIC hop carries — see stageHistory's Javadoc above. */
 export const AUTO_STAGE_MESSAGE = 'อัตโนมัติจากขั้นตอนของดีล';
 
-/** Discovers a factory this database can actually cost, so PricingDecisionService.startReview (the CEO step, eight calls after this one) does not 422. This checks both gates up front instead.
+/** Discovers a factory this database can actually cost, so PricingDecisionService.startReview (the CEO step, eight calls after this one) does not 422.
+ * The costing engine's only per-factory gate is that the quote's factory exists in sales.factory_config
+ * (LandedCostCalculator#costShipment, findByName). sales.price_calc_config is NOT a gate: as of V152 the engine no longer
+ * reads it (LandedCostCalculator class Javadoc), so requiring a factory.country that matches one of its rows refused
+ * databases — CI's demo seed among them, ISO 'IT' factories vs a free-text 'Italy' config — the engine costs fine.
+ * Freight keys come from the catalog link, else the item's own Sales-entered origin country (createPricingRequest sets one).
  * @returns {{id: number, factoryName: string, email: string, currency: string, unit: string, country: string}} */
 export async function resolveFactory(sessions) {
   const factoriesResponse = await sessions.import.get('/api/factory-configs', { failOnStatusCode: false });
   expect(factoriesResponse.status(), 'GET /api/factory-configs').toBe(200);
   const { factories } = await factoriesResponse.json();
 
-  const configsResponse = await sessions.import.get('/api/price-calc-configs', { failOnStatusCode: false });
-  expect(configsResponse.status(), 'GET /api/price-calc-configs').toBe(200);
-  const { configs } = await configsResponse.json();
-  const countriesWithConfig = new Set(configs.map((config) => config.country));
-
-  const usable = factories.find((factory) => factory.country && countriesWithConfig.has(factory.country));
+  const usable = factories.find((factory) => factory.factoryName && factory.country) ?? factories.find((f) => f.factoryName);
   expect(
     usable,
-    `none of the ${factories.length} factories on this database has both a country and a ` +
-      'matching price_calc_config — LandedCostCalculator.calculate 422s on either gap ' +
-      '(pricingcosting/LandedCostCalculator.java:76-87). This is a UAT master-data gap, not a ' +
-      'test bug: raise it with whoever owns the UAT factory-config / price-calc-config data ' +
-      'rather than changing this fixture.'
+    `none of the ${factories.length} rows in sales.factory_config has a name — LandedCostCalculator#costShipment 422s ` +
+      'with "ไม่พบ factory config" for a quote whose factory is not configured. This is a master-data gap, not a test bug.'
   ).toBeTruthy();
   return usable;
 }
