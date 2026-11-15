@@ -128,10 +128,11 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     try {
       const result = await mutation.mutateAsync(variables);
       onDone();
-      // VisitDto.dealMovedToName: the deal now belongs to someone else, so the tick stayed on the visit (NEW-2).
-      showToast('success', result?.dealMovedToName
+      // VisitDto.dealMovedToName: the deal belongs to someone else, so the tick stayed on the visit (NEW-2).
+      // dealMoved says why: it moved after the visit was planned, or the visit's owner never held it (review LOW).
+      showToast('success', !result?.dealMovedToName ? success : result.dealMoved
         ? `ดีลนี้ย้ายไปให้ ${result.dealMovedToName} แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น`
-        : success);
+        : `บันทึกการเข้าพบไว้กับนัดเท่านั้น — ดีลนี้เป็นของ ${result.dealMovedToName}`);
     } catch (error) {
       fail(error);
     }

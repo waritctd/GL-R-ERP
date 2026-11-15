@@ -2779,7 +2779,7 @@ public class DealQuotationService {
         String oldOwner = employeeLabel(ticket.createdById());
         String newOwner = employeeLabel(salesRepId);
         tickets.addEvent(ticket.id(), actor.id(), actor.name(), th.co.glr.hr.ticket.TicketEventKind.EDITED, null, null,
-            "เปลี่ยนเจ้าของงาน: " + oldOwner + " → " + newOwner + " (ตามพนักงานขายในใบเสนอราคา)");
+            TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX + oldOwner + " → " + newOwner + " (ตามพนักงานขายในใบเสนอราคา)");
         if (salesRepId != actor.id()) {
             notifications.notifyEmployeeAtLink(salesRepId, th.co.glr.hr.ticket.TicketEventKind.DEAL_OWNER_CHANGED,
                 "คุณได้รับดีล " + ticket.code() + " เป็นเจ้าของงาน", "/tickets/" + ticket.id());

@@ -344,7 +344,8 @@ describe('MyWork — visits review fixes', () => {
 
   it("ticking a visit on a deal that moved away says it stays with the visit only (NEW-2)", async () => {
     const showToast = vi.fn();
-    api.salesVisits.done.mockResolvedValue(visit({ id: 2, status: 'DONE', dealMovedToName: 'คุณอรุณี ขายเก่ง' }));
+    api.salesVisits.done.mockResolvedValue(visit({ id: 2, status: 'DONE', dealMovedToName: 'คุณอรุณี ขายเก่ง',
+      dealMoved: true }));
     renderMyWork({ showToast });
     const row = await screen.findByTestId('visit-2');
     fireEvent.click(within(row).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
@@ -352,5 +353,19 @@ describe('MyWork — visits review fixes', () => {
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('success',
       'ดีลนี้ย้ายไปให้ คุณอรุณี ขายเก่ง แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น'));
+  });
+
+  it("ticking a visit on someone else's deal that never moved does not claim it moved (review LOW)", async () => {
+    const showToast = vi.fn();
+    api.salesVisits.done.mockResolvedValue(visit({ id: 2, status: 'DONE', dealMovedToName: 'คุณอรุณี ขายเก่ง',
+      dealMoved: false }));
+    renderMyWork({ showToast });
+    const row = await screen.findByTestId('visit-2');
+    fireEvent.click(within(row).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success',
+      'บันทึกการเข้าพบไว้กับนัดเท่านั้น — ดีลนี้เป็นของ คุณอรุณี ขายเก่ง'));
+    expect(showToast).not.toHaveBeenCalledWith('success', expect.stringContaining('ย้ายไปให้'));
   });
 });

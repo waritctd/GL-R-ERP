@@ -137,6 +137,13 @@ public class TicketRepository {
      * already set. One guarded statement: no move to the current owner, after a commission record exists, or on a
      * finished deal (lifecycle CANCELLED/COMPLETED/CLOSED_LOST or status closed/cancelled). Returns rows moved (0 or 1).
      */
+    /**
+     * The message prefix of the EDITED event a reassignment writes on the deal's timeline
+     * (DealQuotationService#moveOwnerToSalesRep). VisitRepository reads it to tell "the deal moved after this visit
+     * was planned" from "the visit's owner never owned the deal", so the two must share this constant.
+     */
+    public static final String OWNER_CHANGED_MESSAGE_PREFIX = "เปลี่ยนเจ้าของงาน: ";
+
     public int moveOwnerToSalesRep(long ticketId, long repId) {
         return jdbc.update("""
             UPDATE sales.ticket SET keyed_by = COALESCE(keyed_by, created_by), created_by = :rep

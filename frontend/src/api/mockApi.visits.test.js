@@ -231,8 +231,11 @@ describe('mockApi.salesVisits', () => {
     const [quiet] = (await api.salesBoard.myWork()).followUp;
     const ahead = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: plusDays(today, 2) });
     const due = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ข', plannedDate: today });
-    // The production reassignment (moveOwnerToSalesRep): the ex-owner becomes the keyer.
-    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: quiet.ownerId });
+    // The production reassignment (DealQuotationService#moveOwnerToSalesRep): the ex-owner becomes the keyer, and
+    // the deal's timeline records the move (an EDITED event the visit reads as "the deal moved").
+    const raw = (await api.tickets.get(quiet.ticketId)).ticket;
+    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: quiet.ownerId, events: [...(raw.events ?? []),
+      { kind: 'EDITED', message: 'เปลี่ยนเจ้าของงาน: ก → ข (ตามพนักงานขายในใบเสนอราคา)', createdAt: new Date().toISOString() }] });
     try {
       await api.auth.login({ role: 'ceo' });
       expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
@@ -242,13 +245,15 @@ describe('mockApi.salesVisits', () => {
       const done = await api.salesVisits.done(due.id, { note: 'ไปมาแล้ว' });
       expect(done.status).toBe('DONE');
       expect(done.dealMovedToName).toBeTruthy();
+      expect(done.dealMoved).toBe(true);
       expect(ahead.dealMovedToName).toBeNull();
+      expect(ahead.dealMoved).toBe(false);
 
       await api.auth.login({ role: 'ceo' });
       expect((await api.tickets.listActivities(quiet.ticketId)).items.length).toBe(before);
       expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
     } finally {
-      patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId });
+      patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId, events: raw.events });
     }
   });
 
@@ -264,7 +269,9 @@ describe('mockApi.salesVisits', () => {
       const before = (await api.tickets.listActivities(quiet.ticketId)).items.length;
 
       await api.auth.login({ role: 'sales' });
-      expect((await api.salesVisits.done(due.id, {})).dealMovedToName).toBeTruthy();
+      const ticked = await api.salesVisits.done(due.id, {});
+      expect(ticked.dealMovedToName).toBeTruthy();
+      expect(ticked.dealMoved).toBe(false);
       await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ค', plannedDate: today, done: true });
 
       await api.auth.login({ role: 'ceo' });

@@ -27,6 +27,8 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
+import th.co.glr.hr.ticket.TicketEventKind;
+import th.co.glr.hr.ticket.TicketRepository;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -312,6 +314,7 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
         assertThat(done.get("status").asText()).isEqualTo("DONE");
         assertThat(done.get("note").asText()).isEqualTo("ไปมาแล้ว");
         assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(done.path("dealMoved").asBoolean()).as("the deal moved after the visit was planned").isTrue();
         assertThat(siteVisitRows(deal)).isZero();
         assertThat(quietRule.isQuiet(deal)).as("the new owner's quiet state is untouched").isTrue();
     }
@@ -322,8 +325,9 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
         long visit = plan(salesActor, deal, "คุณอรุณ", today);
         reassign(deal, otherSalesActor);
 
-        ok(post("/api/sales/visits/" + visit + "/done"), salesManagerActor);
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesManagerActor);
 
+        assertThat(done.path("dealMoved").asBoolean()).isTrue();
         assertThat(siteVisitRows(deal)).isZero();
     }
 
@@ -332,8 +336,9 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
         long deal = deal(salesActor);
         long visit = plan(salesActor, deal, "คุณอรุณ", today);
 
-        assertThat(ok(post("/api/sales/visits/" + visit + "/done"), salesActor).get("dealMovedToName").isNull())
-            .isTrue();
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesActor);
+        assertThat(done.get("dealMovedToName").isNull()).isTrue();
+        assertThat(done.path("dealMoved").asBoolean()).isFalse();
         assertThat(siteVisitRows(deal)).isEqualTo(1);
     }
 
@@ -393,7 +398,34 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
 
         assertThat(done.get("status").asText()).isEqualTo("DONE");
         assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(done.path("dealMoved").asBoolean()).as("a keyer's deal never moved").isFalse();
         assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    // ── review LOW: "the deal moved" only when ownership changed after the visit was planned ──
+
+    @Test
+    void aManagerLoggingTheirOwnVisitOnARepsDeal_isNotToldTheDealMoved() throws Exception {
+        long deal = deal(salesActor);
+
+        JsonNode logged = ok(createRequest(deal, "คุณอรุณ", today, null, true), salesManagerActor);
+
+        assertThat(logged.get("dealMovedToName").asText()).isEqualTo(employeeName(salesActor));
+        assertThat(logged.path("dealMoved").asBoolean()).isFalse();
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    @Test
+    void aVisitPlannedAfterTheDealHadAlreadyMoved_isNotToldTheDealMoved() throws Exception {
+        long deal = deal(salesActor);
+        reassign(deal, otherSalesActor);
+        // The ex-owner keeps keyer access and plans a visit on a deal that is already someone else's.
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesActor);
+
+        assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(done.path("dealMoved").asBoolean()).isFalse();
     }
 
     // ── done only on or before today (review M2) ─────────────────────────────
@@ -534,8 +566,14 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     }
 
     /** The production reassignment path (TicketRepository#moveOwnerToSalesRep): the ex-owner becomes the keyer. */
+    /**
+     * The production reassignment, as DealQuotationService#moveOwnerToSalesRep does it: move the owner, then record
+     * the move on the deal's timeline with {@link TicketRepository#OWNER_CHANGED_MESSAGE_PREFIX}.
+     */
     private void reassign(long ticketId, UserPrincipal newOwner) {
         assertThat(tickets.moveOwnerToSalesRep(ticketId, newOwner.id())).isEqualTo(1);
+        tickets.addEvent(ticketId, newOwner.id(), newOwner.name(), TicketEventKind.EDITED, null, null,
+            TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX + "เดิม → " + newOwner.name() + " (ตามพนักงานขายในใบเสนอราคา)");
     }
 
     private Map<String, Object> siteVisit(long ticketId) {

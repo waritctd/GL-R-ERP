@@ -8300,8 +8300,17 @@ function mockVisitDto(v) {
     dealMovedToName: ticket && Number(ticket.createdById) !== Number(v.ownerId)
       ? (db.users.find((u) => u.id === ticket.createdById)?.name ?? ticket.createdByName ?? null)
       : null,
+    // VisitRepository's deal_moved: that, AND the deal's timeline has a reassignment (an EDITED event starting
+    // TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX) at or after this visit was created (review LOW).
+    dealMoved: Boolean(ticket) && Number(ticket.createdById) !== Number(v.ownerId)
+      && (ticket.events ?? []).some((e) => e.kind === 'EDITED'
+        && String(e.message ?? '').startsWith(MOCK_OWNER_CHANGED_MESSAGE_PREFIX)
+        && Date.parse(e.createdAt) >= Date.parse(v.createdAt ?? '1970-01-01T00:00:00Z')),
   };
 }
+
+/** TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX. */
+const MOCK_OWNER_CHANGED_MESSAGE_PREFIX = 'เปลี่ยนเจ้าของงาน: ';
 
 /** VisitRepository's ORDER BY v.planned_date, v.planned_time NULLS LAST, v.visit_id over [from, to]. */
 function mockVisitsIn(from, to, ownerId = null) {
