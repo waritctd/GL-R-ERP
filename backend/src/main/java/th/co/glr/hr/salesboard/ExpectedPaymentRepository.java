@@ -72,28 +72,6 @@ public class ExpectedPaymentRepository {
             """, Map.of("t", ticketId, "id", id));
     }
 
-    /**
-     * A matched Express receipt marks the deal's OPEN expected payment it most likely is RECEIVED: one whose amount is
-     * within the matcher's tolerance (±1% or ±฿10) first, then the nearest expected week to the receipt's date, then
-     * the oldest row. Returns the row marked, or empty when the deal has no OPEN row (the receipt still counts).
-     */
-    public Optional<Long> markNearestOpenReceived(long ticketId, BigDecimal amount, LocalDate receiptDate,
-                                                  long receiptId) {
-        return jdbc.query("""
-            UPDATE sales.expected_payment SET status = 'RECEIVED', receipt_id = :r, updated_at = now()
-             WHERE expected_payment_id = (
-                   SELECT expected_payment_id FROM sales.expected_payment
-                    WHERE ticket_id = :t AND status = 'OPEN'
-                    ORDER BY (abs(amount - :amount) <= GREATEST(amount * 0.01, 10)) DESC,
-                             abs(expected_week - CAST(:d AS date)), expected_payment_id
-                    LIMIT 1
-                    FOR UPDATE)
-            RETURNING expected_payment_id
-            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("amount", amount)
-                .addValue("d", receiptDate).addValue("r", receiptId),
-            (rs, n) -> rs.getLong(1)).stream().findFirst();
-    }
-
     private static ExpectedPaymentDto map(ResultSet rs, int rowNum) throws SQLException {
         long receipt = rs.getLong("receipt_id");
         Long receiptId = rs.wasNull() ? null : receipt;

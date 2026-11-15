@@ -34,26 +34,32 @@ public class CashRepository {
         this.jdbc = jdbc;
     }
 
-    /** Expected payments whose {@code expected_week} Monday is in [from, to]. */
+    /**
+     * Expected payments whose week belongs to [from, to] by the ISO rule: a week belongs to the month holding its
+     * THURSDAY ({@code expected_week + 3}), so the week of Mon 30 Nov – Fri 4 Dec is December's (review M6).
+     * forecast = the full planned amount of OPEN and RECEIVED rows; the three buckets carry only what is still to come
+     * of an OPEN row ({@code amount - received_amount}, review M1). An OPEN row counts only on an ACTIVE deal (ON_HOLD /
+     * DORMANT deals expect nothing now); a RECEIVED row counts on any deal that is not lost or cancelled.
+     */
     public List<ExpectedWeekRow> expectedByWeek(Long ownerId, LocalDate from, LocalDate to) {
         MapSqlParameterSource p = new MapSqlParameterSource().addValue("from", from).addValue("to", to);
         String owner = ownerPredicate(ownerId, p);
         return jdbc.query("""
             SELECT t.created_by AS owner_id, ep.expected_week,
-                   COALESCE(SUM(ep.amount) FILTER (WHERE ep.status IN ('OPEN', 'RECEIVED')), 0) AS forecast,
-                   COALESCE(SUM(ep.amount) FILTER (WHERE ep.status = 'OPEN'
+                   COALESCE(SUM(ep.amount), 0) AS forecast,
+                   COALESCE(SUM(ep.amount - ep.received_amount) FILTER (WHERE ep.status = 'OPEN'
                        AND ep.kind IN ('ON_DELIVERY', 'BALANCE') AND t.sales_stage = 'DELIVERED'), 0)
                        AS delivered_awaiting,
-                   COALESCE(SUM(ep.amount) FILTER (WHERE ep.status = 'OPEN'
+                   COALESCE(SUM(ep.amount - ep.received_amount) FILTER (WHERE ep.status = 'OPEN'
                        AND ep.kind = 'ON_DELIVERY' AND t.sales_stage IN ('DELIVERY_SCHEDULING', 'PROCUREMENT')), 0)
                        AS deliveries_scheduled,
-                   COALESCE(SUM(ep.amount) FILTER (WHERE ep.status = 'OPEN' AND ep.kind = 'DEPOSIT'), 0)
-                       AS deposits_expected
+                   COALESCE(SUM(ep.amount - ep.received_amount) FILTER (WHERE ep.status = 'OPEN'
+                       AND ep.kind = 'DEPOSIT'), 0) AS deposits_expected
               FROM sales.expected_payment ep
               JOIN sales.ticket t ON t.ticket_id = ep.ticket_id
-             WHERE ep.status <> 'CANCELLED'
-               AND ep.expected_week BETWEEN :from AND :to
-               AND t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')
+             WHERE ((ep.status = 'OPEN' AND t.lifecycle = 'ACTIVE')
+                    OR (ep.status = 'RECEIVED' AND t.lifecycle NOT IN ('CLOSED_LOST', 'CANCELLED')))
+               AND ep.expected_week + 3 BETWEEN :from AND :to
             """ + owner + " GROUP BY t.created_by, ep.expected_week ORDER BY t.created_by, ep.expected_week",
             p, (rs, n) -> new ExpectedWeekRow(rs.getLong("owner_id"), rs.getObject("expected_week", LocalDate.class),
                 rs.getBigDecimal("forecast"), rs.getBigDecimal("delivered_awaiting"),

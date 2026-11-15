@@ -77,6 +77,7 @@ public class SalesBoardService {
     public CashMonth cashForMonth(Long ownerId, YearMonth month) {
         LocalDate first = month.atDay(1);
         LocalDate last = month.atEndOfMonth();
+        // Expected rows by their week's Thursday; receipts by their own Bangkok calendar date.
         return assemble(month, cash.expectedByWeek(ownerId, first, last), cash.receivedByDay(ownerId, first, last));
     }
 
@@ -99,16 +100,20 @@ public class SalesBoardService {
     }
 
     /**
-     * Folds the repository rows into the month. Weeks are every Monday inside the month; a receipt dated before the
-     * first Monday (the 1st falling mid-week) goes into the first week, so the weeks always add up to the month.
+     * Folds the repository rows into the month. The month's weeks are the ISO weeks whose THURSDAY is in it (review
+     * M6: Mon 30 Nov – Fri 4 Dec is December's). Receipts stay calendar-month cash: one dated before the first week
+     * (the 1st falling late in a week) folds into the first week, one after the last week (30 Nov) into the last, so
+     * the weeks always add up to the month.
      */
     static CashMonth assemble(YearMonth month, List<CashRepository.ExpectedWeekRow> expected,
                               List<CashRepository.ReceivedDayRow> received) {
         List<LocalDate> mondays = new ArrayList<>();
-        LocalDate monday = month.atDay(1).with(java.time.temporal.TemporalAdjusters.nextOrSame(
+        LocalDate monday = month.atDay(1).with(java.time.temporal.TemporalAdjusters.previousOrSame(
             java.time.DayOfWeek.MONDAY));
         for (; !monday.isAfter(month.atEndOfMonth()); monday = monday.plusWeeks(1)) {
-            mondays.add(monday);
+            if (YearMonth.from(monday.plusDays(3)).equals(month)) {
+                mondays.add(monday);
+            }
         }
         int n = mondays.size();
         BigDecimal[] delivered = zeros(n);

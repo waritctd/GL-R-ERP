@@ -3937,6 +3937,7 @@ function recordPaymentForTicket(ticket, user, payload) {
   });
   pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status,
     `kind=${kind}, amount=${amount}, paid=${newPaid}, payable=${payable}${note ? ` — ${note}` : ''}`);
+  mockApplyReceiptToExpected(ticket.id, kind, amount, mockBangkokDateOf(payload.receivedAt || now), nextId);
   reconcilePaymentStatus(ticket, user);
   ticket.updatedAt = now.slice(0, 10);
 }
@@ -8327,11 +8328,36 @@ function seedMockExpectedPayments() {
     const at = new Date().toISOString();
     mockExpectedPayments.push({
       id: mockExpectedPaymentSeq++, ticketId, kind, amount, expectedWeek: mockAddDaysIso(monday, offset),
-      status: 'OPEN', receiptId: null, receiptRef: null, createdById: 6, createdAt: at, updatedAt: at,
+      status: 'OPEN', receivedAmount: 0, receiptId: null, receiptRef: null, createdById: 6, createdAt: at, updatedAt: at,
     });
   }
 }
 seedMockExpectedPayments();
+
+/**
+ * TicketRepository#applyReceiptToExpectedPayments — the ONE rule for manual and Express receipts alike (review M1):
+ * add to the nearest OPEN row of the matching kind; RECEIVED only once the cumulative amount reaches it within ±1% /
+ * ±฿10; carry what a completed row does not need to the next one. ADJUSTMENT touches nothing.
+ */
+function mockApplyReceiptToExpected(ticketId, kind, amount, dayIso, receiptId, receiptRef = null) {
+  if (!(amount > 0) || kind === 'ADJUSTMENT') return;
+  const kinds = kind === 'DEPOSIT' ? ['DEPOSIT'] : ['ON_DELIVERY', 'BALANCE'];
+  const gap = (week) => Math.abs(new Date(`${week}T00:00:00Z`) - new Date(`${dayIso}T00:00:00Z`));
+  let left = amount;
+  while (left > 0) {
+    const row = mockExpectedPayments
+      .filter((p) => p.ticketId === Number(ticketId) && p.status === 'OPEN' && kinds.includes(p.kind))
+      .sort((a, b) => gap(a.expectedWeek) - gap(b.expectedWeek) || a.id - b.id)[0];
+    if (!row) return;
+    const applied = Math.min(left, round2(row.amount - (row.receivedAmount ?? 0)));
+    row.receivedAmount = round2((row.receivedAmount ?? 0) + applied);
+    const complete = row.receivedAmount >= row.amount - Math.max(row.amount * 0.01, 10);
+    if (complete) Object.assign(row, { status: 'RECEIVED', receiptId, receiptRef });
+    row.updatedAt = new Date().toISOString();
+    left = round2(left - applied);
+    if (!complete) return;
+  }
+}
 
 /** ExpectedPaymentRepository.findByTicket: non-cancelled, ORDER BY expected_week, expected_payment_id. */
 function mockExpectedPaymentsOf(ticketId) {
@@ -8362,6 +8388,11 @@ function mockRequireDealWrite(user, ticketId) {
   return ticket;
 }
 
+/** ExpectedPaymentService.requireActive: rows on a deal that is not ACTIVE are read-only. */
+function mockRequireActiveExpectedDeal(ticket) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงแก้ไขเงินที่คาดว่าจะเข้าไม่ได้', 409);
+}
+
 function mockRequireOpenExpected(ticketId, id) {
   const row = mockExpectedPayments.find((p) => p.id === Number(id) && p.ticketId === Number(ticketId));
   if (!row) fail('ไม่พบรายการเงินที่คาดว่าจะเข้านี้', 404);
@@ -8387,9 +8418,10 @@ function mockCashForMonth(ownerId, yearMonth) {
   const [y, m] = yearMonth.split('-').map(Number);
   const first = `${yearMonth}-01`;
   const last = `${yearMonth}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+  // ISO rule (review M6): a week belongs to the month holding its Thursday.
   const mondays = [];
-  for (let d = mockWeekStartIso(first) < first ? mockAddDaysIso(mockWeekStartIso(first), 7) : first; d <= last; d = mockAddDaysIso(d, 7)) {
-    mondays.push(d);
+  for (let d = mockWeekStartIso(first); d <= last; d = mockAddDaysIso(d, 7)) {
+    if (mockAddDaysIso(d, 3).slice(0, 7) === yearMonth) mondays.push(d);
   }
   const zero = () => mondays.map(() => 0);
   const delivered = zero(); const scheduled = zero(); const deposits = zero(); const got = zero();
@@ -8399,10 +8431,12 @@ function mockCashForMonth(ownerId, yearMonth) {
   for (const p of mockExpectedPayments) {
     const t = ticketOf(p.ticketId);
     const i = mondays.indexOf(p.expectedWeek);
-    if (p.status === 'CANCELLED' || i < 0 || !inScope(t) || MOCK_DEAD_LIFECYCLES.has(t.lifecycle ?? 'ACTIVE')) continue;
-    const amount = Number(p.amount);
-    forecast += amount;
+    const life = t?.lifecycle ?? 'ACTIVE';
+    if (p.status === 'CANCELLED' || i < 0 || !inScope(t)) continue;
+    if (p.status === 'OPEN' ? life !== 'ACTIVE' : MOCK_DEAD_LIFECYCLES.has(life)) continue;
+    forecast += Number(p.amount);
     if (p.status !== 'OPEN') continue;
+    const amount = round2(Number(p.amount) - Number(p.receivedAmount ?? 0)); // only what is still to come
     if (['ON_DELIVERY', 'BALANCE'].includes(p.kind) && t.salesStage === 'DELIVERED') delivered[i] += amount;
     if (p.kind === 'ON_DELIVERY' && ['DELIVERY_SCHEDULING', 'PROCUREMENT'].includes(t.salesStage)) scheduled[i] += amount;
     if (p.kind === 'DEPOSIT') deposits[i] += amount;
@@ -8411,7 +8445,7 @@ function mockCashForMonth(ownerId, yearMonth) {
   for (const r of db.paymentReceipts ?? []) {
     const day = mockBangkokDateOf(r.receivedAt);
     if (day < first || day > last || (r.currency ?? 'THB') !== 'THB' || !inScope(ticketOf(r.ticketId)) || !mondays.length) continue;
-    let i = 0;
+    let i = 0; // before the first week → the first; after the last week (30 Nov) → the last
     while (i + 1 < mondays.length && day >= mondays[i + 1]) i += 1;
     const signed = r.kind === 'ADJUSTMENT' ? -Number(r.amount) : Number(r.amount);
     got[i] += signed;
@@ -8537,6 +8571,7 @@ function mockReceiptCandidates() {
     ],
     quotationNumbers: mockDealQuotations.filter((q) => q.ticketId === t.id && q.number).map((q) => q.number),
     openExpected: mockExpectedPayments.filter((p) => p.ticketId === t.id && p.status === 'OPEN')
+      .map((p) => ({ ...p, amount: round2(p.amount - (p.receivedAmount ?? 0)) })) // the OPEN remainder
       .sort((a, b) => a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id),
   }));
 }
@@ -8580,12 +8615,7 @@ function mockPlaceExpressReceipt(ticketId, row, user) {
   });
   pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=${kind}, amount=${row.amount} — Express ${row.docNo}`);
   reconcilePaymentStatus(ticket, user, false);
-  // ExpectedPaymentRepository.markNearestOpenReceived: within tolerance first, then nearest week, then oldest.
-  const dayGap = (week) => Math.abs(new Date(`${week}T00:00:00Z`) - new Date(`${row.docDate}T00:00:00Z`));
-  const open = mockExpectedPayments.filter((p) => p.ticketId === ticket.id && p.status === 'OPEN')
-    .sort((a, b) => (Number(mockWithinTolerance(row.amount, Number(b.amount))) - Number(mockWithinTolerance(row.amount, Number(a.amount))))
-      || dayGap(a.expectedWeek) - dayGap(b.expectedWeek) || a.id - b.id);
-  if (open[0]) Object.assign(open[0], { status: 'RECEIVED', receiptId, receiptRef: row.docNo.trim(), updatedAt: now });
+  mockApplyReceiptToExpected(ticket.id, kind, row.amount, row.docDate, receiptId, row.docNo.trim());
   return receiptId;
 }
 
@@ -13583,7 +13613,7 @@ export const api = {
       const valid = mockValidExpectedPayment(payload);
       const at = new Date().toISOString();
       const row = {
-        id: mockExpectedPaymentSeq++, ticketId: ticket.id, ...valid, status: 'OPEN', receiptId: null,
+        id: mockExpectedPaymentSeq++, ticketId: ticket.id, ...valid, status: 'OPEN', receivedAmount: 0, receiptId: null,
         receiptRef: null, createdById: user.id, createdAt: at, updatedAt: at,
       };
       mockExpectedPayments.push(row);
@@ -13591,14 +13621,14 @@ export const api = {
     },
     async update(ticketId, id, payload) {
       const user = requireSession();
-      mockRequireDealWrite(user, ticketId);
+      mockRequireActiveExpectedDeal(mockRequireDealWrite(user, ticketId));
       const row = mockRequireOpenExpected(ticketId, id);
       Object.assign(row, mockValidExpectedPayment(payload), { updatedAt: new Date().toISOString() });
       return delay({ ...row });
     },
     async cancel(ticketId, id) {
       const user = requireSession();
-      mockRequireDealWrite(user, ticketId);
+      mockRequireActiveExpectedDeal(mockRequireDealWrite(user, ticketId));
       const row = mockRequireOpenExpected(ticketId, id);
       row.status = 'CANCELLED';
       row.updatedAt = new Date().toISOString();

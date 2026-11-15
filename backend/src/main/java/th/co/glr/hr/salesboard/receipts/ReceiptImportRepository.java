@@ -194,7 +194,8 @@ public class ReceiptImportRepository {
         });
         Map<Long, List<OpenExpected>> expected = new LinkedHashMap<>();
         jdbc.query("""
-            SELECT ep.ticket_id, ep.amount, ep.expected_week, ep.kind FROM sales.expected_payment ep
+            SELECT ep.ticket_id, ep.amount - ep.received_amount, ep.expected_week, ep.kind
+              FROM sales.expected_payment ep
               JOIN sales.ticket t ON t.ticket_id = ep.ticket_id
              WHERE t.lifecycle = 'ACTIVE' AND ep.status = 'OPEN'
              ORDER BY ep.ticket_id, ep.expected_week, ep.expected_payment_id

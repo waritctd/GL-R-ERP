@@ -1748,6 +1748,59 @@ public class TicketRepository {
         return keys.getKey().longValue();
     }
 
+    /**
+     * THE one rule for what a receipt does to the deal's expected payments (spec 2026-11-15 §7.7, review M1) — called
+     * for a receipt account typed ({@code TicketService#recordPayment}, ยืนยันรับมัดจำ, ยืนยันรับชำระส่วนที่เหลือ) and
+     * for an uploaded Express one ({@code TicketService#recordExpressReceipt}) alike, so the two can never disagree.
+     *
+     * <p>The amount is added to the nearest OPEN row of the matching kind — a DEPOSIT receipt to DEPOSIT rows, a
+     * BALANCE receipt to ON_DELIVERY / BALANCE rows; nearest = expected week closest to the receipt's date, then the
+     * oldest row. The row turns RECEIVED (linking this receipt) only when its cumulative {@code received_amount}
+     * reaches its amount minus the matcher's tolerance (±1% or ±฿10, whichever is wider); otherwise it stays OPEN with
+     * the rest still expected. What a completed row does not need carries to the next nearest row. ADJUSTMENT
+     * receipts touch nothing.
+     */
+    public void applyReceiptToExpectedPayments(long ticketId, String receiptKind, BigDecimal amount,
+                                               java.time.LocalDate receiptDate, long receiptId) {
+        if (amount == null || amount.signum() <= 0 || receiptKind == null || "ADJUSTMENT".equals(receiptKind)) {
+            return;
+        }
+        List<String> kinds = "DEPOSIT".equals(receiptKind) ? List.of("DEPOSIT") : List.of("ON_DELIVERY", "BALANCE");
+        BigDecimal left = amount;
+        while (left.signum() > 0) {
+            List<Map<String, Object>> rows = jdbc.queryForList("""
+                SELECT expected_payment_id, amount, received_amount FROM sales.expected_payment
+                 WHERE ticket_id = :t AND status = 'OPEN' AND kind IN (:kinds)
+                 ORDER BY abs(expected_week - CAST(:d AS date)), expected_payment_id
+                 LIMIT 1
+                 FOR UPDATE
+                """, new MapSqlParameterSource().addValue("t", ticketId).addValue("kinds", kinds)
+                    .addValue("d", receiptDate));
+            if (rows.isEmpty()) {
+                return;
+            }
+            Map<String, Object> row = rows.get(0);
+            BigDecimal rowAmount = (BigDecimal) row.get("amount");
+            BigDecimal got = (BigDecimal) row.get("received_amount");
+            BigDecimal applied = left.min(rowAmount.subtract(got));
+            BigDecimal newGot = got.add(applied);
+            BigDecimal tolerance = rowAmount.multiply(new BigDecimal("0.01")).max(BigDecimal.TEN);
+            boolean complete = newGot.compareTo(rowAmount.subtract(tolerance)) >= 0;
+            jdbc.update("""
+                UPDATE sales.expected_payment
+                   SET received_amount = :got, status = :status, receipt_id = :receipt, updated_at = now()
+                 WHERE expected_payment_id = :id
+                """, new MapSqlParameterSource().addValue("got", newGot)
+                    .addValue("status", complete ? "RECEIVED" : "OPEN")
+                    .addValue("receipt", complete ? receiptId : null)
+                    .addValue("id", ((Number) row.get("expected_payment_id")).longValue()));
+            left = left.subtract(applied);
+            if (!complete) {
+                return;
+            }
+        }
+    }
+
     /** An uploaded Express receipt (V213): source EXPRESS, receipt_ref = the Express document number. */
     public long insertExpressReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy, Instant receivedAt,
                                      String expressDocNo, String customerName) {

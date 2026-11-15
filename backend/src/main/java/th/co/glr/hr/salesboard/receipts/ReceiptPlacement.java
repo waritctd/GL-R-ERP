@@ -31,11 +31,11 @@ public class ReceiptPlacement {
     /** Writes the receipt and marks the expected payment; returns the receipt id. */
     @Transactional
     public long place(long ticketId, ParsedReceipt row, UserPrincipal actor) {
-        long receiptId = tickets.recordExpressReceipt(ticketId, row.amount(),
+        // The expected payment is marked inside recordExpressReceipt, by the rule manual receipts use too
+        // (TicketRepository#applyReceiptToExpectedPayments).
+        return tickets.recordExpressReceipt(ticketId, row.amount(),
             ReceiptImportRepository.receivedAt(row.docDate()).toInstant(), row.docNo().trim(), row.customerName(),
             actor);
-        expected.markNearestOpenReceived(ticketId, row.amount(), row.docDate(), receiptId);
-        return receiptId;
     }
 
     /** Attaches a queued row to {@code ticketId}: locks it, places it, marks it RESOLVED — or 409 if already handled. */

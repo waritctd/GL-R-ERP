@@ -240,6 +240,19 @@ class ExpectedPaymentScopeIntegrationTest extends AbstractDealQuotationSlice2Int
     }
 
     @Test
+    void rowsOnADealThatIsNotActiveAreReadOnly() throws Exception {
+        long mine = deal(salesActor);
+        long row = create(salesActor, mine, "DEPOSIT", "5000", monday);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'DORMANT' WHERE ticket_id = :id", Map.of("id", mine));
+
+        assertThat(status(put(path(mine) + "/" + row).contentType(MediaType.APPLICATION_JSON)
+            .content(body("DEPOSIT", "1", monday)), salesActor)).isEqualTo(409);
+        assertThat(status(delete(path(mine) + "/" + row), salesActor)).isEqualTo(409);
+        assertThat(amountOf(row)).isEqualByComparingTo("5000");
+        assertThat(statusOf(row)).isEqualTo("OPEN");
+    }
+
+    @Test
     void unknownDealIs404() throws Exception {
         assertThat(status(get(path(987654321L)), salesManagerActor)).isEqualTo(404);
     }

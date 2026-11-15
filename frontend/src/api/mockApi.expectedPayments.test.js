@@ -42,9 +42,28 @@ describe('mockApi.expectedPayments', () => {
     await expect(api.expectedPayments.cancel(id, row.id)).rejects.toMatchObject({ status: 409 });
   });
 
+  it('a part payment typed by account keeps the row OPEN with the rest; the next completes it (review M1)', async () => {
+    // A deal inside account's scope (account's own worklist), planned by a sales_manager (who may write any deal).
+    await api.auth.login({ role: 'account' });
+    const { tickets } = await api.tickets.list();
+    const target = tickets.find((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE');
+    expect(target).toBeTruthy();
+    const id = target.id;
+    await api.auth.login({ role: 'sales_manager' });
+    const row = await api.expectedPayments.create(id, { kind: 'DEPOSIT', amount: 1000, expectedWeek: monday });
+    await api.auth.login({ role: 'account' });
+    await api.finance.recordPayment(id, { kind: 'DEPOSIT', amount: 400, allowOverpayment: true, note: 'ทดสอบ' });
+    let mine = (await api.expectedPayments.list(id)).find((r) => r.id === row.id);
+    expect(mine).toMatchObject({ status: 'OPEN', receivedAmount: 400 });
+    await api.finance.recordPayment(id, { kind: 'DEPOSIT', amount: 600, allowOverpayment: true, note: 'ทดสอบ' });
+    mine = (await api.expectedPayments.list(id)).find((r) => r.id === row.id);
+    expect(mine).toMatchObject({ status: 'RECEIVED', receivedAmount: 1000 });
+  });
+
   it('a new OPEN deposit this month shows in my-work cash as forecast and deposits expected', async () => {
     const { id } = await ownDealId();
-    const inMonth = monday.slice(0, 7) === bangkokTodayIso().slice(0, 7) ? monday : plusDays(monday, 7);
+    // ISO rule: the week counts in the month holding its Thursday.
+    const inMonth = plusDays(monday, 3).slice(0, 7) === bangkokTodayIso().slice(0, 7) ? monday : plusDays(monday, 7);
     const before = (await api.salesBoard.myWork()).cash;
     await api.expectedPayments.create(id, { kind: 'DEPOSIT', amount: 1234, expectedWeek: inMonth });
     const after = (await api.salesBoard.myWork()).cash;

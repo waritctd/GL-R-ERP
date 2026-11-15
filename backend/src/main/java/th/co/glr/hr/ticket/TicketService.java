@@ -1904,6 +1904,7 @@ public class TicketService {
             s.status(), s.status(),
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable + " — Express " + ref,
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
+        tickets.applyReceiptToExpectedPayments(ticketId, kind, amount, bangkokDate(receivedAt), receiptId);
         reconcilePaymentStatus(ticketId, actor, false);
         boolean settledNow = depositSettled(requireTicket(ticketId).summary());
         if (settledNow) {
@@ -1991,6 +1992,7 @@ public class TicketService {
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable
                 + (note != null ? " — " + note : ""),
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
+        tickets.applyReceiptToExpectedPayments(ticketId, kind, amount, bangkokDate(request.receivedAt()), receiptId);
         reconcilePaymentStatus(ticketId, actor, true);
         // Deposit settled (a notice alone is not money): an all-stock deal is ready to deliver.
         boolean settledNow = depositSettled(requireTicket(ticketId).summary());
@@ -2119,6 +2121,11 @@ public class TicketService {
                     TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
             }
         }
+    }
+
+    /** The Asia/Bangkok calendar date of a receipt (now when it has no time). */
+    private static java.time.LocalDate bangkokDate(Instant at) {
+        return (at == null ? Instant.now() : at).atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate();
     }
 
     private BigDecimal signedPaymentAmount(String kind, BigDecimal amount) {
