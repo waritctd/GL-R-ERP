@@ -198,7 +198,85 @@ class ImportStepUndoIntegrationTest extends AbstractPostgresIntegrationTest {
         assertRefused(() -> service.undoStep(irId, new UndoImportStepRequest(null), importUser), HttpStatus.BAD_REQUEST);
     }
 
+    // ── the two window checks, each pinned on its own (review M3) ───────────────────────────────
+
+    @Test
+    void theServiceWindowCheckAloneRefuses_onItsOwnClock_whileTheDatabaseWouldStillAccept() {
+        advance(importUser, ImportRequestStep.ORDERED);
+        service.useClock(java.time.Clock.offset(java.time.Clock.systemUTC(), java.time.Duration.ofSeconds(31)));
+        assertRefusedWith(() -> service.undoStep(irId, new UndoImportStepRequest(ImportRequestStep.ORDERED), importUser),
+            HttpStatus.CONFLICT, "เลยเวลา");
+        assertThat(currentStep()).isEqualTo(ImportRequestStep.ORDERED);
+    }
+
+    @Test
+    void theSqlWindowCheckAloneRefuses_theRepositoryUpdateMatchesNothingAfter30Seconds() {
+        advance(importUser, ImportRequestStep.ORDERED);
+        ageTheAdvance(31);
+        assertThat(stored().undoStep(irId, ImportRequestStep.ORDERED, importUser.id(), 30)).isZero();
+        assertThat(currentStep()).isEqualTo(ImportRequestStep.ORDERED);
+        // ...and inside the window the same call does restore (so the zero above is the window, not the fixture).
+        jdbc.update("UPDATE sales.import_request SET step_advanced_at = now() WHERE import_request_id = :id",
+            Map.of("id", irId));
+        assertThat(stored().undoStep(irId, ImportRequestStep.ORDERED, importUser.id(), 30)).isEqualTo(1);
+    }
+
+    @Test
+    void aLostRace_theServiceChecksPassButTheCompareAndSetMatchesNothing_is409() {
+        advance(importUser, ImportRequestStep.ORDERED);
+        ageTheAdvance(31);
+        // The service's own clock still says "inside the window", so only the guarded UPDATE can refuse.
+        service.useClock(java.time.Clock.offset(java.time.Clock.systemUTC(), java.time.Duration.ofSeconds(-60)));
+        assertRefusedWith(() -> service.undoStep(irId, new UndoImportStepRequest(ImportRequestStep.ORDERED), importUser),
+            HttpStatus.CONFLICT, "มีผู้อื่นเปลี่ยน");
+        assertThat(currentStep()).isEqualTo(ImportRequestStep.ORDERED);
+    }
+
+    @Test
+    void anAdvanceExposesWhenItsUndoWindowCloses_inServerTime() {
+        advance(importUser, ImportRequestStep.ORDERED);
+        java.time.Instant advancedAt = jdbc.queryForObject("SELECT step_advanced_at FROM sales.import_request"
+            + " WHERE import_request_id = :id", Map.of("id", irId), java.sql.Timestamp.class).toInstant();
+        assertThat(service.stepUndoUntil(irId)).isEqualTo(advancedAt.plusSeconds(30));
+        service.undoStep(irId, new UndoImportStepRequest(ImportRequestStep.ORDERED), importUser);
+        assertThat(service.stepUndoUntil(irId)).isNull();
+    }
+
+    // ── notifications after an undo (review M4) ─────────────────────────────────────────────────
+
+    @Test
+    void reAdvancingAfterAnUndoBackToContacted_doesNotTellTheRepTheImportStartedTwice() {
+        advance(importUser, ImportRequestStep.ORDERED);
+        assertThat(importStartedNotices()).isEqualTo(1);
+        service.undoStep(irId, new UndoImportStepRequest(ImportRequestStep.ORDERED), importUser);
+        // The undo itself tells the rep nothing (documented on ImportRequestService#undoStep).
+        assertThat(importStartedNotices()).isEqualTo(1);
+        advance(importUser, ImportRequestStep.ORDERED);
+        assertThat(importStartedNotices()).isEqualTo(1);
+    }
+
     // ── fixtures ────────────────────────────────────────────────────────────────────────────────
+
+    private ImportRequestRepository stored() {
+        return new ImportRequestRepository(jdbc);
+    }
+
+    private void ageTheAdvance(int seconds) {
+        jdbc.update("UPDATE sales.import_request SET step_advanced_at = now() - make_interval(secs => :s)"
+            + " WHERE import_request_id = :id", Map.of("id", irId, "s", seconds));
+    }
+
+    private int importStartedNotices() {
+        return jdbc.queryForObject("SELECT count(*) FROM hr.notification WHERE employee_id = :e"
+            + " AND type = 'IMPORT_STARTED'", Map.of("e", ownerId), Integer.class);
+    }
+
+    private static void assertRefusedWith(ThrowingCallable call, HttpStatus status, String messagePart) {
+        assertThatThrownBy(call).isInstanceOfSatisfying(ApiException.class, e -> {
+            assertThat(e.getStatus()).isEqualTo(status);
+            assertThat(e.getMessage()).contains(messagePart);
+        });
+    }
 
     private void advance(UserPrincipal who, String step) {
         service.advanceStep(irId, new AdvanceImportStepRequest(step, null, null), who);

@@ -381,24 +381,34 @@ public class ImportRequestRepository {
     }
 
     /**
-     * What an undo needs to decide (V216). {@code withinWindow} is computed by the DATABASE clock, the same clock that
-     * stamped {@code step_advanced_at}, so JVM/DB skew cannot widen or shrink the window.
+     * What an undo needs to decide (V216). {@code advancedAt} is the database's stamp of the latest advance; the
+     * service compares it with its own clock, and {@link #undoStep}'s guarded UPDATE repeats the window against the
+     * database clock: two independent checks (review M3).
      */
     public record StepUndoState(String status, String importStep, Long advancedById, String undoFrom,
-                                boolean withinWindow) {}
+                                java.time.Instant advancedAt) {}
 
-    public java.util.Optional<StepUndoState> findStepUndoState(long id, int windowSeconds) {
+    public java.util.Optional<StepUndoState> findStepUndoState(long id) {
         return jdbc.query("""
-            SELECT status, import_step, import_step_by_id, step_undo_from,
-                   (step_advanced_at IS NOT NULL
-                    AND step_advanced_at >= now() - make_interval(secs => :w)) AS within_window
+            SELECT status, import_step, import_step_by_id, step_undo_from, step_advanced_at
               FROM sales.import_request WHERE import_request_id = :id
-            """, new MapSqlParameterSource("id", id).addValue("w", windowSeconds), (rs, n) -> {
+            """, new MapSqlParameterSource("id", id), (rs, n) -> {
                 long by = rs.getLong("import_step_by_id");
                 Long advancedBy = rs.wasNull() ? null : by;
+                java.sql.Timestamp at = rs.getTimestamp("step_advanced_at");
                 return new StepUndoState(rs.getString("status"), rs.getString("import_step"), advancedBy,
-                    rs.getString("step_undo_from"), rs.getBoolean("within_window"));
+                    rs.getString("step_undo_from"), at == null ? null : at.toInstant());
             }).stream().findFirst();
+    }
+
+    /** Whether the rep was already told this deal's import started (TicketEventKind.IMPORT_STARTED, review M4): an
+     * undo back to CONTACTED followed by a re-advance must not tell them twice. */
+    public boolean importStartedNoticeSent(long ticketId, long repEmployeeId) {
+        return Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM hr.notification
+                            WHERE employee_id = :e AND type = 'IMPORT_STARTED' AND link = :link)
+            """, new MapSqlParameterSource("e", repEmployeeId).addValue("link", "/tickets/" + ticketId),
+            Boolean.class));
     }
 
     /**

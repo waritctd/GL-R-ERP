@@ -287,7 +287,9 @@ describe('mockApi storedImportRequests.undoStep — the 30-second undo of an adv
   it('restores the step the actor’s own advance replaced, once; another user 403; after a later advance 409', async () => {
     const row = await issuedRow();
     expect(row.importStep).toBe('CONTACTED');
-    await api.storedImportRequests.advanceStep(row.id, { targetStep: 'ORDERED' });
+    const advanced = await api.storedImportRequests.advanceStep(row.id, { targetStep: 'ORDERED' });
+    // ImportRequestController#advanceStep: the answer carries when the undo window closes (server time).
+    expect(Date.parse(advanced.undoUntil) - Date.now()).toBeGreaterThan(25_000);
     const { importRequest } = await api.storedImportRequests.undoStep(row.id, { expectedStep: 'ORDERED' });
     expect(importRequest.importStep).toBe('CONTACTED');
     await expect(api.storedImportRequests.undoStep(row.id, { expectedStep: 'CONTACTED' })).rejects.toMatchObject({ status: 409 });

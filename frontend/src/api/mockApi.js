@@ -13122,7 +13122,8 @@ export const api = {
           applyImportRequestRollupMock(ticket, user);
         }
       }
-      return delay({ importRequest: mockImportRequestDto(row) });
+      // ImportRequestController#advanceStep: also says when the 30 s undo window closes (server time).
+      return delay({ importRequest: mockImportRequestDto(row), undoUntil: new Date(row.stepUndo.advancedAt + 30_000).toISOString() });
     },
     // Mirrors ImportRequestService#undoStep (V216): advance's role gate, actor-only, the step it set, within 30 s,
     // one level, never RECEIVED. The undo is logged as IMPORT_STEP_ADVANCED with a เลิกทำ message.

@@ -191,6 +191,35 @@ describe('ImportFulfilmentPage (per-factory, stored aggregate)', () => {
       expect(api.storedImportRequests.undoStep).not.toHaveBeenCalled();
     });
 
+    it('counts down to the server’s undoUntil, not 30 s from the client clock', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      api.storedImportRequests.advanceStep.mockResolvedValue({
+        importRequest: row({ importStep: 'PICKED_UP' }), undoUntil: new Date(Date.now() + 10_000).toISOString(),
+      });
+      renderPage();
+      const card = await screen.findByTestId('fulfilment-deal');
+      fireEvent.click(within(card).getByTestId('advance-1'));
+      await screen.findByTestId('step-undo-snackbar');
+      await vi.advanceTimersByTimeAsync(11_000);
+      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
+    });
+
+    it('is announced politely, takes focus on its เลิกทำ, and gives focus back when it closes', async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      renderPage();
+      const card = await screen.findByTestId('fulfilment-deal');
+      const advanceButton = within(card).getByTestId('advance-1');
+      advanceButton.focus();
+      fireEvent.click(advanceButton);
+      const snack = await screen.findByTestId('step-undo-snackbar');
+      expect(snack.getAttribute('role')).toBe('status');
+      expect(snack.getAttribute('aria-live')).toBe('polite');
+      await waitFor(() => expect(document.activeElement).toBe(within(snack).getByRole('button', { name: 'เลิกทำ' })));
+      await vi.advanceTimersByTimeAsync(31_000);
+      await waitFor(() => expect(screen.queryByTestId('step-undo-snackbar')).toBeNull());
+      expect(document.activeElement).toBe(within(screen.getByTestId('fulfilment-deal')).getByTestId('advance-1'));
+    });
+
     it('a refused undo (window passed / step moved) says so in a toast', async () => {
       api.storedImportRequests.undoStep.mockRejectedValue(new Error('เลิกทำไม่ได้แล้ว'));
       const { showToast } = renderPage();

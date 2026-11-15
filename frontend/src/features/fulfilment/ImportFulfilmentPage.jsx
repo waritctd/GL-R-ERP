@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -22,10 +22,15 @@ import { IMPORT_STEPS, importStepMeta } from '../importProgress/importSteps.js';
 // the deal up, which the undo endpoint refuses.
 export const STEP_UNDO_WINDOW_MS = 30_000;
 
+// Announced politely (role=status, aria-live) and focused on its เลิกทำ when it appears, so a keyboard or
+// screen-reader user can reach the undo inside its window; the page hands focus back when it closes.
 function StepUndoSnackbar({ undo, busy, onUndo }) {
+  const buttonRef = useRef(null);
+  useEffect(() => { buttonRef.current?.focus(); }, [undo.key]);
   return (
     <div
       role="status"
+      aria-live="polite"
       data-testid="step-undo-snackbar"
       className="fixed inset-x-4 bottom-4 z-40 mx-auto flex max-w-xl flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-md bg-text px-4 py-3 text-sm text-surface shadow-lg"
     >
@@ -33,6 +38,7 @@ function StepUndoSnackbar({ undo, busy, onUndo }) {
         เลื่อนเป็น “{undo.label}”{undo.docNumber ? ` · ${undo.docNumber}` : ''}
       </span>
       <button
+        ref={buttonRef}
         type="button"
         disabled={busy}
         onClick={onUndo}
@@ -151,10 +157,22 @@ export function ImportFulfilmentPage({ user, showToast }) {
   const [emailRow, setEmailRow] = useState(null);
   // The latest advance that can still be undone: { rowId, ticketId, targetStep, label, docNumber, key }.
   const [undo, setUndo] = useState(null);
+  // Closes when the SERVER's window does: the advance answers with undoUntil (server time, review LOW); the 30 s
+  // constant is only the fallback for a response without it.
   useEffect(() => {
     if (!undo) return undefined;
-    const timer = setTimeout(() => setUndo((cur) => (cur?.key === undo.key ? null : cur)), STEP_UNDO_WINDOW_MS);
+    const until = undo.undoUntil ? Date.parse(undo.undoUntil) : NaN;
+    const ms = Number.isFinite(until) ? Math.max(0, until - Date.now()) : STEP_UNDO_WINDOW_MS;
+    const timer = setTimeout(() => setUndo((cur) => (cur?.key === undo.key ? null : cur)), ms);
     return () => clearTimeout(timer);
+  }, [undo]);
+  // Focus goes back where it was before the snackbar took it (the advance button), if that is still on the page.
+  const focusBeforeUndo = useRef(null);
+  const closingUndo = useRef(false);
+  useEffect(() => {
+    if (undo) { closingUndo.current = true; return; }
+    if (closingUndo.current && focusBeforeUndo.current?.isConnected) focusBeforeUndo.current.focus();
+    closingUndo.current = false;
   }, [undo]);
   // Field names MUST be emailTo/emailSubject/emailBody, matching Java's UpdateEmailDraftRequest
   // exactly — see ImportRequestFactoryCard.jsx's comment on the failure mode (`to`/`subject`/`body`
@@ -213,12 +231,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
     // deal: TicketService#applyImportRequestRollup (backend/.../TicketService.java ~942-948)
     // writes only the GOODS_RECEIVED EVENT for that status, never fulfillment_status itself. Only
     // worth taking when the row could have completed the deal (targetStep RECEIVED).
-    onSuccess: async (_data, { rowId, ticketId, targetStep, docNumber }) => {
+    onSuccess: async (data, { rowId, ticketId, targetStep, docNumber, focusFrom }) => {
       invalidateAfterAdvance(ticketId);
       if (targetStep !== 'RECEIVED') {
         // The snackbar IS the confirmation here; it replaces the toast.
+        focusBeforeUndo.current = focusFrom ?? null;
         setUndo({
-          rowId, ticketId, targetStep, docNumber,
+          rowId, ticketId, targetStep, docNumber, undoUntil: data?.undoUntil ?? null,
           label: importStepMeta(targetStep)?.label ?? targetStep,
           key: `${rowId}:${targetStep}:${Date.now()}`,
         });
@@ -564,6 +583,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
                           targetStep,
                           ticketId: deal.ticketId,
                           docNumber: row.docNumber,
+                          focusFrom: document.activeElement,
                         })}
                         onOpenEmail={editable ? openEmail : undefined}
                       />
