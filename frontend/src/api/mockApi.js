@@ -4281,7 +4281,8 @@ function mockFillPartyNameIfBlank(ticket, field, name) {
  * (#mockStageForUnspecifiedRecipient). Names come only from a source that names that party (TicketRepository
  * #partyNameFromQuotation), into a blank field only:
  *   - designerName — the mockDesigners entry behind the quotation's D.Co. (unitCode), for ANY recipient;
- *   - buyerName — the customer of the quotation's BUYER-role party, for a BUYER or UNSPECIFIED recipient;
+ *   - buyerName — the customer of the quotation's BUYER-role party, for a BUYER recipient ONLY: an UNSPECIFIED one's
+ *     BUYER party is the bill-to customer (V204), never a name source;
  *   - ownerName — never. The bill-to customerName is never used for any of them.
  */
 function mockApplyApprovedQuotation(ticket, row, user) {
@@ -4295,7 +4296,7 @@ function mockApplyApprovedQuotation(ticket, row, user) {
   }
   const designer = mockDesigners.find((d) => d.code === String(row.unitCode ?? '').trim());
   mockFillPartyNameIfBlank(ticket, 'designerName', designer?.name);
-  if (recipientType === 'BUYER' || !MOCK_PARTY_NAME_RECIPIENTS.includes(recipientType)) {
+  if (recipientType === 'BUYER') {
     const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId && p.role === 'BUYER') : null;
     const customer = party ? mockCustomers.find((c) => c.id === party.customerId) : null;
     mockFillPartyNameIfBlank(ticket, 'buyerName', customer?.name);

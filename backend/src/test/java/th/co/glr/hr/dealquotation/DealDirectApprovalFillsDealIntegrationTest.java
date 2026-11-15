@@ -200,10 +200,11 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
             .containsEntry("owner_name", null);
     }
 
-    /** Round-2 N3 (+N1): an UNSPECIFIED quotation fills the designer from its D.Co. and, read as a buyer quotation,
-     * the bidder from its BUYER party. Never the bill-to customer, never owner_name. */
+    /** Final review: an UNSPECIFIED quotation's BUYER party is the bill-to customer (V204), never a name source — it
+     * fills the designer from its D.Co. and leaves buyer_name blank, even when its party is a real sibling bidder
+     * (an UNSPECIFIED document cannot be told apart from the bill-to one). Never owner_name either. */
     @Test
-    void unspecifiedQuotation_fillsDesignerFromItsDCoAndBuyerFromItsBuyerParty() {
+    void unspecifiedQuotation_fillsDesignerFromItsDCo_butNeverBuyerName() {
         long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
         DealQuotationDto created = unspecified(ticket);
         attachToBuyerParty(ticket, created.id());
@@ -211,8 +212,10 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
 
         approve(created);
 
-        assertThat(parties(ticket)).containsEntry("designer_name", DESIGNER_NAME).containsEntry("buyer_name", BIDDER_NAME)
+        assertThat(parties(ticket)).containsEntry("designer_name", DESIGNER_NAME).containsEntry("buyer_name", null)
             .containsEntry("owner_name", null);
+        // It still advances like a BUYER quotation (the stage rule is unchanged).
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
     @Test

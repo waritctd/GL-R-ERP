@@ -2612,7 +2612,7 @@ public class TicketService {
     /**
      * A quotation that reached the customer (DEAL_DIRECT approval, PRICING_REQUEST-origin issue) fills its deal
      * (spec 2026-11-15 §7.2, corrected by review H1/H2). The stage advances forward-only onto the recipient's stage,
-     * or for an UNSPECIFIED recipient onto {@link #stageForUnspecifiedRecipient} (like a BUYER one). A party name is
+     * or for an UNSPECIFIED recipient onto {@link #stageForUnspecifiedRecipient} (like a BUYER one, though it fills no buyer_name). A party name is
      * written only from a source that names that party ({@link TicketRepository#partyNameFromQuotation}) and only into
      * a blank column — designer_name from the D.Co. for any recipient (round-2 N3):
      * a name the rep typed is never overwritten, and the bill-to customer is never taken for the designer. A
@@ -2632,12 +2632,13 @@ public class TicketService {
             }
         }
         // Round-2 N3: the quotation's D.Co. (unit_code) names the project's designer whoever the document is addressed
-        // to, so designer_name fills from the directory for ANY recipient. buyer_name only for a BUYER document or an
-        // UNSPECIFIED one (read as a buyer's, as above); partyNameFromQuotation's BUYER-role join keeps it a bidder.
+        // to, so designer_name fills from the directory for ANY recipient. buyer_name only for a document ADDRESSED to
+        // a buyer: an UNSPECIFIED one advances like a buyer's (above) but names nobody, because the BUYER party V204
+        // gave it is the deal's bill-to customer, and the bill-to is never a name source (final review).
         // owner_name has no real source and is never filled.
         tickets.partyNameFromQuotation(quotationId, QuotationRecipient.DESIGNER)
             .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, QuotationRecipient.DESIGNER, name));
-        if (QuotationRecipient.BUYER.equals(recipientType) || !QuotationRecipient.isAddressable(recipientType)) {
+        if (QuotationRecipient.BUYER.equals(recipientType)) {
             tickets.partyNameFromQuotation(quotationId, QuotationRecipient.BUYER)
                 .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, QuotationRecipient.BUYER, name));
         }
