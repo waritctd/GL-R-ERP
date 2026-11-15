@@ -141,6 +141,13 @@ export const API_ROUTES = {
     myWork: '/api/sales/my-work',
     teamOverview: '/api/sales/team-overview',
   },
+  salesVisits: {
+    list: '/api/sales/visits',
+    team: '/api/sales/visits/team',
+    create: '/api/sales/visits',
+    done: (id) => `/api/sales/visits/${id}/done`,
+    cancel: (id) => `/api/sales/visits/${id}/cancel`,
+  },
   tickets: {
     list: '/api/tickets',
     create: '/api/tickets',

@@ -8,6 +8,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -44,13 +45,17 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
     private final ObjectMapper json = new ObjectMapper();
     private MockMvc mvc;
+    private LocalDate today;
 
     @BeforeEach
     void wireHttp() {
         SessionContext sessions = new SessionContext();
         QuietRule quietRule = new QuietRule(jdbc, 14);
+        VisitService visits = new VisitService(new VisitRepository(jdbc), ticketService,
+            java.time.Clock.system(VisitService.BANGKOK));
+        today = LocalDate.now(java.time.Clock.system(VisitService.BANGKOK));
         SalesBoardService board = new SalesBoardService(new SalesBoardRepository(jdbc, quietRule), quietRule,
-            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), visits);
         // The base fixtures label the sales division "SALES"; the real role derivation reads "SA".
         jdbc.update("UPDATE hr.division SET source_code = 'SA' WHERE source_code = 'SALES'", Map.of());
         mvc = MockMvcBuilders
@@ -357,6 +362,69 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
         assertThat(rep(team, salesManagerActor.id()).get("role").asText()).isEqualTo("sales_manager");
         assertThat(rep(team, salesActor.id()).get("role").asText()).isEqualTo("sales");
+    }
+
+    // ── visits this week (slice 2) ───────────────────────────────────────────
+
+    @Test
+    void myWorkCarriesOnlyMyOwnVisitsThisWeek() throws Exception {
+        LocalDate monday = VisitService.weekStart(today);
+        long mineMonday = visit(salesActor, monday, "PLANNED");
+        long mineSunday = visit(salesActor, monday.plusDays(6), "DONE");
+        long mineNextWeek = visit(salesActor, monday.plusDays(7), "PLANNED");
+        long mineLastWeek = visit(salesActor, monday.minusDays(1), "PLANNED");
+        long theirs = visit(otherSalesActor, today, "PLANNED");
+
+        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
+
+        assertThat(visitIds(work.get("visitsThisWeek"))).containsExactly(mineMonday, mineSunday)
+            .doesNotContain(mineNextWeek, mineLastWeek, theirs);
+    }
+
+    @Test
+    void teamOverviewCarriesEveryRepsVisitsAndPerRepCounts() throws Exception {
+        deal(salesActor);
+        LocalDate monday = VisitService.weekStart(today);
+        visit(salesActor, monday, "DONE");
+        visit(salesActor, monday.plusDays(1), "PLANNED");
+        visit(salesActor, monday.plusDays(2), "CANCELLED");
+        visit(salesActor, monday.plusDays(7), "DONE"); // next week: not counted
+        long noDealsVisit = visit(otherSalesActor, monday.plusDays(3), "PLANNED");
+
+        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
+
+        JsonNode a = rep(team, salesActor.id());
+        assertThat(a.get("visitsDone").asInt()).isEqualTo(1);
+        assertThat(a.get("visitsPlanned").asInt()).as("booked and not cancelled, done included").isEqualTo(2);
+        // A rep with visits but no open deal still gets a row, so the manager sees them.
+        JsonNode b = rep(team, otherSalesActor.id());
+        assertThat(b.get("openDeals").asInt()).isZero();
+        assertThat(b.get("visitsPlanned").asInt()).isEqualTo(1);
+        assertThat(visitIds(team.get("teamVisitsThisWeek"))).hasSize(4).contains(noDealsVisit);
+    }
+
+    @Test
+    void aRepWithNeitherDealsNorVisitsHasNoRow() throws Exception {
+        deal(salesActor);
+
+        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
+
+        assertThat(team.get("reps")).hasSize(1);
+        assertThat(team.get("teamVisitsThisWeek")).isEmpty();
+    }
+
+    private long visit(UserPrincipal owner, LocalDate date, String status) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.visit (owner_id, contact_name, planned_date, status, done_at)
+            VALUES (:owner, 'ลูกค้า', :date, :status, CASE WHEN :status = 'DONE' THEN now() END)
+            RETURNING visit_id
+            """, Map.of("owner", owner.id(), "date", date, "status", status), Long.class);
+    }
+
+    private static List<Long> visitIds(JsonNode visits) {
+        List<Long> out = new ArrayList<>();
+        visits.forEach(v -> out.add(v.get("id").asLong()));
+        return out;
     }
 
     /** A copy of {@code sourceId} on the same ticket with the given status, number suffix and approval time. */

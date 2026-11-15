@@ -65,9 +65,10 @@ function CallModal({ deal, submitting, onClose, onSubmit }) {
 
 /**
  * ควรตามต่อ — the rep's quiet deals as served (SalesBoardService ranks them by days × value, max 5). One tap each:
- * โทรแล้ว logs a CALL activity (which clears the quiet clock), ปิดดีลนี้ hands off to the existing mark-lost flow.
+ * โทรแล้ว logs a CALL activity (which clears the quiet clock), นัดเข้าพบ opens the plan-visit dialog on this deal (the
+ * visit clears the clock once it is ticked done), ปิดดีลนี้ hands off to the existing mark-lost flow.
  */
-export function FollowUpList({ deals, quietDays, onLogCall, onCloseDeal, loggingCall }) {
+export function FollowUpList({ deals, quietDays, onLogCall, onBookVisit, onCloseDeal, loggingCall }) {
   const [calling, setCalling] = useState(null);
 
   if (deals.length === 0) {
@@ -116,6 +117,10 @@ export function FollowUpList({ deals, quietDays, onLogCall, onCloseDeal, logging
               <Button type="button" size="sm" variant="secondary" onClick={() => setCalling(deal)}>
                 <Icon name="phone" size={14} />
                 โทรแล้ว
+              </Button>
+              <Button type="button" size="sm" variant="secondary" onClick={() => onBookVisit(deal)}>
+                <Icon name="calendar" size={14} />
+                นัดเข้าพบ
               </Button>
               <Button type="button" size="sm" variant="secondary" onClick={() => onCloseDeal(deal)}>ปิดดีลนี้</Button>
             </div>

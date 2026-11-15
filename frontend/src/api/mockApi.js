@@ -30,6 +30,7 @@ import {
   lastTouchedMs as mockLastTouchedMs,
   repCodeOf as mockRepCodeOf,
 } from '../features/salesBoard/quietRule.js';
+import { weekStartIso as mockWeekStartIso } from '../features/salesBoard/visitWeek.js';
 // Deal tracking: win% defaults, the activity-kind taxonomy, and the stage-advance-gate readiness
 // check, shared with the UI so the mock's numbers/gate can't drift from
 // WinProbabilityDefaults.java / DealActivityKind.java / TicketService.updateStage.
@@ -8195,6 +8196,118 @@ function mockBoardDeals() {
     .map(({ lastTouchedMs, ...deal }) => deal);
 }
 
+// ── sales visits (mirrors VisitService / VisitRepository, V211 sales.visit) ──
+// Seeded relative to the current Bangkok week so the screens have something to show; invented names only.
+let mockVisitSeq = 9001;
+const mockVisits = [];
+
+function mockTodayIso() {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Bangkok', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date());
+  const get = (type) => parts.find((p) => p.type === type).value;
+  return `${get('year')}-${get('month')}-${get('day')}`;
+}
+
+function mockAddDaysIso(iso, n) {
+  const d = new Date(`${iso}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function seedMockVisits() {
+  const monday = mockWeekStartIso(mockTodayIso());
+  const rows = [
+    [6, 0, '10:00', 'เทพสตูดิโอ ดีไซน์', 'DONE', 'นำเสนอรุ่นใหม่'],
+    [6, 1, null, 'อรุณ อาร์คิเทค', 'DONE', 'เทียบสเปค โครงการคอนโด'],
+    [6, 3, '14:00', 'Linea Interior', 'PLANNED', 'ตามใบเสนอราคา'],
+    [6, 4, null, 'ก้าวหน้า คอนสตรัคชั่น', 'PLANNED', 'ดูหน้างาน'],
+    [12, 0, null, 'บ้านสวน ดีไซน์', 'DONE', null],
+    [12, 1, '11:00', 'Studio Nomad', 'CANCELLED', null],
+    [12, 2, null, 'Prompt Interior', 'PLANNED', null],
+  ];
+  for (const [ownerId, offset, time, contactName, status, note] of rows) {
+    const plannedDate = mockAddDaysIso(monday, offset);
+    mockVisits.push({
+      id: mockVisitSeq++, ownerId, ticketId: null, contactName, plannedDate, plannedTime: time, status,
+      doneAt: status === 'DONE' ? `${plannedDate}T09:00:00.000Z` : null, note,
+    });
+  }
+}
+seedMockVisits();
+
+/** VisitRepository's SELECT … JOIN hr.employee LEFT JOIN sales.ticket, for one row. */
+function mockVisitDto(v) {
+  const ticket = v.ticketId == null ? null : db.tickets.find((t) => t.id === v.ticketId);
+  return {
+    id: v.id,
+    ownerId: v.ownerId,
+    ownerName: db.users.find((u) => u.id === v.ownerId)?.name ?? null,
+    ticketId: v.ticketId,
+    ticketTitle: ticket ? ((ticket.title ?? '').trim() || ticket.customerName || null) : null,
+    contactName: v.contactName,
+    plannedDate: v.plannedDate,
+    plannedTime: v.plannedTime,
+    status: v.status,
+    doneAt: v.doneAt,
+    note: v.note,
+  };
+}
+
+/** VisitRepository's ORDER BY v.planned_date, v.planned_time NULLS LAST, v.visit_id over [from, to]. */
+function mockVisitsIn(from, to, ownerId = null) {
+  return mockVisits
+    .filter((v) => v.plannedDate >= from && v.plannedDate <= to && (ownerId == null || v.ownerId === ownerId))
+    .sort((a, b) => a.plannedDate.localeCompare(b.plannedDate)
+      || (a.plannedTime == null) - (b.plannedTime == null)
+      || String(a.plannedTime ?? '').localeCompare(String(b.plannedTime ?? ''))
+      || a.id - b.id)
+    .map(mockVisitDto);
+}
+
+/** VisitService.requireRange: inclusive, at most 31 days, to not before from. */
+function mockRequireVisitRange(from, to) {
+  const iso = /^\d{4}-\d{2}-\d{2}$/;
+  if (!iso.test(from ?? '') || !iso.test(to ?? '') || to < from) fail('ช่วงวันที่ไม่ถูกต้อง', 400);
+  const days = (Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000;
+  if (days >= 31) fail('ดูได้ครั้งละไม่เกิน 31 วัน', 400);
+}
+
+const MOCK_VISIT_ROLES = ['sales', 'sales_manager', 'ceo'];
+const MOCK_VISIT_TEAM_ROLES = ['sales_manager', 'ceo'];
+
+/** VisitService.requireWritable: 404 when missing; the owner, or sales_manager / ceo. */
+function mockWritableVisit(user, id) {
+  const visit = mockVisits.find((v) => v.id === Number(id));
+  if (!visit) fail('ไม่พบนัดเข้าพบนี้', 404);
+  if (visit.ownerId !== user.id && !MOCK_VISIT_TEAM_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return visit;
+}
+
+function mockVisitNotPlanned(visit) {
+  fail(`นัดนี้${visit.status === 'DONE' ? 'บันทึกว่าไปแล้ว' : 'ยกเลิกแล้ว'} จึงเปลี่ยนไม่ได้`, 409);
+}
+
+/** TicketService.addActivity(SITE_VISIT, today) — the one path that resets the quiet clock. */
+function mockLogSiteVisit(user, ticketId, note) {
+  mockDealActivities.push({
+    id: mockDealActivitySeq++,
+    ticketId,
+    activityDate: mockTodayIso(),
+    kind: 'SITE_VISIT',
+    note: note ?? null,
+    createdById: user.id,
+    createdByName: user.name,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+/** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
+function mockVisitsThisWeek(ownerId = null) {
+  const monday = mockWeekStartIso(mockTodayIso());
+  return mockVisitsIn(monday, mockAddDaysIso(monday, 6), ownerId);
+}
+
 /** SalesBoardService's ranking: quiet only, daysQuiet × value (null = 0) desc, then daysQuiet desc. */
 function mockRankQuiet(deals) {
   const score = (d) => d.daysQuiet * Number(d.value ?? 0);
@@ -12969,7 +13082,10 @@ export const api = {
       const user = requireSession();
       if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const board = mockBoardDeals().filter((d) => d.ownerId === user.id);
-      return delay({ followUp: mockRankQuiet(board).slice(0, 5), board, quietDays: MOCK_QUIET_DAYS });
+      return delay({
+        followUp: mockRankQuiet(board).slice(0, 5), board, quietDays: MOCK_QUIET_DAYS,
+        visitsThisWeek: mockVisitsThisWeek(user.id),
+      });
     },
     async teamOverview() {
       const user = requireSession();
@@ -12993,8 +13109,96 @@ export const api = {
         if (!row.lastUpdateAt || d.lastTouchedAt > row.lastUpdateAt) row.lastUpdateAt = d.lastTouchedAt;
         byRep.set(d.ownerId, row);
       }
+      // SalesBoardService.repRows: an owner with visits this week but no open deal still gets a row (0 deals).
+      const teamVisitsThisWeek = mockVisitsThisWeek();
+      for (const v of teamVisitsThisWeek) {
+        if (!byRep.has(v.ownerId)) {
+          byRep.set(v.ownerId, {
+            employeeId: v.ownerId, name: v.ownerName,
+            role: db.users.find((u) => u.id === v.ownerId)?.role ?? null,
+            openDeals: 0, openValue: 0, otherCurrencyValues: {}, quietDeals: 0, lastUpdateAt: null,
+          });
+        }
+      }
+      for (const row of byRep.values()) {
+        const own = teamVisitsThisWeek.filter((v) => v.ownerId === row.employeeId && v.status !== 'CANCELLED');
+        row.visitsDone = own.filter((v) => v.status === 'DONE').length;
+        row.visitsPlanned = own.length;
+      }
       const reps = [...byRep.values()].sort((a, b) => b.openValue - a.openValue || a.employeeId - b.employeeId);
-      return delay({ reps, stale: mockRankQuiet(deals).slice(0, 20), quietDays: MOCK_QUIET_DAYS });
+      return delay({
+        reps, stale: mockRankQuiet(deals).slice(0, 20), quietDays: MOCK_QUIET_DAYS, teamVisitsThisWeek,
+      });
+    },
+  },
+  // Mirrors VisitController / VisitService / VisitRepository (salesboard/). AUTHZ NOTE: these gates approximate the
+  // Java service and are NOT evidence — VisitScopeIntegrationTest is. list = the caller's own visits; team =
+  // sales_manager / ceo; a visit on a deal needs TicketService#requireDealWriteAccess (mockCanDealOwnership);
+  // done / cancel = the owner or sales_manager / ceo, only from PLANNED.
+  salesVisits: {
+    async list({ from, to }) {
+      const user = requireSession();
+      if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      mockRequireVisitRange(from, to);
+      return delay(mockVisitsIn(from, to, user.id));
+    },
+    async team({ from, to }) {
+      const user = requireSession();
+      if (!MOCK_VISIT_TEAM_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      mockRequireVisitRange(from, to);
+      return delay(mockVisitsIn(from, to));
+    },
+    async create(payload) {
+      const user = requireSession();
+      if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const contactName = (payload?.contactName ?? '').trim();
+      if (!contactName) fail('กรุณาระบุว่าพบใคร', 400);
+      if (contactName.length > 200) fail('ชื่อผู้ที่พบยาวเกิน 200 ตัวอักษร', 400);
+      if (!payload?.plannedDate) fail('กรุณาระบุวันที่', 400);
+      const done = payload.done === true;
+      if (done && payload.plannedDate !== mockTodayIso()) {
+        fail('บันทึกเข้าพบได้เฉพาะวันนี้ — นัดล่วงหน้าให้ใช้ “นัดเข้าพบ”', 400);
+      }
+      const note = (payload.note ?? '').trim() || null;
+      const ticketId = payload.ticketId == null || payload.ticketId === '' ? null : Number(payload.ticketId);
+      if (ticketId != null) {
+        const ticket = db.tickets.find((t) => t.id === ticketId);
+        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      const visit = {
+        id: mockVisitSeq++, ownerId: user.id, ticketId, contactName, plannedDate: payload.plannedDate,
+        plannedTime: payload.plannedTime || null, status: done ? 'DONE' : 'PLANNED',
+        doneAt: done ? new Date().toISOString() : null, note,
+      };
+      mockVisits.push(visit);
+      if (done && ticketId != null) mockLogSiteVisit(user, ticketId, note);
+      return delay(mockVisitDto(visit));
+    },
+    async done(id, payload = {}) {
+      const user = requireSession();
+      if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const visit = mockWritableVisit(user, id);
+      if (visit.ticketId != null) {
+        const ticket = db.tickets.find((t) => t.id === visit.ticketId);
+        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      }
+      if (visit.status !== 'PLANNED') mockVisitNotPlanned(visit);
+      const note = (payload?.note ?? '').trim() || null;
+      visit.status = 'DONE';
+      visit.doneAt = new Date().toISOString();
+      if (note) visit.note = note;
+      if (visit.ticketId != null) mockLogSiteVisit(user, visit.ticketId, visit.note);
+      return delay(mockVisitDto(visit));
+    },
+    async cancel(id) {
+      const user = requireSession();
+      if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const visit = mockWritableVisit(user, id);
+      if (visit.status !== 'PLANNED') mockVisitNotPlanned(visit);
+      visit.status = 'CANCELLED';
+      return delay(mockVisitDto(visit));
     },
   },
 

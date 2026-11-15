@@ -31,12 +31,14 @@ class SalesBoardServiceTest {
 
     private SalesBoardRepository repository;
     private SalesBoardService service;
+    private VisitService visits;
 
     @BeforeEach
     void wire() {
         repository = mock(SalesBoardRepository.class);
+        visits = mock(VisitService.class);
         service = new SalesBoardService(repository, new QuietRule(null, 14),
-            mock(th.co.glr.hr.auth.EmployeeAuthRepository.class));
+            mock(th.co.glr.hr.auth.EmployeeAuthRepository.class), visits);
     }
 
     @ParameterizedTest
@@ -56,6 +58,22 @@ class SalesBoardServiceTest {
     void myWork_refusesEveryNonSalesRole(String role) {
         assertForbidden(() -> service.myWork(actor(7L, role)));
         verify(repository, never()).activeDealsOwnedBy(anyLong());
+        org.mockito.Mockito.verifyNoInteractions(visits);
+    }
+
+    @Test
+    void myWork_takesTheCallersOwnVisitsThisWeek_teamTakesTheTeams() {
+        UserPrincipal rep = actor(42L, "sales");
+        UserPrincipal manager = actor(43L, "sales_manager");
+        when(repository.activeDealsOwnedBy(42L)).thenReturn(List.of());
+        when(repository.activeDealsAllReps()).thenReturn(List.of());
+
+        service.myWork(rep);
+        service.teamOverview(manager);
+
+        verify(visits).ownThisWeek(rep);
+        verify(visits).teamThisWeek(manager);
+        verify(visits, never()).teamThisWeek(rep);
     }
 
     @ParameterizedTest
