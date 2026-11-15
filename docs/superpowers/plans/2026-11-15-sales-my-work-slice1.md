@@ -288,3 +288,45 @@ slice. Remove the old `฿0.00` team-sales tile and the blanket "ต้องต
   §7.4 items 1 (partial), 2, 3 → T4/T7 (item 4 and cash/visit tiles deferred); §7.5 → T2; §9 readiness gate —
   `autoAdvanceStage` already bypasses it, nothing to change; lost-reason kept → T6.
 - Not in this slice: visits, expected payments, Express upload, import, CEO-settings UI for the threshold.
+
+---
+
+## PR notes (final review)
+
+State these in the PR body; each is an intended contract change, not an accident (CLAUDE.md, sales flow redesign).
+
+**Merge with a MERGE COMMIT, not a squash.** Three child branches (`feat/sales-visits`, `feat/sales-pipeline-import`
+and, through visits, `feat/sales-cash`) are stacked on this one; squashing orphans them. The history also carries
+intermediate commits that are red on their own (see "Bisect" below), which a squash would hide and a rebase-merge
+would not make any safer.
+
+**Endpoints (new, additive)**
+- `GET /api/sales/my-work` — `sales`, `sales_manager`, `ceo`; the caller's own ACTIVE deals only.
+- `GET /api/sales/team-overview` — `sales_manager`, `ceo`; every rep. Enforced in `SalesBoardService`, proven by the
+  real-DB `SalesBoardScopeIntegrationTest` (not by the mock).
+- `PUT /api/tickets/{id}/tracking` accepts `expectedQuarter` (`YYYY-Qn`).
+- `TicketSummaryDto.stale` now means the 14-day QuietRule (was the 7-day `isStale`); no field added or removed.
+
+**Schema**
+- V209: `sales.ticket.expected_quarter` (nullable, CHECK `YYYY-Qn`).
+- V210: DATA migration, needs the owner's deploy approval. Moves ACTIVE deals whose latest customer-facing quotation is
+  UNSPECIFIED to QUOTE_BUYER (else nearest on-route stage before it), forward-only, skipping deals with a manual
+  backward move; writes a STAGE_CHANGED event stamped at the approval time. Expected volume on production:
+  123 deals moved and 100 designer names filled from the designer directory. Owner approval of the rule: 2026-11-15.
+  V210 is unmerged and applied only on test databases, so it was edited in place during review (including the
+  tested two-statement rollback in its header). `buyer_name` is deliberately never written: the BUYER party V204
+  created for UNSPECIFIED quotations is the bill-to customer, never a name source.
+
+**Workflow**
+- UNSPECIFIED-recipient approvals/issues advance like BUYER (QUOTE_BUYER) — an ongoing rule, not only the backfill.
+- Quiet rule 7 -> 14 days (`app.sales.quiet-days`, default 14); the old 7-day `isStale` is gone.
+- Approving/issuing a customer-facing quotation advances the deal forward-only and fills a BLANK `designer_name`
+  (from the quotation's D.Co.); `buyer_name` only for a BUYER-addressed quotation whose party is a real bidder;
+  `owner_name` never. A typed name is never overwritten.
+- Quiet ranking weights only THB values (non-THB deals rank by days alone).
+
+**Bisect.** `bdd7da87`, `fc7d32e6` and possibly `c26d4bf1` are red on their own (the API client / landing / endpoints
+land before the pieces they reference). Do not bisect through them without the later fixes.
+
+**Not verified here.** The mock's authorization is not evidence; the role gates are covered by
+`SalesBoardScopeIntegrationTest`. V210 must be dry-run on production (the `target` CTE as a SELECT) before the deploy.
