@@ -140,6 +140,9 @@ export const API_ROUTES = {
   salesBoard: {
     myWork: '/api/sales/my-work',
     teamOverview: '/api/sales/team-overview',
+    // PipelineImportController (salesboard/pipelineimport/): the one-time pipeline import, sales_manager / ceo.
+    pipelineImports: '/api/sales/pipeline-imports',
+    pipelineImportTemplate: '/api/sales/pipeline-imports/template',
   },
   // ExpectedPaymentController (salesboard/): a deal's rep-entered expected cash (V212).
   expectedPayments: {

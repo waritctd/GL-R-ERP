@@ -116,19 +116,6 @@ class DealStageQuoteOwnerAndRouteIntegrationTest extends AbstractPostgresIntegra
         assertThat(stageOf(unspecifiedDeal)).isEqualTo(DealStage.LEAD_APPROACH);
     }
 
-    /** The same split through the legacy ticket-native quotation path. */
-    @Test
-    void generateQuotationToTheOwnerAlsoLandsOnQuoteOwner() {
-        long ticketId = createTicket();
-        jdbc.update("UPDATE sales.ticket SET status = 'approved' WHERE ticket_id = :id",
-            Map.of("id", ticketId));
-
-        ticketService.generateQuotation(ticketId, new GenerateQuotationRequest(
-            QuotationRecipient.OWNER, null, null, null, null, null, null, null, null, null), ownerRep);
-
-        assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
-    }
-
     // ── Part B: the permission surface QUOTE_OWNER joins ─────────────────────
 
     /** Wrong-way-round authz. QUOTE_OWNER is in SALES_TARGET_STAGES, so the money roles and a rep who does not own

@@ -363,6 +363,36 @@ public class TicketService {
         // is the ONE gate on this class that widens; every other SALES_ROLES check below is
         // deliberately untouched.
         DealEntryAccess.requireCanEnterDeal(actor, employeeAuth);
+        return createDeal(request, actor);
+    }
+
+    /** Who may run the one-time pipeline import (spec 2026-11-15 §7.9). */
+    private static final Set<String> PIPELINE_IMPORT_ROLES = Set.of("sales_manager", "ceo");
+
+    /**
+     * The pipeline import's way into {@link #create}: the SAME creation path (project required, real channel, valid
+     * priority, owner eligibility, CREATED event, "สร้างดีล" activity, headline party), with one deliberate
+     * difference — the gate is sales_manager / ceo instead of {@link DealEntryAccess}, because the CEO, who may run
+     * the import, is not a deal-entry role. The owner must be named: an imported row always belongs to a rep.
+     * Stated as a sales permission change in the PR body.
+     *
+     * <p><b>For the PR body:</b> through this method the CEO (and a sales_manager) can create deals OWNED BY OTHER
+     * REPS — a capability the CEO does not have by hand. It is still limited to owners who are active and eligible
+     * (the เจ้าของงาน picker's set, re-checked in {@link #createDeal} via {@code isEligibleDealOwner}), and the deal
+     * still records the importer in {@code keyed_by}.
+     */
+    @Transactional
+    public TicketDto createForPipelineImport(CreateTicketRequest request, UserPrincipal actor) {
+        if (!PIPELINE_IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        if (request.ownerEmployeeId() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเจ้าของงานของดีลที่นำเข้า");
+        }
+        return createDeal(request, actor);
+    }
+
+    private TicketDto createDeal(CreateTicketRequest request, UserPrincipal actor) {
         // V50: every new deal belongs to a โครงการ (one deal = one ticket; a project can hold many deals over time).
         // Pre-existing project-less tickets stay valid.
         if (request.projectId() == null) {
@@ -2477,21 +2507,35 @@ public class TicketService {
      * repair.
      */
     private void requireStageFactsHold(TicketSummaryDto s, String targetStage) {
-        if (DealStage.ORDER_RECEIVED.equals(targetStage) && !customerOrderVerified(s)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน ORDER_RECEIVED ไม่ได้: ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า");
+        String refusal = stageFactRefusal(s.paymentStatus(), s.fulfillmentStatus(), s.quotedRecipients(), targetStage);
+        if (refusal != null) {
+            throw new ApiException(HttpStatus.CONFLICT, refusal);
         }
-        if (DealStage.DEPOSIT_RECEIVED.equals(targetStage) && !depositReceived(s)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน DEPOSIT_RECEIVED ไม่ได้: ยังไม่ได้รับชำระมัดจำ");
+    }
+
+    /**
+     * The stage-fact gate as a pure, non-throwing function of the three facts it reads (see
+     * {@link #requireStageFactsHold}, which is now a thin throw around this): null when {@code targetStage}'s fact
+     * holds, else the refusal message. Public so the one-time pipeline import (salesboard/pipelineimport) evaluates
+     * the SAME gate — for a deal it is about to create, every fact is absent ({@code null, null, Set.of()}) — instead
+     * of a second copy that could drift.
+     */
+    public static String stageFactRefusal(String paymentStatus, String fulfillmentStatus, Set<String> quotedRecipients,
+                                          String targetStage) {
+        if (DealStage.ORDER_RECEIVED.equals(targetStage) && !PaymentTrack.isValid(paymentStatus)) {
+            return "เลื่อนไปขั้นตอน ORDER_RECEIVED ไม่ได้: ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า";
         }
-        if (DealStage.DELIVERED.equals(targetStage) && !deliveryGateComplete(s)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน DELIVERED ไม่ได้: ยังส่งมอบสินค้าไม่ครบ");
+        if (DealStage.DEPOSIT_RECEIVED.equals(targetStage)
+                && !(paymentStatus != null && DEPOSIT_RECEIVED_STATES.contains(paymentStatus))) {
+            return "เลื่อนไปขั้นตอน DEPOSIT_RECEIVED ไม่ได้: ยังไม่ได้รับชำระมัดจำ";
         }
-        if (DealStage.CLOSED_PAID.equals(targetStage) && !closedPaidFactsHold(s)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน");
+        boolean fullyDelivered = FulfilmentStatus.FULLY_DELIVERED.equals(fulfillmentStatus);
+        if (DealStage.DELIVERED.equals(targetStage) && !fullyDelivered) {
+            return "เลื่อนไปขั้นตอน DELIVERED ไม่ได้: ยังส่งมอบสินค้าไม่ครบ";
+        }
+        if (DealStage.CLOSED_PAID.equals(targetStage)
+                && !(PaymentTrack.FULLY_PAID.equals(paymentStatus) && fullyDelivered)) {
+            return "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน";
         }
         // The three quote stages. ขั้น 4/5/8 claim "this party has been
         // quoted", so their fact is a quotation on the deal addressed to that party. A 409 ("there
@@ -2501,12 +2545,12 @@ public class TicketService {
         // Not circular: creating the quotation moves the deal via #autoAdvanceStage, which never
         // reaches this method (StageFactGateIntegrationTest#theQuoteStagesStillArriveAutomatically).
         String quotedRecipient = quotationRecipientForStage(targetStage);
-        if (quotedRecipient != null && !s.quotedRecipients().contains(quotedRecipient)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน " + targetStage + " ไม่ได้: ยังไม่มีใบเสนอราคาถึง"
-                    + QuotationRecipient.thaiLabel(quotedRecipient)
-                    + " — ขั้นนี้อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้รับรายนี้");
+        if (quotedRecipient != null && (quotedRecipients == null || !quotedRecipients.contains(quotedRecipient))) {
+            return "เลื่อนไปขั้นตอน " + targetStage + " ไม่ได้: ยังไม่มีใบเสนอราคาถึง"
+                + QuotationRecipient.thaiLabel(quotedRecipient)
+                + " — ขั้นนี้อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้รับรายนี้";
         }
+        return null;
     }
 
     /**

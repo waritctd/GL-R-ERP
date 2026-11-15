@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TeamOverview } from './TeamOverview.jsx';
 import { api } from '../../api/index.js';
@@ -10,7 +10,10 @@ globalThis.React = React;
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, api: { salesBoard: { teamOverview: vi.fn() } } };
+  return {
+    ...actual,
+    api: { salesBoard: { teamOverview: vi.fn(), pipelineImport: vi.fn(), pipelineImportTemplateUrl: () => '/t' } },
+  };
 });
 
 const now = new Date();
@@ -155,5 +158,16 @@ describe('TeamOverview — review fixes (M1 currency, role label)', () => {
     expect(within(rows[0]).getByText('ผจก.ขาย')).toBeTruthy();
     expect(within(rows[1]).getByText('CEO')).toBeTruthy();
     expect(within(rows[2]).queryByText(/ผจก\.ขาย|CEO/)).toBeNull();
+  });
+  it('นำเข้าจากชีท opens the pipeline import dialog, and closing it sends nothing', async () => {
+    renderTeam({ showTitle: false });
+    await screen.findByTestId('tile-held');
+
+    fireEvent.click(screen.getByRole('button', { name: 'นำเข้าจากชีท' }));
+
+    expect(screen.getByRole('dialog', { name: 'นำเข้า pipeline จากชีท' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(api.salesBoard.pipelineImport).not.toHaveBeenCalled();
   });
 });

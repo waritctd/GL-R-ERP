@@ -636,6 +636,22 @@ export const api = {
   salesBoard: {
     myWork: () => apiRequest(API_ROUTES.salesBoard.myWork),
     teamOverview: () => apiRequest(API_ROUTES.salesBoard.teamOverview),
+    // Mirrors PipelineImportController: multipart `file` (.xlsx / UTF-8 .csv). dryRun=true previews and writes
+    // nothing; dryRun=false commits the whole file in one transaction. sales_manager / ceo only (the service's gate).
+    pipelineImport: async (file, dryRun) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const response = await fetch(withQuery(API_ROUTES.salesBoard.pipelineImports, { dryRun: dryRun !== false }), {
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
+      });
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({}));
+        throw new Error(problem.message || 'นำเข้าไม่สำเร็จ');
+      }
+      return response.json();
+    },
+    // The template .xlsx, for a download link (header row only; invented examples on a second sheet).
+    pipelineImportTemplateUrl: () => API_ROUTES.salesBoard.pipelineImportTemplate,
   },
   // Mirrors ExpectedPaymentController (salesboard/, V212). A deal's expected cash: `{ kind: DEPOSIT|ON_DELIVERY|BALANCE,
   // amount, expectedWeek }` (expectedWeek = the ISO week's Monday, 400 otherwise). list = the non-cancelled rows by

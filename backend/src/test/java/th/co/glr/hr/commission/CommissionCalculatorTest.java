@@ -7,6 +7,8 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class CommissionCalculatorTest {
     private final CommissionCalculator calculator = new CommissionCalculator();
@@ -22,14 +24,33 @@ class CommissionCalculatorTest {
     private static final StockBonusConfig ENABLED_STOCK_BONUS =
         new StockBonusConfig(true, LocalDate.of(2026, 8, 1), new BigDecimal("100000.00"), new BigDecimal("1000.00"));
 
-    @Test
-    void progressiveCommission_appliesHighRollerRateAboveThreeMillion() {
+    // Columns: case name, base, expected commission. The expected value is compared with isEqualByComparingTo, so
+    // "0" is the same check as the BigDecimal.ZERO the single-case test used.
+    @ParameterizedTest(name = "progressiveCommission_{0}")
+    @CsvSource({
         // Tiers 1-12 (0-3,000,000, all fully taxed once base exceeds 3,000,000) sum to 48,750.00. V81 corrected tier
         // 13 from 7.5000% to 3.2500%: the 500,000 excess above 3,000,000 is now taxed at 3.25% = 16,250.00. Total =
         // 65,000.00 (was 86,250.00 pre-V81).
-        BigDecimal commission = calculator.progressiveCommission(new BigDecimal("3500000.00"));
+        "appliesHighRollerRateAboveThreeMillion,         3500000.00,        65000.00",
+        // Slice A1: <50,000 monthly floor (written wrong-way-round: the below-floor case is the assertion that
+        // matters)
+        "belowFiftyThousandFloor_paysZero,               49999.00,          0",
+        // Tier 1 (0-250,000 @ 0.25%) still applies from THB 0, unchanged, once the floor is met.
+        "atOrAboveFiftyThousandFloor_paysNormalTierOneRate, 50001.00,       125.00",
+        // Commission redesign calc-refine: round only the FINAL total, never the input base.
+        // 801,204.4999999999 sits just under the exact tie point (801,204.50) that tier 4's 1% rate produces at
+        // 4,262.045 (750,000-1,000,000 bracket: 3,750.00 for tiers 1-3, plus 51,204.4999999999 * 1% = 512.044999999999
+        // -> total 4,262.044999999999).
+        "doesNotPreRoundAFullPrecisionBase_beforeRunningTheBrackets, 801204.4999999999, 4262.04",
+        // Slice A1 (V81): tier 13 corrected from 7.5000% to 3.2500%.
+        // Base = 3,200,000: tiers 1-12 (0-3,000,000, all fully taxed) sum to 48,750.00, then the 200,000 excess above
+        // 3,000,000 is taxed at the corrected 3.25% = 6,500.00. Total = 48,750.00 + 6,500.00 = 55,250.00.
+        "aboveThreeMillion_usesCorrectedTier13Rate,      3200000.00,        55250.00",
+    })
+    void progressiveCommission_brackets(String caseName, String base, String expected) {
+        BigDecimal commission = calculator.progressiveCommission(new BigDecimal(base));
 
-        assertThat(commission).isEqualByComparingTo(new BigDecimal("65000.00"));
+        assertThat(commission).isEqualByComparingTo(new BigDecimal(expected));
     }
 
     @Test
@@ -99,106 +120,31 @@ class CommissionCalculatorTest {
         assertThat(withOverpayment.commissionableBase()).isGreaterThan(baseline.commissionableBase());
     }
 
-    // Slice A1: <50,000 monthly floor (written wrong-way-round: the below-floor case is the assertion that
-    // matters)
-
-    @Test
-    void progressiveCommission_belowFiftyThousandFloor_paysZero() {
-        BigDecimal commission = calculator.progressiveCommission(new BigDecimal("49999.00"));
-
-        assertThat(commission).isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
-    @Test
-    void progressiveCommission_atOrAboveFiftyThousandFloor_paysNormalTierOneRate() {
-        BigDecimal commission = calculator.progressiveCommission(new BigDecimal("50001.00"));
-
-        // Tier 1 (0-250,000 @ 0.25%) still applies from THB 0, unchanged, once the floor is met.
-        assertThat(commission).isEqualByComparingTo(new BigDecimal("125.00"));
-    }
-
-    // ── Slice A1 (V81): tier 13 corrected from 7.5000% to 3.2500% ──
-
-    // ── Commission redesign calc-refine: round only the FINAL total, never the input base ──
-
-    @Test
-    void progressiveCommission_doesNotPreRoundAFullPrecisionBase_beforeRunningTheBrackets() {
-        // 801,204.4999999999 sits just under the exact tie point (801,204.50) that tier 4's 1% rate produces at
-        // 4,262.045 (750,000-1,000,000 bracket: 3,750.00 for tiers 1-3, plus 51,204.4999999999 * 1% = 512.044999999999
-        // -> total 4,262.044999999999).
-        BigDecimal commission = calculator.progressiveCommission(new BigDecimal("801204.4999999999"));
-
-        assertThat(commission).isEqualByComparingTo(new BigDecimal("4262.04"));
-    }
-
-    @Test
-    void progressiveCommission_aboveThreeMillion_usesCorrectedTier13Rate() {
-        // Base = 3,200,000: tiers 1-12 (0-3,000,000, all fully taxed) sum to 48,750.00, then the 200,000 excess above
-        // 3,000,000 is taxed at the corrected 3.25% = 6,500.00. Total = 48,750.00 + 6,500.00 = 55,250.00.
-        BigDecimal commission = calculator.progressiveCommission(new BigDecimal("3200000.00"));
-
-        assertThat(commission).isEqualByComparingTo(new BigDecimal("55250.00"));
-    }
+    // (progressiveCommission bracket cases -- the <50,000 floor, the V81 tier-13 correction and the
+    // round-only-the-final-total rule -- are rows of progressiveCommission_brackets above.)
 
     // Issue #405 — monthlyIncentive: ladder boundaries (highest threshold reached wins, NOT cumulative/pro-rated),
     // plus the explicit "no 80,000 row" and empty/null-input guards.
 
-    @Test
-    void monthlyIncentive_justBelowFirstThreshold_paysZero() {
-        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("2999999.99"), INCENTIVE_LADDER);
-
-        assertThat(incentive).isEqualByComparingTo(BigDecimal.ZERO);
-    }
-
-    @Test
-    void monthlyIncentive_atFirstThreshold_pays15000() {
-        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("3000000.00"), INCENTIVE_LADDER);
-
-        assertThat(incentive).isEqualByComparingTo(new BigDecimal("15000.00"));
-    }
-
-    @Test
-    void monthlyIncentive_justBelowSecondThreshold_staysAt15000() {
-        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("3999999.99"), INCENTIVE_LADDER);
-
-        assertThat(incentive).isEqualByComparingTo(new BigDecimal("15000.00"));
-    }
-
-    @Test
-    void monthlyIncentive_atSecondThreshold_pays25000() {
-        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("4000000.00"), INCENTIVE_LADDER);
-
-        assertThat(incentive).isEqualByComparingTo(new BigDecimal("25000.00"));
-    }
-
-    @Test
-    void monthlyIncentive_justBelowThirdThreshold_staysAt25000() {
-        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("5999999.99"), INCENTIVE_LADDER);
-
-        assertThat(incentive).isEqualByComparingTo(new BigDecimal("25000.00"));
-    }
-
-    @Test
-    void monthlyIncentive_atThirdThreshold_pays50000() {
-        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("6000000.00"), INCENTIVE_LADDER);
-
-        assertThat(incentive).isEqualByComparingTo(new BigDecimal("50000.00"));
-    }
-
-    @Test
-    void monthlyIncentive_atFourthThreshold_pays65000() {
-        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("8000000.00"), INCENTIVE_LADDER);
-
-        assertThat(incentive).isEqualByComparingTo(new BigDecimal("65000.00"));
-    }
-
-    @Test
-    void monthlyIncentive_wellAboveFourthThreshold_staysAt65000_noEightyThousandRow() {
+    // Columns: case name, base, expected incentive. The expected value is compared with isEqualByComparingTo, so
+    // "0" is the same check as the BigDecimal.ZERO the single-case tests used.
+    @ParameterizedTest(name = "monthlyIncentive_{0}")
+    @CsvSource({
+        "justBelowFirstThreshold_paysZero,                 2999999.99,  0",
+        "atFirstThreshold_pays15000,                       3000000.00,  15000.00",
+        "justBelowSecondThreshold_staysAt15000,            3999999.99,  15000.00",
+        "atSecondThreshold_pays25000,                      4000000.00,  25000.00",
+        "justBelowThirdThreshold_staysAt25000,             5999999.99,  25000.00",
+        "atThirdThreshold_pays50000,                       6000000.00,  50000.00",
+        "atFourthThreshold_pays65000,                      8000000.00,  65000.00",
         // The workbook's second "8.00 ล้าน -> 80,000" row is superseded and must NOT exist -- a base of 12,000,000
         // pays 65,000, the same as exactly 8,000,000.
-        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal("12000000.00"), INCENTIVE_LADDER);
+        "wellAboveFourthThreshold_staysAt65000_noEightyThousandRow, 12000000.00, 65000.00",
+    })
+    void monthlyIncentive_ladderBoundaries(String caseName, String base, String expected) {
+        BigDecimal incentive = calculator.monthlyIncentive(new BigDecimal(base), INCENTIVE_LADDER);
 
-        assertThat(incentive).isEqualByComparingTo(new BigDecimal("65000.00"));
+        assertThat(incentive).isEqualByComparingTo(new BigDecimal(expected));
     }
 
     @Test
