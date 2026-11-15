@@ -49,7 +49,10 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
     void wireHttp() {
         SessionContext sessions = new SessionContext();
         QuietRule quietRule = new QuietRule(jdbc, 14);
-        SalesBoardService board = new SalesBoardService(new SalesBoardRepository(jdbc, quietRule), quietRule);
+        SalesBoardService board = new SalesBoardService(new SalesBoardRepository(jdbc, quietRule), quietRule,
+            new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc));
+        // The base fixtures label the sales division "SALES"; the real role derivation reads "SA".
+        jdbc.update("UPDATE hr.division SET source_code = 'SA' WHERE source_code = 'SALES'", Map.of());
         mvc = MockMvcBuilders
             .standaloneSetup(new SalesBoardController(board, sessions), new TicketController(ticketService, sessions))
             .setMessageConverters(new JacksonJsonHttpMessageConverter(JsonMapper.builder()
@@ -219,6 +222,155 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
         JsonNode work = ok(get("/api/sales/my-work"), salesActor);
         assertThat(byId(work.get("board"), id).get("expectedQuarter").asText()).isEqualTo("2027-Q1");
+    }
+
+    // ── review fixes: currency (M1), CLOSED_PAID (M2), value source (M3), role label ──────────
+
+    @Test
+    void usdValueKeepsItsCurrency_andStaysOutOfTheThbTotal() throws Exception {
+        long thb = deal(salesActor);
+        DealQuotationDto thbQuote = approved(thb, salesActor, "DESIGNER");
+        long usd = deal(salesActor);
+        DealQuotationDto usdQuote = approved(usd, salesActor, "DESIGNER");
+        jdbc.update("UPDATE sales.quotation SET currency = 'USD' WHERE quotation_id = :id", Map.of("id", usdQuote.id()));
+
+        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
+        assertThat(byId(work.get("board"), usd).get("currency").asText()).isEqualTo("USD");
+        assertThat(byId(work.get("board"), thb).get("currency").asText()).isEqualTo("THB");
+
+        JsonNode rep = rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id());
+        assertThat(new BigDecimal(rep.get("openValue").asText())).isEqualByComparingTo(thbQuote.grandTotal());
+        assertThat(new BigDecimal(rep.get("otherCurrencyValues").get("USD").asText()))
+            .isEqualByComparingTo(usdQuote.grandTotal());
+    }
+
+    @Test
+    void closedPaidDealsAreNotOpen_butDeliveredOnesAre() throws Exception {
+        long paid = deal(salesActor);
+        long delivered = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'CLOSED_PAID' WHERE ticket_id = :id", Map.of("id", paid));
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'DELIVERED' WHERE ticket_id = :id", Map.of("id", delivered));
+
+        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
+        assertThat(ids(work.get("board"))).containsExactly(delivered);
+        assertThat(byId(work.get("board"), delivered).get("boardColumn").asInt()).isEqualTo(5);
+        assertThat(rep(ok(get("/api/sales/team-overview"), salesManagerActor), salesActor.id())
+            .get("openDeals").asInt()).isEqualTo(1);
+    }
+
+    /** Two live quotations (seeded directly: the service's sweep allows only one): the NEWER approval wins. */
+    @Test
+    void valueIsTheLatestLiveQuotation_byApprovalTime_notTheOlderOne() throws Exception {
+        long id = deal(salesActor);
+        DealQuotationDto first = approved(id, salesActor, "DESIGNER");
+        long second = cloneQuotation(first.id(), "APPROVED", "2", "now() - interval '1 day'");
+        jdbc.update("UPDATE sales.quotation SET approved_at = now() - interval '5 days', total_amount = 100"
+            + " WHERE quotation_id = :id", Map.of("id", first.id()));
+        jdbc.update("UPDATE sales.quotation SET total_amount = 300 WHERE quotation_id = :id", Map.of("id", second));
+
+        JsonNode deal = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
+
+        assertThat(new BigDecimal(deal.get("value").asText())).isEqualByComparingTo("321.00");
+        assertThat(deal.get("valueExpired").asBoolean()).isFalse();
+    }
+
+    @Test
+    void valuePrefersTheHeadlinePartysQuotation_overANewerOne() throws Exception {
+        long id = deal(salesActor);
+        DealQuotationDto headline = approved(id, salesActor, "DESIGNER");
+        long newer = cloneQuotation(headline.id(), "APPROVED", "2", "now()");
+        jdbc.update("UPDATE sales.quotation SET approved_at = now() - interval '5 days', total_amount = 100"
+            + " WHERE quotation_id = :id", Map.of("id", headline.id()));
+        jdbc.update("UPDATE sales.quotation SET total_amount = 300, party_id = NULL WHERE quotation_id = :id",
+            Map.of("id", newer));
+        jdbc.update("""
+            UPDATE sales.deal_party SET is_headline = TRUE
+             WHERE party_id = (SELECT party_id FROM sales.quotation WHERE quotation_id = :id)
+            """, Map.of("id", headline.id()));
+        assertThat(jdbc.queryForObject("SELECT party_id IS NOT NULL FROM sales.quotation WHERE quotation_id = :id",
+            Map.of("id", headline.id()), Boolean.class)).as("fixture: the approved quotation has a party").isTrue();
+
+        JsonNode deal = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
+
+        assertThat(new BigDecimal(deal.get("value").asText())).isEqualByComparingTo("107.00");
+    }
+
+    @Test
+    void sentAndAcceptedQuotationsCarryAValue() throws Exception {
+        long sent = deal(salesActor);
+        DealQuotationDto a = approved(sent, salesActor, "DESIGNER");
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'SENT' WHERE quotation_id = :id", Map.of("id", a.id()));
+        long accepted = deal(salesActor);
+        DealQuotationDto b = approved(accepted, salesActor, "DESIGNER");
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED' WHERE quotation_id = :id", Map.of("id", b.id()));
+
+        JsonNode board = ok(get("/api/sales/my-work"), salesActor).get("board");
+
+        assertThat(new BigDecimal(byId(board, sent).get("value").asText())).isEqualByComparingTo(a.grandTotal());
+        assertThat(new BigDecimal(byId(board, accepted).get("value").asText())).isEqualByComparingTo(b.grandTotal());
+    }
+
+    @Test
+    void expiredQuotationKeepsItsValue_flaggedExpired_whenNothingLiveExists() throws Exception {
+        long id = deal(salesActor);
+        DealQuotationDto q = approved(id, salesActor, "DESIGNER");
+        jdbc.update("UPDATE sales.quotation SET doc_status = 'EXPIRED' WHERE quotation_id = :id", Map.of("id", q.id()));
+
+        JsonNode deal = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
+
+        assertThat(new BigDecimal(deal.get("value").asText())).isEqualByComparingTo(q.grandTotal());
+        assertThat(deal.get("valueExpired").asBoolean()).isTrue();
+    }
+
+    @Test
+    void rejectedSupersededAndCancelledQuotationsCarryNoValue() throws Exception {
+        for (String status : List.of("REJECTED", "SUPERSEDED", "CANCELLED")) {
+            long id = deal(salesActor);
+            DealQuotationDto q = approved(id, salesActor, "DESIGNER");
+            jdbc.update("UPDATE sales.quotation SET doc_status = :s WHERE quotation_id = :id",
+                Map.of("s", status, "id", q.id()));
+
+            JsonNode deal = byId(ok(get("/api/sales/my-work"), salesActor).get("board"), id);
+            assertThat(deal.get("value").isNull()).as(status).isTrue();
+        }
+    }
+
+    @Test
+    void repRowsAreOrderedByThbValueDescending() throws Exception {
+        deal(salesActor);
+        long other = deal(otherSalesActor);
+        approved(other, otherSalesActor, "DESIGNER");
+
+        JsonNode reps = ok(get("/api/sales/team-overview"), salesManagerActor).get("reps");
+
+        assertThat(reps.get(0).get("employeeId").asLong()).isEqualTo(otherSalesActor.id());
+        assertThat(reps.get(1).get("employeeId").asLong()).isEqualTo(salesActor.id());
+    }
+
+    /** Managers' and the CEO's own deals stay in the team table, labelled with their role. */
+    @Test
+    void aManagersOwnDealsStayInTheTeamTable_labelledWithTheirRole() throws Exception {
+        deal(salesManagerActor);
+        deal(salesActor);
+
+        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
+
+        assertThat(rep(team, salesManagerActor.id()).get("role").asText()).isEqualTo("sales_manager");
+        assertThat(rep(team, salesActor.id()).get("role").asText()).isEqualTo("sales");
+    }
+
+    /** A copy of {@code sourceId} on the same ticket with the given status, number suffix and approval time. */
+    private long cloneQuotation(long sourceId, String status, String revisionSuffix, String approvedAtSql) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.quotation (ticket_id, number, issued_by, total_amount, currency, doc_status, origin,
+                                         recipient_type, created_by, sales_rep_id, approved_at, approved_by,
+                                         document_language, party_id, quotation_version)
+            SELECT ticket_id, number || '-R' || :rev, issued_by, total_amount, currency, :status, origin,
+                   recipient_type, created_by, sales_rep_id, %s, approved_by, document_language, party_id,
+                   quotation_version + 1
+              FROM sales.quotation WHERE quotation_id = :id
+            RETURNING quotation_id
+            """.formatted(approvedAtSql), Map.of("id", sourceId, "status", status, "rev", revisionSuffix), Long.class);
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

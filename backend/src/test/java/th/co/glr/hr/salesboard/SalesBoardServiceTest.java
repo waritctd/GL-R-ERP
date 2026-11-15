@@ -35,7 +35,8 @@ class SalesBoardServiceTest {
     @BeforeEach
     void wire() {
         repository = mock(SalesBoardRepository.class);
-        service = new SalesBoardService(repository, new QuietRule(null, 14));
+        service = new SalesBoardService(repository, new QuietRule(null, 14),
+            mock(th.co.glr.hr.auth.EmployeeAuthRepository.class));
     }
 
     @ParameterizedTest
@@ -133,7 +134,8 @@ class SalesBoardServiceTest {
 
     private static BoardDeal deal(long id, long owner, int daysQuiet, String value, boolean quiet) {
         return new BoardDeal(id, "deal " + id, "cust", null, owner, "rep " + owner, "QUOTE_OWNER", "S3", 3,
-            value == null ? null : new BigDecimal(value), null, null, null, daysAgo(daysQuiet), daysQuiet, quiet);
+            value == null ? null : new BigDecimal(value), "THB", false, null, null, null, daysAgo(daysQuiet),
+            daysQuiet, quiet, null, null);
     }
 
     private static UserPrincipal actor(long id, String role) {

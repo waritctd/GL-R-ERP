@@ -40,9 +40,13 @@ public class SalesBoardService {
     private final SalesBoardRepository repository;
     private final QuietRule quietRule;
 
-    public SalesBoardService(SalesBoardRepository repository, QuietRule quietRule) {
+    private final th.co.glr.hr.auth.EmployeeAuthRepository employees;
+
+    public SalesBoardService(SalesBoardRepository repository, QuietRule quietRule,
+                             th.co.glr.hr.auth.EmployeeAuthRepository employees) {
         this.repository = repository;
         this.quietRule = quietRule;
+        this.employees = employees;
     }
 
     public MyWork myWork(UserPrincipal actor) {
@@ -65,25 +69,42 @@ public class SalesBoardService {
         return deals.stream().filter(BoardDeal::quiet).sorted(QUIET_RANK).limit(limit).toList();
     }
 
-    /** One row per owner, ordered by open value desc, then employee id. */
-    private static List<RepRow> repRows(List<BoardDeal> deals) {
-        Map<Long, RepRow> byRep = new LinkedHashMap<>();
-        for (BoardDeal d : deals) {
-            RepRow r = byRep.get(d.ownerId());
-            BigDecimal dealValue = d.value() == null ? BigDecimal.ZERO : d.value();
-            if (r == null) {
-                byRep.put(d.ownerId(), new RepRow(d.ownerId(), d.ownerName(), 1, dealValue, d.quiet() ? 1 : 0,
-                    d.lastTouchedAt()));
-                continue;
+    static final String THB = "THB";
+
+    /**
+     * One row per owner, ordered by THB open value desc, then employee id. Only THB values are added into
+     * {@code openValue}; other currencies are summed per code. Each owner's role comes from the same derivation
+     * login uses (DivisionAccessPolicy#roleFor), so a manager's or the CEO's own deals are labelled, not dropped.
+     */
+    private List<RepRow> repRows(List<BoardDeal> deals) {
+        Map<Long, List<BoardDeal>> byOwner = new LinkedHashMap<>();
+        deals.forEach(d -> byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d));
+        List<RepRow> rows = new ArrayList<>();
+        byOwner.forEach((ownerId, own) -> {
+            BigDecimal thb = BigDecimal.ZERO;
+            Map<String, BigDecimal> other = new java.util.TreeMap<>();
+            Instant last = null;
+            int quiet = 0;
+            for (BoardDeal d : own) {
+                if (d.value() != null) {
+                    String currency = d.currency() == null ? THB : d.currency();
+                    if (THB.equals(currency)) {
+                        thb = thb.add(d.value());
+                    } else {
+                        other.merge(currency, d.value(), BigDecimal::add);
+                    }
+                }
+                if (d.quiet()) {
+                    quiet++;
+                }
+                if (d.lastTouchedAt() != null && (last == null || d.lastTouchedAt().isAfter(last))) {
+                    last = d.lastTouchedAt();
+                }
             }
-            Instant last = r.lastUpdateAt();
-            if (d.lastTouchedAt() != null && (last == null || d.lastTouchedAt().isAfter(last))) {
-                last = d.lastTouchedAt();
-            }
-            byRep.put(d.ownerId(), new RepRow(d.ownerId(), r.name(), r.openDeals() + 1, r.openValue().add(dealValue),
-                r.quietDeals() + (d.quiet() ? 1 : 0), last));
-        }
-        List<RepRow> rows = new ArrayList<>(byRep.values());
+            String role = employees == null ? null : employees.findByEmployeeId(ownerId)
+                .map(th.co.glr.hr.auth.DivisionAccessPolicy::roleFor).orElse(null);
+            rows.add(new RepRow(ownerId, own.get(0).ownerName(), role, own.size(), thb, other, quiet, last));
+        });
         rows.sort(Comparator.comparing(RepRow::openValue).reversed().thenComparingLong(RepRow::employeeId));
         return rows;
     }

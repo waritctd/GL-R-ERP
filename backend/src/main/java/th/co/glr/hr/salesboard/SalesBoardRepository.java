@@ -14,15 +14,19 @@ import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.WinProbabilityDefaults;
 
 /**
- * The board read model: every ACTIVE deal with its last touch ({@link QuietRule}) and the subtotal + language of its
- * latest customer-facing quotation. Scope lives in the WHERE clause: {@link #activeDealsOwnedBy} adds
- * {@code t.created_by = :ownerId}; {@link #activeDealsAllReps} has no owner predicate and is reached only through
- * {@code SalesBoardService}'s sales_manager/ceo gate.
+ * The board read model: every open deal (ACTIVE, not CLOSED_PAID — the money is in; DELIVERED stays, money is still
+ * due) with its last touch ({@link QuietRule}), its latest activity, and the subtotal + language + currency of its
+ * value quotation. Value quotation, in order: a live one (APPROVED/ISSUED/SENT/ACCEPTED) before an EXPIRED one
+ * (REJECTED/SUPERSEDED/CANCELLED never count); within that, the headline party's (★ ยอดหลัก, deal_party.is_headline)
+ * first; then the latest by COALESCE(approved_at, issued_at). Scope lives in the WHERE clause:
+ * {@link #activeDealsOwnedBy} adds {@code t.created_by = :ownerId}; {@link #activeDealsAllReps} has no owner
+ * predicate and is reached only through {@code SalesBoardService}'s sales_manager/ceo gate. Rows come ordered by
+ * last touch ascending, then ticket id — mockApi.salesBoard mirrors this ORDER BY.
  */
 @Repository
 public class SalesBoardRepository {
-    /** A quotation that has reached the customer: DEAL_DIRECT APPROVED, legacy ISSUED and its later SENT/ACCEPTED. */
-    private static final List<String> VALUE_STATUSES = List.of("APPROVED", "ISSUED", "SENT", "ACCEPTED");
+    /** Reached the customer (DEAL_DIRECT APPROVED, legacy ISSUED/SENT/ACCEPTED), plus EXPIRED as a flagged fallback. */
+    private static final List<String> VALUE_STATUSES = List.of("APPROVED", "ISSUED", "SENT", "ACCEPTED", "EXPIRED");
 
     private static final String BOARD_SELECT = """
         SELECT t.ticket_id, t.title, t.customer_name, p.name AS project_name,
@@ -31,18 +35,28 @@ public class SalesBoardRepository {
                t.sales_stage, t.designer_name, t.win_probability, t.expected_quarter,
                %1$s AS last_touched_at,
                %2$s AS quiet,
-               q.total_amount, q.document_language
+               q.total_amount, q.document_language, q.currency, q.expired,
+               la.kind AS last_activity_kind, la.note AS last_activity_note
           FROM sales.ticket t
           JOIN hr.employee e ON e.employee_id = t.created_by
           LEFT JOIN customers.project p ON p.project_id = t.project_id
           LEFT JOIN LATERAL (
-              SELECT vq.total_amount, vq.document_language
+              SELECT vq.total_amount, vq.document_language, vq.currency, vq.doc_status = 'EXPIRED' AS expired
                 FROM sales.quotation vq
+                LEFT JOIN sales.deal_party vp ON vp.party_id = vq.party_id
                WHERE vq.ticket_id = t.ticket_id AND vq.doc_status IN (:valueStatuses)
-               ORDER BY COALESCE(vq.approved_at, vq.issued_at) DESC NULLS LAST, vq.quotation_id DESC
+               ORDER BY (vq.doc_status <> 'EXPIRED') DESC, COALESCE(vp.is_headline, FALSE) DESC,
+                        COALESCE(vq.approved_at, vq.issued_at) DESC NULLS LAST, vq.quotation_id DESC
                LIMIT 1
           ) q ON TRUE
+          LEFT JOIN LATERAL (
+              SELECT a.kind, a.note FROM sales.deal_activity a
+               WHERE a.ticket_id = t.ticket_id
+               ORDER BY a.created_at DESC, a.id DESC
+               LIMIT 1
+          ) la ON TRUE
          WHERE t.lifecycle = 'ACTIVE'
+           AND COALESCE(t.sales_stage, '') <> 'CLOSED_PAID'
         """.formatted(QuietRule.lastTouchedSql("t"), QuietRule.quietSql("t"));
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -79,9 +93,11 @@ public class SalesBoardRepository {
             rs.getString("project_name"), rs.getLong("owner_id"), rs.getString("owner_name"),
             stage, DealStage.repCodeOf(stage), DealStage.boardColumnOf(stage),
             grandTotal(rs.getBigDecimal("total_amount"), rs.getString("document_language")),
+            rs.getString("currency"), rs.getBoolean("expired"),
             rs.getString("designer_name"), winProbability, rs.getString("expected_quarter"),
             lastTouched == null ? null : lastTouched.toInstant(),
-            (int) Math.max(0, quietMillis / 86_400_000L), rs.getBoolean("quiet"));
+            (int) Math.max(0, quietMillis / 86_400_000L), rs.getBoolean("quiet"),
+            rs.getString("last_activity_kind"), rs.getString("last_activity_note"));
     }
 
     /** The quotation's grand total, derived exactly as DealQuotationRepository#mapQuotation derives it. */
