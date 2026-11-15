@@ -34,6 +34,7 @@ public class VisitRepository {
                -- Why the deal is someone else's: it was reassigned at or after this visit was created (the EDITED
                -- event DealQuotationService#moveOwnerToSalesRep writes), versus the visit's owner never holding it
                -- (a keyer's or a manager's own visit). Review LOW: only the first is "the deal moved".
+               -- LIKE prefix% on the stored message: editing the Thai prefix would break matching for stored events.
                (t.ticket_id IS NOT NULL AND v.owner_id <> t.created_by AND EXISTS (
                    SELECT 1 FROM sales.ticket_event te
                     WHERE te.ticket_id = t.ticket_id AND te.kind = 'EDITED'

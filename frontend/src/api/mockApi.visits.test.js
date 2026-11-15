@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api, patchTicketForTests } from './mockApi.js';
+import { api, patchTicketForTests, patchVisitForTests } from './mockApi.js';
 import { bangkokTodayIso } from '../utils/format.js';
 
 // Mirrors VisitService / VisitRepository (backend VisitScopeIntegrationTest). The mock's authz is NOT evidence about
@@ -278,6 +278,25 @@ describe('mockApi.salesVisits', () => {
       expect((await api.tickets.listActivities(quiet.ticketId)).items.length).toBe(before);
     } finally {
       patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId, keyedById: quiet.ownerId });
+    }
+  });
+
+  it('a visit with no createdAt is never told the deal moved; a created visit always carries one (review follow-up)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const [quiet] = (await api.salesBoard.myWork()).followUp;
+    const raw = (await api.tickets.get(quiet.ticketId)).ticket;
+    const visit = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: today });
+    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: quiet.ownerId, events: [...(raw.events ?? []),
+      { kind: 'EDITED', message: 'เปลี่ยนเจ้าของงาน: ก → ข (ตามพนักงานขายในใบเสนอราคา)', createdAt: new Date().toISOString() }] });
+    try {
+      const day = (await api.salesVisits.list({ from: today, to: today })).find((v) => v.id === visit.id);
+      expect(day.dealMoved).toBe(true);
+      patchVisitForTests(visit.id, { createdAt: undefined });
+      const legacy = (await api.salesVisits.list({ from: today, to: today })).find((v) => v.id === visit.id);
+      expect(legacy.dealMovedToName).toBeTruthy();
+      expect(legacy.dealMoved).toBe(false);
+    } finally {
+      patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId, keyedById: quiet.ownerId, events: raw.events });
     }
   });
 });

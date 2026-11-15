@@ -416,6 +416,18 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     }
 
     @Test
+    void aManagersVisitPlannedOnARepsDeal_isToldTheDealMovedOnceItIsReassignedAToB() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesManagerActor, deal, "คุณอรุณ", today);
+        reassign(deal, otherSalesActor);
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesManagerActor);
+
+        assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(done.path("dealMoved").asBoolean()).as("planned on A's deal, then A to B").isTrue();
+    }
+
+    @Test
     void aVisitPlannedAfterTheDealHadAlreadyMoved_isNotToldTheDealMoved() throws Exception {
         long deal = deal(salesActor);
         reassign(deal, otherSalesActor);
@@ -565,10 +577,11 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
             """, Map.of("id", who.id()), String.class);
     }
 
-    /** The production reassignment path (TicketRepository#moveOwnerToSalesRep): the ex-owner becomes the keyer. */
     /**
-     * The production reassignment, as DealQuotationService#moveOwnerToSalesRep does it: move the owner, then record
-     * the move on the deal's timeline with {@link TicketRepository#OWNER_CHANGED_MESSAGE_PREFIX}.
+     * The production reassignment, as DealQuotationService#moveOwnerToSalesRep does it
+     * (TicketRepository#moveOwnerToSalesRep, so the ex-owner becomes the keyer), then the move recorded on the deal's
+     * timeline with {@link TicketRepository#OWNER_CHANGED_MESSAGE_PREFIX}. That service method is private and only
+     * reachable through a full quotation flow, so this mirrors its two calls rather than driving it end to end.
      */
     private void reassign(long ticketId, UserPrincipal newOwner) {
         assertThat(tickets.moveOwnerToSalesRep(ticketId, newOwner.id())).isEqualTo(1);

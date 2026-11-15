@@ -8275,10 +8275,16 @@ function seedMockVisits() {
     mockVisits.push({
       id: mockVisitSeq++, ownerId, ticketId: null, contactName, plannedDate, plannedTime: time, status,
       doneAt: status === 'DONE' ? `${plannedDate}T09:00:00.000Z` : null, note,
+      createdAt: `${plannedDate}T00:00:00.000Z`,
     });
   }
 }
 seedMockVisits();
+
+/** TEST-ONLY seam — not part of `api`. Patches a stored visit row (e.g. to drop createdAt). */
+export function patchVisitForTests(visitId, patch) {
+  Object.assign(mockVisits.find((v) => v.id === Number(visitId)), patch);
+}
 
 /** VisitRepository's SELECT … JOIN hr.employee LEFT JOIN sales.ticket, for one row. */
 function mockVisitDto(v) {
@@ -8305,7 +8311,8 @@ function mockVisitDto(v) {
     dealMoved: Boolean(ticket) && Number(ticket.createdById) !== Number(v.ownerId)
       && (ticket.events ?? []).some((e) => e.kind === 'EDITED'
         && String(e.message ?? '').startsWith(MOCK_OWNER_CHANGED_MESSAGE_PREFIX)
-        && Date.parse(e.createdAt) >= Date.parse(v.createdAt ?? '1970-01-01T00:00:00Z')),
+        // A visit with no createdAt cannot be placed before the move, so it is never "moved" (v.created_at is NOT NULL server-side).
+        && v.createdAt != null && Date.parse(e.createdAt) >= Date.parse(v.createdAt)),
   };
 }
 
