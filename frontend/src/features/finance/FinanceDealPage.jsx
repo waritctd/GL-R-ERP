@@ -309,7 +309,8 @@ export function FinanceDealPage() {
       case 'DEPOSIT_PAID':
         return {
           title: 'ยืนยันรับมัดจำ', confirmLabel: 'ยืนยันรับมัดจำ',
-          text: `ยืนยันว่าได้รับเงินมัดจำของดีล ${deal.code} แล้ว? รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
+          // Design m-deposit-confirm: a matched Express receipt confirms the deposit by itself.
+          text: `ยืนยันว่าได้รับเงินมัดจำของดีล ${deal.code} แล้ว? จะยืนยันเองเมื่อจับคู่รายการจาก Express ได้ ใช้ปุ่มนี้เฉพาะเมื่อรับเงินนอก Express — รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
           call: () => api.finance.confirmDepositPaid(deal.id),
         };
       case 'FINAL_PAYMENT':

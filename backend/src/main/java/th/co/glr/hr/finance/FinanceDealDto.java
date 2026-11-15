@@ -48,8 +48,10 @@ public record FinanceDealDto(
     public record Item(String description, BigDecimal qty, String unit, BigDecimal unitPrice, BigDecimal lineTotal,
                        String vatBasis) {}
 
+    /** {@code source}: MANUAL (typed by account) or EXPRESS (uploaded, V213) — the finance page's source chip. */
     public record Payment(long id, String kind, BigDecimal amount, String currency, Instant receivedAt,
-                          String receiptRef, String note, Long depositNoticeId, String recordedByName) {}
+                          String receiptRef, String note, Long depositNoticeId, String recordedByName,
+                          String source) {}
 
     public record Money(
         BigDecimal amountPayable, BigDecimal amountPayableExVat, BigDecimal amountPaid, BigDecimal amountOutstanding,

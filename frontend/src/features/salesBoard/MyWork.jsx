@@ -15,6 +15,7 @@ import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
 import { useStageCatalog } from '../tickets/stageCatalog.js';
 import { currentQuarter, otherCurrencyTotals, sumValue, totalLabel } from './boardFormat.js';
 import { CashCard } from './CashCard.jsx';
+import { UnmatchedReceipts } from './UnmatchedReceipts.jsx';
 import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
@@ -182,6 +183,9 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
 
         {work?.cash ? <CashCard cash={work.cash} /> : null}
       </div>
+
+      {/* A rep's own unmatched Express rows (slice 3); managers / CEO work the whole queue on ภาพรวมทีมขาย. */}
+      {user?.role === 'sales' ? <UnmatchedReceipts showToast={showToast} hideWhenEmpty /> : null}
 
       <Panel
         title="ดีลทั้งหมดของฉัน"

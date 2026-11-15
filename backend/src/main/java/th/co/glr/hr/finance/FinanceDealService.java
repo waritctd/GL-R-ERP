@@ -154,7 +154,7 @@ public class FinanceDealService {
 
         var payments = tickets.findReceiptsByTicket(ticketId).stream()
             .map(r -> new FinanceDealDto.Payment(r.receiptId(), r.kind(), r.amount(), r.currency(), r.receivedAt(),
-                r.receiptRef(), r.note(), r.depositNoticeId(), r.recordedByName()))
+                r.receiptRef(), r.note(), r.depositNoticeId(), r.recordedByName(), r.source()))
             .toList();
         var money = new FinanceDealDto.Money(s.amountPayable(), tickets.payableAmountExVat(ticketId), s.amountPaid(), s.amountOutstanding(),
             s.depositPolicy(), s.paymentStatus(), s.paymentStage(), s.fulfillmentStatus(),

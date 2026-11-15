@@ -64,7 +64,8 @@ export function RecordPaymentModal({ defaultKind, busy, error, onSubmit, onClose
   return (
     <Modal
       title="บันทึกรับชำระ"
-      subtitle="บันทึกเงินที่รับจริง — รายการนี้ย้อนกลับไม่ได้ ตรวจยอดก่อนบันทึก"
+      // Design m-payment: the Express upload is the normal path now (spec 2026-11-15 §8); this is the fallback.
+      subtitle="ใช้เมื่อรายการจาก Express จับคู่ไม่ได้ หรือรับเงินนอก Express — รายการนี้ย้อนกลับไม่ได้ ตรวจยอดก่อนบันทึก"
       onClose={busy ? undefined : onClose}
       footer={<Footer onClose={onClose} busy={busy} submitLabel="บันทึกรับชำระ" onSubmit={submit} />}
     >

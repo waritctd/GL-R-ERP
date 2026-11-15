@@ -639,6 +639,33 @@ export const api = {
     update: (ticketId, id, payload) => apiRequest(API_ROUTES.expectedPayments.detail(ticketId, id), { method: 'PUT', body: payload }),
     cancel: (ticketId, id) => apiRequest(API_ROUTES.expectedPayments.detail(ticketId, id), { method: 'DELETE' }),
   },
+  // Mirrors ReceiptImportController (salesboard/receipts/, V213). upload(file) = multipart `file` (.csv UTF-8 or .xlsx,
+  // the documented column template — no real Express export exists yet) -> ImportSummary { matched, duplicates,
+  // unmatched, invalid (+ amounts), errors[{ line, message }] }; latest -> { latest, openUnmatched }; template -> the
+  // CSV template as a Blob. upload/latest/template: account, ceo. unmatched -> rows [{ rowId, docNo, docDate,
+  // customerName, amount, reference, reason, candidates[{ ticketId, title, hint, ownerName, expectedAmount, … }] }] —
+  // a sales rep gets only rows one of their own deals could be; resolve(rowId, { ticketId }) attaches it (a rep only
+  // onto an offered own deal); ignore(rowId): account / sales_manager / ceo. Gates live in ReceiptImportService.
+  receiptImports: {
+    upload: async (file) => {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch(API_ROUTES.receiptImports.upload, {
+        method: 'POST', credentials: 'include', headers: csrfHeaders('POST'), body: formData,
+      });
+      if (!res.ok) { const err = await res.json().catch(() => ({})); throw new Error(err.message || 'อัปโหลดไม่สำเร็จ'); }
+      return res.json();
+    },
+    latest: () => apiRequest(API_ROUTES.receiptImports.latest),
+    template: async () => {
+      const res = await fetch(API_ROUTES.receiptImports.template, { credentials: 'include' });
+      if (!res.ok) throw new Error('ดาวน์โหลดแม่แบบไม่สำเร็จ');
+      return res.blob();
+    },
+    unmatched: () => apiRequest(API_ROUTES.receiptImports.unmatched),
+    resolve: (rowId, payload) => apiRequest(API_ROUTES.receiptImports.resolve(rowId), { method: 'POST', body: payload }),
+    ignore: (rowId) => apiRequest(API_ROUTES.receiptImports.ignore(rowId), { method: 'POST' }),
+  },
   // Mirrors VisitController (salesboard/). list: the caller's own visits planned in [from, to] (ISO dates, at most
   // 31 days inclusive); team: every rep's, sales_manager / ceo only. create `{ ticketId?, contactName, plannedDate,
   // plannedTime?, note?, done? }` (done = log a visit that happened today, in one step); done `{ note? }` and cancel

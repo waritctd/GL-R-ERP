@@ -89,6 +89,12 @@ public class TicketService {
     // recording to the CEO. Every other role (sales/sales_manager/import, including the owning
     // rep) is refused too — recording money received was never a sales-side action.
     private static final Set<String> PAYMENT_RECORD_ROLES = Set.of("account");
+    // Placing ONE row of account's uploaded Express receipts file on a deal (spec 2026-11-15 §7.8): account / ceo
+    // upload (ReceiptImportService gates that), and an UNMATCHED row may be attached by the owning rep (own deals only,
+    // checked in recordExpressReceipt) or sales_manager / ceo / account. A separate constant from PAYMENT_RECORD_ROLES
+    // on purpose: no role here TYPES an amount — amount, date and document number always come from the uploaded file,
+    // so this never widens who can invent a payment.
+    private static final Set<String> EXPRESS_RECEIPT_ROLES = Set.of("account", "ceo", "sales_manager", "sales");
     // Step 1 of the three-party close. Do not "fix" this by reusing ACCOUNT_ROLES. Deliberately EXCLUDES ceo,
     // unlike ACCOUNT_ROLES: the CEO signs the second half (verifyClose), so letting them sign the first half too
     // would collapse a two-signature gate into one person.
@@ -1843,6 +1849,75 @@ public class TicketService {
         return recordPaymentInternal(ticketId, request, actor);
     }
 
+    /**
+     * Records one Express receipt row on a deal (spec 2026-11-15 §7.8, plan task 3.3) and returns the new receipt id.
+     * The row's amount, date and Express document number come from account's uploaded file, never from the caller's
+     * typing. Differences from {@link #recordPayment}, each deliberate:
+     * <ul>
+     *   <li>{@code source = 'EXPRESS'}, {@code receipt_ref} = the Express document number (V213's
+     *       ux_payment_receipt_express_ref makes a second copy impossible), {@code customer_name} as printed;</li>
+     *   <li>kind is decided here, not chosen: DEPOSIT while a REQUIRED-deposit deal's deposit is not yet settled,
+     *       else BALANCE (plan decision 4); never ADJUSTMENT;</li>
+     *   <li>an overpayment is refused (409) instead of offered with a reason, and so is a deal that is not ACTIVE (409):
+     *       the caller leaves the row unmatched for a person to look at;</li>
+     *   <li>reconciliation may advance the deposit (DEPOSIT_PAID / AWAITING_FINAL_PAYMENT, so DEPOSIT_RECEIVED), but it
+     *       NEVER walks payment_status to FULLY_PAID, so CLOSED_PAID can never be reached by an upload (spec §11, "no
+     *       deal closes without a human step"). Account's existing {@link #confirmFinalPayment} is still the step that
+     *       does both, and finds nothing outstanding.</li>
+     * </ul>
+     * Who: {@link #EXPRESS_RECEIPT_ROLES}; a sales rep only onto a deal they own or keyed.
+     */
+    @Transactional
+    public long recordExpressReceipt(long ticketId, BigDecimal amount, Instant receivedAt, String expressDocNo,
+                                     String customerName, UserPrincipal actor) {
+        requireRole(actor, EXPRESS_RECEIPT_ROLES);
+        if (amount == null || amount.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ยอดรับชำระต้องมากกว่า 0");
+        }
+        String ref = blankToNull(expressDocNo);
+        if (ref == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องมีเลขที่เอกสาร Express");
+        }
+        tickets.lockTicketForUpdate(ticketId);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(s, actor.id())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        requireActive(s);
+        BigDecimal payable = payableAmount(ticket);
+        BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
+        if (paid.add(amount).compareTo(payable) > 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ");
+        }
+        boolean depositWasSettled = depositSettled(s);
+        String kind = DepositPolicy.REQUIRED.equals(s.depositPolicy()) && !depositWasSettled ? "DEPOSIT" : "BALANCE";
+        long receiptId;
+        try {
+            receiptId = tickets.insertExpressReceipt(ticketId, kind, amount, actor.id(), receivedAt, ref,
+                blankToNull(customerName));
+        } catch (DataIntegrityViolationException e) {
+            throw new ApiException(HttpStatus.CONFLICT, "เลขที่เอกสาร Express นี้ถูกบันทึกแล้ว");
+        }
+        BigDecimal newPaid = paid.add(amount);
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
+            s.status(), s.status(),
+            "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable + " — Express " + ref,
+            RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
+        reconcilePaymentStatus(ticketId, actor, false);
+        boolean settledNow = depositSettled(requireTicket(ticketId).summary());
+        if (settledNow) {
+            routeAllStockDealToDelivery(ticketId, actor);
+        }
+        if (settledNow && !depositWasSettled) {
+            notifyRepOfDepositConfirmed(requireTicket(ticketId).summary(), amount);
+        } else if (depositWasSettled) {
+            notifyRepOfPaymentReceived(requireTicket(ticketId).summary(), amount,
+                payable.subtract(nullToZero(tickets.sumPaid(ticketId))), actor);
+        }
+        return receiptId;
+    }
+
     /** The {@code /api/tickets} entrypoint: ceo only since the H1 lockdown (billing is out of scope for the finance page). */
     @Transactional
     public TicketDto setBilling(long ticketId, BillingRequest request, UserPrincipal actor) {
@@ -1916,7 +1991,7 @@ public class TicketService {
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable
                 + (note != null ? " — " + note : ""),
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
-        reconcilePaymentStatus(ticketId, actor);
+        reconcilePaymentStatus(ticketId, actor, true);
         // Deposit settled (a notice alone is not money): an all-stock deal is ready to deliver.
         boolean settledNow = depositSettled(requireTicket(ticketId).summary());
         if (settledNow) {
@@ -1974,12 +2049,16 @@ public class TicketService {
             "/tickets/" + s.id());
     }
 
-    private void reconcilePaymentStatus(long ticketId, UserPrincipal actor) {
+    /**
+     * {@code allowFullyPaid = false} (an Express upload, {@link #recordExpressReceipt}) skips the FULLY_PAID walk — and
+     * with it {@link #maybeAdvanceClosedPaid} — leaving only the deposit advance below.
+     */
+    private void reconcilePaymentStatus(long ticketId, UserPrincipal actor, boolean allowFullyPaid) {
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         BigDecimal payable = payableAmount(ticket);
         BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
-        if (payable.signum() > 0 && paid.compareTo(payable) >= 0) {
+        if (allowFullyPaid && payable.signum() > 0 && paid.compareTo(payable) >= 0) {
             // Rule 4/5 tightening: null may only advance to CUSTOMER_CONFIRMED. A payment recorded (by account) before the
             // customer was ever confirmed must not silently promote payment_status straight to FULLY_PAID — it stays null
             // until confirmCustomer eventually runs.

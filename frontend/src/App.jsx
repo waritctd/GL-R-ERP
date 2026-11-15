@@ -46,6 +46,7 @@ const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.
 // Role-scoped views: Account's money Overview (landing) + งานการเงิน worklist.
 const AccountOverview = lazy(() => import('./features/dashboard/AccountOverview.jsx').then(toDefault('AccountOverview')));
 const AccountFinancePage = lazy(() => import('./features/finance/AccountFinancePage.jsx').then(toDefault('AccountFinancePage')));
+const ReceiptsImportPage = lazy(() => import('./features/finance/ReceiptsImportPage.jsx').then(toDefault('ReceiptsImportPage')));
 const FinanceDealPage = lazy(() => import('./features/finance/FinanceDealPage.jsx').then(toDefault('FinanceDealPage')));
 const PayrollPage = lazy(() => import('./features/payroll/PayrollPage.jsx').then(toDefault('PayrollPage')));
 const DeductionShortfallsPage = lazy(() => import('./features/payroll/DeductionShortfallsPage.jsx').then(toDefault('DeductionShortfallsPage')));
@@ -522,6 +523,12 @@ export function App() {
                 <Route
                   path="/finance/deals/:id"
                   element={<FinanceDealPage user={user} showToast={showToast} />}
+                />
+                {/* The Express receipts upload (spec 2026-11-15 §7.8): account / ceo, guarded by the same `/finance`
+                 * prefix rule (canConfirmPayments) — exactly ReceiptImportService's UPLOAD_ROLES. */}
+                <Route
+                  path="/finance/receipts-import"
+                  element={<ReceiptsImportPage showToast={showToast} />}
                 />
                 <Route
                   path="/price-import"

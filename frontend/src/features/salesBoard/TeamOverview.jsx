@@ -7,6 +7,7 @@ import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { bangkokTodayIso } from '../../utils/format.js';
 import { baht, columnLabel, money, otherCurrencyTotals, sinceLabel, sumValue, totalLabel } from './boardFormat.js';
 import { monthLabel } from './cashFormat.js';
+import { UnmatchedReceipts } from './UnmatchedReceipts.jsx';
 import { VisitDots, VisitWeekGrid } from './VisitWeekGrid.jsx';
 
 // A manager's or the CEO's own deals stay in the table, labelled (review LOW); a rep's row carries no label.
@@ -49,7 +50,7 @@ function QuietChip({ count }) {
  * alike — against the team's expected payments for the Bangkok month; each row carries that rep's two figures. A
  * rep's name opens the deal list's existing ?owner= filter.
  */
-export function TeamOverview({ showTitle = true }) {
+export function TeamOverview({ showTitle = true, showToast = () => {} }) {
   const query = useQuery({ queryKey: queryKeys.salesBoardTeam(), queryFn: () => api.salesBoard.teamOverview() });
   const team = query.data;
 
@@ -204,6 +205,9 @@ export function TeamOverview({ showTitle = true }) {
               </ul>
             )}
           </Panel>
+
+          {/* The whole unmatched Express queue (slice 3) — managers and the CEO may attach any row, or set it aside. */}
+          <UnmatchedReceipts showToast={showToast} canIgnore hideWhenEmpty />
 
           <VisitWeekGrid reps={team.reps} visits={team.teamVisitsThisWeek ?? []} todayIso={bangkokTodayIso()} />
         </>

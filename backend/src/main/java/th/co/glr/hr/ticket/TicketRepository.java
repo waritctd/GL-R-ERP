@@ -1748,12 +1748,35 @@ public class TicketRepository {
         return keys.getKey().longValue();
     }
 
+    /** An uploaded Express receipt (V213): source EXPRESS, receipt_ref = the Express document number. */
+    public long insertExpressReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy, Instant receivedAt,
+                                     String expressDocNo, String customerName) {
+        GeneratedKeyHolder keys = new GeneratedKeyHolder();
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt
+                (ticket_id, kind, amount, currency, received_at, recorded_by, receipt_ref, source, customer_name)
+            VALUES
+                (:ticketId, :kind, :amount, 'THB', COALESCE(CAST(:receivedAt AS timestamptz), now()), :recordedBy,
+                 :ref, 'EXPRESS', :customerName)
+            """,
+            new MapSqlParameterSource()
+                .addValue("ticketId", ticketId)
+                .addValue("kind", kind)
+                .addValue("amount", amount)
+                .addValue("receivedAt", receivedAt == null ? null : Timestamp.from(receivedAt))
+                .addValue("recordedBy", recordedBy)
+                .addValue("ref", expressDocNo)
+                .addValue("customerName", customerName),
+            keys, new String[]{"receipt_id"});
+        return keys.getKey().longValue();
+    }
+
     public List<PaymentReceiptDto> findReceiptsByTicket(long ticketId) {
         return jdbc.query("""
             SELECT r.receipt_id, r.ticket_id, r.kind, r.amount, r.currency,
                    r.received_at, r.recorded_by,
                    NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS recorded_by_name,
-                   r.note, r.deposit_notice_id, r.receipt_ref, r.created_at
+                   r.note, r.deposit_notice_id, r.receipt_ref, r.created_at, r.source, r.customer_name
               FROM sales.payment_receipt r
               JOIN hr.employee e ON e.employee_id = r.recorded_by
              WHERE r.ticket_id = :ticketId
@@ -1775,7 +1798,9 @@ public class TicketRepository {
                     rs.getString("note"),
                     depositNoticeId,
                     rs.getString("receipt_ref"),
-                    rs.getTimestamp("created_at").toInstant()
+                    rs.getTimestamp("created_at").toInstant(),
+                    rs.getString("source"),
+                    rs.getString("customer_name")
                 );
             });
     }

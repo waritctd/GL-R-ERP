@@ -17,6 +17,7 @@ import { nextAccountAction } from '../tickets/accountActions.js';
 import { dedupeById, rowAmount, useAccountTickets } from './accountTickets.js';
 import { findStage, useStageCatalog } from '../tickets/stageCatalog.js';
 import { MONEY_TRACK, moneyMilestoneOf } from './moneyMilestone.js';
+import { ExpressUploadCard } from './ReceiptsImportPage.jsx';
 
 // The next-action filter. Keys are exactly nextAccountAction()'s own `action.key`, so filtering never drifts
 // from what a row's action column shows.
@@ -170,6 +171,8 @@ export function AccountFinancePage({ user, showToast }) {
   return (
     <PageStack>
       <PageHeader title="งานการเงิน" />
+      {/* Receipts come in from the Express file first (spec 2026-11-15 §7.11 item 5); the worklist follows. */}
+      <ExpressUploadCard />
 
       {loading ? null : (
         <section aria-label="สรุปงานการเงิน" className="grid min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-end gap-x-8 gap-y-4 border-b border-border pb-5 nav-drawer:grid-cols-[minmax(0,1fr)]">

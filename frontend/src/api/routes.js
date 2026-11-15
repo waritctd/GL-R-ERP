@@ -146,6 +146,15 @@ export const API_ROUTES = {
     list: (ticketId) => `/api/tickets/${ticketId}/expected-payments`,
     detail: (ticketId, id) => `/api/tickets/${ticketId}/expected-payments/${id}`,
   },
+  // ReceiptImportController (salesboard/receipts/): the Express receipts upload and its unmatched queue (V213).
+  receiptImports: {
+    upload: '/api/sales/receipt-imports',
+    latest: '/api/sales/receipt-imports/latest',
+    template: '/api/sales/receipt-imports/template',
+    unmatched: '/api/sales/receipt-imports/unmatched',
+    resolve: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/resolve`,
+    ignore: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/ignore`,
+  },
   salesVisits: {
     list: '/api/sales/visits',
     team: '/api/sales/visits/team',
