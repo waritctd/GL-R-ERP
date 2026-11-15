@@ -13011,16 +13011,17 @@ export const api = {
       const committed = dryRun === false;
       const plan = [
         { row: 2, action: 'CREATE', project: 'โรงแรมตัวอย่าง', designer: 'สตูดิโอสมมุติ', ownerName: user.name,
-          repCode: 'S1', value: 2500000, ticketId: null, ticketCode: null, changes: [] },
+          repCode: 'S1', value: 2500000, ticketId: null, ticketCode: null, changes: [], newCustomer: 'บริษัท สมมุติ จำกัด' },
         { row: 3, action: 'UPDATE', project: 'อาคารสมมุติ ชั้น 3', designer: 'สตูดิโอสมมุติ', ownerName: user.name,
-          repCode: 'S3', value: 1240000, ticketId: 1, ticketCode: 'TK-0001', changes: ['โอกาสขาย', 'ช่วงเวลา'] },
+          repCode: 'S3', value: 1240000, ticketId: 1, ticketCode: 'TK-0001', changes: ['โอกาสขาย', 'ช่วงเวลา'],
+          newCustomer: null },
         { row: 4, action: 'UNCHANGED', project: 'โชว์รูมสมมุติ', designer: 'สตูดิโอสมมุติ', ownerName: user.name,
-          repCode: 'S5', value: 1560650, ticketId: 2, ticketCode: 'TK-0002', changes: [] },
+          repCode: 'S5', value: 1560650, ticketId: 2, ticketCode: 'TK-0002', changes: [], newCustomer: null },
         { row: 5, action: 'SKIP', project: 'ห้องรับรองสมมุติ', designer: 'สตูดิโอสมมุติ', ownerName: user.name,
-          repCode: null, value: 1880000, ticketId: null, ticketCode: null, changes: [] },
+          repCode: null, value: 1880000, ticketId: null, ticketCode: null, changes: [], newCustomer: null },
       ];
       return delay({
-        rows: 4, toCreate: 1, toUpdate: 1, unchanged: 1, skipped: 1, committed, plan,
+        rows: 4, toCreate: 1, toUpdate: 1, unchanged: 1, skipped: 1, skippedNeedsDocument: 0, committed, plan,
         issues: [{ row: 5, severity: 'ERROR', message: 'S4 ไม่มีในระบบ เลือก S3 หรือ S5' }],
       });
     },

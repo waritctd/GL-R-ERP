@@ -27,6 +27,13 @@ class PipelineFieldsTest {
         assertThat(PipelineFields.repCode(raw).value()).isEqualTo(code);
     }
 
+    @ParameterizedTest
+    @CsvSource(delimiter = '|', value = {"S3/S5", "S3 หรือ S5", "S3 รอเซ็น", "s6,s7"})
+    void moreThanOneStatusOrTrailingTextIsAnError(String raw) {
+        assertThat(PipelineFields.repCode(raw).value()).isNull();
+        assertThat(PipelineFields.repCode(raw).error()).isEqualTo("ระบุสถานะเดียว");
+    }
+
     @Test
     void s4IsRefusedWithTheRemedy() {
         assertThat(PipelineFields.repCode("S4").error()).isEqualTo("S4 ไม่มีในระบบ เลือก S3 หรือ S5");
@@ -62,10 +69,23 @@ class PipelineFieldsTest {
     }
 
     @ParameterizedTest
-    @CsvSource(delimiter = '|', value = {"USD 1,000", "$1000", "€5", "หนึ่งล้าน", "1.2.3", "-500"})
+    @CsvSource(delimiter = '|', value = {"USD 1,000", "$1000", "€5", "หนึ่งล้าน", "1.2.3", "-500", "99999999999999"})
     void nonThbOrNonNumericValueIsAnError(String raw) {
         assertThat(PipelineFields.value(raw, null).value()).isNull();
         assertThat(PipelineFields.value(raw, null).error()).isNotBlank();
+    }
+
+    @Test
+    void aHugeNumericCellIsARowErrorNotAnException() {
+        assertThat(PipelineFields.value("1E+20", 1e20).error()).isNotBlank();
+        assertThat(PipelineFields.probability("1E+20", 1e20, false).error()).isNotBlank();
+        assertThat(PipelineFields.probability("99999999999", 99999999999d, false).error()).isNotBlank();
+        assertThat(PipelineFields.value("NaN", Double.NaN).error()).isNotBlank();
+    }
+
+    @Test
+    void elevenNinesIsAValidValue() {
+        assertThat(PipelineFields.value("99999999999", null).value()).isEqualByComparingTo("99999999999");
     }
 
     @Test
@@ -77,7 +97,7 @@ class PipelineFieldsTest {
     // ── win probability ────────────────────────────────────────────────────────
 
     @ParameterizedTest
-    @CsvSource({"60,60", "60%,60", " 25 % ,25", "0,0", "100,100", "72.4,72"})
+    @CsvSource({"60,60", "60%,60", " 25 % ,25", "0,0", "100,100", "1,1", "0.6,60", "0.05,5"})
     void probabilityFromText(String raw, int expected) {
         assertThat(PipelineFields.probability(raw, null, false).value()).isEqualTo(expected);
     }
@@ -86,10 +106,12 @@ class PipelineFieldsTest {
     void probabilityFromAPercentFormattedCell() {
         assertThat(PipelineFields.probability("60%", 0.6, true).value()).isEqualTo(60);
         assertThat(PipelineFields.probability("60", 60.0, false).value()).isEqualTo(60);
+        assertThat(PipelineFields.probability("0.6", 0.6, false).value()).isEqualTo(60);
+        assertThat(PipelineFields.probability("1", 1.0, false).value()).isEqualTo(1);
     }
 
     @ParameterizedTest
-    @CsvSource({"101", "-1", "สูง"})
+    @CsvSource({"101", "-1", "สูง", "72.4", "1.5", "60.5%", "99999999999", "1e400"})
     void probabilityOutOfRangeIsAnError(String raw) {
         assertThat(PipelineFields.probability(raw, null, false).error()).isNotBlank();
     }
@@ -116,6 +138,16 @@ class PipelineFieldsTest {
         assertThat(PipelineFields.quarter("Q5/2026", null).error()).isNotBlank();
     }
 
+    // ── quotation numbers ─────────────────────────────────────────────────────
+
+    @Test
+    void aQuotationCellSplitsOnSlashAndCommaIntoRevisionlessBases() {
+        assertThat(PipelineFields.quotationBases("QT-2026-0201-7 / qt-2026-0201-8, QT-2026-0300"))
+            .containsExactly("QT-2026-0201", "QT-2026-0300");
+        assertThat(PipelineFields.quotationBases("  ")).isEmpty();
+        assertThat(PipelineFields.quotationBases(null)).isEmpty();
+    }
+
     // ── titles ─────────────────────────────────────────────────────────────────
 
     @Test
@@ -127,33 +159,60 @@ class PipelineFieldsTest {
 
     @ParameterizedTest
     @CsvSource({
-        "S1,PRESENTATION", "S2,SPEC_APPROVED", "S3,QUOTE_DESIGN_SIDE", "S5,AWAITING_BUYER", "S6,NEGOTIATION",
-        "S7,DEPOSIT_RECEIVED", "S8,DELIVERY_SCHEDULING", "S9,DELIVERED",
+        "S1,PRESENTATION", "S2,SPEC_APPROVED", "S5,AWAITING_BUYER", "S6,NEGOTIATION",
     })
-    void designerLedRouteTakesThePlannedStage(String code, String stage) {
-        PipelineStages.StageChoice choice = PipelineStages.stageFor(code, EntryChannel.DESIGNER_LED);
+    void designerLedRouteTakesThePlannedStage_whereAFreshDealsFactsHold(String code, String stage) {
+        PipelineStages.StageChoice choice = PipelineStages.stageFor(code, EntryChannel.DESIGNER_LED, PipelineStagesFacts.FRESH_DEAL);
         assertThat(choice.stage()).isEqualTo(stage);
         assertThat(choice.warning()).isNull();
         assertThat(DealStage.repCodeOf(choice.stage())).isEqualTo(code);
     }
 
     @Test
-    void ownerDirectS3StaysS3OnTheOwnersQuoteStage() {
-        PipelineStages.StageChoice choice = PipelineStages.stageFor("S3", EntryChannel.OWNER_DIRECT);
+    void s3WithNoQuotationInTheAppLandsOnS2_withTheReason() {
+        PipelineStages.StageChoice choice = PipelineStages.stageFor("S3", EntryChannel.DESIGNER_LED,
+            PipelineStagesFacts.FRESH_DEAL);
+        assertThat(choice.stage()).isEqualTo(DealStage.SPEC_APPROVED);
+        assertThat(choice.warning()).isEqualTo("S3 ในชีท → นำเข้าเป็น S2 เพราะยังไม่มีใบเสนอราคาในระบบ");
+    }
+
+    @ParameterizedTest
+    @CsvSource({"S7", "S8", "S9"})
+    void documentStagesAreNeverImported(String code) {
+        assertThat(PipelineStages.needsDocument(code)).isTrue();
+    }
+
+    @ParameterizedTest
+    @CsvSource({"S1", "S2", "S3", "S5", "S6"})
+    void earlierStagesAreImportable(String code) {
+        assertThat(PipelineStages.needsDocument(code)).isFalse();
+    }
+
+    @Test
+    void ownerDirectS3StaysS3OnTheOwnersQuoteStage_whenItsFactHolds() {
+        PipelineStages.StageChoice choice = PipelineStages.stageFor("S3", EntryChannel.OWNER_DIRECT, PipelineStagesFacts.ALL_HOLD);
         assertThat(choice.stage()).isEqualTo(DealStage.QUOTE_OWNER);
         assertThat(choice.warning()).isNull();
     }
 
     @Test
+    void ownerDirectS3WithNoQuotationLandsOnS2() {
+        PipelineStages.StageChoice choice = PipelineStages.stageFor("S3", EntryChannel.OWNER_DIRECT,
+            PipelineStagesFacts.FRESH_DEAL);
+        assertThat(choice.stage()).isEqualTo(DealStage.SPEC_APPROVED);
+        assertThat(choice.warning()).contains("S3 ในชีท → นำเข้าเป็น S2");
+    }
+
+    @Test
     void buyerDirectS3FallsBackToTheNearestEarlierOnRouteStageWithAWarning() {
-        PipelineStages.StageChoice choice = PipelineStages.stageFor("S3", EntryChannel.BUYER_DIRECT);
+        PipelineStages.StageChoice choice = PipelineStages.stageFor("S3", EntryChannel.BUYER_DIRECT, PipelineStagesFacts.FRESH_DEAL);
         assertThat(choice.stage()).isEqualTo(DealStage.SPEC_APPROVED);
         assertThat(choice.warning()).contains("S3").contains("S2");
     }
 
     @Test
     void buyerDirectS5FallsBackToSpecApproved() {
-        PipelineStages.StageChoice choice = PipelineStages.stageFor("S5", EntryChannel.BUYER_DIRECT);
+        PipelineStages.StageChoice choice = PipelineStages.stageFor("S5", EntryChannel.BUYER_DIRECT, PipelineStagesFacts.FRESH_DEAL);
         assertThat(choice.stage()).isEqualTo(DealStage.SPEC_APPROVED);
         assertThat(choice.warning()).isNotBlank();
     }
@@ -162,9 +221,11 @@ class PipelineFieldsTest {
     void everyChoiceIsOnRoute() {
         for (String channel : new String[] {EntryChannel.DESIGNER_LED, EntryChannel.OWNER_DIRECT,
             EntryChannel.BUYER_DIRECT}) {
-            for (String code : new String[] {"S1", "S2", "S3", "S5", "S6", "S7", "S8", "S9"}) {
-                assertThat(th.co.glr.hr.ticket.DealRoute.isOnRoute(channel,
-                    PipelineStages.stageFor(code, channel).stage())).as("%s %s", channel, code).isTrue();
+            for (String code : new String[] {"S1", "S2", "S3", "S5", "S6"}) {
+                String stage = PipelineStages.stageFor(code, channel, PipelineStagesFacts.FRESH_DEAL).stage();
+                assertThat(th.co.glr.hr.ticket.DealRoute.isOnRoute(channel, stage)).as("%s %s", channel, code).isTrue();
+                assertThat(th.co.glr.hr.ticket.TicketService.stageFactRefusal(null, null, java.util.Set.of(), stage))
+                    .as("facts %s %s", channel, code).isNull();
             }
         }
     }

@@ -22,10 +22,10 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 // Invented rows, one of each action.
 const dryRun = {
-  rows: 4, toCreate: 1, toUpdate: 1, unchanged: 1, skipped: 1, committed: false,
+  rows: 4, toCreate: 1, toUpdate: 1, unchanged: 1, skipped: 1, skippedNeedsDocument: 1, committed: false,
   plan: [
     { row: 2, action: 'CREATE', project: 'โรงแรมสมมุติ', designer: 'สตูดิโอ ก', ownerName: 'คุณทดสอบ ขายดี',
-      repCode: 'S1', value: 2500000, ticketId: null, ticketCode: null, changes: [] },
+      repCode: 'S1', value: 2500000, ticketId: null, ticketCode: null, changes: [], newCustomer: 'บริษัท สมมุติ จำกัด' },
     { row: 3, action: 'UPDATE', project: 'อาคารสมมุติ', designer: 'สตูดิโอ ข', ownerName: 'คุณทดสอบ ขายดี',
       repCode: 'S3', value: 1240000, ticketId: 11, ticketCode: 'TK-0011', changes: ['โอกาสขาย', 'ช่วงเวลา'] },
     { row: 4, action: 'UNCHANGED', project: 'โชว์รูมสมมุติ', designer: 'สตูดิโอ ค', ownerName: 'คุณทดสอบ ขายดี',
@@ -34,6 +34,7 @@ const dryRun = {
       repCode: null, value: 1880000, ticketId: null, ticketCode: null, changes: [] },
   ],
   issues: [
+    { row: 0, severity: 'WARNING', message: 'ไม่รู้จักคอลัมน์: เบอร์โทร — ไม่ถูกนำเข้า' },
     { row: 3, severity: 'WARNING', message: 'คงค่าเดิมในระบบ: ผู้ออกแบบ' },
     { row: 5, severity: 'ERROR', message: 'S4 ไม่มีในระบบ เลือก S3 หรือ S5' },
   ],
@@ -80,6 +81,15 @@ describe('PipelineImportDialog', () => {
     expect(api.salesBoard.pipelineImport).not.toHaveBeenCalled();
   });
 
+  it('the upload step says what the import will not do', () => {
+    renderDialog();
+
+    const help = screen.getByTestId('pipeline-import-help').textContent;
+    expect(help).toContain('S7–S9');
+    expect(help).toContain('ผู้ซื้อหรือเจ้าของโครงการ');
+    expect(help).toContain('ไม่เปลี่ยนสถานะดีลที่มีอยู่');
+  });
+
   it('a dry run shows every row with its result and reasons, and the counts', async () => {
     renderDialog();
 
@@ -99,6 +109,9 @@ describe('PipelineImportDialog', () => {
     expect(screen.getByText('สร้าง 1')).toBeTruthy();
     expect(screen.getByText('อัปเดต 1')).toBeTruthy();
     expect(screen.getByText('ข้าม 1')).toBeTruthy();
+    expect(screen.getByText('ต้องบันทึกผ่านเอกสาร 1')).toBeTruthy();
+    expect(within(rows[0]).getByText('ลูกค้าใหม่: บริษัท สมมุติ จำกัด')).toBeTruthy();
+    expect(screen.getByRole('note').textContent).toContain('ไม่รู้จักคอลัมน์: เบอร์โทร');
     expect(screen.getByText('ยังไม่มีอะไรถูกบันทึกจนกว่าจะกดนำเข้า')).toBeTruthy();
     expect(screen.getByText(/Pipeline_ทดสอบ\.xlsx · 4 แถว/)).toBeTruthy();
   });
@@ -113,7 +126,8 @@ describe('PipelineImportDialog', () => {
     expect(api.salesBoard.pipelineImport).toHaveBeenCalledTimes(2);
     expect(api.salesBoard.pipelineImport).toHaveBeenLastCalledWith(expect.any(File), false);
     expect(screen.getByText(/สร้างดีลใหม่ 1 · อัปเดต 1/)).toBeTruthy();
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['tickets', 'salesBoard'] });
+    // ['tickets'] is the prefix of both the deal list and the sales-board keys (queryKeys.js).
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['tickets'] });
   });
 
   it('nothing to write disables นำเข้า', async () => {

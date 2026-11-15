@@ -52,10 +52,10 @@ final class PipelineSheet {
         put(m, Column.DESIGNER, "designer");
         put(m, Column.OWNER, "owner", "projectowner");
         put(m, Column.BUYER, "buyer", "ผู้รับเหมา", "contractor");
-        put(m, Column.QUOTATION_NO, "เลขที่qt", "quotationno", "quotation", "qtno", "qt");
-        put(m, Column.VALUE, "value", "amount", "มูลค่าบาท");
-        put(m, Column.STATUS, "สถานะ", "status", "stage");
-        put(m, Column.PROBABILITY, "โอกาสขาย", "probability", "winprobability");
+        put(m, Column.QUOTATION_NO, "เลขที่qt", "quotationno", "quotation", "qtno", "qt", "qn", "เลขที่อ้างอิง");
+        put(m, Column.VALUE, "value", "amount", "มูลค่าบาท", "มูลค่าใบเสนอราคา");
+        put(m, Column.STATUS, "สถานะ", "status", "stage", "สถานะงานขาย");
+        put(m, Column.PROBABILITY, "โอกาสขาย", "probability", "winprobability", "จะขายได้", "โอกาส");
         put(m, Column.QUARTER, "ช่วงเวลา", "ไตรมาส", "quarter", "expectedquarter");
         put(m, Column.NOTE, "note", "notes", "remark");
         return Map.copyOf(m);
@@ -96,7 +96,14 @@ final class PipelineSheet {
         }
     }
 
+    /** The rows, and the header labels no alias matched (their columns are ignored — reported as a file warning). */
+    record ParsedSheet(List<SheetRow> rows, List<String> unknownHeaders) {}
+
     static List<SheetRow> read(String filename, byte[] bytes, int maxRows) {
+        return readSheet(filename, bytes, maxRows).rows();
+    }
+
+    static ParsedSheet readSheet(String filename, byte[] bytes, int maxRows) {
         if (bytes == null || bytes.length == 0) {
             throw bad("ไฟล์ว่างเปล่า");
         }
@@ -112,7 +119,7 @@ final class PipelineSheet {
         return toRows(grid, maxRows);
     }
 
-    private static List<SheetRow> toRows(List<List<SheetCell>> grid, int maxRows) {
+    private static ParsedSheet toRows(List<List<SheetCell>> grid, int maxRows) {
         int headerIndex = -1;
         for (int i = 0; i < grid.size(); i++) {
             if (grid.get(i).stream().anyMatch(c -> !c.blank())) {
@@ -125,10 +132,13 @@ final class PipelineSheet {
         }
         Map<Integer, Column> columnAt = new LinkedHashMap<>();
         List<SheetCell> header = grid.get(headerIndex);
+        List<String> unknown = new ArrayList<>();
         for (int i = 0; i < header.size(); i++) {
             Column c = ALIASES.get(headerKey(header.get(i).text()));
             if (c != null && !columnAt.containsValue(c)) {
                 columnAt.put(i, c);
+            } else if (!header.get(i).blank()) {
+                unknown.add(header.get(i).text().strip());
             }
         }
         List<String> missing = new ArrayList<>();
@@ -157,7 +167,7 @@ final class PipelineSheet {
             }
             rows.add(new SheetRow(i + 1, cells));
         }
-        return rows;
+        return new ParsedSheet(rows, List.copyOf(unknown));
     }
 
     // ── xlsx / xls ───────────────────────────────────────────────────────────

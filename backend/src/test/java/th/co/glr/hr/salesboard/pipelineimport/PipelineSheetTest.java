@@ -79,6 +79,58 @@ class PipelineSheetTest {
     }
 
     @Test
+    void theRepsOwnWorkbookHeadersAreRecognised_andUnknownOnesAreListed() throws IOException {
+        String[] real = {"ลำดับ", "พนักงานขาย", "โครงการ", "ผู้ออกแบบ (ชื่อ/ตำแหน่ง)", "เจ้าของโครงการ (ชื่อ/ตำแหน่ง)",
+            "ผู้ซื้อ (ชื่อ/ตำแหน่ง)", "เลขที่อ้างอิง", "มูลค่าใบเสนอราคา", "สถานะงานขาย", "จะขายได้ %", "ช่วงเวลา (Q)",
+            "หมายเหตุ", "เบอร์โทร"};
+        String[] values = {"1", "EMP-T01", "โครงการสมมุติ", "สตูดิโอสมมุติ", "เจ้าของสมมุติ", "ผู้ซื้อสมมุติ", "QT-T-0001-1",
+            "1,000", "S2", "30", "Q1/70", "ข้อมูลสมมุติ", "000"};
+        byte[] xlsx = xlsx(wb -> {
+            Sheet s = wb.createSheet("x");
+            Row h = s.createRow(0);
+            Row r = s.createRow(1);
+            for (int i = 0; i < real.length; i++) {
+                h.createCell(i).setCellValue(real[i]);
+                r.createCell(i).setCellValue(values[i]);
+            }
+        });
+
+        PipelineSheet.ParsedSheet sheet = PipelineSheet.readSheet("a.xlsx", xlsx, 10);
+
+        PipelineSheet.SheetRow row = sheet.rows().get(0);
+        assertThat(row.text(Column.DESIGNER)).isEqualTo("สตูดิโอสมมุติ");
+        assertThat(row.text(Column.OWNER)).isEqualTo("เจ้าของสมมุติ");
+        assertThat(row.text(Column.BUYER)).isEqualTo("ผู้ซื้อสมมุติ");
+        assertThat(row.text(Column.QUOTATION_NO)).isEqualTo("QT-T-0001-1");
+        assertThat(row.text(Column.VALUE)).isEqualTo("1,000");
+        assertThat(row.text(Column.STATUS)).isEqualTo("S2");
+        assertThat(row.text(Column.PROBABILITY)).isEqualTo("30");
+        assertThat(row.text(Column.QUARTER)).isEqualTo("Q1/70");
+        assertThat(sheet.unknownHeaders()).containsExactly("ลำดับ", "เบอร์โทร");
+    }
+
+    @Test
+    void qnAndโอกาสAreAliasesToo() throws IOException {
+        byte[] xlsx = xlsx(wb -> {
+            Sheet s = wb.createSheet("x");
+            Row h = s.createRow(0);
+            String[] hs = {"พนักงานขาย", "โครงการ", "สถานะ", "QN", "โอกาส"};
+            for (int i = 0; i < hs.length; i++) {
+                h.createCell(i).setCellValue(hs[i]);
+            }
+            Row r = s.createRow(1);
+            String[] vs = {"EMP-T01", "โครงการ ก", "S1", "QT-9", "20"};
+            for (int i = 0; i < vs.length; i++) {
+                r.createCell(i).setCellValue(vs[i]);
+            }
+        });
+
+        PipelineSheet.SheetRow row = PipelineSheet.read("a.xlsx", xlsx, 10).get(0);
+        assertThat(row.text(Column.QUOTATION_NO)).isEqualTo("QT-9");
+        assertThat(row.text(Column.PROBABILITY)).isEqualTo("20");
+    }
+
+    @Test
     void blankRowsAreIgnoredAndRowNumbersAreTheSheetsOwn() throws IOException {
         byte[] xlsx = xlsx(wb -> {
             Sheet s = wb.createSheet("x");

@@ -46,7 +46,13 @@ final class PipelineFields {
 
     static final String S4_REFUSAL = "S4 ไม่มีในระบบ เลือก S3 หรือ S5";
 
-    /** "S3", "s3", "S03", "S3 ทำใบเสนอราคาแล้ว", or the long Thai text alone → "S3". */
+    static final String ONE_STATUS = "ระบุสถานะเดียว";
+
+    /**
+     * "S3", "s3", "S03", or the reps' long Thai text alone → "S3". A code followed by anything else ("S3/S5",
+     * "S3 รอเซ็น") is refused with {@link #ONE_STATUS} — the import never guesses between two stages. The one
+     * exception is the code followed by its OWN workbook wording ("S3 ทำใบเสนอราคาแล้ว"), which says nothing more.
+     */
     static Parsed<String> repCode(String raw) {
         String text = raw == null ? "" : raw.strip();
         if (text.isEmpty()) {
@@ -57,6 +63,11 @@ final class PipelineFields {
             int n = Integer.parseInt(m.group(1));
             if (n == 4) {
                 return Parsed.fail(S4_REFUSAL);
+            }
+            String rest = m.group(2).strip();
+            if (n >= 1 && n <= 9 && !rest.isEmpty()
+                    && !("S" + n).equals(STATUS_TEXT.get(rest.replaceAll("\\s+", "")))) {
+                return Parsed.fail(ONE_STATUS);
             }
             if (n >= 1 && n <= 9) {
                 return Parsed.ok("S" + n);
@@ -79,6 +90,9 @@ final class PipelineFields {
     static Parsed<BigDecimal> value(String text, Double numeric) {
         BigDecimal v;
         if (numeric != null) {
+            if (numeric.isNaN() || numeric.isInfinite()) {
+                return Parsed.fail("มูลค่า '" + text + "' ไม่ถูกต้อง");
+            }
             v = BigDecimal.valueOf(numeric);
         } else {
             String t = text == null ? "" : text.strip();
@@ -97,14 +111,21 @@ final class PipelineFields {
         return Parsed.ok(v.setScale(2, RoundingMode.HALF_UP));
     }
 
-    /** Win probability 0–100. A percent-formatted cell holds a fraction (0.6 = 60%). Decimals round half-up. */
+    /**
+     * Win probability 0–100. A percent-formatted cell holds a fraction (0.6 = 60%, rounded half-up). Otherwise a
+     * NON-integer value ≤ 1 is a fraction too (0.6 → 60); an integer 0–100 is taken as-is (so "1" is 1%, not 100%);
+     * anything else — 72.4, 101, a negative, an overflow — is a row error, bound-checked BEFORE any int conversion.
+     */
     static Parsed<Integer> probability(String text, Double numeric, boolean percentFormatted) {
         BigDecimal v;
         String shown = text == null ? "" : text.strip();
         if (numeric != null) {
+            if (numeric.isNaN() || numeric.isInfinite()) {
+                return Parsed.fail("โอกาสขาย '" + shown + "' ต้องเป็นตัวเลข 0–100");
+            }
             v = BigDecimal.valueOf(numeric);
             if (percentFormatted) {
-                v = v.movePointRight(2);
+                v = v.movePointRight(2).setScale(0, RoundingMode.HALF_UP);
             }
         } else {
             if (shown.isEmpty()) {
@@ -116,11 +137,16 @@ final class PipelineFields {
             }
             v = new BigDecimal(digits);
         }
-        int rounded = v.setScale(0, RoundingMode.HALF_UP).intValueExact();
-        if (rounded < 0 || rounded > 100) {
-            return Parsed.fail("โอกาสขาย '" + (shown.isEmpty() ? v.toPlainString() : shown) + "' ต้องอยู่ระหว่าง 0–100");
+        boolean integral = v.stripTrailingZeros().scale() <= 0;
+        if (!integral && v.signum() > 0 && v.compareTo(BigDecimal.ONE) <= 0) {
+            v = v.movePointRight(2).setScale(0, RoundingMode.HALF_UP);
+            integral = true;
         }
-        return Parsed.ok(rounded);
+        if (!integral || v.signum() < 0 || v.compareTo(BigDecimal.valueOf(100)) > 0) {
+            return Parsed.fail("โอกาสขาย '" + (shown.isEmpty() ? v.toPlainString() : shown)
+                + "' ต้องเป็นจำนวนเต็ม 0–100 หรือสัดส่วน เช่น 0.6");
+        }
+        return Parsed.ok(v.intValueExact());
     }
 
     private static final Pattern YEAR_FIRST = Pattern.compile("^(\\d{4})\\s*[-/ ]?\\s*Q([1-9])$");
@@ -177,6 +203,22 @@ final class PipelineFields {
         }
         String t = s.strip();
         return t.isEmpty() ? null : t;
+    }
+
+    /** A quotation-number cell may hold several numbers ("QT-…-7 / QT-…-8", "a, b"); each is folded to its
+     * revisionless base by {@link th.co.glr.hr.salesboard.SalesNames#normaliseDoc}. Distinct, in cell order. */
+    static java.util.List<String> quotationBases(String cell) {
+        if (cell == null || cell.isBlank()) {
+            return java.util.List.of();
+        }
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        for (String part : cell.split("[/,]")) {
+            String base = th.co.glr.hr.salesboard.SalesNames.normaliseDoc(part);
+            if (base != null) {
+                out.add(base);
+            }
+        }
+        return java.util.List.copyOf(out);
     }
 
     private PipelineFields() {}

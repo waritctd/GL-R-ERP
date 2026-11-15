@@ -86,7 +86,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         Map<String, Integer> before = counts();
 
         JsonNode result = upload(csv(
-            row(repCode, "โรงแรมสมมุติ ก", "สตูดิโอสมมุติ", "", "", "QT-T-0001", "1,240,000", "S3", "60", "2026-Q4", ""),
+            row(repCode, "โรงแรมสมมุติ ก", "สตูดิโอสมมุติ", "เจ้าของสมมุติ", "", "QT-T-0001", "1,240,000", "S3", "60", "2026-Q4", ""),
             row(repCode, "อาคารทดลอง ข", "", "บริษัท เจ้าของสมมุติ", "", "", "500000", "S1", "", "", "")),
             true, salesManagerActor);
 
@@ -99,7 +99,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
     void dryRunIsTheDefault_whenTheParameterIsOmitted() throws Exception {
         Map<String, Integer> before = counts();
         MockMultipartFile file = new MockMultipartFile("file", "p.csv", "text/csv",
-            csv(row(repCode, "โครงการ ไม่ระบุ dryRun", "สตูดิโอ", "", "", "", "", "S1", "", "", "")));
+            csv(row(repCode, "โครงการ ไม่ระบุ dryRun", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "", "")));
 
         MvcResult r = mvc.perform(multipart(URL).file(file).session(session(salesManagerActor))).andReturn();
 
@@ -128,7 +128,10 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         assertThat(((Number) t.get("keyed_by")).longValue()).isEqualTo(salesManagerActor.id());
         assertThat(t.get("title")).isEqualTo("โรงแรมสมมุติ ก");
         assertThat(t.get("project_name")).isEqualTo("โรงแรมสมมุติ ก");
-        assertThat(t.get("sales_stage")).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        // S3 in the sheet, but no quotation exists in the app: the fact gate lands it on S2 (H1).
+        assertThat(t.get("sales_stage")).isEqualTo(DealStage.SPEC_APPROVED);
+        assertThat(messages(result, "WARNING"))
+            .contains("S3 ในชีท → นำเข้าเป็น S2 เพราะยังไม่มีใบเสนอราคาในระบบ");
         assertThat(t.get("entry_channel")).isEqualTo("DESIGNER_LED");
         assertThat(t.get("designer_name")).isEqualTo("สตูดิโอสมมุติ");
         assertThat(t.get("owner_name")).isEqualTo("บริษัท เจ้าของสมมุติ");
@@ -151,7 +154,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
             SELECT from_status, to_status, message FROM sales.ticket_event
              WHERE ticket_id = :id AND kind = 'STAGE_CHANGED'""", Map.of("id", id));
         assertThat(ev.get("from_status")).isEqualTo(DealStage.LEAD_APPROACH);
-        assertThat(ev.get("to_status")).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        assertThat(ev.get("to_status")).isEqualTo(DealStage.SPEC_APPROVED);
         assertThat(ev.get("message")).isEqualTo("นำเข้าจากไฟล์ pipeline");
     }
 
@@ -159,7 +162,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
     void ceoCanCommit_althoughTheCeoCannotEnterADealByHand() throws Exception {
         UserPrincipal ceo = actor(createEmployee("ซีอีโอ นำเข้า", "ceo-import@glr.co.th", "EXE", "ผู้บริหาร", null), "ceo");
 
-        JsonNode result = upload(csv(row(repCode, "โครงการ ซีอีโอ", "สตูดิโอ", "", "", "", "", "S2", "", "", "")),
+        JsonNode result = upload(csv(row(repCode, "โครงการ ซีอีโอ", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S2", "", "", "")),
             false, ceo);
 
         assertThat(result.get("toCreate").asInt()).isEqualTo(1);
@@ -172,7 +175,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
     @Test
     void theSameFileTwiceCreatesNothingTheSecondTime() throws Exception {
         byte[] file = csv(
-            row(repCode, "โรงแรมสมมุติ ก", "สตูดิโอสมมุติ", "", "", "QT-T-0001", "1,240,000", "S3", "60", "2026-Q4", ""),
+            row(repCode, "โรงแรมสมมุติ ก", "สตูดิโอสมมุติ", "เจ้าของสมมุติ", "", "QT-T-0001", "1,240,000", "S3", "60", "2026-Q4", ""),
             row(repCode, "อาคารทดลอง ข", "", "บริษัท เจ้าของสมมุติ", "", "", "500000", "S1", "", "", ""));
         upload(file, false, salesManagerActor);
         int tickets = count("sales.ticket");
@@ -218,7 +221,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
     void existingDealMatchedByNormalisedTitle_whenTheRowHasNoQuotationNumber() throws Exception {
         long id = deal(salesActor);
 
-        JsonNode result = upload(csv(row(repCode, "  ดีล   SLICE 2 ", "สตูดิโอ", "", "", "", "", "S1", "40", "", "")),
+        JsonNode result = upload(csv(row(repCode, "  ดีล   SLICE 2 ", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "40", "", "")),
             false, salesManagerActor);
 
         assertThat(result.get("toUpdate").asInt()).isEqualTo(1);
@@ -232,7 +235,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         long theirs = deal(otherSalesActor);
         jdbc.update("UPDATE sales.ticket SET designer_name = NULL WHERE ticket_id = :id", Map.of("id", theirs));
 
-        JsonNode result = upload(csv(row(repCode, "ดีล slice 2", "สตูดิโอของฉัน", "", "", "", "", "S1", "", "", "")),
+        JsonNode result = upload(csv(row(repCode, "ดีล slice 2", "สตูดิโอของฉัน", "เจ้าของสมมุติ", "", "", "", "S1", "", "", "")),
             false, salesManagerActor);
 
         assertThat(result.get("toCreate").asInt()).isEqualTo(1);
@@ -244,8 +247,8 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
     @Test
     void aSecondRowForTheSameDealInOneFileIsSkipped() throws Exception {
         JsonNode result = upload(csv(
-            row(repCode, "โครงการซ้ำ", "สตูดิโอ", "", "", "QT-DUP", "", "S1", "", "", ""),
-            row(repCode, "โครงการซ้ำ อีกชื่อ", "สตูดิโอ", "", "", "qt-dup", "", "S2", "", "", "")),
+            row(repCode, "โครงการซ้ำ", "สตูดิโอ", "เจ้าของสมมุติ", "", "QT-DUP", "", "S1", "", "", ""),
+            row(repCode, "โครงการซ้ำ อีกชื่อ", "สตูดิโอ", "เจ้าของสมมุติ", "", "qt-dup", "", "S2", "", "", "")),
             false, salesManagerActor);
 
         assertThat(result.get("toCreate").asInt()).isEqualTo(1);
@@ -262,13 +265,13 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         Map<String, Integer> before = counts();
 
         JsonNode result = upload(csv(
-            row("NOBODY-999", "โครงการ ก", "สตูดิโอ", "", "", "", "", "S1", "", "", ""),
-            row(repCode, "โครงการ ข", "สตูดิโอ", "", "", "", "", "S4", "", "", ""),
-            row(repCode, "โครงการ ค", "สตูดิโอ", "", "", "", "USD 5,000", "S1", "", "", ""),
-            row(repCode, "", "สตูดิโอ", "", "", "", "", "S1", "", "", ""),
+            row("NOBODY-999", "โครงการ ก", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "", ""),
+            row(repCode, "โครงการ ข", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S4", "", "", ""),
+            row(repCode, "โครงการ ค", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "USD 5,000", "S1", "", "", ""),
+            row(repCode, "", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "", ""),
             row(repCode, "โครงการ จ", "", "", "", "", "", "S1", "", "", ""),
-            row(employeeCode(accountant.id()), "โครงการ ฉ", "สตูดิโอ", "", "", "", "", "S1", "", "", ""),
-            row(repCode, "โครงการ ดี", "สตูดิโอ", "", "", "", "", "S1", "", "", "")),
+            row(employeeCode(accountant.id()), "โครงการ ฉ", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "", ""),
+            row(repCode, "โครงการ ดี", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "", "")),
             false, salesManagerActor);
 
         assertThat(result.get("rows").asInt()).isEqualTo(7);
@@ -278,14 +281,14 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
             .anyMatch(m -> m.equals("S4 ไม่มีในระบบ เลือก S3 หรือ S5"))
             .anyMatch(m -> m.contains("USD 5,000"))
             .anyMatch(m -> m.contains("ไม่มีชื่อโครงการ"))
-            .anyMatch(m -> m.contains("ผู้ออกแบบ"))
+            .anyMatch(m -> m.equals("ต้องมีผู้ซื้อหรือเจ้าของโครงการ"))
             .anyMatch(m -> m.contains("ไม่ใช่พนักงานขาย"));
         assertThat(count("sales.ticket")).isEqualTo(before.get("sales.ticket") + 1);
     }
 
     @Test
     void repResolvesByEmailToo() throws Exception {
-        JsonNode result = upload(csv(row("  SALES-S2@glr.co.th ", "โครงการ อีเมล", "สตูดิโอ", "", "", "", "", "S1",
+        JsonNode result = upload(csv(row("  SALES-S2@glr.co.th ", "โครงการ อีเมล", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1",
             "", "", "")), false, salesManagerActor);
 
         long id = result.get("plan").get(0).get("ticketId").asLong();
@@ -316,6 +319,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
             r.createCell(0).setCellValue(repCode);
             r.createCell(1).setCellValue("โครงการ xlsx สมมุติ");
             r.createCell(2).setCellValue("สตูดิโอ xlsx");
+            r.createCell(3).setCellValue("เจ้าของสมมุติ xlsx");
             r.createCell(6).setCellValue(1560650.5d);
             r.createCell(7).setCellValue("S6");
             var pct = wb.createCellStyle();
@@ -349,9 +353,9 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         Map<String, Integer> before = counts();
 
         int status = status(multipart(URL).file(new MockMultipartFile("file", "p.csv", "text/csv", csv(
-                row(repCode, "โครงการดี 1", "สตูดิโอ", "", "", "", "", "S1", "", "", ""),
-                row(repCode, "โครงการดี 2", "สตูดิโอ", "", "", "", "", "S2", "", "", ""),
-                row(repCode, "ระเบิด", "สตูดิโอ", "", "", "", "", "S3", "", "", ""))))
+                row(repCode, "โครงการดี 1", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "", ""),
+                row(repCode, "โครงการดี 2", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S2", "", "", ""),
+                row(repCode, "ระเบิด", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S3", "", "", ""))))
             .param("dryRun", "false"), salesManagerActor);
 
         assertThat(status).isGreaterThanOrEqualTo(400);
@@ -387,7 +391,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         for (String role : List.of("account", "import", "hr")) {
             refused.add(actor(createEmployee("ผู้ใช้ " + role, role + "-pl@glr.co.th", "ACC", "บัญชี", null), role));
         }
-        byte[] file = csv(row(repCode, "โครงการ ห้ามเข้า", "สตูดิโอ", "", "", "", "", "S1", "", "", ""));
+        byte[] file = csv(row(repCode, "โครงการ ห้ามเข้า", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "", ""));
         for (UserPrincipal who : refused) {
             for (String dryRun : List.of("true", "false")) {
                 assertThat(status(multipart(URL).file(new MockMultipartFile("file", "p.csv", "text/csv", file))
@@ -413,7 +417,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
     void moreThan2000RowsIs400() throws Exception {
         String[][] rows = new String[2001][];
         for (int i = 0; i < rows.length; i++) {
-            rows[i] = row(repCode, "โครงการ " + i, "สตูดิโอ", "", "", "", "", "S1", "", "", "");
+            rows[i] = row(repCode, "โครงการ " + i, "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "", "");
         }
 
         assertThat(status(multipart(URL).file(new MockMultipartFile("file", "p.csv", "text/csv", csv(rows))),
@@ -424,7 +428,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
 
     @Test
     void theBoardShowsTheImportedValue_inThb_whenTheDealHasNoQuotation() throws Exception {
-        JsonNode result = upload(csv(row(repCode, "โครงการ มูลค่า", "สตูดิโอ", "", "", "", "2,500,000", "S1", "", "",
+        JsonNode result = upload(csv(row(repCode, "โครงการ มูลค่า", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "2,500,000", "S1", "", "",
             "")), false, salesManagerActor);
         long id = result.get("plan").get(0).get("ticketId").asLong();
 
@@ -433,6 +437,204 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
 
         assertThat(deal.value()).isEqualByComparingTo("2500000");
         assertThat(deal.currency()).isEqualTo("THB");
+    }
+
+    // ── review round 1 ───────────────────────────────────────────────────────
+
+    /** H1: S7–S9 claim facts only real documents carry — skipped, counted apart, nothing written. */
+    @Test
+    void s7ToS9RowsAreSkippedWithTheDocumentReason_andCountedSeparately() throws Exception {
+        Map<String, Integer> before = counts();
+
+        JsonNode result = upload(csv(
+            row(repCode, "โครงการ มัดจำแล้ว", "", "เจ้าของสมมุติ", "", "", "", "S7", "", "", ""),
+            row(repCode, "โครงการ รอส่ง", "", "เจ้าของสมมุติ", "", "", "", "S8", "", "", ""),
+            row(repCode, "โครงการ ส่งครบ", "", "เจ้าของสมมุติ", "", "", "", "ส่งสินค้าครบแล้ว", "", "", "")),
+            false, salesManagerActor);
+
+        assertThat(result.get("skipped").asInt()).isEqualTo(3);
+        assertThat(result.get("skippedNeedsDocument").asInt()).isEqualTo(3);
+        assertThat(result.get("toCreate").asInt()).isZero();
+        assertThat(messages(result, "ERROR")).hasSize(3).allMatch(m -> m.equals(
+            "ดีลที่ได้มัดจำ/ส่งของแล้ว ต้องบันทึกผ่านเอกสารจริง (ใบแจ้งมัดจำ/IR) ไม่นำเข้าจากชีท"));
+        assertThat(counts()).isEqualTo(before);
+    }
+
+    /** H1: no imported deal ever lands where account or import would see it. */
+    @Test
+    void noImportedDealEntersTheAccountOrImportScope() throws Exception {
+        JsonNode result = upload(csv(
+            row(repCode, "โครงการ ส1", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "100", "S1", "", "", ""),
+            row(repCode, "โครงการ ส2", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "100", "S2", "", "", ""),
+            row(repCode, "โครงการ ส3", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "100", "S3", "", "", ""),
+            row(repCode, "โครงการ ส5", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "100", "S5", "", "", ""),
+            row(repCode, "โครงการ ส6", "สตูดิโอ", "เจ้าของสมมุติ", "ผู้ซื้อสมมุติ", "", "100", "S6", "", "", ""),
+            row(repCode, "โครงการ ส7", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "100", "S7", "", "", ""),
+            row(repCode, "โครงการ ส9", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "100", "S9", "", "", "")),
+            false, salesManagerActor);
+
+        assertThat(result.get("toCreate").asInt()).isEqualTo(5);
+        List<Long> created = new ArrayList<>();
+        result.get("plan").forEach(p -> {
+            if ("CREATE".equals(p.get("action").asText())) {
+                created.add(p.get("ticketId").asLong());
+            }
+        });
+        for (long id : created) {
+            assertThat(tickets.isInAccountScope(id)).as("account scope %d", id).isFalse();
+            assertThat(tickets.isInImportScope(id)).as("import scope %d", id).isFalse();
+            assertThat(DealStage.indexOf(summary(id).salesStage()))
+                .isLessThanOrEqualTo(DealStage.indexOf(DealStage.NEGOTIATION));
+        }
+    }
+
+    /** H2: a revision bump in the sheet (-7 → -8) is the same deal. */
+    @Test
+    void aQuotationRevisionBumpDoesNotDuplicateTheDeal() throws Exception {
+        upload(csv(row(repCode, "โครงการ ปรับรุ่น", "สตูดิโอ", "เจ้าของสมมุติ", "", "QT-T-0201-7", "", "S1", "", "", "")),
+            false, salesManagerActor);
+        int ticketsAfterFirst = count("sales.ticket");
+
+        JsonNode second = upload(csv(row(repCode, "ชื่อโครงการเปลี่ยนแล้ว", "สตูดิโอ", "เจ้าของสมมุติ", "",
+            "qt-t-0201-8", "", "S1", "", "", "")), false, salesManagerActor);
+
+        assertThat(second.get("toCreate").asInt()).isZero();
+        assertThat(count("sales.ticket")).isEqualTo(ticketsAfterFirst);
+    }
+
+    /** H2: any number in a multi-QN cell may match — including the deal's own app quotation. */
+    @Test
+    void aMultiQuotationCellMatchesOnAnyOfItsNumbers() throws Exception {
+        long id = deal(salesActor);
+        DealQuotationDto q = approved(id, salesActor, "DESIGNER");
+
+        JsonNode result = upload(csv(row(repCode, "ชื่ออื่น", "สตูดิโอ", "เจ้าของสมมุติ", "",
+            "QT-T-9999-1 / " + q.number(), "", "S3", "", "", "")), true, salesManagerActor);
+
+        assertThat(result.get("toCreate").asInt()).isZero();
+        assertThat(result.get("plan").get(0).get("ticketId").asLong()).isEqualTo(id);
+    }
+
+    /** H2: same title, different quotation base → still that deal, with a warning; never a new one. */
+    @Test
+    void aTitleMatchWithADifferentQuotationIsStillAMatch_withAWarning() throws Exception {
+        upload(csv(row(repCode, "โครงการ เดียวกัน", "สตูดิโอ", "เจ้าของสมมุติ", "", "QT-T-0300-1", "", "S1", "", "", "")),
+            false, salesManagerActor);
+
+        JsonNode second = upload(csv(row(repCode, "โครงการ เดียวกัน", "สตูดิโอ", "เจ้าของสมมุติ", "",
+            "QT-T-0444-1", "", "S1", "", "", "")), true, salesManagerActor);
+
+        assertThat(second.get("toCreate").asInt()).isZero();
+        assertThat(messages(second, "WARNING")).anyMatch(m -> m.contains("เลขที่ใบเสนอราคาไม่ตรง"));
+    }
+
+    /** H3: only ACTIVE deals are matched; a row that only finds a lost deal is an error, not a new deal. */
+    @Test
+    void aRowMatchingOnlyALostDealIsAnError() throws Exception {
+        long lost = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST', lost_reason = 'PRICE', lost_at = now() WHERE ticket_id = :id",
+            Map.of("id", lost));
+        String code = summary(lost).code();
+        Map<String, Integer> before = counts();
+
+        JsonNode result = upload(csv(row(repCode, "ดีล slice 2", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "", "S1", "", "",
+            "")), false, salesManagerActor);
+
+        assertThat(result.get("skipped").asInt()).isEqualTo(1);
+        assertThat(messages(result, "ERROR")).contains("ดีลนี้ปิดหรือเสียงานไปแล้ว (" + code + ")");
+        assertThat(counts()).isEqualTo(before);
+    }
+
+    /** M6: the designer is never the customer. */
+    @Test
+    void aRowWithNeitherBuyerNorOwnerIsSkipped() throws Exception {
+        JsonNode result = upload(csv(row(repCode, "โครงการ มีแต่ผู้ออกแบบ", "สตูดิโอสมมุติ", "", "", "", "", "S1", "", "",
+            "")), false, salesManagerActor);
+
+        assertThat(result.get("skipped").asInt()).isEqualTo(1);
+        assertThat(messages(result, "ERROR")).contains("ต้องมีผู้ซื้อหรือเจ้าของโครงการ");
+    }
+
+    /** M6: an existing customer is reused across company-form spellings; a new one is announced in the dry run. */
+    @Test
+    void customersMatchAcrossCompanyFormSpellings_andNewOnesAreAnnounced() throws Exception {
+        long existing = customers.create("บริษัท ลูกค้าสมมุติ จำกัด", null, null, "สำนักงานใหญ่", null).id();
+        int customersBefore = count("customers.customer");
+
+        JsonNode dry = upload(csv(
+            row(repCode, "โครงการ ลูกค้าเดิม", "", "บจก. ลูกค้าสมมุติ", "", "", "", "S1", "", "", ""),
+            row(repCode, "โครงการ ลูกค้าใหม่", "", "บริษัท ใหม่เอี่ยมสมมุติ จำกัด", "", "", "", "S1", "", "", "")),
+            true, salesManagerActor);
+        assertThat(dry.get("plan").get(0).get("newCustomer").isNull()).isTrue();
+        assertThat(dry.get("plan").get(1).get("newCustomer").asText()).isEqualTo("บริษัท ใหม่เอี่ยมสมมุติ จำกัด");
+
+        JsonNode done = upload(csv(
+            row(repCode, "โครงการ ลูกค้าเดิม", "", "บจก. ลูกค้าสมมุติ", "", "", "", "S1", "", "", "")),
+            false, salesManagerActor);
+        long id = done.get("plan").get(0).get("ticketId").asLong();
+        assertThat(jdbc.queryForObject("SELECT customer_id FROM sales.ticket WHERE ticket_id = :id", Map.of("id", id),
+            Long.class)).isEqualTo(existing);
+        assertThat(count("customers.customer")).isEqualTo(customersBefore);
+    }
+
+    /** M6: two existing customers with the same folded name → warn, never pick silently. */
+    @Test
+    void duplicateCustomersAreWarnedAbout() throws Exception {
+        customers.create("บริษัท ซ้ำสมมุติ จำกัด", null, null, "สำนักงานใหญ่", null);
+        customers.create("ซ้ำสมมุติ Co.,Ltd.", null, null, "สำนักงานใหญ่", null);
+
+        JsonNode dry = upload(csv(row(repCode, "โครงการ ลูกค้าซ้ำ", "", "บจก. ซ้ำสมมุติ", "", "", "", "S1", "", "", "")),
+            true, salesManagerActor);
+
+        assertThat(messages(dry, "WARNING")).anyMatch(m -> m.startsWith("พบลูกค้าชื่อซ้ำ 2 ราย ใช้ "));
+    }
+
+    /** M8: an overflowing number is a row error and the request still answers 200. */
+    @Test
+    void overflowingNumbersAreRowErrors_notA500() throws Exception {
+        JsonNode result = upload(csv(
+            row(repCode, "โครงการ ล้น 1", "", "เจ้าของสมมุติ", "", "", "99999999999999", "S1", "", "", ""),
+            row(repCode, "โครงการ ล้น 2", "", "เจ้าของสมมุติ", "", "", "", "S1", "99999999999", "", ""),
+            row(repCode, "โครงการ ไม่ล้น", "", "เจ้าของสมมุติ", "", "", "99999999999", "S1", "", "", "")),
+            false, salesManagerActor);
+
+        assertThat(result.get("skipped").asInt()).isEqualTo(2);
+        assertThat(result.get("toCreate").asInt()).isEqualTo(1);
+    }
+
+    /** M4: unrecognised headers are reported once, as a file warning. */
+    @Test
+    void unknownHeadersAreAFileWarning() throws Exception {
+        String text = "﻿พนักงานขาย,โครงการ,เจ้าของโครงการ (ชื่อ/ตำแหน่ง),สถานะงานขาย,เบอร์โทร\r\n"
+            + repCode + ",โครงการ หัวตาราง,เจ้าของสมมุติ,S1,000\r\n";
+
+        JsonNode dry = upload(text.getBytes(StandardCharsets.UTF_8), true, salesManagerActor);
+
+        assertThat(dry.get("toCreate").asInt()).isEqualTo(1);
+        assertThat(messages(dry, "WARNING")).contains("ไม่รู้จักคอลัมน์: เบอร์โทร — ไม่ถูกนำเข้า");
+    }
+
+    /** LOW: filling blanks on an existing deal leaves a trace on it. */
+    @Test
+    void anUpdateWritesATicketEventNamingTheFields() throws Exception {
+        long id = deal(salesActor);
+
+        upload(csv(row(repCode, "ดีล slice 2", "สตูดิโอ", "", "", "", "", "S1", "40", "", "")), false, salesManagerActor);
+
+        assertThat(jdbc.queryForList("SELECT message FROM sales.ticket_event WHERE ticket_id = :id AND kind = 'EDITED'",
+            Map.of("id", id), String.class)).containsExactly("เติมข้อมูลจากไฟล์ pipeline: ผู้ออกแบบ, โอกาสขาย");
+    }
+
+    /** LOW: the dashboard forecast uses the imported value when no quotation gives one, like the board. */
+    @Test
+    void theDashboardForecastFallsBackToTheImportedValue() throws Exception {
+        var dashboard = new th.co.glr.hr.dashboard.DashboardRepository(jdbc);
+        BigDecimal before = dashboard.forecastValue();
+
+        upload(csv(row(repCode, "โครงการ คาดการณ์", "", "เจ้าของสมมุติ", "", "", "750000", "S2", "", "", "")),
+            false, salesManagerActor);
+
+        assertThat(dashboard.forecastValue().subtract(before)).isEqualByComparingTo("750000");
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

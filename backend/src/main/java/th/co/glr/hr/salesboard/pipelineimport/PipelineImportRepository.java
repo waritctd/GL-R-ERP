@@ -60,27 +60,40 @@ public class PipelineImportRepository {
 
     private static final String DEAL_SELECT = """
         SELECT t.ticket_id, t.code, t.lifecycle, t.sales_stage, t.designer_name, t.owner_name, t.buyer_name,
-               t.expected_quarter, t.win_probability, t.imported_value, t.imported_quotation_no, t.note
+               t.expected_quarter, t.win_probability, t.imported_value, t.imported_quotation_no, t.note,
+               t.title, p.name AS project_name,
+               (SELECT string_agg(q.number, ',') FROM sales.quotation q WHERE q.ticket_id = t.ticket_id)
+                   AS quotation_numbers
           FROM sales.ticket t
           LEFT JOIN customers.project p ON p.project_id = t.project_id
          WHERE t.created_by = :ownerId
         """;
 
-    /** This owner's deals carrying the quotation number — imported, or on one of the deal's own quotations. */
-    List<ExistingDeal> dealsByQuotationNo(long ownerId, String quotationNo) {
-        return jdbc.query(DEAL_SELECT + """
-               AND (LOWER(btrim(t.imported_quotation_no)) = LOWER(:qn)
-                    OR EXISTS (SELECT 1 FROM sales.quotation q
-                                WHERE q.ticket_id = t.ticket_id AND LOWER(btrim(q.number)) = LOWER(:qn)))
-             ORDER BY t.ticket_id""",
-            new MapSqlParameterSource().addValue("ownerId", ownerId).addValue("qn", quotationNo.strip()), this::map);
+    /** An owner's deal with what the import matches on: its title, its project name, and every quotation number it
+     * carries (the imported one(s) and its own quotations'), all as raw text — the caller folds them. */
+    record OwnerDeal(ExistingDeal deal, String title, String projectName, String quotationNumbers) {}
+
+    /** Every deal of this owner, any lifecycle — the import decides; never another owner's deal. */
+    List<OwnerDeal> ownerDeals(long ownerId) {
+        return jdbc.query(DEAL_SELECT + " ORDER BY t.ticket_id", Map.of("ownerId", ownerId),
+            (rs, i) -> new OwnerDeal(map(rs, i), rs.getString("title"), rs.getString("project_name"),
+                joinNumbers(rs.getString("imported_quotation_no"), rs.getString("quotation_numbers"))));
     }
 
-    /** This owner's deals whose title or project name normalises to {@code normalisedTitle}. */
-    List<ExistingDeal> dealsByTitle(long ownerId, String normalisedTitle) {
-        return jdbc.query(DEAL_SELECT + " AND (" + NORM.formatted("t.title") + " = :title OR "
-                + NORM.formatted("p.name") + " = :title) ORDER BY t.ticket_id",
-            new MapSqlParameterSource().addValue("ownerId", ownerId).addValue("title", normalisedTitle), this::map);
+    private static String joinNumbers(String imported, String own) {
+        if (imported == null) {
+            return own;
+        }
+        return own == null ? imported : imported + "," + own;
+    }
+
+    /** id + name of every customer, for matching with {@code SalesNames#normaliseCustomer} (not expressible in
+     * SQL). One read per analysis. */
+    record CustomerName(long id, String name) {}
+
+    List<CustomerName> customerNames() {
+        return jdbc.query("SELECT customer_id, name FROM customers.customer ORDER BY customer_id", Map.of(),
+            (rs, i) -> new CustomerName(rs.getLong(1), rs.getString(2)));
     }
 
     private ExistingDeal map(ResultSet rs, int rowNum) throws SQLException {
@@ -125,13 +138,6 @@ public class PipelineImportRepository {
                 .addValue("value", f.importedValue(), java.sql.Types.NUMERIC)
                 .addValue("qn", f.importedQuotationNo())
                 .addValue("note", f.note()));
-    }
-
-    /** The lowest-id customer whose name normalises to the same text. */
-    Optional<Long> customerByName(String normalisedName) {
-        return jdbc.query("SELECT customer_id FROM customers.customer WHERE " + NORM.formatted("name")
-                + " = :name ORDER BY customer_id LIMIT 1", Map.of("name", normalisedName), (rs, i) -> rs.getLong(1))
-            .stream().findFirst();
     }
 
     /** The lowest-id project of that customer whose name normalises to the same text. */

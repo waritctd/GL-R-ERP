@@ -44,6 +44,7 @@ function Steps({ current }) {
 /** The per-row note: the server's issues for that row, then what an UPDATE fills, then the matched deal. */
 function rowNote(plan, issues) {
   const parts = issues.filter((i) => i.row === plan.row).map((i) => i.message);
+  if (plan.action === 'CREATE' && plan.newCustomer) parts.push(`ลูกค้าใหม่: ${plan.newCustomer}`);
   if (plan.action === 'UPDATE' && plan.changes?.length) parts.push(`เพิ่ม ${plan.changes.join(', ')}`);
   if ((plan.action === 'UPDATE' || plan.action === 'UNCHANGED') && plan.ticketCode) parts.push(`ตรงกับ ${plan.ticketCode}`);
   return parts;
@@ -77,7 +78,8 @@ export function PipelineImportDialog({ onClose }) {
         setPreview(result);
       } else {
         setDone(result);
-        queryClient.invalidateQueries({ queryKey: ['tickets', 'salesBoard'] });
+        // ['tickets'] prefixes the deal list AND the sales-board keys (queryKeys.js), so both refresh.
+        queryClient.invalidateQueries({ queryKey: ['tickets'] });
       }
     } catch (e) {
       setError(e.message || 'นำเข้าไม่สำเร็จ');
@@ -131,6 +133,13 @@ export function PipelineImportDialog({ onClose }) {
             onChange={(e) => { setFile(e.target.files?.[0] ?? null); setError(''); }}
             helperText="ไฟล์ .xlsx หรือ .csv (UTF-8) จากแม่แบบ ไม่เกิน 5 MB · 2,000 แถว"
           />
+          <ul data-testid="pipeline-import-help" className="m-0 grid list-disc gap-1 pl-5 text-xs text-text-muted">
+            <li>นำเข้าได้เฉพาะ S1–S6 · S7–S9 (ได้มัดจำ/ส่งของแล้ว) ต้องบันทึกผ่านเอกสารจริง ไม่นำเข้าจากชีท</li>
+            <li>แต่ละแถวต้องมีผู้ซื้อหรือเจ้าของโครงการ (ใช้เป็นลูกค้าของดีล)</li>
+            <li>ดีลที่มีอยู่แล้ว: เติมเฉพาะช่องที่ว่าง ไม่เปลี่ยนสถานะดีลที่มีอยู่</li>
+            <li>สถานะที่ยังไม่มีเอกสารรองรับจะถูกนำเข้าเป็นขั้นก่อนหน้า เช่น S3 ที่ยังไม่มีใบเสนอราคา → S2</li>
+            <li>นำเข้าไฟล์เดิมซ้ำได้ ไม่สร้างดีลซ้ำ</li>
+          </ul>
           <a
             href={api.salesBoard.pipelineImportTemplateUrl()}
             download
@@ -147,6 +156,11 @@ export function PipelineImportDialog({ onClose }) {
             <span className="min-w-0 break-words">{`${file?.name ?? 'ไฟล์'} · ${preview.rows} แถว`}</span>
             <a href={api.salesBoard.pipelineImportTemplateUrl()} download className="text-sm font-bold text-primary">ดาวน์โหลดแม่แบบ</a>
           </div>
+          {preview.issues.some((i) => i.row === 0) ? (
+            <p role="note" className="m-0 rounded-md bg-warning-bg px-3 py-2 text-xs font-bold text-warning-dark">
+              {preview.issues.filter((i) => i.row === 0).map((i) => i.message).join(' · ')}
+            </p>
+          ) : null}
           <table className="w-full table-fixed border-collapse text-sm">
             <thead>
               <tr className="text-left text-xs text-text-muted">
@@ -188,6 +202,9 @@ export function PipelineImportDialog({ onClose }) {
             <Chip tone="bg-info-bg text-info-dark">{`อัปเดต ${preview.toUpdate}`}</Chip>
             {preview.unchanged > 0 ? <Chip tone="bg-surface-subtle text-text-muted">{`ไม่เปลี่ยน ${preview.unchanged}`}</Chip> : null}
             <Chip tone="bg-warning-bg text-warning-dark">{`ข้าม ${preview.skipped}`}</Chip>
+            {preview.skippedNeedsDocument > 0 ? (
+              <Chip tone="bg-surface-subtle text-text-muted">{`ต้องบันทึกผ่านเอกสาร ${preview.skippedNeedsDocument}`}</Chip>
+            ) : null}
             <span className="text-xs text-text-muted">ยังไม่มีอะไรถูกบันทึกจนกว่าจะกดนำเข้า</span>
           </div>
         </div>

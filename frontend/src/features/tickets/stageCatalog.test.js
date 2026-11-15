@@ -113,9 +113,13 @@ function javaFactGatedStages() {
   const method = ticketServiceSource.match(
     // The closing `\n {4}\}` is the method's own dedented brace at four-space indentation — that is what bounds
     // the body, so an `equals(targetStage)` later in the file cannot leak in.
-    /private void requireStageFactsHold\([^)]*\)\s*\{([\s\S]*?)\n {4}\}/,
+    //
+    // Since slice 4 (pipeline import, review round 1) the gate's `if`s live in the pure `stageFactRefusal`, which
+    // `requireStageFactsHold` only throws around, so the import asks the SAME question without a copy. Read the
+    // body where the gates now are.
+    /public static String stageFactRefusal\([^)]*\)\s*\{([\s\S]*?)\n {4}\}/,
   );
-  if (!method) throw new Error('could not find requireStageFactsHold in TicketService.java');
+  if (!method) throw new Error('could not find stageFactRefusal in TicketService.java');
   const body = method[1];
   const stages = new Set();
   for (const hit of body.matchAll(/DealStage\.([A-Z_]+)\.equals\(targetStage\)/g)) {
