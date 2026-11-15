@@ -359,6 +359,31 @@ public class TicketService {
         // is the ONE gate on this class that widens; every other SALES_ROLES check below is
         // deliberately untouched.
         DealEntryAccess.requireCanEnterDeal(actor, employeeAuth);
+        return createDeal(request, actor);
+    }
+
+    /** Who may run the one-time pipeline import (spec 2026-11-15 §7.9). */
+    private static final Set<String> PIPELINE_IMPORT_ROLES = Set.of("sales_manager", "ceo");
+
+    /**
+     * The pipeline import's way into {@link #create}: the SAME creation path (project required, real channel, valid
+     * priority, owner eligibility, CREATED event, "สร้างดีล" activity, headline party), with one deliberate
+     * difference — the gate is sales_manager / ceo instead of {@link DealEntryAccess}, because the CEO, who may run
+     * the import, is not a deal-entry role. The owner must be named: an imported row always belongs to a rep.
+     * Stated as a sales permission change in the PR body.
+     */
+    @Transactional
+    public TicketDto createForPipelineImport(CreateTicketRequest request, UserPrincipal actor) {
+        if (!PIPELINE_IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        if (request.ownerEmployeeId() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเจ้าของงานของดีลที่นำเข้า");
+        }
+        return createDeal(request, actor);
+    }
+
+    private TicketDto createDeal(CreateTicketRequest request, UserPrincipal actor) {
         // V50: every new deal belongs to a โครงการ (one deal = one ticket; a project can hold many deals over time).
         // Pre-existing project-less tickets stay valid.
         if (request.projectId() == null) {

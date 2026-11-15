@@ -8175,10 +8175,12 @@ function mockBoardDeals() {
         salesStage: t.salesStage ?? null,
         repCode: mockRepCodeOf(t.salesStage),
         boardColumn: mockBoardColumnOf(t.salesStage),
+        // No value quotation: the pipeline import's stated value (V215 imported_value, always THB), as
+        // SalesBoardRepository#map falls back to it.
         value: valueQuotation
           ? dealQuotationTotals(valueQuotation.items ?? [], valueQuotation.documentLanguage ?? 'TH').grandTotal
-          : null,
-        currency: valueQuotation ? (valueQuotation.currency ?? 'THB') : null,
+          : (t.importedValue ?? null),
+        currency: valueQuotation ? (valueQuotation.currency ?? 'THB') : (t.importedValue != null ? 'THB' : null),
         valueExpired: valueQuotation?.docStatus === 'EXPIRED',
         designerName: t.designerName ?? null,
         winProbability: dealEffectiveWinProbability(t.winProbabilityOverride, t.salesStage),
@@ -12995,6 +12997,35 @@ export const api = {
       }
       const reps = [...byRep.values()].sort((a, b) => b.openValue - a.openValue || a.employeeId - b.employeeId);
       return delay({ reps, stale: mockRankQuiet(deals).slice(0, 20), quietDays: MOCK_QUIET_DAYS });
+    },
+    // Mirrors PipelineImportController / PipelineImportService (salesboard/pipelineimport/). SHAPE ONLY: the mock does
+    // not parse the file (no POI in the browser, and a JS re-implementation of the row rules would be a mirrored
+    // computation that proves nothing — PipelineImportIntegrationTest is the evidence). Any non-empty file returns
+    // the same canned plan, one row of each action; a "commit" writes NO mock deals. The role gate approximates
+    // the service (sales_manager / ceo) and is NOT evidence.
+    async pipelineImport(file, dryRun) {
+      const user = requireSession();
+      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!file || file.size === 0) fail('ไม่มีไฟล์ หรือไฟล์ว่างเปล่า', 400);
+      if (file.size > 5 * 1024 * 1024) fail('ไฟล์ใหญ่เกิน 5 MB — แบ่งเป็นหลายไฟล์', 400);
+      const committed = dryRun === false;
+      const plan = [
+        { row: 2, action: 'CREATE', project: 'โรงแรมตัวอย่าง', designer: 'สตูดิโอสมมุติ', ownerName: user.name,
+          repCode: 'S1', value: 2500000, ticketId: null, ticketCode: null, changes: [] },
+        { row: 3, action: 'UPDATE', project: 'อาคารสมมุติ ชั้น 3', designer: 'สตูดิโอสมมุติ', ownerName: user.name,
+          repCode: 'S3', value: 1240000, ticketId: 1, ticketCode: 'TK-0001', changes: ['โอกาสขาย', 'ช่วงเวลา'] },
+        { row: 4, action: 'UNCHANGED', project: 'โชว์รูมสมมุติ', designer: 'สตูดิโอสมมุติ', ownerName: user.name,
+          repCode: 'S5', value: 1560650, ticketId: 2, ticketCode: 'TK-0002', changes: [] },
+        { row: 5, action: 'SKIP', project: 'ห้องรับรองสมมุติ', designer: 'สตูดิโอสมมุติ', ownerName: user.name,
+          repCode: null, value: 1880000, ticketId: null, ticketCode: null, changes: [] },
+      ];
+      return delay({
+        rows: 4, toCreate: 1, toUpdate: 1, unchanged: 1, skipped: 1, committed, plan,
+        issues: [{ row: 5, severity: 'ERROR', message: 'S4 ไม่มีในระบบ เลือก S3 หรือ S5' }],
+      });
+    },
+    pipelineImportTemplateUrl() {
+      return '/api/sales/pipeline-imports/template';
     },
   },
 
