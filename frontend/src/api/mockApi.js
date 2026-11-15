@@ -8123,24 +8123,48 @@ function buildFinanceDeal(raw, user) {
 }
 
 // ── salesBoard read model (mirrors SalesBoardRepository) ──
-const MOCK_BOARD_VALUE_STATUSES = new Set(['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED']);
+const MOCK_BOARD_LIVE_STATUSES = new Set(['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED']);
+const mockQuotationTime = (q) => q.approvedAt ?? q.issuedAt ?? null;
 
-/** The grand total of the deal's latest APPROVED/ISSUED/SENT/ACCEPTED quotation, else null. */
-function mockBoardValue(ticketId) {
-  const latest = mockDealQuotations
-    .filter((q) => q.ticketId === ticketId && MOCK_BOARD_VALUE_STATUSES.has(q.docStatus))
-    .sort((a, b) => String(b.approvedAt ?? '').localeCompare(String(a.approvedAt ?? '')) || b.id - a.id)[0];
-  return latest ? dealQuotationTotals(latest.items ?? [], latest.documentLanguage ?? 'TH').grandTotal : null;
+/**
+ * The deal's value quotation, as SalesBoardRepository's LATERAL orders it: a live one (APPROVED/ISSUED/SENT/
+ * ACCEPTED) before an EXPIRED one, the headline party's (★ ยอดหลัก) first, then the latest by
+ * COALESCE(approved_at, issued_at) DESC NULLS LAST, then id DESC. REJECTED/SUPERSEDED/CANCELLED never count.
+ */
+function mockBoardValueQuotation(ticketId) {
+  const headlineParty = new Set(mockPartiesOf(ticketId).filter((p) => p.headline).map((p) => p.id));
+  const rank = (q) => [
+    q.docStatus === 'EXPIRED' ? 1 : 0,
+    headlineParty.has(q.partyId) ? 0 : 1,
+  ];
+  return mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && (MOCK_BOARD_LIVE_STATUSES.has(q.docStatus) || q.docStatus === 'EXPIRED'))
+    .sort((a, b) => {
+      const [ra, rb] = [rank(a), rank(b)];
+      if (ra[0] !== rb[0]) return ra[0] - rb[0];
+      if (ra[1] !== rb[1]) return ra[1] - rb[1];
+      const [ta, tb] = [mockQuotationTime(a), mockQuotationTime(b)];
+      if (ta !== tb) {
+        if (ta == null) return 1; // NULLS LAST
+        if (tb == null) return -1;
+        return String(tb).localeCompare(String(ta));
+      }
+      return b.id - a.id;
+    })[0] ?? null;
 }
 
-/** Every ACTIVE deal as a BoardDeal. */
+/** Every open deal (ACTIVE, not CLOSED_PAID) as a BoardDeal, ordered as the repository's
+ * `ORDER BY last_touched_at, t.ticket_id`. */
 function mockBoardDeals() {
   const now = Date.now();
   return db.tickets
-    .filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE')
+    .filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID')
     .map((t) => {
       const activities = dealActivitiesForTicket(t.id);
       const last = mockLastTouchedMs(t, activities);
+      const valueQuotation = mockBoardValueQuotation(t.id);
+      const latestActivity = [...activities]
+        .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)) || y.id - x.id)[0] ?? null;
       return {
         ticketId: t.id,
         title: t.title,
@@ -8151,15 +8175,24 @@ function mockBoardDeals() {
         salesStage: t.salesStage ?? null,
         repCode: mockRepCodeOf(t.salesStage),
         boardColumn: mockBoardColumnOf(t.salesStage),
-        value: mockBoardValue(t.id),
+        value: valueQuotation
+          ? dealQuotationTotals(valueQuotation.items ?? [], valueQuotation.documentLanguage ?? 'TH').grandTotal
+          : null,
+        currency: valueQuotation ? (valueQuotation.currency ?? 'THB') : null,
+        valueExpired: valueQuotation?.docStatus === 'EXPIRED',
         designerName: t.designerName ?? null,
         winProbability: dealEffectiveWinProbability(t.winProbabilityOverride, t.salesStage),
         expectedQuarter: t.expectedQuarter ?? null,
         lastTouchedAt: Number.isNaN(last) ? null : new Date(last).toISOString(),
         daysQuiet: mockDaysQuietOf(t, activities, now),
         quiet: mockIsQuiet(t, activities, now),
+        lastActivityKind: latestActivity?.kind ?? null,
+        lastActivityNote: latestActivity?.note ?? null,
+        lastTouchedMs: last,
       };
-    });
+    })
+    .sort((x, y) => (x.lastTouchedMs - y.lastTouchedMs) || x.ticketId - y.ticketId)
+    .map(({ lastTouchedMs, ...deal }) => deal);
 }
 
 /** SalesBoardService's ranking: quiet only, daysQuiet × value (null = 0) desc, then daysQuiet desc. */
@@ -9312,6 +9345,14 @@ export const api = {
       ticket.ownerName = (payload?.ownerName || '').trim() || null;
       ticket.buyerName = (payload?.buyerName || '').trim() || null;
       ticket.nextFollowUpAt = payload?.nextFollowUpAt || null;
+      // V209 expectedQuarter is the one exception to full-replace (TrackingUpdateRequest): absent/null KEEPS it,
+      // "" clears it, anything else must be YYYY-Qn.
+      if (payload?.expectedQuarter != null) {
+        if (payload.expectedQuarter !== '' && !/^\d{4}-Q[1-4]$/.test(payload.expectedQuarter)) {
+          fail('ไตรมาสที่คาดว่าจะปิดต้องอยู่ในรูปแบบ YYYY-Qn เช่น 2026-Q4', 400);
+        }
+        ticket.expectedQuarter = payload.expectedQuarter || null;
+      }
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามดีล');
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -12937,10 +12978,17 @@ export const api = {
       const byRep = new Map();
       for (const d of deals) {
         const row = byRep.get(d.ownerId) ?? {
-          employeeId: d.ownerId, name: d.ownerName, openDeals: 0, openValue: 0, quietDeals: 0, lastUpdateAt: null,
+          employeeId: d.ownerId, name: d.ownerName,
+          // DivisionAccessPolicy#roleFor in the real service; the mock's own user role here.
+          role: db.users.find((u) => u.id === d.ownerId)?.role ?? null,
+          openDeals: 0, openValue: 0, otherCurrencyValues: {}, quietDeals: 0, lastUpdateAt: null,
         };
         row.openDeals += 1;
-        row.openValue = round2(row.openValue + Number(d.value ?? 0));
+        // THB only into openValue; any other currency is summed per code (review M1).
+        if (d.value != null && (d.currency ?? 'THB') === 'THB') row.openValue = round2(row.openValue + Number(d.value));
+        else if (d.value != null) {
+          row.otherCurrencyValues[d.currency] = round2((row.otherCurrencyValues[d.currency] ?? 0) + Number(d.value));
+        }
         if (d.quiet) row.quietDeals += 1;
         if (!row.lastUpdateAt || d.lastTouchedAt > row.lastUpdateAt) row.lastUpdateAt = d.lastTouchedAt;
         byRep.set(d.ownerId, row);
