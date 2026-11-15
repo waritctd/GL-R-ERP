@@ -18,7 +18,7 @@ function renderModal(props = {}) {
 
 describe('RecordPaymentModal — prefilled from the open document', () => {
   it('names the document and its outstanding amount, with the kind and amount already filled', () => {
-    const { dialog } = renderModal();
+    const { dialog } = renderModal({ expressUploadEnabled: true });
     expect(within(dialog).getByText(/ใช้เมื่อรายการจาก Express จับคู่ไม่ได้/)).not.toBeNull();
     const summary = within(dialog).getByTestId('payment-prefill-doc');
     expect(summary.textContent).toContain('ใบแจ้งหนี้ส่วนที่เหลือ INV-2026-0031');
@@ -26,6 +26,12 @@ describe('RecordPaymentModal — prefilled from the open document', () => {
     expect(within(dialog).getByLabelText('ประเภท').value).toBe('BALANCE');
     expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('456150');
     expect(within(dialog).getByText('= ยอดคงค้างตามใบแจ้งหนี้')).not.toBeNull();
+  });
+
+  it('shows the Express-fallback header only while the Express upload is enabled', () => {
+    const { dialog } = renderModal({ expressUploadEnabled: false });
+    expect(within(dialog).queryByText(/ใช้เมื่อรายการจาก Express จับคู่ไม่ได้/)).toBeNull();
+    expect(within(dialog).getByText(/ย้อนกลับไม่ได้/)).not.toBeNull();
   });
 
   it('submits the prefilled values untouched', () => {

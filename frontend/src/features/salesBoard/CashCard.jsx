@@ -69,7 +69,7 @@ export function CashCard({ cash, title }) {
           {maxWeek > 0 ? (
             <>
               <ul className="m-0 grid list-none gap-1.5 p-0" aria-hidden="true">
-                {weeks.map((w) => {
+                {weeks.map((w, i) => {
                   const total = weekTotal(w);
                   return (
                     <li
@@ -77,7 +77,7 @@ export function CashCard({ cash, title }) {
                       data-testid="cash-week"
                       className="grid grid-cols-[72px_minmax(0,1fr)_84px] items-center gap-2 text-xs"
                     >
-                      <span className="text-text-muted">{weekEndLabel(w.weekStart, cash.month)}</span>
+                      <span className="text-text-muted">{weekEndLabel(w.weekStart, cash.month, i === weeks.length - 1)}</span>
                       <span className="flex h-3.5 min-w-0">
                         <span
                           data-testid="cash-track"
@@ -114,6 +114,7 @@ export function CashCard({ cash, title }) {
             </>
           ) : null}
 
+          <p className="m-0 text-xs text-text-muted">สัปดาห์ที่คร่อมเดือน นับเข้าเดือนที่มีวันพฤหัสของสัปดาห์นั้น</p>
           <details className="text-xs text-text-secondary">
             <summary className="cursor-pointer select-none font-bold">ดูเป็นตาราง</summary>
             <div className="mt-2 overflow-x-auto">
@@ -128,9 +129,9 @@ export function CashCard({ cash, title }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {weeks.map((w) => (
+                  {weeks.map((w, i) => (
                     <tr key={w.weekStart} className="border-t border-border">
-                      <td className="py-1 pr-2">{weekEndLabel(w.weekStart, cash.month)}</td>
+                      <td className="py-1 pr-2">{weekEndLabel(w.weekStart, cash.month, i === weeks.length - 1)}</td>
                       {CASH_SERIES.map((s) => <td key={s.key} className="py-1 pr-2 text-right">{baht(num(w[s.key]))}</td>)}
                       <td className="py-1 text-right">{baht(num(w.received))}</td>
                     </tr>

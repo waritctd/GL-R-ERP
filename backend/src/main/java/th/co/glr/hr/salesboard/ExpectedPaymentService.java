@@ -26,8 +26,8 @@ import th.co.glr.hr.ticket.TicketSummaryDto;
  *       ({@link TicketRepository#isInAccountScope}, the predicate that filters account's deal list);</li>
  *   <li>everyone else (import, hr, employee, another rep) — 403.</li>
  * </ul>
- * Only an OPEN row can be edited or cancelled; RECEIVED (set by the Express matcher) and CANCELLED are final (409).
- * New rows need an ACTIVE deal. Money is THB, at most 2 dp, &gt; 0.
+ * Only an OPEN row can be edited or cancelled; RECEIVED (set when receipts reach it —
+ * TicketRepository#applyReceiptToExpectedPayments) and CANCELLED are final (409). Every write needs an ACTIVE deal. Money is THB, at most 2 dp, &gt; 0.
  */
 @Service
 public class ExpectedPaymentService {
@@ -53,11 +53,7 @@ public class ExpectedPaymentService {
 
     @Transactional
     public ExpectedPaymentDto create(long ticketId, ExpectedPaymentRequest request, UserPrincipal actor) {
-        TicketSummaryDto s = requireWriteAccess(ticketId, actor);
-        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงเพิ่มเงินที่คาดว่าจะเข้าไม่ได้");
-        }
+        requireActive(requireWriteAccess(ticketId, actor));
         Valid v = validate(request);
         long id = payments.insert(ticketId, v.kind(), v.amount(), v.week(), actor.id());
         return payments.findOnTicket(ticketId, id).orElseThrow();
@@ -65,9 +61,19 @@ public class ExpectedPaymentService {
 
     @Transactional
     public ExpectedPaymentDto update(long ticketId, long id, ExpectedPaymentRequest request, UserPrincipal actor) {
-        requireWriteAccess(ticketId, actor);
+        requireActive(requireWriteAccess(ticketId, actor));
         ExpectedPaymentDto row = requireRow(ticketId, id);
         Valid v = validate(request);
+        // Review N3 (probe Q1): what already came in on a row is fixed — the plan cannot go below it, nor change kind.
+        if (row.receivedAmount().signum() > 0) {
+            if (v.amount().compareTo(row.receivedAmount()) < 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "รับเงินรายการนี้มาแล้ว "
+                    + row.receivedAmount().toPlainString() + " บาท จึงลดยอดให้ต่ำกว่านั้นไม่ได้");
+            }
+            if (!v.kind().equals(row.kind())) {
+                throw new ApiException(HttpStatus.CONFLICT, "รายการนี้รับเงินมาบางส่วนแล้ว จึงเปลี่ยนประเภทไม่ได้");
+            }
+        }
         if (payments.updateOpen(ticketId, id, v.kind(), v.amount(), v.week()) == 0) {
             throw notOpen(row);
         }
@@ -76,12 +82,20 @@ public class ExpectedPaymentService {
 
     @Transactional
     public ExpectedPaymentDto cancel(long ticketId, long id, UserPrincipal actor) {
-        requireWriteAccess(ticketId, actor);
+        requireActive(requireWriteAccess(ticketId, actor));
         ExpectedPaymentDto row = requireRow(ticketId, id);
         if (payments.cancelOpen(ticketId, id) == 0) {
             throw notOpen(row);
         }
         return payments.findOnTicket(ticketId, id).orElseThrow();
+    }
+
+    /** Every write needs an ACTIVE deal: rows on an ON_HOLD / DORMANT / closed deal are read-only (409). */
+    private static void requireActive(TicketSummaryDto s) {
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                "ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงแก้ไขเงินที่คาดว่าจะเข้าไม่ได้");
+        }
     }
 
     private record Valid(String kind, BigDecimal amount, LocalDate week) {}

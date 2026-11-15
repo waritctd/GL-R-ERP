@@ -2292,7 +2292,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           ) : null}
 
           {/* เงินที่คาดว่าจะเข้า (spec 2026-11-15 §7.7): the deal's writers only — owner/keyer, sales_manager, ceo —
-              the same set ExpectedPaymentService lets write (account reads it on its own finance page). */}
+              the same set ExpectedPaymentService lets write (account may READ it through GET /api/tickets/{id}/expected-payments inside its finance scope, but no account screen shows it yet — it never reaches this page). */}
           {role === 'ceo' || role === 'sales_manager' || (role === 'sales' && isOwnerOrKeyer(summary, user.id)) ? (
             <div className="mt-[18px]">
               <ExpectedPaymentsPanel

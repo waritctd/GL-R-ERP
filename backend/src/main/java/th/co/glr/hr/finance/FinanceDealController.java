@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -46,19 +47,25 @@ public class FinanceDealController {
     }
 
     @PostMapping("/{id}/deposit-paid")
-    Map<String, FinanceDealDto> confirmDepositPaid(@PathVariable long id, HttpSession session) {
-        return Map.of("deal", service.confirmDepositPaid(id, sessions.requireUser(session)));
+    Map<String, FinanceDealDto> confirmDepositPaid(@PathVariable long id,
+                                                   @RequestParam(defaultValue = "false") boolean confirmPossibleDuplicate,
+                                                   HttpSession session) {
+        return Map.of("deal", service.confirmDepositPaid(id, sessions.requireUser(session), confirmPossibleDuplicate));
     }
 
     @PostMapping("/{id}/final-payment")
-    Map<String, FinanceDealDto> confirmFinalPayment(@PathVariable long id, HttpSession session) {
-        return Map.of("deal", service.confirmFinalPayment(id, sessions.requireUser(session)));
+    Map<String, FinanceDealDto> confirmFinalPayment(@PathVariable long id,
+                                                    @RequestParam(defaultValue = "false") boolean confirmPossibleDuplicate,
+                                                    HttpSession session) {
+        return Map.of("deal", service.confirmFinalPayment(id, sessions.requireUser(session), confirmPossibleDuplicate));
     }
 
     @PostMapping("/{id}/payments")
     Map<String, FinanceDealDto> recordPayment(@PathVariable long id, @Valid @RequestBody RecordPaymentRequest request,
+                                              @RequestParam(defaultValue = "false") boolean confirmPossibleDuplicate,
                                               HttpSession session) {
-        return Map.of("deal", service.recordPayment(id, request, sessions.requireUser(session)));
+        return Map.of("deal", service.recordPayment(id, request, sessions.requireUser(session),
+            confirmPossibleDuplicate));
     }
 
     @PostMapping("/{id}/close/confirm")

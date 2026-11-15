@@ -1,5 +1,6 @@
 package th.co.glr.hr.salesboard;
 
+import th.co.glr.hr.ticket.QuietRule;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -27,6 +28,8 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
+import th.co.glr.hr.ticket.TicketEventKind;
+import th.co.glr.hr.ticket.TicketRepository;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -49,8 +52,11 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     void wireHttp() {
         SessionContext sessions = new SessionContext();
         quietRule = new QuietRule(jdbc, 14);
-        Clock clock = Clock.system(VisitService.BANGKOK);
-        today = LocalDate.now(clock);
+        // Fixed clock (review M5): Thursday 12 Nov 2026, 10:00 Bangkok. Every date below is relative to this
+        // hard-coded day, not to the machine's clock. (QuietRule still reads the database's now(), so the quiet
+        // assertions here only ever use dates that are in the past for both.)
+        Clock clock = Clock.fixed(java.time.Instant.parse("2026-11-12T03:00:00Z"), VisitService.BANGKOK);
+        today = LocalDate.of(2026, 11, 12);
         VisitService service = new VisitService(new VisitRepository(jdbc), ticketService, clock);
         mvc = MockMvcBuilders
             .standaloneSetup(new VisitController(service, sessions))
@@ -185,8 +191,9 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     void doneOnLinkedDealResetsQuiet() throws Exception {
         long mine = deal(salesActor);
         backdate(mine, 30);
-        long visit = plan(salesActor, mine, "คุณอรุณ", today);
-        assertThat(quietRule.isQuiet(mine)).as("planning alone does not touch the deal").isTrue();
+        // Yesterday's unticked visit no longer holds the deal (QuietRule.upcomingVisitSql), so the tick is what clears it.
+        long visit = plan(salesActor, mine, "คุณอรุณ", today.minusDays(1));
+        assertThat(quietRule.isQuiet(mine)).as("a past-dated planned visit does not touch the deal").isTrue();
 
         JsonNode done = ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
             .content("{\"note\":\"ชอบ Raku สีเทา\"}"), salesActor);
@@ -253,13 +260,245 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     }
 
     @Test
-    void managerMayCompleteARepsVisit() throws Exception {
+    void managerMayCompleteARepsVisit_theActivityIsTheRepsWithWhoRecordedIt() throws Exception {
         long repDeal = deal(salesActor);
         long visit = plan(salesActor, repDeal, "คุณอรุณ", today);
 
-        assertThat(ok(post("/api/sales/visits/" + visit + "/done"), salesManagerActor).get("status").asText())
-            .isEqualTo("DONE");
+        assertThat(ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"ส่งตัวอย่าง\"}"), salesManagerActor).get("status").asText()).isEqualTo("DONE");
         assertThat(siteVisitRows(repDeal)).isEqualTo(1);
+        // M3: the person who went, not the person who ticked.
+        Map<String, Object> activity = siteVisit(repDeal);
+        assertThat(((Number) activity.get("created_by_id")).longValue()).isEqualTo(salesActor.id());
+        assertThat((String) activity.get("note")).isEqualTo("ส่งตัวอย่าง · บันทึกโดย " + salesManagerActor.name());
+    }
+
+    @Test
+    void theOwnersOwnTickCarriesNoRecordedByNote() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+
+        ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"ส่งตัวอย่าง\"}"), salesActor);
+
+        assertThat((String) siteVisit(deal).get("note")).isEqualTo("ส่งตัวอย่าง");
+    }
+
+    // ── reassignment: the visit stays with whoever went (review M1) ──────────
+
+    @Test
+    void afterTheDealMovesToAnotherRep_theVisitOwnerCanStillTickAndCancel() throws Exception {
+        long deal = deal(salesActor);
+        long ticked = plan(salesActor, deal, "คุณอรุณ", today);
+        long cancelled = plan(salesActor, deal, "คุณอรุณ", today.plusDays(2));
+        reassign(deal, otherSalesActor);
+
+        assertThat(ok(post("/api/sales/visits/" + ticked + "/done"), salesActor).get("status").asText())
+            .isEqualTo("DONE");
+        assertThat(ok(post("/api/sales/visits/" + cancelled + "/cancel"), salesActor).get("status").asText())
+            .isEqualTo("CANCELLED");
+    }
+
+    // ── review NEW-2: the ex-owner's tick stays on the visit, never on the new owner's deal ──
+
+    @Test
+    void anExOwnersTickWritesNoActivityOntoTheNewOwnersDeal_andSaysWhereTheDealWent() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today.minusDays(1));
+        backdate(deal, 30);
+        reassign(deal, otherSalesActor);
+        assertThat(quietRule.isQuiet(deal)).isTrue();
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"ไปมาแล้ว\"}"), salesActor);
+
+        assertThat(done.get("status").asText()).isEqualTo("DONE");
+        assertThat(done.get("note").asText()).isEqualTo("ไปมาแล้ว");
+        assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(done.path("dealMoved").asBoolean()).as("the deal moved after the visit was planned").isTrue();
+        assertThat(siteVisitRows(deal)).isZero();
+        assertThat(quietRule.isQuiet(deal)).as("the new owner's quiet state is untouched").isTrue();
+    }
+
+    @Test
+    void aManagerTickingAnExOwnersVisitAlsoWritesNoActivity() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+        reassign(deal, otherSalesActor);
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesManagerActor);
+
+        assertThat(done.path("dealMoved").asBoolean()).isTrue();
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    @Test
+    void aVisitOnTheOwnersOwnDealCarriesNoMovedFlag() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesActor);
+        assertThat(done.get("dealMovedToName").isNull()).isTrue();
+        assertThat(done.path("dealMoved").asBoolean()).isFalse();
+        assertThat(siteVisitRows(deal)).isEqualTo(1);
+    }
+
+    // ── review NEW-1: a plan more than 180 days out is refused ──
+
+    @Test
+    void aVisitMoreThan180DaysAheadIs400() throws Exception {
+        assertThat(status(createRequest(null, "ปีหน้า", today.plusDays(181), null, false), salesActor))
+            .isEqualTo(400);
+        assertThat(status(createRequest(null, "2099", LocalDate.of(2099, 1, 1), null, false), salesActor))
+            .isEqualTo(400);
+        assertThat(visitCount()).isZero();
+        assertThat(status(createRequest(null, "ครึ่งปี", today.plusDays(180), null, false), salesActor))
+            .as("180 days is the last allowed day").isEqualTo(200);
+    }
+
+    @Test
+    void afterTheDealMoves_neitherTheNewDealOwnerNorAThirdRepCanTouchTheVisit() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+        reassign(deal, otherSalesActor);
+        UserPrincipal third = actor(createEmployee("พนักงานขาย คนที่สาม", "third-visit@glr.co.th", "SALES",
+            "แผนกขาย", null), "sales");
+
+        for (UserPrincipal outsider : List.of(otherSalesActor, third)) {
+            assertThat(status(post("/api/sales/visits/" + visit + "/done"), outsider)).as("done").isEqualTo(403);
+            assertThat(status(post("/api/sales/visits/" + visit + "/cancel"), outsider)).as("cancel").isEqualTo(403);
+            assertThat(ids(ok(range("/api/sales/visits", today, today), outsider))).doesNotContain(visit);
+        }
+        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    @Test
+    void creatingAVisitOnAMovedDealIsStill403ForARepWhoWasNeverOnIt() throws Exception {
+        long deal = deal(salesActor);
+        reassign(deal, otherSalesActor);
+        UserPrincipal third = actor(createEmployee("พนักงานขาย คนที่สี่", "fourth-visit@glr.co.th", "SALES",
+            "แผนกขาย", null), "sales");
+
+        // The ex-owner is the deal's keyer now and keeps TicketService's keyer access (deal policy, not visits');
+        // a rep who was never on the deal is refused.
+        assertThat(status(createRequest(deal, "คุณอรุณ", today, null, false), third)).isEqualTo(403);
+    }
+
+    // ── review NEW-A: a keyer who is not the owner neither holds nor writes onto the deal ──
+
+    @Test
+    void aKeyerWhoIsNotTheOwner_ticksWithoutWritingOntoTheDeal() throws Exception {
+        long deal = deal(salesActor);
+        // Keyed in by salesActor for otherSalesActor, never reassigned.
+        jdbc.update("UPDATE sales.ticket SET created_by = :owner, keyed_by = :keyer WHERE ticket_id = :id",
+            Map.of("owner", otherSalesActor.id(), "keyer", salesActor.id(), "id", deal));
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesActor);
+
+        assertThat(done.get("status").asText()).isEqualTo("DONE");
+        assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(done.path("dealMoved").asBoolean()).as("a keyer's deal never moved").isFalse();
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    // ── review LOW: "the deal moved" only when ownership changed after the visit was planned ──
+
+    @Test
+    void aManagerLoggingTheirOwnVisitOnARepsDeal_isNotToldTheDealMoved() throws Exception {
+        long deal = deal(salesActor);
+
+        JsonNode logged = ok(createRequest(deal, "คุณอรุณ", today, null, true), salesManagerActor);
+
+        assertThat(logged.get("dealMovedToName").asText()).isEqualTo(employeeName(salesActor));
+        assertThat(logged.path("dealMoved").asBoolean()).isFalse();
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    @Test
+    void aManagersVisitPlannedOnARepsDeal_isToldTheDealMovedOnceItIsReassignedAToB() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesManagerActor, deal, "คุณอรุณ", today);
+        reassign(deal, otherSalesActor);
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesManagerActor);
+
+        assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(done.path("dealMoved").asBoolean()).as("planned on A's deal, then A to B").isTrue();
+    }
+
+    @Test
+    void aVisitPlannedAfterTheDealHadAlreadyMoved_isNotToldTheDealMoved() throws Exception {
+        long deal = deal(salesActor);
+        reassign(deal, otherSalesActor);
+        // The ex-owner keeps keyer access and plans a visit on a deal that is already someone else's.
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done"), salesActor);
+
+        assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(done.path("dealMoved").asBoolean()).isFalse();
+    }
+
+    // ── done only on or before today (review M2) ─────────────────────────────
+
+    @Test
+    void aFutureVisitCannotBeTickedDone() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today.plusDays(1));
+
+        MvcResult result = perform(post("/api/sales/visits/" + visit + "/done"), salesActor);
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(409);
+        assertThat(result.getResponse().getContentAsString(StandardCharsets.UTF_8)).contains("ยังไม่ถึงวันนัด");
+        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    @Test
+    void anOverdueVisitCanStillBeTickedDone() throws Exception {
+        long visit = plan(salesActor, null, "คุณอรุณ", today.minusDays(3));
+
+        assertThat(ok(post("/api/sales/visits/" + visit + "/done"), salesActor).get("status").asText())
+            .isEqualTo("DONE");
+    }
+
+    // ── LOW: non-ACTIVE deals, one-step log idempotency ──────────────────────
+
+    @Test
+    void aNewVisitCannotBeLinkedToANonActiveDeal() throws Exception {
+        long lost = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", lost));
+
+        assertThat(status(createRequest(lost, "คุณอรุณ", today, null, false), salesActor)).isEqualTo(400);
+        assertThat(status(createRequest(lost, "คุณอรุณ", today, null, true), salesActor)).isEqualTo(400);
+        assertThat(visitCount()).isZero();
+    }
+
+    @Test
+    void anIdenticalOneStepLogWithin60SecondsIsTheSameVisit() throws Exception {
+        long deal = deal(salesActor);
+
+        long first = ok(createRequest(deal, "Walk-in", today, null, true), salesActor).get("id").asLong();
+        long second = ok(createRequest(deal, "Walk-in", today, null, true), salesActor).get("id").asLong();
+
+        assertThat(second).isEqualTo(first);
+        assertThat(visitCount()).isEqualTo(1);
+        assertThat(siteVisitRows(deal)).isEqualTo(1);
+        // A different contact, or the same one over a minute later, is a new visit.
+        ok(createRequest(deal, "คุณอรุณ", today, null, true), salesActor);
+        jdbc.update("UPDATE sales.visit SET created_at = now() - interval '61 seconds'", Map.of());
+        ok(createRequest(deal, "Walk-in", today, null, true), salesActor);
+        assertThat(visitCount()).isEqualTo(3);
+    }
+
+    @Test
+    void anotherRepsIdenticalLogIsNotMerged() throws Exception {
+        ok(createRequest(null, "Walk-in", today, null, true), salesActor);
+        ok(createRequest(null, "Walk-in", today, null, true), otherSalesActor);
+
+        assertThat(visitCount()).isEqualTo(2);
     }
 
     // ── log a visit that already happened (บันทึกเข้าพบ), in one step ─────────
@@ -330,6 +569,31 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
 
     private static MockHttpServletRequestBuilder range(String path, LocalDate from, LocalDate to) {
         return get(path).param("from", from.toString()).param("to", to.toString());
+    }
+
+    private String employeeName(UserPrincipal who) {
+        return jdbc.queryForObject("""
+            SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '') FROM hr.employee
+             WHERE employee_id = :id
+            """, Map.of("id", who.id()), String.class);
+    }
+
+    /**
+     * The production reassignment, as DealQuotationService#moveOwnerToSalesRep does it
+     * (TicketRepository#moveOwnerToSalesRep, so the ex-owner becomes the keyer), then the move recorded on the deal's
+     * timeline with {@link TicketRepository#OWNER_CHANGED_MESSAGE_PREFIX}. That service method is private and only
+     * reachable through a full quotation flow, so this mirrors its two calls rather than driving it end to end.
+     */
+    private void reassign(long ticketId, UserPrincipal newOwner) {
+        assertThat(tickets.moveOwnerToSalesRep(ticketId, newOwner.id())).isEqualTo(1);
+        tickets.addEvent(ticketId, newOwner.id(), newOwner.name(), TicketEventKind.EDITED, null, null,
+            TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX + "เดิม → " + newOwner.name() + " (ตามพนักงานขายในใบเสนอราคา)");
+    }
+
+    private Map<String, Object> siteVisit(long ticketId) {
+        return jdbc.queryForMap(
+            "SELECT created_by_id, note FROM sales.deal_activity WHERE ticket_id = :id AND kind = 'SITE_VISIT'",
+            Map.of("id", ticketId));
     }
 
     private String visitStatus(long visitId) {

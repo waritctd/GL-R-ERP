@@ -89,12 +89,10 @@ public class TicketService {
     // recording to the CEO. Every other role (sales/sales_manager/import, including the owning
     // rep) is refused too — recording money received was never a sales-side action.
     private static final Set<String> PAYMENT_RECORD_ROLES = Set.of("account");
-    // Placing ONE row of account's uploaded Express receipts file on a deal (spec 2026-11-15 §7.8): account / ceo
-    // upload (ReceiptImportService gates that), and an UNMATCHED row may be attached by the owning rep (own deals only,
-    // checked in recordExpressReceipt) or sales_manager / ceo / account. A separate constant from PAYMENT_RECORD_ROLES
-    // on purpose: no role here TYPES an amount — amount, date and document number always come from the uploaded file,
-    // so this never widens who can invent a payment.
-    private static final Set<String> EXPRESS_RECEIPT_ROLES = Set.of("account", "ceo", "sales_manager", "sales");
+    // Placing ONE row of account's uploaded Express receipts file on a deal (spec 2026-11-15 §7.8): ACCOUNT ONLY
+    // (review H2/H3 — the CEO, who approves and closes deals, does not also put cash on them; no sales role attaches
+    // money). A separate constant from PAYMENT_RECORD_ROLES because the two may diverge (they hold the same set today).
+    private static final Set<String> EXPRESS_RECEIPT_ROLES = Set.of("account");
     // Step 1 of the three-party close. Do not "fix" this by reusing ACCOUNT_ROLES. Deliberately EXCLUDES ceo,
     // unlike ACCOUNT_ROLES: the CEO signs the second half (verifyClose), so letting them sign the first half too
     // would collapse a two-signature gate into one person.
@@ -1029,6 +1027,11 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
+        return confirmDepositPaid(ticketId, actor, false);
+    }
+
+    @Transactional
+    public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor, boolean confirmPossibleDuplicate) {
         // Account only — see DEPOSIT_CONFIRM_ROLES's own Javadoc for why this is not
         // ACCOUNT_ROLES (which would still let the CEO through).
         requireRole(actor, DEPOSIT_CONFIRM_ROLES);
@@ -1053,7 +1056,7 @@ public class TicketService {
         }
         RecordPaymentRequest request = new RecordPaymentRequest(
             "DEPOSIT", amount, null, "ยืนยันรับมัดจำ", notice != null ? notice.id() : null, null, false);
-        return recordPaymentInternal(ticketId, request, actor);
+        return recordPaymentInternal(ticketId, request, actor, confirmPossibleDuplicate);
     }
 
     /**
@@ -1808,6 +1811,11 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
+        return confirmFinalPayment(ticketId, actor, false);
+    }
+
+    @Transactional
+    public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor, boolean confirmPossibleDuplicate) {
         // Account only — see PAYMENT_RECORD_ROLES's own Javadoc. ACCOUNT_ROLES would let the CEO
         // through.
         requireRole(actor, PAYMENT_RECORD_ROLES);
@@ -1837,16 +1845,26 @@ public class TicketService {
         }
         RecordPaymentRequest request = new RecordPaymentRequest(
             "BALANCE", outstanding, null, "ยืนยันชำระส่วนที่เหลือ", null, null, false);
-        return recordPaymentInternal(ticketId, request, actor);
+        return recordPaymentInternal(ticketId, request, actor, confirmPossibleDuplicate);
     }
 
     @Transactional
     public TicketDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
+        return recordPayment(ticketId, request, actor, false);
+    }
+
+    /**
+     * {@code confirmPossibleDuplicate}: account has seen the "อาจซ้ำกับ RE-… ที่อัปโหลดแล้ว" warning (409
+     * POSSIBLE_DUPLICATE, review H1) and says this is a different payment.
+     */
+    @Transactional
+    public TicketDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor,
+                                   boolean confirmPossibleDuplicate) {
         // Account only — see PAYMENT_RECORD_ROLES's own Javadoc. ACCOUNT_ROLES would let the CEO
         // through.
         requireRole(actor, PAYMENT_RECORD_ROLES);
         requireAccountScope(ticketId, actor);
-        return recordPaymentInternal(ticketId, request, actor);
+        return recordPaymentInternal(ticketId, request, actor, confirmPossibleDuplicate);
     }
 
     /**
@@ -1865,7 +1883,8 @@ public class TicketService {
      *       deal closes without a human step"). Account's existing {@link #confirmFinalPayment} is still the step that
      *       does both, and finds nothing outstanding.</li>
      * </ul>
-     * Who: {@link #EXPRESS_RECEIPT_ROLES}; a sales rep only onto a deal they own or keyed.
+     * Who: {@link #EXPRESS_RECEIPT_ROLES} (account). A refusal is an {@link ExpressReceiptRefusal} carrying its reason
+     * as a code (review M2): DEAL_NOT_ACTIVE, OVERPAYMENT, DUPLICATE (the number landed meanwhile).
      */
     @Transactional
     public long recordExpressReceipt(long ticketId, BigDecimal amount, Instant receivedAt, String expressDocNo,
@@ -1881,29 +1900,31 @@ public class TicketService {
         tickets.lockTicketForUpdate(ticketId);
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
-        if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(s, actor.id())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.DEAL_NOT_ACTIVE,
+                "ดีลไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้");
         }
-        requireActive(s);
         BigDecimal payable = payableAmount(ticket);
         BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
         if (paid.add(amount).compareTo(payable) > 0) {
-            throw new ApiException(HttpStatus.CONFLICT, "ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ");
+            throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.OVERPAYMENT,
+                "ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ");
         }
         boolean depositWasSettled = depositSettled(s);
-        String kind = DepositPolicy.REQUIRED.equals(s.depositPolicy()) && !depositWasSettled ? "DEPOSIT" : "BALANCE";
+        String kind = expressReceiptKind(ticketId, s, depositWasSettled);
         long receiptId;
         try {
             receiptId = tickets.insertExpressReceipt(ticketId, kind, amount, actor.id(), receivedAt, ref,
                 blankToNull(customerName));
         } catch (DataIntegrityViolationException e) {
-            throw new ApiException(HttpStatus.CONFLICT, "เลขที่เอกสาร Express นี้ถูกบันทึกแล้ว");
+            throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.DUPLICATE, "เลขที่เอกสาร Express นี้ถูกบันทึกแล้ว");
         }
         BigDecimal newPaid = paid.add(amount);
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
             s.status(), s.status(),
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable + " — Express " + ref,
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
+        tickets.applyReceiptToExpectedPayments(ticketId, kind, amount, bangkokDate(receivedAt), receiptId);
         reconcilePaymentStatus(ticketId, actor, false);
         boolean settledNow = depositSettled(requireTicket(ticketId).summary());
         if (settledNow) {
@@ -1935,7 +1956,8 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    private TicketDto recordPaymentInternal(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
+    private TicketDto recordPaymentInternal(long ticketId, RecordPaymentRequest request, UserPrincipal actor,
+                                            boolean confirmPossibleDuplicate) {
         // Account only, re-checked here even though
         // every caller (recordPayment, confirmFinalPayment, confirmDepositPaid) already checks its
         // own role — see PAYMENT_RECORD_ROLES's own Javadoc.
@@ -1955,6 +1977,16 @@ public class TicketService {
         BigDecimal amount = request.amount();
         if (amount == null || amount.signum() <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ยอดรับชำระต้องมากกว่า 0");
+        }
+        if (!"ADJUSTMENT".equals(kind) && !confirmPossibleDuplicate) {
+            // Review H1, reverse order: the same payment may already be on the deal from an Express upload.
+            String twin = tickets.findExpressTwin(ticketId, amount, bangkokDate(request.receivedAt()),
+                th.co.glr.hr.salesboard.receipts.ReceiptImportRepository.TWIN_DAYS).orElse(null);
+            if (twin != null) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "อาจซ้ำกับ " + twin + " ที่อัปโหลดแล้ว — ยืนยันอีกครั้งถ้าเป็นเงินคนละรายการ",
+                    Map.of("code", "POSSIBLE_DUPLICATE", "expressDocNo", twin));
+            }
         }
         BigDecimal payable = payableAmount(ticket);
         BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
@@ -1991,6 +2023,7 @@ public class TicketService {
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable
                 + (note != null ? " — " + note : ""),
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
+        tickets.applyReceiptToExpectedPayments(ticketId, kind, amount, bangkokDate(request.receivedAt()), receiptId);
         reconcilePaymentStatus(ticketId, actor, true);
         // Deposit settled (a notice alone is not money): an all-stock deal is ready to deliver.
         boolean settledNow = depositSettled(requireTicket(ticketId).summary());
@@ -2119,6 +2152,24 @@ public class TicketService {
                     TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
             }
         }
+    }
+
+    /**
+     * An Express receipt is DEPOSIT money while the deal's latest ISSUED deposit notice is still owed (its total
+     * payable above the DEPOSIT receipts so far) — not only until the first instalment settles the deposit on the
+     * payment track (review N2, probe Q2). With no notice: DEPOSIT while a REQUIRED deposit is unsettled. Else BALANCE.
+     */
+    private String expressReceiptKind(long ticketId, TicketSummaryDto s, boolean depositSettled) {
+        var notice = tickets.latestIssuedDepositNotice(ticketId).orElse(null);
+        if (notice != null && notice.totalPayable() != null) {
+            return notice.totalPayable().compareTo(tickets.sumDepositReceipts(ticketId)) > 0 ? "DEPOSIT" : "BALANCE";
+        }
+        return DepositPolicy.REQUIRED.equals(s.depositPolicy()) && !depositSettled ? "DEPOSIT" : "BALANCE";
+    }
+
+    /** The Asia/Bangkok calendar date of a receipt (now when it has no time). */
+    private static java.time.LocalDate bangkokDate(Instant at) {
+        return (at == null ? Instant.now() : at).atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate();
     }
 
     private BigDecimal signedPaymentAmount(String kind, BigDecimal amount) {
@@ -2529,10 +2580,34 @@ public class TicketService {
     /**
      * The deal's sales-side write check, for callers outside this class (VisitService hangs a visit on a deal):
      * 404 when the deal does not exist, 403 unless the actor is its owner/keyer with the sales role, or is
-     * sales_manager / ceo — the same {@link #requireDealOwnership} that guards {@link #addActivity}.
+     * sales_manager / ceo — the same {@link #requireDealOwnership} that guards {@link #addActivity}. Returns the
+     * deal's summary so the caller can check its lifecycle.
      */
-    public void requireDealWriteAccess(long ticketId, UserPrincipal actor) {
-        requireDealOwnership(requireTicket(ticketId).summary(), actor);
+    public TicketSummaryDto requireDealWriteAccess(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        return s;
+    }
+
+    /**
+     * Writes the SITE_VISIT activity for a visit that was ticked done, attributed to {@code visitOwnerId} — the
+     * person who went. No actor check here: VisitService has already verified the caller may write the VISIT (its
+     * owner, or sales_manager / ceo). With {@code onlyIfStillOwner}, nothing is written unless the visit's owner is
+     * the deal's current owner ({@code created_by}) — NOT merely its keyer: a reassignment through
+     * TicketRepository#moveOwnerToSalesRep leaves the ex-owner as keyer (review NEW-A). An ex-owner's tick must not
+     * reset the quiet clock on, or add history to, the deal now held by someone else; the tick stays on the visit.
+     * Returns whether it wrote.
+     * Only VisitService calls this; the deal write check stays on visit creation.
+     */
+    @Transactional
+    public boolean recordVisitActivity(long ticketId, java.time.LocalDate activityDate, String note, long visitOwnerId,
+                                       boolean onlyIfStillOwner) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (onlyIfStillOwner && s.createdById() != visitOwnerId) {
+            return false;
+        }
+        tickets.insertDealActivity(ticketId, activityDate, DealActivityKind.SITE_VISIT, note, visitOwnerId);
+        return true;
     }
 
     public List<DealActivityDto> listActivities(long ticketId, UserPrincipal actor) {
@@ -2674,15 +2749,24 @@ public class TicketService {
     }
 
     /**
-     * Where a quotation with no named recipient (UNSPECIFIED — legacy rows and their revisions/reorders) puts a deal:
-     * the first quote stage on the deal's route, QUOTE_DESIGN_SIDE else QUOTE_OWNER (review H2). Null when neither
-     * is on the route (BUYER_DIRECT): that channel's next quote stage is QUOTE_BUYER, which needs a buyer, so nothing
-     * is guessed. V210's backfill restates this as a CASE; its integration test pins the two together.
+     * Where a quotation with no named recipient (UNSPECIFIED — legacy rows and their revisions/reorders) puts a deal.
+     * Round-2 N1, following the owner-approved V204 reading that a direct quotation is addressed to a buyer: it
+     * advances like a BUYER quotation — QUOTE_BUYER when that is on the deal's route, else the nearest on-route stage
+     * before it (DealStage.ORDER walked backwards). QUOTE_BUYER is on every route today, so the fallback is
+     * defensive. Never null: LEAD_APPROACH is on every route. V210's backfill restates this in SQL; its integration
+     * test pins the two together for every channel.
      */
-    public static String firstQuoteStageOnRoute(String entryChannel) {
-        for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER)) {
-            if (DealRoute.isOnRoute(entryChannel, stage)) {
-                return stage;
+    public static String stageForUnspecifiedRecipient(String entryChannel) {
+        return nearestOnRouteAtOrBefore(stageForQuotationRecipient(QuotationRecipient.BUYER),
+            stage -> DealRoute.isOnRoute(entryChannel, stage));
+    }
+
+    /** The latest stage at or before {@code stage} in {@link DealStage#ORDER} that {@code onRoute} accepts. */
+    static String nearestOnRouteAtOrBefore(String stage, java.util.function.Predicate<String> onRoute) {
+        for (int i = DealStage.indexOf(stage); i >= 0; i--) {
+            String candidate = DealStage.ORDER.get(i);
+            if (onRoute.test(candidate)) {
+                return candidate;
             }
         }
         return null;
@@ -2691,8 +2775,9 @@ public class TicketService {
     /**
      * A quotation that reached the customer (DEAL_DIRECT approval, PRICING_REQUEST-origin issue) fills its deal
      * (spec 2026-11-15 §7.2, corrected by review H1/H2). The stage advances forward-only onto the recipient's stage,
-     * or for an UNSPECIFIED recipient onto {@link #firstQuoteStageOnRoute}. A party name is written only from a
-     * source that names that party ({@link TicketRepository#partyNameFromQuotation}) and only into a blank column:
+     * or for an UNSPECIFIED recipient onto {@link #stageForUnspecifiedRecipient} (like a BUYER one, though it fills no buyer_name). A party name is
+     * written only from a source that names that party ({@link TicketRepository#partyNameFromQuotation}) and only into
+     * a blank column — designer_name from the D.Co. for any recipient (round-2 N3):
      * a name the rep typed is never overwritten, and the bill-to customer is never taken for the designer. A
      * non-ACTIVE deal is left untouched.
      */
@@ -2704,13 +2789,22 @@ public class TicketService {
         if (QuotationRecipient.isAddressable(recipientType)) {
             advanceStageForCustomerQuotationIssue(ticketId, recipientType, actor);
         } else {
-            String target = firstQuoteStageOnRoute(s.entryChannel());
+            String target = stageForUnspecifiedRecipient(s.entryChannel());
             if (target != null) {
                 autoAdvanceStage(s, target, actor);
             }
         }
-        tickets.partyNameFromQuotation(quotationId, recipientType)
-            .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, recipientType, name));
+        // Round-2 N3: the quotation's D.Co. (unit_code) names the project's designer whoever the document is addressed
+        // to, so designer_name fills from the directory for ANY recipient. buyer_name only for a document ADDRESSED to
+        // a buyer: an UNSPECIFIED one advances like a buyer's (above) but names nobody, because the BUYER party V204
+        // gave it is the deal's bill-to customer, and the bill-to is never a name source (final review).
+        // owner_name has no real source and is never filled.
+        tickets.partyNameFromQuotation(quotationId, QuotationRecipient.DESIGNER)
+            .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, QuotationRecipient.DESIGNER, name));
+        if (QuotationRecipient.BUYER.equals(recipientType)) {
+            tickets.partyNameFromQuotation(quotationId, QuotationRecipient.BUYER)
+                .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, QuotationRecipient.BUYER, name));
+        }
     }
 
     /**

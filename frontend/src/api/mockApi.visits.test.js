@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api } from './mockApi.js';
+import { api, patchTicketForTests, patchVisitForTests } from './mockApi.js';
 import { bangkokTodayIso } from '../utils/format.js';
 
 // Mirrors VisitService / VisitRepository (backend VisitScopeIntegrationTest). The mock's authz is NOT evidence about
@@ -107,7 +107,10 @@ describe('mockApi.salesVisits', () => {
   it('done on a linked deal logs SITE_VISIT and clears the quiet clock', async () => {
     await api.auth.login({ role: 'sales' });
     const [quiet] = (await api.salesBoard.myWork()).followUp;
-    const visit = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'คุณอรุณ', plannedDate: today });
+    // Yesterday's unticked visit does not hold the deal (H2), so the done is what clears it.
+    const visit = await api.salesVisits.create({
+      ticketId: quiet.ticketId, contactName: 'คุณอรุณ', plannedDate: plusDays(today, -1),
+    });
     expect(visit.ticketTitle).toBeTruthy();
     expect((await api.salesBoard.myWork()).followUp.map((d) => d.ticketId)).toContain(quiet.ticketId);
 
@@ -133,5 +136,167 @@ describe('mockApi.salesVisits', () => {
     const own = team.teamVisitsThisWeek.filter((x) => x.ownerId === user.id);
     expect(row.visitsDone).toBe(own.filter((x) => x.status === 'DONE').length);
     expect(row.visitsPlanned).toBe(own.filter((x) => x.status !== 'CANCELLED').length);
+  });
+
+  it('a booked visit (today or later) takes the deal out of followUp; cancelled or past-dated does not (H2)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const [quiet, second] = (await api.salesBoard.myWork()).followUp;
+    const booked = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: plusDays(today, 3) });
+    await api.salesVisits.create({ ticketId: second.ticketId, contactName: 'ข', plannedDate: plusDays(today, -1) });
+
+    let work = await api.salesBoard.myWork();
+    expect(work.followUp.map((d) => d.ticketId)).not.toContain(quiet.ticketId);
+    expect(work.board.find((d) => d.ticketId === quiet.ticketId).quiet).toBe(false);
+    expect(work.followUp.map((d) => d.ticketId)).toContain(second.ticketId);
+    await api.auth.login({ role: 'ceo' });
+    expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(false);
+
+    await api.auth.login({ role: 'sales' });
+    await api.salesVisits.cancel(booked.id);
+    work = await api.salesBoard.myWork();
+    expect(work.followUp.map((d) => d.ticketId)).toContain(quiet.ticketId);
+  });
+
+  it('a future visit cannot be ticked done; an overdue one can (M2)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const future = await api.salesVisits.create({ contactName: 'พรุ่งนี้', plannedDate: plusDays(today, 1) });
+    await expectStatus(api.salesVisits.done(future.id, {}), 409);
+    const overdue = await api.salesVisits.create({ contactName: 'เมื่อวาน', plannedDate: plusDays(today, -1) });
+    expect((await api.salesVisits.done(overdue.id, {})).status).toBe('DONE');
+  });
+
+  it("a manager's tick is logged as the rep's, noting who recorded it (M3)", async () => {
+    const { user: rep } = await api.auth.login({ role: 'sales' });
+    const [deal] = (await api.salesBoard.myWork()).board;
+    const visit = await api.salesVisits.create({ ticketId: deal.ticketId, contactName: 'ก', plannedDate: today });
+    const { user: manager } = await api.auth.login({ role: 'sales_manager' });
+    await api.salesVisits.done(visit.id, { note: 'ส่งตัวอย่าง' });
+
+    const activities = (await api.tickets.listActivities(deal.ticketId)).items;
+    const logged = activities.filter((a) => a.kind === 'SITE_VISIT').at(-1);
+    expect(logged.createdById).toBe(rep.id);
+    expect(logged.note).toBe(`ส่งตัวอย่าง · บันทึกโดย ${manager.name}`);
+  });
+
+  it('the owner can still tick after the deal moved to another rep; the new owner cannot (M1)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const [deal] = (await api.salesBoard.myWork()).board;
+    const ticked = await api.salesVisits.create({ ticketId: deal.ticketId, contactName: 'ก', plannedDate: today });
+    const kept = await api.salesVisits.create({ ticketId: deal.ticketId, contactName: 'ข', plannedDate: today });
+    // The production reassignment (moveOwnerToSalesRep): the ex-owner becomes the keyer.
+    patchTicketForTests(deal.ticketId, { createdById: 12, keyedById: deal.ownerId });
+    try {
+      expect((await api.salesVisits.done(ticked.id, {})).status).toBe('DONE');
+      await api.auth.login({ email: 'sales2@glr.co.th', password: 'demo1234' });
+      await expectStatus(api.salesVisits.done(kept.id, {}), 403);
+      await expectStatus(api.salesVisits.cancel(kept.id), 403);
+    } finally {
+      patchTicketForTests(deal.ticketId, { createdById: deal.ownerId });
+    }
+  });
+
+  it('refuses a new visit on a non-ACTIVE deal, an over-long note and a malformed date (LOW)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const [deal] = (await api.salesBoard.myWork()).board;
+    patchTicketForTests(deal.ticketId, { lifecycle: 'CLOSED_LOST' });
+    await expectStatus(api.salesVisits.create({ ticketId: deal.ticketId, contactName: 'x', plannedDate: today }), 400);
+    patchTicketForTests(deal.ticketId, { lifecycle: 'ACTIVE' });
+    await expectStatus(api.salesVisits.create({ contactName: 'x', plannedDate: today, note: 'ก'.repeat(2001) }), 400);
+    await expectStatus(api.salesVisits.create({ contactName: 'x', plannedDate: '13/11/2569' }), 400);
+  });
+
+  it('an identical one-step log is the same visit (LOW)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const a = await api.salesVisits.create({ contactName: 'Walk-in ซ้ำ', plannedDate: today, done: true });
+    const b = await api.salesVisits.create({ contactName: 'Walk-in ซ้ำ', plannedDate: today, done: true });
+    expect(b.id).toBe(a.id);
+  });
+
+  it('only a visit within 14 days holds the deal; more than 180 days ahead is refused (NEW-1)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const [a, b] = (await api.salesBoard.myWork()).followUp;
+    await api.salesVisits.create({ ticketId: a.ticketId, contactName: 'ก', plannedDate: plusDays(today, 14) });
+    await api.salesVisits.create({ ticketId: b.ticketId, contactName: 'ข', plannedDate: plusDays(today, 15) });
+
+    const followUp = (await api.salesBoard.myWork()).followUp.map((d) => d.ticketId);
+    expect(followUp).not.toContain(a.ticketId);
+    expect(followUp).toContain(b.ticketId);
+    await expectStatus(api.salesVisits.create({ contactName: 'x', plannedDate: plusDays(today, 181) }), 400);
+    await expectStatus(api.salesVisits.create({ contactName: 'x', plannedDate: '2099-01-01' }), 400);
+    await api.salesVisits.create({ contactName: 'x', plannedDate: plusDays(today, 180) });
+  });
+
+  it("an ex-owner's visit neither holds nor touches the new owner's deal (NEW-2)", async () => {
+    await api.auth.login({ role: 'sales' });
+    const [quiet] = (await api.salesBoard.myWork()).followUp;
+    const ahead = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: plusDays(today, 2) });
+    const due = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ข', plannedDate: today });
+    // The production reassignment (DealQuotationService#moveOwnerToSalesRep): the ex-owner becomes the keyer, and
+    // the deal's timeline records the move (an EDITED event the visit reads as "the deal moved").
+    const raw = (await api.tickets.get(quiet.ticketId)).ticket;
+    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: quiet.ownerId, events: [...(raw.events ?? []),
+      { kind: 'EDITED', message: 'เปลี่ยนเจ้าของงาน: ก → ข (ตามพนักงานขายในใบเสนอราคา)', createdAt: new Date().toISOString() }] });
+    try {
+      await api.auth.login({ role: 'ceo' });
+      expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
+      const before = (await api.tickets.listActivities(quiet.ticketId)).items.length;
+
+      await api.auth.login({ role: 'sales' });
+      const done = await api.salesVisits.done(due.id, { note: 'ไปมาแล้ว' });
+      expect(done.status).toBe('DONE');
+      expect(done.dealMovedToName).toBeTruthy();
+      expect(done.dealMoved).toBe(true);
+      expect(ahead.dealMovedToName).toBeNull();
+      expect(ahead.dealMoved).toBe(false);
+
+      await api.auth.login({ role: 'ceo' });
+      expect((await api.tickets.listActivities(quiet.ticketId)).items.length).toBe(before);
+      expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
+    } finally {
+      patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId, events: raw.events });
+    }
+  });
+
+  it("a keyer who is not the owner neither holds the deal nor writes onto it (NEW-A)", async () => {
+    const { user: keyer } = await api.auth.login({ role: 'sales' });
+    const [quiet] = (await api.salesBoard.myWork()).followUp;
+    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: keyer.id });
+    try {
+      await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: plusDays(today, 2) });
+      const due = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ข', plannedDate: today });
+      await api.auth.login({ role: 'ceo' });
+      expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
+      const before = (await api.tickets.listActivities(quiet.ticketId)).items.length;
+
+      await api.auth.login({ role: 'sales' });
+      const ticked = await api.salesVisits.done(due.id, {});
+      expect(ticked.dealMovedToName).toBeTruthy();
+      expect(ticked.dealMoved).toBe(false);
+      await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ค', plannedDate: today, done: true });
+
+      await api.auth.login({ role: 'ceo' });
+      expect((await api.tickets.listActivities(quiet.ticketId)).items.length).toBe(before);
+    } finally {
+      patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId, keyedById: quiet.ownerId });
+    }
+  });
+
+  it('a visit with no createdAt is never told the deal moved; a created visit always carries one (review follow-up)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const [quiet] = (await api.salesBoard.myWork()).followUp;
+    const raw = (await api.tickets.get(quiet.ticketId)).ticket;
+    const visit = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: today });
+    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: quiet.ownerId, events: [...(raw.events ?? []),
+      { kind: 'EDITED', message: 'เปลี่ยนเจ้าของงาน: ก → ข (ตามพนักงานขายในใบเสนอราคา)', createdAt: new Date().toISOString() }] });
+    try {
+      const day = (await api.salesVisits.list({ from: today, to: today })).find((v) => v.id === visit.id);
+      expect(day.dealMoved).toBe(true);
+      patchVisitForTests(visit.id, { createdAt: undefined });
+      const legacy = (await api.salesVisits.list({ from: today, to: today })).find((v) => v.id === visit.id);
+      expect(legacy.dealMovedToName).toBeTruthy();
+      expect(legacy.dealMoved).toBe(false);
+    } finally {
+      patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId, keyedById: quiet.ownerId, events: raw.events });
+    }
   });
 });

@@ -41,6 +41,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         list: vi.fn(),
         create: vi.fn(),
       },
+      salesBoard: {
+        teamOverview: vi.fn(),
+      },
     },
   };
 });
@@ -244,6 +247,54 @@ describe('TicketListPage', () => {
 
     fireEvent.click(identityLink);
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/501'));
+  });
+
+  // Round-2 LOW 4: the quiet threshold is configurable (app.sales.quiet-days), so the copy reads it from the API.
+  it('the ภาพรวมทีม quiet badge names the threshold the API serves, not a hard-coded 14', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({ reps: [], stale: [], quietDays: 21 });
+    api.tickets.list.mockResolvedValue({
+      tickets: [{
+        id: 601, code: 'PR-2026-0601', title: 'ดีลเงียบ', customerName: 'บริษัท เงียบ จำกัด', status: 'submitted',
+        createdByName: 'สมชาย ใจดี', createdAt: '2026-07-01T09:00:00.000Z', salesStage: 'QUOTE_DESIGN_SIDE',
+        lifecycle: 'ACTIVE', lostReason: null, overdue: false, fulfillmentStatus: null, stale: true,
+        stageUpdatedAt: '2026-07-01T09:00:00.000Z',
+      }],
+    });
+    renderTicketListPage(managerUser);
+
+    expect(await screen.findByText(/1 ดีลเงียบ \(ไม่มีความเคลื่อนไหว 21 วัน\)/)).toBeTruthy();
+  });
+
+  // Final review: the threshold is near-static, so it must not refetch on every ['tickets'] invalidation (an activity,
+  // a stage move, a lost deal) — own key outside 'tickets', and a 60 s staleTime.
+  it('fetches the quiet threshold once for a manager, outside the tickets key, with a 60 s staleTime', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({ reps: [], stale: [], quietDays: 14 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/tickets']}>
+          <TicketListPage user={managerUser} showToast={vi.fn()} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(api.salesBoard.teamOverview).toHaveBeenCalledTimes(1));
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    const listCalls = api.tickets.list.mock.calls.length;
+
+    await queryClient.invalidateQueries({ queryKey: ['tickets'] });
+
+    await waitFor(() => expect(api.tickets.list.mock.calls.length).toBeGreaterThan(listCalls));
+    expect(api.salesBoard.teamOverview).toHaveBeenCalledTimes(1);
+    const boardQueries = queryClient.getQueryCache().getAll().filter((q) => q.queryKey.includes('salesBoard'));
+    expect(boardQueries).toHaveLength(1);
+    expect(boardQueries[0].queryKey[0]).not.toBe('tickets');
+    expect(boardQueries[0].options.staleTime).toBe(60_000);
+  });
+
+  it('does not ask for the team overview at all for a rep', async () => {
+    renderTicketListPage(salesUser);
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    expect(api.salesBoard.teamOverview).not.toHaveBeenCalled();
   });
 
   it('shows create for Sales and hides it for non-Sales ticket-list roles', async () => {

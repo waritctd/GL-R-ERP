@@ -27,6 +27,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.ticket.QuietRule;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
 import th.co.glr.hr.salesboard.SalesBoardDtos.CashMonth;
 import th.co.glr.hr.salesboard.SalesBoardDtos.CashWeek;
@@ -90,6 +91,9 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
         expected(lead, "DEPOSIT", "7000", "2026-12-07", "OPEN");
         expected(lead, "DEPOSIT", "6000", "2026-10-26", "OPEN");
         expected(lost, "DEPOSIT", "8000", "2026-11-09", "OPEN");
+        long held = dealAt(salesActor, "LEAD_APPROACH");
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD' WHERE ticket_id = :id", Map.of("id", held));
+        expected(held, "DEPOSIT", "9000", "2026-11-09", "OPEN"); // an ON_HOLD deal expects nothing this month
 
         receipt(delivered, "BALANCE", "250", "2026-11-30T16:30:00Z", "RE-2");   // 23:30 Bangkok, 30 Nov
         receipt(delivered, "BALANCE", "111", "2026-11-30T17:30:00Z", "RE-3");   // 00:30 Bangkok, 1 Dec
@@ -104,28 +108,54 @@ class CashForMonthIntegrationTest extends AbstractDealQuotationSlice2Integration
         CashMonth mine = board.cashForMonth(salesActor.id(), NOV);
 
         assertThat(mine.month()).isEqualTo("2026-11");
-        assertThat(mine.forecast()).isEqualByComparingTo("3019");
+        // The week of Mon 30 Nov has its Thursday on 3 Dec, so its 400 belongs to December (ISO week rule).
+        assertThat(mine.forecast()).isEqualByComparingTo("2619");
         assertThat(mine.received()).isEqualByComparingTo("1273");
         assertThat(mine.deliveredAwaiting()).isEqualByComparingTo("500");
         assertThat(mine.deliveriesScheduled()).isEqualByComparingTo("120");
-        assertThat(mine.depositsExpected()).isEqualByComparingTo("400");
+        assertThat(mine.depositsExpected()).isEqualByComparingTo("0");
 
         assertThat(mine.weeks()).extracting(CashWeek::weekStart).containsExactly(
             LocalDate.parse("2026-11-02"), LocalDate.parse("2026-11-09"), LocalDate.parse("2026-11-16"),
-            LocalDate.parse("2026-11-23"), LocalDate.parse("2026-11-30"));
+            LocalDate.parse("2026-11-23"));
         week(mine, 0, "0", "0", "0", "1033"); // Sun 1 Nov folds into the first week
         week(mine, 1, "500", "0", "0", "-10");
         week(mine, 2, "0", "50", "0", "0");
-        week(mine, 3, "0", "70", "0", "0");
-        week(mine, 4, "0", "0", "400", "250");
+        week(mine, 3, "0", "70", "0", "250"); // Mon 30 Nov's receipt is still November cash: the last week holds it
         BigDecimal weeklyReceived = mine.weeks().stream().map(CashWeek::received)
             .reduce(BigDecimal.ZERO, BigDecimal::add);
         assertThat(weeklyReceived).as("weeks add up to the month").isEqualByComparingTo(mine.received());
 
         CashMonth team = board.cashForMonth(null, NOV);
-        assertThat(team.forecast()).isEqualByComparingTo("93019");
+        assertThat(team.forecast()).isEqualByComparingTo("92619");
         assertThat(team.received()).isEqualByComparingTo("51273");
         assertThat(team.deliveredAwaiting()).isEqualByComparingTo("90500");
+    }
+
+    @Test
+    void theWeekOf30NovTo4DecBelongsToDecember() {
+        long lead = dealAt(salesActor, "LEAD_APPROACH");
+        expected(lead, "DEPOSIT", "400", "2026-11-30", "OPEN");
+        expected(lead, "DEPOSIT", "7000", "2026-12-07", "OPEN");
+
+        CashMonth dec = board.cashForMonth(salesActor.id(), YearMonth.of(2026, 12));
+        assertThat(dec.forecast()).isEqualByComparingTo("7400");
+        assertThat(dec.depositsExpected()).isEqualByComparingTo("7400");
+        assertThat(dec.weeks().get(0).weekStart()).isEqualTo(LocalDate.parse("2026-11-30"));
+        assertThat(dec.weeks().get(0).depositsExpected()).isEqualByComparingTo("400");
+        assertThat(board.cashForMonth(salesActor.id(), NOV).forecast()).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void aPartlyReceivedRowKeepsOnlyItsRemainderInTheBuckets() {
+        long lead = dealAt(salesActor, "LEAD_APPROACH");
+        long row = expected(lead, "DEPOSIT", "1000", "2026-11-09", "OPEN");
+        jdbc.update("UPDATE sales.expected_payment SET received_amount = 400 WHERE expected_payment_id = :id",
+            Map.of("id", row));
+
+        CashMonth nov = board.cashForMonth(salesActor.id(), NOV);
+        assertThat(nov.forecast()).as("the forecast is the plan").isEqualByComparingTo("1000");
+        assertThat(nov.depositsExpected()).as("only what is still to come").isEqualByComparingTo("600");
     }
 
     @Test

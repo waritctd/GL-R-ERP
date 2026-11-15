@@ -37,7 +37,7 @@ function Footer({ onClose, busy, submitLabel, onSubmit, tone = 'primary' }) {
 
 // `prefill` is paymentPrefill(deal): { kind, amount, docLabel, basisHint } — the open notice/invoice the form starts
 // from (design m-payment). Every field stays editable.
-export function RecordPaymentModal({ prefill, busy, error, onSubmit, onClose }) {
+export function RecordPaymentModal({ prefill, expressUploadEnabled = false, busy, error, onSubmit, onClose }) {
   const [kind, setKind] = useState(prefill.kind);
   const [amount, setAmount] = useState(prefill.amount != null ? String(prefill.amount) : '');
   const [noteOpen, setNoteOpen] = useState(false);
@@ -68,8 +68,11 @@ export function RecordPaymentModal({ prefill, busy, error, onSubmit, onClose }) 
   return (
     <Modal
       title="บันทึกรับชำระ"
-      // Design m-payment: the Express upload is the normal path now (spec 2026-11-15 §8); this is the fallback.
-      subtitle="ใช้เมื่อรายการจาก Express จับคู่ไม่ได้ หรือรับเงินนอก Express — รายการนี้ย้อนกลับไม่ได้ ตรวจยอดก่อนบันทึก"
+      // Design m-payment: while the Express upload is on it is the normal path (spec 2026-11-15 §8) and this is the
+      // fallback; with the upload off there is no Express path to fall back from, so the header says nothing of it.
+      subtitle={expressUploadEnabled
+        ? 'ใช้เมื่อรายการจาก Express จับคู่ไม่ได้ หรือรับเงินนอก Express — รายการนี้ย้อนกลับไม่ได้ ตรวจยอดก่อนบันทึก'
+        : 'รายการนี้ย้อนกลับไม่ได้ ตรวจยอดก่อนบันทึก'}
       onClose={busy ? undefined : onClose}
       footer={<Footer onClose={onClose} busy={busy} submitLabel="บันทึกรับชำระ" onSubmit={submit} />}
     >

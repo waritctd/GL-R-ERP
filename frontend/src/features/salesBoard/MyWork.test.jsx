@@ -185,13 +185,71 @@ describe('MyWork — review fixes', () => {
       quietDays: 14,
     });
     renderMyWork();
-    await screen.findByTestId('board-card-42');
+    await screen.findByTestId('board-card-41');
 
     fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
     expect(screen.getByTestId('board-card-41')).toBeTruthy();
     expect(screen.queryByTestId('board-card-42')).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'ทั้งหมด' }));
     expect(screen.getByTestId('board-card-42')).toBeTruthy();
+  });
+
+  // Round-2 LOW 1: most reps have not set expected quarters yet, so ไตรมาสนี้ would hide most of their board.
+  it('the board defaults to ทั้งหมด while fewer than half of the open deals have an expected quarter', async () => {
+    const now = new Date();
+    const thisQuarter = `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
+    api.salesBoard.myWork.mockResolvedValue({
+      followUp: [],
+      board: [
+        { ...fresh, ticketId: 71, expectedQuarter: thisQuarter },
+        { ...fresh, ticketId: 72, expectedQuarter: null },
+        { ...fresh, ticketId: 73, expectedQuarter: null },
+      ],
+      quietDays: 14,
+    });
+    renderMyWork();
+
+    await screen.findByTestId('board-card-73');
+    expect(screen.getByRole('button', { name: 'ทั้งหมด' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('board-card-72')).toBeTruthy();
+  });
+
+  it('the board defaults to ไตรมาสนี้ once at least half of the open deals have an expected quarter', async () => {
+    const now = new Date();
+    const thisQuarter = `${now.getFullYear()}-Q${Math.floor(now.getMonth() / 3) + 1}`;
+    api.salesBoard.myWork.mockResolvedValue({
+      followUp: [],
+      board: [{ ...fresh, ticketId: 81, expectedQuarter: thisQuarter }, { ...fresh, ticketId: 82, expectedQuarter: null }],
+      quietDays: 14,
+    });
+    renderMyWork();
+
+    await screen.findByTestId('board-card-81');
+    expect(screen.getByRole('button', { name: 'ไตรมาสนี้' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.queryByTestId('board-card-82')).toBeNull();
+  });
+
+  // Round-2 LOW 2: ควรตามต่อ shows at most five; the rest are reachable from the board.
+  it('ควรตามต่อ offers ดูทั้งหมด (n) past five quiet deals, opening the board filtered to quiet deals', async () => {
+    const quietDeals = [1, 2, 3, 4, 5, 6, 7].map((n) => ({ ...quiet, ticketId: 100 + n, title: `เงียบ ${n}` }));
+    api.salesBoard.myWork.mockResolvedValue({
+      followUp: quietDeals.slice(0, 5), board: [...quietDeals, fresh], quietDays: 14,
+    });
+    renderMyWork();
+
+    await screen.findByTestId('follow-up-101');
+    fireEvent.click(screen.getByRole('button', { name: 'ดูทั้งหมด (7)' }));
+
+    expect(screen.getByRole('button', { name: 'ดีลเงียบ' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('board-card-107')).toBeTruthy();
+    expect(screen.queryByTestId('board-card-32')).toBeNull();
+  });
+
+  it('ควรตามต่อ has no ดูทั้งหมด link at five quiet deals or fewer', async () => {
+    renderMyWork();
+
+    await screen.findByTestId('follow-up-31');
+    expect(screen.queryByRole('button', { name: /ดูทั้งหมด/ })).toBeNull();
   });
 
   it('a USD deal shows USD and stays out of the ฿ total (M1)', async () => {

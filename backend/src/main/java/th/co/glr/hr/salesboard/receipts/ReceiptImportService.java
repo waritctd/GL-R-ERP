@@ -7,186 +7,332 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.salesboard.receipts.ReceiptFileParser.ParseResult;
+import th.co.glr.hr.salesboard.receipts.ReceiptFileParser.RowError;
+import th.co.glr.hr.salesboard.receipts.ReceiptImportDtos.Allocation;
 import th.co.glr.hr.salesboard.receipts.ReceiptImportDtos.CandidateDto;
+import th.co.glr.hr.salesboard.receipts.ReceiptImportDtos.DealOption;
 import th.co.glr.hr.salesboard.receipts.ReceiptImportDtos.ImportSummary;
 import th.co.glr.hr.salesboard.receipts.ReceiptImportDtos.LatestImport;
+import th.co.glr.hr.salesboard.receipts.ReceiptImportDtos.ManagerView;
+import th.co.glr.hr.salesboard.receipts.ReceiptImportDtos.ResolveRequest;
 import th.co.glr.hr.salesboard.receipts.ReceiptImportDtos.UnmatchedRowDto;
 import th.co.glr.hr.salesboard.receipts.ReceiptImportRepository.CandidateDeal;
 import th.co.glr.hr.salesboard.receipts.ReceiptImportRepository.OpenExpected;
 import th.co.glr.hr.salesboard.receipts.ReceiptImportRepository.QueuedRow;
 import th.co.glr.hr.salesboard.receipts.ReceiptMatcher.Match;
-import th.co.glr.hr.salesboard.receipts.ReceiptMatcher.Reason;
+import th.co.glr.hr.ticket.ExpressReceiptRefusal;
 import th.co.glr.hr.ticket.TicketRepository;
 
 /**
- * The Express receipts upload (spec 2026-11-15 §7.8, plan task 3.3). Who may do what — every gate is here:
+ * The Express receipts upload (spec 2026-11-15 §7.8). Who may do what — every gate is here (review H2/H3):
  * <ul>
- *   <li>upload, latest, template — account, ceo;</li>
- *   <li>the unmatched queue — sales (only rows one of their OWN deals could be, with only their own deals offered),
- *       sales_manager / ceo / account (every row, every candidate);</li>
- *   <li>resolve (attach to a deal) — sales only onto their own deal AND only a deal the queue offers them for that
- *       row; sales_manager / ceo / account onto any ACTIVE deal;</li>
- *   <li>ignore — sales_manager / ceo / account (a rep cannot hide money from the queue).</li>
+ *   <li>upload, latest, template, the queue (list, ignored list, resolve, split, ignore, un-ignore, flag for the
+ *       manager), the deal picker — ACCOUNT ONLY. Not the CEO (segregation of duties: the role that approves and
+ *       closes deals does not also put cash on them), not sales, not sales_manager;</li>
+ *   <li>{@link #managerView} — sales_manager / ceo, read-only: how many rows wait, plus only the rows account flagged;</li>
+ *   <li>everyone else — 403.</li>
  * </ul>
+ * The whole upload is off unless {@code app.receipts.express-upload.enabled} (ReceiptImportSettings, H4).
  *
- * <p>Each row of a file is, in order: invalid (reported by line, nothing written); a duplicate — its document number
- * is already a receipt of any source, or already queued, or repeated earlier in the same file (nothing written: this
- * is what makes re-uploading idempotent and keeps a hand-typed receipt from counting twice); matched
- * ({@link ReceiptMatcher}) and placed ({@link ReceiptPlacement}: an EXPRESS receipt, the expected payment marked
- * RECEIVED, the deposit advanced); or queued as UNMATCHED with the matcher's reason — also when placement refuses it
- * (OVERPAYMENT, DEAL_NOT_ACTIVE). Never a guess.
- *
- * <p>Not one transaction on purpose: each placement commits alone (its own @Transactional bean), so a refused row
- * cannot roll back the rows before it, and a re-upload simply skips what already landed.
+ * <p>Each row of a file is, in order: invalid (parser) · a non-cash document type (H4) · a duplicate (its number is a
+ * receipt of any source, a linked manual receipt, already queued, or repeated in the file) · matched against the
+ * CURRENT candidates (reloaded per row, M1) → the manual twin (H1: linked, nothing written) or placed
+ * ({@link ReceiptPlacement}) · else queued UNMATCHED with the matcher's reason. A placement refusal is classified by
+ * its code (ExpressReceiptRefusal, M2), never by message text: DUPLICATE (a concurrent upload landed it) counts as a
+ * duplicate, OVERPAYMENT / DEAL_NOT_ACTIVE queue it. Any OTHER failure on a row is that row's error (M3); the stored
+ * summary is written in a finally block so it is always what happened.
  */
 @Service
 public class ReceiptImportService {
-    static final Set<String> UPLOAD_ROLES = Set.of("account", "ceo");
-    static final Set<String> QUEUE_ROLES = Set.of("sales", "sales_manager", "ceo", "account");
-    static final Set<String> QUEUE_ALL_ROLES = Set.of("sales_manager", "ceo", "account");
+    static final Set<String> ACCOUNT_ROLES = Set.of("account");
+    static final Set<String> MANAGER_VIEW_ROLES = Set.of("sales_manager", "ceo");
     private static final String FORBIDDEN = "ไม่มีสิทธิ์เข้าถึงรายการนี้";
+    private static final Logger log = LoggerFactory.getLogger(ReceiptImportService.class);
 
     private final ReceiptImportRepository imports;
     private final ReceiptPlacement placement;
     private final TicketRepository tickets;
+    private final ReceiptImportSettings settings;
 
-    public ReceiptImportService(ReceiptImportRepository imports, ReceiptPlacement placement, TicketRepository tickets) {
+    public ReceiptImportService(ReceiptImportRepository imports, ReceiptPlacement placement, TicketRepository tickets,
+                                ReceiptImportSettings settings) {
         this.imports = imports;
         this.placement = placement;
         this.tickets = tickets;
+        this.settings = settings;
+    }
+
+    /** Running tallies of one upload. */
+    static final class Counts {
+        final Tally matched = new Tally();
+        final Tally possibleManual = new Tally();
+        final Tally duplicates = new Tally();
+        final Tally unmatched = new Tally();
+        final Tally nonCash = new Tally();
+        int invalid;
+        int failed;
+
+        int total() {
+            return matched.count + possibleManual.count + duplicates.count + unmatched.count + nonCash.count
+                + invalid + failed;
+        }
+    }
+
+    static final class Tally {
+        int count;
+        BigDecimal amount = BigDecimal.ZERO;
+
+        void add(ParsedReceipt row) {
+            count++;
+            amount = amount.add(row.amount());
+        }
     }
 
     public ImportSummary upload(String fileName, byte[] bytes, UserPrincipal actor) {
-        requireRole(actor, UPLOAD_ROLES);
+        requireRole(actor, ACCOUNT_ROLES);
+        if (!settings.uploadEnabled()) {
+            throw new ApiException(HttpStatus.CONFLICT, "ยังไม่เปิดใช้การอัปโหลดไฟล์ Express",
+                Map.of("code", "UPLOAD_DISABLED"));
+        }
         String name = fileName == null || fileName.isBlank() ? "upload" : fileName.trim();
         ParseResult parsed = ReceiptFileParser.parse(name, bytes);
         long importId = imports.insertImport(name, actor.id());
-        List<CandidateDeal> deals = imports.activeCandidates();
-        List<ReceiptMatcher.Candidate> candidates = deals.stream().map(CandidateDeal::candidate).toList();
-
-        Tally matched = new Tally();
-        Tally duplicates = new Tally();
-        Tally unmatched = new Tally();
+        Counts counts = new Counts();
+        counts.invalid = parsed.errors().size();
+        List<RowError> errors = new ArrayList<>(parsed.errors());
         Set<String> seen = new HashSet<>();
-        for (ParsedReceipt row : parsed.rows()) {
-            String key = row.docNo().trim().toUpperCase(Locale.ROOT);
-            if (!seen.add(key) || imports.isKnownDocNo(row.docNo())) {
-                duplicates.add(row);
-                continue;
-            }
-            Match match = ReceiptMatcher.match(row, candidates);
-            if (!match.matched()) {
-                imports.insertUnmatched(importId, row, match.reason().name());
-                unmatched.add(row);
-                continue;
-            }
-            try {
-                placement.place(match.ticketId(), row, actor);
-                matched.add(row);
-            } catch (ApiException e) {
-                if (e.getStatus() != HttpStatus.CONFLICT) {
-                    throw e;
+        try {
+            for (ParsedReceipt row : parsed.rows()) {
+                try {
+                    placeRow(importId, row, seen, counts, actor);
+                } catch (RuntimeException e) {
+                    // Any failure on one row is that row's error, never the file's (review M3).
+                    log.warn("receipt import {} line {} ({}) failed", importId, row.line(), row.docNo(), e);
+                    counts.failed++;
+                    errors.add(new RowError(row.line(), "บันทึกไม่สำเร็จ (" + row.docNo() + ") — ลองอัปโหลดใหม่"));
                 }
-                String message = e.getMessage() == null ? "" : e.getMessage();
-                if (message.contains("ถูกบันทึกแล้ว")) { // the same number landed meanwhile (a concurrent upload)
-                    duplicates.add(row);
-                    continue;
-                }
-                Reason reason = message.contains("เกินยอด") ? Reason.OVERPAYMENT : Reason.DEAL_NOT_ACTIVE;
-                imports.insertUnmatched(importId, row, reason.name());
-                unmatched.add(row);
+            }
+        } finally {
+            imports.finishImport(importId, counts);
+        }
+        errors.sort(Comparator.comparingInt(RowError::line));
+        ImportSummary s = imports.findImport(importId).orElseThrow();
+        return new ImportSummary(s.importId(), s.fileName(), s.uploadedAt(), s.uploadedByName(), s.totalRows(),
+            s.matched(), s.matchedAmount(), s.possibleManualDuplicates(), s.duplicates(), s.duplicateAmount(),
+            s.unmatched(),
+            s.unmatchedAmount(), s.nonCash(), s.invalid(), s.failed(), errors);
+    }
+
+    private void placeRow(long importId, ParsedReceipt row, Set<String> seen, Counts counts, UserPrincipal actor) {
+        if (!settings.isCash(row.docType())) {
+            counts.nonCash.add(row);
+            return;
+        }
+        String key = row.docNo().trim().toUpperCase(Locale.ROOT);
+        if (!seen.add(key) || imports.isKnownDocNo(row.docNo())) {
+            counts.duplicates.add(row);
+            return;
+        }
+        // Reloaded per row: what the rows above placed (a RECEIVED expected payment, a settled deposit) must count.
+        Match match = ReceiptMatcher.match(row, candidatesOnly(imports.activeCandidates()));
+        if (!match.matched()) {
+            queue(importId, row, match.reason().name(), null, counts, counts.unmatched);
+            return;
+        }
+        // Review N1: a hand-typed receipt that fits is only a POSSIBILITY — the same amount within a week can be a
+        // different payment (probe Q3). Never linked here: queued for account to decide, nothing written.
+        Optional<Long> twin = imports.findManualTwin(match.ticketId(), row.amount(), row.docDate());
+        if (twin.isPresent()) {
+            queue(importId, row, POSSIBLE_MANUAL_DUPLICATE, twin.get(), counts, counts.possibleManual);
+            return;
+        }
+        try {
+            placement.place(match.ticketId(), row, actor);
+            counts.matched.add(row);
+        } catch (ExpressReceiptRefusal refusal) {
+            switch (refusal.reason()) {
+                case DUPLICATE -> counts.duplicates.add(row);
+                case OVERPAYMENT, DEAL_NOT_ACTIVE ->
+                    queue(importId, row, refusal.reason().name(), null, counts, counts.unmatched);
             }
         }
-        int invalid = parsed.errors().size();
-        int total = parsed.rows().size() + invalid;
-        imports.finishImport(importId, total, matched.count, matched.amount, duplicates.count, duplicates.amount,
-            unmatched.count, unmatched.amount, invalid);
-        ImportSummary stored = imports.findImport(importId).orElseThrow();
-        return new ImportSummary(stored.importId(), stored.fileName(), stored.uploadedAt(), stored.uploadedByName(),
-            stored.totalRows(), stored.matched(), stored.matchedAmount(), stored.duplicates(),
-            stored.duplicateAmount(), stored.unmatched(), stored.unmatchedAmount(), stored.invalid(), parsed.errors());
+    }
+
+    public static final String POSSIBLE_MANUAL_DUPLICATE = "POSSIBLE_MANUAL_DUPLICATE";
+
+    /**
+     * Queues a row. If another upload queued the same number between this upload's check and its insert, the unique
+     * doc-no index refuses it — that is a duplicate, not a failure (review N4).
+     */
+    private void queue(long importId, ParsedReceipt row, String reason, Long suggestedReceiptId, Counts counts,
+                       Tally into) {
+        try {
+            imports.insertUnmatched(importId, row, reason, suggestedReceiptId);
+            into.add(row);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            counts.duplicates.add(row);
+        }
     }
 
     public LatestImport latest(UserPrincipal actor) {
-        requireRole(actor, UPLOAD_ROLES);
-        return new LatestImport(imports.latestImport().orElse(null), imports.countUnmatched());
+        requireRole(actor, ACCOUNT_ROLES);
+        return new LatestImport(settings.uploadEnabled(), imports.latestImport().orElse(null),
+            imports.countUnmatched());
     }
 
     public byte[] template(UserPrincipal actor) {
-        requireRole(actor, UPLOAD_ROLES);
+        requireRole(actor, ACCOUNT_ROLES);
         return ReceiptFileParser.templateCsv();
     }
 
     public List<UnmatchedRowDto> unmatched(UserPrincipal actor) {
-        requireRole(actor, QUEUE_ROLES);
+        requireRole(actor, ACCOUNT_ROLES);
         List<CandidateDeal> deals = imports.activeCandidates();
-        List<UnmatchedRowDto> out = new ArrayList<>();
-        for (QueuedRow row : imports.findUnmatched()) {
-            List<CandidateDto> offered = offeredTo(row, deals, actor);
-            if (!QUEUE_ALL_ROLES.contains(actor.role()) && offered.isEmpty()) {
-                continue;
-            }
-            out.add(toDto(row, offered));
-        }
-        return out;
+        return imports.findByStatus(ReceiptImportDtos.UNMATCHED).stream()
+            .map(row -> toDto(row, offered(row, deals))).toList();
     }
 
-    public UnmatchedRowDto resolve(long rowId, Long ticketId, UserPrincipal actor) {
-        requireRole(actor, QUEUE_ROLES);
-        if (ticketId == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกดีล");
-        }
+    private UnmatchedRowDto toDto(QueuedRow row, List<CandidateDto> candidates) {
+        ReceiptImportDtos.PossibleManual manual = row.suggestedReceiptId() == null ? null
+            : imports.manualReceipt(row.suggestedReceiptId()).orElse(null);
+        ParsedReceipt r = row.receipt();
+        return new UnmatchedRowDto(row.rowId(), row.importId(), r.docNo(), r.docDate(), r.customerName(), r.amount(),
+            r.reference(), row.reason(), row.status(), row.resolvedTicketId(), row.managerFlaggedAt(),
+            row.suggestedReceiptId(), manual, candidates);
+    }
+
+    public List<UnmatchedRowDto> ignored(UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        return imports.findByStatus(ReceiptImportDtos.IGNORED).stream().map(row -> toDto(row, List.of())).toList();
+    }
+
+    public ManagerView managerView(UserPrincipal actor) {
+        requireRole(actor, MANAGER_VIEW_ROLES);
+        return new ManagerView(imports.countUnmatched(), imports.flaggedUnmatched());
+    }
+
+    public List<DealOption> searchDeals(String q, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        return imports.searchDeals(q);
+    }
+
+    /**
+     * Attaches a queued row: to one deal ({@code ticketId}), or split across several ({@code allocations}, whose
+     * amounts must sum EXACTLY to the row, review M7). Every target must be ACTIVE and inside account's finance scope
+     * (M4) — else 403.
+     */
+    public UnmatchedRowDto resolve(long rowId, ResolveRequest request, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
         QueuedRow row = imports.findRow(rowId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้"));
-        tickets.findById(ticketId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
-        if (!QUEUE_ALL_ROLES.contains(actor.role())) {
-            // A rep attaches only onto a deal the queue offers THEM for this row (their own, a fitting customer).
-            boolean offered = offeredTo(row, imports.activeCandidates(), actor).stream()
-                .anyMatch(c -> c.ticketId() == ticketId);
-            if (!offered) {
+        List<Allocation> lines = allocations(request, row);
+        for (Allocation a : lines) {
+            tickets.findById(a.ticketId()).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            if (!imports.isCandidateDeal(a.ticketId())) {
                 throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
             }
         }
-        placement.resolve(rowId, ticketId, actor);
+        placement.resolve(rowId, lines, actor);
         return toDto(imports.findRow(rowId).orElseThrow(), List.of());
     }
 
+    private static List<Allocation> allocations(ResolveRequest request, QueuedRow row) {
+        if (request == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกดีล");
+        }
+        if (request.allocations() == null || request.allocations().isEmpty()) {
+            if (request.ticketId() == null) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกดีล");
+            }
+            return List.of(new Allocation(request.ticketId(), row.receipt().amount()));
+        }
+        BigDecimal sum = BigDecimal.ZERO;
+        Set<Long> distinct = new HashSet<>();
+        for (Allocation a : request.allocations()) {
+            if (a == null || a.ticketId() == null || a.amount() == null || a.amount().signum() <= 0
+                || a.amount().stripTrailingZeros().scale() > 2 || !distinct.add(a.ticketId())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "แต่ละดีลต้องมียอดมากกว่า 0 และไม่ซ้ำกัน");
+            }
+            sum = sum.add(a.amount());
+        }
+        if (sum.compareTo(row.receipt().amount()) != 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST,
+                "ยอดที่แบ่งรวมกันต้องเท่ากับยอดรายการพอดี (" + row.receipt().amount().toPlainString() + ")");
+        }
+        return List.copyOf(request.allocations());
+    }
+
     public UnmatchedRowDto ignore(long rowId, UserPrincipal actor) {
-        requireRole(actor, QUEUE_ALL_ROLES);
-        QueuedRow row = imports.findRow(rowId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้"));
+        requireRole(actor, ACCOUNT_ROLES);
+        requireRow(rowId);
         if (imports.markIgnored(rowId, actor.id()) == 0) {
             throw new ApiException(HttpStatus.CONFLICT, "รายการนี้จับคู่หรือข้ามไปแล้ว");
         }
-        return toDto(imports.findRow(row.rowId()).orElseThrow(), List.of());
+        return toDto(requireRow(rowId), List.of());
+    }
+
+    public UnmatchedRowDto unignore(long rowId, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        requireRow(rowId);
+        if (imports.markUnignored(rowId) == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ไม่ได้อยู่ในรายการที่ข้ามไป");
+        }
+        return toDto(requireRow(rowId), List.of());
+    }
+
+    /**
+     * "รายการเดียวกับที่บันทึกเอง" (review N1): account confirms a POSSIBLE_MANUAL_DUPLICATE row IS the hand-typed
+     * receipt — it is linked to the Express number and nothing is written. "คนละรายการ" is {@link #resolve}.
+     */
+    public UnmatchedRowDto sameAsManual(long rowId, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        requireRow(rowId);
+        placement.sameAsManual(rowId, actor);
+        return toDto(requireRow(rowId), List.of());
+    }
+
+    /** "ส่งให้ผู้จัดการขายดู" (review M5): shows the row in the manager's read-only view; account still resolves it. */
+    public UnmatchedRowDto flagForManager(long rowId, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        requireRow(rowId);
+        if (imports.flagForManager(rowId, actor.id()) == 0) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้จับคู่หรือข้ามไปแล้ว");
+        }
+        return toDto(requireRow(rowId), List.of());
     }
 
     // ── helpers ────────────────────────────────────────────────────────────
 
-    /**
-     * The deals worth offering for a queued row: whatever the matcher would point at (the ambiguous pair, or the
-     * customer's deals). A sales rep gets only their own (owner or keyer) of those.
-     */
-    private List<CandidateDto> offeredTo(QueuedRow row, List<CandidateDeal> deals, UserPrincipal actor) {
-        Match match = ReceiptMatcher.match(row.receipt(), deals.stream().map(CandidateDeal::candidate).toList());
+    private QueuedRow requireRow(long rowId) {
+        return imports.findRow(rowId).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้"));
+    }
+
+    private static List<ReceiptMatcher.Candidate> candidatesOnly(List<CandidateDeal> deals) {
+        return deals.stream().map(CandidateDeal::candidate).toList();
+    }
+
+    /** The deals worth offering for a queued row: whatever the matcher would point at. */
+    private static List<CandidateDto> offered(QueuedRow row, List<CandidateDeal> deals) {
+        Match match = ReceiptMatcher.match(row.receipt(), candidatesOnly(deals));
         Map<Long, CandidateDeal> byId = deals.stream()
             .collect(Collectors.toMap(d -> d.candidate().ticketId(), Function.identity()));
-        boolean rep = "sales".equals(actor.role());
         List<CandidateDto> out = new ArrayList<>();
         for (Long id : match.candidateIds()) {
             CandidateDeal d = byId.get(id);
-            if (d == null || (rep && d.ownerId() != actor.id() && !Long.valueOf(actor.id()).equals(d.keyedById()))) {
-                continue;
+            if (d != null) {
+                out.add(candidate(d, row.receipt(), match));
             }
-            out.add(candidate(d, row.receipt(), match));
         }
         return out;
     }
@@ -198,30 +344,16 @@ public class ReceiptImportService {
         boolean amountFits = nearest != null && ReceiptMatcher.withinTolerance(row.amount(), nearest.amount());
         String hint = match.rule() == ReceiptMatcher.Rule.INVOICE_NO || match.rule() == ReceiptMatcher.Rule.QUOTATION_NO
             ? "เลขอ้างอิงตรง" : amountFits ? "ลูกค้า + ยอดตรง" : "ลูกค้าตรง";
-        return new CandidateDto(d.candidate().ticketId(), d.title(), d.candidate().customerName(), d.ownerId(),
-            d.ownerName(), hint, nearest == null ? null : nearest.amount(), nearest == null ? null : nearest.week(),
+        return new CandidateDto(d.candidate().ticketId(), d.title(),
+            d.candidate().customerNames().stream().findFirst().orElse(null), d.ownerId(), d.ownerName(), hint,
+            nearest == null ? null : nearest.amount(), nearest == null ? null : nearest.week(),
             nearest == null ? null : nearest.kind());
     }
 
-    private static UnmatchedRowDto toDto(QueuedRow row, List<CandidateDto> candidates) {
-        ParsedReceipt r = row.receipt();
-        return new UnmatchedRowDto(row.rowId(), row.importId(), r.docNo(), r.docDate(), r.customerName(), r.amount(),
-            r.reference(), row.reason(), row.status(), row.resolvedTicketId(), candidates);
-    }
 
     private static void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (!allowed.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
-        }
-    }
-
-    private static final class Tally {
-        int count;
-        BigDecimal amount = BigDecimal.ZERO;
-
-        void add(ParsedReceipt row) {
-            count++;
-            amount = amount.add(row.amount());
         }
     }
 }

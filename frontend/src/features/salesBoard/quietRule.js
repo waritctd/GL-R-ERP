@@ -1,4 +1,4 @@
-// The mock's copy of th.co.glr.hr.salesboard.QuietRule (spec 2026-11-15 §7.5). The real rule runs in SQL on the
+// The mock's copy of th.co.glr.hr.ticket.QuietRule (spec 2026-11-15 §7.5). The real rule runs in SQL on the
 // server and every screen reads its result (TicketSummaryDto.stale, BoardDeal.quiet); only mockApi computes it here.
 //
 // Last touched = the latest of the deal's createdAt, any deal activity's createdAt, and a STAGE_CHANGED /
@@ -42,9 +42,11 @@ export function daysQuietOf(ticket, activities, now = Date.now()) {
   return Math.max(0, Math.floor((now - last) / DAY_MS));
 }
 
-/** QuietRule.quietSql. */
-export function isQuiet(ticket, activities, now = Date.now(), quietDays = QUIET_DAYS) {
+/** QuietRule.quietSql. `hasUpcomingVisit` = QuietRule.upcomingVisitSql: a PLANNED visit dated today (Bangkok) or
+ * later holds the deal out of quiet; the caller (mockApi) works it out from its visits. */
+export function isQuiet(ticket, activities, now = Date.now(), quietDays = QUIET_DAYS, hasUpcomingVisit = false) {
   if ((ticket?.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return false;
+  if (hasUpcomingVisit) return false;
   if (boardColumnOf(ticket?.salesStage) === DELIVER_AND_COLLECT_COLUMN) return false;
   const last = lastTouchedMs(ticket, activities);
   return !Number.isNaN(last) && last < now - quietDays * DAY_MS;

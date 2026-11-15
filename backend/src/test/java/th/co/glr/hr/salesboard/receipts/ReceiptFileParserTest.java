@@ -112,10 +112,47 @@ class ReceiptFileParserTest {
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
+    /** Review H4: a document type from its own column, else the document number's leading letters. */
+    @Test
+    void docTypeComesFromItsColumnElseTheNumbersPrefix() {
+        byte[] csv = ("Doc No,Doc Type,Date,Amount\n"
+            + "RE-6911-1,,2026-11-12,10\n"
+            + "IV6911-2,,2026-11-12,10\n"
+            + "X-3,re,2026-11-12,10\n"
+            + "4455,,2026-11-12,10\n"
+            + "X-5, ใบเสร็จรับเงิน ,2026-11-12,10\n"
+            + "X-6,ใบกำกับภาษี,2026-11-12,10\n").getBytes(StandardCharsets.UTF_8);
+        ParseResult result = ReceiptFileParser.parse("a.csv", csv);
+        // Review N4: the Thai name of a receipt reads as RE; any other text stays non-cash.
+        assertThat(result.rows()).extracting(ParsedReceipt::docType)
+            .containsExactly("RE", "IV", "RE", null, "RE", "ใบกำกับภาษี");
+    }
+
+    /** Review M2 / M3: column limits are checked here, so an over-long row is invalid with its reason, not a crash. */
+    @Test
+    void overLongDocNumbersAndOverLargeAmountsAreInvalidRows() {
+        byte[] csv = ("เลขที่เอกสาร,วันที่,จำนวนเงิน\n"
+            + "RE-" + "9".repeat(58) + ",2026-11-12,10\n"
+            + "RE-OK,2026-11-12,1000000000000\n"
+            + "RE-OK2,2026-11-12,999999999999.99\n").getBytes(StandardCharsets.UTF_8);
+        ParseResult result = ReceiptFileParser.parse("a.csv", csv);
+        assertThat(result.rows()).extracting(ParsedReceipt::docNo).containsExactly("RE-OK2");
+        assertThat(result.errors()).extracting(ReceiptFileParser.RowError::line).containsExactly(2, 3);
+        assertThat(result.errors().get(0).message()).contains("60");
+        assertThat(result.errors().get(1).message()).contains("จำนวนเงิน");
+    }
+
+    @Test
+    void filesOverTwoMegabytesAreRefused() {
+        byte[] big = new byte[2 * 1024 * 1024 + 1];
+        assertThatThrownBy(() -> ReceiptFileParser.parse("x.csv", big))
+            .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getMessage()).contains("2 MB"));
+    }
+
     @Test
     void theDownloadableTemplateIsAHeaderOnlyFileThisParserAccepts() {
         byte[] template = ReceiptFileParser.templateCsv();
-        assertThat(new String(template, StandardCharsets.UTF_8)).startsWith("\uFEFFเลขที่เอกสาร,วันที่,ลูกค้า,จำนวนเงิน,อ้างอิง");
+        assertThat(new String(template, StandardCharsets.UTF_8)).startsWith("\uFEFFเลขที่เอกสาร,ประเภทเอกสาร,วันที่,ลูกค้า,จำนวนเงิน,อ้างอิง");
         ParseResult parsed = ReceiptFileParser.parse("template.csv", template);
         assertThat(parsed.rows()).isEmpty();
         assertThat(parsed.errors()).isEmpty();

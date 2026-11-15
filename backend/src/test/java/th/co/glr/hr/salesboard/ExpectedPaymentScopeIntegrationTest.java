@@ -240,6 +240,41 @@ class ExpectedPaymentScopeIntegrationTest extends AbstractDealQuotationSlice2Int
     }
 
     @Test
+    void rowsOnADealThatIsNotActiveAreReadOnly() throws Exception {
+        long mine = deal(salesActor);
+        long row = create(salesActor, mine, "DEPOSIT", "5000", monday);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'DORMANT' WHERE ticket_id = :id", Map.of("id", mine));
+
+        assertThat(status(put(path(mine) + "/" + row).contentType(MediaType.APPLICATION_JSON)
+            .content(body("DEPOSIT", "1", monday)), salesActor)).isEqualTo(409);
+        assertThat(status(delete(path(mine) + "/" + row), salesActor)).isEqualTo(409);
+        assertThat(amountOf(row)).isEqualByComparingTo("5000");
+        assertThat(statusOf(row)).isEqualTo("OPEN");
+    }
+
+    /** Probe Q1 (review N3): a partly received row cannot be cut below what came in, nor change kind. */
+    @Test
+    void probeQ1_aPartlyReceivedRowCannotDropBelowWhatCameInNorChangeKind() throws Exception {
+        long mine = deal(salesActor);
+        long row = create(salesActor, mine, "DEPOSIT", "1000", monday);
+        jdbc.update("UPDATE sales.expected_payment SET received_amount = 400 WHERE expected_payment_id = :id",
+            Map.of("id", row));
+
+        assertThat(status(put(path(mine) + "/" + row).contentType(MediaType.APPLICATION_JSON)
+            .content(body("DEPOSIT", "300", monday)), salesActor)).isEqualTo(409);
+        assertThat(status(put(path(mine) + "/" + row).contentType(MediaType.APPLICATION_JSON)
+            .content(body("BALANCE", "1000", monday)), salesActor)).isEqualTo(409);
+        assertThat(amountOf(row)).isEqualByComparingTo("1000");
+        // Down to exactly what came in, same kind, is fine.
+        assertThat(status(put(path(mine) + "/" + row).contentType(MediaType.APPLICATION_JSON)
+            .content(body("DEPOSIT", "400", monday)), salesActor)).isEqualTo(200);
+        // And the table refuses it whoever writes, so a bucket can never go negative.
+        assertThatThrownBy(() -> jdbc.update(
+            "UPDATE sales.expected_payment SET amount = 300 WHERE expected_payment_id = :id", Map.of("id", row)))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    @Test
     void unknownDealIs404() throws Exception {
         assertThat(status(get(path(987654321L)), salesManagerActor)).isEqualTo(404);
     }

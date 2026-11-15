@@ -10,6 +10,11 @@ function withQuery(path, params = {}) {
   return text ? `${path}?${text}` : path;
 }
 
+/** The H1 confirm flag as a query object: present only when true, so a normal call's URL is unchanged. */
+function duplicateQuery(options) {
+  return options?.confirmPossibleDuplicate ? { confirmPossibleDuplicate: true } : {};
+}
+
 export const api = {
   auth: {
     login: (payload) => apiRequest(API_ROUTES.auth.login, { method: 'POST', body: payload }),
@@ -646,10 +651,11 @@ export const api = {
   // Mirrors ReceiptImportController (salesboard/receipts/, V213). upload(file) = multipart `file` (.csv UTF-8 or .xlsx,
   // the documented column template — no real Express export exists yet) -> ImportSummary { matched, duplicates,
   // unmatched, invalid (+ amounts), errors[{ line, message }] }; latest -> { latest, openUnmatched }; template -> the
-  // CSV template as a Blob. upload/latest/template: account, ceo. unmatched -> rows [{ rowId, docNo, docDate,
-  // customerName, amount, reference, reason, candidates[{ ticketId, title, hint, ownerName, expectedAmount, … }] }] —
-  // a sales rep gets only rows one of their own deals could be; resolve(rowId, { ticketId }) attaches it (a rep only
-  // onto an offered own deal); ignore(rowId): account / sales_manager / ceo. Gates live in ReceiptImportService.
+  // CSV template as a Blob. ACCOUNT ONLY (review H2/H3): upload, latest ({ uploadEnabled, latest, openUnmatched } —
+  // the upload is off until the owner switches it on), template, unmatched / ignored rows (with candidates), deals(q)
+  // (picker, account's scope), resolve(rowId, { ticketId } | { allocations: [{ ticketId, amount }] } — a split must sum
+  // to the row), ignore / unignore, flagManager. managerView: sales_manager / ceo, read-only { openUnmatched, flagged }.
+  // Gates live in ReceiptImportService.
   receiptImports: {
     upload: async (file) => {
       const formData = new FormData();
@@ -667,8 +673,15 @@ export const api = {
       return res.blob();
     },
     unmatched: () => apiRequest(API_ROUTES.receiptImports.unmatched),
+    ignored: () => apiRequest(API_ROUTES.receiptImports.ignored),
+    managerView: () => apiRequest(API_ROUTES.receiptImports.managerView),
+    deals: (q) => apiRequest(withQuery(API_ROUTES.receiptImports.deals, { q })),
     resolve: (rowId, payload) => apiRequest(API_ROUTES.receiptImports.resolve(rowId), { method: 'POST', body: payload }),
     ignore: (rowId) => apiRequest(API_ROUTES.receiptImports.ignore(rowId), { method: 'POST' }),
+    unignore: (rowId) => apiRequest(API_ROUTES.receiptImports.unignore(rowId), { method: 'POST' }),
+    flagManager: (rowId) => apiRequest(API_ROUTES.receiptImports.flagManager(rowId), { method: 'POST' }),
+    // A POSSIBLE_MANUAL_DUPLICATE row IS the hand-typed receipt: link it, write nothing (review N1). "คนละรายการ" is resolve.
+    sameAsManual: (rowId) => apiRequest(API_ROUTES.receiptImports.sameAsManual(rowId), { method: 'POST' }),
   },
   // Mirrors VisitController (salesboard/). list: the caller's own visits planned in [from, to] (ISO dates, at most
   // 31 days inclusive); team: every rep's, sales_manager / ceo only. create `{ ticketId?, contactName, plannedDate,
@@ -751,9 +764,14 @@ export const api = {
   finance: {
     getDeal: (id) => apiRequest(API_ROUTES.finance.deal(id)),
     addComment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'comments'), { method: 'POST', body: payload }),
-    confirmDepositPaid: (id) => apiRequest(API_ROUTES.finance.action(id, 'deposit-paid'), { method: 'POST' }),
-    confirmFinalPayment: (id) => apiRequest(API_ROUTES.finance.action(id, 'final-payment'), { method: 'POST' }),
-    recordPayment: (id, payload) => apiRequest(API_ROUTES.finance.action(id, 'payments'), { method: 'POST', body: payload }),
+    // { confirmPossibleDuplicate: true } re-sends after the 409 POSSIBLE_DUPLICATE warning (a matching Express receipt
+    // is already on the deal, review H1); it travels as a query parameter.
+    confirmDepositPaid: (id, options = {}) => apiRequest(withQuery(API_ROUTES.finance.action(id, 'deposit-paid'), duplicateQuery(options)), { method: 'POST' }),
+    confirmFinalPayment: (id, options = {}) => apiRequest(withQuery(API_ROUTES.finance.action(id, 'final-payment'), duplicateQuery(options)), { method: 'POST' }),
+    recordPayment: (id, payload) => {
+      const { confirmPossibleDuplicate, ...body } = payload ?? {};
+      return apiRequest(withQuery(API_ROUTES.finance.action(id, 'payments'), duplicateQuery({ confirmPossibleDuplicate })), { method: 'POST', body });
+    },
     confirmCloseReady: (id) => apiRequest(API_ROUTES.finance.action(id, 'close/confirm'), { method: 'POST' }),
     revokeCloseConfirmation: (id, body) =>
       apiRequest(API_ROUTES.finance.action(id, 'close/revoke'), { method: 'POST', body }),

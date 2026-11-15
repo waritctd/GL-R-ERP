@@ -37,7 +37,12 @@ import th.co.glr.hr.common.ApiException;
  *   <li>.csv — UTF-8 (a BOM is allowed), comma-separated, RFC 4180 quoting;</li>
  *   <li>.xlsx — the first sheet; real date and number cells are read as such.</li>
  * </ul>
- * Required: เลขที่เอกสาร, วันที่, จำนวนเงิน. Optional: ลูกค้า, อ้างอิง. Dates: ISO {@code yyyy-MM-dd} or Thai-order
+ * Required: เลขที่เอกสาร, วันที่, จำนวนเงิน. Optional: ประเภทเอกสาร, ลูกค้า, อ้างอิง. The document type comes from its
+ * own column when filled, else the document number's leading letters ("RE-6911-0001" → RE, "IV6911" → IV); only the
+ * configured cash types become receipts (ReceiptImportSettings, review H4). Column limits are checked HERE (review
+ * M2/M3): เลขที่เอกสาร ≤ {@value #MAX_DOC_NO} characters (payment_receipt.receipt_ref), ลูกค้า / อ้างอิง ≤
+ * {@value #MAX_TEXT}, จำนวนเงิน ≤ 999,999,999,999.99 (NUMERIC(14,2)) — a row over a limit is an invalid row with its
+ * reason, never a database error later. Dates: ISO {@code yyyy-MM-dd} or Thai-order
  * {@code d/M/yyyy} (a year above 2400 is Buddhist era). Amounts: commas, ฿ and spaces stripped; must be &gt; 0 with at
  * most 2 decimals. A row missing a required value, or with a bad one, is reported by line and skipped — it never
  * blocks the rest of the file. Fully blank rows are ignored.
@@ -49,15 +54,22 @@ public final class ReceiptFileParser {
 
     public record ParseResult(List<ParsedReceipt> rows, List<RowError> errors) {}
 
-    public enum Column { DOC_NO, DATE, CUSTOMER, AMOUNT, REFERENCE }
+    public enum Column { DOC_NO, DOC_TYPE, DATE, CUSTOMER, AMOUNT, REFERENCE }
 
     static final int HEADER_SCAN_ROWS = 15;
     static final int MAX_ROWS = 5000;
-    static final int MAX_BYTES = 5 * 1024 * 1024;
+    // 2 MB: the .xlsx path loads the whole workbook into memory (POI's DOM model) — capped low on purpose (review LOW).
+    static final int MAX_BYTES = 2 * 1024 * 1024;
+    static final int MAX_DOC_NO = 60;
+    static final int MAX_TEXT = 300;
+    static final BigDecimal MAX_AMOUNT = new BigDecimal("999999999999.99");
+    private static final Pattern DOC_TYPE_PREFIX = Pattern.compile("^([A-Za-z]+)");
+    private static final String THAI_RECEIPT = "ใบเสร็จรับเงิน";
 
     /** The template's own header first (also the Thai label used in messages), then accepted aliases. */
     static final Map<Column, List<String>> ALIASES = new EnumMap<>(Map.of(
         Column.DOC_NO, List.of("เลขที่เอกสาร", "doc no", "document no", "doc number", "document number", "เลขที่"),
+        Column.DOC_TYPE, List.of("ประเภทเอกสาร", "doc type", "document type", "ประเภท"),
         Column.DATE, List.of("วันที่", "date", "doc date", "document date", "วันที่เอกสาร", "วันที่รับเงิน"),
         Column.CUSTOMER, List.of("ลูกค้า", "customer", "customer name", "ชื่อลูกค้า"),
         Column.AMOUNT, List.of("จำนวนเงิน", "amount", "ยอดเงิน", "total", "ยอดรับ"),
@@ -72,7 +84,7 @@ public final class ReceiptFileParser {
             throw bad("ไฟล์ว่างเปล่า");
         }
         if (bytes.length > MAX_BYTES) {
-            throw bad("ไฟล์ใหญ่เกิน 5 MB");
+            throw bad("ไฟล์ใหญ่เกิน 2 MB — แบ่งเป็นหลายไฟล์");
         }
         String name = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT).trim();
         List<List<Object>> table;
@@ -126,6 +138,10 @@ public final class ReceiptFileParser {
                 errors.add(new RowError(line, "ไม่มีเลขที่เอกสาร"));
                 continue;
             }
+            if (docNo.length() > MAX_DOC_NO) {
+                errors.add(new RowError(line, "เลขที่เอกสารยาวเกิน " + MAX_DOC_NO + " ตัวอักษร"));
+                continue;
+            }
             LocalDate date = date(cell(cells, index.get(Column.DATE)));
             if (date == null) {
                 errors.add(new RowError(line, "วันที่ไม่ถูกต้อง (" + docNo + ")"));
@@ -136,10 +152,32 @@ public final class ReceiptFileParser {
                 errors.add(new RowError(line, "จำนวนเงินต้องมากกว่า 0 (" + docNo + ")"));
                 continue;
             }
-            rows.add(new ParsedReceipt(line, docNo, date, text(cell(cells, index.get(Column.CUSTOMER))),
-                amount.setScale(2, java.math.RoundingMode.UNNECESSARY), text(cell(cells, index.get(Column.REFERENCE)))));
+            if (amount.compareTo(MAX_AMOUNT) > 0) {
+                errors.add(new RowError(line, "จำนวนเงินเกิน 999,999,999,999.99 (" + docNo + ")"));
+                continue;
+            }
+            String customer = text(cell(cells, index.get(Column.CUSTOMER)));
+            String reference = text(cell(cells, index.get(Column.REFERENCE)));
+            if ((customer != null && customer.length() > MAX_TEXT) || (reference != null && reference.length() > MAX_TEXT)) {
+                errors.add(new RowError(line, "ชื่อลูกค้าหรืออ้างอิงยาวเกิน " + MAX_TEXT + " ตัวอักษร (" + docNo + ")"));
+                continue;
+            }
+            rows.add(new ParsedReceipt(line, docNo, docType(text(cell(cells, index.get(Column.DOC_TYPE))), docNo), date,
+                customer, amount.setScale(2, java.math.RoundingMode.UNNECESSARY), reference));
         }
         return new ParseResult(rows, errors);
+    }
+
+    /** The column's value when filled, else the document number's leading letters; upper-cased; null when neither. */
+    static String docType(String column, String docNo) {
+        if (column != null) {
+            String t = column.trim();
+            // Review N4: Express may print the Thai name. Only ใบเสร็จรับเงิน means RE; any other text stays itself
+            // (and so non-cash unless configured).
+            return THAI_RECEIPT.equals(t) ? "RE" : t.toUpperCase(Locale.ROOT);
+        }
+        Matcher m = DOC_TYPE_PREFIX.matcher(docNo.trim());
+        return m.find() ? m.group(1).toUpperCase(Locale.ROOT) : null;
     }
 
     private static Map<Column, Integer> headerIndex(List<Object> cells) {

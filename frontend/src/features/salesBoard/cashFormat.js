@@ -26,16 +26,18 @@ export function weekRangeLabel(mondayIso) {
 }
 
 /**
- * The weekly bar's label, "ถึง 13 พ.ย.": the week's Friday, or the month's last day when the week runs past it. A
- * week whose Monday is in the previous month (`2026-10-26` for November) is labelled by its own Friday.
+ * The weekly bar's label, "ถึง 13 พ.ย.": the week's Friday. A month's weeks are the ISO weeks whose Thursday is in it
+ * (SalesBoardService#assemble), so the week of Mon 30 Nov is December's and reads "ถึง 4 ธ.ค.". The month's LAST week
+ * (`isLast`) also holds the receipts of the days after its Friday, so it is labelled to the month's last day when that
+ * is later.
  */
-export function weekEndLabel(mondayIso, yearMonth) {
+export function weekEndLabel(mondayIso, yearMonth, isLast = false) {
   const friday = addDaysIso(mondayIso, 4);
   const [y, m] = (yearMonth ?? '').split('-').map(Number);
   let end = friday;
-  if (y && m && friday.slice(0, 7) > yearMonth && mondayIso.slice(0, 7) === yearMonth) {
-    const lastDay = new Date(Date.UTC(y, m, 0)).getUTCDate();
-    end = `${yearMonth}-${String(lastDay).padStart(2, '0')}`;
+  if (isLast && y && m) {
+    const monthEnd = `${yearMonth}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+    if (monthEnd > friday) end = monthEnd;
   }
   const p = parts(end);
   return p ? `ถึง ${p.day} ${SHORT_MONTH[p.month - 1]}` : '—';

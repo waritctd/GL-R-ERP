@@ -3905,6 +3905,19 @@ function recordPaymentForTicket(ticket, user, payload) {
   if (!['DEPOSIT', 'BALANCE', 'ADJUSTMENT'].includes(kind)) fail(`ไม่รองรับประเภทการรับชำระเงิน '${payload.kind}'`, 400);
   const amount = moneyValue(payload.amount);
   if (amount <= 0) fail('ยอดรับชำระต้องมากกว่า 0', 400);
+  if (kind !== 'ADJUSTMENT' && !payload.confirmPossibleDuplicate) {
+    // TicketService#recordPaymentInternal (review H1): an EXPRESS receipt of the same amount within ±7 days.
+    const day = mockBangkokDateOf(payload.receivedAt || new Date().toISOString());
+    const gapDays = (r) => Math.abs(new Date(`${mockBangkokDateOf(r.receivedAt)}T00:00:00Z`) - new Date(`${day}T00:00:00Z`)) / 86_400_000;
+    const twin = (db.paymentReceipts ?? []).find((r) => r.ticketId === ticket.id && r.source === 'EXPRESS'
+      && Number(r.amount) === amount && gapDays(r) <= 7);
+    if (twin) {
+      const error = new Error(`อาจซ้ำกับ ${twin.receiptRef} ที่อัปโหลดแล้ว — ยืนยันอีกครั้งถ้าเป็นเงินคนละรายการ`);
+      error.status = 409;
+      error.details = { code: 'POSSIBLE_DUPLICATE', expressDocNo: twin.receiptRef };
+      throw error;
+    }
+  }
   const payable = payableAmount(ticket);
   const paid = sumPaid(ticket.id);
   const signed = kind === 'ADJUSTMENT' ? -amount : amount;
@@ -3937,6 +3950,7 @@ function recordPaymentForTicket(ticket, user, payload) {
   });
   pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status,
     `kind=${kind}, amount=${amount}, paid=${newPaid}, payable=${payable}${note ? ` — ${note}` : ''}`);
+  mockApplyReceiptToExpected(ticket.id, kind, amount, mockBangkokDateOf(payload.receivedAt || now), nextId);
   reconcilePaymentStatus(ticket, user);
   ticket.updatedAt = now.slice(0, 10);
 }
@@ -4264,16 +4278,53 @@ function advanceDealToQuotationRecipientStage(ticket, recipientType, user) {
   if (stage) autoAdvanceStage(ticket, stage, user);
 }
 
-/** Mirrors TicketService#applyApprovedQuotation: stage onto the recipient's (forward-only), then the addressee into
- * the matching designerName / ownerName / buyerName only when that field is blank. */
-const MOCK_PARTY_NAME_FIELD = { DESIGNER: 'designerName', OWNER: 'ownerName', BUYER: 'buyerName' };
-function mockApplyApprovedQuotation(ticket, recipientType, partyName, user) {
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
-  advanceDealToQuotationRecipientStage(ticket, recipientType, user);
-  const field = MOCK_PARTY_NAME_FIELD[recipientType];
-  const name = (partyName ?? '').trim();
-  if (field && name && !(ticket[field] ?? '').trim()) ticket[field] = name;
+/**
+ * Mirrors TicketService#stageForUnspecifiedRecipient (round-2 N1): an UNSPECIFIED-recipient quotation advances like a
+ * BUYER one — QUOTE_BUYER when on the deal's route, else the nearest on-route stage before it.
+ */
+function mockStageForUnspecifiedRecipient(entryChannel) {
+  const stages = DEAL_STAGE_CATALOG.stages.map((stage) => stage.code);
+  for (let i = stages.indexOf('QUOTE_BUYER'); i >= 0; i -= 1) {
+    if (mockIsOnRoute(entryChannel, stages[i])) return stages[i];
+  }
+  return null;
 }
+
+/** Mirrors TicketRepository#fillPartyNameIfBlank: writes only into a blank (null / whitespace) field. */
+function mockFillPartyNameIfBlank(ticket, field, name) {
+  const value = (name ?? '').trim();
+  if (value && !(ticket[field] ?? '').trim()) ticket[field] = value;
+}
+
+/**
+ * Mirrors TicketService#applyApprovedQuotation (spec 2026-11-15 §7.2, review H1/H2, round-2 N1/N3). A non-ACTIVE deal
+ * is untouched. Stage: forward-only onto the named recipient's stage, or for UNSPECIFIED like BUYER
+ * (#mockStageForUnspecifiedRecipient). Names come only from a source that names that party (TicketRepository
+ * #partyNameFromQuotation), into a blank field only:
+ *   - designerName — the mockDesigners entry behind the quotation's D.Co. (unitCode), for ANY recipient;
+ *   - buyerName — the customer of the quotation's BUYER-role party, for a BUYER recipient ONLY: an UNSPECIFIED one's
+ *     BUYER party is the bill-to customer (V204), never a name source;
+ *   - ownerName — never. The bill-to customerName is never used for any of them.
+ */
+function mockApplyApprovedQuotation(ticket, row, user) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+  const recipientType = row.recipientType;
+  if (MOCK_PARTY_NAME_RECIPIENTS.includes(recipientType)) {
+    advanceDealToQuotationRecipientStage(ticket, recipientType, user);
+  } else {
+    const target = mockStageForUnspecifiedRecipient(ticket.entryChannel);
+    if (target) autoAdvanceStage(ticket, target, user);
+  }
+  const designer = mockDesigners.find((d) => d.code === String(row.unitCode ?? '').trim());
+  mockFillPartyNameIfBlank(ticket, 'designerName', designer?.name);
+  if (recipientType === 'BUYER') {
+    const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId && p.role === 'BUYER') : null;
+    const customer = party ? mockCustomers.find((c) => c.id === party.customerId) : null;
+    mockFillPartyNameIfBlank(ticket, 'buyerName', customer?.name);
+  }
+}
+/** QuotationRecipient.ADDRESSABLE. */
+const MOCK_PARTY_NAME_RECIPIENTS = ['DESIGNER', 'OWNER', 'BUYER'];
 
 function dealStageIndex(code) {
   return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
@@ -4426,9 +4477,24 @@ export function setPricingRequestStatusForTests(prId, status) {
   pr.status = status;
 }
 
+/** TEST-ONLY seam — not part of `api`. Puts every deposit notice on a deal into `status` (e.g. SUPERSEDED), returning
+ * the previous statuses so a test can restore them. */
+export function setDepositNoticeStatusesForTests(ticketId, status) {
+  const rows = mockDepositNotices.filter((n) => n.ticketId === Number(ticketId));
+  const before = rows.map((n) => n.status);
+  rows.forEach((n) => { n.status = status; });
+  return () => rows.forEach((n, i) => { n.status = before[i]; });
+}
+
 /** TEST-ONLY seam — not part of `api`. Patches raw ticket fields (e.g. lifecycle, legacyStockSource). */
 export function patchTicketForTests(ticketId, patch) {
   Object.assign(findTicketRaw(Number(ticketId)), patch);
+}
+
+/** TEST-ONLY seam — not part of `api`. Patches a stored deal quotation row (e.g. a legacy UNSPECIFIED recipient,
+ * which no create path accepts any more). */
+export function patchDealQuotationForTests(quotationId, patch) {
+  Object.assign(mockDealQuotations.find((q) => q.id === Number(quotationId)), patch);
 }
 
 /** TEST-ONLY seam — not part of `api`. Sets a ticket line's qtyFromStock (a legacy reserve). */
@@ -4546,7 +4612,7 @@ function buildTicketDetail(ticket) {
       designerName: ticket.designerName ?? null,
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
-      stale: dealComputeStale(ticket, dealActivitiesForTicket(ticket.id)),
+      stale: dealComputeStale(ticket, dealActivitiesForTicket(ticket.id), mockHasUpcomingVisit(ticket.id)),
       // Existence-only flag — see hasRecordedCommission's comment. Never an amount; amounts stay
       // behind commissions.list()'s own role gate.
       commissionRecorded: hasRecordedCommission(ticket),
@@ -6521,8 +6587,10 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
   }
   if (pr && ticket) {
     // The QUOTATION's recipient (a revision may be re-addressed), not the request's.
+    // Mirrors DealQuotationService's PRICING_REQUEST-origin issue, which runs the same
+    // TicketService#applyApprovedQuotation as a DEAL_DIRECT approval (review H1/M5c).
     const recipient = row.recipientType ?? pr.recipientType;
-    advanceDealToQuotationRecipientStage(ticket, recipient, user);
+    mockApplyApprovedQuotation(ticket, { ...row, recipientType: recipient }, user);
     pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติและออกใบเสนอราคา ${row.number}`);
     pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคา ${row.number}`);
     // Parity with the real service's unconditional CEO-visibility notification on issue (redundant when the ceo is
@@ -7767,7 +7835,7 @@ async function mockRevokeCloseConfirmation(id, payload = {}, viaFinance = false)
   return delay({ ticket: buildTicketDetail(ticket) });
 }
 
-async function mockConfirmDepositPaid(id) {
+async function mockConfirmDepositPaid(id, options = {}) {
   // account only — no CEO fallback. Mirrors TicketService's DEPOSIT_CONFIRM_ROLES.
   // RECORD_PAYMENT/FINAL_PAYMENT are account-only too (PAYMENT_RECORD_ROLES); ACCOUNT_ROLES
   // (['account','ceo']) only covers SET_BILLING and similar non-payment actions.
@@ -7784,6 +7852,7 @@ async function mockConfirmDepositPaid(id) {
     amount,
     note: 'ยืนยันรับมัดจำ',
     depositNoticeId: notice?.id ?? null,
+    confirmPossibleDuplicate: options.confirmPossibleDuplicate === true,
   });
   return delay({ ticket: buildTicketDetail(ticket) });
 }
@@ -7793,7 +7862,7 @@ function mockPastProcurement(ticket) {
   return isPastProcurement(ticket.salesStage);
 }
 
-async function mockConfirmFinalPayment(id) {
+async function mockConfirmFinalPayment(id, options = {}) {
   // account only — no CEO fallback. Mirrors TicketService's PAYMENT_RECORD_ROLES
   // (confirmFinalPayment is a payment-recording entry point too, whether or not it ends up calling
   // recordPaymentInternal).
@@ -7818,6 +7887,7 @@ async function mockConfirmFinalPayment(id) {
       kind: 'BALANCE',
       amount: outstanding,
       note: 'ยืนยันชำระส่วนที่เหลือ',
+      confirmPossibleDuplicate: options.confirmPossibleDuplicate === true,
     });
   }
   return delay({ ticket: buildTicketDetail(ticket) });
@@ -8192,7 +8262,7 @@ function mockBoardDeals() {
         expectedQuarter: t.expectedQuarter ?? null,
         lastTouchedAt: Number.isNaN(last) ? null : new Date(last).toISOString(),
         daysQuiet: mockDaysQuietOf(t, activities, now),
-        quiet: mockIsQuiet(t, activities, now),
+        quiet: mockIsQuiet(t, activities, now, MOCK_QUIET_DAYS, mockHasUpcomingVisit(t.id)),
         lastActivityKind: latestActivity?.kind ?? null,
         lastActivityNote: latestActivity?.note ?? null,
         lastTouchedMs: last,
@@ -8237,10 +8307,16 @@ function seedMockVisits() {
     mockVisits.push({
       id: mockVisitSeq++, ownerId, ticketId: null, contactName, plannedDate, plannedTime: time, status,
       doneAt: status === 'DONE' ? `${plannedDate}T09:00:00.000Z` : null, note,
+      createdAt: `${plannedDate}T00:00:00.000Z`,
     });
   }
 }
 seedMockVisits();
+
+/** TEST-ONLY seam — not part of `api`. Patches a stored visit row (e.g. to drop createdAt). */
+export function patchVisitForTests(visitId, patch) {
+  Object.assign(mockVisits.find((v) => v.id === Number(visitId)), patch);
+}
 
 /** VisitRepository's SELECT … JOIN hr.employee LEFT JOIN sales.ticket, for one row. */
 function mockVisitDto(v) {
@@ -8257,8 +8333,23 @@ function mockVisitDto(v) {
     status: v.status,
     doneAt: v.doneAt,
     note: v.note,
+    // VisitRepository: the deal's current owner's name when this visit's owner is not its created_by (review NEW-A:
+    // the keyer does not count — reassignment leaves the ex-owner as keyer).
+    dealMovedToName: ticket && Number(ticket.createdById) !== Number(v.ownerId)
+      ? (db.users.find((u) => u.id === ticket.createdById)?.name ?? ticket.createdByName ?? null)
+      : null,
+    // VisitRepository's deal_moved: that, AND the deal's timeline has a reassignment (an EDITED event starting
+    // TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX) at or after this visit was created (review LOW).
+    dealMoved: Boolean(ticket) && Number(ticket.createdById) !== Number(v.ownerId)
+      && (ticket.events ?? []).some((e) => e.kind === 'EDITED'
+        && String(e.message ?? '').startsWith(MOCK_OWNER_CHANGED_MESSAGE_PREFIX)
+        // A visit with no createdAt cannot be placed before the move, so it is never "moved" (v.created_at is NOT NULL server-side).
+        && v.createdAt != null && Date.parse(e.createdAt) >= Date.parse(v.createdAt)),
   };
 }
+
+/** TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX. */
+const MOCK_OWNER_CHANGED_MESSAGE_PREFIX = 'เปลี่ยนเจ้าของงาน: ';
 
 /** VisitRepository's ORDER BY v.planned_date, v.planned_time NULLS LAST, v.visit_id over [from, to]. */
 function mockVisitsIn(from, to, ownerId = null) {
@@ -8271,7 +8362,7 @@ function mockVisitsIn(from, to, ownerId = null) {
     .map(mockVisitDto);
 }
 
-/** VisitService.requireRange: inclusive, at most 31 days, to not before from. */
+/** VisitService.requireRange: ISO dates, inclusive, at most 31 days, to not before from. */
 function mockRequireVisitRange(from, to) {
   const iso = /^\d{4}-\d{2}-\d{2}$/;
   if (!iso.test(from ?? '') || !iso.test(to ?? '') || to < from) fail('ช่วงวันที่ไม่ถูกต้อง', 400);
@@ -8294,16 +8385,17 @@ function mockVisitNotPlanned(visit) {
   fail(`นัดนี้${visit.status === 'DONE' ? 'บันทึกว่าไปแล้ว' : 'ยกเลิกแล้ว'} จึงเปลี่ยนไม่ได้`, 409);
 }
 
-/** TicketService.addActivity(SITE_VISIT, today) — the one path that resets the quiet clock. */
-function mockLogSiteVisit(user, ticketId, note) {
+/** TicketService.recordVisitActivity: SITE_VISIT, today, attributed to the visit's owner (the person who went),
+ * with NO deal-ownership check — the visit's own check already ran (review M1/M3). */
+function mockLogSiteVisit(ownerId, ticketId, note) {
   mockDealActivities.push({
     id: mockDealActivitySeq++,
     ticketId,
     activityDate: mockTodayIso(),
     kind: 'SITE_VISIT',
     note: note ?? null,
-    createdById: user.id,
-    createdByName: user.name,
+    createdById: ownerId,
+    createdByName: db.users.find((u) => u.id === ownerId)?.name ?? null,
     createdAt: new Date().toISOString(),
   });
 }
@@ -8327,11 +8419,44 @@ function seedMockExpectedPayments() {
     const at = new Date().toISOString();
     mockExpectedPayments.push({
       id: mockExpectedPaymentSeq++, ticketId, kind, amount, expectedWeek: mockAddDaysIso(monday, offset),
-      status: 'OPEN', receiptId: null, receiptRef: null, createdById: 6, createdAt: at, updatedAt: at,
+      status: 'OPEN', receivedAmount: 0, receiptId: null, receiptRef: null, createdById: 6, createdAt: at, updatedAt: at,
     });
   }
 }
 seedMockExpectedPayments();
+
+/**
+ * TicketRepository#applyReceiptToExpectedPayments — the ONE rule for manual and Express receipts alike (review M1),
+ * owner ruling N5: a deal WITH an ISSUED deposit notice (same test as expressReceiptKind) fills the rows matching the receipt's kind first
+ * (DEPOSIT receipt -> DEPOSIT rows; anything else -> ON_DELIVERY, then BALANCE), each by expected week then id, and the
+ * overflow goes to the remaining OPEN rows by week; a deal with NO notice fills every OPEN row purely by week, then id.
+ * RECEIVED only once the cumulative amount reaches it within +-1% / +-฿10; carry what a completed row does not need to
+ * the next one. ADJUSTMENT deliberately touches no row (a refund lowers received cash; rows stay closed).
+ */
+const MOCK_BALANCE_ORDER = { ON_DELIVERY: 0, BALANCE: 1 };
+function mockApplyReceiptToExpected(ticketId, kind, amount, dayIso, receiptId, receiptRef = null) {
+  if (!(amount > 0) || kind === 'ADJUSTMENT') return;
+  const hasNotice = mockDepositNotices.some((n) => n.ticketId === Number(ticketId) && n.status === 'ISSUED');
+  const tier = (p) => {
+    if (!hasNotice) return 0;
+    if (kind === 'DEPOSIT') return p.kind === 'DEPOSIT' ? 0 : 1;
+    return MOCK_BALANCE_ORDER[p.kind] ?? 2;
+  };
+  let left = amount;
+  while (left > 0) {
+    const row = mockExpectedPayments
+      .filter((p) => p.ticketId === Number(ticketId) && p.status === 'OPEN')
+      .sort((a, b) => tier(a) - tier(b) || a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id)[0];
+    if (!row) return;
+    const applied = Math.min(left, round2(row.amount - (row.receivedAmount ?? 0)));
+    row.receivedAmount = round2((row.receivedAmount ?? 0) + applied);
+    const complete = row.receivedAmount >= row.amount - Math.max(row.amount * 0.01, 10);
+    if (complete) Object.assign(row, { status: 'RECEIVED', receiptId, receiptRef });
+    row.updatedAt = new Date().toISOString();
+    left = round2(left - applied);
+    if (!complete) return;
+  }
+}
 
 /** ExpectedPaymentRepository.findByTicket: non-cancelled, ORDER BY expected_week, expected_payment_id. */
 function mockExpectedPaymentsOf(ticketId) {
@@ -8362,6 +8487,11 @@ function mockRequireDealWrite(user, ticketId) {
   return ticket;
 }
 
+/** ExpectedPaymentService.requireActive: rows on a deal that is not ACTIVE are read-only. */
+function mockRequireActiveExpectedDeal(ticket) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงแก้ไขเงินที่คาดว่าจะเข้าไม่ได้', 409);
+}
+
 function mockRequireOpenExpected(ticketId, id) {
   const row = mockExpectedPayments.find((p) => p.id === Number(id) && p.ticketId === Number(ticketId));
   if (!row) fail('ไม่พบรายการเงินที่คาดว่าจะเข้านี้', 404);
@@ -8387,9 +8517,10 @@ function mockCashForMonth(ownerId, yearMonth) {
   const [y, m] = yearMonth.split('-').map(Number);
   const first = `${yearMonth}-01`;
   const last = `${yearMonth}-${String(new Date(Date.UTC(y, m, 0)).getUTCDate()).padStart(2, '0')}`;
+  // ISO rule (review M6): a week belongs to the month holding its Thursday.
   const mondays = [];
-  for (let d = mockWeekStartIso(first) < first ? mockAddDaysIso(mockWeekStartIso(first), 7) : first; d <= last; d = mockAddDaysIso(d, 7)) {
-    mondays.push(d);
+  for (let d = mockWeekStartIso(first); d <= last; d = mockAddDaysIso(d, 7)) {
+    if (mockAddDaysIso(d, 3).slice(0, 7) === yearMonth) mondays.push(d);
   }
   const zero = () => mondays.map(() => 0);
   const delivered = zero(); const scheduled = zero(); const deposits = zero(); const got = zero();
@@ -8399,10 +8530,12 @@ function mockCashForMonth(ownerId, yearMonth) {
   for (const p of mockExpectedPayments) {
     const t = ticketOf(p.ticketId);
     const i = mondays.indexOf(p.expectedWeek);
-    if (p.status === 'CANCELLED' || i < 0 || !inScope(t) || MOCK_DEAD_LIFECYCLES.has(t.lifecycle ?? 'ACTIVE')) continue;
-    const amount = Number(p.amount);
-    forecast += amount;
+    const life = t?.lifecycle ?? 'ACTIVE';
+    if (p.status === 'CANCELLED' || i < 0 || !inScope(t)) continue;
+    if (p.status === 'OPEN' ? life !== 'ACTIVE' : MOCK_DEAD_LIFECYCLES.has(life)) continue;
+    forecast += Number(p.amount);
     if (p.status !== 'OPEN') continue;
+    const amount = round2(Number(p.amount) - Number(p.receivedAmount ?? 0)); // only what is still to come
     if (['ON_DELIVERY', 'BALANCE'].includes(p.kind) && t.salesStage === 'DELIVERED') delivered[i] += amount;
     if (p.kind === 'ON_DELIVERY' && ['DELIVERY_SCHEDULING', 'PROCUREMENT'].includes(t.salesStage)) scheduled[i] += amount;
     if (p.kind === 'DEPOSIT') deposits[i] += amount;
@@ -8411,7 +8544,7 @@ function mockCashForMonth(ownerId, yearMonth) {
   for (const r of db.paymentReceipts ?? []) {
     const day = mockBangkokDateOf(r.receivedAt);
     if (day < first || day > last || (r.currency ?? 'THB') !== 'THB' || !inScope(ticketOf(r.ticketId)) || !mondays.length) continue;
-    let i = 0;
+    let i = 0; // before the first week → the first; after the last week (30 Nov) → the last
     while (i + 1 < mondays.length && day >= mondays[i + 1]) i += 1;
     const signed = r.kind === 'ADJUSTMENT' ? -Number(r.amount) : Number(r.amount);
     got[i] += signed;
@@ -8433,10 +8566,17 @@ function mockCashForMonth(ownerId, yearMonth) {
 // .xlsx is refused with a mock-mode message. Matching mirrors ReceiptMatcher's three rules and "ambiguous → unmatched".
 const mockReceiptImports = [];
 const mockReceiptImportRows = [];
+const mockReceiptAllocations = [];
+// ReceiptImportSettings: app.receipts.express-upload.enabled defaults FALSE (review H4), cash doc types = RE.
+let mockReceiptUploadEnabled = false;
+const MOCK_CASH_DOC_TYPES = new Set(['RE']);
+/** Test/demo switch for the owner flag (not an api method: production has no such endpoint). */
+export function setMockReceiptUploadEnabled(enabled) { mockReceiptUploadEnabled = Boolean(enabled); }
 let mockReceiptImportSeq = 1;
 let mockReceiptRowSeq = 1;
 const MOCK_RECEIPT_ALIASES = {
   docNo: ['เลขที่เอกสาร', 'doc no', 'document no', 'doc number', 'document number', 'เลขที่'],
+  docType: ['ประเภทเอกสาร', 'doc type', 'document type', 'ประเภท'],
   date: ['วันที่', 'date', 'doc date', 'document date', 'วันที่เอกสาร', 'วันที่รับเงิน'],
   customer: ['ลูกค้า', 'customer', 'customer name', 'ชื่อลูกค้า'],
   amount: ['จำนวนเงิน', 'amount', 'ยอดเงิน', 'total', 'ยอดรับ'],
@@ -8497,13 +8637,17 @@ function mockParseReceipts(text) {
     const get = (col) => (index[col] == null ? '' : String(cells[index[col]] ?? '').trim());
     const docNo = get('docNo');
     if (!docNo) { errors.push({ line, message: 'ไม่มีเลขที่เอกสาร' }); continue; }
+    if (docNo.length > 60) { errors.push({ line, message: 'เลขที่เอกสารยาวเกิน 60 ตัวอักษร' }); continue; }
     const docDate = mockReceiptDate(get('date'));
     if (!docDate) { errors.push({ line, message: `วันที่ไม่ถูกต้อง (${docNo})` }); continue; }
     const amount = Number(get('amount').replace(/[,฿\s]|บาท/g, ''));
     if (!Number.isFinite(amount) || amount <= 0 || Math.round(amount * 100) !== amount * 100) {
       errors.push({ line, message: `จำนวนเงินต้องมากกว่า 0 (${docNo})` }); continue;
     }
-    rows.push({ line, docNo, docDate, customerName: get('customer') || null, amount, reference: get('reference') || null });
+    if (amount > 999999999999.99) { errors.push({ line, message: `จำนวนเงินเกิน 999,999,999,999.99 (${docNo})` }); continue; }
+    // ReceiptFileParser.docType: the column when filled, else the number's leading letters.
+    const docType = (get('docType') || (/^([A-Za-z]+)/.exec(docNo)?.[1] ?? '')).toUpperCase() || null;
+    rows.push({ line, docNo, docType, docDate, customerName: get('customer') || null, amount, reference: get('reference') || null });
   }
   return { rows, errors };
 }
@@ -8522,21 +8666,26 @@ const mockNormaliseDoc = (v) => {
 };
 const mockWithinTolerance = (amount, expected) => Math.abs(amount - expected) <= Math.max(Math.abs(expected) * 0.01, 10);
 
-/** ReceiptImportRepository.activeCandidates. */
+/** ReceiptImportRepository.activeCandidates: ACTIVE deals inside ACCOUNT's scope (review M4); every customer name the
+ * deal's live documents print (M5); live document numbers only (M7). */
 function mockReceiptCandidates() {
-  return db.tickets.filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE').map((t) => ({
+  const live = (n) => n.status === 'ISSUED';
+  return db.tickets.filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && accountListScopeIncludes(t)).map((t) => ({
     ticketId: t.id,
     title: (t.title ?? '').trim() || t.customerName || null,
     customerName: t.customerName ?? null,
+    customerNames: [t.customerName, ...mockDepositNotices.filter((n) => n.ticketId === t.id && live(n)).map((n) => n.customerName),
+      ...mockRemainingInvoices.filter((n) => n.ticketId === t.id && live(n)).map((n) => n.customerName)].filter(Boolean),
     ownerId: t.createdById,
     keyedById: t.keyedById ?? null,
     ownerName: t.createdByName ?? null,
     invoiceNumbers: [
-      ...mockDepositNotices.filter((n) => n.ticketId === t.id && n.docNumber).map((n) => n.docNumber),
-      ...mockRemainingInvoices.filter((n) => n.ticketId === t.id && n.docNumber).map((n) => n.docNumber),
+      ...mockDepositNotices.filter((n) => n.ticketId === t.id && n.docNumber && live(n)).map((n) => n.docNumber),
+      ...mockRemainingInvoices.filter((n) => n.ticketId === t.id && n.docNumber && live(n)).map((n) => n.docNumber),
     ],
     quotationNumbers: mockDealQuotations.filter((q) => q.ticketId === t.id && q.number).map((q) => q.number),
     openExpected: mockExpectedPayments.filter((p) => p.ticketId === t.id && p.status === 'OPEN')
+      .map((p) => ({ ...p, amount: round2(p.amount - (p.receivedAmount ?? 0)) })) // the OPEN remainder
       .sort((a, b) => a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id),
   }));
 }
@@ -8556,52 +8705,70 @@ function mockMatchReceipt(row, candidates) {
   }
   const customer = mockNormaliseCustomer(row.customerName);
   if (!customer) return { ticketId: null, rule: null, reason: 'NO_CANDIDATE', candidateIds: [] };
-  const same = candidates.filter((c) => mockNormaliseCustomer(c.customerName) === customer);
+  const same = candidates.filter((c) => (c.customerNames ?? [c.customerName]).some((n) => mockNormaliseCustomer(n) === customer));
   const byAmount = ids(same.filter((c) => c.openExpected.some((p) => mockWithinTolerance(row.amount, Number(p.amount)))));
   if (byAmount.length) return decide(byAmount, 'CUSTOMER_AMOUNT');
   return { ticketId: null, rule: null, reason: 'NO_CANDIDATE', candidateIds: ids(same) };
 }
 
 /** TicketService#recordExpressReceipt + ReceiptPlacement.place. Throws 409 for overpayment / not active. */
-function mockPlaceExpressReceipt(ticketId, row, user) {
+function mockRefusal(code, message) {
+  const error = new Error(message);
+  error.status = 409;
+  error.details = { code };
+  throw error;
+}
+
+function mockPlaceExpressReceipt(ticketId, row, user, amount = row.amount, ref = row.docNo.trim()) {
+  if (user.role !== 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403); // EXPRESS_RECEIPT_ROLES (H2/H3)
   const ticket = findTicketRaw(Number(ticketId));
-  if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลไม่ได้อยู่ในสถานะ ACTIVE จึงแก้ไขขั้นตอนนี้ไม่ได้', 409);
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') mockRefusal('DEAL_NOT_ACTIVE', 'ดีลไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้');
   const payable = payableAmount(ticket);
-  if (moneyValue(sumPaid(ticket.id) + row.amount) > payable) fail('ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ', 409);
+  if (moneyValue(sumPaid(ticket.id) + amount) > payable) mockRefusal('OVERPAYMENT', 'ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ');
+  // TicketService#expressReceiptKind (review N2): DEPOSIT while the latest issued deposit notice is still owed.
   const settled = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus);
-  const kind = ticket.depositPolicy === 'REQUIRED' && !settled ? 'DEPOSIT' : 'BALANCE';
+  const notice = latestIssuedDepositNotice(ticket.id);
+  const depositSoFar = (db.paymentReceipts ?? []).filter((r) => r.ticketId === ticket.id && r.kind === 'DEPOSIT')
+    .reduce((x, r) => x + Number(r.amount), 0);
+  const kind = notice?.totalPayable != null
+    ? (Number(notice.totalPayable) > depositSoFar ? 'DEPOSIT' : 'BALANCE')
+    : (ticket.depositPolicy === 'REQUIRED' && !settled ? 'DEPOSIT' : 'BALANCE');
   const receiptId = Math.max(0, ...(db.paymentReceipts ?? []).map((r) => r.receiptId)) + 1;
   const now = new Date().toISOString();
   db.paymentReceipts.push({
-    receiptId, ticketId: ticket.id, kind, amount: row.amount, currency: 'THB', receivedAt: `${row.docDate}T05:00:00.000Z`,
-    recordedById: user.id, recordedByName: user.name, note: null, depositNoticeId: null, receiptRef: row.docNo.trim(),
+    receiptId, ticketId: ticket.id, kind, amount, currency: 'THB', receivedAt: `${row.docDate}T05:00:00.000Z`,
+    recordedById: user.id, recordedByName: user.name, note: null, depositNoticeId: null, receiptRef: ref,
     createdAt: now, source: 'EXPRESS', customerName: row.customerName ?? null,
   });
-  pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=${kind}, amount=${row.amount} — Express ${row.docNo}`);
+  pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=${kind}, amount=${amount} — Express ${ref}`);
   reconcilePaymentStatus(ticket, user, false);
-  // ExpectedPaymentRepository.markNearestOpenReceived: within tolerance first, then nearest week, then oldest.
-  const dayGap = (week) => Math.abs(new Date(`${week}T00:00:00Z`) - new Date(`${row.docDate}T00:00:00Z`));
-  const open = mockExpectedPayments.filter((p) => p.ticketId === ticket.id && p.status === 'OPEN')
-    .sort((a, b) => (Number(mockWithinTolerance(row.amount, Number(b.amount))) - Number(mockWithinTolerance(row.amount, Number(a.amount))))
-      || dayGap(a.expectedWeek) - dayGap(b.expectedWeek) || a.id - b.id);
-  if (open[0]) Object.assign(open[0], { status: 'RECEIVED', receiptId, receiptRef: row.docNo.trim(), updatedAt: now });
+  mockApplyReceiptToExpected(ticket.id, kind, amount, row.docDate, receiptId, ref);
   return receiptId;
 }
 
 const mockKnownDocNo = (docNo) => {
   const key = docNo.trim().toUpperCase();
-  return (db.paymentReceipts ?? []).some((r) => String(r.receiptRef ?? '').trim().toUpperCase() === key)
+  return (db.paymentReceipts ?? []).some((r) => String(r.receiptRef ?? '').trim().toUpperCase() === key
+      || String(r.expressDocNo ?? '').trim().toUpperCase() === key)
     || mockReceiptImportRows.some((r) => r.docNo.trim().toUpperCase() === key);
 };
 
+/** ReceiptImportRepository.findManualTwin (review H1): a MANUAL money receipt, same amount, within ±7 days, unlinked. */
+const mockManualTwin = (ticketId, row) => {
+  const gap = (r) => Math.abs(new Date(`${mockBangkokDateOf(r.receivedAt)}T00:00:00Z`) - new Date(`${row.docDate}T00:00:00Z`)) / 86_400_000;
+  return (db.paymentReceipts ?? [])
+    .filter((r) => r.ticketId === Number(ticketId) && (r.source ?? 'MANUAL') === 'MANUAL' && !r.expressDocNo
+      && ['DEPOSIT', 'BALANCE'].includes(r.kind) && Number(r.amount) === row.amount && gap(r) <= 7)
+    .sort((a, b) => gap(a) - gap(b) || a.receiptId - b.receiptId)[0] ?? null;
+};
+
 /** ReceiptImportService.offeredTo + candidate(): the deals offered for a queued row; a rep gets only their own. */
-function mockOfferedCandidates(row, user) {
+function mockOfferedCandidates(row) {
   const candidates = mockReceiptCandidates();
   const match = mockMatchReceipt(row, candidates);
   return match.candidateIds
     .map((id) => candidates.find((c) => c.ticketId === id))
-    .filter((c) => c && (user.role !== 'sales' || c.ownerId === user.id || c.keyedById === user.id))
+    .filter(Boolean)
     .map((c) => {
       const nearest = [...c.openExpected].sort((a, b) => Math.abs(a.amount - row.amount) - Math.abs(b.amount - row.amount))[0] ?? null;
       const fits = nearest && mockWithinTolerance(row.amount, Number(nearest.amount));
@@ -8613,11 +8780,50 @@ function mockOfferedCandidates(row, user) {
     });
 }
 
+/** ReceiptImportService: ACCOUNT ONLY (review H2/H3). */
+function mockRequireAccount() {
+  const user = requireSession();
+  if (user.role !== 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+function mockRequireQueued(rowId, status) {
+  const row = mockReceiptImportRows.find((r) => r.rowId === Number(rowId));
+  if (!row) fail('ไม่พบรายการนี้', 404);
+  if (row.status !== status) fail('รายการนี้จับคู่หรือข้ามไปแล้ว', 409);
+  return row;
+}
+
 const mockQueuedDto = (r, candidates = []) => ({
   rowId: r.rowId, importId: r.importId, docNo: r.docNo, docDate: r.docDate, customerName: r.customerName,
   amount: r.amount, reference: r.reference, reason: r.reason, status: r.status,
-  resolvedTicketId: r.resolvedTicketId ?? null, candidates,
+  resolvedTicketId: r.resolvedTicketId ?? null, managerFlaggedAt: r.managerFlaggedAt ?? null,
+  possibleManualReceiptId: r.suggestedReceiptId ?? null,
+  possibleManual: (() => {
+    const m = r.suggestedReceiptId == null ? null : (db.paymentReceipts ?? []).find((x) => x.receiptId === r.suggestedReceiptId);
+    return m ? { receiptId: m.receiptId, ticketId: m.ticketId, kind: m.kind, amount: m.amount, receivedAt: m.receivedAt,
+      recordedByName: m.recordedByName ?? null, alreadyLinked: Boolean(m.expressDocNo) } : null;
+  })(),
+  candidates,
 });
+
+/** VisitService.cleanNote: trimmed, null when blank, 400 over 2000 characters. */
+function mockCleanVisitNote(note) {
+  const trimmed = (note ?? '').trim();
+  if (trimmed.length > 2000) fail('โน้ตยาวเกิน 2000 ตัวอักษร', 400);
+  return trimmed || null;
+}
+
+/** QuietRule.upcomingVisitSql: a PLANNED visit on the deal, by its current owner (created_by only), dated from today
+ * (Bangkok) to today + QUIET_DAYS — a far-future plan or an ex-owner's plan does not hold it (review NEW-1/NEW-2). */
+function mockHasUpcomingVisit(ticketId) {
+  const ticket = db.tickets.find((t) => t.id === ticketId);
+  if (!ticket) return false;
+  const today = mockTodayIso();
+  const horizon = mockAddDaysIso(today, MOCK_QUIET_DAYS);
+  return mockVisits.some((v) => v.ticketId === ticketId && v.status === 'PLANNED'
+    && v.plannedDate >= today && v.plannedDate <= horizon && Number(ticket.createdById) === Number(v.ownerId));
+}
 
 /** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
 function mockVisitsThisWeek(ownerId = null) {
@@ -8626,11 +8832,14 @@ function mockVisitsThisWeek(ownerId = null) {
 }
 
 /** SalesBoardService's ranking: quiet only, daysQuiet × value (null = 0) desc, then daysQuiet desc. */
+/** SalesBoardService's ranking: quiet only, daysQuiet × THB value desc, then daysQuiet desc. Values are weighted only
+ * when THB (a null currency is THB, as in repRows): a USD or EUR amount is not comparable, so it ranks by days alone. */
 function mockRankQuiet(deals) {
-  const score = (d) => d.daysQuiet * Number(d.value ?? 0);
+  const score = (d) => ((d.currency ?? 'THB') === 'THB' ? d.daysQuiet * Number(d.value ?? 0) : 0);
   return deals.filter((d) => d.quiet)
     .sort((a, b) => score(b) - score(a) || b.daysQuiet - a.daysQuiet || a.ticketId - b.ticketId);
 }
+export const rankQuietForTests = mockRankQuiet;
 
 export const api = {
   // Mirrors AuthController + AuthService (auth/).
@@ -9005,7 +9214,7 @@ export const api = {
         designerName: t.designerName ?? null,
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
-        stale: dealComputeStale(t, dealActivitiesForTicket(t.id)),
+        stale: dealComputeStale(t, dealActivitiesForTicket(t.id), mockHasUpcomingVisit(t.id)),
         // Same existence-only flag as buildTicketDetail's summary — served on the LIST projection
         // too because accountActions.js's worklist is built from list rows, not detail fetches.
         commissionRecorded: hasRecordedCommission(t),
@@ -13460,7 +13669,7 @@ export const api = {
       }
       // SalesBoardService.repRows: an owner with visits this week but no open deal still gets a row (0 deals).
       const teamVisitsThisWeek = mockVisitsThisWeek();
-      for (const v of teamVisitsThisWeek) {
+      for (const v of teamVisitsThisWeek.filter((x) => x.status !== 'CANCELLED')) {
         if (!byRep.has(v.ownerId)) {
           byRep.set(v.ownerId, {
             employeeId: v.ownerId, name: v.ownerName,
@@ -13501,92 +13710,159 @@ export const api = {
       });
     },
   },
-  // Mirrors ReceiptImportController / ReceiptImportService (salesboard/receipts/, V213). AUTHZ NOTE: these gates
-  // approximate the Java service and are NOT evidence — ReceiptImportIntegrationTest is. upload / latest / template:
-  // account, ceo. Queue: sales (rows their own deals could be), sales_manager / ceo / account (all). Ignore: not sales.
+  // Mirrors ReceiptImportController / ReceiptImportService (salesboard/receipts/, V213/V214). AUTHZ NOTE: these gates
+  // approximate the Java service and are NOT evidence — ReceiptImportIntegrationTest is. Everything is ACCOUNT only
+  // except managerView (sales_manager / ceo, read-only). The upload is OFF by default (setMockReceiptUploadEnabled).
   // Mock mode reads .csv only.
   receiptImports: {
     async upload(file) {
-      const user = requireSession();
-      if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const user = mockRequireAccount();
+      if (!mockReceiptUploadEnabled) mockRefusal('UPLOAD_DISABLED', 'ยังไม่เปิดใช้การอัปโหลดไฟล์ Express');
       const name = file?.name ?? 'upload';
       if (!/\.csv$/i.test(name)) fail('โหมดทดลองอ่านได้เฉพาะไฟล์ .csv (ระบบจริงรับ .xlsx ด้วย)', 400);
       const { rows, errors } = mockParseReceipts(await file.text());
       const importId = mockReceiptImportSeq++;
       const tally = () => ({ count: 0, amount: 0 });
-      const matched = tally(); const duplicates = tally(); const unmatched = tally();
-      const add = (t, row) => { t.count += 1; t.amount = round2(t.amount + row.amount); };
+      const t = { matched: tally(), possibleManual: tally(), duplicates: tally(), unmatched: tally(), nonCash: tally() };
+      const add = (k, row) => { t[k].count += 1; t[k].amount = round2(t[k].amount + row.amount); };
+      const queue = (row, reason, suggestedReceiptId = null, into = 'unmatched') => {
+        mockReceiptImportRows.push({ rowId: mockReceiptRowSeq++, importId, ...row, reason, status: 'UNMATCHED',
+          resolvedTicketId: null, managerFlaggedAt: null, suggestedReceiptId });
+        add(into, row);
+      };
       const seen = new Set();
+      let failed = 0;
       for (const row of rows) {
-        const key = row.docNo.trim().toUpperCase();
-        if (seen.has(key) || mockKnownDocNo(row.docNo)) { seen.add(key); add(duplicates, row); continue; }
-        seen.add(key);
-        const match = mockMatchReceipt(row, mockReceiptCandidates());
-        let reason = match.reason;
-        if (match.ticketId != null) {
-          try { mockPlaceExpressReceipt(match.ticketId, row, user); add(matched, row); continue; } catch (error) {
+        try {
+          if (!MOCK_CASH_DOC_TYPES.has(row.docType ?? '')) { add('nonCash', row); continue; }
+          const key = row.docNo.trim().toUpperCase();
+          if (seen.has(key) || mockKnownDocNo(row.docNo)) { seen.add(key); add('duplicates', row); continue; }
+          seen.add(key);
+          const match = mockMatchReceipt(row, mockReceiptCandidates()); // reloaded per row (M1)
+          if (match.ticketId == null) { queue(row, match.reason); continue; }
+          // Review N1: never linked silently — queued for account to decide.
+          const twin = mockManualTwin(match.ticketId, row);
+          if (twin) { queue(row, 'POSSIBLE_MANUAL_DUPLICATE', twin.receiptId, 'possibleManual'); continue; }
+          try { mockPlaceExpressReceipt(match.ticketId, row, user); add('matched', row); } catch (error) {
             if (error.status !== 409) throw error;
-            reason = /เกินยอด/.test(error.message) ? 'OVERPAYMENT' : 'DEAL_NOT_ACTIVE';
+            if (error.details?.code === 'DUPLICATE') add('duplicates', row); else queue(row, error.details?.code ?? 'DEAL_NOT_ACTIVE');
           }
+        } catch {
+          failed += 1;
+          errors.push({ line: row.line, message: `บันทึกไม่สำเร็จ (${row.docNo}) — ลองอัปโหลดใหม่` });
         }
-        mockReceiptImportRows.push({ rowId: mockReceiptRowSeq++, importId, ...row, reason, status: 'UNMATCHED', resolvedTicketId: null });
-        add(unmatched, row);
       }
       const summary = {
         importId, fileName: name, uploadedAt: new Date().toISOString(), uploadedByName: user.name,
-        totalRows: rows.length + errors.length, matched: matched.count, matchedAmount: matched.amount,
-        duplicates: duplicates.count, duplicateAmount: duplicates.amount, unmatched: unmatched.count,
-        unmatchedAmount: unmatched.amount, invalid: errors.length,
+        totalRows: rows.length + errors.length - failed, matched: t.matched.count, matchedAmount: t.matched.amount,
+        possibleManualDuplicates: t.possibleManual.count, duplicates: t.duplicates.count, duplicateAmount: t.duplicates.amount,
+        unmatched: t.unmatched.count, unmatchedAmount: t.unmatched.amount, nonCash: t.nonCash.count,
+        invalid: errors.length - failed, failed,
       };
       mockReceiptImports.push(summary);
-      return delay({ ...summary, errors });
+      return delay({ ...summary, errors: [...errors].sort((x, y) => x.line - y.line) });
     },
     async latest() {
-      const user = requireSession();
-      if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      mockRequireAccount();
       const last = mockReceiptImports[mockReceiptImports.length - 1] ?? null;
       return delay({
+        uploadEnabled: mockReceiptUploadEnabled,
         latest: last ? { ...last, errors: [] } : null,
         openUnmatched: mockReceiptImportRows.filter((r) => r.status === 'UNMATCHED').length,
       });
     },
     async template() {
-      const user = requireSession();
-      if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      return new Blob(['\uFEFFเลขที่เอกสาร,วันที่,ลูกค้า,จำนวนเงิน,อ้างอิง\r\n'], { type: 'text/csv;charset=utf-8' });
+      mockRequireAccount();
+      return new Blob(['\uFEFFเลขที่เอกสาร,ประเภทเอกสาร,วันที่,ลูกค้า,จำนวนเงิน,อ้างอิง\r\n'], { type: 'text/csv;charset=utf-8' });
     },
     async unmatched() {
-      const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo', 'account'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const rows = mockReceiptImportRows.filter((r) => r.status === 'UNMATCHED')
+      mockRequireAccount();
+      return delay(mockReceiptImportRows.filter((r) => r.status === 'UNMATCHED')
         .sort((a, b) => a.docDate.localeCompare(b.docDate) || a.rowId - b.rowId)
-        .map((r) => mockQueuedDto(r, mockOfferedCandidates(r, user)))
-        .filter((r) => user.role !== 'sales' || r.candidates.length > 0);
-      return delay(rows);
+        .map((r) => mockQueuedDto(r, mockOfferedCandidates(r))));
+    },
+    async ignored() {
+      mockRequireAccount();
+      return delay(mockReceiptImportRows.filter((r) => r.status === 'IGNORED')
+        .sort((a, b) => a.docDate.localeCompare(b.docDate) || a.rowId - b.rowId).map((r) => mockQueuedDto(r)));
+    },
+    async managerView() {
+      const user = requireSession();
+      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const open = mockReceiptImportRows.filter((r) => r.status === 'UNMATCHED');
+      return delay({
+        openUnmatched: open.length,
+        flagged: open.filter((r) => r.managerFlaggedAt).map((r) => ({
+          rowId: r.rowId, docNo: r.docNo, docDate: r.docDate, customerName: r.customerName, amount: r.amount,
+          reference: r.reference, managerFlaggedAt: r.managerFlaggedAt,
+        })),
+      });
+    },
+    async deals(q) {
+      mockRequireAccount();
+      const needle = String(q ?? '').trim().toLowerCase();
+      return delay(db.tickets
+        .filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && accountListScopeIncludes(t))
+        .filter((t) => [t.code, t.title, t.customerName].some((v) => String(v ?? '').toLowerCase().includes(needle)))
+        .sort((a, b) => b.id - a.id).slice(0, 20)
+        .map((t) => ({ ticketId: t.id, code: t.code ?? null, title: (t.title ?? '').trim() || t.customerName || null,
+          customerName: t.customerName ?? null, ownerName: t.createdByName ?? null })));
     },
     async resolve(rowId, payload) {
-      const user = requireSession();
-      if (!['sales', 'sales_manager', 'ceo', 'account'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const ticketId = Number(payload?.ticketId);
-      if (!ticketId) fail('กรุณาเลือกดีล', 400);
+      const user = mockRequireAccount();
       const row = mockReceiptImportRows.find((r) => r.rowId === Number(rowId));
       if (!row) fail('ไม่พบรายการนี้', 404);
-      if (!db.tickets.some((t) => t.id === ticketId)) fail('ไม่พบดีลนี้', 404);
-      if (user.role === 'sales' && !mockOfferedCandidates(row, user).some((c) => c.ticketId === ticketId)) {
-        fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const lines = payload?.allocations?.length
+        ? payload.allocations.map((a) => ({ ticketId: Number(a.ticketId), amount: Number(a.amount) }))
+        : payload?.ticketId ? [{ ticketId: Number(payload.ticketId), amount: row.amount }] : null;
+      if (!lines) fail('กรุณาเลือกดีล', 400);
+      if (lines.length > 1) {
+        const sum = lines.reduce((x, l) => x + Math.round(l.amount * 100), 0);
+        if (lines.some((l) => !(l.amount > 0)) || new Set(lines.map((l) => l.ticketId)).size !== lines.length) {
+          fail('แต่ละดีลต้องมียอดมากกว่า 0 และไม่ซ้ำกัน', 400);
+        }
+        if (sum !== Math.round(row.amount * 100)) fail(`ยอดที่แบ่งรวมกันต้องเท่ากับยอดรายการพอดี (${row.amount})`, 400);
+      }
+      for (const l of lines) {
+        const ticket = db.tickets.find((x) => x.id === l.ticketId);
+        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || !accountListScopeIncludes(ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
       if (row.status !== 'UNMATCHED') fail('รายการนี้จับคู่หรือข้ามไปแล้ว', 409);
-      mockPlaceExpressReceipt(ticketId, row, user);
-      Object.assign(row, { status: 'RESOLVED', resolvedTicketId: ticketId });
+      lines.forEach((l, i) => {
+        const ref = lines.length > 1 ? `${row.docNo.trim()}#${i + 1}` : row.docNo.trim();
+        const receiptId = mockPlaceExpressReceipt(l.ticketId, row, user, l.amount, ref);
+        if (lines.length > 1) mockReceiptAllocations.push({ rowId: row.rowId, ticketId: l.ticketId, receiptId, amount: l.amount });
+      });
+      Object.assign(row, { status: 'RESOLVED', resolvedTicketId: lines[0].ticketId });
       return delay(mockQueuedDto(row));
     },
     async ignore(rowId) {
-      const user = requireSession();
-      if (!['sales_manager', 'ceo', 'account'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      const row = mockReceiptImportRows.find((r) => r.rowId === Number(rowId));
-      if (!row) fail('ไม่พบรายการนี้', 404);
-      if (row.status !== 'UNMATCHED') fail('รายการนี้จับคู่หรือข้ามไปแล้ว', 409);
+      mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'UNMATCHED');
       row.status = 'IGNORED';
+      return delay(mockQueuedDto(row));
+    },
+    async unignore(rowId) {
+      mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'IGNORED');
+      row.status = 'UNMATCHED';
+      return delay(mockQueuedDto(row));
+    },
+    async sameAsManual(rowId) {
+      const user = mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'UNMATCHED');
+      const manual = (db.paymentReceipts ?? []).find((r) => r.receiptId === row.suggestedReceiptId && (r.source ?? 'MANUAL') === 'MANUAL');
+      if (row.reason !== 'POSSIBLE_MANUAL_DUPLICATE' || !manual) fail('รายการนี้ไม่ได้รอเลือกว่าเป็นรายการเดียวกับที่บันทึกเอง', 409);
+      if (manual.expressDocNo) fail('รายการที่บันทึกเองนี้ผูกกับเลขที่ Express อื่นแล้ว', 409);
+      manual.expressDocNo = row.docNo.trim();
+      Object.assign(row, { status: 'RESOLVED', resolvedTicketId: manual.ticketId, resolvedBy: user.id });
+      return delay(mockQueuedDto(row));
+    },
+    async flagManager(rowId) {
+      mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'UNMATCHED');
+      row.managerFlaggedAt = new Date().toISOString();
       return delay(mockQueuedDto(row));
     },
   },
@@ -13614,7 +13890,7 @@ export const api = {
       const valid = mockValidExpectedPayment(payload);
       const at = new Date().toISOString();
       const row = {
-        id: mockExpectedPaymentSeq++, ticketId: ticket.id, ...valid, status: 'OPEN', receiptId: null,
+        id: mockExpectedPaymentSeq++, ticketId: ticket.id, ...valid, status: 'OPEN', receivedAmount: 0, receiptId: null,
         receiptRef: null, createdById: user.id, createdAt: at, updatedAt: at,
       };
       mockExpectedPayments.push(row);
@@ -13622,14 +13898,20 @@ export const api = {
     },
     async update(ticketId, id, payload) {
       const user = requireSession();
-      mockRequireDealWrite(user, ticketId);
+      mockRequireActiveExpectedDeal(mockRequireDealWrite(user, ticketId));
       const row = mockRequireOpenExpected(ticketId, id);
-      Object.assign(row, mockValidExpectedPayment(payload), { updatedAt: new Date().toISOString() });
+      const valid = mockValidExpectedPayment(payload);
+      // ExpectedPaymentService.update (review N3): what came in is fixed — no lower plan, no kind change.
+      if ((row.receivedAmount ?? 0) > 0) {
+        if (valid.amount < row.receivedAmount) fail(`รับเงินรายการนี้มาแล้ว ${row.receivedAmount} บาท จึงลดยอดให้ต่ำกว่านั้นไม่ได้`, 409);
+        if (valid.kind !== row.kind) fail('รายการนี้รับเงินมาบางส่วนแล้ว จึงเปลี่ยนประเภทไม่ได้', 409);
+      }
+      Object.assign(row, valid, { updatedAt: new Date().toISOString() });
       return delay({ ...row });
     },
     async cancel(ticketId, id) {
       const user = requireSession();
-      mockRequireDealWrite(user, ticketId);
+      mockRequireActiveExpectedDeal(mockRequireDealWrite(user, ticketId));
       const row = mockRequireOpenExpected(ticketId, id);
       row.status = 'CANCELLED';
       row.updatedAt = new Date().toISOString();
@@ -13660,41 +13942,60 @@ export const api = {
       if (!contactName) fail('กรุณาระบุว่าพบใคร', 400);
       if (contactName.length > 200) fail('ชื่อผู้ที่พบยาวเกิน 200 ตัวอักษร', 400);
       if (!payload?.plannedDate) fail('กรุณาระบุวันที่', 400);
+      // Spring's LocalDate binding rejects anything but ISO yyyy-MM-dd with a 400.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.plannedDate)
+        || Number.isNaN(Date.parse(`${payload.plannedDate}T00:00:00Z`))) fail('รูปแบบวันที่ไม่ถูกต้อง', 400);
       const done = payload.done === true;
+      if (payload.plannedDate > mockAddDaysIso(mockTodayIso(), 180)) {
+        fail('นัดล่วงหน้าได้ไม่เกิน 180 วัน', 400);
+      }
       if (done && payload.plannedDate !== mockTodayIso()) {
         fail('บันทึกเข้าพบได้เฉพาะวันนี้ — นัดล่วงหน้าให้ใช้ “นัดเข้าพบ”', 400);
       }
-      const note = (payload.note ?? '').trim() || null;
+      const note = mockCleanVisitNote(payload.note);
       const ticketId = payload.ticketId == null || payload.ticketId === '' ? null : Number(payload.ticketId);
       if (ticketId != null) {
         const ticket = db.tickets.find((t) => t.id === ticketId);
         if (!ticket) fail('ไม่พบดีลนี้', 404);
         if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในดีลนี้ไม่ได้', 400);
+      }
+      if (done) {
+        // VisitRepository.findRecentDoneLog: the same one-step log within 60 s is the same visit.
+        const cutoff = Date.now() - 60_000;
+        const same = mockVisits.filter((v) => v.ownerId === user.id && v.ticketId === ticketId
+          && v.contactName === contactName && v.plannedDate === payload.plannedDate && v.status === 'DONE'
+          && Date.parse(v.createdAt ?? 0) > cutoff).at(-1);
+        if (same) return delay(mockVisitDto(same));
       }
       const visit = {
         id: mockVisitSeq++, ownerId: user.id, ticketId, contactName, plannedDate: payload.plannedDate,
         plannedTime: payload.plannedTime || null, status: done ? 'DONE' : 'PLANNED',
-        doneAt: done ? new Date().toISOString() : null, note,
+        doneAt: done ? new Date().toISOString() : null, note, createdAt: new Date().toISOString(),
       };
       mockVisits.push(visit);
-      if (done && ticketId != null) mockLogSiteVisit(user, ticketId, note);
+      const ownsDeal = ticketId != null && Number(db.tickets.find((t) => t.id === ticketId)?.createdById) === user.id;
+      if (done && ownsDeal) mockLogSiteVisit(user.id, ticketId, note);
       return delay(mockVisitDto(visit));
     },
     async done(id, payload = {}) {
       const user = requireSession();
       if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const visit = mockWritableVisit(user, id);
-      if (visit.ticketId != null) {
-        const ticket = db.tickets.find((t) => t.id === visit.ticketId);
-        if (!ticket) fail('ไม่พบดีลนี้', 404);
-        if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const note = mockCleanVisitNote(payload?.note);
+      if (visit.status === 'PLANNED' && visit.plannedDate > mockTodayIso()) {
+        fail('ยังไม่ถึงวันนัด จึงบันทึกว่าเข้าพบแล้วไม่ได้', 409);
       }
       if (visit.status !== 'PLANNED') mockVisitNotPlanned(visit);
-      const note = (payload?.note ?? '').trim() || null;
       visit.status = 'DONE';
       visit.doneAt = new Date().toISOString();
       if (note) visit.note = note;
-      if (visit.ticketId != null) mockLogSiteVisit(user, visit.ticketId, visit.note);
+      const ticket = visit.ticketId == null ? null : db.tickets.find((t) => t.id === visit.ticketId);
+      // TicketService.recordVisitActivity: only onto a deal whose created_by is the visit's owner (review NEW-2/NEW-A).
+      if (ticket && Number(ticket.createdById) === Number(visit.ownerId)) {
+        const recordedBy = visit.ownerId !== user.id ? `บันทึกโดย ${user.name}` : null;
+        mockLogSiteVisit(visit.ownerId, visit.ticketId, [visit.note, recordedBy].filter(Boolean).join(' · ') || null);
+      }
       return delay(mockVisitDto(visit));
     },
     async cancel(id) {
@@ -13928,15 +14229,15 @@ export const api = {
       return delay({ deal: buildFinanceDeal(raw, user) });
     },
 
-    async confirmDepositPaid(id) {
+    async confirmDepositPaid(id, options = {}) {
       const { user, raw } = requireMockFinanceAccess(id);
-      await mockConfirmDepositPaid(id);
+      await mockConfirmDepositPaid(id, options);
       return delay({ deal: buildFinanceDeal(raw, user) });
     },
 
-    async confirmFinalPayment(id) {
+    async confirmFinalPayment(id, options = {}) {
       const { user, raw } = requireMockFinanceAccess(id);
-      await mockConfirmFinalPayment(id);
+      await mockConfirmFinalPayment(id, options);
       return delay({ deal: buildFinanceDeal(raw, user) });
     },
 
@@ -18144,7 +18445,7 @@ export const api = {
       const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
       if (dealTicket) {
         pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
-        mockApplyApprovedQuotation(dealTicket, row.recipientType, row.customerName, user);
+        mockApplyApprovedQuotation(dealTicket, row, user);
       }
       return delay({ quotation: buildDealQuotationDto(row) });
     },

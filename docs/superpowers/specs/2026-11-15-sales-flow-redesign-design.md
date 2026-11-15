@@ -136,6 +136,11 @@ A deal is quiet when its latest activity, quotation issue, or stage change is ol
 in CEO settings), and it is not in the deliver & collect stage or closed. Replaces the current per-row "95 วัน"
 warning.
 
+Any `deal_activity` counts as a touch — including a call logged as **ไม่รับสาย** (no answer). Accepted in the round-2
+review: a rep who keeps calling is still working the deal, and the outcome stays visible on the follow-up row
+("ครั้งล่าสุด: …"). If unanswered calls should stop counting, that needs an outcome column on `deal_activity`
+(today the outcome is only the note's first line), which is out of scope for slice 1.
+
 ### 7.6 Visits
 
 `sales.deal_activity` today records only past activities, always tied to a deal. Visits need:

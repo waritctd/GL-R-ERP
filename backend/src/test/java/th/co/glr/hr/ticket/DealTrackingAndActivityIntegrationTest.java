@@ -276,7 +276,7 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
 
     // ── staleness ─────────────────────────────────────────────────────────────
 
-    // The 14-day QuietRule (salesboard.QuietRule) replaced the 7-day activity-only rule; these pin it through the
+    // The 14-day QuietRule (ticket.QuietRule) replaced the 7-day activity-only rule; these pin it through the
     // service. Last touched = latest of created_at, activity, STAGE_CHANGED/QUOTATION_ISSUED event.
 
     @Test

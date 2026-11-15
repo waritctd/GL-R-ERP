@@ -21,6 +21,7 @@ import th.co.glr.hr.salesboard.SalesBoardDtos.CashMonth;
 import th.co.glr.hr.salesboard.SalesBoardDtos.MyWork;
 import th.co.glr.hr.salesboard.SalesBoardDtos.RepRow;
 import th.co.glr.hr.salesboard.SalesBoardDtos.TeamOverview;
+import th.co.glr.hr.ticket.QuietRule;
 
 /**
  * งานของฉัน (rep) and ภาพรวมทีมขาย (manager/CEO), spec 2026-11-15 §7.3/§7.4. The role decision lives here; the
@@ -33,10 +34,12 @@ public class SalesBoardService {
     static final int FOLLOW_UP_LIMIT = 5;
     static final int STALE_LIMIT = 20;
 
-    /** daysQuiet × value (null = 0) desc, then daysQuiet desc, then ticket id for a stable order. */
+    /** daysQuiet × THB value desc, then daysQuiet desc, then ticket id for a stable order. Only THB is weighted (a null
+     * currency is THB, as in repRows): amounts in different currencies are not comparable, so a non-THB deal's value
+     * counts as 0 and it ranks by days alone. */
     static final Comparator<BoardDeal> QUIET_RANK = Comparator
         .comparing((BoardDeal d) -> BigDecimal.valueOf(d.daysQuiet())
-            .multiply(d.value() == null ? BigDecimal.ZERO : d.value())).reversed()
+            .multiply(d.value() == null || !isThb(d.currency()) ? BigDecimal.ZERO : d.value())).reversed()
         .thenComparing(Comparator.comparingInt(BoardDeal::daysQuiet).reversed())
         .thenComparingLong(BoardDeal::ticketId);
 
@@ -77,6 +80,7 @@ public class SalesBoardService {
     public CashMonth cashForMonth(Long ownerId, YearMonth month) {
         LocalDate first = month.atDay(1);
         LocalDate last = month.atEndOfMonth();
+        // Expected rows by their week's Thursday; receipts by their own Bangkok calendar date.
         return assemble(month, cash.expectedByWeek(ownerId, first, last), cash.receivedByDay(ownerId, first, last));
     }
 
@@ -99,16 +103,20 @@ public class SalesBoardService {
     }
 
     /**
-     * Folds the repository rows into the month. Weeks are every Monday inside the month; a receipt dated before the
-     * first Monday (the 1st falling mid-week) goes into the first week, so the weeks always add up to the month.
+     * Folds the repository rows into the month. The month's weeks are the ISO weeks whose THURSDAY is in it (review
+     * M6: Mon 30 Nov – Fri 4 Dec is December's). Receipts stay calendar-month cash: one dated before the first week
+     * (the 1st falling late in a week) folds into the first week, one after the last week (30 Nov) into the last, so
+     * the weeks always add up to the month.
      */
     static CashMonth assemble(YearMonth month, List<CashRepository.ExpectedWeekRow> expected,
                               List<CashRepository.ReceivedDayRow> received) {
         List<LocalDate> mondays = new ArrayList<>();
-        LocalDate monday = month.atDay(1).with(java.time.temporal.TemporalAdjusters.nextOrSame(
+        LocalDate monday = month.atDay(1).with(java.time.temporal.TemporalAdjusters.previousOrSame(
             java.time.DayOfWeek.MONDAY));
         for (; !monday.isAfter(month.atEndOfMonth()); monday = monday.plusWeeks(1)) {
-            mondays.add(monday);
+            if (YearMonth.from(monday.plusDays(3)).equals(month)) {
+                mondays.add(monday);
+            }
         }
         int n = mondays.size();
         BigDecimal[] delivered = zeros(n);
@@ -182,6 +190,10 @@ public class SalesBoardService {
 
     static final String THB = "THB";
 
+    private static boolean isThb(String currency) {
+        return currency == null || THB.equals(currency);
+    }
+
     /**
      * One row per owner, ordered by THB open value desc, then employee id. Only THB values are added into
      * {@code openValue}; other currencies are summed per code. Each owner's role comes from the same derivation
@@ -196,7 +208,8 @@ public class SalesBoardService {
             byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d);
             names.putIfAbsent(d.ownerId(), d.ownerName());
         });
-        weekVisits.forEach(v -> {
+        // Only a booked (not cancelled) visit earns a deal-less owner a row; cancelled-only is nothing to show.
+        weekVisits.stream().filter(v -> !VisitDtos.CANCELLED.equals(v.status())).forEach(v -> {
             byOwner.computeIfAbsent(v.ownerId(), k -> new ArrayList<>());
             names.putIfAbsent(v.ownerId(), v.ownerName());
         });
@@ -207,6 +220,9 @@ public class SalesBoardService {
                 names.put(ownerId, employees.findByEmployeeId(ownerId).map(e -> e.name()).orElse(null));
             }
         });
+        // One query for every rep's role, not one per rep.
+        Map<Long, th.co.glr.hr.auth.EmployeeLoginRecord> owners =
+            employees == null ? Map.of() : employees.findByEmployeeIds(byOwner.keySet());
         List<RepRow> rows = new ArrayList<>();
         byOwner.forEach((ownerId, own) -> {
             BigDecimal thb = BigDecimal.ZERO;
@@ -229,8 +245,8 @@ public class SalesBoardService {
                     last = d.lastTouchedAt();
                 }
             }
-            String role = employees == null ? null : employees.findByEmployeeId(ownerId)
-                .map(th.co.glr.hr.auth.DivisionAccessPolicy::roleFor).orElse(null);
+            th.co.glr.hr.auth.EmployeeLoginRecord owner = owners.get(ownerId);
+            String role = owner == null ? null : th.co.glr.hr.auth.DivisionAccessPolicy.roleFor(owner);
             int done = 0;
             int booked = 0;
             for (VisitDtos.VisitDto v : weekVisits) {
