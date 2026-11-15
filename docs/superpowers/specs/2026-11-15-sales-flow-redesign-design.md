@@ -217,6 +217,19 @@ backend endpoint and its role gate are unchanged (no authz change). Item 8 remov
 
 Rollout: slice 5 (import & account UI), after slice 3 because item 5–6 depend on the Express upload.
 
+**Deferred from item 3 (slice 5 review, 2026-11-15, decided by the coordinator for the owner):**
+
+- *"Shipment ETA feeds the rep's deliveries-scheduled cash line"* — DEFERRED. The rep's cash card reads the rep-entered
+  expected payments (§7.7), whose week is chosen by the rep; tying it to a factory row's derived ETA needs a rule for
+  which expected payment a shipment moves (per deal, per factory, partial deliveries), and slice 3 is still changing
+  that table (V214 `received_amount`). It belongs with slice 3's follow-up, not this UI slice.
+- *"An undo backed by a reversible event"* — DEFERRED in its full form. Slice 5 ships a 30-second undo of the
+  actor's own latest advance (V216: the row remembers the stamp it replaced; the undo is logged as an
+  `IMPORT_STEP_ADVANCED` event with a "เลิกทำ" message). A true reversible event — an event log the step is derived
+  from, replayable and undoable at any depth — would change how every reader of `import_step` works and would add a
+  `ticket_event.kind`, whose CHECK constraint is re-declared as a full list and so races concurrently numbered
+  migrations. Revisit when the import step gets an event-sourced model of its own.
+
 ## 8. Decided by the owner
 
 - Approach 1.
