@@ -191,10 +191,13 @@ export function UnmatchedReceipts({ showToast = () => {} }) {
                       + (row.possibleManual.recordedByName ? ' · ' + row.possibleManual.recordedByName : '')}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <Button type="button" size="sm" disabled={busy}
-                      onClick={() => run(sameAsManual, row, 'ผูกกับรายการที่บันทึกเองแล้ว ไม่บันทึกซ้ำ')}>
-                      รายการเดียวกับที่บันทึกเอง
-                    </Button>
+                    {row.possibleManual.alreadyLinked ? null : (
+                      // The receipt is already linked to another Express row — the server would 409 this.
+                      <Button type="button" size="sm" disabled={busy}
+                        onClick={() => run(sameAsManual, row, 'ผูกกับรายการที่บันทึกเองแล้ว ไม่บันทึกซ้ำ')}>
+                        รายการเดียวกับที่บันทึกเอง
+                      </Button>
+                    )}
                     <Button type="button" size="sm" variant="secondary" disabled={busy}
                       onClick={() => run(resolve, { row, body: { ticketId: row.possibleManual.ticketId } }, 'บันทึกเป็นอีกรายการแล้ว')}>
                       คนละรายการ

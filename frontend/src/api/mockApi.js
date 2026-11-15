@@ -8350,20 +8350,27 @@ function seedMockExpectedPayments() {
 seedMockExpectedPayments();
 
 /**
- * TicketRepository#applyReceiptToExpectedPayments — the ONE rule for manual and Express receipts alike (review M1):
- * fill OPEN rows in a fixed order whatever the receipt's kind (review N2) — DEPOSIT, then ON_DELIVERY, then BALANCE,
- * each by expected week, then id; RECEIVED only once the cumulative amount reaches it within ±1% / ±฿10; carry what a
- * completed row does not need to the next one. ADJUSTMENT touches nothing.
+ * TicketRepository#applyReceiptToExpectedPayments — the ONE rule for manual and Express receipts alike (review M1),
+ * owner ruling N5: a deal WITH an issued, non-cancelled deposit notice fills the rows matching the receipt's kind first
+ * (DEPOSIT receipt -> DEPOSIT rows; anything else -> ON_DELIVERY, then BALANCE), each by expected week then id, and the
+ * overflow goes to the remaining OPEN rows by week; a deal with NO notice fills every OPEN row purely by week, then id.
+ * RECEIVED only once the cumulative amount reaches it within +-1% / +-฿10; carry what a completed row does not need to
+ * the next one. ADJUSTMENT touches nothing.
  */
-const MOCK_FILL_ORDER = { DEPOSIT: 0, ON_DELIVERY: 1, BALANCE: 2 };
+const MOCK_BALANCE_ORDER = { ON_DELIVERY: 0, BALANCE: 1 };
 function mockApplyReceiptToExpected(ticketId, kind, amount, dayIso, receiptId, receiptRef = null) {
   if (!(amount > 0) || kind === 'ADJUSTMENT') return;
+  const hasNotice = mockDepositNotices.some((n) => n.ticketId === Number(ticketId) && !['DRAFT', 'CANCELLED'].includes(n.status));
+  const tier = (p) => {
+    if (!hasNotice) return 0;
+    if (kind === 'DEPOSIT') return p.kind === 'DEPOSIT' ? 0 : 1;
+    return MOCK_BALANCE_ORDER[p.kind] ?? 2;
+  };
   let left = amount;
   while (left > 0) {
     const row = mockExpectedPayments
       .filter((p) => p.ticketId === Number(ticketId) && p.status === 'OPEN')
-      .sort((a, b) => MOCK_FILL_ORDER[a.kind] - MOCK_FILL_ORDER[b.kind]
-        || a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id)[0];
+      .sort((a, b) => tier(a) - tier(b) || a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id)[0];
     if (!row) return;
     const applied = Math.min(left, round2(row.amount - (row.receivedAmount ?? 0)));
     row.receivedAmount = round2((row.receivedAmount ?? 0) + applied);
@@ -8719,7 +8726,7 @@ const mockQueuedDto = (r, candidates = []) => ({
   possibleManual: (() => {
     const m = r.suggestedReceiptId == null ? null : (db.paymentReceipts ?? []).find((x) => x.receiptId === r.suggestedReceiptId);
     return m ? { receiptId: m.receiptId, ticketId: m.ticketId, kind: m.kind, amount: m.amount, receivedAt: m.receivedAt,
-      recordedByName: m.recordedByName ?? null } : null;
+      recordedByName: m.recordedByName ?? null, alreadyLinked: Boolean(m.expressDocNo) } : null;
   })(),
   candidates,
 });

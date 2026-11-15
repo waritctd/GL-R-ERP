@@ -61,20 +61,81 @@ class ExpectedPaymentReceiptIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(received(row)).isEqualByComparingTo("50000");
     }
 
-    /** Review N2: rows fill in a fixed order — DEPOSIT, then ON_DELIVERY, then BALANCE — whatever the receipt's kind. */
+    /**
+     * Owner ruling (N5), rule 2: a deal with NO deposit notice (bypass policy) fills its OPEN rows purely by expected
+     * week, whatever their kind or the receipt's — and carries the overflow to the next row.
+     */
     @Test
-    void aManualReceiptFillsDepositThenOnDeliveryThenBalance_andCarriesTheOverflow() {
+    void noDepositNotice_aReceiptFillsRowsPurelyByExpectedWeek_andCarriesTheOverflow() {
         long d = orderDeal("200000.00");
-        long balance = expectedRow(d, "BALANCE", "300.00", monday);           // earliest week, but BALANCE comes last
+        long balance = expectedRow(d, "BALANCE", "300.00", monday);
         long onDelivery = expectedRow(d, "ON_DELIVERY", "300.00", monday.plusWeeks(1));
         long deposit = expectedRow(d, "DEPOSIT", "300.00", monday.plusWeeks(2));
 
         manual(d, "BALANCE", "600");
 
-        assertThat(status(deposit)).as("a BALANCE-kind receipt still pays the open deposit first").isEqualTo("RECEIVED");
+        assertThat(status(balance)).isEqualTo("RECEIVED");
         assertThat(status(onDelivery)).isEqualTo("RECEIVED");
-        assertThat(status(balance)).isEqualTo("OPEN");
-        assertThat(received(balance)).isEqualByComparingTo("0");
+        assertThat(status(deposit)).as("kind is ignored: the latest week waits").isEqualTo("OPEN");
+        assertThat(received(deposit)).isEqualByComparingTo("0");
+    }
+
+    /**
+     * N5 probe (review): ON_DELIVERY ฿50,000 this week and DEPOSIT ฿30,000 six weeks out, a deposit notice issued;
+     * account records ฿50,000 as BALANCE. It pays the ON_DELIVERY row whole — the far-off deposit row is untouched.
+     */
+    @Test
+    void probeN5_withANotice_aBalanceReceiptPaysOnDeliveryNotTheFarOffDeposit() {
+        long d = dealWithIssuedNotice("100000.00");
+        long onDelivery = expectedRow(d, "ON_DELIVERY", "50000.00", monday);
+        long deposit = expectedRow(d, "DEPOSIT", "30000.00", monday.plusWeeks(6));
+
+        manual(d, "BALANCE", "50000");
+
+        assertThat(status(onDelivery)).isEqualTo("RECEIVED");
+        assertThat(received(onDelivery)).isEqualByComparingTo("50000");
+        assertThat(status(deposit)).isEqualTo("OPEN");
+        assertThat(received(deposit)).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void withANotice_aBalanceReceiptFillsOnDeliveryThenBalance_byWeekWithinTheMatchingKinds() {
+        long d = dealWithIssuedNotice("100000.00");
+        long balance = expectedRow(d, "BALANCE", "300.00", monday);                     // earliest, but ON_DELIVERY first
+        long onDelivery = expectedRow(d, "ON_DELIVERY", "300.00", monday.plusWeeks(3));
+        long deposit = expectedRow(d, "DEPOSIT", "300.00", monday);
+
+        manual(d, "BALANCE", "600");
+
+        assertThat(status(onDelivery)).isEqualTo("RECEIVED");
+        assertThat(status(balance)).isEqualTo("RECEIVED");
+        assertThat(status(deposit)).isEqualTo("OPEN");
+        assertThat(received(deposit)).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void withANotice_aDepositReceiptFillsDepositRowsFirst_notAnEarlierOnDeliveryRow() {
+        long d = dealWithIssuedNotice("100000.00");
+        long onDelivery = expectedRow(d, "ON_DELIVERY", "300.00", monday);
+        long deposit = expectedRow(d, "DEPOSIT", "300.00", monday.plusWeeks(2));
+
+        manual(d, "DEPOSIT", "300");
+
+        assertThat(status(deposit)).isEqualTo("RECEIVED");
+        assertThat(received(onDelivery)).isEqualByComparingTo("0");
+    }
+
+    @Test
+    void withANotice_theOverflowOfTheMatchingKindsGoesToTheOtherOpenRows() {
+        long d = dealWithIssuedNotice("100000.00");
+        long onDelivery = expectedRow(d, "ON_DELIVERY", "300.00", monday);
+        long deposit = expectedRow(d, "DEPOSIT", "300.00", monday.plusWeeks(2));
+
+        manual(d, "BALANCE", "500");
+
+        assertThat(status(onDelivery)).isEqualTo("RECEIVED");
+        assertThat(received(deposit)).as("the 200 left over reaches the deposit row").isEqualByComparingTo("200");
+        assertThat(status(deposit)).isEqualTo("OPEN");
     }
 
     /** Probe Q2: a deposit paid in two Express halves completes the DEPOSIT row and touches no balance row. */
@@ -131,6 +192,19 @@ class ExpectedPaymentReceiptIntegrationTest extends AbstractDealQuotationSlice2I
         jdbc.update("UPDATE sales.quotation SET total_amount = :a, document_language = 'EN' WHERE quotation_id = :q",
             Map.of("a", new BigDecimal(total), "q", q));
         jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED' WHERE ticket_id = :t", Map.of("t", d));
+        return d;
+    }
+
+    /** An order deal that has an ISSUED deposit notice (so the kind-first rule applies). */
+    private long dealWithIssuedNotice(String total) {
+        long d = orderDeal(total);
+        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'REQUIRED', payment_status = 'DEPOSIT_NOTICE_ISSUED'"
+            + " WHERE ticket_id = :t", Map.of("t", d));
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable, doc_number)
+            VALUES (:t, 1, 'ISSUED', 'x', 0.3, 32100, 32100, 0, 0, 32100, :n)""",
+            Map.of("t", d, "n", "DN-N5-" + d));
         return d;
     }
 

@@ -78,6 +78,47 @@ describe('mockApi.expectedPayments', () => {
       .rejects.toMatchObject({ status: 409 });
   });
 
+  // Owner ruling N5 — mirrors TicketRepository#applyReceiptToExpectedPayments (ExpectedPaymentReceiptIntegrationTest is
+  // the evidence; this pins the mock's copy of the rule).
+  async function plan(id, rows) {
+    await api.auth.login({ role: 'sales_manager' });
+    const made = [];
+    for (const [kind, amount, week] of rows) made.push(await api.expectedPayments.create(id, { kind, amount, expectedWeek: week }));
+    return made;
+  }
+  async function pay(id, kind, amount) {
+    await api.auth.login({ role: 'account' });
+    await api.finance.recordPayment(id, { kind, amount, allowOverpayment: true, note: 'ทดสอบ', confirmPossibleDuplicate: true });
+    await api.auth.login({ role: 'sales_manager' });
+    return Object.fromEntries((await api.expectedPayments.list(id)).map((r) => [r.id, r]));
+  }
+
+  it('N5: with an issued deposit notice a BALANCE receipt pays this weeks ON_DELIVERY, not the far-off DEPOSIT', async () => {
+    const id = 19; // seeded with an ISSUED deposit notice
+    const [onDelivery, deposit] = await plan(id, [['ON_DELIVERY', 50000, monday], ['DEPOSIT', 30000, plusDays(monday, 42)]]);
+    const rows = await pay(id, 'BALANCE', 50000);
+    expect(rows[onDelivery.id]).toMatchObject({ status: 'RECEIVED', receivedAmount: 50000 });
+    expect(rows[deposit.id]).toMatchObject({ status: 'OPEN', receivedAmount: 0 });
+  });
+
+  it('N5: with a notice a DEPOSIT receipt fills DEPOSIT rows first, and overflow reaches the other rows by week', async () => {
+    const id = 20; // seeded with an ISSUED deposit notice
+    const [onDelivery, deposit] = await plan(id, [['ON_DELIVERY', 300, monday], ['DEPOSIT', 300, plusDays(monday, 14)]]);
+    const rows = await pay(id, 'DEPOSIT', 500);
+    expect(rows[deposit.id]).toMatchObject({ status: 'RECEIVED', receivedAmount: 300 });
+    expect(rows[onDelivery.id]).toMatchObject({ status: 'OPEN', receivedAmount: 200 });
+  });
+
+  it('N5: with NO deposit notice every OPEN row fills purely by expected week, whatever its kind', async () => {
+    const id = 22; // no deposit notice
+    const [balance, onDelivery, deposit] = await plan(id, [
+      ['BALANCE', 300, monday], ['ON_DELIVERY', 300, plusDays(monday, 7)], ['DEPOSIT', 300, plusDays(monday, 14)]]);
+    const rows = await pay(id, 'BALANCE', 600);
+    expect(rows[balance.id].status).toBe('RECEIVED');
+    expect(rows[onDelivery.id].status).toBe('RECEIVED');
+    expect(rows[deposit.id]).toMatchObject({ status: 'OPEN', receivedAmount: 0 });
+  });
+
   it('a new OPEN deposit this month shows in my-work cash as forecast and deposits expected', async () => {
     const { id } = await ownDealId();
     // ISO rule: the week counts in the month holding its Thursday.

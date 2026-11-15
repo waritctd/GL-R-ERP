@@ -52,4 +52,19 @@ describe('mockApi.receiptImports', () => {
     await api.auth.login({ role: 'sales_manager' });
     expect((await api.receiptImports.managerView()).flagged.some((r) => r.docNo === 'RE-M-9')).toBe(true);
   });
+
+  it('N5: possibleManual.alreadyLinked turns true once another row has linked that manual receipt', async () => {
+    await api.auth.login({ role: 'account' });
+    const { depositNotices } = await api.depositNotices.listByTicket(19); // seeded ISSUED notice
+    const ref = depositNotices.find((d) => d.status === 'ISSUED').docNumber;
+    const today = new Date().toISOString().slice(0, 10);
+    await api.finance.recordPayment(19, { kind: 'DEPOSIT', amount: 777, allowOverpayment: true, note: 'ทดสอบ' });
+    await api.receiptImports.upload(csv([`RE-LK-1,${today},ใคร,777,${ref}`, `RE-LK-2,${today},ใคร,777,${ref}`]));
+    const mine = async (no) => (await api.receiptImports.unmatched()).find((r) => r.docNo === no);
+    expect((await mine('RE-LK-2')).possibleManual.alreadyLinked).toBe(false);
+    await api.receiptImports.sameAsManual((await mine('RE-LK-1')).rowId);
+    const second = await mine('RE-LK-2');
+    expect(second.possibleManual.alreadyLinked).toBe(true);
+    await expect(api.receiptImports.sameAsManual(second.rowId)).rejects.toMatchObject({ status: 409 });
+  });
 });

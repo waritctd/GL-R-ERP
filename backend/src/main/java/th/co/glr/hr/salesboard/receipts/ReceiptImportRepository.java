@@ -170,13 +170,15 @@ public class ReceiptImportRepository {
     public Optional<ReceiptImportDtos.PossibleManual> manualReceipt(long receiptId) {
         return jdbc.query("""
             SELECT r.receipt_id, r.ticket_id, r.kind, r.amount, r.received_at,
-                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS recorded_by_name
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS recorded_by_name,
+                   (r.express_doc_no IS NOT NULL) AS already_linked
               FROM sales.payment_receipt r
               JOIN hr.employee e ON e.employee_id = r.recorded_by
              WHERE r.receipt_id = :id AND r.source = 'MANUAL'
             """, Map.of("id", receiptId), (rs, n) -> new ReceiptImportDtos.PossibleManual(rs.getLong("receipt_id"),
                 rs.getLong("ticket_id"), rs.getString("kind"), rs.getBigDecimal("amount"),
-                rs.getTimestamp("received_at").toInstant(), rs.getString("recorded_by_name"))).stream().findFirst();
+                rs.getTimestamp("received_at").toInstant(), rs.getString("recorded_by_name"),
+                rs.getBoolean("already_linked"))).stream().findFirst();
     }
 
     public List<QueuedRow> findByStatus(String status) {

@@ -307,6 +307,37 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
             .as("already handled").isEqualTo(409);
     }
 
+    /**
+     * N5 (LOW): two queued rows can suggest the same hand-typed receipt. Once account links it to one, the other's
+     * suggested manual receipt says so ({@code alreadyLinked}) so the UI stops offering "รายการเดียวกับที่บันทึกเอง"
+     * (the backend would 409 it).
+     */
+    @Test
+    void aSuggestedManualReceiptAlreadyLinkedToAnotherRowIsFlagged() throws Exception {
+        long d = payableDeal(salesActor, "100000.00");
+        ticketService.recordPayment(d, new RecordPaymentRequest("DEPOSIT", new BigDecimal("10000"), null, "เงินสด",
+            null, null, false), account);
+        String number = jdbc.queryForObject("SELECT number FROM sales.quotation WHERE ticket_id = :t LIMIT 1",
+            Map.of("t", d), String.class);
+        String today = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).toString();
+        upload(account, csv(row("RE-LK-1", today, "", "10000", number), row("RE-LK-2", today, "", "10000", number)));
+        for (JsonNode q : ok(get("/api/sales/receipt-imports/unmatched"), account)) {
+            assertThat(q.get("possibleManual").get("alreadyLinked").asBoolean()).isFalse();
+        }
+
+        assertThat(ok(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-LK-1") + "/same-as-manual"), account)
+            .get("status").asText()).isEqualTo("RESOLVED");
+
+        JsonNode second = null;
+        for (JsonNode q : ok(get("/api/sales/receipt-imports/unmatched"), account)) {
+            if ("RE-LK-2".equals(q.get("docNo").asText())) second = q;
+        }
+        assertThat(second).isNotNull();
+        assertThat(second.get("possibleManual").get("alreadyLinked").asBoolean()).isTrue();
+        assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-LK-2") + "/same-as-manual"), account))
+            .isEqualTo(409);
+    }
+
     @Test
     void sameAsManualIsOnlyForAPossibleManualDuplicateRow() throws Exception {
         upload(account, csv(row("RE-SM-1", "2026-11-12", "ไม่มีใคร", "10", "")));

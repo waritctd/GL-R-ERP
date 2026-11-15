@@ -179,6 +179,19 @@ describe('UnmatchedReceipts — account works the queue', () => {
     await waitFor(() => expect(api.receiptImports.resolve).toHaveBeenCalledWith(11, { ticketId: 31 }));
   });
 
+  it('N5: a suggested manual receipt already linked to another row offers only "คนละรายการ"', async () => {
+    const possible = queued({
+      reason: 'POSSIBLE_MANUAL_DUPLICATE', candidates: [], possibleManualReceiptId: 77,
+      possibleManual: { receiptId: 77, ticketId: 31, kind: 'DEPOSIT', amount: 372000, receivedAt: '2026-11-10T03:00:00Z',
+        recordedByName: 'คุณบุษบา', alreadyLinked: true },
+    });
+    api.receiptImports.unmatched.mockResolvedValue([possible]);
+    wrap(<UnmatchedReceipts showToast={vi.fn()} />);
+    const row = await screen.findByTestId('unmatched-11');
+    expect(within(row).queryByRole('button', { name: 'รายการเดียวกับที่บันทึกเอง' })).toBeNull();
+    expect(within(row).getByRole('button', { name: 'คนละรายการ' })).toBeTruthy();
+  });
+
   it('a set-aside row can be brought back', async () => {
     wrap(<UnmatchedReceipts showToast={vi.fn()} />);
     fireEvent.click(await screen.findByText(/รายการที่ข้ามไป/));

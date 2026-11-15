@@ -1753,31 +1753,46 @@ public class TicketRepository {
      * for a receipt account typed ({@code TicketService#recordPayment}, ยืนยันรับมัดจำ, ยืนยันรับชำระส่วนที่เหลือ) and
      * for an uploaded Express one ({@code TicketService#recordExpressReceipt}) alike, so the two can never disagree.
      *
-     * <p>The amount fills the deal's OPEN rows in ONE fixed order, whatever the receipt's kind (review N2: a deposit
-     * paid in instalments, or a bypass-policy deal's rep-entered deposit row, must still be completed): DEPOSIT rows,
-     * then ON_DELIVERY, then BALANCE; within a kind by expected week, then the oldest row. The receipt's own kind keeps
-     * its meaning for the payment track only. A row turns RECEIVED (linking this receipt) only when its cumulative
-     * {@code received_amount}
-     * reaches its amount minus the matcher's tolerance (±1% or ±฿10, whichever is wider); otherwise it stays OPEN with
-     * the rest still expected. What a completed row does not need carries to the next nearest row. ADJUSTMENT
-     * receipts touch nothing.
+     * <p>Which OPEN rows the amount fills first (owner ruling N5 — it replaced the fixed DEPOSIT, ON_DELIVERY, BALANCE
+     * order, which paid a far-off deposit row before this week's on-delivery one):
+     * <ul>
+     *   <li>the deal HAS an issued, non-cancelled deposit notice: first the rows matching the receipt's kind — a DEPOSIT
+     *       receipt fills DEPOSIT rows; a BALANCE (any non-deposit) receipt fills ON_DELIVERY rows, then BALANCE rows —
+     *       each by expected week then oldest; whatever overflows goes to the remaining OPEN rows of any kind by
+     *       expected week;</li>
+     *   <li>the deal has NO deposit notice (bypass policy): every OPEN row purely by expected week, then oldest,
+     *       whatever its kind (a rep-entered DEPOSIT row still gets closed by its earliest receipt).</li>
+     * </ul>
+     * The receipt's own kind keeps its meaning for the payment track only. A row turns RECEIVED (linking this receipt)
+     * only when its cumulative {@code received_amount} reaches its amount minus the matcher's tolerance (±1% or ±฿10,
+     * whichever is wider); otherwise it stays OPEN with the rest still expected. What a completed row does not need
+     * carries to the next row in that order. ADJUSTMENT receipts touch nothing.
      */
-    @SuppressWarnings("unused") // receiptDate: kept for callers and for a future tie-break; the order is fixed (N2)
+    @SuppressWarnings("unused") // receiptDate: kept for callers and for a future tie-break
     public void applyReceiptToExpectedPayments(long ticketId, String receiptKind, BigDecimal amount,
                                                java.time.LocalDate receiptDate, long receiptId) {
         if (amount == null || amount.signum() <= 0 || receiptKind == null || "ADJUSTMENT".equals(receiptKind)) {
             return;
         }
+        boolean hasNotice = Boolean.TRUE.equals(jdbc.queryForObject("""
+            SELECT EXISTS (SELECT 1 FROM sales.deposit_notice d
+                            WHERE d.ticket_id = :t AND d.status NOT IN ('DRAFT', 'CANCELLED'))
+            """, Map.of("t", ticketId), Boolean.class));
+        String order;
+        if (!hasNotice) {
+            order = "expected_week, expected_payment_id";
+        } else if ("DEPOSIT".equals(receiptKind)) {
+            order = "CASE kind WHEN 'DEPOSIT' THEN 0 ELSE 1 END, expected_week, expected_payment_id";
+        } else {
+            order = "CASE kind WHEN 'ON_DELIVERY' THEN 0 WHEN 'BALANCE' THEN 1 ELSE 2 END,"
+                + " expected_week, expected_payment_id";
+        }
         BigDecimal left = amount;
         while (left.signum() > 0) {
-            List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT expected_payment_id, amount, received_amount FROM sales.expected_payment
-                 WHERE ticket_id = :t AND status = 'OPEN'
-                 ORDER BY CASE kind WHEN 'DEPOSIT' THEN 0 WHEN 'ON_DELIVERY' THEN 1 ELSE 2 END,
-                          expected_week, expected_payment_id
-                 LIMIT 1
-                 FOR UPDATE
-                """, new MapSqlParameterSource().addValue("t", ticketId));
+            List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT expected_payment_id, amount, received_amount FROM sales.expected_payment"
+                    + " WHERE ticket_id = :t AND status = 'OPEN' ORDER BY " + order + " LIMIT 1 FOR UPDATE",
+                new MapSqlParameterSource().addValue("t", ticketId));
             if (rows.isEmpty()) {
                 return;
             }
