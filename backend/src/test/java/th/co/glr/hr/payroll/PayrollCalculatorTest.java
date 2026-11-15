@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.math.BigDecimal;
 import java.util.List;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class PayrollCalculatorTest {
     private final PayrollCalculator calculator = new PayrollCalculator();
@@ -587,10 +589,27 @@ class PayrollCalculatorTest {
         assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("33960.42"));
     }
 
-    @Test
-    void ssoWageBaseFloorsAtMinimumBaseForLowWages() {
+    /** A wage-only month (no other income or deduction, empty YTD, month 12): the SSO wage base, the whole-baht
+     * เงินสมทบ and the net pay. Columns: case name, wage, expected SSO wage base, expected social security, expected
+     * net pay.
+     *
+     * <ul>
+     *   <li>ssoWageBaseFloorsAtMinimumBaseForLowWages: wage (1,000) is below the 1,650 SSO minimum base, so SSO is
+     *       computed on the floor: 1,650 x 5% = 82.50, not 1,000 x 5% = 50.00. เงินสมทบ is then rounded to whole
+     *       baht (มาตรา 46 วรรคท้าย), so 82.50 -> 83 -- the same figure SsoExporter has always filed.</li>
+     *   <li>ssoContributionRoundsToWholeBahtOnAHalfSatangWage: the real case that drove the change: a ฿11,250 wage
+     *       puts 5% exactly on a half-satang boundary. เงินสมทบ is rounded to whole baht by มาตรา 46 วรรคท้าย, so the
+     *       employee is deducted ฿563 and nets ฿10,687.00.</li>
+     * </ul> */
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "ssoWageBaseFloorsAtMinimumBaseForLowWages,          1000.00,  1650.00,  83.00,  917.00",
+        "ssoContributionRoundsToWholeBahtOnAHalfSatangWage,  11250.00, 11250.00, 563.00, 10687.00",
+    })
+    void ssoOnAWageOnlyMonth(String caseName, String wage, String expectedSsoWageBase, String expectedSocialSecurity,
+                             String expectedNetPay) {
         PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("1000.00"),
+            new BigDecimal(wage),
             List.of(),
             BigDecimal.ZERO,
             BigDecimal.ZERO,
@@ -604,36 +623,9 @@ class PayrollCalculatorTest {
             12
         ));
 
-        // Wage (1,000) is below the 1,650 SSO minimum base, so SSO is computed on the floor: 1,650 x 5% = 82.50, not
-        // 1,000 x 5% = 50.00. เงินสมทบ is then rounded to whole baht (มาตรา 46 วรรคท้าย), so 82.50 -> 83 -- the same
-        // figure SsoExporter has always filed.
-        assertThat(result.ssoWageBase()).isEqualByComparingTo(new BigDecimal("1650.00"));
-        assertThat(result.socialSecurity()).isEqualByComparingTo(new BigDecimal("83.00"));
-        assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("917.00"));
-    }
-
-    /** The real case that drove the change: a ฿11,250 wage puts 5% exactly on a half-satang boundary. เงินสมทบ is
-     * rounded to whole baht by มาตรา 46 วรรคท้าย, so the employee is deducted ฿563 and nets ฿10,687.00. */
-    @Test
-    void ssoContributionRoundsToWholeBahtOnAHalfSatangWage() {
-        PayrollCalculation result = calculator.calculate(new PayrollCalculationInput(
-            new BigDecimal("11250.00"),
-            List.of(),
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            BigDecimal.ZERO,
-            PayrollTaxAllowanceInput.empty(),
-            PayrollYearToDate.empty(),
-            12
-        ));
-
-        assertThat(result.ssoWageBase()).isEqualByComparingTo(new BigDecimal("11250.00"));
-        assertThat(result.socialSecurity()).isEqualByComparingTo(new BigDecimal("563.00"));
-        assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal("10687.00"));
+        assertThat(result.ssoWageBase()).isEqualByComparingTo(new BigDecimal(expectedSsoWageBase));
+        assertThat(result.socialSecurity()).isEqualByComparingTo(new BigDecimal(expectedSocialSecurity));
+        assertThat(result.netPay()).isEqualByComparingTo(new BigDecimal(expectedNetPay));
     }
 
     @Test

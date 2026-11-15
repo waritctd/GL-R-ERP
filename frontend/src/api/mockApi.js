@@ -2267,9 +2267,20 @@ ${doc.notes?.length ? `<div style="margin-top:20px;font-size:12px"><strong>ห�
 </body></html>`;
 }
 
+// Simulated network latency. 140ms in the dev server so loading states stay visible; vitest.config.js sets
+// VITE_MOCK_LATENCY_MS=0 because under the suite it was pure wall-clock cost. Read per call (not at module load) so a
+// test can vi.stubEnv it; a missing or non-numeric value keeps the default. Still a setTimeout at 0, so every call
+// stays asynchronous — see mockApi.latency.test.js.
+const DEFAULT_MOCK_LATENCY_MS = 140;
+function mockLatencyMs() {
+  const raw = import.meta.env.VITE_MOCK_LATENCY_MS;
+  const ms = raw === undefined || raw === '' ? NaN : Number(raw);
+  return Number.isFinite(ms) && ms >= 0 ? ms : DEFAULT_MOCK_LATENCY_MS;
+}
+
 function delay(value) {
   return new Promise((resolve) => {
-    window.setTimeout(() => resolve(structuredClone(value)), 140);
+    window.setTimeout(() => resolve(structuredClone(value)), mockLatencyMs());
   });
 }
 
