@@ -159,6 +159,7 @@ export const API_ROUTES = {
     ignore: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/ignore`,
     unignore: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/unignore`,
     flagManager: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/flag-manager`,
+    sameAsManual: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/same-as-manual`,
   },
   salesVisits: {
     list: '/api/sales/visits',

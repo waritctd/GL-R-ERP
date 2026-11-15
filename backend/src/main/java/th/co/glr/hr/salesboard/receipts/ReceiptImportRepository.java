@@ -29,7 +29,8 @@ import th.co.glr.hr.ticket.TicketRepository;
  * <p>Candidates are the ACTIVE deals inside ACCOUNT's finance scope — {@link TicketRepository#accountScopePredicate},
  * the predicate account's own deal list runs (review M4) — with every customer name the deal is known by (the
  * ticket's, and the names printed on its ISSUED deposit notices, remaining invoices and billing notes: M5), the
- * numbers of those live documents only (superseded / cancelled / draft documents never count: M7), its live
+ * numbers of those live documents only (superseded / cancelled / draft documents, and billing-note lines that were
+ * RELEASED from their note, never count: M7, N4), its live
  * quotation numbers, and the OPEN remainder of each expected payment.
  */
 @Repository
@@ -42,9 +43,9 @@ public class ReceiptImportRepository {
     /** One OPEN expected payment of a candidate deal; {@code amount} is what is still to come. */
     public record OpenExpected(BigDecimal amount, LocalDate week, String kind) {}
 
-    /** A queued row as stored. */
+    /** A queued row as stored. {@code suggestedReceiptId}: the MANUAL receipt a POSSIBLE_MANUAL_DUPLICATE row may be. */
     public record QueuedRow(long rowId, long importId, ParsedReceipt receipt, String reason, String status,
-                            Long resolvedTicketId, java.time.Instant managerFlaggedAt) {}
+                            Long resolvedTicketId, java.time.Instant managerFlaggedAt, Long suggestedReceiptId) {}
 
     private final NamedParameterJdbcTemplate jdbc;
 
@@ -70,7 +71,7 @@ public class ReceiptImportRepository {
              WHERE import_id = :id
             """, new MapSqlParameterSource().addValue("id", importId).addValue("total", c.total())
                 .addValue("matched", c.matched.count).addValue("ma", c.matched.amount)
-                .addValue("mm", c.matchedManual.count)
+                .addValue("mm", c.possibleManual.count)
                 .addValue("dup", c.duplicates.count).addValue("da", c.duplicates.amount)
                 .addValue("un", c.unmatched.count).addValue("ua", c.unmatched.amount)
                 .addValue("nc", c.nonCash.count).addValue("inv", c.invalid).addValue("failed", c.failed));
@@ -150,12 +151,32 @@ public class ReceiptImportRepository {
     // ── the queue ──────────────────────────────────────────────────────────
 
     public long insertUnmatched(long importId, ParsedReceipt r, String reason) {
+        return insertUnmatched(importId, r, reason, null);
+    }
+
+    /** Throws DataIntegrityViolationException when the number is already queued (a concurrent upload: review N4). */
+    public long insertUnmatched(long importId, ParsedReceipt r, String reason, Long suggestedReceiptId) {
         return jdbc.queryForObject("""
-            INSERT INTO sales.receipt_import_row (import_id, doc_no, doc_date, customer_name, amount, reference, reason)
-            VALUES (:imp, :doc, :date, :cust, :amount, :ref, :reason) RETURNING row_id
+            INSERT INTO sales.receipt_import_row (import_id, doc_no, doc_date, customer_name, amount, reference, reason,
+                                                 suggested_receipt_id)
+            VALUES (:imp, :doc, :date, :cust, :amount, :ref, :reason, :sug) RETURNING row_id
             """, new MapSqlParameterSource().addValue("imp", importId).addValue("doc", r.docNo().trim())
                 .addValue("date", r.docDate()).addValue("cust", r.customerName()).addValue("amount", r.amount())
-                .addValue("ref", r.reference()).addValue("reason", reason), Long.class);
+                .addValue("ref", r.reference()).addValue("reason", reason).addValue("sug", suggestedReceiptId),
+            Long.class);
+    }
+
+    /** The MANUAL receipt a queued row may duplicate, with its deal; empty when none or it is no longer MANUAL. */
+    public Optional<ReceiptImportDtos.PossibleManual> manualReceipt(long receiptId) {
+        return jdbc.query("""
+            SELECT r.receipt_id, r.ticket_id, r.kind, r.amount, r.received_at,
+                   NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS recorded_by_name
+              FROM sales.payment_receipt r
+              JOIN hr.employee e ON e.employee_id = r.recorded_by
+             WHERE r.receipt_id = :id AND r.source = 'MANUAL'
+            """, Map.of("id", receiptId), (rs, n) -> new ReceiptImportDtos.PossibleManual(rs.getLong("receipt_id"),
+                rs.getLong("ticket_id"), rs.getString("kind"), rs.getBigDecimal("amount"),
+                rs.getTimestamp("received_at").toInstant(), rs.getString("recorded_by_name"))).stream().findFirst();
     }
 
     public List<QueuedRow> findByStatus(String status) {
@@ -228,7 +249,7 @@ public class ReceiptImportRepository {
 
     private static final String ROW_SELECT = """
         SELECT row_id, import_id, doc_no, doc_date, customer_name, amount, reference, reason, status, resolved_ticket_id,
-               manager_flagged_at
+               manager_flagged_at, suggested_receipt_id
           FROM sales.receipt_import_row
         """;
 
@@ -238,8 +259,10 @@ public class ReceiptImportRepository {
         Timestamp flagged = rs.getTimestamp("manager_flagged_at");
         ParsedReceipt r = new ParsedReceipt(0, rs.getString("doc_no"), null, rs.getObject("doc_date", LocalDate.class),
             rs.getString("customer_name"), rs.getBigDecimal("amount"), rs.getString("reference"));
+        long sug = rs.getLong("suggested_receipt_id");
+        Long suggested = rs.wasNull() ? null : sug;
         return new QueuedRow(rs.getLong("row_id"), rs.getLong("import_id"), r, rs.getString("reason"),
-            rs.getString("status"), resolved, flagged == null ? null : flagged.toInstant());
+            rs.getString("status"), resolved, flagged == null ? null : flagged.toInstant(), suggested);
     }
 
     // ── account scope, candidates, the picker ──────────────────────────────
@@ -292,7 +315,7 @@ public class ReceiptImportRepository {
             UNION ALL
             SELECT bl.ticket_id, bn.doc_number, bn.customer_name FROM sales.billing_note_line bl
               JOIN sales.billing_note bn ON bn.id = bl.billing_note_id
-             WHERE bn.status IN ('ISSUED', 'SETTLED') AND bl.ticket_id IN (""" + deals + """
+             WHERE bn.status IN ('ISSUED', 'SETTLED') AND bl.note_status <> 'RELEASED' AND bl.ticket_id IN (""" + deals + """
             )
             """, p, rs -> {
             long id = rs.getLong(1);

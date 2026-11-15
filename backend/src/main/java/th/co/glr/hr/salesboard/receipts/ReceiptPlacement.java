@@ -69,6 +69,23 @@ public class ReceiptPlacement {
         imports.markResolved(rowId, firstTicket, firstReceipt, actor.id());
     }
 
+    /** Links a POSSIBLE_MANUAL_DUPLICATE row's manual receipt to its Express number and resolves the row; 409 else. */
+    @Transactional
+    public void sameAsManual(long rowId, UserPrincipal actor) {
+        QueuedRow row = imports.lockRow(rowId)
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้"));
+        if (!ReceiptImportDtos.UNMATCHED.equals(row.status())
+            || !ReceiptImportService.POSSIBLE_MANUAL_DUPLICATE.equals(row.reason()) || row.suggestedReceiptId() == null) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการนี้ไม่ได้รอเลือกว่าเป็นรายการเดียวกับที่บันทึกเอง");
+        }
+        var manual = imports.manualReceipt(row.suggestedReceiptId())
+            .orElseThrow(() -> new ApiException(HttpStatus.CONFLICT, "ไม่พบรายการที่บันทึกเองนี้แล้ว"));
+        if (imports.linkManualReceipt(manual.receiptId(), row.receipt().docNo()) != 1) {
+            throw new ApiException(HttpStatus.CONFLICT, "รายการที่บันทึกเองนี้ผูกกับเลขที่ Express อื่นแล้ว");
+        }
+        imports.markResolved(rowId, manual.ticketId(), manual.receiptId(), actor.id());
+    }
+
     private static Instant receivedAt(ParsedReceipt row) {
         return ReceiptImportRepository.receivedAt(row.docDate()).toInstant();
     }

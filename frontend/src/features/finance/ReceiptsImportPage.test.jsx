@@ -18,7 +18,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       receiptImports: {
         upload: vi.fn(), latest: vi.fn(), template: vi.fn(), unmatched: vi.fn(), ignored: vi.fn(),
         managerView: vi.fn(), deals: vi.fn(), resolve: vi.fn(), ignore: vi.fn(), unignore: vi.fn(),
-        flagManager: vi.fn(),
+        flagManager: vi.fn(), sameAsManual: vi.fn(),
       },
     },
   };
@@ -27,7 +27,7 @@ vi.mock('../../utils/download.js', () => ({ downloadBlob: vi.fn() }));
 
 const summary = {
   importId: 4, fileName: 'RE-พ.ย.-สัปดาห์2.xlsx', uploadedAt: '2026-11-13T02:12:00Z', uploadedByName: 'คุณบุษบา',
-  totalRows: 46, matched: 37, matchedAmount: 2841500, matchedManual: 1, duplicates: 3, duplicateAmount: 212400,
+  totalRows: 46, matched: 37, matchedAmount: 2841500, possibleManualDuplicates: 1, duplicates: 3, duplicateAmount: 212400,
   unmatched: 2, unmatchedAmount: 418000, nonCash: 1, invalid: 1, failed: 1,
   errors: [{ line: 9, message: 'วันที่ไม่ถูกต้อง (RE-6911-0009)' }],
 };
@@ -75,7 +75,7 @@ describe('ReceiptsImportPage — อัปโหลดไฟล์รับเ�
     const table = await screen.findByRole('table', { name: 'ผลการอัปโหลด' });
     const rows = within(table).getAllByRole('row').slice(1);
     expect(rows.map((r) => within(r).getAllByRole('cell')[0].textContent)).toEqual([
-      'จับคู่แล้ว', 'ตรงกับรายการที่บันทึกเอง', 'ซ้ำ (เคยนำเข้าแล้ว)', 'ยังจับคู่ไม่ได้', 'ไม่ใช่ใบเสร็จรับเงิน',
+      'จับคู่แล้ว', 'อาจซ้ำกับรายการที่บันทึกเอง', 'ซ้ำ (เคยนำเข้าแล้ว)', 'ยังจับคู่ไม่ได้', 'ไม่ใช่ใบเสร็จรับเงิน',
       'อ่านไม่ได้', 'บันทึกไม่สำเร็จ',
     ]);
     expect(within(rows[0]).getByText('2,841,500.00')).toBeTruthy();
@@ -161,6 +161,22 @@ describe('UnmatchedReceipts — account works the queue', () => {
     await waitFor(() => expect(api.receiptImports.flagManager).toHaveBeenCalledWith(11));
     fireEvent.click(within(row).getByRole('button', { name: /^ข้าม/ }));
     await waitFor(() => expect(api.receiptImports.ignore).toHaveBeenCalledWith(11));
+  });
+
+  it('a possible duplicate of a hand-typed receipt: account says it is the same one, or a different payment', async () => {
+    const possible = queued({
+      reason: 'POSSIBLE_MANUAL_DUPLICATE', candidates: [], possibleManualReceiptId: 77,
+      possibleManual: { receiptId: 77, ticketId: 31, kind: 'DEPOSIT', amount: 372000, receivedAt: '2026-11-10T03:00:00Z', recordedByName: 'คุณบุษบา' },
+    });
+    api.receiptImports.unmatched.mockResolvedValue([possible]);
+    api.receiptImports.sameAsManual.mockResolvedValue({ ...possible, status: 'RESOLVED' });
+    wrap(<UnmatchedReceipts showToast={vi.fn()} />);
+    const row = await screen.findByTestId('unmatched-11');
+    expect(within(row).getByText(/อาจเป็นรายการเดียวกับที่บันทึกเอง/)).toBeTruthy();
+    fireEvent.click(within(row).getByRole('button', { name: 'รายการเดียวกับที่บันทึกเอง' }));
+    await waitFor(() => expect(api.receiptImports.sameAsManual).toHaveBeenCalledWith(11));
+    fireEvent.click(within(row).getByRole('button', { name: 'คนละรายการ' }));
+    await waitFor(() => expect(api.receiptImports.resolve).toHaveBeenCalledWith(11, { ticketId: 31 }));
   });
 
   it('a set-aside row can be brought back', async () => {

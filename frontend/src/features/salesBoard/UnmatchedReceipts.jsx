@@ -132,9 +132,10 @@ export function UnmatchedReceipts({ showToast = () => {} }) {
   const ignore = useMutation({ mutationFn: (row) => api.receiptImports.ignore(row.rowId), onSuccess: refresh });
   const unignore = useMutation({ mutationFn: (row) => api.receiptImports.unignore(row.rowId), onSuccess: refresh });
   const flag = useMutation({ mutationFn: (row) => api.receiptImports.flagManager(row.rowId), onSuccess: refresh });
+  const sameAsManual = useMutation({ mutationFn: (row) => api.receiptImports.sameAsManual(row.rowId), onSuccess: refresh });
   const rows = query.data ?? [];
   const ignored = ignoredQuery.data ?? [];
-  const busy = resolve.isPending || ignore.isPending || unignore.isPending || flag.isPending;
+  const busy = resolve.isPending || ignore.isPending || unignore.isPending || flag.isPending || sameAsManual.isPending;
 
   async function run(mutation, variables, success) {
     setFailure(null);
@@ -181,6 +182,26 @@ export function UnmatchedReceipts({ showToast = () => {} }) {
                 </span>
                 <b className="tabular-nums text-text">{baht(row.amount)}</b>
               </div>
+              {row.reason === 'POSSIBLE_MANUAL_DUPLICATE' && row.possibleManual ? (
+                // Review N1: never linked silently — account says which it is.
+                <div className="grid gap-2 rounded-md border border-warning bg-warning-bg px-3 py-2">
+                  <p className="m-0 text-sm text-text">
+                    {'อาจเป็นรายการเดียวกับที่บันทึกเอง: ' + (EXPECTED_KIND_LABEL[row.possibleManual.kind] ?? row.possibleManual.kind)
+                      + ' ' + baht(row.possibleManual.amount) + ' · ' + formatThaiDate(row.possibleManual.receivedAt)
+                      + (row.possibleManual.recordedByName ? ' · ' + row.possibleManual.recordedByName : '')}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Button type="button" size="sm" disabled={busy}
+                      onClick={() => run(sameAsManual, row, 'ผูกกับรายการที่บันทึกเองแล้ว ไม่บันทึกซ้ำ')}>
+                      รายการเดียวกับที่บันทึกเอง
+                    </Button>
+                    <Button type="button" size="sm" variant="secondary" disabled={busy}
+                      onClick={() => run(resolve, { row, body: { ticketId: row.possibleManual.ticketId } }, 'บันทึกเป็นอีกรายการแล้ว')}>
+                      คนละรายการ
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
               {row.candidates.length ? (
                 <ul className="m-0 grid list-none gap-2 p-0">
                   {row.candidates.map((c) => (
@@ -201,7 +222,7 @@ export function UnmatchedReceipts({ showToast = () => {} }) {
                     </li>
                   ))}
                 </ul>
-              ) : (
+              ) : row.reason === 'POSSIBLE_MANUAL_DUPLICATE' ? null : (
                 <p className="m-0 text-sm text-text-muted">ไม่พบดีลที่ตรง — เลือกดีลเอง ส่งให้ผู้จัดการขายดู หรือข้ามไป</p>
               )}
               {picking === row.rowId ? (

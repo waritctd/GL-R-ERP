@@ -64,6 +64,7 @@ public final class ReceiptFileParser {
     static final int MAX_TEXT = 300;
     static final BigDecimal MAX_AMOUNT = new BigDecimal("999999999999.99");
     private static final Pattern DOC_TYPE_PREFIX = Pattern.compile("^([A-Za-z]+)");
+    private static final String THAI_RECEIPT = "ใบเสร็จรับเงิน";
 
     /** The template's own header first (also the Thai label used in messages), then accepted aliases. */
     static final Map<Column, List<String>> ALIASES = new EnumMap<>(Map.of(
@@ -170,7 +171,10 @@ public final class ReceiptFileParser {
     /** The column's value when filled, else the document number's leading letters; upper-cased; null when neither. */
     static String docType(String column, String docNo) {
         if (column != null) {
-            return column.trim().toUpperCase(Locale.ROOT);
+            String t = column.trim();
+            // Review N4: Express may print the Thai name. Only ใบเสร็จรับเงิน means RE; any other text stays itself
+            // (and so non-cash unless configured).
+            return THAI_RECEIPT.equals(t) ? "RE" : t.toUpperCase(Locale.ROOT);
         }
         Matcher m = DOC_TYPE_PREFIX.matcher(docNo.trim());
         return m.find() ? m.group(1).toUpperCase(Locale.ROOT) : null;

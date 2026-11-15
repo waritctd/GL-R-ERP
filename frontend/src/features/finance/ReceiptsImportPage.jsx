@@ -74,7 +74,7 @@ export function ExpressUploadCard() {
 function OutcomeTable({ result }) {
   const rows = [
     { label: 'จับคู่แล้ว', tone: 'text-success', count: result.matched, sum: result.matchedAmount, next: 'บันทึกเป็นรับเงินของดีลแล้ว' },
-    { label: 'ตรงกับรายการที่บันทึกเอง', tone: 'text-success', count: result.matchedManual ?? 0, sum: null, next: 'ผูกกับรายการที่บันทึกเองแล้ว ไม่นับซ้ำ' },
+    { label: 'อาจซ้ำกับรายการที่บันทึกเอง', tone: 'text-warning-dark', count: result.possibleManualDuplicates ?? 0, sum: null, next: 'ยังไม่บันทึก — เลือกด้านล่างว่าเป็นรายการเดียวกันหรือคนละรายการ' },
     { label: 'ซ้ำ (เคยนำเข้าแล้ว)', tone: 'text-text', count: result.duplicates, sum: result.duplicateAmount, next: 'ไม่นับซ้ำ' },
     { label: 'ยังจับคู่ไม่ได้', tone: 'text-warning-dark', count: result.unmatched, sum: result.unmatchedAmount, next: 'จับคู่เองด้านล่าง' },
     { label: 'ไม่ใช่ใบเสร็จรับเงิน', tone: 'text-text-muted', count: result.nonCash ?? 0, sum: null, next: 'เช่น ใบแจ้งหนี้ (IV) ไม่นับเป็นเงินเข้า' },

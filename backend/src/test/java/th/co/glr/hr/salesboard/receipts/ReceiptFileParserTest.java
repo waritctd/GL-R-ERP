@@ -119,9 +119,13 @@ class ReceiptFileParserTest {
             + "RE-6911-1,,2026-11-12,10\n"
             + "IV6911-2,,2026-11-12,10\n"
             + "X-3,re,2026-11-12,10\n"
-            + "4455,,2026-11-12,10\n").getBytes(StandardCharsets.UTF_8);
+            + "4455,,2026-11-12,10\n"
+            + "X-5, ใบเสร็จรับเงิน ,2026-11-12,10\n"
+            + "X-6,ใบกำกับภาษี,2026-11-12,10\n").getBytes(StandardCharsets.UTF_8);
         ParseResult result = ReceiptFileParser.parse("a.csv", csv);
-        assertThat(result.rows()).extracting(ParsedReceipt::docType).containsExactly("RE", "IV", "RE", null);
+        // Review N4: the Thai name of a receipt reads as RE; any other text stays non-cash.
+        assertThat(result.rows()).extracting(ParsedReceipt::docType)
+            .containsExactly("RE", "IV", "RE", null, "RE", "ใบกำกับภาษี");
     }
 
     /** Review M2 / M3: column limits are checked here, so an over-long row is invalid with its reason, not a crash. */

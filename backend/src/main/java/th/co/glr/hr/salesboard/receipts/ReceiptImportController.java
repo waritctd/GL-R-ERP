@@ -91,6 +91,11 @@ public class ReceiptImportController {
         return service.unignore(rowId, sessions.requireUser(session));
     }
 
+    @PostMapping("/unmatched/{rowId}/same-as-manual")
+    UnmatchedRowDto sameAsManual(@PathVariable long rowId, HttpSession session) {
+        return service.sameAsManual(rowId, sessions.requireUser(session));
+    }
+
     @PostMapping("/unmatched/{rowId}/flag-manager")
     UnmatchedRowDto flagManager(@PathVariable long rowId, HttpSession session) {
         return service.flagForManager(rowId, sessions.requireUser(session));

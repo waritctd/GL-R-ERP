@@ -16,8 +16,9 @@ public final class ReceiptImportDtos {
     /**
      * One upload's outcome; matched + matchedManual + duplicates + unmatched + nonCash + invalid + failed = totalRows.
      * <ul>
-     *   <li>{@code matchedManual} — the row IS a receipt account had already typed by hand (same deal, amount, ±7
-     *       days): linked to it, nothing written ("ตรงกับรายการที่บันทึกเอง", review H1);</li>
+     *   <li>{@code possibleManualDuplicates} — the row MAY be a receipt account already typed by hand (same deal,
+     *       same amount, ±7 days, not yet linked): queued as POSSIBLE_MANUAL_DUPLICATE with nothing written, for account
+     *       to decide (review N1 — it is never linked silently);</li>
      *   <li>{@code duplicates} — its document number is already a receipt (any source), a linked manual receipt, or
      *       queued — or repeats earlier in the same file; nothing written;</li>
      *   <li>{@code nonCash} — not a cash document type (an IV / AI …), "ไม่ใช่ใบเสร็จรับเงิน", nothing written (H4);</li>
@@ -26,7 +27,7 @@ public final class ReceiptImportDtos {
      * </ul>
      */
     public record ImportSummary(long importId, String fileName, Instant uploadedAt, String uploadedByName,
-                                int totalRows, int matched, BigDecimal matchedAmount, int matchedManual,
+                                int totalRows, int matched, BigDecimal matchedAmount, int possibleManualDuplicates,
                                 int duplicates, BigDecimal duplicateAmount, int unmatched, BigDecimal unmatchedAmount,
                                 int nonCash, int invalid, int failed, List<ReceiptFileParser.RowError> errors) {}
 
@@ -41,10 +42,18 @@ public final class ReceiptImportDtos {
     public record CandidateDto(long ticketId, String title, String customerName, long ownerId, String ownerName,
                                String hint, BigDecimal expectedAmount, LocalDate expectedWeek, String expectedKind) {}
 
-    /** One row of account's queue. {@code reason} is ReceiptMatcher.Reason; {@code candidates} the deals worth offering. */
+    /**
+     * One row of account's queue. {@code reason} is ReceiptMatcher.Reason or POSSIBLE_MANUAL_DUPLICATE; for the latter
+     * {@code possibleManual} is the hand-typed receipt it may be (review N1). {@code candidates}: deals worth offering.
+     */
     public record UnmatchedRowDto(long rowId, long importId, String docNo, LocalDate docDate, String customerName,
                                   BigDecimal amount, String reference, String reason, String status,
-                                  Long resolvedTicketId, Instant managerFlaggedAt, List<CandidateDto> candidates) {}
+                                  Long resolvedTicketId, Instant managerFlaggedAt, Long possibleManualReceiptId,
+                                  PossibleManual possibleManual, List<CandidateDto> candidates) {}
+
+    /** The MANUAL receipt an Express row may duplicate: on which deal, what kind, how much, when, typed by whom. */
+    public record PossibleManual(long receiptId, long ticketId, String kind, BigDecimal amount, Instant receivedAt,
+                                 String recordedByName) {}
 
     /** A row account sent to the sales manager to look at (read-only: no deals to pick, no actions). */
     public record FlaggedRowDto(long rowId, String docNo, LocalDate docDate, String customerName, BigDecimal amount,

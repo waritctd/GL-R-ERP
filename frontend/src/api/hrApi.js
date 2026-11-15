@@ -676,6 +676,8 @@ export const api = {
     ignore: (rowId) => apiRequest(API_ROUTES.receiptImports.ignore(rowId), { method: 'POST' }),
     unignore: (rowId) => apiRequest(API_ROUTES.receiptImports.unignore(rowId), { method: 'POST' }),
     flagManager: (rowId) => apiRequest(API_ROUTES.receiptImports.flagManager(rowId), { method: 'POST' }),
+    // A POSSIBLE_MANUAL_DUPLICATE row IS the hand-typed receipt: link it, write nothing (review N1). "คนละรายการ" is resolve.
+    sameAsManual: (rowId) => apiRequest(API_ROUTES.receiptImports.sameAsManual(rowId), { method: 'POST' }),
   },
   // Mirrors VisitController (salesboard/). list: the caller's own visits planned in [from, to] (ISO dates, at most
   // 31 days inclusive); team: every rep's, sales_manager / ceo only. create `{ ticketId?, contactName, plannedDate,

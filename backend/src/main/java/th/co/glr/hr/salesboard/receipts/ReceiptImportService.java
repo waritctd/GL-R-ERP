@@ -76,7 +76,7 @@ public class ReceiptImportService {
     /** Running tallies of one upload. */
     static final class Counts {
         final Tally matched = new Tally();
-        final Tally matchedManual = new Tally();
+        final Tally possibleManual = new Tally();
         final Tally duplicates = new Tally();
         final Tally unmatched = new Tally();
         final Tally nonCash = new Tally();
@@ -84,7 +84,7 @@ public class ReceiptImportService {
         int failed;
 
         int total() {
-            return matched.count + matchedManual.count + duplicates.count + unmatched.count + nonCash.count
+            return matched.count + possibleManual.count + duplicates.count + unmatched.count + nonCash.count
                 + invalid + failed;
         }
     }
@@ -129,7 +129,8 @@ public class ReceiptImportService {
         errors.sort(Comparator.comparingInt(RowError::line));
         ImportSummary s = imports.findImport(importId).orElseThrow();
         return new ImportSummary(s.importId(), s.fileName(), s.uploadedAt(), s.uploadedByName(), s.totalRows(),
-            s.matched(), s.matchedAmount(), s.matchedManual(), s.duplicates(), s.duplicateAmount(), s.unmatched(),
+            s.matched(), s.matchedAmount(), s.possibleManualDuplicates(), s.duplicates(), s.duplicateAmount(),
+            s.unmatched(),
             s.unmatchedAmount(), s.nonCash(), s.invalid(), s.failed(), errors);
     }
 
@@ -146,13 +147,14 @@ public class ReceiptImportService {
         // Reloaded per row: what the rows above placed (a RECEIVED expected payment, a settled deposit) must count.
         Match match = ReceiptMatcher.match(row, candidatesOnly(imports.activeCandidates()));
         if (!match.matched()) {
-            imports.insertUnmatched(importId, row, match.reason().name());
-            counts.unmatched.add(row);
+            queue(importId, row, match.reason().name(), null, counts, counts.unmatched);
             return;
         }
+        // Review N1: a hand-typed receipt that fits is only a POSSIBILITY — the same amount within a week can be a
+        // different payment (probe Q3). Never linked here: queued for account to decide, nothing written.
         Optional<Long> twin = imports.findManualTwin(match.ticketId(), row.amount(), row.docDate());
-        if (twin.isPresent() && imports.linkManualReceipt(twin.get(), row.docNo()) == 1) {
-            counts.matchedManual.add(row);
+        if (twin.isPresent()) {
+            queue(importId, row, POSSIBLE_MANUAL_DUPLICATE, twin.get(), counts, counts.possibleManual);
             return;
         }
         try {
@@ -161,11 +163,25 @@ public class ReceiptImportService {
         } catch (ExpressReceiptRefusal refusal) {
             switch (refusal.reason()) {
                 case DUPLICATE -> counts.duplicates.add(row);
-                case OVERPAYMENT, DEAL_NOT_ACTIVE -> {
-                    imports.insertUnmatched(importId, row, refusal.reason().name());
-                    counts.unmatched.add(row);
-                }
+                case OVERPAYMENT, DEAL_NOT_ACTIVE ->
+                    queue(importId, row, refusal.reason().name(), null, counts, counts.unmatched);
             }
+        }
+    }
+
+    public static final String POSSIBLE_MANUAL_DUPLICATE = "POSSIBLE_MANUAL_DUPLICATE";
+
+    /**
+     * Queues a row. If another upload queued the same number between this upload's check and its insert, the unique
+     * doc-no index refuses it — that is a duplicate, not a failure (review N4).
+     */
+    private void queue(long importId, ParsedReceipt row, String reason, Long suggestedReceiptId, Counts counts,
+                       Tally into) {
+        try {
+            imports.insertUnmatched(importId, row, reason, suggestedReceiptId);
+            into.add(row);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            counts.duplicates.add(row);
         }
     }
 
@@ -185,6 +201,15 @@ public class ReceiptImportService {
         List<CandidateDeal> deals = imports.activeCandidates();
         return imports.findByStatus(ReceiptImportDtos.UNMATCHED).stream()
             .map(row -> toDto(row, offered(row, deals))).toList();
+    }
+
+    private UnmatchedRowDto toDto(QueuedRow row, List<CandidateDto> candidates) {
+        ReceiptImportDtos.PossibleManual manual = row.suggestedReceiptId() == null ? null
+            : imports.manualReceipt(row.suggestedReceiptId()).orElse(null);
+        ParsedReceipt r = row.receipt();
+        return new UnmatchedRowDto(row.rowId(), row.importId(), r.docNo(), r.docDate(), r.customerName(), r.amount(),
+            r.reference(), row.reason(), row.status(), row.resolvedTicketId(), row.managerFlaggedAt(),
+            row.suggestedReceiptId(), manual, candidates);
     }
 
     public List<UnmatchedRowDto> ignored(UserPrincipal actor) {
@@ -266,6 +291,17 @@ public class ReceiptImportService {
         return toDto(requireRow(rowId), List.of());
     }
 
+    /**
+     * "รายการเดียวกับที่บันทึกเอง" (review N1): account confirms a POSSIBLE_MANUAL_DUPLICATE row IS the hand-typed
+     * receipt — it is linked to the Express number and nothing is written. "คนละรายการ" is {@link #resolve}.
+     */
+    public UnmatchedRowDto sameAsManual(long rowId, UserPrincipal actor) {
+        requireRole(actor, ACCOUNT_ROLES);
+        requireRow(rowId);
+        placement.sameAsManual(rowId, actor);
+        return toDto(requireRow(rowId), List.of());
+    }
+
     /** "ส่งให้ผู้จัดการขายดู" (review M5): shows the row in the manager's read-only view; account still resolves it. */
     public UnmatchedRowDto flagForManager(long rowId, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
@@ -314,11 +350,6 @@ public class ReceiptImportService {
             nearest == null ? null : nearest.kind());
     }
 
-    private static UnmatchedRowDto toDto(QueuedRow row, List<CandidateDto> candidates) {
-        ParsedReceipt r = row.receipt();
-        return new UnmatchedRowDto(row.rowId(), row.importId(), r.docNo(), r.docDate(), r.customerName(), r.amount(),
-            r.reference(), row.reason(), row.status(), row.resolvedTicketId(), row.managerFlaggedAt(), candidates);
-    }
 
     private static void requireRole(UserPrincipal actor, Set<String> allowed) {
         if (!allowed.contains(actor.role())) {

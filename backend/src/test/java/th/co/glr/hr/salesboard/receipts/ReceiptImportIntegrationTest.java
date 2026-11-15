@@ -219,9 +219,13 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
 
     // ── H1: the same payment typed by hand AND uploaded ─────────────────────
 
-    /** Probe P1, manual first: the Express row is the payment account already typed — link it, write nothing. */
+    /**
+     * Probe P1, manual first (review N1): the Express row MAY be the payment account already typed. It is queued
+     * POSSIBLE_MANUAL_DUPLICATE with nothing written and nothing linked; account's "รายการเดียวกับที่บันทึกเอง" then
+     * links it, still writing nothing.
+     */
     @Test
-    void probeP1_manualFirst_theExpressRowLinksToTheManualReceipt_andNothingIsWritten() throws Exception {
+    void probeP1_manualFirst_theRowIsQueuedForAccount_andTheSameAsManualChoiceLinksIt() throws Exception {
         long d = awaitingDeposit(salesActor, "32100.00", "DN6900050");
         // Account confirms the deposit by hand first — the real flow: the deal moves to DEPOSIT_PAID, so an Express row
         // placed now would be a BALANCE. It is still the same payment.
@@ -233,8 +237,17 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         JsonNode summary = upload(account, csv(row("RE-H1-1", today, "", "32100", "DN6900050")));
 
         assertThat(summary.get("matched").asInt()).isZero();
-        assertThat(summary.get("matchedManual").asInt()).isEqualTo(1);
+        assertThat(summary.get("possibleManualDuplicates").asInt()).isEqualTo(1);
+        assertThat(queueReason("RE-H1-1")).isEqualTo("POSSIBLE_MANUAL_DUPLICATE");
         assertThat(receiptCount("RE-H1-1")).isZero();
+        assertThat(paidOn(d)).isEqualByComparingTo("32100");
+        assertThat(jdbc.queryForObject("SELECT express_doc_no FROM sales.payment_receipt WHERE receipt_id = :id",
+            Map.of("id", manual), String.class)).as("nothing is linked silently").isNull();
+        JsonNode queued = ok(get("/api/sales/receipt-imports/unmatched"), account).get(0);
+        assertThat(queued.get("possibleManualReceiptId").asLong()).isEqualTo(manual);
+
+        assertThat(ok(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-H1-1") + "/same-as-manual"), account)
+            .get("status").asText()).isEqualTo("RESOLVED");
         assertThat(paidOn(d)).isEqualByComparingTo("32100");
         Map<String, Object> m = jdbc.queryForMap("SELECT * FROM sales.payment_receipt WHERE receipt_id = :id",
             Map.of("id", manual));
@@ -256,8 +269,92 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         JsonNode summary = upload(account, csv(row("RE-H1-2", "2026-11-12", "", "5000", number)));
 
         assertThat(summary.get("matched").asInt()).isEqualTo(1);
-        assertThat(summary.get("matchedManual").asInt()).isZero();
+        assertThat(summary.get("possibleManualDuplicates").asInt()).isZero();
         assertThat(paidOn(d)).isEqualByComparingTo("10000");
+    }
+
+    /**
+     * Probe Q3 (review N1): a manual cash DEPOSIT of ฿10,000 and then an Express BALANCE of ฿10,000 — a different
+     * payment. It used to be swallowed by the auto-link (paid stuck at ฿10,000). Now it is queued, nothing written,
+     * and account's "คนละรายการ" records it: paid ฿20,000.
+     */
+    @Test
+    void probeQ3_aDifferentExpressPaymentOfTheSameAmountIsQueued_andCountsOnceAccountSaysItIsDifferent()
+        throws Exception {
+        long d = payableDeal(salesActor, "100000.00");
+        ticketService.recordPayment(d, new RecordPaymentRequest("DEPOSIT", new BigDecimal("10000"), null, "เงินสด",
+            null, null, false), account);
+        String number = jdbc.queryForObject("SELECT number FROM sales.quotation WHERE ticket_id = :t LIMIT 1",
+            Map.of("t", d), String.class);
+        String today = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).toString();
+
+        JsonNode summary = upload(account, csv(row("RE-Q3-1", today, "", "10000", number)));
+
+        assertThat(summary.get("matched").asInt()).isZero();
+        assertThat(queueReason("RE-Q3-1")).isEqualTo("POSSIBLE_MANUAL_DUPLICATE");
+        assertThat(receiptCount("RE-Q3-1")).isZero();
+        assertThat(paidOn(d)).isEqualByComparingTo("10000");
+        long rowId = rowId("RE-Q3-1");
+        for (UserPrincipal refused : List.of(salesActor, salesManagerActor, ceo)) {
+            assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId + "/same-as-manual"), refused))
+                .as(refused.role()).isEqualTo(403);
+        }
+
+        assertThat(ok(resolve(rowId, d), account).get("status").asText()).isEqualTo("RESOLVED");
+        assertThat(paidOn(d)).isEqualByComparingTo("20000");
+        assertThat(receipt("RE-Q3-1").get("source")).isEqualTo("EXPRESS");
+        assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId + "/same-as-manual"), account))
+            .as("already handled").isEqualTo(409);
+    }
+
+    @Test
+    void sameAsManualIsOnlyForAPossibleManualDuplicateRow() throws Exception {
+        upload(account, csv(row("RE-SM-1", "2026-11-12", "ไม่มีใคร", "10", "")));
+        assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-SM-1") + "/same-as-manual"), account))
+            .isEqualTo(409);
+    }
+
+    /** Review N4: a RELEASED billing-note line is not the deal's document any more. */
+    @Test
+    void aReleasedBillingNoteLineIsNotACandidate() throws Exception {
+        long d = payableDeal(salesActor, "50000.00");
+        long noteId = jdbc.queryForObject("""
+            INSERT INTO sales.billing_note (customer_id, type, base_number, version, doc_number, status, bill_date,
+                   total_amount, created_by_id, created_by_name, issued_by_id, issued_by_name, issued_at)
+            VALUES (:c, 'GOODS', 'BN-REL-1', 1, 'BN-REL-1', 'ISSUED', CURRENT_DATE, 1000, :by, 'x', :by, 'x', now())
+            RETURNING id""", Map.of("c", customer.id(), "by", salesActor.id()), Long.class);
+        jdbc.update("""
+            INSERT INTO sales.billing_note_line (billing_note_id, seq, source_type, ticket_id, doc_number, doc_date,
+                   amount, note_status)
+            VALUES (:n, 1, 'MANUAL', :t, 'X-1', CURRENT_DATE, 1000, 'RELEASED')""", Map.of("n", noteId, "t", d));
+
+        JsonNode summary = upload(account, csv(row("RE-BN-1", "2026-11-12", "", "1000", "BN-REL-1")));
+
+        assertThat(summary.get("matched").asInt()).isZero();
+        assertThat(queueReason("RE-BN-1")).isEqualTo("NO_CANDIDATE");
+    }
+
+    /** Review N4: a concurrent upload queueing the same number between the check and the insert is a duplicate. */
+    @Test
+    void aConcurrentlyQueuedRowIsADuplicate_notAFailure() throws Exception {
+        ReceiptImportRepository racing = new ReceiptImportRepository(jdbc) {
+            @Override
+            public long insertUnmatched(long importId, ParsedReceipt r, String reason, Long suggestedReceiptId) {
+                super.insertUnmatched(importId, r, reason, suggestedReceiptId); // the other upload got there first
+                return super.insertUnmatched(importId, r, reason, suggestedReceiptId);
+            }
+        };
+        ReceiptImportService service = new ReceiptImportService(racing, new ReceiptPlacement(ticketService, racing),
+            tickets, new ReceiptImportSettings(true, Set.of("RE")));
+        MockMvc mvc2 = MockMvcBuilders.standaloneSetup(new ReceiptImportController(service, new SessionContext()))
+            .setMessageConverters(new JacksonJsonHttpMessageConverter(JsonMapper.builder().build()))
+            .setControllerAdvice(new ApiExceptionHandler()).build();
+
+        JsonNode summary = json.readTree(performOn(mvc2, uploadRequest(csv(row("RE-RC-1", "2026-11-12", "ไม่มีใคร",
+            "10", ""))), account).getResponse().getContentAsString(StandardCharsets.UTF_8));
+
+        assertThat(summary.get("duplicates").asInt()).isEqualTo(1);
+        assertThat(summary.get("failed").asInt()).isZero();
     }
 
     /** Probe P1, Express first: typing the same payment by hand is refused (409) unless account confirms it. */

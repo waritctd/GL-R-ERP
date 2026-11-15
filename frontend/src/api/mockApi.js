@@ -8714,7 +8714,14 @@ function mockRequireQueued(rowId, status) {
 const mockQueuedDto = (r, candidates = []) => ({
   rowId: r.rowId, importId: r.importId, docNo: r.docNo, docDate: r.docDate, customerName: r.customerName,
   amount: r.amount, reference: r.reference, reason: r.reason, status: r.status,
-  resolvedTicketId: r.resolvedTicketId ?? null, managerFlaggedAt: r.managerFlaggedAt ?? null, candidates,
+  resolvedTicketId: r.resolvedTicketId ?? null, managerFlaggedAt: r.managerFlaggedAt ?? null,
+  possibleManualReceiptId: r.suggestedReceiptId ?? null,
+  possibleManual: (() => {
+    const m = r.suggestedReceiptId == null ? null : (db.paymentReceipts ?? []).find((x) => x.receiptId === r.suggestedReceiptId);
+    return m ? { receiptId: m.receiptId, ticketId: m.ticketId, kind: m.kind, amount: m.amount, receivedAt: m.receivedAt,
+      recordedByName: m.recordedByName ?? null } : null;
+  })(),
+  candidates,
 });
 
 /** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
@@ -13581,11 +13588,12 @@ export const api = {
       const { rows, errors } = mockParseReceipts(await file.text());
       const importId = mockReceiptImportSeq++;
       const tally = () => ({ count: 0, amount: 0 });
-      const t = { matched: tally(), matchedManual: tally(), duplicates: tally(), unmatched: tally(), nonCash: tally() };
+      const t = { matched: tally(), possibleManual: tally(), duplicates: tally(), unmatched: tally(), nonCash: tally() };
       const add = (k, row) => { t[k].count += 1; t[k].amount = round2(t[k].amount + row.amount); };
-      const queue = (row, reason) => {
-        mockReceiptImportRows.push({ rowId: mockReceiptRowSeq++, importId, ...row, reason, status: 'UNMATCHED', resolvedTicketId: null, managerFlaggedAt: null });
-        add('unmatched', row);
+      const queue = (row, reason, suggestedReceiptId = null, into = 'unmatched') => {
+        mockReceiptImportRows.push({ rowId: mockReceiptRowSeq++, importId, ...row, reason, status: 'UNMATCHED',
+          resolvedTicketId: null, managerFlaggedAt: null, suggestedReceiptId });
+        add(into, row);
       };
       const seen = new Set();
       let failed = 0;
@@ -13597,8 +13605,9 @@ export const api = {
           seen.add(key);
           const match = mockMatchReceipt(row, mockReceiptCandidates()); // reloaded per row (M1)
           if (match.ticketId == null) { queue(row, match.reason); continue; }
+          // Review N1: never linked silently — queued for account to decide.
           const twin = mockManualTwin(match.ticketId, row);
-          if (twin) { twin.expressDocNo = row.docNo.trim(); add('matchedManual', row); continue; }
+          if (twin) { queue(row, 'POSSIBLE_MANUAL_DUPLICATE', twin.receiptId, 'possibleManual'); continue; }
           try { mockPlaceExpressReceipt(match.ticketId, row, user); add('matched', row); } catch (error) {
             if (error.status !== 409) throw error;
             if (error.details?.code === 'DUPLICATE') add('duplicates', row); else queue(row, error.details?.code ?? 'DEAL_NOT_ACTIVE');
@@ -13611,7 +13620,7 @@ export const api = {
       const summary = {
         importId, fileName: name, uploadedAt: new Date().toISOString(), uploadedByName: user.name,
         totalRows: rows.length + errors.length - failed, matched: t.matched.count, matchedAmount: t.matched.amount,
-        matchedManual: t.matchedManual.count, duplicates: t.duplicates.count, duplicateAmount: t.duplicates.amount,
+        possibleManualDuplicates: t.possibleManual.count, duplicates: t.duplicates.count, duplicateAmount: t.duplicates.amount,
         unmatched: t.unmatched.count, unmatchedAmount: t.unmatched.amount, nonCash: t.nonCash.count,
         invalid: errors.length - failed, failed,
       };
@@ -13703,6 +13712,16 @@ export const api = {
       mockRequireAccount();
       const row = mockRequireQueued(rowId, 'IGNORED');
       row.status = 'UNMATCHED';
+      return delay(mockQueuedDto(row));
+    },
+    async sameAsManual(rowId) {
+      const user = mockRequireAccount();
+      const row = mockRequireQueued(rowId, 'UNMATCHED');
+      const manual = (db.paymentReceipts ?? []).find((r) => r.receiptId === row.suggestedReceiptId && (r.source ?? 'MANUAL') === 'MANUAL');
+      if (row.reason !== 'POSSIBLE_MANUAL_DUPLICATE' || !manual) fail('รายการนี้ไม่ได้รอเลือกว่าเป็นรายการเดียวกับที่บันทึกเอง', 409);
+      if (manual.expressDocNo) fail('รายการที่บันทึกเองนี้ผูกกับเลขที่ Express อื่นแล้ว', 409);
+      manual.expressDocNo = row.docNo.trim();
+      Object.assign(row, { status: 'RESOLVED', resolvedTicketId: manual.ticketId, resolvedBy: user.id });
       return delay(mockQueuedDto(row));
     },
     async flagManager(rowId) {
