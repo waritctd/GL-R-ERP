@@ -1,4 +1,4 @@
-package th.co.glr.hr.salesboard;
+package th.co.glr.hr.ticket;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -13,11 +13,6 @@ import th.co.glr.hr.employee.EmployeeReferenceRepository;
 import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
-import th.co.glr.hr.ticket.CreateTicketRequest;
-import th.co.glr.hr.ticket.DealActivityKind;
-import th.co.glr.hr.ticket.DealLifecycle;
-import th.co.glr.hr.ticket.DealStage;
-import th.co.glr.hr.ticket.TicketRepository;
 
 /** The one "quiet" rule (spec 2026-11-15 §7.5) against real SQL: last touched = latest of created_at, any
  * deal_activity, and a STAGE_CHANGED / QUOTATION_ISSUED event; quiet = ACTIVE, not in deliver &amp; collect, and

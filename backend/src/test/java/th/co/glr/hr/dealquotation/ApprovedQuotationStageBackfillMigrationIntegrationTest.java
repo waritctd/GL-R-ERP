@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
+import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -237,6 +238,56 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
         assertThat(eventCount(ticket, "STAGE_CHANGED")).isEqualTo(1);
     }
 
+    // ── rollback ─────────────────────────────────────────────────────────────
+
+    /** The rollback in V210's header, run for real: deals and events return to the pre-backfill state, except the
+     * designer_name fills (not reversible). A deal that moved on again since stays where it is; an event the backfill
+     * did not write is never deleted. The SQL is read from the migration file between its markers, so the header and
+     * this test cannot drift. stage_updated_at is restored from the event INTO the old stage, which is later in real
+     * time than the (backdated) approval — a restore keyed on created_at ordering would miss it. */
+    @Test
+    void rollbackSql_restoresDealsAndEvents_exceptDesignerNames() throws IOException {
+        jdbc.update("INSERT INTO sales.designer (code, name) VALUES ('ZT20', 'ดีไซน์ ย้อนกลับ')", Map.of());
+        long atLead = stuckDeal(EntryChannel.DESIGNER_LED);
+        jdbc.update("UPDATE sales.quotation SET unit_code = 'ZT20' WHERE ticket_id = :id", Map.of("id", atLead));
+        // A deal that never left its opening stage entered it at creation (no earlier event records anything else).
+        jdbc.update("UPDATE sales.ticket SET designer_name = NULL, stage_updated_at = created_at WHERE ticket_id = :id",
+            Map.of("id", atLead));
+        long atPresentation = stuckDeal(EntryChannel.DESIGNER_LED);
+        setStage(atPresentation, DealStage.PRESENTATION);
+        stageEvent(atPresentation, salesActor.name(), DealStage.LEAD_APPROACH, DealStage.PRESENTATION, null);
+        jdbc.update("""
+            UPDATE sales.ticket SET stage_updated_at = (SELECT created_at FROM sales.ticket_event
+                                                         WHERE ticket_id = :id AND kind = 'STAGE_CHANGED')
+             WHERE ticket_id = :id
+            """, Map.of("id", atPresentation));
+        long untouched = stuckDeal(EntryChannel.DESIGNER_LED);
+        setStage(untouched, DealStage.NEGOTIATION);
+        stageEvent(untouched, salesActor.name(), DealStage.QUOTE_BUYER, DealStage.NEGOTIATION, null);
+        long movedOn = stuckDeal(EntryChannel.DESIGNER_LED);
+        List<Long> tickets = List.of(atLead, atPresentation, untouched, movedOn);
+        Map<Long, Map<String, Object>> before = new java.util.LinkedHashMap<>();
+        tickets.forEach(t -> before.put(t, dealState(t)));
+
+        runMigration();
+        assertThat(summary(atLead).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+        assertThat(summary(atPresentation).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+        assertThat(dealState(atPresentation).get("stage_updated_at")).isNotEqualTo(before.get(atPresentation)
+            .get("stage_updated_at"));
+        setStage(movedOn, DealStage.NEGOTIATION);
+        runRollback();
+
+        for (long t : List.of(atLead, atPresentation, untouched)) {
+            assertThat(dealState(t)).as("deal " + t).isEqualTo(before.get(t));
+        }
+        assertThat(summary(movedOn).salesStage()).isEqualTo(DealStage.NEGOTIATION);
+        assertThat(eventCount(movedOn, "STAGE_CHANGED")).isZero();
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.ticket_event WHERE message = :m",
+            Map.of("m", NOTE), Integer.class)).isZero();
+        // Not reversible, and said so in the header: the directory name stays where the backfill put it.
+        assertThat(summary(atLead).designerName()).isEqualTo("ดีไซน์ ย้อนกลับ");
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     /** An ACTIVE deal at LEAD_APPROACH holding an APPROVED quotation recorded as UNSPECIFIED (the prod shape). */
@@ -291,6 +342,33 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
     private Timestamp createdAt(long ticket) {
         return jdbc.queryForObject("SELECT created_at FROM sales.ticket WHERE ticket_id = :id",
             Map.of("id", ticket), Timestamp.class);
+    }
+
+    /** sales_stage, stage_updated_at and the ordered event ids of one deal: everything the rollback must restore. */
+    private Map<String, Object> dealState(long ticket) {
+        Map<String, Object> state = new java.util.LinkedHashMap<>(jdbc.queryForMap(
+            "SELECT sales_stage, stage_updated_at FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticket)));
+        state.put("events", jdbc.queryForList(
+            "SELECT event_id FROM sales.ticket_event WHERE ticket_id = :id ORDER BY event_id",
+            Map.of("id", ticket), Long.class));
+        return state;
+    }
+
+    /** The two-statement rollback from the migration's header: the lines between its markers, comment prefix off. */
+    private void runRollback() throws IOException {
+        String sql;
+        try (InputStream in = getClass().getClassLoader().getResourceAsStream(MIGRATION)) {
+            assertThat(in).as(MIGRATION).isNotNull();
+            sql = new String(in.readAllBytes(), StandardCharsets.UTF_8);
+        }
+        int begin = sql.indexOf("-- ROLLBACK-BEGIN");
+        int end = sql.indexOf("-- ROLLBACK-END");
+        assertThat(begin).as("rollback begin marker").isNotNegative();
+        assertThat(end).as("rollback end marker").isGreaterThan(begin);
+        String rollback = sql.substring(begin, end).lines().skip(1)
+            .map(line -> line.replaceFirst("^--( |$)", "")).collect(java.util.stream.Collectors.joining("\n"));
+        assertThat(rollback).contains("UPDATE sales.ticket").contains("DELETE FROM sales.ticket_event");
+        jdbc.getJdbcTemplate().execute(rollback);
     }
 
     private void runMigration() throws IOException {

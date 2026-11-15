@@ -446,7 +446,7 @@ export function nextSalesAction(deal, pricingRequests = [], { reviseTarget = nul
   }
 
   // 7. Quiet under the 14-day QuietRule (no activity, stage change or quotation issue for app.sales.quiet-days
-  // days) — `deal.stale` is computed server-side (salesboard.QuietRule, mirrored by dealTrackingMeta.js's
+  // days) — `deal.stale` is computed server-side (th.co.glr.hr.ticket.QuietRule, mirrored by dealTrackingMeta.js's
   // computeStale) and included on every api.tickets.list() row, so it is reused here rather than recomputed.
   if (deal.stale) {
     return { key: SALES_ACTION.LOG_ACTIVITY, label: ACTION_LABEL[SALES_ACTION.LOG_ACTIVITY] };

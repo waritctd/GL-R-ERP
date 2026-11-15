@@ -1,4 +1,4 @@
-// The mock's copy of th.co.glr.hr.salesboard.QuietRule (spec 2026-11-15 §7.5). The real rule runs in SQL on the
+// The mock's copy of th.co.glr.hr.ticket.QuietRule (spec 2026-11-15 §7.5). The real rule runs in SQL on the
 // server and every screen reads its result (TicketSummaryDto.stale, BoardDeal.quiet); only mockApi computes it here.
 //
 // Last touched = the latest of the deal's createdAt, any deal activity's createdAt, and a STAGE_CHANGED /

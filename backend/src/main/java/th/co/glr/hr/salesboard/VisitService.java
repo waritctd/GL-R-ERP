@@ -1,5 +1,6 @@
 package th.co.glr.hr.salesboard;
 
+import th.co.glr.hr.ticket.QuietRule;
 import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
