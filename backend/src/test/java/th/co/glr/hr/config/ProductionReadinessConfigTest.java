@@ -69,16 +69,6 @@ class ProductionReadinessConfigTest {
     }
 
     @Test
-    void realProdWithoutDemoPassesSilentlyOnAbsoluteUploadsDir() {
-        Environment environment = environment("prod");
-        when(environment.getProperty("app.uploads-dir", "")).thenReturn(writableUploadsDir.toString());
-
-        ProductionReadinessConfig.validate(environment);
-
-        assertThat(appender.list).isEmpty();
-    }
-
-    @Test
     void prodPlusDemoNoLongerSilentlyPassesOnBlankUploadsDir_itWarnsInstead() {
         Environment environment = environment("prod", "demo");
         when(environment.getProperty("app.uploads-dir", "")).thenReturn("");

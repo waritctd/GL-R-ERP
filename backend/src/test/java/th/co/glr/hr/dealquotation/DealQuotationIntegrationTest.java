@@ -1978,7 +1978,8 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** Wrong-way-round twin of the rejection above: PLAIN and ADJUSTMENT rows are EXEMPT -- neither has a lead-time
      * concept at all (freight/consumables/a ส่วนลดพิเศษ line cannot "arrive"), so a document made of a TILE row
-     * (with a lead time) plus PLAIN/ADJUSTMENT rows with none still submits. */
+     * (with a lead time) plus PLAIN/ADJUSTMENT rows with none still submits. It also pins that submit's STORED-row
+     * tile completeness rule (รุ่น/สี/ผิว/ขนาด) is not applied to a PLAIN or ADJUSTMENT row. */
     @Test
     void submit_stillAcceptsPlainAndAdjustmentRowsWithNoLeadTime() {
         DealQuotationDto created = quotationService.create(ticketId,
@@ -4524,22 +4525,6 @@ class DealQuotationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ── submit / revision over the new row types ────────────────────────────────────────────
-
-    /** submit re-checks the STORED rows. Its tile completeness rule must NOT be applied to a PLAIN or ADJUSTMENT
-     * row — without the type switch, every document containing a freight line would be un-submittable because it
-     * has no รุ่น/สี/ผิว/ขนาด. */
-    @Test
-    void submit_acceptsADocumentContainingPlainAndAdjustmentRows() {
-        DealQuotationDto created = quotationService.create(ticketId,
-            upsertRequest(List.of(
-                sampleItem("100.00", 10),
-                plainItem("ค่าขนส่ง", "1", "JOB", "500.00"),
-                adjustmentPctItem("3", LocalDate.of(2026, 7, 31)))),
-            salesActor);
-
-        DealQuotationDto submitted = quotationService.submit(created.id(), salesActor);
-        assertThat(submitted.docStatus()).isEqualTo(QuotationStatus.PENDING_APPROVAL);
-    }
 
     /** A PLAIN row missing its description is still refused at submit — the type switch narrows the rule, it does
      * not remove it. Written by breaking the stored row directly, the way a legacy/pre-rule row would exist. */

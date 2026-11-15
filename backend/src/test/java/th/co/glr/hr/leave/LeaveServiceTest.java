@@ -1274,7 +1274,8 @@ class LeaveServiceTest {
 
     @Test
     void submitAllowsWhenMinimumServiceIsMet() {
-        // Same type, same request date -- but hired more than 12 months earlier.
+        // Same type, same request date -- but hired more than 12 months earlier. Also the once-per-employment
+        // happy path: no prior claim exists (hasOutstandingOrGrantedRequest = false), so ORDINATION submits.
         SubmitLeaveRequest request = new SubmitLeaveRequest(
             null, "ORDINATION", weekdayAfterNotice(), weekdayAfterNotice(), "Ordination ceremony");
         when(leaveRepository.employeeExists(10L)).thenReturn(true);
@@ -1653,30 +1654,6 @@ class LeaveServiceTest {
             eq(BigDecimal.ZERO), eq(request.startDate().getYear()),
             eq(LeaveStatus.AUTO_REJECTED), any(BigDecimal.class), any(BigDecimal.class),
             org.mockito.ArgumentMatchers.contains("เพียงครั้งเดียวตลอดระยะเวลาที่เป็นพนักงาน"), eq(null), eq(null), eq(null), eq(null), eq(null));
-    }
-
-    @Test
-    void submitAllowsAnOncePerEmploymentTypeWhenNoClaimExistsYet() {
-        SubmitLeaveRequest request = new SubmitLeaveRequest(
-            null, "ORDINATION", weekdayAfterNotice(), weekdayAfterNotice(), "Ordination ceremony");
-        when(leaveRepository.employeeExists(10L)).thenReturn(true);
-        when(leaveRepository.findLeaveType("ORDINATION")).thenReturn(Optional.of(ordinationType()));
-        when(leaveRepository.hasOutstandingOrGrantedRequest(10L, "ORDINATION")).thenReturn(false);
-        when(leaveRepository.findHireDate(10L)).thenReturn(Optional.of(LocalDate.parse("2020-01-01")));
-        when(leaveRepository.sumUsedDays(eq(10L), eq("ORDINATION"), eq(request.startDate().getYear()), any(Collection.class)))
-            .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.sumPaidDays(eq(10L), eq("ORDINATION"), eq(request.startDate().getYear()), any(Collection.class)))
-            .thenReturn(BigDecimal.ZERO);
-        when(leaveRepository.create(eq(10L), eq(10L), eq(request), any(BigDecimal.class), any(BigDecimal.class),
-            any(BigDecimal.class), eq(request.startDate().getYear()),
-            eq(LeaveStatus.SUBMITTED), any(BigDecimal.class), any(BigDecimal.class), eq(null), eq(null), eq(null), eq(null), eq(null), eq(null)))
-            .thenReturn(96L);
-        when(leaveRepository.findById(96L)).thenReturn(Optional.of(
-            requestDto(96L, 10L, "SUBMITTED", request.startDate(), request.endDate(), "1.00", "0.00")));
-
-        LeaveRequestDto result = leaveService.submit(request, user("employee", 10L));
-
-        assertThat(result.status()).isEqualTo("SUBMITTED");
     }
 
     @Test
