@@ -1377,8 +1377,7 @@ public class DealQuotationService {
         // Spec 2026-11-15 §7.2: the approved document fills its deal — stage onto the recipient's (forward-only) and
         // the addressee into the blank designer/owner/buyer name. Same transaction. Null only in hand-wired tests.
         if (ticketService != null) {
-            ticketService.applyApprovedQuotation(approved.ticketId(), approved.recipientType(),
-                approved.customerName(), actor);
+            ticketService.applyApprovedQuotation(approved.ticketId(), approved.id(), approved.recipientType(), actor);
         }
         String message = "ใบเสนอราคา " + approved.number() + " ได้รับอนุมัติแล้ว";
         // In-app + branded HTML email only; no second plain-text email with the PDF.
@@ -1493,7 +1492,8 @@ public class DealQuotationService {
         // request's. The stage has normally arrived at create time (#advanceDealToRecipientStage); this call stays because
         // it is idempotent under forward-only and covers a recipient changed between draft and approval on a path
         // #update's hook does not reach.
-        ticketService.advanceStageForCustomerQuotationIssue(summary.ticketId(), issued.recipientType(), actor);
+        // Review H1/M5c: the same fill as a DEAL_DIRECT approval (stage + party names from a real source).
+        ticketService.applyApprovedQuotation(summary.ticketId(), issued.id(), issued.recipientType(), actor);
         supersedeOtherLiveOnTicket(issued, actor);
         // Issuing a REVISION replaces its parent chain. Each hop is its own compare-and-set (supersede() only flips an
         // ISSUED/REVISION_REQUESTED row), so already-terminal ancestors are a safe no-op.

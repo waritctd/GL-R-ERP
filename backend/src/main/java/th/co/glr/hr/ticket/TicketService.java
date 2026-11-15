@@ -2586,21 +2586,43 @@ public class TicketService {
     }
 
     /**
-     * An approved DEAL_DIRECT quotation fills its deal (spec 2026-11-15 §7.2): the stage advances onto the
-     * recipient's stage (forward-only, via {@link #advanceStageForCustomerQuotationIssue}), and the quotation's
-     * addressee is written into the matching {@code designer_name} / {@code owner_name} / {@code buyer_name} only
-     * when that column is blank — a name the rep typed is never overwritten. A non-ACTIVE deal is left untouched.
+     * Where a quotation with no named recipient (UNSPECIFIED — legacy rows and their revisions/reorders) puts a deal:
+     * the first quote stage on the deal's route, QUOTE_DESIGN_SIDE else QUOTE_OWNER (review H2). Null when neither
+     * is on the route (BUYER_DIRECT): that channel's next quote stage is QUOTE_BUYER, which needs a buyer, so nothing
+     * is guessed. V210's backfill restates this as a CASE; its integration test pins the two together.
      */
-    public void applyApprovedQuotation(long ticketId, String recipientType, String partyName, UserPrincipal actor) {
+    public static String firstQuoteStageOnRoute(String entryChannel) {
+        for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER)) {
+            if (DealRoute.isOnRoute(entryChannel, stage)) {
+                return stage;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A quotation that reached the customer (DEAL_DIRECT approval, PRICING_REQUEST-origin issue) fills its deal
+     * (spec 2026-11-15 §7.2, corrected by review H1/H2). The stage advances forward-only onto the recipient's stage,
+     * or for an UNSPECIFIED recipient onto {@link #firstQuoteStageOnRoute}. A party name is written only from a
+     * source that names that party ({@link TicketRepository#partyNameFromQuotation}) and only into a blank column:
+     * a name the rep typed is never overwritten, and the bill-to customer is never taken for the designer. A
+     * non-ACTIVE deal is left untouched.
+     */
+    public void applyApprovedQuotation(long ticketId, long quotationId, String recipientType, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
             return;
         }
-        advanceStageForCustomerQuotationIssue(ticketId, recipientType, actor);
-        String name = blankToNull(partyName);
-        if (name != null && QuotationRecipient.isAddressable(recipientType)) {
-            tickets.fillPartyNameIfBlank(ticketId, recipientType, name.strip());
+        if (QuotationRecipient.isAddressable(recipientType)) {
+            advanceStageForCustomerQuotationIssue(ticketId, recipientType, actor);
+        } else {
+            String target = firstQuoteStageOnRoute(s.entryChannel());
+            if (target != null) {
+                autoAdvanceStage(s, target, actor);
+            }
         }
+        tickets.partyNameFromQuotation(quotationId, recipientType)
+            .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, recipientType, name));
     }
 
     /**

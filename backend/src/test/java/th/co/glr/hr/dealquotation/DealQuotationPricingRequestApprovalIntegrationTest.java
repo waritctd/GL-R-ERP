@@ -479,6 +479,30 @@ class DealQuotationPricingRequestApprovalIntegrationTest extends AbstractPostgre
         assertThat(stageChangedEvents()).isEqualTo(stageEventsAtCreation);
     }
 
+    /** Review H1/M5c: issuing a PRICING_REQUEST-origin quotation fills designer_name from the designer directory
+     * entry behind its D.Co. (unit_code) — never from the bill-to customer it is printed for. */
+    @Test
+    void issue_fillsDesignerNameFromTheDirectory_neverTheBillToCustomer() {
+        jdbc.update("INSERT INTO sales.designer (code, name) VALUES ('ZT02', 'ทดสอบ ดีไซน์ สอง')", java.util.Map.of());
+        DealQuotationDto submitted = submittedQuotation();
+        jdbc.update("UPDATE sales.quotation SET unit_code = 'ZT02' WHERE quotation_id = :id",
+            java.util.Map.of("id", submitted.id()));
+
+        quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().designerName()).isEqualTo("ทดสอบ ดีไซน์ สอง");
+    }
+
+    @Test
+    void issue_withoutADirectoryDesigner_leavesDesignerNameBlank() {
+        DealQuotationDto submitted = submittedQuotation();
+
+        DealQuotationDto issued = quotationService.approve(submitted.id(), new ApproveRequest(null), salesManagerActor);
+
+        assertThat(issued.customerName()).isNotBlank();
+        assertThat(tickets.findById(ticketId).orElseThrow().summary().designerName()).isNull();
+    }
+
     private Integer stageChangedEvents() {
         return jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",

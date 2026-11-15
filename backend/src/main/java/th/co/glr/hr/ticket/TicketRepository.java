@@ -2620,6 +2620,34 @@ public class TicketRepository {
      * OWNER → owner_name, BUYER → buyer_name) only when that column is null or blank. The column is chosen by a
      * switch over the three codes, never from input. Returns rows written (0 or 1).
      */
+    /**
+     * The party name a quotation actually carries for its recipient (review H1): DESIGNER → the designer
+     * directory entry behind the quotation's D.Co. ({@code unit_code}); BUYER → the customer of the quotation's
+     * BUYER party (the bidder it is addressed to). OWNER and UNSPECIFIED have no such source — empty. The bill-to
+     * {@code customer_name} is deliberately NOT a source: it names whoever is billed, not the designer.
+     */
+    public Optional<String> partyNameFromQuotation(long quotationId, String recipientType) {
+        String sql;
+        if (QuotationRecipient.DESIGNER.equals(recipientType)) {
+            sql = """
+                SELECT NULLIF(TRIM(d.name), '') FROM sales.quotation q
+                  JOIN sales.designer d ON d.code = TRIM(q.unit_code)
+                 WHERE q.quotation_id = :id
+                """;
+        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
+            sql = """
+                SELECT NULLIF(TRIM(c.name), '') FROM sales.quotation q
+                  JOIN sales.deal_party p ON p.party_id = q.party_id AND p.role = 'BUYER'
+                  JOIN customers.customer c ON c.customer_id = p.customer_id
+                 WHERE q.quotation_id = :id
+                """;
+        } else {
+            return Optional.empty();
+        }
+        return jdbc.queryForList(sql, Map.of("id", quotationId), String.class).stream()
+            .filter(java.util.Objects::nonNull).findFirst();
+    }
+
     public int fillPartyNameIfBlank(long ticketId, String recipientType, String value) {
         String column = switch (recipientType) {
             case QuotationRecipient.DESIGNER -> "designer_name";
