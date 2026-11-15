@@ -39,8 +39,9 @@ final class PipelineStages {
      * Where a row's code lands, in two steps:
      * <ol>
      *   <li><b>Route.</b> The planned stage when it is on the deal's route. Otherwise another stage of the SAME rep
-     *   code that is on the route (S3 on an owner-direct deal → QUOTE_OWNER, as {@code
-     *   TicketService#firstQuoteStageOnRoute} and V210 choose it), else the nearest on-route stage before it.</li>
+     *   code that is on the route (S3 on an owner-direct deal → QUOTE_OWNER, the first S3 stage on its route), else
+     *   the nearest on-route stage before it. This is a rep-code mapping, not a quotation: it is unrelated to {@code
+     *   TicketService#stageForUnspecifiedRecipient} / V210, which put an UNSPECIFIED quotation on QUOTE_BUYER.</li>
      *   <li><b>Facts.</b> {@code factRefusal} is the app's own stage-fact gate ({@code
      *   TicketService#stageFactRefusal}, null = the fact holds) evaluated for the deal being created. When it refuses,
      *   the deal lands on the highest EARLIER on-route stage whose facts hold, never on a stage it has no fact for:
