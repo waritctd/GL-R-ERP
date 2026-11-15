@@ -214,15 +214,11 @@ public class SalesBoardService {
             names.putIfAbsent(v.ownerId(), v.ownerName());
         });
         // An owner with cash this month but no open deal and no visit (every deal closed) still gets a row.
-        cashByOwner.keySet().forEach(ownerId -> {
-            byOwner.computeIfAbsent(ownerId, k -> new ArrayList<>());
-            if (!names.containsKey(ownerId) && employees != null) {
-                names.put(ownerId, employees.findByEmployeeId(ownerId).map(e -> e.name()).orElse(null));
-            }
-        });
-        // One query for every rep's role, not one per rep.
+        cashByOwner.keySet().forEach(ownerId -> byOwner.computeIfAbsent(ownerId, k -> new ArrayList<>()));
+        // One query for every rep's role (and the name of an owner no deal/visit row named), not one per rep.
         Map<Long, th.co.glr.hr.auth.EmployeeLoginRecord> owners =
             employees == null ? Map.of() : employees.findByEmployeeIds(byOwner.keySet());
+        owners.forEach((id, o) -> names.putIfAbsent(id, o.name()));
         List<RepRow> rows = new ArrayList<>();
         byOwner.forEach((ownerId, own) -> {
             BigDecimal thb = BigDecimal.ZERO;

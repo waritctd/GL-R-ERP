@@ -189,7 +189,7 @@ function CommentsSection({ deal, onPosted }) {
 }
 
 /** /finance/deals/:id — one deal as finance sees it. Presentation only — the server enforces every gate. */
-export function FinanceDealPage() {
+export function FinanceDealPage({ user }) {
   const { id } = useParams();
   const queryClient = useQueryClient();
   const { catalog } = useStageCatalog();
@@ -208,8 +208,11 @@ export function FinanceDealPage() {
   const expressQuery = useQuery({
     queryKey: queryKeys.receiptImportLatest(),
     queryFn: () => api.receiptImports.latest(),
+    enabled: user?.role === 'account',
     retry: false,
   });
+
+  const expressUploadEnabled = expressQuery.data?.uploadEnabled === true;
 
   const dealQuery = useQuery({
     queryKey: key,
@@ -330,7 +333,7 @@ export function FinanceDealPage() {
         return {
           title: 'ยืนยันรับมัดจำ', confirmLabel: 'ยืนยันรับมัดจำ',
           // Design m-deposit-confirm: a matched Express receipt confirms the deposit by itself.
-          text: `ยืนยันว่าได้รับเงินมัดจำของดีล ${deal.code} แล้ว? จะยืนยันเองเมื่อจับคู่รายการจาก Express ได้ ใช้ปุ่มนี้เฉพาะเมื่อรับเงินนอก Express — รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
+          text: `ยืนยันว่าได้รับเงินมัดจำของดีล ${deal.code} แล้ว? ${expressUploadEnabled ? 'จะยืนยันเองเมื่อจับคู่รายการจาก Express ได้ ใช้ปุ่มนี้เฉพาะเมื่อรับเงินนอก Express — ' : ''}รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
           call: (options) => (options ? api.finance.confirmDepositPaid(deal.id, options) : api.finance.confirmDepositPaid(deal.id)),
         };
       case 'FINAL_PAYMENT':
@@ -477,7 +480,7 @@ export function FinanceDealPage() {
 
       {activeAction?.action === 'RECORD_PAYMENT' ? (
         <RecordPaymentModal
-          prefill={recordPaymentPrefill} expressUploadEnabled={expressQuery.data?.uploadEnabled === true} busy={busy} error={flowError}
+          prefill={recordPaymentPrefill} expressUploadEnabled={expressUploadEnabled} busy={busy} error={flowError}
           onSubmit={(body) => run((options) => api.finance.recordPayment(deal.id, options ? { ...body, ...options } : body))}
           onClose={() => setFlow(null)}
         />

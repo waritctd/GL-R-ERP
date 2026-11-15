@@ -524,8 +524,8 @@ export function App() {
                   path="/finance/deals/:id"
                   element={<FinanceDealPage user={user} showToast={showToast} />}
                 />
-                {/* The Express receipts upload (spec 2026-11-15 §7.8): account / ceo, guarded by the same `/finance`
-                 * prefix rule (canConfirmPayments) — exactly ReceiptImportService's UPLOAD_ROLES. */}
+                {/* The Express receipts upload (spec 2026-11-15 §7.8): account only (the backend refuses the CEO), guarded by its own
+                 * exact-path rule in PATH_GUARDS ahead of the `/finance` prefix rule. */}
                 <Route
                   path="/finance/receipts-import"
                   element={<ReceiptsImportPage showToast={showToast} />}

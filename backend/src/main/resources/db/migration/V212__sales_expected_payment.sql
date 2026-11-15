@@ -3,8 +3,9 @@
 -- expected in. Feeds the rep's เงินที่จะเข้า card and the team's cash KPI (SalesBoardService#cashForMonth).
 --
 -- Rep-entered, not seeded: quotations carry no structured payment-terms field to seed from (plan decision 2).
--- RECEIVED is set only by the Express receipts matcher (V213, ReceiptImportService), which also links the receipt it
--- matched — so RECEIVED <=> receipt_id IS NOT NULL. CANCELLED is the soft delete (DELETE on an OPEN row); a RECEIVED
+-- RECEIVED is set when a receipt fills the row: the Express receipts matcher (V213, ReceiptImportService) or a hand-typed
+-- payment recorded by account. Either way it links the receipt it matched
+-- — so RECEIVED <=> receipt_id IS NOT NULL. CANCELLED is the soft delete (DELETE on an OPEN row); a RECEIVED
 -- row cannot be cancelled (409), it is the record of cash that came in.
 --
 -- Additive: a new table, no backfill, nothing existing changes. Written by POST/PUT/DELETE
@@ -28,4 +29,4 @@ CREATE INDEX IF NOT EXISTS idx_expected_payment_ticket ON sales.expected_payment
 CREATE INDEX IF NOT EXISTS idx_expected_payment_week ON sales.expected_payment (expected_week) WHERE status <> 'CANCELLED';
 
 COMMENT ON TABLE sales.expected_payment IS
-    'Rep-entered expected cash per deal (spec 2026-11-15 §7.7). RECEIVED only via the Express receipts matcher.';
+    'Rep-entered expected cash per deal (spec 2026-11-15 §7.7). RECEIVED when a receipt fills the row (Express matcher or hand-typed payment).';

@@ -119,7 +119,7 @@ function OutcomeTable({ result }) {
 }
 
 /**
- * อัปโหลดไฟล์รับเงินจาก Express (spec 2026-11-15 §7.8, design m-upload): account / ceo upload the receipts export;
+ * อัปโหลดไฟล์รับเงินจาก Express (spec 2026-11-15 §7.8, design m-upload): account uploads the receipts export;
  * the server matches each row (invoice no → quotation no → customer + amount), writes what it can as Express receipts,
  * counts re-uploaded rows once, and queues the rest below for a one-tap match. Reads the documented column template —
  * no real Express export has been seen yet, so the template download is the format reference.
