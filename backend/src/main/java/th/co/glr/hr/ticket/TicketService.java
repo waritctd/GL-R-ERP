@@ -2586,15 +2586,24 @@ public class TicketService {
     }
 
     /**
-     * Where a quotation with no named recipient (UNSPECIFIED — legacy rows and their revisions/reorders) puts a deal:
-     * the first quote stage on the deal's route, QUOTE_DESIGN_SIDE else QUOTE_OWNER (review H2). Null when neither
-     * is on the route (BUYER_DIRECT): that channel's next quote stage is QUOTE_BUYER, which needs a buyer, so nothing
-     * is guessed. V210's backfill restates this as a CASE; its integration test pins the two together.
+     * Where a quotation with no named recipient (UNSPECIFIED — legacy rows and their revisions/reorders) puts a deal.
+     * Round-2 N1, following the owner-approved V204 reading that a direct quotation is addressed to a buyer: it
+     * advances like a BUYER quotation — QUOTE_BUYER when that is on the deal's route, else the nearest on-route stage
+     * before it (DealStage.ORDER walked backwards). QUOTE_BUYER is on every route today, so the fallback is
+     * defensive. Never null: LEAD_APPROACH is on every route. V210's backfill restates this in SQL; its integration
+     * test pins the two together for every channel.
      */
-    public static String firstQuoteStageOnRoute(String entryChannel) {
-        for (String stage : List.of(DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER)) {
-            if (DealRoute.isOnRoute(entryChannel, stage)) {
-                return stage;
+    public static String stageForUnspecifiedRecipient(String entryChannel) {
+        return nearestOnRouteAtOrBefore(stageForQuotationRecipient(QuotationRecipient.BUYER),
+            stage -> DealRoute.isOnRoute(entryChannel, stage));
+    }
+
+    /** The latest stage at or before {@code stage} in {@link DealStage#ORDER} that {@code onRoute} accepts. */
+    static String nearestOnRouteAtOrBefore(String stage, java.util.function.Predicate<String> onRoute) {
+        for (int i = DealStage.indexOf(stage); i >= 0; i--) {
+            String candidate = DealStage.ORDER.get(i);
+            if (onRoute.test(candidate)) {
+                return candidate;
             }
         }
         return null;
@@ -2603,7 +2612,7 @@ public class TicketService {
     /**
      * A quotation that reached the customer (DEAL_DIRECT approval, PRICING_REQUEST-origin issue) fills its deal
      * (spec 2026-11-15 §7.2, corrected by review H1/H2). The stage advances forward-only onto the recipient's stage,
-     * or for an UNSPECIFIED recipient onto {@link #firstQuoteStageOnRoute}. A party name is written only from a
+     * or for an UNSPECIFIED recipient onto {@link #stageForUnspecifiedRecipient} (like a BUYER one). A party name is written only from a
      * source that names that party ({@link TicketRepository#partyNameFromQuotation}) and only into a blank column:
      * a name the rep typed is never overwritten, and the bill-to customer is never taken for the designer. A
      * non-ACTIVE deal is left untouched.
@@ -2616,7 +2625,7 @@ public class TicketService {
         if (QuotationRecipient.isAddressable(recipientType)) {
             advanceStageForCustomerQuotationIssue(ticketId, recipientType, actor);
         } else {
-            String target = firstQuoteStageOnRoute(s.entryChannel());
+            String target = stageForUnspecifiedRecipient(s.entryChannel());
             if (target != null) {
                 autoAdvanceStage(s, target, actor);
             }

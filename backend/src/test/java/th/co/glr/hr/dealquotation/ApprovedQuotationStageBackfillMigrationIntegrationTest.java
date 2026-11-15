@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.sql.Timestamp;
-import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -17,8 +16,9 @@ import th.co.glr.hr.ticket.EntryChannel;
 import th.co.glr.hr.ticket.TicketService;
 
 /**
- * V210 (review H2): ACTIVE deals left behind a quote stage although they hold a quotation that reached the customer
- * (APPROVED/ISSUED/SENT/ACCEPTED) move forward to the first quote stage on their route, with a STAGE_CHANGED event
+ * V210 (review H2, round-2 N1): ACTIVE deals left behind a quote stage although they hold an UNSPECIFIED-recipient
+ * quotation that reached the customer (APPROVED/ISSUED/SENT/ACCEPTED) move forward like a BUYER quotation would —
+ * QUOTE_BUYER, else the nearest on-route stage before it (TicketService#stageForUnspecifiedRecipient) — with a STAGE_CHANGED event
  * stamped at the quotation's approval time. Executes the migration file verbatim against the migrated schema (the
  * V175 / V193 / V204 technique), so the fixture can be built first. Annotated itself: @EnabledIf is not inherited.
  */
@@ -31,49 +31,59 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
     private static final String NOTE = "ย้ายอัตโนมัติจากใบเสนอราคาที่อนุมัติแล้ว (ย้อนหลัง)";
 
     @Test
-    void designerLedDealAtS1WithAnApprovedUnspecifiedQuotation_movesToQuoteDesignSide() throws IOException {
+    void designerLedDealAtS1WithAnApprovedUnspecifiedQuotation_movesToQuoteBuyer() throws IOException {
         long ticket = stuckDeal(EntryChannel.DESIGNER_LED);
         Timestamp approvedAt = approvedAt(ticket);
         Timestamp createdAt = createdAt(ticket);
 
         runMigration();
 
-        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
         Map<String, Object> event = jdbc.queryForMap("""
             SELECT from_status, to_status, message, created_at FROM sales.ticket_event
              WHERE ticket_id = :id AND kind = 'STAGE_CHANGED'
             """, Map.of("id", ticket));
         assertThat(event).containsEntry("from_status", DealStage.LEAD_APPROACH)
-            .containsEntry("to_status", DealStage.QUOTE_DESIGN_SIDE).containsEntry("message", NOTE);
+            .containsEntry("to_status", DealStage.QUOTE_BUYER).containsEntry("message", NOTE);
         // Stamped at the approval, not at deploy time: a backfill must not make 123 old deals look freshly touched.
         assertThat(event.get("created_at")).isEqualTo(approvedAt);
         assertThat(createdAt(ticket)).isEqualTo(createdAt);
     }
 
     @Test
-    void ownerDirectDeal_movesToQuoteOwner_theFirstQuoteStageOnItsRoute() throws IOException {
+    void ownerDirectDeal_movesToQuoteBuyer_likeABuyerQuotation() throws IOException {
         long ticket = stuckDeal(EntryChannel.OWNER_DIRECT);
 
         runMigration();
 
-        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_OWNER);
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
-    /** The SQL target must agree with TicketService.firstQuoteStageOnRoute (the live path) for every channel. */
+    /** Round-2 N1: BUYER_DIRECT used to be skipped; QUOTE_BUYER is on its route, so it moves too. */
+    @Test
+    void buyerDirectDeal_nowMovesToQuoteBuyer() throws IOException {
+        long ticket = stuckDeal(EntryChannel.BUYER_DIRECT);
+
+        runMigration();
+
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+    }
+
+    /** The SQL target must agree with TicketService.stageForUnspecifiedRecipient (the live path) for every channel
+     * the column can hold. entry_channel is NOT NULL (V51), so NULL cannot reach the SQL; DealRouteTest pins the Java
+     * answer for null. Each deal starts at LEAD_APPROACH, so every channel must move to exactly the Java target. */
     @Test
     void backfillTargetMatchesTheLiveRuleForEveryChannel() throws IOException {
         Map<String, Long> byChannel = new java.util.LinkedHashMap<>();
-        for (String channel : List.of(EntryChannel.DESIGNER_LED, EntryChannel.OWNER_DIRECT, EntryChannel.BUYER_DIRECT,
-                EntryChannel.UNSPECIFIED)) {
+        for (String channel : new java.util.TreeSet<>(EntryChannel.VALID)) {
             byChannel.put(channel, stuckDeal(channel));
         }
 
         runMigration();
 
         byChannel.forEach((channel, ticket) -> {
-            String expected = TicketService.firstQuoteStageOnRoute(channel);
             assertThat(summary(ticket).salesStage()).as(channel)
-                .isEqualTo(expected == null ? DealStage.LEAD_APPROACH : expected);
+                .isEqualTo(TicketService.stageForUnspecifiedRecipient(channel));
         });
     }
 
@@ -122,8 +132,8 @@ class ApprovedQuotationStageBackfillMigrationIntegrationTest extends AbstractDea
 
         runMigration();
 
-        assertThat(summary(sent).salesStage()).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
-        assertThat(summary(accepted).salesStage()).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        assertThat(summary(sent).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+        assertThat(summary(accepted).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
     @Test

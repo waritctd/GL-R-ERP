@@ -15,8 +15,8 @@ import th.co.glr.hr.ticket.EntryChannel;
 
 /**
  * Spec 2026-11-15 §7.2 — "deals fill from quotations", as corrected after review (H1/H2). Approving a DEAL_DIRECT
- * quotation advances the deal forward-only onto its recipient's stage — or, for an UNSPECIFIED recipient, onto the
- * first quote stage on the deal's route — and fills a blank party name ONLY from a source that names that party:
+ * quotation advances the deal forward-only onto its recipient's stage — an UNSPECIFIED recipient advances like a BUYER
+ * one (QUOTE_BUYER, else the nearest on-route stage before it) — and fills a blank party name ONLY from a source that names that party:
  * designer_name from the designer directory entry behind the quotation's D.Co. (unit_code); buyer_name from the
  * quotation's BUYER party's customer; owner_name never. Expectations are independent fixture values (the seeded
  * directory name, the seeded bidder), never the quotation's own bill-to customer. Real service, real Postgres.
@@ -61,19 +61,21 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
         assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.NEGOTIATION);
     }
 
-    /** H2: 178 of 289 approved quotations on prod are UNSPECIFIED (legacy rows and their revisions/reorders). */
+    /** H2 / round-2 N1: 178 of 289 approved quotations on prod are UNSPECIFIED (legacy rows and their
+     * revisions/reorders). Owner-approved V204 reading: a direct quotation is addressed to a buyer, so it advances like
+     * a BUYER one — QUOTE_BUYER, never the designer stage. */
     @Test
-    void unspecifiedRecipient_advancesADesignerLedDealToTheFirstQuoteStage() {
+    void unspecifiedRecipient_onADesignerLedDeal_advancesLikeBuyer_toQuoteBuyer() {
         long ticket = deal(salesActor, EntryChannel.DESIGNER_LED);
         DealQuotationDto created = unspecified(ticket);
 
         approve(created);
 
-        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_DESIGN_SIDE);
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
     @Test
-    void unspecifiedRecipient_onAnOwnerDirectDeal_advancesToQuoteOwner_theFirstOnRoute() {
+    void unspecifiedRecipient_onAnOwnerDirectDeal_advancesLikeBuyer_toQuoteBuyer() {
         long ticket = deal(salesActor, EntryChannel.OWNER_DIRECT);
         DealQuotationDto created = quotationService.create(ticket, draft("OWNER"), salesActor);
         jdbc.update("UPDATE sales.quotation SET recipient_type = 'UNSPECIFIED' WHERE quotation_id = :id",
@@ -82,7 +84,21 @@ class DealDirectApprovalFillsDealIntegrationTest extends AbstractDealQuotationSl
 
         approve(created);
 
-        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_OWNER);
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
+    }
+
+    /** Round-2 N1: BUYER_DIRECT used to get nothing; QUOTE_BUYER is on its route, so it now moves too. */
+    @Test
+    void unspecifiedRecipient_onABuyerDirectDeal_advancesToQuoteBuyer() {
+        long ticket = deal(salesActor, EntryChannel.BUYER_DIRECT);
+        DealQuotationDto created = quotationService.create(ticket, draft("BUYER"), salesActor);
+        jdbc.update("UPDATE sales.quotation SET recipient_type = 'UNSPECIFIED' WHERE quotation_id = :id",
+            Map.of("id", created.id()));
+        tickets.updateSalesStage(ticket, DealStage.LEAD_APPROACH);
+
+        approve(created);
+
+        assertThat(summary(ticket).salesStage()).isEqualTo(DealStage.QUOTE_BUYER);
     }
 
     @Test
