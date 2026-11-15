@@ -670,11 +670,13 @@ export function TicketListPage({ user, showToast }) {
   const toParam = searchParams.get('to');
   const range = useMemo(() => rangeFromParams(fromParam, toParam), [fromParam, toParam]);
   // The quiet threshold (app.sales.quiet-days) is served with the team overview; the ภาพรวมทีม badge names it
-  // instead of hard-coding 14 (round-2 LOW 4). Shares the TeamOverview screen's cache entry; manager view only.
+  // instead of hard-coding 14 (round-2 LOW 4). Manager view only (the endpoint is sales_manager/ceo), on its own key
+  // with a 60 s staleTime so a ['tickets'] invalidation never refetches the team overview for one number.
   const teamOverviewQuery = useQuery({
-    queryKey: queryKeys.salesBoardTeam(),
+    queryKey: queryKeys.salesBoardQuietDays(),
     queryFn: () => api.salesBoard.teamOverview(),
     enabled: isManagerView,
+    staleTime: 60_000,
   });
   const quietDays = teamOverviewQuery.data?.quietDays ?? null;
   const ticketsQuery = useQuery({
