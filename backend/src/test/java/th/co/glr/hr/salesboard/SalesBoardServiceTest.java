@@ -24,6 +24,7 @@ import th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal;
 import th.co.glr.hr.salesboard.SalesBoardDtos.MyWork;
 import th.co.glr.hr.salesboard.SalesBoardDtos.RepRow;
 import th.co.glr.hr.salesboard.SalesBoardDtos.TeamOverview;
+import th.co.glr.hr.ticket.QuietRule;
 
 /** The role DECISION and the ranking, with the repository mocked. Whether the scope reaches the WHERE clause is
  * SalesBoardScopeIntegrationTest's job — a mocked repository cannot prove it. */

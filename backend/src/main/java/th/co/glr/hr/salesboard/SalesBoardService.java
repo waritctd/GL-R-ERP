@@ -16,6 +16,7 @@ import th.co.glr.hr.salesboard.SalesBoardDtos.BoardDeal;
 import th.co.glr.hr.salesboard.SalesBoardDtos.MyWork;
 import th.co.glr.hr.salesboard.SalesBoardDtos.RepRow;
 import th.co.glr.hr.salesboard.SalesBoardDtos.TeamOverview;
+import th.co.glr.hr.ticket.QuietRule;
 
 /**
  * งานของฉัน (rep) and ภาพรวมทีมขาย (manager/CEO), spec 2026-11-15 §7.3/§7.4. The role decision lives here; the
