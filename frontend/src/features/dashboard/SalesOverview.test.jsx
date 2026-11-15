@@ -10,6 +10,11 @@ import { expectFigure, figureRows } from '../../test/fixtures/dashboardMoney.js'
 
 globalThis.React = React;
 
+// Review H3: the rep landing is งานของฉัน (MyWork) with what this page already did put back above it — the money
+// band and the next-action worklist. The worklist's quiet group is gone (ควรตามต่อ, the 14-day QuietRule, covers
+// a deal whose only action is "log an activity"), its follow group reads ถึงกำหนดตาม, and the rep's 7-day tile
+// panel was not restored (the manager/CEO landings keep theirs).
+
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
   // Imported inside the factory: vi.mock is hoisted above every import.
@@ -17,7 +22,11 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      tickets: { list: vi.fn(), getProcurementSource: vi.fn() },
+      tickets: {
+        list: vi.fn(), getProcurementSource: vi.fn(), addActivity: vi.fn(), markLost: vi.fn(), create: vi.fn(),
+      },
+      // งานของฉัน's own read (MyWork): ควรตามต่อ + the board, pinned in salesBoard/MyWork.test.jsx.
+      salesBoard: { myWork: vi.fn() },
       pricingRequests: { queue: vi.fn() },
       commissions: { monthlySummary: vi.fn() },
       // Each quoted deal's quotation list (the same call the deal page makes) — none by default.
@@ -135,6 +144,30 @@ describe('SalesOverview', () => {
     api.tickets.list.mockResolvedValue({ tickets: deals });
     api.pricingRequests.queue.mockResolvedValue({ items: pricingRequests });
     api.commissions.monthlySummary.mockResolvedValue({ summary: defaultCommissionSummary });
+    api.salesBoard.myWork.mockResolvedValue({ followUp: [], board: [], quietDays: 14 });
+  });
+
+  it('is งานของฉัน: money band and worklist above ควรตามต่อ and the board', async () => {
+    renderOverview();
+    expect(screen.getByRole('heading', { name: 'งานของฉัน' })).toBeTruthy();
+    await screen.findByTestId('sales-group-follow');
+    const order = ['ตัวเลขเดือนนี้', 'สิ่งที่ต้องทำ', 'ควรตามต่อ'].map((name) => (name === 'ตัวเลขเดือนนี้'
+      ? screen.getByRole('region', { name })
+      : screen.getByText(name).closest('section')));
+     
+    expect(order[0].compareDocumentPosition(order[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+     
+    expect(order[1].compareDocumentPosition(order[2]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(api.salesBoard.myWork).toHaveBeenCalledTimes(1);
+  });
+
+  it('an overdue follow-up shows under ถึงกำหนดตาม even though the deal is not quiet', async () => {
+    renderOverview();
+    const group = await screen.findByTestId('sales-group-follow');
+    expect(group.textContent).toContain('ถึงกำหนดตาม');
+    // Deal D: stale === false, nextFollowUpAt five days ago.
+    expect(deals.find((d) => d.id === 604).stale).toBe(false);
+    expect(within(group).getByTestId('sales-row-604')).toBeTruthy();
   });
 
   it('greets the rep and requests an own-scoped deal list', async () => {
@@ -214,7 +247,8 @@ describe('SalesOverview', () => {
       expect(badgeOf('บริษัท ซี จำกัด')).toBe('ยืนยันคำสั่งซื้อ'); // QUOTATION_ACCEPTED, not confirmed
       expect(badgeOf('บริษัท ดี จำกัด')).toBe('ติดตามลูกค้า'); // follow-up overdue
       expect(badgeOf('บริษัท อี จำกัด')).toBe('ติดตามลูกค้า'); // follow-up due today
-      expect(badgeOf('บริษัท เอฟ จำกัด')).toBe('บันทึกกิจกรรม'); // stale, no follow-up
+      // F (stale, nothing else to do) is ควรตามต่อ's, not a worklist row any more.
+      expect(worklist.queryByText('บริษัท เอฟ จำกัด')).toBeNull();
       expect(badgeOf('บริษัท ไอ จำกัด')).toBe('บันทึกส่งมอบ'); // GOODS_RECEIVED, priced outside the PCR chain
       expect(badgeOf('บริษัท เจ จำกัด')).toBe('บันทึกผลใบเสนอราคา'); // QUOTATION_ISSUED, outcome not recorded yet
 
@@ -223,19 +257,18 @@ describe('SalesOverview', () => {
       expect(worklist.queryByText('บริษัท เอช จำกัด')).toBeNull();
     });
 
-    it('groups ติดตามลูกค้า → ต้องทำต่อ → ไม่มีความเคลื่อนไหว, keeping the worklist order inside each group', async () => {
+    it('groups ถึงกำหนดตาม → ต้องทำต่อ, keeping the worklist order inside each group', async () => {
       renderOverview();
       await screen.findByTestId('sales-group-follow');
 
       const order = [...document.querySelectorAll('[data-testid^="sales-group-"]')].map((el) => el.dataset.testid.replace('sales-group-', ''));
-      expect(order).toEqual(['follow', 'next', 'quiet']);
+      expect(order).toEqual(['follow', 'next']);
       // Overdue first within ติดตามลูกค้า; the action cascade within ต้องทำต่อ (same order sortWorklist gives).
       expect(groupNames('follow')).toEqual(['บริษัท ดี จำกัด', 'บริษัท อี จำกัด']);
       expect(groupNames('next')).toEqual(['บริษัท ซี จำกัด', 'บริษัท บี จำกัด', 'บริษัท เจ จำกัด', 'บริษัท เอ จำกัด', 'บริษัท ไอ จำกัด']);
-      expect(groupNames('quiet')).toEqual(['บริษัท เอฟ จำกัด']);
       expect(screen.getByTestId('sales-group-follow').textContent).toContain('2 ดีล');
-      expect(screen.getByTestId('worklist-total').textContent).toBe('8');
-      expect(screen.getByText('รวม 8 ดีล').className).toContain('sr-only');
+      expect(screen.getByTestId('worklist-total').textContent).toBe('7');
+      expect(screen.getByText('รวม 7 ดีล').className).toContain('sr-only');
     });
 
     it('puts the follow-up date on the row: เลยนัด for overdue, นัดวันนี้ for today', async () => {
@@ -247,20 +280,18 @@ describe('SalesOverview', () => {
       expect(screen.getByTestId('sales-row-601').textContent).not.toMatch(/เลยนัด|นัดวันนี้/);
     });
 
-    it('shows every quiet deal (no cap, no expander)', async () => {
+    it('leaves a quiet deal with nothing else to do to ควรตามต่อ', async () => {
       const quiet = Array.from({ length: 5 }, (_, i) => ({
         ...deals[5], id: 900 + i, code: `PR-2026-09${i}`, customerName: `บริษัท เงียบ ${i}`,
       }));
       api.tickets.list.mockResolvedValue({ tickets: quiet });
-      // Each sits with the CEO, like deal F: stale with nothing for the rep to do -> บันทึกกิจกรรม.
       api.pricingRequests.queue.mockResolvedValue({
         items: quiet.map((d, i) => ({ id: 50 + i, ticketId: d.id, status: 'CEO_REVIEWING', orderConfirmedAt: null })),
       });
       renderOverview();
-      await screen.findByTestId('sales-group-quiet');
 
-      expect(groupNames('quiet')).toHaveLength(5);
-      expect(screen.queryByRole('button', { name: /แสดงอีก|แสดงน้อยลง/ })).toBeNull();
+      expect(await screen.findByText('ไม่มีสิ่งที่ต้องดำเนินการตอนนี้')).toBeTruthy();
+      expect(screen.queryByTestId('sales-group-quiet')).toBeNull();
     });
 
     it('opens the deal from its row', async () => {
@@ -436,7 +467,7 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
     expect(api.tickets.getProcurementSource).not.toHaveBeenCalledWith(823);
   });
 
-  describe('7 วันล่าสุด panel (movement tiles, money band, worklist amounts)', () => {
+  describe('money band and worklist amounts', () => {
     const mv = (id, extra) => ({
       id, code: `PR-2026-09${id}`, customerName: `ลูกค้า ${id}`, title: `ดีล ${id}`, lifecycle: 'ACTIVE',
       salesStage: 'NEGOTIATION', amountPayable: 100, stale: false, nextFollowUpAt: null,
@@ -452,34 +483,9 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
       // a paused deal is flagged on every signal but counts on none of the tiles
       mv(7, { lifecycle: 'ON_HOLD', stageChangedInRange: true, activityInRange: true, nextFollowUpAt: OVERDUE_DATE }),
     ];
-    const tile = (key) => screen.getByTestId(`week-${key}`);
 
     beforeEach(() => {
       api.tickets.list.mockResolvedValue({ tickets: movementDeals });
-    });
-
-    it('shows the four tiles with counts under the same rules as the list (overdue counts: range includes today)', async () => {
-      renderOverview();
-      const panel = (await screen.findByRole('heading', { name: '7 วันล่าสุด' })).closest('section');
-      await waitFor(() => expect(tile('moved').textContent).toMatch(/2 ดีล/));
-      expect(within(panel).getByText('ดีลที่ขยับขั้น')).toBeTruthy();
-      expect(within(panel).getByText('ดีลที่มีกิจกรรม')).toBeTruthy();
-      expect(within(panel).getByText('นัดติดตามถึงกำหนด')).toBeTruthy();
-      expect(within(panel).getByText('ไม่เคลื่อนไหวในช่วงนี้')).toBeTruthy();
-      expect(tile('moved').textContent).toMatch(/2/);
-      expect(tile('activity').textContent).toMatch(/1/);
-      expect(tile('due').textContent).toMatch(/2/);
-      // 3 and 4 only: the CLOSED_LOST deal is not ACTIVE, the others moved
-      expect(tile('silent').textContent).toMatch(/2/);
-    });
-
-    it.each(['moved', 'activity', 'due', 'silent'])('the %s tile navigates to /tickets?week=<same key>', async (key) => {
-      renderOverview();
-      await screen.findByTestId(`week-${key}`);
-      fireEvent.click(screen.getByTestId(`week-${key}`));
-      expect((await screen.findByTestId('location-probe')).textContent).toBe('/tickets');
-      // the link carries the range the counts were computed for, so the list opens on exactly it
-      expect(screen.getByTestId('location-search').textContent).toBe(`?week=${key}&from=${addDays(TODAY, -6)}&to=${TODAY}`);
     });
 
     it('money band: ยอดที่สั่งซื้อแล้ว / ยอดคาดหวัง / ค่าคอมประมาณการ (เดือนนี้)', async () => {
@@ -495,7 +501,7 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
     it('shows — for both value figures until the stage catalog has loaded', async () => {
       api.meta.dealStages.mockImplementation(() => new Promise(() => {}));
       renderOverview();
-      await screen.findByRole('heading', { name: '7 วันล่าสุด' });
+      await screen.findByRole('region', { name: 'ตัวเลขเดือนนี้' });
       await waitFor(() => expect(figureRows('ยอดคาดหวัง')[0]).toContain('—'));
       expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).toContain('—');
       expect(figureRows('ยอดที่สั่งซื้อแล้ว')[0]).not.toContain('฿');
@@ -504,7 +510,6 @@ describe('SalesOverview — the procurement-source decision shows in the worklis
 
     it('every worklist row shows the deal amount', async () => {
       renderOverview();
-      await screen.findByRole('heading', { name: '7 วันล่าสุด' });
       const rows = await waitFor(() => {
         const found = [...document.querySelectorAll('[data-testid^="sales-row-"]')];
         expect(found.length).toBeGreaterThan(0);

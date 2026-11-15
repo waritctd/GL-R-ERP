@@ -308,7 +308,7 @@ export function App() {
               ) : user.role === 'sales_manager' && SALES_ENABLED ? (
                 <ManagerOverview user={user} employee={currentEmployee} dashboardSummary={dashboardSummary} showToast={showToast} />
               ) : user.role === 'sales' && SALES_ENABLED ? (
-                <SalesOverview user={user} employee={currentEmployee} />
+                <SalesOverview user={user} employee={currentEmployee} showToast={showToast} />
               ) : user?.role === 'ceo' && SALES_ENABLED ? (
                 <CeoOverview
                   user={user}

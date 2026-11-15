@@ -29,8 +29,14 @@ vi.mock('./api/index.js', () => ({
     pricingRequests: {
       queue: vi.fn().mockResolvedValue({ items: [] }),
     },
-    // SalesOverview (role-scoped views, Sales branch) is what a sales user now lands on at '/' — its own two
-    // remaining queries, needed by the redirect test below.
+    // SalesOverview (งานของฉัน) is what a sales user lands on at '/': GET /api/sales/my-work plus the stage
+    // catalog MarkLostModal reads.
+    salesBoard: {
+      myWork: vi.fn().mockResolvedValue({ followUp: [], board: [], quietDays: 14 }),
+    },
+    meta: {
+      dealStages: vi.fn().mockResolvedValue({ stages: [], phases: [], lostReasons: [], cancelReasons: [], routes: {} }),
+    },
     tickets: {
       list: vi.fn().mockResolvedValue({ tickets: [] }),
     },
@@ -293,7 +299,7 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
   it('lands a sales rep on SalesOverview — sales is exempt from the lock', async () => {
     await renderLockedAppAt('/', salesUser);
 
-    expect(await screen.findByText(/ดีลของฉัน/)).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'งานของฉัน' })).toBeTruthy();
     expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
   });
 
@@ -343,7 +349,7 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
   it('changes nothing when the flag is off — a sales rep still lands on SalesOverview', async () => {
     await renderLockedAppAt('/', salesUser, 'false');
 
-    expect(await screen.findByText(/ดีลของฉัน/)).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: 'งานของฉัน' })).toBeTruthy();
     expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
   });
 });

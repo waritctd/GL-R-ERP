@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.EmptyResultDataAccessException;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import th.co.glr.hr.common.PageRequest;
@@ -75,6 +76,7 @@ public class TicketRepository {
         """;
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final QuietRule quietRule;
 
     // ── Role-scoped list membership (Phase B) ────────────────────────────────
     // Mirrors frontend/src/features/tickets/salesViewScope.js#dealInScope, which is
@@ -144,8 +146,15 @@ public class TicketRepository {
             """, new MapSqlParameterSource().addValue("id", ticketId).addValue("rep", repId));
     }
 
+    /** Tests' convenience: the default {@value QuietRule#DEFAULT_QUIET_DAYS}-day quiet rule. */
     public TicketRepository(NamedParameterJdbcTemplate jdbc) {
+        this(jdbc, new QuietRule(jdbc, QuietRule.DEFAULT_QUIET_DAYS));
+    }
+
+    @Autowired
+    public TicketRepository(NamedParameterJdbcTemplate jdbc, QuietRule quietRule) {
         this.jdbc = jdbc;
+        this.quietRule = quietRule;
     }
 
     public List<TicketSummaryDto> findSummaries(String status, Long createdByFilter) {
@@ -1331,7 +1340,8 @@ public class TicketRepository {
 
     private Map<Long, SummaryFacts> summaryFacts(List<Long> ids) {
         Map<Long, SummaryFacts> byId = new HashMap<>();
-        jdbc.query(SummaryFactsSql.SELECT, Map.of("ids", ids.toArray(Long[]::new)), rs -> {
+        jdbc.query(SummaryFactsSql.SELECT,
+            Map.of("ids", ids.toArray(Long[]::new), "quietDays", quietRule.quietDays()), rs -> {
             BigDecimal payable = rs.getBigDecimal("payable");
             BigDecimal paid = rs.getBigDecimal("paid");
             long quotationId = rs.getLong("quotation_id");
@@ -1433,15 +1443,11 @@ public class TicketRepository {
     }
 
     /**
-     * Boolean SQL fragment: no {@code deal_activity} row was logged (by {@code created_at}) in the last 7 days,
-     * including a deal that has never had one. {@link #enrichSummaries} additionally gates it on
-     * {@code lifecycle == ACTIVE}, so only a live deal is ever flagged.
+     * Boolean SQL fragment: the deal is quiet under the one shared {@link QuietRule} (needs {@code :quietDays}).
+     * {@code ticketAlias} must be the {@code sales.ticket} alias, not a {@code ticket_id} reference.
      */
-    private static String isStaleSql(String ticketIdRef) {
-        return """
-            NOT EXISTS(SELECT 1 FROM sales.deal_activity
-                        WHERE ticket_id = %s AND created_at >= now() - interval '7 days')
-            """.formatted(ticketIdRef);
+    private static String isStaleSql(String ticketAlias) {
+        return QuietRule.quietSql(ticketAlias);
     }
 
     /** Backs TicketSummaryDto#commissionRecorded — a DELIBERATE second copy of
@@ -2608,6 +2614,57 @@ public class TicketRepository {
 
     // ── Deal tracking + activity (V83) ──────
 
+    /**
+     * Writes {@code value} into the deal's party-name column for {@code recipientType} (DESIGNER → designer_name,
+     * OWNER → owner_name, BUYER → buyer_name) only when that column is null or blank. The column is chosen by a
+     * switch over the three codes, never from input. Returns rows written (0 or 1).
+     */
+    /**
+     * The party name a quotation actually carries for its recipient (review H1): DESIGNER → the designer
+     * directory entry behind the quotation's D.Co. ({@code unit_code}); BUYER → the customer of the quotation's
+     * BUYER party (the bidder it is addressed to). OWNER and UNSPECIFIED have no such source — empty. The bill-to
+     * {@code customer_name} is deliberately NOT a source: it names whoever is billed, not the designer.
+     */
+    public Optional<String> partyNameFromQuotation(long quotationId, String recipientType) {
+        String sql;
+        if (QuotationRecipient.DESIGNER.equals(recipientType)) {
+            sql = """
+                SELECT NULLIF(TRIM(d.name), '') FROM sales.quotation q
+                  JOIN sales.designer d ON d.code = TRIM(q.unit_code)
+                 WHERE q.quotation_id = :id
+                """;
+        } else if (QuotationRecipient.BUYER.equals(recipientType)) {
+            sql = """
+                SELECT NULLIF(TRIM(c.name), '') FROM sales.quotation q
+                  JOIN sales.deal_party p ON p.party_id = q.party_id AND p.role = 'BUYER'
+                  JOIN customers.customer c ON c.customer_id = p.customer_id
+                 WHERE q.quotation_id = :id
+                """;
+        } else {
+            return Optional.empty();
+        }
+        return jdbc.queryForList(sql, Map.of("id", quotationId), String.class).stream()
+            .filter(java.util.Objects::nonNull).findFirst();
+    }
+
+    public int fillPartyNameIfBlank(long ticketId, String recipientType, String value) {
+        String column = switch (recipientType) {
+            case QuotationRecipient.DESIGNER -> "designer_name";
+            case QuotationRecipient.OWNER -> "owner_name";
+            case QuotationRecipient.BUYER -> "buyer_name";
+            default -> throw new IllegalArgumentException("Not a deal party: " + recipientType);
+        };
+        return jdbc.update("UPDATE sales.ticket SET " + column + " = :v, updated_at = now()"
+            + " WHERE ticket_id = :id AND COALESCE(TRIM(" + column + "), '') = ''",
+            new MapSqlParameterSource().addValue("v", value).addValue("id", ticketId));
+    }
+
+    /** V209: the rep's expected close quarter ({@code YYYY-Qn}), or null to clear. */
+    public void updateExpectedQuarter(long ticketId, String expectedQuarter) {
+        jdbc.update("UPDATE sales.ticket SET expected_quarter = :q, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("q", expectedQuarter).addValue("id", ticketId));
+    }
+
     public void updateTracking(long ticketId, Integer winProbabilityOverride, String designerName,
                                String ownerName, String buyerName, LocalDate nextFollowUpAt) {
         jdbc.update("""
@@ -2739,7 +2796,7 @@ public class TicketRepository {
             + payableAmountSelect("t.ticket_id") + ") AS payable, ("
             + paidAmountSelect("t.ticket_id") + ") AS paid, "
             + hasBalanceReceiptSql("t.ticket_id") + " AS balance_receipt, "
-            + isStaleSql("t.ticket_id") + " AS is_stale, "
+            + isStaleSql("t") + " AS is_stale, "
             + hasInvoiceAttachmentSql("t.ticket_id") + " AS has_invoice, "
             + hasRecordedCommission("t.ticket_id") + """
              AS commission_recorded,

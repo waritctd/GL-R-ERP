@@ -2461,6 +2461,9 @@ public class TicketService {
         requireActive(s);
         tickets.updateTracking(ticketId, request.winProbability(), blankToNull(request.designerName()),
             blankToNull(request.ownerName()), blankToNull(request.buyerName()), request.nextFollowUpAt());
+        if (request.expectedQuarter() != null) { // null = keep (see TrackingUpdateRequest); "" = clear
+            tickets.updateExpectedQuarter(ticketId, blankToNull(request.expectedQuarter()));
+        }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(), "tracking fields updated");
         return requireTicket(ticketId);
@@ -2579,6 +2582,65 @@ public class TicketService {
         String stage = stageForQuotationRecipient(recipientType);
         if (stage != null) {
             autoAdvanceStage(s, stage, actor);
+        }
+    }
+
+    /**
+     * Where a quotation with no named recipient (UNSPECIFIED — legacy rows and their revisions/reorders) puts a deal.
+     * Round-2 N1, following the owner-approved V204 reading that a direct quotation is addressed to a buyer: it
+     * advances like a BUYER quotation — QUOTE_BUYER when that is on the deal's route, else the nearest on-route stage
+     * before it (DealStage.ORDER walked backwards). QUOTE_BUYER is on every route today, so the fallback is
+     * defensive. Never null: LEAD_APPROACH is on every route. V210's backfill restates this in SQL; its integration
+     * test pins the two together for every channel.
+     */
+    public static String stageForUnspecifiedRecipient(String entryChannel) {
+        return nearestOnRouteAtOrBefore(stageForQuotationRecipient(QuotationRecipient.BUYER),
+            stage -> DealRoute.isOnRoute(entryChannel, stage));
+    }
+
+    /** The latest stage at or before {@code stage} in {@link DealStage#ORDER} that {@code onRoute} accepts. */
+    static String nearestOnRouteAtOrBefore(String stage, java.util.function.Predicate<String> onRoute) {
+        for (int i = DealStage.indexOf(stage); i >= 0; i--) {
+            String candidate = DealStage.ORDER.get(i);
+            if (onRoute.test(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A quotation that reached the customer (DEAL_DIRECT approval, PRICING_REQUEST-origin issue) fills its deal
+     * (spec 2026-11-15 §7.2, corrected by review H1/H2). The stage advances forward-only onto the recipient's stage,
+     * or for an UNSPECIFIED recipient onto {@link #stageForUnspecifiedRecipient} (like a BUYER one, though it fills no buyer_name). A party name is
+     * written only from a source that names that party ({@link TicketRepository#partyNameFromQuotation}) and only into
+     * a blank column — designer_name from the D.Co. for any recipient (round-2 N3):
+     * a name the rep typed is never overwritten, and the bill-to customer is never taken for the designer. A
+     * non-ACTIVE deal is left untouched.
+     */
+    public void applyApprovedQuotation(long ticketId, long quotationId, String recipientType, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            return;
+        }
+        if (QuotationRecipient.isAddressable(recipientType)) {
+            advanceStageForCustomerQuotationIssue(ticketId, recipientType, actor);
+        } else {
+            String target = stageForUnspecifiedRecipient(s.entryChannel());
+            if (target != null) {
+                autoAdvanceStage(s, target, actor);
+            }
+        }
+        // Round-2 N3: the quotation's D.Co. (unit_code) names the project's designer whoever the document is addressed
+        // to, so designer_name fills from the directory for ANY recipient. buyer_name only for a document ADDRESSED to
+        // a buyer: an UNSPECIFIED one advances like a buyer's (above) but names nobody, because the BUYER party V204
+        // gave it is the deal's bill-to customer, and the bill-to is never a name source (final review).
+        // owner_name has no real source and is never filled.
+        tickets.partyNameFromQuotation(quotationId, QuotationRecipient.DESIGNER)
+            .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, QuotationRecipient.DESIGNER, name));
+        if (QuotationRecipient.BUYER.equals(recipientType)) {
+            tickets.partyNameFromQuotation(quotationId, QuotationRecipient.BUYER)
+                .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, QuotationRecipient.BUYER, name));
         }
     }
 

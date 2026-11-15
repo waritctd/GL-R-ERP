@@ -136,6 +136,11 @@ export const API_ROUTES = {
     dealStages: '/api/meta/deal-stages',
     unitBases: '/api/meta/unit-bases',
   },
+  // SalesBoardController (salesboard/): the rep's งานของฉัน and the manager/CEO ภาพรวมทีมขาย read models.
+  salesBoard: {
+    myWork: '/api/sales/my-work',
+    teamOverview: '/api/sales/team-overview',
+  },
   tickets: {
     list: '/api/tickets',
     create: '/api/tickets',

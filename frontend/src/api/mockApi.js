@@ -22,6 +22,14 @@ import { createDemoDatabase } from '../data/demoData.js';
 // GET /api/meta/deal-stages — and nothing more. Stage rules live in TicketService, not here; see
 // mockStageDecisions below for what the mock refuses to decide.
 import { DEAL_STAGE_CATALOG } from '../data/dealStageCatalog.js';
+import {
+  QUIET_DAYS as MOCK_QUIET_DAYS,
+  boardColumnOf as mockBoardColumnOf,
+  daysQuietOf as mockDaysQuietOf,
+  isQuiet as mockIsQuiet,
+  lastTouchedMs as mockLastTouchedMs,
+  repCodeOf as mockRepCodeOf,
+} from '../features/salesBoard/quietRule.js';
 // Deal tracking: win% defaults, the activity-kind taxonomy, and the stage-advance-gate readiness
 // check, shared with the UI so the mock's numbers/gate can't drift from
 // WinProbabilityDefaults.java / DealActivityKind.java / TicketService.updateStage.
@@ -4260,6 +4268,54 @@ function advanceDealToQuotationRecipientStage(ticket, recipientType, user) {
   if (stage) autoAdvanceStage(ticket, stage, user);
 }
 
+/**
+ * Mirrors TicketService#stageForUnspecifiedRecipient (round-2 N1): an UNSPECIFIED-recipient quotation advances like a
+ * BUYER one — QUOTE_BUYER when on the deal's route, else the nearest on-route stage before it.
+ */
+function mockStageForUnspecifiedRecipient(entryChannel) {
+  const stages = DEAL_STAGE_CATALOG.stages.map((stage) => stage.code);
+  for (let i = stages.indexOf('QUOTE_BUYER'); i >= 0; i -= 1) {
+    if (mockIsOnRoute(entryChannel, stages[i])) return stages[i];
+  }
+  return null;
+}
+
+/** Mirrors TicketRepository#fillPartyNameIfBlank: writes only into a blank (null / whitespace) field. */
+function mockFillPartyNameIfBlank(ticket, field, name) {
+  const value = (name ?? '').trim();
+  if (value && !(ticket[field] ?? '').trim()) ticket[field] = value;
+}
+
+/**
+ * Mirrors TicketService#applyApprovedQuotation (spec 2026-11-15 §7.2, review H1/H2, round-2 N1/N3). A non-ACTIVE deal
+ * is untouched. Stage: forward-only onto the named recipient's stage, or for UNSPECIFIED like BUYER
+ * (#mockStageForUnspecifiedRecipient). Names come only from a source that names that party (TicketRepository
+ * #partyNameFromQuotation), into a blank field only:
+ *   - designerName — the mockDesigners entry behind the quotation's D.Co. (unitCode), for ANY recipient;
+ *   - buyerName — the customer of the quotation's BUYER-role party, for a BUYER recipient ONLY: an UNSPECIFIED one's
+ *     BUYER party is the bill-to customer (V204), never a name source;
+ *   - ownerName — never. The bill-to customerName is never used for any of them.
+ */
+function mockApplyApprovedQuotation(ticket, row, user) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+  const recipientType = row.recipientType;
+  if (MOCK_PARTY_NAME_RECIPIENTS.includes(recipientType)) {
+    advanceDealToQuotationRecipientStage(ticket, recipientType, user);
+  } else {
+    const target = mockStageForUnspecifiedRecipient(ticket.entryChannel);
+    if (target) autoAdvanceStage(ticket, target, user);
+  }
+  const designer = mockDesigners.find((d) => d.code === String(row.unitCode ?? '').trim());
+  mockFillPartyNameIfBlank(ticket, 'designerName', designer?.name);
+  if (recipientType === 'BUYER') {
+    const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId && p.role === 'BUYER') : null;
+    const customer = party ? mockCustomers.find((c) => c.id === party.customerId) : null;
+    mockFillPartyNameIfBlank(ticket, 'buyerName', customer?.name);
+  }
+}
+/** QuotationRecipient.ADDRESSABLE. */
+const MOCK_PARTY_NAME_RECIPIENTS = ['DESIGNER', 'OWNER', 'BUYER'];
+
 function dealStageIndex(code) {
   return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
 }
@@ -4416,6 +4472,12 @@ export function patchTicketForTests(ticketId, patch) {
   Object.assign(findTicketRaw(Number(ticketId)), patch);
 }
 
+/** TEST-ONLY seam — not part of `api`. Patches a stored deal quotation row (e.g. a legacy UNSPECIFIED recipient,
+ * which no create path accepts any more). */
+export function patchDealQuotationForTests(quotationId, patch) {
+  Object.assign(mockDealQuotations.find((q) => q.id === Number(quotationId)), patch);
+}
+
 /** TEST-ONLY seam — not part of `api`. Sets a ticket line's qtyFromStock (a legacy reserve). */
 export function setTicketItemQtyFromStockForTests(ticketId, itemId, qty) {
   const item = db.tickets.find((t) => t.id === Number(ticketId))?.items.find((i) => i.id === Number(itemId));
@@ -4531,7 +4593,7 @@ function buildTicketDetail(ticket) {
       designerName: ticket.designerName ?? null,
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
-      stale: dealComputeStale(ticket.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(ticket.id)),
+      stale: dealComputeStale(ticket, dealActivitiesForTicket(ticket.id)),
       // Existence-only flag — see hasRecordedCommission's comment. Never an amount; amounts stay
       // behind commissions.list()'s own role gate.
       commissionRecorded: hasRecordedCommission(ticket),
@@ -6506,8 +6568,10 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
   }
   if (pr && ticket) {
     // The QUOTATION's recipient (a revision may be re-addressed), not the request's.
+    // Mirrors DealQuotationService's PRICING_REQUEST-origin issue, which runs the same
+    // TicketService#applyApprovedQuotation as a DEAL_DIRECT approval (review H1/M5c).
     const recipient = row.recipientType ?? pr.recipientType;
-    advanceDealToQuotationRecipientStage(ticket, recipient, user);
+    mockApplyApprovedQuotation(ticket, { ...row, recipientType: recipient }, user);
     pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติและออกใบเสนอราคา ${row.number}`);
     pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคา ${row.number}`);
     // Parity with the real service's unconditional CEO-visibility notification on issue (redundant when the ceo is
@@ -8114,6 +8178,88 @@ function buildFinanceDeal(raw, user) {
   return deal;
 }
 
+// ── salesBoard read model (mirrors SalesBoardRepository) ──
+const MOCK_BOARD_LIVE_STATUSES = new Set(['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED']);
+const mockQuotationTime = (q) => q.approvedAt ?? q.issuedAt ?? null;
+
+/**
+ * The deal's value quotation, as SalesBoardRepository's LATERAL orders it: a live one (APPROVED/ISSUED/SENT/
+ * ACCEPTED) before an EXPIRED one, the headline party's (★ ยอดหลัก) first, then the latest by
+ * COALESCE(approved_at, issued_at) DESC NULLS LAST, then id DESC. REJECTED/SUPERSEDED/CANCELLED never count.
+ */
+function mockBoardValueQuotation(ticketId) {
+  const headlineParty = new Set(mockPartiesOf(ticketId).filter((p) => p.headline).map((p) => p.id));
+  const rank = (q) => [
+    q.docStatus === 'EXPIRED' ? 1 : 0,
+    headlineParty.has(q.partyId) ? 0 : 1,
+  ];
+  return mockDealQuotations
+    .filter((q) => q.ticketId === ticketId && (MOCK_BOARD_LIVE_STATUSES.has(q.docStatus) || q.docStatus === 'EXPIRED'))
+    .sort((a, b) => {
+      const [ra, rb] = [rank(a), rank(b)];
+      if (ra[0] !== rb[0]) return ra[0] - rb[0];
+      if (ra[1] !== rb[1]) return ra[1] - rb[1];
+      const [ta, tb] = [mockQuotationTime(a), mockQuotationTime(b)];
+      if (ta !== tb) {
+        if (ta == null) return 1; // NULLS LAST
+        if (tb == null) return -1;
+        return String(tb).localeCompare(String(ta));
+      }
+      return b.id - a.id;
+    })[0] ?? null;
+}
+
+/** Every open deal (ACTIVE, not CLOSED_PAID) as a BoardDeal, ordered as the repository's
+ * `ORDER BY last_touched_at, t.ticket_id`. */
+function mockBoardDeals() {
+  const now = Date.now();
+  return db.tickets
+    .filter((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID')
+    .map((t) => {
+      const activities = dealActivitiesForTicket(t.id);
+      const last = mockLastTouchedMs(t, activities);
+      const valueQuotation = mockBoardValueQuotation(t.id);
+      const latestActivity = [...activities]
+        .sort((x, y) => String(y.createdAt).localeCompare(String(x.createdAt)) || y.id - x.id)[0] ?? null;
+      return {
+        ticketId: t.id,
+        title: t.title,
+        customerName: t.customerName ?? null,
+        projectName: t.projectId ? (mockProjects.find((p) => p.id === t.projectId)?.name ?? null) : null,
+        ownerId: t.createdById,
+        ownerName: t.createdByName ?? null,
+        salesStage: t.salesStage ?? null,
+        repCode: mockRepCodeOf(t.salesStage),
+        boardColumn: mockBoardColumnOf(t.salesStage),
+        value: valueQuotation
+          ? dealQuotationTotals(valueQuotation.items ?? [], valueQuotation.documentLanguage ?? 'TH').grandTotal
+          : null,
+        currency: valueQuotation ? (valueQuotation.currency ?? 'THB') : null,
+        valueExpired: valueQuotation?.docStatus === 'EXPIRED',
+        designerName: t.designerName ?? null,
+        winProbability: dealEffectiveWinProbability(t.winProbabilityOverride, t.salesStage),
+        expectedQuarter: t.expectedQuarter ?? null,
+        lastTouchedAt: Number.isNaN(last) ? null : new Date(last).toISOString(),
+        daysQuiet: mockDaysQuietOf(t, activities, now),
+        quiet: mockIsQuiet(t, activities, now),
+        lastActivityKind: latestActivity?.kind ?? null,
+        lastActivityNote: latestActivity?.note ?? null,
+        lastTouchedMs: last,
+      };
+    })
+    .sort((x, y) => (x.lastTouchedMs - y.lastTouchedMs) || x.ticketId - y.ticketId)
+    .map(({ lastTouchedMs, ...deal }) => deal);
+}
+
+/** SalesBoardService's ranking: quiet only, daysQuiet × THB value desc, then daysQuiet desc. Values are weighted only
+ * when THB (a null currency is THB, as in repRows): a USD or EUR amount is not comparable, so it ranks by days alone. */
+function mockRankQuiet(deals) {
+  const score = (d) => ((d.currency ?? 'THB') === 'THB' ? d.daysQuiet * Number(d.value ?? 0) : 0);
+  return deals.filter((d) => d.quiet)
+    .sort((a, b) => score(b) - score(a) || b.daysQuiet - a.daysQuiet || a.ticketId - b.ticketId);
+}
+export const rankQuietForTests = mockRankQuiet;
+
 export const api = {
   // Mirrors AuthController + AuthService (auth/).
   auth: {
@@ -8487,7 +8633,7 @@ export const api = {
         designerName: t.designerName ?? null,
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
-        stale: dealComputeStale(t.lifecycle ?? 'ACTIVE', dealActivitiesForTicket(t.id)),
+        stale: dealComputeStale(t, dealActivitiesForTicket(t.id)),
         // Same existence-only flag as buildTicketDetail's summary — served on the LIST projection
         // too because accountActions.js's worklist is built from list rows, not detail fetches.
         commissionRecorded: hasRecordedCommission(t),
@@ -9257,6 +9403,14 @@ export const api = {
       ticket.ownerName = (payload?.ownerName || '').trim() || null;
       ticket.buyerName = (payload?.buyerName || '').trim() || null;
       ticket.nextFollowUpAt = payload?.nextFollowUpAt || null;
+      // V209 expectedQuarter is the one exception to full-replace (TrackingUpdateRequest): absent/null KEEPS it,
+      // "" clears it, anything else must be YYYY-Qn.
+      if (payload?.expectedQuarter != null) {
+        if (payload.expectedQuarter !== '' && !/^\d{4}-Q[1-4]$/.test(payload.expectedQuarter)) {
+          fail('ไตรมาสที่คาดว่าจะปิดต้องอยู่ในรูปแบบ YYYY-Qn เช่น 2026-Q4', 400);
+        }
+        ticket.expectedQuarter = payload.expectedQuarter || null;
+      }
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามดีล');
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -12861,6 +13015,44 @@ export const api = {
     async unitBases() {
       requireSession();
       return delay({ unitBases: PRICING_REQUEST_UNIT_BASIS_OPTIONS });
+    },
+  },
+
+  // Mirrors SalesBoardService / SalesBoardRepository (salesboard/). AUTHZ NOTE: these role gates and the own-deals
+  // scope approximate the Java service and are NOT evidence — SalesBoardScopeIntegrationTest is. my-work is the
+  // caller's OWN deals (created_by only, not keyed_by), sales / sales_manager / ceo; team-overview is
+  // sales_manager / ceo. Quiet uses the same 14-day rule (features/salesBoard/quietRule.js).
+  salesBoard: {
+    async myWork() {
+      const user = requireSession();
+      if (!['sales', 'sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const board = mockBoardDeals().filter((d) => d.ownerId === user.id);
+      return delay({ followUp: mockRankQuiet(board).slice(0, 5), board, quietDays: MOCK_QUIET_DAYS });
+    },
+    async teamOverview() {
+      const user = requireSession();
+      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const deals = mockBoardDeals();
+      const byRep = new Map();
+      for (const d of deals) {
+        const row = byRep.get(d.ownerId) ?? {
+          employeeId: d.ownerId, name: d.ownerName,
+          // DivisionAccessPolicy#roleFor in the real service; the mock's own user role here.
+          role: db.users.find((u) => u.id === d.ownerId)?.role ?? null,
+          openDeals: 0, openValue: 0, otherCurrencyValues: {}, quietDeals: 0, lastUpdateAt: null,
+        };
+        row.openDeals += 1;
+        // THB only into openValue; any other currency is summed per code (review M1).
+        if (d.value != null && (d.currency ?? 'THB') === 'THB') row.openValue = round2(row.openValue + Number(d.value));
+        else if (d.value != null) {
+          row.otherCurrencyValues[d.currency] = round2((row.otherCurrencyValues[d.currency] ?? 0) + Number(d.value));
+        }
+        if (d.quiet) row.quietDeals += 1;
+        if (!row.lastUpdateAt || d.lastTouchedAt > row.lastUpdateAt) row.lastUpdateAt = d.lastTouchedAt;
+        byRep.set(d.ownerId, row);
+      }
+      const reps = [...byRep.values()].sort((a, b) => b.openValue - a.openValue || a.employeeId - b.employeeId);
+      return delay({ reps, stale: mockRankQuiet(deals).slice(0, 20), quietDays: MOCK_QUIET_DAYS });
     },
   },
 
@@ -17294,6 +17486,14 @@ export const api = {
           ancestor.updatedAt = now;
         }
         ancestorId = ancestor.parentQuotationId;
+      }
+      // Mirrors DealQuotationService#approve's QUOTATION_ISSUED event and TicketService#applyApprovedQuotation
+      // (spec 2026-11-15 §7.2): advance onto the recipient's stage (forward-only) and fill a blank party name with
+      // the quotation's addressee. A non-ACTIVE deal is left alone.
+      const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
+      if (dealTicket) {
+        pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
+        mockApplyApprovedQuotation(dealTicket, row, user);
       }
       return delay({ quotation: buildDealQuotationDto(row) });
     },

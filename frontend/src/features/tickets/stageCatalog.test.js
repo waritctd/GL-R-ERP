@@ -135,6 +135,17 @@ const javaAutoAdvanced = javaConstantList('AUTO_ADVANCED');
 const javaPhase = javaConstantMap('PHASE');
 const javaBusinessCode = javaConstantMap('BUSINESS_CODE');
 const javaFactGated = javaFactGatedStages();
+const javaRepCode = javaConstantMap('REP_CODE');
+
+/** Pull `BOARD_COLUMN = Map.of("S1", 1, ...)` out of the Java, as rep code -> column. */
+function javaBoardColumnByRepCode() {
+  const match = javaSource.match(/BOARD_COLUMN\s*=\s*Map\.of\(([\s\S]*?)\);/);
+  if (!match) throw new Error('could not find BOARD_COLUMN in DealStage.java');
+  const entries = {};
+  for (const hit of match[1].matchAll(/"(S\d)"\s*,\s*(\d+)/g)) entries[hit[1]] = Number(hit[2]);
+  return entries;
+}
+const javaBoardColumn = javaBoardColumnByRepCode();
 
 describe('DealStage.java is the pipeline, and this side must not disagree with it', () => {
   it('parsed the Java at all — a vacuous parse must fail, not pass', () => {
@@ -217,6 +228,22 @@ describe('DealStage.java is the pipeline, and this side must not disagree with i
       expect(stage.businessCode, `businessCode of ${stage.code}`).toBe(javaBusinessCode[stage.code]);
     }
     expect(javaBusinessCode.PROCUREMENT).toBe('S12–S17');
+  });
+});
+
+describe("the reps' S1–S9 codes and the five board columns mirror DealStage.java", () => {
+  it('`repCode` is exactly DealStage.REP_CODE', () => {
+    expect(Object.keys(javaRepCode)).toHaveLength(15);
+    for (const stage of DEAL_STAGE_CATALOG.stages) {
+      expect(stage.repCode, `repCode of ${stage.code}`).toBe(javaRepCode[stage.code]);
+    }
+  });
+
+  it('`boardColumn` is exactly DealStage.boardColumnOf', () => {
+    expect(Object.keys(javaBoardColumn)).toHaveLength(8);
+    for (const stage of DEAL_STAGE_CATALOG.stages) {
+      expect(stage.boardColumn, `boardColumn of ${stage.code}`).toBe(javaBoardColumn[javaRepCode[stage.code]]);
+    }
   });
 });
 
