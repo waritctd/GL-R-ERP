@@ -736,11 +736,11 @@ describe('FinanceDealPage', () => {
       expect(within(dialog).getByTestId('payment-prefill-doc').textContent).toContain('ใบแจ้งมัดจำ DN-2026-0007');
     });
 
-    it('an issued remaining invoice prefills BALANCE and the deal outstanding (design m-payment)', async () => {
+    it('an issued remaining invoice prefills BALANCE and THAT invoice’s outstanding (its total less balance taken)', async () => {
       const dialog = await openPaymentDialog(payDeal());
       expect(within(dialog).getByLabelText('ประเภท').value).toBe('BALANCE');
-      expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('80000');
-      expect(within(dialog).getByTestId('payment-prefill-doc').textContent).toContain('ใบแจ้งหนี้ส่วนที่เหลือ RI-2026-0012 · คงค้าง ฿80,000.00');
+      expect(within(dialog).getByLabelText('จำนวนเงิน').value).toBe('85600');
+      expect(within(dialog).getByTestId('payment-prefill-doc').textContent).toContain('ใบแจ้งหนี้ส่วนที่เหลือ RI-2026-0012 · คงค้าง ฿85,600.00');
     });
 
     it('payment kind defaults to BALANCE once something has been paid', async () => {

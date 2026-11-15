@@ -86,6 +86,11 @@ export function RecordPaymentModal({ prefill, busy, error, onSubmit, onClose }) 
             </span>
           </p>
         ) : null}
+        {prefill.whtHint ? (
+          <p className="m-0 flex items-start gap-2 text-sm text-warning-dark" data-testid="payment-wht-hint">
+            {prefill.whtHint}
+          </p>
+        ) : null}
         <FormField label="ประเภท" htmlFor="fin-pay-kind">
           <select id="fin-pay-kind" value={kind} onChange={(e) => setKind(e.target.value)}>
             {PAYMENT_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}

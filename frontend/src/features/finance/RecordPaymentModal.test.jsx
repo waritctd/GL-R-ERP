@@ -50,6 +50,14 @@ describe('RecordPaymentModal — prefilled from the open document', () => {
     expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ note: 'เช็คธนาคาร' }));
   });
 
+  it('shows the withholding-tax hint only when the prefill carries one', () => {
+    const { dialog } = renderModal({ prefill: { ...prefill, whtHint: 'ถ้าลูกค้าหัก ณ ที่จ่าย ให้แก้ยอด' } });
+    expect(within(dialog).getByTestId('payment-wht-hint').textContent).toBe('ถ้าลูกค้าหัก ณ ที่จ่าย ให้แก้ยอด');
+    cleanup();
+    const { dialog: plain } = renderModal();
+    expect(within(plain).queryByTestId('payment-wht-hint')).toBeNull();
+  });
+
   it('with no open document: no summary line, a blank amount, and the given kind', () => {
     const { dialog } = renderModal({ prefill: { kind: 'DEPOSIT', amount: null, docLabel: null, basisHint: null } });
     expect(within(dialog).queryByTestId('payment-prefill-doc')).toBeNull();
