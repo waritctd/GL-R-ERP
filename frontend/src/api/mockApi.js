@@ -4257,16 +4257,52 @@ function advanceDealToQuotationRecipientStage(ticket, recipientType, user) {
   if (stage) autoAdvanceStage(ticket, stage, user);
 }
 
-/** Mirrors TicketService#applyApprovedQuotation: stage onto the recipient's (forward-only), then the addressee into
- * the matching designerName / ownerName / buyerName only when that field is blank. */
-const MOCK_PARTY_NAME_FIELD = { DESIGNER: 'designerName', OWNER: 'ownerName', BUYER: 'buyerName' };
-function mockApplyApprovedQuotation(ticket, recipientType, partyName, user) {
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
-  advanceDealToQuotationRecipientStage(ticket, recipientType, user);
-  const field = MOCK_PARTY_NAME_FIELD[recipientType];
-  const name = (partyName ?? '').trim();
-  if (field && name && !(ticket[field] ?? '').trim()) ticket[field] = name;
+/**
+ * Mirrors TicketService#stageForUnspecifiedRecipient (round-2 N1): an UNSPECIFIED-recipient quotation advances like a
+ * BUYER one — QUOTE_BUYER when on the deal's route, else the nearest on-route stage before it.
+ */
+function mockStageForUnspecifiedRecipient(entryChannel) {
+  const stages = DEAL_STAGE_CATALOG.stages.map((stage) => stage.code);
+  for (let i = stages.indexOf('QUOTE_BUYER'); i >= 0; i -= 1) {
+    if (mockIsOnRoute(entryChannel, stages[i])) return stages[i];
+  }
+  return null;
 }
+
+/** Mirrors TicketRepository#fillPartyNameIfBlank: writes only into a blank (null / whitespace) field. */
+function mockFillPartyNameIfBlank(ticket, field, name) {
+  const value = (name ?? '').trim();
+  if (value && !(ticket[field] ?? '').trim()) ticket[field] = value;
+}
+
+/**
+ * Mirrors TicketService#applyApprovedQuotation (spec 2026-11-15 §7.2, review H1/H2, round-2 N1/N3). A non-ACTIVE deal
+ * is untouched. Stage: forward-only onto the named recipient's stage, or for UNSPECIFIED like BUYER
+ * (#mockStageForUnspecifiedRecipient). Names come only from a source that names that party (TicketRepository
+ * #partyNameFromQuotation), into a blank field only:
+ *   - designerName — the mockDesigners entry behind the quotation's D.Co. (unitCode), for ANY recipient;
+ *   - buyerName — the customer of the quotation's BUYER-role party, for a BUYER or UNSPECIFIED recipient;
+ *   - ownerName — never. The bill-to customerName is never used for any of them.
+ */
+function mockApplyApprovedQuotation(ticket, row, user) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+  const recipientType = row.recipientType;
+  if (MOCK_PARTY_NAME_RECIPIENTS.includes(recipientType)) {
+    advanceDealToQuotationRecipientStage(ticket, recipientType, user);
+  } else {
+    const target = mockStageForUnspecifiedRecipient(ticket.entryChannel);
+    if (target) autoAdvanceStage(ticket, target, user);
+  }
+  const designer = mockDesigners.find((d) => d.code === String(row.unitCode ?? '').trim());
+  mockFillPartyNameIfBlank(ticket, 'designerName', designer?.name);
+  if (recipientType === 'BUYER' || !MOCK_PARTY_NAME_RECIPIENTS.includes(recipientType)) {
+    const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId && p.role === 'BUYER') : null;
+    const customer = party ? mockCustomers.find((c) => c.id === party.customerId) : null;
+    mockFillPartyNameIfBlank(ticket, 'buyerName', customer?.name);
+  }
+}
+/** QuotationRecipient.ADDRESSABLE. */
+const MOCK_PARTY_NAME_RECIPIENTS = ['DESIGNER', 'OWNER', 'BUYER'];
 
 function dealStageIndex(code) {
   return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
@@ -4422,6 +4458,12 @@ export function setPricingRequestStatusForTests(prId, status) {
 /** TEST-ONLY seam — not part of `api`. Patches raw ticket fields (e.g. lifecycle, legacyStockSource). */
 export function patchTicketForTests(ticketId, patch) {
   Object.assign(findTicketRaw(Number(ticketId)), patch);
+}
+
+/** TEST-ONLY seam — not part of `api`. Patches a stored deal quotation row (e.g. a legacy UNSPECIFIED recipient,
+ * which no create path accepts any more). */
+export function patchDealQuotationForTests(quotationId, patch) {
+  Object.assign(mockDealQuotations.find((q) => q.id === Number(quotationId)), patch);
 }
 
 /** TEST-ONLY seam — not part of `api`. Sets a ticket line's qtyFromStock (a legacy reserve). */
@@ -6514,8 +6556,10 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
   }
   if (pr && ticket) {
     // The QUOTATION's recipient (a revision may be re-addressed), not the request's.
+    // Mirrors DealQuotationService's PRICING_REQUEST-origin issue, which runs the same
+    // TicketService#applyApprovedQuotation as a DEAL_DIRECT approval (review H1/M5c).
     const recipient = row.recipientType ?? pr.recipientType;
-    advanceDealToQuotationRecipientStage(ticket, recipient, user);
+    mockApplyApprovedQuotation(ticket, { ...row, recipientType: recipient }, user);
     pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติและออกใบเสนอราคา ${row.number}`);
     pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคา ${row.number}`);
     // Parity with the real service's unconditional CEO-visibility notification on issue (redundant when the ceo is
@@ -17435,7 +17479,7 @@ export const api = {
       const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
       if (dealTicket) {
         pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
-        mockApplyApprovedQuotation(dealTicket, row.recipientType, row.customerName, user);
+        mockApplyApprovedQuotation(dealTicket, row, user);
       }
       return delay({ quotation: buildDealQuotationDto(row) });
     },
