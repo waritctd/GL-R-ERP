@@ -144,6 +144,58 @@ class QuietRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quietRule.isQuiet(id)).isFalse();
     }
 
+    // ── a booked visit keeps the deal out of ควรตามต่อ (spec §7.3, review H2) ──────
+
+    @Test
+    void plannedVisitTodayOrLaterKeepsTheDealOutOfQuiet() {
+        long today = dealCreatedDaysAgo(60);
+        long later = dealCreatedDaysAgo(60);
+        visit(today, "PLANNED", 0);
+        visit(later, "PLANNED", 9);
+
+        assertThat(quietRule.isQuiet(today)).isFalse();
+        assertThat(quietRule.isQuiet(later)).isFalse();
+        // The deal list reads the same rule.
+        assertThat(tickets.findSummaryById(later).orElseThrow().stale()).isFalse();
+    }
+
+    @Test
+    void aPlannedVisitWhoseDatePassedUntickedLetsTheDealGoQuietAgain() {
+        long id = dealCreatedDaysAgo(60);
+        visit(id, "PLANNED", -1);
+
+        assertThat(quietRule.isQuiet(id)).isTrue();
+    }
+
+    @Test
+    void cancelledOrDoneVisitsDoNotHoldTheDeal() {
+        long cancelled = dealCreatedDaysAgo(60);
+        visit(cancelled, "CANCELLED", 3);
+        long doneLater = dealCreatedDaysAgo(60);
+        visit(doneLater, "DONE", 3); // DONE resets through its SITE_VISIT activity, never through the visit row
+
+        assertThat(quietRule.isQuiet(cancelled)).isTrue();
+        assertThat(quietRule.isQuiet(doneLater)).isTrue();
+    }
+
+    @Test
+    void anotherDealsVisitDoesNotHoldThisOne() {
+        long booked = dealCreatedDaysAgo(60);
+        long other = dealCreatedDaysAgo(60);
+        visit(booked, "PLANNED", 2);
+
+        assertThat(quietRule.isQuiet(other)).isTrue();
+    }
+
+    /** A visit on the deal, {@code dayOffset} days from today's Bangkok date. */
+    private void visit(long ticketId, String status, int dayOffset) {
+        jdbc.update("""
+            INSERT INTO sales.visit (owner_id, ticket_id, contact_name, planned_date, status, done_at)
+            VALUES (:rep, :id, 'ลูกค้า', (now() AT TIME ZONE 'Asia/Bangkok')::date + :d, :status,
+                    CASE WHEN :status = 'DONE' THEN now() END)
+            """, Map.of("rep", repId, "id", ticketId, "d", dayOffset, "status", status));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private long dealCreatedDaysAgo(int days) {

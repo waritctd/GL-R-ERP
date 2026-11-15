@@ -185,8 +185,9 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     void doneOnLinkedDealResetsQuiet() throws Exception {
         long mine = deal(salesActor);
         backdate(mine, 30);
-        long visit = plan(salesActor, mine, "คุณอรุณ", today);
-        assertThat(quietRule.isQuiet(mine)).as("planning alone does not touch the deal").isTrue();
+        // Yesterday's unticked visit no longer holds the deal (QuietRule.upcomingVisitSql), so the tick is what clears it.
+        long visit = plan(salesActor, mine, "คุณอรุณ", today.minusDays(1));
+        assertThat(quietRule.isQuiet(mine)).as("a past-dated planned visit does not touch the deal").isTrue();
 
         JsonNode done = ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
             .content("{\"note\":\"ชอบ Raku สีเทา\"}"), salesActor);
@@ -253,13 +254,130 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     }
 
     @Test
-    void managerMayCompleteARepsVisit() throws Exception {
+    void managerMayCompleteARepsVisit_theActivityIsTheRepsWithWhoRecordedIt() throws Exception {
         long repDeal = deal(salesActor);
         long visit = plan(salesActor, repDeal, "คุณอรุณ", today);
 
-        assertThat(ok(post("/api/sales/visits/" + visit + "/done"), salesManagerActor).get("status").asText())
-            .isEqualTo("DONE");
+        assertThat(ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"ส่งตัวอย่าง\"}"), salesManagerActor).get("status").asText()).isEqualTo("DONE");
         assertThat(siteVisitRows(repDeal)).isEqualTo(1);
+        // M3: the person who went, not the person who ticked.
+        Map<String, Object> activity = siteVisit(repDeal);
+        assertThat(((Number) activity.get("created_by_id")).longValue()).isEqualTo(salesActor.id());
+        assertThat((String) activity.get("note")).isEqualTo("ส่งตัวอย่าง · บันทึกโดย " + salesManagerActor.name());
+    }
+
+    @Test
+    void theOwnersOwnTickCarriesNoRecordedByNote() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+
+        ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"ส่งตัวอย่าง\"}"), salesActor);
+
+        assertThat((String) siteVisit(deal).get("note")).isEqualTo("ส่งตัวอย่าง");
+    }
+
+    // ── reassignment: the visit stays with whoever went (review M1) ──────────
+
+    @Test
+    void afterTheDealMovesToAnotherRep_theVisitOwnerCanStillTickAndCancel() throws Exception {
+        long deal = deal(salesActor);
+        long ticked = plan(salesActor, deal, "คุณอรุณ", today);
+        long cancelled = plan(salesActor, deal, "คุณอรุณ", today.plusDays(2));
+        reassign(deal, otherSalesActor);
+
+        assertThat(ok(post("/api/sales/visits/" + ticked + "/done"), salesActor).get("status").asText())
+            .isEqualTo("DONE");
+        assertThat(ok(post("/api/sales/visits/" + cancelled + "/cancel"), salesActor).get("status").asText())
+            .isEqualTo("CANCELLED");
+        Map<String, Object> activity = siteVisit(deal);
+        assertThat(((Number) activity.get("created_by_id")).longValue()).isEqualTo(salesActor.id());
+    }
+
+    @Test
+    void afterTheDealMoves_neitherTheNewDealOwnerNorAThirdRepCanTouchTheVisit() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+        reassign(deal, otherSalesActor);
+        UserPrincipal third = actor(createEmployee("พนักงานขาย คนที่สาม", "third-visit@glr.co.th", "SALES",
+            "แผนกขาย", null), "sales");
+
+        for (UserPrincipal outsider : List.of(otherSalesActor, third)) {
+            assertThat(status(post("/api/sales/visits/" + visit + "/done"), outsider)).as("done").isEqualTo(403);
+            assertThat(status(post("/api/sales/visits/" + visit + "/cancel"), outsider)).as("cancel").isEqualTo(403);
+            assertThat(ids(ok(range("/api/sales/visits", today, today), outsider))).doesNotContain(visit);
+        }
+        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    @Test
+    void creatingAVisitOnADealThatMovedAwayIsStill403() throws Exception {
+        long deal = deal(salesActor);
+        reassign(deal, otherSalesActor);
+
+        assertThat(status(createRequest(deal, "คุณอรุณ", today, null, false), salesActor)).isEqualTo(403);
+    }
+
+    // ── done only on or before today (review M2) ─────────────────────────────
+
+    @Test
+    void aFutureVisitCannotBeTickedDone() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today.plusDays(1));
+
+        MvcResult result = perform(post("/api/sales/visits/" + visit + "/done"), salesActor);
+
+        assertThat(result.getResponse().getStatus()).isEqualTo(409);
+        assertThat(result.getResponse().getContentAsString(StandardCharsets.UTF_8)).contains("ยังไม่ถึงวันนัด");
+        assertThat(visitStatus(visit)).isEqualTo("PLANNED");
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    @Test
+    void anOverdueVisitCanStillBeTickedDone() throws Exception {
+        long visit = plan(salesActor, null, "คุณอรุณ", today.minusDays(3));
+
+        assertThat(ok(post("/api/sales/visits/" + visit + "/done"), salesActor).get("status").asText())
+            .isEqualTo("DONE");
+    }
+
+    // ── LOW: non-ACTIVE deals, one-step log idempotency ──────────────────────
+
+    @Test
+    void aNewVisitCannotBeLinkedToANonActiveDeal() throws Exception {
+        long lost = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'CLOSED_LOST' WHERE ticket_id = :id", Map.of("id", lost));
+
+        assertThat(status(createRequest(lost, "คุณอรุณ", today, null, false), salesActor)).isEqualTo(400);
+        assertThat(status(createRequest(lost, "คุณอรุณ", today, null, true), salesActor)).isEqualTo(400);
+        assertThat(visitCount()).isZero();
+    }
+
+    @Test
+    void anIdenticalOneStepLogWithin60SecondsIsTheSameVisit() throws Exception {
+        long deal = deal(salesActor);
+
+        long first = ok(createRequest(deal, "Walk-in", today, null, true), salesActor).get("id").asLong();
+        long second = ok(createRequest(deal, "Walk-in", today, null, true), salesActor).get("id").asLong();
+
+        assertThat(second).isEqualTo(first);
+        assertThat(visitCount()).isEqualTo(1);
+        assertThat(siteVisitRows(deal)).isEqualTo(1);
+        // A different contact, or the same one over a minute later, is a new visit.
+        ok(createRequest(deal, "คุณอรุณ", today, null, true), salesActor);
+        jdbc.update("UPDATE sales.visit SET created_at = now() - interval '61 seconds'", Map.of());
+        ok(createRequest(deal, "Walk-in", today, null, true), salesActor);
+        assertThat(visitCount()).isEqualTo(3);
+    }
+
+    @Test
+    void anotherRepsIdenticalLogIsNotMerged() throws Exception {
+        ok(createRequest(null, "Walk-in", today, null, true), salesActor);
+        ok(createRequest(null, "Walk-in", today, null, true), otherSalesActor);
+
+        assertThat(visitCount()).isEqualTo(2);
     }
 
     // ── log a visit that already happened (บันทึกเข้าพบ), in one step ─────────
@@ -330,6 +448,17 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
 
     private static MockHttpServletRequestBuilder range(String path, LocalDate from, LocalDate to) {
         return get(path).param("from", from.toString()).param("to", to.toString());
+    }
+
+    private void reassign(long ticketId, UserPrincipal newOwner) {
+        jdbc.update("UPDATE sales.ticket SET created_by = :o, keyed_by = NULL WHERE ticket_id = :id",
+            Map.of("o", newOwner.id(), "id", ticketId));
+    }
+
+    private Map<String, Object> siteVisit(long ticketId) {
+        return jdbc.queryForMap(
+            "SELECT created_by_id, note FROM sales.deal_activity WHERE ticket_id = :id AND kind = 'SITE_VISIT'",
+            Map.of("id", ticketId));
     }
 
     private String visitStatus(long visitId) {

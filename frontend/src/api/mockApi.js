@@ -4540,7 +4540,7 @@ function buildTicketDetail(ticket) {
       designerName: ticket.designerName ?? null,
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
-      stale: dealComputeStale(ticket, dealActivitiesForTicket(ticket.id)),
+      stale: dealComputeStale(ticket, dealActivitiesForTicket(ticket.id), mockHasUpcomingVisit(ticket.id)),
       // Existence-only flag — see hasRecordedCommission's comment. Never an amount; amounts stay
       // behind commissions.list()'s own role gate.
       commissionRecorded: hasRecordedCommission(ticket),
@@ -8186,7 +8186,7 @@ function mockBoardDeals() {
         expectedQuarter: t.expectedQuarter ?? null,
         lastTouchedAt: Number.isNaN(last) ? null : new Date(last).toISOString(),
         daysQuiet: mockDaysQuietOf(t, activities, now),
-        quiet: mockIsQuiet(t, activities, now),
+        quiet: mockIsQuiet(t, activities, now, MOCK_QUIET_DAYS, mockHasUpcomingVisit(t.id)),
         lastActivityKind: latestActivity?.kind ?? null,
         lastActivityNote: latestActivity?.note ?? null,
         lastTouchedMs: last,
@@ -8265,7 +8265,7 @@ function mockVisitsIn(from, to, ownerId = null) {
     .map(mockVisitDto);
 }
 
-/** VisitService.requireRange: inclusive, at most 31 days, to not before from. */
+/** VisitService.requireRange: ISO dates, inclusive, at most 31 days, to not before from. */
 function mockRequireVisitRange(from, to) {
   const iso = /^\d{4}-\d{2}-\d{2}$/;
   if (!iso.test(from ?? '') || !iso.test(to ?? '') || to < from) fail('ช่วงวันที่ไม่ถูกต้อง', 400);
@@ -8288,18 +8288,32 @@ function mockVisitNotPlanned(visit) {
   fail(`นัดนี้${visit.status === 'DONE' ? 'บันทึกว่าไปแล้ว' : 'ยกเลิกแล้ว'} จึงเปลี่ยนไม่ได้`, 409);
 }
 
-/** TicketService.addActivity(SITE_VISIT, today) — the one path that resets the quiet clock. */
-function mockLogSiteVisit(user, ticketId, note) {
+/** TicketService.recordVisitActivity: SITE_VISIT, today, attributed to the visit's owner (the person who went),
+ * with NO deal-ownership check — the visit's own check already ran (review M1/M3). */
+function mockLogSiteVisit(ownerId, ticketId, note) {
   mockDealActivities.push({
     id: mockDealActivitySeq++,
     ticketId,
     activityDate: mockTodayIso(),
     kind: 'SITE_VISIT',
     note: note ?? null,
-    createdById: user.id,
-    createdByName: user.name,
+    createdById: ownerId,
+    createdByName: db.users.find((u) => u.id === ownerId)?.name ?? null,
     createdAt: new Date().toISOString(),
   });
+}
+
+/** VisitService.cleanNote: trimmed, null when blank, 400 over 2000 characters. */
+function mockCleanVisitNote(note) {
+  const trimmed = (note ?? '').trim();
+  if (trimmed.length > 2000) fail('โน้ตยาวเกิน 2000 ตัวอักษร', 400);
+  return trimmed || null;
+}
+
+/** QuietRule.upcomingVisitSql: a PLANNED visit on the deal dated today (Bangkok) or later. */
+function mockHasUpcomingVisit(ticketId) {
+  const today = mockTodayIso();
+  return mockVisits.some((v) => v.ticketId === ticketId && v.status === 'PLANNED' && v.plannedDate >= today);
 }
 
 /** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
@@ -8688,7 +8702,7 @@ export const api = {
         designerName: t.designerName ?? null,
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
-        stale: dealComputeStale(t, dealActivitiesForTicket(t.id)),
+        stale: dealComputeStale(t, dealActivitiesForTicket(t.id), mockHasUpcomingVisit(t.id)),
         // Same existence-only flag as buildTicketDetail's summary — served on the LIST projection
         // too because accountActions.js's worklist is built from list rows, not detail fetches.
         commissionRecorded: hasRecordedCommission(t),
@@ -13111,7 +13125,7 @@ export const api = {
       }
       // SalesBoardService.repRows: an owner with visits this week but no open deal still gets a row (0 deals).
       const teamVisitsThisWeek = mockVisitsThisWeek();
-      for (const v of teamVisitsThisWeek) {
+      for (const v of teamVisitsThisWeek.filter((x) => x.status !== 'CANCELLED')) {
         if (!byRep.has(v.ownerId)) {
           byRep.set(v.ownerId, {
             employeeId: v.ownerId, name: v.ownerName,
@@ -13155,41 +13169,54 @@ export const api = {
       if (!contactName) fail('กรุณาระบุว่าพบใคร', 400);
       if (contactName.length > 200) fail('ชื่อผู้ที่พบยาวเกิน 200 ตัวอักษร', 400);
       if (!payload?.plannedDate) fail('กรุณาระบุวันที่', 400);
+      // Spring's LocalDate binding rejects anything but ISO yyyy-MM-dd with a 400.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.plannedDate)
+        || Number.isNaN(Date.parse(`${payload.plannedDate}T00:00:00Z`))) fail('รูปแบบวันที่ไม่ถูกต้อง', 400);
       const done = payload.done === true;
       if (done && payload.plannedDate !== mockTodayIso()) {
         fail('บันทึกเข้าพบได้เฉพาะวันนี้ — นัดล่วงหน้าให้ใช้ “นัดเข้าพบ”', 400);
       }
-      const note = (payload.note ?? '').trim() || null;
+      const note = mockCleanVisitNote(payload.note);
       const ticketId = payload.ticketId == null || payload.ticketId === '' ? null : Number(payload.ticketId);
       if (ticketId != null) {
         const ticket = db.tickets.find((t) => t.id === ticketId);
         if (!ticket) fail('ไม่พบดีลนี้', 404);
         if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในดีลนี้ไม่ได้', 400);
+      }
+      if (done) {
+        // VisitRepository.findRecentDoneLog: the same one-step log within 60 s is the same visit.
+        const cutoff = Date.now() - 60_000;
+        const same = mockVisits.filter((v) => v.ownerId === user.id && v.ticketId === ticketId
+          && v.contactName === contactName && v.plannedDate === payload.plannedDate && v.status === 'DONE'
+          && Date.parse(v.createdAt ?? 0) > cutoff).at(-1);
+        if (same) return delay(mockVisitDto(same));
       }
       const visit = {
         id: mockVisitSeq++, ownerId: user.id, ticketId, contactName, plannedDate: payload.plannedDate,
         plannedTime: payload.plannedTime || null, status: done ? 'DONE' : 'PLANNED',
-        doneAt: done ? new Date().toISOString() : null, note,
+        doneAt: done ? new Date().toISOString() : null, note, createdAt: new Date().toISOString(),
       };
       mockVisits.push(visit);
-      if (done && ticketId != null) mockLogSiteVisit(user, ticketId, note);
+      if (done && ticketId != null) mockLogSiteVisit(user.id, ticketId, note);
       return delay(mockVisitDto(visit));
     },
     async done(id, payload = {}) {
       const user = requireSession();
       if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const visit = mockWritableVisit(user, id);
-      if (visit.ticketId != null) {
-        const ticket = db.tickets.find((t) => t.id === visit.ticketId);
-        if (!ticket) fail('ไม่พบดีลนี้', 404);
-        if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const note = mockCleanVisitNote(payload?.note);
+      if (visit.status === 'PLANNED' && visit.plannedDate > mockTodayIso()) {
+        fail('ยังไม่ถึงวันนัด จึงบันทึกว่าเข้าพบแล้วไม่ได้', 409);
       }
       if (visit.status !== 'PLANNED') mockVisitNotPlanned(visit);
-      const note = (payload?.note ?? '').trim() || null;
       visit.status = 'DONE';
       visit.doneAt = new Date().toISOString();
       if (note) visit.note = note;
-      if (visit.ticketId != null) mockLogSiteVisit(user, visit.ticketId, visit.note);
+      if (visit.ticketId != null) {
+        const recordedBy = visit.ownerId !== user.id ? `บันทึกโดย ${user.name}` : null;
+        mockLogSiteVisit(visit.ownerId, visit.ticketId, [visit.note, recordedBy].filter(Boolean).join(' · ') || null);
+      }
       return delay(mockVisitDto(visit));
     },
     async cancel(id) {

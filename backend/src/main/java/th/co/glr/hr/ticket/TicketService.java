@@ -2450,10 +2450,26 @@ public class TicketService {
     /**
      * The deal's sales-side write check, for callers outside this class (VisitService hangs a visit on a deal):
      * 404 when the deal does not exist, 403 unless the actor is its owner/keyer with the sales role, or is
-     * sales_manager / ceo — the same {@link #requireDealOwnership} that guards {@link #addActivity}.
+     * sales_manager / ceo — the same {@link #requireDealOwnership} that guards {@link #addActivity}. Returns the
+     * deal's summary so the caller can check its lifecycle.
      */
-    public void requireDealWriteAccess(long ticketId, UserPrincipal actor) {
-        requireDealOwnership(requireTicket(ticketId).summary(), actor);
+    public TicketSummaryDto requireDealWriteAccess(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        return s;
+    }
+
+    /**
+     * Writes the SITE_VISIT activity for a visit that was ticked done, attributed to {@code visitOwnerId} — the
+     * person who went. Deliberately NO deal-ownership check: VisitService has already verified the caller may write
+     * the VISIT (its owner, or sales_manager / ceo), and a visit that happened stays on the deal's history even
+     * after the deal moved to another rep (review M1). Only VisitService calls this; the deal write check stays on
+     * visit creation.
+     */
+    @Transactional
+    public void recordVisitActivity(long ticketId, java.time.LocalDate activityDate, String note, long visitOwnerId) {
+        requireTicket(ticketId);
+        tickets.insertDealActivity(ticketId, activityDate, DealActivityKind.SITE_VISIT, note, visitOwnerId);
     }
 
     public List<DealActivityDto> listActivities(long ticketId, UserPrincipal actor) {

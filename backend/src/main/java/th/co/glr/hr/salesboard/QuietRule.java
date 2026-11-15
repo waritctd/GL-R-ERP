@@ -13,8 +13,11 @@ import th.co.glr.hr.ticket.TicketEventKind;
 /**
  * The one "quiet" (stale) rule for a deal — spec 2026-11-15 §7.5. A deal is last touched at the latest of its
  * {@code created_at}, any {@code deal_activity} row, and a {@code STAGE_CHANGED} / {@code QUOTATION_ISSUED} event.
- * It is quiet when it is {@code ACTIVE}, not in the deliver &amp; collect board column, and last touched more than
- * {@link #quietDays()} days ago. The threshold is {@code app.sales.quiet-days} (default 14).
+ * It is quiet when it is {@code ACTIVE}, not in the deliver &amp; collect board column, last touched more than
+ * {@link #quietDays()} days ago, and has no booked visit ahead: a {@code sales.visit} that is PLANNED with
+ * {@code planned_date} on or after today (Asia/Bangkok) holds the deal out of ควรตามต่อ (spec §7.3 — booking a visit
+ * is the follow-up). Once that date passes unticked the deal can go quiet again; a DONE visit resets the clock through
+ * its SITE_VISIT activity instead. The threshold is {@code app.sales.quiet-days} (default 14).
  *
  * <p>The SQL fragments need a {@code :quietDays} bind parameter; pass {@link #quietDays()}.
  */
@@ -49,8 +52,19 @@ public class QuietRule {
         return """
             (%1$s.lifecycle = '%2$s'
              AND COALESCE(%1$s.sales_stage, '') NOT IN (%3$s)
-             AND %4$s < now() - make_interval(days => :quietDays))
-            """.formatted(t, DealLifecycle.ACTIVE, deliverAndCollectStagesSql(), lastTouchedSql(t));
+             AND %4$s < now() - make_interval(days => :quietDays)
+             AND NOT %5$s)
+            """.formatted(t, DealLifecycle.ACTIVE, deliverAndCollectStagesSql(), lastTouchedSql(t),
+                upcomingVisitSql(t));
+    }
+
+    /** SQL boolean: the deal aliased {@code t} has a PLANNED visit dated today (Asia/Bangkok) or later. */
+    public static String upcomingVisitSql(String t) {
+        return """
+            EXISTS (SELECT 1 FROM sales.visit uv
+                     WHERE uv.ticket_id = %1$s.ticket_id AND uv.status = 'PLANNED'
+                       AND uv.planned_date >= (now() AT TIME ZONE 'Asia/Bangkok')::date)
+            """.formatted(t);
     }
 
     public boolean isQuiet(long ticketId) {

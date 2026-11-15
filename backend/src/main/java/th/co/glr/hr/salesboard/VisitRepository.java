@@ -56,6 +56,20 @@ public class VisitRepository {
             .stream().findFirst();
     }
 
+    /** The owner's DONE visit with the same deal, contact and date, created in the last {@code seconds} seconds. */
+    public Optional<VisitDto> findRecentDoneLog(long ownerId, Long ticketId, String contactName, LocalDate plannedDate,
+                                                int seconds) {
+        return jdbc.query(SELECT + """
+             WHERE v.owner_id = :ownerId AND v.ticket_id IS NOT DISTINCT FROM :ticketId
+               AND v.contact_name = :contactName AND v.planned_date = :plannedDate AND v.status = 'DONE'
+               AND v.created_at > now() - make_interval(secs => :seconds)
+             ORDER BY v.visit_id DESC LIMIT 1
+            """, new MapSqlParameterSource()
+                .addValue("ownerId", ownerId).addValue("ticketId", ticketId, java.sql.Types.BIGINT)
+                .addValue("contactName", contactName).addValue("plannedDate", plannedDate)
+                .addValue("seconds", seconds), VisitRepository::map).stream().findFirst();
+    }
+
     /** Inserts a visit; {@code done} creates it DONE with {@code done_at = now()}. */
     public long insert(long ownerId, Long ticketId, String contactName, LocalDate plannedDate, LocalTime plannedTime,
                        String note, boolean done) {
