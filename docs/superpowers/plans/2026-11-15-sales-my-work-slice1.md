@@ -85,11 +85,11 @@ upload (slice 3, blocked on a sample export) and the pipeline import (slice 4) g
 ### Task 2: One "quiet" rule replaces `isStale`
 
 **Files:**
-- Create: `backend/src/main/java/th/co/glr/hr/salesboard/QuietRule.java`
+- Create: `backend/src/main/java/th/co/glr/hr/ticket/QuietRule.java`
 - Modify: `backend/src/main/java/th/co/glr/hr/ticket/TicketRepository.java:2102-2115` (`isStale` delegates)
 - Modify: `backend/src/main/resources/application.yml` (`app.sales.quiet-days: 14`)
 - Modify: `backend/src/main/java/th/co/glr/hr/ticket/TicketSummaryDto.java:70` (Javadoc only: 14-day rule)
-- Test: `backend/src/test/java/th/co/glr/hr/salesboard/QuietRuleIntegrationTest.java`
+- Test: `backend/src/test/java/th/co/glr/hr/ticket/QuietRuleIntegrationTest.java`
 
 **Interfaces:**
 - Produces: `@Component QuietRule` with `int quietDays()`, `String lastTouchedSql(String ticketAlias)` (a SQL
