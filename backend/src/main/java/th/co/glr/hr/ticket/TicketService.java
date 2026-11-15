@@ -2447,6 +2447,15 @@ public class TicketService {
             .orElseThrow();
     }
 
+    /**
+     * The deal's sales-side write check, for callers outside this class (VisitService hangs a visit on a deal):
+     * 404 when the deal does not exist, 403 unless the actor is its owner/keyer with the sales role, or is
+     * sales_manager / ceo — the same {@link #requireDealOwnership} that guards {@link #addActivity}.
+     */
+    public void requireDealWriteAccess(long ticketId, UserPrincipal actor) {
+        requireDealOwnership(requireTicket(ticketId).summary(), actor);
+    }
+
     public List<DealActivityDto> listActivities(long ticketId, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
