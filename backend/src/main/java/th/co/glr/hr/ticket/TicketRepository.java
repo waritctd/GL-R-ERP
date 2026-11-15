@@ -1801,6 +1801,23 @@ public class TicketRepository {
         }
     }
 
+    /**
+     * Review H1, reverse order: the Express document number of an EXPRESS receipt already on this deal with the exact
+     * same amount, received within ±{@code days} days of {@code day} (Bangkok) — the payment account is about to type
+     * may be that one. Nearest first.
+     */
+    public java.util.Optional<String> findExpressTwin(long ticketId, BigDecimal amount, java.time.LocalDate day,
+                                                       int days) {
+        return jdbc.query("""
+            SELECT receipt_ref FROM sales.payment_receipt
+             WHERE ticket_id = :t AND source = 'EXPRESS' AND amount = :a
+               AND abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)) <= :days
+             ORDER BY abs((received_at AT TIME ZONE 'Asia/Bangkok')::date - CAST(:d AS date)), receipt_id
+             LIMIT 1
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("a", amount).addValue("d", day)
+                .addValue("days", days), (rs, n) -> rs.getString(1)).stream().findFirst();
+    }
+
     /** An uploaded Express receipt (V213): source EXPRESS, receipt_ref = the Express document number. */
     public long insertExpressReceipt(long ticketId, String kind, BigDecimal amount, long recordedBy, Instant receivedAt,
                                      String expressDocNo, String customerName) {

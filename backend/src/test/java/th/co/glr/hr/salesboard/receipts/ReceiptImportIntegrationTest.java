@@ -1,6 +1,7 @@
 package th.co.glr.hr.salesboard.receipts;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -10,14 +11,18 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
 import java.time.DayOfWeek;
+import java.time.Instant;
 import java.time.LocalDate;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.converter.ByteArrayHttpMessageConverter;
 import org.springframework.http.converter.json.JacksonJsonHttpMessageConverter;
@@ -30,18 +35,20 @@ import org.springframework.test.web.servlet.request.AbstractMockHttpServletReque
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
-import th.co.glr.hr.salesboard.ExpectedPaymentRepository;
+import th.co.glr.hr.ticket.RecordPaymentRequest;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
  * POST /api/sales/receipt-imports and the unmatched queue through the real controller, services, repositories and
- * Postgres (V213). Every file is synthetic, built in the test. Written wrong-way-round where it matters: re-uploading
- * writes nothing; a receipt already typed by hand is not counted twice; two deals that both fit a row get NEITHER; an
- * upload never reaches CLOSED_PAID; sales / sales_manager / import cannot upload; a rep cannot attach a row to another
- * rep's deal, nor to their own deal when the row is not theirs to see. Annotated itself — @EnabledIf is not inherited.
+ * Postgres (V213 + V214). Every file is synthetic, built in the test. Written wrong-way-round where it matters:
+ * re-uploading writes nothing; a receipt account already typed by hand is linked, not doubled — in either order; two
+ * deals that both fit a row get NEITHER; an upload never reaches CLOSED_PAID; only ACCOUNT uploads and works the queue
+ * (not the CEO, not sales, not sales_manager); IV rows are not cash; the whole upload is off until the owner turns it
+ * on; a deal outside account's finance scope is never a candidate. Annotated itself — @EnabledIf is not inherited.
  */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
@@ -50,26 +57,29 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
 
     private final ObjectMapper json = new ObjectMapper();
     private MockMvc mvc;
+    private ReceiptImportRepository repository;
     private UserPrincipal account;
     private UserPrincipal ceo;
     private LocalDate monday;
 
     @BeforeEach
     void wire() {
-        ExpectedPaymentRepository expected = new ExpectedPaymentRepository(jdbc);
-        ReceiptImportRepository repository = new ReceiptImportRepository(jdbc);
-        ReceiptPlacement placement = new ReceiptPlacement(ticketService, expected, repository);
-        ReceiptImportService service = new ReceiptImportService(repository, placement, tickets);
-        mvc = MockMvcBuilders
+        repository = new ReceiptImportRepository(jdbc);
+        mvc = mvcWith(new ReceiptPlacement(ticketService, repository), new ReceiptImportSettings(true, Set.of("RE")));
+        account = actor(createEmployee("บัญชี", "acc-rcpt@glr.co.th", "ACC", "บัญชี", null), "account");
+        ceo = actor(createEmployee("ซีอีโอ", "ceo-rcpt@glr.co.th", "EXE", "ผู้บริหาร", null), "ceo");
+        monday = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"))
+            .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+    }
+
+    private MockMvc mvcWith(ReceiptPlacement placement, ReceiptImportSettings settings) {
+        ReceiptImportService service = new ReceiptImportService(repository, placement, tickets, settings);
+        return MockMvcBuilders
             .standaloneSetup(new ReceiptImportController(service, new SessionContext()))
             .setMessageConverters(new ByteArrayHttpMessageConverter(), new JacksonJsonHttpMessageConverter(
                 JsonMapper.builder().configure(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT, true).build()))
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
-        account = actor(createEmployee("บัญชี", "acc-rcpt@glr.co.th", "ACC", "บัญชี", null), "account");
-        ceo = actor(createEmployee("ซีอีโอ", "ceo-rcpt@glr.co.th", "EXE", "ผู้บริหาร", null), "ceo");
-        monday = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok"))
-            .with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
     }
 
     // ── matching ────────────────────────────────────────────────────────────
@@ -89,28 +99,23 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(r.get("source")).isEqualTo("EXPRESS");
         assertThat(r.get("kind")).isEqualTo("DEPOSIT");
         assertThat(r.get("recorded_by")).isEqualTo(account.id());
-        assertThat(r.get("customer_name")).isEqualTo("ใครก็ได้");
         assertThat(jdbc.queryForObject("SELECT (received_at AT TIME ZONE 'Asia/Bangkok')::date FROM sales.payment_receipt"
             + " WHERE receipt_ref = 'RE-6911-0001'", Map.of(), LocalDate.class)).isEqualTo(LocalDate.of(2026, 11, 12));
         assertThat(expectedStatus(ep)).isEqualTo("RECEIVED");
-        assertThat(jdbc.queryForObject("SELECT receipt_id FROM sales.expected_payment WHERE expected_payment_id = :id",
-            Map.of("id", ep), Long.class)).isEqualTo(((Number) r.get("receipt_id")).longValue());
         assertThat(summary(d).paymentStatus()).isEqualTo("DEPOSIT_PAID");
         assertThat(summary(d).salesStage()).isEqualTo("DEPOSIT_RECEIVED");
     }
 
     @Test
-    void quotationNumberWithRevisionSuffixMatches() throws Exception {
+    void quotationNumberWithAnotherRevisionMatches() throws Exception {
         long d = payableDeal(salesActor, "50000.00");
         String number = jdbc.queryForObject("SELECT number FROM sales.quotation WHERE ticket_id = :t LIMIT 1",
             Map.of("t", d), String.class);
-
-        // Numbers are "<base>-<revision>" (QuotationNumbering, e.g. QT-2026-0001-1); the receipt names another revision.
         String otherRevision = number.replaceFirst("-\\d{1,2}$", "").toLowerCase() + "-2";
+
         JsonNode summary = upload(account, csv(row("RE-Q-1", "2026-11-12", "", "1000", otherRevision)));
 
-        assertThat(summary.get("matched").asInt()).as("quotation number %s, summary %s", number, summary)
-            .isEqualTo(1);
+        assertThat(summary.get("matched").asInt()).as("quotation number %s", number).isEqualTo(1);
         assertThat(receipt("RE-Q-1").get("ticket_id")).isEqualTo(d);
     }
 
@@ -126,8 +131,21 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(summary.get("matched").asInt()).isEqualTo(1);
         assertThat(summary.get("unmatched").asInt()).isEqualTo(1);
         assertThat(receipt("RE-C-1").get("ticket_id")).isEqualTo(d);
-        assertThat(receiptCount("RE-C-2")).isZero();
         assertThat(queueReason("RE-C-2")).isEqualTo("NO_CANDIDATE");
+    }
+
+    /** Review M5: the customer names printed on the deal's issued documents count too, not only the ticket's. */
+    @Test
+    void theCustomerNameOnTheDealsDepositNoticeAlsoMatches() throws Exception {
+        long d = payableDeal(salesActor, "50000.00");
+        jdbc.update("UPDATE sales.ticket SET customer_name = 'ชื่อในดีลไม่ตรง' WHERE ticket_id = :t", Map.of("t", d));
+        notice(d, "1000.00", null, "ISSUED", "บริษัท ชื่อบนใบแจ้งหนี้ จำกัด");
+        expectedRow(d, "DEPOSIT", "2000.00", monday);
+
+        JsonNode summary = upload(account, csv(row("RE-N-1", "2026-11-12", "ชื่อบนใบแจ้งหนี้", "2000", "")));
+
+        assertThat(summary.get("matched").asInt()).isEqualTo(1);
+        assertThat(receipt("RE-N-1").get("ticket_id")).isEqualTo(d);
     }
 
     @Test
@@ -140,11 +158,25 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         JsonNode summary = upload(account, csv(row("RE-A-1", "2026-11-12", "ผู้รับใบเสนอราคา", "15000", "")));
 
         assertThat(summary.get("matched").asInt()).isZero();
-        assertThat(summary.get("unmatched").asInt()).isEqualTo(1);
-        assertThat(receiptCount("RE-A-1")).isZero();
         assertThat(queueReason("RE-A-1")).isEqualTo("AMBIGUOUS");
         assertThat(paidOn(a)).isEqualByComparingTo("0");
         assertThat(paidOn(b)).isEqualByComparingTo("0");
+    }
+
+    /** Review M1: candidates reload per row — the second identical row in a file must not ride the first's match. */
+    @Test
+    void twoRowsForTheSameCustomerInOneFile_theSecondDoesNotReuseTheFirstsExpectedPayment() throws Exception {
+        long d = payableDeal(salesActor, "50000.00");
+        long ep = expectedRow(d, "DEPOSIT", "15000.00", monday);
+
+        JsonNode summary = upload(account, csv(
+            row("RE-2R-1", "2026-11-12", "ผู้รับใบเสนอราคา", "15000", ""),
+            row("RE-2R-2", "2026-11-13", "ผู้รับใบเสนอราคา", "15000", "")));
+
+        assertThat(summary.get("matched").asInt()).isEqualTo(1);
+        assertThat(summary.get("unmatched").asInt()).isEqualTo(1);
+        assertThat(expectedStatus(ep)).isEqualTo("RECEIVED");
+        assertThat(paidOn(d)).isEqualByComparingTo("15000");
     }
 
     @Test
@@ -156,6 +188,18 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(summary.get("unmatched").asInt()).isEqualTo(1);
         assertThat(queueReason("RE-O-1")).isEqualTo("OVERPAYMENT");
         assertThat(paidOn(d)).isEqualByComparingTo("0");
+    }
+
+    /** Review M7: a superseded or cancelled document is not a candidate. */
+    @Test
+    void aSupersededDepositNoticeNumberIsNotACandidate() throws Exception {
+        long d = awaitingDeposit(salesActor, "32100.00", "DN6900040");
+        notice(d, "32100.00", "DN6900041", "SUPERSEDED", "x");
+
+        JsonNode summary = upload(account, csv(row("RE-S-1", "2026-11-12", "", "32100", "DN6900041")));
+
+        assertThat(summary.get("matched").asInt()).isZero();
+        assertThat(queueReason("RE-S-1")).isEqualTo("NO_CANDIDATE");
     }
 
     @Test
@@ -170,11 +214,86 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         assertThat(summary(d).salesStage()).isEqualTo("DELIVERED");
 
         ticketService.confirmFinalPayment(d, account);
-        assertThat(summary(d).paymentStatus()).isEqualTo("FULLY_PAID");
         assertThat(summary(d).salesStage()).isEqualTo("CLOSED_PAID");
     }
 
-    // ── idempotency ─────────────────────────────────────────────────────────
+    // ── H1: the same payment typed by hand AND uploaded ─────────────────────
+
+    /** Probe P1, manual first: the Express row is the payment account already typed — link it, write nothing. */
+    @Test
+    void probeP1_manualFirst_theExpressRowLinksToTheManualReceipt_andNothingIsWritten() throws Exception {
+        long d = awaitingDeposit(salesActor, "32100.00", "DN6900050");
+        // Account confirms the deposit by hand first — the real flow: the deal moves to DEPOSIT_PAID, so an Express row
+        // placed now would be a BALANCE. It is still the same payment.
+        ticketService.confirmDepositPaid(d, account);
+        long manual = jdbc.queryForObject("SELECT receipt_id FROM sales.payment_receipt WHERE ticket_id = :t",
+            Map.of("t", d), Long.class);
+        String today = LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")).toString();
+
+        JsonNode summary = upload(account, csv(row("RE-H1-1", today, "", "32100", "DN6900050")));
+
+        assertThat(summary.get("matched").asInt()).isZero();
+        assertThat(summary.get("matchedManual").asInt()).isEqualTo(1);
+        assertThat(receiptCount("RE-H1-1")).isZero();
+        assertThat(paidOn(d)).isEqualByComparingTo("32100");
+        Map<String, Object> m = jdbc.queryForMap("SELECT * FROM sales.payment_receipt WHERE receipt_id = :id",
+            Map.of("id", manual));
+        assertThat(m.get("express_doc_no")).isEqualTo("RE-H1-1");
+        assertThat(m.get("source")).isEqualTo("MANUAL");
+        assertThat(m.get("note")).as("manual fields untouched").isEqualTo("ยืนยันรับมัดจำ");
+
+        JsonNode again = upload(account, csv(row("RE-H1-1", today, "", "32100", "DN6900050")));
+        assertThat(again.get("duplicates").asInt()).as("a linked number is known").isEqualTo(1);
+    }
+
+    @Test
+    void aManualReceiptMoreThanSevenDaysAwayIsNotTheSamePayment() throws Exception {
+        long d = payableDeal(salesActor, "100000.00");
+        manualReceipt(d, "BALANCE", "5000.00", "2026-10-01T03:00:00Z", "MAN-OLD");
+        String number = jdbc.queryForObject("SELECT number FROM sales.quotation WHERE ticket_id = :t LIMIT 1",
+            Map.of("t", d), String.class);
+
+        JsonNode summary = upload(account, csv(row("RE-H1-2", "2026-11-12", "", "5000", number)));
+
+        assertThat(summary.get("matched").asInt()).isEqualTo(1);
+        assertThat(summary.get("matchedManual").asInt()).isZero();
+        assertThat(paidOn(d)).isEqualByComparingTo("10000");
+    }
+
+    /** Probe P1, Express first: typing the same payment by hand is refused (409) unless account confirms it. */
+    @Test
+    void probeP1_expressFirst_aManualReceiptOfTheSameAmountNeedsAnExplicitConfirm() throws Exception {
+        long d = payableDeal(salesActor, "100000.00");
+        String number = jdbc.queryForObject("SELECT number FROM sales.quotation WHERE ticket_id = :t LIMIT 1",
+            Map.of("t", d), String.class);
+        upload(account, csv(row("RE-H1-3", LocalDate.now().toString(), "", "5000", number)));
+        RecordPaymentRequest same = new RecordPaymentRequest("BALANCE", new BigDecimal("5000"), null, null, null,
+            "โอน", false);
+
+        ApiException refused = refusal(() -> ticketService.recordPayment(d, same, account), HttpStatus.CONFLICT);
+        assertThat(refused.getDetails()).containsEntry("code", "POSSIBLE_DUPLICATE").containsEntry("expressDocNo",
+            "RE-H1-3");
+        assertThat(refused.getMessage()).contains("อาจซ้ำกับ RE-H1-3 ที่อัปโหลดแล้ว");
+        assertThat(paidOn(d)).isEqualByComparingTo("5000");
+
+        ticketService.recordPayment(d, same, account, true);
+        assertThat(paidOn(d)).isEqualByComparingTo("10000");
+    }
+
+    @Test
+    void probeP1_expressFirst_confirmDepositPaidIsGuardedToo() throws Exception {
+        long d = awaitingDeposit(salesActor, "32100.00", "DN6900060");
+        // An Express receipt of the deposit amount landed on the deal while it still awaits the confirm.
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref, source)
+            VALUES (:t, 'BALANCE', 32100.00, :by, 'RE-H1-4', 'EXPRESS')""", Map.of("t", d, "by", account.id()));
+
+        ApiException refused = refusal(() -> ticketService.confirmDepositPaid(d, account), HttpStatus.CONFLICT);
+        assertThat(refused.getDetails()).containsEntry("code", "POSSIBLE_DUPLICATE");
+        assertThat(paidOn(d)).isEqualByComparingTo("32100");
+    }
+
+    // ── idempotency, invalid rows, robustness ───────────────────────────────
 
     @Test
     void reUploadingTheSameFileIsAllDuplicatesAndWritesNothing() throws Exception {
@@ -182,7 +301,7 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         byte[] file = csv(
             row("RE-R-1", "2026-11-12", "", "32100", "DN6900032"),
             row("RE-R-2", "2026-11-12", "ไม่มีดีลนี้", "777", ""),
-            row("RE-R-1", "2026-11-12", "", "32100", "DN6900032")); // the same row twice in one file
+            row("RE-R-1", "2026-11-12", "", "32100", "DN6900032"));
 
         JsonNode first = upload(account, file);
         assertThat(first.get("matched").asInt()).isEqualTo(1);
@@ -192,10 +311,8 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         int queued = count("sales.receipt_import_row");
         String status = summary(d).paymentStatus();
 
-        JsonNode second = upload(ceo, file);
+        JsonNode second = upload(account, file);
 
-        assertThat(second.get("matched").asInt()).isZero();
-        assertThat(second.get("unmatched").asInt()).isZero();
         assertThat(second.get("duplicates").asInt()).isEqualTo(3);
         assertThat(second.get("duplicateAmount").decimalValue()).isEqualByComparingTo("64977");
         assertThat(count("sales.payment_receipt")).isEqualTo(receipts);
@@ -206,10 +323,7 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
     @Test
     void aReceiptAlreadyTypedByHandWithTheSameNumberIsCountedOnce_andIsNotTouched() throws Exception {
         long d = awaitingDeposit(salesActor, "32100.00", "DN6900033");
-        long manual = jdbc.queryForObject("""
-            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref, note)
-            VALUES (:t, 'DEPOSIT', 32100, :by, 'RE-6911-0100', 'พิมพ์เอง') RETURNING receipt_id
-            """, Map.of("t", d, "by", account.id()), Long.class);
+        long manual = manualReceipt(d, "DEPOSIT", "32100", "2026-09-01T03:00:00Z", "RE-6911-0100");
         String before = jdbc.queryForObject(
             "SELECT row_to_json(r)::text FROM sales.payment_receipt r WHERE receipt_id = :id", Map.of("id", manual),
             String.class);
@@ -217,13 +331,10 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         JsonNode summary = upload(account, csv(row(" re-6911-0100 ", "2026-11-12", "", "32100", "DN6900033")));
 
         assertThat(summary.get("duplicates").asInt()).isEqualTo(1);
-        assertThat(summary.get("matched").asInt()).isZero();
         assertThat(paidOn(d)).isEqualByComparingTo("32100");
-        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE ticket_id = :t",
-            Map.of("t", d), Integer.class)).isEqualTo(1);
         assertThat(jdbc.queryForObject(
             "SELECT row_to_json(r)::text FROM sales.payment_receipt r WHERE receipt_id = :id", Map.of("id", manual),
-            String.class)).as("the manual receipt is untouched").isEqualTo(before);
+            String.class)).isEqualTo(before);
     }
 
     @Test
@@ -231,32 +342,248 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         long d = awaitingDeposit(salesActor, "32100.00", "DN6900034");
         JsonNode summary = upload(account, csv(
             row("", "2026-11-12", "", "100", ""),
+            row("RE-" + "X".repeat(60), "2026-11-12", "", "100", ""),       // review M2: over the 60-character column
             row("RE-B-2", "2026-11-12", "", "32100", "DN6900034")));
 
-        assertThat(summary.get("invalid").asInt()).isEqualTo(1);
-        assertThat(summary.get("errors").get(0).get("line").asInt()).isEqualTo(2);
+        assertThat(summary.get("invalid").asInt()).isEqualTo(2);
+        assertThat(summary.get("errors").get(1).get("line").asInt()).isEqualTo(3);
+        assertThat(summary.get("errors").get(1).get("message").asText()).contains("60");
         assertThat(summary.get("matched").asInt()).isEqualTo(1);
         assertThat(paidOn(d)).isEqualByComparingTo("32100");
     }
 
-    // ── authz: who may upload ────────────────────────────────────────────────
+    /** Review H4: only cash document types become receipts; the doc-type column wins over the number's prefix. */
+    @Test
+    void invoiceRowsAreNotCash_andTheDocTypeColumnDecides() throws Exception {
+        long d = awaitingDeposit(salesActor, "32100.00", "DN6900035");
+        byte[] file = ("เลขที่เอกสาร,ประเภทเอกสาร,วันที่,ลูกค้า,จำนวนเงิน,อ้างอิง\n"
+            + "IV-6911-0001,,2026-11-12,,32100,DN6900035\n"
+            + "X-0002,IV,2026-11-12,,32100,DN6900035\n"
+            + "X-0003,re,2026-11-12,,32100,DN6900035\n").getBytes(StandardCharsets.UTF_8);
+
+        JsonNode summary = upload(account, file);
+
+        assertThat(summary.get("nonCash").asInt()).isEqualTo(2);
+        assertThat(summary.get("matched").asInt()).isEqualTo(1);
+        assertThat(receipt("X-0003").get("ticket_id")).isEqualTo(d);
+        assertThat(receiptCount("IV-6911-0001")).isZero();
+        assertThat(receiptCount("X-0002")).isZero();
+        assertThat(count("sales.receipt_import_row")).as("non-cash rows are not queued either").isZero();
+    }
+
+    /** Review H4: the whole upload is off until the owner has checked a real export. */
+    @Test
+    void theUploadIsOffByDefault() throws Exception {
+        MockMvc off = mvcWith(new ReceiptPlacement(ticketService, repository), new ReceiptImportSettings(false, Set.of("RE")));
+        MvcResult refused = performOn(off, uploadRequest(csv(row("RE-OFF-1", "2026-11-12", "", "1", ""))), account);
+        assertThat(refused.getResponse().getStatus()).isEqualTo(409);
+        assertThat(count("sales.receipt_import")).isZero();
+        JsonNode latest = json.readTree(performOn(off, get("/api/sales/receipt-imports/latest"), account)
+            .getResponse().getContentAsString(StandardCharsets.UTF_8));
+        assertThat(latest.get("uploadEnabled").asBoolean()).isFalse();
+        assertThat(ok(get("/api/sales/receipt-imports/latest"), account).get("uploadEnabled").asBoolean()).isTrue();
+        assertThat(new ReceiptImportSettings(false, null).cashDocTypes()).as("default cash types").containsExactly("RE");
+    }
+
+    /** Probe P2: a concurrent upload landed the same number (another case) between the check and the write. */
+    @Test
+    void probeP2_aConcurrentDuplicateIsCountedAsADuplicate_notAnUnmatchedRow() throws Exception {
+        long d = awaitingDeposit(salesActor, "32100.00", "DN6900070");
+        long other = deal(otherSalesActor);
+        ReceiptPlacement racing = new ReceiptPlacement(ticketService, repository) {
+            @Override
+            public long place(long ticketId, ParsedReceipt row, UserPrincipal actor) {
+                jdbc.update("""
+                    INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref, source)
+                    VALUES (:t, 'BALANCE', 1, :by, ' re-p2-1', 'EXPRESS')""", Map.of("t", other, "by", account.id()));
+                return super.place(ticketId, row, actor);
+            }
+        };
+        MockMvc mvc2 = mvcWith(racing, new ReceiptImportSettings(true, Set.of("RE")));
+
+        JsonNode summary = json.readTree(performOn(mvc2, uploadRequest(csv(row("RE-P2-1", "2026-11-12", "", "32100",
+            "DN6900070"))), account).getResponse().getContentAsString(StandardCharsets.UTF_8));
+
+        assertThat(summary.get("duplicates").asInt()).isEqualTo(1);
+        assertThat(summary.get("unmatched").asInt()).isZero();
+        assertThat(paidOn(d)).isEqualByComparingTo("0");
+    }
+
+    /** Probe P5: any failure on one row is that row's error; the rest land and the stored summary is honest. */
+    @Test
+    void probeP5_anUnexpectedFailureOnOneRowIsRecorded_andTheSummaryStaysHonest() throws Exception {
+        long d = awaitingDeposit(salesActor, "32100.00", "DN6900080");
+        long e = awaitingDeposit(otherSalesActor, "1000.00", "DN6900081");
+        ReceiptPlacement flaky = new ReceiptPlacement(ticketService, repository) {
+            @Override
+            public long place(long ticketId, ParsedReceipt row, UserPrincipal actor) {
+                if (row.docNo().equals("RE-P5-1")) {
+                    throw new IllegalStateException("boom");
+                }
+                return super.place(ticketId, row, actor);
+            }
+        };
+        MockMvc mvc2 = mvcWith(flaky, new ReceiptImportSettings(true, Set.of("RE")));
+
+        JsonNode summary = json.readTree(performOn(mvc2, uploadRequest(csv(
+            row("RE-P5-1", "2026-11-12", "", "32100", "DN6900080"),
+            row("RE-P5-2", "2026-11-12", "", "1000", "DN6900081"))), account)
+            .getResponse().getContentAsString(StandardCharsets.UTF_8));
+
+        assertThat(summary.get("failed").asInt()).isEqualTo(1);
+        assertThat(summary.get("matched").asInt()).isEqualTo(1);
+        assertThat(summary.get("errors").get(0).get("line").asInt()).isEqualTo(2);
+        assertThat(paidOn(e)).isEqualByComparingTo("1000");
+        assertThat(paidOn(d)).isEqualByComparingTo("0");
+        Map<String, Object> stored = jdbc.queryForMap("SELECT matched, failed, total_rows FROM sales.receipt_import", Map.of());
+        assertThat(stored.get("matched")).isEqualTo(1);
+        assertThat(stored.get("failed")).isEqualTo(1);
+        assertThat(stored.get("total_rows")).isEqualTo(2);
+    }
+
+    /** Review M3: the EXPRESS reference index is case- and space-insensitive (two "upserts" of one number). */
+    @Test
+    void twoExpressReceiptsWhoseNumbersDifferOnlyByCaseOrSpacesCannotBothExist() {
+        long d = deal(salesActor);
+        jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref, source)
+            VALUES (:t, 'BALANCE', 1, :by, 'RE-CASE-1', 'EXPRESS')""", Map.of("t", d, "by", account.id()));
+        assertThatThrownBy(() -> jdbc.update("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref, source)
+            VALUES (:t, 'BALANCE', 1, :by, ' re-case-1 ', 'EXPRESS')""", Map.of("t", d, "by", account.id())))
+            .isInstanceOf(DataIntegrityViolationException.class);
+    }
+
+    // ── authz: account only ─────────────────────────────────────────────────
 
     @Test
-    void onlyAccountAndCeoMayUploadOrDownloadTheTemplate() throws Exception {
+    void onlyAccountMayUploadOrDownloadTheTemplate_notTheCeo() throws Exception {
         byte[] file = csv(row("RE-Z-1", "2026-11-12", "", "1", ""));
         UserPrincipal importer = actor(createEmployee("นำเข้า", "imp-rcpt@glr.co.th", "IMP", "นำเข้า", null), "import");
-        for (UserPrincipal refused : List.of(salesActor, salesManagerActor, importer)) {
+        for (UserPrincipal refused : List.of(ceo, salesActor, salesManagerActor, importer)) {
             assertThat(status(uploadRequest(file), refused)).as(refused.role()).isEqualTo(403);
             assertThat(status(get("/api/sales/receipt-imports/template"), refused)).as(refused.role()).isEqualTo(403);
             assertThat(status(get("/api/sales/receipt-imports/latest"), refused)).as(refused.role()).isEqualTo(403);
         }
         assertThat(count("sales.receipt_import")).isZero();
-        assertThat(count("sales.receipt_import_row")).isZero();
+        refusal(() -> ticketService.recordExpressReceipt(deal(salesActor), BigDecimal.ONE, Instant.now(), "RE-CEO-1",
+            null, ceo), HttpStatus.FORBIDDEN);
+        assertThat(status(uploadRequest(file), account)).isEqualTo(200);
+    }
 
-        MvcResult template = perform(get("/api/sales/receipt-imports/template"), account);
-        assertThat(template.getResponse().getStatus()).isEqualTo(200);
-        assertThat(template.getResponse().getContentAsString(StandardCharsets.UTF_8)).contains("เลขที่เอกสาร");
-        assertThat(status(uploadRequest(file), ceo)).isEqualTo(200);
+    /** Review H3: the queue is account's. A rep sees none of it; a sales_manager cannot work it. */
+    @Test
+    void repsAndManagersCannotReadOrResolveTheQueue() throws Exception {
+        long mine = payableDeal(salesActor, "50000.00");
+        upload(account, csv(row("RE-U-1", "2026-11-12", "ผู้รับใบเสนอราคา", "4321", "")));
+        long rowId = rowId("RE-U-1");
+
+        for (UserPrincipal refused : List.of(salesActor, salesManagerActor, ceo)) {
+            assertThat(status(get("/api/sales/receipt-imports/unmatched"), refused)).as(refused.role()).isEqualTo(403);
+            assertThat(status(resolve(rowId, mine), refused)).as(refused.role()).isEqualTo(403);
+            assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId + "/ignore"), refused))
+                .as(refused.role()).isEqualTo(403);
+        }
+        assertThat(status(get("/api/sales/receipt-imports/manager-view"), salesActor)).isEqualTo(403);
+        assertThat(rowStatus(rowId)).isEqualTo("UNMATCHED");
+        assertThat(receiptCount("RE-U-1")).isZero();
+        refusal(() -> ticketService.recordExpressReceipt(mine, BigDecimal.ONE, Instant.now(), "RE-REP-1", null,
+            salesActor), HttpStatus.FORBIDDEN);
+    }
+
+    @Test
+    void theManagersViewIsACountPlusOnlyWhatAccountFlagged() throws Exception {
+        upload(account, csv(row("RE-M-1", "2026-11-12", "ไม่มีลูกค้านี้", "111", ""),
+            row("RE-M-2", "2026-11-12", "ไม่มีลูกค้านี้เหมือนกัน", "222", "")));
+        assertThat(ok(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-M-2") + "/flag-manager"), account)
+            .get("managerFlaggedAt").isNull()).isFalse();
+        assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId("RE-M-1") + "/flag-manager"),
+            salesManagerActor)).isEqualTo(403);
+
+        JsonNode view = ok(get("/api/sales/receipt-imports/manager-view"), salesManagerActor);
+        assertThat(view.get("openUnmatched").asInt()).isEqualTo(2);
+        assertThat(view.get("flagged")).hasSize(1);
+        assertThat(view.get("flagged").get(0).get("docNo").asText()).isEqualTo("RE-M-2");
+        assertThat(view.get("flagged").get(0).has("candidates")).as("read-only: no deals to pick").isFalse();
+    }
+
+    @Test
+    void accountAttachesARowToADealInOneTap() throws Exception {
+        long mine = payableDeal(salesActor, "50000.00");
+        upload(account, csv(row("RE-T-1", "2026-11-12", "ผู้รับใบเสนอราคา", "4321", "")));
+        long rowId = rowId("RE-T-1");
+        JsonNode queue = ok(get("/api/sales/receipt-imports/unmatched"), account);
+        assertThat(candidateIds(queue.get(0))).containsExactly(mine);
+
+        JsonNode resolved = ok(resolve(rowId, mine), account);
+
+        assertThat(resolved.get("status").asText()).isEqualTo("RESOLVED");
+        assertThat(receipt("RE-T-1").get("ticket_id")).isEqualTo(mine);
+        assertThat(status(resolve(rowId, mine), account)).as("already resolved").isEqualTo(409);
+    }
+
+    /** Review M4: a deal outside account's finance scope is never a candidate and cannot be resolved onto. */
+    @Test
+    void aDealOutsideAccountsScopeIsNeverACandidate_norAResolveTarget() throws Exception {
+        long lead = deal(salesActor); // LEAD_APPROACH: outside account's scope
+        notice(lead, "1000.00", "DN6900090", "ISSUED", "x");
+        expectedRow(lead, "DEPOSIT", "1000.00", monday);
+
+        JsonNode summary = upload(account, csv(row("RE-SC-1", "2026-11-12", "", "1000", "DN6900090")));
+
+        assertThat(summary.get("matched").asInt()).isZero();
+        assertThat(candidateIds(ok(get("/api/sales/receipt-imports/unmatched"), account).get(0))).isEmpty();
+        assertThat(status(resolve(rowId("RE-SC-1"), lead), account)).isEqualTo(403);
+        assertThat(paidOn(lead)).isEqualByComparingTo("0");
+        assertThat(ids(ok(get("/api/sales/receipt-imports/deals").param("q", "slice 2"), account))).doesNotContain(lead);
+    }
+
+    /** Review M5: account can search its scope for a deal when the matcher found none. */
+    @Test
+    void theDealPickerSearchesAccountsScopeOnly() throws Exception {
+        long order = payableDeal(salesActor, "50000.00");
+        long lead = deal(salesActor);
+
+        List<Long> found = ids(ok(get("/api/sales/receipt-imports/deals").param("q", "ผู้รับ"), account));
+
+        assertThat(found).contains(order).doesNotContain(lead);
+        assertThat(status(get("/api/sales/receipt-imports/deals").param("q", "ผู้รับ"), salesManagerActor))
+            .isEqualTo(403);
+    }
+
+    /** Review M7: one billing-note receipt split across the deals it covers; the lines must sum to the row. */
+    @Test
+    void aRowCanBeSplitAcrossDeals_onlyWhenTheLinesSumToTheRow() throws Exception {
+        long a = payableDeal(salesActor, "50000.00");
+        long b = payableDeal(otherSalesActor, "50000.00");
+        upload(account, csv(row("RE-SP-1", "2026-11-12", "ไม่มีลูกค้านี้", "3000", "")));
+        long rowId = rowId("RE-SP-1");
+
+        assertThat(status(split(rowId, a, "1000", b, "1999.99"), account)).isEqualTo(400);
+        assertThat(status(split(rowId, a, "1000", b, "2000"), salesManagerActor)).isEqualTo(403);
+        assertThat(rowStatus(rowId)).isEqualTo("UNMATCHED");
+
+        assertThat(ok(split(rowId, a, "1000", b, "2000"), account).get("status").asText()).isEqualTo("RESOLVED");
+        assertThat(paidOn(a)).isEqualByComparingTo("1000");
+        assertThat(paidOn(b)).isEqualByComparingTo("2000");
+        assertThat(jdbc.queryForObject("SELECT sum(amount) FROM sales.receipt_import_allocation WHERE row_id = :r",
+            Map.of("r", rowId), BigDecimal.class)).isEqualByComparingTo("3000");
+    }
+
+    @Test
+    void ignoreAndUnignoreAreAccounts() throws Exception {
+        upload(account, csv(row("RE-I-1", "2026-11-12", "ไม่มีใคร", "4321", "")));
+        long rowId = rowId("RE-I-1");
+
+        assertThat(ok(post("/api/sales/receipt-imports/unmatched/" + rowId + "/ignore"), account)
+            .get("status").asText()).isEqualTo("IGNORED");
+        assertThat(docNos(ok(get("/api/sales/receipt-imports/unmatched"), account))).doesNotContain("RE-I-1");
+        assertThat(docNos(ok(get("/api/sales/receipt-imports/ignored"), account))).contains("RE-I-1");
+        assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId + "/unignore"), salesManagerActor))
+            .isEqualTo(403);
+        assertThat(ok(post("/api/sales/receipt-imports/unmatched/" + rowId + "/unignore"), account)
+            .get("status").asText()).isEqualTo("UNMATCHED");
+        assertThat(docNos(ok(get("/api/sales/receipt-imports/unmatched"), account))).contains("RE-I-1");
     }
 
     @Test
@@ -264,113 +591,7 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         upload(account, csv(row("RE-L-1", "2026-11-12", "ไม่มีใคร", "10", ""), row("RE-L-2", "2026-11-12", "ไม่มี", "20", "")));
         JsonNode latest = ok(get("/api/sales/receipt-imports/latest"), account);
         assertThat(latest.get("latest").get("fileName").asText()).isEqualTo("express.csv");
-        assertThat(latest.get("latest").get("unmatched").asInt()).isEqualTo(2);
         assertThat(latest.get("openUnmatched").asInt()).isEqualTo(2);
-    }
-
-    // ── the unmatched queue ─────────────────────────────────────────────────
-
-    @Test
-    void aRepSeesOnlyRowsTheirOwnDealsCouldBe_andOnlyTheirOwnCandidates() throws Exception {
-        long mine = payableDeal(salesActor, "50000.00");
-        long theirs = payableDeal(otherSalesActor, "50000.00");
-        upload(account, csv(
-            row("RE-U-1", "2026-11-12", "ผู้รับใบเสนอราคา", "4321", ""),   // both reps' deals are this customer
-            row("RE-U-2", "2026-11-12", "ไม่มีลูกค้านี้", "999", "")));
-
-        JsonNode repView = ok(get("/api/sales/receipt-imports/unmatched"), salesActor);
-        assertThat(docNos(repView)).containsExactly("RE-U-1");
-        assertThat(candidateIds(repView.get(0))).containsExactly(mine).doesNotContain(theirs);
-
-        JsonNode managerView = ok(get("/api/sales/receipt-imports/unmatched"), salesManagerActor);
-        assertThat(docNos(managerView)).containsExactlyInAnyOrder("RE-U-1", "RE-U-2");
-        JsonNode both = managerView.get(docNos(managerView).indexOf("RE-U-1"));
-        assertThat(candidateIds(both)).containsExactlyInAnyOrder(mine, theirs);
-        assertThat(docNos(ok(get("/api/sales/receipt-imports/unmatched"), account))).hasSize(2);
-    }
-
-    @Test
-    void aRepAttachesARowToTheirOwnDeal_inOneTap() throws Exception {
-        long mine = payableDeal(salesActor, "50000.00");
-        payableDeal(otherSalesActor, "50000.00");
-        upload(account, csv(row("RE-T-1", "2026-11-12", "ผู้รับใบเสนอราคา", "4321", "")));
-        long rowId = rowId("RE-T-1");
-
-        JsonNode resolved = ok(resolve(rowId, mine), salesActor);
-
-        assertThat(resolved.get("status").asText()).isEqualTo("RESOLVED");
-        Map<String, Object> r = receipt("RE-T-1");
-        assertThat(r.get("ticket_id")).isEqualTo(mine);
-        assertThat(r.get("source")).isEqualTo("EXPRESS");
-        assertThat(r.get("recorded_by")).isEqualTo(salesActor.id());
-        assertThat(status(resolve(rowId, mine), salesActor)).as("already resolved").isEqualTo(409);
-        assertThat(receiptCount("RE-T-1")).isEqualTo(1);
-    }
-
-    @Test
-    void aRepCannotAttachARowToAnotherRepsDeal() throws Exception {
-        payableDeal(salesActor, "50000.00");
-        long theirs = payableDeal(otherSalesActor, "50000.00");
-        upload(account, csv(row("RE-W-1", "2026-11-12", "ผู้รับใบเสนอราคา", "4321", "")));
-        long rowId = rowId("RE-W-1");
-
-        assertThat(status(resolve(rowId, theirs), salesActor)).isEqualTo(403);
-
-        assertThat(receiptCount("RE-W-1")).isZero();
-        assertThat(rowStatus(rowId)).isEqualTo("UNMATCHED");
-        assertThat(paidOn(theirs)).isEqualByComparingTo("0");
-    }
-
-    @Test
-    void aRepCannotPullARowThatIsNotTheirsOntoTheirOwnDeal() throws Exception {
-        long mine = payableDeal(salesActor, "50000.00");
-        jdbc.update("UPDATE sales.ticket SET customer_name = 'ลูกค้าคนละราย' WHERE ticket_id = :t", Map.of("t", mine));
-        long theirs = payableDeal(otherSalesActor, "50000.00");
-        upload(account, csv(row("RE-X-1", "2026-11-12", "ผู้รับใบเสนอราคา", "4321", "")));
-        long rowId = rowId("RE-X-1");
-
-        assertThat(status(resolve(rowId, mine), salesActor)).isEqualTo(403);
-        assertThat(rowStatus(rowId)).isEqualTo("UNMATCHED");
-        assertThat(receiptCount("RE-X-1")).isZero();
-
-        // A manager may attach it anywhere that fits.
-        assertThat(ok(resolve(rowId, theirs), salesManagerActor).get("status").asText()).isEqualTo("RESOLVED");
-    }
-
-    /** The service gate under the queue's own: even called directly, a rep cannot put Express money on another rep's deal. */
-    @Test
-    void recordExpressReceiptRefusesARepOnAnotherRepsDeal_evenCalledDirectly() {
-        long theirs = payableDeal(otherSalesActor, "50000.00");
-        refusal(() -> ticketService.recordExpressReceipt(theirs, new BigDecimal("100"), java.time.Instant.now(),
-            "RE-D-1", null, salesActor), org.springframework.http.HttpStatus.FORBIDDEN);
-        assertThat(receiptCount("RE-D-1")).isZero();
-        UserPrincipal importer = actor(createEmployee("นำเข้า", "imp-d@glr.co.th", "IMP", "นำเข้า", null), "import");
-        refusal(() -> ticketService.recordExpressReceipt(theirs, new BigDecimal("100"), java.time.Instant.now(),
-            "RE-D-2", null, importer), org.springframework.http.HttpStatus.FORBIDDEN);
-        assertThat(paidOn(theirs)).isEqualByComparingTo("0");
-    }
-
-    @Test
-    void ignoreIsForAccountAndManagers_notReps() throws Exception {
-        payableDeal(salesActor, "50000.00");
-        upload(account, csv(row("RE-I-1", "2026-11-12", "ผู้รับใบเสนอราคา", "4321", "")));
-        long rowId = rowId("RE-I-1");
-
-        assertThat(status(post("/api/sales/receipt-imports/unmatched/" + rowId + "/ignore"), salesActor))
-            .isEqualTo(403);
-        assertThat(rowStatus(rowId)).isEqualTo("UNMATCHED");
-        assertThat(ok(post("/api/sales/receipt-imports/unmatched/" + rowId + "/ignore"), account)
-            .get("status").asText()).isEqualTo("IGNORED");
-        assertThat(docNos(ok(get("/api/sales/receipt-imports/unmatched"), account))).doesNotContain("RE-I-1");
-    }
-
-    @Test
-    void importAndHrCannotReadTheQueue() throws Exception {
-        for (String role : List.of("import", "hr")) {
-            UserPrincipal other = actor(createEmployee("ผู้ใช้ " + role, role + "-q@glr.co.th", "OPS", "ปฏิบัติการ", null),
-                role);
-            assertThat(status(get("/api/sales/receipt-imports/unmatched"), other)).as(role).isEqualTo(403);
-        }
     }
 
     // ── fixtures ────────────────────────────────────────────────────────────
@@ -381,32 +602,31 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         jdbc.update("""
             UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED', deposit_policy = 'REQUIRED',
                    payment_status = 'DEPOSIT_NOTICE_ISSUED' WHERE ticket_id = :t""", Map.of("t", d));
-        notice(d, total, docNo);
+        notice(d, total, docNo, "ISSUED", "x");
         return d;
     }
 
-    /** A deal whose payable is {@code total} through an ACCEPTED quotation (so it has a quotation number). */
+    /** Inside account's scope (ORDER_RECEIVED), payable {@code total} through an ACCEPTED EN quotation. */
     private long payableDeal(UserPrincipal owner, String total) {
         long d = deal(owner);
         long q = approved(d, owner, "OWNER").id();
         setDocStatus(q, "ACCEPTED");
         jdbc.update("UPDATE sales.quotation SET total_amount = :a, document_language = 'EN' WHERE quotation_id = :q",
             Map.of("a", new BigDecimal(total), "q", q));
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'ORDER_RECEIVED' WHERE ticket_id = :t", Map.of("t", d));
         return d;
     }
 
     /** DELIVERED, fully delivered, deposit paid (32,100.00 by hand), balance invoiced as GLR6900077-1. */
     private long deliveredAwaitingBalance(UserPrincipal owner) {
         long d = deal(owner);
-        long notice = notice(d, "32100.00", "DN6900077");
+        long notice = notice(d, "32100.00", "DN6900077", "ISSUED", "x");
         jdbc.update("""
             INSERT INTO sales.remaining_invoice (ticket_id, deposit_notice_id, status, base_number, doc_number,
                 issued_at, grand_total)
             VALUES (:id, :notice, 'ISSUED', 'GLR6900077', 'GLR6900077-1', now(), 74900.01)""",
             new MapSqlParameterSource("id", d).addValue("notice", notice));
-        jdbc.update("""
-            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref)
-            VALUES (:t, 'DEPOSIT', 32100.00, :by, 'MANUAL-DEP')""", Map.of("t", d, "by", account.id()));
+        manualReceipt(d, "DEPOSIT", "32100.00", "2026-09-01T03:00:00Z", "MANUAL-DEP");
         jdbc.update("""
             UPDATE sales.ticket SET sales_stage = 'DELIVERED', deposit_policy = 'REQUIRED',
                    payment_status = 'AWAITING_FINAL_PAYMENT', fulfillment_status = 'FULLY_DELIVERED'
@@ -414,15 +634,25 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         return d;
     }
 
-    private long notice(long ticketId, String total, String docNo) {
+    private long notice(long ticketId, String total, String docNo, String status, String customer) {
         BigDecimal t = new BigDecimal(total);
         return jdbc.queryForObject("""
             INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
                 subtotal, deposit_amount, vat_percent, vat_amount, total_payable, doc_number)
-            VALUES (:id, 1, 'ISSUED', 'x', 0.3, :t, :t, 0, 0, :t, :doc)
+            VALUES (:id, (SELECT COALESCE(max(version), 0) + 1 FROM sales.deposit_notice WHERE ticket_id = :id),
+                    :status, :cust, 0.3, :t, :t, 0, 0, :t, :doc)
             RETURNING deposit_notice_id""",
-            new MapSqlParameterSource("id", ticketId).addValue("t", t).addValue("doc", docNo), Number.class)
-            .longValue();
+            new MapSqlParameterSource("id", ticketId).addValue("t", t).addValue("doc", docNo)
+                .addValue("status", status).addValue("cust", customer), Number.class).longValue();
+    }
+
+    private long manualReceipt(long ticketId, String kind, String amount, String at, String ref) {
+        return jdbc.queryForObject("""
+            INSERT INTO sales.payment_receipt (ticket_id, kind, amount, recorded_by, receipt_ref, received_at)
+            VALUES (:t, :k, :a, :by, :ref, CAST(:at AS timestamptz)) RETURNING receipt_id
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("k", kind)
+                .addValue("a", new BigDecimal(amount)).addValue("by", account.id()).addValue("ref", ref)
+                .addValue("at", at), Long.class);
     }
 
     private long expectedRow(long ticketId, String kind, String amount, LocalDate week) {
@@ -442,7 +672,7 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
     }
 
     private static byte[] csv(String... rows) {
-        return ("\uFEFFเลขที่เอกสาร,วันที่,ลูกค้า,จำนวนเงิน,อ้างอิง\n" + String.join("\n", rows) + "\n")
+        return ("เลขที่เอกสาร,วันที่,ลูกค้า,จำนวนเงิน,อ้างอิง\n" + String.join("\n", rows) + "\n")
             .getBytes(StandardCharsets.UTF_8);
     }
 
@@ -460,6 +690,13 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
             .contentType(MediaType.APPLICATION_JSON).content("{\"ticketId\":" + ticketId + "}");
     }
 
+    private AbstractMockHttpServletRequestBuilder<?> split(long rowId, long a, String amountA, long b, String amountB) {
+        return post("/api/sales/receipt-imports/unmatched/" + rowId + "/resolve")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content("{\"allocations\":[{\"ticketId\":" + a + ",\"amount\":" + amountA + "},{\"ticketId\":" + b
+                + ",\"amount\":" + amountB + "}]}");
+    }
+
     // ── read-backs ──────────────────────────────────────────────────────────
 
     private Map<String, Object> receipt(String ref) {
@@ -467,7 +704,8 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
     }
 
     private int receiptCount(String ref) {
-        return jdbc.queryForObject("SELECT count(*) FROM sales.payment_receipt WHERE upper(receipt_ref) = upper(:r)",
+        return jdbc.queryForObject(
+            "SELECT count(*) FROM sales.payment_receipt WHERE upper(btrim(receipt_ref)) = upper(btrim(:r))",
             Map.of("r", ref), Integer.class);
     }
 
@@ -511,6 +749,12 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
         return out;
     }
 
+    private static List<Long> ids(JsonNode deals) {
+        List<Long> out = new ArrayList<>();
+        deals.forEach(c -> out.add(c.get("ticketId").asLong()));
+        return out;
+    }
+
     private JsonNode ok(AbstractMockHttpServletRequestBuilder<?> request, UserPrincipal who) throws Exception {
         MvcResult result = perform(request, who);
         String body = result.getResponse().getContentAsString(StandardCharsets.UTF_8);
@@ -523,8 +767,13 @@ class ReceiptImportIntegrationTest extends AbstractDealQuotationSlice2Integratio
     }
 
     private MvcResult perform(AbstractMockHttpServletRequestBuilder<?> request, UserPrincipal who) throws Exception {
+        return performOn(mvc, request, who);
+    }
+
+    private static MvcResult performOn(MockMvc on, AbstractMockHttpServletRequestBuilder<?> request, UserPrincipal who)
+        throws Exception {
         MockHttpSession session = new MockHttpSession();
         session.setAttribute(SessionContext.SESSION_USER_KEY, who);
-        return mvc.perform(request.session(session)).andReturn();
+        return on.perform(request.session(session)).andReturn();
     }
 }

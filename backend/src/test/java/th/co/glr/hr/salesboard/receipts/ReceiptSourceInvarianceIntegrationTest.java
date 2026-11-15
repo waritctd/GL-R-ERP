@@ -83,6 +83,46 @@ class ReceiptSourceInvarianceIntegrationTest extends AbstractDealQuotationSlice2
         assertThat(tickets.sumPaid(manual)).isEqualByComparingTo(before);
     }
 
+    /**
+     * Behavioural half of §11 (review LOW): an Express receipt — the only write an upload makes — can never move a deal
+     * to CLOSED_PAID, the stage commission submission keys on (CommissionService#resolveDealLinkage), and creates no
+     * commission record. The same full payment typed by hand DOES close it: the difference is the source alone.
+     */
+    @Test
+    void anExpressReceiptNeverClosesTheDealOrMakesItCommissionEligible_theManualOneDoes() {
+        th.co.glr.hr.auth.UserPrincipal account = actor(createEmployee("บัญชี", "acc-inv@glr.co.th", "ACC", "บัญชี",
+            null), "account");
+        long express = deliveredOwing(salesActor);
+        long manual = deliveredOwing(otherSalesActor);
+
+        ticketService.recordExpressReceipt(express, new BigDecimal("1000"), java.time.Instant.now(), "RE-INV-1", null,
+            account);
+        ticketService.recordPayment(manual, new th.co.glr.hr.ticket.RecordPaymentRequest("BALANCE",
+            new BigDecimal("1000"), java.time.Instant.parse("2026-01-01T00:00:00Z"), null, null, "MAN-INV-1", false),
+            account);
+
+        assertThat(tickets.sumPaid(express)).isEqualByComparingTo(tickets.sumPaid(manual));
+        assertThat(summary(express).salesStage()).isEqualTo("DELIVERED");
+        assertThat(summary(express).paymentStatus()).isNotEqualTo("FULLY_PAID");
+        assertThat(summary(manual).salesStage()).isEqualTo("CLOSED_PAID");
+        assertThat(jdbc.queryForObject("SELECT count(*) FROM sales.commission_record WHERE source_ticket_id = :t",
+            Map.of("t", express), Integer.class)).isZero();
+    }
+
+    /** DELIVERED and fully delivered, deposit settled, owing exactly ฿1,000 (an EN deposit notice is the payable). */
+    private long deliveredOwing(th.co.glr.hr.auth.UserPrincipal owner) {
+        long d = deal(owner);
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable)
+            VALUES (:t, 1, 'ISSUED', 'x', 1, 1000, 1000, 0, 0, 1000)""", Map.of("t", d));
+        jdbc.update("""
+            UPDATE sales.ticket SET sales_stage = 'DELIVERED', deposit_policy = 'NOT_REQUIRED',
+                   payment_status = 'AWAITING_FINAL_PAYMENT', fulfillment_status = 'FULLY_DELIVERED'
+             WHERE ticket_id = :t""", Map.of("t", d));
+        return d;
+    }
+
     private void receipts(long ticketId, String source) {
         String[][] rows = {{"DEPOSIT", "500"}, {"BALANCE", "600"}, {"ADJUSTMENT", "110"}};
         int i = 0;

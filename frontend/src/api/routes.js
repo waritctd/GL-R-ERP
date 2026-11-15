@@ -152,8 +152,13 @@ export const API_ROUTES = {
     latest: '/api/sales/receipt-imports/latest',
     template: '/api/sales/receipt-imports/template',
     unmatched: '/api/sales/receipt-imports/unmatched',
+    ignored: '/api/sales/receipt-imports/ignored',
+    managerView: '/api/sales/receipt-imports/manager-view',
+    deals: '/api/sales/receipt-imports/deals',
     resolve: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/resolve`,
     ignore: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/ignore`,
+    unignore: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/unignore`,
+    flagManager: (rowId) => `/api/sales/receipt-imports/unmatched/${rowId}/flag-manager`,
   },
   salesVisits: {
     list: '/api/sales/visits',

@@ -16,13 +16,13 @@ import th.co.glr.hr.salesboard.receipts.ReceiptMatcher.Rule;
 class ReceiptMatcherTest {
 
     private static ParsedReceipt row(String customer, String amount, String reference) {
-        return new ParsedReceipt(2, "RE-6911-0057", LocalDate.of(2026, 11, 12), customer, new BigDecimal(amount),
-            reference);
+        return new ParsedReceipt(2, "RE-6911-0057", "RE", LocalDate.of(2026, 11, 12), customer,
+            new BigDecimal(amount), reference);
     }
 
     private static Candidate deal(long id, String customer, Set<String> invoices, Set<String> quotations,
                                   String... openExpected) {
-        return new Candidate(id, customer, invoices, quotations,
+        return new Candidate(id, Set.of(customer), invoices, quotations,
             java.util.Arrays.stream(openExpected).map(BigDecimal::new).toList());
     }
 

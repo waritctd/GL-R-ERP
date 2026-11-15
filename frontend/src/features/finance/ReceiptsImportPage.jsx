@@ -11,7 +11,9 @@ import { formatBangkokTime, formatThaiDate } from '../../utils/format.js';
 import { baht } from '../salesBoard/boardFormat.js';
 import { UnmatchedReceipts } from '../salesBoard/UnmatchedReceipts.jsx';
 
-export const receiptImportLatestKey = () => ['tickets', 'receiptImports', 'latest'];
+import { queryKeys } from '../../api/queryKeys.js';
+
+export const receiptImportLatestKey = () => queryKeys.receiptImportLatest();
 
 const AMOUNT = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const amount = (v) => AMOUNT.format(Number(v ?? 0));
@@ -33,7 +35,8 @@ const LINK_BUTTON = 'inline-flex min-h-[38px] items-center justify-center rounde
  */
 export function ExpressUploadCard() {
   const query = useQuery({ queryKey: receiptImportLatestKey(), queryFn: () => api.receiptImports.latest() });
-  if (query.isError || !query.data) return null;
+  // Hidden while the owner has not switched the upload on (app.receipts.express-upload.enabled, review H4).
+  if (query.isError || !query.data || !query.data.uploadEnabled) return null;
   const { latest, openUnmatched } = query.data;
   return (
     <section
@@ -71,11 +74,16 @@ export function ExpressUploadCard() {
 function OutcomeTable({ result }) {
   const rows = [
     { label: 'จับคู่แล้ว', tone: 'text-success', count: result.matched, sum: result.matchedAmount, next: 'บันทึกเป็นรับเงินของดีลแล้ว' },
+    { label: 'ตรงกับรายการที่บันทึกเอง', tone: 'text-success', count: result.matchedManual ?? 0, sum: null, next: 'ผูกกับรายการที่บันทึกเองแล้ว ไม่นับซ้ำ' },
     { label: 'ซ้ำ (เคยนำเข้าแล้ว)', tone: 'text-text', count: result.duplicates, sum: result.duplicateAmount, next: 'ไม่นับซ้ำ' },
-    { label: 'ยังจับคู่ไม่ได้', tone: 'text-warning-dark', count: result.unmatched, sum: result.unmatchedAmount, next: 'จับคู่เองด้านล่าง หรือให้ฝ่ายขายเลือก' },
+    { label: 'ยังจับคู่ไม่ได้', tone: 'text-warning-dark', count: result.unmatched, sum: result.unmatchedAmount, next: 'จับคู่เองด้านล่าง' },
+    { label: 'ไม่ใช่ใบเสร็จรับเงิน', tone: 'text-text-muted', count: result.nonCash ?? 0, sum: null, next: 'เช่น ใบแจ้งหนี้ (IV) ไม่นับเป็นเงินเข้า' },
   ];
   if (result.invalid > 0) {
     rows.push({ label: 'อ่านไม่ได้', tone: 'text-danger', count: result.invalid, sum: null, next: 'แก้ไฟล์แล้วอัปโหลดใหม่ได้' });
+  }
+  if (result.failed > 0) {
+    rows.push({ label: 'บันทึกไม่สำเร็จ', tone: 'text-danger', count: result.failed, sum: null, next: 'อัปโหลดไฟล์เดิมซ้ำได้ — รายการที่บันทึกแล้วจะไม่นับซ้ำ' });
   }
   return (
     <div className="grid gap-2">
@@ -131,6 +139,7 @@ export function ReceiptsImportPage({ showToast = () => {} }) {
     },
   });
   const latest = latestQuery.data?.latest ?? null;
+  const enabled = latestQuery.data?.uploadEnabled === true;
 
   async function submit() {
     if (!file) return;
@@ -157,6 +166,15 @@ export function ReceiptsImportPage({ showToast = () => {} }) {
         subtitle="ไฟล์ส่งออก RE / AI / IV · อัปโหลดซ้ำได้ ระบบนับรายการละครั้งเดียว"
       />
 
+      {latestQuery.data && !enabled ? (
+        <Panel>
+          <p className="m-0 font-bold text-text">ยังไม่เปิดใช้การอัปโหลดไฟล์ Express</p>
+          <p className="m-0 mt-1 text-sm text-text-muted">
+            ยังไม่เคยเห็นไฟล์ส่งออกจริงจาก Express — เปิดใช้หลังตรวจไฟล์ตัวอย่างแล้ว ระหว่างนี้บันทึกรับชำระที่หน้าดีลตามเดิม
+          </p>
+        </Panel>
+      ) : null}
+      {enabled ? (
       <Panel>
         <div className="grid gap-4">
           <div className="grid justify-items-center gap-2 rounded-md border-2 border-dashed border-border-input bg-surface-muted px-4 py-6 text-center">
@@ -188,8 +206,9 @@ export function ReceiptsImportPage({ showToast = () => {} }) {
           <p className="m-0 text-xs text-text-muted">จับคู่จากเลขใบแจ้งหนี้ก่อน แล้วเลขใบเสนอราคา แล้วลูกค้า + ยอดเงิน</p>
         </div>
       </Panel>
+      ) : null}
 
-      <UnmatchedReceipts showToast={showToast} canIgnore />
+      <UnmatchedReceipts showToast={showToast} />
     </PageStack>
   );
 }

@@ -65,20 +65,33 @@ public class FinanceDealService {
     }
 
     public FinanceDealDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
+        return confirmDepositPaid(ticketId, actor, false);
+    }
+
+    public FinanceDealDto confirmDepositPaid(long ticketId, UserPrincipal actor, boolean confirmPossibleDuplicate) {
         requireFinanceAccess(ticketId, actor);
-        ticketService.confirmDepositPaid(ticketId, actor);
+        ticketService.confirmDepositPaid(ticketId, actor, confirmPossibleDuplicate);
         return build(ticketId, actor);
     }
 
     public FinanceDealDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
+        return confirmFinalPayment(ticketId, actor, false);
+    }
+
+    public FinanceDealDto confirmFinalPayment(long ticketId, UserPrincipal actor, boolean confirmPossibleDuplicate) {
         requireFinanceAccess(ticketId, actor);
-        ticketService.confirmFinalPayment(ticketId, actor);
+        ticketService.confirmFinalPayment(ticketId, actor, confirmPossibleDuplicate);
         return build(ticketId, actor);
     }
 
     public FinanceDealDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
+        return recordPayment(ticketId, request, actor, false);
+    }
+
+    public FinanceDealDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor,
+                                        boolean confirmPossibleDuplicate) {
         requireFinanceAccess(ticketId, actor);
-        ticketService.recordPayment(ticketId, request, actor);
+        ticketService.recordPayment(ticketId, request, actor, confirmPossibleDuplicate);
         return build(ticketId, actor);
     }
 

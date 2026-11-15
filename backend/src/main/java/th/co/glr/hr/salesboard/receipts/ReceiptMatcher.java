@@ -35,7 +35,7 @@ public final class ReceiptMatcher {
     public enum Reason { NO_CANDIDATE, AMBIGUOUS, OVERPAYMENT, DEAL_NOT_ACTIVE }
 
     /** A deal the row could belong to: its customer, its document numbers and its OPEN expected payment amounts. */
-    public record Candidate(long ticketId, String customerName, Set<String> invoiceNumbers,
+    public record Candidate(long ticketId, Set<String> customerNames, Set<String> invoiceNumbers,
                             Set<String> quotationNumbers, List<BigDecimal> openExpectedAmounts) {}
 
     /** {@code ticketId} set ⇔ matched. Unmatched carries a {@code reason} and the deals worth offering. */
@@ -78,7 +78,7 @@ public final class ReceiptMatcher {
             return new Match(null, null, Reason.NO_CANDIDATE, List.of());
         }
         List<Candidate> sameCustomer = candidates.stream()
-            .filter(c -> customer.equals(normaliseCustomer(c.customerName()))).toList();
+            .filter(c -> c.customerNames().stream().anyMatch(n -> customer.equals(normaliseCustomer(n)))).toList();
         List<Long> byAmount = idsWhere(sameCustomer, c -> c.openExpectedAmounts().stream()
             .anyMatch(expected -> withinTolerance(row.amount(), expected)));
         if (!byAmount.isEmpty()) {
