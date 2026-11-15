@@ -1,8 +1,8 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { render, screen, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TeamOverview } from './TeamOverview.jsx';
 import { api } from '../../api/index.js';
 import { bangkokTodayIso } from '../../utils/format.js';
@@ -10,9 +10,13 @@ import { weekDays } from './visitWeek.js';
 
 globalThis.React = React;
 
+// A fixed Thursday, 12 Nov 2026 Bangkok (Mon 9 – Sun 15).
+vi.setSystemTime(new Date('2026-11-12T03:00:00Z'));
+afterAll(() => vi.useRealTimers());
+
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, api: { salesBoard: { teamOverview: vi.fn() } } };
+  return { ...actual, api: { salesBoard: { teamOverview: vi.fn() }, salesVisits: { team: vi.fn() } } };
 });
 
 const today = bangkokTodayIso();
@@ -61,6 +65,7 @@ describe('TeamOverview — visits', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.salesBoard.teamOverview.mockResolvedValue(fixture);
+    api.salesVisits.team.mockResolvedValue([]);
   });
 
   it('the เข้าพบสัปดาห์นี้ tile sums done / booked across the team', async () => {
@@ -96,7 +101,7 @@ describe('TeamOverview — visits', () => {
     const cell = within(grid).getByTestId(`visit-cell-7-${wed.iso}`);
     expect(within(cell).getByText('Orbit')).toBeTruthy();
     expect(within(cell).getByText('Taak')).toBeTruthy();
-    expect(within(cell).getByTestId('visit-chip-5').textContent).toContain('นัดไว้');
+    expect(within(cell).getByTestId('visit-chip-5').textContent).toContain('เลยกำหนด'); // Wed, before Thursday
     expect(within(cell).getByTestId('visit-chip-6').textContent).toContain('ยกเลิก');
     expect(within(grid).getByTestId('visit-chip-1').textContent).toContain('ไปแล้ว');
     // A rep with no visits this week still has a row, so a gap is visible.
@@ -121,5 +126,38 @@ describe('TeamOverview — visits', () => {
 
     const grid = await screen.findByTestId('visit-week');
     expect(within(grid).getByText('ยังไม่มีนัดเข้าพบสัปดาห์นี้')).toBeTruthy();
+  });
+});
+
+describe('TeamOverview — visits review fixes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.salesBoard.teamOverview.mockResolvedValue(fixture);
+    api.salesVisits.team.mockResolvedValue([
+      visit({ id: 30, ownerId: 9, ownerName: 'คุณกมล รุ่งเรือง', contactName: 'SSAA', plannedDate: '2026-11-18' }),
+    ]);
+  });
+
+  it('a PLANNED visit dated before today is marked เลยกำหนด in text (M4)', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({
+      ...fixture,
+      teamVisitsThisWeek: [...fixture.teamVisitsThisWeek, visit({ id: 8, contactName: 'IA103', plannedDate: mon.iso })],
+    });
+    renderTeam();
+
+    const grid = await screen.findByTestId('visit-week');
+    expect(within(grid).getByTestId('visit-chip-8').textContent).toContain('เลยกำหนด');
+    expect(within(grid).getByTestId('visit-chip-3').textContent).toContain('นัดไว้'); // Friday: still ahead
+  });
+
+  it('the week grid pages to next week through the team endpoint (H1)', async () => {
+    renderTeam();
+    const grid = await screen.findByTestId('visit-week');
+
+    fireEvent.click(within(grid).getByRole('button', { name: 'สัปดาห์หน้า' }));
+
+    expect(await within(grid).findByTestId('visit-chip-30')).toBeTruthy();
+    expect(api.salesVisits.team).toHaveBeenCalledWith({ from: '2026-11-16', to: '2026-11-22' });
+    expect(within(grid).getByText('16–22 พ.ย.')).toBeTruthy();
   });
 });

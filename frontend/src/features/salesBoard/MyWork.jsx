@@ -9,7 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
-import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
+import { addDaysIso, bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import { MarkLostModal } from '../tickets/MarkLostModal.jsx';
 import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
 import { useStageCatalog } from '../tickets/stageCatalog.js';
@@ -17,7 +17,12 @@ import { currentQuarter, otherCurrencyTotals, sumValue, totalLabel } from './boa
 import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
-import { VisitsThisWeek } from './VisitsThisWeek.jsx';
+import { CarriedOverVisits, VisitsThisWeek } from './VisitsThisWeek.jsx';
+import { weekRangeLabel, weekStartIso } from './visitWeek.js';
+
+// ค้างจากสัปดาห์ก่อน looks back 31 days before this Monday — the ranged endpoint's cap. An older unticked visit is
+// still reachable with ‹ สัปดาห์ก่อน.
+const CARRY_OVER_DAYS = 31;
 
 function CountPill({ count }) {
   return (
@@ -60,6 +65,27 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   const [cancelling, setCancelling] = useState(null);
   const [logging, setLogging] = useState(false);
   const todayIso = bangkokTodayIso();
+  const thisMonday = weekStartIso(todayIso);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [landed, setLanded] = useState(null);
+  const shownMonday = addDaysIso(thisMonday, 7 * weekOffset);
+  const shownSunday = addDaysIso(shownMonday, 6);
+  const otherWeekQuery = useQuery({
+    queryKey: queryKeys.salesVisitsOwn(shownMonday, shownSunday),
+    queryFn: () => api.salesVisits.list({ from: shownMonday, to: shownSunday }),
+    enabled: weekOffset !== 0,
+  });
+  const carryFrom = addDaysIso(thisMonday, -CARRY_OVER_DAYS);
+  const carryTo = addDaysIso(thisMonday, -1);
+  const carriedQuery = useQuery({
+    queryKey: queryKeys.salesVisitsOwn(carryFrom, carryTo),
+    queryFn: () => api.salesVisits.list({ from: carryFrom, to: carryTo }),
+  });
+  const carriedOver = (carriedQuery.data ?? []).filter((v) => v.status === 'PLANNED');
+  const showWeek = (offset) => {
+    setWeekOffset(offset);
+    setLanded(null);
+  };
 
   const workQuery = useQuery({ queryKey: queryKeys.salesBoardMyWork(), queryFn: () => api.salesBoard.myWork() });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['tickets'] });
@@ -115,8 +141,17 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   }
 
   const work = workQuery.data;
-  const visits = work ? (work.visitsThisWeek ?? []) : null;
-  const todaysPlanned = (visits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate === todayIso);
+  const thisWeekVisits = work ? (work.visitsThisWeek ?? []) : null;
+  const visits = weekOffset === 0 ? thisWeekVisits : (otherWeekQuery.data ?? null);
+  const todaysPlanned = (thisWeekVisits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate === todayIso);
+
+  /** After a plan is saved: when it landed outside the week on screen, say where and offer the jump. */
+  function noteLanding(plannedDate) {
+    const monday = weekStartIso(plannedDate);
+    if (monday === shownMonday) return;
+    const offset = Math.round((Date.parse(`${monday}T00:00:00Z`) - Date.parse(`${thisMonday}T00:00:00Z`)) / (7 * 86_400_000));
+    setLanded({ weekOffset: offset, label: weekRangeLabel(monday) });
+  }
   const openLog = () => setLogging(true);
   const quietDays = work?.quietDays ?? 14;
   const quarter = currentQuarter();
@@ -172,13 +207,19 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
         <VisitsThisWeek
           visits={visits}
           todayIso={todayIso}
-          loading={!work}
-          failed={workQuery.isError}
+          mondayIso={shownMonday}
+          weekOffset={weekOffset}
+          onWeek={showWeek}
+          landed={landed}
+          loading={weekOffset === 0 ? !work : otherWeekQuery.isLoading}
+          failed={weekOffset === 0 ? workQuery.isError : otherWeekQuery.isError}
           onPlan={() => setPlanning({ deal: null })}
           onDone={setTicking}
           onCancel={setCancelling}
         />
       </div>
+
+      <CarriedOverVisits visits={carriedOver} todayIso={todayIso} onDone={setTicking} onCancel={setCancelling} />
 
       <Panel
         title="ดีลทั้งหมดของฉัน"
@@ -227,7 +268,10 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           todayIso={todayIso}
           submitting={createVisit.isPending}
           onClose={() => setPlanning(null)}
-          onSubmit={(payload) => attempt(createVisit, payload, () => setPlanning(null), 'บันทึกนัดแล้ว')}
+          onSubmit={(payload) => attempt(createVisit, payload, () => {
+            setPlanning(null);
+            noteLanding(payload.plannedDate);
+          }, 'บันทึกนัดแล้ว')}
         />
       ) : null}
       {ticking ? (

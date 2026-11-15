@@ -11,9 +11,15 @@ const SIZE_CLASSNAMES = {
   lg: 'w-[min(1040px,100%)] max-h-[calc(100dvh-40px)]',
 };
 
+// placement="sheet-on-phone": below 640px the panel docks to the bottom edge, full width, as a bottom sheet (the
+// one-step visit log, spec 2026-11-15 §7.3); at 640px and up it stays the centred dialog.
+const SHEET_BACKDROP = 'phone:place-items-end phone:p-0';
+const SHEET_PANEL = 'phone:w-full phone:max-h-[88dvh] phone:rounded-b-none';
+
 export function Modal({
-  title, subtitle, children, footer, onClose, testId, size = 'md', initialFocusRef,
+  title, subtitle, children, footer, onClose, testId, size = 'md', initialFocusRef, placement = 'center',
 }) {
+  const sheet = placement === 'sheet-on-phone';
   const panelRef = useRef(null);
   // Modal is only ever mounted while shown, so the trap is unconditionally active for its lifetime (see
   // useDialogFocus.js -- the payroll detail panel is the other consumer, and gates this on its >=1280px
@@ -22,7 +28,7 @@ export function Modal({
 
   return (
     <div
-      className="modal-backdrop fixed inset-0 z-50 grid place-items-center p-5 bg-overlay"
+      className={cn('modal-backdrop fixed inset-0 z-50 grid place-items-center p-5 bg-overlay', sheet && SHEET_BACKDROP)}
       role="presentation"
       onMouseDown={onClose}
     >
@@ -32,7 +38,9 @@ export function Modal({
         className={cn(
           'modal-panel flex flex-col overflow-hidden rounded-md bg-surface shadow-[var(--shadow-lg-heavy)]',
           SIZE_CLASSNAMES[size] || SIZE_CLASSNAMES.md,
+          sheet && SHEET_PANEL,
         )}
+        data-placement={placement}
         role="dialog"
         aria-modal="true"
         aria-label={title}

@@ -2,7 +2,7 @@ import { useId, useState } from 'react';
 import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
-import { timeLabel } from './visitWeek.js';
+import { timeLabel, weekRangeLabel, weekStartIso } from './visitWeek.js';
 
 // The m-visit-log dialog's three outcomes. Stored as the note's first line (sales.visit and deal_activity have no
 // outcome column), as the call dialog does; optional, because the tick itself is the fact being recorded.
@@ -68,6 +68,14 @@ function DealSelect({ id, deals, value, onChange }) {
 
 const footerHint = (text) => <span className="mr-auto text-xs text-text-muted mobile:hidden">{text}</span>;
 
+/** Which week the chosen date lands in — the visit appears in that week of the card and the team grid. */
+function weekHint(plannedDate, todayIso) {
+  const monday = weekStartIso(plannedDate);
+  return monday === weekStartIso(todayIso)
+    ? `นัดนี้อยู่ในสัปดาห์นี้ · ${weekRangeLabel(monday)}`
+    : `นัดนี้อยู่ในสัปดาห์ ${weekRangeLabel(monday)}`;
+}
+
 /**
  * m-visit-plan — นัดเข้าพบ. A visit may be to a designer or owner before any deal exists, so ดีล is optional.
  * `initialDeal` (the follow-up row's deal) preselects the deal and prefills พบใคร with its designer.
@@ -98,7 +106,6 @@ export function PlanVisitModal({ deals, initialDeal = null, todayIso, submitting
       onClose={onClose}
       footer={(
         <>
-          {footerHint('ขึ้นในตารางเข้าพบของทีมทันที')}
           <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
           <Button type="button" disabled={submitting || !ready} onClick={submit}>
             {submitting ? 'กำลังบันทึก…' : 'บันทึกนัด'}
@@ -136,6 +143,9 @@ export function PlanVisitModal({ deals, initialDeal = null, todayIso, submitting
             />
           </label>
         </div>
+        {plannedDate ? (
+          <p className="m-0 -mt-2 text-xs text-text-muted" aria-live="polite">{weekHint(plannedDate, todayIso)}</p>
+        ) : null}
         <label className={LABEL} htmlFor={`${ids}-note`}>
           <span>เรื่องที่จะคุย <Optional /></span>
           <textarea
@@ -216,6 +226,7 @@ export function LogVisitModal({ todaysPlanned, deals, submitting, onClose, onSub
     <Modal
       title="บันทึกเข้าพบ"
       subtitle="หลังเข้าพบลูกค้า — เลือกจากนัดวันนี้ หรือบันทึกที่ไม่ได้นัด"
+      placement="sheet-on-phone"
       onClose={onClose}
       footer={(
         <>
