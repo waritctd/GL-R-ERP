@@ -8,6 +8,11 @@ import { columnLabel, money } from './boardFormat.js';
 
 // The m-call dialog's four outcomes. Stored as the activity note's first line (deal_activity has no outcome
 // column); the rep's own note follows.
+//
+// Every outcome — ไม่รับสาย (no answer) included — writes a CALL deal_activity row, and QuietRule counts any
+// deal_activity as a touch, so an unanswered call also clears the quiet clock. Accepted (round-2 review LOW 3): a
+// rep who keeps trying is still working the deal, and the outcome line stays visible as "ครั้งล่าสุด: …" on the
+// follow-up row. Spec 2026-11-15 §7.5 records the same decision.
 const CALL_OUTCOMES = ['คุยแล้ว ยังสนใจ', 'ขอใบเสนอราคาใหม่', 'ไม่รับสาย', 'ขอเลื่อนโครงการ'];
 
 function CallModal({ deal, submitting, onClose, onSubmit }) {
