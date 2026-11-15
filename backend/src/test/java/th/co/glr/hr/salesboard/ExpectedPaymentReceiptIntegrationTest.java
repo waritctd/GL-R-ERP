@@ -61,19 +61,56 @@ class ExpectedPaymentReceiptIntegrationTest extends AbstractDealQuotationSlice2I
         assertThat(received(row)).isEqualByComparingTo("50000");
     }
 
+    /** Review N2: rows fill in a fixed order — DEPOSIT, then ON_DELIVERY, then BALANCE — whatever the receipt's kind. */
     @Test
-    void onlyTheMatchingKindIsTouched_andAnOverflowCarriesToTheNextRow() {
+    void aManualReceiptFillsDepositThenOnDeliveryThenBalance_andCarriesTheOverflow() {
         long d = orderDeal("200000.00");
-        long deposit = expectedRow(d, "DEPOSIT", "300.00", monday);
-        long onDelivery = expectedRow(d, "ON_DELIVERY", "300.00", monday);
-        long balance = expectedRow(d, "BALANCE", "300.00", monday.plusWeeks(2));
+        long balance = expectedRow(d, "BALANCE", "300.00", monday);           // earliest week, but BALANCE comes last
+        long onDelivery = expectedRow(d, "ON_DELIVERY", "300.00", monday.plusWeeks(1));
+        long deposit = expectedRow(d, "DEPOSIT", "300.00", monday.plusWeeks(2));
 
         manual(d, "BALANCE", "600");
 
-        assertThat(status(deposit)).as("a balance never pays the deposit row").isEqualTo("OPEN");
-        assertThat(received(deposit)).isEqualByComparingTo("0");
+        assertThat(status(deposit)).as("a BALANCE-kind receipt still pays the open deposit first").isEqualTo("RECEIVED");
         assertThat(status(onDelivery)).isEqualTo("RECEIVED");
-        assertThat(status(balance)).isEqualTo("RECEIVED");
+        assertThat(status(balance)).isEqualTo("OPEN");
+        assertThat(received(balance)).isEqualByComparingTo("0");
+    }
+
+    /** Probe Q2: a deposit paid in two Express halves completes the DEPOSIT row and touches no balance row. */
+    @Test
+    void probeQ2_aDepositPaidInTwoExpressHalvesCompletesTheDepositRow() {
+        long d = orderDeal("200000.00");
+        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'REQUIRED', payment_status = 'DEPOSIT_NOTICE_ISSUED'"
+            + " WHERE ticket_id = :t", Map.of("t", d));
+        jdbc.update("""
+            INSERT INTO sales.deposit_notice (ticket_id, version, status, customer_name, deposit_percent,
+                subtotal, deposit_amount, vat_percent, vat_amount, total_payable, doc_number)
+            VALUES (:t, 1, 'ISSUED', 'x', 0.3, 32100, 32100, 0, 0, 32100, 'DN-Q2')""", Map.of("t", d));
+        long deposit = expectedRow(d, "DEPOSIT", "32100.00", monday);
+        long balance = expectedRow(d, "BALANCE", "16050.00", monday.minusWeeks(1));
+
+        ticketService.recordExpressReceipt(d, new BigDecimal("16050.00"), Instant.now(), "RE-Q2-1", null, account);
+        assertThat(status(deposit)).isEqualTo("OPEN");
+        ticketService.recordExpressReceipt(d, new BigDecimal("16050.00"), Instant.now(), "RE-Q2-2", null, account);
+
+        assertThat(status(deposit)).isEqualTo("RECEIVED");
+        assertThat(status(balance)).isEqualTo("OPEN");
+        assertThat(received(balance)).isEqualByComparingTo("0");
+        assertThat(jdbc.queryForList("SELECT kind FROM sales.payment_receipt WHERE ticket_id = :t ORDER BY receipt_id",
+            Map.of("t", d), String.class)).as("both halves are deposit money while the notice is still owed")
+            .containsExactly("DEPOSIT", "DEPOSIT");
+    }
+
+    @Test
+    void aBypassPolicyDealsRepEnteredDepositRowIsClosedByItsReceipt() {
+        long d = orderDeal("200000.00");
+        jdbc.update("UPDATE sales.ticket SET deposit_policy = 'NOT_REQUIRED' WHERE ticket_id = :t", Map.of("t", d));
+        long deposit = expectedRow(d, "DEPOSIT", "5000.00", monday);
+
+        ticketService.recordExpressReceipt(d, new BigDecimal("5000.00"), Instant.now(), "RE-BP-1", null, account);
+
+        assertThat(status(deposit)).isEqualTo("RECEIVED");
     }
 
     @Test

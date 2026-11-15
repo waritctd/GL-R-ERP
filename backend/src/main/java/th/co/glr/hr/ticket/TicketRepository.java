@@ -1753,29 +1753,31 @@ public class TicketRepository {
      * for a receipt account typed ({@code TicketService#recordPayment}, ยืนยันรับมัดจำ, ยืนยันรับชำระส่วนที่เหลือ) and
      * for an uploaded Express one ({@code TicketService#recordExpressReceipt}) alike, so the two can never disagree.
      *
-     * <p>The amount is added to the nearest OPEN row of the matching kind — a DEPOSIT receipt to DEPOSIT rows, a
-     * BALANCE receipt to ON_DELIVERY / BALANCE rows; nearest = expected week closest to the receipt's date, then the
-     * oldest row. The row turns RECEIVED (linking this receipt) only when its cumulative {@code received_amount}
+     * <p>The amount fills the deal's OPEN rows in ONE fixed order, whatever the receipt's kind (review N2: a deposit
+     * paid in instalments, or a bypass-policy deal's rep-entered deposit row, must still be completed): DEPOSIT rows,
+     * then ON_DELIVERY, then BALANCE; within a kind by expected week, then the oldest row. The receipt's own kind keeps
+     * its meaning for the payment track only. A row turns RECEIVED (linking this receipt) only when its cumulative
+     * {@code received_amount}
      * reaches its amount minus the matcher's tolerance (±1% or ±฿10, whichever is wider); otherwise it stays OPEN with
      * the rest still expected. What a completed row does not need carries to the next nearest row. ADJUSTMENT
      * receipts touch nothing.
      */
+    @SuppressWarnings("unused") // receiptDate: kept for callers and for a future tie-break; the order is fixed (N2)
     public void applyReceiptToExpectedPayments(long ticketId, String receiptKind, BigDecimal amount,
                                                java.time.LocalDate receiptDate, long receiptId) {
         if (amount == null || amount.signum() <= 0 || receiptKind == null || "ADJUSTMENT".equals(receiptKind)) {
             return;
         }
-        List<String> kinds = "DEPOSIT".equals(receiptKind) ? List.of("DEPOSIT") : List.of("ON_DELIVERY", "BALANCE");
         BigDecimal left = amount;
         while (left.signum() > 0) {
             List<Map<String, Object>> rows = jdbc.queryForList("""
                 SELECT expected_payment_id, amount, received_amount FROM sales.expected_payment
-                 WHERE ticket_id = :t AND status = 'OPEN' AND kind IN (:kinds)
-                 ORDER BY abs(expected_week - CAST(:d AS date)), expected_payment_id
+                 WHERE ticket_id = :t AND status = 'OPEN'
+                 ORDER BY CASE kind WHEN 'DEPOSIT' THEN 0 WHEN 'ON_DELIVERY' THEN 1 ELSE 2 END,
+                          expected_week, expected_payment_id
                  LIMIT 1
                  FOR UPDATE
-                """, new MapSqlParameterSource().addValue("t", ticketId).addValue("kinds", kinds)
-                    .addValue("d", receiptDate));
+                """, new MapSqlParameterSource().addValue("t", ticketId));
             if (rows.isEmpty()) {
                 return;
             }
@@ -1816,6 +1818,14 @@ public class TicketRepository {
              LIMIT 1
             """, new MapSqlParameterSource().addValue("t", ticketId).addValue("a", amount).addValue("d", day)
                 .addValue("days", days), (rs, n) -> rs.getString(1)).stream().findFirst();
+    }
+
+    /** The deal's DEPOSIT-kind receipts, net of nothing (ADJUSTMENT is its own kind). */
+    public BigDecimal sumDepositReceipts(long ticketId) {
+        BigDecimal v = jdbc.queryForObject(
+            "SELECT COALESCE(SUM(amount), 0) FROM sales.payment_receipt WHERE ticket_id = :t AND kind = 'DEPOSIT'",
+            Map.of("t", ticketId), BigDecimal.class);
+        return v == null ? BigDecimal.ZERO : v;
     }
 
     /** An uploaded Express receipt (V213): source EXPRESS, receipt_ref = the Express document number. */

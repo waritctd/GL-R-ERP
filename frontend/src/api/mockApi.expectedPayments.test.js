@@ -60,6 +60,24 @@ describe('mockApi.expectedPayments', () => {
     expect(mine).toMatchObject({ status: 'RECEIVED', receivedAmount: 1000 });
   });
 
+  it('a partly received row cannot drop below what came in, nor change kind (review N3)', async () => {
+    await api.auth.login({ role: 'account' });
+    const { tickets } = await api.tickets.list();
+    // A deal with no seeded expected rows, so the receipt lands on this row only.
+    const id = tickets.find((t) => (t.lifecycle ?? 'ACTIVE') === 'ACTIVE' && ![12, 21, 23].includes(t.id)).id;
+    await api.auth.login({ role: 'sales_manager' });
+    const row = await api.expectedPayments.create(id, { kind: 'BALANCE', amount: 5000, expectedWeek: plusDays(monday, 70) });
+    await api.auth.login({ role: 'account' });
+    await api.finance.recordPayment(id, { kind: 'BALANCE', amount: 1000, allowOverpayment: true, note: 'ทดสอบ', confirmPossibleDuplicate: true });
+    await api.auth.login({ role: 'sales_manager' });
+    const now = (await api.expectedPayments.list(id)).find((r) => r.id === row.id);
+    expect(now.receivedAmount).toBe(1000);
+    await expect(api.expectedPayments.update(id, row.id, { kind: 'BALANCE', amount: 999, expectedWeek: row.expectedWeek }))
+      .rejects.toMatchObject({ status: 409 });
+    await expect(api.expectedPayments.update(id, row.id, { kind: 'DEPOSIT', amount: 5000, expectedWeek: row.expectedWeek }))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
   it('a new OPEN deposit this month shows in my-work cash as forecast and deposits expected', async () => {
     const { id } = await ownDealId();
     // ISO rule: the week counts in the month holding its Thursday.

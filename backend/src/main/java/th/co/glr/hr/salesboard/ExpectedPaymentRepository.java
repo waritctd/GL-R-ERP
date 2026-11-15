@@ -22,7 +22,7 @@ import th.co.glr.hr.salesboard.ExpectedPaymentDtos.ExpectedPaymentDto;
 public class ExpectedPaymentRepository {
     private static final String SELECT = """
         SELECT ep.expected_payment_id, ep.ticket_id, ep.kind, ep.amount, ep.expected_week, ep.status,
-               ep.receipt_id, r.receipt_ref, ep.created_by, ep.created_at, ep.updated_at
+               ep.receipt_id, r.receipt_ref, ep.created_by, ep.created_at, ep.updated_at, ep.received_amount
           FROM sales.expected_payment ep
           LEFT JOIN sales.payment_receipt r ON r.receipt_id = ep.receipt_id
         """;
@@ -80,6 +80,7 @@ public class ExpectedPaymentRepository {
         return new ExpectedPaymentDto(rs.getLong("expected_payment_id"), rs.getLong("ticket_id"), rs.getString("kind"),
             rs.getBigDecimal("amount"), rs.getObject("expected_week", LocalDate.class), rs.getString("status"),
             receiptId, rs.getString("receipt_ref"), rs.getLong("created_by"),
-            created == null ? null : created.toInstant(), updated == null ? null : updated.toInstant());
+            created == null ? null : created.toInstant(), updated == null ? null : updated.toInstant(),
+            rs.getBigDecimal("received_amount"));
     }
 }

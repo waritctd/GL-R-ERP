@@ -64,6 +64,16 @@ public class ExpectedPaymentService {
         requireActive(requireWriteAccess(ticketId, actor));
         ExpectedPaymentDto row = requireRow(ticketId, id);
         Valid v = validate(request);
+        // Review N3 (probe Q1): what already came in on a row is fixed — the plan cannot go below it, nor change kind.
+        if (row.receivedAmount().signum() > 0) {
+            if (v.amount().compareTo(row.receivedAmount()) < 0) {
+                throw new ApiException(HttpStatus.CONFLICT, "รับเงินรายการนี้มาแล้ว "
+                    + row.receivedAmount().toPlainString() + " บาท จึงลดยอดให้ต่ำกว่านั้นไม่ได้");
+            }
+            if (!v.kind().equals(row.kind())) {
+                throw new ApiException(HttpStatus.CONFLICT, "รายการนี้รับเงินมาบางส่วนแล้ว จึงเปลี่ยนประเภทไม่ได้");
+            }
+        }
         if (payments.updateOpen(ticketId, id, v.kind(), v.amount(), v.week()) == 0) {
             throw notOpen(row);
         }

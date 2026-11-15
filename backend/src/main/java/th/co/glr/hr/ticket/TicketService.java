@@ -1911,7 +1911,7 @@ public class TicketService {
                 "ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ");
         }
         boolean depositWasSettled = depositSettled(s);
-        String kind = DepositPolicy.REQUIRED.equals(s.depositPolicy()) && !depositWasSettled ? "DEPOSIT" : "BALANCE";
+        String kind = expressReceiptKind(ticketId, s, depositWasSettled);
         long receiptId;
         try {
             receiptId = tickets.insertExpressReceipt(ticketId, kind, amount, actor.id(), receivedAt, ref,
@@ -2152,6 +2152,19 @@ public class TicketService {
                     TicketEventKind.AWAITING_FINAL_PAYMENT, s.status(), s.status(), null);
             }
         }
+    }
+
+    /**
+     * An Express receipt is DEPOSIT money while the deal's latest ISSUED deposit notice is still owed (its total
+     * payable above the DEPOSIT receipts so far) — not only until the first instalment settles the deposit on the
+     * payment track (review N2, probe Q2). With no notice: DEPOSIT while a REQUIRED deposit is unsettled. Else BALANCE.
+     */
+    private String expressReceiptKind(long ticketId, TicketSummaryDto s, boolean depositSettled) {
+        var notice = tickets.latestIssuedDepositNotice(ticketId).orElse(null);
+        if (notice != null && notice.totalPayable() != null) {
+            return notice.totalPayable().compareTo(tickets.sumDepositReceipts(ticketId)) > 0 ? "DEPOSIT" : "BALANCE";
+        }
+        return DepositPolicy.REQUIRED.equals(s.depositPolicy()) && !depositSettled ? "DEPOSIT" : "BALANCE";
     }
 
     /** The Asia/Bangkok calendar date of a receipt (now when it has no time). */

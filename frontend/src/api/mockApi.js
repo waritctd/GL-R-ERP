@@ -8351,18 +8351,19 @@ seedMockExpectedPayments();
 
 /**
  * TicketRepository#applyReceiptToExpectedPayments — the ONE rule for manual and Express receipts alike (review M1):
- * add to the nearest OPEN row of the matching kind; RECEIVED only once the cumulative amount reaches it within ±1% /
- * ±฿10; carry what a completed row does not need to the next one. ADJUSTMENT touches nothing.
+ * fill OPEN rows in a fixed order whatever the receipt's kind (review N2) — DEPOSIT, then ON_DELIVERY, then BALANCE,
+ * each by expected week, then id; RECEIVED only once the cumulative amount reaches it within ±1% / ±฿10; carry what a
+ * completed row does not need to the next one. ADJUSTMENT touches nothing.
  */
+const MOCK_FILL_ORDER = { DEPOSIT: 0, ON_DELIVERY: 1, BALANCE: 2 };
 function mockApplyReceiptToExpected(ticketId, kind, amount, dayIso, receiptId, receiptRef = null) {
   if (!(amount > 0) || kind === 'ADJUSTMENT') return;
-  const kinds = kind === 'DEPOSIT' ? ['DEPOSIT'] : ['ON_DELIVERY', 'BALANCE'];
-  const gap = (week) => Math.abs(new Date(`${week}T00:00:00Z`) - new Date(`${dayIso}T00:00:00Z`));
   let left = amount;
   while (left > 0) {
     const row = mockExpectedPayments
-      .filter((p) => p.ticketId === Number(ticketId) && p.status === 'OPEN' && kinds.includes(p.kind))
-      .sort((a, b) => gap(a.expectedWeek) - gap(b.expectedWeek) || a.id - b.id)[0];
+      .filter((p) => p.ticketId === Number(ticketId) && p.status === 'OPEN')
+      .sort((a, b) => MOCK_FILL_ORDER[a.kind] - MOCK_FILL_ORDER[b.kind]
+        || a.expectedWeek.localeCompare(b.expectedWeek) || a.id - b.id)[0];
     if (!row) return;
     const applied = Math.min(left, round2(row.amount - (row.receivedAmount ?? 0)));
     row.receivedAmount = round2((row.receivedAmount ?? 0) + applied);
@@ -8641,8 +8642,14 @@ function mockPlaceExpressReceipt(ticketId, row, user, amount = row.amount, ref =
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') mockRefusal('DEAL_NOT_ACTIVE', 'ดีลไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้');
   const payable = payableAmount(ticket);
   if (moneyValue(sumPaid(ticket.id) + amount) > payable) mockRefusal('OVERPAYMENT', 'ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ');
+  // TicketService#expressReceiptKind (review N2): DEPOSIT while the latest issued deposit notice is still owed.
   const settled = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus);
-  const kind = ticket.depositPolicy === 'REQUIRED' && !settled ? 'DEPOSIT' : 'BALANCE';
+  const notice = latestIssuedDepositNotice(ticket.id);
+  const depositSoFar = (db.paymentReceipts ?? []).filter((r) => r.ticketId === ticket.id && r.kind === 'DEPOSIT')
+    .reduce((x, r) => x + Number(r.amount), 0);
+  const kind = notice?.totalPayable != null
+    ? (Number(notice.totalPayable) > depositSoFar ? 'DEPOSIT' : 'BALANCE')
+    : (ticket.depositPolicy === 'REQUIRED' && !settled ? 'DEPOSIT' : 'BALANCE');
   const receiptId = Math.max(0, ...(db.paymentReceipts ?? []).map((r) => r.receiptId)) + 1;
   const now = new Date().toISOString();
   db.paymentReceipts.push({
@@ -13739,7 +13746,13 @@ export const api = {
       const user = requireSession();
       mockRequireActiveExpectedDeal(mockRequireDealWrite(user, ticketId));
       const row = mockRequireOpenExpected(ticketId, id);
-      Object.assign(row, mockValidExpectedPayment(payload), { updatedAt: new Date().toISOString() });
+      const valid = mockValidExpectedPayment(payload);
+      // ExpectedPaymentService.update (review N3): what came in is fixed — no lower plan, no kind change.
+      if ((row.receivedAmount ?? 0) > 0) {
+        if (valid.amount < row.receivedAmount) fail(`รับเงินรายการนี้มาแล้ว ${row.receivedAmount} บาท จึงลดยอดให้ต่ำกว่านั้นไม่ได้`, 409);
+        if (valid.kind !== row.kind) fail('รายการนี้รับเงินมาบางส่วนแล้ว จึงเปลี่ยนประเภทไม่ได้', 409);
+      }
+      Object.assign(row, valid, { updatedAt: new Date().toISOString() });
       return delay({ ...row });
     },
     async cancel(ticketId, id) {
