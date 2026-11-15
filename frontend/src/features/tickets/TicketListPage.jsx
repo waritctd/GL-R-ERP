@@ -128,7 +128,6 @@ const PHASE_STYLES = {
   5: { dot: 'bg-phase-5' },
 };
 
-const STALE_DAYS = 7;
 const WEEK_KEYS_SET = new Set(WEEK_KEYS);
 const LIFECYCLE_FILTERS = [
   { value: '', label: 'ทั้งหมด', tone: 'neutral' },
@@ -161,13 +160,14 @@ function daysSince(iso) {
   return Math.max(0, Math.floor(diff / 86400000));
 }
 
-function DaysBadge({ stageUpdatedAt }) {
+/** Days since the stage last changed — informational only. It paints no warning: the app's one meaning of
+ * "quiet" is the 14-day QuietRule served as `deal.stale` (spec 2026-11-15 §7.5, review M5). */
+export function DaysBadge({ stageUpdatedAt }) {
   const days = daysSince(stageUpdatedAt);
   if (days == null) return <span>-</span>;
-  const stale = days > STALE_DAYS;
   return (
-    <span className={`text-xs font-bold ${stale ? 'text-warning' : 'text-text-muted'}`}>
-      {stale ? <Icon name="clock" size={12} /> : null} {days === 0 ? 'วันนี้' : `${days} วัน`}
+    <span className="text-xs font-bold text-text-muted">
+      {days === 0 ? 'วันนี้' : `${days} วัน`}
     </span>
   );
 }
@@ -185,9 +185,9 @@ function matchesSearch(deal, query) {
 }
 
 // ── Manager live pipeline (sales_manager/ceo) ──
-// `deal.stale` (no deal_activity logged in 7 days; computed server/mock-side, see
-// dealTrackingMeta.js's computeStale) is unrelated to the DaysBadge/STALE_DAYS above (days since
-// the STAGE last changed): "has anyone followed up recently", not "how long in this stage".
+// `deal.stale` is the 14-day QuietRule (no activity, stage change or quotation issue for
+// app.sales.quiet-days days; computed server-side, mirrored by dealTrackingMeta.js's computeStale). The
+// DaysBadge above only reports days since the STAGE last changed and flags nothing.
 const MANAGER_PIPELINE_ROLES = new Set(['sales_manager', 'ceo']);
 
 /**
@@ -254,7 +254,7 @@ function TeamPipelineSummary({ groups }) {
         <h2 id="ticket-pipeline-title">ภาพรวมทีม</h2>
         {groups.staleActiveCount > 0 ? (
           <StatusBadge tone="warning">
-            <Icon name="clock" size={12} /> {groups.staleActiveCount} ดีลเงียบ (ไม่มีการติดตาม 7 วัน)
+            <Icon name="clock" size={12} /> {groups.staleActiveCount} ดีลเงียบ (ไม่มีความเคลื่อนไหว 14 วัน)
           </StatusBadge>
         ) : null}
       </div>
