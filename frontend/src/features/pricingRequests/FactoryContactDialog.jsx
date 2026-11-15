@@ -42,6 +42,7 @@ export function FactoryContactDialog({ factoryName, pending, onCancel, onConfirm
         <FormField
           label="วันที่ติดต่อ"
           htmlFor="pcr-contact-date"
+          hint="ค่าเริ่มต้นเป็นวันนี้ เปลี่ยนได้"
           error={contactedOn && contactedOn > today ? 'เลือกวันที่หลังวันนี้ไม่ได้' : undefined}
         >
           <ThaiDateInput

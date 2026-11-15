@@ -911,7 +911,7 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     fireEvent.click(openBtn);
 
     const dialog = await screen.findByTestId('factory-email-draft-modal');
-    expect(within(dialog).getByRole('button', { name: /คัดลอกเมล/ })).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: /คัดลอกทั้งหมด/ })).not.toBeNull();
     expect(within(dialog).queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
     expect(within(dialog).getByLabelText('ถึง').disabled).toBe(true);
   });
@@ -930,7 +930,7 @@ describe('PricingRequestDetailPage Import factory-quote workflow', () => {
     fireEvent.click(screen.getByTestId('pcr-open-email-draft-91'));
     const dialog = await screen.findByTestId('factory-email-draft-modal');
     expect(within(dialog).queryByRole('button', { name: 'บันทึกร่าง' })).toBeNull();
-    expect(within(dialog).getByRole('button', { name: /คัดลอกเมล/ })).not.toBeNull();
+    expect(within(dialog).getByRole('button', { name: /คัดลอกทั้งหมด/ })).not.toBeNull();
     expect(within(dialog).getByLabelText('ถึง').disabled).toBe(true);
   });
 
@@ -4730,7 +4730,7 @@ describe('CR-1 ติดต่อโรงงานแล้ว dialog (R3, R5, 
 });
 
 describe('CR-1 สร้างเมล modal (R3, R8)', () => {
-  it('has ถึง pre-filled from the factory email, หัวข้อ, เนื้อหา — and ONLY บันทึกร่าง / คัดลอกเมล (+ ปิด); no ส่งแล้ว, no hand-off steps', async () => {
+  it('has ถึง pre-filled from the factory email, หัวข้อ, เนื้อหา — and per-field คัดลอก, บันทึกร่าง / คัดลอกทั้งหมด (+ ปิด); no ส่งแล้ว, no hand-off steps', async () => {
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
     await waitForLoaded();
     await screen.findByText('SCG Ceramics');
@@ -4741,11 +4741,14 @@ describe('CR-1 สร้างเมล modal (R3, R8)', () => {
     expect(within(dialog).getByLabelText('หัวข้อ').value).toBe('ขอราคา SCG A1');
     expect(within(dialog).getByLabelText('เนื้อหา').value).toBe('เรียน โรงงาน...');
     const buttons = within(dialog).getAllByRole('button').map((b) => b.textContent.trim());
-    expect(buttons.filter((t) => t && t !== 'ปิด' && !/ปิด|close/i.test(t))).toEqual(['บันทึกร่าง', 'คัดลอกเมล']);
+    // Design m-email (spec §7.11 item 4): a คัดลอก per field, then บันทึกร่าง and the primary คัดลอกทั้งหมด.
+    expect(buttons.filter((t) => t && t !== 'ปิด' && !/ปิด|close/i.test(t)))
+      .toEqual(['คัดลอก', 'คัดลอก', 'คัดลอก', 'บันทึกร่าง', 'คัดลอกทั้งหมด']);
+    expect(within(dialog).getByText('วางในอีเมลได้ทีเดียว ทั้งถึง หัวข้อ และเนื้อหา')).not.toBeNull();
     expect(within(dialog).queryByText('คัดลอกข้อความอีเมลด้านล่าง')).toBeNull();
   });
 
-  it('คัดลอกเมล copies the mail and changes NO status (no contact call, no save)', async () => {
+  it('คัดลอกทั้งหมด copies ถึง, หัวข้อ and เนื้อหา in one go and changes NO status (no contact call, no save)', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(globalThis.navigator, 'clipboard', { value: { writeText }, configurable: true });
     renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
@@ -4754,10 +4757,44 @@ describe('CR-1 สร้างเมล modal (R3, R8)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
     const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
-    fireEvent.click(within(dialog).getByRole('button', { name: /คัดลอกเมล/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /คัดลอกทั้งหมด/ }));
 
     await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
-    expect(writeText.mock.calls[0][0]).toContain('Subject: ขอราคา SCG A1');
+    const copied = writeText.mock.calls[0][0];
+    expect(copied).toContain('To: sales@scg-factory.example');
+    expect(copied).toContain('Subject: ขอราคา SCG A1');
+    expect(copied).toContain('เรียน โรงงาน...');
+    expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
+    expect(api.pricingRequests.updateFactoryQuote).not.toHaveBeenCalled();
+  });
+
+  it('each field has its own คัดลอก that copies just that field', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis.navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'คัดลอก หัวข้อ' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('ขอราคา SCG A1'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'คัดลอก ถึง' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('sales@scg-factory.example'));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'คัดลอก เนื้อหา' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('เรียน โรงงาน...'));
+  });
+
+  it('(คัดลอกทั้งหมด, status) the copy is not a contact record', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(globalThis.navigator, 'clipboard', { value: { writeText }, configurable: true });
+    renderDetailPage({ user: importUser, request: crRequest(), factoryQuotes: [crQuote()] });
+    await waitForLoaded();
+    await screen.findByText('SCG Ceramics');
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างเมล' }));
+    const dialog = await screen.findByRole('dialog', { name: 'สร้างเมล' });
+    fireEvent.click(within(dialog).getByRole('button', { name: /คัดลอกทั้งหมด/ }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
     expect(api.pricingRequests.markFactoryQuoteContacted).not.toHaveBeenCalled();
     expect(api.pricingRequests.updateFactoryQuote).not.toHaveBeenCalled();
   });
