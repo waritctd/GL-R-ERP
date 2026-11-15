@@ -118,6 +118,9 @@ export const queryKeys = {
   // Under 'tickets' so every deal/visit write's ['tickets'] invalidation refreshes them too.
   salesVisitsOwn: (from, to) => ['tickets', 'salesVisits', 'own', from, to],
   salesVisitsTeam: (from, to) => ['tickets', 'salesVisits', 'team', from, to],
+  // The quiet threshold the deal list's ภาพรวมทีม badge names. Deliberately OUTSIDE 'tickets': it is near-static, so a
+  // ['tickets'] invalidation (an activity, a stage move) must not refetch the whole team overview just to re-read it.
+  salesBoardQuietDays: () => ['salesBoard', 'quietDays'],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
   unitBasisCatalog: () => ['meta', 'unit-bases'],
   // See ticketDetail's comment above for why Number() matters.

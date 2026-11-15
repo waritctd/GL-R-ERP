@@ -81,6 +81,13 @@ describe('mock applyApprovedQuotation mirrors TicketService#applyApprovedQuotati
     expect(s.salesStage).toBe('QUOTE_BUYER');
   });
 
+  // Final review: an UNSPECIFIED quotation's BUYER party is the deal's bill-to customer, never a name source.
+  it('an UNSPECIFIED quotation leaves buyerName blank (the bill-to is not a bidder)', async () => {
+    freshDeal();
+    const s = summaryOf(await approveOn18('DESIGNER', { storedRecipient: 'UNSPECIFIED' }));
+    expect(s.buyerName ?? null).toBeNull();
+  });
+
   it('an UNSPECIFIED quotation never regresses a deal already past QUOTE_BUYER', async () => {
     freshDeal();
     await api.auth.login({ role: 'sales' });

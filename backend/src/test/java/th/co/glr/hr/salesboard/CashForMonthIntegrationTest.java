@@ -27,6 +27,7 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
+import th.co.glr.hr.ticket.QuietRule;
 import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
 import th.co.glr.hr.salesboard.SalesBoardDtos.CashMonth;
 import th.co.glr.hr.salesboard.SalesBoardDtos.CashWeek;

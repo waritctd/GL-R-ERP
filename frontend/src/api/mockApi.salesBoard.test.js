@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { api } from './mockApi.js';
+import { api, rankQuietForTests } from './mockApi.js';
 
 // Mirrors SalesBoardService / SalesBoardRepository (backend SalesBoardScopeIntegrationTest). The mock's authz is
 // NOT evidence about the Java service — the role gates and the own-deals scope are proven only by the real-DB
@@ -55,6 +55,21 @@ describe('mockApi.salesBoard.myWork', () => {
     const after = await api.salesBoard.myWork();
     expect(after.followUp.map((d) => d.ticketId)).not.toContain(first.ticketId);
     expect(after.board.find((d) => d.ticketId === first.ticketId).quiet).toBe(false);
+  });
+});
+
+// Final review: values in different currencies are not comparable, so ranking weights THB only.
+describe('quiet ranking currency', () => {
+  const deal = (ticketId, daysQuiet, value, currency) => ({ ticketId, daysQuiet, value, currency, quiet: true });
+
+  it('a USD 1,000 deal does not outrank a THB 900,000 deal of equal days', () => {
+    const ranked = rankQuietForTests([deal(1, 20, 1000, 'USD'), deal(2, 20, 900000, 'THB')]);
+    expect(ranked.map((d) => d.ticketId)).toEqual([2, 1]);
+  });
+
+  it('a non-THB deal ranks by days alone, below THB-weighted ones but above fewer days', () => {
+    const ranked = rankQuietForTests([deal(1, 30, 5, 'USD'), deal(2, 20, 900000, 'THB'), deal(3, 25, 1000000, 'EUR')]);
+    expect(ranked.map((d) => d.ticketId)).toEqual([2, 1, 3]);
   });
 });
 

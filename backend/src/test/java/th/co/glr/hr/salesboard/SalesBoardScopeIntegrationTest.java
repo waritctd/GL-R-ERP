@@ -29,6 +29,7 @@ import th.co.glr.hr.dealquotation.AbstractDealQuotationSlice2IntegrationTest;
 import th.co.glr.hr.dealquotation.DealQuotationDtos.DealQuotationDto;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealStage;
+import th.co.glr.hr.ticket.QuietRule;
 import th.co.glr.hr.ticket.TicketController;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
