@@ -45,15 +45,17 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
     private final ObjectMapper json = new ObjectMapper();
     private MockMvc mvc;
-    private LocalDate today;
+    private static final LocalDate MONDAY = LocalDate.of(2026, 11, 9);
+    private static final LocalDate SUNDAY = LocalDate.of(2026, 11, 15);
 
     @BeforeEach
     void wireHttp() {
         SessionContext sessions = new SessionContext();
         QuietRule quietRule = new QuietRule(jdbc, 14);
+        // Fixed clock (review M5): Thursday 12 Nov 2026, 10:00 Bangkok. The week is hard-coded below
+        // (Mon 9 – Sun 15 Nov), never derived from VisitService.weekStart, so a wrong week computation fails here.
         VisitService visits = new VisitService(new VisitRepository(jdbc), ticketService,
-            java.time.Clock.system(VisitService.BANGKOK));
-        today = LocalDate.now(java.time.Clock.system(VisitService.BANGKOK));
+            java.time.Clock.fixed(java.time.Instant.parse("2026-11-12T03:00:00Z"), VisitService.BANGKOK));
         SalesBoardService board = new SalesBoardService(new SalesBoardRepository(jdbc, quietRule), quietRule,
             new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), visits, new CashRepository(jdbc));
         // The base fixtures label the sales division "SALES"; the real role derivation reads "SA".
@@ -368,12 +370,11 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
     @Test
     void myWorkCarriesOnlyMyOwnVisitsThisWeek() throws Exception {
-        LocalDate monday = VisitService.weekStart(today);
-        long mineMonday = visit(salesActor, monday, "PLANNED");
-        long mineSunday = visit(salesActor, monday.plusDays(6), "DONE");
-        long mineNextWeek = visit(salesActor, monday.plusDays(7), "PLANNED");
-        long mineLastWeek = visit(salesActor, monday.minusDays(1), "PLANNED");
-        long theirs = visit(otherSalesActor, today, "PLANNED");
+        long mineMonday = visit(salesActor, MONDAY, "PLANNED");
+        long mineSunday = visit(salesActor, SUNDAY, "DONE");
+        long mineNextWeek = visit(salesActor, LocalDate.of(2026, 11, 16), "PLANNED");
+        long mineLastWeek = visit(salesActor, LocalDate.of(2026, 11, 8), "PLANNED");
+        long theirs = visit(otherSalesActor, LocalDate.of(2026, 11, 12), "PLANNED");
 
         JsonNode work = ok(get("/api/sales/my-work"), salesActor);
 
@@ -384,12 +385,11 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
     @Test
     void teamOverviewCarriesEveryRepsVisitsAndPerRepCounts() throws Exception {
         deal(salesActor);
-        LocalDate monday = VisitService.weekStart(today);
-        visit(salesActor, monday, "DONE");
-        visit(salesActor, monday.plusDays(1), "PLANNED");
-        visit(salesActor, monday.plusDays(2), "CANCELLED");
-        visit(salesActor, monday.plusDays(7), "DONE"); // next week: not counted
-        long noDealsVisit = visit(otherSalesActor, monday.plusDays(3), "PLANNED");
+        visit(salesActor, MONDAY, "DONE");
+        visit(salesActor, LocalDate.of(2026, 11, 10), "PLANNED");
+        visit(salesActor, LocalDate.of(2026, 11, 11), "CANCELLED");
+        visit(salesActor, LocalDate.of(2026, 11, 16), "DONE"); // next week: not counted
+        long noDealsVisit = visit(otherSalesActor, LocalDate.of(2026, 11, 12), "PLANNED");
 
         JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
 
@@ -411,6 +411,18 @@ class SalesBoardScopeIntegrationTest extends AbstractDealQuotationSlice2Integrat
 
         assertThat(team.get("reps")).hasSize(1);
         assertThat(team.get("teamVisitsThisWeek")).isEmpty();
+    }
+
+    /** Review LOW: an owner whose only visits this week were cancelled has nothing to show, so no row. */
+    @Test
+    void anOwnerWhoseOnlyVisitsAreCancelledGetsNoRow() throws Exception {
+        deal(salesActor);
+        visit(otherSalesActor, MONDAY, "CANCELLED");
+
+        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
+
+        assertThat(team.get("reps")).hasSize(1);
+        assertThat(rep(team, salesActor.id())).isNotNull();
     }
 
     private long visit(UserPrincipal owner, LocalDate date, String status) {

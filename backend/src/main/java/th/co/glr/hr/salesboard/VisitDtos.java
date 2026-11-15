@@ -12,10 +12,17 @@ public final class VisitDtos {
     public static final String DONE = "DONE";
     public static final String CANCELLED = "CANCELLED";
 
-    /** {@code ticketTitle} is the linked deal's title, else its customer name; null when the visit has no deal. */
+    /**
+     * {@code ticketTitle} is the linked deal's title, else its customer name; null when the visit has no deal.
+     * {@code dealMovedToName} is the deal's current owner when the deal has moved away from this visit's owner
+     * (the visit's owner is not its {@code created_by}, even if still its keyer); a tick then stays on the visit
+     * only (review NEW-2 / NEW-A). Null otherwise. {@code dealMoved} says why, when the name is set: true when the
+     * deal was reassigned at or after this visit was created ("ดีลนี้ย้ายไปให้ …"), false when the visit's owner never
+     * held it — a keyer's or a manager's own visit ("… ดีลนี้เป็นของ …"). Always false when the name is null.
+     */
     public record VisitDto(long id, long ownerId, String ownerName, Long ticketId, String ticketTitle,
                            String contactName, LocalDate plannedDate, LocalTime plannedTime, String status,
-                           Instant doneAt, String note) {}
+                           Instant doneAt, String note, String dealMovedToName, boolean dealMoved) {}
 
     /**
      * POST /api/sales/visits. {@code done = true} records a visit that already happened (the phone's บันทึกเข้าพบ):

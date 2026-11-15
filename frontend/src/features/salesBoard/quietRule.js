@@ -42,9 +42,11 @@ export function daysQuietOf(ticket, activities, now = Date.now()) {
   return Math.max(0, Math.floor((now - last) / DAY_MS));
 }
 
-/** QuietRule.quietSql. */
-export function isQuiet(ticket, activities, now = Date.now(), quietDays = QUIET_DAYS) {
+/** QuietRule.quietSql. `hasUpcomingVisit` = QuietRule.upcomingVisitSql: a PLANNED visit dated today (Bangkok) or
+ * later holds the deal out of quiet; the caller (mockApi) works it out from its visits. */
+export function isQuiet(ticket, activities, now = Date.now(), quietDays = QUIET_DAYS, hasUpcomingVisit = false) {
   if ((ticket?.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return false;
+  if (hasUpcomingVisit) return false;
   if (boardColumnOf(ticket?.salesStage) === DELIVER_AND_COLLECT_COLUMN) return false;
   const last = lastTouchedMs(ticket, activities);
   return !Number.isNaN(last) && last < now - quietDays * DAY_MS;

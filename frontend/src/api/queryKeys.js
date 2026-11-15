@@ -115,6 +115,9 @@ export const queryKeys = {
   receiptImportLatest: () => ['tickets', 'receiptImports', 'latest'],
   // Under 'tickets' too: a change to a deal's expected cash refreshes the boards' cash card through the same prefix.
   expectedPayments: (ticketId) => ['tickets', 'expectedPayments', ticketId == null ? ticketId : Number(ticketId)],
+  // Under 'tickets' so every deal/visit write's ['tickets'] invalidation refreshes them too.
+  salesVisitsOwn: (from, to) => ['tickets', 'salesVisits', 'own', from, to],
+  salesVisitsTeam: (from, to) => ['tickets', 'salesVisits', 'team', from, to],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
   unitBasisCatalog: () => ['meta', 'unit-bases'],
   // See ticketDetail's comment above for why Number() matters.

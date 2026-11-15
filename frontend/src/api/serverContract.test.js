@@ -445,12 +445,6 @@ describe('controller surface / hrApi.js contract', () => {
  * retiring the endpoint) is the direction of travel and the stale-entry test deletes the entry.
  */
 const UNREACHABLE_FROM_UI = new Set([
-  // Visits (slice 2): the screens read this week's visits embedded in GET /api/sales/my-work
-  // (visitsThisWeek) and /team-overview (teamVisitsThisWeek), so no screen calls the ranged lists yet.
-  // They are the paging path for a past/next-week view; VisitScopeIntegrationTest covers both through
-  // the real service (owner scope, team gate, 31-day cap). Remove once a week picker calls them.
-  'GET /api/sales/visits',
-  'GET /api/sales/visits/team',
   // The one-click legacy "issue IR" is closed: the endpoint answers 409 for every deal and no screen
   // calls it. Retire the endpoint and hrApi method together in a follow-up.
   'POST /api/tickets/{}/import-request',

@@ -8,6 +8,11 @@ import { columnLabel, money } from './boardFormat.js';
 
 // The m-call dialog's four outcomes. Stored as the activity note's first line (deal_activity has no outcome
 // column); the rep's own note follows.
+//
+// Every outcome — ไม่รับสาย (no answer) included — writes a CALL deal_activity row, and QuietRule counts any
+// deal_activity as a touch, so an unanswered call also clears the quiet clock. Accepted (round-2 review LOW 3): a
+// rep who keeps trying is still working the deal, and the outcome line stays visible as "ครั้งล่าสุด: …" on the
+// follow-up row. Spec 2026-11-15 §7.5 records the same decision.
 const CALL_OUTCOMES = ['คุยแล้ว ยังสนใจ', 'ขอใบเสนอราคาใหม่', 'ไม่รับสาย', 'ขอเลื่อนโครงการ'];
 
 function CallModal({ deal, submitting, onClose, onSubmit }) {
@@ -67,8 +72,10 @@ function CallModal({ deal, submitting, onClose, onSubmit }) {
  * ควรตามต่อ — the rep's quiet deals as served (SalesBoardService ranks them by days × value, max 5). One tap each:
  * โทรแล้ว logs a CALL activity (which clears the quiet clock), นัดเข้าพบ opens the plan-visit dialog on this deal (the
  * visit clears the clock once it is ticked done), ปิดดีลนี้ hands off to the existing mark-lost flow.
+ * When the rep has more quiet deals than are listed ({@code quietTotal}), ดูทั้งหมด (n) calls {@code onShowAll}, which
+ * opens the board filtered to quiet deals.
  */
-export function FollowUpList({ deals, quietDays, onLogCall, onBookVisit, onCloseDeal, loggingCall }) {
+export function FollowUpList({ deals, quietDays, quietTotal = 0, onShowAll, onLogCall, onBookVisit, onCloseDeal, loggingCall }) {
   const [calling, setCalling] = useState(null);
 
   if (deals.length === 0) {
@@ -127,6 +134,11 @@ export function FollowUpList({ deals, quietDays, onLogCall, onBookVisit, onClose
           </li>
         ))}
       </ul>
+      {quietTotal > deals.length && onShowAll ? (
+        <div className="border-t border-border-subtle px-5 py-2.5 mobile:px-3.5">
+          <Button type="button" size="sm" variant="secondary" onClick={onShowAll}>{`ดูทั้งหมด (${quietTotal})`}</Button>
+        </div>
+      ) : null}
       {calling ? (
         <CallModal
           deal={calling}

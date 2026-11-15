@@ -242,7 +242,7 @@ function groupDealsForPipeline(deals, catalog) {
  * "ภาพรวมทีม": the live-pipeline replacement for the weekly report, computed off the same deal
  * list the table below renders.
  */
-function TeamPipelineSummary({ groups }) {
+function TeamPipelineSummary({ groups, quietDays }) {
   const items = [
     { key: 'won', label: 'ยอดที่สั่งซื้อแล้ว', tone: 'success', group: groups.won },
     { key: 'expected', label: 'ยอดคาดหวัง', tone: 'info', group: groups.expected },
@@ -254,7 +254,8 @@ function TeamPipelineSummary({ groups }) {
         <h2 id="ticket-pipeline-title">ภาพรวมทีม</h2>
         {groups.staleActiveCount > 0 ? (
           <StatusBadge tone="warning">
-            <Icon name="clock" size={12} /> {groups.staleActiveCount} ดีลเงียบ (ไม่มีความเคลื่อนไหว 14 วัน)
+            <Icon name="clock" size={12} /> {groups.staleActiveCount} ดีลเงียบ
+            {quietDays != null ? ` (ไม่มีความเคลื่อนไหว ${quietDays} วัน)` : null}
           </StatusBadge>
         ) : null}
       </div>
@@ -668,6 +669,14 @@ export function TicketListPage({ user, showToast }) {
   const fromParam = searchParams.get('from');
   const toParam = searchParams.get('to');
   const range = useMemo(() => rangeFromParams(fromParam, toParam), [fromParam, toParam]);
+  // The quiet threshold (app.sales.quiet-days) is served with the team overview; the ภาพรวมทีม badge names it
+  // instead of hard-coding 14 (round-2 LOW 4). Shares the TeamOverview screen's cache entry; manager view only.
+  const teamOverviewQuery = useQuery({
+    queryKey: queryKeys.salesBoardTeam(),
+    queryFn: () => api.salesBoard.teamOverview(),
+    enabled: isManagerView,
+  });
+  const quietDays = teamOverviewQuery.data?.quietDays ?? null;
   const ticketsQuery = useQuery({
     queryKey: isSales ? queryKeys.ticketListByRange(range.from, range.to) : queryKeys.ticketList(''),
     queryFn: () => api.tickets.list(isSales ? { movementFrom: range.from, movementTo: range.to } : {})
@@ -1254,7 +1263,7 @@ export function TicketListPage({ user, showToast }) {
       />
 
       {/* Summary metrics come after the worklist ("next action before summary metrics"). */}
-      {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} /> : null}
+      {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} quietDays={quietDays} /> : null}
 
       {creating ? (
         <TicketCreateModal user={user} onClose={() => setCreating(false)} onSubmit={handleCreate} />

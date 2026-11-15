@@ -201,7 +201,8 @@ public class SalesBoardService {
             byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d);
             names.putIfAbsent(d.ownerId(), d.ownerName());
         });
-        weekVisits.forEach(v -> {
+        // Only a booked (not cancelled) visit earns a deal-less owner a row; cancelled-only is nothing to show.
+        weekVisits.stream().filter(v -> !VisitDtos.CANCELLED.equals(v.status())).forEach(v -> {
             byOwner.computeIfAbsent(v.ownerId(), k -> new ArrayList<>());
             names.putIfAbsent(v.ownerId(), v.ownerName());
         });

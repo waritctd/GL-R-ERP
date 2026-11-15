@@ -167,4 +167,28 @@ class DealRouteTest {
         assertThat(owner).isNotEqualTo(buyer);
         assertThat(buyer).doesNotContain("เจ้าของติดต่อโดยตรง");
     }
+
+    // ── round-2 N1: where an UNSPECIFIED-recipient quotation puts a deal ─────
+
+    /** Owner-approved V204 reading: a direct quotation is addressed to a buyer. Every channel — including the
+     * stated-nothing ones and null — lands on QUOTE_BUYER, which no route skips. Never the designer stage. */
+    @Test
+    void unspecifiedRecipient_advancesLikeBuyer_onEveryChannel() {
+        List<String> channels = new ArrayList<>(EntryChannel.VALID);
+        channels.add(null);
+        channels.add("SOMETHING_UNKNOWN");
+        for (String channel : channels) {
+            assertThat(TicketService.stageForUnspecifiedRecipient(channel)).as("channel %s", channel)
+                .isEqualTo(DealStage.QUOTE_BUYER);
+        }
+    }
+
+    /** The fallback half of the rule: were QUOTE_BUYER ever off a route, the nearest on-route stage BEFORE it is
+     * taken (walking DealStage.ORDER backwards), never one after it. */
+    @Test
+    void unspecifiedRecipient_fallsBackToTheNearestEarlierOnRouteStage() {
+        Set<String> off = Set.of(DealStage.QUOTE_BUYER, DealStage.AWAITING_BUYER, DealStage.OWNER_SIGNOFF);
+        assertThat(TicketService.nearestOnRouteAtOrBefore(DealStage.QUOTE_BUYER, stage -> !off.contains(stage)))
+            .isEqualTo(DealStage.QUOTE_OWNER);
+    }
 }

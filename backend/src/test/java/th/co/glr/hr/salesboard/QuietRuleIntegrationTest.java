@@ -144,6 +144,113 @@ class QuietRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quietRule.isQuiet(id)).isFalse();
     }
 
+    // ── a booked visit keeps the deal out of ควรตามต่อ (spec §7.3, review H2) ──────
+
+    @Test
+    void plannedVisitTodayOrLaterKeepsTheDealOutOfQuiet() {
+        long today = dealCreatedDaysAgo(60);
+        long later = dealCreatedDaysAgo(60);
+        visit(today, "PLANNED", 0);
+        visit(later, "PLANNED", 9);
+
+        assertThat(quietRule.isQuiet(today)).isFalse();
+        assertThat(quietRule.isQuiet(later)).isFalse();
+        // The deal list reads the same rule.
+        assertThat(tickets.findSummaryById(later).orElseThrow().stale()).isFalse();
+    }
+
+    @Test
+    void aPlannedVisitWhoseDatePassedUntickedLetsTheDealGoQuietAgain() {
+        long id = dealCreatedDaysAgo(60);
+        visit(id, "PLANNED", -1);
+
+        assertThat(quietRule.isQuiet(id)).isTrue();
+    }
+
+    @Test
+    void cancelledOrDoneVisitsDoNotHoldTheDeal() {
+        long cancelled = dealCreatedDaysAgo(60);
+        visit(cancelled, "CANCELLED", 3);
+        long doneLater = dealCreatedDaysAgo(60);
+        visit(doneLater, "DONE", 3); // DONE resets through its SITE_VISIT activity, never through the visit row
+
+        assertThat(quietRule.isQuiet(cancelled)).isTrue();
+        assertThat(quietRule.isQuiet(doneLater)).isTrue();
+    }
+
+    @Test
+    void anotherDealsVisitDoesNotHoldThisOne() {
+        long booked = dealCreatedDaysAgo(60);
+        long other = dealCreatedDaysAgo(60);
+        visit(booked, "PLANNED", 2);
+
+        assertThat(quietRule.isQuiet(other)).isTrue();
+    }
+
+    // ── review NEW-1: only a visit within the quiet window holds the deal ─────
+
+    @Test
+    void aVisit14DaysOutHoldsTheDeal_15DaysOutDoesNot() {
+        long fourteen = dealCreatedDaysAgo(60);
+        long fifteen = dealCreatedDaysAgo(60);
+        long farFuture = dealCreatedDaysAgo(190);
+        visit(fourteen, "PLANNED", 14);
+        visit(fifteen, "PLANNED", 15);
+        visitOn(farFuture, repId, "2099-01-01");
+
+        assertThat(quietRule.isQuiet(fourteen)).isFalse();
+        assertThat(quietRule.isQuiet(fifteen)).isTrue();
+        assertThat(quietRule.isQuiet(farFuture)).as("a 2099 plan must not hide a deal forever").isTrue();
+    }
+
+    // ── review NEW-2: only the deal's current owner's visit holds it ──────────
+
+    @Test
+    void anExOwnersUpcomingVisitDoesNotHoldTheNewOwnersDeal() {
+        long id = dealCreatedDaysAgo(60);
+        visit(id, "PLANNED", 2);
+        // The production reassignment path: the ex-owner becomes the keyer (keyed_by = COALESCE(keyed_by, created_by)).
+        assertThat(tickets.moveOwnerToSalesRep(id, otherRepId())).isEqualTo(1);
+
+        assertThat(quietRule.isQuiet(id)).isTrue();
+        assertThat(tickets.findSummaryById(id).orElseThrow().stale()).isTrue();
+    }
+
+    @Test
+    void aKeyersVisitDoesNotHoldTheOwnersDeal() {
+        long id = dealCreatedDaysAgo(60);
+        long owner = otherRepId();
+        // Keyed in by repId for another rep, never reassigned: repId is the keyer, not the owner.
+        jdbc.update("UPDATE sales.ticket SET created_by = :owner, keyed_by = :keyer WHERE ticket_id = :id",
+            Map.of("owner", owner, "keyer", repId, "id", id));
+        visit(id, "PLANNED", 2); // booked by repId, the keyer
+
+        assertThat(quietRule.isQuiet(id)).isTrue();
+    }
+
+    private long otherRepId() {
+        return new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc))
+            .create(new UpsertEmployeeRequest(null, null, "พนักงานขาย คนใหม่", null, null, null, null, null, null,
+                null, "quiet-rule-new-owner-" + System.nanoTime() + "@glr.co.th", null, "SALES", "Sales Division", "แผนกขาย", null, null, null,
+                "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+    }
+
+    private void visitOn(long ticketId, long ownerId, String isoDate) {
+        jdbc.update("""
+            INSERT INTO sales.visit (owner_id, ticket_id, contact_name, planned_date, status)
+            VALUES (:owner, :id, 'ลูกค้า', CAST(:d AS date), 'PLANNED')
+            """, Map.of("owner", ownerId, "id", ticketId, "d", isoDate));
+    }
+
+    /** A visit on the deal, {@code dayOffset} days from today's Bangkok date. */
+    private void visit(long ticketId, String status, int dayOffset) {
+        jdbc.update("""
+            INSERT INTO sales.visit (owner_id, ticket_id, contact_name, planned_date, status, done_at)
+            VALUES (:rep, :id, 'ลูกค้า', (now() AT TIME ZONE 'Asia/Bangkok')::date + :d, :status,
+                    CASE WHEN :status = 'DONE' THEN now() END)
+            """, Map.of("rep", repId, "id", ticketId, "d", dayOffset, "status", status));
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private long dealCreatedDaysAgo(int days) {

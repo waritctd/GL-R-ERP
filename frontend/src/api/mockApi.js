@@ -4278,16 +4278,52 @@ function advanceDealToQuotationRecipientStage(ticket, recipientType, user) {
   if (stage) autoAdvanceStage(ticket, stage, user);
 }
 
-/** Mirrors TicketService#applyApprovedQuotation: stage onto the recipient's (forward-only), then the addressee into
- * the matching designerName / ownerName / buyerName only when that field is blank. */
-const MOCK_PARTY_NAME_FIELD = { DESIGNER: 'designerName', OWNER: 'ownerName', BUYER: 'buyerName' };
-function mockApplyApprovedQuotation(ticket, recipientType, partyName, user) {
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
-  advanceDealToQuotationRecipientStage(ticket, recipientType, user);
-  const field = MOCK_PARTY_NAME_FIELD[recipientType];
-  const name = (partyName ?? '').trim();
-  if (field && name && !(ticket[field] ?? '').trim()) ticket[field] = name;
+/**
+ * Mirrors TicketService#stageForUnspecifiedRecipient (round-2 N1): an UNSPECIFIED-recipient quotation advances like a
+ * BUYER one — QUOTE_BUYER when on the deal's route, else the nearest on-route stage before it.
+ */
+function mockStageForUnspecifiedRecipient(entryChannel) {
+  const stages = DEAL_STAGE_CATALOG.stages.map((stage) => stage.code);
+  for (let i = stages.indexOf('QUOTE_BUYER'); i >= 0; i -= 1) {
+    if (mockIsOnRoute(entryChannel, stages[i])) return stages[i];
+  }
+  return null;
 }
+
+/** Mirrors TicketRepository#fillPartyNameIfBlank: writes only into a blank (null / whitespace) field. */
+function mockFillPartyNameIfBlank(ticket, field, name) {
+  const value = (name ?? '').trim();
+  if (value && !(ticket[field] ?? '').trim()) ticket[field] = value;
+}
+
+/**
+ * Mirrors TicketService#applyApprovedQuotation (spec 2026-11-15 §7.2, review H1/H2, round-2 N1/N3). A non-ACTIVE deal
+ * is untouched. Stage: forward-only onto the named recipient's stage, or for UNSPECIFIED like BUYER
+ * (#mockStageForUnspecifiedRecipient). Names come only from a source that names that party (TicketRepository
+ * #partyNameFromQuotation), into a blank field only:
+ *   - designerName — the mockDesigners entry behind the quotation's D.Co. (unitCode), for ANY recipient;
+ *   - buyerName — the customer of the quotation's BUYER-role party, for a BUYER or UNSPECIFIED recipient;
+ *   - ownerName — never. The bill-to customerName is never used for any of them.
+ */
+function mockApplyApprovedQuotation(ticket, row, user) {
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') return;
+  const recipientType = row.recipientType;
+  if (MOCK_PARTY_NAME_RECIPIENTS.includes(recipientType)) {
+    advanceDealToQuotationRecipientStage(ticket, recipientType, user);
+  } else {
+    const target = mockStageForUnspecifiedRecipient(ticket.entryChannel);
+    if (target) autoAdvanceStage(ticket, target, user);
+  }
+  const designer = mockDesigners.find((d) => d.code === String(row.unitCode ?? '').trim());
+  mockFillPartyNameIfBlank(ticket, 'designerName', designer?.name);
+  if (recipientType === 'BUYER' || !MOCK_PARTY_NAME_RECIPIENTS.includes(recipientType)) {
+    const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId && p.role === 'BUYER') : null;
+    const customer = party ? mockCustomers.find((c) => c.id === party.customerId) : null;
+    mockFillPartyNameIfBlank(ticket, 'buyerName', customer?.name);
+  }
+}
+/** QuotationRecipient.ADDRESSABLE. */
+const MOCK_PARTY_NAME_RECIPIENTS = ['DESIGNER', 'OWNER', 'BUYER'];
 
 function dealStageIndex(code) {
   return DEAL_STAGE_CATALOG.stages.findIndex((stage) => stage.code === code);
@@ -4454,6 +4490,12 @@ export function patchTicketForTests(ticketId, patch) {
   Object.assign(findTicketRaw(Number(ticketId)), patch);
 }
 
+/** TEST-ONLY seam — not part of `api`. Patches a stored deal quotation row (e.g. a legacy UNSPECIFIED recipient,
+ * which no create path accepts any more). */
+export function patchDealQuotationForTests(quotationId, patch) {
+  Object.assign(mockDealQuotations.find((q) => q.id === Number(quotationId)), patch);
+}
+
 /** TEST-ONLY seam — not part of `api`. Sets a ticket line's qtyFromStock (a legacy reserve). */
 export function setTicketItemQtyFromStockForTests(ticketId, itemId, qty) {
   const item = db.tickets.find((t) => t.id === Number(ticketId))?.items.find((i) => i.id === Number(itemId));
@@ -4569,7 +4611,7 @@ function buildTicketDetail(ticket) {
       designerName: ticket.designerName ?? null,
       ownerName: ticket.ownerName ?? null,
       buyerName: ticket.buyerName ?? null,
-      stale: dealComputeStale(ticket, dealActivitiesForTicket(ticket.id)),
+      stale: dealComputeStale(ticket, dealActivitiesForTicket(ticket.id), mockHasUpcomingVisit(ticket.id)),
       // Existence-only flag — see hasRecordedCommission's comment. Never an amount; amounts stay
       // behind commissions.list()'s own role gate.
       commissionRecorded: hasRecordedCommission(ticket),
@@ -6544,8 +6586,10 @@ function mockApproveDealQuotationPricingRequestOrigin(row, payload, user) {
   }
   if (pr && ticket) {
     // The QUOTATION's recipient (a revision may be re-addressed), not the request's.
+    // Mirrors DealQuotationService's PRICING_REQUEST-origin issue, which runs the same
+    // TicketService#applyApprovedQuotation as a DEAL_DIRECT approval (review H1/M5c).
     const recipient = row.recipientType ?? pr.recipientType;
-    advanceDealToQuotationRecipientStage(ticket, recipient, user);
+    mockApplyApprovedQuotation(ticket, { ...row, recipientType: recipient }, user);
     pushEvent(ticket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติและออกใบเสนอราคา ${row.number}`);
     pushPricingRequestEvent(pr, user, 'CUSTOMER_QUOTATION_ISSUED', null, null, `ออกใบเสนอราคา ${row.number}`);
     // Parity with the real service's unconditional CEO-visibility notification on issue (redundant when the ceo is
@@ -8217,7 +8261,7 @@ function mockBoardDeals() {
         expectedQuarter: t.expectedQuarter ?? null,
         lastTouchedAt: Number.isNaN(last) ? null : new Date(last).toISOString(),
         daysQuiet: mockDaysQuietOf(t, activities, now),
-        quiet: mockIsQuiet(t, activities, now),
+        quiet: mockIsQuiet(t, activities, now, MOCK_QUIET_DAYS, mockHasUpcomingVisit(t.id)),
         lastActivityKind: latestActivity?.kind ?? null,
         lastActivityNote: latestActivity?.note ?? null,
         lastTouchedMs: last,
@@ -8262,10 +8306,16 @@ function seedMockVisits() {
     mockVisits.push({
       id: mockVisitSeq++, ownerId, ticketId: null, contactName, plannedDate, plannedTime: time, status,
       doneAt: status === 'DONE' ? `${plannedDate}T09:00:00.000Z` : null, note,
+      createdAt: `${plannedDate}T00:00:00.000Z`,
     });
   }
 }
 seedMockVisits();
+
+/** TEST-ONLY seam — not part of `api`. Patches a stored visit row (e.g. to drop createdAt). */
+export function patchVisitForTests(visitId, patch) {
+  Object.assign(mockVisits.find((v) => v.id === Number(visitId)), patch);
+}
 
 /** VisitRepository's SELECT … JOIN hr.employee LEFT JOIN sales.ticket, for one row. */
 function mockVisitDto(v) {
@@ -8282,8 +8332,23 @@ function mockVisitDto(v) {
     status: v.status,
     doneAt: v.doneAt,
     note: v.note,
+    // VisitRepository: the deal's current owner's name when this visit's owner is not its created_by (review NEW-A:
+    // the keyer does not count — reassignment leaves the ex-owner as keyer).
+    dealMovedToName: ticket && Number(ticket.createdById) !== Number(v.ownerId)
+      ? (db.users.find((u) => u.id === ticket.createdById)?.name ?? ticket.createdByName ?? null)
+      : null,
+    // VisitRepository's deal_moved: that, AND the deal's timeline has a reassignment (an EDITED event starting
+    // TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX) at or after this visit was created (review LOW).
+    dealMoved: Boolean(ticket) && Number(ticket.createdById) !== Number(v.ownerId)
+      && (ticket.events ?? []).some((e) => e.kind === 'EDITED'
+        && String(e.message ?? '').startsWith(MOCK_OWNER_CHANGED_MESSAGE_PREFIX)
+        // A visit with no createdAt cannot be placed before the move, so it is never "moved" (v.created_at is NOT NULL server-side).
+        && v.createdAt != null && Date.parse(e.createdAt) >= Date.parse(v.createdAt)),
   };
 }
+
+/** TicketRepository.OWNER_CHANGED_MESSAGE_PREFIX. */
+const MOCK_OWNER_CHANGED_MESSAGE_PREFIX = 'เปลี่ยนเจ้าของงาน: ';
 
 /** VisitRepository's ORDER BY v.planned_date, v.planned_time NULLS LAST, v.visit_id over [from, to]. */
 function mockVisitsIn(from, to, ownerId = null) {
@@ -8296,7 +8361,7 @@ function mockVisitsIn(from, to, ownerId = null) {
     .map(mockVisitDto);
 }
 
-/** VisitService.requireRange: inclusive, at most 31 days, to not before from. */
+/** VisitService.requireRange: ISO dates, inclusive, at most 31 days, to not before from. */
 function mockRequireVisitRange(from, to) {
   const iso = /^\d{4}-\d{2}-\d{2}$/;
   if (!iso.test(from ?? '') || !iso.test(to ?? '') || to < from) fail('ช่วงวันที่ไม่ถูกต้อง', 400);
@@ -8319,16 +8384,17 @@ function mockVisitNotPlanned(visit) {
   fail(`นัดนี้${visit.status === 'DONE' ? 'บันทึกว่าไปแล้ว' : 'ยกเลิกแล้ว'} จึงเปลี่ยนไม่ได้`, 409);
 }
 
-/** TicketService.addActivity(SITE_VISIT, today) — the one path that resets the quiet clock. */
-function mockLogSiteVisit(user, ticketId, note) {
+/** TicketService.recordVisitActivity: SITE_VISIT, today, attributed to the visit's owner (the person who went),
+ * with NO deal-ownership check — the visit's own check already ran (review M1/M3). */
+function mockLogSiteVisit(ownerId, ticketId, note) {
   mockDealActivities.push({
     id: mockDealActivitySeq++,
     ticketId,
     activityDate: mockTodayIso(),
     kind: 'SITE_VISIT',
     note: note ?? null,
-    createdById: user.id,
-    createdByName: user.name,
+    createdById: ownerId,
+    createdByName: db.users.find((u) => u.id === ownerId)?.name ?? null,
     createdAt: new Date().toISOString(),
   });
 }
@@ -8740,6 +8806,24 @@ const mockQueuedDto = (r, candidates = []) => ({
   candidates,
 });
 
+/** VisitService.cleanNote: trimmed, null when blank, 400 over 2000 characters. */
+function mockCleanVisitNote(note) {
+  const trimmed = (note ?? '').trim();
+  if (trimmed.length > 2000) fail('โน้ตยาวเกิน 2000 ตัวอักษร', 400);
+  return trimmed || null;
+}
+
+/** QuietRule.upcomingVisitSql: a PLANNED visit on the deal, by its current owner (created_by only), dated from today
+ * (Bangkok) to today + QUIET_DAYS — a far-future plan or an ex-owner's plan does not hold it (review NEW-1/NEW-2). */
+function mockHasUpcomingVisit(ticketId) {
+  const ticket = db.tickets.find((t) => t.id === ticketId);
+  if (!ticket) return false;
+  const today = mockTodayIso();
+  const horizon = mockAddDaysIso(today, MOCK_QUIET_DAYS);
+  return mockVisits.some((v) => v.ticketId === ticketId && v.status === 'PLANNED'
+    && v.plannedDate >= today && v.plannedDate <= horizon && Number(ticket.createdById) === Number(v.ownerId));
+}
+
 /** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
 function mockVisitsThisWeek(ownerId = null) {
   const monday = mockWeekStartIso(mockTodayIso());
@@ -9126,7 +9210,7 @@ export const api = {
         designerName: t.designerName ?? null,
         ownerName: t.ownerName ?? null,
         buyerName: t.buyerName ?? null,
-        stale: dealComputeStale(t, dealActivitiesForTicket(t.id)),
+        stale: dealComputeStale(t, dealActivitiesForTicket(t.id), mockHasUpcomingVisit(t.id)),
         // Same existence-only flag as buildTicketDetail's summary — served on the LIST projection
         // too because accountActions.js's worklist is built from list rows, not detail fetches.
         commissionRecorded: hasRecordedCommission(t),
@@ -13550,7 +13634,7 @@ export const api = {
       }
       // SalesBoardService.repRows: an owner with visits this week but no open deal still gets a row (0 deals).
       const teamVisitsThisWeek = mockVisitsThisWeek();
-      for (const v of teamVisitsThisWeek) {
+      for (const v of teamVisitsThisWeek.filter((x) => x.status !== 'CANCELLED')) {
         if (!byRep.has(v.ownerId)) {
           byRep.set(v.ownerId, {
             employeeId: v.ownerId, name: v.ownerName,
@@ -13823,41 +13907,60 @@ export const api = {
       if (!contactName) fail('กรุณาระบุว่าพบใคร', 400);
       if (contactName.length > 200) fail('ชื่อผู้ที่พบยาวเกิน 200 ตัวอักษร', 400);
       if (!payload?.plannedDate) fail('กรุณาระบุวันที่', 400);
+      // Spring's LocalDate binding rejects anything but ISO yyyy-MM-dd with a 400.
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.plannedDate)
+        || Number.isNaN(Date.parse(`${payload.plannedDate}T00:00:00Z`))) fail('รูปแบบวันที่ไม่ถูกต้อง', 400);
       const done = payload.done === true;
+      if (payload.plannedDate > mockAddDaysIso(mockTodayIso(), 180)) {
+        fail('นัดล่วงหน้าได้ไม่เกิน 180 วัน', 400);
+      }
       if (done && payload.plannedDate !== mockTodayIso()) {
         fail('บันทึกเข้าพบได้เฉพาะวันนี้ — นัดล่วงหน้าให้ใช้ “นัดเข้าพบ”', 400);
       }
-      const note = (payload.note ?? '').trim() || null;
+      const note = mockCleanVisitNote(payload.note);
       const ticketId = payload.ticketId == null || payload.ticketId === '' ? null : Number(payload.ticketId);
       if (ticketId != null) {
         const ticket = db.tickets.find((t) => t.id === ticketId);
         if (!ticket) fail('ไม่พบดีลนี้', 404);
         if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในดีลนี้ไม่ได้', 400);
+      }
+      if (done) {
+        // VisitRepository.findRecentDoneLog: the same one-step log within 60 s is the same visit.
+        const cutoff = Date.now() - 60_000;
+        const same = mockVisits.filter((v) => v.ownerId === user.id && v.ticketId === ticketId
+          && v.contactName === contactName && v.plannedDate === payload.plannedDate && v.status === 'DONE'
+          && Date.parse(v.createdAt ?? 0) > cutoff).at(-1);
+        if (same) return delay(mockVisitDto(same));
       }
       const visit = {
         id: mockVisitSeq++, ownerId: user.id, ticketId, contactName, plannedDate: payload.plannedDate,
         plannedTime: payload.plannedTime || null, status: done ? 'DONE' : 'PLANNED',
-        doneAt: done ? new Date().toISOString() : null, note,
+        doneAt: done ? new Date().toISOString() : null, note, createdAt: new Date().toISOString(),
       };
       mockVisits.push(visit);
-      if (done && ticketId != null) mockLogSiteVisit(user, ticketId, note);
+      const ownsDeal = ticketId != null && Number(db.tickets.find((t) => t.id === ticketId)?.createdById) === user.id;
+      if (done && ownsDeal) mockLogSiteVisit(user.id, ticketId, note);
       return delay(mockVisitDto(visit));
     },
     async done(id, payload = {}) {
       const user = requireSession();
       if (!MOCK_VISIT_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const visit = mockWritableVisit(user, id);
-      if (visit.ticketId != null) {
-        const ticket = db.tickets.find((t) => t.id === visit.ticketId);
-        if (!ticket) fail('ไม่พบดีลนี้', 404);
-        if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const note = mockCleanVisitNote(payload?.note);
+      if (visit.status === 'PLANNED' && visit.plannedDate > mockTodayIso()) {
+        fail('ยังไม่ถึงวันนัด จึงบันทึกว่าเข้าพบแล้วไม่ได้', 409);
       }
       if (visit.status !== 'PLANNED') mockVisitNotPlanned(visit);
-      const note = (payload?.note ?? '').trim() || null;
       visit.status = 'DONE';
       visit.doneAt = new Date().toISOString();
       if (note) visit.note = note;
-      if (visit.ticketId != null) mockLogSiteVisit(user, visit.ticketId, visit.note);
+      const ticket = visit.ticketId == null ? null : db.tickets.find((t) => t.id === visit.ticketId);
+      // TicketService.recordVisitActivity: only onto a deal whose created_by is the visit's owner (review NEW-2/NEW-A).
+      if (ticket && Number(ticket.createdById) === Number(visit.ownerId)) {
+        const recordedBy = visit.ownerId !== user.id ? `บันทึกโดย ${user.name}` : null;
+        mockLogSiteVisit(visit.ownerId, visit.ticketId, [visit.note, recordedBy].filter(Boolean).join(' · ') || null);
+      }
       return delay(mockVisitDto(visit));
     },
     async cancel(id) {
@@ -18307,7 +18410,7 @@ export const api = {
       const dealTicket = db.tickets.find((t) => t.id === row.ticketId);
       if (dealTicket) {
         pushEvent(dealTicket, user, 'QUOTATION_ISSUED', null, null, `อนุมัติใบเสนอราคา ${row.number}`);
-        mockApplyApprovedQuotation(dealTicket, row.recipientType, row.customerName, user);
+        mockApplyApprovedQuotation(dealTicket, row, user);
       }
       return delay({ quotation: buildDealQuotationDto(row) });
     },

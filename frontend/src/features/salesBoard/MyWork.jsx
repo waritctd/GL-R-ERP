@@ -9,16 +9,21 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
-import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
+import { addDaysIso, bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import { MarkLostModal } from '../tickets/MarkLostModal.jsx';
 import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
 import { useStageCatalog } from '../tickets/stageCatalog.js';
-import { currentQuarter, otherCurrencyTotals, sumValue, totalLabel } from './boardFormat.js';
+import { currentQuarter, defaultBoardFilter, otherCurrencyTotals, sumValue, totalLabel } from './boardFormat.js';
 import { CashCard } from './CashCard.jsx';
 import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
-import { VisitsThisWeek } from './VisitsThisWeek.jsx';
+import { CarriedOverVisits, VisitsThisWeek } from './VisitsThisWeek.jsx';
+import { weekRangeLabel, weekStartIso } from './visitWeek.js';
+
+// ค้างจากสัปดาห์ก่อน looks back 31 days before this Monday — the ranged endpoint's cap. An older unticked visit is
+// still reachable with ‹ สัปดาห์ก่อน.
+const CARRY_OVER_DAYS = 31;
 
 function CountPill({ count }) {
   return (
@@ -40,7 +45,10 @@ const Failed = () => <p className="m-0 px-5 py-4 text-sm font-bold text-danger m
 const BOARD_FILTERS = [
   { key: 'quarter', label: 'ไตรมาสนี้' },
   { key: 'all', label: 'ทั้งหมด' },
+  { key: 'quiet', label: 'ดีลเงียบ' },
 ];
+
+const BOARD_ID = 'my-work-board';
 
 /**
  * งานของฉัน — the rep's landing (spec 2026-11-15 §7.3): ควรตามต่อ and นัดเข้าพบสัปดาห์นี้ side by side, then the
@@ -55,12 +63,34 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   const { catalog } = useStageCatalog();
   const [losing, setLosing] = useState(null);
   const [creating, setCreating] = useState(false);
-  const [boardFilter, setBoardFilter] = useState('all');
+  // null until the rep picks one: the default follows the data (defaultBoardFilter).
+  const [boardFilterChoice, setBoardFilter] = useState(null);
   const [planning, setPlanning] = useState(null); // { deal } — deal is null for a visit with no deal yet
   const [ticking, setTicking] = useState(null);
   const [cancelling, setCancelling] = useState(null);
   const [logging, setLogging] = useState(false);
   const todayIso = bangkokTodayIso();
+  const thisMonday = weekStartIso(todayIso);
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [landed, setLanded] = useState(null);
+  const shownMonday = addDaysIso(thisMonday, 7 * weekOffset);
+  const shownSunday = addDaysIso(shownMonday, 6);
+  const otherWeekQuery = useQuery({
+    queryKey: queryKeys.salesVisitsOwn(shownMonday, shownSunday),
+    queryFn: () => api.salesVisits.list({ from: shownMonday, to: shownSunday }),
+    enabled: weekOffset !== 0,
+  });
+  const carryFrom = addDaysIso(thisMonday, -CARRY_OVER_DAYS);
+  const carryTo = addDaysIso(thisMonday, -1);
+  const carriedQuery = useQuery({
+    queryKey: queryKeys.salesVisitsOwn(carryFrom, carryTo),
+    queryFn: () => api.salesVisits.list({ from: carryFrom, to: carryTo }),
+  });
+  const carriedOver = (carriedQuery.data ?? []).filter((v) => v.status === 'PLANNED');
+  const showWeek = (offset) => {
+    setWeekOffset(offset);
+    setLanded(null);
+  };
 
   const workQuery = useQuery({ queryKey: queryKeys.salesBoardMyWork(), queryFn: () => api.salesBoard.myWork() });
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['tickets'] });
@@ -97,9 +127,13 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   /** Runs a visit mutation; a failure is toasted and the dialog stays open with what was typed. */
   async function attempt(mutation, variables, onDone, success) {
     try {
-      await mutation.mutateAsync(variables);
+      const result = await mutation.mutateAsync(variables);
       onDone();
-      showToast('success', success);
+      // VisitDto.dealMovedToName: the deal belongs to someone else, so the tick stayed on the visit (NEW-2).
+      // dealMoved says why: it moved after the visit was planned, or the visit's owner never held it (review LOW).
+      showToast('success', !result?.dealMovedToName ? success : result.dealMoved
+        ? `ดีลนี้ย้ายไปให้ ${result.dealMovedToName} แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น`
+        : `บันทึกการเข้าพบไว้กับนัดเท่านั้น — ดีลนี้เป็นของ ${result.dealMovedToName}`);
     } catch (error) {
       fail(error);
     }
@@ -116,14 +150,30 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   }
 
   const work = workQuery.data;
-  const visits = work ? (work.visitsThisWeek ?? []) : null;
-  const todaysPlanned = (visits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate === todayIso);
+  const thisWeekVisits = work ? (work.visitsThisWeek ?? []) : null;
+  const visits = weekOffset === 0 ? thisWeekVisits : (otherWeekQuery.data ?? null);
+  const todaysPlanned = (thisWeekVisits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate === todayIso);
+
+  /** After a plan is saved: when it landed outside the week on screen, say where and offer the jump. */
+  function noteLanding(plannedDate) {
+    const monday = weekStartIso(plannedDate);
+    if (monday === shownMonday) return;
+    const offset = Math.round((Date.parse(`${monday}T00:00:00Z`) - Date.parse(`${thisMonday}T00:00:00Z`)) / (7 * 86_400_000));
+    setLanded({ weekOffset: offset, label: weekRangeLabel(monday, todayIso) });
+  }
   const openLog = () => setLogging(true);
   const quietDays = work?.quietDays ?? 14;
   const quarter = currentQuarter();
+  const boardFilter = boardFilterChoice ?? (work ? defaultBoardFilter(work.board) : 'all');
+  const quietTotal = work ? work.board.filter((d) => d.quiet).length : 0;
   const boardDeals = !work ? [] : boardFilter === 'quarter'
     ? work.board.filter((d) => d.expectedQuarter === quarter)
-    : work.board;
+    : boardFilter === 'quiet' ? work.board.filter((d) => d.quiet) : work.board;
+
+  function showAllQuiet() {
+    setBoardFilter('quiet');
+    document.getElementById(BOARD_ID)?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  }
 
   return (
     <PageStack>
@@ -162,6 +212,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
             <FollowUpList
               deals={work.followUp}
               quietDays={quietDays}
+              quietTotal={quietTotal}
+              onShowAll={showAllQuiet}
               loggingCall={callMutation.isPending}
               onLogCall={logCall}
               onBookVisit={(deal) => setPlanning({ deal })}
@@ -173,8 +225,12 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
         <VisitsThisWeek
           visits={visits}
           todayIso={todayIso}
-          loading={!work}
-          failed={workQuery.isError}
+          mondayIso={shownMonday}
+          weekOffset={weekOffset}
+          onWeek={showWeek}
+          landed={landed}
+          loading={weekOffset === 0 ? !work : otherWeekQuery.isLoading}
+          failed={weekOffset === 0 ? workQuery.isError : otherWeekQuery.isError}
           onPlan={() => setPlanning({ deal: null })}
           onDone={setTicking}
           onCancel={setCancelling}
@@ -183,7 +239,10 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
         {work?.cash ? <CashCard cash={work.cash} /> : null}
       </div>
 
+      <CarriedOverVisits visits={carriedOver} todayIso={todayIso} onDone={setTicking} onCancel={setCancelling} />
+
       <Panel
+        id={BOARD_ID}
         title="ดีลทั้งหมดของฉัน"
         actions={work ? (
           <span className="flex flex-wrap items-center gap-2 text-sm text-text-muted">
@@ -193,7 +252,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
                 {totalLabel(sumValue(boardDeals), otherCurrencyTotals(boardDeals))}
               </b>
             </span>
-            <span className="flex gap-1" role="group" aria-label="กรองตามไตรมาส">
+            <span className="flex flex-wrap gap-1" role="group" aria-label="กรองดีล">
               {BOARD_FILTERS.map((f) => (
                 <Button
                   key={f.key}
@@ -230,7 +289,10 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           todayIso={todayIso}
           submitting={createVisit.isPending}
           onClose={() => setPlanning(null)}
-          onSubmit={(payload) => attempt(createVisit, payload, () => setPlanning(null), 'บันทึกนัดแล้ว')}
+          onSubmit={(payload) => attempt(createVisit, payload, () => {
+            setPlanning(null);
+            noteLanding(payload.plannedDate);
+          }, 'บันทึกนัดแล้ว')}
         />
       ) : null}
       {ticking ? (
