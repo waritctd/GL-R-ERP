@@ -291,6 +291,17 @@ export async function createPricingRequest(
         requestedUnit: 'PCS',
         requestedUnitBasis: 'PER_PIECE',
         quantityType: 'CONFIRMED',
+        // PricingRequestService#requireItemFieldsComplete: the direct-deal form's required tile fields. A draft is
+        // refused 400 without them (this helper had gone stale against develop).
+        color: 'E2E white',
+        texture: 'R10',
+        size: '60x60',
+        thicknessMm: 9,
+        sqmPerPiece: 0.36,
+        piecesPerBox: 4,
+        quantityMode: 'AREA',
+        areaSqm: requestedQty,
+        originCountry: 'อิตาลี',
       },
     ],
   });

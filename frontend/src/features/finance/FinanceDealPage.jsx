@@ -461,6 +461,15 @@ export function FinanceDealPage({ user }) {
         />
       ) : null}
 
+      {activeAction?.action === 'RECORD_PAYMENT' ? (
+        <RecordPaymentModal
+          prefill={recordPaymentPrefill} expressUploadEnabled={expressUploadEnabled} busy={busy} error={flowError}
+          onSubmit={(body) => run((options) => api.finance.recordPayment(deal.id, options ? { ...body, ...options } : body))}
+          onClose={() => setFlow(null)}
+        />
+      ) : null}
+      {/* Rendered AFTER the payment modal on purpose: both are fixed z-50 overlays, so the later one paints on top. Before
+          the warning sat above this modal in the source, which hid it (and its บันทึกต่อ button) behind the form. */}
       {possibleDuplicate ? (
         <ConfirmDialog
           open
@@ -478,13 +487,6 @@ export function FinanceDealPage({ user }) {
         />
       ) : null}
 
-      {activeAction?.action === 'RECORD_PAYMENT' ? (
-        <RecordPaymentModal
-          prefill={recordPaymentPrefill} expressUploadEnabled={expressUploadEnabled} busy={busy} error={flowError}
-          onSubmit={(body) => run((options) => api.finance.recordPayment(deal.id, options ? { ...body, ...options } : body))}
-          onClose={() => setFlow(null)}
-        />
-      ) : null}
       {activeAction?.action === 'REVOKE_CLOSE_CONFIRM' ? (
         <RevokeCloseModal
           busy={busy} error={flowError}

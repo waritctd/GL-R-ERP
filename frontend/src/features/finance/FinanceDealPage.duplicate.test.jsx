@@ -115,6 +115,21 @@ describe('FinanceDealPage — บันทึกรับชำระ (prefilled
     expect(api.finance.recordPayment).toHaveBeenLastCalledWith(501, { ...firstBody, confirmPossibleDuplicate: true });
   });
 
+  // Found by the real-browser run (e2e-real/cash-and-ops.spec.js): both dialogs are fixed z-50 overlays, so the one
+  // later in the DOM paints on top. The warning used to render BEFORE the payment modal, which hid it — and its
+  // บันทึกต่อ button — behind the form it was warning about. jsdom has no paint order, so the DOM order is the proxy.
+  it('the possible-duplicate warning is stacked ABOVE the still-open payment modal (later in the DOM)', async () => {
+    api.finance.recordPayment.mockRejectedValueOnce(
+      new ApiError('อาจซ้ำ', 409, { code: 'POSSIBLE_DUPLICATE', expressDocNo: 'RE-6911-0188' }),
+    );
+    const dialog = await openModal();
+    fireEvent.change(within(dialog).getByLabelText('จำนวนเงิน'), { target: { value: '5000' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกรับชำระ' }));
+    const warn = await screen.findByRole('dialog', { name: 'อาจซ้ำกับรายการที่อัปโหลดแล้ว' });
+    const form = screen.getByRole('dialog', { name: 'บันทึกรับชำระ' });
+    expect(form.compareDocumentPosition(warn) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('the Express-fallback header appears with the upload flag on and is gone with it off', async () => {
     let dialog = await openModal();
     await waitFor(() => expect(within(dialog).queryByText(/ใช้เมื่อรายการจาก Express จับคู่ไม่ได้/)).not.toBeNull());
