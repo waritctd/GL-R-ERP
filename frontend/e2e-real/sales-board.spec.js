@@ -240,9 +240,10 @@ test.describe('sales board — failure paths @sales-board', () => {
     });
     await loginAs(page, 'sales');
 
-    // Both panels (ควรตามต่อ and the board) fall to the shared failure copy once react-query's single retry is spent.
+    // All three panels fed by my-work (ควรตามต่อ, นัดเข้าพบสัปดาห์นี้ and the board) fall to the shared failure copy once
+    // react-query's single retry is spent. (Was 2 before the visits card existed.)
     await expect(page.getByText('โหลดไม่สำเร็จ').first()).toBeVisible();
-    await expect(page.getByText('โหลดไม่สำเร็จ')).toHaveCount(2);
+    await expect(page.getByText('โหลดไม่สำเร็จ')).toHaveCount(3);
     expect(hits).toBeGreaterThan(0);
     // The page chrome survives: header + the rest of the shell, no error-boundary fallback, no board skeleton.
     await expect(page.getByRole('heading', { name: 'งานของฉัน' })).toBeVisible();

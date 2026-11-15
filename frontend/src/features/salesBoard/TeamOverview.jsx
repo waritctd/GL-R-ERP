@@ -1,10 +1,14 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
+import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { bangkokTodayIso } from '../../utils/format.js';
+import { PipelineImportDialog } from './PipelineImportDialog.jsx';
 import { columnLabel, money, otherCurrencyTotals, sinceLabel, sumValue, totalLabel } from './boardFormat.js';
 import { VisitDots, VisitWeekGrid } from './VisitWeekGrid.jsx';
 
@@ -43,6 +47,8 @@ function QuietChip({ count }) {
  * dots, the team's quiet deals ranked by value × days quiet, and the week visit grid. All numbers are served by
  * GET /api/sales/team-overview (sales_manager / ceo). The cash tile belongs to slice 3 and is not shown. A rep's
  * name opens the deal list's existing ?owner= filter.
+ * นำเข้าจากชีท opens the one-time pipeline import (slice 4); this section only renders data for the two roles the
+ * import also allows, and the server re-checks the role on every call.
  */
 export function TeamOverview({ showTitle = true }) {
   const query = useQuery({ queryKey: queryKeys.salesBoardTeam(), queryFn: () => api.salesBoard.teamOverview() });
@@ -54,10 +60,22 @@ export function TeamOverview({ showTitle = true }) {
   const quietDays = team?.quietDays ?? 14;
   const visitsDone = team?.reps.reduce((sum, r) => sum + (r.visitsDone ?? 0), 0) ?? 0;
   const visitsPlanned = team?.reps.reduce((sum, r) => sum + (r.visitsPlanned ?? 0), 0) ?? 0;
+  const [importing, setImporting] = useState(false);
 
   return (
     <section aria-label="ภาพรวมทีมขาย" className="grid gap-[18px]">
-      {showTitle ? <h2 className="m-0 text-xl font-extrabold text-text">ภาพรวมทีมขาย</h2> : null}
+      {showTitle || team ? (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          {showTitle ? <h2 className="m-0 text-xl font-extrabold text-text">ภาพรวมทีมขาย</h2> : <span />}
+          {team ? (
+            <Button variant="secondary" onClick={() => setImporting(true)}>
+              <Icon name="upload" size={14} />
+              นำเข้าจากชีท
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      {importing ? <PipelineImportDialog onClose={() => setImporting(false)} /> : null}
 
       {query.isError ? (
         <p className="m-0 text-sm font-bold text-danger">โหลดไม่สำเร็จ</p>

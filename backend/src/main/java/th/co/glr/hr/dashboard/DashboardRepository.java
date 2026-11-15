@@ -245,12 +245,19 @@ public class DashboardRepository {
             + TicketRepository.paymentOverduePredicate("t.ticket_id"), new MapSqlParameterSource(), java.math.BigDecimal.class);
     }
 
-    /** ยอดคาดการณ์: payable of live deals that have not reached ORDER_RECEIVED. */
+    /** ยอดคาดการณ์: payable of live deals that have not reached ORDER_RECEIVED. A deal with no customer-facing
+     * quotation yet (none in APPROVED/ISSUED/SENT/ACCEPTED/EXPIRED — the board's value statuses) counts its
+     * pipeline-import value ({@code imported_value}, V215, THB) instead, exactly as SalesBoardRepository's board
+     * value falls back; with no imported value the payable expression is used unchanged. */
     public java.math.BigDecimal forecastValue() {
         MapSqlParameterSource params = new MapSqlParameterSource().addValue("beforeOrder",
             th.co.glr.hr.ticket.DealStage.ORDER.subList(0,
                 th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED)));
-        return jdbc.queryForObject("SELECT COALESCE(SUM(" + "(" + TicketRepository.payableAmountSelect("t.ticket_id") + ")"
+        String payable = "(" + TicketRepository.payableAmountSelect("t.ticket_id") + ")";
+        String value = "CASE WHEN t.imported_value IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sales.quotation vq"
+            + " WHERE vq.ticket_id = t.ticket_id AND vq.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED',"
+            + " 'EXPIRED')) THEN t.imported_value ELSE " + payable + " END";
+        return jdbc.queryForObject("SELECT COALESCE(SUM(" + value
             + "), 0) FROM sales.ticket t WHERE t.lifecycle = 'ACTIVE' AND t.sales_stage IN (:beforeOrder) "
             + "AND t.status NOT IN ('closed', 'cancelled')", params, java.math.BigDecimal.class);
     }
