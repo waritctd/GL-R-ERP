@@ -28,7 +28,6 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
-import th.co.glr.hr.customer.CustomerDto;
 import th.co.glr.hr.customer.CustomerRepository;
 import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
@@ -455,412 +454,17 @@ class TicketServiceTest {
 
     // ── submit (deprecated — superseded by the PricingRequest aggregate) ───
 
-    @Test
-    void submit_isDeprecatedAndAlwaysConflicts() {
-        // Ticket-level submit() is retired: pricing now starts on a PricingRequest (POST
-        // /api/tickets/{id}/pricing-requests + /pricing-requests/{id}/submit). This must 409 unconditionally —
-        // regardless of status, role, or ownership — and must not touch the repository or notifications at all.
-        stubTicketWithItems(10L, 1L, TicketStatus.DRAFT, List.of(sampleItem()));
-
-        assertConflict(() -> service.submit(10L, salesActor));
-        assertConflict(() -> service.submit(10L, otherSales));
-        assertConflict(() -> service.submit(10L, importActor));
-
-        verify(ticketRepo, never()).addEvent(anyLong(), anyLong(), anyString(), anyString(), any(), any(), any());
-        verify(notifRepo, never()).notifyByRole(any(), anyLong(), any(), any());
-    }
-
     // ── pickup ────────────────────────────────────────────────────────────
-
-    @Test
-    void pickup_submittedByImport_transitionsToInReview() {
-        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
-
-        service.pickup(10L, importActor);
-
-        verify(ticketRepo).addEvent(eq(10L), eq(3L), anyString(),
-            eq(TicketEventKind.PICKED_UP), eq(TicketStatus.SUBMITTED), eq(TicketStatus.IN_REVIEW), isNull());
-    }
-
-    @Test
-    void pickup_rejectsSalesRole() {
-        assertForbidden(() -> service.pickup(10L, salesActor));
-    }
-
-    @Test
-    void pickup_rejectsCeoRole() {
-        assertForbidden(() -> service.pickup(10L, ceoActor));
-    }
-
-    @Test
-    void pickup_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.DRAFT);
-        assertConflict(() -> service.pickup(10L, importActor));
-    }
 
     // ── proposePrice ──────────────────────────────────────────────────────
 
-    @Test
-    void proposePrice_inReviewByImport_transitionsToPriceProposed() {
-        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
-        ProposePriceRequest req = new ProposePriceRequest(List.of(), "ราคาจาก supplier");
-
-        service.proposePrice(10L, req, importActor);
-
-        verify(ticketRepo).addEventWithSnapshot(eq(10L), eq(3L), anyString(),
-            eq(TicketEventKind.PRICE_PROPOSED), eq(TicketStatus.IN_REVIEW), eq(TicketStatus.PRICE_PROPOSED),
-            eq("ราคาจาก supplier"), anyString());
-        verify(notifRepo).notifyByRole(eq("ceo"), eq(10L), anyString(), anyString());
-    }
-
-    @Test
-    void proposePrice_rejectsCeoRole() {
-        assertForbidden(() -> service.proposePrice(10L, new ProposePriceRequest(List.of(), null), ceoActor));
-    }
-
-    @Test
-    void proposePrice_rejectsSalesRole() {
-        assertForbidden(() -> service.proposePrice(10L, new ProposePriceRequest(List.of(), null), salesActor));
-    }
-
-    @Test
-    void proposePrice_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.SUBMITTED);
-        assertConflict(() -> service.proposePrice(10L, new ProposePriceRequest(List.of(), null), importActor));
-    }
-
     // ── approve ───────────────────────────────────────────────────────────
-
-    @Test
-    void approve_priceProposedByCeo_transitionsToApproved() {
-        stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
-
-        service.approve(10L, ceoActor);
-
-        verify(ticketRepo).approveItemPrices(10L);
-        verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
-            eq(TicketEventKind.APPROVED), eq(TicketStatus.PRICE_PROPOSED), eq(TicketStatus.APPROVED), isNull());
-        verify(notifRepo).notifyEmployee(eq(1L), eq(10L), anyString(), anyString());
-    }
-
-    @Test
-    void approve_rejectsSalesRole() {
-        assertForbidden(() -> service.approve(10L, salesActor));
-    }
-
-    @Test
-    void approve_rejectsImportRole() {
-        assertForbidden(() -> service.approve(10L, importActor));
-    }
-
-    @Test
-    void approve_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
-        assertConflict(() -> service.approve(10L, ceoActor));
-    }
 
     // ── reject (reject loop) ──────────────────────────────────────────────
 
-    @Test
-    void reject_priceProposedByCeo_returnsToInReview() {
-        stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
-
-        service.reject(10L, new RejectRequest("ราคาสูงเกิน"), ceoActor);
-
-        verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
-            eq(TicketEventKind.REJECTED), eq(TicketStatus.PRICE_PROPOSED), eq(TicketStatus.IN_REVIEW), eq("ราคาสูงเกิน"));
-        verify(notifRepo).notifyByRole(eq("import"), eq(10L), anyString(), anyString());
-    }
-
-    @Test
-    void reject_rejectsSalesRole() {
-        assertForbidden(() -> service.reject(10L, new RejectRequest("reason"), salesActor));
-    }
-
-    @Test
-    void reject_rejectsImportRole() {
-        assertForbidden(() -> service.reject(10L, new RejectRequest("reason"), importActor));
-    }
-
-    @Test
-    void reject_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.APPROVED);
-        assertConflict(() -> service.reject(10L, new RejectRequest("reason"), ceoActor));
-    }
-
     // ── generateQuotation ─────────────────────────────────────────────────
 
-    @Test
-    void generateQuotation_approvedByOwner_createsQuotationAndTransitions() {
-        TicketItemDto item = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
-            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
-            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
-        stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item));
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0001");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00")),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(99L, 10L, "QT-2026-0001"));
-
-        service.generateQuotation(10L, designerQuotation(), salesActor);
-
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0001"), eq(1L), eq(new BigDecimal("200.00")),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
-        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.APPROVED), eq(TicketStatus.QUOTATION_ISSUED),
-            anyString(), eq(RelatedDocumentType.QUOTATION), anyLong());
-    }
-
-    @Test
-    void generateQuotation_rejectsNonOwnerSales() {
-        stubTicket(10L, 1L, TicketStatus.APPROVED);
-        assertForbidden(() -> service.generateQuotation(10L, designerQuotation(), otherSales));
-    }
-
-    @Test
-    void generateQuotation_rejectsCeoRole() {
-        assertForbidden(() -> service.generateQuotation(10L, designerQuotation(), ceoActor));
-    }
-
-    @Test
-    void generateQuotation_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.PRICE_PROPOSED);
-        assertConflict(() -> service.generateQuotation(10L, designerQuotation(), salesActor));
-    }
-
-    @Test
-    void generateQuotation_allowsReissueFromQuotationIssued() {
-        stubTicketWithItems(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of());
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0003");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(100L, 10L, "QT-2026-0003"));
-
-        service.generateQuotation(10L, designerQuotation(), salesActor);
-
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0003"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
-        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED), anyString(),
-            eq(RelatedDocumentType.QUOTATION), anyLong());
-    }
-
-    @Test
-    void generateQuotation_beforeSpecApproved_doesNotRequireSpecStage() {
-        TicketItemDto item = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
-            "pcs", null, new BigDecimal("1"), null, null, null, null, null,
-            new BigDecimal("120.00"), "THB", 0, null, null, null, "PIECE", null, null);
-        stubDeal(10L, 1L, TicketStatus.APPROVED, List.of(item), null, null, DealStage.PRESENTATION, null);
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0009");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
-            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(103L, 10L, "QT-2026-0009",
-                QuotationRecipient.OWNER, 1, QuotationStatus.ISSUED));
-
-        service.generateQuotation(10L, new GenerateQuotationRequest(
-            QuotationRecipient.OWNER, null, null, null, null, null, null, null, null, null), salesActor);
-
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0009"), eq(1L), eq(new BigDecimal("120.00")),
-            eq(QuotationRecipient.OWNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
-        // Wrong-way-round: an OWNER quotation must land on QUOTE_OWNER (S5) and
-        // must NOT land on QUOTE_DESIGN_SIDE (S4); the two recipients no longer share one stage.
-        verify(ticketRepo).updateSalesStage(10L, DealStage.QUOTE_OWNER);
-        verify(ticketRepo, never()).updateSalesStage(10L, DealStage.QUOTE_DESIGN_SIDE);
-    }
-
-    @Test
-    void generateQuotation_sumsMultipleItemsIncludingFractionalQuantities() {
-        TicketItemDto item1 = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
-            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
-            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
-        TicketItemDto item2 = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
-            "pcs", null, new BigDecimal("3"), null, null, null, null, null,
-            new BigDecimal("50.00"), "THB", 1, null, null, null, "PIECE", null, null);
-        TicketItemDto item3 = new TicketItemDto(3L, 10L, "PC003", "Product C", null, null,
-            "sqm", null, new BigDecimal("1.5"), null, null, null, null, null,
-            new BigDecimal("10.00"), "THB", 2, null, null, null, "SQM", null, null);
-        stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(item1, item2, item3));
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0004");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(101L, 10L, "QT-2026-0004"));
-
-        service.generateQuotation(10L, designerQuotation(), salesActor);
-
-        // (2 x 100.00) + (3 x 50.00) + (1.5 x 10.00) = 200.00 + 150.00 + 15.00 = 365.00 (BigDecimal.equals() is
-        // scale-sensitive, so use isEqualByComparingTo rather than eq().)
-        ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0004"), eq(1L), total.capture(),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
-        assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("365.00"));
-    }
-
-    @Test
-    void generateQuotation_treatsUnpricedItemAsZeroNotError() {
-        TicketItemDto priced = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
-            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
-            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
-        TicketItemDto unpriced = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
-            "pcs", null, new BigDecimal("5"), null, null, null, null, null,
-            null, "THB", 1, null, null, null, "PIECE", null, null);
-        stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0005");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(102L, 10L, "QT-2026-0005"));
-
-        service.generateQuotation(10L, designerQuotation(), salesActor);
-
-        // The unpriced item (approvedPrice = null) contributes 0 regardless of its quantity, rather than throwing or
-        // being skipped from the total silently in a way that hides its qty.
-        ArgumentCaptor<BigDecimal> total = ArgumentCaptor.forClass(BigDecimal.class);
-        verify(ticketRepo).createQuotation(eq(10L), eq("QT-2026-0005"), eq(1L), total.capture(),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull());
-        assertThat(total.getValue()).isEqualByComparingTo(new BigDecimal("200.00"));
-    }
-
     // ── generateQuotation: issue-time snapshot (V49) ──────────────────────
-
-    @Test
-    void generateQuotation_snapshotsOnlyPricedItemsAndCustomerHeaderInSameCall() {
-        TicketItemDto priced = new TicketItemDto(1L, 10L, "PC001", "Product A", null, null,
-            "pcs", null, new BigDecimal("2"), null, null, null, null, null,
-            new BigDecimal("100.00"), "THB", 0, null, null, null, "PIECE", null, null);
-        TicketItemDto unpriced = new TicketItemDto(2L, 10L, "PC002", "Product B", null, null,
-            "pcs", null, new BigDecimal("5"), null, null, null, null, null,
-            null, "THB", 1, null, null, null, "PIECE", null, null);
-        stubTicketWithItems(10L, 1L, TicketStatus.APPROVED, List.of(priced, unpriced));
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0006");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0006"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(200L, 10L, "QT-2026-0006"));
-
-        service.generateQuotation(10L, designerQuotation(), salesActor);
-
-        // insertQuotationItems is handed the FULL item list (priced + unpriced) — the repository itself is responsible
-        // for filtering to approvedPrice != null, mirroring how the total-amount calculation above already treats
-        // unpriced items as excluded.
-        ArgumentCaptor<List<TicketItemDto>> itemsCaptor = ArgumentCaptor.forClass(List.class);
-        verify(ticketRepo).insertQuotationItems(eq(200L), itemsCaptor.capture());
-        assertThat(itemsCaptor.getValue()).containsExactly(priced, unpriced);
-
-        // No customerId on this ticket (stubTicket leaves it null) — falls back to the ticket's free-text
-        // customerName, with no address/tax/phone to snapshot.
-        verify(ticketRepo).updateQuotationHeader(eq(200L), eq("Test Customer"),
-            isNull(), isNull(), isNull(), isNull());
-    }
-
-    @Test
-    void generateQuotation_snapshotsCustomerHeaderFromCustomerRepositoryWhenLinked() {
-        TicketSummaryDto summary = new TicketSummaryDto(
-            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
-            1L, "Sales User", null, null, "Free-text Name", 55L, null, "Renovation Project",
-            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null,
-            "QUOTE_DESIGN_SIDE", null, null, Instant.now(),
-            DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null, EntryChannel.DESIGNER_LED);
-        TicketDto ticket = new TicketDto(summary, List.of(), List.of(), null, List.of());
-        when(ticketRepo.findById(10L)).thenReturn(Optional.of(ticket));
-        when(customerRepo.findById(55L)).thenReturn(Optional.of(
-            new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
-                "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0007");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0007"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(201L, 10L, "QT-2026-0007"));
-
-        service.generateQuotation(10L, designerQuotation(), salesActor);
-
-        // Fidelity rule: the frozen NAME is the ticket's display name —
-        // that's what toXlsx/toPdf have always printed — so the snapshot must capture
-        // it, not the master record's name. Address/taxId/phone DO come from the master
-        // record because that's what the live render pulls from CustomerDto.
-        verify(ticketRepo).updateQuotationHeader(eq(201L), eq("Free-text Name"),
-            eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), eq("Renovation Project"));
-    }
-
-    @Test
-    void generateQuotation_blankTicketNameFallsBackToMasterCustomerName() {
-        TicketSummaryDto summary = new TicketSummaryDto(
-            10L, "PR-2026-0001", "PRICE_REQUEST", "Test ticket", TicketStatus.APPROVED, "NORMAL",
-            1L, "Sales User", null, null, null, 55L, null, null,
-            null, null, null, Instant.now(), Instant.now(), null, 0, false, null, null,
-            "QUOTE_DESIGN_SIDE", null, null, Instant.now(),
-            DealLifecycle.ACTIVE, TenderRequirement.UNKNOWN, DepositPolicy.REQUIRED, null, EntryChannel.DESIGNER_LED);
-        when(ticketRepo.findById(10L)).thenReturn(Optional.of(
-            new TicketDto(summary, List.of(), List.of(), null, List.of())));
-        when(customerRepo.findById(55L)).thenReturn(Optional.of(
-            new CustomerDto(55L, "Real Customer Co., Ltd.", "0105500000000",
-                "123 Real Address", "สำนักงานใหญ่", "02-000-0000")));
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0008");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0008"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(202L, 10L, "QT-2026-0008"));
-
-        service.generateQuotation(10L, designerQuotation(), salesActor);
-
-        verify(ticketRepo).updateQuotationHeader(eq(202L), eq("Real Customer Co., Ltd."),
-            eq("123 Real Address"), eq("0105500000000"), eq("02-000-0000"), isNull());
-    }
-
-    @Test
-    void generateQuotation_requiresAmendmentReasonAfterAcceptedVersionOrCustomerConfirmed() {
-        QuotationDto accepted = quotationOf(300L, 10L, "QT-2026-0300",
-            QuotationRecipient.DESIGNER, 1, QuotationStatus.ACCEPTED);
-        stubDealWithQuotations(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
-            DealStage.QUOTE_DESIGN_SIDE, DealLifecycle.ACTIVE, List.of(accepted));
-
-        assertBadRequest(() -> service.generateQuotation(10L, designerQuotation(), salesActor));
-
-        GenerateQuotationRequest amendment = new GenerateQuotationRequest(
-            QuotationRecipient.DESIGNER, null, null, null, null, null, "แก้ตามแบบล่าสุด", null, null, null);
-        when(ticketRepo.nextQuotationCode()).thenReturn("QT-2026-0301");
-        when(ticketRepo.createQuotation(eq(10L), eq("QT-2026-0301"), eq(1L), any(BigDecimal.class),
-            eq(QuotationRecipient.DESIGNER), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull(), isNull()))
-            .thenReturn(quotationOf(301L, 10L, "QT-2026-0301",
-                QuotationRecipient.DESIGNER, 2, QuotationStatus.ISSUED));
-
-        service.generateQuotation(10L, amendment, salesActor);
-
-        verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(), eq(TicketEventKind.QUOTATION_ISSUED),
-            eq(TicketStatus.QUOTATION_ISSUED), eq(TicketStatus.QUOTATION_ISSUED),
-            org.mockito.ArgumentMatchers.contains("แก้ตามแบบล่าสุด"),
-            eq(RelatedDocumentType.QUOTATION), anyLong());
-
-        stubDealWithQuotations(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(),
-            "CUSTOMER_CONFIRMED", null, DealStage.NEGOTIATION, DealLifecycle.ACTIVE, List.of());
-        assertBadRequest(() -> service.generateQuotation(11L, designerQuotation(), salesActor));
-    }
-
-    @Test
-    void markQuotationLifecycle_validatesLegalTransitionAuthAndLifecycle() {
-        QuotationDto issued = quotationOf(400L, 10L, "QT-2026-0400",
-            QuotationRecipient.OWNER, 1, QuotationStatus.ISSUED);
-        stubDealWithQuotations(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
-            DealStage.OWNER_SIGNOFF, DealLifecycle.ACTIVE, List.of(issued));
-
-        service.markQuotationSent(10L, 400L, "ส่งให้เจ้าของแล้ว", salesActor);
-        service.markQuotationAccepted(10L, 400L, null, ceoActor);
-        service.markQuotationRejected(10L, 400L, "ลูกค้าไม่รับ", salesActor);
-
-        verify(ticketRepo).markQuotationStatus(10L, 400L, QuotationStatus.SENT);
-        verify(ticketRepo).markQuotationStatus(10L, 400L, QuotationStatus.ACCEPTED);
-        verify(ticketRepo).markQuotationStatus(10L, 400L, QuotationStatus.REJECTED);
-        verify(ticketRepo).addEvent(eq(10L), eq(1L), anyString(),
-            eq(TicketEventKind.QUOTATION_SENT), eq(TicketStatus.QUOTATION_ISSUED),
-            eq(TicketStatus.QUOTATION_ISSUED), org.mockito.ArgumentMatchers.contains("OWNER"));
-
-        assertForbidden(() -> service.markQuotationAccepted(10L, 400L, null, otherSales));
-        assertForbidden(() -> service.markQuotationAccepted(10L, 400L, null, salesManagerActor));
-
-        QuotationDto accepted = quotationOf(401L, 11L, "QT-2026-0401",
-            QuotationRecipient.OWNER, 1, QuotationStatus.ACCEPTED);
-        stubDealWithQuotations(11L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
-            DealStage.OWNER_SIGNOFF, DealLifecycle.ACTIVE, List.of(accepted));
-        assertConflict(() -> service.markQuotationRejected(11L, 401L, null, salesActor));
-
-        stubDealWithQuotations(12L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null,
-            DealStage.OWNER_SIGNOFF, DealLifecycle.ON_HOLD, List.of(issued));
-        assertConflict(() -> service.markQuotationSent(12L, 400L, null, salesActor));
-    }
 
     // ── close ─────────────────────────────────────────────────────────────
 
@@ -2149,7 +1753,6 @@ class TicketServiceTest {
         stubDeal(10L, 1L, TicketStatus.DRAFT, List.of(sampleItem()), null, null,
             DealStage.PRESENTATION, null, DealLifecycle.ON_HOLD, DepositPolicy.REQUIRED);
 
-        assertConflict(() -> service.submit(10L, salesActor));
         assertConflict(() -> service.updateStage(10L, DealStage.SPEC_APPROVED, null, salesActor));
         service.comment(10L, new CommentRequest("ยังรอลูกค้ากลับมา"), salesActor);
 
@@ -2545,10 +2148,6 @@ class TicketServiceTest {
         // operational actions must stay denied.
         stubDeal(10L, 1L, TicketStatus.QUOTATION_ISSUED, List.of(), null, null, DealStage.NEGOTIATION, null);
         assertForbidden(() -> service.confirmCustomer(10L, salesManagerActor));
-        // submit() is now deprecated and 409s unconditionally for every role, sales_manager included — it no longer
-        // demonstrates a role-specific denial, just that the route is dead. See submit_isDeprecatedAndAlwaysConflicts
-        // for the dedicated coverage.
-        assertConflict(() -> service.submit(10L, salesManagerActor));
         service.markLost(10L, DealLostReason.RELATIONSHIP, null, salesManagerActor);
         verify(ticketRepo).markDealLost(10L, DealLostReason.RELATIONSHIP);
     }
@@ -2864,33 +2463,6 @@ class TicketServiceTest {
     // ── overrideItemPrice ────────────────────────────────────────────────
     // Overriding a price must leave an audit trail.
 
-    @Test
-    void overrideItemPrice_logsPriceOverriddenEventWithItemIdManualPriceAndReason() {
-        TicketItemDto item = new TicketItemDto(
-            101L, 10L, "Brand", "Model", null, null, null, "Cotto",
-            BigDecimal.ONE, null, new BigDecimal("50"), "THB", "piece",
-            new BigDecimal("100"), null, "THB", 0, null, null, null, "PIECE", null, null);
-        stubTicketWithItems(10L, 1L, TicketStatus.PRICE_PROPOSED, List.of(item));
-
-        service.overrideItemPrice(10L, 101L,
-            new OverridePriceRequest(new BigDecimal("777.00"), "ราคาพิเศษลูกค้า VIP"), ceoActor);
-
-        ArgumentCaptor<String> noteCaptor = ArgumentCaptor.forClass(String.class);
-        verify(ticketRepo).addEvent(eq(10L), eq(4L), anyString(),
-            eq(TicketEventKind.PRICE_OVERRIDDEN), eq(TicketStatus.PRICE_PROPOSED),
-            eq(TicketStatus.PRICE_PROPOSED), noteCaptor.capture());
-        assertThat(noteCaptor.getValue()).contains("101").contains("777.00").contains("ราคาพิเศษลูกค้า VIP");
-        verify(ticketRepo).updateItemManualPrice(101L, new BigDecimal("777.00"), "ราคาพิเศษลูกค้า VIP");
-    }
-
-    @Test
-    void overrideItemPrice_rejectsWrongStatus() {
-        stubTicket(10L, 1L, TicketStatus.IN_REVIEW);
-
-        assertConflict(() -> service.overrideItemPrice(10L, 101L,
-            new OverridePriceRequest(new BigDecimal("777.00"), null), ceoActor));
-    }
-
     // ── comment ───────────────────────────────────────────────────────────
 
     @Test
@@ -2951,41 +2523,6 @@ class TicketServiceTest {
 
         verify(ticketRepo).addEvent(eq(10L), eq(8L), anyString(),
             eq(TicketEventKind.COMMENTED), isNull(), isNull(), eq("ติดตามความคืบหน้าให้ลูกค้าหน่อย"));
-    }
-
-    @Test
-    void submit_deprecatedConflictAppliesToSalesManagerToo() {
-        // Previously sales_manager got a distinct FORBIDDEN (read-only role, never owns a ticket). Now that submit()
-        // is deprecated for everyone, it 409s here the same as for any other role — there is no more role-specific
-        // denial to assert.
-        assertConflict(() -> service.submit(10L, salesManagerActor));
-    }
-
-    @Test
-    void pickup_rejectsSalesManagerRole() {
-        assertForbidden(() -> service.pickup(10L, salesManagerActor));
-    }
-
-    @Test
-    void proposePrice_rejectsSalesManagerRole() {
-        assertForbidden(() -> service.proposePrice(10L, new ProposePriceRequest(List.of(), null), salesManagerActor));
-    }
-
-    @Test
-    void approve_rejectsSalesManagerRole() {
-        assertForbidden(() -> service.approve(10L, salesManagerActor));
-    }
-
-    @Test
-    void overrideItemPrice_rejectsSalesManagerRole() {
-        assertForbidden(() -> service.overrideItemPrice(10L, 101L,
-            new OverridePriceRequest(new BigDecimal("777.00"), null), salesManagerActor));
-    }
-
-    @Test
-    void generateQuotation_rejectsSalesManagerRole() {
-        // Role-gated (SALES_ROLES) before the ownership check even runs.
-        assertForbidden(() -> service.generateQuotation(10L, designerQuotation(), salesManagerActor));
     }
 
     @Test
@@ -3180,10 +2717,6 @@ class TicketServiceTest {
         return new QuotationDto(quotationId, ticketId, number, 1L, "Sales User",
             Instant.now(), null, null, "THB", version, docStatus, recipientType,
             null, null, null, null, null, null, null, null, null, null, null, null);
-    }
-
-    private static GenerateQuotationRequest designerQuotation() {
-        return new GenerateQuotationRequest(QuotationRecipient.DESIGNER, null, null, null, null, null, null, null, null, null);
     }
 
     private static CreateTicketRequest createRequest(Long projectId, List<TicketItemRequest> items) {
