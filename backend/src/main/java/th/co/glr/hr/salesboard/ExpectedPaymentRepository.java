@@ -5,11 +5,9 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.LocalDate;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -78,54 +76,22 @@ public class ExpectedPaymentRepository {
      * A matched Express receipt marks the deal's OPEN expected payment it most likely is RECEIVED: one whose amount is
      * within the matcher's tolerance (±1% or ±฿10) first, then the nearest expected week to the receipt's date, then
      * the oldest row. Returns the row marked, or empty when the deal has no OPEN row (the receipt still counts).
-     * Any kind: the matcher decides the receipt's kind itself, so it does not narrow on it.
      */
     public Optional<Long> markNearestOpenReceived(long ticketId, BigDecimal amount, LocalDate receiptDate,
                                                   long receiptId) {
-        return markNearestOpenReceived(ticketId, null, amount, receiptDate, receiptId);
-    }
-
-    /**
-     * The same rule, narrowed to {@code kinds} (null = any). A payment account records BY HAND has a kind account
-     * chose, so it may only settle an expectation of that kind (slice 5, plan task 5.5) — see
-     * {@link #expectedKindsFor}. Until slice 5 only the Express matcher set RECEIVED (V212's own comment predates it).
-     */
-    public Optional<Long> markNearestOpenReceived(long ticketId, Collection<String> kinds, BigDecimal amount,
-                                                  LocalDate receiptDate, long receiptId) {
-        if (kinds != null && kinds.isEmpty()) {
-            return Optional.empty();
-        }
-        MapSqlParameterSource params = new MapSqlParameterSource().addValue("t", ticketId).addValue("amount", amount)
-            .addValue("d", receiptDate).addValue("r", receiptId);
-        String kindFilter = "";
-        if (kinds != null) {
-            kindFilter = " AND kind IN (:kinds)";
-            params.addValue("kinds", kinds);
-        }
         return jdbc.query("""
             UPDATE sales.expected_payment SET status = 'RECEIVED', receipt_id = :r, updated_at = now()
              WHERE expected_payment_id = (
                    SELECT expected_payment_id FROM sales.expected_payment
-                    WHERE ticket_id = :t AND status = 'OPEN'%s
+                    WHERE ticket_id = :t AND status = 'OPEN'
                     ORDER BY (abs(amount - :amount) <= GREATEST(amount * 0.01, 10)) DESC,
                              abs(expected_week - CAST(:d AS date)), expected_payment_id
                     LIMIT 1
                     FOR UPDATE)
             RETURNING expected_payment_id
-            """.formatted(kindFilter), params, (rs, n) -> rs.getLong(1)).stream().findFirst();
-    }
-
-    /**
-     * Which expected-payment kinds a receipt of {@code receiptKind} can settle: a DEPOSIT receipt only a DEPOSIT
-     * expectation; a BALANCE receipt an ON_DELIVERY or BALANCE one; an ADJUSTMENT (a correction or refund, not cash the
-     * rep expected) none.
-     */
-    public static Set<String> expectedKindsFor(String receiptKind) {
-        return switch (receiptKind == null ? "" : receiptKind) {
-            case "DEPOSIT" -> Set.of("DEPOSIT");
-            case "BALANCE" -> Set.of("ON_DELIVERY", "BALANCE");
-            default -> Set.of();
-        };
+            """, new MapSqlParameterSource().addValue("t", ticketId).addValue("amount", amount)
+                .addValue("d", receiptDate).addValue("r", receiptId),
+            (rs, n) -> rs.getLong(1)).stream().findFirst();
     }
 
     private static ExpectedPaymentDto map(ResultSet rs, int rowNum) throws SQLException {

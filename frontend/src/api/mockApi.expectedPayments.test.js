@@ -54,33 +54,3 @@ describe('mockApi.expectedPayments', () => {
     expect(after.weeks.every((w) => new Date(`${w.weekStart}T00:00:00Z`).getUTCDay() === 1)).toBe(true);
   });
 });
-
-// Slice 5 (plan task 5.5): a payment account records BY HAND marks the nearest OPEN expected payment of the matching
-// kind RECEIVED, like a matched Express receipt. Mirrors TicketService#recordPaymentInternal ->
-// ExpectedPaymentRepository#markNearestOpenReceived(kinds); ManualPaymentExpectedPaymentIntegrationTest is the evidence.
-describe('mockApi.finance.recordPayment settles an expected payment', () => {
-  async function payableDealForAccount() {
-    await api.auth.login({ role: 'account' });
-    for (let id = 1; id <= 400; id += 1) {
-      try {
-        const { deal } = await api.finance.getDeal(id);
-        if (deal.lifecycle === 'ACTIVE' && deal.money.amountOutstanding >= 500
-          && deal.availableActions.some((a) => a.action === 'RECORD_PAYMENT')) return deal.id;
-      } catch { /* not in account scope */ }
-    }
-    throw new Error('no payable deal in the seed');
-  }
-
-  it('a BALANCE typed by hand marks the ON_DELIVERY row, not the DEPOSIT one of the same amount', async () => {
-    const id = await payableDealForAccount();
-    await api.auth.login({ role: 'ceo' });
-    const deposit = await api.expectedPayments.create(id, { kind: 'DEPOSIT', amount: 250, expectedWeek: monday });
-    const onDelivery = await api.expectedPayments.create(id, { kind: 'ON_DELIVERY', amount: 250, expectedWeek: plusDays(monday, 21) });
-    await api.auth.login({ role: 'account' });
-    await api.finance.recordPayment(id, { kind: 'BALANCE', amount: 250, receiptRef: `S5-${id}`, allowOverpayment: false });
-    const rows = await api.expectedPayments.list(id);
-    expect(rows.find((r) => r.id === onDelivery.id)).toMatchObject({ status: 'RECEIVED', receiptRef: `S5-${id}` });
-    expect(rows.find((r) => r.id === onDelivery.id).receiptId).not.toBeNull();
-    expect(rows.find((r) => r.id === deposit.id)).toMatchObject({ status: 'OPEN', receiptId: null });
-  });
-});

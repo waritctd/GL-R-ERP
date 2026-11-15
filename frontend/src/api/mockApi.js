@@ -3937,9 +3937,6 @@ function recordPaymentForTicket(ticket, user, payload) {
   });
   pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status,
     `kind=${kind}, amount=${amount}, paid=${newPaid}, payable=${payable}${note ? ` — ${note}` : ''}`);
-  // TicketService#recordPaymentInternal (slice 5): cash typed by hand settles the rep's expectation too.
-  mockMarkNearestOpenReceived(ticket.id, mockExpectedKindsFor(kind), amount,
-    mockBangkokDateOf(payload.receivedAt || now), nextId, receiptRef, now);
   reconcilePaymentStatus(ticket, user);
   ticket.updatedAt = now.slice(0, 10);
 }
@@ -8583,26 +8580,14 @@ function mockPlaceExpressReceipt(ticketId, row, user) {
   });
   pushEvent(ticket, user, 'PAYMENT_RECORDED', ticket.status, ticket.status, `kind=${kind}, amount=${row.amount} — Express ${row.docNo}`);
   reconcilePaymentStatus(ticket, user, false);
-  mockMarkNearestOpenReceived(ticket.id, null, row.amount, row.docDate, receiptId, row.docNo.trim(), now);
+  // ExpectedPaymentRepository.markNearestOpenReceived: within tolerance first, then nearest week, then oldest.
+  const dayGap = (week) => Math.abs(new Date(`${week}T00:00:00Z`) - new Date(`${row.docDate}T00:00:00Z`));
+  const open = mockExpectedPayments.filter((p) => p.ticketId === ticket.id && p.status === 'OPEN')
+    .sort((a, b) => (Number(mockWithinTolerance(row.amount, Number(b.amount))) - Number(mockWithinTolerance(row.amount, Number(a.amount))))
+      || dayGap(a.expectedWeek) - dayGap(b.expectedWeek) || a.id - b.id);
+  if (open[0]) Object.assign(open[0], { status: 'RECEIVED', receiptId, receiptRef: row.docNo.trim(), updatedAt: now });
   return receiptId;
 }
-
-/**
- * ExpectedPaymentRepository.markNearestOpenReceived: within tolerance first, then nearest week, then oldest; `kinds`
- * null = any (the Express matcher), else only those kinds (a receipt typed by hand — expectedKindsFor).
- */
-function mockMarkNearestOpenReceived(ticketId, kinds, amount, dateIso, receiptId, receiptRef, now) {
-  if (kinds && kinds.length === 0) return;
-  const dayGap = (week) => Math.abs(new Date(`${week}T00:00:00Z`) - new Date(`${dateIso}T00:00:00Z`));
-  const open = mockExpectedPayments
-    .filter((p) => p.ticketId === ticketId && p.status === 'OPEN' && (!kinds || kinds.includes(p.kind)))
-    .sort((a, b) => (Number(mockWithinTolerance(amount, Number(b.amount))) - Number(mockWithinTolerance(amount, Number(a.amount))))
-      || dayGap(a.expectedWeek) - dayGap(b.expectedWeek) || a.id - b.id);
-  if (open[0]) Object.assign(open[0], { status: 'RECEIVED', receiptId, receiptRef, updatedAt: now });
-}
-
-/** ExpectedPaymentRepository.expectedKindsFor. */
-const mockExpectedKindsFor = (receiptKind) => ({ DEPOSIT: ['DEPOSIT'], BALANCE: ['ON_DELIVERY', 'BALANCE'] })[receiptKind] ?? [];
 
 const mockKnownDocNo = (docNo) => {
   const key = docNo.trim().toUpperCase();
