@@ -8251,6 +8251,10 @@ function mockVisitDto(v) {
     status: v.status,
     doneAt: v.doneAt,
     note: v.note,
+    // VisitRepository: the deal's current owner's name when the deal has moved away from this visit's owner.
+    dealMovedToName: ticket && !isOwnerOrKeyer(ticket, v.ownerId)
+      ? (db.users.find((u) => u.id === ticket.createdById)?.name ?? ticket.createdByName ?? null)
+      : null,
   };
 }
 
@@ -8310,10 +8314,15 @@ function mockCleanVisitNote(note) {
   return trimmed || null;
 }
 
-/** QuietRule.upcomingVisitSql: a PLANNED visit on the deal dated today (Bangkok) or later. */
+/** QuietRule.upcomingVisitSql: a PLANNED visit on the deal, by its current owner (or keyer), dated from today
+ * (Bangkok) to today + QUIET_DAYS — a far-future plan or an ex-owner's plan does not hold it (review NEW-1/NEW-2). */
 function mockHasUpcomingVisit(ticketId) {
+  const ticket = db.tickets.find((t) => t.id === ticketId);
+  if (!ticket) return false;
   const today = mockTodayIso();
-  return mockVisits.some((v) => v.ticketId === ticketId && v.status === 'PLANNED' && v.plannedDate >= today);
+  const horizon = mockAddDaysIso(today, MOCK_QUIET_DAYS);
+  return mockVisits.some((v) => v.ticketId === ticketId && v.status === 'PLANNED'
+    && v.plannedDate >= today && v.plannedDate <= horizon && isOwnerOrKeyer(ticket, v.ownerId));
 }
 
 /** VisitService.ownThisWeek / teamThisWeek: the ISO week (Mon–Sun) containing today. */
@@ -13173,6 +13182,9 @@ export const api = {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(payload.plannedDate)
         || Number.isNaN(Date.parse(`${payload.plannedDate}T00:00:00Z`))) fail('รูปแบบวันที่ไม่ถูกต้อง', 400);
       const done = payload.done === true;
+      if (payload.plannedDate > mockAddDaysIso(mockTodayIso(), 180)) {
+        fail('นัดล่วงหน้าได้ไม่เกิน 180 วัน', 400);
+      }
       if (done && payload.plannedDate !== mockTodayIso()) {
         fail('บันทึกเข้าพบได้เฉพาะวันนี้ — นัดล่วงหน้าให้ใช้ “นัดเข้าพบ”', 400);
       }
@@ -13213,7 +13225,9 @@ export const api = {
       visit.status = 'DONE';
       visit.doneAt = new Date().toISOString();
       if (note) visit.note = note;
-      if (visit.ticketId != null) {
+      const ticket = visit.ticketId == null ? null : db.tickets.find((t) => t.id === visit.ticketId);
+      // TicketService.recordVisitActivity: only onto a deal the visit's owner still owns (review NEW-2).
+      if (ticket && isOwnerOrKeyer(ticket, visit.ownerId)) {
         const recordedBy = visit.ownerId !== user.id ? `บันทึกโดย ${user.name}` : null;
         mockLogSiteVisit(visit.ownerId, visit.ticketId, [visit.note, recordedBy].filter(Boolean).join(' · ') || null);
       }

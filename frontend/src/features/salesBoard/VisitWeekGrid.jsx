@@ -81,7 +81,7 @@ export function VisitWeekGrid({ reps, visits: thisWeekVisits, todayIso }) {
       title={(
         <span className="grid gap-0.5">
           <span>{weekOffset === 0 ? 'ตารางเข้าพบสัปดาห์นี้' : 'ตารางเข้าพบ'}</span>
-          <small className="text-xs font-normal text-text-muted">{weekRangeLabel(monday)}</small>
+          <small className="text-xs font-normal text-text-muted">{weekRangeLabel(monday, todayIso)}</small>
         </span>
       )}
       actions={(

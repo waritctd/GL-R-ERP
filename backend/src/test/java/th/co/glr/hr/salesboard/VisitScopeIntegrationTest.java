@@ -49,8 +49,11 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
     void wireHttp() {
         SessionContext sessions = new SessionContext();
         quietRule = new QuietRule(jdbc, 14);
-        Clock clock = Clock.system(VisitService.BANGKOK);
-        today = LocalDate.now(clock);
+        // Fixed clock (review M5): Thursday 12 Nov 2026, 10:00 Bangkok. Every date below is relative to this
+        // hard-coded day, not to the machine's clock. (QuietRule still reads the database's now(), so the quiet
+        // assertions here only ever use dates that are in the past for both.)
+        Clock clock = Clock.fixed(java.time.Instant.parse("2026-11-12T03:00:00Z"), VisitService.BANGKOK);
+        today = LocalDate.of(2026, 11, 12);
         VisitService service = new VisitService(new VisitRepository(jdbc), ticketService, clock);
         mvc = MockMvcBuilders
             .standaloneSetup(new VisitController(service, sessions))
@@ -291,8 +294,60 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
             .isEqualTo("DONE");
         assertThat(ok(post("/api/sales/visits/" + cancelled + "/cancel"), salesActor).get("status").asText())
             .isEqualTo("CANCELLED");
-        Map<String, Object> activity = siteVisit(deal);
-        assertThat(((Number) activity.get("created_by_id")).longValue()).isEqualTo(salesActor.id());
+    }
+
+    // ── review NEW-2: the ex-owner's tick stays on the visit, never on the new owner's deal ──
+
+    @Test
+    void anExOwnersTickWritesNoActivityOntoTheNewOwnersDeal_andSaysWhereTheDealWent() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today.minusDays(1));
+        backdate(deal, 30);
+        reassign(deal, otherSalesActor);
+        assertThat(quietRule.isQuiet(deal)).isTrue();
+
+        JsonNode done = ok(post("/api/sales/visits/" + visit + "/done").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"ไปมาแล้ว\"}"), salesActor);
+
+        assertThat(done.get("status").asText()).isEqualTo("DONE");
+        assertThat(done.get("note").asText()).isEqualTo("ไปมาแล้ว");
+        assertThat(done.get("dealMovedToName").asText()).isEqualTo(employeeName(otherSalesActor));
+        assertThat(siteVisitRows(deal)).isZero();
+        assertThat(quietRule.isQuiet(deal)).as("the new owner's quiet state is untouched").isTrue();
+    }
+
+    @Test
+    void aManagerTickingAnExOwnersVisitAlsoWritesNoActivity() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+        reassign(deal, otherSalesActor);
+
+        ok(post("/api/sales/visits/" + visit + "/done"), salesManagerActor);
+
+        assertThat(siteVisitRows(deal)).isZero();
+    }
+
+    @Test
+    void aVisitOnTheOwnersOwnDealCarriesNoMovedFlag() throws Exception {
+        long deal = deal(salesActor);
+        long visit = plan(salesActor, deal, "คุณอรุณ", today);
+
+        assertThat(ok(post("/api/sales/visits/" + visit + "/done"), salesActor).get("dealMovedToName").isNull())
+            .isTrue();
+        assertThat(siteVisitRows(deal)).isEqualTo(1);
+    }
+
+    // ── review NEW-1: a plan more than 180 days out is refused ──
+
+    @Test
+    void aVisitMoreThan180DaysAheadIs400() throws Exception {
+        assertThat(status(createRequest(null, "ปีหน้า", today.plusDays(181), null, false), salesActor))
+            .isEqualTo(400);
+        assertThat(status(createRequest(null, "2099", LocalDate.of(2099, 1, 1), null, false), salesActor))
+            .isEqualTo(400);
+        assertThat(visitCount()).isZero();
+        assertThat(status(createRequest(null, "ครึ่งปี", today.plusDays(180), null, false), salesActor))
+            .as("180 days is the last allowed day").isEqualTo(200);
     }
 
     @Test
@@ -448,6 +503,13 @@ class VisitScopeIntegrationTest extends AbstractDealQuotationSlice2IntegrationTe
 
     private static MockHttpServletRequestBuilder range(String path, LocalDate from, LocalDate to) {
         return get(path).param("from", from.toString()).param("to", to.toString());
+    }
+
+    private String employeeName(UserPrincipal who) {
+        return jdbc.queryForObject("""
+            SELECT NULLIF(TRIM(CONCAT_WS(' ', first_name_th, last_name_th)), '') FROM hr.employee
+             WHERE employee_id = :id
+            """, Map.of("id", who.id()), String.class);
     }
 
     private void reassign(long ticketId, UserPrincipal newOwner) {

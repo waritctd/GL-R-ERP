@@ -26,10 +26,15 @@ public class VisitRepository {
         SELECT v.visit_id, v.owner_id,
                NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS owner_name,
                v.ticket_id, COALESCE(NULLIF(TRIM(t.title), ''), t.customer_name) AS ticket_title,
-               v.contact_name, v.planned_date, v.planned_time, v.status, v.done_at, v.note
+               v.contact_name, v.planned_date, v.planned_time, v.status, v.done_at, v.note,
+               CASE WHEN t.ticket_id IS NOT NULL AND v.owner_id <> t.created_by
+                         AND v.owner_id IS DISTINCT FROM t.keyed_by
+                    THEN NULLIF(TRIM(CONCAT_WS(' ', de.first_name_th, de.last_name_th)), '') END
+                 AS deal_moved_to_name
           FROM sales.visit v
           JOIN hr.employee e ON e.employee_id = v.owner_id
           LEFT JOIN sales.ticket t ON t.ticket_id = v.ticket_id
+          LEFT JOIN hr.employee de ON de.employee_id = t.created_by
         """;
     private static final String ORDER = " ORDER BY v.planned_date, v.planned_time NULLS LAST, v.visit_id";
 
@@ -56,7 +61,14 @@ public class VisitRepository {
             .stream().findFirst();
     }
 
-    /** The owner's DONE visit with the same deal, contact and date, created in the last {@code seconds} seconds. */
+    /**
+     * The owner's DONE visit with the same deal, contact and date, created in the last {@code seconds} seconds.
+     *
+     * <p>Known limitation (review NEW-3, accepted): this is check-then-insert with no lock or unique key, so two
+     * identical requests that arrive at the same instant can both miss each other and insert twice. The UI disables
+     * the save button while a log is pending, which covers the double tap; a true race needs two in-flight requests
+     * from one rep within milliseconds. Closing it fully would need an advisory lock or a partial unique index.
+     */
     public Optional<VisitDto> findRecentDoneLog(long ownerId, Long ticketId, String contactName, LocalDate plannedDate,
                                                 int seconds) {
         return jdbc.query(SELECT + """
@@ -120,6 +132,6 @@ public class VisitRepository {
         return new VisitDto(rs.getLong("visit_id"), rs.getLong("owner_id"), rs.getString("owner_name"), ticket,
             rs.getString("ticket_title"), rs.getString("contact_name"), rs.getObject("planned_date", LocalDate.class),
             time == null ? null : time.toLocalTime(), rs.getString("status"),
-            doneAt == null ? null : doneAt.toInstant(), rs.getString("note"));
+            doneAt == null ? null : doneAt.toInstant(), rs.getString("note"), rs.getString("deal_moved_to_name"));
     }
 }

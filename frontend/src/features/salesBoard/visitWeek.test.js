@@ -34,7 +34,10 @@ describe('visitWeek', () => {
     expect(timeLabel(null)).toBe('');
   });
 
-  it('weekRangeLabel within and across a month', () => {
+  it('weekRangeLabel within and across a month, and with the year outside this year', () => {
+    expect(weekRangeLabel('2027-01-04', '2026-11-12')).toBe('4–10 ม.ค. 2570');
+    expect(weekRangeLabel('2026-12-28', '2026-11-12')).toBe('28 ธ.ค.–3 ม.ค. 2570');
+    expect(weekRangeLabel('2026-11-16', '2026-11-12')).toBe('16–22 พ.ย.');
     expect(weekRangeLabel('2026-11-09')).toBe('9–15 พ.ย.');
     expect(weekRangeLabel('2026-11-30')).toBe('30 พ.ย.–6 ธ.ค.');
   });

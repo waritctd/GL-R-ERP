@@ -330,4 +330,27 @@ describe('MyWork — visits review fixes', () => {
 
     expect((await screen.findByRole('dialog')).getAttribute('data-placement')).toBe('sheet-on-phone');
   });
+
+  it('the week hint carries the year when the week is not in this year (NEW-1)', async () => {
+    renderMyWork();
+    const section = await screen.findByTestId('visits-this-week');
+    fireEvent.click(within(section).getByRole('button', { name: /นัดเข้าพบ/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.change(within(dialog).getByLabelText('วันที่'), { target: { value: '05/01/2570' } });
+    fireEvent.blur(within(dialog).getByLabelText('วันที่'));
+
+    expect(await within(dialog).findByText('นัดนี้อยู่ในสัปดาห์ 4–10 ม.ค. 2570')).toBeTruthy();
+  });
+
+  it("ticking a visit on a deal that moved away says it stays with the visit only (NEW-2)", async () => {
+    const showToast = vi.fn();
+    api.salesVisits.done.mockResolvedValue(visit({ id: 2, status: 'DONE', dealMovedToName: 'คุณอรุณี ขายเก่ง' }));
+    renderMyWork({ showToast });
+    const row = await screen.findByTestId('visit-2');
+    fireEvent.click(within(row).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'บันทึก' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success',
+      'ดีลนี้ย้ายไปให้ คุณอรุณี ขายเก่ง แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น'));
+  });
 });

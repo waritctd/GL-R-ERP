@@ -45,6 +45,8 @@ public class VisitService {
     static final int MAX_CONTACT_LENGTH = 200;
     static final int MAX_NOTE_LENGTH = 2000;
     static final int DUPLICATE_LOG_SECONDS = 60;
+    /** A plan further ahead than this is refused (review NEW-1). */
+    static final int MAX_DAYS_AHEAD = 180;
 
     private static final String FORBIDDEN = "ไม่มีสิทธิ์เข้าถึงรายการนี้";
 
@@ -100,6 +102,9 @@ public class VisitService {
         if (request.plannedDate() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาระบุวันที่");
         }
+        if (request.plannedDate().isAfter(today().plusDays(MAX_DAYS_AHEAD))) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "นัดล่วงหน้าได้ไม่เกิน " + MAX_DAYS_AHEAD + " วัน");
+        }
         boolean done = Boolean.TRUE.equals(request.done());
         if (done && !request.plannedDate().equals(today())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "บันทึกเข้าพบได้เฉพาะวันนี้ — นัดล่วงหน้าให้ใช้ “นัดเข้าพบ”");
@@ -122,7 +127,8 @@ public class VisitService {
         long id = visits.insert(actor.id(), request.ticketId(), contact, request.plannedDate(),
             request.plannedTime(), note, done);
         if (done && request.ticketId() != null) {
-            tickets.recordVisitActivity(request.ticketId(), today(), note, actor.id());
+            // The actor has just passed the deal write check above, so the log goes on the deal.
+            tickets.recordVisitActivity(request.ticketId(), today(), note, actor.id(), false);
         }
         return require(id);
     }
@@ -144,7 +150,9 @@ public class VisitService {
             if (visit.ownerId() != actor.id()) {
                 activityNote = (activityNote == null ? "" : activityNote + " · ") + "บันทึกโดย " + actor.name();
             }
-            tickets.recordVisitActivity(visit.ticketId(), today(), activityNote, visit.ownerId());
+            // Written only while the visit's owner still holds the deal (review NEW-2); otherwise the response's
+            // dealMovedToName tells the UI the tick stayed on the visit.
+            tickets.recordVisitActivity(visit.ticketId(), today(), activityNote, visit.ownerId(), true);
         }
         return require(visitId);
     }

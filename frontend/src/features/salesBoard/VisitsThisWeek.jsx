@@ -119,7 +119,7 @@ export function VisitsThisWeek({
   visits, todayIso, mondayIso, weekOffset, onWeek, loading, failed, landed, onPlan, onDone, onCancel,
 }) {
   const { done, planned } = visitCounts(visits);
-  const label = weekOffset === 0 ? `สัปดาห์นี้ · ${weekRangeLabel(mondayIso)}` : weekRangeLabel(mondayIso);
+  const label = weekOffset === 0 ? `สัปดาห์นี้ · ${weekRangeLabel(mondayIso)}` : weekRangeLabel(mondayIso, todayIso);
   return (
     <Panel
       flush

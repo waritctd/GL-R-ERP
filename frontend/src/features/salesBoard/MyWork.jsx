@@ -122,9 +122,12 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   /** Runs a visit mutation; a failure is toasted and the dialog stays open with what was typed. */
   async function attempt(mutation, variables, onDone, success) {
     try {
-      await mutation.mutateAsync(variables);
+      const result = await mutation.mutateAsync(variables);
       onDone();
-      showToast('success', success);
+      // VisitDto.dealMovedToName: the deal now belongs to someone else, so the tick stayed on the visit (NEW-2).
+      showToast('success', result?.dealMovedToName
+        ? `ดีลนี้ย้ายไปให้ ${result.dealMovedToName} แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น`
+        : success);
     } catch (error) {
       fail(error);
     }
@@ -150,7 +153,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     const monday = weekStartIso(plannedDate);
     if (monday === shownMonday) return;
     const offset = Math.round((Date.parse(`${monday}T00:00:00Z`) - Date.parse(`${thisMonday}T00:00:00Z`)) / (7 * 86_400_000));
-    setLanded({ weekOffset: offset, label: weekRangeLabel(monday) });
+    setLanded({ weekOffset: offset, label: weekRangeLabel(monday, todayIso) });
   }
   const openLog = () => setLogging(true);
   const quietDays = work?.quietDays ?? 14;

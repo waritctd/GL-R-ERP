@@ -12,10 +12,14 @@ public final class VisitDtos {
     public static final String DONE = "DONE";
     public static final String CANCELLED = "CANCELLED";
 
-    /** {@code ticketTitle} is the linked deal's title, else its customer name; null when the visit has no deal. */
+    /**
+     * {@code ticketTitle} is the linked deal's title, else its customer name; null when the visit has no deal.
+     * {@code dealMovedToName} is the deal's current owner when the deal has moved away from this visit's owner
+     * (neither its owner nor its keyer any more); a tick then stays on the visit only (review NEW-2). Null otherwise.
+     */
     public record VisitDto(long id, long ownerId, String ownerName, Long ticketId, String ticketTitle,
                            String contactName, LocalDate plannedDate, LocalTime plannedTime, String status,
-                           Instant doneAt, String note) {}
+                           Instant doneAt, String note, String dealMovedToName) {}
 
     /**
      * POST /api/sales/visits. {@code done = true} records a visit that already happened (the phone's บันทึกเข้าพบ):

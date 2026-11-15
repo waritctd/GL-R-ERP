@@ -45,14 +45,18 @@ export function timeLabel(plannedTime) {
 
 const SHORT_MONTH = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
 
-/** "9–15 พ.ย." for the week starting `mondayIso`; "30 พ.ย.–6 ธ.ค." across a month end. */
-export function weekRangeLabel(mondayIso) {
+/** "9–15 พ.ย." for the week starting `mondayIso`; "30 พ.ย.–6 ธ.ค." across a month end. With `todayIso`, a week
+ * that is not wholly in today's year gets the พ.ศ. year: "4–10 ม.ค. 2570". */
+export function weekRangeLabel(mondayIso, todayIso = null) {
   const sunday = addDaysIso(mondayIso, 6);
   const [startDay, startMonth] = [Number(mondayIso.slice(8, 10)), Number(mondayIso.slice(5, 7))];
   const [endDay, endMonth] = [Number(sunday.slice(8, 10)), Number(sunday.slice(5, 7))];
-  return startMonth === endMonth
+  const range = startMonth === endMonth
     ? `${startDay}–${endDay} ${SHORT_MONTH[endMonth - 1]}`
     : `${startDay} ${SHORT_MONTH[startMonth - 1]}–${endDay} ${SHORT_MONTH[endMonth - 1]}`;
+  const thisYear = todayIso?.slice(0, 4);
+  const otherYear = thisYear && (mondayIso.slice(0, 4) !== thisYear || sunday.slice(0, 4) !== thisYear);
+  return otherYear ? `${range} ${Number(sunday.slice(0, 4)) + 543}` : range;
 }
 
 /** A PLANNED visit whose day has passed without a tick (review M4). */

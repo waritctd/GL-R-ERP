@@ -210,4 +210,43 @@ describe('mockApi.salesVisits', () => {
     const b = await api.salesVisits.create({ contactName: 'Walk-in ซ้ำ', plannedDate: today, done: true });
     expect(b.id).toBe(a.id);
   });
+
+  it('only a visit within 14 days holds the deal; more than 180 days ahead is refused (NEW-1)', async () => {
+    await api.auth.login({ role: 'sales' });
+    const [a, b] = (await api.salesBoard.myWork()).followUp;
+    await api.salesVisits.create({ ticketId: a.ticketId, contactName: 'ก', plannedDate: plusDays(today, 14) });
+    await api.salesVisits.create({ ticketId: b.ticketId, contactName: 'ข', plannedDate: plusDays(today, 15) });
+
+    const followUp = (await api.salesBoard.myWork()).followUp.map((d) => d.ticketId);
+    expect(followUp).not.toContain(a.ticketId);
+    expect(followUp).toContain(b.ticketId);
+    await expectStatus(api.salesVisits.create({ contactName: 'x', plannedDate: plusDays(today, 181) }), 400);
+    await expectStatus(api.salesVisits.create({ contactName: 'x', plannedDate: '2099-01-01' }), 400);
+    await api.salesVisits.create({ contactName: 'x', plannedDate: plusDays(today, 180) });
+  });
+
+  it("an ex-owner's visit neither holds nor touches the new owner's deal (NEW-2)", async () => {
+    await api.auth.login({ role: 'sales' });
+    const [quiet] = (await api.salesBoard.myWork()).followUp;
+    const ahead = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ก', plannedDate: plusDays(today, 2) });
+    const due = await api.salesVisits.create({ ticketId: quiet.ticketId, contactName: 'ข', plannedDate: today });
+    patchTicketForTests(quiet.ticketId, { createdById: 12, keyedById: null });
+    try {
+      await api.auth.login({ role: 'ceo' });
+      expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
+      const before = (await api.tickets.listActivities(quiet.ticketId)).items.length;
+
+      await api.auth.login({ role: 'sales' });
+      const done = await api.salesVisits.done(due.id, { note: 'ไปมาแล้ว' });
+      expect(done.status).toBe('DONE');
+      expect(done.dealMovedToName).toBeTruthy();
+      expect(ahead.dealMovedToName).toBeNull();
+
+      await api.auth.login({ role: 'ceo' });
+      expect((await api.tickets.listActivities(quiet.ticketId)).items.length).toBe(before);
+      expect((await api.tickets.get(quiet.ticketId)).ticket.summary.stale).toBe(true);
+    } finally {
+      patchTicketForTests(quiet.ticketId, { createdById: quiet.ownerId });
+    }
+  });
 });

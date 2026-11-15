@@ -14,9 +14,11 @@ import th.co.glr.hr.ticket.TicketEventKind;
  * The one "quiet" (stale) rule for a deal — spec 2026-11-15 §7.5. A deal is last touched at the latest of its
  * {@code created_at}, any {@code deal_activity} row, and a {@code STAGE_CHANGED} / {@code QUOTATION_ISSUED} event.
  * It is quiet when it is {@code ACTIVE}, not in the deliver &amp; collect board column, last touched more than
- * {@link #quietDays()} days ago, and has no booked visit ahead: a {@code sales.visit} that is PLANNED with
- * {@code planned_date} on or after today (Asia/Bangkok) holds the deal out of ควรตามต่อ (spec §7.3 — booking a visit
- * is the follow-up). Once that date passes unticked the deal can go quiet again; a DONE visit resets the clock through
+ * {@link #quietDays()} days ago, and has no booked visit ahead: a {@code sales.visit} that is PLANNED, booked by the
+ * deal's current owner (or keyer), with {@code planned_date} from today to today + {@link #quietDays()}
+ * (Asia/Bangkok) holds the deal out of ควรตามต่อ (spec §7.3 — booking a visit is the follow-up). A plan further out
+ * does not (review NEW-1: a 2099 plan must not hide a deal forever), nor does an ex-owner's plan after the deal was
+ * reassigned (review NEW-2). Once that date passes unticked the deal can go quiet again; a DONE visit resets the clock through
  * its SITE_VISIT activity instead. The threshold is {@code app.sales.quiet-days} (default 14).
  *
  * <p>The SQL fragments need a {@code :quietDays} bind parameter; pass {@link #quietDays()}.
@@ -58,12 +60,17 @@ public class QuietRule {
                 upcomingVisitSql(t));
     }
 
-    /** SQL boolean: the deal aliased {@code t} has a PLANNED visit dated today (Asia/Bangkok) or later. */
+    /**
+     * SQL boolean: the deal aliased {@code t} has a PLANNED visit by its current owner or keyer, dated from today to
+     * today + {@code :quietDays} (Asia/Bangkok). Needs {@code :quietDays} bound, as {@link #quietSql} already does.
+     */
     public static String upcomingVisitSql(String t) {
         return """
             EXISTS (SELECT 1 FROM sales.visit uv
                      WHERE uv.ticket_id = %1$s.ticket_id AND uv.status = 'PLANNED'
-                       AND uv.planned_date >= (now() AT TIME ZONE 'Asia/Bangkok')::date)
+                       AND (uv.owner_id = %1$s.created_by OR uv.owner_id = %1$s.keyed_by)
+                       AND uv.planned_date BETWEEN (now() AT TIME ZONE 'Asia/Bangkok')::date
+                                               AND (now() AT TIME ZONE 'Asia/Bangkok')::date + :quietDays)
             """.formatted(t);
     }
 

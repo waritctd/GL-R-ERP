@@ -73,7 +73,7 @@ function weekHint(plannedDate, todayIso) {
   const monday = weekStartIso(plannedDate);
   return monday === weekStartIso(todayIso)
     ? `นัดนี้อยู่ในสัปดาห์นี้ · ${weekRangeLabel(monday)}`
-    : `นัดนี้อยู่ในสัปดาห์ ${weekRangeLabel(monday)}`;
+    : `นัดนี้อยู่ในสัปดาห์ ${weekRangeLabel(monday, todayIso)}`;
 }
 
 /**

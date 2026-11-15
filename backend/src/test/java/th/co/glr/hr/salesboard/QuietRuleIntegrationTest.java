@@ -187,6 +187,49 @@ class QuietRuleIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(quietRule.isQuiet(other)).isTrue();
     }
 
+    // ── review NEW-1: only a visit within the quiet window holds the deal ─────
+
+    @Test
+    void aVisit14DaysOutHoldsTheDeal_15DaysOutDoesNot() {
+        long fourteen = dealCreatedDaysAgo(60);
+        long fifteen = dealCreatedDaysAgo(60);
+        long farFuture = dealCreatedDaysAgo(190);
+        visit(fourteen, "PLANNED", 14);
+        visit(fifteen, "PLANNED", 15);
+        visitOn(farFuture, repId, "2099-01-01");
+
+        assertThat(quietRule.isQuiet(fourteen)).isFalse();
+        assertThat(quietRule.isQuiet(fifteen)).isTrue();
+        assertThat(quietRule.isQuiet(farFuture)).as("a 2099 plan must not hide a deal forever").isTrue();
+    }
+
+    // ── review NEW-2: only the deal's current owner's visit holds it ──────────
+
+    @Test
+    void anExOwnersUpcomingVisitDoesNotHoldTheNewOwnersDeal() {
+        long id = dealCreatedDaysAgo(60);
+        visit(id, "PLANNED", 2);
+        jdbc.update("UPDATE sales.ticket SET created_by = :o, keyed_by = NULL WHERE ticket_id = :id",
+            Map.of("o", otherRepId(), "id", id));
+
+        assertThat(quietRule.isQuiet(id)).isTrue();
+        assertThat(tickets.findSummaryById(id).orElseThrow().stale()).isTrue();
+    }
+
+    private long otherRepId() {
+        return new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc))
+            .create(new UpsertEmployeeRequest(null, null, "พนักงานขาย คนใหม่", null, null, null, null, null, null,
+                null, "quiet-rule-new-owner@glr.co.th", null, "SALES", "Sales Division", "แผนกขาย", null, null, null,
+                "ACT", new BigDecimal("30000"), null, null, null, null, null, null, null));
+    }
+
+    private void visitOn(long ticketId, long ownerId, String isoDate) {
+        jdbc.update("""
+            INSERT INTO sales.visit (owner_id, ticket_id, contact_name, planned_date, status)
+            VALUES (:owner, :id, 'ลูกค้า', CAST(:d AS date), 'PLANNED')
+            """, Map.of("owner", ownerId, "id", ticketId, "d", isoDate));
+    }
+
     /** A visit on the deal, {@code dayOffset} days from today's Bangkok date. */
     private void visit(long ticketId, String status, int dayOffset) {
         jdbc.update("""
