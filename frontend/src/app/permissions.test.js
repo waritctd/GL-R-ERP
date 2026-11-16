@@ -751,6 +751,11 @@ describe('activity log access (admin capability)', () => {
       expect(locked('/activity-log', user('import', { admin: true }))).toBe(true);
     });
 
+    it('keeps /activity-log locked for a locked role without the admin flag', async () => {
+      const locked = await lockedCanAccessPath();
+      expect(locked('/activity-log', user('import', { admin: false }))).toBe(false);
+    });
+
     it('unlocks NOTHING else for that admin', async () => {
       // The narrow-exemption check. Being admin must open /activity-log and nothing more; if this goes
       // green for /tickets, the exemption has been widened into a full lockdown bypass (which adding

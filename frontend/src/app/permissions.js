@@ -287,15 +287,20 @@ export function dealRedirectFor(path, user) {
   return `${target.prefix}/${match[1]}`;
 }
 
+// Per-path lock exemptions: each opens exactly one path family for the holder of one capability, never a role.
+// (A team head is not hr/ceo, so the lock would otherwise hide their one page.)
+const LOCK_EXEMPTIONS = [
+  { test: isActivityLogPath, can: (u) => Boolean(u.admin) },
+  { test: isQuotationPath, can: isQuotationReleaseUser },
+  { test: (p) => p === '/people-insights', can: (u) => Boolean(u.canViewPeopleInsights) },
+];
+
 export function canAccessPath(path, user) {
   if (!user) return false;
   // Checked BEFORE the guards below, not after: the lockdown has to deny paths the user's role would otherwise
   // pass (a sales rep on /tickets) as well as paths no guard claims at all. Narrow exemption, deliberate.
-  const adminActivityLog = isActivityLogPath(path) && Boolean(user.admin);
-  const quotationRelease = isQuotationPath(path) && isQuotationReleaseUser(user);
-  // A team head is not hr/ceo, so the lock would hide their one page; open exactly this path for the flag holder.
-  const peopleInsights = path === '/people-insights' && Boolean(user.canViewPeopleInsights);
-  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease && !peopleInsights
+  if (isSelfServiceLocked(user) && !isSelfServicePath(path)
+    && !LOCK_EXEMPTIONS.some((entry) => entry.test(path) && entry.can(user))
     && !isReleasedPath(path, user)) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;
