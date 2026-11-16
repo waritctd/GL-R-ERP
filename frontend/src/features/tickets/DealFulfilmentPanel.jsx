@@ -4,6 +4,9 @@ import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import {
+  DialogCallout, DialogSummary, DialogTable, dialogTd, dialogTh,
+} from '../../components/common/DocumentDialogParts.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
@@ -675,15 +678,47 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const serverNames = coverageQuery.isError ? undefined : coverageQuery.data?.uncoveredFactoryNames;
   const confirmNames = serverNames ? [...new Set([...serverNames, ...pickedNames])] : [];
   const coverageLoading = coverageQuery.isFetching;
+  // Drawing m-ir (2026-11-16): "N โรงงาน" and a โรงงาน table. The factories are the same `confirmNames` the old
+  // one-line confirm named (the server's coverage names plus the rep's picks). The drawing's per-factory รายการ count
+  // and ระยะเวลานำเข้า columns are not built: coverage returns names only (ImportRequestCoverageResponse), and the
+  // server's line-to-factory cascade and lead times are resolved inside createDrafts, so the panel cannot show them
+  // without guessing. "ส่งถึงฝ่ายนำเข้าทันที" is what createDrafts does: each new row is issued at once and
+  // ImportRequestService#notifyImportOfIssuedIr notifies the import role.
   let createConfirmMessage = 'กำลังตรวจสอบโรงงาน…';
   if (!coverageLoading && allFactoriesCovered) {
     // Another session issued the last one since this page loaded: a create now would only 409.
     createConfirmMessage = 'ทุกโรงงานมีใบขอซื้อแล้ว — ไม่มีใบขอซื้อที่ต้องออก';
   } else if (!coverageLoading) {
-    const what = confirmNames.length > 0
-      ? `จะออกใบขอซื้อ (IR) ${confirmNames.length} ใบ: ${confirmNames.join(', ')}`
-      : `ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน${pickedNames.length > 0 ? ` (โรงงานที่เลือก: ${pickedNames.join(', ')})` : ''}`;
-    createConfirmMessage = `${what} — การดำเนินการนี้ย้อนกลับไม่ได้`;
+    createConfirmMessage = (
+      <div className="flex flex-col gap-3.5">
+        {/* First in the scrolling body, so a short phone shows it with the footer's ออกใบขอซื้อ (fix round 1, F4).
+            Not the drawing's "แก้ไขหรือลบไม่ได้" (F1): an issued IR can be corrected by a ฉบับแก้ไข —
+            ImportRequestService#revise, same requireFullWrite gate as createDrafts, until the goods are RECEIVED —
+            but it can never be deleted. */}
+        <DialogCallout tone="warn" testId="ir-confirm-warning">
+          ออกเลข IR แล้วลบไม่ได้ · แก้ได้ด้วยการออกฉบับแก้ไขเท่านั้น
+        </DialogCallout>
+        {confirmNames.length > 0 ? (
+          <>
+            <DialogSummary icon="truck" testId="ir-confirm-summary">
+              {`${confirmNames.length} โรงงาน · ส่งถึงฝ่ายนำเข้าทันที`}
+            </DialogSummary>
+            <DialogTable label="โรงงานที่จะออกใบขอซื้อ">
+              <thead><tr><th scope="col" className={dialogTh}>โรงงาน</th></tr></thead>
+              <tbody>
+                {confirmNames.map((name) => <tr key={name}><td className={dialogTd}>{name}</td></tr>)}
+              </tbody>
+            </DialogTable>
+            <p className="m-0 text-xs text-text-muted">รายการและระยะเวลานำเข้าของแต่ละโรงงานจะแสดงในใบขอซื้อแต่ละใบหลังออก</p>
+          </>
+        ) : (
+          // Names unavailable (older backend, or the re-check failed): the generic line, still naming the picks.
+          <DialogSummary icon="truck" testId="ir-confirm-summary">
+            {`ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน · ส่งถึงฝ่ายนำเข้าทันที${pickedNames.length > 0 ? ` (โรงงานที่เลือก: ${pickedNames.join(', ')})` : ''}`}
+          </DialogSummary>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -1087,57 +1122,102 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       </div>
 
       {deliveryOpen ? (
+        // Drawing m-delivery (2026-11-16). The request is unchanged (handleRecordDelivery): source, note, and the
+        // lines with a qty > 0. Not built from the drawing: "งวดที่ N · นัดส่ง …" (no delivery round or appointment
+        // reaches this panel) and "วันที่ส่ง" (RecordDeliveryRequest has no date — the server stamps the record).
+        // Every figure is the item's own qty / qtyDelivered and the remaining the tracker table above derives.
         <Modal
           title="บันทึกการส่งสินค้า"
+          subtitle={summary?.projectName || summary?.title || undefined}
           onClose={() => setDeliveryOpen(false)}
           footer={(
             <>
               <Button type="button" variant="secondary" onClick={() => setDeliveryOpen(false)}>ยกเลิก</Button>
               <Button type="button" variant="primary" disabled={recordDeliveryMutation.isPending}
                 onClick={handleRecordDelivery} data-testid="deal-fulfilment-record-delivery-submit">
-                บันทึก
+                บันทึกการส่ง
               </Button>
             </>
           )}
         >
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3.5">
+            {/* First in the scrolling body, like the deposit and IR warnings: TicketController has no route to void a
+                recorded delivery, and recording one can advance the stage. */}
+            <DialogCallout tone="warn" testId="delivery-warning">
+              บันทึกแล้วแก้ไขหรือลบไม่ได้ ตรวจจำนวนก่อนกดบันทึก
+            </DialogCallout>
+            <DialogSummary icon="truck" testId="delivery-summary">
+              {`เหลือส่ง ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการ`}
+            </DialogSummary>
+            {/* Phones (≤520px, mobile-xs): the สั่ง / ส่งแล้ว / เหลือส่ง columns fold into a line under the name, so
+                the table is two columns — name and the ส่งครั้งนี้ input — and the input is in view at 320px with no
+                sideways scrolling (fix round 1, F5). Same figures either way. */}
+            <DialogTable label="รายการที่ส่งครั้งนี้">
+              <thead>
+                <tr>
+                  <th scope="col" className={dialogTh}>รายการ</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>สั่ง</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>ส่งแล้ว</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>เหลือส่ง</th>
+                  <th scope="col" className={`${dialogTh} text-right`}>ส่งครั้งนี้</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const ordered = Number(item.qty || 0);
+                  const delivered = Number(item.qtyDelivered || 0);
+                  const remaining = Math.max(0, ordered - delivered);
+                  const name = `${item.brand ?? ''} ${item.model || ''}`.trim();
+                  return (
+                    <tr key={item.id}>
+                      <td className={`${dialogTd} [overflow-wrap:anywhere]`}>
+                        <span className="font-bold">{name}</span>
+                        <span className="hidden text-xs text-text-muted mobile-xs:block" data-testid={`delivery-line-figures-${item.id}`}>
+                          {`สั่ง ${ordered.toLocaleString('en-US')} · ส่งแล้ว ${delivered.toLocaleString('en-US')} · เหลือส่ง ${remaining.toLocaleString('en-US')}`}
+                        </span>
+                      </td>
+                      <td className={`${dialogTd} text-right mobile-xs:hidden`}>{ordered.toLocaleString('en-US')}</td>
+                      <td className={`${dialogTd} text-right mobile-xs:hidden`}>{delivered.toLocaleString('en-US')}</td>
+                      <td className={cn(dialogTd, 'text-right mobile-xs:hidden', remaining > 0 && 'font-extrabold text-text')}>
+                        {remaining.toLocaleString('en-US')}
+                      </td>
+                      <td className={`${dialogTd} text-right`}>
+                        <input type="number" min="0" max={remaining} step="0.01" inputMode="decimal"
+                          className="min-h-[44px] w-20 text-right"
+                          aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
+                          value={deliveryDraft.lines[item.id] ?? ''}
+                          onChange={(e) => setDeliveryDraft((draft) => ({
+                            ...draft,
+                            lines: { ...draft.lines, [item.id]: e.target.value },
+                          }))} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </DialogTable>
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               แหล่งสินค้า
-              <select value={deliveryDraft.source}
+              <select value={deliveryDraft.source} className="min-h-[44px]"
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
                 {Object.entries(DELIVERY_SOURCE_LABELS).map(([code, label]) => (
                   <option key={code} value={code}>{label}</option>
                 ))}
               </select>
             </label>
-            <div className="flex flex-col gap-2">
-              {items.map((item) => {
-                const remaining = Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0));
-                return (
-                  <label key={item.id} className="grid grid-cols-[1fr_120px] items-center gap-2.5 text-sm">
-                    <span>
-                      <span className="sr-only">จำนวนส่งมอบ</span>
-                      <strong>{item.brand} {item.model || ''}</strong>
-                      <small className="block text-text-muted">
-                        คงเหลือ {remaining.toLocaleString('en-US')} · ส่งแล้ว {Number(item.qtyDelivered || 0).toLocaleString('en-US')}
-                      </small>
-                    </span>
-                    <input type="number" min="0" max={remaining} step="0.01"
-                      aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
-                      value={deliveryDraft.lines[item.id] ?? ''}
-                      onChange={(e) => setDeliveryDraft((draft) => ({
-                        ...draft,
-                        lines: { ...draft.lines, [item.id]: e.target.value },
-                      }))} />
-                  </label>
-                );
-              })}
-            </div>
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               หมายเหตุ
               <textarea className="min-h-16" value={deliveryDraft.note}
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
             </label>
+            {/* What TicketService#recordDeliveryInternal does once every line is delivered: FULLY_DELIVERED,
+                autoAdvanceStage(DELIVERED) — rep code S9 (DealStage.REP_CODE); a no-op when the deal is already
+                there or past it, hence "ถ้ายังไม่ถึง" — and a DELIVERY_COMPLETED notice to the account role.
+                Conditional: whether THIS save completes the deal is the server's call. S9 is named once (fix round 1,
+                F6): a fully paid deal goes on to CLOSED_PAID, which is also S9, so a step name would mislead. */}
+            <DialogCallout tone="info" testId="delivery-info">
+              ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ ระบบจะบันทึกว่าส่งครบ เลื่อนงานไป S9 (ถ้ายังไม่ถึง) และแจ้งฝ่ายบัญชี
+            </DialogCallout>
           </div>
         </Modal>
       ) : null}
@@ -1206,7 +1286,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         open={confirmingCreate}
         title="ยืนยันการออกใบขอซื้อ (IR)"
         message={createConfirmMessage}
-        confirmLabel="ออกใบขอซื้อ (IR)"
+        confirmLabel="ออกใบขอซื้อ"
         busy={createDraftsMutation.isPending}
         confirmDisabled={coverageLoading || allFactoriesCovered}
         // Close first: a second click on the open dialog would send twice.

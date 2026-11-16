@@ -6,6 +6,9 @@ import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import {
+  DialogCallout, DialogSummary, DialogTable, dialogTd,
+} from '../../components/common/DocumentDialogParts.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
@@ -47,25 +50,71 @@ function isBlankRow(item) {
   return !String(item.description ?? '').trim() && !(lineNet(item) * (Number(item.qty) || 0));
 }
 
-/** The confirm-before-issue amounts, shared by this editor and DealDepositPanel's ออกเอกสาร. */
-export function DepositIssueSummary({ customerName, depositPercent, deposit, vatPercent, vat, total }) {
+/**
+ * The confirm-before-issue body (drawing m-deposit-issue, 2026-11-16), shared by this editor and the deal page's
+ * เงิน tab ออกเอกสาร. Display only: every figure is passed in by the caller — the served draft's subtotal /
+ * depositAmount / vatAmount / totalPayable on the deal page, this editor's own สรุปยอด figures here — and is shown
+ * with the same `money` formatter; nothing is computed in this component.
+ *
+ * Deliberate departures from the drawing: the value row is "มูลค่าสินค้า" with the notice's own reference beside it
+ * (the reference field takes a PO number too, and the notice's lines may have been edited after it was drafted from
+ * the quotation, so "มูลค่าตามใบเสนอราคา" could name the wrong document or figure); the hint does not mention
+ * "เงินที่คาดว่าจะเข้า" (DepositNoticeService#createDraftFromQuotation takes the percent from the quotation, never
+ * from expected payments).
+ *
+ * `estimate` (fix round 1, F2) — this editor's own confirm. Its figures are computed in the browser and the server
+ * recomputes them on save (DepositNoticeRepository#update, BigDecimal HALF_UP), so they can be a satang off the
+ * issued document. They are therefore shown as the old confirm showed them — deposit, VAT, total — under a plain
+ * "ยอดโดยประมาณ" line, without the subtotal row or the summary line that would present them as the document's
+ * content. The deal page's เงิน tab issues its saved draft exactly as stored, so it shows the full drawn summary.
+ *
+ * The irreversibility warning is first in the body (F4): the body scrolls and the footer does not, so first is the
+ * one place that is always on screen with the ออกเอกสาร button on a short phone.
+ */
+export function DepositIssueSummary({
+  customerName, depositPercent, subtotal, reference, deposit, vatPercent, vat, total, estimate = false,
+}) {
+  const percent = Math.round(Number(depositPercent) * 100);
   return (
-    <div className="flex flex-col gap-2">
-      <p className="confirm-dialog-message text-text-secondary leading-normal m-0">
-        ตรวจสอบยอดเงินก่อนออกเอกสารให้ <strong>{customerName || 'ลูกค้า'}</strong> — <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
-      </p>
-      <div className="flex justify-between border-t border-border pt-2 text-sm">
-        <span className="text-icon-muted">ขอรับเงินมัดจำ ({Math.round(Number(depositPercent) * 100)}%)</span>
-        <code className="font-mono">{money(deposit)} บาท</code>
-      </div>
-      <div className="flex justify-between text-sm">
-        <span className="text-icon-muted">ภาษีมูลค่าเพิ่ม {formatVatPercent(vatPercent)}%</span>
-        <code className="font-mono">{money(vat)} บาท</code>
-      </div>
-      <div className="flex justify-between text-md font-bold">
-        <span>รวมเป็นเงินที่ต้องชำระ</span>
-        <code className="font-mono">{money(total)} บาท</code>
-      </div>
+    <div className="flex flex-col gap-3.5">
+      <DialogCallout tone="warn" testId="deposit-issue-warning">
+        ออกเลขที่เอกสารแล้ว <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
+      </DialogCallout>
+      {estimate ? (
+        <p className="m-0 text-sm text-text-secondary" data-testid="deposit-issue-estimate">
+          ยอดโดยประมาณ · ยอดจริงตามเอกสารที่ระบบออก
+        </p>
+      ) : (
+        <DialogSummary testId="deposit-issue-summary">
+          {`มัดจำ ${percent}% · ${money(total)} บาท รวม VAT · ถึง ${customerName || 'ลูกค้า'}`}
+        </DialogSummary>
+      )}
+      <DialogTable label="ยอดในใบแจ้งยอดเงินรับมัดจำ">
+        <tbody>
+          {estimate ? null : (
+            <tr>
+              <td className={dialogTd}>
+                มูลค่าสินค้า
+                {reference ? <span className="ml-1.5 text-xs text-text-muted">อ้างอิง {reference}</span> : null}
+              </td>
+              <td className={`${dialogTd} text-right`}>{money(subtotal)} บาท</td>
+            </tr>
+          )}
+          <tr>
+            <td className={dialogTd}>มัดจำ {percent}% (ก่อน VAT)</td>
+            <td className={`${dialogTd} text-right`}>{money(deposit)} บาท</td>
+          </tr>
+          <tr>
+            <td className={dialogTd}>VAT {formatVatPercent(vatPercent)}%</td>
+            <td className={`${dialogTd} text-right`}>{money(vat)} บาท</td>
+          </tr>
+          <tr className="font-bold">
+            <td className="px-2 py-2">ยอดที่ลูกค้าต้องชำระ</td>
+            <td className="px-2 py-2 text-right">{money(total)} บาท</td>
+          </tr>
+        </tbody>
+      </DialogTable>
+      <p className="m-0 text-xs text-text-muted">ยอดเริ่มต้นเติมจากใบเสนอราคาของงานนี้ แก้รายการได้จนกว่าจะออกเอกสาร</p>
     </div>
   );
 }
@@ -913,7 +962,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         open={confirmIssue}
         title="ยืนยันการออกเอกสาร"
         message={(
-          <DepositIssueSummary customerName={form.customerName} depositPercent={form.depositPercent}
+          <DepositIssueSummary estimate customerName={form.customerName} depositPercent={form.depositPercent}
             deposit={deposit} vatPercent={vatPercent} vat={vat} total={total} />
         )}
         confirmLabel="ออกเอกสาร"
