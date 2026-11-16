@@ -156,6 +156,38 @@ describe('PauseDealModal — พักงาน (m-hold)', () => {
     expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ pauseReturnOn: '2026-11-16' }));
   });
 
+  // Review round 3 (F4 / F5): picking a valid date any other way after a refusal clears the block.
+  it('after a refused date, a quick-date chip clears the block and enables พักงาน', () => {
+    const onSubmit = vi.fn();
+    render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    const date = screen.getByLabelText('วันที่จะกลับมาดู');
+    fireEvent.change(date, { target: { value: '15/11/2569' } });
+    fireEvent.blur(date);
+    expect(screen.getByRole('button', { name: 'พักงาน' }).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: '2 สัปดาห์' }));
+    expect(screen.getByRole('button', { name: 'พักงาน' }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'พักงาน' }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ pauseReturnOn: '2026-11-30' }));
+  });
+
+  it('after a refused date, a day picked in the calendar clears the block and enables พักงาน', () => {
+    const onSubmit = vi.fn();
+    render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    const date = screen.getByLabelText('วันที่จะกลับมาดู');
+    fireEvent.change(date, { target: { value: '15/11/2569' } });
+    fireEvent.blur(date);
+    expect(screen.getByRole('button', { name: 'พักงาน' }).disabled).toBe(true);
+
+    fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
+    fireEvent.click(screen.getByRole('button', { name: '20 พฤศจิกายน 2569' }));
+    expect(screen.getByRole('button', { name: 'พักงาน' }).disabled).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'พักงาน' }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ pauseReturnOn: '2026-11-20' }));
+  });
+
   it('after a refused date, emptying the field pauses with no date on purpose', () => {
     const onSubmit = vi.fn();
     render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" onClose={vi.fn()} onSubmit={onSubmit} />);

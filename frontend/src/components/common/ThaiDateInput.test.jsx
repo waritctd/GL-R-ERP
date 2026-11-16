@@ -134,6 +134,52 @@ describe('ThaiDateInput', () => {
     expect(field().value).toBe('15/08/2569');
   });
 
+  // onErrorChange (optional; review round 3): a refused entry reverts WITHOUT calling onChange, so a parent that must
+  // not read "refused" as "no date" (PauseDealModal) is told the field's own error, and told '' once it clears.
+  describe('onErrorChange', () => {
+    it('is called with the error when a typed value is refused', () => {
+      const onErrorChange = vi.fn();
+      render(<Controlled initial="" min="2026-11-10" onErrorChange={onErrorChange} />);
+      type('01/11/2569');
+      fireEvent.blur(field());
+      expect(onErrorChange).toHaveBeenLastCalledWith('วันที่อยู่นอกช่วงที่เลือกได้');
+    });
+
+    it('is called with "" when the refused field is cleared, or a valid date is typed or picked', () => {
+      const onErrorChange = vi.fn();
+      render(<Controlled initial="" min="2026-11-10" onErrorChange={onErrorChange} />);
+      const refuse = () => { type('01/11/2569'); fireEvent.blur(field()); };
+
+      refuse();
+      type('');
+      fireEvent.blur(field());
+      expect(onErrorChange).toHaveBeenLastCalledWith('');
+
+      refuse();
+      type('20/11/2569');
+      fireEvent.blur(field());
+      expect(onErrorChange).toHaveBeenLastCalledWith('');
+    });
+
+    it('is called with "" when a day is picked in the calendar after a refusal', () => {
+      const onErrorChange = vi.fn();
+      // A stored value, so the refused entry reverts to it and the calendar opens on that month (not "today's").
+      render(<Controlled initial="2026-11-15" min="2026-11-10" onErrorChange={onErrorChange} />);
+      type('01/11/2569');
+      fireEvent.blur(field());
+      expect(onErrorChange).toHaveBeenLastCalledWith('วันที่อยู่นอกช่วงที่เลือกได้');
+      fireEvent.click(screen.getByRole('button', { name: 'เลือกวันที่' }));
+      fireEvent.click(screen.getByRole('button', { name: '25 พฤศจิกายน 2569' }));
+      expect(onErrorChange).toHaveBeenLastCalledWith('');
+    });
+
+    it('is optional: without it a refusal still reverts with the error and nothing throws', () => {
+      render(<Controlled initial="" min="2026-11-10" />);
+      expect(() => { type('01/11/2569'); fireEvent.blur(field()); }).not.toThrow();
+      expect(field().getAttribute('aria-invalid')).toBe('true');
+    });
+  });
+
   it('clearing the field reports an empty value on blur', () => {
     const onValue = vi.fn();
     render(<Controlled initial="2027-01-31" onValue={onValue} />);

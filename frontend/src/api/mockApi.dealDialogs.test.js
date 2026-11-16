@@ -150,6 +150,44 @@ describe('mock — fix round 1', () => {
       .rejects.toMatchObject({ status: 400 });
     expect((await api.tickets.get(id)).ticket.summary.estimatedValue).toBe(500);
   });
+
+  // Review round 3 (mock fidelity 1): the mock accepts every amount Java accepts. Java is @DecimalMin(0, exclusive)
+  // + @Digits(integer = 12, fraction = 2), checked by Hibernate Validator on new BigDecimal(toString())
+  // .stripTrailingZeros(). The old float test (Math.round(n*100) === n*100) refused normal amounts such as 0.29.
+  it('accepts every two-decimal amount Java accepts, on create and on the tracking update', async () => {
+    const id = await newDeal();
+    for (const ok of [0.01, 0.07, 0.29, 1.1, 1234.35, 999999999999.99, '1234.35', '1.100']) {
+      const { ticket } = await api.tickets.updateTracking(id, { estimatedValue: ok });
+      expect(ticket.summary.estimatedValue, String(ok)).toBe(Number(ok));
+    }
+    const { customers } = await api.customers.search('');
+    const { projects } = await api.customers.projects(customers[0].id);
+    const created = await api.tickets.create({
+      title: 'งานมูลค่าทศนิยม', customerId: customers[0].id, projectId: projects[0].id, items: [],
+      entryChannel: 'DESIGNER_LED', estimatedValue: 1234.35,
+    });
+    expect(created.ticket.summary.estimatedValue).toBe(1234.35);
+  });
+
+  it('refuses what Java refuses: zero, negative, more than two decimals, more than twelve integer digits', async () => {
+    const id = await newDeal();
+    for (const bad of [0, -1, '0.00', 1.005, '1.001', 0.001, 1e12, '1000000000000']) {
+      await expect(api.tickets.updateTracking(id, { estimatedValue: bad }), String(bad)).rejects.toMatchObject({ status: 400 });
+    }
+  });
+
+  // Review round 3 (mock fidelity 2): in Java the request body's bean validation (@Valid TrackingUpdateRequest) runs
+  // before TicketService.updateTracking's permission check, so a caller who may not edit the deal and sends an invalid
+  // estimate gets 400, not 403. A valid estimate from that caller is still 403, and nothing changes either way.
+  it('checks the estimate before the permission, as Java does: invalid → 400 even for another rep; valid → 403', async () => {
+    const id = await newDeal(); // sales2's
+    await api.tickets.updateTracking(id, { estimatedValue: 500 });
+    await api.auth.login({ role: 'sales' }); // the first seeded rep, not the owner
+    await expect(api.tickets.updateTracking(id, { estimatedValue: -1 })).rejects.toMatchObject({ status: 400 });
+    await expect(api.tickets.updateTracking(id, { estimatedValue: 700 })).rejects.toMatchObject({ status: 403 });
+    await api.auth.login({ email: 'sales2@glr.co.th' });
+    expect((await api.tickets.get(id)).ticket.summary.estimatedValue).toBe(500);
+  });
 });
 
 describe('mock cancel reasons and catalog', () => {

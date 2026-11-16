@@ -8307,10 +8307,24 @@ function mockChangePauseReturnOn(ticket, user, payload = {}) {
   return delay({ ticket: buildTicketDetail(ticket) });
 }
 
-/** CreateTicketRequest / TrackingUpdateRequest estimatedValue: > 0, at most two decimals, within NUMERIC(14,2). */
+/**
+ * CreateTicketRequest / TrackingUpdateRequest estimatedValue, as Java validates it:
+ * {@code @DecimalMin(value = "0", inclusive = false) @Digits(integer = 12, fraction = 2)}. Hibernate Validator 9.1's
+ * DigitsValidatorForNumber reads {@code new BigDecimal(value.toString()).stripTrailingZeros()} and requires
+ * precision − scale ≤ 12 integer digits and scale ≤ 2 fraction digits. This mirrors that on the DECIMAL STRING
+ * (no float arithmetic: the old Math.round(n*100) === n*100 test refused 0.29, 1.10, 1234.35…).
+ */
 function mockValidEstimate(value) {
-  const n = Number(value);
-  return Number.isFinite(n) && n > 0 && n <= 999999999999.99 && Math.round(n * 100) === n * 100;
+  const match = /^\+?(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/.exec(String(value ?? '').trim());
+  if (!match || (match[1] === '' && !match[2])) return false;
+  // Unscaled digits and scale, as BigDecimal holds them; then stripTrailingZeros.
+  let digits = `${match[1]}${match[2] ?? ''}`.replace(/^0+/, '');
+  let scale = (match[2] ?? '').length - Number(match[3] ?? 0);
+  if (digits === '') return false; // zero is not > 0
+  while (digits.endsWith('0')) { digits = digits.slice(0, -1); scale -= 1; }
+  const integerDigits = digits.length - scale;
+  const fractionDigits = Math.max(scale, 0);
+  return integerDigits <= 12 && fractionDigits <= 2;
 }
 
 /** TicketService#requireReturnDateNotPast: วันที่จะกลับมาดู may be today (Asia/Bangkok) or later; null = no date. */
@@ -10124,17 +10138,18 @@ export const api = {
 
     async updateTracking(id, payload) {
       const user = requireSession();
+      // Like Java's bean validation on the @Valid TrackingUpdateRequest body, which runs BEFORE TicketController hands
+      // the request to TicketService.updateTracking (and so before its requireDealOwnership 403 / requireActive 409):
+      // a sent estimate is checked first, whatever clearEstimatedValue says (review rounds 2 L-3 and 3).
+      if (payload?.estimatedValue != null && !mockValidEstimate(payload.estimatedValue)) {
+        fail('มูลค่าโดยประมาณต้องมากกว่า 0', 400);
+      }
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       requireActive(ticket);
       if (payload?.winProbability != null
         && (Number(payload.winProbability) < 0 || Number(payload.winProbability) > 100)) {
         fail('win probability ต้องอยู่ระหว่าง 0-100', 400);
-      }
-      // Like Java's bean validation on TrackingUpdateRequest: a sent estimate is checked whatever clearEstimatedValue
-      // says (review round 2, L-3 — the mock must not be more permissive), before anything is written.
-      if (payload?.estimatedValue != null && !mockValidEstimate(payload.estimatedValue)) {
-        fail('มูลค่าโดยประมาณต้องมากกว่า 0', 400);
       }
       // Full-replace semantics (PUT), not a merge — mirrors TrackingUpdateRequest: an omitted/null field CLEARS it
       // (null winProbability = "fall back to the stage default", the intended way to clear an override).

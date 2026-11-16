@@ -339,18 +339,25 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     // has been logged since. Same guarantee as before: the form collects the follow-up date and an activity, then
     // moves the deal. The form opens from the panel's guided opener or, where the page's main button carries the
     // move, from that "เลื่อนไป: 9." button. Either way the form itself must open, be filled and move the deal.
+    // Both openers exist only once the page's separate actions query (TicketDetailPage `actionsQuery`:
+    // stageDecisions) has loaded, and stageIs above needs only the summary. So wait, web-first, for either one to be
+    // visible, which proves the actions are in, before choosing (review round 3, M-3: an instant count() raced it).
     const opener = salesPage.getByTestId('guided-advance-open');
-    await ((await opener.count()) ? opener : salesPage.getByRole('button', { name: /^เลื่อนไป: 9\./ })).first().click();
+    const headerMove = salesPage.getByRole('button', { name: /^เลื่อนไป: 9\./ });
+    await expect(opener.or(headerMove).first()).toBeVisible();
+    await ((await opener.isVisible()) ? opener : headerMove).first().click();
     const guided = salesPage.getByTestId('guided-advance-modal');
     await expect(guided).toBeVisible();
-    await salesPage.getByTestId('guided-advance-followup').fill(inDays(7));
+    // A date the form must carry through: newDeal already set inDays(7), so asserting that again would pass even if the
+    // form dropped the date (review round 3, M-3).
+    await salesPage.getByTestId('guided-advance-followup').fill(inDays(9));
     await salesPage.getByTestId('guided-advance-note').fill(`${tag} โทรติดตามก่อนเลื่อนขั้น 9`);
     await salesPage.getByTestId('guided-advance-submit').click();
     await expect(guided).toHaveCount(0);
     await stageIs(salesPage, 9);
     const after = await ticketOf(deal);
     expect(after.summary.salesStage).toBe('NEGOTIATION');
-    expect(after.summary.nextFollowUpAt).toBe(inDays(7));
+    expect(after.summary.nextFollowUpAt).toBe(inDays(9));
     const activities = await (await sessions.sales.get(`/api/tickets/${deal}/activities`)).json();
     expect(activities.items.some((a) => String(a.note).includes(`${tag} โทรติดตามก่อนเลื่อนขั้น 9`))).toBe(true);
     await shot(salesPage, '07-buyer-guided-advance-stage9');
