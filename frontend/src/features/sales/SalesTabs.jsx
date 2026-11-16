@@ -7,7 +7,7 @@ import { hasPermission } from '../../app/permissions.js';
 // The งานขาย (Sales) workspace is one sidebar menu. คำขอราคา and โครงการ were merged into the single
 // deal-pipeline page (/tickets — one ticket = one deal). The sidebar item stays highlighted across it and the
 // detail pages via AppShell `match`, and deep links keep working unchanged.
-const DEAL_LIST_TAB = { path: '/tickets', label: 'ดีลทั้งหมด' };
+const DEAL_LIST_TAB = { path: '/tickets', label: 'งานทั้งหมด' };
 
 const PRICING_QUEUE_TAB = { path: '/pricing-requests', label: 'คิวขอราคา' };
 
@@ -26,7 +26,7 @@ export function SalesTabs({ role }) {
 
   // A tab bar offering ONE destination is chrome that navigates nowhere: the tab is always the page you are
   // already on. That was invisible while every pipeline role had two, and dropping ภาพรวม leaves `sales` with
-  // exactly one (ดีลทั้งหมด) and `import` with exactly one (คิวขอราคา).
+  // exactly one (งานทั้งหมด) and `import` with exactly one (คิวขอราคา).
   if (tabs.length < 2) return null;
 
   return (

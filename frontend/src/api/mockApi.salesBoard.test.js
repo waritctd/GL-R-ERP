@@ -102,6 +102,33 @@ describe('mockApi.salesBoard.teamOverview', () => {
   });
 });
 
+// The authz here is the mock's approximation; TeamBoardScopeIntegrationTest is the evidence for the Java gate.
+describe('mockApi.salesBoard.teamBoard', () => {
+  it.each(['sales', 'account', 'import', 'hr'])('rejects %s with 403', async (role) => {
+    await api.auth.login({ role });
+    await expect(api.salesBoard.teamBoard()).rejects.toMatchObject({ status: 403 });
+  });
+
+  it.each(['sales_manager', 'ceo'])('gives %s every open deal of every rep, in the board order, each with its owner',
+    async (role) => {
+      await api.auth.login({ role });
+      const team = await api.salesBoard.teamBoard();
+
+      expect(team.quietDays).toBe(14);
+      const all = (await api.tickets.list()).tickets;
+      const open = all.filter((t) => t.lifecycle === 'ACTIVE' && t.salesStage !== 'CLOSED_PAID').map((t) => t.id);
+      expect(team.board.map((d) => d.ticketId).sort()).toEqual(open.sort());
+      expect(new Set(team.board.map((d) => d.ownerId)).size).toBeGreaterThan(1);
+      for (const deal of team.board) {
+        expect(deal.ownerName).toBeTruthy();
+        expect(deal.boardColumn).toBeGreaterThanOrEqual(1);
+      }
+      // SalesBoardRepository: ORDER BY last_touched_at, ticket_id.
+      const touched = team.board.map((d) => d.lastTouchedAt ?? '');
+      expect(touched).toEqual([...touched].sort());
+    });
+});
+
 // ── review fixes mirrored in the mock (LOW: updateTracking expectedQuarter, ORDER BY mirror; M1/M2/M3 shape) ──
 describe('mockApi review-fix mirrors', () => {
   it('updateTracking keeps expectedQuarter when absent, clears it on "", and rejects a malformed one', async () => {

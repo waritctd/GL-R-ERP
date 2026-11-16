@@ -1,6 +1,8 @@
 import { Link } from 'react-router-dom';
 import { Icon } from '../../components/common/Icon.jsx';
-import { BOARD_COLUMNS, money, otherCurrencyTotals, quarterLabel, sumValue, totalLabel } from './boardFormat.js';
+import {
+  BOARD_COLUMNS, money, otherCurrencyTotals, ownerShortName, quarterLabel, sumValue, totalLabel,
+} from './boardFormat.js';
 
 function Chip({ tone = 'neutral', children }) {
   const tones = {
@@ -14,23 +16,35 @@ function Chip({ tone = 'neutral', children }) {
   );
 }
 
-function DealCard({ deal, showCode }) {
+function DealCard({ deal, showCode, showOwner }) {
   const meta = [deal.designerName, quarterLabel(deal.expectedQuarter)].filter(Boolean).join(' · ');
   return (
     <li
       data-testid={`board-card-${deal.ticketId}`}
-      className={`grid gap-1 rounded-md border bg-surface p-3 ${deal.quiet ? 'border-warning-border' : 'border-border'}`}
+      // `relative` + the link's ::after overlay make the whole card the tap target (≥44px on a phone), while the
+      // link's own name stays the deal title for assistive tech.
+      className={`relative grid gap-1 rounded-md border bg-surface p-3 hover:border-border-strong ${deal.quiet ? 'border-warning-border' : 'border-border'}`}
     >
       <Link
         to={`/tickets/${deal.ticketId}`}
-        className="min-w-0 break-words text-sm font-bold text-text no-underline hover:underline focus-visible:underline"
+        className="min-w-0 break-words text-sm font-bold text-text no-underline after:absolute after:inset-0 after:rounded-md after:content-[''] hover:underline focus-visible:underline focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-primary"
       >
         {deal.title || deal.customerName}
       </Link>
-      {meta || showCode ? (
+      {meta || showCode || (showOwner && deal.ownerName) ? (
         <span className="min-w-0 break-words text-xs text-text-muted">
           {showCode && deal.repCode ? <b className="mr-1 font-extrabold text-text-secondary">{deal.repCode}</b> : null}
           {meta}
+          {showOwner && deal.ownerName ? (
+            <span
+              data-testid="board-card-owner"
+              title={`ผู้ดูแล: ${deal.ownerName}`}
+              className="ml-1.5 inline-flex items-center rounded-full border border-border bg-surface-muted px-1.5 align-baseline text-2xs font-bold text-text-secondary"
+            >
+              <span className="sr-only">ผู้ดูแล </span>
+              {ownerShortName(deal.ownerName)}
+            </span>
+          ) : null}
         </span>
       ) : null}
       <span className="flex flex-wrap items-center justify-between gap-2">
@@ -50,9 +64,10 @@ function DealCard({ deal, showCode }) {
 /**
  * The rep's deals in the five display columns (spec 2026-11-15 §7.1). Columns 3–5 move by themselves from documents
  * (quotation, order, deposit, delivery), so they carry an อัปเดตอัตโนมัติ tag. Five columns on a desktop, three on
- * a tablet, one stacked column on a phone — never a horizontal page scroll.
+ * a tablet, one stacked column on a phone — never a horizontal page scroll. `showOwner` (sales_manager / ceo on
+ * งานทั้งหมด) tags each card with its rep's first name; a rep looking at their own deals does not need it.
  */
-export function DealBoard({ deals }) {
+export function DealBoard({ deals, showOwner = false }) {
   return (
     <div data-testid="deal-board" className="grid grid-cols-5 gap-3 nav-drawer:grid-cols-3 mobile:grid-cols-1">
       {BOARD_COLUMNS.map((col) => {
@@ -71,7 +86,7 @@ export function DealBoard({ deals }) {
                 <span className="text-2xs font-bold text-text-muted">· {col.code}</span>
               </h3>
               <small className="text-xs tabular-nums text-text-muted">
-                {inColumn.length} ดีล · {totalLabel(sumValue(inColumn), otherCurrencyTotals(inColumn))}
+                {inColumn.length} งาน · {totalLabel(sumValue(inColumn), otherCurrencyTotals(inColumn))}
               </small>
               {col.auto ? (
                 <span className="inline-flex items-center gap-1 text-2xs font-bold text-accent-dark">
@@ -82,10 +97,10 @@ export function DealBoard({ deals }) {
             </header>
             {inColumn.length ? (
               <ul className="m-0 grid list-none gap-2 p-0">
-                {inColumn.map((deal) => <DealCard key={deal.ticketId} deal={deal} showCode={showCode} />)}
+                {inColumn.map((deal) => <DealCard key={deal.ticketId} deal={deal} showCode={showCode} showOwner={showOwner} />)}
               </ul>
             ) : (
-              <p className="m-0 px-0.5 text-xs text-text-faint">ไม่มีดีล</p>
+              <p className="m-0 px-0.5 text-xs text-text-faint">ไม่มีงาน</p>
             )}
           </section>
         );
