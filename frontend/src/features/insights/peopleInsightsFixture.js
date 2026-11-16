@@ -4,6 +4,7 @@
 export const PEOPLE_FIXTURE = {
   asOf: '2026-04-10',
   year: 2026,
+  years: [2025, 2026],
   scopes: [{ id: 'all', label: 'ทั้งบริษัท' }, { id: '7', label: 'ทีมทดสอบ' }],
   scope: { id: 'all', label: 'ทั้งบริษัท' },
   leaveTypes: [
@@ -12,9 +13,9 @@ export const PEOPLE_FIXTURE = {
     { code: 'VACATION', nameTh: 'ลาพักร้อน', annualQuotaDays: 6 },
   ],
   people: [
-    { employeeId: 1, employeeCode: 'T001', nickname: 'เอ', timeExempt: false },
-    { employeeId: 2, employeeCode: 'T002', nickname: 'บี', timeExempt: false },
-    { employeeId: 3, employeeCode: 'T003', nickname: 'ซี', timeExempt: true },
+    { employeeId: 1, employeeCode: 'T001', nickname: 'เอ', timeExempt: false, active: true },
+    { employeeId: 2, employeeCode: 'T002', nickname: 'บี', timeExempt: false, active: true },
+    { employeeId: 3, employeeCode: 'T003', nickname: 'ซี', timeExempt: true, active: true },
   ],
   leave: [
     { employeeId: 1, month: '2026-03', leaveTypeCode: 'SICK', days: 2, requests: 1, sickEdgeDays: 1, lateFiled: 1, unpaidDays: 0 },

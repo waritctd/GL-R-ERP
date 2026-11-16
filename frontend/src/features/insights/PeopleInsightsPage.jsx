@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { Button } from '../../components/common/Button.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
@@ -16,12 +17,21 @@ import { MONTH_LABELS, latestMonthIndex, monthKey, monthTotals, personRows, summ
 
 const days = (v) => (v ? `${Number(v.toFixed(2))}` : '0');
 const clock = (mins) => (mins == null ? '—' : `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(Math.round(mins % 60)).padStart(2, '0')}`);
-const EXEMPT_NOTE = 'พนักงานขายนอกสถานที่ · ไม่นับเวลาเข้างาน';
+const EXEMPT_NOTE = 'ไม่นับเวลาเข้างาน';
 
-function MonthColumns({ totals, year, sel, onSelect }) {
+const Name = ({ p }) => <><b>{p.nick}</b>{p.active ? null : <span className="ml-1.5 text-2xs font-normal text-text-muted">พ้นสภาพ</span>}</>;
+
+function MonthColumns({ totals, year, years, sel, onSelect, onYear }) {
+  const at = years.indexOf(year);
   const max = Math.max(0, ...totals);
   return (
-    <InsightPanel title={`วันลารายเดือน ปี ${year + 543}`} side="กดแท่งเพื่อดูเดือนนั้น" foot="นับเฉพาะใบลาที่อนุมัติแล้ว หน่วยเป็นวัน">
+    <InsightPanel title={`วันลารายเดือน ปี ${year + 543}`} side={(
+      <span className="flex items-center gap-2">
+        <Button variant="secondary" aria-label="ปีก่อนหน้า" disabled={at <= 0} onClick={() => onYear(years[at - 1])}>‹</Button>
+        <Button variant="secondary" aria-label="ปีถัดไป" disabled={at < 0 || at >= years.length - 1} onClick={() => onYear(years[at + 1])}>›</Button>
+        กดแท่งเพื่อดูเดือนนั้น
+      </span>
+    )} foot="นับเฉพาะใบลาที่อนุมัติแล้ว หน่วยเป็นวัน">
       <Pad>
         <div className="flex h-40 items-end gap-1.5">
           {totals.map((v, i) => (
@@ -69,7 +79,7 @@ function buildFindings(people, year, quota) {
   return out;
 }
 
-function Report({ data, scope, onScope }) {
+function Report({ data, scope, onScope, onYear, busy }) {
   const [picked, setPicked] = useState(null);
   const last = latestMonthIndex(data);
   const month = Math.min(picked ?? last, last);
@@ -94,14 +104,14 @@ function Report({ data, scope, onScope }) {
     <PageStack>
       <PageHeader
         title={TITLE}
-        subtitle={data.scope.label}
+        subtitle={busy ? (data.scopes.find((s) => s.id === (scope ?? data.scope.id))?.label ?? data.scope.label) : data.scope.label}
         actions={data.scopes.length > 1
           ? <Tabs items={data.scopes} value={scope ?? data.scope.id} onChange={onScope} ariaLabel="ขอบเขตข้อมูล" idPrefix="people-scope" onSurface />
           : null}
       />
-      <div className="grid gap-[18px]" data-testid="people-insights">
+      <div className={cn('grid gap-[18px]', busy && 'opacity-50')} data-testid="people-insights" aria-busy={busy}>
         {data.asOf ? <small className="text-xs text-text-muted">ข้อมูล ณ {formatThaiDate(data.asOf)}</small> : null}
-        <MonthColumns totals={monthTotals(data, null, last + 1)} year={data.year} sel={month} onSelect={setPicked} />
+        <MonthColumns totals={monthTotals(data, null, last + 1)} year={data.year} years={data.years ?? [data.year]} sel={month} onSelect={setPicked} onYear={(y) => { setPicked(null); onYear(y); }} />
         <InsightPanel title={`${MONTH_LABELS[month]} ${yearBE}`} side={`${data.people.length} คน`}>
           <FigureBand>
             <Figure testId="fig-leave" lead label="วันลารวม" value={`${days(cur.leaveDays)} วัน`} caption={prev ? `${MONTH_LABELS[month - 1]} ${days(prev.leaveDays)} วัน` : 'ไม่มีเดือนก่อนหน้า'} />
@@ -115,7 +125,7 @@ function Report({ data, scope, onScope }) {
             <InsightTable cols={[['พนักงาน'], ['ป่วย', true], ['กิจ', true], ['พักร้อน', true], ['รวม (วัน)', true], ['สัดส่วน']]}>
               {monthPeople.filter((p) => p.leaveDays > 0).sort((a, b) => b.leaveDays - a.leaveDays).map((p) => (
                 <tr key={p.employeeId}>
-                  <Td><b>{p.nick}</b><Small>{p.code}</Small></Td>
+                  <Td><Name p={p} /><Small>{p.code}</Small></Td>
                   <Td right>{days(p.byType.SICK || 0)}</Td><Td right>{days(p.byType.PERSONAL || 0)}</Td><Td right>{days(p.byType.VACATION || 0)}</Td>
                   <Td right><b>{days(p.leaveDays)}</b></Td>
                   <Td><ProgressBar part={p.leaveDays} whole={leaveTop} label={`${p.nick}: ${days(p.leaveDays)} วัน`} /></Td>
@@ -124,11 +134,11 @@ function Report({ data, scope, onScope }) {
               {cur.leaveDays === 0 ? <tr><Td colSpan={6} className="text-text-muted">ไม่มีการลาในเดือนนี้</Td></tr> : null}
             </InsightTable>
           </InsightPanel>
-          <InsightPanel title="เวลาเข้างานรายคน" side={MONTH_LABELS[month]} foot="สาย = เข้างานหลังเวลาผ่อนผัน 15 นาทีของตารางงาน · เวลาเฉลี่ยนับเฉพาะวันที่สแกนเข้าก่อนเที่ยง · พนักงานขายนอกสถานที่สแกนวันละครั้ง จึงไม่นับสายและไม่นับการสแกนออก">
+          <InsightPanel title="เวลาเข้างานรายคน" side={MONTH_LABELS[month]} foot="สาย = เข้างานหลังเวลาผ่อนผัน 15 นาทีของตารางงาน · เวลาเฉลี่ยนับเฉพาะวันที่สแกนเข้าก่อนเที่ยง · พนักงานที่ได้รับยกเว้น (เช่น พนักงานขายนอกสถานที่) ไม่นับสายและไม่นับการสแกนออก">
             <InsightTable testId="checkin-table" cols={[['พนักงาน'], ['วันที่สแกน', true], ['เข้างานเฉลี่ย', true], ['สาย (ครั้ง)', true], ['นาทีรวม', true]]}>
               {monthPeople.filter((p) => p.scanDays > 0).sort((a, b) => b.late - a.late || a.nick.localeCompare(b.nick, 'th')).map((p) => (
                 <tr key={p.employeeId}>
-                  <Td><b>{p.nick}</b><Small>{p.code}</Small></Td>
+                  <Td><Name p={p} /><Small>{p.code}</Small></Td>
                   <Td right>{p.scanDays}</Td><Td right>{clock(p.avgIn)}</Td>
                   <Td right>{p.late ? <StatusBadge tone={p.late / p.scanDays >= 0.3 ? 'danger' : 'warning'}>{p.late}</StatusBadge> : '0'}</Td>
                   <Td right>{p.lateMin || '—'}</Td>
@@ -136,7 +146,7 @@ function Report({ data, scope, onScope }) {
               ))}
               {exemptPeople.map((p) => (
                 <tr key={p.employeeId}>
-                  <Td><b>{p.nick}</b><Small>{p.code}</Small></Td>
+                  <Td><Name p={p} /><Small>{p.code}</Small></Td>
                   <Td colSpan={4} className="text-right text-text-muted">{EXEMPT_NOTE}</Td>
                 </tr>
               ))}
@@ -163,7 +173,7 @@ function Report({ data, scope, onScope }) {
           <InsightTable testId="quota-table" cols={[['พนักงาน'], [withQuota('ลาป่วย', 'SICK'), true], [withQuota('ลากิจ', 'PERSONAL'), true], ['ลาพักร้อน', true], ['ไม่รับค่าจ้าง', true], ['มาสายทั้งปี', true]]}>
             {[...yearPeople].sort((a, b) => b.leaveDays - a.leaveDays).map((p) => (
               <tr key={p.employeeId}>
-                <Td><b>{p.nick}</b><Small>{p.code}</Small></Td>
+                <Td><Name p={p} /><Small>{p.code}</Small></Td>
                 {['SICK', 'PERSONAL'].map((t) => (
                   <Td key={t} right>{quota[t] != null && (p.quotaUsed[t] || 0) > quota[t] ? <StatusBadge tone="danger">{days(p.quotaUsed[t])}</StatusBadge> : days(p.quotaUsed[t] || 0)}</Td>
                 ))}
@@ -183,9 +193,10 @@ const Shell = ({ children }) => <PageStack><PageHeader title={TITLE} />{children
 
 export function PeopleInsightsPage() {
   const [scope, setScope] = useState(undefined);
+  const [year, setYear] = useState(undefined);
   const query = useQuery({
-    queryKey: queryKeys.peopleInsights(scope),
-    queryFn: () => api.peopleInsights.get(scope ? { scope } : {}),
+    queryKey: queryKeys.peopleInsights(scope, year),
+    queryFn: () => api.peopleInsights.get({ ...(scope ? { scope } : {}), ...(year ? { year } : {}) }),
     placeholderData: keepPreviousData,
     retry: (count, error) => error?.status !== 403 && count < 1,
   });
@@ -211,5 +222,5 @@ export function PeopleInsightsPage() {
       </Shell>
     );
   }
-  return <Report data={query.data} scope={scope} onScope={setScope} />;
+  return <Report data={query.data} scope={scope} onScope={setScope} onYear={setYear} busy={query.isPlaceholderData} />;
 }

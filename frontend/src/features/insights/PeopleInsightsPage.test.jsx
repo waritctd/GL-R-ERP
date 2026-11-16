@@ -54,7 +54,8 @@ describe('PeopleInsightsPage', () => {
     renderPage();
     await screen.findByTestId('people-insights');
     const checkIn = screen.getByTestId('checkin-table');
-    expect(within(checkIn).getByText('พนักงานขายนอกสถานที่ · ไม่นับเวลาเข้างาน')).toBeTruthy();
+    expect(within(checkIn).getByText('ไม่นับเวลาเข้างาน')).toBeTruthy();
+    expect(checkIn.closest('section').textContent).toContain('พนักงานที่ได้รับยกเว้น (เช่น พนักงานขายนอกสถานที่) ไม่นับสายและไม่นับการสแกนออก');
     const yearly = screen.getByTestId('quota-table');
     const exemptRow = within(yearly).getByText('ซี').closest('tr');
     expect(exemptRow.querySelector('td:last-child').textContent).toBe('—');
@@ -148,5 +149,43 @@ describe('PeopleInsightsPage', () => {
     renderPage();
     expect(await screen.findByTestId('people-insights-no-access')).toBeTruthy();
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('marks a person who left with a muted tag after their name', async () => {
+    serve({ people: PEOPLE_FIXTURE.people.map((p) => (p.employeeId === 2 ? { ...p, active: false } : p)) });
+    renderPage();
+    await screen.findByTestId('people-insights');
+    const row = within(screen.getByTestId('quota-table')).getByText('บี').closest('td');
+    expect(row.textContent).toContain('พ้นสภาพ');
+    expect(within(screen.getByTestId('quota-table')).getByText('เอ').closest('td').textContent).not.toContain('พ้นสภาพ');
+  });
+
+  it('steps the year with the arrows, disabled at the ends of years, and refetches with the chosen year', async () => {
+    api.peopleInsights.get.mockImplementation(async (params = {}) => (params.year === 2025
+      ? { ...PEOPLE_FIXTURE, year: 2025, leave: [], attendance: [], quotaUsage: [] }
+      : PEOPLE_FIXTURE));
+    renderPage();
+    await screen.findByTestId('people-insights');
+    const next = screen.getByRole('button', { name: 'ปีถัดไป' });
+    const prev = screen.getByRole('button', { name: 'ปีก่อนหน้า' });
+    expect(next.disabled).toBe(true); // 2026 is the last year
+    expect(prev.disabled).toBe(false);
+    fireEvent.click(prev);
+    await waitFor(() => expect(api.peopleInsights.get).toHaveBeenLastCalledWith({ year: 2025 }));
+    await waitFor(() => expect(screen.getByText(/วันลารายเดือน ปี 2568/)).toBeTruthy());
+    expect(within(fig('fig-leave')).getByText('0 วัน')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'ปีก่อนหน้า' }).disabled).toBe(true); // 2025 is the first
+    expect(screen.getByRole('button', { name: 'ปีถัดไป' }).disabled).toBe(false);
+  });
+
+  it('does not present the old figures as the new selection while a scope switch loads', async () => {
+    serve();
+    renderPage();
+    await screen.findByTestId('people-insights');
+    api.peopleInsights.get.mockReturnValue(new Promise(() => {}));
+    fireEvent.click(within(screen.getByRole('tablist')).getByRole('tab', { name: 'ทีมทดสอบ' }));
+    await waitFor(() => expect(screen.getByTestId('people-insights').getAttribute('aria-busy')).toBe('true'));
+    expect(screen.getByTestId('people-insights').className).toContain('opacity-50');
+    expect(document.querySelector('header').textContent).toContain('ทีมทดสอบ');
   });
 });

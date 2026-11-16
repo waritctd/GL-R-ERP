@@ -12,7 +12,16 @@ describe('mockApi.peopleInsights', () => {
       expect(data.scope.id).toBe('all');
       for (const key of ['people', 'leave', 'attendance', 'quotaUsage', 'leaveTypes', 'teams']) expect(Array.isArray(data[key])).toBe(true);
       expect(data.people.length).toBeGreaterThan(0);
+      expect(data.people.every((p) => typeof p.active === 'boolean')).toBe(true);
+      expect(data.years).toContain(data.year);
     }
+  });
+
+  it('serves a listed year other than the fixture year with no figures', async () => {
+    await api.auth.login({ role: 'ceo' });
+    const data = await api.peopleInsights.get({ year: 2025 });
+    expect(data.year).toBe(2025);
+    expect(data.leave).toEqual([]);
   });
 
   it('narrows to a team when asked, and refuses everyone else with 403', async () => {

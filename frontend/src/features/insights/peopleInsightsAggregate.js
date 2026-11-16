@@ -55,7 +55,7 @@ export function personRows(data, ids, key) {
     // The server averages only check-ins before 12:00, so each month weighs in by how many it averaged.
     const scans = sum(rows, 'morningScanDays');
     const avgIn = scans ? rows.reduce((total, r) => total + r.avgCheckInMinutes * r.morningScanDays, 0) / scans : null;
-    return { employeeId: p.employeeId, code: p.employeeCode, nick: p.nickname, timeExempt: p.timeExempt, ...summarise(data, [p.employeeId], key), avgIn };
+    return { employeeId: p.employeeId, code: p.employeeCode, nick: p.nickname, timeExempt: p.timeExempt, active: p.active !== false, ...summarise(data, [p.employeeId], key), avgIn };
   });
 }
 
