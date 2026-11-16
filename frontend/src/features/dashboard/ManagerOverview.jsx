@@ -9,6 +9,8 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { InsightSwitch, ViewPanel, useInsightView } from './InsightSwitch.jsx';
+import { SalesInsights } from './SalesInsights.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { failed, moneySum } from './dashboardParts.jsx';
 import { TeamOverview } from '../salesBoard/TeamOverview.jsx';
@@ -67,7 +69,26 @@ function CountPill({ count, unit = 'รายการ' }) {
   );
 }
 
-export function ManagerOverview({ user, employee }) {
+const MANAGER_TITLE = 'ภาพรวมทีมขาย';
+
+/** Landing page: today's team overview, or (?view=insight) the sales-analytics snapshot. */
+export function ManagerOverview(props) {
+  const [view, setView] = useInsightView();
+  const switcher = <InsightSwitch view={view} onChange={setView} />;
+  if (view === 'insight') {
+    return (
+      <ViewPanel view={view}>
+        <PageStack>
+          <PageHeader title={MANAGER_TITLE} actions={switcher} />
+          <SalesInsights user={props.user} showToast={props.showToast} />
+        </PageStack>
+      </ViewPanel>
+    );
+  }
+  return <ViewPanel view={view}><ManagerToday {...props} switcher={switcher} /></ViewPanel>;
+}
+
+function ManagerToday({ user, employee, switcher }) {
   const navigate = useNavigate();
   const commissionsQuery = useQuery({
     queryKey: queryKeys.commissionsPendingApproval(),
@@ -94,9 +115,14 @@ export function ManagerOverview({ user, employee }) {
   return (
     <PageStack>
       <PageHeader
-        title="ภาพรวมทีมขาย"
+        title={MANAGER_TITLE}
         subtitle={`${greeting} · ${today}`}
-        actions={<Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูดีลทีม</Button>}
+        actions={(
+          <>
+            {switcher}
+            <Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูดีลทีม</Button>
+          </>
+        )}
       />
 
       <TeamOverview showTitle={false} />

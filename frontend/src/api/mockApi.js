@@ -8250,6 +8250,8 @@ function buildFinanceDeal(raw, user) {
   return deal;
 }
 
+let mockAnalyticsSnapshot = null;
+
 // ── salesBoard read model (mirrors SalesBoardRepository) ──
 const MOCK_BOARD_LIVE_STATUSES = new Set(['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED']);
 const mockQuotationTime = (q) => q.approvedAt ?? q.issuedAt ?? null;
@@ -13743,6 +13745,23 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async unitBases() {
       requireSession();
       return delay({ unitBases: PRICING_REQUEST_UNIT_BASIS_OPTIONS });
+    },
+  },
+
+  // Mirrors SalesAnalyticsService. Role gates approximate the Java service and are NOT evidence. No real data lives
+  // here: the mock starts with no snapshot, and a CEO upload is kept in memory only.
+  salesAnalytics: {
+    async snapshot() {
+      const user = requireSession();
+      if (!['ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay({ snapshot: mockAnalyticsSnapshot });
+    },
+    async upload(document) {
+      const user = requireSession();
+      if (user.role !== 'ceo') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (!document || typeof document !== 'object' || Array.isArray(document)) fail('ข้อมูลวิเคราะห์ต้องเป็น JSON object', 400);
+      mockAnalyticsSnapshot = { payload: document, asOf: null, uploadedAt: new Date().toISOString() };
+      return delay({ ok: true });
     },
   },
 
