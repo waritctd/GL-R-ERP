@@ -1,14 +1,15 @@
-/* Hallmark · genre: modern-minimal · macrostructure: Stat-Led · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
-/* Hallmark · pre-emit critique: P4 H4 E4 S4 R4 V4 (lead figure is the real outstanding total of the loaded rows and always paired with words; worklist keeps the subgrid columns) */
+/* Hallmark · genre: modern-minimal · macrostructure: grouped worklist (a-fin-land) · tone: utilitarian · theme: project system (Sarabun + indigo, owner-locked) · redesign */
+/* Hallmark · pre-emit critique: groups mirror ImportOverview's pattern; the server's ค้างรับทั้งหมด lead figure and the subgrid table moved to ทั้งหมด, unchanged */
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Link, useSearchParams } from 'react-router-dom';
 import { queryKeys } from '../../api/queryKeys.js';
-import { Button } from '../../components/common/Button.jsx';
+import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { FilterBar, FilterField, PageStack } from '../../components/common/Layout.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { TabPanel, Tabs } from '../../components/common/Tabs.jsx';
 import { fetchDashboardSummary } from '../../hooks/useHrData.js';
 import { cn } from '../../utils/cn.js';
@@ -18,6 +19,8 @@ import { dedupeById, rowAmount, useAccountTickets } from './accountTickets.js';
 import { findStage, useStageCatalog } from '../tickets/stageCatalog.js';
 import { MONEY_TRACK, moneyMilestoneOf } from './moneyMilestone.js';
 import { ExpressUploadCard } from './ReceiptsImportPage.jsx';
+import { canPerformFinanceStep } from './financeActionPerformers.js';
+import { groupFinanceWork } from './financeWorkGroups.js';
 
 // The next-action filter. Keys are exactly nextAccountAction()'s own `action.key`, so filtering never drifts
 // from what a row's action column shows.
@@ -81,8 +84,99 @@ function DealRow({ row, catalog }) {
   );
 }
 
-/** งานการเงิน — the page IS the worklist. Each row is one link to /finance/deals/:id. Same data-scope note as
- * before: which deals appear is decided server-side (account's list scope); this page filters and orders what
+// The row's button: the group's verb only for a viewer the server lets perform that step
+// (financeActionPerformers.js, read from the Java); anyone else gets "เปิด", so no button is a dead end.
+function rowButton(group, action, role) {
+  const verb = group.buttonLabel !== 'เปิด' && canPerformFinanceStep(action.key, role);
+  return { label: verb ? group.buttonLabel : 'เปิด', primary: verb && group.key === 'closeReady' };
+}
+
+// The one figure a grouped row shows is the old table's: the คงค้าง column, amountOutstanding, as sent. The step
+// is the old table's ขั้นตอนที่ต้องทำ text, shown whenever the button does not already say it — except the overdue
+// chase, whose step is its group's own name.
+function workDetail(row, buttonLabel) {
+  const { ticket, action } = row;
+  const step = buttonLabel === action.label || action.key === 'chaseOverdue' ? null : action.label;
+  return { amount: `คงค้าง ${money(ticket.amountOutstanding)}`, step };
+}
+
+function dueChip(ticket) {
+  if (ticket.overdue) {
+    return <StatusBadge tone="danger">{ticket.paymentDueDate ? `เกินกำหนดชำระ ${formatThaiDate(ticket.paymentDueDate)}` : 'เกินกำหนดชำระ'}</StatusBadge>;
+  }
+  if (ticket.paymentDueDate) return <StatusBadge tone="warning">{`ครบกำหนด ${formatThaiDate(ticket.paymentDueDate)}`}</StatusBadge>;
+  return null;
+}
+
+// One worklist line (design a-fin-land .wl): code · customer/project · figure · due chip · the group's ONE button.
+// Five columns on a wide screen; below the nav-drawer breakpoint the code and name lead and the rest wraps
+// beneath, never wider than the viewport. The button is the row's only control and goes where today's row link
+// went — the deal's finance page, where the action's own confirm/modal lives.
+function WorkRow({ group, row, role }) {
+  const { ticket } = row;
+  const name = ticket.customerName || ticket.title || ticket.code;
+  const button = rowButton(group, row.action, role);
+  const { amount, step } = workDetail(row, button.label);
+  const chip = group.key === 'chase' ? dueChip(ticket) : null;
+  // The chip track is max-content: a long overdue chip widens its own column (the fr columns give way and their
+  // text wraps) instead of running under the button.
+  return (
+    <li
+      data-testid={`fin-work-row-${ticket.id}`}
+      className="grid grid-cols-[8rem_minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(max-content,1fr)_auto] items-center gap-x-4 gap-y-1.5 border-t border-border-subtle px-5 py-3 first:border-t-0 nav-drawer:grid-cols-[minmax(0,1fr)_auto] mobile:px-3.5"
+    >
+      <span className="min-w-0 text-sm font-bold tabular-nums text-text-secondary [overflow-wrap:anywhere] nav-drawer:col-span-2">{ticket.code}</span>
+      <span className="grid min-w-0 gap-0.5 nav-drawer:col-start-1">
+        <strong className="min-w-0 text-md font-bold text-text [overflow-wrap:anywhere]">{name}</strong>
+        {ticket.projectName ? <span className="min-w-0 text-sm text-text-muted [overflow-wrap:anywhere]">{ticket.projectName}</span> : null}
+      </span>
+      <span className="grid min-w-0 gap-0.5 nav-drawer:col-start-1">
+        <span className="text-sm font-bold tabular-nums text-text [overflow-wrap:anywhere]">{amount}</span>
+        {step ? <span className="text-sm text-text-secondary [overflow-wrap:anywhere]">{step}</span> : null}
+      </span>
+      <span className={cn('min-w-0 nav-drawer:col-start-1', !chip && 'nav-drawer:hidden')}>{chip}</span>
+      <span className="justify-self-end nav-drawer:col-start-2 nav-drawer:row-span-3 nav-drawer:row-start-2 nav-drawer:self-center">
+        <Link
+          to={`/finance/deals/${ticket.id}`}
+          aria-label={`${button.label} · ${name}`}
+          className={cn(
+            buttonVariants({ variant: button.primary ? 'primary' : 'secondary', size: 'sm' }),
+            'whitespace-nowrap no-underline mobile:min-h-11 pointer-coarse:min-h-11',
+          )}
+        >
+          {button.label}
+        </Link>
+      </span>
+    </li>
+  );
+}
+
+function WorkGroup({ group, role }) {
+  return (
+    <section data-testid={`fin-group-${group.key}`} aria-label={group.label} className="border-b border-border last:border-b-0">
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 bg-surface-subtle px-5 py-2.5 mobile:px-3.5">
+        <h2 className="m-0 text-md font-extrabold text-text">{group.label}</h2>
+        <span data-testid="group-count" className="rounded-full bg-surface-muted px-2 text-sm font-bold tabular-nums text-text-secondary">
+          {group.rows.length}
+        </span>
+        {group.hint ? <small className="min-w-0 text-sm text-text-muted">{group.hint}</small> : null}
+      </div>
+      {group.rows.length === 0 ? (
+        <p className="m-0 px-5 py-3 text-sm text-text-muted mobile:px-3.5">ไม่มีรายการ</p>
+      ) : (
+        <ul className="m-0 list-none p-0">
+          {group.rows.map((row) => <WorkRow key={row.ticket.id} group={group} row={row} role={role} />)}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+/** งานการเงิน — finance's landing (design a-fin-land). The default view is the worklist grouped by the next thing
+ * finance must do (financeWorkGroups.js, built on nextAccountAction), each row carrying its group's one button;
+ * "ทั้งหมด" is the former flat table with its filters, sorting and the ค้างรับทั้งหมด figure. A filter deep link
+ * (?action= / ?stage= / ?milestone=, e.g. from AccountOverview) still opens that filtered table. Same data-scope note
+ * as before: which deals appear is decided server-side (account's list scope); this page filters and orders what
  * it is given. */
 export function AccountFinancePage({ user, showToast }) {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -137,7 +231,9 @@ export function AccountFinancePage({ user, showToast }) {
     const nextDue = dueTimes.length ? new Date(Math.min(...dueTimes)).toISOString() : null;
     return { overdueCount, nextDue };
   }, [actionable]);
-  const summary = `ต้องดำเนินการ ${actionable.length} ดีล · ค้างรับทั้งหมด ${serverOutstanding == null ? '—' : formatMoney(serverOutstanding)}`;
+  const summary = `ต้องดำเนินการ ${actionable.length} งาน · ค้างรับทั้งหมด ${serverOutstanding == null ? '—' : formatMoney(serverOutstanding)}`;
+  // Grouped from the already-sorted rows, so each group keeps the page's urgent/due/outstanding order.
+  const groups = useMemo(() => groupFinanceWork(allRows), [allRows]);
 
   const rows = useMemo(() => {
     const base = view === 'all' ? allRows : actionable;
@@ -148,6 +244,9 @@ export function AccountFinancePage({ user, showToast }) {
   }, [view, allRows, actionable, milestoneFilter, actionFilter]);
 
   const filtered = Boolean(milestoneFilter || actionFilter);
+  // The groups are the unfiltered "ต้องดำเนินการ" view; any filter (a deep link, or the selects in ทั้งหมด) shows the table.
+  const showGroups = view === 'todo' && !filtered;
+  const groupedEmpty = groups.every((g) => g.rows.length === 0);
 
   function setParam(name, value) {
     setSearchParams((prev) => {
@@ -170,11 +269,24 @@ export function AccountFinancePage({ user, showToast }) {
 
   return (
     <PageStack>
-      <PageHeader title="งานการเงิน" />
+      <PageHeader title="งานการเงิน" subtitle="รับเงินมาจากไฟล์ Express · ที่เหลือคือสิ่งที่ต้องทำต่อ" />
       {/* Receipts come in from the Express file first (spec 2026-11-15 §7.11 item 5); the worklist follows. */}
       <ExpressUploadCard />
 
-      {loading ? null : (
+      <Tabs
+        items={[
+          { id: 'todo', label: 'ต้องดำเนินการ', badge: loading ? null : actionable.length, badgeLabel: `${actionable.length} งาน` },
+          { id: 'all', label: 'ทั้งหมด', badge: loading ? null : allRows.length, badgeLabel: `${allRows.length} งาน` },
+        ]}
+        value={view}
+        onChange={(v) => setParam('view', v === 'all' ? 'all' : '')}
+        ariaLabel="มุมมองรายการ"
+        idPrefix="fin-view"
+      />
+
+      <TabPanel id={view} idPrefix="fin-view" active>
+      {/* The drawing drops the receivable figures from the landing; they stay with the full list. */}
+      {loading || view !== 'all' ? null : (
         <section aria-label="สรุปงานการเงิน" className="grid min-w-0 grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)] items-end gap-x-8 gap-y-4 border-b border-border pb-5 nav-drawer:grid-cols-[minmax(0,1fr)]">
           {/* The screen-reader sentence; the visible block below shows the same figures as a lead stat. */}
           <p className="sr-only">{summary}</p>
@@ -186,12 +298,12 @@ export function AccountFinancePage({ user, showToast }) {
           </div>
           <dl className="m-0 grid grid-cols-3 gap-x-4 gap-y-2 mobile:grid-cols-1">
             <div className="grid min-w-0 gap-0.5">
-              <dt className="text-sm text-text-muted">ดีลที่รอดำเนินการ</dt>
-              <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{`${actionable.length} ดีล`}</dd>
+              <dt className="text-sm text-text-muted">งานที่รอดำเนินการ</dt>
+              <dd className="m-0 text-lg font-extrabold tabular-nums text-text">{`${actionable.length} งาน`}</dd>
             </div>
             <div className="grid min-w-0 gap-0.5">
               <dt className="text-sm text-text-muted">ในนั้นเกินกำหนด</dt>
-              <dd className={cn('m-0 text-lg font-extrabold tabular-nums', stats.overdueCount > 0 ? 'text-danger' : 'text-text')}>{`${stats.overdueCount} ดีล`}</dd>
+              <dd className={cn('m-0 text-lg font-extrabold tabular-nums', stats.overdueCount > 0 ? 'text-danger' : 'text-text')}>{`${stats.overdueCount} งาน`}</dd>
             </div>
             <div className="grid min-w-0 gap-0.5">
               <dt className="text-sm text-text-muted">ครบกำหนดใกล้สุด</dt>
@@ -201,18 +313,7 @@ export function AccountFinancePage({ user, showToast }) {
         </section>
       )}
 
-      <Tabs
-        items={[
-          { id: 'todo', label: 'ต้องดำเนินการ', badge: loading ? null : actionable.length, badgeLabel: `${actionable.length} ดีล` },
-          { id: 'all', label: 'ทั้งหมด', badge: loading ? null : allRows.length, badgeLabel: `${allRows.length} ดีล` },
-        ]}
-        value={view}
-        onChange={(v) => setParam('view', v === 'all' ? 'all' : '')}
-        ariaLabel="มุมมองรายการ"
-        idPrefix="fin-view"
-      />
-
-      <TabPanel id={view} idPrefix="fin-view" active>
+      {showGroups ? null : (
       <FilterBar>
         <FilterField label="ขั้นการเงิน" htmlFor="fin-filter-milestone" className="basis-[200px]">
           <select id="fin-filter-milestone" value={milestoneFilter} onChange={(e) => setParam('milestone', e.target.value)}>
@@ -227,6 +328,7 @@ export function AccountFinancePage({ user, showToast }) {
           </select>
         </FilterField>
       </FilterBar>
+      )}
 
       {loading ? (
         <div aria-busy="true" aria-label="กำลังโหลดงานการเงิน" className="grid">
@@ -250,14 +352,26 @@ export function AccountFinancePage({ user, showToast }) {
             ลองอีกครั้ง
           </Button>
         </div>
+      ) : showGroups ? (
+        groupedEmpty ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border border-border bg-surface p-5 text-text-muted mobile:p-3.5">
+            <Icon name="check" size={18} />
+            <span className="text-md font-bold">ไม่มีงานการเงินที่ต้องทำตอนนี้</span>
+            <span className="text-sm">ดูงานที่เสร็จแล้วได้ที่มุมมอง &quot;ทั้งหมด&quot;</span>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-md border border-border bg-surface">
+            {groups.map((group) => <WorkGroup key={group.key} group={group} role={user?.role} />)}
+          </div>
+        )
       ) : rows.length === 0 ? (
         <div className="grid justify-items-center gap-3">
           <EmptyState
             icon="badgeDollar"
-            title={filtered ? (milestoneFilter ? 'ไม่มีดีลในขั้นนี้' : 'ไม่มีดีลที่ตรงกับตัวกรอง') : 'ไม่มีดีลที่ต้องดำเนินการตอนนี้'}
+            title={filtered ? (milestoneFilter ? 'ไม่มีงานในขั้นนี้' : 'ไม่มีงานที่ตรงกับตัวกรอง') : 'ไม่มีงานที่ต้องดำเนินการตอนนี้'}
             description={filtered
-              ? 'ตัวกรองที่เลือกไม่ตรงกับดีลใดในมุมมองนี้'
-              : view === 'all' ? 'ยังไม่มีดีลในขอบเขตงานการเงินของคุณ' : 'ดูดีลที่เสร็จแล้วได้ที่มุมมอง "ทั้งหมด"'}
+              ? 'ตัวกรองที่เลือกไม่ตรงกับงานใดในมุมมองนี้'
+              : view === 'all' ? 'ยังไม่มีงานในขอบเขตงานการเงินของคุณ' : 'ดูงานที่เสร็จแล้วได้ที่มุมมอง "ทั้งหมด"'}
           />
           {filtered ? <Button type="button" variant="secondary" className="whitespace-nowrap" onClick={clearFilters}>ล้างตัวกรอง</Button> : null}
         </div>
@@ -270,7 +384,7 @@ export function AccountFinancePage({ user, showToast }) {
               aria-hidden="true"
               className="col-span-full grid grid-cols-subgrid items-center border-b border-border bg-surface-muted px-5 py-3 text-2xs font-extrabold uppercase text-text-muted @max-[60rem]:hidden"
             >
-              <span>ดีล</span>
+              <span>งาน</span>
               <span>ขั้นการเงิน</span>
               <span>ขั้นตอนที่ต้องทำ</span>
               <span className="text-right">คงค้าง</span>
