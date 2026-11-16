@@ -8,20 +8,22 @@ import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
+import { TIMELINE_FILTERS, timelineRowMatches } from './dealTimeline.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 // Moved verbatim from TicketDetailPage.jsx (IA rebuild — see docs/ui-repair/02-information-architecture/):
 // this is the label table for `ticket.events`, unrelated to the DealActivityKind taxonomy
 // (dealTrackingMeta.js's ACTIVITY_KINDS) that backs the activity log merged in below.
 export const EVENT_KIND_LABEL = {
-  CREATED:            'สร้างดีล',
-  STAGE_CHANGED:      'เปลี่ยนสถานะดีล',
+  // Owner ruling 2026-11-16: labels say งาน, not ดีล (the kinds themselves are untouched).
+  CREATED:            'สร้างงาน',
+  STAGE_CHANGED:      'เปลี่ยนสถานะงาน',
   MARKED_LOST:        'เสียงาน',
-  REOPENED:           'เปิดดีลอีกครั้ง',
-  ON_HOLD:            'พักดีลไว้',
+  REOPENED:           'เปิดงานอีกครั้ง',
+  ON_HOLD:            'พักงานไว้',
   DORMANT:            'พัก dormant',
   RESUMED:            'ดำเนินการต่อ',
-  POLICY_CHANGED:     'เปลี่ยนนโยบายดีล',
+  POLICY_CHANGED:     'เปลี่ยนนโยบายงาน',
   PAYMENT_RECORDED:   'บันทึกรับชำระเงิน',
   BILLING_UPDATED:    'อัปเดตข้อมูลวางบิล',
   SUBMITTED:          'ส่งเรื่องเข้าระบบ',
@@ -70,8 +72,8 @@ export const EVENT_KIND_LABEL = {
   DELIVERY_COMPLETED:     'ส่งมอบครบแล้ว',
   AWAITING_FINAL_PAYMENT: 'รอชำระส่วนที่เหลือ',
   FULLY_PAID:             'ชำระครบแล้ว',
-  CLOSE_CONFIRMED:        'ยืนยันการปิดดีล',
-  CLOSE_CONFIRM_REVOKED:  'ถอนการยืนยันปิดดีล',
+  CLOSE_CONFIRMED:        'ยืนยันการปิดงาน',
+  CLOSE_CONFIRM_REVOKED:  'ถอนการยืนยันปิดงาน',
   ORDER_CONFIRMED_FROM_QUOTATION: 'ยืนยันคำสั่งซื้อจากใบเสนอราคา',
   DEAL_QUOTATION_SUBMITTED: 'ส่งใบเสนอราคาขออนุมัติ',
   DEAL_QUOTATION_APPROVED: 'อนุมัติใบเสนอราคา',
@@ -185,9 +187,12 @@ function ActivityRow({ activity }) {
   );
 }
 
-/** "ประวัติดีล": one chronological history merging the system audit trail with the rep's own follow-up log
- * (`activities`, formerly DealTrackingPanel's "ประวัติการติดตาม"). A row with no parseable timestamp sorts
- * last rather than crashing or floating to the top. */
+/** "ประวัติ" (drawing a-deal, on the ภาพรวม tab): one chronological history merging the system audit trail with the
+ * rep's own follow-up log (`activities`, formerly DealTrackingPanel's "ประวัติการติดตาม"), filtered by
+ * ทั้งหมด / เข้าพบ / เอกสาร (dealTimeline.js). The note composer (comment + the any-kind activity form) is closed
+ * until "+ บันทึก" — the header's โทรแล้ว / นัดเข้าพบ are the everyday way to log a touch now. Each half keeps its
+ * own gate (`canComment`, `canAddActivity`); "+ บันทึก" shows when either applies. A row with no parseable
+ * timestamp sorts last rather than crashing or floating to the top. */
 export function DealHistoryPanel({
   events = [],
   activities = [],
@@ -203,8 +208,11 @@ export function DealHistoryPanel({
   addingActivity = false,
 }) {
   const [activityDraft, setActivityDraft] = useState(emptyActivityDraft);
+  const [filter, setFilter] = useState('all');
+  const [composerOpen, setComposerOpen] = useState(false);
+  const canNote = canComment || canAddActivity;
 
-  const rows = useMemo(() => {
+  const allRows = useMemo(() => {
     const eventRows = events.map((event) => ({ key: `event-${event.id}`, type: 'event', ts: toTimestamp(event.createdAt), event }));
     const activityRows = activities.map((activity) => ({ key: `activity-${activity.id}`, type: 'activity', ts: toTimestamp(activity.activityDate), activity }));
     return [...eventRows, ...activityRows].sort((a, b) => {
@@ -223,6 +231,7 @@ export function DealHistoryPanel({
       return bId - aId;
     });
   }, [events, activities]);
+  const rows = allRows.filter((row) => timelineRowMatches(row, filter));
 
   async function submitActivity() {
     if (!activityDraft.activityDate) return;
@@ -235,9 +244,56 @@ export function DealHistoryPanel({
   }
 
   return (
-    <Panel title="ประวัติดีล" actions={<span className="text-2xs font-normal text-text-muted">History</span>}>
+    <Panel
+      title="ประวัติ"
+      data-testid="deal-timeline"
+      actions={(
+        <div className="flex flex-wrap items-center gap-1.5">
+          {canNote ? (
+            <Button
+              type="button" variant="secondary" size="sm" className="mobile:min-h-[44px]"
+              aria-expanded={composerOpen}
+              onClick={() => setComposerOpen((open) => !open)}
+            >
+              + บันทึก
+            </Button>
+          ) : null}
+          <div role="group" aria-label="กรองประวัติ" className="flex flex-wrap gap-1">
+            {TIMELINE_FILTERS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                aria-pressed={filter === option.id}
+                onClick={() => setFilter(option.id)}
+                className={`min-h-[32px] rounded-full border px-3 text-xs font-bold mobile:min-h-[44px] ${filter === option.id
+                  ? 'border-primary bg-primary-bg text-primary'
+                  : 'border-border-input bg-surface text-text-secondary hover:bg-surface-hover'}`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    >
+      {composerOpen && canNote ? (
+        <Composer
+          canComment={canComment}
+          commentText={commentText}
+          onCommentTextChange={onCommentTextChange}
+          onSubmitComment={onSubmitComment}
+          commentSubmitting={commentSubmitting}
+          canAddActivity={canAddActivity}
+          activityDraft={activityDraft}
+          setActivityDraft={setActivityDraft}
+          addingActivity={addingActivity}
+          submitActivity={submitActivity}
+        />
+      ) : null}
       <div className="ticket-events">
-        {rows.length === 0 && !loading ? (
+        {rows.length === 0 && !loading && allRows.length > 0 ? (
+          <p className="m-0 px-1 py-3 text-sm text-text-muted">ไม่มีรายการในตัวกรองนี้</p>
+        ) : rows.length === 0 && !loading ? (
           // FIX 1 (Opus review): when `canViewActivityFeed` is false, `activities` is always `[]` because it was never
           // fetched for this viewer (see the parent's `activitiesQuery.enabled`) — an empty `events` list here only
           // proves the AUDIT TRAIL is empty, not that "nothing has happened on this deal".
@@ -247,7 +303,7 @@ export function DealHistoryPanel({
             <EmptyState
               icon="clock"
               title="ยังไม่มีประวัติการดำเนินการ"
-              description="บันทึกกิจกรรมติดตามแสดงเฉพาะเจ้าของดีล ผู้จัดการฝ่ายขาย และ CEO"
+              description="บันทึกกิจกรรมติดตามแสดงเฉพาะเจ้าของงาน ผู้จัดการฝ่ายขาย และ CEO"
             />
           )
         ) : (
@@ -268,8 +324,20 @@ export function DealHistoryPanel({
         ) : null}
       </div>
 
+    </Panel>
+  );
+}
+
+/** "+ บันทึก"'s composer: the comment box (`canComment`) and the any-kind activity form (`canAddActivity`), each
+ * behind its own gate exactly as before. */
+function Composer({
+  canComment, commentText, onCommentTextChange, onSubmitComment, commentSubmitting,
+  canAddActivity, activityDraft, setActivityDraft, addingActivity, submitActivity,
+}) {
+  return (
+    <div className="mb-3 flex flex-col rounded-md border border-border-subtle bg-surface-muted">
       {canComment ? (
-        <div className="flex flex-col gap-2 border-t border-border p-4">
+        <div className="flex flex-col gap-2 p-4">
           <textarea
             rows={2}
             value={commentText}
@@ -288,7 +356,7 @@ export function DealHistoryPanel({
       ) : null}
 
       {canAddActivity ? (
-        <div className="mt-1 flex flex-col gap-2 border-t border-border p-4">
+        <div className="flex flex-col gap-2 p-4 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-border">
           <h3 className="m-0 text-sm font-extrabold text-text">บันทึกกิจกรรมติดตาม</h3>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
@@ -331,6 +399,6 @@ export function DealHistoryPanel({
           </Button>
         </div>
       ) : null}
-    </Panel>
+    </div>
   );
 }

@@ -35,7 +35,7 @@ describe('stageMeta holds labels, and only labels', () => {
         'QUOTE_BUYER', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER'],
     );
     // QA-09: the IR is now issued by the owning sales rep (ขั้น 11 button), not by import.
-    expect(AUTO_STAGE_HINT.PROCUREMENT).toBe('อัปเดตอัตโนมัติเมื่อฝ่ายขายออกเลขใบขอซื้อ (IR) ของดีลนี้ · ถ้าสินค้ามาจากสต็อกทั้งหมด จะข้ามไปขั้นนัดส่งสินค้า');
+    expect(AUTO_STAGE_HINT.PROCUREMENT).toBe('อัปเดตอัตโนมัติเมื่อฝ่ายขายออกเลขใบขอซื้อ (IR) ของงานนี้ · ถ้าสินค้ามาจากสต็อกทั้งหมด จะข้ามไปขั้นนัดส่งสินค้า');
     for (const hint of Object.values(AUTO_STAGE_HINT)) {
       expect(hint).toContain('อัตโนมัติ');
     }

@@ -7,7 +7,6 @@ import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
-import { Panel } from '../../components/common/Layout.jsx';
 import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
@@ -110,7 +109,7 @@ const DEP_BADGE = {
 };
 
 const DEP_HINT = {
-  skipped: 'ข้ามขั้นตอนนี้ — ไม่ต้องเก็บมัดจำสำหรับดีลนี้',
+  skipped: 'ข้ามขั้นตอนนี้ — ไม่ต้องเก็บมัดจำสำหรับงานนี้',
   notyet: 'สร้างได้เมื่อลูกค้ายืนยันคำสั่งซื้อ',
   issued: 'รอลูกค้าชำระ — ฝ่ายบัญชียืนยันรับเงินที่หน้าการเงินของฝ่ายบัญชี',
 };
@@ -139,10 +138,11 @@ function ListError({ onRetry }) {
 const mono = (text) => <span className="font-mono text-sm font-bold text-text">{text}</span>;
 
 /**
- * The deal page's การเงิน tab, as ONE panel (owner design 2026-10-31): the payment-stage badge, the
- * balance readout with a paid bar, three document steps (ใบแจ้งยอดเงินรับมัดจำ → ใบแจ้งหนี้ส่วนที่เหลือ →
- * รับชำระครบ), and the payment timeline underneath. Replaces the old สถานะการเงิน strip/pipeline, the
- * มัดจำ card, the remaining-invoice card and the timeline panel; the วางบิล step and controls are gone.
+ * The deal page's เงิน tab (drawing a-deal-money, 2026-11-16; before that the one-panel การเงิน tab of
+ * the owner design 2026-10-31): three KPI tiles มูลค่างาน / รับแล้ว (with the paid bar) / คงค้าง, then
+ * "รับแล้ว" — the receipts (each with its Express / บันทึกเอง source chip) and the money-track events —
+ * beside "เอกสาร" — the payment-stage badge and three document steps (ใบแจ้งยอดเงินรับมัดจำ →
+ * ใบแจ้งหนี้ส่วนที่เหลือ → รับชำระครบ). Same data and controls as the one panel had.
  *
  * The deposit step keeps the old มัดจำ card's gates: the owning sales rep creates / edits / issues;
  * every viewer who can read the notice can preview a draft and download an issued one. The remaining
@@ -328,32 +328,14 @@ export function DealPaymentSection({
 
   const stage = paymentStageLabel(summary.paymentStage);
 
+  // Deal page redesign (drawing a-deal-money, 2026-11-16): three KPI tiles, then รับแล้ว beside เอกสาร. The same
+  // numbers (the server's amountPayable / amountPaid / amountOutstanding, never recomputed), the same steps and the
+  // same timeline rows as the one-panel layout this replaces.
   return (
-    <Panel
-      title="การชำระเงิน"
-      actions={(
-        <div className="flex flex-wrap gap-2">
-          <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
-          {summary.overdue && <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>}
-        </div>
-      )}
-    >
-      <div className="flex flex-col gap-4 px-[18px] pb-4">
-        <div className="flex flex-col gap-2 rounded-lg border border-border-subtle bg-surface-muted px-3 py-2.5">
-          <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
-            <div className="flex flex-col">
-              <span className="text-2xs text-text-muted">ยอดที่ต้องชำระ</span>
-              <strong className="text-sm text-text">{formatMoney(payable)}</strong>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xs text-text-muted">ชำระแล้ว</span>
-              <strong className="text-sm text-text">{formatMoney(paidAmount)}</strong>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-2xs font-bold text-text-muted">คงเหลือ</span>
-              <strong className={`text-lg ${outstanding > 0 ? 'text-danger' : 'text-text'}`}>{formatMoney(outstanding)}</strong>
-            </div>
-          </div>
+    <div className="flex flex-col gap-4">
+      <div data-testid="money-kpis" className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <Kpi label="มูลค่างาน" value={formatMoney(payable)} sub={stage.label} />
+        <Kpi label="รับแล้ว" value={formatMoney(paidAmount)} valueClassName="text-success-dark" sub={`ชำระแล้ว ${percentPaid}%`}>
           <div
             role="progressbar" aria-label={`ชำระแล้ว ${percentPaid}%`}
             aria-valuemin={0} aria-valuemax={100} aria-valuenow={percentPaid}
@@ -361,11 +343,37 @@ export function DealPaymentSection({
           >
             <div className="h-full rounded-full bg-success" style={{ width: `${percentPaid}%` }} />
           </div>
-          <span className="text-2xs text-text-muted">ชำระแล้ว {percentPaid}%</span>
-        </div>
+        </Kpi>
+        <Kpi label="คงค้าง" value={formatMoney(outstanding)} valueClassName={outstanding > 0 ? 'text-danger' : 'text-text'} />
+      </div>
 
-        <div>
-          <h3 className="m-0 mb-2 text-sm font-extrabold text-text-secondary">เอกสารและการรับชำระ</h3>
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2 lg:items-start">
+        <section data-testid="money-received" className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-surface p-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h3 className="m-0 text-md font-extrabold text-text">รับแล้ว</h3>
+            <span className="text-2xs text-text-muted">รับเงินและความเคลื่อนไหวการชำระ ล่าสุดก่อน</span>
+          </div>
+          {paymentsLoading ? (
+            <SkeletonText lines={2} />
+          ) : rows.length === 0 ? (
+            <EmptyState icon="clock" title="ยังไม่มีความเคลื่อนไหว" description="เหตุการณ์และการรับชำระของงานนี้จะปรากฏที่นี่" />
+          ) : (
+            <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
+              {rows.map((row) => (row.type === 'event'
+                ? <MoneyEventRow key={row.key} event={row.event} />
+                : <MoneyReceiptRow key={row.key} receipt={row.receipt} />))}
+            </ul>
+          )}
+        </section>
+
+        <section data-testid="money-documents" className="flex min-w-0 flex-col gap-3 rounded-md border border-border bg-surface p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="m-0 text-md font-extrabold text-text">เอกสาร</h3>
+            <div className="flex flex-wrap gap-2">
+              <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
+              {summary.overdue && <StatusBadge tone={overdueBadgeLabel(true).tone}>{overdueBadgeLabel(true).label}</StatusBadge>}
+            </div>
+          </div>
           <div className="flex flex-col gap-2">
             <Step
               no={1} id="deposit" title="ใบแจ้งยอดเงินรับมัดจำ" done={depositDone} muted={dep === 'skipped'}
@@ -452,22 +460,7 @@ export function DealPaymentSection({
               hint={finalHint}
             />
           </div>
-        </div>
-
-        <div className="border-t border-border pt-3">
-          <h3 className="m-0 mb-2.5 text-sm font-bold">ไทม์ไลน์การชำระเงิน</h3>
-          {paymentsLoading ? (
-            <SkeletonText lines={2} />
-          ) : rows.length === 0 ? (
-            <EmptyState icon="clock" title="ยังไม่มีความเคลื่อนไหว" description="เหตุการณ์และการรับชำระของดีลนี้จะปรากฏที่นี่" />
-          ) : (
-            <ul className="m-0 flex list-none flex-col gap-2.5 p-0">
-              {rows.map((row) => (row.type === 'event'
-                ? <MoneyEventRow key={row.key} event={row.event} />
-                : <MoneyReceiptRow key={row.key} receipt={row.receipt} />))}
-            </ul>
-          )}
-        </div>
+        </section>
       </div>
 
       {doc ? (
@@ -484,6 +477,18 @@ export function DealPaymentSection({
           onConfirm={() => issueMutation.mutate()}
         />
       ) : null}
-    </Panel>
+    </div>
+  );
+}
+
+/** One of the เงิน tab's three KPI tiles (drawing a-deal-money). */
+function Kpi({ label, value, sub = null, valueClassName = 'text-text', children = null }) {
+  return (
+    <div data-testid="money-kpi" className="flex min-w-0 flex-col gap-1 rounded-md border border-border bg-surface px-4 py-3">
+      <span className="text-xs font-bold text-text-muted">{label}</span>
+      <strong className={`text-xl font-extrabold tabular-nums [overflow-wrap:anywhere] ${valueClassName}`}>{value}</strong>
+      {children}
+      {sub ? <span className="text-2xs text-text-muted">{sub}</span> : null}
+    </div>
   );
 }
