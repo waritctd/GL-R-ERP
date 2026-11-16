@@ -93,7 +93,7 @@ function Report({ data, scope, onScope }) {
   return (
     <PageStack>
       <PageHeader
-        title="วิเคราะห์การลาและเวลาเข้างาน"
+        title={TITLE}
         subtitle={data.scope.label}
         actions={data.scopes.length > 1
           ? <Tabs items={data.scopes} value={scope ?? data.scope.id} onChange={onScope} ariaLabel="ขอบเขตข้อมูล" idPrefix="people-scope" onSurface />
@@ -178,6 +178,9 @@ function Report({ data, scope, onScope }) {
 }
 
 /** วิเคราะห์การลาและเวลาเข้างาน: ceo/hr see the whole company or any team, a team head only their team (the server decides). */
+const TITLE = 'วิเคราะห์การลาและเวลาเข้างาน';
+const Shell = ({ children }) => <PageStack><PageHeader title={TITLE} />{children}</PageStack>;
+
 export function PeopleInsightsPage() {
   const [scope, setScope] = useState(undefined);
   const query = useQuery({
@@ -189,26 +192,23 @@ export function PeopleInsightsPage() {
 
   if (query.error?.status === 403) {
     return (
-      <PageStack>
-        <PageHeader title="วิเคราะห์การลาและเวลาเข้างาน" />
+      <Shell>
         <section data-testid="people-insights-no-access" className="rounded-md border border-border bg-surface p-5 text-sm text-text-muted">คุณไม่มีสิทธิ์ดูหน้านี้</section>
-      </PageStack>
+      </Shell>
     );
   }
   if (query.isError && !query.data) {
     return (
-      <PageStack>
-        <PageHeader title="วิเคราะห์การลาและเวลาเข้างาน" />
+      <Shell>
         <p role="alert" className="m-0 text-sm text-danger">โหลดข้อมูลไม่สำเร็จ</p>
-      </PageStack>
+      </Shell>
     );
   }
   if (!query.data) {
     return (
-      <PageStack>
-        <PageHeader title="วิเคราะห์การลาและเวลาเข้างาน" />
+      <Shell>
         <div data-testid="people-insights-loading" className="grid gap-[18px]"><Skeleton height={200} /><Skeleton height={120} /><Skeleton height={240} /></div>
-      </PageStack>
+      </Shell>
     );
   }
   return <Report data={query.data} scope={scope} onScope={setScope} />;

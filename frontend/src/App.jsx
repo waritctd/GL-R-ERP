@@ -101,7 +101,6 @@ function userFromAuthResponse(response) {
     canCreateQuotation: Boolean(response.canCreateQuotation),
     canIssueBillingNote: Boolean(response.canIssueBillingNote),
     canViewAs: Boolean(response.canViewAs),
-    // Menu hint only (ceo/hr/team head): the endpoint decides again on every call.
     canViewPeopleInsights: Boolean(response.canViewPeopleInsights),
     viewAs: response.viewAs ?? null,
   };
