@@ -122,6 +122,15 @@ describe('TeamOverview', () => {
     expect(within(item).queryByText(/เงียบ/)).toBeNull();
   });
 
+  // Review round 2, M-1: the server lists every returning paused deal FIRST (uncapped, until resumed or re-dated), then
+  // the quiet ones by value × days quiet. The panel's subtitle says that order, not only the second half of it.
+  it('the ดีลที่ควรโทรตาม subtitle describes the real order: returning work first, then value × days quiet', async () => {
+    renderTeam();
+
+    expect(await screen.findByText('งานที่ถึงวันกลับมาดูขึ้นก่อน แล้วเรียงตามมูลค่า × วันที่เงียบ')).toBeTruthy();
+    expect(screen.queryByText('เรียงตามมูลค่า × วันที่เงียบ')).toBeNull();
+  });
+
   it('never shows the old ฿0.00, and has no cash tile while the payload carries no cash', async () => {
     renderTeam();
 

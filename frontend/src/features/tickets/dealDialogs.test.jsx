@@ -136,7 +136,9 @@ describe('PauseDealModal — พักงาน (m-hold)', () => {
   });
 
   // Fix round 1, ruling 8 (F7): a typed past date is refused in the dialog itself, not only by the server.
-  it('a typed date before today (Bangkok) is refused by the field and never posted', () => {
+  // Review round 2, L-5: a refused date must NOT turn into a pause with no date. While the field holds a refused
+  // entry nothing is sent; the rep fixes the date, or empties the field to pause without one on purpose.
+  it('a typed date before today (Bangkok) is refused by the field and blocks the pause — never posted as "no date"', () => {
     const onSubmit = vi.fn();
     render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" onClose={vi.fn()} onSubmit={onSubmit} />);
 
@@ -144,13 +146,43 @@ describe('PauseDealModal — พักงาน (m-hold)', () => {
     fireEvent.change(date, { target: { value: '15/11/2569' } }); // 15 Nov 2026, the day before "today"
     fireEvent.blur(date);
     expect(screen.getByText('วันที่อยู่นอกช่วงที่เลือกได้')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'พักงาน' }).disabled).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'พักงาน' }));
-    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ pauseReturnOn: null }));
+    expect(onSubmit).not.toHaveBeenCalled();
 
     fireEvent.change(date, { target: { value: '16/11/2569' } }); // today is allowed
     fireEvent.blur(date);
     fireEvent.click(screen.getByRole('button', { name: 'พักงาน' }));
     expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ pauseReturnOn: '2026-11-16' }));
+  });
+
+  it('after a refused date, emptying the field pauses with no date on purpose', () => {
+    const onSubmit = vi.fn();
+    render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    const date = screen.getByLabelText('วันที่จะกลับมาดู');
+    fireEvent.change(date, { target: { value: '15/11/2569' } });
+    fireEvent.blur(date);
+    expect(screen.getByRole('button', { name: 'พักงาน' }).disabled).toBe(true);
+    fireEvent.change(date, { target: { value: '' } });
+    fireEvent.blur(date);
+    fireEvent.click(screen.getByRole('button', { name: 'พักงาน' }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ pauseReturnOn: null }));
+  });
+
+  // Review round 2, L-5: the change-date dialog may still switch the pause type, and says plainly which does what.
+  it('in change mode it says that changing only the date notifies no one, and that switching the type does', () => {
+    const onSubmit = vi.fn();
+    render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" currentReturnOn="2026-12-24" changing onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    const notice = screen.getByTestId('pause-change-notice');
+    expect(notice.textContent).toContain('เปลี่ยนเฉพาะวันที่ ไม่มีการแจ้งเตือน');
+    expect(notice.textContent).toContain('เปลี่ยนแบบการพัก ระบบจะแจ้งเตือน');
+    expect(screen.getByRole('button', { name: 'บันทึกวันที่' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('radio', { name: /ไม่เคลื่อนไหว/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'เปลี่ยนแบบการพักและแจ้งเตือน' }));
+    expect(onSubmit).toHaveBeenCalledWith({ kind: 'DORMANT', pauseReturnOn: '2026-12-24', note: undefined });
   });
 
   it('a current date that has already passed (a returning deal) must be changed before saving', () => {

@@ -222,6 +222,24 @@ describe('TicketCreateModal — the drawn short form (m-create)', () => {
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
+  // Review round 2, L-5: when the channel is the (first) missing field, focus lands on the channel picker and the
+  // error is announced (role="alert") and tied to the group.
+  it('a missing channel moves focus to the channel picker and announces the error', async () => {
+    renderModal({ onSubmit: vi.fn() });
+
+    typeProject('โครงการใหม่');
+    const input = screen.getByPlaceholderText('พิมพ์ค้นหาชื่อบริษัท…');
+    fireEvent.focus(input);
+    fireEvent.mouseDown(await screen.findByText(CUSTOMER.name));
+    fireEvent.click(submitButton());
+
+    const error = await screen.findByText('กรุณาเลือกว่างานนี้เสนอแก่ใคร');
+    expect(error.getAttribute('role')).toBe('alert');
+    const group = screen.getByRole('radiogroup', { name: 'เสนอแก่' });
+    expect(group.getAttribute('aria-describedby')).toBe(error.id);
+    expect(document.activeElement).toBe(within(group).getByRole('radio', { name: 'ผู้ออกแบบนำ' }));
+  });
+
   it('a designer picked from the directory is sent by name', async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);
     renderModal({ onSubmit });

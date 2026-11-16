@@ -247,9 +247,15 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
       setFieldErrors(errors);
       setError('');
       const first = ['project', 'customer', 'entryChannel', 'value'].find((key) => errors[key]);
-      document.getElementById({
-        project: 'deal-project-name', customer: 'deal-customer', value: 'deal-estimated-value',
-      }[first])?.focus();
+      if (first === 'entryChannel') {
+        // A radiogroup cannot take focus itself: focus its first chip (review round 2, L-5). The error is role="alert"
+        // and the group is aria-describedby it, so it is announced.
+        document.querySelector('#deal-entry-channel [role="radio"]')?.focus();
+      } else {
+        document.getElementById({
+          project: 'deal-project-name', customer: 'deal-customer', value: 'deal-estimated-value',
+        }[first])?.focus();
+      }
       return;
     }
     setFieldErrors({});
@@ -403,6 +409,8 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
             <span className="text-danger" aria-hidden="true"> *</span>
           </span>
           <PickChips
+            id="deal-entry-channel"
+            describedBy={fieldErrors.entryChannel ? 'deal-entry-channel-error' : undefined}
             label={OFFERED_TO_LABEL}
             value={entryChannel}
             onChange={(value) => { setEntryChannel(value); clearError('entryChannel'); }}

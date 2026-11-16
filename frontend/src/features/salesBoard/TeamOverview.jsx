@@ -184,7 +184,9 @@ export function TeamOverview({ showTitle = true }) {
             title={(
               <span className="grid gap-0.5">
                 <span>ดีลที่ควรโทรตาม</span>
-                <small className="text-xs font-normal text-text-muted">เรียงตามมูลค่า × วันที่เงียบ</small>
+                {/* The real order (SalesBoardService.rankFollowUp): every returning paused deal first — never capped,
+                    listed until resumed or re-dated — then the quiet ones by value × days quiet (review round 2, M-1). */}
+                <small className="text-xs font-normal text-text-muted">งานที่ถึงวันกลับมาดูขึ้นก่อน แล้วเรียงตามมูลค่า × วันที่เงียบ</small>
               </span>
             )}
             actions={(

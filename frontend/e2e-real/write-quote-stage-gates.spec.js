@@ -332,6 +332,28 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await salesPage.goto(`/tickets/${deal}`);
     await stageIs(salesPage, 8);
     await shot(salesPage, '07-buyer-deal-stage8');
+
+    // The guided advance, in a real browser (restored, lifecycle dialogs review round 2). Case 1 used to drive it on
+    // its "เลื่อนไป: 2./3." steps. On an S1 deal those are now the "ย้ายไป S2" dialog, but the guided form still runs
+    // every hand move the readiness gate blocks. ขั้น 8 → 9 is one: the quotation just moved the stage, so no activity
+    // has been logged since. Same guarantee as before: the form collects the follow-up date and an activity, then
+    // moves the deal. The form opens from the panel's guided opener or, where the page's main button carries the
+    // move, from that "เลื่อนไป: 9." button. Either way the form itself must open, be filled and move the deal.
+    const opener = salesPage.getByTestId('guided-advance-open');
+    await ((await opener.count()) ? opener : salesPage.getByRole('button', { name: /^เลื่อนไป: 9\./ })).first().click();
+    const guided = salesPage.getByTestId('guided-advance-modal');
+    await expect(guided).toBeVisible();
+    await salesPage.getByTestId('guided-advance-followup').fill(inDays(7));
+    await salesPage.getByTestId('guided-advance-note').fill(`${tag} โทรติดตามก่อนเลื่อนขั้น 9`);
+    await salesPage.getByTestId('guided-advance-submit').click();
+    await expect(guided).toHaveCount(0);
+    await stageIs(salesPage, 9);
+    const after = await ticketOf(deal);
+    expect(after.summary.salesStage).toBe('NEGOTIATION');
+    expect(after.summary.nextFollowUpAt).toBe(inDays(7));
+    const activities = await (await sessions.sales.get(`/api/tickets/${deal}/activities`)).json();
+    expect(activities.items.some((a) => String(a.note).includes(`${tag} โทรติดตามก่อนเลื่อนขั้น 9`))).toBe(true);
+    await shot(salesPage, '07-buyer-guided-advance-stage9');
   });
 
   test('8. a deal born from a quotation starts on the recipient stage', async () => {

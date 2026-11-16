@@ -140,6 +140,16 @@ describe('mock — fix round 1', () => {
     expect((await api.tickets.updateTracking(id, { clearEstimatedValue: true })).ticket.summary.estimatedValue).toBeNull();
     await expect(api.tickets.updateTracking(id, { estimatedValue: 0 })).rejects.toMatchObject({ status: 400 });
   });
+
+  // Review round 2, L-3: Java's bean validation (@DecimalMin / @Digits on TrackingUpdateRequest) refuses an invalid
+  // estimate whatever clearEstimatedValue says; the mock must not be more permissive. Nothing is written on the 400.
+  it('an invalid estimate is refused even when clearEstimatedValue is set, and nothing changes', async () => {
+    const id = await newDeal();
+    await api.tickets.updateTracking(id, { estimatedValue: 500 });
+    await expect(api.tickets.updateTracking(id, { clearEstimatedValue: true, estimatedValue: -1 }))
+      .rejects.toMatchObject({ status: 400 });
+    expect((await api.tickets.get(id)).ticket.summary.estimatedValue).toBe(500);
+  });
 });
 
 describe('mock cancel reasons and catalog', () => {

@@ -3,7 +3,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
-import { FieldLabel, RadioCards } from './dealDialogParts.jsx';
+import { FieldLabel, InfoNote, RadioCards } from './dealDialogParts.jsx';
 
 /** `iso` + `months` calendar months, clamped to the target month's last day (31 Dec + 2 → 28 Feb). Pure date math on
  * a YYYY-MM-DD string, like addDaysIso. */
@@ -40,6 +40,9 @@ export function PauseDealModal({
   const [returnOn, setReturnOn] = useState(currentReturnOn ?? '');
   // The server refuses a date before today (Asia/Bangkok); say so here instead of after a round trip.
   const pastDate = Boolean(returnOn) && returnOn < today;
+  // Review round 2, L-5: the field refused a typed entry (it reverts to the old value and does not report a change).
+  // Until the rep fixes it, or empties the field on purpose, nothing is sent — a refused date never becomes "no date".
+  const [dateRefused, setDateRefused] = useState(false);
   const [note, setNote] = useState('');
   const chips = [
     { label: '2 สัปดาห์', value: addDaysIso(today, 14) },
@@ -49,7 +52,10 @@ export function PauseDealModal({
   const options = KIND_OPTIONS.map((option) => ({
     ...option, disabled: option.value === 'ON_HOLD' ? !canHold : !canDormant,
   }));
-  const canSubmit = !submitting && !pastDate && (kind === 'ON_HOLD' ? canHold : canDormant);
+  const canSubmit = !submitting && !pastDate && !dateRefused && (kind === 'ON_HOLD' ? canHold : canDormant);
+  // Changing the date in place: staying in the same pause state is a date-only change (no notification); picking the
+  // other state is a real switch, which notifies exactly as pausing does (TicketService.markDormant).
+  const switching = changing && kind !== initialKind;
 
   return (
     <Modal
@@ -69,13 +75,19 @@ export function PauseDealModal({
             disabled={!canSubmit}
             onClick={() => onSubmit({ kind, pauseReturnOn: returnOn || null, note: note.trim() || undefined })}
           >
-            {submitting ? 'กำลังบันทึก…' : changing ? 'บันทึกวันที่' : 'พักงาน'}
+            {submitting ? 'กำลังบันทึก…' : switching ? 'เปลี่ยนแบบการพักและแจ้งเตือน' : changing ? 'บันทึกวันที่' : 'พักงาน'}
           </Button>
         </>
       )}
     >
       <div className="flex flex-col gap-4">
         <RadioCards label="แบบไหน" options={options} value={kind} onChange={setKind} />
+        {changing ? (
+          <InfoNote testId="pause-change-notice">
+            เปลี่ยนเฉพาะวันที่ ไม่มีการแจ้งเตือน · ถ้าเปลี่ยนแบบการพัก ระบบจะแจ้งเตือนผู้จัดการฝ่ายขายและผู้บริหาร
+            (และฝ่ายนำเข้า / บัญชี ถ้าเกี่ยวข้อง) เหมือนการพักครั้งใหม่
+          </InfoNote>
+        ) : null}
         <div className="grid gap-1.5">
           <FieldLabel htmlFor="pause-return-on">วันที่จะกลับมาดู</FieldLabel>
           <div className="flex flex-wrap items-center gap-2">
@@ -84,6 +96,7 @@ export function PauseDealModal({
               value={returnOn}
               min={today}
               onChange={(event) => setReturnOn(event.target.value)}
+              onErrorChange={(message) => setDateRefused(Boolean(message))}
               wrapperClassName="w-44"
             />
             {chips.map((chip) => (
@@ -91,7 +104,7 @@ export function PauseDealModal({
                 key={chip.label}
                 type="button"
                 aria-pressed={returnOn === chip.value}
-                onClick={() => setReturnOn(chip.value)}
+                onClick={() => { setReturnOn(chip.value); setDateRefused(false); }}
                 className={`min-h-11 rounded-full border px-3.5 text-xs font-bold ${
                   returnOn === chip.value ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-surface text-text hover:bg-surface-hover'
                 }`}

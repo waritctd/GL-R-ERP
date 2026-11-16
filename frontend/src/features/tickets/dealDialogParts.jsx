@@ -74,10 +74,11 @@ export function RadioCards({ label, options, value, onChange, columns = 2 }) {
  * Pick chips (the drawings' `.picks .pk`): one choice from a short list, each optionally led by a code (F1–F8).
  * `tone="danger"` colours the chosen chip as the lost / cancel dialogs draw it.
  */
-export function PickChips({ label, options, value, onChange, tone = 'primary' }) {
+export function PickChips({ label, options, value, onChange, tone = 'primary', id, describedBy }) {
   const chosen = tone === 'danger' ? 'border-danger bg-danger-bg text-danger-dark' : 'border-primary bg-primary/10 text-primary';
   return (
-    <div role="radiogroup" aria-label={label} className="flex flex-wrap gap-2">
+    // `id` lets a form move focus into the group (its first chip); `describedBy` ties the group to its error message.
+    <div id={id} role="radiogroup" aria-label={label} aria-describedby={describedBy} className="flex flex-wrap gap-2">
       {options.map((option) => {
         const selected = option.value === value;
         return (

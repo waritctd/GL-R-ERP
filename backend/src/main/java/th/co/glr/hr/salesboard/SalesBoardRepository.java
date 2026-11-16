@@ -33,7 +33,11 @@ public class SalesBoardRepository {
     private static final List<String> VALUE_STATUSES = List.of("APPROVED", "ISSUED", "SENT", "ACCEPTED", "EXPIRED");
 
     /** Every column a board row needs; the WHERE is the caller's ({@link #ACTIVE_WHERE} or {@link #RETURNING_WHERE}),
-     * so a returning paused deal is read with exactly the same value / last-touch / last-activity logic. */
+     * so a returning paused deal is read with exactly the same value / last-touch / last-activity logic.
+     * {@code days_quiet} (whole days since the last touch) is computed HERE, from this statement's {@code now()} — the
+     * same clock as the {@code quiet} flag and as the Postgres-written timestamps it measures. It used to be the JVM
+     * clock minus a Postgres timestamp, which read N-1 for an N-day deal whenever the JVM clock lagged the database's
+     * and reordered ควรตามต่อ (review round 2, L-1). */
     private static final String ROW_SELECT = """
         SELECT t.ticket_id, t.title, t.customer_name, p.name AS project_name,
                t.created_by AS owner_id,
@@ -41,6 +45,7 @@ public class SalesBoardRepository {
                t.sales_stage, t.designer_name, t.win_probability, t.expected_quarter, t.imported_value,
                t.pause_return_on, t.estimated_value,
                %1$s AS last_touched_at,
+               GREATEST(0, FLOOR(EXTRACT(EPOCH FROM (now() - %1$s)) / 86400))::int AS days_quiet,
                %2$s AS quiet,
                %3$s AS returning,
                q.total_amount, q.document_language, q.currency, q.expired,
@@ -123,7 +128,6 @@ public class SalesBoardRepository {
     private BoardDeal map(ResultSet rs, int rowNum) throws SQLException {
         String stage = rs.getString("sales_stage");
         Timestamp lastTouched = rs.getTimestamp("last_touched_at");
-        long quietMillis = lastTouched == null ? 0 : System.currentTimeMillis() - lastTouched.getTime();
         int override = rs.getInt("win_probability");
         Integer winProbability = rs.wasNull()
             ? (stage == null ? null : WinProbabilityDefaults.defaultFor(stage))
@@ -148,7 +152,7 @@ public class SalesBoardRepository {
             value, currency, rs.getBoolean("expired"),
             rs.getString("designer_name"), winProbability, rs.getString("expected_quarter"),
             lastTouched == null ? null : lastTouched.toInstant(),
-            (int) Math.max(0, quietMillis / 86_400_000L), rs.getBoolean("quiet"),
+            rs.getInt("days_quiet"), rs.getBoolean("quiet"),
             rs.getString("last_activity_kind"), rs.getString("last_activity_note"),
             rs.getBoolean("returning"), rs.getObject("pause_return_on", java.time.LocalDate.class));
     }

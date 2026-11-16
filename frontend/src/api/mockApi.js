@@ -10131,8 +10131,9 @@ export const api = {
         && (Number(payload.winProbability) < 0 || Number(payload.winProbability) > 100)) {
         fail('win probability ต้องอยู่ระหว่าง 0-100', 400);
       }
-      if (payload?.clearEstimatedValue !== true && payload?.estimatedValue != null
-        && !mockValidEstimate(payload.estimatedValue)) {
+      // Like Java's bean validation on TrackingUpdateRequest: a sent estimate is checked whatever clearEstimatedValue
+      // says (review round 2, L-3 — the mock must not be more permissive), before anything is written.
+      if (payload?.estimatedValue != null && !mockValidEstimate(payload.estimatedValue)) {
         fail('มูลค่าโดยประมาณต้องมากกว่า 0', 400);
       }
       // Full-replace semantics (PUT), not a merge — mirrors TrackingUpdateRequest: an omitted/null field CLEARS it

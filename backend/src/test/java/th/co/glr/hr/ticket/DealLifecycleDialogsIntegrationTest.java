@@ -397,6 +397,45 @@ class DealLifecycleDialogsIntegrationTest extends AbstractDealQuotationSlice2Int
         assertThat(summary(id).pauseReturnOn()).isEqualTo(on);
     }
 
+    /** Review round 2, M-2 (BM7): the in-place date change is logged as POLICY_CHANGED and touches nothing the quiet rule
+     * or the movement reports read: no STAGE_CHANGED event, the same stage_updated_at, the same last-touched instant. */
+    @Test
+    void changingTheDateInPlace_isAPolicyChange_notAStageMove_andLeavesTheQuietClockAlone() throws Exception {
+        for (String path : List.of("hold", "dormant")) {
+            long id = deal(salesActor);
+            ok(post("/api/tickets/" + id + "/" + path).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pauseReturnOn\":\"" + today().plusDays(7) + "\"}"), salesActor);
+            int stageEvents = eventCount(id, TicketEventKind.STAGE_CHANGED);
+            int policyEvents = eventCount(id, TicketEventKind.POLICY_CHANGED);
+            Object stageUpdatedAt = stageUpdatedAt(id);
+            Object lastTouched = lastTouched(id);
+
+            ok(post("/api/tickets/" + id + "/" + path).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pauseReturnOn\":\"" + today().plusMonths(1) + "\"}"), salesActor);
+
+            assertThat(eventCount(id, TicketEventKind.POLICY_CHANGED)).as(path).isEqualTo(policyEvents + 1);
+            assertThat(eventCount(id, TicketEventKind.STAGE_CHANGED)).as(path).isEqualTo(stageEvents);
+            assertThat(stageUpdatedAt(id)).as(path).isEqualTo(stageUpdatedAt);
+            assertThat(lastTouched(id)).as(path).isEqualTo(lastTouched);
+        }
+    }
+
+    /** Review round 2, M-2 (BM8): the OWNER re-dating an already-paused deal to a past Bangkok date is refused 400 (the
+     * permission check passes first), and the stored date is unchanged — in both pause states. */
+    @Test
+    void theOwnerCannotReDateAPausedDealIntoThePast() throws Exception {
+        for (String path : List.of("hold", "dormant")) {
+            long id = deal(salesActor);
+            LocalDate on = today().plusDays(7);
+            ok(post("/api/tickets/" + id + "/" + path).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pauseReturnOn\":\"" + on + "\"}"), salesActor);
+
+            assertThat(status(post("/api/tickets/" + id + "/" + path).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pauseReturnOn\":\"" + today().minusDays(1) + "\"}"), salesActor)).as(path).isEqualTo(400);
+            assertThat(summary(id).pauseReturnOn()).as(path).isEqualTo(on);
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private static LocalDate today() {
@@ -413,6 +452,17 @@ class DealLifecycleDialogsIntegrationTest extends AbstractDealQuotationSlice2Int
     private long created(String extra) throws Exception {
         return ok(post("/api/tickets").contentType(MediaType.APPLICATION_JSON).content(body(extra)), salesActor)
             .at("/ticket/summary/id").asLong();
+    }
+
+    private Object stageUpdatedAt(long id) {
+        return jdbc.queryForObject("SELECT stage_updated_at FROM sales.ticket WHERE ticket_id = :id",
+            Map.of("id", id), java.sql.Timestamp.class);
+    }
+
+    /** The instant the shared quiet rule (QuietRule#lastTouchedSql) reads as this deal's last touch. */
+    private Object lastTouched(long id) {
+        return jdbc.queryForObject("SELECT " + QuietRule.lastTouchedSql("t") + " FROM sales.ticket t WHERE t.ticket_id = :id",
+            Map.of("id", id), java.sql.Timestamp.class);
     }
 
     /** Notifications about this deal (every lifecycle notice links to /tickets/{id}). */
