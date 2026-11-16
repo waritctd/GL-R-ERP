@@ -144,6 +144,62 @@ describe('PeopleInsightsPage', () => {
     expect((await screen.findByRole('alert')).textContent).toContain('โหลดข้อมูลไม่สำเร็จ');
   });
 
+  it('first-load failure shows the bare error and no report', async () => {
+    api.peopleInsights.get.mockRejectedValue(Object.assign(new Error('boom'), { status: 500 }));
+    renderPage();
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe('โหลดข้อมูลไม่สำเร็จ');
+    expect(screen.queryByTestId('people-insights')).toBeNull();
+  });
+
+  it('a failed scope switch keeps the previous report, shows the alert, and snaps the selection back', async () => {
+    serve();
+    renderPage();
+    await screen.findByTestId('people-insights');
+    api.peopleInsights.get.mockImplementation(async (params = {}) => {
+      if (params.scope === '7') throw Object.assign(new Error('boom'), { status: 500 });
+      return PEOPLE_FIXTURE;
+    });
+    fireEvent.click(within(screen.getByRole('tablist')).getByRole('tab', { name: 'ทีมทดสอบ' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('โหลดข้อมูลไม่สำเร็จ · กำลังแสดงข้อมูลที่โหลดได้ล่าสุด');
+    expect(screen.getByTestId('people-insights')).toBeTruthy(); // the last good report is still there
+    expect(within(fig('fig-leave')).getByText('14 วัน')).toBeTruthy();
+    await waitFor(() => expect(within(screen.getByRole('tablist')).getByRole('tab', { name: 'ทีมทดสอบ' }).getAttribute('aria-selected')).toBe('false'));
+    expect(within(screen.getByRole('tablist')).getByRole('tab', { name: PEOPLE_FIXTURE.scope.label }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('alert')).toBeTruthy(); // refetching the snapped-back selection does not clear it
+  });
+
+  it('the failure alert clears after a later successful load', async () => {
+    serve();
+    renderPage();
+    await screen.findByTestId('people-insights');
+    let fail = true;
+    api.peopleInsights.get.mockImplementation(async (params = {}) => {
+      if (params.scope === '7') {
+        if (fail) throw Object.assign(new Error('boom'), { status: 500 });
+        return { ...PEOPLE_FIXTURE, scope: { id: '7', label: 'ทีมทดสอบ' }, teams: [] };
+      }
+      return PEOPLE_FIXTURE;
+    });
+    fireEvent.click(within(screen.getByRole('tablist')).getByRole('tab', { name: 'ทีมทดสอบ' }));
+    await screen.findByRole('alert');
+    fail = false;
+    fireEvent.click(await within(screen.getByRole('tablist')).findByRole('tab', { name: 'ทีมทดสอบ' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    expect(document.querySelector('header').textContent).toContain('ทีมทดสอบ');
+    expect(screen.queryByText('เทียบตามสายงาน')).toBeNull(); // the new scope's data, not the old report
+  });
+
+  it('a 403 on a scope switch still shows the no-access state', async () => {
+    serve();
+    renderPage();
+    await screen.findByTestId('people-insights');
+    api.peopleInsights.get.mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403 }));
+    fireEvent.click(within(screen.getByRole('tablist')).getByRole('tab', { name: 'ทีมทดสอบ' }));
+    expect(await screen.findByTestId('people-insights-no-access')).toBeTruthy();
+  });
+
   it('shows a no-access state on 403', async () => {
     api.peopleInsights.get.mockRejectedValue(Object.assign(new Error('forbidden'), { status: 403 }));
     renderPage();

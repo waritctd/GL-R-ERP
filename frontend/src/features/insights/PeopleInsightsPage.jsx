@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -17,6 +17,8 @@ import { MONTH_LABELS, latestMonthIndex, monthKey, monthTotals, personRows, summ
 
 const days = (v) => (v ? `${Number(v.toFixed(2))}` : '0');
 const clock = (mins) => (mins == null ? '—' : `${String(Math.floor(mins / 60)).padStart(2, '0')}:${String(Math.round(mins % 60)).padStart(2, '0')}`);
+const LOAD_FAILED = 'โหลดข้อมูลไม่สำเร็จ';
+const LOAD_FAILED_KEPT = `${LOAD_FAILED} · กำลังแสดงข้อมูลที่โหลดได้ล่าสุด`;
 const EXEMPT_NOTE = 'ไม่นับเวลาเข้างาน';
 
 const Name = ({ p }) => <><b>{p.nick}</b>{p.active ? null : <span className="ml-1.5 text-2xs font-normal text-text-muted">พ้นสภาพ</span>}</>;
@@ -79,7 +81,7 @@ function buildFindings(people, year, quota) {
   return out;
 }
 
-function Report({ data, scope, onScope, onYear, busy }) {
+function Report({ data, scope, onScope, onYear, busy, failed }) {
   const [picked, setPicked] = useState(null);
   const last = latestMonthIndex(data);
   const month = Math.min(picked ?? last, last);
@@ -109,6 +111,7 @@ function Report({ data, scope, onScope, onYear, busy }) {
           ? <Tabs items={data.scopes} value={scope ?? data.scope.id} onChange={onScope} ariaLabel="ขอบเขตข้อมูล" idPrefix="people-scope" onSurface />
           : null}
       />
+      {failed ? <p role="alert" className="m-0 text-sm text-danger">{LOAD_FAILED_KEPT}</p> : null}
       <div className={cn('grid gap-[18px]', busy && 'opacity-50')} data-testid="people-insights" aria-busy={busy}>
         {data.asOf ? <small className="text-xs text-text-muted">ข้อมูล ณ {formatThaiDate(data.asOf)}</small> : null}
         <MonthColumns totals={monthTotals(data, null, last + 1)} year={data.year} years={data.years ?? [data.year]} sel={month} onSelect={setPicked} onYear={(y) => { setPicked(null); onYear(y); }} />
@@ -194,12 +197,35 @@ const Shell = ({ children }) => <PageStack><PageHeader title={TITLE} />{children
 export function PeopleInsightsPage() {
   const [scope, setScope] = useState(undefined);
   const [year, setYear] = useState(undefined);
+  // The last successful response and the selection it answers: a failed switch keeps showing it instead of replacing the report with an error.
+  const [lastGood, setLastGood] = useState(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const query = useQuery({
     queryKey: queryKeys.peopleInsights(scope, year),
     queryFn: () => api.peopleInsights.get({ ...(scope ? { scope } : {}), ...(year ? { year } : {}) }),
     placeholderData: keepPreviousData,
     retry: (count, error) => error?.status !== 403 && count < 1,
   });
+  const fresh = query.isPlaceholderData ? undefined : query.data;
+
+  // Keyed on the data itself: a refetch that returns the same report (the snap-back below) is not a new success.
+  useEffect(() => {
+    if (fresh && fresh !== lastGood?.data) {
+      setLastGood({ scope, year, data: fresh });
+      setLoadFailed(false);
+    }
+  }, [fresh, lastGood, scope, year]);
+
+  useEffect(() => {
+    if (!query.isError || query.error?.status === 403) return;
+    setLoadFailed(true);
+    // Never when the failed selection is the good one, so a failing refetch cannot loop.
+    if (lastGood && (lastGood.scope !== scope || lastGood.year !== year)) {
+      setScope(lastGood.scope);
+      setYear(lastGood.year);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs once per failure
+  }, [query.errorUpdatedAt]);
 
   if (query.error?.status === 403) {
     return (
@@ -208,19 +234,20 @@ export function PeopleInsightsPage() {
       </Shell>
     );
   }
-  if (query.isError && !query.data) {
+  const shown = query.data ?? lastGood?.data;
+  if (!shown && query.isError) {
     return (
       <Shell>
-        <p role="alert" className="m-0 text-sm text-danger">โหลดข้อมูลไม่สำเร็จ</p>
+        <p role="alert" className="m-0 text-sm text-danger">{LOAD_FAILED}</p>
       </Shell>
     );
   }
-  if (!query.data) {
+  if (!shown) {
     return (
       <Shell>
         <div data-testid="people-insights-loading" className="grid gap-[18px]"><Skeleton height={200} /><Skeleton height={120} /><Skeleton height={240} /></div>
       </Shell>
     );
   }
-  return <Report data={query.data} scope={scope} onScope={setScope} onYear={setYear} busy={query.isPlaceholderData} />;
+  return <Report data={shown} scope={scope} onScope={setScope} onYear={setYear} busy={query.isPlaceholderData} failed={loadFailed} />;
 }
