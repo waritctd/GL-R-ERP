@@ -179,6 +179,10 @@ const UI_REACHABLE_KEYS = new Set(
 // Whether to surface or retire any of them is a product decision, not something a test decides.
 const SERVER_ONLY = {
   // ── Live, via a client this harness cannot see ────────────────────────────
+  'PUT /api/sales-analytics/snapshot':
+    "Sent by the weekly sales-insights refresh job from the CEO's signed-in page, so the requester is an outside "
+    + 'script this harness cannot see. No screen and no hrApi method calls it since the upload button was removed. '
+    + 'CEO-only on the server (SalesAnalyticsService).',
   'GET /api/public/brand/logo.png':
     'Fetched by the MAIL CLIENT, not by this app — it is the <img> src in the notification email '
     + 'templates, so the requester is Gmail/Outlook rendering a message, with no session and no hrApi '

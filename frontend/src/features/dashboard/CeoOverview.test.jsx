@@ -23,7 +23,7 @@ vi.mock('../../api/index.js', () => ({
     overtime: { list: vi.fn() },
     leave: { list: vi.fn() },
     salesBoard: { teamOverview: vi.fn() },
-    salesAnalytics: { snapshot: vi.fn(), upload: vi.fn() },
+    salesAnalytics: { snapshot: vi.fn() },
   },
 }));
 

@@ -1,38 +1,48 @@
 import React from 'react';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, focusManager } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { SalesInsights } from './SalesInsights.jsx';
 import { api } from '../../api/index.js';
 import { ml, pct } from './insight/insightFormat.js';
+import { formatThaiDate } from '../../utils/format.js';
 import { SNAPSHOT, SNAPSHOT_MINIMAL, SNAPSHOT_SPARSE, SNAPSHOT_WITH_NOW } from '../../test/fixtures/salesAnalyticsSnapshot.js';
 
 globalThis.React = React;
 
 vi.mock('../../api/index.js', () => ({
-  api: { salesAnalytics: { snapshot: vi.fn(), upload: vi.fn() } },
+  api: { salesAnalytics: { snapshot: vi.fn() } },
 }));
 
-// The role decides section order and who may upload (the backend enforces the same split; see
-// SalesAnalyticsSnapshotIntegrationTest). Both are product rulings, so both are pinned here per role.
+// The role decides section order: a product ruling, pinned here per role.
 const CEO_ORDER = ['sales', 'comm', 'cust', 'pipe', 'des'];
 const MANAGER_ORDER = ['pipe', 'des', 'sales', 'cust', 'comm'];
 
-function renderInsights(role) {
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <SalesInsights user={{ role }} />
-      </MemoryRouter>
-    </QueryClientProvider>,
-  );
+// `queries` overrides the test client's defaults (the app's own defaults are no focus refetch and a 30 s staleTime).
+function renderInsights(role, queries = {}) {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, ...queries }, mutations: { retry: false } } });
+  return {
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <SalesInsights user={{ role }} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 const withSnapshot = (payload = SNAPSHOT) => api.salesAnalytics.snapshot.mockResolvedValue({
   snapshot: { payload, asOf: '2026-03-31', uploadedAt: '2026-04-02T03:00:00Z' },
 });
+const expectNoUploadControl = () => {
+  const root = screen.getByTestId('sales-insights');
+  expect(root.querySelector('input[type="file"]')).toBeNull();
+  expect(within(root).queryByRole('button', { name: /อัปโหลด|upload/i })).toBeNull();
+};
 const detail = () => screen.getByTestId('insight-month-detail');
 const sectionOrder = () => [...document.querySelectorAll('[data-testid^="insight-section-"]')]
   .map((el) => el.getAttribute('data-testid').replace('insight-section-', ''));
@@ -119,7 +129,7 @@ describe('SalesInsights', () => {
     });
   });
 
-  describe('empty state and upload', () => {
+  describe('empty state', () => {
     beforeEach(() => api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null }));
 
     it('shows the empty state, not the month picker, when no snapshot exists', async () => {
@@ -128,34 +138,26 @@ describe('SalesInsights', () => {
       expect(screen.queryByTestId('insight-month-detail')).toBeNull();
     });
 
-    it('offers อัปโหลดข้อมูลวิเคราะห์ to the CEO only', async () => {
+    it('offers no upload control to anyone, the CEO included: the data arrives through the weekly update', async () => {
       const { unmount } = renderInsights('ceo');
-      await screen.findByTestId('insight-empty');
-      expect(screen.getByLabelText('อัปโหลดข้อมูลวิเคราะห์')).toBeTruthy();
+      const ceoEmpty = await screen.findByTestId('insight-empty');
+      expect(ceoEmpty.textContent).toBe('ยังไม่มีข้อมูลวิเคราะห์ — ข้อมูลอัปเดตทุกสัปดาห์');
+      expectNoUploadControl();
       unmount();
 
       renderInsights('sales_manager');
-      await screen.findByTestId('insight-empty');
-      expect(screen.queryByLabelText('อัปโหลดข้อมูลวิเคราะห์')).toBeNull();
+      expect((await screen.findByTestId('insight-empty')).textContent).toBe(ceoEmpty.textContent);
+      expectNoUploadControl();
     });
 
-    it('uploading a file sends the PARSED JSON to the API, and a non-JSON file is refused client-side', async () => {
-      api.salesAnalytics.upload.mockResolvedValue({});
+    it('offers the CEO no upload control next to a usable snapshot either', async () => {
+      withSnapshot();
       renderInsights('ceo');
-      await screen.findByTestId('insight-empty');
-      const input = screen.getByLabelText('อัปโหลดข้อมูลวิเคราะห์');
-
-      fireEvent.change(input, { target: { files: [new File(['{not json'], 'bad.json', { type: 'application/json' })] } });
-      await screen.findByRole('alert');
-      expect(api.salesAnalytics.upload).not.toHaveBeenCalled();
-
-      fireEvent.change(input, {
-        target: { files: [new File([JSON.stringify(SNAPSHOT)], 'kpi.json', { type: 'application/json' })] },
-      });
-      await waitFor(() => expect(api.salesAnalytics.upload).toHaveBeenCalledTimes(1));
-      expect(api.salesAnalytics.upload.mock.calls[0][0]).toEqual(SNAPSHOT);
+      await screen.findByTestId('insight-month-detail');
+      expectNoUploadControl();
     });
   });
+
   describe('optional parts of the snapshot', () => {
     it('shows the ยังไม่จบเดือน chip only when `now` exists, and selecting it shows the in-progress table', async () => {
       const { unmount } = renderInsights('ceo');
@@ -307,17 +309,14 @@ describe('SalesInsights', () => {
     });
   });
   describe('review round 2', () => {
-    it('recovers from a snapshot that fails to render once a good one is uploaded', async () => {
+    it('recovers from a snapshot that fails to render once a newer one is fetched', async () => {
       const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
       api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: { payload: { ...SNAPSHOT, cust: { ...SNAPSHOT.cust, buckets: 'x' } }, asOf: null, uploadedAt: '2026-04-02T03:00:00Z' } });
-      api.salesAnalytics.upload.mockResolvedValue({});
-      renderInsights('ceo');
+      const { queryClient } = renderInsights('ceo');
       expect((await screen.findByRole('alert')).textContent).toContain('แสดงหัวข้อนี้ไม่ได้');
 
       api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: { payload: SNAPSHOT, asOf: null, uploadedAt: '2026-04-03T03:00:00Z' } });
-      fireEvent.change(screen.getByLabelText('อัปโหลดข้อมูลวิเคราะห์'), {
-        target: { files: [new File([JSON.stringify(SNAPSHOT)], 'kpi.json', { type: 'application/json' })] },
-      });
+      await act(async () => { await queryClient.invalidateQueries(); });
       await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
       expect(screen.getByTestId('insight-month-detail')).toBeTruthy();
       spy.mockRestore();
@@ -332,16 +331,6 @@ describe('SalesInsights', () => {
       withSnapshot({ ...SNAPSHOT, monthly: [{ ...SNAPSHOT.monthly[0], reps: [null] }, SNAPSHOT.monthly[1], SNAPSHOT.monthly[2]] });
       renderInsights('ceo');
       expect(await screen.findByTestId('insight-empty')).toBeTruthy();
-    });
-
-    it('refuses a file over 2 MB in the browser, without calling the API', async () => {
-      api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null });
-      renderInsights('ceo');
-      await screen.findByTestId('insight-empty');
-      const big = new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'big.json', { type: 'application/json' });
-      fireEvent.change(screen.getByLabelText('อัปโหลดข้อมูลวิเคราะห์'), { target: { files: [big] } });
-      expect((await screen.findByRole('alert')).textContent).toContain('ไฟล์ใหญ่เกิน 2 MB');
-      expect(api.salesAnalytics.upload).not.toHaveBeenCalled();
     });
 
     it('renders every row when two reps share a name, with no duplicate-key error', async () => {
@@ -415,12 +404,12 @@ describe('SalesInsights', () => {
       const m = SNAPSHOT.monthly;
       withSnapshot({ ...SNAPSHOT, monthly: [m[0], m[1], { ...m[2], fc: [null] }] });
       renderInsights('ceo');
-      expect((await screen.findByRole('alert')).textContent).toContain('แสดงเดือนนี้ไม่ได้');
+      expect((await screen.findByRole('alert')).textContent).toBe('แสดงเดือนนี้ไม่ได้ เลือกเดือนอื่น');
       expect(screen.queryByTestId('insight-month-detail')).toBeNull();
 
       fireEvent.click(screen.getByTestId('insight-month-0'));
       expect(within(detail()).getByText('ลูกค้า ก')).toBeTruthy();
-      expect(screen.queryByText('แสดงเดือนนี้ไม่ได้ กรุณาอัปโหลดไฟล์ใหม่หรือแจ้งผู้ดูแลระบบ')).toBeNull();
+      expect(screen.queryByRole('alert')).toBeNull();
       spy.mockRestore();
     });
 
@@ -434,11 +423,11 @@ describe('SalesInsights', () => {
       expect(ml('2000000')).toBe('2.0 ล้าน');
     });
 
-    it('shows the ข้อมูล ณ date to the sales manager too, who still gets no upload control', async () => {
+    it('shows the ข้อมูล ณ date to the sales manager too, like the CEO, with no upload control', async () => {
       renderInsights('sales_manager');
       await screen.findByTestId('insight-month-detail');
-      expect(screen.getByText('ข้อมูล ณ 2026-03-31')).toBeTruthy();
-      expect(screen.queryByLabelText('อัปโหลดข้อมูลวิเคราะห์')).toBeNull();
+      expect(screen.getByTestId('insight-updated').textContent).toContain('ข้อมูล ณ 2026-03-31');
+      expect(document.querySelector('input[type="file"]')).toBeNull();
     });
 
     describe('findings and recommendations follow the data', () => {
@@ -534,6 +523,74 @@ describe('SalesInsights', () => {
       const cell = (row) => row.querySelectorAll('td')[4].textContent;
       expect(cell(rows[1])).toBe('0%');
       expect(cell(rows[2])).toBe('—');
+    });
+  });
+  describe('review round 4', () => {
+    afterEach(() => { vi.useRealTimers(); focusManager.setFocused(undefined); });
+
+    it('shows the load-error alert when a refetch fails over a stored snapshot the page cannot draw', async () => {
+      withSnapshot({ ...SNAPSHOT_MINIMAL, months: [], monthly_total: [], monthly: [] });
+      const { queryClient } = renderInsights('ceo');
+      await screen.findByTestId('insight-empty');
+
+      api.salesAnalytics.snapshot.mockRejectedValue(new Error('down'));
+      await act(async () => { await queryClient.invalidateQueries(); });
+
+      expect((await screen.findByRole('alert')).textContent).toBe('โหลดข้อมูลวิเคราะห์ไม่สำเร็จ');
+    });
+
+    it('an open tab picks up a newer snapshot when the window regains focus after 10 minutes, and not before', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      renderInsights('ceo', { refetchOnWindowFocus: false, staleTime: 30_000 });
+      await screen.findByTestId('insight-month-detail');
+      expect(api.salesAnalytics.snapshot).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 9 * 60_000);
+      await act(async () => { focusManager.setFocused(false); focusManager.setFocused(true); });
+      expect(api.salesAnalytics.snapshot).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(Date.now() + 2 * 60_000);
+      await act(async () => { focusManager.setFocused(false); focusManager.setFocused(true); });
+      await waitFor(() => expect(api.salesAnalytics.snapshot).toHaveBeenCalledTimes(2));
+    });
+
+    it('the month fallback only says to pick another month when another choice exists', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const bad = { ...SNAPSHOT.monthly[2], fc: [null] };
+      const single = { ...SNAPSHOT, months: ['มี.ค. 69'], monthly_total: [1500000], monthly: [bad] };
+      withSnapshot(single);
+      const { unmount } = renderInsights('ceo');
+      expect((await screen.findByRole('alert')).textContent).toBe('แสดงเดือนนี้ไม่ได้');
+      unmount();
+
+      withSnapshot({ ...single, now: SNAPSHOT_WITH_NOW.now });
+      renderInsights('ceo');
+      expect((await screen.findByRole('alert')).textContent).toBe('แสดงเดือนนี้ไม่ได้ เลือกเดือนอื่น');
+      spy.mockRestore();
+    });
+
+    describe('the "when was this loaded" line', () => {
+      const line = () => screen.getByTestId('insight-updated').textContent;
+      const updated = `อัปเดตล่าสุด ${formatThaiDate('2026-04-02T03:00:00Z')}`;
+
+      it('shows the as-of date and the update date together', async () => {
+        renderInsights('ceo');
+        await screen.findByTestId('insight-month-detail');
+        expect(line()).toBe(`ข้อมูล ณ 2026-03-31 · ${updated}`);
+      });
+
+      it('still shows the update date when the snapshot has no as-of date, and nothing when it has neither', async () => {
+        api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: { payload: SNAPSHOT, asOf: null, uploadedAt: '2026-04-02T03:00:00Z' } });
+        const { unmount } = renderInsights('ceo');
+        await screen.findByTestId('insight-month-detail');
+        expect(line()).toBe(updated);
+        unmount();
+
+        api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: { payload: SNAPSHOT, asOf: null, uploadedAt: null } });
+        renderInsights('ceo');
+        await screen.findByTestId('insight-month-detail');
+        expect(screen.queryByTestId('insight-updated')).toBeNull();
+      });
     });
   });
 });

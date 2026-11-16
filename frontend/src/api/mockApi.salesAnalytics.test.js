@@ -1,20 +1,28 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
+import { isUsable } from '../features/dashboard/insight/insightFormat.js';
 
-// Mirrors SalesAnalyticsService#upload: asOf is the document's `as_of` string, else null (the real
-// authz/validation is proven only by SalesAnalyticsSnapshotIntegrationTest).
-const doc = (extra = {}) => ({ months: ['ม.ค. 69'], monthly_total: [1], monthly: [{ total: 1, reps: [] }], reps: [], ...extra });
+// Role gates mirror SalesAnalyticsService but are NOT evidence (SalesAnalyticsSnapshotIntegrationTest is). The data
+// arrives through an outside weekly job, so the mock has no upload: it starts with a synthetic snapshot instead.
+describe('mockApi.salesAnalytics', () => {
+  it('starts with a usable synthetic snapshot for the CEO and the sales manager', async () => {
+    for (const role of ['ceo', 'sales_manager']) {
+      await api.auth.login({ role });
+      const { snapshot } = await api.salesAnalytics.snapshot();
+      expect(isUsable(snapshot?.payload)).toBe(true);
+      expect(snapshot.asOf).toBe('2026-03-31');
+      expect(Number.isNaN(Date.parse(snapshot.uploadedAt))).toBe(false);
+    }
+  });
 
-describe('mockApi.salesAnalytics.upload', () => {
-  it('derives asOf from the document\'s as_of string, and null when it is missing or not a string', async () => {
-    await api.auth.login({ role: 'ceo' });
-    await api.salesAnalytics.upload(doc({ as_of: '2026-03-31' }));
-    expect((await api.salesAnalytics.snapshot()).snapshot.asOf).toBe('2026-03-31');
+  it('refuses every other role with 403', async () => {
+    for (const role of ['sales', 'account', 'hr']) {
+      await api.auth.login({ role });
+      await expect(api.salesAnalytics.snapshot()).rejects.toMatchObject({ status: 403 });
+    }
+  });
 
-    await api.salesAnalytics.upload(doc());
-    expect((await api.salesAnalytics.snapshot()).snapshot.asOf).toBeNull();
-
-    await api.salesAnalytics.upload(doc({ as_of: 5 }));
-    expect((await api.salesAnalytics.snapshot()).snapshot.asOf).toBeNull();
+  it('has no upload', () => {
+    expect(api.salesAnalytics.upload).toBeUndefined();
   });
 });

@@ -145,7 +145,7 @@ export const API_ROUTES = {
     pipelineImports: '/api/sales/pipeline-imports',
     pipelineImportTemplate: '/api/sales/pipeline-imports/template',
   },
-  // SalesAnalyticsController (salesanalytics/): the monthly analytics snapshot, ceo + sales_manager read, ceo uploads.
+  // SalesAnalyticsController (salesanalytics/): the weekly analytics snapshot, ceo + sales_manager read; the PUT comes from an outside refresh job.
   salesAnalytics: {
     snapshot: '/api/sales-analytics/snapshot',
   },
