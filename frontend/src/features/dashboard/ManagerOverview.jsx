@@ -73,7 +73,7 @@ const MANAGER_TITLE = 'ภาพรวมทีมขาย';
 /** Landing page: today's team overview, or (?view=insight) the sales-analytics snapshot. */
 export function ManagerOverview(props) {
   return (
-    <InsightLanding title={MANAGER_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher, panelProps) => <ManagerToday {...props} switcher={switcher} panelProps={panelProps} />} />
+    <InsightLanding title={MANAGER_TITLE} user={props.user} renderToday={(switcher, panelProps) => <ManagerToday {...props} switcher={switcher} panelProps={panelProps} />} />
   );
 }
 

@@ -23,14 +23,14 @@ function useInsightView() {
  * the sales-analytics snapshot. The tablist lives in the header; the tabpanel (`panelProps`) wraps only the body below
  * it, so the tablist is never inside the panel it controls.
  */
-export function InsightLanding({ title, user, showToast, renderToday }) {
+export function InsightLanding({ title, user, renderToday }) {
   const [view, setView] = useInsightView();
   const switcher = <Tabs items={ITEMS} value={view} onChange={setView} ariaLabel="มุมมองหน้าแรก" idPrefix="landing-view" onSurface />;
   const panelProps = { role: 'tabpanel', id: `landing-view-panel-${view}`, 'aria-labelledby': `landing-view-tab-${view}` };
   return view === 'insight' ? (
     <PageStack>
       <PageHeader title={title} actions={switcher} />
-      <div {...panelProps}><SalesInsights user={user} showToast={showToast} /></div>
+      <div {...panelProps}><SalesInsights user={user} /></div>
     </PageStack>
   ) : renderToday(switcher, panelProps);
 }
