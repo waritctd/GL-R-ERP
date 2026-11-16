@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 import org.springframework.http.HttpStatus;
@@ -51,7 +52,8 @@ public class PeopleInsightsService {
         if (y < 2000 || y > 2100) throw new ApiException(HttpStatus.BAD_REQUEST, "ปีไม่ถูกต้อง");
 
         boolean whole = ALL.equals(served.id());
-        List<Long> scopeIds = whole ? repository.activeEmployeeIds() : repository.teamMemberIds(Long.parseLong(served.id()));
+        Map<Long, List<Long>> members = repository.teamMemberIds(y);
+        List<Long> scopeIds = whole ? repository.companyEmployeeIds(y) : members.getOrDefault(Long.parseLong(served.id()), List.of());
         List<Person> people = repository.people(scopeIds);
         List<Long> judged = people.stream().filter(p -> !p.timeExempt()).map(Person::employeeId).toList();
         List<LeaveRow> leave = repository.leave(scopeIds, y);
@@ -61,8 +63,8 @@ public class PeopleInsightsService {
         // A type can reach this year only through its quota year (a leave that starts in December), so both lists name it.
         Set<String> typeCodes = Stream.concat(leave.stream().map(LeaveRow::leaveTypeCode), quotaUsage.stream().map(q -> q.leaveTypeCode()))
             .collect(Collectors.toSet());
-        return new Response(asOf == null ? null : asOf.toString(), y, allowed, served,
-            repository.leaveTypes(typeCodes), people, leave, quotaUsage, attendance, whole ? comparableTeams(teams) : List.of());
+        return new Response(asOf == null ? null : asOf.toString(), y, years(), allowed, served,
+            repository.leaveTypes(typeCodes), people, leave, quotaUsage, attendance, whole ? comparableTeams(teams, members) : List.of());
     }
 
     private List<Scope> allowedScopes(UserPrincipal user, List<TeamRow> teams) {
@@ -77,10 +79,16 @@ public class PeopleInsightsService {
         return out;
     }
 
-    private List<Team> comparableTeams(List<TeamRow> teams) {
+    private List<Integer> years() {
+        TreeSet<Integer> years = new TreeSet<>(repository.activeYears());
+        years.add(LocalDate.now(BANGKOK).getYear());
+        return List.copyOf(years);
+    }
+
+    private List<Team> comparableTeams(List<TeamRow> teams, Map<Long, List<Long>> members) {
         Map<Long, List<String>> heads = repository.headNicknames();
         return teams.stream().map(t -> new Team(String.valueOf(t.id()), t.label(), heads.getOrDefault(t.id(), List.of()),
-            repository.teamMemberIds(t.id()))).toList();
+            members.getOrDefault(t.id(), List.of()))).toList();
     }
 
     private static ApiException forbidden() {

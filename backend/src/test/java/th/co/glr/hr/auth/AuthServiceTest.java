@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doThrow;
@@ -24,12 +25,14 @@ import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.peopleinsights.PeopleInsightsService;
 
 class AuthServiceTest {
     private final EmployeeAuthRepository employees = mock(EmployeeAuthRepository.class);
     private final PasswordEncoder encoder = new BCryptPasswordEncoder();
     private final AuditService audit = mock(AuditService.class);
-    private final AuthService service = new AuthService(employees, encoder, audit, new ViewAsService(employees, audit, ""));
+    private final PeopleInsightsService insights = mock(PeopleInsightsService.class);
+    private final AuthService service = new AuthService(employees, encoder, audit, new ViewAsService(employees, audit, ""), insights);
 
     @Test
     void rejectsTheEmployeeCodeAsAPassword() {
@@ -124,6 +127,8 @@ class AuthServiceTest {
 
     @Test
     void loginSurfacesCanViewPeopleInsightsForHrAndForATeamHeadButNotForAnEmployee() {
+        // The access rule lives in PeopleInsightsService.mayView; the login response only relays it.
+        when(insights.mayView(argThat(u -> u != null && "hr".equals(u.role())))).thenReturn(true);
         when(employees.findByEmail("hr@glr.co.th"))
             .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
         assertThat(service.login(new LoginRequest("hr@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
@@ -134,7 +139,7 @@ class AuthServiceTest {
         assertThat(service.login(new LoginRequest("employee@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
             .canViewPeopleInsights()).isFalse();
 
-        when(employees.isInsightTeamHead(42L)).thenReturn(true);
+        when(insights.mayView(any())).thenReturn(true);
         assertThat(service.login(new LoginRequest("employee@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
             .canViewPeopleInsights()).isTrue();
     }

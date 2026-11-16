@@ -12,9 +12,9 @@ public final class PeopleInsightsDtos {
 
     public record LeaveType(String code, String nameTh, BigDecimal annualQuotaDays) {}
 
-    public record Person(long employeeId, String employeeCode, String nickname, boolean timeExempt) {}
+    public record Person(long employeeId, String employeeCode, String nickname, boolean timeExempt, boolean active) {}
 
-    /** One employee x month x leave type, APPROVED requests only, bucketed by start month. */
+    /** One employee x month x leave type, APPROVED requests only. days and unpaidDays are the request's share of the month; requests, sickEdgeDays and lateFiled belong to the start month. */
     public record LeaveRow(long employeeId, String month, String leaveTypeCode, BigDecimal days, int requests,
                            BigDecimal sickEdgeDays, int lateFiled, BigDecimal unpaidDays) {}
 
@@ -27,7 +27,7 @@ public final class PeopleInsightsDtos {
 
     public record Team(String id, String label, List<String> headNicknames, List<Long> memberIds) {}
 
-    public record Response(String asOf, int year, List<Scope> scopes, Scope scope, List<LeaveType> leaveTypes,
+    public record Response(String asOf, int year, List<Integer> years, List<Scope> scopes, Scope scope, List<LeaveType> leaveTypes,
                            List<Person> people, List<LeaveRow> leave, List<QuotaUsage> quotaUsage,
                            List<AttendanceRow> attendance, List<Team> teams) {}
 }

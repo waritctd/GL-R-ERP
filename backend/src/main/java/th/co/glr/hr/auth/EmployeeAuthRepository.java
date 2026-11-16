@@ -143,14 +143,6 @@ public class EmployeeAuthRepository {
         return Boolean.TRUE.equals(granted);
     }
 
-    /** Whether this employee heads a team on the leave/check-in insights page (hr.insight_team_head): the UI hint for the
-     * menu item. The endpoint itself re-reads it on every call. */
-    public boolean isInsightTeamHead(long employeeId) {
-        Boolean head = jdbc.queryForObject(
-            "SELECT EXISTS (SELECT 1 FROM hr.insight_team_head WHERE employee_id = :id)", Map.of("id", employeeId), Boolean.class);
-        return Boolean.TRUE.equals(head);
-    }
-
     /** Stores a user-chosen password and clears the forced-change flag. */
     public void updatePassword(long employeeId, String passwordHash) {
         jdbc.update("""

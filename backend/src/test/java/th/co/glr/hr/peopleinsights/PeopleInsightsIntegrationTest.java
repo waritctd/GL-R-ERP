@@ -227,8 +227,8 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
     @Test
     void quotaUsageFollowsTheQuotaYearNotTheStartDate() throws Exception {
         long e = id.get("a1y");
-        // Starts 30 Dec 2025, 4 days: 2 in 2025, 2 in 2026. In 2026's quotaUsage (2 days) but NOT in 2026's leave (start year 2025).
-        long span = leave(e, "SICK", "2025-12-30", 4, "APPROVED", 4, 0, e, "2025-12-29T10:00:00+07:00", null);
+        // 30 Dec 2025 - 2 Jan 2026, 4 days: 2 in 2025, 2 in 2026. In 2026's quotaUsage (2 days) and its January leave share (2 days, no request: it started in 2025).
+        long span = leaveSpan(e, "SICK", "2025-12-30", "2026-01-02", 4, "APPROVED", 4, 0, e, "2025-12-29T10:00:00+07:00", null);
         quotaYear(span, 2025, 2);
         quotaYear(span, 2026, 2);
         // Starts 2 Jan 2026 but charged to quota year 2025 (carried over): in 2026's leave, NOT in 2026's quotaUsage.
@@ -247,7 +247,7 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(list(body, "leaveTypes").stream().map(r -> r.get("code")).toList()).contains("VACATION");
         List<Map<String, Object>> leaveRows = list(body, "leave").stream().filter(r -> num(r, "employeeId") == e).toList();
         assertThat(leaveRows.stream().map(r -> r.get("month") + r.get("leaveTypeCode").toString()).toList())
-            .containsExactlyInAnyOrder("2026-01PERSONAL", "2026-02SICK");
+            .containsExactlyInAnyOrder("2026-01PERSONAL", "2026-01SICK", "2026-02SICK");
 
         // A team head sees quotaUsage only for their own team.
         assertThat(list(call("b1", null, 2026), "quotaUsage")).isEmpty();
@@ -273,6 +273,120 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(num(may, "scanDays")).isEqualTo(20);
         assertThat(num(may, "morningScanDays")).isEqualTo(1);
         assertThat(num(june, "morningScanDays")).isEqualTo(10);
+    }
+
+    // fix 1 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+    @Test
+    void daysCoveredByApprovedLeaveAreNeverLateOrEarlyLeaveButOtherLeaveStatesDoNotExcuse() throws Exception {
+        long e = id.get("a1y");
+        day(e, "2026-03-02", "2026-03-02T13:00:00+07:00", "2026-03-02T17:00:00+07:00", 255, 0);   // approved morning leave: excused
+        leaveSpan(e, "PERSONAL", "2026-03-02", "2026-03-02", 0.5, "APPROVED", 0.5, 0, e, "2026-03-01T10:00:00+07:00", null);
+        day(e, "2026-03-03", "2026-03-03T13:00:00+07:00", "2026-03-03T17:00:00+07:00", 255, 0);   // rejected leave: still late
+        leaveSpan(e, "PERSONAL", "2026-03-03", "2026-03-03", 0.5, "REJECTED", 0, 0, e, "2026-03-02T10:00:00+07:00", null);
+        day(e, "2026-03-04", "2026-03-04T13:00:00+07:00", "2026-03-04T17:00:00+07:00", 255, 0);   // submitted leave: still late
+        leaveSpan(e, "PERSONAL", "2026-03-04", "2026-03-04", 0.5, "SUBMITTED", 0, 0, e, "2026-03-03T10:00:00+07:00", null);
+        day(e, "2026-03-05", "2026-03-05T08:00:00+07:00", "2026-03-05T14:00:00+07:00", 0, 180);   // approved afternoon leave: early leave excused
+        leaveSpan(e, "PERSONAL", "2026-03-05", "2026-03-05", 0.5, "APPROVED", 0.5, 0, e, "2026-03-04T10:00:00+07:00", null);
+        day(e, "2026-03-06", "2026-03-06T08:00:00+07:00", "2026-03-06T14:00:00+07:00", 0, 180);   // no leave: early leave counts
+        day(e, "2026-03-09", "2026-03-09T09:00:00+07:00", "2026-03-09T17:00:00+07:00", 30, 0);    // inside a multi-day approved leave: excused
+        leaveSpan(e, "VACATION", "2026-03-08", "2026-03-10", 2, "APPROVED", 2, 0, e, "2026-03-01T10:00:00+07:00", null);
+
+        Map<String, Object> march = list(call("ceo", "all", 2026), "attendance").stream()
+            .filter(r -> num(r, "employeeId") == e && "2026-03".equals(r.get("month"))).findFirst().orElseThrow();
+        assertThat(num(march, "scanDays")).isEqualTo(6); // excused days still count as scans
+        assertThat(num(march, "lateDays")).isEqualTo(2); // only the rejected and submitted days
+        assertThat(num(march, "lateMinutes")).isEqualTo(510);
+        assertThat(num(march, "earlyLeave")).isEqualTo(1); // only 6 Mar
+        assertThat(num(march, "morningScanDays")).isEqualTo(3); // 5, 6 and 9 Mar; the 13:00 scans are afternoon
+    }
+
+    // fix 2 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+    @Test
+    void peopleWhoLeftDuringTheYearStayInThatYearsFiguresAndAreMarkedInactive() throws Exception {
+        long z = id.get("a1z");
+        leave(z, "SICK", "2026-03-10", 1, "APPROVED", 1, 0, z, "2026-03-10T10:00:00+07:00", null);
+        long left = emp("T-LEFT", "ลาออก", id.get("ceo"), false); // attendance only, outside any team
+        day(left, "2026-03-11", "2026-03-11T08:00:00+07:00", "2026-03-11T17:00:00+07:00", 0, 0);
+        long gone = emp("T-GONE", "หายไป", id.get("ceo"), false); // inactive, nothing in 2026
+        leave(gone, "SICK", "2026-03-10", 1, "REJECTED", 0, 0, gone, "2026-03-10T10:00:00+07:00", null);
+        leave(gone, "SICK", "2025-03-10", 1, "APPROVED", 1, 0, gone, "2025-03-10T10:00:00+07:00", null);
+
+        Map<String, Object> all = call("ceo", "all", 2026);
+        Map<String, Object> zPerson = list(all, "people").stream().filter(p -> num(p, "employeeId") == z).findFirst().orElseThrow();
+        assertThat(zPerson.get("active")).isEqualTo(false);
+        assertThat(list(all, "people").stream().filter(p -> num(p, "employeeId") == id.get("a1y")).findFirst().orElseThrow().get("active")).isEqualTo(true);
+        assertThat(personIds(all)).contains(left).doesNotContain(gone);
+        assertThat(list(all, "leave").stream().filter(r -> num(r, "employeeId") == z).map(r -> r.get("month")).toList()).containsExactly("2026-03");
+        assertThat(list(all, "attendance").stream().filter(r -> num(r, "employeeId") == left)).hasSize(1);
+        assertThat(personIds(call("ceo", "all", 2025))).contains(gone).doesNotContain(z);
+
+        assertThat(personIds(call("a1", null, 2026))).contains(z).doesNotContain(left); // inside a1's line, not the other inactive
+        assertThat(personIds(call("a2", null, 2026))).contains(z); // co-heads share the line
+        assertThat(personIds(call("b1", null, 2026))).doesNotContain(z); // outside b1's line
+        assertThat(longs(list(all, "teams").stream().filter(t -> t.get("id").equals(String.valueOf(alphaTeam))).findFirst().orElseThrow().get("memberIds")))
+            .contains(z);
+    }
+
+    // fix 3 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+    @Test
+    void leaveSpanningMonthsIsSplitByCalendarDaysAndOnlyTheStartMonthCountsTheRequest() throws Exception {
+        long e = id.get("a1y");
+        // 20 Apr - 14 May: 25 calendar days, 11 in April and 14 in May. 20 days and 5 unpaid days split 8.8/11.2 and 2.2/2.8.
+        leaveSpan(e, "VACATION", "2026-04-20", "2026-05-14", 20, "APPROVED", 15, 5, e, "2026-04-10T10:00:00+07:00", null);
+        // 30 Dec 2025 - 3 Jan 2026: 5 calendar days, 3 in 2026. 4 days -> 2.4 in January; the request itself belongs to 2025.
+        leaveSpan(e, "SICK", "2025-12-30", "2026-01-03", 4, "APPROVED", 4, 0, e, "2025-12-31T10:00:00+07:00", null);
+        // 30 Dec 2026 - 2 Jan 2027: 4 calendar days, 2 in 2026. 3 days -> 1.5 in December. Starts on a Wednesday: not a sick edge.
+        leaveSpan(e, "SICK", "2026-12-30", "2027-01-02", 3, "APPROVED", 3, 0, e, "2027-01-05T10:00:00+07:00", null);
+        // 3 days over 3 calendar days across a month end: 1.0 + 2.0 exactly, remainder on the last month.
+        leaveSpan(e, "PERSONAL", "2026-06-29", "2026-07-01", 1, "APPROVED", 1, 0, e, "2026-06-20T10:00:00+07:00", null);
+
+        List<Map<String, Object>> rows = list(call("ceo", "all", 2026), "leave").stream().filter(r -> num(r, "employeeId") == e).toList();
+        Map<String, Object> apr = row(rows, "2026-04", "VACATION");
+        Map<String, Object> may = row(rows, "2026-05", "VACATION");
+        assertThat(dbl(apr, "days")).isEqualTo(8.8);
+        assertThat(dbl(may, "days")).isEqualTo(11.2);
+        assertThat(dbl(apr, "unpaidDays")).isEqualTo(2.2);
+        assertThat(dbl(may, "unpaidDays")).isEqualTo(2.8);
+        assertThat(num(apr, "requests")).isEqualTo(1);
+        assertThat(num(may, "requests")).isEqualTo(0);
+
+        Map<String, Object> jan = row(rows, "2026-01", "SICK");
+        assertThat(dbl(jan, "days")).isEqualTo(2.4);
+        assertThat(num(jan, "requests")).isEqualTo(0);
+        assertThat(dbl(jan, "sickEdgeDays")).isEqualTo(0.0);
+        Map<String, Object> dec = row(rows, "2026-12", "SICK");
+        assertThat(dbl(dec, "days")).isEqualTo(1.5);
+        assertThat(num(dec, "requests")).isEqualTo(1);
+        assertThat(rows.stream().filter(r -> "2027-01".equals(r.get("month")))).isEmpty();
+
+        Map<String, Object> jun = row(rows, "2026-06", "PERSONAL");
+        Map<String, Object> jul = row(rows, "2026-07", "PERSONAL");
+        assertThat(dbl(jun, "days") + dbl(jul, "days")).isEqualTo(1.0);
+        assertThat(dbl(jun, "days")).isEqualTo(0.67);
+        assertThat(dbl(jul, "days")).isEqualTo(0.33);
+    }
+
+    // fix 4 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+    @Test
+    void yearsListsEveryYearWithApprovedLeaveOrAttendanceAndAlwaysTheCurrentYear() throws Exception {
+        long e = id.get("a1y");
+        leave(e, "SICK", "2024-05-06", 1, "APPROVED", 1, 0, e, "2024-05-06T10:00:00+07:00", null);
+        leave(e, "SICK", "2022-05-06", 1, "REJECTED", 0, 0, e, "2022-05-06T10:00:00+07:00", null); // not approved: no year
+        day(e, "2025-03-03", "2025-03-03T08:00:00+07:00", "2025-03-03T17:00:00+07:00", 0, 0);
+        int current = LocalDate.now(ZoneId.of("Asia/Bangkok")).getYear();
+
+        List<Integer> years = ((List<?>) call("ceo", "all", 2026).get("years")).stream().map(o -> ((Number) o).intValue()).toList();
+        assertThat(years).contains(2024, 2025, current).doesNotContain(2022).isSorted().doesNotHaveDuplicates();
+    }
+
+    // fix 7 ──────────────────────────────────────────────────────────────────────────────────────────────────────
+    @Test
+    void everyTeamsMembersAreCorrectInOneWholeCompanyResponse() throws Exception {
+        List<Map<String, Object>> teams = list(call("ceo", "all", 2026), "teams");
+        Map<String, Map<String, Object>> byId = teams.stream().collect(Collectors.toMap(t -> (String) t.get("id"), t -> t));
+        assertThat(longs(byId.get(String.valueOf(betaTeam)).get("memberIds"))).containsExactlyInAnyOrderElementsOf(ids("b1x"));
+        assertThat(longs(byId.get(String.valueOf(alphaTeam)).get("memberIds")))
+            .containsExactlyInAnyOrderElementsOf(ids("a1x", "a1y", "a1y1", "a2x"));
     }
 
     // helpers ────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -357,15 +471,20 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private long leave(long employee, String type, String start, double days, String status, double paid, double unpaid,
                        long requestedBy, String requestedAt, String systemNote) {
+        return leaveSpan(employee, type, start, start, days, status, paid, unpaid, requestedBy, requestedAt, systemNote);
+    }
+
+    private long leaveSpan(long employee, String type, String start, String end, double days, String status, double paid, double unpaid,
+                           long requestedBy, String requestedAt, String systemNote) {
         return jdbc.queryForObject("""
             INSERT INTO hr.leave_request (employee_id, leave_type_code, start_date, end_date, total_days, quota_year, reason,
                 status, paid_days, unpaid_days, quota_remaining_before, quota_remaining_after, requested_by_id, requested_at,
                 system_note)
-            VALUES (:e, :type, CAST(:start AS date), CAST(:start AS date), :days, CAST(substr(:start, 1, 4) AS smallint), 'ทดสอบ',
+            VALUES (:e, :type, CAST(:start AS date), CAST(:end AS date), :days, CAST(substr(:start, 1, 4) AS smallint), 'ทดสอบ',
                 :status, :paid, :unpaid, 10, 9, :by, CAST(:at AS timestamptz), :note)
             RETURNING leave_request_id
             """, new MapSqlParameterSource().addValue("e", employee).addValue("type", type).addValue("start", start)
-                .addValue("days", days).addValue("status", status).addValue("paid", status.equals("APPROVED") ? paid : 0)
+                .addValue("end", end).addValue("days", days).addValue("status", status).addValue("paid", status.equals("APPROVED") ? paid : 0)
                 .addValue("unpaid", status.equals("APPROVED") ? unpaid : 0).addValue("by", requestedBy)
                 .addValue("at", requestedAt).addValue("note", systemNote), Long.class);
     }

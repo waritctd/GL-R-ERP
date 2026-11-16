@@ -59,7 +59,7 @@ class PasswordResetIntegrationTest extends AbstractPostgresIntegrationTest {
             mailer, new BrandAssets(), "", "", "https://portal.test.glr");
         AuditService auditService = new AuditService(new AuditLogRepository(jdbc), new ObjectMapper().findAndRegisterModules());
         service = new PasswordResetService(employees, tokenRepository, encoder, emailService, auditService);
-        authService = new AuthService(employees, encoder, auditService, new ViewAsService(employees, auditService, ""));
+        authService = new AuthService(employees, encoder, auditService, new ViewAsService(employees, auditService, ""), org.mockito.Mockito.mock(th.co.glr.hr.peopleinsights.PeopleInsightsService.class));
     }
 
     @Test
