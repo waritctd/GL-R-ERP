@@ -1,4 +1,5 @@
-import { Figure, FigureBand, InsightPanel, Pad } from './insightParts.jsx';
+import { Figure } from '../dashboardParts.jsx';
+import { FigureBand, InsightPanel, Pad } from './insightParts.jsx';
 import { cn } from '../../../utils/cn.js';
 import { SECTION_VIEW } from './insightSections.jsx';
 import { SECTION_LABEL, SECTION_ORDER, availableSections, buildFindings, buildRecommendations, ml } from './insightFormat.js';

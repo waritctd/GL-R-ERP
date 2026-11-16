@@ -1,10 +1,7 @@
-import { formatMoney } from '../../../utils/format.js';
-
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
 /** 1.2 ล้าน — the snapshot's headline unit; "—" for a missing figure. */
 export const ml = (n) => (isNum(Number(n)) && n != null ? `${(Number(n) / 1e6).toFixed(1)} ล้าน` : '—');
-export const baht = formatMoney;
 export const pct = (v) => (isNum(Number(v)) && v != null ? `${Math.round(Number(v) * 100)}%` : '—');
 /** Signed percent for a month-over-month style delta; null means "no comparison month". */
 export const signed = (v) => (isNum(v) ? `${v > 0 ? '+' : ''}${v}%` : '—');

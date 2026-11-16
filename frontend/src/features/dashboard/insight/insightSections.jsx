@@ -1,6 +1,8 @@
-import { Badge, Bars, InsightPanel, InsightTable, Pad, Pairs, ProgressBar, Small, Td } from './insightParts.jsx';
+import { StatusBadge } from '../../../components/common/StatusBadge.jsx';
+import { formatMoney } from '../../../utils/format.js';
+import { Bars, InsightPanel, InsightTable, Pad, Pairs, ProgressBar, Small, Td } from './insightParts.jsx';
 import { CustomerList } from './insightMonth.jsx';
-import { baht, ml } from './insightFormat.js';
+import { ml } from './insightFormat.js';
 
 const range = (K) => (K.t12_range ? <span>{K.t12_range.join(' – ')}</span> : null);
 const fcTone = (r) => (r >= 80 && r <= 120 ? 'success' : r >= 50 && r <= 200 ? 'warning' : 'danger');
@@ -19,12 +21,12 @@ function Sales({ K }) {
               {q ? (
                 <>
                   <Td right>{ml(x.q_prev)}</Td><Td right>{ml(x.q_cur)}</Td>
-                  <Td right><Badge tone={x.qchg < 0 ? 'danger' : 'success'}>{x.qchg > 0 ? '+' : ''}{x.qchg}%</Badge></Td>
+                  <Td right><StatusBadge tone={x.qchg < 0 ? 'danger' : 'success'}>{x.qchg > 0 ? '+' : ''}{x.qchg}%</StatusBadge></Td>
                 </>
               ) : null}
               <Td right>{ml(x.max)}<Small>{x.maxm}</Small></Td>
-              <Td right>{x.cv >= 0.7 ? <Badge tone="warning">สูง · {x.cv}</Badge> : x.cv}</Td>
-              <Td right>{baht(x.med_ticket)}</Td>
+              <Td right>{x.cv >= 0.7 ? <StatusBadge tone="warning">สูง · {x.cv}</StatusBadge> : x.cv}</Td>
+              <Td right>{formatMoney(x.med_ticket)}</Td>
             </tr>
           ))}
         </InsightTable>
@@ -51,8 +53,8 @@ function Comm({ K }) {
         <InsightTable cols={[['พนักงานขาย'], ['รายรับ', true], ['ค่าคอมจ่ายจริง', true], ['% ของรายรับ', true], ['ตามสูตร', true], ['เดือนที่แจ้งแก้ไข', true]]}>
           {K.reps.map((x) => (
             <tr key={x.rep}>
-              <Td><b>{x.rep}</b></Td><Td right>{ml(x.rev)}</Td><Td right>{baht(x.comm)}</Td><Td right>{x.rate}%</Td><Td right>{baht(x.formula)}</Td>
-              <Td right>{x.corr ? <Badge tone={x.corr >= 9 ? 'warning' : 'neutral'}>{x.corr} จาก {x.n}</Badge> : '—'}</Td>
+              <Td><b>{x.rep}</b></Td><Td right>{ml(x.rev)}</Td><Td right>{formatMoney(x.comm)}</Td><Td right>{x.rate}%</Td><Td right>{formatMoney(x.formula)}</Td>
+              <Td right>{x.corr ? <StatusBadge tone={x.corr >= 9 ? 'warning' : 'neutral'}>{x.corr} จาก {x.n}</StatusBadge> : '—'}</Td>
             </tr>
           ))}
         </InsightTable>
@@ -66,7 +68,7 @@ function Cust({ K }) {
   return (
     <>
       <div className="grid grid-cols-2 items-start gap-[18px] nav-drawer:grid-cols-1">
-        <InsightPanel id="cust-panel" title="ลูกค้า" side="12 เดือนล่าสุด" foot={`ใบเสร็จกลาง ๆ ${baht(c.med)} · ลูกค้า ${c.n80} รายให้รายรับ 80%`}>
+        <InsightPanel id="cust-panel" title="ลูกค้า" side="12 เดือนล่าสุด" foot={`ใบเสร็จกลาง ๆ ${formatMoney(c.med)} · ลูกค้า ${c.n80} รายให้รายรับ 80%`}>
           <Pad>
             <dl className="m-0 grid grid-cols-3 gap-4 mobile:grid-cols-1">
               <div><dt className="text-xs font-bold text-text-muted">ลูกค้าที่รับเงิน</dt><dd className="m-0 text-xl font-extrabold">{c.n} ราย</dd><small className="text-xs text-text-muted">{Number(c.lines).toLocaleString()} ใบเสร็จ</small></div>
@@ -100,7 +102,7 @@ function Pipe({ K }) {
                   <Td right>{x.cover >= 0.1 ? `${x.cover} เท่า` : 'ต่ำกว่า 0.1 เท่า'}</Td>
                   <Td right>{x.lost_n ? ml(x.lost) : '—'}<Small>{x.lost_n ? `${x.lost_n} งาน` : 'ไม่ได้บันทึก'}</Small></Td>
                   <Td right>{f ? `${Math.round(f * 100)}%` : '—'}</Td>
-                  <Td>{!c ? '—' : c.stale_wk > 3 ? <Badge tone="danger">ขาด {c.stale_wk} สัปดาห์</Badge> : c.weeks / c.of >= 0.8 ? <Badge tone="success">ส่งครบ {c.weeks}/{c.of}</Badge> : <Badge tone="warning">ส่ง {c.weeks}/{c.of} สัปดาห์</Badge>}</Td>
+                  <Td>{!c ? '—' : c.stale_wk > 3 ? <StatusBadge tone="danger">ขาด {c.stale_wk} สัปดาห์</StatusBadge> : c.weeks / c.of >= 0.8 ? <StatusBadge tone="success">ส่งครบ {c.weeks}/{c.of}</StatusBadge> : <StatusBadge tone="warning">ส่ง {c.weeks}/{c.of} สัปดาห์</StatusBadge>}</Td>
                 </tr>
               );
             })}
@@ -121,7 +123,7 @@ function Pipe({ K }) {
             {K.fc_stats.map((x) => (
               <tr key={x.rep}>
                 <Td><b>{x.rep}</b>{x.xl ? <Small>จากไฟล์ Excel</Small> : null}</Td><Td right>{x.n}</Td>
-                <Td right><Badge tone={fcTone(x.ratio)}>{x.ratio}%</Badge></Td><Td right>±{x.err}%</Td><Td right>{x.weeks}%</Td>
+                <Td right><StatusBadge tone={fcTone(x.ratio)}>{x.ratio}%</StatusBadge></Td><Td right>±{x.err}%</Td><Td right>{x.weeks}%</Td>
               </tr>
             ))}
           </InsightTable>
@@ -133,7 +135,7 @@ function Pipe({ K }) {
             {K.pipe_quality.map((x) => (
               <tr key={x.rep}>
                 <Td><b>{x.rep}</b></Td><Td right>{x.n}</Td><Td right>{ml(x.value)}</Td>
-                {['q', 'stage', 'prob', 'designer'].map((k) => <Td key={k} right><Badge tone={fillTone(x[k])}>{x[k]}%</Badge></Td>)}
+                {['q', 'stage', 'prob', 'designer'].map((k) => <Td key={k} right><StatusBadge tone={fillTone(x[k])}>{x[k]}%</StatusBadge></Td>)}
                 <Td right>{x.largest}%</Td>
               </tr>
             ))}
@@ -172,7 +174,7 @@ function Des({ K }) {
               <tr key={d.name}>
                 <Td><b>{d.name}</b></Td><Td>{d.reps}</Td><Td right>{ml(d.ordered)}</Td><Td right>{ml(d.expected)}</Td><Td right>{d.n}</Td>
                 <Td><ProgressBar part={d.ordered + d.expected} whole={top.ordered + top.expected} label={`${d.name}: ${ml(d.ordered + d.expected)}`} /></Td>
-                <Td right>{d.visits || <Badge tone="warning">ไม่พบในบันทึก</Badge>}</Td>
+                <Td right>{d.visits || <StatusBadge tone="warning">ไม่พบในบันทึก</StatusBadge>}</Td>
               </tr>
             ))}
           </InsightTable>

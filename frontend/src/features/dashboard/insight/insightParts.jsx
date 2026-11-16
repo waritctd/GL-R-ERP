@@ -1,6 +1,4 @@
 import { Panel } from '../../../components/common/Layout.jsx';
-import { StatusBadge } from '../../../components/common/StatusBadge.jsx';
-import { Figure } from '../dashboardParts.jsx';
 import { cn } from '../../../utils/cn.js';
 import { barWidth } from './insightFormat.js';
 
@@ -29,7 +27,6 @@ export function ProgressBar({ part, whole, tone = 'bg-primary', label }) {
 export const FigureBand = ({ children }) => (
   <dl className="m-0 grid grid-cols-4 gap-x-6 gap-y-4 px-5 py-4 nav-drawer:grid-cols-2 mobile:grid-cols-1 mobile:px-3.5">{children}</dl>
 );
-export { Figure };
 
 /** Rows of [name, value, caption] as labelled bars against `max`. */
 export function Bars({ rows, max }) {
@@ -78,5 +75,4 @@ export function InsightTable({ cols, children, testId }) {
 export const Td = ({ right, className, children, ...p }) => (
   <td className={cn('border-b border-border-subtle px-5 py-2.5 mobile:px-3.5', right && 'text-right tabular-nums', className)} {...p}>{children}</td>
 );
-export const Badge = ({ tone, children }) => <StatusBadge tone={tone}>{children}</StatusBadge>;
 export const Small = ({ children }) => <span className="ml-1.5 text-xs text-text-muted">{children}</span>;

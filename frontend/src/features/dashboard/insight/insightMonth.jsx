@@ -1,7 +1,10 @@
 import { Button } from '../../../components/common/Button.jsx';
-import { Badge, Figure, FigureBand, InsightPanel, InsightTable, Pad, ProgressBar, Small, Td } from './insightParts.jsx';
-import { baht, ml, pctOf, ratio, signed } from './insightFormat.js';
+import { StatusBadge } from '../../../components/common/StatusBadge.jsx';
+import { Figure } from '../dashboardParts.jsx';
+import { FigureBand, InsightPanel, InsightTable, Pad, ProgressBar, Small, Td } from './insightParts.jsx';
+import { ml, pctOf, ratio, signed } from './insightFormat.js';
 import { cn } from '../../../utils/cn.js';
+import { formatMoney } from '../../../utils/format.js';
 
 const ratioTone = (r) => (r >= 0.8 && r <= 1.2 ? 'success' : r >= 0.5 && r <= 2 ? 'warning' : 'danger');
 
@@ -69,7 +72,7 @@ export function CustomerList({ id, title, side, rows, total, testId }) {
           <tr key={`${c.name}-${i}`}>
             <Td>{i + 1}</Td>
             <Td><b>{c.name}</b></Td>
-            <Td right>{baht(c.amt)}</Td>
+            <Td right>{formatMoney(c.amt)}</Td>
             <Td><ProgressBar part={c.amt} whole={top} label={`${c.name}: ${c.share}%`} /></Td>
             <Td right>{c.share}%</Td>
             <Td right>{c.n}</Td>
@@ -91,10 +94,10 @@ export function MonthDetail({ K, sel }) {
     <div className="grid gap-[18px]" data-testid="insight-month-detail">
       <InsightPanel title={K.months[sel]} side={`${d.lines} ใบเสร็จ · ${d.cust} ลูกค้า`}>
         <FigureBand>
-          <Figure lead label="รายรับเดือนนี้ (ไม่รวม VAT)" value={baht(d.total)} caption={lead ? `${lead.rep} ทำ ${pctOf(lead.rev, d.total)} ของเดือน` : ''} />
+          <Figure lead label="รายรับเดือนนี้ (ไม่รวม VAT)" value={formatMoney(d.total)} caption={lead ? `${lead.rep} ทำ ${pctOf(lead.rev, d.total)} ของเดือน` : ''} />
           <Figure danger={d.mom < 0} label="เทียบเดือนก่อน" value={signed(d.mom)} caption={sel ? `${K.months[sel - 1]} ${ml(K.monthly_total[sel - 1])}` : 'ไม่มีไฟล์เดือนก่อนหน้า'} />
           <Figure danger={d.yoy < 0} label="เทียบเดือนเดียวกันปีก่อน" value={signed(d.yoy)} caption={d.yoy == null || !K.months[sel - 12] ? 'ไม่มีไฟล์ของปีก่อน' : `${K.months[sel - 12]} ${ml(K.monthly_total[sel - 12])}`} />
-          <Figure label="ค่าคอมจ่าย" value={baht(d.comm)} caption={`${pctOf(d.comm, d.total, 2)} ของรายรับ${d.corr ? ` · แจ้งแก้ไข ${d.corr} คน` : ''}`} />
+          <Figure label="ค่าคอมจ่าย" value={formatMoney(d.comm)} caption={`${pctOf(d.comm, d.total, 2)} ของรายรับ${d.corr ? ` · แจ้งแก้ไข ${d.corr} คน` : ''}`} />
         </FigureBand>
       </InsightPanel>
       <div className="grid grid-cols-2 items-start gap-[18px] nav-drawer:grid-cols-1">
@@ -102,10 +105,10 @@ export function MonthDetail({ K, sel }) {
           <InsightTable cols={[['พนักงานขาย'], ['รายรับ', true], ['สัดส่วน'], ['ค่าคอม', true], ['สถานะ']]}>
             {d.reps.map((r) => (
               <tr key={r.rep}>
-                <Td><b>{r.rep}</b></Td><Td right>{baht(r.rev)}</Td>
+                <Td><b>{r.rep}</b></Td><Td right>{formatMoney(r.rev)}</Td>
                 <Td><ProgressBar part={r.rev} whole={top} label={`${r.rep}: ${pctOf(r.rev, d.total)} ของเดือน`} /></Td>
-                <Td right>{baht(r.comm)}</Td>
-                <Td>{r.corr ? <Badge tone="warning">แจ้งแก้ไข</Badge> : <Badge tone="success">OK</Badge>}</Td>
+                <Td right>{formatMoney(r.comm)}</Td>
+                <Td>{r.corr ? <StatusBadge tone="warning">แจ้งแก้ไข</StatusBadge> : <StatusBadge tone="success">OK</StatusBadge>}</Td>
               </tr>
             ))}
           </InsightTable>
@@ -117,8 +120,8 @@ export function MonthDetail({ K, sel }) {
                 {fc.map((f) => (
                   <tr key={f.rep}>
                     <Td><b>{f.rep}</b>{f.xl ? <Small>จากไฟล์ Excel</Small> : null}</Td>
-                    <Td right>{baht(f.fc)}</Td><Td right>{baht(f.act)}</Td>
-                    <Td right><Badge tone={ratioTone(f.ratio)}>{Math.round(f.ratio * 100)}%</Badge></Td>
+                    <Td right>{formatMoney(f.fc)}</Td><Td right>{formatMoney(f.act)}</Td>
+                    <Td right><StatusBadge tone={ratioTone(f.ratio)}>{Math.round(f.ratio * 100)}%</StatusBadge></Td>
                   </tr>
                 ))}
               </InsightTable>
@@ -128,7 +131,7 @@ export function MonthDetail({ K, sel }) {
             <FigureBand>
               <Figure label="5 รายใหญ่สุด" value={`${d.top5}%`} caption="ของรายรับเดือนนี้" />
               <Figure label="รายใหญ่สุดรายเดียว" value={`${d.top1}%`} caption="ของรายรับเดือนนี้" />
-              <Figure label="ใบเสร็จเกิน 500,000" value={`${d.big} ใบ`} caption={`ใบเสร็จกลาง ๆ ${baht(d.med)}`} />
+              <Figure label="ใบเสร็จเกิน 500,000" value={`${d.big} ใบ`} caption={`ใบเสร็จกลาง ๆ ${formatMoney(d.med)}`} />
             </FigureBand>
           </InsightPanel>
         </div>
@@ -146,23 +149,23 @@ export function NowDetail({ now }) {
   const rc = reported.reduce((s, r) => s + r.recv, 0);
   return (
     <div data-testid="insight-now-detail">
-      <InsightPanel title={<>{now.label} <Badge tone="info">ข้อมูล ณ {now.asof}</Badge></>} side="จากอีเมลรายงานประจำสัปดาห์ล่าสุด" foot="ตัวเลขเดือนนี้ยังไม่ผ่านการตรวจกับไฟล์ค่าคอม">
+      <InsightPanel title={<>{now.label} <StatusBadge tone="info">ข้อมูล ณ {now.asof}</StatusBadge></>} side="จากอีเมลรายงานประจำสัปดาห์ล่าสุด" foot="ตัวเลขเดือนนี้ยังไม่ผ่านการตรวจกับไฟล์ค่าคอม">
         <FigureBand>
-          <Figure lead label="รับเงินแล้ว (รวม VAT)" value={baht(rc)} caption={`${reported.length} คนที่รายงานตัวเลข`} />
-          <Figure label="ประมาณการทั้งเดือน" value={baht(fc)} caption="ตามที่เซลส์ประมาณเอง" />
+          <Figure lead label="รับเงินแล้ว (รวม VAT)" value={formatMoney(rc)} caption={`${reported.length} คนที่รายงานตัวเลข`} />
+          <Figure label="ประมาณการทั้งเดือน" value={formatMoney(fc)} caption="ตามที่เซลส์ประมาณเอง" />
           <Figure label="รับแล้วต่อประมาณการ" value={pctOf(rc, fc)} caption="เฉพาะคนที่รายงาน" />
-          <Figure label="ยังต้องรับอีก" value={baht(fc - rc)} caption="ถ้าจะถึงประมาณการ" />
+          <Figure label="ยังต้องรับอีก" value={formatMoney(fc - rc)} caption="ถ้าจะถึงประมาณการ" />
         </FigureBand>
         <InsightTable testId="insight-now-table" cols={[['พนักงานขาย'], ['ประมาณการทั้งเดือน', true], ['รับแล้ว', true], ['ความคืบหน้า'], ['%', true]]}>
           {rows.map((r) => (r.recv != null ? (
             <tr key={r.rep}>
-              <Td><b>{r.rep}</b></Td><Td right>{baht(r.fc)}</Td><Td right>{baht(r.recv)}</Td>
+              <Td><b>{r.rep}</b></Td><Td right>{formatMoney(r.fc)}</Td><Td right>{formatMoney(r.recv)}</Td>
               <Td><ProgressBar part={r.recv} whole={r.fc} label={`${r.rep}: ${pctOf(r.recv, r.fc)}`} /></Td>
-              <Td right>{ratio(r.recv, r.fc) != null && ratio(r.recv, r.fc) < 0.1 ? <Badge tone="danger">{pctOf(r.recv, r.fc, 1)}</Badge> : pctOf(r.recv, r.fc)}</Td>
+              <Td right>{ratio(r.recv, r.fc) != null && ratio(r.recv, r.fc) < 0.1 ? <StatusBadge tone="danger">{pctOf(r.recv, r.fc, 1)}</StatusBadge> : pctOf(r.recv, r.fc)}</Td>
             </tr>
           ) : (
             <tr key={r.rep}>
-              <Td><b>{r.rep}</b></Td><Td right>{baht(r.fc)}</Td>
+              <Td><b>{r.rep}</b></Td><Td right>{formatMoney(r.fc)}</Td>
               <Td colSpan={3} className="text-text-muted">ยังไม่มียอดที่รับแล้วในรายงาน</Td>
             </tr>
           )))}
