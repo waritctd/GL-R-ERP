@@ -251,7 +251,8 @@ describe('AccountOverview', () => {
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       render(
         <QueryClientProvider client={queryClient}>
-          <MemoryRouter initialEntries={['/finance']}>
+          {/* ?view=all: on งานการเงิน the ค้างรับทั้งหมด block moved to the ทั้งหมด view (design a-fin-land). */}
+          <MemoryRouter initialEntries={['/finance?view=all']}>
             <AccountFinancePage user={accountUser} showToast={vi.fn()} />
           </MemoryRouter>
         </QueryClientProvider>,
