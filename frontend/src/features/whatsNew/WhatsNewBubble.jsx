@@ -124,7 +124,9 @@ export function WhatsNewBubble({ user, onNavigate, open: controlledOpen, onOpenC
                 </span>
                 <span className="min-w-0 text-sm leading-snug text-text">
                   {entry.title}
-                  <span className="mt-0.5 block text-xs text-text-muted">{entry.page} · {entry.steps.length} ขั้นตอน · มีภาพประกอบ</span>
+                  <span className="mt-0.5 block text-xs text-text-muted">
+                    {entry.page} · {entry.steps.length} ขั้นตอน{entry.steps.some((step) => step.image) ? ' · มีภาพประกอบ' : ''}
+                  </span>
                 </span>
               </li>
             ))}

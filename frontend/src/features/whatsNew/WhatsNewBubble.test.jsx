@@ -112,6 +112,16 @@ describe('WhatsNewBubble', () => {
     expect(items[0].textContent).toContain('เมนู');
   });
 
+  it('says "มีภาพประกอบ" only for an entry that has a screenshot', async () => {
+    renderBubble({ role: 'account', employeeId: 50 });
+
+    fireEvent.click(await screen.findByRole('button', { name: /มีอะไรใหม่/ }));
+    const items = within(screen.getByRole('dialog', { name: 'มีอะไรใหม่' })).getAllByRole('listitem');
+    const view = items.find((item) => item.textContent.includes('ที่คุณดูได้'));
+    expect(view.textContent).not.toContain('มีภาพประกอบ');
+    expect(items.find((item) => item.textContent.includes('งานการเงิน')).textContent).toContain('มีภาพประกอบ');
+  });
+
   it('"ไว้ทีหลัง" and Escape close the popover without navigating', async () => {
     const { onNavigate } = renderBubble();
 

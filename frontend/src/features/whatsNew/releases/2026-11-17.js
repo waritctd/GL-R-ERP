@@ -31,16 +31,21 @@
 // (2026-11-17.test.js); “curly quotes” mark words that are not labels on screen today (the old menu name, the old word ดีล).
 //
 // SCREENSHOTS. One per step, at /whats-new/2026-11-17/<entry id>-<step number>.png (frontend/public/whats-new/…).
-// 2026-11-17.test.js requires every referenced file to exist.
+// A step whose screen cannot be captured honestly from the mock app has no image (alt null) rather than a misleading
+// one. 2026-11-17.test.js requires every referenced file to exist and no other file to sit in the folder.
 
 const RELEASE_ID = '2026-11-17';
 const shot = (entryId, n) => `/whats-new/${RELEASE_ID}/${entryId}-${n}.png`;
 
+/** A step tuple is [text, detail, alt]; an alt of null means the step has NO screenshot (image null), for a screen
+ * that cannot be captured honestly. The step keeps its number, so the other images keep their paths. */
 function entry({ id, steps, ...rest }) {
   return {
     id,
     ...rest,
-    steps: steps.map(([text, detail, alt], index) => ({ text, detail, alt, image: shot(id, index + 1) })),
+    steps: steps.map(([text, detail, alt], index) => ({
+      text, detail, alt, image: alt === null ? null : shot(id, index + 1),
+    })),
   };
 }
 
@@ -140,7 +145,10 @@ const entries = [
     why: 'คุณเห็นยอดเงินและรายการที่จะออกก่อนกดยืนยัน และรู้ชัดว่าเอกสารใดแก้ไม่ได้หลังยืนยัน',
     steps: [
       ['ใบแจ้งยอดเงินรับมัดจำ: ในแท็บ "เงิน" เมื่อมีร่างแล้ว กด "ออกเอกสาร"', 'หน้าต่างสรุปมัดจำกี่เปอร์เซ็นต์ ยอดรวม VAT และชื่อลูกค้า พร้อมตาราง "มูลค่าสินค้า" มัดจำ VAT และ "ยอดที่ลูกค้าต้องชำระ" ข้อความเตือนด้านบนบอกว่า "หลังจากนี้จะไม่สามารถแก้ไขได้" ถ้ายังไม่มีร่าง กด "สร้างใบแจ้งยอดเงินรับมัดจำ" ก่อน ปุ่มนี้อยู่ในกล่อง "ขั้นต่อไป" หรือในแท็บ "เงิน"', 'หน้าต่างยืนยันการออกใบแจ้งยอดเงินรับมัดจำพร้อมยอดสรุป'],
-      ['ใบแจ้งหนี้ส่วนที่เหลือ: ในแท็บ "เงิน" กด "สร้างใบแจ้งหนี้ส่วนที่เหลือ" แล้วกด "บันทึกร่าง"', 'ปุ่มขึ้นเมื่อรับมัดจำแล้วและสินค้าถึงขั้นรับหรือส่งมอบ บรรทัดสรุปบอก "ส่วนที่เหลือ … = มูลค่า … − มัดจำ …" (ก่อน VAT) หลังบันทึกร่าง หน้าต่างเดิมแสดงร่างพร้อมปุ่ม "ออกใบแจ้งหนี้" กดเมื่อพร้อมออก ถ้าปิดหน้าต่างไปก่อน กลับมาที่ร่างได้ด้วยปุ่ม "จัดการเอกสาร" ในแท็บ "เงิน"', 'หน้าต่างใบแจ้งหนี้ส่วนที่เหลือพร้อมบรรทัดสรุปยอดและปุ่มบันทึกร่าง'],
+      ['ใบแจ้งหนี้ส่วนที่เหลือ: ในแท็บ "เงิน" กด "สร้างใบแจ้งหนี้ส่วนที่เหลือ" แล้วกด "บันทึกร่าง"', 'ปุ่มขึ้นเมื่อรับมัดจำแล้วและสินค้าถึงขั้นรับหรือส่งมอบ บรรทัดสรุปบอก "ส่วนที่เหลือ … = มูลค่า … − มัดจำ …" (ก่อน VAT) หลังบันทึกร่าง หน้าต่างเดิมแสดงร่างพร้อมปุ่ม "ออกใบแจ้งหนี้" กดเมื่อพร้อมออก ถ้าปิดหน้าต่างไปก่อน กลับมาที่ร่างได้ด้วยปุ่ม "จัดการเอกสาร" ในแท็บ "เงิน"',
+        // No screenshot: every mock remaining invoice deducts a ฿0 deposit (mockApi hardcodes it), which would read
+        // wrong beside a step about the deposit.
+        null],
       IR_STEP,
       DELIVERY_STEP,
     ],
@@ -197,10 +205,12 @@ const entries = [
     kind: 'changed',
     title: 'รายการใบเสนอราคาที่คุณดูได้เรียงใบล่าสุดไว้บนสุด และค้นหาจากยอดรวมได้',
     why: 'เจอใบเสนอราคาล่าสุดทันที และหาใบที่อ้างยอดเงินมาได้เร็ว',
+    // No screenshots: in mock mode /quotations has no rows for account / import, so any capture is an empty list.
+    // This entry reaches them only with the release lock off, never on production today.
     steps: [
-      ['กด "เมนู" แล้วเลือก "ใบเสนอราคา" ในหมวด งานขาย', 'หน้านี้ดูได้อย่างเดียว รายการเรียงตาม "เลขที่" ใบใหม่สุดอยู่บนสุด ต้องการดูแบบจัดกลุ่ม ที่ "มุมมอง" กด "จัดกลุ่มตามดีล" และกด "เรียงตามเลขที่" เพื่อกลับ', 'รายการใบเสนอราคาแบบดูอย่างเดียวเรียงตามเลขที่'],
-      ['พิมพ์ยอดเงินในช่อง "ค้นหาลูกค้า / โครงการ / ยอดรวม"', 'พิมพ์ได้ทั้ง 5,444.80 หรือ 5444.8 ใบที่ยอดรวมมีตัวเลขนี้จะขึ้นมา', 'ผลการค้นหาใบเสนอราคาด้วยยอดรวม'],
-      ['ดูคอลัมน์ "วันที่อนุมัติ" ด้านขวาสุด', 'ใบที่ยังไม่อนุมัติแสดงเป็นขีด', 'คอลัมน์วันที่อนุมัติในรายการใบเสนอราคา'],
+      ['กด "เมนู" แล้วเลือก "ใบเสนอราคา" ในหมวด งานขาย', 'หน้านี้ดูได้อย่างเดียว รายการเรียงตาม "เลขที่" ใบใหม่สุดอยู่บนสุด ต้องการดูแบบจัดกลุ่ม ที่ "มุมมอง" กด "จัดกลุ่มตามดีล" และกด "เรียงตามเลขที่" เพื่อกลับ', null],
+      ['พิมพ์ยอดเงินในช่อง "ค้นหาลูกค้า / โครงการ / ยอดรวม"', 'พิมพ์ได้ทั้ง 5,444.80 หรือ 5444.8 ใบที่ยอดรวมมีตัวเลขนี้จะขึ้นมา', null],
+      ['ดูคอลัมน์ "วันที่อนุมัติ" ด้านขวาสุด', 'ใบที่ยังไม่อนุมัติแสดงเป็นขีด', null],
     ],
     help: '',
   }),

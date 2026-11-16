@@ -75,9 +75,14 @@ describe('release content modules', () => {
         entry.steps.forEach((step, index) => {
           expect(step.text.trim().length, `${where} step ${index + 1}`).toBeGreaterThan(0);
           expect(typeof step.detail, `${where} step ${index + 1}`).toBe('string');
-          // One predictable filename per step, so whoever captures the screenshots knows exactly what to save.
-          expect(step.image).toBe(`/whats-new/${release.id}/${entry.id}-${index + 1}.png`);
-          expect(step.alt.trim().length, `${where} step ${index + 1} alt`).toBeGreaterThan(0);
+          // One predictable filename per step, so whoever captures the screenshots knows exactly what to save. A step
+          // may have NO screenshot (image and alt both null) when no honest capture exists; never a dangling alt.
+          if (step.image === null) {
+            expect(step.alt, `${where} step ${index + 1}: an image-less step has no alt`).toBeNull();
+          } else {
+            expect(step.image).toBe(`/whats-new/${release.id}/${entry.id}-${index + 1}.png`);
+            expect(step.alt.trim().length, `${where} step ${index + 1} alt`).toBeGreaterThan(0);
+          }
         });
       }
     }
@@ -103,6 +108,14 @@ describe('2026-11-16 audiences (unlocked, as the test env runs)', () => {
     expect(idsFor(user('ceo'))).toEqual(['address', 'ceo-home', 'sales-insights', 'deal-list', 'deal-page-ceo', 'fulfilment']);
     expect(idsFor(user('account'))).toEqual(['address', 'finance-deal']);
     expect(idsFor(user('import'))).toEqual(['address', 'import-home', 'fulfilment', 'import-deal', 'pricing-request']);
+  });
+
+  it('every step of the published release keeps its screenshot', () => {
+    for (const entry of release.entries) {
+      entry.steps.forEach((step, index) => expect(step.image, `${entry.id} step ${index + 1}`).toBe(
+        `/whats-new/2026-11-16/${entry.id}-${index + 1}.png`,
+      ));
+    }
   });
 
   it('roles whose pages did not change get only the address entry', () => {

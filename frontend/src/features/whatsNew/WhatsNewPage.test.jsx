@@ -112,6 +112,25 @@ describe('WhatsNewPage', () => {
     expect(within(firstStep).getByText('ภาพหน้าจอจะเพิ่มเร็ว ๆ นี้')).toBeTruthy();
   });
 
+  it('a step with no screenshot renders its text alone: no image, no "coming soon" placeholder', async () => {
+    renderPage({ ...sales, role: 'account' }, '/whats-new/2026-11-17');
+
+    const article = (await screen.findByRole('heading', { level: 3, name: /ที่คุณดูได้/ })).closest('article');
+    const steps = within(article).getAllByRole('listitem');
+    expect(steps).toHaveLength(3);
+    expect(within(article).queryByRole('img')).toBeNull();
+    expect(within(article).queryByText('ภาพหน้าจอจะเพิ่มเร็ว ๆ นี้')).toBeNull();
+    expect(steps[0].textContent).toContain('ใบเสนอราคา');
+  });
+
+  it('an entry mixing both shows a screenshot only on the steps that have one', async () => {
+    renderPage(sales, '/whats-new/2026-11-17');
+
+    const article = (await screen.findByRole('heading', { level: 3, name: /ระบบสรุปให้ตรวจก่อนทุกครั้ง/ })).closest('article');
+    const steps = within(article).getAllByRole('listitem');
+    expect(steps.map((step) => within(step).queryAllByRole('img').length)).toEqual([1, 0, 1, 1]);
+  });
+
   it('/whats-new with no id shows the latest release', async () => {
     renderPage(sales, '/whats-new');
 

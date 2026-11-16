@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ROLE_PERMISSIONS } from '../../../api/routes.js';
@@ -115,8 +115,9 @@ function labelInSources(label, sources) {
     .every((part) => sources.some((src) => src.includes(part)));
 }
 
+// alt is null on an image-less step.
 const allText = (entry) => [entry.title, entry.page, entry.menu, entry.why, entry.help,
-  ...entry.steps.flatMap((step) => [step.text, step.detail, step.alt])];
+  ...entry.steps.flatMap((step) => [step.text, step.detail, step.alt])].filter((text) => text != null);
 
 describe('2026-11-17 release: registration', () => {
   it('is registered and is the latest release; the 16 Nov release stays reachable', () => {
@@ -131,7 +132,7 @@ describe('2026-11-17 release: registration', () => {
   it('every screenshot is its own file under /whats-new/2026-11-17/, never a 16 Nov image', () => {
     expect(release).not.toBeNull();
     const older = new Set(findRelease('2026-11-16').entries.flatMap((entry) => entry.steps.map((step) => step.image)));
-    const images = release.entries.flatMap((entry) => entry.steps.map((step) => step.image));
+    const images = release.entries.flatMap((entry) => entry.steps.map((step) => step.image)).filter(Boolean);
     expect(new Set(images).size).toBe(images.length);
     for (const image of images) {
       expect(image.startsWith('/whats-new/2026-11-17/'), image).toBe(true);
@@ -145,8 +146,28 @@ describe('2026-11-17 release: registration', () => {
     const onDisk = (image) => existsSync(resolve(FRONTEND_ROOT, `public${image}`));
     // Guard the root: the published 16 Nov images must resolve, or this check would pass/fail for the wrong reason.
     expect(onDisk('/whats-new/2026-11-16/address-1.png'), 'cwd is not frontend/').toBe(true);
-    const missing = release.entries.flatMap((entry) => entry.steps.map((step) => step.image)).filter((image) => !onDisk(image));
+    const missing = release.entries.flatMap((entry) => entry.steps.map((step) => step.image)).filter(Boolean)
+      .filter((image) => !onDisk(image));
     expect(missing).toEqual([]);
+  });
+
+  it('no file in public/whats-new/2026-11-17 is left that no step shows', () => {
+    expect(release).not.toBeNull();
+    const referenced = new Set(release.entries.flatMap((entry) => entry.steps.map((step) => step.image)).filter(Boolean));
+    const strays = readdirSync(resolve(FRONTEND_ROOT, 'public/whats-new/2026-11-17'))
+      .map((file) => `/whats-new/2026-11-17/${file}`).filter((image) => !referenced.has(image));
+    expect(strays).toEqual([]);
+  });
+
+  // No honest capture exists for these, so they carry no image rather than a misleading one:
+  //   - deal-documents step 2: every mock remaining invoice deducts a ฿0 deposit (mockApi remainingInvoiceOptions and
+  //     mockRemainingInvoiceSnapshot hardcode 0), beside a step about the deposit.
+  //   - quotation-list-view: in mock mode /quotations has no rows for account / import, so the list is empty.
+  it('exactly the steps that cannot be captured honestly have no screenshot', () => {
+    expect(release).not.toBeNull();
+    const imageless = release.entries.flatMap((entry) => entry.steps
+      .map((step, index) => (step.image === null ? `${entry.id}-${index + 1}` : null)).filter(Boolean));
+    expect(imageless).toEqual(['deal-documents-2', 'quotation-list-view-1', 'quotation-list-view-2', 'quotation-list-view-3']);
   });
 });
 
