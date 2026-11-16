@@ -691,6 +691,13 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   } else if (!coverageLoading) {
     createConfirmMessage = (
       <div className="flex flex-col gap-3.5">
+        {/* First in the scrolling body, so a short phone shows it with the footer's ออกใบขอซื้อ (fix round 1, F4).
+            Not the drawing's "แก้ไขหรือลบไม่ได้" (F1): an issued IR can be corrected by a ฉบับแก้ไข —
+            ImportRequestService#revise, same requireFullWrite gate as createDrafts, until the goods are RECEIVED —
+            but it can never be deleted. */}
+        <DialogCallout tone="warn" testId="ir-confirm-warning">
+          ออกเลข IR แล้วลบไม่ได้ · แก้ได้ด้วยการออกฉบับแก้ไขเท่านั้น
+        </DialogCallout>
         {confirmNames.length > 0 ? (
           <>
             <DialogSummary icon="truck" testId="ir-confirm-summary">
@@ -710,9 +717,6 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             {`ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน · ส่งถึงฝ่ายนำเข้าทันที${pickedNames.length > 0 ? ` (โรงงานที่เลือก: ${pickedNames.join(', ')})` : ''}`}
           </DialogSummary>
         )}
-        <DialogCallout tone="warn" testId="ir-confirm-warning">
-          ออกเลข IR แล้วแก้ไขหรือลบไม่ได้ — การดำเนินการนี้ย้อนกลับไม่ได้
-        </DialogCallout>
       </div>
     );
   }
@@ -1140,15 +1144,16 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             <DialogSummary icon="truck" testId="delivery-summary">
               {`เหลือส่ง ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการ`}
             </DialogSummary>
-            {/* Sized to fit a 375px phone with the ส่งครั้งนี้ input in view (the name column wraps); narrower than
-                that the table scrolls inside its own wrapper, never the page. */}
-            <DialogTable label="รายการที่ส่งครั้งนี้" minWidth="min-w-[18rem]">
+            {/* Phones (≤520px, mobile-xs): the สั่ง / ส่งแล้ว / เหลือส่ง columns fold into a line under the name, so
+                the table is two columns — name and the ส่งครั้งนี้ input — and the input is in view at 320px with no
+                sideways scrolling (fix round 1, F5). Same figures either way. */}
+            <DialogTable label="รายการที่ส่งครั้งนี้">
               <thead>
                 <tr>
                   <th scope="col" className={dialogTh}>รายการ</th>
-                  <th scope="col" className={`${dialogTh} text-right`}>สั่ง</th>
-                  <th scope="col" className={`${dialogTh} text-right`}>ส่งแล้ว</th>
-                  <th scope="col" className={`${dialogTh} text-right`}>เหลือส่ง</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>สั่ง</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>ส่งแล้ว</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>เหลือส่ง</th>
                   <th scope="col" className={`${dialogTh} text-right`}>ส่งครั้งนี้</th>
                 </tr>
               </thead>
@@ -1160,10 +1165,15 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                   const name = `${item.brand ?? ''} ${item.model || ''}`.trim();
                   return (
                     <tr key={item.id}>
-                      <td className={`${dialogTd} font-bold [overflow-wrap:anywhere]`}>{name}</td>
-                      <td className={`${dialogTd} text-right`}>{ordered.toLocaleString('en-US')}</td>
-                      <td className={`${dialogTd} text-right`}>{delivered.toLocaleString('en-US')}</td>
-                      <td className={cn(dialogTd, 'text-right', remaining > 0 && 'font-extrabold text-text')}>
+                      <td className={`${dialogTd} [overflow-wrap:anywhere]`}>
+                        <span className="font-bold">{name}</span>
+                        <span className="hidden text-xs text-text-muted mobile-xs:block" data-testid={`delivery-line-figures-${item.id}`}>
+                          {`สั่ง ${ordered.toLocaleString('en-US')} · ส่งแล้ว ${delivered.toLocaleString('en-US')} · เหลือส่ง ${remaining.toLocaleString('en-US')}`}
+                        </span>
+                      </td>
+                      <td className={`${dialogTd} text-right mobile-xs:hidden`}>{ordered.toLocaleString('en-US')}</td>
+                      <td className={`${dialogTd} text-right mobile-xs:hidden`}>{delivered.toLocaleString('en-US')}</td>
+                      <td className={cn(dialogTd, 'text-right mobile-xs:hidden', remaining > 0 && 'font-extrabold text-text')}>
                         {remaining.toLocaleString('en-US')}
                       </td>
                       <td className={`${dialogTd} text-right`}>
@@ -1196,10 +1206,12 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
             </label>
             {/* What TicketService#recordDeliveryInternal does once every line is delivered: FULLY_DELIVERED,
-                autoAdvanceStage(DELIVERED) — S9 (DealStage.REP_CODE) — and a DELIVERY_COMPLETED notice to the account
-                role. Conditional wording: whether THIS save completes the deal is the server's call. */}
+                autoAdvanceStage(DELIVERED) — rep code S9 (DealStage.REP_CODE); a no-op when the deal is already
+                there or past it, hence "ถ้ายังไม่ถึง" — and a DELIVERY_COMPLETED notice to the account role.
+                Conditional: whether THIS save completes the deal is the server's call. S9 is named once (fix round 1,
+                F6): a fully paid deal goes on to CLOSED_PAID, which is also S9, so a step name would mislead. */}
             <DialogCallout tone="info" testId="delivery-info">
-              ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ งานจะย้ายไป S9 ส่งสินค้าครบแล้ว เอง และระบบจะแจ้งฝ่ายบัญชีให้ดำเนินการต่อ
+              ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ ระบบจะบันทึกว่าส่งครบ เลื่อนงานไป S9 (ถ้ายังไม่ถึง) และแจ้งฝ่ายบัญชี
             </DialogCallout>
           </div>
         </Modal>

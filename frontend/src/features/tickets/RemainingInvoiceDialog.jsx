@@ -13,11 +13,6 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
 
-// Drawing m-remaining's footer note, corrected to what the server does: the lines come from the matched deposit
-// notice's own item snapshot (rule D11), or the accepted quotation when there is no notice — never from deliveries
-// (DepositNoticeService#resolveFromQuotation). The drawing said "ใบเสนอราคาและการส่งของ".
-const SOURCE_HINT = 'ทุกบรรทัดเติมจากใบเสนอราคาและใบแจ้งยอดเงินรับมัดจำแล้ว';
-
 /**
  * Drawing m-remaining's summary line: "ส่วนที่เหลือ … = มูลค่า … − มัดจำ …". All three figures are ONE served row's own
  * fields (the options preview's netAmount/itemsTotal/depositAmount, or a stored row's netAmount/itemsTotal/
@@ -36,11 +31,16 @@ function RemainingSummaryLine({ net, itemsTotal, deposit }) {
   );
 }
 
-/** The drawn footer: the source note on the left, the write buttons on the right (wrapping under it on a phone). */
+/**
+ * The drawn footer row: the write buttons, right-aligned. The drawing's source note ("ทุกบรรทัดเติมจากใบเสนอราคาและ
+ * การส่งของแล้ว") is left out (fix round 1, F6): the lines come from the matched deposit notice's snapshot, or the
+ * quotation when there is no notice, or legacy approved prices (DepositNoticeService#resolveFromQuotation /
+ * #resolveLegacy), never from deliveries — and nothing this dialog receives says which, so no one sentence is true
+ * for every deal.
+ */
 function DialogFooterRow({ children }) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3" data-testid="remaining-invoice-footer">
-      <span className="min-w-[12rem] flex-1 text-xs text-text-muted">{SOURCE_HINT}</span>
       {children}
     </div>
   );

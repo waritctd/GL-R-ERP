@@ -61,25 +61,45 @@ function isBlankRow(item) {
  * the quotation, so "มูลค่าตามใบเสนอราคา" could name the wrong document or figure); the hint does not mention
  * "เงินที่คาดว่าจะเข้า" (DepositNoticeService#createDraftFromQuotation takes the percent from the quotation, never
  * from expected payments).
+ *
+ * `estimate` (fix round 1, F2) — this editor's own confirm. Its figures are computed in the browser and the server
+ * recomputes them on save (DepositNoticeRepository#update, BigDecimal HALF_UP), so they can be a satang off the
+ * issued document. They are therefore shown as the old confirm showed them — deposit, VAT, total — under a plain
+ * "ยอดโดยประมาณ" line, without the subtotal row or the summary line that would present them as the document's
+ * content. The deal page's เงิน tab issues its saved draft exactly as stored, so it shows the full drawn summary.
+ *
+ * The irreversibility warning is first in the body (F4): the body scrolls and the footer does not, so first is the
+ * one place that is always on screen with the ออกเอกสาร button on a short phone.
  */
 export function DepositIssueSummary({
-  customerName, depositPercent, subtotal, reference, deposit, vatPercent, vat, total,
+  customerName, depositPercent, subtotal, reference, deposit, vatPercent, vat, total, estimate = false,
 }) {
   const percent = Math.round(Number(depositPercent) * 100);
   return (
     <div className="flex flex-col gap-3.5">
-      <DialogSummary testId="deposit-issue-summary">
-        {`มัดจำ ${percent}% · ${money(total)} บาท รวม VAT · ถึง ${customerName || 'ลูกค้า'}`}
-      </DialogSummary>
+      <DialogCallout tone="warn" testId="deposit-issue-warning">
+        ออกเลขที่เอกสารแล้ว <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
+      </DialogCallout>
+      {estimate ? (
+        <p className="m-0 text-sm text-text-secondary" data-testid="deposit-issue-estimate">
+          ยอดโดยประมาณ · ยอดจริงตามเอกสารที่ระบบออก
+        </p>
+      ) : (
+        <DialogSummary testId="deposit-issue-summary">
+          {`มัดจำ ${percent}% · ${money(total)} บาท รวม VAT · ถึง ${customerName || 'ลูกค้า'}`}
+        </DialogSummary>
+      )}
       <DialogTable label="ยอดในใบแจ้งยอดเงินรับมัดจำ">
         <tbody>
-          <tr>
-            <td className={dialogTd}>
-              มูลค่าสินค้า
-              {reference ? <span className="ml-1.5 text-xs text-text-muted">อ้างอิง {reference}</span> : null}
-            </td>
-            <td className={`${dialogTd} text-right`}>{money(subtotal)} บาท</td>
-          </tr>
+          {estimate ? null : (
+            <tr>
+              <td className={dialogTd}>
+                มูลค่าสินค้า
+                {reference ? <span className="ml-1.5 text-xs text-text-muted">อ้างอิง {reference}</span> : null}
+              </td>
+              <td className={`${dialogTd} text-right`}>{money(subtotal)} บาท</td>
+            </tr>
+          )}
           <tr>
             <td className={dialogTd}>มัดจำ {percent}% (ก่อน VAT)</td>
             <td className={`${dialogTd} text-right`}>{money(deposit)} บาท</td>
@@ -95,9 +115,6 @@ export function DepositIssueSummary({
         </tbody>
       </DialogTable>
       <p className="m-0 text-xs text-text-muted">ยอดเริ่มต้นเติมจากใบเสนอราคาของงานนี้ แก้รายการได้จนกว่าจะออกเอกสาร</p>
-      <DialogCallout tone="warn" testId="deposit-issue-warning">
-        ออกเลขที่เอกสารแล้ว <strong>หลังจากนี้จะไม่สามารถแก้ไขได้</strong>
-      </DialogCallout>
     </div>
   );
 }
@@ -945,8 +962,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
         open={confirmIssue}
         title="ยืนยันการออกเอกสาร"
         message={(
-          <DepositIssueSummary customerName={form.customerName} depositPercent={form.depositPercent}
-            subtotal={subtotal} reference={form.reference}
+          <DepositIssueSummary estimate customerName={form.customerName} depositPercent={form.depositPercent}
             deposit={deposit} vatPercent={vatPercent} vat={vat} total={total} />
         )}
         confirmLabel="ออกเอกสาร"

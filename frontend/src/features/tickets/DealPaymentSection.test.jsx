@@ -504,6 +504,8 @@ describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm
     expect(row('VAT 7%').textContent).toContain('26,040.02');
     expect(row('ยอดที่ลูกค้าต้องชำระ').textContent).toContain('398,040.05');
     expect(dialog.getByText(/ยอดเริ่มต้นเติมจากใบเสนอราคา/)).toBeTruthy();
+    // Fix round 1, F2: this opener issues the saved draft exactly as listed, so it is not an estimate.
+    expect(dialog.queryByTestId('deposit-issue-estimate')).toBeNull();
   });
 
   it('keeps the irreversibility warning, and its own labels never say ดีล', async () => {
@@ -512,6 +514,15 @@ describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm
     const dialog = await openConfirm();
     expect(within(dialog).getByTestId('deposit-issue-warning').textContent).toMatch(/หลังจากนี้จะไม่สามารถแก้ไขได้/);
     expect(dialog.textContent).not.toContain('ดีล');
+  });
+
+  // Fix round 1, F4: first in the scrolling body, so it is on screen with the footer's ออกเอกสาร on a short phone.
+  it('puts the irreversibility warning first in the scrolling body', async () => {
+    renderSection(props);
+    await settled();
+    const dialog = await openConfirm();
+    const body = dialog.querySelector('.modal-body');
+    expect(body.firstElementChild.firstElementChild).toBe(within(dialog).getByTestId('deposit-issue-warning'));
   });
 
   it('a notice with no reference shows the value row without an อ้างอิง', async () => {

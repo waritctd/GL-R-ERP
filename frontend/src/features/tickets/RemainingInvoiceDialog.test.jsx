@@ -739,23 +739,28 @@ describe('RemainingInvoiceDialog — drawing m-remaining', () => {
     expect(screen.getByTestId('remaining-invoice-summary').textContent).toBe('ส่วนที่เหลือ ฿612,199.30 (ก่อน VAT)');
   });
 
-  it('draft footer: the source hint, then บันทึกร่าง and ออกใบแจ้งหนี้; no วันครบกำหนด / เงื่อนไข field', async () => {
+  // Fix round 1, F6: the drawn source sentence is dropped. Lines come from the matched deposit notice, OR the
+  // quotation (no notice), OR legacy approved prices (DepositNoticeService#resolveFromQuotation / #resolveLegacy),
+  // and nothing the dialog receives says which, so no wording is true for every deal.
+  it('draft footer: บันทึกร่าง then ออกใบแจ้งหนี้, no source claim; no วันครบกำหนด / เงื่อนไข field', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
     renderDialog();
     const editor = await screen.findByTestId('remaining-invoice-draft-editor');
     const footer = within(editor).getByTestId('remaining-invoice-footer');
-    expect(within(footer).getByText('ทุกบรรทัดเติมจากใบเสนอราคาและใบแจ้งยอดเงินรับมัดจำแล้ว')).toBeTruthy();
     expect(within(footer).getAllByRole('button').map((b) => b.textContent)).toEqual(['บันทึกร่าง', 'ออกใบแจ้งหนี้']);
+    expect(footer.textContent).toBe('บันทึกร่างออกใบแจ้งหนี้');
+    expect(screen.getByTestId('remaining-invoice-dialog').textContent).not.toMatch(/ทุกบรรทัด|เติมจาก/);
     expect(editor.textContent).not.toMatch(/วันครบกำหนด|เงื่อนไข/);
   });
 
-  it('create footer: the same hint beside บันทึกร่าง', async () => {
+  it('create footer: บันทึกร่าง alone, no source claim', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
     renderDialog();
     await screen.findByDisplayValue('QT-2026-0099');
     const footer = screen.getByTestId('remaining-invoice-footer');
-    expect(within(footer).getByText('ทุกบรรทัดเติมจากใบเสนอราคาและใบแจ้งยอดเงินรับมัดจำแล้ว')).toBeTruthy();
+    expect(footer.textContent).toBe('บันทึกร่าง');
     expect(within(footer).getByTestId('remaining-invoice-create-draft').textContent).toBe('บันทึกร่าง');
+    expect(screen.getByTestId('remaining-invoice-dialog').textContent).not.toMatch(/ทุกบรรทัด|เติมจาก/);
   });
 
   it('its own labels never say ดีล (the waiting state included)', async () => {

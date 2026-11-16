@@ -597,23 +597,43 @@ describe('DepositNoticePage', () => {
       expect(api.depositNotices.issue).not.toHaveBeenCalled();
     });
 
-    it('shows the drawn summary and rows from the same figures as the สรุปยอด panel, plus the warning', async () => {
+    // Fix round 1, F2: this page's figures are computed in the browser (round2 on floats) and the server
+    // recomputes them on save, so they can be a satang off the issued document. The confirm shows the old
+    // confirm's figures only (deposit, VAT, total) under an estimate line — no subtotal row, no bold
+    // "X บาท รวม VAT" summary presenting them as the document's content.
+    it('shows the old figures as an estimate: estimate line, no summary line, no subtotal row', async () => {
       api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [doc] });
       renderDepositNoticePage();
 
       await screen.findByDisplayValue('บริษัท ลุมพินี จำกัด');
       fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
-      const dialog = within(await screen.findByRole('dialog'));
-      expect(dialog.getByTestId('deposit-issue-summary').textContent)
-        .toBe('มัดจำ 40% · 1,585.18 บาท รวม VAT · ถึง บริษัท ลุมพินี จำกัด');
+      const dialogEl = await screen.findByRole('dialog');
+      const dialog = within(dialogEl);
+      expect(dialog.getByTestId('deposit-issue-estimate').textContent).toBe('ยอดโดยประมาณ · ยอดจริงตามเอกสารที่ระบบออก');
+      expect(dialog.queryByTestId('deposit-issue-summary')).toBeNull();
+      expect(dialogEl.textContent).not.toContain('รวม VAT');
+      expect(dialogEl.textContent).not.toContain('มูลค่าสินค้า');
+      expect(dialogEl.textContent).not.toContain('3,703.71');
       const row = (label) => dialog.getByText(label, { exact: false }).closest('tr');
-      expect(row('มูลค่าสินค้า').textContent).toContain('QT-2026-0201');
-      expect(row('มูลค่าสินค้า').textContent).toContain('3,703.71');
       expect(row('มัดจำ 40% (ก่อน VAT)').textContent).toContain('1,481.48');
       expect(row('VAT 7%').textContent).toContain('103.70');
       expect(row('ยอดที่ลูกค้าต้องชำระ').textContent).toContain('1,585.18');
-      expect(dialog.getByTestId('deposit-issue-warning').textContent).toMatch(/หลังจากนี้จะไม่สามารถแก้ไขได้/);
-      expect(screen.getByRole('dialog').textContent).not.toContain('ดีล');
+      expect(dialogEl.textContent).not.toContain('ดีล');
+    });
+
+    // Fix round 1, F4: the warning is the first thing in the scrolling body, so a short phone screen shows it
+    // together with the footer's ออกเอกสาร.
+    it('puts the irreversibility warning first in the scrolling body', async () => {
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [doc] });
+      renderDepositNoticePage();
+
+      await screen.findByDisplayValue('บริษัท ลุมพินี จำกัด');
+      fireEvent.click(screen.getByRole('button', { name: /ออกเอกสาร/ }));
+      const dialogEl = await screen.findByRole('dialog');
+      const body = dialogEl.querySelector('.modal-body');
+      const warning = within(dialogEl).getByTestId('deposit-issue-warning');
+      expect(warning.textContent).toMatch(/หลังจากนี้จะไม่สามารถแก้ไขได้/);
+      expect(body.firstElementChild.firstElementChild).toBe(warning);
     });
   });
 });
