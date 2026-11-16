@@ -227,10 +227,6 @@
   --color-border-subtle: #e2e8f0;
   --color-border-muted: #cbd5e1;
 
-  /* Sidebar / dark surfaces */
-  --color-sidebar-bg: #0b1220;
-  --color-sidebar-text: #cbd5e1;
-
   /* Phase 3.4 — semantic token infrastructure (docs/ui-repair/03-design-foundation/TOKENS.md "Token gap
    * summary") Additive only: nothing below is consumed by any existing selector or component yet, so no rendered
    * page changes. */
@@ -257,10 +253,7 @@
   --animate-wn-fade: wn-fade 220ms ease-out both;
   --animate-wn-pulse-once: wn-pulse 300ms ease-out 400ms 1;
 
-  /* Layout — mirrors the current rendered desktop rail width and the per-breakpoint page gutters already
-   * hardcoded per page/breakpoint. */
-  --sidebar-width: 260px;
-  --sidebar-width-icon: 72px;
+  /* Layout — the per-breakpoint page gutters already hardcoded per page/breakpoint. */
   --content-max: 1440px;
   --page-gutter-mobile: 16px;
   --page-gutter-tablet: 20px;

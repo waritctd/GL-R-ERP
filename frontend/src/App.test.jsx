@@ -336,6 +336,8 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
   it('still lets a locked role reach its own leave page', async () => {
     await renderLockedAppAt('/leave', importUser);
 
+    // The nav lives in the launcher now: open it, then the locked role's own วันลา link must be there.
+    fireEvent.click(await screen.findByRole('button', { name: 'เมนู' }));
     expect((await screen.findAllByText('วันลา')).length).toBeGreaterThan(0);
     expect(screen.queryByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).toBeNull();
   });

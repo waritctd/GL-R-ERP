@@ -53,7 +53,7 @@ function quantityCell(item, language = 'TH') {
 // 1. A money column must never be shrunk below its own text: `minmax(0, …)` lets the grid do that
 //    and `.data-row > span` is `nowrap` with `text-overflow: ellipsis`, so the loss shows up as a
 //    silently truncated baht figure (a ฿1,524,369.36 line was cut at every table width under 850px
-//    and on desktop at 1041–1150px, where the sidebar returns). So the floors are deliberately
+//    and on desktop at 1041–1150px, where the sidebar used to return). So the floors are deliberately
 //    ungated.
 //
 // 2. The floors must be FIXED lengths, not `min-content`. The head row and each data row are

@@ -27,8 +27,8 @@ export async function logout(page) {
   await expect(page.getByTestId('login-submit')).toBeVisible();
 }
 
-/** The topbar account-menu trigger — the single identity/logout affordance since issue #396 removed the sidebar
- * footer's duplicate. Present on every role's landing and at every viewport, which is what makes it a reliable
+/** The topbar account-menu trigger — the single identity/logout affordance since issue #396 removed the old sidebar
+ * footer's duplicate (the sidebar itself is now the เมนู launcher). Present on every role's landing and at every viewport, which is what makes it a reliable
  * "we are authenticated" signal. */
 export function userMenu(page) {
   return page.getByRole('button', { name: 'เมนูผู้ใช้' });

@@ -54,8 +54,6 @@ describe('design tokens — Phase 3.4 infrastructure', () => {
       '--motion-slow',
       '--ease-standard',
       '--ease-exit',
-      '--sidebar-width',
-      '--sidebar-width-icon',
       '--content-max',
       '--page-gutter-mobile',
       '--page-gutter-tablet',
@@ -114,9 +112,6 @@ describe('design tokens — Phase 3.4 infrastructure', () => {
       // Same token, other direction — --color-success used as plain text (not a button fill) on a light surface,
       // e.g. .event-dot.success and any future success-toned label.
       ['success text on surface-panel', token('--color-success'), token('--color-surface'), 4.5],
-      // Ink Faint is deliberately allowed as TEXT only on the dark sidebar rail (see index.css's --color-text-faint
-      // comment) — this is the one pairing where Faint-as-text is correct, not a violation.
-      ['text-faint on sidebar rail', token('--color-text-faint'), token('--color-sidebar-bg'), 4.5],
       // --color-accent-dark backs the sidebar unread badge label and the ImportOverview teal pulse numeral, both on
       // light surfaces.
       ['accent-dark text on surface-panel', token('--color-accent-dark'), token('--color-surface'), 4.5],
