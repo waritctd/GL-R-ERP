@@ -66,18 +66,18 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     retry: false,
   });
   const expressUploadEnabled = expressQuery.data?.uploadEnabled === true;
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isLauncherOpen, setIsLauncherOpen] = useState(false);
   const [activeTopbarPopover, setActiveTopbarPopover] = useState(null);
   const [isContentScrolled, setIsContentScrolled] = useState(false);
   const [viewAsPickerOpen, setViewAsPickerOpen] = useState(false);
-  const drawerRef = useRef(null);
+  const launcherRef = useRef(null);
   const menuButtonRef = useRef(null);
   // One ref for one element: <main> IS the scroll container (it carries `.content-scroll`), so the skip link's
   // focus target and the scrolled box are the same node — see the JSX comment on <main> below.
   const mainRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
-  const drawerId = 'primary-navigation';
+  const launcherId = 'primary-navigation';
   const mainContentId = 'main-content';
 
   // The topbar's bottom border only appears once content is scrolled underneath it. Tracks
@@ -111,7 +111,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
     // Admin capability, not a role: `user.admin` comes from AuthResponse and is held by exactly one person.
-    { path: '/activity-log', label: 'บันทึกการใช้งาน', helper: 'Portal activity log', icon: 'clipboard', group: 'settings', show: Boolean(user.admin) },
+    { path: '/activity-log', label: 'บันทึกการใช้งาน', helper: 'Portal activity log', icon: 'clipboard', group: 'settings', lockExempt: true, show: Boolean(user.admin) },
     // Division-manager (non-sales) "ทีมของฉัน" group: reuses the /employee-requests, /leave,
     // /attendance routes every role already has (dual submit+approve pages for anyone with
     // reports), framed as team-facing entry points. The 'self' entries below stay the manager's
@@ -233,10 +233,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // group (เวลาทำงาน, คำขอเงินพิเศษ, วันลา); the 'sales',
     // 'hr', 'finance', 'team' and 'settings' groups disappear entirely.
     //
-    // Group-based, not path-based, and deliberately so: a new nav item is
+    // Group-based by default, and deliberately so: a new nav item is
     // hidden by default under the lock unless it is explicitly filed under
-    // 'self', which matches how permissions.js's SELF_SERVICE_PATHS allowlist
-    // treats routes. The two lists have to agree — a visible item pointing at a
+    // 'self' (or flagged `lockExempt`), which matches how permissions.js's
+    // SELF_SERVICE_PATHS allowlist treats routes. The two lists have to agree — a visible item pointing at a
     // path canAccessPath refuses would render a nav link straight to the
     // access-denied page.
     //
@@ -244,27 +244,32 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // links: its three entries point at /employee-requests, /leave and
     // /attendance, which are the same routes the surviving 'self' group lists.
     //
-    // One exception: ใบเสนอราคา stays for the quotation audience, the nav
+    // Exceptions: an item flagged `lockExempt` always stays (บันทึกการใช้งาน, which
+    // is admin-only through its own `show`, the twin of canAccessPath's admin
+    // activity-log exemption). ใบเสนอราคา stays for the quotation audience, the nav
     // twin of permissions.js's quotation-release path exemption, keyed on the same predicate so
     // the two cannot disagree. It keeps its 'sales' group, so that header shows with this one item.
     .filter((item) => !navLocked || !item.group || item.group === 'self'
-      // Admin-only; it was ungrouped (so it passed this filter) before moving into 'settings'.
-      || item.path === '/activity-log'
+      || item.lockExempt
       || (item.path === '/quotations' && isQuotationReleaseUser(user))
       // import's งานนำเข้า + คิวขอราคา and account's งานการเงิน survive the lock: the same
       // allowlist canAccessPath applies.
       || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);
-  const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
+  const closeLauncher = useCallback(() => setIsLauncherOpen(false), []);
 
   useEffect(() => {
-    closeDrawer();
+    if (activeTopbarPopover) closeLauncher();
+  }, [activeTopbarPopover, closeLauncher]);
+
+  useEffect(() => {
+    closeLauncher();
     closeTopbarPopover();
-  }, [closeDrawer, closeTopbarPopover, location.pathname]);
+  }, [closeLauncher, closeTopbarPopover, location.pathname]);
 
   useEffect(() => {
-    if (!isDrawerOpen) return undefined;
+    if (!isLauncherOpen) return undefined;
 
     const previouslyFocused = document.activeElement;
     const menuButton = menuButtonRef.current;
@@ -278,15 +283,15 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     ].join(',');
 
     const getFocusableItems = () => Array
-      .from(drawerRef.current?.querySelectorAll(focusableSelector) || [])
+      .from(launcherRef.current?.querySelectorAll(focusableSelector) || [])
       .filter((element) => element.getClientRects().length > 0);
 
     const focusableItems = getFocusableItems();
-    (focusableItems[0] || drawerRef.current)?.focus();
+    (focusableItems[0] || launcherRef.current)?.focus();
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
-        closeDrawer();
+        closeLauncher();
         return;
       }
 
@@ -310,17 +315,25 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       }
     };
 
+    // Outside = neither the panel nor the menu button (the button's own click toggles).
+    const handlePointer = (event) => {
+      if (launcherRef.current?.contains(event.target) || menuButton?.contains(event.target)) return;
+      closeLauncher();
+    };
+
     document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handlePointer);
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handlePointer);
       if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
         previouslyFocused.focus();
       } else {
         menuButton?.focus();
       }
     };
-  }, [closeDrawer, isDrawerOpen]);
+  }, [closeLauncher, isLauncherOpen]);
 
   return (
     <div className="flex h-dvh w-full max-w-full overflow-hidden">
@@ -333,15 +346,6 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       >
         ข้ามไปยังเนื้อหาหลัก
       </a>
-      {isDrawerOpen ? (
-        <button
-          type="button"
-          className="fixed inset-0 z-30 w-full border-0 bg-overlay-drawer p-0"
-          aria-label="ปิดเมนู"
-          onClick={closeDrawer}
-          tabIndex={-1}
-        />
-      ) : null}
       {/* The topbar is a SIBLING of <main>, never a child: `<header>` scoped to <body> maps to
           the `banner` landmark, and a banner nested inside `main` is an a11y defect (landmark
           navigation expects them side by side, and `getByRole('main')` would include the
@@ -368,10 +372,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
               className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2 text-sm font-bold text-text hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
               onClick={() => {
                 closeTopbarPopover();
-                setIsDrawerOpen((open) => !open);
+                setIsLauncherOpen((open) => !open);
               }}
-              aria-controls={isDrawerOpen ? drawerId : undefined}
-              aria-expanded={isDrawerOpen}
+              aria-controls={isLauncherOpen ? launcherId : undefined}
+              aria-expanded={isLauncherOpen}
             >
               <span data-testid="brand-mark" aria-hidden="true" className="grid size-6 flex-none grid-cols-2 gap-[2px]">
                 <i className="rounded-sm bg-accent" />
@@ -382,7 +386,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
               เมนู
               <Icon name="chevronDown" size={16} />
             </button>
-            {isDrawerOpen ? <Launcher id={drawerId} panelRef={drawerRef} items={navItems} onNavigate={closeDrawer} /> : null}
+            {isLauncherOpen ? <Launcher id={launcherId} panelRef={launcherRef} items={navItems} onNavigate={closeLauncher} /> : null}
           </div>
           <div className="topbar-title grid min-w-0 flex-1 gap-0.5" aria-label="พื้นที่ทำงานปัจจุบัน">
             <span className="overflow-hidden text-ellipsis whitespace-nowrap font-extrabold" translate="no">{PRODUCT_NAME}</span>

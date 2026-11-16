@@ -126,11 +126,22 @@ export function UserMenu({
             </button>
           ) : null}
 
+          <button
+            ref={(node) => { itemRefs.current[2] = node; }}
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={() => select(() => onNavigate('/whats-new'))}
+          >
+            <Icon name="sparkles" size={17} />
+            มีอะไรใหม่
+          </button>
+
           <div className="border-t border-border" />
 
           {onViewAs && (
             <button
-              ref={(node) => { itemRefs.current[2] = node; }}
+              ref={(node) => { itemRefs.current[3] = node; }}
               type="button"
               role="menuitem"
               className={itemClass}
@@ -142,7 +153,7 @@ export function UserMenu({
           )}
 
           <button
-            ref={(node) => { itemRefs.current[3] = node; }}
+            ref={(node) => { itemRefs.current[4] = node; }}
             type="button"
             role="menuitem"
             className={itemClass}

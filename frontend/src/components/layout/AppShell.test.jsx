@@ -4,6 +4,7 @@ import { Link, MemoryRouter, Route, Routes, useLocation } from 'react-router-dom
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppShell } from './AppShell.jsx';
+import { Launcher } from './Launcher.jsx';
 
 globalThis.React = React;
 
@@ -262,6 +263,64 @@ describe('AppShell launcher — closed state and toggle', () => {
   });
 });
 
+describe('AppShell launcher — pointer handling', () => {
+  const launcherClosed = () => screen.queryByRole('navigation', { name: 'Primary navigation' }) === null;
+
+  it('has no full-page backdrop button (it would swallow clicks on the other topbar controls)', async () => {
+    renderShell(SALES_USER);
+    expect(screen.queryByRole('button', { name: 'ปิดเมนู' })).toBeNull();
+  });
+
+  it('closes on a mousedown outside the panel and the button', async () => {
+    renderShell(SALES_USER);
+    fireEvent.mouseDown(screen.getByTestId('pathname'));
+    await waitFor(() => expect(launcherClosed()).toBe(true));
+  });
+
+  it('stays open on a mousedown inside the panel', async () => {
+    renderShell(SALES_USER);
+    fireEvent.mouseDown(within(launcherNav()).getByRole('link', { name: /งานทั้งหมด/ }));
+    expect(launcherClosed()).toBe(false);
+  });
+
+  it('closes, and does not reopen, when the เมนู button is pressed while open', async () => {
+    renderShell(SALES_USER);
+    const button = screen.getByRole('button', { name: 'เมนู' });
+    fireEvent.mouseDown(button);
+    expect(launcherClosed()).toBe(false);
+    fireEvent.click(button);
+    expect(launcherClosed()).toBe(true);
+  });
+
+  it('opens the notification bell in one click while closing the launcher', async () => {
+    renderShell(SALES_USER);
+    const bell = await screen.findByRole('button', { name: /การแจ้งเตือน/ });
+
+    fireEvent.mouseDown(bell);
+    fireEvent.click(bell);
+
+    expect(await screen.findByRole('dialog', { name: 'การแจ้งเตือน' })).toBeTruthy();
+    expect(launcherClosed()).toBe(true);
+  });
+
+  it('closes the launcher when a topbar popover opens', async () => {
+    renderShell(SALES_USER);
+    fireEvent.click(screen.getByRole('button', { name: 'เมนูผู้ใช้' }));
+    await screen.findByRole('menu', { name: 'เมนูผู้ใช้' });
+    expect(launcherClosed()).toBe(true);
+  });
+});
+
+describe('Launcher guard', () => {
+  it('throws, naming the path and group, when an item has a group with no section', () => {
+    const items = [{ path: '/mystery', label: 'ลึกลับ', helper: 'Mystery', icon: 'clipboard', group: 'nope', show: true }];
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(() => render(<MemoryRouter><Launcher id="x" items={items} onNavigate={() => {}} /></MemoryRouter>))
+      .toThrow(/\/mystery.*nope/);
+    vi.restoreAllMocks();
+  });
+});
+
 describe('AppShell launcher — sections and placement', () => {
   it('lists the sections in order, and renders none that is empty', async () => {
     renderShell(CEO_USER);
@@ -403,6 +462,18 @@ describe('AppShell topbar — มีอะไรใหม่ and ค่าลด
     fireEvent.click(await screen.findByRole('menuitem', { name: /ค่าลดหย่อนภาษี/ }));
 
     await waitFor(() => expect(screen.getByTestId('pathname').textContent).toBe('/tax-allowance'));
+  });
+
+  it.each([
+    ['with an employee record', EMPLOYEE_USER],
+    ['without one', { role: 'hr', name: 'ไม่มีพนักงาน', email: 'x@test.local' }],
+  ])('offers มีอะไรใหม่ in the user menu %s, so /whats-new stays reachable', async (_label, user) => {
+    renderShell(user, ['/'], { open: false });
+    fireEvent.click(screen.getByRole('button', { name: 'เมนูผู้ใช้' }));
+
+    fireEvent.click(await screen.findByRole('menuitem', { name: /มีอะไรใหม่/ }));
+
+    await waitFor(() => expect(screen.getByTestId('pathname').textContent).toBe('/whats-new'));
   });
 
   it('does not offer ค่าลดหย่อนภาษี to a user with no employee record', async () => {
