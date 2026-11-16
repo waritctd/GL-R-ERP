@@ -83,6 +83,7 @@ import {
   buildDemoEmployeeTaxAllowances, buildDemoDeductionObligations, buildDemoPayrollInputDrafts,
   buildDemoDeductionShortfalls,
 } from '../data/demoPayroll.js';
+import { SNAPSHOT_WITH_NOW } from '../test/fixtures/salesAnalyticsSnapshot.js';
 
 const db = createDemoDatabase();
 
@@ -8253,7 +8254,7 @@ function buildFinanceDeal(raw, user) {
   return deal;
 }
 
-let mockAnalyticsSnapshot = null;
+const mockAnalyticsSnapshot = { payload: SNAPSHOT_WITH_NOW, asOf: '2026-03-31', uploadedAt: '2026-04-02T03:00:00Z' };
 
 // ── salesBoard read model (mirrors SalesBoardRepository) ──
 const MOCK_BOARD_LIVE_STATUSES = new Set(['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED']);
@@ -13805,20 +13806,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     },
   },
 
-  // Mirrors SalesAnalyticsService. Role gates approximate the Java service and are NOT evidence. No real data lives
-  // here: the mock starts with no snapshot, and a CEO upload is kept in memory only.
+  // Mirrors SalesAnalyticsService. Role gates approximate the Java service and are NOT evidence. The real snapshot is
+  // loaded by an outside weekly job, so the mock has no upload and starts with a synthetic snapshot.
   salesAnalytics: {
     async snapshot() {
       const user = requireSession();
       if (!['ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ snapshot: mockAnalyticsSnapshot });
-    },
-    async upload(document) {
-      const user = requireSession();
-      if (user.role !== 'ceo') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (!document || typeof document !== 'object' || Array.isArray(document)) fail('ข้อมูลวิเคราะห์ต้องเป็น JSON object', 400);
-      mockAnalyticsSnapshot = { payload: document, asOf: typeof document.as_of === 'string' ? document.as_of : null, uploadedAt: new Date().toISOString() };
-      return delay({ ok: true });
     },
   },
 
