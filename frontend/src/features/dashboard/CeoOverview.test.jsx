@@ -23,6 +23,7 @@ vi.mock('../../api/index.js', () => ({
     overtime: { list: vi.fn() },
     leave: { list: vi.fn() },
     salesBoard: { teamOverview: vi.fn() },
+    salesAnalytics: { snapshot: vi.fn(), upload: vi.fn() },
   },
 }));
 
@@ -158,9 +159,13 @@ function LocationProbe() {
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
+function SearchProbe() {
+  return <div data-testid="search-probe">{useLocation().search}</div>;
+}
+
 let lastClient;
 
-function renderOverview(summary = dashboardSummary) {
+function renderOverview(summary = dashboardSummary, entry = '/') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -168,12 +173,15 @@ function renderOverview(summary = dashboardSummary) {
 
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/']}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route
             path="/"
             element={(
-              <CeoOverview user={ceoUser} employee={ceoEmployee} dashboardSummary={summary} showToast={vi.fn()} />
+              <>
+                <CeoOverview user={ceoUser} employee={ceoEmployee} dashboardSummary={summary} showToast={vi.fn()} />
+                <SearchProbe />
+              </>
             )}
           />
           <Route path="*" element={<LocationProbe />} />
@@ -521,6 +529,59 @@ describe('CeoOverview', () => {
 
       expectFigure('กำลังพล', '42 คน');
       expectFigure('มาสายวันนี้', '3 คน');
+    });
+  });
+  // Sales insights (spec 2026-11-16): the landing page is a two-way switch, state in ?view=insight. The insight body
+  // itself is pinned in SalesInsights.test.jsx; here only the wiring.
+  describe('มุมมอง: งานวันนี้ / วิเคราะห์ยอดขาย', () => {
+    beforeEach(() => api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null }));
+
+    it('defaults to today\'s dashboard, with the switch showing งานวันนี้ selected and no insight view', async () => {
+      renderOverview();
+
+      expect(screen.getByRole('tab', { name: 'งานวันนี้' }).getAttribute('aria-selected')).toBe('true');
+      expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }).getAttribute('aria-selected')).toBe('false');
+      expect(screen.getByText('รอคุณตัดสินใจ')).toBeTruthy();
+      expect(screen.queryByTestId('sales-insights')).toBeNull();
+      expect(screen.getByRole('tabpanel').getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
+      expect(api.salesAnalytics.snapshot).not.toHaveBeenCalled();
+    });
+
+    it('keeps the tablist OUTSIDE the tabpanel, which wraps only the content below the header, in both views', async () => {
+      const { unmount } = renderOverview();
+      let panel = screen.getByRole('tabpanel');
+      expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
+      expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
+      expect(panel.textContent).toContain('รอคุณตัดสินใจ');
+      expect(panel.textContent).not.toContain('ภาพรวมผู้บริหาร');
+      unmount();
+
+      renderOverview(dashboardSummary, '/?view=insight');
+      await screen.findByTestId('sales-insights');
+      panel = screen.getByRole('tabpanel');
+      expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
+      expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-insight');
+      expect(panel.contains(screen.getByTestId('sales-insights'))).toBe(true);
+    });
+
+    it('?view=insight shows the insight view instead of the worklist', async () => {
+      renderOverview(dashboardSummary, '/?view=insight');
+
+      expect(await screen.findByTestId('sales-insights')).toBeTruthy();
+      expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }).getAttribute('aria-selected')).toBe('true');
+      expect(screen.queryByText('รอคุณตัดสินใจ')).toBeNull();
+    });
+
+    it('clicking the switch writes the view to the URL and back again', async () => {
+      renderOverview();
+
+      fireEvent.click(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }));
+      expect(await screen.findByTestId('sales-insights')).toBeTruthy();
+      expect(screen.getByTestId('search-probe').textContent).toContain('view=insight');
+
+      fireEvent.click(screen.getByRole('tab', { name: 'งานวันนี้' }));
+      expect(screen.queryByTestId('sales-insights')).toBeNull();
+      expect(screen.getByTestId('search-probe').textContent).not.toContain('view=insight');
     });
   });
 });

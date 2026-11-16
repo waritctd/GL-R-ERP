@@ -145,6 +145,10 @@ export const API_ROUTES = {
     pipelineImports: '/api/sales/pipeline-imports',
     pipelineImportTemplate: '/api/sales/pipeline-imports/template',
   },
+  // SalesAnalyticsController (salesanalytics/): the monthly analytics snapshot, ceo + sales_manager read, ceo uploads.
+  salesAnalytics: {
+    snapshot: '/api/sales-analytics/snapshot',
+  },
   // ExpectedPaymentController (salesboard/): a deal's rep-entered expected cash (V212).
   expectedPayments: {
     list: (ticketId) => `/api/tickets/${ticketId}/expected-payments`,

@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { InsightLanding } from './InsightSwitch.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { failed, moneySum } from './dashboardParts.jsx';
 import { TeamOverview } from '../salesBoard/TeamOverview.jsx';
@@ -67,7 +68,16 @@ function CountPill({ count, unit = 'รายการ' }) {
   );
 }
 
-export function ManagerOverview({ user, employee }) {
+const MANAGER_TITLE = 'ภาพรวมทีมขาย';
+
+/** Landing page: today's team overview, or (?view=insight) the sales-analytics snapshot. */
+export function ManagerOverview(props) {
+  return (
+    <InsightLanding title={MANAGER_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher, panelProps) => <ManagerToday {...props} switcher={switcher} panelProps={panelProps} />} />
+  );
+}
+
+function ManagerToday({ user, employee, switcher, panelProps }) {
   const navigate = useNavigate();
   const commissionsQuery = useQuery({
     queryKey: queryKeys.commissionsPendingApproval(),
@@ -94,11 +104,16 @@ export function ManagerOverview({ user, employee }) {
   return (
     <PageStack>
       <PageHeader
-        title="ภาพรวมทีมขาย"
+        title={MANAGER_TITLE}
         subtitle={`${greeting} · ${today}`}
-        actions={<Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูดีลทีม</Button>}
+        actions={(
+          <>
+            {switcher}
+            <Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูดีลทีม</Button>
+          </>
+        )}
       />
-
+      <PageStack {...panelProps}>
       <TeamOverview showTitle={false} />
 
       <TeamMovementPanel deals={tickets} range={teamRange} />
@@ -155,6 +170,7 @@ export function ManagerOverview({ user, employee }) {
           </>
         )}
       </Panel>
+      </PageStack>
     </PageStack>
   );
 }

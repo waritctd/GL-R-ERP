@@ -497,3 +497,23 @@
     }
   }
 }
+
+/* Sales insights (features/dashboard/insight): small entrance + grow-in motion. Only under no-preference, so the
+ * default (and reduced-motion) rendering is the final state with no animation at all. */
+@media (prefers-reduced-motion: no-preference) {
+  @keyframes insight-rise {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes insight-grow {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+  }
+  @keyframes insight-grow-y {
+    from { transform: scaleY(0); }
+    to { transform: scaleY(1); }
+  }
+  .insight-rise { animation: insight-rise 320ms ease-out both; }
+  .insight-grow { transform-origin: left; animation: insight-grow 600ms ease-out both; }
+  .insight-grow-y { transform-origin: bottom; animation: insight-grow-y 500ms ease-out both; }
+}
