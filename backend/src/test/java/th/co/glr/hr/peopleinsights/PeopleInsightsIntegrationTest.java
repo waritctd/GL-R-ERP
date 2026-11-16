@@ -333,6 +333,40 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(num(march, "earlyLeave")).isEqualTo(1);    // 18 Mar
     }
 
+    @Test
+    void aLeaveDayIsJudgedAgainstTheScheduleAssignedToTheEmployeesDivisionNotTheCompanyDefault() throws Exception {
+        long division = jdbc.queryForObject("INSERT INTO hr.division (source_code, name_th, is_active) VALUES ('T9', 'ฝ่ายทดสอบ', TRUE) RETURNING division_id", Map.of(), Long.class);
+        long e = emp("T-DIV9", "ดีไนน์", id.get("ceo"), true);
+        jdbc.update("UPDATE hr.employee SET division_id = :d WHERE employee_id = :e", Map.of("d", division, "e", e));
+        long schedule = jdbc.queryForObject("""
+            INSERT INTO hr.work_schedule (code, name_th, work_start, work_end, grace_minutes)
+            VALUES ('T_0900', 'ทดสอบ 09:00-18:00', TIME '09:00', TIME '18:00', 15) RETURNING work_schedule_id
+            """, Map.of(), Long.class);
+        jdbc.update("INSERT INTO hr.work_schedule_day (work_schedule_id, day_of_week) SELECT :s, d FROM generate_series(1, 7) d", Map.of("s", schedule));
+        jdbc.update("""
+            INSERT INTO hr.work_schedule_assignment (scope_type, scope_id, work_schedule_id, effective_from)
+            VALUES ('DIVISION', :d, :s, DATE '2024-01-01')
+            """, Map.of("d", division, "s", schedule));
+        // Approved leave 09:00-11:00, arrives 11:05: 5 uncovered minutes after the assigned 09:00 start, within its grace of 15.
+        // Against the company 08:30 start the same arrival leaves 35 uncovered minutes, so a dropped division id makes it late.
+        timed(leaveSpan(e, "PERSONAL", "2026-03-02", "2026-03-02", 0.25, "APPROVED", 0.25, 0, e, "2026-03-01T10:00:00+07:00", null), "09:00", "11:00");
+        day(e, "2026-03-02", "2026-03-02T11:05:00+07:00", "2026-03-02T18:00:00+07:00", 125, 0);
+
+        // The app's own resolver (assignment tiers over the company-wide fallback), not the fixed one the other cases inject.
+        var properties = new th.co.glr.hr.config.AppProperties();
+        var resolver = new th.co.glr.hr.attendance.schedule.TieredWorkScheduleResolver(
+            new th.co.glr.hr.attendance.schedule.WorkScheduleAssignmentRepository(jdbc, properties),
+            new th.co.glr.hr.attendance.schedule.CompanyWideWorkScheduleResolver(properties), properties);
+        mvc = MockMvcBuilders.standaloneSetup(new PeopleInsightsController(new PeopleInsightsService(new PeopleInsightsRepository(jdbc), resolver), new SessionContext()))
+            .setControllerAdvice(new ApiExceptionHandler()).build();
+        Map<String, Object> body = call("ceo", "all", 2026);
+
+        Map<String, Object> march = list(body, "attendance").stream()
+            .filter(r -> num(r, "employeeId") == e && "2026-03".equals(r.get("month"))).findFirst().orElseThrow();
+        assertThat(num(march, "scanDays")).isEqualTo(1);
+        assertThat(num(march, "lateDays")).isZero();
+    }
+
     // fix 2 ──────────────────────────────────────────────────────────────────────────────────────────────────────
     @Test
     void peopleWhoLeftDuringTheYearStayInThatYearsFiguresAndAreMarkedInactive() throws Exception {

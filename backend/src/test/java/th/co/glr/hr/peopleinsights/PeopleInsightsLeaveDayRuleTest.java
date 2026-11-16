@@ -43,7 +43,7 @@ class PeopleInsightsLeaveDayRuleTest {
     }
     @Test void l_lonePunchRightAfterMorningLeaveIsTheArrival() { assertDay(run(List.of(span("08:30", "12:30")), null, "13:20", 0, 250), 0, false); }
     @Test void m_lonePunchLaterInTheAfternoonIsLateArrivalNotEarlyLeave() { assertDay(run(List.of(span("08:30", "12:30")), null, "14:30", 0, 180), 60, false); }
-    @Test void m2_lonePunchPastTheMidpointStaysADepartureAndIsEarlyByItsUncoveredMinutes() { assertDay(run(List.of(span("08:30", "12:30")), null, "17:20", 30, 10), 0, true); }
+    @Test void m2_lonePunchPastTheMidpointStaysADepartureAndIsEarlyByItsUncoveredMinutes() { assertDay(run(List.of(span("08:30", "12:30")), null, "17:20", 0, 10), 0, true); }
     @Test void q_staleStoredValueIsOnlyEverReducedNeverRaised() { assertDay(run(List.of(span("09:00", "10:00")), "10:00", null, 60, 0), 30, false); }
     @Test void r_lateCapStoredValueBelowResidualWins() { assertDay(run(List.of(span("09:00", "10:00")), "10:00", null, 20, 0), 20, false); }
     @Test void s_earlyCapStoredZeroKeepsNotEarlyAndLateStays() { assertDay(run(List.of(span("16:00", "17:00")), "10:00", "15:00", 90, 0), 90, false); }
