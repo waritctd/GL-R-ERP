@@ -54,6 +54,7 @@ const ROUTES = [
   '/catalog',
   '/whats-new', // มีอะไรใหม่ — release notice, every role (static content; no API call to render)
   '/whats-new/2026-11-16', // the same page pinned to one release: where the bell row and the email link land
+  '/whats-new/2026-11-17', // the second release: /whats-new now shows it, and the 16 Nov link above must still load
 ];
 
 // Declared in App.jsx but deliberately outside this sweep, each with the reason.
