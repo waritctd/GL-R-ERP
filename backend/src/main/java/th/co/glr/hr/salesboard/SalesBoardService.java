@@ -184,6 +184,16 @@ public class SalesBoardService {
             quietRule.quietDays(), weekVisits, cashForMonth(null, month));
     }
 
+    /** Every rep's open deals for the sales_manager / ceo งานทั้งหมด board — the same gate and the same
+     * {@link SalesBoardRepository#activeDealsAllReps()} rows {@link #teamOverview} already reads, served whole so the
+     * team overview's payload stays as it is. */
+    public SalesBoardDtos.TeamBoard teamBoard(UserPrincipal actor) {
+        if (!TEAM_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
+        }
+        return new SalesBoardDtos.TeamBoard(repository.activeDealsAllReps(), quietRule.quietDays());
+    }
+
     private static List<BoardDeal> rankQuiet(List<BoardDeal> deals, int limit) {
         return deals.stream().filter(BoardDeal::quiet).sorted(QUIET_RANK).limit(limit).toList();
     }

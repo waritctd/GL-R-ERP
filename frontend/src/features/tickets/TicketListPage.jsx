@@ -622,7 +622,11 @@ function buildDealColumns({ role, isManagerView, catalog }) {
   ];
 }
 
-export function TicketListPage({ user, showToast }) {
+/**
+ * `viewSwitch` (from AllDealsPage) is the งานทั้งหมด header's บอร์ด button, rendered beside งานใหม่; absent when the
+ * table is rendered on its own.
+ */
+export function TicketListPage({ user, showToast, viewSwitch = null }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   // Phase filter + search live in the URL so list → detail → back keeps them. The stage cell does
@@ -1005,14 +1009,14 @@ export function TicketListPage({ user, showToast }) {
     >
       <SalesTabs role={user.role} />
       <PageHeader
-        title="รายการดีล"
-        subtitle="ติดตามดีลตามขอบเขตบทบาทและตัวกรองที่เลือก"
+        title="งานทั้งหมด"
+        subtitle="ติดตามงานตามขอบเขตบทบาทและตัวกรองที่เลือก"
         // Denser mobile heading/actions treatment, set here directly: a legacy-layer override via
         // a `.ticket-list-page` ancestor selector in styles.css would lose to Tailwind's utilities
         // layer (see styles-css-loses-to-tailwind-utilities).
         headingClassName="mobile:leading-[1.15]"
         subtitleClassName="mobile:mt-0.5 mobile:text-sm mobile:leading-[1.35]"
-        actionsClassName="mobile:grid mobile:w-full mobile:grid-cols-[44px_minmax(0,1fr)] mobile:gap-2 [&>*:only-child]:mobile:col-start-1"
+        actionsClassName={`mobile:grid mobile:w-full mobile:gap-2 [&>*:only-child]:mobile:col-start-1 ${viewSwitch ? 'mobile:grid-cols-[44px_minmax(0,1fr)_minmax(0,1fr)]' : 'mobile:grid-cols-[44px_minmax(0,1fr)]'}`}
         actions={(
           <>
             <Button
@@ -1020,15 +1024,16 @@ export function TicketListPage({ user, showToast }) {
               type="button"
               onClick={invalidateTicketsList}
               loading={refreshing}
-              title="รีเฟรชรายการดีล"
-              aria-label="รีเฟรชรายการดีล"
+              title="รีเฟรชงานทั้งหมด"
+              aria-label="รีเฟรชงานทั้งหมด"
             >
               <Icon name="refresh" />
             </Button>
+            {viewSwitch}
             {canCreate ? (
               <Button type="button" onClick={() => setCreating(true)}>
                 <Icon name="plus" />
-                สร้างดีลใหม่
+                งานใหม่
               </Button>
             ) : null}
           </>

@@ -201,7 +201,8 @@ describe('TicketListPage', () => {
   it('renders rows from a mocked api.tickets.list', async () => {
     renderTicketListPage();
 
-    expect(screen.getByRole('heading', { level: 1, name: 'รายการดีล' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'งานทั้งหมด' })).toBeTruthy();
+    expect(screen.getByText('ติดตามงานตามขอบเขตบทบาทและตัวกรองที่เลือก')).toBeTruthy();
     expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
     expect(screen.getByText('PR-2026-0501')).not.toBeNull();
     // sales now also sends the default movement range (see 'movement range' below); the plain
@@ -306,13 +307,13 @@ describe('TicketListPage', () => {
     ];
 
     const { unmount } = renderTicketListPage(salesUser);
-    expect(await screen.findByRole('button', { name: /สร้างดีลใหม่/ })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /งานใหม่/ })).toBeTruthy();
     unmount();
 
     for (const roleUser of rolesWithoutCreate) {
       const view = renderTicketListPage(roleUser);
-      await screen.findByRole('heading', { name: 'รายการดีล' });
-      expect(screen.queryByRole('button', { name: /สร้างดีลใหม่/ })).toBeNull();
+      await screen.findByRole('heading', { name: 'งานทั้งหมด' });
+      expect(screen.queryByRole('button', { name: /งานใหม่/ })).toBeNull();
       view.unmount();
     }
   });
@@ -357,7 +358,7 @@ describe('TicketListPage', () => {
 
     expect(await screen.findByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
     expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
-    expect(screen.queryByRole('button', { name: /สร้างดีลใหม่/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /งานใหม่/ })).toBeNull();
     const scopeToggle = within(screen.getByLabelText('เลือกขอบเขตรายการ'));
     expect(scopeToggle.getByRole('button', { name: /ต้องดำเนินการ/ }).getAttribute('aria-pressed')).toBe('true');
 
@@ -457,7 +458,7 @@ describe('TicketListPage', () => {
     await screen.findByText('บริษัท ทดสอบ จำกัด');
     expect(api.tickets.list).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /สร้างดีลใหม่/ }));
+    fireEvent.click(screen.getByRole('button', { name: /งานใหม่/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันสร้าง (stub)' }));
 
     await waitFor(() => expect(api.tickets.create).toHaveBeenCalledWith({ title: 'โครงการใหม่' }));
@@ -533,7 +534,7 @@ describe('TicketListPage', () => {
     );
 
     await screen.findByText('บริษัท ทดสอบ จำกัด');
-    fireEvent.click(screen.getByRole('button', { name: /สร้างดีลใหม่/ }));
+    fireEvent.click(screen.getByRole('button', { name: /งานใหม่/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันสร้าง (stub)' }));
 
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/502'));
@@ -1184,7 +1185,7 @@ describe('TicketListPage', () => {
 
     it('chip counts respect the current phase filter', async () => {
       renderTicketListPage(salesUser, ['/tickets?phase=5']);
-      await screen.findByRole('heading', { name: 'รายการดีล' });
+      await screen.findByRole('heading', { name: 'งานทั้งหมด' });
       // every fixture deal is NEGOTIATION (phase 3), so phase 5 leaves nothing to count
       await waitFor(() => expect(weekChips().getByRole('button', { name: /^ไม่เคลื่อนไหว/ }).textContent).toMatch(/0/));
     });

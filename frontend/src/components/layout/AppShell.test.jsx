@@ -38,14 +38,14 @@ function renderShell(user, initialEntries = ['/']) {
   );
 }
 
-// Role-scoped views (Import build, docs/role-scoped-views.md): the sidebar's รายการดีล item is gated on
+// Role-scoped views (Import build, docs/role-scoped-views.md): the sidebar's งานทั้งหมด item is gated on
 // canViewDealPipeline, not canViewTickets — import loses it and leads with its pricing queue instead.
 describe('AppShell navigation (role-scoped views)', () => {
-  it('hides รายการดีล for import and leads with คิวขอราคา', async () => {
+  it('hides งานทั้งหมด for import and leads with คิวขอราคา', async () => {
     renderShell({ role: 'import', employeeId: 2, name: 'นำเข้า ทดสอบ', email: 'import@test.local' });
 
     await screen.findByText('เนื้อหา');
-    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
     expect(screen.getByText('คิวขอราคา')).toBeTruthy();
   });
 
@@ -77,17 +77,17 @@ describe('AppShell navigation (role-scoped views)', () => {
     expect(screen.getByText('การขนส่ง')).toBeTruthy();
   });
 
-  it('keeps รายการดีล for sales', async () => {
+  it('keeps งานทั้งหมด for sales', async () => {
     renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
 
     await screen.findByText('เนื้อหา');
-    expect(screen.getByText('รายการดีล')).toBeTruthy();
+    expect(screen.getByText('งานทั้งหมด')).toBeTruthy();
   });
 
-  it('keeps รายการดีล for ceo/sales_manager (still on canViewDealPipeline)', async () => {
+  it('keeps งานทั้งหมด for ceo/sales_manager (still on canViewDealPipeline)', async () => {
     renderShell({ role: 'ceo', employeeId: 1, name: 'CEO ทดสอบ', email: 'ceo@test.local' });
     await screen.findByText('เนื้อหา');
-    expect(screen.getByText('รายการดีล')).toBeTruthy();
+    expect(screen.getByText('งานทั้งหมด')).toBeTruthy();
   });
 });
 
@@ -98,8 +98,8 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
   it('keeps nav destinations accessible with native tooltip names', async () => {
     renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
 
-    const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
-    expect(dealsLink.getAttribute('title')).toBe('รายการดีล (Deal pipeline)');
+    const dealsLink = await screen.findByRole('link', { name: 'งานทั้งหมด (All deals)' });
+    expect(dealsLink.getAttribute('title')).toBe('งานทั้งหมด (All deals)');
     expect(screen.getByRole('link', { name: 'GL&R ERP home' }).getAttribute('title')).toBe('GL&R ERP home');
     expect(screen.getByText('GL&R ERP')).toBeTruthy();
   });
@@ -110,7 +110,7 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
       ['/tickets'],
     );
 
-    const dealsLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
+    const dealsLink = await screen.findByRole('link', { name: 'งานทั้งหมด (All deals)' });
     expect(dealsLink.className).toContain('active');
   });
 
@@ -132,15 +132,15 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
     renderShell({ role: 'ceo', employeeId: 1, name: 'ผู้บริหาร ทดสอบ', email: 'ceo@glr.co.th' });
 
     const groupToggle = await screen.findByRole('button', { name: /งานขาย/ });
-    expect(screen.getByRole('link', { name: 'รายการดีล (Deal pipeline)' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'งานทั้งหมด (All deals)' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'ตั้งค่าราคา (CEO price config)' })).toBeTruthy();
 
     fireEvent.click(groupToggle);
-    expect(screen.queryByRole('link', { name: 'รายการดีล (Deal pipeline)' })).toBeNull();
+    expect(screen.queryByRole('link', { name: 'งานทั้งหมด (All deals)' })).toBeNull();
     expect(screen.queryByRole('link', { name: 'ตั้งค่าราคา (CEO price config)' })).toBeNull();
 
     fireEvent.click(groupToggle);
-    expect(screen.getByRole('link', { name: 'รายการดีล (Deal pipeline)' })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'งานทั้งหมด (All deals)' })).toBeTruthy();
     expect(screen.getByRole('link', { name: 'ตั้งค่าราคา (CEO price config)' })).toBeTruthy();
   });
 
@@ -186,27 +186,27 @@ describe('AppShell navigation (drawer content, no persistent tablet rail)', () =
 
 });
 
-// Account role-scoped views (finalized design, owner-confirmed 2026-07-24): nav drops BOTH รายการดีล (pipeline
+// Account role-scoped views (finalized design, owner-confirmed 2026-07-24): nav drops BOTH งานทั้งหมด (pipeline
 // browser) and ค่าคอมมิชชัน (the invoice+commission step is folded into งานการเงิน as the last money-lifecycle
 // stage), and gains งานการเงิน. sales is the control — unaffected by the split.
 describe('AppShell nav — Account role-scoped views', () => {
-  it('account nav has no รายการดีล, no ค่าคอมมิชชัน, and has งานการเงิน', async () => {
+  it('account nav has no งานทั้งหมด, no ค่าคอมมิชชัน, and has งานการเงิน', async () => {
     renderShell({ role: 'account', name: 'บัญชี ทดสอบ', email: 'account@glr.co.th', employeeId: 3 });
     expect(await screen.findByText('งานการเงิน')).not.toBeNull();
-    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
     expect(screen.queryByText('ค่าคอมมิชชัน')).toBeNull();
   });
 
-  it('sales nav still has รายการดีล and ค่าคอมมิชชัน, but no งานการเงิน', async () => {
+  it('sales nav still has งานทั้งหมด and ค่าคอมมิชชัน, but no งานการเงิน', async () => {
     renderShell({ role: 'sales', name: 'ขาย ทดสอบ', email: 'sales@glr.co.th', employeeId: 4 });
-    expect(await screen.findByText('รายการดีล')).not.toBeNull();
+    expect(await screen.findByText('งานทั้งหมด')).not.toBeNull();
     expect(screen.getByText('ค่าคอมมิชชัน')).not.toBeNull();
     expect(screen.queryByText('งานการเงิน')).toBeNull();
   });
 
-  it('ceo nav keeps รายการดีล and ค่าคอมมิชชัน, and also gains งานการเงิน (canConfirmPayments fallback)', async () => {
+  it('ceo nav keeps งานทั้งหมด and ค่าคอมมิชชัน, and also gains งานการเงิน (canConfirmPayments fallback)', async () => {
     renderShell({ role: 'ceo', name: 'ผู้บริหาร ทดสอบ', email: 'ceo@glr.co.th', employeeId: 5 });
-    expect(await screen.findByText('รายการดีล')).not.toBeNull();
+    expect(await screen.findByText('งานทั้งหมด')).not.toBeNull();
     expect(screen.getByText('ค่าคอมมิชชัน')).not.toBeNull();
     expect(screen.getByText('งานการเงิน')).not.toBeNull();
   });
@@ -220,7 +220,7 @@ describe('AppShell skip link (WCAG 2.2 §2.4.1 Bypass Blocks)', () => {
     renderShell({ role: 'sales', employeeId: 9, name: 'ขาย ทดสอบ', email: 'sales@test.local' });
 
     const skipLink = await screen.findByRole('link', { name: 'ข้ามไปยังเนื้อหาหลัก' });
-    const firstNavLink = await screen.findByRole('link', { name: 'รายการดีล (Deal pipeline)' });
+    const firstNavLink = await screen.findByRole('link', { name: 'งานทั้งหมด (All deals)' });
 
     // DOCUMENT_POSITION_FOLLOWING (4) means firstNavLink comes after skipLink.
     expect(skipLink.compareDocumentPosition(firstNavLink) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -378,7 +378,7 @@ describe('AppShell navigation under the release lockdown', () => {
     await screen.findByText('เนื้อหา');
 
     expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
-    expect(screen.getByText('รายการดีล')).toBeTruthy();
+    expect(screen.getByText('งานทั้งหมด')).toBeTruthy();
     expect(screen.getByText('แคตตาล็อกสินค้า')).toBeTruthy();
     expect(screen.queryByText('งานการเงิน')).toBeNull();
     expect(screen.queryByText('การขนส่ง')).toBeNull();
@@ -399,7 +399,7 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.getByText('คิวขอราคา')).toBeTruthy();
     expect(screen.getByText('การขนส่ง')).toBeTruthy();
     expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
-    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
     // import holds canManagePriceImport, so นำเข้าราคา is removed by the lock filter alone — and
     // '/price-import' must not ride on the '/pricing-requests' prefix.
@@ -414,7 +414,7 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.getByText('งานการเงิน')).toBeTruthy();
     expect(screen.queryByText('คิวขอราคา')).toBeNull();
     expect(screen.queryByText('การขนส่ง')).toBeNull();
-    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
     expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
     // account holds canViewCatalog; only the lock filter removes it.
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
@@ -425,7 +425,7 @@ describe('AppShell navigation under the release lockdown', () => {
     await renderLockedShell({ role: 'qc', employeeId: 144, canCreateQuotation: true, name: 'คิวซี ทดสอบ', email: 'qc@test.local' });
     await screen.findByText('เนื้อหา');
     expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
-    expect(screen.queryByText('รายการดีล')).toBeNull();
+    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
   });
 
@@ -483,7 +483,7 @@ describe('AppShell navigation under the release lockdown', () => {
     await renderLockedShell({ role: 'sales', employeeId: 41, name: 'ขาย ทดสอบ', email: 'sales@test.local' }, 'false');
     await screen.findByText('เนื้อหา');
 
-    expect(screen.getByText('รายการดีล')).toBeTruthy();
+    expect(screen.getByText('งานทั้งหมด')).toBeTruthy();
     expect(screen.getByText('งานขาย')).toBeTruthy();
   });
 });

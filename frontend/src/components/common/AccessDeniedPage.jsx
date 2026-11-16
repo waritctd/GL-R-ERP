@@ -13,7 +13,7 @@ const PATH_LABELS = {
   '/requests': 'คำขอแก้ไขข้อมูล',
   '/my-requests': 'ข้อมูลส่วนตัว',
   '/profile': 'ข้อมูลส่วนตัว',
-  '/tickets': 'รายการดีล',
+  '/tickets': 'งานทั้งหมด',
   '/catalog': 'แคตตาล็อกสินค้า',
   '/commissions': 'ค่าคอมมิชชัน',
   '/finance': 'งานการเงิน',

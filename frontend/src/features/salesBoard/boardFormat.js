@@ -81,3 +81,7 @@ export function defaultBoardFilter(openDeals) {
   const withQuarter = deals.filter((d) => d.expectedQuarter).length;
   return deals.length > 0 && withQuarter * 2 >= deals.length ? 'quarter' : 'all';
 }
+
+/** The board's owner tag (sales_manager / ceo): the rep's first name, as the review draws it; the card keeps the full
+ * name in the tag's title. */
+export const ownerShortName = (name) => (name ?? '').trim().split(/\s+/)[0] ?? '';

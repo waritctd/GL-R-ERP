@@ -45,7 +45,7 @@ const Failed = () => <p className="m-0 px-5 py-4 text-sm font-bold text-danger m
 const BOARD_FILTERS = [
   { key: 'quarter', label: 'ไตรมาสนี้' },
   { key: 'all', label: 'ทั้งหมด' },
-  { key: 'quiet', label: 'ดีลเงียบ' },
+  { key: 'quiet', label: 'งานเงียบ' },
 ];
 
 const BOARD_ID = 'my-work-board';
@@ -182,7 +182,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
         subtitle={subtitle ?? formatThaiDate(bangkokTodayIso())}
         actions={(
           <>
-            <Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูรายการดีลทั้งหมด</Button>
+            <Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูงานทั้งหมด</Button>
             <Button type="button" variant="secondary" onClick={() => setCreating(true)}>
               <Icon name="plus" size={16} />
               งานใหม่
@@ -243,16 +243,16 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
 
       <Panel
         id={BOARD_ID}
-        title="ดีลทั้งหมดของฉัน"
+        title="งานทั้งหมดของฉัน"
         actions={work ? (
           <span className="flex flex-wrap items-center gap-2 text-sm text-text-muted">
             <span>
-              {boardDeals.length} ดีล · มูลค่ารวม{' '}
+              {boardDeals.length} งาน · มูลค่ารวม{' '}
               <b data-testid="board-total" className="tabular-nums text-text">
                 {totalLabel(sumValue(boardDeals), otherCurrencyTotals(boardDeals))}
               </b>
             </span>
-            <span className="flex flex-wrap gap-1" role="group" aria-label="กรองดีล">
+            <span className="flex flex-wrap gap-1" role="group" aria-label="กรองงาน">
               {BOARD_FILTERS.map((f) => (
                 <Button
                   key={f.key}
@@ -269,7 +269,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           </span>
         ) : null}
       >
-        {workQuery.isError ? <Failed /> : !work ? <Loading label="กำลังโหลดดีลทั้งหมด" /> : <DealBoard deals={boardDeals} />}
+        {workQuery.isError ? <Failed /> : !work ? <Loading label="กำลังโหลดงานทั้งหมด" /> : <DealBoard deals={boardDeals} />}
       </Panel>
 
       {/* บันทึกเข้าพบ stays reachable on phone (spec §7.3): a sticky bottom button, with a spacer so it never covers

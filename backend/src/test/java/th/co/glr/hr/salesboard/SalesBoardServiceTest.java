@@ -95,6 +95,28 @@ class SalesBoardServiceTest {
         verify(repository, never()).activeDealsAllReps();
     }
 
+    // ── team board (งานทั้งหมด for sales_manager / ceo) ──────────────────────────
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sales_manager", "ceo"})
+    void teamBoard_givesManagerAndCeoEveryRepsOpenDeals(String role) {
+        List<BoardDeal> rows = List.of(deal(1, 10L, 3, "100", false), deal(2, 20L, 30, null, true));
+        when(repository.activeDealsAllReps()).thenReturn(rows);
+
+        SalesBoardDtos.TeamBoard board = service.teamBoard(actor(1L, role));
+
+        assertThat(board.board()).containsExactlyElementsOf(rows);
+        assertThat(board.quietDays()).isEqualTo(14);
+        verify(repository, never()).activeDealsOwnedBy(anyLong());
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"sales", "account", "import", "hr", "employee", "warehouse", "qc", "division_manager"})
+    void teamBoard_refusesEveryOtherRole_beforeReadingAnyRow(String role) {
+        assertForbidden(() -> service.teamBoard(actor(7L, role)));
+        org.mockito.Mockito.verifyNoInteractions(repository);
+    }
+
     @Test
     void followUp_isQuietOnly_rankedByDaysTimesValueThenDays_cappedAtFive() {
         List<BoardDeal> rows = List.of(

@@ -13747,9 +13747,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   },
 
   // Mirrors SalesBoardService / SalesBoardRepository (salesboard/). AUTHZ NOTE: these role gates and the own-deals
-  // scope approximate the Java service and are NOT evidence — SalesBoardScopeIntegrationTest is. my-work is the
-  // caller's OWN deals (created_by only, not keyed_by), sales / sales_manager / ceo; team-overview is
-  // sales_manager / ceo. Quiet uses the same 14-day rule (features/salesBoard/quietRule.js).
+  // scope approximate the Java service and are NOT evidence — SalesBoardScopeIntegrationTest and
+  // TeamBoardScopeIntegrationTest are. my-work is the caller's OWN deals (created_by only, not keyed_by), sales /
+  // sales_manager / ceo; team-overview and team-board are sales_manager / ceo. Quiet uses the same 14-day rule
+  // (features/salesBoard/quietRule.js).
   salesBoard: {
     async myWork() {
       const user = requireSession();
@@ -13760,6 +13761,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         visitsThisWeek: mockVisitsThisWeek(user.id),
         cash: mockCashForMonth(user.id, mockTodayIso().slice(0, 7)),
       });
+    },
+    // Mirrors SalesBoardService.teamBoard: SalesBoardRepository.activeDealsAllReps (every rep's ACTIVE, non-CLOSED_PAID
+    // deal, ORDER BY last_touched_at, ticket_id — mockBoardDeals already sorts so), sales_manager / ceo only.
+    async teamBoard() {
+      const user = requireSession();
+      if (!['sales_manager', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay({ board: mockBoardDeals(), quietDays: MOCK_QUIET_DAYS });
     },
     async teamOverview() {
       const user = requireSession();
