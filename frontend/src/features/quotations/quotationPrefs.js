@@ -108,3 +108,21 @@ export function pushRecentCatalogPick(userId, catalogRow) {
   writeJson(storageKey(RECENT_PRODUCTS_KEY, userId), next);
   return next;
 }
+
+// ใบเสนอราคา list view ───────────────────────────────────────────────────────────────────── Sales asked
+// (2026-11-16) for the list to open flat, newest number on top, the way it read before deals grouped it. The
+// grouped view stays one click away and the choice is remembered per user, per browser.
+
+const LIST_VIEW_KEY = 'glr.quotation.listView.v1';
+export const QUOTATION_LIST_VIEWS = ['flat', 'grouped'];
+
+/** 'flat' unless this user last chose 'grouped' here. Anything else stored (or a storage failure) is 'flat'. */
+export function readQuotationListView(userId) {
+  const stored = readJson(storageKey(LIST_VIEW_KEY, userId));
+  return stored === 'grouped' ? 'grouped' : 'flat';
+}
+
+export function writeQuotationListView(userId, view) {
+  if (!QUOTATION_LIST_VIEWS.includes(view)) return false;
+  return writeJson(storageKey(LIST_VIEW_KEY, userId), view);
+}

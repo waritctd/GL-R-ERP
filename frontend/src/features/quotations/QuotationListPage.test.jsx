@@ -5,7 +5,7 @@ import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QuotationListPage, groupQuotationRows, quotationRowClassName } from './QuotationListPage.jsx';
 import { api } from '../../api/index.js';
 import { bangkokTodayIso } from '../../utils/format.js';
@@ -46,6 +46,25 @@ function row(overrides = {}) {
 
 // Prints the current search string so a test can assert the tab actually travels in the URL (owner feedback
 // F5: "driven by the URL (`?status=`)") rather than only in component state.
+// The list opens flat (sales request 2026-11-16). The grouped describes below opt in the way a rep would have:
+// the view they last chose, remembered per user in this browser.
+const LIST_VIEW_KEY = 'glr.quotation.listView.v1';
+function showGroupedView(user = salesUser) {
+  globalThis.localStorage.setItem(`${LIST_VIEW_KEY}:${user.id}`, JSON.stringify('grouped'));
+}
+// This repo's Node ships a broken built-in `localStorage` (see quotationPrefs.test.js), so each test gets a
+// fresh in-memory one.
+function memoryStorage() {
+  const map = new Map();
+  return {
+    getItem: (key) => (map.has(key) ? map.get(key) : null),
+    setItem: (key, value) => { map.set(key, String(value)); },
+    removeItem: (key) => { map.delete(key); },
+    clear: () => map.clear(),
+  };
+}
+beforeEach(() => vi.stubGlobal('localStorage', memoryStorage()));
+
 function LocationProbe() {
   const location = useLocation();
   return <p data-testid="location-search">{location.search}</p>;
@@ -327,7 +346,7 @@ describe('QuotationListPage', () => {
     await screen.findByText('QD69-0001');
 
     expect(screen.queryByRole('combobox', { name: 'กรองตามพนักงานขาย' })).toBeNull();
-    expect(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ')).not.toBeNull();
+    expect(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ / ยอดรวม')).not.toBeNull();
   });
 });
 
@@ -340,6 +359,7 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.counts.mockResolvedValue({});
+    showGroupedView();
     api.dealQuotations.list.mockResolvedValue({
       items: [
         bid({ id: 3, number: 'QT-2026-0280-2', customerName: 'บจก.สมมติ ก่อสร้าง', partyStatus: 'QUOTED', grandTotal: 491400.03 }),
@@ -484,12 +504,15 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
     expect(circles).toEqual(['1', '2', '3']);
   });
 
-  it('has no grouping switch and no expand-all switch: grouping is always on', async () => {
+  it('the view switch leaves the grouped view for the flat list; there is no expand-all switch', async () => {
     renderListPage(salesUser);
     await s26Group();
-    expect(screen.queryByTestId('quotation-group-toggle')).toBeNull();
     expect(screen.queryByTestId('quotation-expand-toggle')).toBeNull();
-    expect(screen.queryByText('จัดกลุ่มตามโครงการ')).toBeNull();
+    const flat = screen.getByRole('button', { name: 'เรียงตามเลขที่' });
+    expect(flat.getAttribute('aria-pressed')).toBe('false');
+    fireEvent.click(flat);
+    await waitFor(() => expect(screen.queryByTestId('quotation-group-row')).toBeNull());
+    expect(screen.getByText('QT-2026-0280-2')).toBeTruthy();
   });
 
   it('on a phone a member card is indented behind a connector line; an older version one step further', () => {
@@ -519,6 +542,7 @@ describe('QuotationListPage — revisions of one document fold into the version 
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.counts.mockResolvedValue({});
+    showGroupedView();
     api.dealQuotations.list.mockResolvedValue({ items: chain });
   });
 
@@ -597,6 +621,7 @@ describe('QuotationListPage — who each quotation is for', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.counts.mockResolvedValue({});
+    showGroupedView();
     api.dealQuotations.list.mockResolvedValue({ items });
   });
 
@@ -645,6 +670,7 @@ describe('QuotationListPage — contractor bids from before the recipient was re
   beforeEach(() => {
     vi.clearAllMocks();
     api.dealQuotations.counts.mockResolvedValue({});
+    showGroupedView();
     api.dealQuotations.list.mockResolvedValue({ items });
   });
 
@@ -730,7 +756,7 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
     const headers = [...container.querySelector('.table-head').children]
       .map((cell) => cell.textContent.replace(/[▲▼↑↓]/g, '').trim());
     expect(headers).toEqual([
-      'เลขที่', 'ลูกค้า / ผู้รับใบเสนอราคา', 'พนักงานขาย', 'ยอดรวม', 'สถานะ', 'วันที่',
+      'เลขที่', 'ลูกค้า / ผู้รับใบเสนอราคา', 'พนักงานขาย', 'ยอดรวม', 'สถานะ', 'วันที่อนุมัติ',
     ]);
   });
 
@@ -757,5 +783,262 @@ describe('QuotationListPage column floors (responsive review, 2026-09-10)', () =
     expect(repCell.firstElementChild?.tagName, 'พนักงานขาย must render inside a <span>')
       .toBe('SPAN');
     expect(repCell.textContent).toBe('คุณสมหมาย ขายดี');
+  });
+});
+
+// Sales request 2026-11-16 (annotated screenshot from the sales manager): no deal grouping by default, newest
+// number on top; search by the quotation total; the date column is the approval date.
+describe('QuotationListPage — flat list by number (sales request 2026-11-16)', () => {
+  const items = [
+    row({ id: 11, number: 'QT-2026-0119-1', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'SUPERSEDED', grandTotal: 40449.21, quotationDate: '2026-07-24' }),
+    row({ id: 31, number: 'QT-2026-0141-2', customerName: 'คุณรมิตา เกรียงไกรรัตน์', projectName: 'บ้านคุณรมิตา', ticketId: 136, ticketCode: 'PR-2026-0136', docStatus: 'APPROVED', grandTotal: 7198.45, quotationDate: '2026-07-29', approvedAt: '2026-07-29T03:00:00Z' }),
+    row({ id: 12, number: 'QT-2026-0119-2', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'APPROVED', grandTotal: 5444.8, quotationDate: '2026-07-24',
+      // 18:30 UTC on the 15th is already the 16th in Bangkok: the cell must show the Bangkok day.
+      approvedAt: '2026-11-15T18:30:00Z' }),
+    row({ id: 32, number: 'QT-2026-0141-3', customerName: 'คุณรมิตา เกรียงไกรรัตน์', projectName: 'บ้านคุณรมิตา', ticketId: 136, ticketCode: 'PR-2026-0136', docStatus: 'DRAFT', grandTotal: 6406.61, quotationDate: '2026-11-13', approvedAt: null }),
+    row({ id: 13, number: 'QT-2026-0120-1', customerName: 'บริษัท ไวท์ วูด กรีน จำกัด', projectName: 'บ้านคุณปองพล', ticketId: 114, ticketCode: 'PR-2026-0114', docStatus: 'SUPERSEDED', grandTotal: 9188.14, quotationDate: '2026-07-24' }),
+  ];
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.dealQuotations.counts.mockResolvedValue({});
+    api.dealQuotations.list.mockResolvedValue({ items });
+  });
+  const bodyRows = (container) => [...container.querySelectorAll('tbody tr')];
+
+  it('opens flat: no deal header rows, no เปิดดีล link, every quotation is its own row', async () => {
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    expect(screen.queryByTestId('quotation-group-row')).toBeNull();
+    expect(screen.queryByRole('link', { name: /เปิดดีล/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-versions-toggle')).toBeNull();
+    expect(bodyRows(container)).toHaveLength(5);
+    expect(screen.getByRole('button', { name: 'เรียงตามเลขที่' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('orders by quotation number, newest on top, a later revision above its earlier one', async () => {
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    const numbers = bodyRows(container).map((tr) => /QT-2026-\d{4}-\d+/.exec(tr.textContent)?.[0]);
+    expect(numbers).toEqual(['QT-2026-0141-3', 'QT-2026-0141-2', 'QT-2026-0120-1', 'QT-2026-0119-2', 'QT-2026-0119-1']);
+  });
+
+  it('a flat row still names its project under the customer', async () => {
+    renderListPage(salesManagerUser);
+    const tr = (await screen.findByText('QT-2026-0120-1')).closest('tr');
+    expect(tr.textContent).toContain('บริษัท ไวท์ วูด กรีน จำกัด');
+    expect(tr.textContent).toContain('บ้านคุณปองพล');
+  });
+
+  it.each([
+    ['as printed, with the comma', '5,444.80'],
+    ['digits only', '5444.8'],
+    ['a leading fragment', '5,444'],
+  ])('search finds a quotation by its total (%s)', async (_label, typed) => {
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    fireEvent.change(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ / ยอดรวม'), { target: { value: typed } });
+    await waitFor(() => expect(bodyRows(container)).toHaveLength(1));
+    expect(bodyRows(container)[0].textContent).toContain('QT-2026-0119-2');
+  });
+
+  it('a total that matches nothing empties the list instead of matching everything', async () => {
+    renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    fireEvent.change(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ / ยอดรวม'), { target: { value: '999,999.99' } });
+    await waitFor(() => expect(screen.queryByText('QT-2026-0141-3')).toBeNull());
+    expect(screen.getByText('ไม่มีใบเสนอราคาในเงื่อนไขนี้')).toBeTruthy();
+  });
+
+  it('the date column is the approval date in Bangkok time; an unapproved row shows a dash, not its document date', async () => {
+    renderListPage(salesManagerUser);
+    const approved = (await screen.findByText('QT-2026-0119-2')).closest('tr');
+    expect(within(approved).getByTestId('quotation-approved-date').textContent).toBe('16 พ.ย. 2569');
+    const draft = screen.getByText('QT-2026-0141-3').closest('tr');
+    expect(within(draft).getByTestId('quotation-approved-date').textContent).toBe('—');
+    expect(draft.textContent).not.toContain('13 พ.ย. 2569');
+  });
+
+  it('จัดกลุ่มตามดีล brings the deal headers back, and the choice is remembered for that user', async () => {
+    const first = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0141-3');
+    fireEvent.click(screen.getByRole('button', { name: 'จัดกลุ่มตามดีล' }));
+    expect(await screen.findAllByTestId('quotation-group-row')).toHaveLength(2);
+    first.unmount();
+
+    renderListPage(salesManagerUser);
+    expect(await screen.findAllByTestId('quotation-group-row')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'จัดกลุ่มตามดีล' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('one user choosing the grouped view does not change the list of another user', async () => {
+    showGroupedView(salesManagerUser);
+    renderListPage(ceoUser);
+    await screen.findByText('QT-2026-0141-3');
+    expect(screen.queryByTestId('quotation-group-row')).toBeNull();
+  });
+
+  it('grouped view: a search by total still keeps the whole deal together', async () => {
+    showGroupedView(salesManagerUser);
+    renderListPage(salesManagerUser);
+    await screen.findAllByTestId('quotation-group-row');
+    fireEvent.change(screen.getByPlaceholderText('ค้นหาลูกค้า / โครงการ / ยอดรวม'), { target: { value: '5,444.80' } });
+    await waitFor(() => expect(screen.getAllByTestId('quotation-group-row')).toHaveLength(1));
+    expect(screen.getByText('QT-2026-0120-1')).toBeTruthy();
+    expect(screen.queryByText('QT-2026-0141-3')).toBeNull();
+  });
+});
+
+// Adversarial review of the flat list (#1314): sorting, search and the Bangkok day, each pinned so the mutation
+// that slipped through (a column that renders but sorts nothing, a non-numeric number sort, a timezone that
+// only works on one machine) goes red.
+describe('QuotationListPage — flat list: header sorting, search and Bangkok day (review fixes)', () => {
+  const SEARCH = 'ค้นหาลูกค้า / โครงการ / ยอดรวม';
+  const bodyRows = (container) => [...container.querySelectorAll('tbody tr')];
+  const numbersOf = (container) => bodyRows(container).map((tr) => /QT-2026-\d{4}-\d+/.exec(tr.textContent)?.[0]);
+  const customersOf = (container) => bodyRows(container).map((tr) => /ลูกค้า-(?:มีนา|มกรา|ร่าง|กุมภา|ใหม่|เก่า)/.exec(tr.textContent)?.[0]);
+  const header = (name) => screen.getByRole('button', { name: new RegExp(`^${name}`) });
+  const search = (value) => fireEvent.change(screen.getByPlaceholderText(SEARCH), { target: { value } });
+  const setItems = (items) => {
+    vi.clearAllMocks();
+    api.dealQuotations.counts.mockResolvedValue({});
+    api.dealQuotations.list.mockResolvedValue({ items });
+  };
+  const processEnv = globalThis.process.env;
+  const originalTz = processEnv.TZ;
+  afterEach(() => {
+    if (originalTz === undefined) delete processEnv.TZ; else processEnv.TZ = originalTz;
+  });
+
+  const approvals = [
+    row({ id: 1, number: 'QT-2026-0001-1', customerName: 'ลูกค้า-มีนา', grandTotal: 1300, docStatus: 'APPROVED', approvedAt: '2026-03-10T03:00:00Z' }),
+    row({ id: 2, number: 'QT-2026-0002-1', customerName: 'ลูกค้า-มกรา', grandTotal: 100, docStatus: 'APPROVED', approvedAt: '2026-01-10T03:00:00Z' }),
+    row({ id: 3, number: 'QT-2026-0003-1', customerName: 'ลูกค้า-ร่าง', grandTotal: 200, docStatus: 'DRAFT', approvedAt: null }),
+    row({ id: 4, number: 'QT-2026-0004-1', customerName: 'ลูกค้า-กุมภา', grandTotal: 50, docStatus: 'APPROVED', approvedAt: '2026-02-10T03:00:00Z' }),
+  ];
+
+  it('sorting วันที่อนุมัติ orders by the approval instant, the unapproved row together at one end', async () => {
+    setItems(approvals);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    fireEvent.click(header('วันที่อนุมัติ'));
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-ร่าง', 'ลูกค้า-มกรา', 'ลูกค้า-กุมภา', 'ลูกค้า-มีนา']));
+    fireEvent.click(header('วันที่อนุมัติ'));
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-มีนา', 'ลูกค้า-กุมภา', 'ลูกค้า-มกรา', 'ลูกค้า-ร่าง']));
+  });
+
+  it('sorting ยอดรวม orders by the amount shown', async () => {
+    setItems(approvals);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    fireEvent.click(header('ยอดรวม'));
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-กุมภา', 'ลูกค้า-มกรา', 'ลูกค้า-ร่าง', 'ลูกค้า-มีนา']));
+    fireEvent.click(header('ยอดรวม'));
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-มีนา', 'ลูกค้า-ร่าง', 'ลูกค้า-มกรา', 'ลูกค้า-กุมภา']));
+  });
+
+  it('sorting สถานะ keeps the rows of one label together', async () => {
+    setItems(approvals);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    fireEvent.click(header('สถานะ'));
+    await waitFor(() => {
+      const labels = bodyRows(container).map((tr) => (tr.textContent.includes('อนุมัติแล้ว') ? 'approved' : 'draft'));
+      expect(labels.join(',')).toMatch(/^(draft,approved,approved,approved|approved,approved,approved,draft)$/);
+    });
+  });
+
+  const revisions = [
+    row({ id: 1, number: 'QT-2026-0500-2', customerName: 'ลูกค้า-สอง' }),
+    row({ id: 2, number: 'QT-2026-0500-10', customerName: 'ลูกค้า-สิบ' }),
+    row({ id: 3, number: 'QT-2026-0500-9', customerName: 'ลูกค้า-เก้า' }),
+  ];
+
+  it('the default order is numeric: -10 above -9 above -2', async () => {
+    setItems(revisions);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0500-10');
+    expect(numbersOf(container)).toEqual(['QT-2026-0500-10', 'QT-2026-0500-9', 'QT-2026-0500-2']);
+  });
+
+  it('the เลขที่ header sorts numerically too, and agrees with the default order', async () => {
+    setItems(revisions);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0500-10');
+    fireEvent.click(header('เลขที่'));
+    await waitFor(() => expect(numbersOf(container)).toEqual(['QT-2026-0500-2', 'QT-2026-0500-9', 'QT-2026-0500-10']));
+    fireEvent.click(header('เลขที่'));
+    await waitFor(() => expect(numbersOf(container)).toEqual(['QT-2026-0500-10', 'QT-2026-0500-9', 'QT-2026-0500-2']));
+  });
+
+  it('two rows with the same number fall back to the newer id on top', async () => {
+    setItems([
+      row({ id: 5, number: 'QT-2026-0700-1', customerName: 'ลูกค้า-เก่า' }),
+      row({ id: 7, number: 'QT-2026-0700-1', customerName: 'ลูกค้า-ใหม่' }),
+    ]);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('ลูกค้า-ใหม่');
+    await waitFor(() => expect(customersOf(container)).toEqual(['ลูกค้า-ใหม่', 'ลูกค้า-เก่า']));
+  });
+
+  it('the flat footer says how many rows the search hid, counting every row once', async () => {
+    setItems(approvals);
+    renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    search('มกรา');
+    expect((await screen.findAllByText(/\(กรองจาก 4\)/)).length).toBeGreaterThan(0);
+  });
+
+  it('an instant just after Bangkok midnight shows the Bangkok day from a zone behind Bangkok', async () => {
+    processEnv.TZ = 'Pacific/Honolulu';
+    setItems([row({ id: 1, number: 'QT-2026-0800-1', docStatus: 'APPROVED', approvedAt: '2026-11-15T18:30:00Z' })]);
+    renderListPage(salesManagerUser);
+    const cell = await screen.findByTestId('quotation-approved-date');
+    expect(cell.textContent).toBe('16 พ.ย. 2569');
+  });
+
+  it('an instant just before Bangkok midnight shows the Bangkok day from a zone ahead of Bangkok', async () => {
+    processEnv.TZ = 'Asia/Tokyo';
+    setItems([row({ id: 1, number: 'QT-2026-0800-1', docStatus: 'APPROVED', approvedAt: '2026-11-15T16:30:00Z' })]);
+    renderListPage(salesManagerUser);
+    const cell = await screen.findByTestId('quotation-approved-date');
+    expect(cell.textContent).toBe('15 พ.ย. 2569');
+  });
+
+  it('search finds a quotation by its total pasted with the currency sign', async () => {
+    setItems([
+      row({ id: 1, number: 'QT-2026-0900-1', customerName: 'ลูกค้า-เป้า', grandTotal: 5444.8 }),
+      row({ id: 2, number: 'QT-2026-0901-1', customerName: 'ลูกค้า-อื่น', grandTotal: 9100 }),
+    ]);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0901-1');
+    search('฿5,444.80');
+    await waitFor(() => expect(bodyRows(container)).toHaveLength(1));
+    expect(bodyRows(container)[0].textContent).toContain('QT-2026-0900-1');
+  });
+
+  it.each([['.'], [','], ['฿']])('a search of only punctuation (%s) does not match every row through the total', async (typed) => {
+    setItems(approvals);
+    renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    search(typed);
+    await waitFor(() => expect(screen.queryByText('QT-2026-0004-1')).toBeNull());
+    expect(screen.getByText('ไม่มีใบเสนอราคาในเงื่อนไขนี้')).toBeTruthy();
+  });
+
+  it('grouped view: a search of only punctuation does not match every deal either', async () => {
+    showGroupedView(salesManagerUser);
+    setItems(approvals.map((r) => ({ ...r, ticketId: r.id, ticketCode: `PR-${r.id}` })));
+    renderListPage(salesManagerUser);
+    await screen.findAllByTestId('quotation-group-row');
+    search('.');
+    await waitFor(() => expect(screen.queryAllByTestId('quotation-group-row')).toHaveLength(0));
+  });
+
+  it('an ordinary digit search still finds the number it names', async () => {
+    setItems(approvals);
+    const { container } = renderListPage(salesManagerUser);
+    await screen.findByText('QT-2026-0004-1');
+    search('0003');
+    await waitFor(() => expect(bodyRows(container)).toHaveLength(1));
   });
 });

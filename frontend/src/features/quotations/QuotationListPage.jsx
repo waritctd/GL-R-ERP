@@ -18,12 +18,13 @@ import {
   dealQuotationPeriodStart, dealQuotationStatusLabel, dealQuotationStatusTab, defaultDealQuotationStatusTab,
   filterDealQuotationRows, isDealQuotationReadOnlyViewer,
 } from './quotationMeta.js';
+import { readQuotationListView, writeQuotationListView } from './quotationPrefs.js';
 
 // DataTable's `gridClassName` becomes the desktop `<tr>`'s own class; the shared
 // `.table-head`/`.data-row` rules in styles.css set `display:grid` with no
 // `grid-template-columns`. A Tailwind arbitrary-value utility supplies it without a page-specific
 // CSS class (CLAUDE.md: "Do not add new page-specific CSS files"): เลขที่ / ลูกค้า·โครงการ /
-// พนักงานขาย / ยอดรวม / สถานะ / วันที่, six columns weighted by how much text they carry.
+// พนักงานขาย / ยอดรวม / สถานะ / วันที่อนุมัติ, six columns weighted by how much text they carry.
 //
 // ── Column floors: FIXED, identical in every row ──────────────────────────────────────────────
 // `minmax(0, …)` lets the grid shrink a column BELOW its own text, and the cells are
@@ -92,6 +93,11 @@ const LIST_TABLE_GRID = 'grid-cols-[minmax(6.875rem,1fr)_minmax(0,2.2fr)_minmax(
 // Revisions of one document (the same number with a `-<n>` suffix: QT-2026-0303-1 … -5) are listed under
 // the version in force (the newest approved one, else the newest). They are OPEN by default; the
 // document's "ซ่อนเวอร์ชันก่อนหน้า N" button folds them away.
+const LIST_VIEW_OPTIONS = [
+  { value: 'flat', label: 'เรียงตามเลขที่' },
+  { value: 'grouped', label: 'จัดกลุ่มตามดีล' },
+];
+
 const IN_FORCE_STATUSES = new Set(['APPROVED', 'ACCEPTED', 'ISSUED', 'SENT']);
 const EMPTY_SET = new Set();
 
@@ -112,6 +118,50 @@ function splitInForce(versions) {
 }
 
 const KNOWN_ROLES = ['DESIGNER', 'OWNER', 'BUYER'];
+
+// What a search for a total matches (sales request 2026-11-16): the amount exactly as the cell prints it
+// ("฿5,444.80", so "5,444.80" too) and as a rep keys it on a number pad ("5444.80", and so "5444.8"). Substring
+// match, like every other column: "5,444.80" therefore also finds "15,444.80".
+function totalSearchText(value) {
+  const amount = Number(value);
+  if (value == null || value === '' || !Number.isFinite(amount)) return '';
+  return `${amount.toFixed(2)} ${formatMoney(amount)}`;
+}
+
+// Totals take part in a search only when the query holds a digit. Every printed total contains "." and ","
+// (and "฿"), so a query of only punctuation would otherwise match every row that has a total.
+const hasDigit = (query) => /[0-9]/.test(query);
+
+// A key that orders document numbers the way a person reads them: every digit run is zero-padded, so "-9" sorts
+// before "-10". DataTable's own string comparison is not numeric, and it is the only comparison a header click gets.
+function numberSortKey(number) {
+  return String(number ?? '').replace(/[0-9]+/g, (digits) => digits.padStart(12, '0'));
+}
+
+// The approval instant as its Bangkok calendar day. Parsed at local noon so formatThaiDate's local getDate()
+// cannot roll it to a neighbouring day in any timezone.
+function approvedDateLabel(approvedAt) {
+  if (!approvedAt) return null;
+  const date = new Date(approvedAt);
+  if (Number.isNaN(date.getTime())) return null;
+  return formatThaiDate(`${bangkokTodayIso(date)}T12:00:00`);
+}
+
+function ApprovedDate({ row, className }) {
+  const label = approvedDateLabel(row.approvedAt);
+  return (
+    <span className={cn(className, !label && 'text-text-muted')} data-testid="quotation-approved-date" title={label ? undefined : 'ยังไม่อนุมัติ'}>
+      {label ?? '—'}
+    </span>
+  );
+}
+
+/** The flat view (the default): every quotation its own row, highest number first, so a later revision
+ * ("-3") sits above its earlier ones. Ties fall back to the newer row. */
+export function sortQuotationRowsByNumber(rows) {
+  return [...(rows ?? [])].sort((a, b) => String(b.number ?? '').localeCompare(String(a.number ?? ''), 'en', { numeric: true })
+    || Number(b.id) - Number(a.id));
+}
 
 // A row that takes part in the bid: a contractor's quotation, or one whose recipient was never recorded (every
 // contractor bid from before the field existed, V205's merged sibling bids among them). Designer and owner
@@ -149,6 +199,8 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
     emitted.add(row.ticketId);
     const headline = members.find((m) => m.partyHeadline) ?? null;
     const searchText = members.map((m) => `${m.number} ${m.customerName ?? ''} ${m.projectName ?? ''} ${m.salesRepName ?? ''} ${m.docStatus ?? ''}`).join(' ');
+    // Kept apart from searchText: the column accessors add it only for a query that holds a digit.
+    const totalsText = members.map((m) => totalSearchText(m.grandTotal)).join(' ');
     // Numbered per contractor: one party's quotations sit together under one number, the ยอดหลัก
     // party first, the rest in server order.
     const byParty = new Map();
@@ -176,6 +228,7 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
       headlineAmount: headline?.grandTotal ?? null,
       // What a search over the group header matches: any of its rows' own text, older versions included.
       searchText,
+      totalsText,
     });
     const ordered = [];
     parties.forEach((party) => {
@@ -204,7 +257,7 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
     // The header counts documents (a revision chain is one), so it can say how many quotations the deal holds.
     out[out.length - 1].documentCount = ordered.filter((m) => !m.isOlderVersion).length;
     ordered.forEach((m, i) => out.push({
-      ...m, groupSize: ordered.length, groupSearchText: searchText,
+      ...m, groupSize: ordered.length, groupSearchText: searchText, groupTotalsText: totalsText,
       ...(i === 0 ? { groupFirst: true } : {}), ...(i === ordered.length - 1 ? { groupLast: true } : {}),
     }));
   }
@@ -335,12 +388,14 @@ function PartyChipLine({ row }) {
   );
 }
 
-const COLUMNS = [
+// `searchTotals`: whether a search may match the printed totals (see hasDigit).
+const makeColumns = (searchTotals) => [
   {
     key: 'number',
     header: 'เลขที่',
     sortable: true,
-    searchAccessor: (row) => (row.isGroup ? row.searchText : row.number),
+    sortAccessor: (row) => numberSortKey(row.number),
+    searchAccessor: (row) => (row.isGroup ? `${row.searchText} ${searchTotals ? row.totalsText : ''}` : row.number),
     render: (row) => (row.isGroup ? <GroupRowContent row={row} /> : (
       <span className={cn('inline-flex items-center', row.isOlderVersion && 'pl-4')}>
         <Link to={`/quotations/${row.id}`} className="text-xs text-info underline">
@@ -352,7 +407,7 @@ const COLUMNS = [
   {
     key: 'customer',
     header: 'ลูกค้า / ผู้รับใบเสนอราคา',
-    searchAccessor: (row) => (row.isGroup ? row.searchText : `${row.customerName ?? ''} ${row.projectName ?? ''}`),
+    searchAccessor: (row) => (row.isGroup ? `${row.searchText} ${searchTotals ? row.totalsText : ''}` : `${row.customerName ?? ''} ${row.projectName ?? ''}`),
     // <span>, NOT <div>, and that is load-bearing rather than a style preference. styles.css
     // clips on the CELL — `.data-row > td` is `white-space: nowrap; text-overflow: ellipsis` — and
     // its wrap escape hatch only reaches `> strong`, `> small` and `> span`. A <div> child
@@ -388,12 +443,16 @@ const COLUMNS = [
     header: 'ยอดรวม',
     align: 'right',
     sortable: true,
+    // The amount, so a header click orders by the number the cell prints (a missing total sorts as the lowest).
+    sortAccessor: (row) => (row.grandTotal == null || row.grandTotal === '' || !Number.isFinite(Number(row.grandTotal)) ? null : Number(row.grandTotal)),
+    searchAccessor: (row) => (row.isGroup || !searchTotals ? null : totalSearchText(row.grandTotal)),
     render: (row) => (row.isGroup ? null : <span className="tabular-nums text-sm font-bold">{formatMoney(row.grandTotal)}</span>),
   },
   {
     key: 'status',
     header: 'สถานะ',
     sortable: true,
+    sortAccessor: (row) => (row.isGroup ? null : dealQuotationStatusLabel(row.docStatus).label),
     searchAccessor: (row) => (row.isGroup ? null : row.docStatus),
     render: (row) => {
       if (row.isGroup) return null;
@@ -402,20 +461,29 @@ const COLUMNS = [
     },
   },
   {
-    key: 'quotationDate',
-    header: 'วันที่',
+    // Sales asked for the approval date here, not the document date (2026-11-16). A row nobody has approved
+    // shows a dash; its document date is still on the quotation itself. The ช่วงเวลา filter is unchanged and
+    // still reads the document date.
+    key: 'approvedAt',
+    header: 'วันที่อนุมัติ',
     sortable: true,
-    render: (row) => (row.isGroup ? null : <span className="text-xs">{formatThaiDate(row.quotationDate)}</span>),
+    // The approval instant itself, not the printed day: two approvals on one day keep their real order, and an
+    // unapproved row (no instant) is the lowest, so those rows sit together at one end.
+    sortAccessor: (row) => {
+      const time = row.approvedAt ? Date.parse(row.approvedAt) : Number.NaN;
+      return Number.isNaN(time) ? null : time;
+    },
+    render: (row) => (row.isGroup ? null : <ApprovedDate row={row} className="text-xs" />),
   },
 ];
 
-// The list is always grouped, so no column sorts: a sort would tear a deal's rows out from under its header.
+// In the grouped view no column sorts: a sort would tear a deal's rows out from under its header.
 // Every row of a group answers a search with the whole group's text, so a match keeps the group whole.
-const GROUPED_COLUMNS = COLUMNS.map((column) => ({
+const makeGroupedColumns = (searchTotals) => makeColumns(searchTotals).map((column) => ({
   ...column,
   sortable: false,
   searchAccessor: (row) => {
-    if (row.inGroup) return column.key === 'number' ? row.groupSearchText : null;
+    if (row.inGroup) return column.key === 'number' ? `${row.groupSearchText} ${searchTotals ? row.groupTotalsText : ''}` : null;
     return column.searchAccessor ? column.searchAccessor(row) : null;
   },
 }));
@@ -466,7 +534,7 @@ function QuotationCard({ row }) {
         ? <PartyChipLine row={row} />
         : row.projectName ? <span className="min-w-0 truncate text-xs text-text-muted">{row.projectName}</span> : null}
       <span className="min-w-0 truncate text-xs text-text-muted">
-        {row.salesRepName ?? '-'} · {formatThaiDate(row.quotationDate)}
+        {row.salesRepName ?? '-'} · <ApprovedDate row={row} />
       </span>
       <span className="tabular-nums text-md font-extrabold text-text">{formatMoney(row.grandTotal)}</span>
     </>
@@ -542,15 +610,31 @@ export function QuotationListPage({ user }) {
     if (!next.delete(docKey)) next.add(docKey);
     return next;
   });
+  // Flat by number is the default (sales request 2026-11-16); the grouped view is the user's own remembered choice.
+  const [view, setView] = useState(() => readQuotationListView(user?.id));
+  const grouped = view === 'grouped';
+  function chooseView(next) {
+    setView(next);
+    writeQuotationListView(user?.id, next);
+  }
+  // The search text lives here (DataTable's controlled search) so the columns can tell whether it holds a digit.
+  const [searchText, setSearchText] = useState('');
+  const searchTotals = hasDigit(searchText);
+  const columns = useMemo(
+    () => (grouped ? makeGroupedColumns(searchTotals) : makeColumns(searchTotals)),
+    [grouped, searchTotals],
+  );
   const tableRows = useMemo(
-    () => groupQuotationRows(filteredRows, { collapsed: collapsedVersions, onToggleVersions: toggleVersions }),
-    [filteredRows, collapsedVersions],
+    () => (grouped
+      ? groupQuotationRows(filteredRows, { collapsed: collapsedVersions, onToggleVersions: toggleVersions })
+      : sortQuotationRowsByNumber(filteredRows)),
+    [grouped, filteredRows, collapsedVersions],
   );
   // The footer's "(กรองจาก M)" denominator: the same grouping and the same folded versions, unfiltered, so
   // folding a document's versions does not read as a filter.
   const unfilteredTotal = useMemo(
-    () => groupQuotationRows(rows, { collapsed: collapsedVersions }).length,
-    [rows, collapsedVersions],
+    () => (grouped ? groupQuotationRows(rows, { collapsed: collapsedVersions }).length : rows.length),
+    [grouped, rows, collapsedVersions],
   );
 
   // One request for all five tab counts, scoped server-side exactly like the list itself. Counts are advisory
@@ -707,10 +791,32 @@ export function QuotationListPage({ user }) {
               ))}
             </select>
           </label>
+          {/* Pushed to the row's end on a wide screen; wraps under the filters on a narrow one. */}
+          <div className="ml-auto flex flex-col gap-1 mobile:ml-0 mobile:w-full" role="group" aria-label="มุมมองรายการ">
+            <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">มุมมอง</span>
+            <div className="inline-flex overflow-hidden rounded border border-border">
+              {LIST_VIEW_OPTIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  aria-pressed={view === option.value}
+                  onClick={() => chooseView(option.value)}
+                  className={cn(
+                    'h-8 mobile:min-h-[44px] mobile:flex-1 cursor-pointer border-l border-border px-3 text-xs font-bold first:border-l-0 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-primary',
+                    view === option.value ? 'bg-primary/10 text-primary' : 'bg-surface text-text hover:bg-surface-hover',
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
         <DataTable
-          columns={GROUPED_COLUMNS}
+          columns={columns}
+          searchValue={searchText}
+          onSearchChange={setSearchText}
           rows={tableRows}
           // Group rows count as rows in the footer, so the "(กรองจาก M)" denominator counts them too.
           unfilteredTotal={unfilteredTotal}
@@ -719,7 +825,7 @@ export function QuotationListPage({ user }) {
           rowClassName={quotationRowClassName}
           mobileCard={(row) => <QuotationCard row={row} />}
           searchable
-          searchPlaceholder="ค้นหาลูกค้า / โครงการ"
+          searchPlaceholder="ค้นหาลูกค้า / โครงการ / ยอดรวม"
           // The filters render outside DataTable and are always visible regardless of this flag, as
           // is DataTable's own search box. What this keeps is the COLUMN HEADER ROW when a filter
           // narrows the list to zero rows, so the table keeps its shape under the empty-state line.
