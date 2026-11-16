@@ -43,8 +43,12 @@ class PeopleInsightsLeaveDayRuleTest {
     }
     @Test void l_lonePunchRightAfterMorningLeaveIsTheArrival() { assertDay(run(List.of(span("08:30", "12:30")), null, "13:20", 0, 250), 0, false); }
     @Test void m_lonePunchLaterInTheAfternoonIsLateArrivalNotEarlyLeave() { assertDay(run(List.of(span("08:30", "12:30")), null, "14:30", 0, 180), 60, false); }
-    @Test void m2_lonePunchPastTheMidpointStaysADepartureAndIsEarlyByItsUncoveredMinutes() { assertDay(run(List.of(span("08:30", "12:30")), null, "17:20", 0, 10), 0, true); }
+    @Test void m2_lonePunchPastTheMidpointStaysADepartureAndIsEarlyByItsUncoveredMinutes() { assertDay(run(List.of(span("08:30", "12:30")), null, "17:20", 30, 10), 0, true); }
     @Test void q_staleStoredValueIsOnlyEverReducedNeverRaised() { assertDay(run(List.of(span("09:00", "10:00")), "10:00", null, 60, 0), 30, false); }
+    @Test void r_lateCapStoredValueBelowResidualWins() { assertDay(run(List.of(span("09:00", "10:00")), "10:00", null, 20, 0), 20, false); }
+    @Test void s_earlyCapStoredZeroKeepsNotEarlyAndLateStays() { assertDay(run(List.of(span("16:00", "17:00")), "10:00", "15:00", 90, 0), 90, false); }
+    @Test void t_lonePunchBeforeLeaveThatDoesNotStartAtWorkStartKeepsStoredEarly() { assertDay(run(List.of(span("15:00", "17:30")), null, "14:00", 0, 210), 0, true); }
+
     @Test void n_overlappingLeavesAreUnitedNotSummed() { assertDay(run(List.of(span("08:30", "10:00"), span("09:00", "10:00")), "10:40", null, 130, 0), 40, false); }
     @Test void o_secondsAreTruncatedAndLeaveAfterArrivalKeepsStored() { assertDay(run(List.of(span("16:00", "17:00")), "08:45:30", null, 15, 0), 15, false); }
     @Test void p_breakIsNotWorkTimeOnALeaveDayThatTouchesIt() { assertDay(run(List.of(span("13:30", "17:30")), "13:00", null, 270, 0), 240, false); }

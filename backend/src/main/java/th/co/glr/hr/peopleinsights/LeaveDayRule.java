@@ -51,6 +51,7 @@ final class LeaveDayRule {
 
         Integer arrival = checkIn == null ? null : minute(checkIn);
         boolean lonePunchArrival = false;
+        // A lone punch with no leave at work start (block == null) is left as stored, like a day without leave: its early minutes stay.
         if (checkIn == null && checkOut != null && storedEarly > 0) {
             int punch = minute(checkOut);
             Span block = covered.stream().filter(s -> s.start() <= start && s.end() > start).findFirst().orElse(null);
@@ -59,7 +60,7 @@ final class LeaveDayRule {
                 lonePunchArrival = true;
             } else if (block != null) {
                 // A later lone punch stays a departure: not late, early by the minutes of [punch, end] no leave covers.
-                return new Outcome(storedLate, Math.min(uncovered(covered, punch, end), storedEarly) > 0);
+                return new Outcome(0, Math.min(uncovered(covered, punch, end), storedEarly) > 0);
             }
         }
 
