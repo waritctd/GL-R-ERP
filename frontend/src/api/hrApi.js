@@ -632,10 +632,9 @@ export const api = {
     unitBases: () => apiRequest(API_ROUTES.meta.unitBases),
   },
   // Mirrors SalesAnalyticsController (salesanalytics/). snapshot: {snapshot: {payload, asOf, uploadedAt} | null}.
-  // upload sends the parsed JSON document; ceo only (the service's gate).
+  // Read-only here: the weekly refresh job PUTs the document from the CEO's signed-in page, not this client.
   salesAnalytics: {
     snapshot: () => apiRequest(API_ROUTES.salesAnalytics.snapshot),
-    upload: (document) => apiRequest(API_ROUTES.salesAnalytics.snapshot, { method: 'PUT', body: document }),
   },
   // Mirrors SalesBoardController (salesboard/). myWork: the caller's own ACTIVE deals (followUp + board), sales /
   // sales_manager / ceo. teamOverview: per-rep rows + the team's quiet deals, sales_manager / ceo only.

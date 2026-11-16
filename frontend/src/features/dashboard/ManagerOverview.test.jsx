@@ -19,7 +19,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { list: vi.fn() },
       commissions: { list: vi.fn(), pendingApproval: vi.fn() },
       salesBoard: { teamOverview: vi.fn() },
-      salesAnalytics: { snapshot: vi.fn(), upload: vi.fn() },
+      salesAnalytics: { snapshot: vi.fn() },
     },
   };
 });
@@ -240,7 +240,7 @@ describe('ManagerOverview', () => {
 });
 
 // Sales insights (spec 2026-11-16): same switch as the CEO's, state in ?view=insight; the body is pinned in
-// SalesInsights.test.jsx. A sales_manager reads the snapshot but never gets the upload control.
+// SalesInsights.test.jsx. Nobody has an upload control here: the snapshot arrives through the weekly update.
 describe('ManagerOverview: งานวันนี้ / วิเคราะห์ยอดขาย', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -269,7 +269,7 @@ describe('ManagerOverview: งานวันนี้ / วิเคราะ�
     expect(panel.contains(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' }))).toBe(false);
   });
 
-  it('?view=insight shows the insight view, and the empty state has no upload control for a manager', async () => {
+  it('?view=insight shows the insight view, and the empty state has no upload control', async () => {
     renderOverview(summary, '/?view=insight');
 
     expect(await screen.findByTestId('sales-insights')).toBeTruthy();
