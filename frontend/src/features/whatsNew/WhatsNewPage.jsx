@@ -113,10 +113,17 @@ export function WhatsNewPage({ user, showToast }) {
 
   const roleLabel = ROLE_LABEL[user?.role] ?? 'คุณ';
   const mine = entriesForViewer(release, user);
-  const { sections, addressOnlyRoles } = allTabSections(release);
+  const { sections: allSections, addressOnlyRoles } = allTabSections(release);
+  // A release with no everyone entry (2026-11-17) would otherwise render an empty ทุกแผนก heading.
+  const sections = allSections.filter((section) => section.entries.length > 0);
+  const hasEveryoneEntries = allSections.some((section) => section.key === 'everyone' && section.entries.length > 0);
   const mineGroups = [{ key: 'mine', label: `สำหรับ${roleLabel}`, entries: mine }];
+  // Roles with nothing of their own: they got only the everyone section (16 Nov's address move — its wording is kept
+  // exactly as published), or, in a release with no everyone entry (2026-11-17), nothing at all.
   const addressOnlyNote = addressOnlyRoles.length > 0
-    ? `${addressOnlyRoles.map((role) => ROLE_LABEL[role]).join(' · ')}: ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)`
+    ? `${addressOnlyRoles.map((role) => ROLE_LABEL[role]).join(' · ')}: ${hasEveryoneEntries
+      ? 'ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)'
+      : 'ฉบับนี้ไม่มีเรื่องเฉพาะแผนกเหล่านี้'}`
     : null;
   const tabs = [
     { id: 'mine', label: `สำหรับแผนกของคุณ (${mine.length})` },

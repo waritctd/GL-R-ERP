@@ -6,6 +6,7 @@ import {
   allTabSections,
   audienceLabels,
   entriesForViewer,
+  entryVisibleTo,
   isForEveryone,
   publishPayload,
 } from '../audiences.js';
@@ -40,11 +41,37 @@ describe('release content modules', () => {
       // A section for each of the nine roles, each naming only real entries, each used by some section.
       expect(Object.keys(release.sections).sort()).toEqual([...ALL_ROLES].sort());
       const used = new Set(Object.values(release.sections).flat());
+      const hasEveryoneEntry = release.entries.some((entry) => isForEveryone(release, entry));
       for (const [role, sectionIds] of Object.entries(release.sections)) {
-        expect(sectionIds.length, `${role} needs at least one entry`).toBeGreaterThan(0);
+        expect(Array.isArray(sectionIds), `${role} section must be a list`).toBe(true);
+        expect(new Set(sectionIds).size, `${release.id}: ${role} lists an entry twice`).toBe(sectionIds.length);
         for (const id of sectionIds) expect(ids, `${role} lists unknown entry ${id}`).toContain(id);
+        // A role is told nothing ONLY when nothing in the release is for it: no everyone entry, and (lock off, the
+        // widest a role ever gets) no changed page it can open. Landing entries are left out: each describes one
+        // role's own dashboard at `/`, which every role "can open". An empty section gets the page's
+        // "ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ" state, never filler.
+        if (sectionIds.length === 0) {
+          expect(hasEveryoneEntry, `${release.id}: ${role} has no entries although the release has an everyone entry`).toBe(false);
+          for (const entry of release.entries.filter((e) => !e.landing)) {
+            expect(entryVisibleTo(entry, user(role)), `${release.id}: ${role} can open ${entry.path} (${entry.id}) but is told nothing`)
+              .toBe(false);
+          }
+        }
       }
       for (const id of ids) expect(used.has(id), `entry ${id} is in no role's section`).toBe(true);
+      // Each entry title is a line of its own in the bell and the release email: two alike would read as a duplicate.
+      const titles = release.entries.map((entry) => entry.title);
+      expect(new Set(titles).size, `${release.id}: entry titles must be unique`).toBe(titles.length);
+
+      // Wrong-way-round, with the lock OFF (the widest a role ever gets): no role's section names an entry whose
+      // page that role cannot open. Under the lock entryVisibleTo hides more; each release pins that below.
+      for (const [role, sectionIds] of Object.entries(release.sections)) {
+        for (const id of sectionIds) {
+          const entry = release.entries.find((e) => e.id === id);
+          expect(entryVisibleTo(entry, user(role)), `${release.id}: ${role} is told about ${id} (${entry.path}) but cannot open it`)
+            .toBe(true);
+        }
+      }
 
       for (const entry of release.entries) {
         const where = `${release.id}/${entry.id}`;
@@ -88,6 +115,12 @@ describe('2026-11-16 audiences (unlocked, as the test env runs)', () => {
     expect(idsFor(user('ceo'))).toEqual(['address', 'ceo-home', 'sales-insights', 'deal-list', 'deal-page-ceo', 'fulfilment']);
     expect(idsFor(user('account'))).toEqual(['address', 'finance-deal']);
     expect(idsFor(user('import'))).toEqual(['address', 'import-home', 'fulfilment', 'import-deal', 'pricing-request']);
+  });
+
+  it('every role is told at least one thing (the published notice, unchanged by later releases)', () => {
+    for (const role of ALL_ROLES) {
+      expect(release.sections[role].length, `${role} needs at least one entry`).toBeGreaterThan(0);
+    }
   });
 
   it('roles whose pages did not change get only the address entry', () => {

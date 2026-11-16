@@ -65,7 +65,18 @@ describe('WhatsNewPage', () => {
     const sections = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
     expect(sections).toEqual(['ทุกแผนก', 'ฝ่ายขาย', 'ผู้จัดการฝ่ายขาย', 'CEO', 'ฝ่ายบัญชี', 'ฝ่ายนำเข้า']);
     expect(changeHeadings().join('|')).toContain('บันทึกรับชำระ');
-    expect(screen.getByText(/ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป/)).toBeTruthy();
+    // The published 16 Nov page, word for word: a second release must not change what this one says.
+    expect(screen.getByText(/ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป/).textContent)
+      .toBe('ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป: ฉบับนี้มีเฉพาะการย้ายที่อยู่เว็บ (ด้านบน)');
+  });
+
+  it('the 16 Nov page is unchanged for a role a later release has nothing for', async () => {
+    renderPage(hr, '/whats-new/2026-11-16');
+
+    const mine = await screen.findByRole('tab', { name: /สำหรับแผนกของคุณ/ });
+    expect(mine.textContent).toContain('1');
+    expect(changeHeadings()).toEqual(['พอร์ทัลย้ายมาที่ glr-hub.com']);
+    expect(screen.queryByText('ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ')).toBeNull();
   });
 
   it('each entry names its page and menu path', async () => {
@@ -104,7 +115,33 @@ describe('WhatsNewPage', () => {
   it('/whats-new with no id shows the latest release', async () => {
     renderPage(sales, '/whats-new');
 
+    expect(await screen.findByRole('heading', { level: 1, name: /17 พ\.ย\. 2569/ })).toBeTruthy();
+  });
+
+  it('the 16 Nov release stays reachable by its own link after a newer one ships', async () => {
+    renderPage(sales, '/whats-new/2026-11-16');
+
     expect(await screen.findByRole('heading', { level: 1, name: /16 พ\.ย\. 2569/ })).toBeTruthy();
+  });
+
+  it('a role this release has nothing for gets the empty state, not an empty list', async () => {
+    renderPage(hr, '/whats-new/2026-11-17');
+
+    const mine = await screen.findByRole('tab', { name: /สำหรับแผนกของคุณ/ });
+    expect(mine.textContent).toContain('0');
+    expect(screen.getByText('ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ')).toBeTruthy();
+    expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0);
+  });
+
+  it('"ทั้งหมด" of a release with no everyone entry shows no empty ทุกแผนก section and no address-move note', async () => {
+    renderPage(hr, '/whats-new/2026-11-17');
+
+    fireEvent.click(await screen.findByRole('tab', { name: /ทั้งหมด/ }));
+
+    const sections = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
+    expect(sections).toEqual(['ฝ่ายขาย', 'ผู้จัดการฝ่ายขาย', 'CEO', 'ฝ่ายบัญชี', 'ฝ่ายนำเข้า']);
+    expect(screen.getByText(/ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป/).textContent)
+      .toBe('ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป: ฉบับนี้ไม่มีเรื่องเฉพาะแผนกเหล่านี้');
   });
 
   it('an unknown release id says so instead of rendering an empty page', async () => {
