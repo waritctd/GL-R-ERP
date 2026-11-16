@@ -4,7 +4,7 @@ import { hasPermission } from '../../../app/permissions.js';
 import { canPerformFinanceStep } from '../../finance/financeActionPerformers.js';
 import { FINANCE_WORK_GROUPS } from '../../finance/financeWorkGroups.js';
 import { BOARD_COLUMNS } from '../../salesBoard/boardFormat.js';
-import { MOVER_LABEL } from '../../tickets/dealSteps.js';
+import { MOVER_LABEL, REP_STEPS } from '../../tickets/dealSteps.js';
 import { TICKET_DETAIL_TABS } from '../../tickets/ticketDetailTabs.js';
 import { ALL_ROLES, allTabSections, entriesForViewer, publishPayload, rolesForEntry } from '../audiences.js';
 import { RELEASES, findRelease, latestRelease } from './index.js';
@@ -24,6 +24,7 @@ import nextStepCardSrc from '../../tickets/NextStepCard.jsx?raw';
 import dealStepperSrc from '../../tickets/DealStepper.jsx?raw';
 import dealStepsSrc from '../../tickets/dealSteps.js?raw';
 import quietLinksSrc from '../../tickets/DealQuietLinks.jsx?raw';
+import dealTabBodiesSrc from '../../tickets/DealTabBodies.jsx?raw';
 import ticketTabsSrc from '../../tickets/ticketDetailTabs.js?raw';
 import quickActionsSrc from '../../tickets/DealQuickActions.jsx?raw';
 import dealInfoCardSrc from '../../tickets/DealInfoCard.jsx?raw';
@@ -51,7 +52,8 @@ const byId = (id) => release?.entries.find((entry) => entry.id === id);
 const BOARD = [appShellSrc, allDealsSrc, dealBoardSrc, boardFormatSrc, ticketListSrc, myWorkSrc];
 const DEAL_PAGE = [ticketDetailSrc, dealHeaderSrc, nextStepCardSrc, dealStepperSrc, dealStepsSrc, quietLinksSrc,
   ticketTabsSrc, quickActionsSrc, dealInfoCardSrc, dealHistorySrc];
-const DOCUMENTS = [ticketTabsSrc, paymentSectionSrc, depositNoticeSrc, remainingInvoiceSrc, fulfilmentSrc];
+// NextStepCard: the deposit notice's create button can sit in ขั้นต่อไป instead of the เงิน tab (mainButtonCreatesNotice).
+const DOCUMENTS = [ticketTabsSrc, paymentSectionSrc, depositNoticeSrc, remainingInvoiceSrc, fulfilmentSrc, nextStepCardSrc];
 const VISITS = [appShellSrc, visitsPageSrc, visitsThisWeekSrc, visitWeekGridSrc, visitWeekSrc, visitDialogsSrc];
 const FINANCE = [appShellSrc, financePageSrc, financeGroupsSrc];
 
@@ -339,6 +341,60 @@ describe('2026-11-17 wording matches the screens', () => {
     }
     // The quotation list's view switch.
     expect(quotedLabels(byId('quotation-list'))).toEqual(expect.arrayContaining(['มุมมอง', 'จัดกลุ่มตามดีล', 'วันที่อนุมัติ']));
+  });
+
+  // Screenshot review (2026-11-17): steps whose ORDER or CONDITION did not match the screen. Each pin is tied to the
+  // component fact it rests on, so the notice and the screen fail together.
+  const stepText = (id, n) => `${byId(id).steps[n - 1].text} ${byId(id).steps[n - 1].detail}`;
+
+  it('the stepper is named as the eight steps it shows, S4 left out (dealSteps REP_STEPS)', () => {
+    expect(release).not.toBeNull();
+    const THAI_COUNT = { 8: 'แปด' };
+    expect(REP_STEPS.map((s) => s.code)).not.toContain('S4');
+    const step = stepText('deal-page', 1);
+    expect(step).toContain(`${THAI_COUNT[REP_STEPS.length]}ขั้น`);
+    expect(step).toContain(REP_STEPS.map((s) => s.code).join(' '));
+    for (const entry of release.entries) for (const text of allText(entry)) expect(text, entry.id).not.toMatch(/S1\s*[–-]\s*S9/);
+  });
+
+  it('the remaining invoice is saved as a draft before it can be issued (RemainingInvoiceDialog CreateForm → DraftEditor)', () => {
+    expect(release).not.toBeNull();
+    // CreateForm's only write button is บันทึกร่าง; ออกใบแจ้งหนี้ lives in DraftEditor, shown once a DRAFT exists.
+    expect(remainingInvoiceSrc).toMatch(/data-testid="remaining-invoice-create-draft">\s*\{creating \? 'กำลังบันทึกร่าง…' : 'บันทึกร่าง'\}/);
+    const step = stepText('deal-documents', 2);
+    const save = step.indexOf('"บันทึกร่าง"');
+    const manage = step.indexOf('"จัดการเอกสาร"');
+    const issue = step.indexOf('"ออกใบแจ้งหนี้"');
+    expect(save).toBeGreaterThanOrEqual(0);
+    expect(manage, 'จัดการเอกสาร appears only once a draft exists').toBeGreaterThan(save);
+    expect(issue).toBeGreaterThan(manage);
+  });
+
+  it('a visit is ticked only on its day or later (VisitState canTick = plannedDate <= today)', () => {
+    expect(release).not.toBeNull();
+    expect(visitsThisWeekSrc).toContain('const canTick = visit.plannedDate <= todayIso;');
+    expect(stepText('visits', 3)).toContain('ในวันนัดหรือหลังจากนั้น');
+    // On a phone (≤520px, mobile-xs) the tick button is the ✓ icon alone: its "เข้าพบแล้ว" text is hidden.
+    expect(visitsThisWeekSrc).toContain('<span className="mobile-xs:hidden">เข้าพบแล้ว</span>');
+    expect(stepText('today-phone', 4)).toContain('✓');
+  });
+
+  it('the quiet links are placed where DealOverviewTab puts them: last in the right-hand column', () => {
+    expect(release).not.toBeNull();
+    expect(dealTabBodiesSrc).toMatch(/\{info\}\s*\{parties\}\s*\{quietLinks\}/);
+    const step = stepText('deal-page', 5);
+    expect(step).toContain('ล่างสุดของคอลัมน์ขวา');
+    expect(step).not.toMatch(/อยู่ใต้กล่อง "ข้อมูลงาน"/);
+  });
+
+  it('a conditional control is described with its condition', () => {
+    expect(release).not.toBeNull();
+    // NextStepCard renders a button only when the page resolved one for this viewer.
+    expect(stepText('deal-page', 2)).toContain('ถ้ามีปุ่ม');
+    // The IR button waits for the deposit and, when sourcing is pending, for จัดซื้อสินค้า.
+    expect(stepText('deal-documents', 3)).toContain('"จัดซื้อสินค้า"');
+    // บันทึกการส่งสินค้า is offered only when the server lists RECORD_PARTIAL_DELIVERY, in the ส่งมอบสินค้า block.
+    expect(stepText('deal-documents', 4)).toContain('"ส่งมอบสินค้า"');
   });
 
   it('does not claim a label that is in the source but not on that role’s screen', () => {
