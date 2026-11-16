@@ -75,6 +75,7 @@ import {
 } from './ticketDetailTabs.js';
 import { isRemainingInvoiceReady, pickRemainingInvoice } from './remainingInvoiceReadiness.js';
 import { isOwnerOrKeyer } from './dealOwnership.js';
+import { invalidateDealDocuments, useDocumentChain } from '../documentChain/documentChain.js';
 import { manualMoveLabel } from './stageMeta.js';
 import { quoteNextPartyBanner, resolveWorkState, secondaryWorkActions } from './workState.js';
 
@@ -478,6 +479,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   });
   const procurementSource = procurementSourceQuery.data;
   const depositNotice = pickDepositNotice(depositNoticesQuery.data);
+  // The deal's document chain summary: the SAME server source as the quotation page's chain card. The เงิน tab's steps
+  // read it (DealPaymentSection, same key: one fetch) and so does the ขั้นต่อไป card at the money stages.
+  const documentChainQuery = useDocumentChain(ticketId, { enabled: !!ticketId && !!ticket && sections.depositNotice });
+  const documentChain = documentChainQuery.data ?? null;
   // undefined until the list is read: nextSalesAction then never offers the invoice.
   const remainingInvoice = remainingInvoicesQuery.data === undefined ? undefined : pickRemainingInvoice(remainingInvoicesQuery.data);
   const createDepositNoticeMutation = useMutation({
@@ -487,9 +492,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       return pickDepositNotice(docs)?.status === 'DRAFT' ? null : createDepositNoticeDraft(ticketId);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: queryKeys.depositNotices(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
-      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
+      // The chain's keys (the quotation page's card reads them too).
+      invalidateDealDocuments(queryClient, ticketId);
       navigate(`/tickets/${ticketId}/deposit`);
     },
     onError: (err) => showToast('error', err.message || 'สร้างเอกสารฉบับร่างไม่สำเร็จ'),
@@ -582,7 +586,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       setConfirm(null);
       showToast('success', 'ยืนยันคำสั่งซื้อแล้ว');
       queryClient.invalidateQueries({ queryKey: ['tickets'] });
-      queryClient.invalidateQueries({ queryKey: ['dealQuotations'] });
+      invalidateDealDocuments(queryClient, ticketId);
     },
     onError: (error) => {
       setConfirm(null);
@@ -1145,6 +1149,10 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   let routeChoiceSecondTrigger = null;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
+  // True only when the button the page SHOWS is สร้าง/ออกใบแจ้งยอดเงินรับมัดจำ (not merely when the resolver proposed
+  // it: บันทึกผลประมูล and the money/close buttons outrank it). The เงิน tab then points at it instead of offering a
+  // second copy; before 2026-11-17 this read workStateAction, and the tab pointed at a button that was not there.
+  let stickyCreatesNotice = false;
   // The เสนอราคา<party> line, minus a skip this viewer cannot take (set below).
   let quoteBannerText = workState.bannerText;
   // "บันทึกผลประมูล" (deal-party-model.md): offered to the deal's editors (owner/keyer sales,
@@ -1273,6 +1281,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'create_deposit_notice') {
       // DRAFT already made: just open it; else make it (same path as DepositNoticePage's สร้าง) and open it.
+      stickyCreatesNotice = true;
       stickyPrimaryAction = (
         <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey}
           disabled={createDepositNoticeMutation.isPending}
@@ -1435,6 +1444,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // for an ACTIVE deal whose step this viewer has no button for — a switch to the tab that holds that stage's work.
   const nextStep = nextStepFor({
     salesStage: summary.salesStage, lifecycle: summary.lifecycle ?? 'ACTIVE', depositPolicy: summary.depositPolicy,
+    chain: documentChain,
   });
   let cardAction = stickyPrimaryAction;
   // Fix round 1 (L1): the title names what the button does. With the page's own resolved action that is the action's
@@ -1674,7 +1684,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             stepIndex={repStepIndex(stageCatalog, summary.salesStage)}
             nextStep={{ ...nextStep, title: cardTitle }}
             facts={cardFacts}
-            nextLine={nextLine?.lineStage ? <NextStageLine line={nextLine} entryChannel={summary.entryChannel} /> : null}
+            // At a money stage the line under the title is the document chain's next step (nextStep.fromChain), the
+            // same sentence the quotation page's chain card prints; elsewhere it is the stage line, as before.
+            nextLine={!nextStep.fromChain && nextLine?.lineStage ? <NextStageLine line={nextLine} entryChannel={summary.entryChannel} /> : null}
             bannerText={bannerText}
             primaryAction={cardAction}
             overflowItems={overflowItems}
@@ -1928,7 +1940,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               canReadDepositNotices={sections.depositNotice}
               canManageRemainingInvoice={can.downloadRemainingInvoice}
               onManageRemainingInvoice={() => setRemainingInvoiceDialogOpen(true)}
-              mainButtonCreatesNotice={workStateAction?.key === 'create_deposit_notice'}
+              mainButtonCreatesNotice={stickyCreatesNotice}
               onCreateDepositNotice={() => createDepositNoticeMutation.mutate()}
               actionLoading={actionLoading || createDepositNoticeMutation.isPending}
               showToast={showToast}

@@ -3,6 +3,10 @@ import { formatThaiAddress } from '../features/locations/thaiAddress.js';
 import { isPastProcurement } from '../features/finance/moneyMilestone.js';
 import { accountOwesStep } from '../features/tickets/accountActions.js';
 import { isOwnerOrKeyer } from '../features/tickets/dealOwnership.js';
+import {
+  chainDepositBlockedReason, chainDepositState, chainListStage, chainOrderConfirmed, chainRemainingBlockedReason,
+  chainRemainingState,
+} from './mockDocumentChainRules.js';
 // Mock backend for VITE_USE_MOCKS=true — the default verification surface for the
 // `frontend-mock` launch config that devs, QA and coding agents drive.
 //
@@ -4103,6 +4107,94 @@ function pushEvent(ticket, actor, kind, fromStatus, toStatus, message, itemSnaps
 function mockConfirmedQuotationEvent(ticket) {
   return ticket?.events?.find((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION') ?? null;
 }
+
+// ── Document chain (2026-11-17) — mirrors th.co.glr.hr.documentchain ─────────────────────────────────────────
+// The deal facts DocumentChainRules reads: the deal's own columns plus which document rows exist.
+function mockChainFacts(ticket) {
+  const notices = mockDepositNotices.filter((d) => d.ticketId === ticket.id);
+  const invoices = mockRemainingInvoices.filter((r) => r.ticketId === ticket.id);
+  return {
+    status: ticket.status, lifecycle: ticket.lifecycle ?? 'ACTIVE', depositPolicy: ticket.depositPolicy ?? 'REQUIRED',
+    paymentStatus: ticket.paymentStatus ?? null, fulfillmentStatus: ticket.fulfillmentStatus ?? null,
+    noticeDraft: notices.some((d) => d.status === 'DRAFT'), noticeIssued: notices.some((d) => d.status === 'ISSUED'),
+    invoiceDraft: invoices.some((r) => r.status === 'DRAFT'), invoiceIssued: invoices.some((r) => r.status === 'ISSUED'),
+  };
+}
+
+// Mirrors DepositNoticeService#dealDocumentScope: whose deals' documents a role may read.
+function mockDealDocumentReadable(ticket, user) {
+  if (['ceo', 'sales_manager'].includes(user.role)) return true;
+  if (user.role === 'sales') return isOwnerOrKeyer(ticket, user.id);
+  if (user.role === 'account') return accountListScopeIncludes(ticket);
+  return false;
+}
+
+// Mirrors DocumentChainService#listStages + DocumentChainRepository#findListFacts: APPROVED direct quotations only, on
+// deals whose documents this viewer may read.
+function mockListChainStage(row, viewer) {
+  if ((row.origin ?? 'DEAL_DIRECT') !== 'DEAL_DIRECT' || row.docStatus !== 'APPROVED') return null;
+  const ticket = db.tickets.find((t) => t.id === row.ticketId);
+  if (!ticket || !mockDealDocumentReadable(ticket, viewer)) return null;
+  const promoted = Boolean(mockConfirmedQuotationEvent(ticket));
+  return chainListStage(mockChainFacts(ticket), promoted, ticket.orderConfirmedQuotationId ?? null, row.id);
+}
+
+// Mirrors DocumentChainService#forTicket's assembly (the gate is the caller's).
+function mockDocumentChainFor(ticket, user) {
+  const f = mockChainFacts(ticket);
+  const notices = mockDepositNotices.filter((d) => d.ticketId === ticket.id);
+  const invoices = mockRemainingInvoices.filter((r) => r.ticketId === ticket.id);
+  const promoted = Boolean(mockConfirmedQuotationEvent(ticket));
+  // DealQuotationService#listForTicket + #orderConfirmedQuotationId: the confirmed row only when this viewer sees it.
+  const row = promoted ? mockDealQuotations.find((q) => q.id === ticket.orderConfirmedQuotationId) ?? null : null;
+  const confirmedRow = row && (user.role !== 'account'
+    || (ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(row.docStatus) && accountListScopeIncludes(ticket))) ? row : null;
+  const confirmed = chainOrderConfirmed(f);
+  const events = ticket.events ?? [];
+  const confirmEvent = [...events].reverse().find((e) => e.kind === 'DEAL_PROMOTED_FROM_QUOTATION')
+    ?? [...events].reverse().find((e) => e.kind === 'CUSTOMER_CONFIRMED');
+  const draftNotice = notices.find((d) => d.status === 'DRAFT') ?? null;
+  const issuedNotice = notices.filter((d) => d.status === 'ISSUED')
+    .sort((a, b) => (b.version ?? 0) - (a.version ?? 0))[0] ?? null;
+  const picked = draftNotice ?? issuedNotice;
+  let percent = null;
+  if (picked?.depositPercent != null) percent = Math.round(Number(picked.depositPercent) * 100);
+  else if (confirmedRow) percent = confirmedRow.depositPercent ?? MOCK_DEFAULT_DEPOSIT_PERCENT;
+  const depositState = chainDepositState(f);
+  const invoice = invoices.find((r) => r.status === 'ISSUED') ?? invoices.find((r) => r.status === 'DRAFT') ?? null;
+  const remainingState = chainRemainingState(f);
+  const remainingReason = chainRemainingBlockedReason(f);
+  const mayWrite = user.role === 'sales' && isOwnerOrKeyer(ticket, user.id); // DepositNoticeService#mayWriteDealDocuments
+  // DealQuotationService#hasEditAccess (the confirm-order authz): owner sales, any sales_manager, or the grant.
+  const mayConfirm = hasDealQuotationMockGrant(user) || user.role === 'sales_manager'
+    || (user.role === 'sales' && isOwnerOrKeyer(ticket, user.id));
+  return {
+    ticketId: ticket.id, dealCode: ticket.code ?? null, dealStatus: ticket.status, lifecycle: ticket.lifecycle ?? 'ACTIVE',
+    order: {
+      confirmed,
+      confirmable: ticket.status === 'draft' && (ticket.lifecycle ?? 'ACTIVE') === 'ACTIVE' && !promoted,
+      confirmedFromQuotationId: confirmedRow?.id ?? null,
+      confirmedFromQuotationNumber: confirmedRow?.number ?? null,
+      // account reads no ticket events (TicketService#requireViewAccess).
+      confirmedAt: confirmed && user.role !== 'account' ? confirmEvent?.createdAt ?? null : null,
+    },
+    deposit: {
+      policy: ticket.depositPolicy ?? 'REQUIRED',
+      required: !['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'].includes(ticket.depositPolicy),
+      percent, state: depositState, blockedReason: chainDepositBlockedReason(f),
+      noticeId: picked?.id ?? null, issuedNoticeId: issuedNotice?.id ?? null,
+      docNumber: issuedNotice?.docNumber ?? null, issueDate: issuedNotice?.issueDate ?? null,
+      draftExists: Boolean(draftNotice), received: depositState === 'PAID',
+    },
+    remaining: {
+      state: remainingState, blockedReason: remainingReason,
+      canCreate: remainingState === 'TO_CREATE' && remainingReason == null,
+      invoiceId: invoice?.id ?? null, docNumber: invoice?.docNumber ?? null, docDate: invoice?.docDate ?? null,
+      draftExists: f.invoiceDraft,
+    },
+    viewer: { mayConfirmOrder: mayConfirm, mayWriteDepositNotice: mayWrite, mayWriteRemainingInvoice: mayWrite },
+  };
+}
 function requireNoOtherDirectQuotationAfterConfirm(ticket, row) {
   const promoted = mockConfirmedQuotationEvent(ticket);
   if ((row.origin || 'DEAL_DIRECT') === 'PRICING_REQUEST' || !promoted || ticket.orderConfirmedQuotationId === row.id) return;
@@ -6534,6 +6626,15 @@ function applyMockOrderConfirmation(ticket, row, user, fromStatus = ticket.statu
   ticket.orderConfirmedQuotationId = row.id; // mock-internal: which quotation the order was confirmed from
   pushEvent(ticket, user, 'DEAL_PROMOTED_FROM_QUOTATION', fromStatus, 'quotation_issued',
     `ยืนยันคำสั่งซื้อจากใบเสนอราคา ${row.number}`);
+  // DealQuotationService#confirmOrderFromDirectQuotation: "the confirmed quotation's party has won, whichever path
+  // confirmed it" (DealQuotationRepository#markPartyAwarded). Without this the mock left the party QUOTED, so the
+  // deal page offered บันทึกผลประมูล after a confirm the real service had already awarded (document chain, 2026-11-17).
+  const awardedParty = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
+  if (awardedParty && awardedParty.status !== 'AWARDED') {
+    awardedParty.status = 'AWARDED';
+    awardedParty.notAwardedReason = null;
+    awardedParty.updatedAt = new Date().toISOString();
+  }
   // DealQuotationService#ticketItemsFromQuotation: goods lines only (no ADJUSTMENT, no
   // non-positive quantity), no pricing field copied, qty_sqm from the same piece count.
   ticket.items = (row.items ?? [])
@@ -14847,6 +14948,18 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
   // Mirrors RemainingInvoiceController — the STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate. See this
   // file's "STORED ใบแจ้งหนี้ส่วนที่เหลือ aggregate" header comment (near mockRemainingInvoices)
   // for what is and is not mirrored faithfully.
+  // Mirrors DocumentChainController / DocumentChainService#forTicket (backend documentchain/): gated FIRST by the
+  // deposit-notice read gate (DepositNoticeService#requireTicketViewer, here requireDepositNoticeViewer — the gate
+  // depositNotices.listByTicket and storedRemainingInvoices.listForTicket use), then the deal's facts through
+  // mockDocumentChainRules.js, the mirror of DocumentChainRules. AUTHZ HERE IS AN APPROXIMATION: the scope evidence is
+  // DocumentChainIntegrationTest against real Postgres.
+  documentChain: {
+    async get(ticketId) {
+      const { user, ticket } = requireDepositNoticeViewer(ticketId);
+      return delay({ documentChain: mockDocumentChainFor(ticket, user) });
+    },
+  },
+
   storedRemainingInvoices: {
     async createDraft(ticketId, payload = {}) {
       const ticket = findTicketRaw(Number(ticketId));
@@ -17910,7 +18023,13 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const sorted = [...filtered]
         .filter((q) => viewer.role !== 'account' || ACCOUNT_VISIBLE_DEAL_QUOTATION_STATUSES.includes(q.docStatus))
         .sort((a, b) => b.id - a.id);
-      return delay({ items: sorted.map((q) => forDealQuotationViewer(buildDealQuotationDto(q), viewer)) });
+      // DealQuotationController#search's per-row `chainStage` (DocumentChainService#listStages).
+      return delay({
+        items: sorted.map((q) => ({
+          ...forDealQuotationViewer(buildDealQuotationDto(q), viewer),
+          chainStage: mockListChainStage(q, viewer),
+        })),
+      });
     },
 
     // Per-status counts for the tab labels. Computed from the SAME scoped rows list() reads --

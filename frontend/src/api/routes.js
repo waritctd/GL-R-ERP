@@ -278,6 +278,10 @@ export const API_ROUTES = {
   // below. Authorisation is DepositNoticeService's issue-deposit-notice gate (write) /
   // requireTicketViewer (read), reused verbatim (see RemainingInvoiceService); these methods carry
   // no gate of their own.
+  // DocumentChainController: the deal's document chain summary (quotation page chain card + deal page เงิน tab).
+  documentChain: {
+    forTicket: (ticketId) => `/api/tickets/${ticketId}/document-chain`,
+  },
   storedRemainingInvoices: {
     forTicket: (ticketId) => `/api/tickets/${ticketId}/remaining-invoices`,
     get: (id) => `/api/remaining-invoices/${id}`,

@@ -165,6 +165,10 @@ export const queryKeys = {
   // for one deal. Separate from remainingInvoiceOptions above, which stays the stateless prefill
   // source a new draft snapshots from.
   storedRemainingInvoices: (ticketId) => ['remainingInvoice', 'stored', ticketId],
+  // The deal's document chain summary (GET /tickets/{id}/document-chain): ONE key the quotation page's chain card
+  // and the deal page's เงิน tab share, so an invalidation reaches both. Number()-coerced like ticketDetail: the
+  // deal page passes a route-param string, the quotation page a numeric ticketId.
+  documentChain: (ticketId) => ['documentChain', ticketId == null ? ticketId : Number(ticketId)],
   customersSearch: (q) => ['customers', 'search', q ?? ''],
   // One customer MASTER row by id (quotation editor). There is no GET
   // /api/customers/{id}, so this is resolved through the name search and matched on id (see
