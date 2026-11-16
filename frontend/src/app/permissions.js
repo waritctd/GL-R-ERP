@@ -206,6 +206,8 @@ const SELF_SERVICE_PATHS = [
   // OvertimeService hardcodes it in notification links.
   '/overtime',
   '/tax-allowance',
+  // มีอะไรใหม่ release notice (/whats-new and /whats-new/:releaseId): every employee's bell row and email link here.
+  '/whats-new',
 ];
 
 export function isSelfServicePath(path) {

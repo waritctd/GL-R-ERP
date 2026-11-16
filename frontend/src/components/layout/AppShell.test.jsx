@@ -459,6 +459,26 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.getByText('ตั้งค่าราคา')).toBeTruthy();
   });
 
+  // มีอะไรใหม่ is for every employee, so it must survive the lock for the most-locked roles: a nav link in the
+  // sidebar and the header bubble beside the bell.
+  it('keeps มีอะไรใหม่ in the nav and the header bubble for every locked role', async () => {
+    for (const user of [
+      { role: 'employee', employeeId: 51 },
+      { role: 'warehouse', employeeId: 52 },
+      { role: 'account', employeeId: 53 },
+      { role: 'import', employeeId: 54 },
+      { role: 'employee', employeeId: 55, manager: true },
+    ]) {
+      const { unmount } = await renderLockedShell({ ...user, name: 'ทดสอบ', email: `${user.role}@test.local` });
+      await screen.findByText('เนื้อหา');
+      const nav = screen.getByRole('navigation');
+      const link = within(nav).getByRole('link', { name: /มีอะไรใหม่/ });
+      expect(link.getAttribute('href'), user.role).toBe('/whats-new');
+      expect(within(screen.getByRole('banner')).getByRole('button', { name: /มีอะไรใหม่/ })).toBeTruthy();
+      unmount();
+    }
+  });
+
   it('changes nothing when the flag is off', async () => {
     await renderLockedShell({ role: 'sales', employeeId: 41, name: 'ขาย ทดสอบ', email: 'sales@test.local' }, 'false');
     await screen.findByText('เนื้อหา');
