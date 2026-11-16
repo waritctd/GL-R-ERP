@@ -109,7 +109,7 @@ export function buildFindings(K) {
   }
   if (obj(K.comm) && ratio(K.comm.paid, K.comm.formula) != null) {
     const over = Math.round((ratio(K.comm.paid, K.comm.formula) - 1) * 100);
-    out.push([K.comm.paid > K.comm.formula ? DOT.warn : DOT.info, `ค่าคอมจ่ายจริง ${ml(K.comm.paid)} ${moreLess(-over, 'สูงกว่า', 'ต่ำกว่า')}สูตรขั้นบันได ${Math.abs(over)}%`,
+    out.push([K.comm.paid > K.comm.formula ? DOT.warn : DOT.info, `ค่าคอมจ่ายจริง ${ml(K.comm.paid)} ${moreLess(over, 'สูงกว่า', 'ต่ำกว่า')}สูตรขั้นบันได ${Math.abs(over)}%`,
       `${num(K.comm.corr)} จาก ${num(K.comm.n)} รายการต้องแจ้งแก้ไข`]);
   }
   const b = obj(K.cust) && Array.isArray(K.cust.buckets) ? K.cust.buckets : [];

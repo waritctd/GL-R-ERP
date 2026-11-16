@@ -170,7 +170,7 @@ describe('WhatsNewPage', () => {
       await waitFor(() => expect(api.releaseNotes.publish).toHaveBeenCalledTimes(1));
       const payload = api.releaseNotes.publish.mock.calls[0][0];
       expect(payload.releaseId).toBe('2026-11-16');
-      expect(payload.changes).toHaveLength(12);
+      expect(payload.changes).toHaveLength(13);
       expect(api.releaseNotes.email).not.toHaveBeenCalled();
       await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', expect.stringContaining('6')));
     });

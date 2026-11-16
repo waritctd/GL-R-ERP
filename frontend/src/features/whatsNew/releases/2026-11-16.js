@@ -59,6 +59,22 @@ const entries = [
     help: 'ตัวเลขไม่ตรงกับที่คิด ส่งรหัสดีลให้ผู้จัดการฝ่ายขาย',
   }),
   entry({
+    id: 'sales-insights',
+    page: 'วิเคราะห์ยอดขาย',
+    menu: 'แดชบอร์ด › วิเคราะห์ยอดขาย',
+    path: '/',
+    landing: true,
+    kind: 'new',
+    title: 'วิเคราะห์ยอดขาย: ดูรายเดือนก่อน แล้วดูทั้งปี',
+    why: 'รายรับ ค่าคอมมิชชัน ลูกค้า งานในมือ และความแม่นของประมาณการ อยู่ในแดชบอร์ดเดียว แทนรายงานที่ทำมือทุกเดือน ไม่มีเมนูใหม่เพิ่ม',
+    steps: [
+      ['ที่แดชบอร์ด กดแท็บ "วิเคราะห์ยอดขาย" มุมขวาบน', 'กดแท็บ "งานวันนี้" เพื่อกลับไปหน้าเดิม', 'แท็บงานวันนี้และวิเคราะห์ยอดขายที่หัวแดชบอร์ด'],
+      ['กดแท่งของเดือนที่ต้องการดู', 'เห็นรายรับ ค่าคอม ประมาณการเทียบรับจริง และลูกค้ารายใหญ่ของเดือนนั้น ใช้ปุ่มลูกศรเลื่อนทีละเดือนได้', 'แท่งรายเดือนและรายละเอียดของเดือนที่เลือก'],
+      ['เลื่อนลงไปที่ "ทั้งปี" แล้วกดหัวข้อที่สนใจ', 'ยอดขาย · ค่าคอมมิชชัน · ลูกค้า · งานในมือและประมาณการ · ผู้ออกแบบและการใช้เวลา', 'ข้อค้นพบและปุ่มเลือกหัวข้อของส่วนทั้งปี'],
+    ],
+    help: 'ตัวเลขมาจากไฟล์วิเคราะห์ประจำเดือนที่ CEO อัปโหลด ถ้าหน้ายังว่าง แปลว่ายังไม่ได้อัปโหลดไฟล์ของรอบนี้',
+  }),
+  entry({
     id: 'deal-list',
     page: 'รายการดีล',
     menu: 'งานขาย › รายการดีล',
@@ -213,8 +229,8 @@ const release = {
   // One section per role DivisionAccessPolicy.roleFor can return, in display order.
   sections: {
     sales: ['address', 'my-work', 'deal-list', 'deal-page'],
-    sales_manager: ['address', 'team-overview', 'deal-list', 'deal-page'],
-    ceo: ['address', 'ceo-home', 'deal-list', 'deal-page-ceo', 'fulfilment'],
+    sales_manager: ['address', 'team-overview', 'sales-insights', 'deal-list', 'deal-page'],
+    ceo: ['address', 'ceo-home', 'sales-insights', 'deal-list', 'deal-page-ceo', 'fulfilment'],
     account: ['address', 'finance-deal'],
     import: ['address', 'import-home', 'fulfilment', 'import-deal', 'pricing-request'],
     hr: ['address'],

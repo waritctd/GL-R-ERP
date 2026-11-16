@@ -478,11 +478,14 @@ describe('SalesInsights', () => {
         const { unmount } = renderInsights('ceo');
         await screen.findByTestId('insight-year');
         expect(dotOf('ค่าคอมจ่ายจริง')).toContain('bg-warning');
+        // The wording must agree with the tone: paid above the formula reads "สูงกว่า", never "ต่ำกว่า".
+        expect(screen.getByTestId('insight-year').textContent).toMatch(/ค่าคอมจ่ายจริง [^·]*สูงกว่าสูตรขั้นบันได/);
         unmount();
 
         await show({ comm: { ...SNAPSHOT.comm, paid: 30000 } });
         expect(dotOf('ค่าคอมจ่ายจริง')).not.toContain('bg-warning');
         expect(dotOf('ค่าคอมจ่ายจริง')).toContain('bg-text-muted');
+        expect(screen.getByTestId('insight-year').textContent).toMatch(/ค่าคอมจ่ายจริง [^·]*ต่ำกว่าสูตรขั้นบันได/);
       });
 
       it('the pipe concentration finding is red with "แต่" only when the top 10 hold at least half', async () => {
