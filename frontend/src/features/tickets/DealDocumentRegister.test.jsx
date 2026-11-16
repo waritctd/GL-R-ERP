@@ -152,7 +152,7 @@ describe('DealDocumentRegister', () => {
   });
 
   // DealQuotationRepository#findByTicket also returns PRICING_REQUEST-origin rows: a deal whose only
-  // quotation is one of those must not show the false "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" empty state.
+  // quotation is one of those must not show the false "ยังไม่มีใบเสนอราคาสำหรับงานนี้" empty state.
   // The register LISTS the rows of that endpoint itself (versions grouped) instead of pointing at
   // the panel below, so the row must be visible here and no pointer sentence shown.
   it('a deal with only a PRICING_REQUEST-origin quotation lists it (no false empty state, no pointer sentence)', async () => {
@@ -170,7 +170,7 @@ describe('DealDocumentRegister', () => {
 
     expect(await screen.findByTestId('register-quotations')).not.toBeNull();
     expect(await screen.findByText('QT-2026-0101-1')).not.toBeNull();
-    expect(screen.queryByText('ยังไม่มีใบเสนอราคาสำหรับดีลนี้')).toBeNull();
+    expect(screen.queryByText('ยังไม่มีใบเสนอราคาสำหรับงานนี้')).toBeNull();
     expect(screen.queryByText(/แสดงอยู่ในแผง/)).toBeNull();
   });
 
@@ -850,9 +850,9 @@ describe('DealDocumentRegister', () => {
     expect(deposit.compareDocumentPosition(remaining) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(deposit).getByText('ใบแจ้งยอดมัดจำ')).not.toBeNull();
     expect(within(remaining).getByText('ใบแจ้งหนี้ส่วนที่เหลือ')).not.toBeNull();
-    expect(await within(deposit).findByText('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้')).not.toBeNull();
+    expect(await within(deposit).findByText('ยังไม่มีใบแจ้งยอดมัดจำสำหรับงานนี้')).not.toBeNull();
     // Empty stored list: the readiness row stays at the top, the empty sentence sits beneath it.
-    expect(await within(remaining).findByText('ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับดีลนี้')).not.toBeNull();
+    expect(await within(remaining).findByText('ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับงานนี้')).not.toBeNull();
     expect(within(remaining).getByText('ออกใบแจ้งหนี้ส่วนที่เหลือ')).not.toBeNull();
     expect(screen.queryByTestId('register-deposit-and-invoice')).toBeNull();
   });
@@ -882,7 +882,7 @@ describe('DealDocumentRegister', () => {
     });
 
     const deposit = await screen.findByTestId('register-deposit');
-    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้'));
+    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับงานนี้'));
     if (pointed) {
       expect(deposit.textContent).toContain('กดปุ่ม “สร้างใบแจ้งยอดเงินรับมัดจำ” ด้านบนของหน้า');
     } else {
@@ -894,7 +894,7 @@ describe('DealDocumentRegister', () => {
     renderRegister({ ...ACCOUNT, summary: { status: 'price_proposed', fulfillmentStatus: null, salesStage: 'ORDER_RECEIVED', depositPolicy: 'REQUIRED', createdById: 5 } });
 
     const deposit = await screen.findByTestId('register-deposit');
-    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้'));
+    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับงานนี้'));
     expect(deposit.textContent).not.toContain('สร้างใบแจ้งยอดเงินรับมัดจำ');
   });
 
@@ -1097,7 +1097,7 @@ describe('DealDocumentRegister — ใบขอซื้อ (รายโรง�
   it('shows an honest empty line when the deal has no IR yet', async () => {
     renderRegister(OWNER);
     const section = await screen.findByTestId('register-import-requests');
-    expect(await within(section).findByText('ยังไม่มีใบขอซื้อสำหรับดีลนี้')).not.toBeNull();
+    expect(await within(section).findByText('ยังไม่มีใบขอซื้อสำหรับงานนี้')).not.toBeNull();
   });
 
   it('import (read-only), CEO and sales_manager see the section; a non-owning sales rep and account do not, and never fetch', async () => {

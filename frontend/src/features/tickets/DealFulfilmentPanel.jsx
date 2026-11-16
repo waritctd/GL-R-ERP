@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
@@ -300,7 +301,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     .filter((r) => r.status !== 'SUPERSEDED')
     .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || a.version - b.version);
   // A FAILED fetch must not read as "this deal has zero stored IRs": an empty `?? []` on error
-  // would show "ยังไม่มีใบขอซื้อสำหรับดีลนี้" where an error belongs, and (via `hasStoredIrs` false)
+  // would show "ยังไม่มีใบขอซื้อสำหรับงานนี้" where an error belongs, and (via `hasStoredIrs` false)
   // resurrect the legacy per-brand block. Treating an ERROR as "has stored IRs" is the safe
   // direction: the legacy block stays hidden and the real error shows.
   const hasStoredIrs = storedIrRows.length > 0 || storedIrQuery.isError;
@@ -856,7 +857,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 โหลดใบขอซื้อรายโรงงานไม่สำเร็จ — {storedIrQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}
               </p>
             ) : liveStoredIrRows.length === 0 ? (
-              <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับดีลนี้</p>
+              <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับงานนี้</p>
             ) : (
               <div className="flex flex-col gap-3">
                 {liveStoredIrRows.map((row) => (
@@ -923,9 +924,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             </p>
 
             {brandsQuery.isLoading ? (
-              <p className="text-xs text-text-muted">กำลังโหลดแบรนด์ในดีลนี้…</p>
+              <p className="text-xs text-text-muted">กำลังโหลดแบรนด์ในงานนี้…</p>
             ) : brandsQuery.isError ? (
-              <p className="text-xs text-danger">ไม่สามารถโหลดแบรนด์ในดีลนี้ได้</p>
+              <p className="text-xs text-danger">ไม่สามารถโหลดแบรนด์ในงานนี้ได้</p>
             ) : irBrands.length === 0 ? (
               <p className="text-xs text-text-muted">
                 ยังไม่มีแบรนด์ในรายการสินค้า — ต้องระบุแบรนด์ก่อนจึงจะออกใบขอซื้อได้
@@ -995,34 +996,61 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            {items.map((item) => {
-              const ordered = Number(item.qty || 0);
-              const delivered = Number(item.qtyDelivered || 0);
-              const remaining = Math.max(0, ordered - delivered);
-              return (
-                <div key={item.id} className="flex items-center justify-between gap-2 rounded-md border border-border-subtle px-3 py-2 text-xs">
-                  <div className="min-w-0">
-                    <strong className="block truncate">{item.brand} {item.model || ''}</strong>
-                    <span className="text-2xs text-text-muted">
-                      จากสต็อก {Number(item.qtyFromStock || 0).toLocaleString('en-US')} · คงเหลือ {remaining.toLocaleString('en-US')}
-                    </span>
-                  </div>
-                  {can.reserveStock ? (
-                    <label className="flex shrink-0 items-center gap-1.5 font-bold text-text-secondary">
-                      <input
-                        type="checkbox" data-testid={`deal-fulfilment-reserve-stock-${item.id}`}
-                        checked={Number(item.qtyFromStock || 0) >= ordered}
-                        disabled={reserveStockMutation.isPending}
-                        onChange={(e) => setPendingStock({ item, qtyFromStock: e.target.checked ? ordered : 0 })}
-                      />
-                      จากสต็อก
-                    </label>
-                  ) : null}
-                  <strong className="shrink-0">{delivered.toLocaleString('en-US')} / {ordered.toLocaleString('en-US')}</strong>
-                </div>
-              );
-            })}
+          {/* Drawing a-deal-ship: one row per item, สั่ง / ส่งแล้ว / เหลือ / ที่มา. Every figure is the item's own
+              qty / qtyDelivered / qtyFromStock, as the list it replaces showed them; ที่มา says คลัง for the part
+              reserved from stock and นำเข้า for the rest (the only two sources, see ProcurementSourceDialog). */}
+          <div className="-mx-1 overflow-x-auto px-1">
+            <table aria-label="การส่งสินค้าให้ลูกค้า" className="w-full min-w-[30rem] border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-2xs font-bold text-text-muted">
+                  <th scope="col" className="py-2 pr-3 font-bold">รายการ</th>
+                  <th scope="col" className="px-2 py-2 text-right font-bold">สั่ง</th>
+                  <th scope="col" className="px-2 py-2 text-right font-bold">ส่งแล้ว</th>
+                  <th scope="col" className="px-2 py-2 text-right font-bold">เหลือ</th>
+                  <th scope="col" className="py-2 pl-3 font-bold">ที่มา</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const ordered = Number(item.qty || 0);
+                  const delivered = Number(item.qtyDelivered || 0);
+                  const remaining = Math.max(0, ordered - delivered);
+                  const fromStock = Math.min(ordered, Number(item.qtyFromStock || 0));
+                  const sourceChips = fromStock >= ordered && ordered > 0
+                    ? [{ key: 'stock', label: 'คลัง', tone: 'neutral' }]
+                    : fromStock > 0
+                      ? [
+                        { key: 'stock', label: `คลัง ${fromStock.toLocaleString('en-US')}`, tone: 'neutral' },
+                        { key: 'import', label: `นำเข้า ${(ordered - fromStock).toLocaleString('en-US')}`, tone: 'info' },
+                      ]
+                      : [{ key: 'import', label: 'นำเข้า', tone: 'info' }];
+                  return (
+                    <tr key={item.id} className="border-b border-border-subtle align-middle last:border-b-0">
+                      <td className="max-w-[16rem] py-2 pr-3 font-bold text-text [overflow-wrap:anywhere]">{`${item.brand ?? ''} ${item.model || ''}`.trim()}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{ordered.toLocaleString('en-US')}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{delivered.toLocaleString('en-US')}</td>
+                      <td className={cn('px-2 py-2 text-right tabular-nums', remaining > 0 && 'font-extrabold text-text')}>{remaining.toLocaleString('en-US')}</td>
+                      <td className="py-2 pl-3">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          {sourceChips.map((chip) => <StatusBadge key={chip.key} tone={chip.tone}>{chip.label}</StatusBadge>)}
+                          {can.reserveStock ? (
+                            <label className="flex min-h-[44px] items-center gap-1.5 font-bold text-text-secondary">
+                              <input
+                                type="checkbox" data-testid={`deal-fulfilment-reserve-stock-${item.id}`}
+                                checked={Number(item.qtyFromStock || 0) >= ordered}
+                                disabled={reserveStockMutation.isPending}
+                                onChange={(e) => setPendingStock({ item, qtyFromStock: e.target.checked ? ordered : 0 })}
+                              />
+                              จากสต็อก
+                            </label>
+                          ) : null}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
 
           <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-2.5">

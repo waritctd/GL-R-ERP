@@ -115,7 +115,7 @@ describe('PricingRequestPanel', () => {
     renderPanel({ user: { id: 2, name: 'อื่น', role: 'sales' } });
 
     await screen.findByText('ยังไม่มีคำขอราคา');
-    expect(screen.getByText('ยังไม่มีคำขอราคาสำหรับดีลนี้')).not.toBeNull();
+    expect(screen.getByText('ยังไม่มีคำขอราคาสำหรับงานนี้')).not.toBeNull();
     expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
   });
 

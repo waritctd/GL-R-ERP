@@ -114,17 +114,26 @@ export function DealDocumentRegister({
   legacyQuotations = [],
   attachments = [],
   attachLoading = false,
+  // Deal page redesign (2026-11-16): the register is split across two tabs. 'quotations' renders only the quotation
+  // family, as the ใบเสนอราคา tab's "ใบเสนอราคาของงานนี้" card (with `quotationsAction` in its header); 'files'
+  // renders every other family on the ไฟล์ tab; 'all' (the default) is the whole register. Each family keeps its own
+  // gate below — `part` only ever narrows what one instance shows (and fetches).
+  part = 'all',
+  quotationsAction = null,
 }) {
   const [busyKey, setBusyKey] = useState(null);
   const [remainingInvoiceDialogOpen, setRemainingInvoiceDialogOpen] = useState(false);
+  const quotationsOnly = part === 'quotations';
 
   // Unchanged from the pre-Slice-D `documents` tab gate (ticketDetailTabs.js) — see this file's own header
   // comment for why it stays a two-part role+section check rather than collapsing to just
   // `canViewPricingRequests`.
-  const canViewQuotations = canViewPricingRequests && Boolean(sections?.dealQuotation || sections?.quotation);
+  const canViewQuotations = part !== 'files' && canViewPricingRequests && Boolean(sections?.dealQuotation || sections?.quotation);
   // Mirrors DepositNoticeService#requireTicketViewer via salesViewScope's own `depositNotice` section id (see
   // header comment) — governs BOTH the deposit notice and the remaining invoice.
-  const canViewDepositAndInvoice = Boolean(sections?.depositNotice);
+  const canViewDepositAndInvoice = !quotationsOnly && Boolean(sections?.depositNotice);
+  // The attachments family's gate is the page's own canViewDocumentsTab, unchanged.
+  const showAttachments = !quotationsOnly && canViewDocumentsTab;
   // the remaining invoice's own WRITE gate — mirrors RemainingInvoiceService#requireDepositNoticeIssueGate /
   // mockApi's requireRemainingInvoiceWriteGate exactly (sales role + this deal's own owner, no CEO carve-out).
   const canWriteRemainingInvoice = user?.role === 'sales' && isOwnerOrKeyer(summary, user?.id);
@@ -180,7 +189,7 @@ export function DealDocumentRegister({
   // CR-1 (R6/R9): the stored ใบขอซื้อ rows — one IR per factory — in a 5th section. Same read gate as
   // ImportRequestService#requireRead (and DealFulfilmentPanel's canReadStoredIr): import / CEO / sales_manager,
   // or the OWNING sales rep. Same query key as that panel, so one fetch feeds both.
-  const canViewImportRequests = canReadStoredImportRequests(user, summary);
+  const canViewImportRequests = !quotationsOnly && canReadStoredImportRequests(user, summary);
   const importRequestsQuery = useQuery({
     queryKey: queryKeys.storedImportRequests(ticketId),
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
@@ -270,13 +279,15 @@ export function DealDocumentRegister({
     setRemainingInvoiceDialogOpen(true);
   }
 
-  const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || canViewDocumentsTab || canViewImportRequests;
+  const hasAnyVisibleSection = canViewQuotations || canViewDepositAndInvoice || showAttachments || canViewImportRequests;
+  const panelTitle = quotationsOnly ? 'ใบเสนอราคาของงานนี้' : 'เอกสารของงาน';
+  const panelTestId = quotationsOnly ? 'deal-quotations-card' : 'deal-document-register';
 
   if (!hasAnyVisibleSection) {
     return (
-      <Panel title="เอกสารของดีล" data-testid="deal-document-register">
+      <Panel title={panelTitle} data-testid={panelTestId}>
         <div className="p-4">
-          <EmptyState icon="fileText" title="ไม่มีเอกสารให้แสดงในมุมมองนี้" description="สิทธิ์การเข้าถึงของบทบาทนี้ไม่ครอบคลุมเอกสารของดีลนี้" />
+          <EmptyState icon="fileText" title="ไม่มีเอกสารให้แสดงในมุมมองนี้" description="สิทธิ์การเข้าถึงของบทบาทนี้ไม่ครอบคลุมเอกสารของงานนี้" />
         </div>
       </Panel>
     );
@@ -381,9 +392,9 @@ export function DealDocumentRegister({
   ]);
 
   return (
-    <Panel flush className="flex flex-col" title="เอกสารของดีล" data-testid="deal-document-register">
+    <Panel flush className="flex flex-col" title={panelTitle} actions={quotationsOnly ? quotationsAction : null} data-testid={panelTestId}>
       {canViewQuotations ? (
-        <RegisterSection testId="register-quotations" title="ใบเสนอราคา" count={quotationDocCount} unit="เอกสาร">
+        <RegisterSection testId="register-quotations" title={quotationsOnly ? null : 'ใบเสนอราคา'} count={quotationDocCount} unit="เอกสาร">
           {customerQuotationsLoading && quotationDocCount === 0 ? (
             // Only block on the async chain fetch while there is NOTHING else to show yet — legacy rows arrive as a prop
             // and must never wait on an unrelated query.
@@ -391,7 +402,7 @@ export function DealDocumentRegister({
           ) : quotationDocCount === 0 ? (
             directQuotationsQuery.isLoading
               ? <Skeleton height={40} />
-              : <p className="text-xs text-text-muted">ยังไม่มีใบเสนอราคาสำหรับดีลนี้</p>
+              : <p className="text-xs text-text-muted">ยังไม่มีใบเสนอราคาสำหรับงานนี้</p>
           ) : (
             <div className="flex flex-col gap-3">
               {quotationGroups.map((g) => <DocumentGroup key={g.key} items={g.versions.map(g.toItem)} />)}
@@ -409,7 +420,7 @@ export function DealDocumentRegister({
             renderGroups(depositGroups, depositItem)
           ) : (
             <p className="text-xs text-text-muted">
-              ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้
+              ยังไม่มีใบแจ้งยอดมัดจำสำหรับงานนี้
               {depositCtaShown ? ' — กดปุ่ม “สร้างใบแจ้งยอดเงินรับมัดจำ” ด้านบนของหน้า' : ''}
             </p>
           )}
@@ -434,7 +445,7 @@ export function DealDocumentRegister({
           ) : remainingInvoicesQuery.isLoading ? (
             <Skeleton height={40} />
           ) : (
-            <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับดีลนี้</p>
+            <p className="text-xs text-text-muted">ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับงานนี้</p>
           )}
         </RegisterSection>
       ) : null}
@@ -446,7 +457,7 @@ export function DealDocumentRegister({
           ) : importRequestsQuery.isError ? (
             <p className="text-xs font-bold text-danger">โหลดใบขอซื้อไม่สำเร็จ — ลองรีเฟรชหน้านี้</p>
           ) : importRequestRows.length === 0 ? (
-            <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับดีลนี้</p>
+            <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับงานนี้</p>
           ) : (
             <div className="flex flex-col gap-3">
               {importRequestRows.map((r) => <DocumentGroup key={`ir-${r.id}`} items={[importRequestItem(r)]} />)}
@@ -455,12 +466,12 @@ export function DealDocumentRegister({
         </RegisterSection>
       ) : null}
 
-      {canViewDocumentsTab ? (
+      {showAttachments ? (
         <RegisterSection testId="register-attachments" title="ไฟล์แนบ (PO / ใบเซ็น / ใบกำกับภาษี)">
           {attachLoading ? (
             <Skeleton height={40} />
           ) : attachments.length === 0 ? (
-            <p className="text-xs text-text-muted">ยังไม่มีไฟล์แนบสำหรับดีลนี้</p>
+            <p className="text-xs text-text-muted">ยังไม่มีไฟล์แนบสำหรับงานนี้</p>
           ) : (
             <div className="flex flex-col gap-1.5">
               {attachments.map((att) => (
@@ -493,10 +504,12 @@ export function DealDocumentRegister({
 function RegisterSection({ testId, title, count, unit, children }) {
   return (
     <section className="flex flex-col gap-3 px-5 py-4 mobile:px-4 mobile:py-3.5 [&+&]:border-t [&+&]:border-border-subtle" data-testid={testId}>
-      <div className="flex items-baseline gap-2">
-        <strong className="text-sm font-bold text-text">{title}</strong>
-        {count > 0 ? <span className="text-xs text-text-muted">{`${count} ${unit}`}</span> : null}
-      </div>
+      {title || count > 0 ? (
+        <div className="flex items-baseline gap-2">
+          {title ? <strong className="text-sm font-bold text-text">{title}</strong> : null}
+          {count > 0 ? <span className="text-xs text-text-muted">{`${count} ${unit}`}</span> : null}
+        </div>
+      ) : null}
       {children}
     </section>
   );

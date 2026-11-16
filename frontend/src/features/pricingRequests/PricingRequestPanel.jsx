@@ -110,7 +110,7 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
       const pr = requests.find((request) => request.id === id);
       if (submitMutation.isPending) return;
       if (pr && canSubmitPricingRequest(user, pr)) submitMutation.mutate(id);
-      else showToast?.('error', 'ส่งคำขอราคานี้ไม่ได้ ดูคำขอราคาในแท็บสินค้าและราคา');
+      else showToast?.('error', 'ส่งคำขอราคานี้ไม่ได้ ดูคำขอราคาในแท็บใบเสนอราคา');
     },
   }));
 
@@ -121,8 +121,8 @@ export const PricingRequestPanel = forwardRef(function PricingRequestPanel({ tic
           icon="fileText"
           title="ยังไม่มีคำขอราคา"
           description={canCreate
-            ? 'คำขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา — สร้างได้จากปุ่ม “สร้างคำขอราคา” บนแถบด้านบนของหน้า เมื่อดีลถึงขั้น 3'
-            : 'ยังไม่มีคำขอราคาสำหรับดีลนี้'}
+            ? 'คำขอราคาส่งรายละเอียดสินค้าให้ฝ่ายนำเข้าเสนอราคา — สร้างได้จากปุ่ม “สร้างคำขอราคา” บนแถบด้านบนของหน้า เมื่องานถึงขั้น 3'
+            : 'ยังไม่มีคำขอราคาสำหรับงานนี้'}
         />
       ) : (
         <div className="flex flex-col gap-2 p-4">

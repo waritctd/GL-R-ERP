@@ -119,7 +119,9 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
   // The stage badge carries the catalogue's absolute number. The route line prints no position;
   // it reads "เส้นทาง · <route> · N ขั้น", and N is the full-spine
   // count until the per-deal route loads, so the badge is the stable assertion.
-  const stageIs = (page, n) => expect(page.getByTestId('deal-stage-no')).toHaveText(String(n));
+  // Deal page redesign (2026-11-16): the numbered pip gave way to the S stepper, so the absolute number is read off
+  // the stage strip's data-stage-no.
+  const stageIs = (page, n) => expect(page.getByTestId('deal-stage-panel')).toHaveAttribute('data-stage-no', String(n));
 
   test.beforeAll(async ({ browser }) => {
     sessions = await apiSessionsFor(['sales', 'sales_manager']);
@@ -205,7 +207,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await salesPage.goto(`/tickets/${dealA}`);
     await stageIs(salesPage, 4);
     await shot(salesPage, '03-designer-deal-stage4');
-    await salesPage.getByRole('tab', { name: /ประวัติ/ }).click().catch(() => {});
+    await salesPage.getByRole('tab', { name: /ภาพรวม/ }).click().catch(() => {});
     await expect(salesPage.getByText(STAGE_MESSAGE).first()).toBeVisible();
     await shot(salesPage, '03-designer-deal-history');
   });
@@ -305,7 +307,7 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     await expect(sp.locator('main')).toContainText('ฉบับที่ไม่ได้ใช้แล้ว');
     await shot(sp, '06-parent-superseded');
     await sp.goto(`/tickets/${dealA}`);
-    await sp.getByRole('tab', { name: /เอกสาร/ }).click().catch(() => {});
+    await sp.getByRole('tab', { name: /ใบเสนอราคา/ }).click().catch(() => {});
     await expect(sp.locator('main')).toContainText(qt3.number);
     await shot(sp, '06-deal-register');
   });

@@ -16,7 +16,7 @@ const STATUS_TONE = { DRAFT: 'info', ISSUED: 'success', SUPERSEDED: 'neutral' };
 // Both sentences hold whatever else is true of the deal, so neither needs the deal's state: a row
 // gets its import step at issue, and the server refuses the deal-level chain from the first ISSUED
 // row on (TicketRepository#hasLiveImportRequests).
-const FIRST_DRAFT_HINT = 'ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของดีลหรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้งดีล';
+const FIRST_DRAFT_HINT = 'ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของงานหรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้งงาน';
 // revise() leaves the ISSUED predecessor live until this draft is issued; issue() then supersedes
 // it, carries its step forward and resets the order e-mail to unsent (ImportRequestRepository#issue).
 const REVISION_DRAFT_HINT = 'ร่างฉบับแก้ไข — ฉบับที่ออกเลขแล้วยังติดตามและเลื่อนขั้นได้ตามปกติ เมื่อออกเลขฉบับนี้จะได้เลขใบขอซื้อใหม่แทนฉบับเดิม ขั้นนำเข้าปัจจุบันยกมาต่อ และต้องส่งอีเมลสั่งซื้อใหม่';
@@ -283,6 +283,9 @@ export function ImportRequestFactoryCard({
       <span className="text-2xs text-text-muted">v{row.version}</span>
       <StatusBadge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status] ?? row.status}</StatusBadge>
       {row.docNumber ? <code className="text-2xs text-text-muted">{row.docNumber}</code> : null}
+      {/* Drawing a-deal-ship: the tracker below is read-only on every surface that shows this card (import moves it
+          on การขนส่ง), so it says so. */}
+      {isIssued ? <StatusBadge tone="neutral">ดูอย่างเดียว</StatusBadge> : null}
     </>
   );
 

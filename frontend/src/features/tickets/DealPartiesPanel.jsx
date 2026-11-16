@@ -59,7 +59,7 @@ function PartyOutcome({ party }) {
       <StatusBadge tone={chip.tone}>{chip.label}</StatusBadge>
       {party.splitTicketId ? (
         <Link to={`/tickets/${party.splitTicketId}`} className="text-2xs text-info underline">
-          {`ดีล ${party.splitTicketCode ?? `#${party.splitTicketId}`}`}
+          {`งาน ${party.splitTicketCode ?? `#${party.splitTicketId}`}`}
         </Link>
       ) : null}
     </span>
@@ -81,7 +81,7 @@ function PartyActions({ ticketId, party, canEdit, onUpdate, onRemove, busy }) {
       key: 'quoted', label: 'กลับเป็นเสนอราคาแล้ว', disabled: busy, onSelect: () => onUpdate(party, { status: 'QUOTED' }, 'บันทึกสถานะแล้ว'),
     },
     party.status === 'ACTIVE' && party.latestQuotationId == null && {
-      key: 'remove', label: 'นำออกจากดีล', disabled: busy, onSelect: () => onRemove(party),
+      key: 'remove', label: 'นำออกจากงาน', disabled: busy, onSelect: () => onRemove(party),
     },
   ].filter(Boolean);
   return (
@@ -245,7 +245,7 @@ export function DealPartiesPanel({ ticketId, parties = [], loading = false, canE
   });
   const removeMutation = useMutation({
     mutationFn: (party) => api.tickets.removeParty(ticketId, party.id),
-    onSuccess: () => { refresh(); showToast?.('success', 'นำผู้รับเหมาออกจากดีลแล้ว'); },
+    onSuccess: () => { refresh(); showToast?.('success', 'นำผู้รับเหมาออกจากงานแล้ว'); },
     onError: (err) => showToast?.('error', err.message || 'นำออกไม่สำเร็จ'),
   });
   const busy = updateMutation.isPending || removeMutation.isPending;
@@ -269,7 +269,7 @@ export function DealPartiesPanel({ ticketId, parties = [], loading = false, canE
       {loading ? (
         <p className="m-0 px-5 py-4 text-sm text-text-muted">กำลังโหลด…</p>
       ) : buyers.length === 0 ? (
-        <p className="m-0 px-5 py-4 text-sm text-text-muted">ยังไม่มีผู้รับเหมาในดีลนี้</p>
+        <p className="m-0 px-5 py-4 text-sm text-text-muted">ยังไม่มีผู้รับเหมาในงานนี้</p>
       ) : (
         <>
           {isMobile ? (

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { formatMoney } from '../../utils/format.js';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
@@ -28,7 +28,7 @@ describe('DealHistoryPanel', () => {
     expect(items).toHaveLength(2);
     // id 11 (STAGE_CHANGED) was written later in the same transaction, so it belongs first in a newest-first list
     // — even though it was passed second.
-    expect(items[0]).toContain('เปลี่ยนสถานะดีล');
+    expect(items[0]).toContain('เปลี่ยนสถานะงาน');
     expect(items[1]).toContain('ลูกค้ายืนยันคำสั่งซื้อ');
   });
 
@@ -62,7 +62,7 @@ describe('DealHistoryPanel', () => {
 
     const items = screen.getAllByRole('listitem').map((li) => li.textContent);
     expect(items[0]).toContain('ส่งเรื่องเข้าระบบ');
-    expect(items[1]).toContain('สร้างดีล');
+    expect(items[1]).toContain('สร้างงาน');
   });
 
   it('a tie that is not between two events (e.g. an unparseable/missing timestamp) keeps a stable order rather than crashing', () => {
@@ -89,6 +89,8 @@ describe('DealHistoryPanel', () => {
     vi.setSystemTime(new Date('2026-10-30T23:30:00Z'));
     try {
       render(<DealHistoryPanel canAddActivity />);
+      // The form opens from "+ บันทึก" since the deal page redesign (2026-11-16).
+      fireEvent.click(screen.getByRole('button', { name: '+ บันทึก' }));
       expect(screen.getByLabelText('วันที่').value).toBe('31/10/2569');
     } finally {
       vi.useRealTimers();
