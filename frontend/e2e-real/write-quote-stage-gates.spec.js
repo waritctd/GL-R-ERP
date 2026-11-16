@@ -184,9 +184,15 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     }
     await shot(page, '01-stage3-stage-picker');
     await page.keyboard.press('Escape');
-    await page.getByRole('button', { name: 'ยกเลิก' }).first().click({ trial: false }).catch(() => {});
-    // auto hint
-    await expect(page.getByText('อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของดีลนี้')).toBeVisible();
+    // Escape normally closes the picker; if it did not, its own ยกเลิก does. Scoped to the modal: a page-wide
+    // "ยกเลิก" substring match now lands on the ยกเลิกงาน quiet link (deal page redesign, 2026-11-16).
+    if (await modal.isVisible()) await modal.getByRole('button', { name: 'ยกเลิก', exact: true }).click();
+    await expect(modal).toHaveCount(0);
+    // auto hint: since the redesign it is the "ถัดไป:" line of the ขั้นต่อไป card at the top of the page
+    // (NextStageLine, stageMeta AUTO_STAGE_HINT, wording ดีล → งาน). The card folds away while the header is
+    // condensed, and the ⋯ triggers above may have scrolled the page, so return to the top first.
+    await page.getByTestId('deal-chrome-expand-sentinel').scrollIntoViewIfNeeded();
+    await expect(page.getByTestId('next-step-card').getByText('อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของงานนี้')).toBeVisible();
     await shot(page, '01-stage3-auto-hint');
   });
 
