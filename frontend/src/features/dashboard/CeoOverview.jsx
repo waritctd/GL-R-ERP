@@ -68,11 +68,11 @@ const CEO_TITLE = 'ภาพรวมผู้บริหาร';
 /** Landing page: today's worklist, or (?view=insight) the sales-analytics snapshot. */
 export function CeoOverview(props) {
   return (
-    <InsightLanding title={CEO_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher) => <CeoToday {...props} switcher={switcher} />} />
+    <InsightLanding title={CEO_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher, panelProps) => <CeoToday {...props} switcher={switcher} panelProps={panelProps} />} />
   );
 }
 
-function CeoToday({ user, employee, dashboardSummary, switcher }) {
+function CeoToday({ user, employee, dashboardSummary, switcher, panelProps }) {
   const navigate = useNavigate();
   const onOpen = useCallback((to) => navigate(to), [navigate]);
 
@@ -272,6 +272,7 @@ function CeoToday({ user, employee, dashboardSummary, switcher }) {
   return (
     <PageStack>
       <PageHeader title={CEO_TITLE} subtitle={`${greeting} · ${today}`} actions={switcher} />
+      <PageStack {...panelProps}>
 
       {/* Spec 2026-11-15 §7.4: the team's deals and quiet list first. */}
       {SALES_ENABLED ? <TeamOverview /> : null}
@@ -384,6 +385,7 @@ function CeoToday({ user, employee, dashboardSummary, switcher }) {
           </Panel>
         </div>
       </div>
+      </PageStack>
     </PageStack>
   );
 }

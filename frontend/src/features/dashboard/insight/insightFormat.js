@@ -1,10 +1,22 @@
-const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
+export const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 
 /** 1.2 ล้าน — the snapshot's headline unit; "—" for a missing figure. */
-export const ml = (n) => (isNum(Number(n)) && n != null ? `${(Number(n) / 1e6).toFixed(1)} ล้าน` : '—');
-export const pct = (v) => (isNum(Number(v)) && v != null ? `${Math.round(Number(v) * 100)}%` : '—');
+/** A number, or a non-blank numeric string; '' / ' ' / text / null are "missing", never 0. */
+const numeric = (v) => (typeof v === 'number' || (typeof v === 'string' && v.trim() !== '')) && isNum(Number(v));
+export const ml = (n) => (numeric(n) ? `${(Number(n) / 1e6).toFixed(1)} ล้าน` : '—');
+export const pct = (v) => (numeric(v) ? `${Math.round(Number(v) * 100)}%` : '—');
 /** Signed percent for a month-over-month style delta; null means "no comparison month". */
 export const signed = (v) => (isNum(v) ? `${v > 0 ? '+' : ''}${v}%` : '—');
+
+/** An optional number with its unit suffix, or "—" when the snapshot did not carry it (never "undefined" / "NaN"). */
+export const num = (v, suffix = '') => (isNum(v) ? `${v}${suffix}` : '—');
+/** The "from – to" months of the 12-month window, '' when absent or not a list. */
+export const rangeText = (K) => (Array.isArray(K.t12_range) ? K.t12_range.join(' – ') : '');
+/** `K.quarter` only when it can be printed whole (labels and a numeric change); the quarter UI is omitted otherwise. */
+export const quarterOf = (K) => {
+  const q = K.quarter;
+  return q && typeof q === 'object' && q.label && q.prev_label && isNum(q.chg) ? q : null;
+};
 
 /** The one ratio guard: part/whole as a number, or null when the whole is 0 / not a number. */
 export function ratio(part, whole) {
@@ -62,6 +74,10 @@ export function availableSections(K) {
 
 const repPct = (map) => Object.entries(obj(map) ? map : {}).map(([rep, v]) => `${rep} ${pct(v)}`).join(' · ');
 const moreLess = (chg, more, less) => (chg < 0 ? less : more);
+const LOW_FILL = 80;
+// Only the three rates the recommendation names decide it.
+const lowFill = (fill) => obj(fill) && [fill.prob, fill.q, fill.stage].some((v) => isNum(v) && v < LOW_FILL);
+const offTarget = (map) => obj(map) && Object.values(map).some((v) => isNum(v) && (v < 0.85 || v > 1.15));
 
 /** Tone class of the finding dot, from the project's colour tokens. */
 const DOT = { bad: 'bg-danger', warn: 'bg-warning', info: 'bg-text-muted' };
@@ -69,45 +85,50 @@ const DOT = { bad: 'bg-danger', warn: 'bg-warning', info: 'bg-text-muted' };
 /** [dot class, headline, detail] rows — each built only from the figures the snapshot actually carries. */
 export function buildFindings(K) {
   const out = [];
-  const q = K.quarter;
-  if (obj(q)) {
-    out.push([DOT.bad, `${q.label} รับเงิน ${ml(q.cur)} ${moreLess(q.chg, 'สูงกว่า', 'ต่ำกว่า')}${q.prev_label} ${Math.abs(q.chg)}%`, `${q.prev_label} รับ ${ml(q.prev)}`]);
+  const q = quarterOf(K);
+  if (q) {
+    out.push([q.chg < 0 ? DOT.bad : DOT.info, `${q.label} รับเงิน ${ml(q.cur)} ${moreLess(q.chg, 'สูงกว่า', 'ต่ำกว่า')}${q.prev_label} ${Math.abs(q.chg)}%`, `${q.prev_label} รับ ${ml(q.prev)}`]);
   }
   if (K.reps.length >= 2) {
     const [a, b] = K.reps.slice().sort((x, y) => y.rev - x.rev);
-    out.push([DOT.warn, `${a.rep} และ ${b.rep} ทำ ${(a.share + b.share).toFixed(1)}% ของรายรับ 12 เดือน`,
-      `${a.rep} ${ml(a.rev)} · ${b.rep} ${ml(b.rev)}${K.t12_total ? ` จากทั้งหมด ${ml(K.t12_total)}` : ''}`]);
+    if (isNum(a.share) && isNum(b.share)) {
+      out.push([DOT.warn, `${a.rep} และ ${b.rep} ทำ ${(a.share + b.share).toFixed(1)}% ของรายรับ 12 เดือน`,
+        `${a.rep} ${ml(a.rev)} · ${b.rep} ${ml(b.rev)}${K.t12_total ? ` จากทั้งหมด ${ml(K.t12_total)}` : ''}`]);
+    }
   }
-  if (obj(K.pipe)) {
-    out.push([DOT.bad, `งานคาดหวัง ${ml(K.pipe.value)} แต่ ${K.pipe.top10}% อยู่ใน 10 งาน`,
-      `งานใหญ่สุดงานเดียว ${K.pipe.largest}%${obj(K.pipe.fill) ? ` · กรอก "จะขายได้ %" แค่ ${K.pipe.fill.prob}% ของงาน` : ''}`]);
+  const p = K.pipe;
+  if (obj(p) && isNum(p.top10)) {
+    const prob = obj(p.fill) && isNum(p.fill.prob) ? p.fill.prob : null;
+    const heavy = p.top10 >= 50;
+    out.push([heavy ? DOT.bad : DOT.info, `งานคาดหวัง ${ml(p.value)}${heavy ? ' แต่' : ' โดย'} ${p.top10}% อยู่ใน 10 งาน`,
+      `งานใหญ่สุดงานเดียว ${num(p.largest, '%')}${prob != null ? ` · กรอก "จะขายได้ %"${prob < LOW_FILL ? ' แค่' : ''} ${prob}% ของงาน` : ''}`]);
   }
-  if (obj(K.fc)) {
-    out.push([DOT.warn, `ประมาณการต้นเดือนคลาดเคลื่อนกลาง ๆ ${K.fc.mae}%`, `รับจริงต่อที่ประมาณ: ${repPct(K.fc.by_rep)}`]);
+  if (obj(K.fc) && isNum(K.fc.mae)) {
+    const byRep = repPct(K.fc.by_rep);
+    out.push([DOT.warn, `ประมาณการต้นเดือนคลาดเคลื่อนกลาง ๆ ${K.fc.mae}%`, byRep ? `รับจริงต่อที่ประมาณ: ${byRep}` : '']);
   }
   if (obj(K.comm) && ratio(K.comm.paid, K.comm.formula) != null) {
     const over = Math.round((ratio(K.comm.paid, K.comm.formula) - 1) * 100);
-    out.push([DOT.warn, `ค่าคอมจ่ายจริง ${ml(K.comm.paid)} ${moreLess(-over, 'สูงกว่า', 'ต่ำกว่า')}สูตรขั้นบันได ${Math.abs(over)}%`,
-      `${K.comm.corr} จาก ${K.comm.n} รายการต้องแจ้งแก้ไข`]);
+    out.push([K.comm.paid > K.comm.formula ? DOT.warn : DOT.info, `ค่าคอมจ่ายจริง ${ml(K.comm.paid)} ${moreLess(-over, 'สูงกว่า', 'ต่ำกว่า')}สูตรขั้นบันได ${Math.abs(over)}%`,
+      `${num(K.comm.corr)} จาก ${num(K.comm.n)} รายการต้องแจ้งแก้ไข`]);
   }
-  if (obj(K.cust)) {
-    const b = Array.isArray(K.cust.buckets) ? K.cust.buckets : [];
-    const small = (b[0]?.cnt ?? 0) + (b[1]?.cnt ?? 0);
-    const smallV = (b[0]?.val ?? 0) + (b[1]?.val ?? 0);
+  const b = obj(K.cust) && Array.isArray(K.cust.buckets) ? K.cust.buckets : [];
+  if (b.length >= 2 && [b[0], b[1]].every((x) => obj(x) && x.b && isNum(x.cnt) && isNum(x.val)) && isNum(K.cust.n80) && isNum(K.cust.n)) {
     out.push([DOT.info, `ลูกค้า ${K.cust.n80} จาก ${K.cust.n} รายให้รายรับ 80%`,
-      `ใบเสร็จต่ำกว่า 20,000 บาทมี ${small.toFixed(1)}% ของจำนวน แต่ให้ยอด ${smallV.toFixed(1)}%`]);
+      `ใบเสร็จ ${b[0].b} และ ${b[1].b} มี ${(b[0].cnt + b[1].cnt).toFixed(1)}% ของจำนวน แต่ให้ยอด ${(b[0].val + b[1].val).toFixed(1)}%`]);
   }
   return out;
 }
 
 export function buildRecommendations(K) {
   const out = [];
-  if (obj(K.pipe) && obj(K.pipe.fill)) {
+  if (obj(K.pipe) && lowFill(K.pipe.fill)) {
+    const f = K.pipe.fill;
     out.push(['ให้ "จะขายได้ %", ไตรมาส และขั้นงานขาย เป็นช่องบังคับในดีล',
-      `ตอนนี้กรอก ${K.pipe.fill.prob}% / ${K.pipe.fill.q}% / ${K.pipe.fill.stage}% จึงถ่วงน้ำหนักยอดคาดหวังไม่ได้`]);
+      `ตอนนี้กรอก ${num(f.prob, '%')} / ${num(f.q, '%')} / ${num(f.stage, '%')} จึงถ่วงน้ำหนักยอดคาดหวังไม่ได้`]);
   }
-  if (obj(K.pipe)) out.push(['ทบทวน 10 งานใหญ่ทุกสัปดาห์', `10 งานนี้คือ ${K.pipe.top10}% ของงานคาดหวังทั้งหมด`]);
-  if (obj(K.fc) && obj(K.fc.by_rep)) out.push(['ปรับฐานประมาณการรายคนตามยอดรับจริง', repPct(K.fc.by_rep)]);
+  if (obj(K.pipe) && isNum(K.pipe.top10)) out.push(['ทบทวน 10 งานใหญ่ทุกสัปดาห์', `10 งานนี้คือ ${K.pipe.top10}% ของงานคาดหวังทั้งหมด`]);
+  if (obj(K.fc) && offTarget(K.fc.by_rep)) out.push(['ปรับฐานประมาณการรายคนตามยอดรับจริง', repPct(K.fc.by_rep)]);
   if (obj(K.comm) && ratio(K.comm.corr, K.comm.n) != null) {
     out.push(['คำนวณค่าคอมใน Portal เพื่อลดการแจ้งแก้ไข', `${pctOf(K.comm.corr, K.comm.n)} ของรายการค่าคอม 12 เดือนมีการแก้ไข`]);
   }

@@ -547,6 +547,23 @@ describe('CeoOverview', () => {
       expect(api.salesAnalytics.snapshot).not.toHaveBeenCalled();
     });
 
+    it('keeps the tablist OUTSIDE the tabpanel, which wraps only the content below the header, in both views', async () => {
+      const { unmount } = renderOverview();
+      let panel = screen.getByRole('tabpanel');
+      expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
+      expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
+      expect(panel.textContent).toContain('รอคุณตัดสินใจ');
+      expect(panel.textContent).not.toContain('ภาพรวมผู้บริหาร');
+      unmount();
+
+      renderOverview(dashboardSummary, '/?view=insight');
+      await screen.findByTestId('sales-insights');
+      panel = screen.getByRole('tabpanel');
+      expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
+      expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-insight');
+      expect(panel.contains(screen.getByTestId('sales-insights'))).toBe(true);
+    });
+
     it('?view=insight shows the insight view instead of the worklist', async () => {
       renderOverview(dashboardSummary, '/?view=insight');
 

@@ -1,6 +1,6 @@
 import { Panel } from '../../../components/common/Layout.jsx';
 import { cn } from '../../../utils/cn.js';
-import { barWidth } from './insightFormat.js';
+import { barWidth, num } from './insightFormat.js';
 
 /** The shared Panel (flush: header rule, body padded by the caller) + a footnote slot Panel does not have. */
 export function InsightPanel({ title, side, children, foot, className, ...rest }) {
@@ -47,11 +47,11 @@ export function Bars({ rows, max }) {
 export function Pairs({ rows, a, b }) {
   return (
     <div className="grid gap-3">
-      {rows.map((x) => (
-        <div key={x.b} className="grid gap-1 text-sm">
-          <b>{x.b}</b>
-          <div className="flex items-center gap-2"><div className="flex-1"><ProgressBar part={x.cnt} whole={100} tone="bg-primary/40" label={`${x.b}: ${a} ${x.cnt}%`} /></div><em className="w-10 text-right text-xs not-italic tabular-nums">{x.cnt}%</em></div>
-          <div className="flex items-center gap-2"><div className="flex-1"><ProgressBar part={x.val} whole={100} label={`${x.b}: ${b} ${x.val}%`} /></div><em className="w-10 text-right text-xs not-italic tabular-nums">{x.val}%</em></div>
+      {rows.map((x, i) => (
+        <div key={`${i}-${x.b}`} className="grid gap-1 text-sm">
+          <b>{x.b ?? '—'}</b>
+          <div className="flex items-center gap-2"><div className="flex-1"><ProgressBar part={x.cnt} whole={100} tone="bg-primary/40" label={`${x.b ?? '—'}: ${a} ${num(x.cnt, '%')}`} /></div><em className="w-10 text-right text-xs not-italic tabular-nums">{num(x.cnt, '%')}</em></div>
+          <div className="flex items-center gap-2"><div className="flex-1"><ProgressBar part={x.val} whole={100} label={`${x.b ?? '—'}: ${b} ${num(x.val, '%')}`} /></div><em className="w-10 text-right text-xs not-italic tabular-nums">{num(x.val, '%')}</em></div>
         </div>
       ))}
       <div className="flex gap-4 text-xs text-text-muted"><span>▮ {a}</span><span className="text-primary">▮ {b}</span></div>

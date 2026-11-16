@@ -52,3 +52,16 @@ export const SNAPSHOT_WITH_NOW = {
 export const SNAPSHOT_MINIMAL = {
   months: SNAPSHOT.months, monthly_total: SNAPSHOT.monthly_total, monthly: SNAPSHOT.monthly, reps: SNAPSHOT.reps,
 };
+
+// Required keys only inside every optional section: each section object is present but carries none of its numbers,
+// so the page must print "—" (or omit the sentence), never "undefined" / "NaN".
+export const SNAPSHOT_SPARSE = {
+  months: ['ม.ค. 69', 'ก.พ. 69'],
+  monthly_total: [100, 200],
+  monthly: [{ total: 100, reps: [{ rep: 'Rep A' }] }, { total: 200, reps: [{ rep: 'Rep A' }], fc: [{ rep: 'Rep A' }], topc: [{}] }],
+  reps: [{ rep: 'Rep A' }, { rep: 'Rep B' }],
+  quarter: {}, comm: {}, cust: { buckets: [{}, {}] }, pipe: { by_rep: [{ rep: 'Rep A' }], fill: {}, buckets: [{}] },
+  fc: {}, designers: [{}], designer_meta: {}, time: { 'Rep A': {} }, coverage: { 'Rep A': {} },
+  fc_stats: [{ rep: 'Rep A' }], pipe_quality: [{ rep: 'Rep A' }], top_deals: [{}], top_customers: [{}],
+  now: { rows: [{ rep: 'Rep A' }] },
+};

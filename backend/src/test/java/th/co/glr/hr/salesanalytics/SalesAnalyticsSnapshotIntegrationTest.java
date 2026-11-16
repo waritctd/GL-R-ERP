@@ -226,4 +226,15 @@ class SalesAnalyticsSnapshotIntegrationTest extends AbstractPostgresIntegrationT
         putAs("ceo", snapshot(padding), 400);
         putAs("ceo", snapshot("small"), 200); // and the limit is not a blanket refusal
     }
+
+    @Test
+    void putRejectsJsonThatJacksonAcceptsButPostgresJsonbWouldNot_andNothingIsStored() throws Exception {
+        // A \u0000 escape is legal JSON, but jsonb cannot hold NUL: that must be a 400, not a 500.
+        putAs("ceo", snapshot("a\\u0000b"), 400);
+        // A complete document followed by more text is not one JSON document.
+        putAs("ceo", snapshot("x") + " {\"extra\":1}", 400);
+        putAs("ceo", snapshot("x") + " garbage", 400);
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject("SELECT COUNT(*) FROM sales.sales_analytics_snapshot", Map.of(), Long.class)).isZero();
+    }
 }

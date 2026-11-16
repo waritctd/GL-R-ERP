@@ -1,11 +1,12 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { SalesInsights } from './SalesInsights.jsx';
 import { api } from '../../api/index.js';
-import { SNAPSHOT, SNAPSHOT_MINIMAL, SNAPSHOT_WITH_NOW } from '../../test/fixtures/salesAnalyticsSnapshot.js';
+import { ml, pct } from './insight/insightFormat.js';
+import { SNAPSHOT, SNAPSHOT_MINIMAL, SNAPSHOT_SPARSE, SNAPSHOT_WITH_NOW } from '../../test/fixtures/salesAnalyticsSnapshot.js';
 
 globalThis.React = React;
 
@@ -271,9 +272,9 @@ describe('SalesInsights', () => {
     });
   });
   describe('month picker bars', () => {
-    const heightOf = (i) => parseFloat(screen.getByTestId(`insight-month-${i}`).style.height);
+    const heightOf = (i) => parseFloat(screen.getByTestId(`insight-month-bar-${i}`).style.height);
 
-    it('gives a zero or missing month a 0-height bar, keeps a 2% floor for a tiny one, and never exceeds 100%', async () => {
+    it('gives a zero month a 0-height bar inside a full-height, still clickable button; a tiny one keeps a 2% floor; never over 100%', async () => {
       const m = SNAPSHOT.monthly;
       withSnapshot({
         ...SNAPSHOT,
@@ -285,6 +286,9 @@ describe('SalesInsights', () => {
       expect(heightOf(0)).toBe(0);
       expect(heightOf(1)).toBe(2);
       expect(heightOf(2)).toBe(100);
+      expect(screen.getByTestId('insight-month-0').className).toContain('h-full');
+      fireEvent.click(screen.getByTestId('insight-month-0'));
+      expect(screen.getByTestId('insight-month-0').getAttribute('aria-pressed')).toBe('true');
     });
 
     it('renders and selects both columns when two months share a label', async () => {
@@ -308,13 +312,14 @@ describe('SalesInsights', () => {
       api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: { payload: { ...SNAPSHOT, cust: { ...SNAPSHOT.cust, buckets: 'x' } }, asOf: null, uploadedAt: '2026-04-02T03:00:00Z' } });
       api.salesAnalytics.upload.mockResolvedValue({});
       renderInsights('ceo');
-      expect((await screen.findByRole('alert')).textContent).toContain('แสดงข้อมูลวิเคราะห์ไม่ได้');
+      expect((await screen.findByRole('alert')).textContent).toContain('แสดงหัวข้อนี้ไม่ได้');
 
       api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: { payload: SNAPSHOT, asOf: null, uploadedAt: '2026-04-03T03:00:00Z' } });
       fireEvent.change(screen.getByLabelText('อัปโหลดข้อมูลวิเคราะห์'), {
         target: { files: [new File([JSON.stringify(SNAPSHOT)], 'kpi.json', { type: 'application/json' })] },
       });
-      expect(await screen.findByTestId('insight-month-detail')).toBeTruthy();
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+      expect(screen.getByTestId('insight-month-detail')).toBeTruthy();
       spy.mockRestore();
     });
 
@@ -363,6 +368,169 @@ describe('SalesInsights', () => {
       expect(label(0).className).not.toContain('mobile:sr-only'); // every third
       expect(label(1).className).toContain('mobile:sr-only');
       [0, 1, 2].forEach((i) => expect(screen.getByTestId(`insight-month-${i}`).getAttribute('aria-label')).toContain(SNAPSHOT.months[i]));
+    });
+  });
+  describe('review round 3', () => {
+    it('a snapshot with only the required keys, and every optional section empty, prints no "undefined" or "NaN"', async () => {
+      withSnapshot(SNAPSHOT_SPARSE);
+      const view = renderInsights('ceo');
+      const root = await screen.findByTestId('sales-insights');
+      await screen.findByTestId('insight-year');
+      // innerHTML, so aria-label / title attributes are scanned too.
+      const clean = () => expect(root.innerHTML).not.toMatch(/undefined|NaN/);
+      clean();
+      fireEvent.click(screen.getByTestId('insight-month-1'));
+      clean();
+      fireEvent.click(screen.getByRole('button', { name: 'ยังไม่จบเดือน' }));
+      await screen.findByTestId('insight-now-detail');
+      clean();
+      expect(screen.queryByRole('alert')).toBeNull();
+      view.unmount();
+
+      // Same for the bare minimum (no optional section at all) and the manager's section order.
+      withSnapshot({ months: ['ม.ค. 69'], monthly_total: [1], monthly: [{ total: 1, reps: [{ rep: 'Rep A' }] }], reps: [{ rep: 'Rep A' }] });
+      renderInsights('sales_manager');
+      expect((await screen.findByTestId('sales-insights')).innerHTML).not.toMatch(/undefined|NaN/);
+    });
+
+    it('one malformed optional section shows a section fallback while the month picker, detail and other sections stay', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      withSnapshot({ ...SNAPSHOT, cust: { ...SNAPSHOT.cust, buckets: { b: 'x' } } });
+      renderInsights('ceo');
+      await screen.findByTestId('insight-month-detail');
+      await screen.findByTestId('insight-year');
+
+      expect(screen.getByTestId('insight-month-0')).toBeTruthy();
+      const alerts = screen.getAllByRole('alert');
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0].textContent).toContain('แสดงหัวข้อนี้ไม่ได้');
+      expect(within(screen.getByTestId('insight-section-cust')).getByRole('alert')).toBeTruthy();
+      expect(within(screen.getByTestId('insight-section-sales')).queryByRole('alert')).toBeNull();
+      expect(screen.getAllByTestId('insight-figure')).toHaveLength(4);
+      spy.mockRestore();
+    });
+
+    it('keeps the month picker, and recovers by picking another month, when the selected month\'s data is malformed', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const m = SNAPSHOT.monthly;
+      withSnapshot({ ...SNAPSHOT, monthly: [m[0], m[1], { ...m[2], fc: [null] }] });
+      renderInsights('ceo');
+      expect((await screen.findByRole('alert')).textContent).toContain('แสดงเดือนนี้ไม่ได้');
+      expect(screen.queryByTestId('insight-month-detail')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('insight-month-0'));
+      expect(within(detail()).getByText('ลูกค้า ก')).toBeTruthy();
+      expect(screen.queryByText('แสดงเดือนนี้ไม่ได้ กรุณาอัปโหลดไฟล์ใหม่หรือแจ้งผู้ดูแลระบบ')).toBeNull();
+      spy.mockRestore();
+    });
+
+    it('treats an empty string and non-numeric text as a missing figure, not 0', () => {
+      ['', ' ', 'abc', null, undefined].forEach((v) => {
+        expect(pct(v)).toBe('—');
+        expect(ml(v)).toBe('—');
+      });
+      expect(pct(0)).toBe('0%');
+      expect(pct('0.5')).toBe('50%');
+      expect(ml('2000000')).toBe('2.0 ล้าน');
+    });
+
+    it('shows the ข้อมูล ณ date to the sales manager too, who still gets no upload control', async () => {
+      renderInsights('sales_manager');
+      await screen.findByTestId('insight-month-detail');
+      expect(screen.getByText('ข้อมูล ณ 2026-03-31')).toBeTruthy();
+      expect(screen.queryByLabelText('อัปโหลดข้อมูลวิเคราะห์')).toBeNull();
+    });
+
+    describe('findings and recommendations follow the data', () => {
+      const findingTexts = () => [...screen.getByTestId('insight-year').querySelectorAll('#find strong')].map((e) => e.textContent);
+      const dotOf = (head) => [...screen.getByTestId('insight-year').querySelectorAll('#find strong')]
+        .find((e) => e.textContent.includes(head)).querySelector('span').className;
+      const show = async (patch) => {
+        withSnapshot({ ...SNAPSHOT, ...patch });
+        renderInsights('ceo');
+        return screen.findByTestId('insight-year');
+      };
+
+      it('the quarter finding is red only when the quarter fell, neutral when it rose', async () => {
+        const { unmount } = renderInsights('ceo');
+        await screen.findByTestId('insight-year');
+        expect(dotOf('ไตรมาส 1/70')).toContain('bg-danger');
+        unmount();
+
+        await show({ quarter: { ...SNAPSHOT.quarter, chg: 5 } });
+        expect(dotOf('ไตรมาส 1/70')).not.toContain('bg-danger');
+        expect(dotOf('ไตรมาส 1/70')).toContain('bg-text-muted');
+      });
+
+      it('"แค่" and the make-mandatory recommendation appear only when a fill rate is below 80', async () => {
+        const year = await show({});
+        expect(year.textContent).toContain('แค่ 50%');
+        expect(year.textContent).toContain('เป็นช่องบังคับในดีล');
+        cleanup();
+
+        // designer is not named by the recommendation, so a low designer rate alone must not trigger it.
+        const full = await show({ pipe: { ...SNAPSHOT.pipe, fill: { prob: 90, q: 85, stage: 95, designer: 50 } } });
+        expect(full.textContent).not.toContain('แค่ 90%');
+        expect(full.textContent).not.toContain('เป็นช่องบังคับในดีล');
+      });
+
+      it('the commission finding is a warning only when paid is above the formula', async () => {
+        const { unmount } = renderInsights('ceo');
+        await screen.findByTestId('insight-year');
+        expect(dotOf('ค่าคอมจ่ายจริง')).toContain('bg-warning');
+        unmount();
+
+        await show({ comm: { ...SNAPSHOT.comm, paid: 30000 } });
+        expect(dotOf('ค่าคอมจ่ายจริง')).not.toContain('bg-warning');
+        expect(dotOf('ค่าคอมจ่ายจริง')).toContain('bg-text-muted');
+      });
+
+      it('the pipe concentration finding is red with "แต่" only when the top 10 hold at least half', async () => {
+        const { unmount } = renderInsights('ceo');
+        await screen.findByTestId('insight-year');
+        expect(dotOf('งานคาดหวัง 9.0 ล้าน')).toContain('bg-danger');
+        expect(findingTexts().find((t) => t.includes('อยู่ใน 10 งาน'))).toContain('แต่');
+        unmount();
+
+        await show({ pipe: { ...SNAPSHOT.pipe, top10: 30 } });
+        expect(dotOf('อยู่ใน 10 งาน')).not.toContain('bg-danger');
+        expect(dotOf('อยู่ใน 10 งาน')).toContain('bg-text-muted');
+        expect(findingTexts().find((t) => t.includes('อยู่ใน 10 งาน'))).not.toContain('แต่');
+      });
+
+      it('recommends re-basing the forecast only when some rep is outside 85-115%', async () => {
+        const { unmount } = renderInsights('ceo'); // Rep A 0.8
+        const year = await screen.findByTestId('insight-year');
+        expect(year.textContent).toContain('ปรับฐานประมาณการรายคน');
+        unmount();
+
+        const ok = await show({ fc: { ...SNAPSHOT.fc, by_rep: { 'Rep A': 0.9, 'Rep B': 1.1 } } });
+        expect(ok.textContent).not.toContain('ปรับฐานประมาณการรายคน');
+      });
+
+      it('the customer finding names the first two bucket labels from the snapshot, and is omitted without buckets', async () => {
+        await show({ cust: { ...SNAPSHOT.cust, buckets: [{ b: 'ถึง 10k', cnt: 10, val: 1 }, { b: '10-30k', cnt: 20, val: 4 }, { b: 'เกิน 30k', cnt: 70, val: 95 }] } });
+        const line = screen.getByTestId('insight-year').querySelector('#find').textContent;
+        expect(line).toContain('ถึง 10k');
+        expect(line).toContain('10-30k');
+        expect(line).toContain('30.0%'); // 10 + 20 of the count
+        expect(line).not.toContain('20,000');
+        cleanup();
+
+        const year = await show({ cust: { ...SNAPSHOT.cust, buckets: undefined } });
+        expect(findingTexts().some((t) => t.includes('จาก 20 ราย'))).toBe(false);
+        expect(year.textContent).not.toContain('20,000');
+      });
+    });
+
+    it('prints a real 0 forecast accuracy as 0%, and an absent one as —', async () => {
+      withSnapshot({ ...SNAPSHOT, fc: { ...SNAPSHOT.fc, by_rep: { 'Rep A': 0 } }, pipe: { ...SNAPSHOT.pipe, by_rep: [{ ...SNAPSHOT.pipe.by_rep[0] }, { ...SNAPSHOT.pipe.by_rep[0], rep: 'Rep B' }] } });
+      renderInsights('ceo');
+      await screen.findByTestId('insight-year');
+      const rows = within(screen.getByTestId('insight-section-pipe').querySelector('#pipe')).getAllByRole('row');
+      const cell = (row) => row.querySelectorAll('td')[4].textContent;
+      expect(cell(rows[1])).toBe('0%');
+      expect(cell(rows[2])).toBe('—');
     });
   });
 });

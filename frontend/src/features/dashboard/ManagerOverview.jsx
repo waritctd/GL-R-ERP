@@ -73,11 +73,11 @@ const MANAGER_TITLE = 'ภาพรวมทีมขาย';
 /** Landing page: today's team overview, or (?view=insight) the sales-analytics snapshot. */
 export function ManagerOverview(props) {
   return (
-    <InsightLanding title={MANAGER_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher) => <ManagerToday {...props} switcher={switcher} />} />
+    <InsightLanding title={MANAGER_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher, panelProps) => <ManagerToday {...props} switcher={switcher} panelProps={panelProps} />} />
   );
 }
 
-function ManagerToday({ user, employee, switcher }) {
+function ManagerToday({ user, employee, switcher, panelProps }) {
   const navigate = useNavigate();
   const commissionsQuery = useQuery({
     queryKey: queryKeys.commissionsPendingApproval(),
@@ -113,7 +113,7 @@ function ManagerToday({ user, employee, switcher }) {
           </>
         )}
       />
-
+      <PageStack {...panelProps}>
       <TeamOverview showTitle={false} />
 
       <TeamMovementPanel deals={tickets} range={teamRange} />
@@ -170,6 +170,7 @@ function ManagerToday({ user, employee, switcher }) {
           </>
         )}
       </Panel>
+      </PageStack>
     </PageStack>
   );
 }

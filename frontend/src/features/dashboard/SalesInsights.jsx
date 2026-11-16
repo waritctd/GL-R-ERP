@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -55,6 +55,8 @@ export function SalesInsights({ user, showToast }) {
   const isCeo = user?.role === 'ceo';
   const query = useQuery({ queryKey: queryKeys.salesAnalyticsSnapshot(), queryFn: () => api.salesAnalytics.snapshot() });
   const stored = query.data?.snapshot?.payload ?? null;
+  const asOf = query.data?.snapshot?.asOf;
+  const uploadedAt = query.data?.snapshot?.uploadedAt;
   // A stored document the page cannot draw (no months, malformed month entries) reads as "no data", never a crash.
   const K = isUsable(stored) ? stored : null;
   const [picked, setPicked] = useState(null);
@@ -68,12 +70,12 @@ export function SalesInsights({ user, showToast }) {
 
   return (
     <div className="grid gap-[18px]" data-testid="sales-insights">
-      {isCeo || message || error ? (
+      {isCeo || message || error || asOf ? (
         <div className="flex flex-wrap items-center gap-3">
           {isCeo ? <UploadControl onError={setError} onDone={done} /> : null}
           {error ? <span role="alert" className="text-sm text-danger">{error}</span> : null}
           {message && !error ? <span role="status" className="text-sm text-text-muted">{message}</span> : null}
-          {query.data?.snapshot?.asOf ? <small className="text-xs text-text-muted">ข้อมูล ณ {query.data.snapshot.asOf}</small> : null}
+          {asOf ? <small className="text-xs text-text-muted">ข้อมูล ณ {asOf}</small> : null}
         </div>
       ) : null}
       {query.isLoading ? <Skeleton height={160} /> : null}
@@ -84,11 +86,15 @@ export function SalesInsights({ user, showToast }) {
         </section>
       ) : null}
       {K ? (
-        <ErrorBoundary key={query.data?.snapshot?.uploadedAt} fallback={() => <p role="alert" className="m-0 text-sm text-danger">แสดงข้อมูลวิเคราะห์ไม่ได้ กรุณาอัปโหลดไฟล์ใหม่หรือแจ้งผู้ดูแลระบบ</p>}>
+        // Keyed on the upload: a re-upload remounts every boundary below, so a snapshot that failed can recover.
+        <Fragment key={uploadedAt}>
           <MonthPicker K={K} sel={sel} onSelect={setPicked} />
-          {sel === 'now' ? <NowDetail now={K.now} /> : <MonthDetail K={K} sel={sel} />}
+          {/* Keyed on the selection too: picking another month remounts the detail, so a malformed month can be left. */}
+          <ErrorBoundary key={sel} fallback={() => <p role="alert" className="m-0 text-sm text-danger">แสดงเดือนนี้ไม่ได้ เลือกเดือนอื่น หรืออัปโหลดไฟล์ใหม่</p>}>
+            {sel === 'now' ? <NowDetail now={K.now} /> : <MonthDetail K={K} sel={sel} />}
+          </ErrorBoundary>
           <YearPart K={K} role={user?.role} section={section} onSection={setSection} />
-        </ErrorBoundary>
+        </Fragment>
       ) : null}
     </div>
   );

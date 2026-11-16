@@ -19,20 +19,18 @@ function useInsightView() {
 }
 
 /**
- * Landing page with the today / insight switch: `renderToday(switcher)` draws today's dashboard, `?view=insight` the
- * sales-analytics snapshot. The tabpanel wraps the whole page body (Tabs points aria-controls at it).
+ * Landing page with the today / insight switch: `renderToday(switcher, panelProps)` draws today's dashboard, `?view=insight`
+ * the sales-analytics snapshot. The tablist lives in the header; the tabpanel (`panelProps`) wraps only the body below
+ * it, so the tablist is never inside the panel it controls.
  */
 export function InsightLanding({ title, user, showToast, renderToday }) {
   const [view, setView] = useInsightView();
   const switcher = <Tabs items={ITEMS} value={view} onChange={setView} ariaLabel="มุมมองหน้าแรก" idPrefix="landing-view" onSurface />;
-  return (
-    <div role="tabpanel" id={`landing-view-panel-${view}`} aria-labelledby={`landing-view-tab-${view}`}>
-      {view === 'insight' ? (
-        <PageStack>
-          <PageHeader title={title} actions={switcher} />
-          <SalesInsights user={user} showToast={showToast} />
-        </PageStack>
-      ) : renderToday(switcher)}
-    </div>
-  );
+  const panelProps = { role: 'tabpanel', id: `landing-view-panel-${view}`, 'aria-labelledby': `landing-view-tab-${view}` };
+  return view === 'insight' ? (
+    <PageStack>
+      <PageHeader title={title} actions={switcher} />
+      <div {...panelProps}><SalesInsights user={user} showToast={showToast} /></div>
+    </PageStack>
+  ) : renderToday(switcher, panelProps);
 }

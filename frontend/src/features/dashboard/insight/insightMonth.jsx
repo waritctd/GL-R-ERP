@@ -2,7 +2,7 @@ import { Button } from '../../../components/common/Button.jsx';
 import { StatusBadge } from '../../../components/common/StatusBadge.jsx';
 import { Figure } from '../dashboardParts.jsx';
 import { FigureBand, InsightPanel, InsightTable, Pad, ProgressBar, Small, Td } from './insightParts.jsx';
-import { barWidth, ml, pctOf, ratio, signed } from './insightFormat.js';
+import { barWidth, ml, num, pct, pctOf, ratio, signed } from './insightFormat.js';
 import { cn } from '../../../utils/cn.js';
 import { formatMoney } from '../../../utils/format.js';
 
@@ -47,9 +47,15 @@ export function MonthPicker({ K, sel, onSelect }) {
               aria-label={`${K.months[i]} ${ml(v)}`}
               title={`${K.months[i]}: ${ml(v)}`}
               onClick={() => onSelect(i)}
-              className={cn('insight-grow-y min-w-0 flex-1 rounded-t border-0 p-0', sel === i ? 'bg-primary' : 'bg-primary/40 hover:bg-primary/60')}
-              style={{ height: `${barWidth(v, max)}%` }}
-            />
+              className="group flex h-full min-w-0 flex-1 items-end border-0 bg-transparent p-0"
+            >
+              <span
+                aria-hidden="true"
+                data-testid={`insight-month-bar-${i}`}
+                className={cn('insight-grow-y block w-full rounded-t', sel === i ? 'bg-primary' : 'bg-primary/40 group-hover:bg-primary/60')}
+                style={{ height: `${barWidth(v, max)}%` }}
+              />
+            </button>
           ))}
         </div>
         <div className="mt-1 flex gap-1.5 text-center text-2xs text-text-muted">
@@ -63,7 +69,7 @@ export function MonthPicker({ K, sel, onSelect }) {
 /** Top customers (of a month or of the year): # / ลูกค้า / amount / share bar / % / receipts / reps, as the prototype's custList. */
 export function CustomerList({ id, title, side, rows, total, testId }) {
   if (!Array.isArray(rows) || rows.length === 0) return null;
-  const top = rows[0].amt;
+  const top = rows[0]?.amt;
   const sum = rows.reduce((s, c) => s + (Number(c.amt) || 0), 0);
   return (
     <InsightPanel id={id} data-testid={testId} title={title} side={side} foot={`รวม ${rows.length} รายนี้คิดเป็น ${pctOf(sum, total, 1)} ของรายรับช่วงนี้ · ชื่อลูกค้าเป็นข้อมูลภายใน ห้ามส่งต่อนอก GL&R`}>
@@ -73,10 +79,10 @@ export function CustomerList({ id, title, side, rows, total, testId }) {
             <Td>{i + 1}</Td>
             <Td><b>{c.name}</b></Td>
             <Td right>{formatMoney(c.amt)}</Td>
-            <Td><ProgressBar part={c.amt} whole={top} label={`${c.name}: ${c.share}%`} /></Td>
-            <Td right>{c.share}%</Td>
-            <Td right>{c.n}</Td>
-            <Td>{c.reps}</Td>
+            <Td><ProgressBar part={c.amt} whole={top} label={`${c.name ?? '—'}: ${num(c.share, '%')}`} /></Td>
+            <Td right>{num(c.share, '%')}</Td>
+            <Td right>{num(c.n)}</Td>
+            <Td>{c.reps ?? '—'}</Td>
           </tr>
         ))}
       </InsightTable>
@@ -88,11 +94,11 @@ export function CustomerList({ id, title, side, rows, total, testId }) {
 export function MonthDetail({ K, sel }) {
   const d = K.monthly[sel];
   const lead = d.reps[0];
-  const top = Math.max(0, ...d.reps.map((r) => r.rev));
+  const top = Math.max(0, ...d.reps.map((r) => Number(r.rev) || 0));
   const fc = Array.isArray(d.fc) ? d.fc : [];
   return (
     <div className="grid gap-[18px]" data-testid="insight-month-detail">
-      <InsightPanel title={K.months[sel]} side={`${d.lines} ใบเสร็จ · ${d.cust} ลูกค้า`}>
+      <InsightPanel title={K.months[sel]} side={`${num(d.lines)} ใบเสร็จ · ${num(d.cust)} ลูกค้า`}>
         <FigureBand>
           <Figure lead label="รายรับเดือนนี้ (ไม่รวม VAT)" value={formatMoney(d.total)} caption={lead ? `${lead.rep} ทำ ${pctOf(lead.rev, d.total)} ของเดือน` : ''} />
           <Figure danger={d.mom < 0} label="เทียบเดือนก่อน" value={signed(d.mom)} caption={sel ? `${K.months[sel - 1]} ${ml(K.monthly_total[sel - 1])}` : 'ไม่มีไฟล์เดือนก่อนหน้า'} />
@@ -121,7 +127,7 @@ export function MonthDetail({ K, sel }) {
                   <tr key={`${i}-${f.rep}`}>
                     <Td><b>{f.rep}</b>{f.xl ? <Small>จากไฟล์ Excel</Small> : null}</Td>
                     <Td right>{formatMoney(f.fc)}</Td><Td right>{formatMoney(f.act)}</Td>
-                    <Td right><StatusBadge tone={ratioTone(f.ratio)}>{Math.round(f.ratio * 100)}%</StatusBadge></Td>
+                    <Td right><StatusBadge tone={ratioTone(f.ratio)}>{pct(f.ratio)}</StatusBadge></Td>
                   </tr>
                 ))}
               </InsightTable>
@@ -129,9 +135,9 @@ export function MonthDetail({ K, sel }) {
           </InsightPanel>
           <InsightPanel title="ลูกค้าและใบเสร็จ">
             <FigureBand>
-              <Figure label="5 รายใหญ่สุด" value={`${d.top5}%`} caption="ของรายรับเดือนนี้" />
-              <Figure label="รายใหญ่สุดรายเดียว" value={`${d.top1}%`} caption="ของรายรับเดือนนี้" />
-              <Figure label="ใบเสร็จเกิน 500,000" value={`${d.big} ใบ`} caption={`ใบเสร็จกลาง ๆ ${formatMoney(d.med)}`} />
+              <Figure label="5 รายใหญ่สุด" value={num(d.top5, '%')} caption="ของรายรับเดือนนี้" />
+              <Figure label="รายใหญ่สุดรายเดียว" value={num(d.top1, '%')} caption="ของรายรับเดือนนี้" />
+              <Figure label="ใบเสร็จเกิน 500,000" value={num(d.big, ' ใบ')} caption={`ใบเสร็จกลาง ๆ ${formatMoney(d.med)}`} />
             </FigureBand>
           </InsightPanel>
         </div>
@@ -145,11 +151,11 @@ export function MonthDetail({ K, sel }) {
 export function NowDetail({ now }) {
   const rows = Array.isArray(now.rows) ? now.rows : [];
   const reported = rows.filter((r) => r.recv != null);
-  const fc = reported.reduce((s, r) => s + r.fc, 0);
-  const rc = reported.reduce((s, r) => s + r.recv, 0);
+  const fc = reported.reduce((s, r) => s + (Number(r.fc) || 0), 0);
+  const rc = reported.reduce((s, r) => s + (Number(r.recv) || 0), 0);
   return (
     <div data-testid="insight-now-detail">
-      <InsightPanel title={<>{now.label} <StatusBadge tone="info">ข้อมูล ณ {now.asof}</StatusBadge></>} side="จากอีเมลรายงานประจำสัปดาห์ล่าสุด" foot="ตัวเลขเดือนนี้ยังไม่ผ่านการตรวจกับไฟล์ค่าคอม">
+      <InsightPanel title={<>{now.label} {now.asof ? <StatusBadge tone="info">ข้อมูล ณ {now.asof}</StatusBadge> : null}</>} side="จากอีเมลรายงานประจำสัปดาห์ล่าสุด" foot="ตัวเลขเดือนนี้ยังไม่ผ่านการตรวจกับไฟล์ค่าคอม">
         <FigureBand>
           <Figure lead label="รับเงินแล้ว (รวม VAT)" value={formatMoney(rc)} caption={`${reported.length} คนที่รายงานตัวเลข`} />
           <Figure label="ประมาณการทั้งเดือน" value={formatMoney(fc)} caption="ตามที่เซลส์ประมาณเอง" />

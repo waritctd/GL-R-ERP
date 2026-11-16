@@ -259,6 +259,16 @@ describe('ManagerOverview: งานวันนี้ / วิเคราะ�
     expect(screen.queryByTestId('sales-insights')).toBeNull();
   });
 
+  it('keeps the tablist outside the tabpanel in today\'s view', () => {
+    renderOverview();
+
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
+    expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
+    expect(panel.contains(screen.getByRole('heading', { name: 'อัตราปิดงาน' }))).toBe(true);
+    expect(panel.contains(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' }))).toBe(false);
+  });
+
   it('?view=insight shows the insight view, and the empty state has no upload control for a manager', async () => {
     renderOverview(summary, '/?view=insight');
 

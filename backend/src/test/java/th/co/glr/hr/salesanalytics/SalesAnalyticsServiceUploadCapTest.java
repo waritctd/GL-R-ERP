@@ -3,15 +3,20 @@ package th.co.glr.hr.salesanalytics;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.HttpServletRequest;
 import java.io.ByteArrayInputStream;
 import java.io.InputStream;
 import java.time.LocalDate;
 import java.util.concurrent.atomic.AtomicLong;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
+import org.springframework.mock.web.MockHttpSession;
+import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
@@ -51,11 +56,16 @@ class SalesAnalyticsServiceUploadCapTest {
     }
 
     @Test
-    void theRoleIsCheckedBeforeTheBodyIsTouched() {
-        AtomicLong read = new AtomicLong();
-        assertThatThrownBy(() -> service.upload(user("sales_manager"), endless(read), -1))
+    void theControllerChecksTheRoleBeforeItTouchesTheBodyStream() throws Exception {
+        HttpServletRequest request = mock(HttpServletRequest.class);
+        MockHttpSession session = new MockHttpSession();
+        session.setAttribute(SessionContext.SESSION_USER_KEY, user("sales_manager"));
+        SalesAnalyticsController controller = new SalesAnalyticsController(service, new SessionContext());
+
+        assertThatThrownBy(() -> controller.upload(request, session))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
-        assertThat(read.get()).isZero();
+        verify(request, never()).getInputStream();
+        verifyNoInteractions(repository);
     }
 
     @Test
