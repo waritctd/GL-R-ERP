@@ -46,7 +46,7 @@ function RouteRibbon({ path, currentIdx, catalog, lost, skipped }) {
   if (path.length === 0) return null;
   return (
     <div className="border-b border-border px-4 py-3">
-      <div className="mb-2 text-xs font-bold text-text-muted">เส้นทางของดีลนี้ ({path.length} ขั้น)</div>
+      <div className="mb-2 text-xs font-bold text-text-muted">เส้นทางของงานนี้ ({path.length} ขั้น)</div>
       <ol data-testid="route-ribbon" className="m-0 flex list-none flex-wrap gap-1.5 p-0">
         {path.map((step, position) => {
           // Owner ruling 2026-09-30: the pip carries the ROUTE'S ordinal (1..N), NOT step.no (the business S-number). On
@@ -124,13 +124,13 @@ function OffRouteGroup({
                 {dealStageLabel(step.code, channel).label}
                 {step.code === salesStage ? (
                   <span className="ml-2 rounded-full bg-surface-subtle px-2 py-0.5 text-2xs font-bold text-text-muted">
-                    ดีลอยู่ขั้นนี้
+                    งานอยู่ขั้นนี้
                   </span>
                 ) : null}
               </span>
               <span className="block text-2xs leading-snug text-text-muted [overflow-wrap:anywhere]">
                 {decisionByCode.get(step.code)?.blockedReason
-                  ?? 'ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน'}
+                  ?? 'ไม่อยู่ในเส้นทางของงานนี้ — แก้ช่องทางงานก่อน'}
               </span>
               {/* The remedy for the sentence above, where it is read. Renders nothing unless the server advertised
                * SET_ENTRY_CHANNEL (and a handler is wired). */}
@@ -140,6 +140,7 @@ function OffRouteGroup({
                 onSubmit={onSetEntryChannel}
                 disabled={disabled}
                 context={dealStageLabel(step.code, channel).label}
+                noun="งาน"
               />
             </span>
           </li>

@@ -31,16 +31,16 @@ export function manualMoveLabel(salesStage, next, stageLabel) {
  * map only supplies words for the ones that have it. */
 export const AUTO_STAGE_HINT = {
   // Operational — a transition on the deal itself.
-  ORDER_RECEIVED:    'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของดีลนี้',
-  DEPOSIT_RECEIVED:  'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของดีลนี้',
-  PROCUREMENT:       'อัปเดตอัตโนมัติเมื่อฝ่ายขายออกเลขใบขอซื้อ (IR) ของดีลนี้ · ถ้าสินค้ามาจากสต็อกทั้งหมด จะข้ามไปขั้นนัดส่งสินค้า',
-  CLOSED_PAID:       'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของดีลนี้',
+  ORDER_RECEIVED:    'อัปเดตอัตโนมัติเมื่อฝ่ายขายยืนยันใบสั่งซื้อของงานนี้',
+  DEPOSIT_RECEIVED:  'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับมัดจำของงานนี้',
+  PROCUREMENT:       'อัปเดตอัตโนมัติเมื่อฝ่ายขายออกเลขใบขอซื้อ (IR) ของงานนี้ · ถ้าสินค้ามาจากสต็อกทั้งหมด จะข้ามไปขั้นนัดส่งสินค้า',
+  CLOSED_PAID:       'อัปเดตอัตโนมัติเมื่อฝ่ายบัญชียืนยันรับเงินครบของงานนี้',
   // Document-driven (owner ruling 2026-10-16) — a quotation addressed to that party. Each names
   // the DOCUMENT rather than a department, because unlike the four above the way in is something
   // this rep does themselves: the stage arrives when they quote that party.
-  QUOTE_DESIGN_SIDE: 'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของดีลนี้',
-  QUOTE_OWNER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงเจ้าของโครงการของดีลนี้',
-  QUOTE_BUYER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ซื้อ / ผู้รับเหมาของดีลนี้',
+  QUOTE_DESIGN_SIDE: 'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ออกแบบของงานนี้',
+  QUOTE_OWNER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงเจ้าของโครงการของงานนี้',
+  QUOTE_BUYER:       'อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้ซื้อ / ผู้รับเหมาของงานนี้',
 };
 
 export const LOST_REASON_LABEL = {

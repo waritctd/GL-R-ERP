@@ -292,14 +292,14 @@ describe('searchCatalog — stale-response guard', () => {
 // shared-module usage pin ───────────────────────────────────────────────── The bug this branch fixes was
 // exactly this: TicketCreateModal.jsx had ItemFieldLabel/ItemField/
 // CatalogOption/CatalogAutocompleteField/REQUIRED_ITEM_FIELD_LABELS, and TicketDetailPage.jsx had none of it.
-describe('shared usage pin — TicketCreateModal.jsx and TicketDetailPage.jsx both import from here, neither re-inlines', () => {
+describe('shared usage pin — TicketCreateModal.jsx and DealItemsPanel.jsx (the deal page items editor, moved out of TicketDetailPage.jsx 2026-11-16) both import from here, neither re-inlines', () => {
   function readSource(relativePath) {
     return readFileSync(resolve(process.cwd(), relativePath), 'utf8');
   }
 
   const files = {
     'TicketCreateModal.jsx': readSource('src/features/tickets/TicketCreateModal.jsx'),
-    'TicketDetailPage.jsx': readSource('src/features/tickets/TicketDetailPage.jsx'),
+    'DealItemsPanel.jsx': readSource('src/features/tickets/DealItemsPanel.jsx'),
   };
 
   for (const [name, source] of Object.entries(files)) {

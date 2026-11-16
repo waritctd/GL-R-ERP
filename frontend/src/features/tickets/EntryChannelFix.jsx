@@ -13,6 +13,8 @@ const SETTABLE_ENTRY_CHANNELS = ['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT']
  * off the deal's route with a message that ends "— แก้ช่องทางดีลก่อน". */
 export function EntryChannelFix({
   entryChannel, action, onSubmit, disabled = false, context,
+  // The deal page's stepper says งาน (owner ruling 2026-11-16, that page only); UpdateStageModal keeps ดีล.
+  noun = 'ดีล',
 }) {
   const uid = useId();
   const panelId = `${uid}-panel`;
@@ -38,7 +40,7 @@ export function EntryChannelFix({
   // the order the rep would clear them.
   let hint = null;
   if (picked == null) hint = 'เลือกช่องทางที่ถูกต้องก่อน จึงจะบันทึกได้';
-  else if (reasonMissing) hint = 'ต้องระบุเหตุผลก่อนบันทึก — ดีลนี้ระบุช่องทางไว้แล้ว การแก้ไขต้องมีเหตุผลประกอบ';
+  else if (reasonMissing) hint = `ต้องระบุเหตุผลก่อนบันทึก — ${noun}นี้ระบุช่องทางไว้แล้ว การแก้ไขต้องมีเหตุผลประกอบ`;
   else if (disabled) hint = 'กำลังดำเนินการอื่นอยู่ — รอสักครู่แล้วบันทึกอีกครั้ง';
   const canSave = hint == null;
 
@@ -65,7 +67,7 @@ export function EntryChannelFix({
         data-testid="entry-channel-fix-toggle"
       >
         <span>
-          แก้ช่องทางดีล
+          {`แก้ช่องทาง${noun}`}
           {context ? <span className="sr-only">{` เพื่อไปขั้น ${context}`}</span> : null}
         </span>
         <span
@@ -122,14 +124,14 @@ export function EntryChannelFix({
                 data-testid="entry-channel-fix-reason"
                 value={reason}
                 disabled={disabled}
-                placeholder="เช่น มีผู้ออกแบบเข้ามาร่วมดีลจริง"
+                placeholder={`เช่น มีผู้ออกแบบเข้ามาร่วม${noun}จริง`}
                 onChange={(event) => setReason(event.target.value)}
               />
             </label>
           ) : null}
 
           <p className="m-0 text-2xs leading-snug text-text-muted">
-            การแก้ไขนี้เปลี่ยนเส้นทางของดีลทันที และบันทึกไว้ในประวัติดีล
+            {`การแก้ไขนี้เปลี่ยนเส้นทางของ${noun}ทันที และบันทึกไว้ในประวัติ${noun}`}
           </p>
 
           {hint ? (

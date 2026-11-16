@@ -80,13 +80,16 @@ const settled = async () => {
 
 beforeEach(() => { vi.clearAllMocks(); });
 
-describe('DealPaymentSection — one panel, no วางบิล', () => {
-  it('is a single "การชำระเงิน" panel with the three steps and the timeline, and no สถานะการเงิน or วางบิล text', async () => {
+// Deal page redesign (drawing a-deal-money, 2026-11-16): the one "การชำระเงิน" panel became three KPI tiles, then
+// รับแล้ว (the timeline) beside เอกสาร (the three steps) — same steps, same rows.
+describe('DealPaymentSection — KPI tiles, รับแล้ว beside เอกสาร, no วางบิล', () => {
+  it('is three KPI tiles plus the รับแล้ว timeline and the เอกสาร steps, and no สถานะการเงิน or วางบิล text', async () => {
     const { container } = renderSection();
     await settled();
-    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['การชำระเงิน']);
-    expect(screen.getByRole('heading', { level: 3, name: 'เอกสารและการรับชำระ' })).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 3, name: 'ไทม์ไลน์การชำระเงิน' })).toBeTruthy();
+    expect(screen.queryAllByRole('heading', { level: 2 })).toHaveLength(0);
+    expect(within(screen.getByTestId('money-kpis')).getAllByTestId('money-kpi')).toHaveLength(3);
+    expect(within(screen.getByTestId('money-documents')).getByRole('heading', { level: 3, name: 'เอกสาร' })).toBeTruthy();
+    expect(within(screen.getByTestId('money-received')).getByRole('heading', { level: 3, name: 'รับแล้ว' })).toBeTruthy();
     expect(['payment-step-deposit', 'payment-step-remaining', 'payment-step-final'].every((id) => screen.getByTestId(id))).toBe(true);
     expect(screen.getByText('ใบแจ้งยอดเงินรับมัดจำ')).toBeTruthy();
     expect(container.textContent).not.toMatch(/สถานะการเงิน|วางบิล|ครบกำหนดชำระ|ติดตามครั้งถัดไป|ใบวางบิล/);
@@ -95,8 +98,10 @@ describe('DealPaymentSection — one panel, no วางบิล', () => {
   it('shows the stage and overdue badges only when they apply', async () => {
     const first = renderSection({ summary: summaryOf({ paymentStage: 'PARTIALLY_PAID', overdue: true }) });
     await settled();
-    expect(screen.getByText('ชำระบางส่วน')).toBeTruthy();
-    expect(screen.getByText('เกินกำหนด')).toBeTruthy();
+    // The stage also names the มูลค่างาน tile now, so the badge is read inside เอกสาร.
+    const documents = screen.getByTestId('money-documents');
+    expect(within(documents).getByText('ชำระบางส่วน')).toBeTruthy();
+    expect(within(documents).getByText('เกินกำหนด')).toBeTruthy();
     first.unmount();
     renderSection({ summary: summaryOf({ overdue: false }) });
     await settled();
@@ -104,13 +109,17 @@ describe('DealPaymentSection — one panel, no วางบิล', () => {
   });
 });
 
-describe('DealPaymentSection — balance strip and progress bar', () => {
+describe('DealPaymentSection — KPI tiles and progress bar', () => {
+  // The three figures were the balance strip's ยอดที่ต้องชำระ / ชำระแล้ว / คงเหลือ; they are the drawn tiles
+  // มูลค่างาน / รับแล้ว / คงค้าง now, still the server's amountPayable / amountPaid / amountOutstanding.
+  const tile = (label) => within(screen.getByTestId('money-kpis')).getByText(label).closest('[data-testid="money-kpi"]');
+
   it('keeps the three figures and fills the bar with amountPaid / amountPayable', async () => {
     renderSection({ summary: summaryOf({ amountPayable: 1000, amountPaid: 400, amountOutstanding: 600 }) });
     await settled();
-    expect(within(screen.getByText('ยอดที่ต้องชำระ').parentElement).getByText('฿1,000.00')).toBeTruthy();
-    expect(within(screen.getByText('ชำระแล้ว', { selector: 'span' }).parentElement).getByText('฿400.00')).toBeTruthy();
-    expect(within(screen.getByText('คงเหลือ').parentElement).getByText('฿600.00')).toBeTruthy();
+    expect(within(tile('มูลค่างาน')).getByText('฿1,000.00')).toBeTruthy();
+    expect(within(tile('รับแล้ว')).getByText('฿400.00')).toBeTruthy();
+    expect(within(tile('คงค้าง')).getByText('฿600.00')).toBeTruthy();
     const bar = screen.getByRole('progressbar');
     expect(bar.getAttribute('aria-valuenow')).toBe('40');
     expect(bar.getAttribute('aria-label')).toBe('ชำระแล้ว 40%');
@@ -129,14 +138,15 @@ describe('DealPaymentSection — balance strip and progress bar', () => {
     expect(screen.getByText(`ชำระแล้ว ${expected}%`)).toBeTruthy();
   });
 
-  it('คงเหลือ is red only while above 0', async () => {
+  it('คงค้าง is red only while above 0', async () => {
     const first = renderSection({ summary: summaryOf({ amountOutstanding: 600 }) });
     await settled();
-    expect(screen.getByText('฿600.00', { selector: 'strong' }).className).toContain('text-danger');
+    expect(tile('คงค้าง').querySelector('strong').textContent).toBe('฿600.00');
+    expect(tile('คงค้าง').querySelector('strong').className).toContain('text-danger');
     first.unmount();
     renderSection({ summary: summaryOf({ amountPayable: 1000, amountPaid: 1000, amountOutstanding: 0 }) });
     await settled();
-    expect(screen.getByText('คงเหลือ').parentElement.querySelector('strong').className).not.toContain('text-danger');
+    expect(tile('คงค้าง').querySelector('strong').className).not.toContain('text-danger');
   });
 });
 
@@ -444,7 +454,8 @@ describe('DealPaymentSection — step 3 รับชำระครบ, and the 
 
 describe('DealPaymentSection — the timeline (moved here unchanged)', () => {
   const summary = summaryOf({ paymentStage: 'PARTIALLY_PAID', paymentStatus: 'DEPOSIT_PAID' });
-  const timelineItems = () => within(screen.getByRole('heading', { level: 3, name: 'ไทม์ไลน์การชำระเงิน' }).parentElement)
+  // The timeline is the รับแล้ว card now (was the "ไทม์ไลน์การชำระเงิน" block).
+  const timelineItems = () => within(screen.getByTestId('money-received'))
     .queryAllByRole('listitem').map((li) => li.textContent);
 
   it('merges money-track events and receipts, newest first, and drops non-payment events', async () => {

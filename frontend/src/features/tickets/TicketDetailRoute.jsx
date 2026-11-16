@@ -22,6 +22,10 @@ export function TicketDetailRoute({ user, showToast }) {
   }
   return (
     <TicketDetailPage
+      // Keyed by the deal: moving from one deal to another mounts a fresh page, so NO per-deal client state (an
+      // unsaved item edit, the open tab's panels, dialogs and their drafts, the timeline filter) can cross from deal A
+      // to deal B — or come back half-restored on A.
+      key={id}
       user={user}
       ticketId={id}
       // navigate(-1) (not a fixed '/tickets') so the list's status filter and search text — now carried in the URL
