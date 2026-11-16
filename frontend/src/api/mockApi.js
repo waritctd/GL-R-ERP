@@ -8251,7 +8251,7 @@ function buildFinanceDeal(raw, user) {
   return deal;
 }
 
-const mockAnalyticsSnapshot = { payload: SNAPSHOT_WITH_NOW, asOf: SNAPSHOT_WITH_NOW.as_of ?? null, uploadedAt: '2026-04-02T03:00:00Z' };
+const mockAnalyticsSnapshot = { payload: SNAPSHOT_WITH_NOW, asOf: '2026-03-31', uploadedAt: '2026-04-02T03:00:00Z' };
 
 // ── salesBoard read model (mirrors SalesBoardRepository) ──
 const MOCK_BOARD_LIVE_STATUSES = new Set(['APPROVED', 'ISSUED', 'SENT', 'ACCEPTED']);

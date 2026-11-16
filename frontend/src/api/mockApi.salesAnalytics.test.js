@@ -10,7 +10,7 @@ describe('mockApi.salesAnalytics', () => {
       await api.auth.login({ role });
       const { snapshot } = await api.salesAnalytics.snapshot();
       expect(isUsable(snapshot?.payload)).toBe(true);
-      expect(snapshot.asOf).toBe(snapshot.payload.as_of ?? null);
+      expect(snapshot.asOf).toBe('2026-03-31');
       expect(Number.isNaN(Date.parse(snapshot.uploadedAt))).toBe(false);
     }
   });

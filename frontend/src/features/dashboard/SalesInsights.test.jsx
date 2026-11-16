@@ -545,10 +545,11 @@ describe('SalesInsights', () => {
       await screen.findByTestId('insight-month-detail');
       expect(api.salesAnalytics.snapshot).toHaveBeenCalledTimes(1);
 
+      vi.setSystemTime(Date.now() + 9 * 60_000);
       await act(async () => { focusManager.setFocused(false); focusManager.setFocused(true); });
       expect(api.salesAnalytics.snapshot).toHaveBeenCalledTimes(1);
 
-      vi.setSystemTime(Date.now() + 11 * 60_000);
+      vi.setSystemTime(Date.now() + 2 * 60_000);
       await act(async () => { focusManager.setFocused(false); focusManager.setFocused(true); });
       await waitFor(() => expect(api.salesAnalytics.snapshot).toHaveBeenCalledTimes(2));
     });
