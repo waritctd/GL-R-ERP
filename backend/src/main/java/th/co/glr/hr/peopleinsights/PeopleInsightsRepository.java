@@ -3,6 +3,8 @@ package th.co.glr.hr.peopleinsights;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
 import java.time.YearMonth;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
@@ -11,7 +13,6 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.TreeSet;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -99,13 +100,15 @@ public class PeopleInsightsRepository {
         return out;
     }
 
-    /** Years with any approved leave or attendance for anyone, ascending. */
-    public List<Integer> activeYears() {
-        return new ArrayList<>(new TreeSet<>(jdbc.queryForList("""
-            SELECT EXTRACT(YEAR FROM start_date)::int FROM hr.leave_request WHERE status = 'APPROVED'
-            UNION SELECT EXTRACT(YEAR FROM end_date)::int FROM hr.leave_request WHERE status = 'APPROVED'
-            UNION SELECT EXTRACT(YEAR FROM work_date)::int FROM hr.attendance_daily
-            """, Map.of(), Integer.class)));
+    /** First and last year with attendance or APPROVED leave; null when there is none. Only the bounds are read, never every year. */
+    public record YearBounds(int first, int last) {}
+
+    public YearBounds dataYearBounds() {
+        return jdbc.queryForObject("""
+            SELECT EXTRACT(YEAR FROM LEAST(a.lo, l.lo))::int AS first, EXTRACT(YEAR FROM GREATEST(a.hi, l.hi))::int AS last
+              FROM (SELECT MIN(work_date) AS lo, MAX(work_date) AS hi FROM hr.attendance_daily) a,
+                   (SELECT MIN(start_date) AS lo, MAX(end_date) AS hi FROM hr.leave_request WHERE status = 'APPROVED') l
+            """, Map.of(), (rs, i) -> rs.getObject("first") == null ? null : new YearBounds(rs.getInt("first"), rs.getInt("last")));
     }
 
     public List<Person> people(Collection<Long> ids) {
@@ -169,28 +172,25 @@ public class PeopleInsightsRepository {
             .toList();
     }
 
-    /** Splits amount over the months [start, end] touches inside the year by calendar-day share; the last in-year month takes the rounding remainder so the parts sum to the in-year share. */
+    /**
+     * Splits amount ONCE over every month [start, end] touches, in any year, by calendar-day share, then keeps only the
+     * year's months. Rounding is cumulative (each month takes round2(amount * daysSoFar / span) minus what earlier months
+     * took), so parts are never negative, always sum to the amount, and do not depend on which year was asked for.
+     */
     static Map<YearMonth, BigDecimal> apportion(LocalDate start, LocalDate end, BigDecimal amount, int year) {
-        LocalDate from = start.isBefore(LocalDate.of(year, 1, 1)) ? LocalDate.of(year, 1, 1) : start;
-        LocalDate to = end.isAfter(LocalDate.of(year, 12, 31)) ? LocalDate.of(year, 12, 31) : end;
         long span = ChronoUnit.DAYS.between(start, end) + 1;
-        long inYear = ChronoUnit.DAYS.between(from, to) + 1;
-        BigDecimal share = inYear == span ? amount : share(amount, inYear, span);
         Map<YearMonth, BigDecimal> out = new LinkedHashMap<>();
-        BigDecimal given = BigDecimal.ZERO;
-        for (YearMonth m = YearMonth.from(from); !m.isAfter(YearMonth.from(to)); m = m.plusMonths(1)) {
-            LocalDate a = m.atDay(1).isBefore(from) ? from : m.atDay(1);
-            LocalDate b = m.atEndOfMonth().isAfter(to) ? to : m.atEndOfMonth();
-            boolean last = m.equals(YearMonth.from(to));
-            BigDecimal part = last ? share.subtract(given) : share(amount, ChronoUnit.DAYS.between(a, b) + 1, span);
-            out.put(m, part);
-            given = given.add(part);
+        BigDecimal taken = BigDecimal.ZERO;
+        long days = 0;
+        for (YearMonth m = YearMonth.from(start); !m.isAfter(YearMonth.from(end)); m = m.plusMonths(1)) {
+            LocalDate a = m.atDay(1).isBefore(start) ? start : m.atDay(1);
+            LocalDate b = m.atEndOfMonth().isAfter(end) ? end : m.atEndOfMonth();
+            days += ChronoUnit.DAYS.between(a, b) + 1;
+            BigDecimal cumulative = amount.multiply(BigDecimal.valueOf(days)).divide(BigDecimal.valueOf(span), 2, RoundingMode.HALF_UP);
+            if (m.getYear() == year) out.put(m, cumulative.subtract(taken));
+            taken = cumulative;
         }
         return out;
-    }
-
-    private static BigDecimal share(BigDecimal amount, long days, long span) {
-        return amount.multiply(BigDecimal.valueOf(days)).divide(BigDecimal.valueOf(span), 2, RoundingMode.HALF_UP);
     }
 
     public List<QuotaUsage> quotaUsage(Collection<Long> ids, int year) {
@@ -207,7 +207,7 @@ public class PeopleInsightsRepository {
 
     public List<AttendanceRow> attendance(Collection<Long> ids, int year) {
         if (ids.isEmpty()) return List.of();
-        // A day inside approved leave is never late or an early leave, whatever the schedule says (the minutes are computed from the schedule alone).
+        // Late and early-leave figures skip every day an approved leave covers: PeopleInsightsService adds those days back through LeaveDayRule (leaveDays).
         return jdbc.query("""
             SELECT employee_id, to_char(work_date, 'YYYY-MM') AS month,
                    COUNT(*) FILTER (WHERE check_in IS NOT NULL) AS scan_days,
@@ -229,6 +229,32 @@ public class PeopleInsightsRepository {
                 rs.getObject("avg_in") == null ? null : rs.getDouble("avg_in")));
     }
 
+    /** One row per (attendance day, APPROVED leave covering it) where the day has stored late or early-leave minutes; the day rule turns these into the real figures. */
+    public record LeaveDayRow(long employeeId, LocalDate workDate, OffsetDateTime checkIn, OffsetDateTime checkOut, int lateMinutes,
+                              int earlyLeaveMinutes, Long divisionId, Long departmentId, LocalDate leaveStart, LocalDate leaveEnd,
+                              LocalTime startTime, LocalTime endTime) {}
+
+    public List<LeaveDayRow> leaveDays(Collection<Long> ids, int year) {
+        if (ids.isEmpty()) return List.of();
+        return jdbc.query("""
+            SELECT d.employee_id, d.work_date, d.check_in, d.check_out, d.late_minutes, d.early_leave_minutes,
+                   e.division_id, e.department_id, r.start_date, r.end_date, r.start_time, r.end_time
+              FROM hr.attendance_daily d
+              JOIN hr.employee e ON e.employee_id = d.employee_id
+              JOIN hr.leave_request r ON r.employee_id = d.employee_id AND r.status = 'APPROVED'
+                                     AND d.work_date BETWEEN r.start_date AND r.end_date
+             WHERE d.employee_id IN (:ids) AND d.work_date >= :from AND d.work_date < :to
+               AND (d.late_minutes > 0 OR d.early_leave_minutes > 0)
+             ORDER BY d.employee_id, d.work_date
+            """, range(ids, year),
+            (rs, i) -> new LeaveDayRow(rs.getLong("employee_id"), rs.getObject("work_date", LocalDate.class),
+                rs.getObject("check_in", OffsetDateTime.class), rs.getObject("check_out", OffsetDateTime.class),
+                rs.getInt("late_minutes"), rs.getInt("early_leave_minutes"),
+                nullableId(rs.getObject("division_id")), nullableId(rs.getObject("department_id")),
+                rs.getObject("start_date", LocalDate.class), rs.getObject("end_date", LocalDate.class),
+                rs.getObject("start_time", LocalTime.class), rs.getObject("end_time", LocalTime.class)));
+    }
+
     public List<LeaveType> leaveTypes(Collection<String> codes) {
         if (codes.isEmpty()) return List.of();
         return jdbc.query("SELECT leave_type_code, name_th, annual_quota_days FROM hr.leave_type WHERE leave_type_code IN (:codes) ORDER BY leave_type_code",
@@ -239,6 +265,10 @@ public class PeopleInsightsRepository {
     /** The latest day any attendance was calculated, or null when there is none. */
     public LocalDate latestAttendanceDate() {
         return jdbc.queryForObject("SELECT MAX(work_date) FROM hr.attendance_daily", Map.of(), LocalDate.class);
+    }
+
+    private static Long nullableId(Object id) {
+        return id == null ? null : ((Number) id).longValue();
     }
 
     private static MapSqlParameterSource range(Collection<Long> ids, int year) {

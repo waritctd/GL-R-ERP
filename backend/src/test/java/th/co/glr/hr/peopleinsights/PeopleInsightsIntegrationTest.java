@@ -33,6 +33,11 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final String URL = "/api/people-insights";
     private static final ObjectMapper JSON = new ObjectMapper();
 
+    /** 08:30-17:30, grace 15 for everyone (the same schedule the day rule's table uses). */
+    private static final th.co.glr.hr.attendance.schedule.WorkScheduleResolver FIXED_SCHEDULE = (employee, division, department, date) ->
+        new th.co.glr.hr.attendance.schedule.WorkSchedule(ZoneId.of("Asia/Bangkok"), java.time.LocalTime.of(8, 30), java.time.LocalTime.of(17, 30), 15,
+            Set.of(java.time.DayOfWeek.values()));
+
     private MockMvc mvc;
     private final java.util.Map<String, Long> id = new java.util.HashMap<>();
     private long alphaTeam;
@@ -41,7 +46,7 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
     @BeforeEach
     void wire() {
         mvc = MockMvcBuilders.standaloneSetup(
-                new PeopleInsightsController(new PeopleInsightsService(new PeopleInsightsRepository(jdbc)), new SessionContext()))
+                new PeopleInsightsController(new PeopleInsightsService(new PeopleInsightsRepository(jdbc), FIXED_SCHEDULE), new SessionContext()))
             .setControllerAdvice(new ApiExceptionHandler())
             .build();
         id.put("ceo", emp("T-CEO", "ซีอี", null, true));
@@ -300,6 +305,34 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(num(march, "morningScanDays")).isEqualTo(3); // 5, 6 and 9 Mar; the 13:00 scans are afternoon
     }
 
+    // D1 wiring ──────────────────────────────────────────────────────────────────────────────────────────────────
+    @Test
+    void partialLeaveOnlyExcusesTheMinutesItCoversAndALeaveThatIsNotApprovedExcusesNothing() throws Exception {
+        long e = id.get("a1y");
+        // Row k: a timed leave Mon 13:30 -> Wed 12:30. Tuesday is wholly covered; Wednesday is covered until 12:30 (+ the break).
+        long span = leaveSpan(e, "VACATION", "2026-03-09", "2026-03-11", 2, "APPROVED", 2, 0, e, "2026-03-01T10:00:00+07:00", null);
+        timed(span, "13:30", "12:30");
+        day(e, "2026-03-10", "2026-03-10T10:00:00+07:00", "2026-03-10T17:30:00+07:00", 90, 0);
+        day(e, "2026-03-11", "2026-03-11T13:25:00+07:00", "2026-03-11T17:30:00+07:00", 295, 0);
+        // Row j: the same morning leave, REJECTED: still late for all of it.
+        long rejected = leaveSpan(e, "PERSONAL", "2026-03-16", "2026-03-16", 0.5, "REJECTED", 0, 0, e, "2026-03-15T10:00:00+07:00", null);
+        timed(rejected, "08:30", "12:30");
+        day(e, "2026-03-16", "2026-03-16T13:00:00+07:00", "2026-03-16T17:30:00+07:00", 270, 0);
+        // Row d: approved morning leave, arrives an hour after the break: late only by that hour.
+        timed(leaveSpan(e, "PERSONAL", "2026-03-17", "2026-03-17", 0.5, "APPROVED", 0.5, 0, e, "2026-03-15T10:00:00+07:00", null), "08:30", "12:30");
+        day(e, "2026-03-17", "2026-03-17T14:30:00+07:00", "2026-03-17T17:30:00+07:00", 360, 0);
+        // Row i: approved afternoon leave, but left before it began: still an early leave.
+        timed(leaveSpan(e, "PERSONAL", "2026-03-18", "2026-03-18", 0.5, "APPROVED", 0.5, 0, e, "2026-03-15T10:00:00+07:00", null), "13:30", "17:30");
+        day(e, "2026-03-18", "2026-03-18T08:30:00+07:00", "2026-03-18T11:30:00+07:00", 0, 360);
+
+        Map<String, Object> march = list(call("ceo", "all", 2026), "attendance").stream()
+            .filter(r -> num(r, "employeeId") == e && "2026-03".equals(r.get("month"))).findFirst().orElseThrow();
+        assertThat(num(march, "scanDays")).isEqualTo(5);
+        assertThat(num(march, "lateDays")).isEqualTo(2);      // 16 Mar (270) and 17 Mar (60)
+        assertThat(num(march, "lateMinutes")).isEqualTo(330);
+        assertThat(num(march, "earlyLeave")).isEqualTo(1);    // 18 Mar
+    }
+
     // fix 2 ──────────────────────────────────────────────────────────────────────────────────────────────────────
     @Test
     void peopleWhoLeftDuringTheYearStayInThatYearsFiguresAndAreMarkedInactive() throws Exception {
@@ -368,15 +401,24 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // fix 4 ──────────────────────────────────────────────────────────────────────────────────────────────────────
     @Test
-    void yearsListsEveryYearWithApprovedLeaveOrAttendanceAndAlwaysTheCurrentYear() throws Exception {
+    void yearsRunFromTheEarliestDataYearAtLeast2024UpToNextYearAndStrayRowsDoNotWidenThem() throws Exception {
         long e = id.get("a1y");
-        leave(e, "SICK", "2024-05-06", 1, "APPROVED", 1, 0, e, "2024-05-06T10:00:00+07:00", null);
-        leave(e, "SICK", "2022-05-06", 1, "REJECTED", 0, 0, e, "2022-05-06T10:00:00+07:00", null); // not approved: no year
-        day(e, "2025-03-03", "2025-03-03T08:00:00+07:00", "2025-03-03T17:00:00+07:00", 0, 0);
         int current = LocalDate.now(ZoneId.of("Asia/Bangkok")).getYear();
+        leave(e, "SICK", "2025-05-06", 1, "APPROVED", 1, 0, e, "2025-05-06T10:00:00+07:00", null);
+        leave(e, "SICK", "2022-05-06", 1, "REJECTED", 0, 0, e, "2022-05-06T10:00:00+07:00", null); // not approved: no year
+        assertThat(yearsOf(call("ceo", "all", 2026))).containsExactlyElementsOf(new java.util.TreeSet<>(List.of(2025, current))); // only approved data counts; the current year is always there
 
-        List<Integer> years = ((List<?>) call("ceo", "all", 2026).get("years")).stream().map(o -> ((Number) o).intValue()).toList();
-        assertThat(years).contains(2024, 2025, current).doesNotContain(2022).isSorted().doesNotHaveDuplicates();
+        day(e, "2000-01-03", "2000-01-03T08:00:00+07:00", "2000-01-03T17:00:00+07:00", 0, 0);   // stray attendance far in the past
+        leave(e, "SICK", "2099-01-05", 1, "APPROVED", 1, 0, e, "2099-01-05T10:00:00+07:00", null); // stray leave far in the future
+        List<Integer> years = yearsOf(call("ceo", "all", 2026));
+        assertThat(years).doesNotContain(2000, 2099).isSorted().doesNotHaveDuplicates();
+        assertThat(years.get(0)).isEqualTo(2024);
+        assertThat(years.get(years.size() - 1)).isEqualTo(current + 1);
+        assertThat(years).contains(current);
+    }
+
+    private static List<Integer> yearsOf(Map<String, Object> body) {
+        return ((List<?>) body.get("years")).stream().map(o -> ((Number) o).intValue()).toList();
     }
 
     // fix 7 ──────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -487,6 +529,12 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
                 .addValue("end", end).addValue("days", days).addValue("status", status).addValue("paid", status.equals("APPROVED") ? paid : 0)
                 .addValue("unpaid", status.equals("APPROVED") ? unpaid : 0).addValue("by", requestedBy)
                 .addValue("at", requestedAt).addValue("note", systemNote), Long.class);
+    }
+
+    /** Makes an inserted request a timed one: start_time belongs to start_date, end_time to end_date. */
+    private void timed(long leaveRequestId, String startTime, String endTime) {
+        jdbc.update("UPDATE hr.leave_request SET start_time = CAST(:s AS time), end_time = CAST(:e AS time) WHERE leave_request_id = :id",
+            Map.of("s", startTime, "e", endTime, "id", leaveRequestId));
     }
 
     private void quotaYear(long leaveRequestId, int year, double days) {
