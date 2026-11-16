@@ -4145,7 +4145,8 @@ const mockFeedback = [
 ];
 
 const MOCK_FEEDBACK_STEPS = { ACCEPTED: 'รับเรื่อง', IN_PROGRESS: 'กำลังทำ', TESTING: 'ทดสอบ', RELEASED: 'ใช้งานได้แล้ว' };
-const MOCK_FEEDBACK_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+const MOCK_FEEDBACK_MONTHS = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม',
+  'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
 function mockFeedbackDate(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   return `${d} ${MOCK_FEEDBACK_MONTHS[m - 1]} ${y + 543}`;
@@ -13044,6 +13045,10 @@ export const api = {
       if (extra && [...extra].length > 4000) fail('ข้อความเพิ่มเติมยาวเกินไป');
       const impact = payload.impact || null;
       if (impact && !MOCK_FEEDBACK_IMPACTS[payload.kind].includes(impact)) fail('ระดับผลกระทบไม่ถูกต้อง');
+      const hourAgo = Date.now() - 60 * 60 * 1000;
+      if (mockFeedback.filter((f) => f.reporterEmployeeId === user.id && Date.parse(f.createdAt) > hourAgo).length >= 10) {
+        fail('ส่งได้ไม่เกิน 10 เรื่องต่อชั่วโมง ลองใหม่ภายหลัง', 429);
+      }
       const now = new Date().toISOString();
       const saved = {
         id: Math.max(...mockFeedback.map((f) => f.id), 0) + 1, kind: payload.kind, area: payload.area, details, extra,

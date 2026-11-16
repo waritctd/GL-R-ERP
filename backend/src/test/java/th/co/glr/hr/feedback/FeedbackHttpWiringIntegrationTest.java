@@ -19,6 +19,7 @@ import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.SessionContext;
+import th.co.glr.hr.auth.ViewAsReadOnlyFilter;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.common.ApiExceptionHandler;
@@ -46,6 +47,7 @@ class FeedbackHttpWiringIntegrationTest extends AbstractPostgresIntegrationTest 
             new EmployeeAuthRepository(jdbc),
             new NotificationService(new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP), email)));
         mvc = MockMvcBuilders.standaloneSetup(new FeedbackController(service, new SessionContext()))
+            .addFilters(new ViewAsReadOnlyFilter())
             .setControllerAdvice(new ApiExceptionHandler()).build();
         long sales = division("SA", "ฝ่ายขาย");
         long exec = division("MD", "ผู้บริหาร");
@@ -120,6 +122,32 @@ class FeedbackHttpWiringIntegrationTest extends AbstractPostgresIntegrationTest 
             .andExpect(status().isOk()).andReturn().getResponse().getContentAsString());
         assertThat(updated.get("status").asText()).isEqualTo("TESTING");
         assertThat(updated.get("eta").asText()).isEqualTo("2026-12-05");
+    }
+
+    @Test
+    void aViewAsSessionCanNotSubmitDecideOrUpdate_andNothingIsWritten() throws Exception {
+        long id = submitAs(rep, "sales");
+        // The owner (admin) is "viewing as" the rep: the effective user is the target, the filter sees VIEW_AS_USER_KEY.
+        MockHttpSession viewing = session(admin, "employee");
+        viewing.setAttribute(SessionContext.VIEW_AS_USER_KEY, new UserPrincipal(rep, "r@glr.co.th", "ผู้ทดสอบ",
+            "sales", rep, true, LocalDate.of(2026, 1, 1), false, null, false));
+
+        mvc.perform(post("/api/feedback").session(viewing).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"kind\":\"BUG\",\"area\":\"LEAVE\",\"details\":\"รายละเอียดที่ยาวพอสมควร\"}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(post("/api/feedback/" + id + "/decision").session(viewing).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"decision\":\"ACCEPT\",\"eta\":\"2026-12-05\"}"))
+            .andExpect(status().isForbidden());
+        mvc.perform(patch("/api/feedback/" + id).session(viewing).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"status\":\"RELEASED\"}"))
+            .andExpect(status().isForbidden());
+
+        assertThat(jdbc.getJdbcTemplate().queryForObject("SELECT COUNT(*) FROM hr.feedback_request", Integer.class))
+            .isEqualTo(1);
+        assertThat(jdbc.getJdbcTemplate().queryForObject(
+            "SELECT status FROM hr.feedback_request WHERE feedback_id = " + id, String.class)).isEqualTo("PENDING");
+        // Reads still work while viewing.
+        mvc.perform(get("/api/feedback/mine").session(viewing)).andExpect(status().isOk());
     }
 
     private long submitAs(long employeeId, String role) throws Exception {

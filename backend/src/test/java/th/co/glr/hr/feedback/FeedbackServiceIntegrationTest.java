@@ -146,14 +146,47 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void telemetryTruncationNeverSplitsASurrogatePair() {
-        // 299 ASCII + one emoji straddles the 300-unit boundary; the emoji must go, not be cut in half.
-        String path = "a".repeat(299) + "😀";
+        // The emoji sits at UTF-16 units 299-300, so a plain substring(0, 300) would keep only its high half.
+        String path = "a".repeat(299) + "😀" + "b".repeat(5);
+
         FeedbackDto saved = service.submit(principal(rep, "sales"), new SubmitRequest("BUG", "QUOTATIONS", DETAILS,
             null, null, path, "Chrome", "390x844"));
-        assertThat(saved.pagePath()).isEqualTo(path); // 300 code points fit exactly: kept whole
-        FeedbackDto longer = service.submit(principal(rep, "sales"), new SubmitRequest("BUG", "QUOTATIONS", DETAILS,
-            null, null, "a".repeat(300) + "😀", "Chrome", "390x844"));
-        assertThat(longer.pagePath()).isEqualTo("a".repeat(300));
+
+        assertThat(saved.pagePath().codePointCount(0, saved.pagePath().length())).isEqualTo(300);
+        assertThat(saved.pagePath()).isEqualTo("a".repeat(299) + "😀");
+        assertThat(Character.isHighSurrogate(saved.pagePath().charAt(saved.pagePath().length() - 1))).isFalse();
+    }
+
+    @Test
+    void aReporterMaySubmitTenPerHour_theEleventhIs429_noRowNoNotification() {
+        for (int i = 0; i < 10; i++) {
+            pending();
+        }
+        long adminBells = feedbackBells(admin).size();
+        clearInvocations(mailer);
+
+        assertThatThrownBy(this::pending)
+            .isInstanceOf(ApiException.class)
+            .hasFieldOrPropertyWithValue("status", HttpStatus.TOO_MANY_REQUESTS)
+            .hasMessageContaining("10");
+
+        assertThat(rowCount()).isEqualTo(10);
+        assertThat(feedbackBells(admin)).hasSize((int) adminBells);
+        verifyNoInteractions(mailer);
+        // Another reporter has their own allowance.
+        service.submit(principal(otherRep, "account"), submit("BUG", "LEAVE", DETAILS, null, null));
+        assertThat(rowCount()).isEqualTo(11);
+    }
+
+    @Test
+    void submissionsOlderThanAnHourNoLongerCount() {
+        for (int i = 0; i < 10; i++) {
+            pending();
+        }
+        jdbc.update("UPDATE hr.feedback_request SET created_at = now() - interval '61 minutes'", Map.of());
+
+        assertThat(pending()).isPositive();
+        assertThat(rowCount()).isEqualTo(11);
     }
 
     @Test
@@ -293,7 +326,7 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(bells.get(0).type()).isEqualTo("FEEDBACK_DECIDED");
         assertThat(bells.get(0).link()).isEqualTo(LINK);
         // Thai Buddhist-era date, never ISO.
-        assertThat(bells.get(0).message()).contains("5 ธ.ค. 2569").doesNotContain("2026-12-05");
+        assertThat(bells.get(0).message()).contains("5 ธันวาคม 2569").doesNotContain("2026-12-05");
         // Bell only: the reporter is not emailed about a decision.
         verifyNoInteractions(mailer);
         assertThat(feedbackBells(otherRep)).isEmpty();
@@ -388,7 +421,7 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
 
         assertThat(bellCount(rep)).isEqualTo(before + 5);
         // Thai step labels and a พ.ศ. date, never raw codes. Newest first: the last change was RELEASED.
-        assertThat(feedbackBells(rep).get(0).message()).contains("ใช้งานได้แล้ว").contains("5 ธ.ค. 2569")
+        assertThat(feedbackBells(rep).get(0).message()).contains("ใช้งานได้แล้ว").contains("5 ธันวาคม 2569")
             .doesNotContain("RELEASED").doesNotContain("2026-12-05");
         assertThat(feedbackBells(rep).get(1).message()).contains("ความคืบหน้า: รับเรื่อง").doesNotContain("ACCEPTED");
         assertThat(feedbackBells(rep).get(4).message()).contains("ความคืบหน้า: ทดสอบ").doesNotContain("TESTING");

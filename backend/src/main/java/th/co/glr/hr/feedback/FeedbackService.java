@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 import th.co.glr.hr.auth.EmployeeAuthRepository;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.common.ThaiText;
 import th.co.glr.hr.feedback.FeedbackDtos.DecisionRequest;
 import th.co.glr.hr.feedback.FeedbackDtos.FeedbackDto;
 import th.co.glr.hr.feedback.FeedbackDtos.SubmitRequest;
@@ -25,10 +26,9 @@ public class FeedbackService {
     private static final Set<String> BUG_IMPACTS = Set.of("BLOCKED", "WORKAROUND", "LOW");
     private static final Set<String> FEATURE_IMPACTS = Set.of("DAILY", "SOMETIMES", "NICE");
     private static final int MAX_TEXT = 4000;
+    private static final int MAX_PER_HOUR = 10;
     private static final Map<String, String> STEP_LABEL = Map.of("ACCEPTED", "รับเรื่อง", "IN_PROGRESS", "กำลังทำ",
         "TESTING", "ทดสอบ", "RELEASED", "ใช้งานได้แล้ว");
-    private static final String[] THAI_MONTHS = {"ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.",
-        "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."};
 
     private final FeedbackRepository repository;
     private final EmployeeAuthRepository employees;
@@ -63,6 +63,9 @@ public class FeedbackService {
         String impact = blankToNull(request.impact());
         if (impact != null && !("BUG".equals(request.kind()) ? BUG_IMPACTS : FEATURE_IMPACTS).contains(impact)) {
             throw bad("ระดับผลกระทบไม่ถูกต้อง");
+        }
+        if (repository.countLastHour(actor.id()) >= MAX_PER_HOUR) {
+            throw new ApiException(HttpStatus.TOO_MANY_REQUESTS, "ส่งได้ไม่เกิน 10 เรื่องต่อชั่วโมง ลองใหม่ภายหลัง");
         }
         SubmitRequest clean = new SubmitRequest(request.kind(), request.area(), details, extra, impact,
             cut(request.pagePath(), 300), cut(request.userAgent(), 300), cut(request.viewport(), 30));
@@ -108,7 +111,7 @@ public class FeedbackService {
         String ref = "#" + id;
         notifications.notify(before.reporterEmployeeId(), "FEEDBACK_DECIDED",
             accept ? "รับเรื่อง " + ref + " แล้ว" : "ไม่รับเรื่อง " + ref,
-            accept ? "กำหนดเสร็จ " + thaiDate(request.eta()) : "เหตุผล: " + reason, LINK, false);
+            accept ? "กำหนดเสร็จ " + ThaiText.date(request.eta()) : "เหตุผล: " + reason, LINK, false);
         return existing(id);
     }
 
@@ -134,7 +137,7 @@ public class FeedbackService {
         }
         FeedbackDto after = existing(id);
         notifications.notify(before.reporterEmployeeId(), "FEEDBACK_UPDATED", "อัปเดตเรื่อง #" + id,
-            "ความคืบหน้า: " + STEP_LABEL.get(after.status()) + " · กำหนดเสร็จ " + thaiDate(after.eta()), LINK, false);
+            "ความคืบหน้า: " + STEP_LABEL.get(after.status()) + " · กำหนดเสร็จ " + ThaiText.date(after.eta()), LINK, false);
         return after;
     }
 
@@ -171,9 +174,5 @@ public class FeedbackService {
             return value;
         }
         return value.substring(0, value.offsetByCodePoints(0, max));
-    }
-
-    private static String thaiDate(LocalDate date) {
-        return date.getDayOfMonth() + " " + THAI_MONTHS[date.getMonthValue() - 1] + " " + (date.getYear() + 543);
     }
 }

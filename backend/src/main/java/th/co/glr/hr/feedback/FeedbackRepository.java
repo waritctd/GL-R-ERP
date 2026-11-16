@@ -65,6 +65,14 @@ public class FeedbackRepository {
         return jdbc.query(SELECT + " ORDER BY created_at DESC, feedback_id DESC", Map.of(), MAPPER);
     }
 
+    /** Submissions by this reporter in the last hour (rate limit). */
+    public int countLastHour(long employeeId) {
+        return jdbc.queryForObject("""
+            SELECT COUNT(*) FROM hr.feedback_request
+             WHERE reporter_employee_id = :id AND created_at > now() - interval '60 minutes'
+            """, Map.of("id", employeeId), Integer.class);
+    }
+
     public String departmentOf(long employeeId) {
         return jdbc.query("""
             SELECT d.name_th FROM hr.employee e JOIN hr.division d ON d.division_id = e.division_id
