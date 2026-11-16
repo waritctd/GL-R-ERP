@@ -15,7 +15,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     ...actual,
     api: {
       salesBoard: { myWork: vi.fn() },
-      tickets: { addActivity: vi.fn(), markLost: vi.fn(), create: vi.fn() },
+      tickets: { addActivity: vi.fn(), markLost: vi.fn(), create: vi.fn(), resume: vi.fn() },
       meta: { dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG) },
     },
   };
@@ -84,13 +84,15 @@ describe('MyWork', () => {
     expect(api.salesBoard.myWork).toHaveBeenCalledTimes(2);
   });
 
-  it('ปิดดีลนี้ opens the mark-lost dialog, which still requires a reason', async () => {
+  // ปิดงานนี้ (was ปิดดีลนี้) now opens the rebuilt ปิดงาน · เสียงาน dialog (drawing m-lost); it used to assert the old
+  // 'ทำเครื่องหมายเสียงาน' title. The reason is still required.
+  it('ปิดงานนี้ opens the mark-lost dialog, which still requires a reason', async () => {
     renderMyWork();
     const row = await screen.findByTestId('follow-up-31');
 
-    fireEvent.click(within(row).getByRole('button', { name: 'ปิดดีลนี้' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'ปิดงานนี้' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByText('ทำเครื่องหมายเสียงาน')).toBeTruthy();
+    expect(within(dialog).getByText('ปิดงาน · เสียงาน')).toBeTruthy();
     const confirm = within(dialog).getByRole('button', { name: 'ยืนยันเสียงาน' });
     expect(confirm.disabled).toBe(true);
 
@@ -170,12 +172,25 @@ describe('MyWork — review fixes', () => {
     api.tickets.markLost.mockRejectedValue(new Error('ปิดดีลไม่ได้'));
     renderMyWork({ showToast });
     const row = await screen.findByTestId('follow-up-31');
-    fireEvent.click(within(row).getByRole('button', { name: 'ปิดดีลนี้' }));
+    fireEvent.click(within(row).getByRole('button', { name: 'ปิดงานนี้' }));
     const dialog = await screen.findByRole('dialog');
     fireEvent.click(within(dialog).getAllByRole('radio')[1]);
     fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยันเสียงาน' }));
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ปิดดีลไม่ได้'));
+  });
+
+  // Owner ruling 2026-11-16: a paused deal whose วันที่จะกลับมาดู has arrived is in ควรตามต่อ until resumed.
+  it('a returning paused deal can be resumed from ควรตามต่อ', async () => {
+    const back = { ...quiet, ticketId: 40, title: 'งานที่พักไว้', quiet: false, returning: true, pauseReturnOn: '2026-11-16' };
+    api.salesBoard.myWork.mockResolvedValue({ followUp: [back], board: [fresh], quietDays: 14 });
+    api.tickets.resume.mockResolvedValue({});
+    renderMyWork();
+
+    const row = await screen.findByTestId('follow-up-40');
+    fireEvent.click(within(row).getByRole('button', { name: 'ดำเนินการต่อ' }));
+
+    await waitFor(() => expect(api.tickets.resume).toHaveBeenCalledWith(40, {}));
   });
 
   it('a follow-up row says what was done last (ครั้งล่าสุด)', async () => {

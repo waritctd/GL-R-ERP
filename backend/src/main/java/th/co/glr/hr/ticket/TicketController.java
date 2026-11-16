@@ -243,20 +243,20 @@ public class TicketController {
 
     @PostMapping("/{id}/hold")
     TicketDetailResponse hold(@PathVariable long id,
-                              @RequestBody(required = false) NoteRequest request,
+                              @RequestBody(required = false) PauseRequest request,
                               HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return detail(user, 
-            ticketService.placeOnHold(id, request == null ? null : request.note(), user));
+        return detail(user, ticketService.placeOnHold(id, request == null ? null : request.note(),
+            request == null ? null : request.pauseReturnOn(), user));
     }
 
     @PostMapping("/{id}/dormant")
     TicketDetailResponse dormant(@PathVariable long id,
-                                 @RequestBody(required = false) NoteRequest request,
+                                 @RequestBody(required = false) PauseRequest request,
                                  HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return detail(user, 
-            ticketService.markDormant(id, request == null ? null : request.note(), user));
+        return detail(user, ticketService.markDormant(id, request == null ? null : request.note(),
+            request == null ? null : request.pauseReturnOn(), user));
     }
 
     @PostMapping("/{id}/resume")
@@ -337,6 +337,10 @@ public class TicketController {
     record ReopenRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
 
     record NoteRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
+
+    /** hold / dormant (the one พักงาน dialog, 2026-11-16): NoteRequest plus the optional วันที่จะกลับมาดู (V219). */
+    record PauseRequest(@jakarta.validation.constraints.Size(max = 2000) String note,
+                        java.time.LocalDate pauseReturnOn) {}
 
     record PolicyValueRequest(@jakarta.validation.constraints.NotBlank String value) {}
 

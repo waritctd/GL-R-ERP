@@ -58,6 +58,22 @@ public class QuietRule {
     }
 
     /**
+     * SQL boolean: the deal aliased {@code t} is a PAUSED deal coming back — {@code ON_HOLD} or {@code DORMANT} with a
+     * วันที่จะกลับมาดู ({@code pause_return_on}, V219) on or before today (Asia/Bangkok). Owner ruling 2026-11-16:
+     * such a deal shows in its owner's ควรตามต่อ and counts in the manager's quiet figures the way a quiet deal does,
+     * until the rep resumes it (which clears the date) or re-pauses it with a later one. A pause with no date never
+     * matches, exactly as before V219. Deliberately NOT part of {@link #quietSql}: the board, the deal summary's
+     * {@code stale} flag and every other quiet reader stay ACTIVE-only. Needs no bind parameter.
+     */
+    public static String returningSql(String t) {
+        return """
+            (%1$s.lifecycle IN ('%2$s', '%3$s')
+             AND %1$s.pause_return_on IS NOT NULL
+             AND %1$s.pause_return_on <= (now() AT TIME ZONE 'Asia/Bangkok')::date)
+            """.formatted(t, DealLifecycle.ON_HOLD, DealLifecycle.DORMANT);
+    }
+
+    /**
      * SQL boolean: the deal aliased {@code t} has a PLANNED visit by its current owner ({@code created_by} only: a
      * reassignment through TicketRepository#moveOwnerToSalesRep leaves the ex-owner as the keyer, so the keyer must
      * not count — review NEW-A), dated from today to

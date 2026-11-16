@@ -106,6 +106,12 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     mutationFn: ({ deal, payload }) => api.tickets.markLost(deal.ticketId, payload),
     onSuccess: refresh,
   });
+  // A returning paused deal (V219) leaves ควรตามต่อ when resumed — the same POST /resume the deal page uses.
+  const resumeMutation = useMutation({
+    mutationFn: (deal) => api.tickets.resume(deal.ticketId, {}),
+    onSuccess: () => { refresh(); showToast('success', 'ดำเนินการต่อแล้ว'); },
+    onError: fail,
+  });
   const createMutation = useMutation({
     mutationFn: (payload) => api.tickets.create(payload),
     onSuccess: (response) => {
@@ -165,7 +171,9 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   const quietDays = work?.quietDays ?? 14;
   const quarter = currentQuarter();
   const boardFilter = boardFilterChoice ?? (work ? defaultBoardFilter(work.board) : 'all');
-  const quietTotal = work ? work.board.filter((d) => d.quiet).length : 0;
+  // Returning paused deals are not on the board, so they are counted from ควรตามต่อ itself.
+  const quietTotal = work
+    ? work.board.filter((d) => d.quiet).length + work.followUp.filter((d) => d.returning).length : 0;
   const boardDeals = !work ? [] : boardFilter === 'quarter'
     ? work.board.filter((d) => d.expectedQuarter === quarter)
     : boardFilter === 'quiet' ? work.board.filter((d) => d.quiet) : work.board;
@@ -218,6 +226,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
               onLogCall={logCall}
               onBookVisit={(deal) => setPlanning({ deal })}
               onCloseDeal={setLosing}
+              onResume={(deal) => resumeMutation.mutate(deal)}
+              resuming={resumeMutation.isPending}
             />
           )}
         </Panel>

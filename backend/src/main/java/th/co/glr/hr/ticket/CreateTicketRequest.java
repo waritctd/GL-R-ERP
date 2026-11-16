@@ -1,9 +1,13 @@
 package th.co.glr.hr.ticket;
 
 import jakarta.validation.Valid;
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 
 public record CreateTicketRequest(
@@ -15,11 +19,11 @@ public record CreateTicketRequest(
     @NotNull Long projectId,
     Long contactId,
     String note,
-    // Required for every new deal: the channel decides the deal's route
-    // (DealRoute). Enforced HERE, at the API boundary, via TicketController's @Valid -- NOT in
-    // TicketService.create, which still tolerates null so the ~84 existing call sites keep working.
-    // UNSPECIFIED is non-blank, so it passes this annotation; TicketService.create refuses it.
-    @NotBlank String entryChannel,
+    // OPTIONAL since the owner-approved short create form (2026-11-16, the สร้างงานใหม่ drawing asks no channel).
+    // Absent/blank is stored UNSPECIFIED ("not stated", V144) and stated later on the deal page. A value that IS
+    // sent must still be a real channel: TicketService.create refuses an unknown one and an explicit UNSPECIFIED.
+    // Before 2026-11-16 this was @NotBlank (owner ruling 2026-09-30, "a new deal must state a real channel").
+    String entryChannel,
     // Optional: a deal may start at the lead stage with no product items
     // yet (lightweight DRAFT); items arrive later via editItems before submit.
     List<@Valid TicketItemRequest> items,
@@ -39,8 +43,26 @@ public record CreateTicketRequest(
      * the commission, is notified) and the actor is recorded in {@code keyed_by} and keeps full access.
      * Must be an active employee who can enter deals ({@code TicketService#create} validates).
      */
-    Long ownerEmployeeId
+    Long ownerEmployeeId,
+    /** Optional ผู้ออกแบบ (short create form): the designer's name, written to {@code sales.ticket.designer_name} —
+     * the same column the tracking form and the quotation fill write. */
+    @Size(max = 200) String designerName,
+    /** Optional มูลค่าโดยประมาณ (THB): written to {@code sales.ticket.imported_value}, the rep's stated value the
+     * board shows until a quotation gives one (V215 / V219). */
+    @DecimalMin("0") @Digits(integer = 12, fraction = 2) BigDecimal estimatedValue,
+    /** Optional เริ่มที่: {@code LEAD_APPROACH} (S1, the default) or {@code SPEC_APPROVED} (S2). Anything else is a
+     * 400; starting at S2 needs the same stage write access as moving a deal there by hand. */
+    String startStage
 ) {
+    /** The twelve-argument shape before the short create form's fields. */
+    public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
+                               Long projectId, Long contactId, String note, String entryChannel,
+                               List<TicketItemRequest> items, LocalDate nextFollowUpAt, Boolean quotationOnly,
+                               Long ownerEmployeeId) {
+        this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
+            items, nextFollowUpAt, quotationOnly, ownerEmployeeId, null, null, null);
+    }
+
     /** The pre-owner eleven-argument shape: the actor owns the deal. */
     public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
                                Long projectId, Long contactId, String note, String entryChannel,

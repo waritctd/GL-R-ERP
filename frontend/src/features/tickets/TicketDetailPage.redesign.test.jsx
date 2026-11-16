@@ -451,11 +451,13 @@ describe('relocated actions keep their old permission condition', () => {
     await settle();
   }
 
-  it('พักงาน (was พักดีลไว้ in ⋯): shown with PLACE_ON_HOLD on an active deal, opens the existing dialog', async () => {
+  // Dialog names below follow the rebuilt dialogs (drawings m-hold / m-lost / m-cancel, 2026-11-16); they used to
+  // be the old dialogs' 'พักดีลไว้' / 'ทำเครื่องหมายเสียงาน' / 'ยกเลิกดีล' / 'พัก dormant'. The gates are unchanged.
+  it('พักงาน (was พักดีลไว้ in ⋯): shown with PLACE_ON_HOLD on an active deal, opens the พักงาน dialog', async () => {
     setDeal({}, ['PLACE_ON_HOLD']);
     await overviewReady(salesOwner);
     fireEvent.click(await screen.findByRole('button', { name: 'พักงาน' }));
-    expect(await screen.findByRole('dialog', { name: 'พักดีลไว้' })).toBeTruthy();
+    expect(await screen.findByRole('dialog', { name: 'พักงาน' })).toBeTruthy();
   });
 
   it('wrong-way-round: no พักงาน without PLACE_ON_HOLD, nor on a paused deal', async () => {
@@ -474,7 +476,7 @@ describe('relocated actions keep their old permission condition', () => {
     setDeal({}, ['MARK_LOST']);
     await overviewReady(salesOwner);
     fireEvent.click(await screen.findByRole('button', { name: 'ปิดงาน (เสียงาน)' }));
-    expect(await screen.findByRole('dialog', { name: 'ทำเครื่องหมายเสียงาน' })).toBeTruthy();
+    expect(await screen.findByRole('dialog', { name: 'ปิดงาน · เสียงาน' })).toBeTruthy();
   });
 
   it('wrong-way-round: no ปิดงาน (เสียงาน) without MARK_LOST, nor at CLOSED_PAID', async () => {
@@ -493,7 +495,7 @@ describe('relocated actions keep their old permission condition', () => {
     setDeal({}, ['CANCEL']);
     await overviewReady(salesOwner);
     fireEvent.click(await screen.findByRole('button', { name: 'ยกเลิกงาน' }));
-    expect(await screen.findByRole('dialog', { name: 'ยกเลิกดีล' })).toBeTruthy();
+    expect(await screen.findByRole('dialog', { name: 'ยกเลิกงาน' })).toBeTruthy();
   });
 
   it('wrong-way-round: ยกเลิกงาน stays owner-only even when CANCEL is listed (ceo, sales_manager, another rep)', async () => {
@@ -519,7 +521,8 @@ describe('relocated actions keep their old permission condition', () => {
     await overviewReady(salesOwner);
     fireEvent.click(screen.getByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: 'พัก dormant' }));
-    expect(await screen.findByRole('dialog', { name: 'พัก dormant' })).toBeTruthy();
+    const pause = await screen.findByRole('dialog', { name: 'พักงาน' });
+    expect(within(pause).getByRole('radio', { name: /ไม่เคลื่อนไหว/ }).getAttribute('aria-checked')).toBe('true');
   });
 
   it('wrong-way-round: no พัก dormant on a paused deal without MARK_DORMANT', async () => {

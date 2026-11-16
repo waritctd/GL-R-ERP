@@ -23,20 +23,26 @@ import th.co.glr.hr.ticket.WinProbabilityDefaults;
  * value ({@code imported_value}, V215, THB) instead. Scope lives in the WHERE clause:
  * {@link #activeDealsOwnedBy} adds {@code t.created_by = :ownerId}; {@link #activeDealsAllReps} has no owner
  * predicate and is reached only through {@code SalesBoardService}'s sales_manager/ceo gate. Rows come ordered by
- * last touch ascending, then ticket id — mockApi.salesBoard mirrors this ORDER BY.
+ * last touch ascending, then ticket id — mockApi.salesBoard mirrors this ORDER BY. The two
+ * {@code returningPausedDeals*} reads (V219) take the same row shape for PAUSED deals whose วันที่จะกลับมาดู has
+ * arrived ({@link QuietRule#returningSql}), with the same owner predicate split.
  */
 @Repository
 public class SalesBoardRepository {
     /** Reached the customer (DEAL_DIRECT APPROVED, legacy ISSUED/SENT/ACCEPTED), plus EXPIRED as a flagged fallback. */
     private static final List<String> VALUE_STATUSES = List.of("APPROVED", "ISSUED", "SENT", "ACCEPTED", "EXPIRED");
 
-    private static final String BOARD_SELECT = """
+    /** Every column a board row needs; the WHERE is the caller's ({@link #ACTIVE_WHERE} or {@link #RETURNING_WHERE}),
+     * so a returning paused deal is read with exactly the same value / last-touch / last-activity logic. */
+    private static final String ROW_SELECT = """
         SELECT t.ticket_id, t.title, t.customer_name, p.name AS project_name,
                t.created_by AS owner_id,
                NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS owner_name,
                t.sales_stage, t.designer_name, t.win_probability, t.expected_quarter, t.imported_value,
+               t.pause_return_on,
                %1$s AS last_touched_at,
                %2$s AS quiet,
+               %3$s AS returning,
                q.total_amount, q.document_language, q.currency, q.expired,
                la.kind AS last_activity_kind, la.note AS last_activity_note
           FROM sales.ticket t
@@ -57,9 +63,21 @@ public class SalesBoardRepository {
                ORDER BY a.created_at DESC, a.id DESC
                LIMIT 1
           ) la ON TRUE
+        """.formatted(QuietRule.lastTouchedSql("t"), QuietRule.quietSql("t"), QuietRule.returningSql("t"));
+
+    /** The board: open ACTIVE deals. */
+    private static final String ACTIVE_WHERE = """
          WHERE t.lifecycle = 'ACTIVE'
            AND COALESCE(t.sales_stage, '') <> 'CLOSED_PAID'
-        """.formatted(QuietRule.lastTouchedSql("t"), QuietRule.quietSql("t"));
+        """;
+
+    /** Paused deals whose วันที่จะกลับมาดู has arrived (QuietRule#returningSql) — follow-up / quiet figures only. */
+    private static final String RETURNING_WHERE = " WHERE " + QuietRule.returningSql("t") + """
+           AND COALESCE(t.sales_stage, '') <> 'CLOSED_PAID'
+        """;
+
+    private static final String BOARD_SELECT = ROW_SELECT + ACTIVE_WHERE;
+    private static final String RETURNING_SELECT = ROW_SELECT + RETURNING_WHERE;
 
     private final NamedParameterJdbcTemplate jdbc;
     private final QuietRule quietRule;
@@ -79,6 +97,21 @@ public class SalesBoardRepository {
     /** Every ACTIVE deal of every rep. Only for the sales_manager/ceo team overview. */
     public List<BoardDeal> activeDealsAllReps() {
         return jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id",
+            Map.of("valueStatuses", VALUE_STATUSES, "quietDays", quietRule.quietDays()), this::map);
+    }
+
+    /** The caller's own paused deals whose วันที่จะกลับมาดู has arrived — owner ({@code created_by}) scoped in the
+     * WHERE clause exactly as {@link #activeDealsOwnedBy}. Same row order. */
+    public List<BoardDeal> returningPausedDealsOwnedBy(long ownerId) {
+        return jdbc.query(RETURNING_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
+            Map.of("ownerId", ownerId, "valueStatuses", VALUE_STATUSES, "quietDays", quietRule.quietDays()),
+            this::map);
+    }
+
+    /** Every rep's returning paused deals. Only for the sales_manager/ceo team overview, like
+     * {@link #activeDealsAllReps}. */
+    public List<BoardDeal> returningPausedDealsAllReps() {
+        return jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id",
             Map.of("valueStatuses", VALUE_STATUSES, "quietDays", quietRule.quietDays()), this::map);
     }
 
@@ -106,7 +139,8 @@ public class SalesBoardRepository {
             rs.getString("designer_name"), winProbability, rs.getString("expected_quarter"),
             lastTouched == null ? null : lastTouched.toInstant(),
             (int) Math.max(0, quietMillis / 86_400_000L), rs.getBoolean("quiet"),
-            rs.getString("last_activity_kind"), rs.getString("last_activity_note"));
+            rs.getString("last_activity_kind"), rs.getString("last_activity_note"),
+            rs.getBoolean("returning"), rs.getObject("pause_return_on", java.time.LocalDate.class));
     }
 
     /** The quotation's grand total, derived exactly as DealQuotationRepository#mapQuotation derives it. */

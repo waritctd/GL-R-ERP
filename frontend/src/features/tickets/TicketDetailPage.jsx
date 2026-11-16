@@ -47,7 +47,9 @@ import {
   canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
   DEAD_PRICING_REQUEST_STATUSES, stageForQuotationRecipient,
 } from '../quotations/quotationMeta.js';
-import { DealStagePanel, NextStageLine, nextStageLine } from './DealStagePanel.jsx';
+import {
+  canMoveDealToS2, DealStagePanel, NextStageLine, nextStageLine,
+} from './DealStagePanel.jsx';
 import { DealHeader } from './DealHeader.jsx';
 import { DealInfoCard } from './DealInfoCard.jsx';
 import { DealItemsPanel, useDealItemsEdit } from './DealItemsPanel.jsx';
@@ -1362,9 +1364,21 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'advance_stage') {
-      // ขั้น 1–2 are moved by hand. Offered only when the rep can move: DealStagePanel's startAdvance
-      // moves at once when ready, else opens its follow-up + activity form.
-      if (canAdvance || advanceAwaitsReadiness) {
+      // ขั้น 1–2 are moved by hand. On an S1 deal the one manual move is to S2 (drawing m-stage, 2026-11-16):
+      // "ย้ายไป S2 · สเปคผ่าน" opens that dialog, for exactly the viewers whose แก้ไขสถานะ… could pick S2
+      // (canMoveDealToS2). The step inside S1 (LEAD_APPROACH → PRESENTATION) stays reachable in ⋯ as
+      // "เลื่อนไป: 2. …" and "แก้ไขสถานะ…" — secondary, not removed. Elsewhere: DealStagePanel's startAdvance moves
+      // at once when ready, else opens its follow-up + activity form, as before.
+      if (canMoveDealToS2({ summary, stageDecisions })) {
+        advanceInHeader = true;
+        stickyPrimaryLabel = 'ย้ายไป S2 · สเปคผ่าน';
+        stickyPrimaryAction = (
+          <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} disabled={actionLoading} onClick={() => dealStagePanelRef.current?.openMoveToS2()}>
+            {stickyPrimaryLabel}
+            <Icon name="chevronRight" size={14} />
+          </Button>
+        );
+      } else if (canAdvance || advanceAwaitsReadiness) {
         advanceInHeader = true;
         stickyPrimaryLabel = `เลื่อนไป: ${next.no}. ${dealStageLabel(next.code, summary.entryChannel).label}`;
         stickyPrimaryAction = (
@@ -1519,6 +1533,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // while loading.
   const readyToAdvance = activitiesQuery.isLoading
     || isReadyToAdvance(summary, hasActivitySince(activities, lastStageChangeAt(events, summary.createdAt)));
+  // The ย้ายไป S2 dialog asks for its note as the activity only when there is none since the last stage change.
+  const hasRecentActivity = activitiesQuery.isLoading
+    ? null : hasActivitySince(activities, lastStageChangeAt(events, summary.createdAt));
 
   // Named handlers (not inline closures in the array below) so each ref read happens inside an ordinary
   // event-handler function, not lexically inside an object/array literal being built during render.
@@ -1730,6 +1747,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         showNextLine={false}
         // primaryAction lives solely in the ขั้นต่อไป card ("one primary CTA"); not passed here too.
         advanceReady={readyToAdvance}
+        hasRecentActivity={hasRecentActivity}
         advanceInHeader={advanceInHeader}
         actionLoading={actionLoading}
         onUpdateStage={(payload) => doAction(() => api.tickets.updateStage(ticketId, payload), 'อัปเดตสถานะงานแล้ว')}

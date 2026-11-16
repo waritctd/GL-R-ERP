@@ -42,6 +42,14 @@ export function daysQuietOf(ticket, activities, now = Date.now()) {
   return Math.max(0, Math.floor((now - last) / DAY_MS));
 }
 
+/** QuietRule.returningSql (V219): a PAUSED deal (ON_HOLD / DORMANT) whose วันที่จะกลับมาดู is on or before
+ * `todayIso` (the Asia/Bangkok date). A pause with no date never returns. Not part of isQuiet, exactly as on the
+ * server: only the follow-up list and the manager's quiet figures read it. */
+export function isReturning(ticket, todayIso) {
+  if (!['ON_HOLD', 'DORMANT'].includes(ticket?.lifecycle)) return false;
+  return Boolean(ticket?.pauseReturnOn) && String(ticket.pauseReturnOn) <= String(todayIso);
+}
+
 /** QuietRule.quietSql. `hasUpcomingVisit` = QuietRule.upcomingVisitSql: a PLANNED visit dated today (Bangkok) or
  * later holds the deal out of quiet; the caller (mockApi) works it out from its visits. */
 export function isQuiet(ticket, activities, now = Date.now(), quietDays = QUIET_DAYS, hasUpcomingVisit = false) {

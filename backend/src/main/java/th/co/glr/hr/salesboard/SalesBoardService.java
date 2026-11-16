@@ -169,7 +169,10 @@ public class SalesBoardService {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
         List<BoardDeal> board = repository.activeDealsOwnedBy(actor.id());
-        return new MyWork(rankQuiet(board, FOLLOW_UP_LIMIT), board, quietRule.quietDays(), visits.ownThisWeek(actor),
+        // ควรตามต่อ also takes the caller's OWN paused deals whose วันที่จะกลับมาดู has arrived (V219); the board does not.
+        List<BoardDeal> followUp = rankFollowUp(board, repository.returningPausedDealsOwnedBy(actor.id()),
+            FOLLOW_UP_LIMIT);
+        return new MyWork(followUp, board, quietRule.quietDays(), visits.ownThisWeek(actor),
             cashForMonth(actor.id(), thisMonth()));
     }
 
@@ -178,10 +181,13 @@ public class SalesBoardService {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
         List<BoardDeal> deals = repository.activeDealsAllReps();
+        // Returning paused deals (V219) count in the quiet figures — each rep's quietDeals and the stale list — the
+        // way a quiet deal does, and nowhere else: they are not open deals and add no open value.
+        List<BoardDeal> returning = repository.returningPausedDealsAllReps();
         List<VisitDtos.VisitDto> weekVisits = visits.teamThisWeek(actor);
         YearMonth month = thisMonth();
-        return new TeamOverview(repRows(deals, weekVisits, cashByOwner(month)), rankQuiet(deals, STALE_LIMIT),
-            quietRule.quietDays(), weekVisits, cashForMonth(null, month));
+        return new TeamOverview(repRows(deals, returning, weekVisits, cashByOwner(month)),
+            rankFollowUp(deals, returning, STALE_LIMIT), quietRule.quietDays(), weekVisits, cashForMonth(null, month));
     }
 
     /** Every rep's open deals for the sales_manager / ceo งานทั้งหมด board — the same gate and the same
@@ -194,8 +200,10 @@ public class SalesBoardService {
         return new SalesBoardDtos.TeamBoard(repository.activeDealsAllReps(), quietRule.quietDays());
     }
 
-    private static List<BoardDeal> rankQuiet(List<BoardDeal> deals, int limit) {
-        return deals.stream().filter(BoardDeal::quiet).sorted(QUIET_RANK).limit(limit).toList();
+    /** The quiet ACTIVE deals plus the returning paused ones, ranked together by {@link #QUIET_RANK}, capped. */
+    private static List<BoardDeal> rankFollowUp(List<BoardDeal> active, List<BoardDeal> returning, int limit) {
+        return java.util.stream.Stream.concat(active.stream().filter(BoardDeal::quiet), returning.stream())
+            .sorted(QUIET_RANK).limit(limit).toList();
     }
 
     static final String THB = "THB";
@@ -210,13 +218,21 @@ public class SalesBoardService {
      * login uses (DivisionAccessPolicy#roleFor), so a manager's or the CEO's own deals are labelled, not dropped.
      * An owner with visits this week but no open deal still gets a row (0 deals), so the week grid has their name.
      */
-    private List<RepRow> repRows(List<BoardDeal> deals, List<VisitDtos.VisitDto> weekVisits,
-                                 Map<Long, CashMonth> cashByOwner) {
+    private List<RepRow> repRows(List<BoardDeal> deals, List<BoardDeal> returning,
+                                 List<VisitDtos.VisitDto> weekVisits, Map<Long, CashMonth> cashByOwner) {
         Map<Long, List<BoardDeal>> byOwner = new LinkedHashMap<>();
         Map<Long, String> names = new LinkedHashMap<>();
         deals.forEach(d -> {
             byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d);
             names.putIfAbsent(d.ownerId(), d.ownerName());
+        });
+        // A returning paused deal adds to its owner's quiet count only (V219); an owner whose only such deal it is
+        // still gets a row (0 open deals).
+        Map<Long, Integer> returningByOwner = new LinkedHashMap<>();
+        returning.forEach(d -> {
+            byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>());
+            names.putIfAbsent(d.ownerId(), d.ownerName());
+            returningByOwner.merge(d.ownerId(), 1, Integer::sum);
         });
         // Only a booked (not cancelled) visit earns a deal-less owner a row; cancelled-only is nothing to show.
         weekVisits.stream().filter(v -> !VisitDtos.CANCELLED.equals(v.status())).forEach(v -> {
@@ -234,7 +250,7 @@ public class SalesBoardService {
             BigDecimal thb = BigDecimal.ZERO;
             Map<String, BigDecimal> other = new java.util.TreeMap<>();
             Instant last = null;
-            int quiet = 0;
+            int quiet = returningByOwner.getOrDefault(ownerId, 0);
             for (BoardDeal d : own) {
                 if (d.value() != null) {
                     String currency = d.currency() == null ? THB : d.currency();

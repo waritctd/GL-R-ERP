@@ -53,7 +53,14 @@ describe('stageMeta holds labels, and only labels', () => {
       { code: 'PRICE', label: 'ราคา' },
       { code: 'PRODUCT_FIT', label: 'ไม่มีสินค้าที่ลูกค้าต้องการ' },
     ]);
-    expect(labelledReasons(['OTHER'], CANCEL_REASON_LABEL)[0].label).toBe('อื่น ๆ (ระบุในหมายเหตุ)');
+    // 'อื่น ๆ' since the ยกเลิกงาน drawing (2026-11-16); it was 'อื่น ๆ (ระบุในหมายเหตุ)'.
+    expect(labelledReasons(['OTHER'], CANCEL_REASON_LABEL)[0].label).toBe('อื่น ๆ');
+    // Every cancel code the server accepts — the drawn four AND the three retired ones already-cancelled deals
+    // carry — has wording, so neither ever renders as a raw code.
+    for (const code of ['DUPLICATE_DEAL', 'WRONG_CUSTOMER_OR_PROJECT', 'NO_REAL_PROJECT', 'OTHER',
+      'OWNER_CANCELLED', 'PROJECT_SUSPENDED', 'BUDGET_CANCELLED']) {
+      expect(labelledReasons([code], CANCEL_REASON_LABEL)[0].label, code).not.toBe(code);
+    }
     // A code the backend adds before this side has wording for it renders as its code rather than as `undefined` —
     // visible, not blank.
     expect(labelledReasons(['F9_BRAND_NEW'], LOST_REASON_LABEL)).toEqual([

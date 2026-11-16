@@ -108,6 +108,20 @@ describe('TeamOverview', () => {
     expect(within(items[2]).getByText('—')).toBeTruthy();
   });
 
+  // Owner ruling 2026-11-16: a paused deal whose วันที่จะกลับมาดู has arrived counts in the quiet figures (served) and
+  // is labelled as a paused deal coming back, not as a silent active one.
+  it('labels a returning paused deal in the stale list as paused, not as quiet', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({
+      ...fixture,
+      stale: [stale({ ticketId: 50, title: 'งานที่พักไว้', quiet: false, returning: true, pauseReturnOn: '2026-11-16', daysQuiet: 60 })],
+    });
+    renderTeam();
+
+    const item = within(await screen.findByTestId('team-stale')).getAllByRole('listitem')[0];
+    expect(within(item).getByText('พักไว้ · ถึงวันกลับมาดู 16 พ.ย. 2569')).toBeTruthy();
+    expect(within(item).queryByText(/เงียบ/)).toBeNull();
+  });
+
   it('never shows the old ฿0.00, and has no cash tile while the payload carries no cash', async () => {
     renderTeam();
 

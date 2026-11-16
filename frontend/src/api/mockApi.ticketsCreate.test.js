@@ -40,10 +40,11 @@ describe('mock tickets.create -- nextFollowUpAt is persisted like the real INSER
   });
 });
 
-// Mirrors th.co.glr.hr.ticket.CreateTicketRequest (@NotBlank entryChannel, enforced by TicketController's
-// @Valid @RequestBody -> 400) plus TicketService.create's explicit refusal of UNSPECIFIED (valid as STORED,
-// invalid as a create INPUT -- see th.co.glr.hr.ticket.EntryChannel).
-describe('mock tickets.create -- a new deal must state a real entry channel', () => {
+// Mirrors th.co.glr.hr.ticket.CreateTicketRequest + TicketService.create. Since the owner-approved short create form
+// (2026-11-16) an ABSENT channel is no longer refused: it is stored UNSPECIFIED. A channel that IS sent must still be
+// real: UNSPECIFIED (valid as STORED, invalid as a create INPUT) and unknown values are refused. The three tests that
+// used to pin "no / null / blank channel -> 400" now pin the opposite.
+describe('mock tickets.create -- the entry channel is optional, but a stated one must be real', () => {
   async function createWith(channelFields) {
     const { customer, project } = await anyCustomerAndProject();
     return api.tickets.create({
@@ -52,17 +53,19 @@ describe('mock tickets.create -- a new deal must state a real entry channel', ()
     });
   }
 
-  it('refuses a request with no entryChannel, 400', async () => {
-    await expect(createWith({})).rejects.toMatchObject({ status: 400 });
+  it('accepts a request with no entryChannel and stores UNSPECIFIED', async () => {
+    const { ticket } = await createWith({});
+    expect(ticket.summary.entryChannel).toBe('UNSPECIFIED');
   });
 
-  it('refuses a null entryChannel, 400', async () => {
-    await expect(createWith({ entryChannel: null })).rejects.toMatchObject({ status: 400 });
+  it('accepts a null entryChannel and stores UNSPECIFIED', async () => {
+    const { ticket } = await createWith({ entryChannel: null });
+    expect(ticket.summary.entryChannel).toBe('UNSPECIFIED');
   });
 
-  it('refuses an empty and a whitespace-only entryChannel, 400', async () => {
-    await expect(createWith({ entryChannel: '' })).rejects.toMatchObject({ status: 400 });
-    await expect(createWith({ entryChannel: '   ' })).rejects.toMatchObject({ status: 400 });
+  it('accepts an empty and a whitespace-only entryChannel as not stated', async () => {
+    expect((await createWith({ entryChannel: '' })).ticket.summary.entryChannel).toBe('UNSPECIFIED');
+    expect((await createWith({ entryChannel: '   ' })).ticket.summary.entryChannel).toBe('UNSPECIFIED');
   });
 
   it('refuses UNSPECIFIED, 400, with a Thai message', async () => {
@@ -85,5 +88,34 @@ describe('mock tickets.create -- a new deal must state a real entry channel', ()
     const before = (await api.tickets.list()).tickets.length;
     await expect(createWith({ entryChannel: 'UNSPECIFIED' })).rejects.toMatchObject({ status: 400 });
     expect((await api.tickets.list()).tickets.length).toBe(before);
+  });
+});
+
+// The short create form's three new optional fields (CreateTicketRequest designerName / estimatedValue /
+// startStage). Shape only: who may start at S2 is TicketService's stage write gate (DealLifecycleDialogsIntegrationTest).
+describe('mock tickets.create -- the short form fields', () => {
+  async function createWith(fields) {
+    const { customer, project } = await anyCustomerAndProject();
+    return api.tickets.create({ title: 'โครงการสั้น', customerId: customer.id, projectId: project.id, items: [], ...fields });
+  }
+
+  it('stores the designer name and the estimate (shown on the board as the deal value until a quotation)', async () => {
+    const { ticket } = await createWith({ designerName: 'เทพสตูดิโอ ดีไซน์', estimatedValue: 1200000 });
+    expect(ticket.summary.designerName).toBe('เทพสตูดิโอ ดีไซน์');
+    const { board } = await api.salesBoard.myWork();
+    const row = board.find((d) => d.ticketId === ticket.summary.id);
+    expect(row).toMatchObject({ value: 1200000, currency: 'THB', designerName: 'เทพสตูดิโอ ดีไซน์' });
+  });
+
+  it('starts at S1 by default and at S2 when asked, with a STAGE_CHANGED event', async () => {
+    expect((await createWith({})).ticket.summary.salesStage).toBe('LEAD_APPROACH');
+    const { ticket } = await createWith({ startStage: 'SPEC_APPROVED' });
+    expect(ticket.summary.salesStage).toBe('SPEC_APPROVED');
+    expect(ticket.events.some((e) => e.kind === 'STAGE_CHANGED' && e.toStatus === 'SPEC_APPROVED')).toBe(true);
+  });
+
+  it('refuses any other start stage and a negative estimate, 400', async () => {
+    await expect(createWith({ startStage: 'QUOTE_BUYER' })).rejects.toMatchObject({ status: 400 });
+    await expect(createWith({ estimatedValue: -1 })).rejects.toMatchObject({ status: 400 });
   });
 });

@@ -12,7 +12,10 @@ import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { goodsArrived, goodsNotArrivedWarning } from '../importProgress/importSteps.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker, skippedStageCodes } from './DealStageStepper.jsx';
+import { EntryChannelFix } from './EntryChannelFix.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
+import { MoveToS2Modal } from './MoveToS2Modal.jsx';
+import { PauseDealModal } from './PauseDealModal.jsx';
 import {
   EMPTY_STAGE_CATALOG, findStage, nextOnRoute, routePath, stageIndexIn,
 } from './stageCatalog.js';
@@ -88,6 +91,25 @@ export function NextStageLine({ line, entryChannel }) {
   );
 }
 
+/** The S1 stages: a rep moves a deal on from here to S2 by hand (spec 2026-11-15 §7.1). */
+export const S1_STAGES = ['LEAD_APPROACH', 'PRESENTATION'];
+
+/**
+ * May this viewer move the deal from S1 to S2 through the ย้ายไป S2 dialog (drawing m-stage)? Read entirely off the
+ * server's per-viewer answer, like every other gate here: the deal is ACTIVE at an S1 stage and its SPEC_APPROVED
+ * decision is on-route and either allowed or blocked ONLY by the readiness gate — the one block the dialog itself
+ * clears. TicketService.stageDecisions runs the stage WRITE gate before the readiness gate, so a readiness-only
+ * block already means "this viewer may write S2": exactly the reach the old เลื่อนไป / guided-advance button had
+ * (`advanceAwaitsReadiness`). The server re-checks on the move. (An allowed decision is itself what makes the server
+ * list ADVANCE_STAGE / UPDATE_STAGE, so no action needs checking on top.)
+ */
+export function canMoveDealToS2({ summary, stageDecisions = [] }) {
+  if ((summary?.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || !S1_STAGES.includes(summary?.salesStage)) return false;
+  const decision = stageDecisions.find((d) => d.stage === 'SPEC_APPROVED');
+  if (!decision || decision.onRoute === false) return false;
+  return decision.allowed || decision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+}
+
 function daysSince(iso) {
   if (!iso) return null;
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
@@ -135,10 +157,16 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // The deal page shows the "ถัดไป" line in its ขั้นต่อไป card instead (one "what's next" statement); a standalone
   // panel keeps its own.
   showNextLine = true,
+  // Whether a deal_activity exists since the last stage change (the page computes it from activities + events); the
+  // ย้ายไป S2 dialog asks for the note as that activity only when this is false. null = not known.
+  hasRecentActivity = null,
 }, ref) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
+  // 'resume' only now: hold / dormant open the one พักงาน dialog (pauseKind) since the m-hold drawing.
   const [noteAction, setNoteAction] = useState(null);
+  const [pauseKind, setPauseKind] = useState(null); // null | 'ON_HOLD' | 'DORMANT' — which choice พักงาน opens on
+  const [moveS2Open, setMoveS2Open] = useState(false);
   const [note, setNote] = useState('');
   const [showSteps, setShowSteps] = useState(false);
   // Guided advance: the readiness gate stays, but instead of a dead hint the
@@ -207,6 +235,40 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   });
   const canHold = hasAction('PLACE_ON_HOLD');
   const canDormant = hasAction('MARK_DORMANT');
+  const canMoveToS2 = canMoveDealToS2({ summary, stageDecisions });
+  // Which half of the readiness gate is missing, when it is the gate that blocks S2.
+  const s2Decision = stageDecisions.find((decision) => decision.stage === 'SPEC_APPROVED');
+  const s2ReadinessBlocked = Boolean(s2Decision) && !s2Decision.allowed
+    && s2Decision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+  const s2NeedsFollowUp = s2ReadinessBlocked && !summary.nextFollowUpAt;
+  const s2NeedsActivity = s2ReadinessBlocked
+    && (hasRecentActivity === false || (hasRecentActivity == null && Boolean(summary.nextFollowUpAt)));
+  // ย้ายไป S2: clear whatever half of the gate is missing, then move through the PARENT's onUpdateStage (its
+  // invalidation and toast still run). The gate itself is unchanged.
+  const moveToS2 = useMutation({
+    mutationFn: async ({ note, nextFollowUpAt }) => {
+      if (s2NeedsFollowUp && nextFollowUpAt) {
+        // PUT /tickets/{id}/tracking REPLACES every tracking column (TicketRepository.updateTracking), so the fields
+        // this dialog does not edit are sent back exactly as the deal holds them.
+        await api.tickets.updateTracking(summary.id, {
+          nextFollowUpAt,
+          designerName: summary.designerName ?? null,
+          ownerName: summary.ownerName ?? null,
+          buyerName: summary.buyerName ?? null,
+          winProbability: summary.winProbabilityOverride ?? null,
+        });
+      }
+      if (s2NeedsActivity && note) {
+        await api.tickets.addActivity(summary.id, { activityDate: bangkokTodayIso(), kind: 'OTHER', note });
+      }
+      await onUpdateStage({ stage: 'SPEC_APPROVED', note: note || undefined });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(summary.id) });
+      queryClient.invalidateQueries({ queryKey: queryKeys.ticketActivities(summary.id) });
+      setMoveS2Open(false);
+    },
+  });
   const canResume = hasAction('RESUME');
   const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
   // "แก้ช่องทางดีล" is the remedy for a route refusal, not standing chrome (the ช่องทางรับงาน row is
@@ -217,7 +279,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const isDone = !lost && summary.salesStage === 'CLOSED_PAID';
 
   useImperativeHandle(ref, () => ({
-    canEditStage, canLost, canHold, canDormant,
+    canEditStage, canLost, canHold, canDormant, canMoveToS2,
     // An in-flight mutation must block a second click: the overflow menu item only disables its
     // own click on its OWN precondition (e.g. `!readyToAdvance`) and never re-derives
     // actionLoading, so a stale double-click (⋯ → click, reopen ⋯ while the first mutation is
@@ -227,8 +289,11 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     // is falsy.
     openEditStage: () => { if (canEditStage && !actionLoading) setEditOpen(true); },
     openMarkLost: () => { if (canLost) setLostOpen(true); },
-    openHold: () => { if (canHold && !actionLoading) setNoteAction('hold'); },
-    openDormant: () => { if (canDormant && !actionLoading) setNoteAction('dormant'); },
+    // The one พักงาน dialog (m-hold): พักชั่วคราว from the quiet link, ไม่เคลื่อนไหว from ⋯ พัก dormant. Same gates.
+    openHold: () => { if (canHold && !actionLoading) setPauseKind('ON_HOLD'); },
+    openDormant: () => { if (canDormant && !actionLoading) setPauseKind('DORMANT'); },
+    // ย้ายไป S2 · สเปคผ่าน (m-stage), the ขั้นต่อไป card's button on an S1 deal. Re-checks canMoveDealToS2.
+    openMoveToS2: () => { if (canMoveToS2 && !actionLoading) { moveToS2.reset(); setMoveS2Open(true); } },
     // The old paused / lost banners' buttons, now in the ขั้นต่อไป card. Same gates as those banners had:
     // ดำเนินการต่อ on a paused deal with RESUME, เปิดงานอีกครั้ง on a lost deal with REOPEN. The page mirrors
     // these gates to decide whether to show the button; the re-check here is the guard.
@@ -271,11 +336,17 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
 
   async function submitNoteAction() {
     const payload = { note: note.trim() || undefined };
-    if (noteAction === 'hold') await onHold(payload);
-    if (noteAction === 'dormant') await onDormant(payload);
     if (noteAction === 'resume') await onResume(payload);
     setNoteAction(null);
     setNote('');
+  }
+
+  // พักงาน → the SAME two handlers (and so the same two endpoints) as before, now carrying pauseReturnOn.
+  async function submitPause({ kind, pauseReturnOn, note: pauseNote }) {
+    const payload = { note: pauseNote, pauseReturnOn };
+    if (kind === 'ON_HOLD') await onHold(payload);
+    else await onDormant(payload);
+    setPauseKind(null);
   }
 
   // The deal page's S stepper and ขั้นต่อไป card (DealHeader) replaced this panel's "สถานะดีล (Pipeline)" shell, its
@@ -368,6 +439,19 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
             <span data-testid="deal-route-line" className="text-xs font-bold text-text-muted">
               เส้นทาง · {route} · {routeStageCount} ขั้น{days != null ? ` · อยู่ในขั้นนี้ ${days === 0 ? 'วันนี้' : `${days} วัน`}` : ''}
             </span>
+          ) : entryChannelAction && onSetEntryChannel ? (
+            // No route because no channel was stated — the short create form (m-create) does not ask for one. Where
+            // the route would be named, the rep can state it (the server advertises SET_ENTRY_CHANNEL).
+            <div data-testid="entry-channel-unstated" className="flex min-w-0 flex-wrap items-center gap-x-2">
+              <span className="text-xs font-bold text-text-muted">ยังไม่ได้ระบุช่องทางงาน</span>
+              <EntryChannelFix
+                entryChannel={summary.entryChannel}
+                action={entryChannelAction}
+                onSubmit={onSetEntryChannel}
+                disabled={actionLoading}
+                noun="งาน"
+              />
+            </div>
           ) : <span />}
           <Button
             type="button"
@@ -433,9 +517,30 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           onSubmit={submitLost}
         />
       ) : null}
+      {pauseKind ? (
+        <PauseDealModal
+          canHold={canHold}
+          canDormant={canDormant}
+          initialKind={pauseKind}
+          submitting={actionLoading}
+          onClose={() => setPauseKind(null)}
+          onSubmit={submitPause}
+        />
+      ) : null}
+      {moveS2Open ? (
+        <MoveToS2Modal
+          deal={summary}
+          needsFollowUp={s2NeedsFollowUp}
+          needsActivity={s2NeedsActivity}
+          submitting={moveToS2.isPending || actionLoading}
+          error={moveToS2.isError ? (moveToS2.error?.message ?? 'ย้ายไม่สำเร็จ') : null}
+          onClose={() => setMoveS2Open(false)}
+          onSubmit={(values) => moveToS2.mutate(values)}
+        />
+      ) : null}
       {noteAction ? (
         <Modal
-          title={noteAction === 'resume' ? 'ดำเนินการต่อ' : noteAction === 'hold' ? 'พักดีลไว้' : 'พัก dormant'}
+          title="ดำเนินการต่อ"
           onClose={() => { setNoteAction(null); setNote(''); }}
           footer={(
             <>

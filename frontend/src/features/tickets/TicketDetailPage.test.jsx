@@ -1904,17 +1904,20 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByTestId('guided-advance-modal')).toBeNull();
     });
 
-    it('ขั้น 2, not ready: the main button reads เลื่อนไป: 3. … and opens the follow-up + activity form instead of moving', async () => {
+    // S1 → S2 is the m-stage drawing's ย้ายไป S2 · สเปคผ่าน since 2026-11-16. This used to pin "เลื่อนไป: 3. …"
+    // opening the guided follow-up + activity form; the new dialog asks for exactly those two things itself.
+    it('ขั้น 2, not ready: the main button reads ย้ายไป S2 · สเปคผ่าน and opens that dialog, asking for what is missing, instead of moving', async () => {
       earlyDeal('PRESENTATION', 'SPEC_APPROVED');
       renderTicketDetailPage(salesOwnerUser);
 
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('advance_stage'));
-      expect(screen.getByTestId('ticket-primary-action').textContent).toMatch(/เลื่อนไป: 3\./);
-      // One เลื่อนไป button on the page body: the stage panel's own opener steps aside for it.
+      expect(screen.getByTestId('ticket-primary-action').textContent).toContain('ย้ายไป S2 · สเปคผ่าน');
+      // One move button on the page body: the stage panel's own opener steps aside for it.
       expect(screen.queryByTestId('guided-advance-open')).toBeNull();
 
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
-      expect(await screen.findByTestId('guided-advance-modal')).not.toBeNull();
+      const dialog = await screen.findByTestId('move-s2-modal');
+      expect(within(dialog).getByLabelText(/วันติดตามครั้งถัดไป/)).toBeTruthy();
       expect(api.tickets.updateStage).not.toHaveBeenCalled();
     });
 

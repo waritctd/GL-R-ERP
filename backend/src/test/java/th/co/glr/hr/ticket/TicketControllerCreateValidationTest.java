@@ -18,9 +18,10 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
-/** HTTP-level proof that the boundary enforces "a new deal must state a real ช่องทางดีล": POST /api/tickets
- * with entryChannel absent or blank is a 400 and the service is never reached. Standalone MockMvc (same
- * harness as AttendanceControllerTest): no Spring context, no DB. */
+/** HTTP-level proof of what POST /api/tickets refuses at the boundary. Since the owner-approved short create form
+ * (2026-11-16) an absent or blank entryChannel is no longer one of those things (it is stored UNSPECIFIED); a
+ * negative estimatedValue is. Standalone MockMvc (same harness as AttendanceControllerTest): no Spring context, no
+ * DB. */
 class TicketControllerCreateValidationTest {
 
     private final TicketService ticketService = mock(TicketService.class);
@@ -34,31 +35,42 @@ class TicketControllerCreateValidationTest {
         return "{\"title\":\"Test deal\",\"projectId\":77" + channelFragment + "}";
     }
 
+    // The owner-approved short create form (2026-11-16) does not ask for a channel. These three used to pin "400 and
+    // never reaches the service"; an absent/blank channel now reaches it and is stored UNSPECIFIED.
     @Test
-    void createWithoutEntryChannelIs400AndNeverReachesTheService() throws Exception {
+    void createWithoutEntryChannelReachesTheService() throws Exception {
         mvc.perform(post("/api/tickets").session(sales()).contentType(MediaType.APPLICATION_JSON)
                 .content(body("")))
-            .andExpect(status().isBadRequest());
-        verifyNoInteractions(ticketService);
+            .andExpect(status().isOk());
+        verify(ticketService).create(any(CreateTicketRequest.class), any(UserPrincipal.class));
     }
 
     @Test
-    void createWithNullEntryChannelIs400AndNeverReachesTheService() throws Exception {
+    void createWithNullEntryChannelReachesTheService() throws Exception {
         mvc.perform(post("/api/tickets").session(sales()).contentType(MediaType.APPLICATION_JSON)
                 .content(body(",\"entryChannel\":null")))
-            .andExpect(status().isBadRequest());
-        verifyNoInteractions(ticketService);
+            .andExpect(status().isOk());
+        verify(ticketService).create(any(CreateTicketRequest.class), any(UserPrincipal.class));
     }
 
     @Test
-    void createWithBlankEntryChannelIs400AndNeverReachesTheService() throws Exception {
+    void createWithBlankEntryChannelReachesTheService() throws Exception {
         mvc.perform(post("/api/tickets").session(sales()).contentType(MediaType.APPLICATION_JSON)
                 .content(body(",\"entryChannel\":\"  \"")))
+            .andExpect(status().isOk());
+        verify(ticketService).create(any(CreateTicketRequest.class), any(UserPrincipal.class));
+    }
+
+    /** The boundary still validates what it can: a negative estimate never reaches the service. */
+    @Test
+    void createWithNegativeEstimatedValueIs400AndNeverReachesTheService() throws Exception {
+        mvc.perform(post("/api/tickets").session(sales()).contentType(MediaType.APPLICATION_JSON)
+                .content(body(",\"estimatedValue\":-5")))
             .andExpect(status().isBadRequest());
         verifyNoInteractions(ticketService);
     }
 
-    /** Control: proves the 400s above come from entryChannel validation, not the harness. */
+    /** Control: proves the 400 above comes from field validation, not the harness. */
     @Test
     void createWithARealEntryChannelReachesTheService() throws Exception {
         mvc.perform(post("/api/tickets").session(sales()).contentType(MediaType.APPLICATION_JSON)
