@@ -2387,6 +2387,23 @@ describe('TicketDetailPage', () => {
         expect(trigger()).toBeNull();
       });
 
+      // Fix round 2, item 4: one party left — the route choice is a plain button, and its second trigger runs the
+      // same single-party handler (`onSingle`).
+      it('single party: the second trigger is the same plain button and opens the same request form', async () => {
+        deal({ entryChannel: 'BUYER_DIRECT', actionsAnswered: false });
+        renderTicketDetailPage(salesOwnerUser);
+        const primary = await primaryWithAction('quote_next_party');
+        await openTab(/ใบเสนอราคา/);
+        await screen.findByTestId('deal-quotations-card');
+        const second = await screen.findByTestId('quote-tab-route-choice');
+        expect(second.textContent).toBe(primary.textContent);
+        expect(second.textContent).toBe('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
+        expect(second.getAttribute('aria-haspopup')).toBeNull();
+        fireEvent.click(second);
+        const dialog = within(await screen.findByRole('dialog'));
+        expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
+      });
+
       it('present beside the route choice, and it opens the SAME choice: the party picked there opens its request form', async () => {
         deal();
         renderTicketDetailPage(salesOwnerUser);

@@ -1035,6 +1035,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       ตรวจสอบและปิดงาน
     </Button>
   ) : null;
+  // The button's own label, for the ขั้นต่อไป card's title (fix round 2): the card names the action once, as its title,
+  // and the `nextAction` sentence explains it once, beneath (as the banner line).
+  const primaryActionLabel = can.confirmCustomer ? 'ลูกค้ายืนยัน'
+    : can.confirmFinalPayment ? 'ยืนยันชำระครบ (Final Payment)'
+      : can.confirmClose ? 'ยืนยันพร้อมปิดงาน'
+        : can.verifyClose ? 'ตรวจสอบและปิดงาน'
+          : null;
 
   // Sticky action bar. `primaryAction` above (confirmCustomer/finalPayment/close/verify) is a REAL,
   // server-gated button and always wins. workState.js's resolveWorkState fills the gap for every
@@ -1433,7 +1440,11 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // Fix round 1 (L1): the title names what the button does. With the page's own resolved action that is the action's
   // label (the stage table's step can be a different one, e.g. ติดตามผลใบเสนอราคา over ติดตามลูกค้า); otherwise the
   // table's step (paused / lost: the state the resume / reopen button acts on; the tab button: where that step lives).
-  const cardTitle = stickyPrimaryAction ? (stickyPrimaryLabel ?? nextStep.title) : nextStep.title;
+  // For the four server-gated buttons stickyPrimaryLabel is the explanatory sentence, already said by bannerText, so the
+  // title is the button's own label instead.
+  const cardTitle = !stickyPrimaryAction ? nextStep.title
+    : stickyPrimaryAction === primaryAction ? primaryActionLabel
+      : (stickyPrimaryLabel ?? nextStep.title);
   if (!cardAction && nextStep.kind === 'resume' && canResumeDeal) {
     cardAction = (
       <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action="resume" disabled={actionLoading}
@@ -1478,8 +1489,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     : null;
   const cardFacts = lost
     ? [
-      summary.lostReason ? `เหตุผล: ${dealLostReasonLabel(summary.lostReason).label}` : null,
-      summary.lostAt ? `ปิดเมื่อ ${formatThaiDate(summary.lostAt)}` : null,
+      // Always both lines, "-" when unrecorded, as the old lost banner did (fix round 2).
+      `เหตุผล: ${dealLostReasonLabel(summary.lostReason).label}`,
+      `ปิดเมื่อ ${formatThaiDate(summary.lostAt)}`,
       leftAt,
     ].filter(Boolean)
     : isPaused ? [leftAt].filter(Boolean) : [];

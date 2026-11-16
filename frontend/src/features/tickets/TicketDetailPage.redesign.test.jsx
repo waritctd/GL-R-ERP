@@ -10,9 +10,12 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import {
   act, fireEvent, render, screen, waitFor, within,
 } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import {
+  MemoryRouter, Route, Routes, useLocation, useNavigate,
+} from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketDetailPage } from './TicketDetailPage.jsx';
+import { TicketDetailRoute } from './TicketDetailRoute.jsx';
 import { api } from '../../api/index.js';
 
 globalThis.React = React;
@@ -934,5 +937,122 @@ describe('wording: งาน, not ดีล', () => {
     const text = visibleText();
     const hits = [...text.matchAll(/ดีล/g)].map((m) => text.slice(Math.max(0, m.index - 25), m.index + 28));
     expect(hits).toEqual([]);
+  });
+});
+
+// Fix round 2.
+describe('fix round 2', () => {
+  // Item 1: per-deal client state never crosses from one deal to another. TicketDetailRoute keys the page by the
+  // route id, so moving from deal A to deal B mounts a fresh page — every piece of state (the unsaved item edit, the
+  // tab, open dialogs, the timeline filter and "+ บันทึก" draft, the call / visit drafts) starts over.
+  function Nav() {
+    const navigate = useNavigate();
+    return (
+      <>
+        <button type="button" onClick={() => navigate('/tickets/702')}>go-702</button>
+        <button type="button" onClick={() => navigate('/tickets/701')}>go-701</button>
+      </>
+    );
+  }
+  function renderRoute() {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    return render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/tickets/701']}>
+          <Nav />
+          <Routes>
+            <Route
+              path="/tickets/:id"
+              element={<React.Suspense fallback="loading"><TicketDetailRoute user={salesOwner} showToast={vi.fn()} /></React.Suspense>}
+            />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  }
+  function twoDeals() {
+    api.tickets.get.mockImplementation((id) => Promise.resolve({
+      ticket: buildTicket({
+        summary: String(id) === '702'
+          ? { id: 702, code: 'PR-2026-0702', projectName: 'โครงการบี', title: 'โครงการบี', status: 'draft' }
+          : { id: 701, status: 'draft' },
+      }),
+    }));
+    api.tickets.actions.mockResolvedValue({
+      currentState: { lifecycle: 'ACTIVE', salesStage: 'SPEC_APPROVED' },
+      availableActions: [{ action: 'EDIT_ITEMS' }],
+      stageDecisions: [],
+    });
+  }
+  const heading = () => screen.findByRole('heading', { level: 1 });
+  async function editItemOnFirstDeal() {
+    await waitFor(async () => expect((await heading()).textContent).toBe('โครงการบ้านสวน'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'ใบเสนอราคา' }));
+    fireEvent.click(await screen.findByRole('button', { name: /แก้ไขรายการสินค้า/ }));
+    fireEvent.change(document.getElementById('edit-item-0-size'), { target: { value: 'ของดีล 701' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'ภาพรวม' }));
+  }
+
+  it('an unsaved item edit on deal A never appears on deal B', async () => {
+    twoDeals();
+    renderRoute();
+    await editItemOnFirstDeal();
+    fireEvent.click(screen.getByRole('button', { name: 'go-702' }));
+    await waitFor(async () => expect((await heading()).textContent).toBe('โครงการบี'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'ใบเสนอราคา' }));
+    await screen.findByRole('heading', { name: /^รายการสินค้า/ });
+    expect(screen.queryByDisplayValue('ของดีล 701')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกการแก้ไข' })).toBeNull();
+  });
+
+  it('A → B → A: the unsaved edit on A is gone, not half-restored (decided: gone)', async () => {
+    twoDeals();
+    renderRoute();
+    await editItemOnFirstDeal();
+    fireEvent.click(screen.getByRole('button', { name: 'go-702' }));
+    await waitFor(async () => expect((await heading()).textContent).toBe('โครงการบี'));
+    fireEvent.click(screen.getByRole('button', { name: 'go-701' }));
+    await waitFor(async () => expect((await heading()).textContent).toBe('โครงการบ้านสวน'));
+    fireEvent.click(await screen.findByRole('tab', { name: 'ใบเสนอราคา' }));
+    await screen.findByRole('heading', { name: /^รายการสินค้า/ });
+    expect(screen.queryByDisplayValue('ของดีล 701')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'บันทึกการแก้ไข' })).toBeNull();
+  });
+
+  it('within ONE deal the unsaved edit still survives a tab switch (round-1 ruling 5)', async () => {
+    twoDeals();
+    renderRoute();
+    await editItemOnFirstDeal();
+    fireEvent.click(screen.getByRole('tab', { name: 'ใบเสนอราคา' }));
+    expect(await screen.findByDisplayValue('ของดีล 701')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'บันทึกการแก้ไข' })).toBeTruthy();
+  });
+
+  // Item 2: for the four server-gated buttons the card's title is the button's own label, and the explanatory sentence
+  // appears once, beneath it.
+  it.each([
+    ['ลูกค้ายืนยัน', salesOwner, { status: 'quotation_issued', paymentStatus: null }, 'CONFIRM_CUSTOMER', 'ยืนยันว่าลูกค้าตกลงคำสั่งซื้อแล้ว'],
+    ['ยืนยันชำระครบ (Final Payment)', { id: 5, employeeId: 5, name: 'บัญชี', role: 'account' }, { status: 'quotation_issued' }, 'FINAL_PAYMENT', 'ยืนยันว่าลูกค้าชำระส่วนที่เหลือครบแล้ว'],
+    ['ยืนยันพร้อมปิดงาน', { id: 5, employeeId: 5, name: 'บัญชี', role: 'account' }, {}, 'CONFIRM_CLOSE', 'ส่งมอบและรับเงินครบแล้ว — ยืนยันเพื่อส่งให้ CEO ตรวจสอบปิดงาน'],
+    ['ตรวจสอบและปิดงาน', ceo, {}, 'VERIFY_CLOSE', 'ฝ่ายบัญชียืนยันแล้ว — ตรวจสอบและปิดงานได้เลย'],
+  ])('%s: the title is the button label and the sentence is said once', async (label, user, summary, action, sentence) => {
+    setDeal(summary, [action]);
+    renderPage(user);
+    await pageReady();
+    const card = await screen.findByTestId('next-step-card');
+    const button = await within(card).findByRole('button', { name: label });
+    expect(button.textContent.trim()).toBe(label);
+    expect(within(card).getByTestId('next-step-title').textContent).toBe(label);
+    expect(card.textContent.split(sentence)).toHaveLength(2);
+  });
+
+  // Item 3: like the old lost banner, a lost deal with no recorded reason (or date) still says so, with "-".
+  it('a lost deal with no recorded reason or date shows both lines with "-"', async () => {
+    setDeal({ lifecycle: 'CLOSED_LOST', salesStage: 'QUOTE_OWNER', lostReason: null, lostAt: null }, []);
+    renderPage();
+    await pageReady();
+    const facts = await screen.findByTestId('next-step-facts');
+    expect(facts.textContent).toContain('เหตุผล: -');
+    expect(facts.textContent).toContain('ปิดเมื่อ -');
   });
 });
