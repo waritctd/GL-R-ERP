@@ -1141,6 +1141,11 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           )}
         >
           <div className="flex flex-col gap-3.5">
+            {/* First in the scrolling body, like the deposit and IR warnings: TicketController has no route to void a
+                recorded delivery, and recording one can advance the stage. */}
+            <DialogCallout tone="warn" testId="delivery-warning">
+              บันทึกแล้วแก้ไขหรือลบไม่ได้ ตรวจจำนวนก่อนกดบันทึก
+            </DialogCallout>
             <DialogSummary icon="truck" testId="delivery-summary">
               {`เหลือส่ง ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการ`}
             </DialogSummary>

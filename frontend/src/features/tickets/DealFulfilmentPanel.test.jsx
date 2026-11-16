@@ -1597,6 +1597,20 @@ describe('DealFulfilmentPanel — บันทึกการส่งสิน�
     expect(info.match(/S\d+/g)).toEqual(['S9']);
   });
 
+  // Re-review ruling: a recorded delivery cannot be voided (TicketController has no void route) and can advance the
+  // stage, so the dialog warns first in its scrolling body — without replacing or moving the conditional S9 note.
+  it('warns first in the body that a recorded delivery cannot be edited or deleted; the S9 note stays last', async () => {
+    const dialogEl = await open();
+    const body = dialogEl.querySelector('.modal-body');
+    const warning = within(dialogEl).getByTestId('delivery-warning');
+    expect(warning.textContent).toBe('บันทึกแล้วแก้ไขหรือลบไม่ได้ ตรวจจำนวนก่อนกดบันทึก');
+    expect(body.firstElementChild.firstElementChild).toBe(warning);
+    const info = within(dialogEl).getByTestId('delivery-info');
+    expect(body.firstElementChild.lastElementChild).toBe(info);
+    expect(info.textContent).toBe('ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ ระบบจะบันทึกว่าส่งครบ เลื่อนงานไป S9 (ถ้ายังไม่ถึง) และแจ้งฝ่ายบัญชี');
+    expect(warning.compareDocumentPosition(within(dialogEl).getByTestId('delivery-summary')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   // Fix round 1, F3: the input's max is the line's REMAINING qty, never its ordered qty.
   it('each input is capped at the remaining qty, not the ordered qty', async () => {
     const dialog = within(await open());
