@@ -234,15 +234,17 @@ class PeopleInsightsIntegrationTest extends AbstractPostgresIntegrationTest {
         // Starts 2 Jan 2026 but charged to quota year 2025 (carried over): in 2026's leave, NOT in 2026's quotaUsage.
         long carried = leave(e, "PERSONAL", "2026-01-02", 1, "APPROVED", 1, 0, e, "2026-01-01T10:00:00+07:00", null);
         quotaYear(carried, 2025, 1);
+        // A type that reaches 2026 only through its quota year (starts 31 Dec 2025): still needs its quota in leaveTypes.
+        quotaYear(leave(e, "VACATION", "2025-12-31", 1, "APPROVED", 1, 0, e, "2025-12-30T10:00:00+07:00", null), 2026, 1);
         // Plain 2026 request, plus a SUBMITTED one that must not count.
         quotaYear(leave(e, "SICK", "2026-02-09", 1.5, "APPROVED", 1.5, 0, e, "2026-02-08T10:00:00+07:00", null), 2026, 1.5);
         quotaYear(leave(e, "SICK", "2026-02-16", 5, "SUBMITTED", 0, 0, e, "2026-02-15T10:00:00+07:00", null), 2026, 5);
 
         Map<String, Object> body = call("ceo", "all", 2026);
         List<Map<String, Object>> usage = list(body, "quotaUsage").stream().filter(r -> num(r, "employeeId") == e).toList();
-        assertThat(usage).hasSize(1);
-        assertThat(usage.get(0).get("leaveTypeCode")).isEqualTo("SICK");
-        assertThat(dbl(usage.get(0), "days")).isEqualTo(3.5); // 2 spilled in + 1.5
+        assertThat(usage.stream().map(r -> r.get("leaveTypeCode") + "=" + dbl(r, "days")).toList())
+            .containsExactlyInAnyOrder("SICK=3.5", "VACATION=1.0"); // SICK: 2 spilled in + 1.5
+        assertThat(list(body, "leaveTypes").stream().map(r -> r.get("code")).toList()).contains("VACATION");
         List<Map<String, Object>> leaveRows = list(body, "leave").stream().filter(r -> num(r, "employeeId") == e).toList();
         assertThat(leaveRows.stream().map(r -> r.get("month") + r.get("leaveTypeCode").toString()).toList())
             .containsExactlyInAnyOrder("2026-01PERSONAL", "2026-02SICK");

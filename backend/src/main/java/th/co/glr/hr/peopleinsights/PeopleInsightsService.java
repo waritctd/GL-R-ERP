@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.auth.UserPrincipal;
@@ -56,9 +57,12 @@ public class PeopleInsightsService {
         List<LeaveRow> leave = repository.leave(scopeIds, y);
         List<AttendanceRow> attendance = repository.attendance(judged, y);
         LocalDate asOf = repository.latestAttendanceDate();
+        var quotaUsage = repository.quotaUsage(scopeIds, y);
+        // A type can reach this year only through its quota year (a leave that starts in December), so both lists name it.
+        Set<String> typeCodes = Stream.concat(leave.stream().map(LeaveRow::leaveTypeCode), quotaUsage.stream().map(q -> q.leaveTypeCode()))
+            .collect(Collectors.toSet());
         return new Response(asOf == null ? null : asOf.toString(), y, allowed, served,
-            repository.leaveTypes(leave.stream().map(LeaveRow::leaveTypeCode).collect(Collectors.toSet())),
-            people, leave, repository.quotaUsage(scopeIds, y), attendance, whole ? comparableTeams(teams) : List.of());
+            repository.leaveTypes(typeCodes), people, leave, quotaUsage, attendance, whole ? comparableTeams(teams) : List.of());
     }
 
     private List<Scope> allowedScopes(UserPrincipal user, List<TeamRow> teams) {
