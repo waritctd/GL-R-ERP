@@ -56,7 +56,8 @@ test.describe('real data reaches the browser', () => {
     // replaces.
     const [{ status, json }] = await Promise.all([
       captureJson(page, (r) => apiPath(r) === '/api/tickets' && r.request().method() === 'GET'),
-      page.goto('/tickets'),
+      // งานทั้งหมด opens on the board, whose cards carry no deal code; the table view still lists DEMO-TKT- codes.
+      page.goto('/tickets?view=table'),
     ]);
     expect(status).toBe(200);
 

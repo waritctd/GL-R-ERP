@@ -115,6 +115,18 @@ describe('MyWork', () => {
     expect(screen.getByTestId('board-card-31')).toBeTruthy();
     expect(screen.getByTestId('board-card-32')).toBeTruthy();
   });
+
+  // Owner ruling 2026-11-16: the sales screens say งาน; the list page is งานทั้งหมด.
+  it('names the board and its links in งาน, never ดีล', async () => {
+    renderMyWork();
+    await screen.findByTestId('deal-board');
+
+    expect(screen.getByText('งานทั้งหมดของฉัน')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'งานเงียบ' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'ดูงานทั้งหมด' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /รายการดีล/ })).toBeNull();
+    expect(screen.queryByText('ดีลทั้งหมดของฉัน')).toBeNull();
+  });
 });
 
 // ── review fixes (M1, M3, M4, LOW error toasts, design gaps) ─────────────────────────────────
@@ -240,7 +252,7 @@ describe('MyWork — review fixes', () => {
     await screen.findByTestId('follow-up-101');
     fireEvent.click(screen.getByRole('button', { name: 'ดูทั้งหมด (7)' }));
 
-    expect(screen.getByRole('button', { name: 'ดีลเงียบ' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'งานเงียบ' }).getAttribute('aria-pressed')).toBe('true');
     expect(screen.getByTestId('board-card-107')).toBeTruthy();
     expect(screen.queryByTestId('board-card-32')).toBeNull();
   });

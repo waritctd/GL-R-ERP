@@ -139,8 +139,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // both and detail pages.
     {
       path: '/tickets',
-      label: 'รายการดีล',
-      helper: 'Deal pipeline',
+      label: 'งานทั้งหมด',
+      helper: 'All deals',
       icon: 'briefcase',
       group: 'sales',
       // Role-scoped views: the pipeline BROWSER is canViewDealPipeline (sales/

@@ -21,13 +21,13 @@ describe('SalesTabs (role-scoped views)', () => {
   it('gives ceo the deal-list tab and the pricing queue tab, queue trailing', () => {
     renderTabs('ceo');
     expect(screen.getAllByRole('link').map((link) => link.textContent))
-      .toEqual(['ดีลทั้งหมด', 'คิวขอราคา']);
+      .toEqual(['งานทั้งหมด', 'คิวขอราคา']);
   });
 
   it('gives sales_manager the deal-list tab and the pricing queue tab, queue trailing', () => {
     renderTabs('sales_manager');
     expect(screen.getAllByRole('link').map((link) => link.textContent))
-      .toEqual(['ดีลทั้งหมด', 'คิวขอราคา']);
+      .toEqual(['งานทั้งหมด', 'คิวขอราคา']);
   });
 
   // A bar offering ONE destination is chrome that navigates nowhere — the tab is always the page you are already
@@ -41,7 +41,7 @@ describe('SalesTabs (role-scoped views)', () => {
 
   it('renders nothing for import, left with only the pricing queue', () => {
     renderTabs('import');
-    expect(screen.queryByText('ดีลทั้งหมด')).toBeNull();
+    expect(screen.queryByText('งานทั้งหมด')).toBeNull();
     expect(screen.queryAllByRole('link')).toHaveLength(0);
   });
 

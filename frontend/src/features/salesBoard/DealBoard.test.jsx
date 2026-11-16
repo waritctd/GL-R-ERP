@@ -12,7 +12,7 @@ const deal = (over) => ({
   expectedQuarter: null, lastTouchedAt: '2026-11-10T00:00:00Z', daysQuiet: 5, quiet: false, ...over,
 });
 
-const renderBoard = (deals) => render(<MemoryRouter><DealBoard deals={deals} /></MemoryRouter>);
+const renderBoard = (deals, props = {}) => render(<MemoryRouter><DealBoard deals={deals} {...props} /></MemoryRouter>);
 
 describe('DealBoard', () => {
   it('shows the five columns with the reps\' S-codes, and the auto tag only on columns 3–5', () => {
@@ -75,5 +75,35 @@ describe('DealBoard', () => {
     const board = screen.getByTestId('deal-board');
     expect(board.className).toContain('mobile:grid-cols-1');
     expect(board.className).not.toMatch(/overflow-x|min-w-\[/);
+  });
+  it('counts each column in งาน and says ไม่มีงาน for an empty one (owner ruling: the sales screens say งาน)', () => {
+    renderBoard([deal({ ticketId: 31, title: 'ร้านกาแฟ', value: 1000 })]);
+
+    expect(within(screen.getByTestId('board-column-1')).getByText(/^1 งาน · ฿1,000$/)).toBeTruthy();
+    expect(within(screen.getByTestId('board-column-2')).getByText('ไม่มีงาน')).toBeTruthy();
+    expect(screen.queryByText(/ดีล/)).toBeNull();
+  });
+
+  it('names the owning rep on each card only when asked (managers), by first name with the full name kept', () => {
+    const { unmount } = renderBoard([deal({ ticketId: 41, ownerName: 'สมหมาย ขายดี' })]);
+    expect(within(screen.getByTestId('board-card-41')).queryByTestId('board-card-owner')).toBeNull();
+    unmount();
+
+    renderBoard([deal({ ticketId: 41, ownerName: 'สมหมาย ขายดี' })], { showOwner: true });
+
+    const owner = within(screen.getByTestId('board-card-41')).getByTestId('board-card-owner');
+    expect(owner.textContent).toContain('สมหมาย');
+    expect(owner.textContent).not.toContain('ขายดี');
+    expect(owner.getAttribute('title')).toBe('ผู้ดูแล: สมหมาย ขายดี');
+  });
+
+  it('makes the whole card the tap target, not just the title text', () => {
+    renderBoard([deal({ ticketId: 51, title: 'Landmark' })]);
+
+    const card = screen.getByTestId('board-card-51');
+    const link = within(card).getByRole('link', { name: 'Landmark' });
+    expect(card.className).toContain('relative');
+    expect(link.className).toContain('after:absolute');
+    expect(link.className).toContain('after:inset-0');
   });
 });

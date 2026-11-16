@@ -32,6 +32,12 @@ public final class SalesBoardDtos {
                          List<VisitDtos.VisitDto> visitsThisWeek, CashMonth cash) {}
 
     /**
+     * GET /api/sales/team-board: every rep's open deals in {@link BoardDeal} shape (each row names its owner), for the
+     * sales_manager / ceo งานทั้งหมด board. {@code quietDays} is {@link QuietRule#quietDays()}, as on {@link MyWork}.
+     */
+    public record TeamBoard(List<BoardDeal> board, int quietDays) {}
+
+    /**
      * One week of the เงินที่จะเข้า bars. {@code weekStart} is the ISO week's Monday; the first week of the month also
      * holds any receipt dated before that Monday (the 1st falling mid-week), so the weeks' {@code received} sum to
      * {@link CashMonth#received}. The three expected buckets are OPEN rows due in this week.

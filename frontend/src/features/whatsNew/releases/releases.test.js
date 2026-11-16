@@ -84,8 +84,8 @@ describe('2026-11-16 audiences (unlocked, as the test env runs)', () => {
 
   it('each role is told about exactly the pages this release changed for it', () => {
     expect(idsFor(user('sales'))).toEqual(['address', 'my-work', 'deal-list', 'deal-page']);
-    expect(idsFor(user('sales_manager'))).toEqual(['address', 'team-overview', 'deal-list', 'deal-page']);
-    expect(idsFor(user('ceo'))).toEqual(['address', 'ceo-home', 'deal-list', 'deal-page-ceo', 'fulfilment']);
+    expect(idsFor(user('sales_manager'))).toEqual(['address', 'team-overview', 'sales-insights', 'deal-list', 'deal-page']);
+    expect(idsFor(user('ceo'))).toEqual(['address', 'ceo-home', 'sales-insights', 'deal-list', 'deal-page-ceo', 'fulfilment']);
     expect(idsFor(user('account'))).toEqual(['address', 'finance-deal']);
     expect(idsFor(user('import'))).toEqual(['address', 'import-home', 'fulfilment', 'import-deal', 'pricing-request']);
   });
@@ -105,6 +105,7 @@ describe('2026-11-16 audiences (unlocked, as the test env runs)', () => {
     expect(audienceLabels(release, byId.address)).toEqual(['ทุกคน']);
     expect(audienceLabels(release, byId['deal-list'])).toEqual(['ฝ่ายขาย', 'ผู้จัดการฝ่ายขาย', 'CEO']);
     expect(audienceLabels(release, byId.fulfilment)).toEqual(['CEO', 'ฝ่ายนำเข้า']);
+    expect(audienceLabels(release, byId['sales-insights'])).toEqual(['ผู้จัดการฝ่ายขาย', 'CEO']);
   });
 
   it('the ทั้งหมด tab has an everyone section, a section per role with its own pages, and names the address-only roles', () => {
@@ -156,7 +157,7 @@ describe('2026-11-16 audiences under the release lockdown', () => {
     const { entriesForViewer: forViewer, release } = await lockedModules();
     expect(forViewer(release, user('sales')).map((entry) => entry.id)).toEqual(['address', 'my-work', 'deal-list', 'deal-page']);
     expect(forViewer(release, user('ceo')).map((entry) => entry.id))
-      .toEqual(['address', 'ceo-home', 'deal-list', 'deal-page-ceo', 'fulfilment']);
+      .toEqual(['address', 'ceo-home', 'sales-insights', 'deal-list', 'deal-page-ceo', 'fulfilment']);
   });
 
   it('the publish payload drops a hidden page from the bell and email of the role that cannot open it', async () => {

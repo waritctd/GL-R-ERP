@@ -639,9 +639,12 @@ export const api = {
   },
   // Mirrors SalesBoardController (salesboard/). myWork: the caller's own ACTIVE deals (followUp + board), sales /
   // sales_manager / ceo. teamOverview: per-rep rows + the team's quiet deals, sales_manager / ceo only.
+  // teamBoard: { board, quietDays } — every rep's open deals in myWork.board's row shape (owner on each row), for the
+  // งานทั้งหมด board; sales_manager / ceo only (SalesBoardService.teamBoard).
   salesBoard: {
     myWork: () => apiRequest(API_ROUTES.salesBoard.myWork),
     teamOverview: () => apiRequest(API_ROUTES.salesBoard.teamOverview),
+    teamBoard: () => apiRequest(API_ROUTES.salesBoard.teamBoard),
     // Mirrors PipelineImportController: multipart `file` (.xlsx / UTF-8 .csv). dryRun=true previews and writes
     // nothing; dryRun=false commits the whole file in one transaction. sales_manager / ceo only (the service's gate).
     pipelineImport: async (file, dryRun) => {

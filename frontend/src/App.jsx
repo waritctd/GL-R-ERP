@@ -41,7 +41,7 @@ const RequestsPage = lazy(() => import('./features/requests/RequestsPage.jsx').t
 const LeaveSurfacePage = lazy(() => import('./features/leave/LeaveSurfacePage.jsx').then(toDefault('LeaveSurfacePage')));
 // The 3-step /leave/new route the "ยื่นคำขอลา" CTA navigates to -- see LeaveRequestPage.jsx's doc comment.
 const LeaveRequestPage = lazy(() => import('./features/leave/LeaveRequestPage.jsx').then(toDefault('LeaveRequestPage')));
-const TicketListPage = lazy(() => import('./features/tickets/TicketListPage.jsx').then(toDefault('TicketListPage')));
+const AllDealsPage = lazy(() => import('./features/tickets/AllDealsPage.jsx').then(toDefault('AllDealsPage')));
 import { AccountFinanceRedirect, TicketDetailRoute } from './features/tickets/TicketDetailRoute.jsx';
 const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.jsx').then(toDefault('CommissionPage')));
 // Role-scoped views: Account's money Overview (landing) + งานการเงิน worklist.
@@ -467,7 +467,7 @@ export function App() {
               <>
                 <Route
                   path="/tickets"
-                  element={<TicketListPage user={user} showToast={showToast} />}
+                  element={<AllDealsPage user={user} showToast={showToast} />}
                 />
                 <Route
                   path="/tickets/:id"
