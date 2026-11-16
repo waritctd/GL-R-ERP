@@ -186,9 +186,50 @@ describe('PeopleInsightsPage', () => {
     await screen.findByRole('alert');
     fail = false;
     fireEvent.click(await within(screen.getByRole('tablist')).findByRole('tab', { name: 'ทีมทดสอบ' }));
-    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    await waitFor(() => expect(screen.queryByText('เทียบตามสายงาน')).toBeNull()); // the new scope's data, not the old report
+    expect(screen.queryByRole('alert')).toBeNull();
     expect(document.querySelector('header').textContent).toContain('ทีมทดสอบ');
-    expect(screen.queryByText('เทียบตามสายงาน')).toBeNull(); // the new scope's data, not the old report
+  });
+
+  describe('load-failed alert follows the user, not the data', () => {
+    // One shared object for every good response, so "a reload returning the same report" is literal.
+    const base = { ...PEOPLE_FIXTURE, scopes: [...PEOPLE_FIXTURE.scopes, { id: '8', label: 'ทีมสอง' }] };
+    const tab = (name) => within(screen.getByRole('tablist')).getByRole('tab', { name });
+    const setup = async () => {
+      api.peopleInsights.get.mockImplementation(async (params = {}) => {
+        if (params.scope === '7') throw Object.assign(new Error('boom'), { status: 500 });
+        return base;
+      });
+      renderPage();
+      await screen.findByTestId('people-insights');
+      fireEvent.click(tab('ทีมทดสอบ'));
+      await screen.findByRole('alert');
+      await waitFor(() => expect(tab('ทีมทดสอบ').getAttribute('aria-selected')).toBe('false'));
+    };
+
+    it('keeps the alert after the snap-back refetch resolves with the same data', async () => {
+      await setup();
+      await waitFor(() => expect(screen.getByTestId('people-insights').getAttribute('aria-busy')).toBe('false'));
+      expect(screen.getByRole('alert')).toBeTruthy();
+    });
+
+    it('clears the alert when the user picks another scope that loads, even with an identical report', async () => {
+      await setup();
+      fireEvent.click(tab('ทีมสอง'));
+      await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    });
+
+    it('shows the alert again, without looping, when the user picks the failed scope again', async () => {
+      await setup();
+      const calls = () => api.peopleInsights.get.mock.calls.filter(([p]) => p?.scope === '7').length;
+      const before = calls(); // the failed fetch plus its one retry
+      fireEvent.click(tab('ทีมทดสอบ'));
+      await waitFor(() => expect(calls()).toBe(before + 2));
+      await waitFor(() => expect(tab('ทีมทดสอบ').getAttribute('aria-selected')).toBe('false'));
+      expect(screen.getByRole('alert')).toBeTruthy();
+      await new Promise((r) => { setTimeout(r, 100); });
+      expect(calls()).toBe(before + 2);
+    });
   });
 
   it('a 403 on a scope switch still shows the no-access state', async () => {

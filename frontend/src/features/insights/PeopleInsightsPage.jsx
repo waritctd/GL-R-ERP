@@ -208,13 +208,9 @@ export function PeopleInsightsPage() {
   });
   const fresh = query.isPlaceholderData ? undefined : query.data;
 
-  // Keyed on the data itself: a refetch that returns the same report (the snap-back below) is not a new success.
   useEffect(() => {
-    if (fresh && fresh !== lastGood?.data) {
-      setLastGood({ scope, year, data: fresh });
-      setLoadFailed(false);
-    }
-  }, [fresh, lastGood, scope, year]);
+    if (fresh) setLastGood({ scope, year, data: fresh });
+  }, [fresh, scope, year]);
 
   useEffect(() => {
     if (!query.isError || query.error?.status === 403) return;
@@ -249,5 +245,8 @@ export function PeopleInsightsPage() {
       </Shell>
     );
   }
-  return <Report data={shown} scope={scope} onScope={setScope} onYear={setYear} busy={query.isPlaceholderData} failed={loadFailed} />;
+  // The alert belongs to the user's last pick: only their own scope or year choice clears it, never the automatic snap-back.
+  const pickScope = (s) => { setLoadFailed(false); setScope(s); };
+  const pickYear = (y) => { setLoadFailed(false); setYear(y); };
+  return <Report data={shown} scope={scope} onScope={pickScope} onYear={pickYear} busy={query.isPlaceholderData} failed={loadFailed} />;
 }
