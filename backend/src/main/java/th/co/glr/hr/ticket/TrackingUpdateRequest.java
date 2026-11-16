@@ -21,7 +21,7 @@ public record TrackingUpdateRequest(
     @Pattern(regexp = "^$|^\\d{4}-Q[1-4]$", message = "ไตรมาสที่คาดว่าจะปิดต้องอยู่ในรูปแบบ YYYY-Qn เช่น 2026-Q4")
     String expectedQuarter,
     /**
-     * V219 มูลค่าโดยประมาณ (THB). Like {@code expectedQuarter} it is KEPT when null/absent — every existing caller of
+     * V220 มูลค่าโดยประมาณ (THB). Like {@code expectedQuarter} it is KEPT when null/absent — every existing caller of
      * this endpoint predates it — and set when sent. Same bounds as the create request: > 0 and NUMERIC(14,2), the
      * precision of imported_value (V215).
      */
@@ -32,7 +32,7 @@ public record TrackingUpdateRequest(
      * {@code estimatedValue}. */
     Boolean clearEstimatedValue
 ) {
-    /** The shape before the estimate (V219): the estimate is kept. */
+    /** The shape before the estimate (V220): the estimate is kept. */
     public TrackingUpdateRequest(Integer winProbability, String designerName, String ownerName, String buyerName,
                                  LocalDate nextFollowUpAt, String expectedQuarter) {
         this(winProbability, designerName, ownerName, buyerName, nextFollowUpAt, expectedQuarter, null, null);

@@ -47,7 +47,7 @@ public record CreateTicketRequest(
     /** Optional ผู้ออกแบบ (short create form): the designer's name, written to {@code sales.ticket.designer_name} —
      * the same column the tracking form and the quotation fill write. */
     @Size(max = 200) String designerName,
-    /** Optional มูลค่าโดยประมาณ (THB): written to its own column {@code sales.ticket.estimated_value} (V219), the
+    /** Optional มูลค่าโดยประมาณ (THB): written to its own column {@code sales.ticket.estimated_value} (V220), the
      * board / forecast's LAST value fallback (after a quotation and imported_value). > 0, and NUMERIC(14,2) — the
      * precision of imported_value (V215). Editable afterwards through PUT /tracking. */
     @DecimalMin(value = "0", inclusive = false) @Digits(integer = 12, fraction = 2) BigDecimal estimatedValue,

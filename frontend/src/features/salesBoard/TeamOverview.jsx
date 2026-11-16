@@ -216,7 +216,7 @@ export function TeamOverview({ showTitle = true }) {
                     </div>
                     <span className="grid shrink-0 justify-items-end gap-1">
                       <span className="text-sm font-bold tabular-nums text-text">{money(deal.value, deal.currency)}</span>
-                      {/* V219: a paused deal whose วันที่จะกลับมาดู has arrived, counted with the quiet ones. */}
+                      {/* V220: a paused deal whose วันที่จะกลับมาดู has arrived, counted with the quiet ones. */}
                       {deal.returning ? (
                         <span className="rounded-full bg-info-bg px-2 py-px text-2xs font-bold text-info-dark">
                           {`พักไว้ · ถึงวันกลับมาดู ${formatThaiDate(deal.pauseReturnOn)}`}

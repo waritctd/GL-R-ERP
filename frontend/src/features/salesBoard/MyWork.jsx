@@ -145,7 +145,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     mutationFn: ({ deal, payload }) => api.tickets.markLost(deal.ticketId, payload),
     onSuccess: refresh,
   });
-  // A returning paused deal (V219) leaves ควรตามต่อ when resumed — the same POST /resume the deal page uses.
+  // A returning paused deal (V220) leaves ควรตามต่อ when resumed — the same POST /resume the deal page uses.
   const resumeMutation = useMutation({
     mutationFn: (deal) => api.tickets.resume(deal.ticketId, {}),
     onSuccess: () => { refresh(); showToast('success', 'ดำเนินการต่อแล้ว'); },

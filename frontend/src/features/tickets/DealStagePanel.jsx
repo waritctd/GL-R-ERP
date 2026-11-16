@@ -225,7 +225,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
         designerName: summary.designerName ?? null,
         ownerName: summary.ownerName ?? null,
         buyerName: summary.buyerName ?? null,
-        estimatedValue: summary.estimatedValue ?? null, // V219: absent/null KEEPS it server-side; sent as held anyway
+        estimatedValue: summary.estimatedValue ?? null, // V220: absent/null KEEPS it server-side; sent as held anyway
       });
       await api.tickets.addActivity(summary.id, {
         activityDate: bangkokTodayIso(),
@@ -265,7 +265,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           ownerName: summary.ownerName ?? null,
           buyerName: summary.buyerName ?? null,
           winProbability: summary.winProbabilityOverride ?? null,
-          estimatedValue: summary.estimatedValue ?? null, // V219: absent/null KEEPS it server-side; sent as held anyway
+          estimatedValue: summary.estimatedValue ?? null, // V220: absent/null KEEPS it server-side; sent as held anyway
         });
       }
       if (s2NeedsActivity && note) {

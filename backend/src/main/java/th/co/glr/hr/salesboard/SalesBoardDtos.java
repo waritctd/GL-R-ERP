@@ -16,7 +16,7 @@ public final class SalesBoardDtos {
      * headline-party quotation, else its latest live (APPROVED/ISSUED/SENT/ACCEPTED) one; when none is live the last
      * EXPIRED one is used and {@code valueExpired} is true. {@code lastTouchedAt}/{@code daysQuiet}/{@code quiet}
      * follow {@link QuietRule}; {@code lastActivityKind}/{@code lastActivityNote} are the latest deal_activity.
-     * {@code returning} is true for a PAUSED deal whose วันที่จะกลับมาดู ({@code pauseReturnOn}, V219) has arrived
+     * {@code returning} is true for a PAUSED deal whose วันที่จะกลับมาดู ({@code pauseReturnOn}, V220) has arrived
      * ({@link QuietRule#returningSql}): such a row is never on the board, only in ควรตามต่อ / the team's stale list,
      * and {@code quiet} is false on it (that rule is ACTIVE-only).
      */
@@ -39,7 +39,7 @@ public final class SalesBoardDtos {
     }
 
     /**
-     * {@code followUp}: quiet deals plus the caller's returning paused deals (V219), by daysQuiet × value then
+     * {@code followUp}: quiet deals plus the caller's returning paused deals (V220), by daysQuiet × value then
      * daysQuiet, max 5. {@code board}: every open deal.
      * {@code visitsThisWeek}: the caller's own visits in this ISO week (Mon–Sun, Asia/Bangkok), in
      * {@link VisitRepository}'s order.
@@ -90,7 +90,7 @@ public final class SalesBoardDtos {
                          int visitsDone, int visitsPlanned, BigDecimal expected, BigDecimal received) {}
 
     /**
-     * {@code stale}: quiet deals plus returning paused deals (V219) across the team, ordered as
+     * {@code stale}: quiet deals plus returning paused deals (V220) across the team, ordered as
      * {@link MyWork#followUp}, max 20. A rep's {@link RepRow#quietDeals} counts both the same way.
      * {@code teamVisitsThisWeek}: every rep's visits this ISO week. An owner with visits but no open deal still gets
      * a {@link RepRow} (0 deals).

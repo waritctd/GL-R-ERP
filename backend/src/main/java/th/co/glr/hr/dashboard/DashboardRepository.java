@@ -254,7 +254,7 @@ public class DashboardRepository {
             th.co.glr.hr.ticket.DealStage.ORDER.subList(0,
                 th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED)));
         String payable = "(" + TicketRepository.payableAmountSelect("t.ticket_id") + ")";
-        // V219: with no imported value the rep's own estimate (estimated_value) is the last fallback, exactly as on the
+        // V220: with no imported value the rep's own estimate (estimated_value) is the last fallback, exactly as on the
         // board: quotation → imported_value → estimated_value.
         String stated = "COALESCE(t.imported_value, t.estimated_value)";
         String value = "CASE WHEN " + stated + " IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sales.quotation vq"

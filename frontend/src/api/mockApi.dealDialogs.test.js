@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { api } from './mockApi.js';
 import { isReturning } from '../features/salesBoard/quietRule.js';
 
-// The mock's mirror of the lifecycle-dialog backend changes (2026-11-16): the pause return date (V219, QuietRule
+// The mock's mirror of the lifecycle-dialog backend changes (2026-11-16): the pause return date (V220, QuietRule
 // #returningSql), the drawn cancel reasons, and the meta catalog. SHAPE ONLY — whose deals the follow-up list and the
 // team figures include is SalesBoardScopeIntegrationTest / PausedDealFollowUpScopeIntegrationTest's job, never this.
 

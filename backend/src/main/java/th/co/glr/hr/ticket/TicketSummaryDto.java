@@ -174,13 +174,13 @@ public record TicketSummaryDto(
     boolean activityInRange,
     LocalDate lastActivityAt,
     /**
-     * V219 {@code sales.ticket.pause_return_on} — วันที่จะกลับมาดู, the date a paused (ON_HOLD / DORMANT) deal comes
+     * V220 {@code sales.ticket.pause_return_on} — วันที่จะกลับมาดู, the date a paused (ON_HOLD / DORMANT) deal comes
      * back into its owner's ควรตามต่อ (Asia/Bangkok date, {@code QuietRule#returningSql}). Null when the pause named
      * no date, and cleared on resume. Only meaningful while the deal is paused.
      */
     LocalDate pauseReturnOn,
     /**
-     * V219 {@code sales.ticket.estimated_value} — มูลค่าโดยประมาณ (THB) the rep typed (create dialog / tracking edit).
+     * V220 {@code sales.ticket.estimated_value} — มูลค่าโดยประมาณ (THB) the rep typed (create dialog / tracking edit).
      * The board and forecast fall back to it last (quotation → imported_value → this). Nulled by
      * {@link #withoutMoney()}: it is a selling figure.
      */
@@ -490,11 +490,11 @@ public record TicketSummaryDto(
      * Copy for the {@code import} role, wherever it receives a summary (import must not be handed pricing, and the
      * deal's payable/received totals are the customer price). Nulled: the customer money totals ({@code amountPayable},
      * {@code amountPaid}, {@code amountOutstanding}); the payment-due and deposit-due facts; the live direct quotation
-     * (and {@code quotedRecipients} emptied); {@code estimatedValue} (V219 — a selling figure); and {@code pauseReturnOn}. Every
+     * (and {@code quotedRecipients} emptied); {@code estimatedValue} (V220 — a selling figure); and {@code pauseReturnOn}. Every
      * other field is unchanged. Null rather than zero, so a client cannot mistake "not disclosed" for "nothing owed".
      *
      * <p>{@code pauseReturnOn} is not money. Withholding it is a deliberate choice, not a pricing rule: the import
-     * role did not see a deal's return date before V219 (the field did not exist) and still does not, so this slice
+     * role did not see a deal's return date before V220 (the field did not exist) and still does not, so this slice
      * widens nothing it may see. Import keeps seeing {@code lifecycle} and gets the pause notice. Showing it the date
      * is an owner decision for a later change, not a side effect of this one.
      */

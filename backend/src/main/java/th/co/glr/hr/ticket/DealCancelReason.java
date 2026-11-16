@@ -11,7 +11,7 @@ import java.util.stream.Stream;
  * <p>Owner ruling 2026-11-16 (the ยกเลิกงาน drawing): cancelling now means "this deal was opened by mistake", so a
  * NEW cancellation is offered {@link #OFFERED} — duplicate / wrong customer or project / no real project / other.
  * The three earlier codes ({@link #RETIRED}) stay VALID: already-cancelled deals carry them and keep their labels,
- * and the API still accepts them. Additive only (V219 widened the CHECK constraint); no row is rewritten. */
+ * and the API still accepts them. Additive only (V220 widened the CHECK constraint); no row is rewritten. */
 public final class DealCancelReason {
     /** เปิดซ้ำกับงานอื่น — the same opportunity already has a deal. */
     public static final String DUPLICATE_DEAL            = "DUPLICATE_DEAL";

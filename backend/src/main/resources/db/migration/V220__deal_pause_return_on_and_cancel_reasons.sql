@@ -1,7 +1,8 @@
--- V219: the deal lifecycle dialogs rebuilt to the owner-approved drawings (2026-11-16). Additive only.
+-- V220: the deal lifecycle dialogs rebuilt to the owner-approved drawings (2026-11-16). Additive only.
 --
--- MIGRATION NUMBERING: V219. Verified free on origin/develop and every local/remote branch and worktree
--- (`git ls-tree` over each) immediately before writing this file; the highest elsewhere is V218. Flyway out-of-order
+-- MIGRATION NUMBERING: V220. Written as V219; renumbered on 2026-11-17 before merge because develop gained
+-- V219__people_insights_teams first (it had been applied only to integration-test databases). An open PR also
+-- proposes a V220 (feedback requests) and has been asked to take V221. Flyway out-of-order
 -- is off and validate-on-migrate is false on prod (CLAUDE.md), so the IMAGE that carries this must also carry every
 -- lower pending migration, or those are silently skipped. (Edited in place during review fix round 1 — it had not
 -- been applied to any database outside the integration tests.)
@@ -26,7 +27,7 @@
 ALTER TABLE sales.ticket ADD COLUMN IF NOT EXISTS pause_return_on DATE;
 
 COMMENT ON COLUMN sales.ticket.pause_return_on IS
-    'วันที่จะกลับมาดู: from this Asia/Bangkok date a paused (ON_HOLD/DORMANT) deal returns to its owner''s follow-up list. NULL = no date (the pause behaves as before V219). Cleared on resume.';
+    'วันที่จะกลับมาดู: from this Asia/Bangkok date a paused (ON_HOLD/DORMANT) deal returns to its owner''s follow-up list. NULL = no date (the pause behaves as before V220). Cleared on resume.';
 
 ALTER TABLE sales.ticket ADD COLUMN IF NOT EXISTS estimated_value NUMERIC(14, 2);
 

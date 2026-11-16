@@ -169,7 +169,7 @@ public class SalesBoardService {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
         List<BoardDeal> board = repository.activeDealsOwnedBy(actor.id());
-        // ควรตามต่อ also takes the caller's OWN paused deals whose วันที่จะกลับมาดู has arrived (V219); the board does not.
+        // ควรตามต่อ also takes the caller's OWN paused deals whose วันที่จะกลับมาดู has arrived (V220); the board does not.
         List<BoardDeal> followUp = rankFollowUp(board, repository.returningPausedDealsOwnedBy(actor.id()),
             FOLLOW_UP_LIMIT);
         return new MyWork(followUp, board, quietRule.quietDays(), visits.ownThisWeek(actor),
@@ -181,7 +181,7 @@ public class SalesBoardService {
             throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
         }
         List<BoardDeal> deals = repository.activeDealsAllReps();
-        // Returning paused deals (V219) count in the quiet figures — each rep's quietDeals and the stale list — the
+        // Returning paused deals (V220) count in the quiet figures — each rep's quietDeals and the stale list — the
         // way a quiet deal does, and nowhere else: they are not open deals and add no open value.
         List<BoardDeal> returning = repository.returningPausedDealsAllReps();
         List<VisitDtos.VisitDto> weekVisits = visits.teamThisWeek(actor);
@@ -234,7 +234,7 @@ public class SalesBoardService {
             byOwner.computeIfAbsent(d.ownerId(), k -> new ArrayList<>()).add(d);
             names.putIfAbsent(d.ownerId(), d.ownerName());
         });
-        // A returning paused deal adds to its owner's quiet count only (V219); an owner whose only such deal it is
+        // A returning paused deal adds to its owner's quiet count only (V220); an owner whose only such deal it is
         // still gets a row (0 open deals).
         Map<Long, Integer> returningByOwner = new LinkedHashMap<>();
         returning.forEach(d -> {

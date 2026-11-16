@@ -74,10 +74,10 @@ public class QuietRule {
 
     /**
      * SQL boolean: the deal aliased {@code t} is a PAUSED deal coming back — {@code ON_HOLD} or {@code DORMANT} with a
-     * วันที่จะกลับมาดู ({@code pause_return_on}, V219) on or before today (Asia/Bangkok). Owner ruling 2026-11-16:
+     * วันที่จะกลับมาดู ({@code pause_return_on}, V220) on or before today (Asia/Bangkok). Owner ruling 2026-11-16:
      * such a deal shows in its owner's ควรตามต่อ and counts in the manager's quiet figures the way a quiet deal does,
      * until the rep resumes it (which clears the date) or re-pauses it with a later one. A pause with no date never
-     * matches, exactly as before V219. Deliberately NOT part of {@link #quietSql}: the board, the deal summary's
+     * matches, exactly as before V220. Deliberately NOT part of {@link #quietSql}: the board, the deal summary's
      * {@code stale} flag and every other quiet reader stay ACTIVE-only. Needs {@code :returnToday} bound to
      * {@link #bangkokToday()}.
      */

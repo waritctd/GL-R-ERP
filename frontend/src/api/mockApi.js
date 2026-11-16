@@ -4651,9 +4651,9 @@ function buildTicketDetail(ticket) {
       entryChannel: ticket.entryChannel ?? 'UNSPECIFIED',
       cancelReason: ticket.cancelReason ?? null,
       cancelledAt: ticket.cancelledAt ?? null,
-      // V219 วันที่จะกลับมาดู (TicketSummaryDto.pauseReturnOn): set by hold / dormant, cleared by resume.
+      // V220 วันที่จะกลับมาดู (TicketSummaryDto.pauseReturnOn): set by hold / dormant, cleared by resume.
       pauseReturnOn: ticket.pauseReturnOn ?? null,
-      // V219 มูลค่าโดยประมาณ (TicketSummaryDto.estimatedValue).
+      // V220 มูลค่าโดยประมาณ (TicketSummaryDto.estimatedValue).
       estimatedValue: ticket.estimatedValue ?? null,
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
       closeConfirmedByName: ticket.closeConfirmedByName ?? null,
@@ -8372,7 +8372,7 @@ function mockBoardRows(include) {
         boardColumn: mockBoardColumnOf(t.salesStage),
         // No value quotation: the pipeline import's stated value (V215 imported_value, always THB), as
         // SalesBoardRepository#map falls back to it.
-        // ...and with neither, the rep's own estimate (V219 estimated_value), the LAST fallback.
+        // ...and with neither, the rep's own estimate (V220 estimated_value), the LAST fallback.
         value: valueQuotation
           ? dealQuotationTotals(valueQuotation.items ?? [], valueQuotation.documentLanguage ?? 'TH').grandTotal
           : (t.importedValue ?? t.estimatedValue ?? null),
@@ -8388,7 +8388,7 @@ function mockBoardRows(include) {
         quiet: mockIsQuiet(t, activities, now, MOCK_QUIET_DAYS, mockHasUpcomingVisit(t.id)),
         lastActivityKind: latestActivity?.kind ?? null,
         lastActivityNote: latestActivity?.note ?? null,
-        // V219 (BoardDeal.returning / pauseReturnOn): a paused deal coming back — never an ACTIVE board row.
+        // V220 (BoardDeal.returning / pauseReturnOn): a paused deal coming back — never an ACTIVE board row.
         returning: mockIsReturning(t, today),
         pauseReturnOn: t.pauseReturnOn ?? null,
         lastTouchedMs: last,
@@ -8962,7 +8962,7 @@ function mockVisitsThisWeek(ownerId = null) {
  * when THB (a null currency is THB, as in repRows): a USD or EUR amount is not comparable, so it ranks by days alone. */
 function mockRankQuiet(deals) {
   const score = (d) => ((d.currency ?? 'THB') === 'THB' ? d.daysQuiet * Number(d.value ?? 0) : 0);
-  // SalesBoardService.rankFollowUp: quiet ACTIVE deals and returning paused ones (V219), ranked together.
+  // SalesBoardService.rankFollowUp: quiet ACTIVE deals and returning paused ones (V220), ranked together.
   return deals.filter((d) => d.quiet || d.returning)
     .sort((a, b) => score(b) - score(a) || b.daysQuiet - a.daysQuiet || a.ticketId - b.ticketId);
 }
@@ -9326,7 +9326,7 @@ export const api = {
         depositPolicy: t.depositPolicy ?? 'REQUIRED',
         depositPolicyReason: t.depositPolicyReason ?? null,
         entryChannel: t.entryChannel ?? 'UNSPECIFIED',
-        // V219: the list rows are the same TicketSummaryDto, so they carry the pause return date and estimate too.
+        // V220: the list rows are the same TicketSummaryDto, so they carry the pause return date and estimate too.
         pauseReturnOn: t.pauseReturnOn ?? null,
         estimatedValue: t.estimatedValue ?? null,
         // The real TicketSummaryDto (TicketService.java / TicketRepository.java) carries these
@@ -10044,7 +10044,7 @@ export const api = {
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle)) fail('ดำเนินการต่อได้เฉพาะดีลที่พักไว้', 409);
       ticket.lifecycle = 'ACTIVE';
-      ticket.pauseReturnOn = null; // V219: resume clears the return date
+      ticket.pauseReturnOn = null; // V220: resume clears the return date
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'RESUMED', ticket.salesStage, ticket.salesStage, (payload.note || '').trim() || null);
       return delay({ ticket: buildTicketDetail(ticket) });
@@ -10168,7 +10168,7 @@ export const api = {
         }
         ticket.expectedQuarter = payload.expectedQuarter || null;
       }
-      // V219 estimatedValue: like expectedQuarter, absent/null KEEPS it; clearEstimatedValue clears it; a value must
+      // V220 estimatedValue: like expectedQuarter, absent/null KEEPS it; clearEstimatedValue clears it; a value must
       // be > 0 within NUMERIC(14,2) (TrackingUpdateRequest @DecimalMin(exclusive 0) @Digits(12,2)).
       if (payload?.clearEstimatedValue === true) {
         ticket.estimatedValue = null;
@@ -13953,7 +13953,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         if (!row.lastUpdateAt || d.lastTouchedAt > row.lastUpdateAt) row.lastUpdateAt = d.lastTouchedAt;
         byRep.set(d.ownerId, row);
       }
-      // SalesBoardService.repRows (V219): a returning paused deal adds to its owner's quietDeals only — not an open
+      // SalesBoardService.repRows (V220): a returning paused deal adds to its owner's quietDeals only — not an open
       // deal, no open value; an owner whose only such deal it is still gets a row.
       const returning = mockReturningPausedDeals();
       for (const d of returning) {

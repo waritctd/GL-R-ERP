@@ -441,7 +441,7 @@ public class TicketRepository {
             """,
             new MapSqlParameterSource()
                 // The short create form's ผู้ออกแบบ and มูลค่าโดยประมาณ (2026-11-16); both null from every other caller.
-                // The estimate has its own column (V219 estimated_value); imported_value stays the pipeline import's.
+                // The estimate has its own column (V220 estimated_value); imported_value stays the pipeline import's.
                 .addValue("designerName", request.designerName() == null || request.designerName().isBlank()
                     ? null : request.designerName().trim())
                 .addValue("estimatedValue", request.estimatedValue(), java.sql.Types.NUMERIC)
@@ -1683,14 +1683,14 @@ public class TicketRepository {
             new MapSqlParameterSource().addValue("lifecycle", lifecycle).addValue("id", ticketId));
     }
 
-    /** V219 มูลค่าโดยประมาณ: written by the tracking update (null = cleared). */
+    /** V220 มูลค่าโดยประมาณ: written by the tracking update (null = cleared). */
     public void updateEstimatedValue(long ticketId, java.math.BigDecimal estimatedValue) {
         jdbc.update(
             "UPDATE sales.ticket SET estimated_value = :v, updated_at = now() WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("v", estimatedValue, java.sql.Types.NUMERIC).addValue("id", ticketId));
     }
 
-    /** V219 วันที่จะกลับมาดู: written by hold / dormant (null = no date) and cleared by resume. */
+    /** V220 วันที่จะกลับมาดู: written by hold / dormant (null = no date) and cleared by resume. */
     public void updatePauseReturnOn(long ticketId, LocalDate pauseReturnOn) {
         jdbc.update(
             "UPDATE sales.ticket SET pause_return_on = :on, updated_at = now() WHERE ticket_id = :id",

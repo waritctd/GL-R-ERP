@@ -54,7 +54,7 @@ export function DealInfoCard({
   }
 
   async function submitTracking() {
-    // มูลค่าโดยประมาณ (V219 estimated_value): set when typed, cleared when emptied (`clearEstimatedValue`, because the
+    // มูลค่าโดยประมาณ (V220 estimated_value): set when typed, cleared when emptied (`clearEstimatedValue`, because the
     // endpoint KEEPS an absent estimate). Same bounds as the create form and the server.
     const estimate = parseEstimatedValue(draft.estimatedValue);
     if (Number.isNaN(estimate)) {

@@ -2694,7 +2694,7 @@ public class TicketService {
         if (request.expectedQuarter() != null) { // null = keep (see TrackingUpdateRequest); "" = clear
             tickets.updateExpectedQuarter(ticketId, blankToNull(request.expectedQuarter()));
         }
-        // V219 มูลค่าโดยประมาณ: kept when absent, like expectedQuarter; clearEstimatedValue clears it. Same gate as every
+        // V220 มูลค่าโดยประมาณ: kept when absent, like expectedQuarter; clearEstimatedValue clears it. Same gate as every
         // other tracking field (requireDealOwnership + requireActive above, unchanged).
         if (Boolean.TRUE.equals(request.clearEstimatedValue())) {
             tickets.updateEstimatedValue(ticketId, null);
@@ -3007,7 +3007,7 @@ public class TicketService {
         return placeOnHold(ticketId, note, null, actor);
     }
 
-    /** {@link #placeOnHold} with the optional วันที่จะกลับมาดู (V219). The authorization checks are the method's
+    /** {@link #placeOnHold} with the optional วันที่จะกลับมาดู (V220). The authorization checks are the method's
      * existing two, unchanged and in the same order; the date is validated only after them, so a caller who may not
      * pause the deal is told 403, never a date error. */
     @Transactional
@@ -3037,7 +3037,7 @@ public class TicketService {
         return markDormant(ticketId, note, null, actor);
     }
 
-    /** {@link #markDormant} with the optional วันที่จะกลับมาดู (V219); the existing checks run first, unchanged. On an
+    /** {@link #markDormant} with the optional วันที่จะกลับมาดู (V220); the existing checks run first, unchanged. On an
      * ON_HOLD deal this is also the "re-pause with a new date" the owner ruling names: the new date (or none)
      * replaces the old one. */
     @Transactional
@@ -3071,7 +3071,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "ดำเนินการต่อได้เฉพาะดีลที่พักไว้");
         }
         tickets.updateLifecycle(ticketId, DealLifecycle.ACTIVE);
-        // V219: a resumed deal has no return date to come back on.
+        // V220: a resumed deal has no return date to come back on.
         tickets.updatePauseReturnOn(ticketId, null);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.RESUMED, s.salesStage(), s.salesStage(), blankToNull(note));

@@ -33,7 +33,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * The backend half of the five rebuilt deal dialogs (สร้างงานใหม่ / ยกเลิกงาน / พักงาน), through the real controller,
- * service, repository and Postgres (V219). Written wrong-way-round where a rule says who may do something: the short
+ * service, repository and Postgres (V220). Written wrong-way-round where a rule says who may do something: the short
  * create form must not let anyone start a deal at S2 who could not move one there by hand, and a return date is
  * writable by exactly whoever may pause the deal. Annotated itself — @EnabledIf is not inherited.
  */

@@ -1725,7 +1725,7 @@ class TicketServiceTest {
 
     // ── deal lifecycle + policies (V51) ──────────────────────────────────
 
-    /** Fix round 1, ruling 8 (V219 วันที่จะกลับมาดู): "not in the past" is judged on the Asia/Bangkok date. At
+    /** Fix round 1, ruling 8 (V220 วันที่จะกลับมาดู): "not in the past" is judged on the Asia/Bangkok date. At
      * 2026-11-18 03:00 Bangkok the UTC date is still the 17th; a return date of the 17th is already past in Bangkok and
      * must be refused, the 18th accepted. Judging in UTC would accept the 17th. */
     @Test

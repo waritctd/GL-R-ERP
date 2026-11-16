@@ -58,7 +58,7 @@ describe('DealInfoCard', () => {
     })));
   });
 
-  // Fix round 1, ruling 3: the create form's มูลค่าโดยประมาณ (V219 estimated_value) is shown here and edited through
+  // Fix round 1, ruling 3: the create form's มูลค่าโดยประมาณ (V220 estimated_value) is shown here and edited through
   // the same tracking update — set, clear, or (left alone) kept.
   describe('มูลค่าโดยประมาณ', () => {
     const withEstimate = { ...summary, estimatedValue: 1200000 };

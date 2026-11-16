@@ -1,4 +1,4 @@
-// มูลค่าโดยประมาณ (V219 sales.ticket.estimated_value): the bounds the server enforces on CreateTicketRequest and
+// มูลค่าโดยประมาณ (V220 sales.ticket.estimated_value): the bounds the server enforces on CreateTicketRequest and
 // TrackingUpdateRequest — > 0 and NUMERIC(14,2), the precision of imported_value (V215) — in one place for the create
 // form and the ข้อมูลงาน edit form.
 

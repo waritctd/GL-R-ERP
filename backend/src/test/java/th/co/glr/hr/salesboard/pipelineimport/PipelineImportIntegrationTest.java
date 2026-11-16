@@ -682,7 +682,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         assertThat(dashboard.forecastValue().subtract(before)).isEqualByComparingTo("750000");
     }
 
-    // ── the create form's estimate (V219 estimated_value, fix round 1 ruling 3) ───────────────────
+    // ── the create form's estimate (V220 estimated_value, fix round 1 ruling 3) ───────────────────
 
     /** The import neither overwrites nor is blocked by a rep's estimate: it still writes imported_value as before,
      * the estimate is untouched, and the board and the dashboard forecast show the imported value. */

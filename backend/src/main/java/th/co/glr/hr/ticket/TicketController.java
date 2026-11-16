@@ -338,7 +338,7 @@ public class TicketController {
 
     record NoteRequest(@jakarta.validation.constraints.Size(max = 2000) String note) {}
 
-    /** hold / dormant (the one พักงาน dialog, 2026-11-16): NoteRequest plus the optional วันที่จะกลับมาดู (V219). */
+    /** hold / dormant (the one พักงาน dialog, 2026-11-16): NoteRequest plus the optional วันที่จะกลับมาดู (V220). */
     record PauseRequest(@jakarta.validation.constraints.Size(max = 2000) String note,
                         java.time.LocalDate pauseReturnOn) {}
 

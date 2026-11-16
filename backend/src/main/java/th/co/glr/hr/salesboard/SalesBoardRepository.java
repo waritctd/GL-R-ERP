@@ -24,7 +24,7 @@ import th.co.glr.hr.ticket.WinProbabilityDefaults;
  * {@link #activeDealsOwnedBy} adds {@code t.created_by = :ownerId}; {@link #activeDealsAllReps} has no owner
  * predicate and is reached only through {@code SalesBoardService}'s sales_manager/ceo gate. Rows come ordered by
  * last touch ascending, then ticket id — mockApi.salesBoard mirrors this ORDER BY. The two
- * {@code returningPausedDeals*} reads (V219) take the same row shape for PAUSED deals whose วันที่จะกลับมาดู has
+ * {@code returningPausedDeals*} reads (V220) take the same row shape for PAUSED deals whose วันที่จะกลับมาดู has
  * arrived ({@link QuietRule#returningSql}), with the same owner predicate split.
  */
 @Repository
@@ -140,7 +140,7 @@ public class SalesBoardRepository {
             value = rs.getBigDecimal("imported_value");
             currency = "THB";
         }
-        // Last fallback (V219): the rep's own มูลค่าโดยประมาณ, THB, only when neither a quotation nor the import gives one.
+        // Last fallback (V220): the rep's own มูลค่าโดยประมาณ, THB, only when neither a quotation nor the import gives one.
         if (value == null && rs.getBigDecimal("estimated_value") != null) {
             value = rs.getBigDecimal("estimated_value");
             currency = "THB";

@@ -123,7 +123,7 @@ test.describe('sales board — happy paths @sales-board', () => {
     const mine = await (await sessions.sales.get('/api/sales/my-work')).json();
     // followUp is capped at 5, ranked by days x value; a zero-value deal can be crowded out by older rows, so
     // work the deal the server actually lists first if ours is not there (still a real, quiet, owned deal).
-    // Since the lifecycle dialogs (V219) followUp also LEADS with any returning paused deals, which offer only
+    // Since the lifecycle dialogs (V220) followUp also LEADS with any returning paused deals, which offer only
     // ดำเนินการต่อ, not โทรแล้ว — so the fallback is the first QUIET row, never a returning one.
     const target = mine.followUp.find((d) => d.ticketId === deal.id) ?? mine.followUp.find((d) => !d.returning);
     expect(target, `followUp is empty after backdating deal #${deal.id} (quietDays=${mine.quietDays})`).toBeTruthy();
