@@ -461,6 +461,32 @@ describe('2026-11-17 wording matches the screens', () => {
     expect(quotedLabels(byId('menu-launcher'))).toContain('มีอะไรใหม่');
   });
 
+  it('the profile-menu step names exactly the items UserMenu renders, each with its condition (review N1)', () => {
+    expect(release).not.toBeNull();
+    // Every item label in UserMenu: the text after its icon, closing the button.
+    const items = [...code(userMenuSrc).matchAll(/<Icon [^>]*\/>\s*([^<{\s][^<{]*?)\s*<\/button>/g)].map((match) => match[1]);
+    expect(items).toEqual(['ข้อมูลของฉัน', 'ค่าลดหย่อนภาษี', 'มีอะไรใหม่', 'ดูในมุมมองพนักงาน', 'ออกจากระบบ']);
+    const step = byId('menu-launcher').steps[1];
+    const named = [...`${step.text} ${step.detail}`.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    // ดูในมุมมองพนักงาน is the view-as capability (user.canViewAs), not a reader's item: never named.
+    expect([...new Set(named)].sort()).toEqual(items.filter((item) => item !== 'ดูในมุมมองพนักงาน').sort());
+    // ข้อมูลของฉัน and ค่าลดหย่อนภาษี show only for an account linked to an employee record: the step says so.
+    expect(appShellSrc).toContain('canViewProfile={!!user.employeeId}');
+    expect(userMenuSrc).toMatch(/\{user\.employeeId \? \([\s\S]{0,400}ค่าลดหย่อนภาษี/);
+    expect(step.detail).toContain('ข้อมูลพนักงาน');
+    // Those pages are NOT in the launcher, so the reason must not say every page is.
+    expect(byId('menu-launcher').why).not.toContain('ทุกหน้า');
+  });
+
+  it('the closed-deal links name พักยาว with its condition (AllDealsPage ClosedLinks)', () => {
+    expect(release).not.toBeNull();
+    expect(allDealsSrc).toContain("{ life: 'DORMANT', label: 'พักยาว', always: false }");
+    for (const id of ['all-deals', 'all-deals-team']) {
+      const step = byId(id).steps.find((s) => s.detail.includes('"พักไว้"'));
+      expect(step.detail, id).toMatch(/"พักยาว" เมื่อมีงานที่พักยาว/);
+    }
+  });
+
   it('pins the labels staff act on most', () => {
     expect(release).not.toBeNull();
     // The five board columns, on both board entries.
