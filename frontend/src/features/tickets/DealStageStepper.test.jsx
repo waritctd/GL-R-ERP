@@ -216,7 +216,7 @@ describe('DealStageStepper off-route group', () => {
   it('still says the reason when the server sent none (never a silently dead row)', () => {
     const noReason = decisionsFor(OWNER_OFF).map((d) => ({ ...d, blockedReason: null }));
     render(<DealStageStepper catalog={catalog} salesStage="SPEC_APPROVED" stageDecisions={noReason} />);
-    expect(within(screen.getByTestId('off-route-group')).getByText(/ไม่อยู่ในเส้นทางของดีลนี้/)).not.toBeNull();
+    expect(within(screen.getByTestId('off-route-group')).getByText(/ไม่อยู่ในเส้นทางของงานนี้/)).not.toBeNull();
   });
 
   it('labels the row a deal is actually SITTING on, so a corrected channel does not read as an error', () => {
@@ -224,7 +224,7 @@ describe('DealStageStepper off-route group', () => {
     render(
       <DealStageStepper catalog={catalog} salesStage="QUOTE_DESIGN_SIDE" stageDecisions={decisionsFor(OWNER_OFF)} />,
     );
-    expect(within(screen.getByTestId('off-route-group')).getByText('ดีลอยู่ขั้นนี้')).not.toBeNull();
+    expect(within(screen.getByTestId('off-route-group')).getByText('งานอยู่ขั้นนี้')).not.toBeNull();
   });
 });
 
@@ -283,7 +283,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
       {...props}
     />,
   );
-  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทางดีล/ });
+  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทาง/ });
   // Asserts the control exists BEFORE clicking, so a missing remedy fails as an assertion.
   const firstToggle = () => {
     expect(toggles().length).toBeGreaterThan(0);
@@ -293,7 +293,7 @@ describe('DealStageStepper off-route rows — แก้ช่องทางด�
   it('puts one remedy on EACH off-route row, and only inside the off-route group', () => {
     renderBuyer();
     const group = within(screen.getByTestId('off-route-group'));
-    expect(group.getAllByRole('button', { name: /แก้ช่องทางดีล/ })).toHaveLength(BUYER_OFF.length);
+    expect(group.getAllByRole('button', { name: /แก้ช่องทาง/ })).toHaveLength(BUYER_OFF.length);
     // Not in the phase list, not in the ribbon: nowhere but beside the refusal it answers.
     expect(toggles()).toHaveLength(BUYER_OFF.length);
   });

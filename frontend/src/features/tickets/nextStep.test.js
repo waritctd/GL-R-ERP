@@ -10,17 +10,17 @@ const TAB_IDS = TICKET_DETAIL_TABS.map((t) => t.id);
 const ACTIVE_STAGES = {
   LEAD_APPROACH: { title: 'นำเสนอสินค้าจนผู้ออกแบบตกลงสเปค', hint: 'ตกลงสเปคแล้ว เซลส์ย้ายงานไป S2 เอง', tab: 'overview' },
   PRESENTATION: { title: 'นำเสนอสินค้าจนผู้ออกแบบตกลงสเปค', hint: 'ตกลงสเปคแล้ว เซลส์ย้ายงานไป S2 เอง', tab: 'overview' },
-  SPEC_APPROVED: { title: 'ทำใบเสนอราคา', hint: 'ทำใบเสนอราคาแล้วงานย้ายไป S3 เอง', tab: 'quote' },
-  QUOTE_DESIGN_SIDE: { title: 'ติดตามผลใบเสนอราคา', hint: 'บันทึกผลแล้วงานย้ายไป S5 / S6 เอง', tab: 'quote' },
-  QUOTE_OWNER: { title: 'ติดตามผลใบเสนอราคา', hint: 'บันทึกผลแล้วงานย้ายไป S5 / S6 เอง', tab: 'quote' },
-  OWNER_SIGNOFF: { title: 'ติดตามผลใบเสนอราคา', hint: 'บันทึกผลแล้วงานย้ายไป S5 / S6 เอง', tab: 'quote' },
-  AWAITING_BUYER: { title: 'ติดตามผลประมูล', hint: 'ทราบผู้ซื้อแล้วงานย้ายไป S6 เอง', tab: 'quote' },
+  SPEC_APPROVED: { title: 'ทำใบเสนอราคา', hint: 'ทำใบเสนอราคาแล้วงานย้ายไป S3 ตามเอกสาร', tab: 'quote' },
+  QUOTE_DESIGN_SIDE: { title: 'ติดตามผลใบเสนอราคา', hint: 'บันทึกผลแล้วเซลส์ย้ายงานไป S5 หรือเสนอราคาผู้ซื้อแล้วงานย้ายไป S6 ตามเอกสาร', tab: 'quote' },
+  QUOTE_OWNER: { title: 'ติดตามผลใบเสนอราคา', hint: 'บันทึกผลแล้วเซลส์ย้ายงานไป S5 หรือเสนอราคาผู้ซื้อแล้วงานย้ายไป S6 ตามเอกสาร', tab: 'quote' },
+  OWNER_SIGNOFF: { title: 'ติดตามผลใบเสนอราคา', hint: 'บันทึกผลแล้วเซลส์ย้ายงานไป S5 หรือเสนอราคาผู้ซื้อแล้วงานย้ายไป S6 ตามเอกสาร', tab: 'quote' },
+  AWAITING_BUYER: { title: 'ติดตามผลประมูล', hint: 'ทราบผู้ซื้อแล้วเสนอราคาผู้ซื้อ งานย้ายไป S6 ตามเอกสาร', tab: 'quote' },
   QUOTE_BUYER: { title: 'ยืนยันคำสั่งซื้อกับผู้ซื้อ', hint: 'ยืนยันคำสั่งซื้อแล้วออกใบแจ้งมัดจำได้', tab: 'quote' },
   NEGOTIATION: { title: 'ยืนยันคำสั่งซื้อกับผู้ซื้อ', hint: 'ยืนยันคำสั่งซื้อแล้วออกใบแจ้งมัดจำได้', tab: 'quote' },
-  ORDER_RECEIVED: { title: 'ออกใบแจ้งมัดจำและรอรับมัดจำ', hint: 'ฝ่ายบัญชียืนยันรับมัดจำแล้วงานย้ายไป S7 เอง', tab: 'money' },
+  ORDER_RECEIVED: { title: 'ออกใบแจ้งมัดจำและรอรับมัดจำ', hint: 'ฝ่ายบัญชียืนยันรับมัดจำแล้วงานย้ายไป S7 ตามเอกสาร', tab: 'money' },
   DEPOSIT_RECEIVED: { title: 'จัดซื้อสินค้า', hint: 'ออกใบขอซื้อ (IR) แล้วฝ่ายนำเข้าติดตามของต่อ', tab: 'ship' },
   PROCUREMENT: { title: 'ติดตามการนำเข้า', hint: 'ของถึงโกดังแล้วนัดส่งสินค้าได้ (S8)', tab: 'ship' },
-  DELIVERY_SCHEDULING: { title: 'ส่งสินค้าให้ลูกค้า', hint: 'ส่งครบแล้วงานย้ายไป S9 เอง', tab: 'ship' },
+  DELIVERY_SCHEDULING: { title: 'ส่งสินค้าให้ลูกค้า', hint: 'ส่งครบแล้วเซลส์ย้ายงานไป S9', tab: 'ship' },
   DELIVERED: { title: 'เก็บเงินส่วนที่เหลือ', hint: 'ฝ่ายบัญชียืนยันรับเงินครบแล้วปิดงาน', tab: 'money' },
 };
 
@@ -66,6 +66,25 @@ describe('nextStepFor — a deal that is not ACTIVE (the lifecycle wins over the
     for (const salesStage of ['LEAD_APPROACH', 'QUOTE_OWNER', 'PROCUREMENT', 'CLOSED_PAID']) {
       expect(nextStepFor({ salesStage, lifecycle })).toEqual(expected);
     }
+  });
+});
+
+// Fix round 1 (L2): a deal that skips the deposit (dealMoneyStatus.depositBypassed: NOT_REQUIRED / WAIVED /
+// CREDIT_CUSTOMER) leaves ORDER_RECEIVED on its first payment (TicketService: the bypass target is
+// AWAITING_FINAL_PAYMENT, then DEPOSIT_RECEIVED), not on a deposit notice.
+describe('nextStepFor — ORDER_RECEIVED and the deposit policy', () => {
+  it.each(['NOT_REQUIRED', 'WAIVED', 'CREDIT_CUSTOMER'])('%s: no deposit notice, the first payment moves it', (depositPolicy) => {
+    expect(nextStepFor({ salesStage: 'ORDER_RECEIVED', depositPolicy })).toEqual({
+      kind: 'step', title: 'รอรับชำระงวดแรก', hint: 'ไม่เก็บมัดจำ — ฝ่ายบัญชีบันทึกรับชำระงวดแรกแล้วงานย้ายไป S7 ตามเอกสาร', tab: 'money',
+    });
+  });
+
+  it.each(['REQUIRED', undefined, null])('wrong-way: %s keeps the deposit step', (depositPolicy) => {
+    expect(nextStepFor({ salesStage: 'ORDER_RECEIVED', depositPolicy }).title).toBe('ออกใบแจ้งมัดจำและรอรับมัดจำ');
+  });
+
+  it('the policy changes nothing at any other stage', () => {
+    expect(nextStepFor({ salesStage: 'DEPOSIT_RECEIVED', depositPolicy: 'WAIVED' }).title).toBe('จัดซื้อสินค้า');
   });
 });
 

@@ -1159,7 +1159,7 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
   const STATED = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value', 'note'] };
   const UPDATE = { action: 'UPDATE_STAGE' };
   const ownerDeal = () => baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' });
-  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทางดีล/ });
+  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทาง/ });
   // Asserts the control exists BEFORE clicking, so a missing remedy fails as an assertion.
   const firstToggle = () => {
     expect(toggles().length).toBeGreaterThan(0);
@@ -1187,7 +1187,7 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
       onSetEntryChannel,
     });
     showSteps();
-    expect(within(screen.getByTestId('off-route-group')).getAllByRole('button', { name: /แก้ช่องทางดีล/ })).toHaveLength(1);
+    expect(within(screen.getByTestId('off-route-group')).getAllByRole('button', { name: /แก้ช่องทาง/ })).toHaveLength(1);
     fireEvent.click(firstToggle());
     fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));

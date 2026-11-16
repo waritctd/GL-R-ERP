@@ -2311,6 +2311,99 @@ describe('TicketDetailPage', () => {
     // Later describes in this file read listForTicket bare (a rejected query) — keep it that way.
     afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
 
+    // Fix round 1 (ruling 1): the ใบเสนอราคา tab may carry a SECOND trigger for the page's primary ONLY while that
+    // primary is the quotation route choice (เสนอราคา<party>) — same handler, same choice, same visibility — and
+    // nothing in every other state. Wrong-way-round cases first.
+    describe('the ใบเสนอราคา tab second trigger for the quotation route choice', () => {
+      const trigger = () => screen.queryByTestId('quote-tab-route-choice');
+      function summaryOverride(extra) {
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({
+            summary: {
+              lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', createdById: 1, status: 'draft', entryChannel: 'DESIGNER_LED',
+              designerName: 'สมชาย ผู้ออกแบบ', ownerName: 'บริษัท เจ้าของ จำกัด', buyerName: 'ผู้รับเหมา ข.', ...extra,
+            },
+          }),
+        });
+      }
+      async function onQuoteTab() {
+        await openTab(/ใบเสนอราคา/);
+        await screen.findByTestId('deal-quotations-card');
+        await stickyInputsSettled();
+      }
+
+      it('wrong-way: absent while the primary is สร้างคำขอราคา (no request yet)', async () => {
+        deal({ requests: [], quotations: [], stage: 'SPEC_APPROVED' });
+        renderTicketDetailPage(salesOwnerUser);
+        await primaryWithAction('create_pcr');
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it('wrong-way: absent while a live direct quotation drives the primary', async () => {
+        deal({ requests: [], quotations: [] });
+        summaryOverride({ liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT', recipientType: 'DESIGNER' } });
+        renderTicketDetailPage(salesOwnerUser);
+        await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).not.toBe('quote_next_party'));
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it('wrong-way: absent once the order is confirmed', async () => {
+        deal();
+        summaryOverride({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'ORDER_RECEIVED' });
+        renderTicketDetailPage(salesOwnerUser);
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it('wrong-way: absent while a later party already has a live request', async () => {
+        deal({ requests: [sentRequest(), sentRequest({ id: 502, requestCode: 'PCR-2026-0502', recipientType: 'OWNER', status: 'SUBMITTED' })] });
+        renderTicketDetailPage(salesOwnerUser);
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it('wrong-way: absent on a deal that is not active', async () => {
+        deal();
+        summaryOverride({ lifecycle: 'ON_HOLD' });
+        renderTicketDetailPage(salesOwnerUser);
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it.each([
+        ['another sales rep', { id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' }],
+        ['account', accountUser],
+      ])('wrong-way: absent for a viewer without the right (%s)', async (_label, user) => {
+        deal();
+        // What the server answers this viewer: PricingRequestService.listForTicket gives a sales rep only the
+        // requests on deals they own, so another rep reads none (account never reads the list at all).
+        if (user.role === 'sales') api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+        renderTicketDetailPage(user);
+        await openTab(/ใบเสนอราคา/);
+        await screen.findByTestId('deal-quotations-card');
+        await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 80); }); });
+        expect(trigger()).toBeNull();
+      });
+
+      it('present beside the route choice, and it opens the SAME choice: the party picked there opens its request form', async () => {
+        deal();
+        renderTicketDetailPage(salesOwnerUser);
+        const primary = await primaryWithAction('quote_next_party');
+        await onQuoteTab();
+        const second = trigger();
+        expect(second).not.toBeNull();
+        expect(second.textContent).toBe(primary.textContent);
+        fireEvent.click(second);
+        const items = await screen.findAllByRole('menuitem');
+        expect(items.map((item) => item.textContent)).toEqual(['เสนอราคาเจ้าของโครงการ', 'ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา']);
+        fireEvent.click(screen.getByRole('menuitem', { name: 'ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา' }));
+        const dialog = within(await screen.findByRole('dialog'));
+        expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
+      });
+    });
+
     // The menu's trigger is the neutral เสนอราคา ▾, not the first party.
     it('a sent designer quotation: the primary เสนอราคา is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
       deal();
@@ -4905,32 +4998,25 @@ describe('TicketDetailPage', () => {
     // (สร้างคำขอราคา / ใบเสนอราคาตรง + helper note) are GONE from the เอกสาร tab. Quotations stay listed
     // (with PDF/Excel) in the document register at the top; the one way to start a pricing request is
     // the sticky CTA.
-    // Redesign (drawing a-deal-quote, 2026-11-16): the quotation list moved to the ใบเสนอราคา tab as "ใบเสนอราคาของงานนี้",
-    // whose header carries the drawn "+ สร้างใบเสนอราคา" — ONE link to the quotation editor for this deal, shown only
-    // to a viewer DealQuotationService.create lets create (canCreateDealQuotation: the owning rep, sales_manager, a
-    // granted employee — not account, not the CEO). The old panel's route buttons and helper line stay gone.
+    // Restored verbatim from 5560009a (fix round 1 ruling): there is NO independent link to /quotations/new on the
+    // deal page. Only the tab it opens follows the content (the quotation list lives on ใบเสนอราคา since the
+    // redesign; the rest of the old เอกสาร tab is ไฟล์), and the same check runs on both.
     it.each([
-      ['the owning rep', salesOwnerUser, 1],
-      ['a role that may not create a quotation (account)', accountUser, 0],
-      ['the CEO (DealQuotationService.create does not include ceo)', ceoUser, 0],
-    ])('the ใบเสนอราคา tab has no old route buttons or helper line, and %s gets %s "+ สร้างใบเสนอราคา"', async (_label, user, links) => {
+      ['the owning rep', salesOwnerUser],
+      ['a role that may not create a quotation (account)', accountUser],
+      ['the CEO', ceoUser],
+    ])('the เอกสาร tab has no ใบเสนอราคา panel, route buttons or helper line for %s', async (_label, user) => {
       activeDeal();
       renderTicketDetailPage(user);
-      await openTab(/ใบเสนอราคา/);
-      await screen.findByTestId('deal-quotations-card');
-      // The request list (account never reads it) and the quotation list have answered.
-      await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalled());
-      await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 50); }); });
-      expect(screen.queryByRole('heading', { name: 'ใบเสนอราคา', level: 2 })).toBeNull();
-      expect(screen.queryByRole('link', { name: 'ใบเสนอราคาตรง' })).toBeNull();
-      const newQuotationLinks = [...document.querySelectorAll('a[href*="/quotations/new"]')];
-      expect(newQuotationLinks).toHaveLength(links);
-      newQuotationLinks.forEach((a) => {
-        expect(a.textContent).toBe('+ สร้างใบเสนอราคา');
-        expect(a.getAttribute('href')).toBe('/quotations/new?ticket=701');
-      });
-      expect(screen.queryByText(/ใบเสนอราคาตรง = กรอกราคาเอง/)).toBeNull();
-      expect(screen.queryByText('สร้างได้จากหน้า ใบเสนอราคา')).toBeNull();
+      for (const tab of [/ใบเสนอราคา/, /^ไฟล์/]) {
+        await openTab(tab);
+        await screen.findByTestId(tab.source === 'ใบเสนอราคา' ? 'deal-quotations-card' : 'deal-document-register');
+        expect(screen.queryByRole('heading', { name: 'ใบเสนอราคา', level: 2 })).toBeNull();
+        expect(screen.queryByRole('link', { name: 'ใบเสนอราคาตรง' })).toBeNull();
+        expect(document.querySelector('a[href*="/quotations/new"]')).toBeNull();
+        expect(screen.queryByText(/ใบเสนอราคาตรง = กรอกราคาเอง/)).toBeNull();
+        expect(screen.queryByText('สร้างได้จากหน้า ใบเสนอราคา')).toBeNull();
+      }
     });
 
     it('สร้างคำขอราคา exists exactly once for the owning rep — the primary button, not a second copy on the ใบเสนอราคา tab', async () => {
@@ -5513,7 +5599,7 @@ describe('TicketDetailPage', () => {
 
     it('shows nothing when the server did not advertise SET_ENTRY_CHANNEL', async () => {
       const group = await openSteps([]);
-      expect(within(group).queryByRole('button', { name: /แก้ช่องทางดีล/ })).toBeNull();
+      expect(within(group).queryByRole('button', { name: /แก้ช่องทาง/ })).toBeNull();
       expect(api.tickets.setEntryChannel).not.toHaveBeenCalled();
     });
 
@@ -5527,7 +5613,7 @@ describe('TicketDetailPage', () => {
       api.tickets.actions.mockResolvedValue(actionsFor(new Set(), [FIRST]));
       const before = api.tickets.actions.mock.calls.length;
 
-      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทางดีล/ }));
+      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทาง/ }));
       expect(screen.queryByTestId('entry-channel-fix-reason')).toBeNull();
       fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
@@ -5543,7 +5629,7 @@ describe('TicketDetailPage', () => {
       api.tickets.setEntryChannel.mockResolvedValue({
         ticket: buildTicket({ summary: { salesStage: 'SPEC_APPROVED', entryChannel: 'DESIGNER_LED', nextFollowUpAt: '2026-07-15' } }),
       });
-      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทางดีล/ }));
+      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทาง/ }));
       fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
       expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
       fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบเข้ามาร่วมจริง' } });

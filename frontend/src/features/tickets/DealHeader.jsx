@@ -23,6 +23,10 @@ export function DealHeader({
   summary,
   stepIndex = -1,
   nextStep = null,
+  // Facts the card states under its title (a lost deal's reason / date, the stage a paused or lost deal was left at),
+  // and the "ถัดไป: …" line (DealStagePanel's NextStageLine), which replaces the stage table's hint when present.
+  facts = [],
+  nextLine = null,
   bannerText = null,
   primaryAction = null,
   overflowItems = [],
@@ -40,7 +44,9 @@ export function DealHeader({
 }) {
   const lifecycle = dealLifecycleLabel(summary.lifecycle ?? 'ACTIVE');
   const step = stepIndex >= 0 ? REP_STEPS[stepIndex] : null;
-  const title = awaitingBid?.projectName || summary.projectName || summary.title || summary.customerName;
+  // Never an empty h1 (fix round 1, L4): the deal's code when it has no name at all.
+  const title = awaitingBid?.projectName || summary.projectName || summary.title || summary.customerName
+    || summary.code || `งาน #${summary.id}`;
   const sub = [
     awaitingBid
       ? <StatusBadge key="bid" tone="warning">{`ลูกค้าผู้ชำระเงิน · รอผลประมูล ${awaitingBid.count} ราย`}</StatusBadge>
@@ -50,7 +56,9 @@ export function DealHeader({
     winProbability != null ? <span key="win" className="tabular-nums">{`โอกาส ${winProbability}%`}</span> : null,
   ].filter(Boolean);
   const overflow = overflowItems.length > 0
-    ? <OverflowMenu items={overflowItems} mobilePlacement="up" onOpenChange={onMenuOpenChange} />
+    // The trigger sits at the top of the header now (it was in the phone's bottom bar), so on a phone the menu opens
+    // DOWN — upward it pushed its first items off the top of the screen (fix round 1, M0).
+    ? <OverflowMenu items={overflowItems} mobilePlacement="down" onOpenChange={onMenuOpenChange} />
     : null;
 
   return (
@@ -102,6 +110,7 @@ export function DealHeader({
       {/* Collapsible extras: grid-rows 1fr→0fr animates the height; only non-interactive content and the stepper's
           own scroll wrapper live here, so overflow-hidden never clips a menu or dialog. Force-open on a phone. */}
       <div
+        data-testid="deal-header-extras"
         className={`grid transition-[grid-template-rows,opacity] duration-200 ease-out motion-reduce:transition-none mobile:!grid-rows-[1fr] mobile:!opacity-100 ${
           condensed ? 'grid-rows-[0fr] opacity-0' : 'grid-rows-[1fr] opacity-100'
         }`}
@@ -118,7 +127,14 @@ export function DealHeader({
       </div>
 
       {!condensed ? (
-        <NextStepCard title={nextStep?.title ?? null} hint={nextStep?.hint ?? null} bannerText={bannerText} primaryAction={primaryAction} />
+        <NextStepCard
+          title={nextStep?.title ?? null}
+          hint={nextStep?.hint ?? null}
+          facts={facts}
+          nextLine={nextLine}
+          bannerText={bannerText}
+          primaryAction={primaryAction}
+        />
       ) : null}
     </section>
   );

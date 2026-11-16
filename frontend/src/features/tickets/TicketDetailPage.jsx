@@ -5,7 +5,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Breadcrumbs } from '../../components/common/Breadcrumbs.jsx';
@@ -20,9 +20,10 @@ import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton, SkeletonText } from '../../components/common/Skeleton.jsx';
 import { Tabs, TabPanel } from '../../components/common/Tabs.jsx';
-import { cn } from '../../utils/cn.js';
 import {
+  dealLostReasonLabel,
   dealStageLabel,
+  formatThaiDate,
   formatMoney,
   quotationRecipientLabel,
 } from '../../utils/format.js';
@@ -43,13 +44,13 @@ import { DealPaymentSection } from './DealPaymentSection.jsx';
 import { ExpectedPaymentsPanel } from '../salesBoard/ExpectedPaymentsPanel.jsx';
 import { DealQuotationPanel } from './DealQuotationPanel.jsx';
 import {
-  canCreateDealQuotation, canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
+  canReviseDealQuotation, orderConfirmationOf, canViewDealQuotation, newestQuotationByRequest,
   DEAD_PRICING_REQUEST_STATUSES, stageForQuotationRecipient,
 } from '../quotations/quotationMeta.js';
-import { DealStagePanel } from './DealStagePanel.jsx';
+import { DealStagePanel, NextStageLine, nextStageLine } from './DealStagePanel.jsx';
 import { DealHeader } from './DealHeader.jsx';
 import { DealInfoCard } from './DealInfoCard.jsx';
-import { DealItemsPanel } from './DealItemsPanel.jsx';
+import { DealItemsPanel, useDealItemsEdit } from './DealItemsPanel.jsx';
 import { DealLatestQuotationItems } from './DealLatestQuotationItems.jsx';
 import { DealQuickActions } from './DealQuickActions.jsx';
 import { DealQuietLinks } from './DealQuietLinks.jsx';
@@ -65,7 +66,9 @@ import {
   buyerParties, isAwaitingBidOutcome, isBiddingParty,
 } from './dealPartyMeta.js';
 import { visibleSections } from './salesViewScope.js';
-import { nextOnRoute, offRoutePartiesFor, stageIndexIn, useStageCatalog } from './stageCatalog.js';
+import {
+  findStage, nextOnRoute, offRoutePartiesFor, stageIndexIn, useStageCatalog,
+} from './stageCatalog.js';
 import { PARTY_LABEL } from './salesActions.js';
 import {
   resolveTicketDetailTab, TICKET_DETAIL_TABS, visibleTicketDetailTabIds,
@@ -137,6 +140,31 @@ const NEXT_STEP_TAB_LABEL = {
   ship: 'ไปที่ส่งของ',
   files: 'ไปที่ไฟล์',
 };
+
+/** A trigger for the เสนอราคา<party> route choice: a menu of the parties (and "ไม่มีผู้รับเหมา"), or one button when
+ * there is a single choice. The page renders it twice from the same `items` / `onSingle`: the primary and the
+ * ใบเสนอราคา tab's second trigger. */
+function RouteChoiceTrigger({
+  testId, actionKey, variant, placement, onOpenChange, asMenu, items, singleLabel, onSingle,
+}) {
+  return asMenu ? (
+    <OverflowMenu
+      items={items}
+      label="เสนอราคา"
+      triggerLabel={<>เสนอราคา<Icon name="chevronDown" size={14} /></>}
+      triggerIcon={null}
+      triggerClassName={buttonVariants({ variant })}
+      triggerProps={{ 'data-testid': testId, 'data-action': actionKey }}
+      align="end"
+      mobilePlacement={placement}
+      onOpenChange={onOpenChange}
+    />
+  ) : (
+    <Button type="button" variant={variant} data-testid={testId} data-action={actionKey} onClick={onSingle}>
+      {singleLabel}
+    </Button>
+  );
+}
 
 function scrollToSection(id) {
   const el = typeof document !== 'undefined' ? document.getElementById(id) : null;
@@ -258,6 +286,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // triggers its confirm directly instead of scrolling to a second copy of the button.
   const dealQuotationPanelRef = useRef(null);
   const fulfilmentPanelRef = useRef(null);
+  // The items editor's unsaved edit lives here, not in DealItemsPanel, so a tab switch (which unmounts the panel)
+  // does not throw it away (fix round 1, M3).
+  const itemsEdit = useDealItemsEdit();
 
   // The items table and its edit mode (state, catalog autocomplete, 'editItems.*' errors) live in DealItemsPanel.
 
@@ -1103,6 +1134,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
   const advanceAwaitsReadiness = Boolean(next) && !next.auto && nextDecision?.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
   let advanceInHeader = false;
+  // The ใบเสนอราคา tab's second trigger for the route choice (set only in the quote_next_party branch below).
+  let routeChoiceSecondTrigger = null;
   let stickyPrimaryLabel = nextAction;
   let stickyPrimaryAction = primaryAction;
   // The เสนอราคา<party> line, minus a skip this viewer cannot take (set below).
@@ -1187,27 +1220,29 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             onSelect: () => navigate(`/pricing-requests/${outcomeSecondary.pricingRequestId}`),
           };
       if (workStateAction.skipBuyer && !skipBuyerItem) quoteBannerText = quoteNextPartyBanner({ ...workStateAction, skipBuyer: false });
-      stickyPrimaryAction = parties.length > 1 || skipBuyerItem ? (
-        <OverflowMenu
-          items={[...parties.map((party, index) => ({
-            key: party,
-            label: `${index > 0 ? 'ข้ามไป' : ''}เสนอราคา${PARTY_LABEL[party]}`,
-            testId: `quote-party-${party}`,
-            onSelect: () => openFor(party),
-          })), skipBuyerItem].filter(Boolean)}
-          label="เสนอราคา"
-          triggerLabel={<>เสนอราคา<Icon name="chevronDown" size={14} /></>}
-          triggerIcon={null}
-          triggerClassName={buttonVariants({ variant: 'primary' })}
-          triggerProps={{ 'data-testid': 'ticket-primary-action', 'data-action': actionKey }}
-          align="end"
-          mobilePlacement="up"
-          onOpenChange={onHeaderMenuOpenChange}
+      // ONE set of choices for both triggers of this route choice: the page's primary (in the ขั้นต่อไป card / phone
+      // bottom bar, menu opening up) and its second copy on the ใบเสนอราคา tab (fix round 1, ruling 1: same
+      // handler, same choice, shown exactly when the primary is). Nothing else on the page starts a quotation.
+      const choiceItems = [...parties.map((party, index) => ({
+        key: party,
+        label: `${index > 0 ? 'ข้ามไป' : ''}เสนอราคา${PARTY_LABEL[party]}`,
+        testId: `quote-party-${party}`,
+        onSelect: () => openFor(party),
+      })), skipBuyerItem].filter(Boolean);
+      const asMenu = parties.length > 1 || Boolean(skipBuyerItem);
+      stickyPrimaryAction = (
+        <RouteChoiceTrigger
+          testId="ticket-primary-action" actionKey={actionKey} variant="primary" placement="up"
+          onOpenChange={onHeaderMenuOpenChange} asMenu={asMenu} items={choiceItems}
+          singleLabel={workStateAction.label} onSingle={() => openFor(parties[0])}
         />
-      ) : (
-        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action={actionKey} onClick={() => openFor(parties[0])}>
-          {workStateAction.label}
-        </Button>
+      );
+      routeChoiceSecondTrigger = (
+        <RouteChoiceTrigger
+          testId="quote-tab-route-choice" actionKey={actionKey} variant="secondary" placement="down"
+          asMenu={asMenu} items={choiceItems}
+          singleLabel={workStateAction.label} onSingle={() => openFor(parties[0])}
+        />
       );
       stickyPrimaryLabel = workStateAction.label;
     } else if (actionKey === 'submit_pricing_request') {
@@ -1391,8 +1426,14 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // The ขั้นต่อไป card (nextStep.js names the step) and its ONE button: the action this page already resolved for
   // this viewer (stickyPrimaryAction, unchanged), else the paused / lost deal's ดำเนินการต่อ / เปิดงานอีกครั้ง, else —
   // for an ACTIVE deal whose step this viewer has no button for — a switch to the tab that holds that stage's work.
-  const nextStep = nextStepFor({ salesStage: summary.salesStage, lifecycle: summary.lifecycle ?? 'ACTIVE' });
+  const nextStep = nextStepFor({
+    salesStage: summary.salesStage, lifecycle: summary.lifecycle ?? 'ACTIVE', depositPolicy: summary.depositPolicy,
+  });
   let cardAction = stickyPrimaryAction;
+  // Fix round 1 (L1): the title names what the button does. With the page's own resolved action that is the action's
+  // label (the stage table's step can be a different one, e.g. ติดตามผลใบเสนอราคา over ติดตามลูกค้า); otherwise the
+  // table's step (paused / lost: the state the resume / reopen button acts on; the tab button: where that step lives).
+  const cardTitle = stickyPrimaryAction ? (stickyPrimaryLabel ?? nextStep.title) : nextStep.title;
   if (!cardAction && nextStep.kind === 'resume' && canResumeDeal) {
     cardAction = (
       <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action="resume" disabled={actionLoading}
@@ -1429,12 +1470,31 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
     customerName: summary.customerName,
     designerName: designerNames[0] ?? summary.designerName ?? '',
   };
-  // "+ สร้างใบเสนอราคา" (ใบเสนอราคาของงานนี้): DealQuotationService.create's gate (canCreateDealQuotation), on an
-  // ACTIVE deal (the /quotations/new picker offers only those) with no live คำขอราคา (the server 409s a direct
-  // quotation then). While the request list is unread a DRAFT may be hiding, so it waits for the read.
-  const hasLivePricingRequest = pricingRequests.some((pr) => !DEAD_PRICING_REQUEST_STATUSES.has(pr.status));
-  const canStartQuotation = isActiveLifecycle && canCreateDealQuotation(user, summary)
-    && !requestListUnread && !hasLivePricingRequest;
+  // What the old paused / lost banners said (fix round 1, M2): the stage the deal was left at, and for a lost deal
+  // why and when it was lost. Shown under the ขั้นต่อไป card's title.
+  const leftAtStage = findStage(stageCatalog, summary.salesStage);
+  const leftAt = leftAtStage
+    ? `ขั้นเดิม ${leftAtStage.no}. ${dealStageLabel(summary.salesStage, summary.entryChannel).label}`
+    : null;
+  const cardFacts = lost
+    ? [
+      summary.lostReason ? `เหตุผล: ${dealLostReasonLabel(summary.lostReason).label}` : null,
+      summary.lostAt ? `ปิดเมื่อ ${formatThaiDate(summary.lostAt)}` : null,
+      leftAt,
+    ].filter(Boolean)
+    : isPaused ? [leftAt].filter(Boolean) : [];
+  // The ONE "ถัดไป" line (fix round 1, L3): DealStagePanel's own computation, shown in the card rather than in a second
+  // strip under the tab bar — and, as before, only for a deal that is plain ACTIVE (not paused, not lost) and not done.
+  const nextLine = !isPaused && !lost && summary.salesStage !== 'CLOSED_PAID'
+    ? nextStageLine({
+      summary,
+      availableActions,
+      stageDecisions,
+      catalog: stageCatalog,
+      quoteParties: workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null,
+      ctaStage,
+    })
+    : null;
 
   // Stage-advance readiness (dealTrackingMeta.js's gate, shared with DealInfoCard's badge),
   // lifted here so it sits next to the "เลื่อนไป" action in the header overflow menu. Consulted
@@ -1574,7 +1634,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
   // openDeliveryModal/closeDeliveryModal/openStockModal live in DealFulfilmentPanel.
 
   return (
-    <div className={`relative grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${bannerText || stickyPrimaryAction || overflowItems.length > 0 ? 'mobile:pb-36' : ''}`}>
+    // Bottom room on a phone exactly when the ขั้นต่อไป card's button bar is fixed to the bottom of the screen — that is
+    // whenever the card has a button (fix round 1, M1); the ⋯ menu and the work-state line sit at the top now.
+    <div className={`relative grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px] ${cardAction ? 'mobile:pb-36' : ''}`}>
       {/* Hysteresis sentinels for the sticky-chrome condense IntersectionObserver (see the
           ticketChromeCondensed declaration). Absolutely positioned + 0-size so they add no
           layout/gap. The pair marks "the very top" and "scrolled past ~56px" independent of
@@ -1598,7 +1660,9 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           <DealHeader
             summary={summary}
             stepIndex={repStepIndex(stageCatalog, summary.salesStage)}
-            nextStep={nextStep}
+            nextStep={{ ...nextStep, title: cardTitle }}
+            facts={cardFacts}
+            nextLine={nextLine?.lineStage ? <NextStageLine line={nextLine} entryChannel={summary.entryChannel} /> : null}
             bannerText={bannerText}
             primaryAction={cardAction}
             overflowItems={overflowItems}
@@ -1650,6 +1714,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         events={ticket.events}
         quoteParties={workStateAction?.key === 'quote_next_party' ? workStateAction.parties : null}
         ctaStage={ctaStage}
+        // Its "ถัดไป" line is shown in the ขั้นต่อไป card (one "what's next" statement on the page).
+        showNextLine={false}
         // primaryAction lives solely in the ขั้นต่อไป card ("one primary CTA"); not passed here too.
         advanceReady={readyToAdvance}
         advanceInHeader={advanceInHeader}
@@ -1767,17 +1833,13 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
         <DealQuoteTab
           quotations={(
             <>
-              {/* ใบเสนอราคาของงานนี้: the register's quotation family (was the เอกสาร tab's first section), with
-                  "+ สร้างใบเสนอราคา" — the quotation editor for this deal, offered exactly when
-                  canCreateDealQuotation (DealQuotationService.create's gate) holds on an ACTIVE deal with no live
-                  คำขอราคา (the server 409s a direct quotation then — LIVE_PRICING_REQUEST_BLOCK_MESSAGE). */}
+              {/* ใบเสนอราคาของงานนี้: the register's quotation family (was the เอกสาร tab's first section). Its header
+                  carries NO quotation entry of its own (fix round 1, ruling 1; the 5560009a guard): only a second
+                  trigger for the page's primary while that primary is the route choice (เสนอราคา<party>) — same
+                  builder, same handler, present exactly when the primary is. */}
               <DealDocumentRegister
                 part="quotations"
-                quotationsAction={canStartQuotation ? (
-                  <Link to={`/quotations/new?ticket=${ticketId}`} className={cn(buttonVariants({ variant: 'primary', size: 'sm' }), 'mobile:min-h-[44px]')}>
-                    + สร้างใบเสนอราคา
-                  </Link>
-                ) : null}
+                quotationsAction={routeChoiceSecondTrigger}
                 ticketId={ticketId}
                 user={user}
                 summary={summary}
@@ -1823,6 +1885,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
               fxRatesByCurrency={fxRatesByCurrency}
               actionLoading={actionLoading}
               onAction={doAction}
+              edit={itemsEdit}
             />
           )}
           pricingRequests={(
@@ -2070,7 +2133,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
           submitting={actionLoading}
           onClose={() => setConfirm(null)}
           onSubmit={async (payload) => {
-            await doAction(() => api.tickets.cancel(ticketId, payload), 'ยกเลิกดีลแล้ว');
+            await doAction(() => api.tickets.cancel(ticketId, payload), 'ยกเลิกงานแล้ว');
             setConfirm(null);
           }}
         />

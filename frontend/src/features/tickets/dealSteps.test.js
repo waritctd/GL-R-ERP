@@ -22,11 +22,17 @@ describe('REP_STEPS', () => {
     expect(REP_STEPS.some((s) => s.code === 'S4')).toBe(false);
   });
 
-  it('S1 and S2 are moved by the rep; S3 onward follow documents and events (spec §7.1 "Who moves it")', () => {
-    expect(REP_STEPS.map((s) => s.mover)).toEqual(['sales', 'sales', 'auto', 'auto', 'auto', 'auto', 'auto', 'auto']);
+  // Fix round 1 (ruling 6): labelled from DealStage.java's own facts, not the drawing. A step is "ย้ายตามเอกสาร" only
+  // when the stage it is entered at is in DealStage.AUTO_ADVANCED (a quotation, the order, the deposit, the IR);
+  // S5 (AWAITING_BUYER) has no automatic path, and S8 / S9 (DELIVERY_SCHEDULING, DELIVERED) are deliberately absent
+  // from AUTO_ADVANCED because "the rep also reaches both by hand".
+  it('labels each step from DealStage: the rep moves S1, S2, S5, S8, S9; documents move S3, S6, S7', () => {
+    expect(REP_STEPS.map((s) => s.mover)).toEqual(['sales', 'sales', 'document', 'sales', 'document', 'document', 'sales', 'sales']);
     expect(REP_STEPS.map((s) => s.moverLabel)).toEqual([
-      'เซลส์ย้ายเอง', 'เซลส์ย้ายเอง', 'อัตโนมัติ', 'อัตโนมัติ', 'อัตโนมัติ', 'อัตโนมัติ', 'อัตโนมัติ', 'อัตโนมัติ',
+      'เซลส์ย้ายเอง', 'เซลส์ย้ายเอง', 'ย้ายตามเอกสาร', 'เซลส์ย้ายเอง', 'ย้ายตามเอกสาร', 'ย้ายตามเอกสาร', 'เซลส์ย้ายเอง', 'เซลส์ย้ายเอง',
     ]);
+    // Never the word the backend says must not be used for S5/S8/S9.
+    expect(REP_STEPS.map((s) => s.moverLabel)).not.toContain('อัตโนมัติ');
   });
 });
 

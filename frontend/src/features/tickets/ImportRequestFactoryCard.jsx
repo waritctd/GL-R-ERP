@@ -16,7 +16,8 @@ const STATUS_TONE = { DRAFT: 'info', ISSUED: 'success', SUPERSEDED: 'neutral' };
 // Both sentences hold whatever else is true of the deal, so neither needs the deal's state: a row
 // gets its import step at issue, and the server refuses the deal-level chain from the first ISSUED
 // row on (TicketRepository#hasLiveImportRequests).
-const FIRST_DRAFT_HINT = 'ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของงานหรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้งงาน';
+// `noun`: the deal page says งาน (owner ruling 2026-11-16, that page only); import's own page keeps ดีล.
+const firstDraftHint = (noun) => `ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของ${noun}หรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้ง${noun}`;
 // revise() leaves the ISSUED predecessor live until this draft is issued; issue() then supersedes
 // it, carries its step forward and resets the order e-mail to unsent (ImportRequestRepository#issue).
 const REVISION_DRAFT_HINT = 'ร่างฉบับแก้ไข — ฉบับที่ออกเลขแล้วยังติดตามและเลื่อนขั้นได้ตามปกติ เมื่อออกเลขฉบับนี้จะได้เลขใบขอซื้อใหม่แทนฉบับเดิม ขั้นนำเข้าปัจจุบันยกมาต่อ และต้องส่งอีเมลสั่งซื้อใหม่';
@@ -55,6 +56,8 @@ function downloadBlob(blob, filename) {
 export function ImportRequestFactoryCard({
   row, ticketId, canFullWrite, canFooterWrite, canSetLeadTime, canEmailWrite, showToast,
   showInlineDownload = false, showOrderEmail = false,
+  // Deal page only (redesign 2026-11-16): its own noun, and the "ดูอย่างเดียว" chip on a card this viewer cannot edit.
+  dealNoun = 'ดีล', showReadOnlyChip = false,
 }) {
   const queryClient = useQueryClient();
   const [leadTimeDraft, setLeadTimeDraft] = useState({ min: row.leadTimeMinDays ?? '', max: row.leadTimeMaxDays ?? '' });
@@ -283,9 +286,12 @@ export function ImportRequestFactoryCard({
       <span className="text-2xs text-text-muted">v{row.version}</span>
       <StatusBadge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status] ?? row.status}</StatusBadge>
       {row.docNumber ? <code className="text-2xs text-text-muted">{row.docNumber}</code> : null}
-      {/* Drawing a-deal-ship: the tracker below is read-only on every surface that shows this card (import moves it
-          on การขนส่ง), so it says so. */}
-      {isIssued ? <StatusBadge tone="neutral">ดูอย่างเดียว</StatusBadge> : null}
+      {/* Drawing a-deal-ship: the card says ดูอย่างเดียว only when it offers this viewer nothing to edit — the same
+          conditions the controls below render on (ออกฉบับแก้ไข, the post-issue lead-time editor, the CEO footer, the
+          order e-mail). */}
+      {showReadOnlyChip && isIssued && !(
+        (canFullWrite && row.importStep !== 'RECEIVED') || canSetLeadTime || canFooterWrite || (showOrderEmail && canEmailWrite)
+      ) ? <StatusBadge tone="neutral">ดูอย่างเดียว</StatusBadge> : null}
     </>
   );
 
@@ -326,7 +332,7 @@ export function ImportRequestFactoryCard({
       {isDraft ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border-subtle pt-3">
           <p className="m-0 min-w-0 flex-1 basis-64 text-xs text-text-muted" data-testid={`ir-draft-hint-${row.id}`}>
-            {isRevisionDraft ? REVISION_DRAFT_HINT : FIRST_DRAFT_HINT}
+            {isRevisionDraft ? REVISION_DRAFT_HINT : firstDraftHint(dealNoun)}
           </p>
           {canFullWrite ? (
             <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={issueMutation.isPending}

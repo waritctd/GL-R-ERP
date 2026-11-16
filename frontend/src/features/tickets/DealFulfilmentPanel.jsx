@@ -871,6 +871,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     canEmailWrite={canEmailWriteStoredIr}
                     showOrderEmail={role !== 'sales'}
                     showToast={showToast}
+                    dealNoun="งาน"
+                    showReadOnlyChip
                   />
                 ))}
               </div>
@@ -1016,14 +1018,18 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                   const delivered = Number(item.qtyDelivered || 0);
                   const remaining = Math.max(0, ordered - delivered);
                   const fromStock = Math.min(ordered, Number(item.qtyFromStock || 0));
+                  // Not reserved from stock is นำเข้า only once the procurement source is decided; while it is
+                  // pending (procurementSource.pending) nothing is known yet (fix round 1).
+                  const restLabel = sourcePending ? 'ยังไม่กำหนด' : 'นำเข้า';
+                  const restTone = sourcePending ? 'warning' : 'info';
                   const sourceChips = fromStock >= ordered && ordered > 0
                     ? [{ key: 'stock', label: 'คลัง', tone: 'neutral' }]
                     : fromStock > 0
                       ? [
                         { key: 'stock', label: `คลัง ${fromStock.toLocaleString('en-US')}`, tone: 'neutral' },
-                        { key: 'import', label: `นำเข้า ${(ordered - fromStock).toLocaleString('en-US')}`, tone: 'info' },
+                        { key: 'rest', label: `${restLabel} ${(ordered - fromStock).toLocaleString('en-US')}`, tone: restTone },
                       ]
-                      : [{ key: 'import', label: 'นำเข้า', tone: 'info' }];
+                      : [{ key: 'rest', label: restLabel, tone: restTone }];
                   return (
                     <tr key={item.id} className="border-b border-border-subtle align-middle last:border-b-0">
                       <td className="max-w-[16rem] py-2 pr-3 font-bold text-text [overflow-wrap:anywhere]">{`${item.brand ?? ''} ${item.model || ''}`.trim()}</td>
@@ -1153,7 +1159,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           <div className="flex flex-col gap-3">
             <p className="text-xs text-text-muted">
               น้ำหนัก 2 หรือ 3 เท่ามีผลเฉพาะสัดส่วนของแต่ละรายการที่มาจากสต็อกเท่านั้น ส่วนที่สั่งนำเข้ายังคงนับ 1 เท่าเสมอ
-              การตั้งค่านี้จะมีผลกับค่าคอมมิชชั่นครั้งถัดไปที่บันทึกสำหรับดีลนี้เท่านั้น ไม่กระทบรายการที่บันทึกไปแล้ว
+              การตั้งค่านี้จะมีผลกับค่าคอมมิชชั่นครั้งถัดไปที่บันทึกสำหรับงานนี้เท่านั้น ไม่กระทบรายการที่บันทึกไปแล้ว
             </p>
             {items.map((item) => (
               <label key={item.id} className="grid grid-cols-[1fr_110px] items-center gap-2.5 text-sm">

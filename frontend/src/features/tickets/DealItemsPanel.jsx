@@ -35,16 +35,31 @@ import {
  *   - saving goes through the page's shared action (`onAction(fn, successMsg)`, which toasts and re-reads the deal
  *     and resolves true on success); edit mode closes only when it succeeded, as before.
  */
+/**
+ * The items editor's unsaved state (edit mode, the draft rows, the note). The page holds it (fix round 1): the panel
+ * lives on the ใบเสนอราคา tab, which unmounts whenever another tab is open, so state kept inside the panel was
+ * silently thrown away by a tab switch.
+ */
+export function useDealItemsEdit() {
+  const [editMode, setEditMode] = useState(false);
+  const [editDraft, setEditDraft] = useState([]);
+  const [editNote, setEditNote] = useState('');
+  return { editMode, setEditMode, editDraft, setEditDraft, editNote, setEditNote };
+}
+
 export function DealItemsPanel({
   ticketId, role, items, st, isOwner, canEditItems, fromPricingChain = false, fxRatesByCurrency = { THB: 1 },
   actionLoading = false, onAction,
+  // useDealItemsEdit() from the page, so an unsaved edit survives a tab switch; a panel without one keeps its own.
+  edit = null,
 }) {
   const can = { editItems: canEditItems };
 
   // Edit-items mode
-  const [editMode, setEditMode] = useState(false);
-  const [editDraft, setEditDraft] = useState([]);
-  const [editNote, setEditNote] = useState('');
+  const ownEdit = useDealItemsEdit();
+  const {
+    editMode, setEditMode, editDraft, setEditDraft, editNote, setEditNote,
+  } = edit ?? ownEdit;
   // Catalog autocomplete for the ยี่ห้อ/รุ่น fields in edit mode — same shape as TicketCreateModal's
   // catalogResults/catalogFocus (`{ index, field }`).
   const [editCatalogResults, setEditCatalogResults] = useState([]);

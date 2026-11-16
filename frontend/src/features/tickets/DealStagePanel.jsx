@@ -23,6 +23,71 @@ import { UpdateStageModal } from './UpdateStageModal.jsx';
 import { stageForQuotationRecipient } from '../quotations/quotationMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
+/**
+ * The next stage this deal moves to and the "ถัดไป: …" line that names it (route-aware, deposit-bypass-aware, and
+ * naming the parties' own quote stages while the route choice is the main button). Pure: every gate is read off the
+ * server's own payload (`availableActions`, `stageDecisions`), never re-derived. Shared by DealStagePanel (its gates)
+ * and the deal page (the line, shown in the ขั้นต่อไป card).
+ */
+export function nextStageLine({
+  summary, availableActions = [], stageDecisions = [], catalog = EMPTY_STAGE_CATALOG, quoteParties = null, ctaStage = null,
+}) {
+  const hasAction = (action, targetStage = null) => availableActions.some((item) =>
+    item.action === action && (targetStage == null || item.targetStage === targetStage));
+  // lifecycle, not lostReason — the reason persists after a reopen (V57).
+  const lost = summary.lifecycle === 'CLOSED_LOST';
+  const nextStage = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
+  // A no-deposit deal never passes ขั้น 11 (nothing for the account team to confirm): step over it.
+  const next = nextStage?.code === 'DEPOSIT_RECEIVED' && depositBypassed(summary.depositPolicy)
+    ? nextOnRoute(catalog, nextStage.code, stageDecisions)
+    : nextStage;
+  // `next` is on-route by construction; the explicit onRoute check is the belt to that braces — an off-route
+  // stage must never be one click away, whatever else the server listed.
+  const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
+  const canAdvance = Boolean(next) && !next.auto && nextDecision?.onRoute !== false
+    && hasAction('ADVANCE_STAGE', next.code);
+  // The next stage is reachable EXCEPT the readiness gate (a follow-up date + a logged activity since the last
+  // stage change) is unmet — the ONE block the acting sales rep clears themselves. When true, the guided-advance
+  // flow replaces the dead "อัปเดตโดย…" hint.
+  const readinessBlocked = Boolean(next) && !next.auto && !canAdvance
+    && Boolean(nextDecision) && !nextDecision.allowed
+    && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
+  // When the next stage isn't one this user can one-click into, explain who or what advances it instead of
+  // showing a dead end. Suppressed while the guided-advance button stands in for it.
+  const nextHint = next && !canAdvance && !readinessBlocked
+    ? (next.auto ? AUTO_STAGE_HINT[next.code] : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
+    : null;
+  // With the route choice as the main button, ถัดไป names the parties' own quote stages (the first, then "หรือข้ามไป"
+  // the rest) with the first one's auto hint — not the stage after the current one. The first party's stage missing
+  // from the catalog: the plain next-stage line.
+  const [choiceStage, ...skipStages] = (quoteParties ?? []).map((party) => findStage(catalog, stageForQuotationRecipient(party)));
+  const ctaRow = ctaStage ? findStage(catalog, ctaStage) : null;
+  return {
+    next,
+    nextDecision,
+    canAdvance,
+    readinessBlocked,
+    lineStage: choiceStage ?? ctaRow ?? next,
+    lineHint: choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : ctaRow ? AUTO_STAGE_HINT[ctaRow.code] : nextHint,
+    lineSkips: choiceStage ? skipStages.filter(Boolean) : [],
+  };
+}
+
+/** ONE "what happens next, and who moves it" line, from nextStageLine(); nothing when there is no next stage. */
+export function NextStageLine({ line, entryChannel }) {
+  if (!line?.lineStage) return null;
+  return (
+    <div data-testid="deal-stage-next" className="text-sm leading-snug text-text">
+      <span className="font-bold text-text-muted">ถัดไป: </span>
+      <span className="font-extrabold">{line.lineStage.no}. {dealStageLabel(line.lineStage.code, entryChannel).label}</span>
+      {line.lineSkips.map((stage) => (
+        <span key={stage.code}> หรือข้ามไป <span className="font-extrabold">{stage.no}. {dealStageLabel(stage.code, entryChannel).label}</span></span>
+      ))}
+      {line.lineHint ? <span className="text-text-secondary"> — {line.lineHint}</span> : null}
+    </div>
+  );
+}
+
 function daysSince(iso) {
   if (!iso) return null;
   return Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86400000));
@@ -67,6 +132,9 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   events = [],
   onUpdateStage, onMarkLost, onReopen, onHold, onDormant, onResume, onSetTenderRequirement,
   onSetEntryChannel,
+  // The deal page shows the "ถัดไป" line in its ขั้นต่อไป card instead (one "what's next" statement); a standalone
+  // panel keeps its own.
+  showNextLine = true,
 }, ref) {
   const [editOpen, setEditOpen] = useState(false);
   const [lostOpen, setLostOpen] = useState(false);
@@ -93,11 +161,13 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // this deal's route does not visit. Both are read off the server's answer — `entryChannel` on the
   // summary, `onRoute` on each stage decision — never derived here. Absent => today's behaviour.
   const label = dealStageLabel(summary.salesStage, summary.entryChannel);
-  const nextStage = lost ? null : nextOnRoute(catalog, summary.salesStage, stageDecisions);
-  // A no-deposit deal never passes ขั้น 11 (nothing for the account team to confirm): step over it.
-  const next = nextStage?.code === 'DEPOSIT_RECEIVED' && depositBypassed(summary.depositPolicy)
-    ? nextOnRoute(catalog, nextStage.code, stageDecisions)
-    : nextStage;
+  // The next stage, whether this viewer can one-click into it, and the "ถัดไป" line — one pure computation shared with
+  // the page, which shows the line in the ขั้นต่อไป card (fix round 1, L3: one "what's next" statement on the page).
+  const {
+    next, canAdvance, readinessBlocked, lineStage, lineSkips, lineHint,
+  } = nextStageLine({
+    summary, availableActions, stageDecisions, catalog, quoteParties, ctaStage,
+  });
   const route = routeName(summary.entryChannel);
   const routeStageCount = routePath(catalog, stageDecisions).length;
   const days = daysSince(summary.stageUpdatedAt);
@@ -108,17 +178,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   const canEditStage = hasAction('UPDATE_STAGE')
     && stageDecisions.some((decision) => decision.allowed) && !lost;
   const canLost = hasAction('MARK_LOST') && !lost && summary.salesStage !== 'CLOSED_PAID';
-  // `next` is on-route by construction; the explicit onRoute check is the belt to that braces — an off-route
-  // stage must never be one click away, whatever else the server listed.
-  const nextDecision = next ? stageDecisions.find((decision) => decision.stage === next.code) : null;
-  const canAdvance = Boolean(next) && !next.auto && nextDecision?.onRoute !== false
-    && hasAction('ADVANCE_STAGE', next.code);
-  // The next stage is reachable EXCEPT the readiness gate (a follow-up date + a logged activity since the last
-  // stage change) is unmet — the ONE block the acting sales rep clears themselves. When true, the guided-advance
-  // flow replaces the dead "อัปเดตโดย…" hint.
-  const readinessBlocked = Boolean(next) && !next.auto && !canAdvance
-    && Boolean(nextDecision) && !nextDecision.allowed
-    && nextDecision.blockedReason === STAGE_ADVANCE_GATE_MESSAGE;
   // The page's main button carries เลื่อนไป on ขั้น 1–2; one copy on the page.
   // No เลื่อนไป beside a main button that leads elsewhere (ยืนยันคำสั่งซื้อ → 10).
   const showGuidedOpener = readinessBlocked && !advanceInHeader && !(ctaStage === 'ORDER_RECEIVED' && ctaStage !== next?.code);
@@ -192,16 +251,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     },
   }));
 
-  // When the next stage isn't one this user can one-click into, explain who or what advances it instead of
-  // showing a dead end. Suppressed while the guided-advance button stands in for it: that button IS the way
-  // forward, so "อัปเดตโดย<ฝ่าย>" would be a misleading dead end next to it.
-  const nextHint = next && !canAdvance && !readinessBlocked
-    ? (next.auto ? AUTO_STAGE_HINT[next.code] : `ขั้นถัดไปอัปเดตโดย${GATE_LABEL[next.gate]}`)
-    : null;
-  // With the route choice on the sticky bar, ถัดไป names the parties' own quote stages (the first,
-  // then "หรือข้ามไป" the rest) with the first one's auto hint — not the stage after the current one.
-  // The first party's stage missing from the catalog: the plain next-stage line.
-  const [choiceStage, ...skipStages] = (quoteParties ?? []).map((party) => findStage(catalog, stageForQuotationRecipient(party)));
   // A skipped stage is final: แก้ไขสถานะ never offers what the track marks ข้าม.
   // Only a skipped OWNER stage is final; any other never-visited stage (e.g. the routine 4 -> 3) stays offered.
   const skippedAll = skippedStageCodes(catalog, stageIndexIn(catalog, summary.salesStage), events);
@@ -209,10 +258,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     ? new Set(['QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'].filter((code) => skippedAll.has(code)))
     : new Set();
   const showGoodsWarning = summary.salesStage === 'PROCUREMENT' && !goodsArrived(summary.fulfillmentStatus);
-  const ctaRow = ctaStage ? findStage(catalog, ctaStage) : null;
-  const lineStage = choiceStage ?? ctaRow ?? next;
-  const lineHint = choiceStage ? AUTO_STAGE_HINT[choiceStage.code] : ctaRow ? AUTO_STAGE_HINT[ctaRow.code] : nextHint;
-  const lineSkips = choiceStage ? skipStages.filter(Boolean) : [];
 
   async function submitStage(payload) {
     await onUpdateStage(payload);
@@ -263,15 +308,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           <div className="flex flex-col gap-3">
             {/* ONE "what happens next, and who moves it" line: the hint (the only sentence that
                 says whose move it is) must not be the least prominent thing on screen. */}
-            {lineStage && !isDone ? (
-              <div data-testid="deal-stage-next" className="text-sm leading-snug text-text">
-                <span className="font-bold text-text-muted">ถัดไป: </span>
-                <span className="font-extrabold">{lineStage.no}. {dealStageLabel(lineStage.code, summary.entryChannel).label}</span>
-                {lineSkips.map((stage) => (
-                  <span key={stage.code}> หรือข้ามไป <span className="font-extrabold">{stage.no}. {dealStageLabel(stage.code, summary.entryChannel).label}</span></span>
-                ))}
-                {lineHint ? <span className="text-text-secondary"> — {lineHint}</span> : null}
-              </div>
+            {showNextLine && !isDone ? (
+              <NextStageLine line={{ lineStage, lineSkips, lineHint }} entryChannel={summary.entryChannel} />
             ) : null}
 
             {/* CLOSED_PAID's "done" line is the ขั้นต่อไป card's now. */}

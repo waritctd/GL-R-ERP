@@ -285,7 +285,7 @@ export function DealDocumentRegister({
 
   if (!hasAnyVisibleSection) {
     return (
-      <Panel title={panelTitle} data-testid={panelTestId}>
+      <Panel title={panelTitle} actions={quotationsOnly ? quotationsAction : null} data-testid={panelTestId}>
         <div className="p-4">
           <EmptyState icon="fileText" title="ไม่มีเอกสารให้แสดงในมุมมองนี้" description="สิทธิ์การเข้าถึงของบทบาทนี้ไม่ครอบคลุมเอกสารของงานนี้" />
         </div>
