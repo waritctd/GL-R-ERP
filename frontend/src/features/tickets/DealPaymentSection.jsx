@@ -469,6 +469,7 @@ export function DealPaymentSection({
           title="ยืนยันการออกเอกสาร"
           message={(
             <DepositIssueSummary customerName={doc.customerName} depositPercent={doc.depositPercent}
+              subtotal={doc.subtotal} reference={doc.reference}
               deposit={doc.depositAmount} vatPercent={doc.vatPercent} vat={doc.vatAmount} total={doc.totalPayable} />
           )}
           confirmLabel="ออกเอกสาร"

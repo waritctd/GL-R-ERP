@@ -452,6 +452,78 @@ describe('DealPaymentSection — step 3 รับชำระครบ, and the 
   });
 });
 
+// Drawing m-deposit-issue (2026-11-16): the issue confirm is rebuilt; what it SENDS must not change. Every figure in
+// this fixture differs from every other, so reading one field where another belongs fails.
+describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm (drawing m-deposit-issue)', () => {
+  const notice = {
+    ...draftNotice, depositPercent: 0.3, subtotal: 1240000.11, depositAmount: 372000.03, vatPercent: 0.07,
+    vatAmount: 26040.02, totalPayable: 398040.05, customerName: 'บริษัท ลุมพินี เรสซิเดนซ์ จำกัด', reference: 'QT-2026-0201',
+    updatedAt: 'stamp-7',
+  };
+  const props = { summary: summaryOf({ paymentStatus: 'CUSTOMER_CONFIRMED' }), depositNotices: [notice] };
+  const openConfirm = async () => {
+    fireEvent.click(deposit().getByRole('button', { name: 'ออกเอกสาร' }));
+    return screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' });
+  };
+
+  // Payload identity — captured against the pre-rebuild dialog and kept green through it.
+  it('confirm sends exactly one issue(id, { expectedUpdatedAt }) with the listed draft\'s stamp, nothing else', async () => {
+    api.depositNotices.issue.mockResolvedValue({ depositNotice: { docNumber: 'GLRD6900099' } });
+    renderSection(props);
+    await settled();
+    const dialog = await openConfirm();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกเอกสาร' }));
+    await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.issue.mock.calls).toEqual([[31, { expectedUpdatedAt: 'stamp-7' }]]);
+    expect(api.depositNotices.preview).not.toHaveBeenCalled();
+  });
+
+  it('ยกเลิก, Escape and ✕ close it and send nothing', async () => {
+    renderSection(props);
+    await settled();
+    fireEvent.click(within(await openConfirm()).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await openConfirm();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(within(await openConfirm()).getByRole('button', { name: 'ปิด' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.depositNotices.issue).not.toHaveBeenCalled();
+  });
+
+  it('shows the drawn summary line and rows, each from its own served field', async () => {
+    renderSection(props);
+    await settled();
+    const dialog = within(await openConfirm());
+    expect(dialog.getByTestId('deposit-issue-summary').textContent)
+      .toBe('มัดจำ 30% · 398,040.05 บาท รวม VAT · ถึง บริษัท ลุมพินี เรสซิเดนซ์ จำกัด');
+    const row = (label) => dialog.getByText(label, { exact: false }).closest('tr');
+    expect(row('มูลค่าสินค้า').textContent).toContain('QT-2026-0201');
+    expect(row('มูลค่าสินค้า').textContent).toContain('1,240,000.11');
+    expect(row('มัดจำ 30% (ก่อน VAT)').textContent).toContain('372,000.03');
+    expect(row('VAT 7%').textContent).toContain('26,040.02');
+    expect(row('ยอดที่ลูกค้าต้องชำระ').textContent).toContain('398,040.05');
+    expect(dialog.getByText(/ยอดเริ่มต้นเติมจากใบเสนอราคา/)).toBeTruthy();
+  });
+
+  it('keeps the irreversibility warning, and its own labels never say ดีล', async () => {
+    renderSection(props);
+    await settled();
+    const dialog = await openConfirm();
+    expect(within(dialog).getByTestId('deposit-issue-warning').textContent).toMatch(/หลังจากนี้จะไม่สามารถแก้ไขได้/);
+    expect(dialog.textContent).not.toContain('ดีล');
+  });
+
+  it('a notice with no reference shows the value row without an อ้างอิง', async () => {
+    renderSection({ ...props, depositNotices: [{ ...notice, reference: null }] });
+    await settled();
+    const dialog = within(await openConfirm());
+    const row = dialog.getByText('มูลค่าสินค้า', { exact: false }).closest('tr');
+    expect(row.textContent).not.toContain('อ้างอิง');
+    expect(row.textContent).toContain('1,240,000.11');
+  });
+});
+
 describe('DealPaymentSection — the timeline (moved here unchanged)', () => {
   const summary = summaryOf({ paymentStage: 'PARTIALLY_PAID', paymentStatus: 'DEPOSIT_PAID' });
   // The timeline is the รับแล้ว card now (was the "ไทม์ไลน์การชำระเงิน" block).
