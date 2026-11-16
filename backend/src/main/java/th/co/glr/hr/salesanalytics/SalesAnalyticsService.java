@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.OffsetDateTime;
+import java.util.Collections;
 import java.util.Map;
 import java.util.Set;
 import org.springframework.http.HttpStatus;
@@ -37,7 +38,7 @@ public class SalesAnalyticsService {
         }
         SnapshotDto dto = repository.findLatest().map(r -> new SnapshotDto(mapper.convertValue(parse(r.payloadJson()), Object.class), r.asOf(), r.uploadedAt()))
             .orElse(null);
-        return java.util.Collections.singletonMap("snapshot", dto);
+        return Collections.singletonMap("snapshot", dto);
     }
 
     /** CEO only. The document must be a JSON object with the four required keys; the three series must agree in length. */
