@@ -1,18 +1,26 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ROLE_PERMISSIONS } from '../../../api/routes.js';
 import { hasPermission } from '../../../app/permissions.js';
 import { canPerformFinanceStep } from '../../finance/financeActionPerformers.js';
-import { FINANCE_WORK_GROUPS } from '../../finance/financeWorkGroups.js';
+import { FINANCE_WORK_GROUPS, OTHER_WORK_GROUP } from '../../finance/financeWorkGroups.js';
+import {
+  canApproveDealQuotation, canCreateDealQuotationStandalone, isDealQuotationReadOnlyViewer,
+} from '../../quotations/quotationMeta.js';
 import { BOARD_COLUMNS } from '../../salesBoard/boardFormat.js';
 import { MOVER_LABEL, REP_STEPS } from '../../tickets/dealSteps.js';
 import { TICKET_DETAIL_TABS } from '../../tickets/ticketDetailTabs.js';
-import { ALL_ROLES, allTabSections, entriesForViewer, publishPayload, rolesForEntry } from '../audiences.js';
+import {
+  ALL_ROLES, allTabSections, entriesForViewer, isForEveryone, publishPayload, rolesForEntry,
+} from '../audiences.js';
 import { RELEASES, findRelease, latestRelease } from './index.js';
 
 // The source of every component this release describes. A label the notice puts in "quotes" must exist in the source
 // of the screen it describes, so the notice breaks here, not in front of staff, when the UI wording changes.
 import appShellSrc from '../../../components/layout/AppShell.jsx?raw';
-import sidebarSrc from '../../../components/layout/Sidebar.jsx?raw';
+import launcherSrc from '../../../components/layout/Launcher.jsx?raw';
+import userMenuSrc from '../../../components/layout/UserMenu.jsx?raw';
 import allDealsSrc from '../../tickets/AllDealsPage.jsx?raw';
 import dealBoardSrc from '../../salesBoard/DealBoard.jsx?raw';
 import boardFormatSrc from '../../salesBoard/boardFormat.js?raw';
@@ -49,29 +57,50 @@ const user = (role, extra = {}) => ({ id: 1, role, employeeId: 1, ...extra });
 const release = findRelease(RELEASE_ID);
 const byId = (id) => release?.entries.find((entry) => entry.id === id);
 
-const BOARD = [appShellSrc, allDealsSrc, dealBoardSrc, boardFormatSrc, ticketListSrc, myWorkSrc];
+/** A source with its comments removed: a label that survives only in a comment is not on any screen (review M4). Line
+ * comments go first, so a `/*` written inside one (e.g. "dist/assets/*.css") cannot open a fake block comment. URLs
+ * keep their `//` because the line-comment arm needs whitespace or a line start before it. */
+function code(src) {
+  return src.replace(/(^|\s)\/\/.*$/gm, '$1').replace(/\/\*[\s\S]*?\*\//g, '');
+}
+
+// The launcher (#1324) replaced the sidebar: the "เมนู" button opens it, and SECTIONS names its headings.
+const NAV = [appShellSrc, launcherSrc];
+const BOARD = [...NAV, allDealsSrc, dealBoardSrc, boardFormatSrc, ticketListSrc, myWorkSrc];
 const DEAL_PAGE = [ticketDetailSrc, dealHeaderSrc, nextStepCardSrc, dealStepperSrc, dealStepsSrc, quietLinksSrc,
   ticketTabsSrc, quickActionsSrc, dealInfoCardSrc, dealHistorySrc];
 // NextStepCard: the deposit notice's create button can sit in ขั้นต่อไป instead of the เงิน tab (mainButtonCreatesNotice).
 const DOCUMENTS = [ticketTabsSrc, paymentSectionSrc, depositNoticeSrc, remainingInvoiceSrc, fulfilmentSrc, nextStepCardSrc];
-const VISITS = [appShellSrc, visitsPageSrc, visitsThisWeekSrc, visitWeekGridSrc, visitWeekSrc, visitDialogsSrc];
-const FINANCE = [appShellSrc, financePageSrc, financeGroupsSrc];
+const QUOTATIONS = [...NAV, quotationListSrc, quotationMetaSrc];
+const VISITS = [...NAV, visitsPageSrc, visitsThisWeekSrc, visitWeekGridSrc, visitWeekSrc, visitDialogsSrc];
+const FINANCE = [...NAV, financePageSrc, financeGroupsSrc];
 
-/** Entry id → the sources of the screens it describes. Every entry must be listed: an entry with no sources would
- * skip the label check. */
-const ENTRY_SOURCES = {
+/** Entry id → the sources of the screens it describes, comments stripped. Every entry must be listed: an entry with no
+ * sources would skip the label check. */
+const ENTRY_SOURCES = Object.fromEntries(Object.entries({
+  'menu-launcher': [...NAV, userMenuSrc],
   'all-deals': BOARD,
   'all-deals-team': BOARD,
   'deal-page': DEAL_PAGE,
   'deal-documents': DOCUMENTS,
   'deal-documents-ceo': DOCUMENTS,
-  'quotation-list': [appShellSrc, quotationListSrc, quotationMetaSrc],
+  'quotation-list': QUOTATIONS,
+  'quotation-list-approver': QUOTATIONS,
+  'quotation-list-view': QUOTATIONS,
   visits: VISITS,
   'visits-team': VISITS,
-  'today-phone': [appShellSrc, todayOnPhoneSrc, myWorkSrc, visitDialogsSrc, visitsThisWeekSrc],
+  'today-phone': [...NAV, todayOnPhoneSrc, myWorkSrc, visitDialogsSrc, visitsThisWeekSrc],
   'finance-worklist': FINANCE,
   'finance-worklist-ceo': FINANCE,
-};
+}).map(([id, sources]) => [id, sources.map(code)]));
+
+// The backend's own quiet threshold (QuietRule.DEFAULT_QUIET_DAYS; application.yml defaults app.sales.quiet-days to it).
+// Vitest runs from frontend/ (vitest.config.js); public/ and ../backend are resolved from there.
+const FRONTEND_ROOT = process.cwd();
+const QUIET_RULE_SRC = readFileSync(
+  resolve(FRONTEND_ROOT, '../backend/src/main/java/th/co/glr/hr/ticket/QuietRule.java'), 'utf8',
+);
+const DEFAULT_QUIET_DAYS = Number(/DEFAULT_QUIET_DAYS = (\d+);/.exec(QUIET_RULE_SRC)[1]);
 
 /** Every "quoted" on-screen label in an entry's prose (title, why, each step's text and detail, help). Alt text is
  * not on-screen copy, so it is left out. */
@@ -109,6 +138,16 @@ describe('2026-11-17 release: registration', () => {
       expect(older.has(image), image).toBe(false);
     }
   });
+
+  // Captured screenshots ship with the notice: a missing file renders a placeholder in front of staff (review M22).
+  it('every referenced screenshot exists in frontend/public', () => {
+    expect(release).not.toBeNull();
+    const onDisk = (image) => existsSync(resolve(FRONTEND_ROOT, `public${image}`));
+    // Guard the root: the published 16 Nov images must resolve, or this check would pass/fail for the wrong reason.
+    expect(onDisk('/whats-new/2026-11-16/address-1.png'), 'cwd is not frontend/').toBe(true);
+    const missing = release.entries.flatMap((entry) => entry.steps.map((step) => step.image)).filter((image) => !onDisk(image));
+    expect(missing).toEqual([]);
+  });
 });
 
 describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
@@ -116,26 +155,32 @@ describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
 
   it('each role is told about exactly the pages it can open that changed for it', () => {
     expect(release).not.toBeNull();
-    expect(idsFor(user('sales'))).toEqual(['all-deals', 'deal-page', 'deal-documents', 'quotation-list', 'visits', 'today-phone']);
-    expect(idsFor(user('sales_manager'))).toEqual(['all-deals-team', 'deal-page', 'quotation-list', 'visits-team']);
-    expect(idsFor(user('ceo'))).toEqual(
-      ['all-deals-team', 'deal-page', 'deal-documents-ceo', 'quotation-list', 'visits-team', 'finance-worklist-ceo'],
+    expect(idsFor(user('sales'))).toEqual(
+      ['menu-launcher', 'all-deals', 'deal-page', 'deal-documents', 'quotation-list', 'visits', 'today-phone'],
     );
-    // account and import read the ใบเสนอราคา list (canViewDealQuotations) when the lock is off; nothing else changed for
-    // them but งานการเงิน for account.
-    expect(idsFor(user('account'))).toEqual(['finance-worklist', 'quotation-list']);
-    expect(idsFor(user('import'))).toEqual(['quotation-list']);
+    expect(idsFor(user('sales_manager'))).toEqual(
+      ['menu-launcher', 'all-deals-team', 'deal-page', 'quotation-list-approver', 'visits-team'],
+    );
+    expect(idsFor(user('ceo'))).toEqual(
+      ['menu-launcher', 'all-deals-team', 'deal-page', 'deal-documents-ceo', 'quotation-list-approver', 'visits-team',
+        'finance-worklist-ceo'],
+    );
+    // account and import read the ใบเสนอราคา list (canViewDealQuotations) when the lock is off, read-only.
+    expect(idsFor(user('account'))).toEqual(['menu-launcher', 'finance-worklist', 'quotation-list-view']);
+    expect(idsFor(user('import'))).toEqual(['menu-launcher', 'quotation-list-view']);
   });
 
-  it('roles with no changed page get nothing, not filler', () => {
+  it('the launcher (#1324) is for everyone; roles with no changed sales page get only that', () => {
     expect(release).not.toBeNull();
+    expect(isForEveryone(release, byId('menu-launcher'))).toBe(true);
+    expect(byId('menu-launcher').landing).toBeFalsy();
     for (const role of ['hr', 'warehouse', 'qc', 'employee']) {
-      expect(release.sections[role], role).toEqual([]);
-      expect(idsFor(user(role)), role).toEqual([]);
+      expect(release.sections[role], role).toEqual(['menu-launcher']);
+      expect(idsFor(user(role)), role).toEqual(['menu-launcher']);
     }
-    expect(idsFor(user('employee', { manager: true }))).toEqual([]);
+    expect(idsFor(user('employee', { manager: true }))).toEqual(['menu-launcher']);
     // Wrong-way-round: a quotation-grant holder outside the sales roles is not told about the sales pages.
-    expect(idsFor(user('qc', { canCreateQuotation: true }))).toEqual([]);
+    expect(idsFor(user('qc', { canCreateQuotation: true }))).toEqual(['menu-launcher']);
     // Wrong-way-round: import and account are never told about the board, the deal page, visits or the phone screen.
     for (const role of ['import', 'account']) {
       for (const id of ['all-deals', 'all-deals-team', 'deal-page', 'deal-documents', 'deal-documents-ceo', 'visits',
@@ -146,10 +191,48 @@ describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
     expect(idsFor(user('import'))).not.toContain('finance-worklist');
   });
 
-  it('the ใบเสนอราคา entry reaches exactly the roles that can open the list', () => {
+  it('the ใบเสนอราคา entries split by the list’s own role branches and together reach exactly its viewers', () => {
     expect(release).not.toBeNull();
-    expect(rolesForEntry(release, byId('quotation-list')))
-      .toEqual(ALL_ROLES.filter((role) => hasPermission(role, 'canViewDealQuotations')));
+    const roles = (id) => rolesForEntry(release, byId(id));
+    // QuotationListPage: approvers (canApproveDealQuotation) land on รออนุมัติ with the พนักงานขาย / ยอดรวม filters;
+    // read-only viewers (isDealQuotationReadOnlyViewer) get "(ดูอย่างเดียว)"; a rep gets its own list.
+    expect(roles('quotation-list')).toEqual(['sales']);
+    expect(roles('quotation-list-approver')).toEqual(ALL_ROLES.filter((role) => canApproveDealQuotation({ role })));
+    expect(roles('quotation-list-view')).toEqual(ALL_ROLES.filter((role) => isDealQuotationReadOnlyViewer({ role })));
+    expect([...roles('quotation-list'), ...roles('quotation-list-approver'), ...roles('quotation-list-view')].sort())
+      .toEqual(ALL_ROLES.filter((role) => hasPermission(role, 'canViewDealQuotations')).sort());
+    // The approver steps name the รออนุมัติ landing and the see-all filters.
+    expect(quotedLabels(byId('quotation-list-approver'))).toEqual(
+      expect.arrayContaining(['รออนุมัติ', 'ทั้งหมด', 'พนักงานขาย', 'ยอดรวม']),
+    );
+    // Read-only viewers have no see-all filters (dealQuotationListSeesAll is approvers only).
+    expect(quotedLabels(byId('quotation-list-view'))).not.toContain('พนักงานขาย');
+  });
+
+  it('no entry tells a role to use a control that role does not have', () => {
+    expect(release).not.toBeNull();
+    const pressed = (entry, label) => entry.steps.some((step) => new RegExp(`กด[^"\\n]{0,12}"${label}"`).test(`${step.text} ${step.detail}`));
+    for (const entry of release.entries) {
+      const roles = rolesForEntry(release, entry);
+      // สร้างใบเสนอราคา: canCreateDealQuotationStandalone (sales, sales_manager, grant) — not the CEO, account or import.
+      if (allText(entry).some((text) => text.includes('สร้างใบเสนอราคา'))) {
+        for (const role of roles) expect(canCreateDealQuotationStandalone({ role }), `${entry.id}: ${role}`).toBe(true);
+      }
+      // The finance verbs are performed only by the roles financeActionPerformers lists (review M10).
+      for (const group of FINANCE_WORK_GROUPS.filter((g) => g.buttonLabel !== 'เปิด')) {
+        if (!pressed(entry, group.buttonLabel)) continue;
+        for (const role of roles) {
+          expect(group.actionKeys.some((key) => canPerformFinanceStep(key, role)), `${entry.id}: ${role} presses ${group.buttonLabel}`)
+            .toBe(true);
+        }
+      }
+      // The deposit notice's ออกเอกสาร is the owning rep's alone (DealPaymentSection isOwnerSales; review M17).
+      if (pressed(entry, 'ออกเอกสาร')) expect(roles, entry.id).toEqual(['sales']);
+    }
+    expect(paymentSectionSrc).toMatch(/\{isOwnerSales \? \([\s\S]{0,700}ออกเอกสาร/);
+    // Cancel is owner-only (TicketDetailPage can.cancel … && isOwner); the help must say so (review M9).
+    expect(ticketDetailSrc).toMatch(/cancel:\s+hasAction\('CANCEL'\) && !TERMINAL\.includes\(st\)\s+&& isOwner,/);
+    expect(byId('deal-page').help).toContain('ยกเลิกได้เฉพาะพนักงานขายเจ้าของงาน');
   });
 
   it('who gets which version of a page follows the page’s own role branch', () => {
@@ -188,13 +271,14 @@ describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
     expect(quotedLabels(byId('finance-worklist-ceo'))).toContain('เปิด');
   });
 
-  it('the ทั้งหมด tab has no empty everyone section and names the roles with nothing', () => {
+  it('the ทั้งหมด tab leads with the launcher for everyone and names the roles that got only that', () => {
     expect(release).not.toBeNull();
     const { sections, addressOnlyRoles } = allTabSections(release);
-    expect(sections.filter((s) => s.entries.length > 0).map((s) => s.key))
-      .toEqual(['sales', 'sales_manager', 'ceo', 'account', 'import']);
-    expect(sections.find((s) => s.key === 'everyone').entries).toEqual([]);
+    expect(sections.map((s) => s.key)).toEqual(['everyone', 'sales', 'sales_manager', 'ceo', 'account', 'import']);
+    expect(sections[0].entries.map((entry) => entry.id)).toEqual(['menu-launcher']);
     expect(addressOnlyRoles).toEqual(['hr', 'warehouse', 'qc', 'employee']);
+    // The page's note for those roles is this release's own, not 16 Nov's address-move sentence.
+    expect(release.otherRolesNote).toBe('ฉบับนี้มีเฉพาะเมนูแบบใหม่ (ด้านบน)');
   });
 
   it('publishPayload carries each entry once with the roles told about it', () => {
@@ -203,11 +287,12 @@ describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
     expect(payload.releaseId).toBe(RELEASE_ID);
     expect(payload.changes).toHaveLength(release.entries.length);
     const byTitle = Object.fromEntries(payload.changes.map((change) => [change.title, change.roles]));
+    expect(byTitle[byId('menu-launcher').title]).toEqual(ALL_ROLES);
     expect(byTitle[byId('deal-page').title]).toEqual(['sales', 'sales_manager', 'ceo']);
-    expect(byTitle[byId('quotation-list').title]).toEqual(['sales', 'sales_manager', 'ceo', 'account', 'import']);
+    expect(byTitle[byId('quotation-list').title]).toEqual(['sales']);
+    expect(byTitle[byId('quotation-list-approver').title]).toEqual(['sales_manager', 'ceo']);
+    expect(byTitle[byId('quotation-list-view').title]).toEqual(['account', 'import']);
     expect(byTitle[byId('finance-worklist').title]).toEqual(['account']);
-    const told = new Set(payload.changes.flatMap((change) => change.roles));
-    for (const role of ['hr', 'warehouse', 'qc', 'employee']) expect(told.has(role), role).toBe(false);
   });
 });
 
@@ -230,15 +315,18 @@ describe('2026-11-17 audiences under the release lockdown', () => {
     const { entriesForViewer: forViewer, locked } = await lockedModules();
     expect(locked).not.toBeNull();
     const ids = (role, extra) => forViewer(locked, user(role, extra)).map((entry) => entry.id);
-    expect(ids('sales')).toEqual(['all-deals', 'deal-page', 'deal-documents', 'quotation-list', 'visits', 'today-phone']);
-    expect(ids('sales_manager')).toEqual(['all-deals-team', 'deal-page', 'quotation-list', 'visits-team']);
+    expect(ids('sales')).toEqual(
+      ['menu-launcher', 'all-deals', 'deal-page', 'deal-documents', 'quotation-list', 'visits', 'today-phone'],
+    );
+    expect(ids('sales_manager')).toEqual(['menu-launcher', 'all-deals-team', 'deal-page', 'quotation-list-approver', 'visits-team']);
     expect(ids('ceo')).toEqual(
-      ['all-deals-team', 'deal-page', 'deal-documents-ceo', 'quotation-list', 'visits-team', 'finance-worklist-ceo'],
+      ['menu-launcher', 'all-deals-team', 'deal-page', 'deal-documents-ceo', 'quotation-list-approver', 'visits-team',
+        'finance-worklist-ceo'],
     );
     // Locked, account opens /finance only and import neither /finance nor /quotations: the ใบเสนอราคา entry is hidden.
-    expect(ids('account')).toEqual(['finance-worklist']);
-    for (const role of ['import', 'hr', 'warehouse', 'qc', 'employee']) expect(ids(role), role).toEqual([]);
-    expect(ids('employee', { manager: true })).toEqual([]);
+    expect(ids('account')).toEqual(['menu-launcher', 'finance-worklist']);
+    for (const role of ['import', 'hr', 'warehouse', 'qc', 'employee']) expect(ids(role), role).toEqual(['menu-launcher']);
+    expect(ids('employee', { manager: true })).toEqual(['menu-launcher']);
   });
 
   it('under the lock the only listed entry a role cannot open is ใบเสนอราคา for import and account', async () => {
@@ -251,24 +339,28 @@ describe('2026-11-17 audiences under the release lockdown', () => {
         if (!visible(entry, user(role))) hidden.push(`${role}:${id}`);
       }
     }
-    expect(hidden.sort()).toEqual(['account:quotation-list', 'import:quotation-list']);
+    expect(hidden.sort()).toEqual(['account:quotation-list-view', 'import:quotation-list-view']);
   });
 
   it('the publish payload names only roles that can open the page', async () => {
     const { publishPayload: payloadOf, locked } = await lockedModules();
     expect(locked).not.toBeNull();
     const payload = payloadOf(locked);
-    expect(payload.changes).toHaveLength(locked.entries.length);
-    const told = new Set(payload.changes.flatMap((change) => change.roles));
-    expect([...told].sort()).toEqual(['account', 'ceo', 'sales', 'sales_manager']);
-    const quotationList = locked.entries.find((e) => e.id === 'quotation-list');
-    expect(payload.changes.find((change) => change.title === quotationList.title).roles).toEqual(['sales', 'sales_manager', 'ceo']);
+    // The read-only quotation entry reaches nobody under the lock, so it is left out of the bell and the email.
+    const view = locked.entries.find((e) => e.id === 'quotation-list-view');
+    expect(payload.changes).toHaveLength(locked.entries.length - 1);
+    expect(payload.changes.map((change) => change.title)).not.toContain(view.title);
+    const byTitle = Object.fromEntries(payload.changes.map((change) => [change.title, change.roles]));
+    expect(byTitle[locked.entries.find((e) => e.id === 'menu-launcher').title]).toEqual(ALL_ROLES);
+    expect(byTitle[locked.entries.find((e) => e.id === 'finance-worklist').title]).toEqual(['account']);
   });
 });
 
-// The release email (separate work) sends each entry's title and its one-line why, with a link to the page and no
-// steps or screenshots. Each must therefore read on its own: one plain sentence, nothing that points at the page.
-describe('2026-11-17 titles and reasons read on their own in an email', () => {
+// The bell row and the backend's release email (ReleaseNoticePolicy.emailBody, today) carry each entry's TITLE alone,
+// with a link to the page and no steps or screenshots, so a title must read on its own. The why is the first line a
+// reader sees on the page under that title, so it is held to the same standard: one sentence, nothing that points
+// at steps or images.
+describe('2026-11-17 titles and reasons read on their own', () => {
   // "ภาพ" alone would also catch the tab name ภาพรวม, so only the screenshot phrasings are listed.
   const POINTS_AT_THE_PAGE = /ด้านล่าง|ด้านบน|ขั้นตอน|ในภาพ|ตามภาพ|ดังภาพ|ภาพประกอบ|ภาพหน้าจอ|ดังนี้|ต่อไปนี้|ที่นี่/;
 
@@ -312,16 +404,40 @@ describe('2026-11-17 wording matches the screens', () => {
     }
   });
 
-  it('every menu path is the nav as AppShell / Sidebar render it', () => {
+  it('every menu path is the nav as AppShell / Launcher render it', () => {
     expect(release).not.toBeNull();
-    const instructions = new Set(['เลือกงาน']);
+    // 'เมนู' is the launcher button's own text (pinned below); 'เลือกงาน' is an instruction, not a label.
+    const instructions = new Set(['เลือกงาน', 'เมนู']);
     for (const entry of release.entries) {
       for (const segment of entry.menu.split(' › ')) {
         if (instructions.has(segment)) continue;
-        expect(appShellSrc.includes(`'${segment}'`) || sidebarSrc.includes(`'${segment}'`), `${entry.id}: menu "${segment}"`)
+        expect(appShellSrc.includes(`'${segment}'`) || launcherSrc.includes(`'${segment}'`), `${entry.id}: menu "${segment}"`)
           .toBe(true);
       }
     }
+  });
+
+  it('every way to a page goes through the launcher as it is today (#1324)', () => {
+    expect(release).not.toBeNull();
+    // The top-bar button that opens the launcher reads "เมนู".
+    expect(appShellSrc).toMatch(/<\/span>\s*เมนู\s*<Icon name="chevronDown"/);
+    const sections = [...launcherSrc.matchAll(/label: '([^']+)'/g)].map((match) => match[1]);
+    for (const entry of release.entries) {
+      for (const step of entry.steps) {
+        // The sidebar-era "กดเมนู งานขาย › …" is gone: a reader presses the "เมนู" button, then picks the page.
+        expect(step.text, entry.id).not.toMatch(/กดเมนู\s/);
+        for (const match of `${step.text} ${step.detail}`.matchAll(/ในหมวด (\S+)/g)) {
+          expect(sections, `${entry.id}: launcher has no section ${match[1]}`).toContain(match[1]);
+        }
+      }
+    }
+    for (const id of ['all-deals', 'all-deals-team', 'quotation-list', 'quotation-list-approver', 'quotation-list-view',
+      'visits', 'visits-team', 'finance-worklist', 'finance-worklist-ceo']) {
+      expect(byId(id).steps[0].text, id).toContain('กด "เมนู"');
+    }
+    // มีอะไรใหม่ moved from the nav to the user menu (UserMenu, "เมนูผู้ใช้").
+    expect(userMenuSrc).toContain("onNavigate('/whats-new')");
+    expect(quotedLabels(byId('menu-launcher'))).toContain('มีอะไรใหม่');
   });
 
   it('pins the labels staff act on most', () => {
@@ -335,12 +451,44 @@ describe('2026-11-17 wording matches the screens', () => {
     for (const label of Object.values(MOVER_LABEL)) expect(quotedLabels(byId('deal-page')), label).toContain(label);
     // The three quiet links.
     for (const label of ['พักงาน', 'ปิดงาน (เสียงาน)', 'ยกเลิกงาน']) expect(quotedLabels(byId('deal-page')), label).toContain(label);
-    // The finance groups, on both finance entries.
+    // The finance groups, on both finance entries, including the catch-all group that appears when it has rows.
     for (const id of ['finance-worklist', 'finance-worklist-ceo']) {
-      for (const group of FINANCE_WORK_GROUPS) expect(quotedLabels(byId(id)), `${id}: ${group.label}`).toContain(group.label);
+      for (const group of [...FINANCE_WORK_GROUPS, OTHER_WORK_GROUP]) {
+        expect(quotedLabels(byId(id)), `${id}: ${group.label}`).toContain(group.label);
+      }
+      expect(allText(byId(id)).join(' '), id).not.toContain('สามกลุ่ม');
     }
     // The quotation list's view switch.
-    expect(quotedLabels(byId('quotation-list'))).toEqual(expect.arrayContaining(['มุมมอง', 'จัดกลุ่มตามดีล', 'วันที่อนุมัติ']));
+    for (const id of ['quotation-list', 'quotation-list-approver', 'quotation-list-view']) {
+      expect(quotedLabels(byId(id)), id).toEqual(expect.arrayContaining(['มุมมอง', 'จัดกลุ่มตามดีล', 'วันที่อนุมัติ']));
+    }
+  });
+
+  it('numbers and step codes come from their source constants (review M7, M8)', () => {
+    expect(release).not.toBeNull();
+    // Delivery completion moves the deal to the stepper's LAST step, as the dialog itself says.
+    const last = REP_STEPS[REP_STEPS.length - 1].code;
+    expect(fulfilmentSrc).toContain(`เลื่อนงานไป ${last}`);
+    for (const id of ['deal-documents', 'deal-documents-ceo']) {
+      expect(byId(id).steps.find((s) => s.text.includes('บันทึกการส่งสินค้า')).detail, id).toContain(`ไป ${last} `);
+    }
+    // The quiet threshold is QuietRule's default, and the rule's two exclusions are named (QuietRule javadoc).
+    expect(QUIET_RULE_SRC).toContain('not in the deliver &amp; collect board column');
+    expect(QUIET_RULE_SRC).toContain('has no booked visit ahead');
+    for (const id of ['all-deals', 'all-deals-team']) {
+      const quiet = byId(id).steps[1].detail;
+      expect(quiet, id).toContain(`เกิน ${DEFAULT_QUIET_DAYS} วัน`);
+      expect(quiet, id).toContain('ส่งของ · เก็บเงิน');
+      expect(quiet, id).toContain('นัดเข้าพบ');
+    }
+    for (const entry of release.entries) {
+      for (const text of allText(entry)) {
+        for (const match of text.matchAll(/เกิน (\d+) วัน/g)) expect(Number(match[1]), entry.id).toBe(DEFAULT_QUIET_DAYS);
+      }
+    }
+    // วันนี้ของฉัน is the phone screen only (MyWork: phoneToday = isPhone && …); the help must keep saying so (M21).
+    expect(myWorkSrc).toContain('const phoneToday = isPhone && !fullOnPhone;');
+    expect(byId('today-phone').help).toContain('เฉพาะบนจอมือถือ');
   });
 
   // Screenshot review (2026-11-17): steps whose ORDER or CONDITION did not match the screen. Each pin is tied to the
@@ -357,17 +505,23 @@ describe('2026-11-17 wording matches the screens', () => {
     for (const entry of release.entries) for (const text of allText(entry)) expect(text, entry.id).not.toMatch(/S1\s*[–-]\s*S9/);
   });
 
-  it('the remaining invoice is saved as a draft before it can be issued (RemainingInvoiceDialog CreateForm → DraftEditor)', () => {
+  it('the remaining invoice: บันทึกร่าง, then the SAME dialog shows the draft with ออกใบแจ้งหนี้ (review F2/F5)', () => {
     expect(release).not.toBeNull();
-    // CreateForm's only write button is บันทึกร่าง; ออกใบแจ้งหนี้ lives in DraftEditor, shown once a DRAFT exists.
+    // CreateForm's only write button is บันทึกร่าง; on save it only refetches the list, and the same Modal then renders
+    // DraftEditor (draft && canWrite), whose footer carries ออกใบแจ้งหนี้.
     expect(remainingInvoiceSrc).toMatch(/data-testid="remaining-invoice-create-draft">\s*\{creating \? 'กำลังบันทึกร่าง…' : 'บันทึกร่าง'\}/);
+    expect(remainingInvoiceSrc).toContain('<CreateForm ticketId={ticketId} onCreated={invalidateList} />');
+    expect(remainingInvoiceSrc).toMatch(/\{draft && canWrite \? \(\s*<DraftEditor/);
+    // จัดการเอกสาร shows on the เงิน tab once an invoice exists (DealPaymentSection) — the way BACK to a draft later.
+    expect(paymentSectionSrc).toMatch(/\{invoice && canManageRemainingInvoice \? \([\s\S]{0,200}จัดการเอกสาร/);
     const step = stepText('deal-documents', 2);
     const save = step.indexOf('"บันทึกร่าง"');
-    const manage = step.indexOf('"จัดการเอกสาร"');
     const issue = step.indexOf('"ออกใบแจ้งหนี้"');
+    const manage = step.indexOf('"จัดการเอกสาร"');
     expect(save).toBeGreaterThanOrEqual(0);
-    expect(manage, 'จัดการเอกสาร appears only once a draft exists').toBeGreaterThan(save);
-    expect(issue).toBeGreaterThan(manage);
+    expect(issue, 'ออกใบแจ้งหนี้ follows บันทึกร่าง in the same dialog').toBeGreaterThan(save);
+    expect(manage, 'จัดการเอกสาร is the way back later, after the issue step').toBeGreaterThan(issue);
+    expect(step).toContain('หน้าต่างเดิม');
   });
 
   it('a visit is ticked only on its day or later (VisitState canTick = plannedDate <= today)', () => {
@@ -377,6 +531,16 @@ describe('2026-11-17 wording matches the screens', () => {
     // On a phone (≤520px, mobile-xs) the tick button is the ✓ icon alone: its "เข้าพบแล้ว" text is hidden.
     expect(visitsThisWeekSrc).toContain('<span className="mobile-xs:hidden">เข้าพบแล้ว</span>');
     expect(stepText('today-phone', 4)).toContain('✓');
+  });
+
+  it('the top-right buttons named are the header quick actions themselves (review M4)', () => {
+    expect(release).not.toBeNull();
+    // "บันทึกกิจกรรม" is a real button too (DealHistoryPanel's activity form), so a source-wide label check cannot see a
+    // label moved to the wrong place: the step about the header's top right must quote DealQuickActions' own labels.
+    const step = byId('deal-page').steps.find((s) => s.text.includes('มุมขวาบน'));
+    const labels = [...step.text.matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+    expect(labels.length).toBeGreaterThan(0);
+    for (const label of labels) expect(code(quickActionsSrc), label).toMatch(new RegExp(`>\\s*${label}\\s*<`));
   });
 
   it('the quiet links are placed where DealOverviewTab puts them: last in the right-hand column', () => {
@@ -391,10 +555,32 @@ describe('2026-11-17 wording matches the screens', () => {
     expect(release).not.toBeNull();
     // NextStepCard renders a button only when the page resolved one for this viewer.
     expect(stepText('deal-page', 2)).toContain('ถ้ามีปุ่ม');
-    // The IR button waits for the deposit and, when sourcing is pending, for จัดซื้อสินค้า.
+    // The IR button waits for the deposit, a factory on every line, and (when sourcing is pending) จัดซื้อสินค้า.
+    expect(fulfilmentSrc).toContain('disabled={createDraftsMutation.isPending || !allLinesPicked || !depositReady || sourcePending}');
     expect(stepText('deal-documents', 3)).toContain('"จัดซื้อสินค้า"');
+    expect(stepText('deal-documents', 3)).toContain('ทุกรายการมีโรงงาน');
     // บันทึกการส่งสินค้า is offered only when the server lists RECORD_PARTIAL_DELIVERY, in the ส่งมอบสินค้า block.
     expect(stepText('deal-documents', 4)).toContain('"ส่งมอบสินค้า"');
+    // ค้างจากสัปดาห์ก่อน renders on the current week only (VisitsPage weekOffset === 0).
+    expect(visitsPageSrc).toMatch(/\{weekOffset === 0 \? \(\s*<CarriedOverVisits/);
+    expect(stepText('visits', 4)).toContain('สัปดาห์ปัจจุบัน');
+  });
+
+  it('says what is true and nothing more (review F7, F8, F9)', () => {
+    expect(release).not.toBeNull();
+    // No endpoint corrects a delivery record and the sales manager cannot write deliveries: promise no fix.
+    for (const id of ['deal-documents', 'deal-documents-ceo']) expect(byId(id).help, id).not.toContain('ผู้จัดการฝ่ายขาย');
+    // A remembered view is per browser (localStorage), not "the system".
+    for (const entry of release.entries) for (const text of allText(entry)) expect(text, entry.id).not.toContain('ระบบจำ');
+    expect(stepText('all-deals', 4)).toContain('เบราว์เซอร์นี้');
+    // ดีล → งาน is true on the board and the deal page, not on the quotation list ("จัดกลุ่มตามดีล", "เปิดดีล").
+    for (const entry of release.entries) {
+      for (const text of allText(entry)) {
+        expect(text, entry.id).not.toContain('หน้าจอฝ่ายขายเรียก');
+        expect(text, entry.id).not.toContain('ตามงานแล้ว');
+      }
+    }
+    expect(byId('deal-page').why).not.toContain('แท็บที่เหลือ');
   });
 
   it('does not claim a label that is in the source but not on that role’s screen', () => {

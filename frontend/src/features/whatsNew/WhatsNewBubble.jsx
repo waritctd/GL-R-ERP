@@ -116,24 +116,19 @@ export function WhatsNewBubble({ user, onNavigate, open: controlledOpen, onOpenC
             <span className="block text-xs text-text-muted">อัปเดต {release.dateLabel}</span>
             <strong className="text-md text-text">สำหรับ{ROLE_LABEL[user?.role] ?? 'คุณ'}</strong>
           </div>
-          {entries.length === 0 ? (
-            // Same words as the page's empty state: a release can have nothing for this role (2026-11-17 for hr).
-            <p className="m-0 px-4 py-3 text-sm text-text-muted">ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ</p>
-          ) : (
-            <ul className="m-0 grid max-h-[50dvh] list-none gap-0.5 overflow-y-auto p-2">
-              {entries.map((entry) => (
-                <li key={entry.id} className="flex items-start gap-2.5 rounded-md p-2">
-                  <span className="grid size-[30px] flex-none place-items-center rounded-md bg-primary-bg text-primary" aria-hidden="true">
-                    <Icon name={entry.kind === 'new' ? 'plus' : 'refresh'} size={15} />
-                  </span>
-                  <span className="min-w-0 text-sm leading-snug text-text">
-                    {entry.title}
-                    <span className="mt-0.5 block text-xs text-text-muted">{entry.page} · {entry.steps.length} ขั้นตอน · มีภาพประกอบ</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul className="m-0 grid max-h-[50dvh] list-none gap-0.5 overflow-y-auto p-2">
+            {entries.map((entry) => (
+              <li key={entry.id} className="flex items-start gap-2.5 rounded-md p-2">
+                <span className="grid size-[30px] flex-none place-items-center rounded-md bg-primary-bg text-primary" aria-hidden="true">
+                  <Icon name={entry.kind === 'new' ? 'plus' : 'refresh'} size={15} />
+                </span>
+                <span className="min-w-0 text-sm leading-snug text-text">
+                  {entry.title}
+                  <span className="mt-0.5 block text-xs text-text-muted">{entry.page} · {entry.steps.length} ขั้นตอน · มีภาพประกอบ</span>
+                </span>
+              </li>
+            ))}
+          </ul>
           <div className="flex items-center justify-between gap-2 px-4 pb-3.5 pt-2">
             <Button type="button" variant="text" size="sm" className="text-text-muted" onClick={closeAndRestore}>ไว้ทีหลัง</Button>
             <Button type="button" onClick={goToRelease}>ดูรายละเอียดและวิธีใช้</Button>

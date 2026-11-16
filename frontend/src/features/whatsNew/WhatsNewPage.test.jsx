@@ -124,24 +124,24 @@ describe('WhatsNewPage', () => {
     expect(await screen.findByRole('heading', { level: 1, name: /16 พ\.ย\. 2569/ })).toBeTruthy();
   });
 
-  it('a role this release has nothing for gets the empty state, not an empty list', async () => {
+  it('a role whose pages did not change gets the 17 Nov launcher entry only', async () => {
     renderPage(hr, '/whats-new/2026-11-17');
 
     const mine = await screen.findByRole('tab', { name: /สำหรับแผนกของคุณ/ });
-    expect(mine.textContent).toContain('0');
-    expect(screen.getByText('ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ')).toBeTruthy();
-    expect(screen.queryAllByRole('heading', { level: 3 })).toHaveLength(0);
+    expect(mine.textContent).toContain('1');
+    expect(changeHeadings()).toHaveLength(1);
+    expect(changeHeadings()[0]).toContain('เมนู');
   });
 
-  it('"ทั้งหมด" of a release with no everyone entry shows no empty ทุกแผนก section and no address-move note', async () => {
+  it('"ทั้งหมด" of 17 Nov leads with ทุกแผนก and names the other roles with ITS note, not 16 Nov’s', async () => {
     renderPage(hr, '/whats-new/2026-11-17');
 
     fireEvent.click(await screen.findByRole('tab', { name: /ทั้งหมด/ }));
 
     const sections = screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent);
-    expect(sections).toEqual(['ฝ่ายขาย', 'ผู้จัดการฝ่ายขาย', 'CEO', 'ฝ่ายบัญชี', 'ฝ่ายนำเข้า']);
+    expect(sections).toEqual(['ทุกแผนก', 'ฝ่ายขาย', 'ผู้จัดการฝ่ายขาย', 'CEO', 'ฝ่ายบัญชี', 'ฝ่ายนำเข้า']);
     expect(screen.getByText(/ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป/).textContent)
-      .toBe('ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป: ฉบับนี้ไม่มีเรื่องเฉพาะแผนกเหล่านี้');
+      .toBe('ฝ่ายบุคคล · คลังสินค้า · QC · พนักงานทั่วไป: ฉบับนี้มีเฉพาะเมนูแบบใหม่ (ด้านบน)');
   });
 
   it('an unknown release id says so instead of rendering an empty page', async () => {

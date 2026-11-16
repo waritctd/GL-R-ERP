@@ -60,7 +60,7 @@ describe('WhatsNewBubble', () => {
     const popover = screen.getByRole('dialog', { name: 'มีอะไรใหม่' });
     expect(popover.textContent).toContain('17 พ.ย. 2569');
     const items = within(popover).getAllByRole('listitem');
-    expect(items).toHaveLength(6);
+    expect(items).toHaveLength(7);
     // Wrong-way-round: a rep is not shown the finance worklist or the team versions.
     expect(popover.textContent).not.toContain('งานการเงิน');
     expect(popover.textContent).not.toContain('ทุกคนในทีม');
@@ -101,13 +101,15 @@ describe('WhatsNewBubble', () => {
     expect(onNavigate).toHaveBeenCalledWith('/whats-new/2026-11-16');
   });
 
-  it('a role the release has nothing for is told so, not shown an empty list', async () => {
+  it('a role with no sales pages is shown the 17 Nov launcher change alone', async () => {
     renderBubble({ role: 'hr', employeeId: 47 });
 
     fireEvent.click(await screen.findByRole('button', { name: /มีอะไรใหม่/ }));
     const popover = screen.getByRole('dialog', { name: 'มีอะไรใหม่' });
-    expect(within(popover).queryAllByRole('listitem')).toHaveLength(0);
-    expect(within(popover).getByText('ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ')).toBeTruthy();
+    expect(popover.textContent).toContain('17 พ.ย. 2569');
+    const items = within(popover).getAllByRole('listitem');
+    expect(items).toHaveLength(1);
+    expect(items[0].textContent).toContain('เมนู');
   });
 
   it('"ไว้ทีหลัง" and Escape close the popover without navigating', async () => {
