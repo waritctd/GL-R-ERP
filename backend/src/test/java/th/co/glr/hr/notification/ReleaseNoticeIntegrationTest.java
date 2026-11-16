@@ -274,7 +274,52 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(service.email(actor(hr, "hr"), next)).isEqualTo(new EmailResult(6, 5, 0, 1));
     }
 
+    // ── Email reset: undoing a run whose sends all failed (hr.audit_log is append-only) ─────────────────────
+
+    @Test
+    void aResetMarkerLetsARunWhoseSendsFailedBeSentAgain() {
+        service.email(actor(hr, "hr"), REQUEST);
+        insertEmailReset(RELEASE_ID);
+
+        assertThat(service.audience(actor(ceo, "ceo"), REQUEST)).isEqualTo(new Audience(6, 0, 6, 0, 5, 1));
+        EmailResult afterReset = service.email(actor(ceo, "ceo"), REQUEST);
+
+        assertThat(afterReset).isEqualTo(new EmailResult(6, 5, 0, 1));
+        verify(mailer, times(10)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void afterAResetAndAResend_emailingAgainStillDoesNotDoubleSend() {
+        service.email(actor(hr, "hr"), REQUEST);
+        insertEmailReset(RELEASE_ID);
+        service.email(actor(hr, "hr"), REQUEST);
+
+        EmailResult third = service.email(actor(ceo, "ceo"), REQUEST);
+
+        assertThat(third).isEqualTo(new EmailResult(6, 0, 5, 1));
+        verify(mailer, times(10)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void aResetForAnotherReleaseDoesNotReopenThisOne() {
+        service.email(actor(hr, "hr"), REQUEST);
+        insertEmailReset("2026-12-01");
+
+        EmailResult second = service.email(actor(ceo, "ceo"), REQUEST);
+
+        assertThat(second).isEqualTo(new EmailResult(6, 0, 5, 1));
+        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────────
+
+    /** The operator's append-only "forget the earlier email run" marker — the exact row the runbook SQL inserts. */
+    private void insertEmailReset(String releaseId) {
+        jdbc.update("""
+            INSERT INTO hr.audit_log (action, entity, after_json)
+            VALUES ('RELEASE_NOTE_EMAIL_RESET', 'release_note', jsonb_build_object('releaseId', :releaseId))
+            """, Map.of("releaseId", releaseId));
+    }
 
     private Map<String, String> sentHtmlByRecipient(int expectedCalls) {
         ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);

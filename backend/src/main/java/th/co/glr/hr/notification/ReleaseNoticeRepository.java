@@ -23,6 +23,15 @@ import org.springframework.stereotype.Repository;
 public class ReleaseNoticeRepository {
     static final String EMAILED_ACTION = "RELEASE_NOTE_EMAILED";
     static final String EMAILED_ENTITY = "employee";
+    /**
+     * Operator-inserted marker that voids every earlier {@code RELEASE_NOTE_EMAILED} row of one release, so a run
+     * whose sends all failed (2026-11-16: invalid Resend key, 28 rows recorded, nothing delivered) can be sent
+     * again. hr.audit_log is append-only (trigger audit_log_no_mutate), so those rows cannot be deleted; a later
+     * row that supersedes them is the only honest undo. Ordered by id, not {@code at}: {@code at} is the
+     * transaction start, so a reset and a send in the same instant would otherwise tie.
+     */
+    static final String EMAIL_RESET_ACTION = "RELEASE_NOTE_EMAIL_RESET";
+    static final String EMAIL_RESET_ENTITY = "release_note";
 
     /** "RELN". Two-int advisory-lock keyspace, separate from every other locker in the app. */
     private static final int LOCK_CLASS_ID = 0x52454C4E;
@@ -57,6 +66,13 @@ public class ReleaseNoticeRepository {
                AND entity = :entity
                AND entity_id IS NOT NULL
                AND after_json ->> 'releaseId' = :releaseId
-            """, Map.of("action", EMAILED_ACTION, "entity", EMAILED_ENTITY, "releaseId", releaseId), Long.class));
+               AND id > COALESCE((
+                       SELECT MAX(reset.id)
+                         FROM hr.audit_log reset
+                        WHERE reset.action = :resetAction
+                          AND reset.entity = :resetEntity
+                          AND reset.after_json ->> 'releaseId' = :releaseId), 0)
+            """, Map.of("action", EMAILED_ACTION, "entity", EMAILED_ENTITY, "releaseId", releaseId,
+                "resetAction", EMAIL_RESET_ACTION, "resetEntity", EMAIL_RESET_ENTITY), Long.class));
     }
 }
