@@ -12,8 +12,7 @@ import { isManualKind } from '../commissions/commissionRecord.js';
 import { Figure, WorklistGroup, WorklistTotal, failed } from './dashboardParts.jsx';
 import { defaultRange } from '../tickets/movementRange.js';
 import { TeamMovementPanel } from './TeamMovementPanel.jsx';
-import { InsightSwitch, ViewPanel, useInsightView } from './InsightSwitch.jsx';
-import { SalesInsights } from './SalesInsights.jsx';
+import { InsightLanding } from './InsightSwitch.jsx';
 import { SALES_ENABLED } from '../../app/features.js';
 import { TeamOverview } from '../salesBoard/TeamOverview.jsx';
 
@@ -68,19 +67,9 @@ const CEO_TITLE = 'ภาพรวมผู้บริหาร';
 
 /** Landing page: today's worklist, or (?view=insight) the sales-analytics snapshot. */
 export function CeoOverview(props) {
-  const [view, setView] = useInsightView();
-  const switcher = <InsightSwitch view={view} onChange={setView} />;
-  if (view === 'insight') {
-    return (
-      <ViewPanel view={view}>
-        <PageStack>
-          <PageHeader title={CEO_TITLE} actions={switcher} />
-          <SalesInsights user={props.user} showToast={props.showToast} />
-        </PageStack>
-      </ViewPanel>
-    );
-  }
-  return <ViewPanel view={view}><CeoToday {...props} switcher={switcher} /></ViewPanel>;
+  return (
+    <InsightLanding title={CEO_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher) => <CeoToday {...props} switcher={switcher} />} />
+  );
 }
 
 function CeoToday({ user, employee, dashboardSummary, switcher }) {

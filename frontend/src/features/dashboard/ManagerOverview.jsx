@@ -9,8 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
-import { InsightSwitch, ViewPanel, useInsightView } from './InsightSwitch.jsx';
-import { SalesInsights } from './SalesInsights.jsx';
+import { InsightLanding } from './InsightSwitch.jsx';
 import { formatMoney, formatThaiDate, greetingName } from '../../utils/format.js';
 import { failed, moneySum } from './dashboardParts.jsx';
 import { TeamOverview } from '../salesBoard/TeamOverview.jsx';
@@ -73,19 +72,9 @@ const MANAGER_TITLE = 'ภาพรวมทีมขาย';
 
 /** Landing page: today's team overview, or (?view=insight) the sales-analytics snapshot. */
 export function ManagerOverview(props) {
-  const [view, setView] = useInsightView();
-  const switcher = <InsightSwitch view={view} onChange={setView} />;
-  if (view === 'insight') {
-    return (
-      <ViewPanel view={view}>
-        <PageStack>
-          <PageHeader title={MANAGER_TITLE} actions={switcher} />
-          <SalesInsights user={props.user} showToast={props.showToast} />
-        </PageStack>
-      </ViewPanel>
-    );
-  }
-  return <ViewPanel view={view}><ManagerToday {...props} switcher={switcher} /></ViewPanel>;
+  return (
+    <InsightLanding title={MANAGER_TITLE} user={props.user} showToast={props.showToast} renderToday={(switcher) => <ManagerToday {...props} switcher={switcher} />} />
+  );
 }
 
 function ManagerToday({ user, employee, switcher }) {
