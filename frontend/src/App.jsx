@@ -12,6 +12,7 @@ import { useToast } from './hooks/useToast.js';
 import { SALES_ENABLED } from './app/features.js';
 import { hasPermission, isDivisionManager, isSelfServiceLocked } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
+import { userFromAuthResponse } from './app/authUser.js';
 
 // Route pages are code-split: each import() becomes its own chunk, loaded on navigation. This keeps the entry
 // bundle lean (heavy deps like zod, react-hook-form, and @tanstack/react-table travel with the pages that use
@@ -81,31 +82,6 @@ const SafeFormSubmitterProbe = lazy(() => import('./dev/SafeFormSubmitterProbe.j
 
 // Thin wrappers that source the ticket id from the URL for the frozen sales pages (they already
 // fetch by id internally).
-// AuthResponse carries `admin` as a sibling of `user`, not a field on it (UserPrincipal is session
-// state with 306 test construction sites). Flatten it here so the rest of the app keeps reading one
-// user object. This only decides whether the nav item renders — every admin endpoint re-checks the
-// flag against the database.
-//
-// `canCreateQuotation` is the same shape, carried by the same record: the per-employee "can create
-// quotations" capability. Also a hint only: DealQuotationService re-reads the grant live on every
-// request.
-//
-// `canIssueBillingNote` is the same shape again: the per-employee "can issue billing notes"
-// capability. Also a hint only: BillingNoteService.hasWriteGrant re-reads the grant live on every
-// request.
-function userFromAuthResponse(response) {
-  if (!response?.user) return null;
-  return {
-    ...response.user,
-    admin: Boolean(response.admin),
-    canCreateQuotation: Boolean(response.canCreateQuotation),
-    canIssueBillingNote: Boolean(response.canIssueBillingNote),
-    canViewAs: Boolean(response.canViewAs),
-    canViewPeopleInsights: Boolean(response.canViewPeopleInsights),
-    viewAs: response.viewAs ?? null,
-  };
-}
-
 function DepositNoticeRoute({ user, showToast }) {
   const { ticketId } = useParams();
   const navigate = useNavigate();
