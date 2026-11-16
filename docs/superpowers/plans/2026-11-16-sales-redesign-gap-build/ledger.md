@@ -88,3 +88,4 @@ Controller session 21665dad. Worktree for plan/ledger: `.claude/worktrees/whats-
 - Ruling: release the four together WITH the new What's-new entry, not before it — staff should not meet a rebuilt deal page with no notice — costs a few hours' delay overnight.
 - What's-new release 2026-11-17: implementer a8109bd651a71b9d8, worktree .claude/worktrees/whats-new-1117, branch feat/whats-new-2026-11-17. Brief: task-wn2-brief.md. Controller captures screenshots from the mock app using its shot list. Publishing the bell notice needs a CEO/HR login (owner). Email stays on hold.
 - Live agents: 3a fixer a16ef5a (Maven), What's-new writer a8109bd.
+- Owner ~00:15: 'when there is a มีอะไรใหม่ update send it email out' + 'do this in another session'. The app cannot start a session over Remote Control; the brief is saved at briefs/whats-new-email-brief.md for the owner to start in the desktop app. THIS session does not build the email change and still sends no email itself.
