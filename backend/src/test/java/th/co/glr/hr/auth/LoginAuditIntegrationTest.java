@@ -34,7 +34,7 @@ class LoginAuditIntegrationTest extends AbstractPostgresIntegrationTest {
     void wireRealCollaborators() {
         EmployeeAuthRepository repo = new EmployeeAuthRepository(jdbc);
         AuditService audit = new AuditService(new AuditLogRepository(jdbc), new ObjectMapper().findAndRegisterModules());
-        service = new AuthService(repo, encoder, audit, new ViewAsService(repo, audit, ""));
+        service = new AuthService(repo, encoder, audit, new ViewAsService(repo, audit, ""), org.mockito.Mockito.mock(th.co.glr.hr.peopleinsights.PeopleInsightsService.class));
 
         long hrDivision = insertDivision("HR", "ฝ่ายบุคคล");
         employeeId = insertEmployee("AUD-001", "audit.login@glr.co.th", encoder.encode(PASSWORD), hrDivision);

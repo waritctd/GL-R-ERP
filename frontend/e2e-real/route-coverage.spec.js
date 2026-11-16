@@ -30,6 +30,7 @@ const ROUTES = [
   '/settings/leave-policy', // §5 announcement PDF upload
   '/settings/attendance-calendar',
   '/attendance',
+  '/people-insights', // วิเคราะห์การลาและเวลาเข้างาน — ceo/hr (and team heads); with no teams configured it renders the whole-company view
   '/tickets',
   '/tickets/1', // DEMO-TKT-01 (V21) — a real deal
   '/tickets/1/deposit',

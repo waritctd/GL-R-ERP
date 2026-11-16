@@ -83,6 +83,7 @@ import {
   buildDemoDeductionShortfalls,
 } from '../data/demoPayroll.js';
 import { SNAPSHOT_WITH_NOW } from '../test/fixtures/salesAnalyticsSnapshot.js';
+import { PEOPLE_FIXTURE } from '../features/insights/peopleInsightsFixture.js';
 
 const db = createDemoDatabase();
 
@@ -2327,6 +2328,7 @@ function authResponse(user) {
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
     canViewAs: false,
+    canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
     viewAs: null,
   };
 }
@@ -13756,6 +13758,26 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       if (!['ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ snapshot: mockAnalyticsSnapshot });
+    },
+  },
+
+  // Mirrors PeopleInsightsService with the synthetic PEOPLE_FIXTURE. The role gate (ceo/hr only: the mock has no team
+  // heads) approximates the Java service and is NOT evidence; PeopleInsightsIntegrationTest is.
+  peopleInsights: {
+    async get({ scope, year } = {}) {
+      const user = requireSession();
+      if (!['ceo', 'hr'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const served = PEOPLE_FIXTURE.scopes.find((s) => s.id === (scope ?? 'all'));
+      if (!served) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // The fixture holds one year of figures; any other listed year is served empty.
+      const base = year && year !== PEOPLE_FIXTURE.year ? { ...PEOPLE_FIXTURE, year, leave: [], quotaUsage: [], attendance: [] } : PEOPLE_FIXTURE;
+      if (served.id === 'all') return delay(base);
+      const ids = new Set(PEOPLE_FIXTURE.teams.find((t) => t.id === served.id).memberIds);
+      const mine = (row) => ids.has(row.employeeId);
+      return delay({
+        ...base, scope: served, teams: [], people: base.people.filter(mine),
+        leave: base.leave.filter(mine), quotaUsage: base.quotaUsage.filter(mine), attendance: base.attendance.filter(mine),
+      });
     },
   },
 
