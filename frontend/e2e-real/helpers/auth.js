@@ -50,8 +50,17 @@ export async function sessionUser(page) {
   if (!response.ok()) {
     throw new Error(`GET /api/auth/me returned ${response.status()} — no live session`);
   }
-  const { user } = await response.json();
-  return user;
+  // Mirrors App.jsx's userFromAuthResponse: the capability flags sit beside `user` on the response, and canAccessPath
+  // reads them from the user object.
+  const { user, admin, canCreateQuotation, canIssueBillingNote, canViewAs, canViewPeopleInsights } = await response.json();
+  return {
+    ...user,
+    admin: Boolean(admin),
+    canCreateQuotation: Boolean(canCreateQuotation),
+    canIssueBillingNote: Boolean(canIssueBillingNote),
+    canViewAs: Boolean(canViewAs),
+    canViewPeopleInsights: Boolean(canViewPeopleInsights),
+  };
 }
 
 /** True once the app has rendered an authenticated shell rather than the login screen. */
