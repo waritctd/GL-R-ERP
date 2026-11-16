@@ -1,7 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MyWork } from './MyWork.jsx';
 import { api } from '../../api/index.js';
@@ -12,12 +12,30 @@ globalThis.React = React;
 vi.setSystemTime(new Date('2026-11-12T03:00:00Z'));
 afterAll(() => vi.useRealTimers());
 
-// The phone screen follows the app's `mobile` breakpoint (useIsMobile: max-width 720px).
-const viewport = vi.hoisted(() => ({ mobile: true }));
-vi.mock('../../hooks/useIsMobile.js', () => ({
-  useIsMobile: () => viewport.mobile,
-  useMediaQuery: () => false,
-}));
+// The phone screen follows the app's `mobile` breakpoint (useIsMobile: max-width 720px). The mock is a live store so
+// a test can cross the breakpoint mid-render (a phone rotated to landscape), as matchMedia's change event would.
+const viewport = vi.hoisted(() => {
+  const listeners = new Set();
+  return {
+    mobile: true,
+    listeners,
+    set(value) {
+      this.mobile = value;
+      listeners.forEach((notify) => notify());
+    },
+  };
+});
+vi.mock('../../hooks/useIsMobile.js', async () => {
+  const { useSyncExternalStore } = await import('react');
+  const subscribe = (notify) => {
+    viewport.listeners.add(notify);
+    return () => viewport.listeners.delete(notify);
+  };
+  return {
+    useIsMobile: () => useSyncExternalStore(subscribe, () => viewport.mobile),
+    useMediaQuery: () => false,
+  };
+});
 
 vi.mock('../../api/index.js', async (importOriginal) => {
   const actual = await importOriginal();
@@ -34,7 +52,12 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 });
 
 vi.mock('../tickets/TicketCreateModal.jsx', () => ({
-  TicketCreateModal: () => <div role="dialog">สร้างงานใหม่ (stub)</div>,
+  TicketCreateModal: ({ onSubmit }) => (
+    <div role="dialog">
+      สร้างงานใหม่ (stub)
+      <button type="button" onClick={() => onSubmit({ title: 'x' })}>ส่งสร้าง (stub)</button>
+    </div>
+  ),
 }));
 
 const TODAY = '2026-11-12';
@@ -97,10 +120,12 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     viewport.mobile = true;
+    try { sessionStorage.clear(); } catch { /* no storage */ }
     api.salesBoard.myWork.mockResolvedValue(workWith());
     api.salesVisits.list.mockResolvedValue([]);
     api.salesVisits.done.mockResolvedValue(visit({ id: 2, status: 'DONE' }));
     api.tickets.addActivity.mockResolvedValue({});
+    api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 77 } } });
   });
 
   it('shows the drawn phone screen instead of the stacked page', async () => {
@@ -149,15 +174,181 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
       expect(within(card).getByText('ก้าวหน้า คอนสตรัคชั่น')).toBeTruthy();
     });
 
-    it('says so when nothing is planned for the rest of the week, and offers to plan one', async () => {
+    // Ruling 5: the card looks 7 days ahead across the week boundary — GET /api/sales/visits from today to today + 7
+    // (8 days inclusive, inside the endpoint's 31-day cap).
+    it('looks into next week when nothing is left this week', async () => {
+      api.salesBoard.myWork.mockResolvedValue(workWith({ visitsThisWeek: [visits[0]] }));
+      api.salesVisits.list.mockImplementation(({ from }) => Promise.resolve(from === TODAY
+        ? [visit({ id: 30, contactName: 'Orbit Studio', plannedDate: '2026-11-16', plannedTime: '09:00:00' })]
+        : []));
+      renderMyWork();
+
+      const card = await screen.findByTestId('today-next-visit');
+      expect(await within(card).findByText('นัดถัดไป · จ. 16 · 09:00')).toBeTruthy();
+      expect(within(card).getByText('Orbit Studio')).toBeTruthy();
+      expect(api.salesVisits.list).toHaveBeenCalledWith({ from: '2026-11-12', to: '2026-11-19' });
+    });
+
+    it('says so when nothing is planned in the next 7 days, and offers to plan one (in งาน wording)', async () => {
       api.salesBoard.myWork.mockResolvedValue(workWith({ visitsThisWeek: [visits[0]] }));
       renderMyWork();
       const card = await screen.findByTestId('today-next-visit');
-      expect(within(card).getByText('ไม่มีนัดที่เหลือสัปดาห์นี้')).toBeTruthy();
+      expect(await within(card).findByText('ไม่มีนัดใน 7 วันข้างหน้า')).toBeTruthy();
 
       fireEvent.click(within(card).getByRole('button', { name: 'นัดเข้าพบ' }));
       const dialog = await screen.findByRole('dialog');
       expect(within(dialog).getByRole('heading', { name: 'นัดเข้าพบ' })).toBeTruthy();
+      expect(within(dialog).getByLabelText(/งาน/)).toBeTruthy();
+      expect(dialog.textContent).not.toMatch(/ดีล/);
+    });
+  });
+
+  // Ruling 1: a missed visit (PLANNED, its day passed) never vanishes from the phone — this week's and the ones carried
+  // over from the 31 days before this Monday (the query MyWork already makes), each tickable through the tick dialog.
+  describe('ค้าง — missed visits', () => {
+    const overdueThisWeek = visit({ id: 41, contactName: 'บ้านสวน ดีไซน์', plannedDate: '2026-11-10' });
+    const carried = visit({ id: 42, contactName: 'PIA Interior', plannedDate: '2026-11-05', ticketId: 31,
+      ticketTitle: 'สยามพารากอน · ห้องน้ำชั้น 3' });
+
+    beforeEach(() => {
+      api.salesBoard.myWork.mockResolvedValue(workWith({ visitsThisWeek: [visits[0], overdueThisWeek] }));
+      api.salesVisits.list.mockImplementation(({ from }) => Promise.resolve(from === '2026-10-09' ? [carried] : []));
+      api.salesVisits.done.mockResolvedValue({ ...carried, status: 'DONE' });
+    });
+
+    it('lists this week\'s and carried-over unticked visits, each tickable', async () => {
+      renderMyWork();
+      const missed = await screen.findByTestId('today-missed');
+      expect(await within(missed).findByText('ค้าง 2 นัด')).toBeTruthy();
+      expect(within(missed).getByTestId('visit-42')).toBeTruthy();
+      expect(within(missed).getByTestId('visit-41')).toBeTruthy();
+
+      fireEvent.click(within(missed).getByRole('button', { name: 'เข้าพบแล้ว: PIA Interior' }));
+      const dialog = await screen.findByRole('dialog');
+      expect(within(dialog).getByRole('heading', { name: 'เข้าพบแล้ว' })).toBeTruthy();
+      expect(dialog.textContent).not.toMatch(/ดีล/);
+      fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+      await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledWith(42, { note: undefined }));
+    });
+
+    it('never claims there is nothing left while a visit is missed', async () => {
+      renderMyWork();
+      const card = await screen.findByTestId('today-next-visit');
+      await screen.findByText('ค้าง 2 นัด');
+      expect(within(card).queryByText('ไม่มีนัดใน 7 วันข้างหน้า')).toBeNull();
+      expect(within(card).getByText('ไม่มีนัดใหม่ใน 7 วันข้างหน้า · ค้าง 2 นัดด้านล่าง')).toBeTruthy();
+    });
+
+    it('shows no ค้าง block when nothing is missed', async () => {
+      api.salesBoard.myWork.mockResolvedValue(workWith());
+      api.salesVisits.list.mockResolvedValue([]);
+      renderMyWork();
+      await screen.findByText('นัดถัดไป · 14:00');
+      expect(screen.queryByTestId('today-missed')).toBeNull();
+    });
+  });
+
+  // Ruling 2: บันทึกเข้าพบ and the quick row do not depend on /my-work — a failed load shows the error and a retry
+  // beside them, as the old sticky button was always there.
+  it('keeps บันทึกเข้าพบ and the quick row when /my-work fails, with a retry', async () => {
+    api.salesBoard.myWork.mockRejectedValue(new Error('down'));
+    renderMyWork();
+
+    expect(await screen.findByText('โหลดไม่สำเร็จ')).toBeTruthy();
+    const log = screen.getByRole('button', { name: 'บันทึกเข้าพบ' });
+    expect(within(screen.getByTestId('today-quick-actions')).getByRole('link', { name: 'ทำใบเสนอราคา' })).toBeTruthy();
+
+    api.salesBoard.myWork.mockResolvedValue(workWith());
+    fireEvent.click(screen.getByRole('button', { name: 'ลองใหม่' }));
+    await waitFor(() => expect(api.salesBoard.myWork).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('นัดถัดไป · 14:00')).toBeTruthy();
+
+    fireEvent.click(log);
+    expect(within(await screen.findByRole('dialog')).getByRole('heading', { name: 'บันทึกเข้าพบ' })).toBeTruthy();
+  });
+
+  it('logs from a failed load too — the sheet opens with ไม่ได้นัด', async () => {
+    api.salesBoard.myWork.mockRejectedValue(new Error('down'));
+    renderMyWork();
+    await screen.findByText('โหลดไม่สำเร็จ');
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกเข้าพบ' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('radio', { name: 'ไม่ได้นัด' }).getAttribute('aria-checked')).toBe('true');
+    expect(dialog.textContent).not.toMatch(/ดีล/);
+  });
+
+  // Ruling 3: rotating past 720px swaps the screen, but the call picker / call dialog and what was typed survive.
+  describe('crossing the breakpoint', () => {
+    it('keeps an open call dialog, its outcome and its note', async () => {
+      renderMyWork();
+      fireEvent.click(await within(await screen.findByTestId('today-quick-actions')).findByRole('button', { name: 'โทรแล้ว' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /สยามพารากอน/ }));
+      let call = await screen.findByRole('dialog');
+      fireEvent.click(within(call).getByRole('radio', { name: 'ไม่รับสาย' }));
+      fireEvent.change(within(call).getByLabelText(/โน้ต/), { target: { value: 'โทรอีกทีบ่ายนี้' } });
+
+      act(() => viewport.set(false));
+
+      expect(await screen.findByText('งานทั้งหมดของฉัน')).toBeTruthy();
+      call = screen.getByRole('dialog');
+      expect(within(call).getByRole('heading', { name: 'โทรแล้ว' })).toBeTruthy();
+      expect(within(call).getByRole('radio', { name: 'ไม่รับสาย' }).getAttribute('aria-checked')).toBe('true');
+      expect(within(call).getByLabelText(/โน้ต/).value).toBe('โทรอีกทีบ่ายนี้');
+    });
+
+    it('keeps an open call picker', async () => {
+      renderMyWork();
+      fireEvent.click(await within(await screen.findByTestId('today-quick-actions')).findByRole('button', { name: 'โทรแล้ว' }));
+      await screen.findByRole('heading', { name: 'โทรหางานไหน' });
+
+      act(() => viewport.set(false));
+
+      expect(await screen.findByText('งานทั้งหมดของฉัน')).toBeTruthy();
+      expect(screen.getByRole('heading', { name: 'โทรหางานไหน' })).toBeTruthy();
+    });
+  });
+
+  // Ruling 4: "ดูหน้าเต็ม" is remembered for the browser session; the way back is as visible as the way there.
+  describe('ดูหน้าเต็ม is remembered for the session', () => {
+    it('reopens on the full page until the rep goes back', async () => {
+      const first = renderMyWork();
+      fireEvent.click(within(await screen.findByTestId('today-phone')).getByRole('button', { name: 'ดูหน้าเต็ม' }));
+      await screen.findByText('งานทั้งหมดของฉัน');
+      first.unmount();
+
+      const second = renderMyWork();
+      expect(await screen.findByText('งานทั้งหมดของฉัน')).toBeTruthy();
+      expect(screen.queryByTestId('today-phone')).toBeNull();
+      const back = screen.getByRole('button', { name: 'กลับไปหน้าวันนี้' });
+      // As visible as ดูหน้าเต็ม: a full-width 52px button, not a small link.
+      expect(back.className).toContain('w-full');
+      expect(back.className).toContain('min-h-[52px]');
+      fireEvent.click(back);
+      expect(await screen.findByTestId('today-phone')).toBeTruthy();
+      second.unmount();
+
+      renderMyWork();
+      expect(await screen.findByTestId('today-phone')).toBeTruthy();
+    });
+
+    it('still works when the browser refuses storage', async () => {
+      // A stand-in rather than a spy: this Node ships its own Web Storage, which can shadow jsdom's Storage.prototype.
+      const denied = () => { throw new Error('denied'); };
+      const refusing = { getItem: vi.fn(denied), setItem: vi.fn(denied), removeItem: vi.fn(denied) };
+      vi.stubGlobal('sessionStorage', refusing);
+      try {
+        renderMyWork();
+        fireEvent.click(within(await screen.findByTestId('today-phone')).getByRole('button', { name: 'ดูหน้าเต็ม' }));
+        expect(await screen.findByText('งานทั้งหมดของฉัน')).toBeTruthy();
+        fireEvent.click(screen.getByRole('button', { name: 'กลับไปหน้าวันนี้' }));
+        expect(await screen.findByTestId('today-phone')).toBeTruthy();
+        // The refusing storage was really consulted, so this is not passing on an unread stand-in.
+        expect(refusing.getItem).toHaveBeenCalled();
+        expect(refusing.setItem).toHaveBeenCalled();
+      } finally {
+        vi.unstubAllGlobals();
+      }
     });
   });
 
@@ -165,7 +356,7 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
     it('offers โทรแล้ว and ทำใบเสนอราคา to a rep, and no ส่งตัวอย่าง (nothing records a sample)', async () => {
       renderMyWork();
       const row = await screen.findByTestId('today-quick-actions');
-      expect(within(row).getByRole('button', { name: 'โทรแล้ว' })).toBeTruthy();
+      expect(await within(row).findByRole('button', { name: 'โทรแล้ว' })).toBeTruthy();
       expect(within(row).getByRole('link', { name: 'ทำใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/new');
       expect(screen.queryByText('ส่งตัวอย่าง')).toBeNull();
     });
@@ -173,8 +364,8 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
     it('hides ทำใบเสนอราคา from someone the create-quotation entry points refuse', async () => {
       renderMyWork({ user: { id: 1, role: 'ceo', employeeId: 1, name: 'ซีอีโอ' } });
       const row = await screen.findByTestId('today-quick-actions');
+      expect(await within(row).findByRole('button', { name: 'โทรแล้ว' })).toBeTruthy();
       expect(within(row).queryByRole('link', { name: 'ทำใบเสนอราคา' })).toBeNull();
-      expect(within(row).getByRole('button', { name: 'โทรแล้ว' })).toBeTruthy();
     });
 
     it('shows a grantee ทำใบเสนอราคา even outside the sales roles', async () => {
@@ -186,16 +377,19 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
     it('hides โทรแล้ว when the rep has no open งาน to call about', async () => {
       api.salesBoard.myWork.mockResolvedValue(workWith({ followUp: [], board: [] }));
       renderMyWork();
-      const row = await screen.findByTestId('today-quick-actions');
+      // Wait for the payload: the row itself renders before /my-work answers (ruling 2).
+      await screen.findByTestId('today-follow-up');
+      const row = screen.getByTestId('today-quick-actions');
       expect(within(row).queryByRole('button', { name: 'โทรแล้ว' })).toBeNull();
     });
 
     it('โทรแล้ว picks a งาน — ควรตามต่อ first — then logs the call through the existing dialog', async () => {
       renderMyWork();
-      fireEvent.click(within(await screen.findByTestId('today-quick-actions')).getByRole('button', { name: 'โทรแล้ว' }));
+      fireEvent.click(await within(await screen.findByTestId('today-quick-actions')).findByRole('button', { name: 'โทรแล้ว' }));
 
       const picker = await screen.findByRole('dialog');
       expect(within(picker).getByRole('heading', { name: 'โทรหางานไหน' })).toBeTruthy();
+      expect(picker.textContent).not.toMatch(/ดีล/);
       const options = within(picker).getAllByRole('button', { name: /สยามพารากอน|BMW/ });
       expect(options.map((o) => o.textContent)).toEqual([
         expect.stringContaining('สยามพารากอน'), expect.stringContaining('BMW Showroom'),
@@ -204,6 +398,8 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
 
       const call = await screen.findByRole('dialog');
       expect(within(call).getByRole('heading', { name: 'โทรแล้ว' })).toBeTruthy();
+      expect(within(call).getByText('สยามพารากอน · ห้องน้ำชั้น 3 · เงียบ 27 วัน')).toBeTruthy();
+      expect(call.textContent).not.toMatch(/ดีล/);
       fireEvent.click(within(call).getByRole('radio', { name: 'คุยแล้ว ยังสนใจ' }));
       fireEvent.click(within(call).getByRole('button', { name: 'บันทึก' }));
 
@@ -211,6 +407,17 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
         kind: 'CALL', activityDate: TODAY, note: 'คุยแล้ว ยังสนใจ',
       }));
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    });
+
+    // Ruling 6: "เงียบ N วัน" only for a งาน the quiet rule marks quiet (BoardDeal.quiet), not every picked one.
+    it('does not call a fresh งาน quiet in the call dialog', async () => {
+      renderMyWork();
+      fireEvent.click(await within(await screen.findByTestId('today-quick-actions')).findByRole('button', { name: 'โทรแล้ว' }));
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: /BMW Showroom/ }));
+
+      const call = await screen.findByRole('dialog');
+      expect(within(call).getByText('BMW Showroom เชียงใหม่')).toBeTruthy();
+      expect(call.textContent).not.toMatch(/เงียบ/);
     });
   });
 
@@ -230,7 +437,8 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
       const card = await screen.findByTestId('today-cash');
       expect(within(card).getByRole('heading', { name: 'เงินเข้าเดือนนี้' })).toBeTruthy();
       expect(within(card).getByText('฿121,150')).toBeTruthy();
-      expect(within(card).getByText('จากที่คาด ฿1,301,000 · รอบถัดไป ถึง 13 พ.ย.')).toBeTruthy();
+      // As drawn: "รอบถัดไป 13 พ.ย." — the week's date, no "ถึง".
+      expect(within(card).getByText('จากที่คาด ฿1,301,000 · รอบถัดไป 13 พ.ย.')).toBeTruthy();
     });
 
     it('skips a week with nothing due when naming the next one', async () => {
@@ -240,7 +448,7 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
       }));
       renderMyWork();
       const card = await screen.findByTestId('today-cash');
-      expect(within(card).getByText('จากที่คาด ฿1,301,000 · รอบถัดไป ถึง 20 พ.ย.')).toBeTruthy();
+      expect(within(card).getByText('จากที่คาด ฿1,301,000 · รอบถัดไป 20 พ.ย.')).toBeTruthy();
     });
 
     it('leaves the next due out when nothing more is due this month', async () => {
@@ -278,6 +486,15 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'กลับไปหน้าวันนี้' }));
     expect(await screen.findByTestId('today-phone')).toBeTruthy();
+  });
+
+  it('says งาน when a new งาน made from the phone is saved', async () => {
+    const showToast = vi.fn();
+    renderMyWork({ showToast });
+    fireEvent.click(within(await screen.findByTestId('today-phone')).getByRole('button', { name: 'งานใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'ส่งสร้าง (stub)' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'สร้างงานเรียบร้อย'));
   });
 
   it('pads the bottom for the home indicator (env(safe-area-inset-bottom))', async () => {

@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useId } from 'react';
 import { Link } from 'react-router-dom';
 import { Button, buttonVariants } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -8,9 +8,9 @@ import { cn } from '../../utils/cn.js';
 import { canCreateDealQuotationStandalone } from '../quotations/quotationMeta.js';
 import { baht } from './boardFormat.js';
 import { CASH_SERIES } from './CashCard.jsx';
-import { weekEndLabel } from './cashFormat.js';
-import { CallModal } from './FollowUpList.jsx';
-import { dayLineLabel, nextVisit, shortWeekday, timeLabel, weekStartIso } from './visitWeek.js';
+import { weekEndDay } from './cashFormat.js';
+import { VisitRow } from './VisitsThisWeek.jsx';
+import { dayLineLabel, isOverdue, nextVisit, shortWeekday, timeLabel, weekStartIso } from './visitWeek.js';
 
 const CARD = 'grid gap-1 rounded-md border border-border bg-surface p-3.5';
 const CARD_TITLE = 'm-0 text-base font-extrabold text-text';
@@ -19,7 +19,7 @@ const CARD_TITLE = 'm-0 text-base font-extrabold text-text';
 const TILE = 'min-h-[52px] mobile:min-h-[52px] w-full min-w-0 px-2 py-1.5 text-center text-sm leading-snug whitespace-normal';
 const dealName = (d) => d.title || d.customerName || `#${d.ticketId}`;
 
-/** "นัดถัดไป · 14:00" today, "นัดถัดไป · ศ. 13 · 10:00" later this week (visitWeek.nextVisit picks which visit). */
+/** "นัดถัดไป · 14:00" today, "นัดถัดไป · ศ. 13 · 10:00" on a later day (visitWeek.nextVisit picks which visit). */
 function nextHeading({ visit, isToday }) {
   const time = timeLabel(visit.plannedTime);
   if (isToday) return `นัดถัดไป · ${time || 'วันนี้'}`;
@@ -27,13 +27,16 @@ function nextHeading({ visit, isToday }) {
     .filter(Boolean).join(' · ');
 }
 
-function NextVisitCard({ next, onPlan }) {
+/** The empty card must stay true while visits are missed (ruling 1): "nothing NEW ahead", and where the missed ones are. */
+function NextVisitCard({ next, missedCount, onPlan }) {
   const ids = useId();
   if (!next) {
     return (
       <section data-testid="today-next-visit" aria-labelledby={`${ids}-h`} className={CARD}>
         <h2 id={`${ids}-h`} className="m-0 text-xs font-bold text-text-muted">นัดถัดไป</h2>
-        <p className="m-0 text-base font-bold text-text">ไม่มีนัดที่เหลือสัปดาห์นี้</p>
+        <p className="m-0 text-base font-bold text-text">
+          {missedCount > 0 ? `ไม่มีนัดใหม่ใน 7 วันข้างหน้า · ค้าง ${missedCount} นัดด้านล่าง` : 'ไม่มีนัดใน 7 วันข้างหน้า'}
+        </p>
         <Button type="button" variant="secondary" className="mt-1.5 justify-self-start" onClick={onPlan}>
           <Icon name="plus" size={16} />
           นัดเข้าพบ
@@ -48,6 +51,25 @@ function NextVisitCard({ next, onPlan }) {
       <h2 id={`${ids}-h`} className="m-0 text-xs font-bold text-primary">{nextHeading(next)}</h2>
       <b className="break-words text-lg leading-snug text-text">{visit.contactName}</b>
       {what ? <span className="break-words text-sm text-text-muted">{what}</span> : null}
+    </section>
+  );
+}
+
+/** ค้าง n นัด — visits still PLANNED after their day: this week's and those carried over from earlier weeks. */
+function MissedVisits({ visits, todayIso, onTick, onCancel }) {
+  const ids = useId();
+  if (!visits.length) return null;
+  return (
+    <section data-testid="today-missed" aria-labelledby={`${ids}-h`} className="rounded-md border border-warning-border bg-surface">
+      <div className="grid gap-0.5 px-3.5 pb-1 pt-3">
+        <h2 id={`${ids}-h`} className={CARD_TITLE}>{`ค้าง ${visits.length} นัด`}</h2>
+        <small className="text-xs text-text-muted">ยังไม่ได้ติ๊ก — ติ๊กว่าไปแล้ว หรือยกเลิก</small>
+      </div>
+      <ul className="m-0 list-none p-0">
+        {visits.map((visit) => (
+          <VisitRow key={visit.id} visit={visit} todayIso={todayIso} onDone={onTick} onCancel={onCancel} />
+        ))}
+      </ul>
     </section>
   );
 }
@@ -82,12 +104,12 @@ function FollowUpCompact({ deals, quietDays }) {
 
 const weekTotal = (w) => CASH_SERIES.reduce((sum, s) => sum + (Number(w[s.key] ?? 0) || 0), 0);
 
-/** The first week from this one on with money still expected, labelled as CashCard labels its bars. */
+/** The first week from this one on with money still expected: CashCard's bar date for it, as drawn ("13 พ.ย."). */
 function nextDueLabel(cash, todayIso) {
   const weeks = cash.weeks ?? [];
   const thisMonday = weekStartIso(todayIso);
   const i = weeks.findIndex((w) => w.weekStart >= thisMonday && weekTotal(w) > 0);
-  return i < 0 ? null : weekEndLabel(weeks[i].weekStart, cash.month, i === weeks.length - 1);
+  return i < 0 ? null : weekEndDay(weeks[i].weekStart, cash.month, i === weeks.length - 1);
 }
 
 /** เงินเข้าเดือนนี้ — CashCard's headline only: received, against expected, and the next week money is due. */
@@ -113,8 +135,11 @@ function CashCompact({ cash, todayIso }) {
   );
 }
 
-/** โทรแล้ว needs a deal: ควรตามต่อ first (the reason to call), then the rest of the rep's open deals. */
-function CallPicker({ followUp, board, onPick, onClose }) {
+/**
+ * โทรแล้ว needs a deal: ควรตามต่อ first (the reason to call), then the rest of the rep's open deals. Rendered by MyWork
+ * with its other dialogs, so it survives the switch between the phone screen and the full page.
+ */
+export function CallPicker({ followUp, board, onPick, onClose }) {
   const quietIds = new Set(followUp.map((d) => d.ticketId));
   const groups = [
     { label: 'ควรตามต่อ', deals: followUp },
@@ -157,24 +182,44 @@ function CallPicker({ followUp, board, onPick, onClose }) {
   );
 }
 
+
+/** this week's PLANNED visits whose day has passed, after the ones carried over from earlier weeks, oldest first. */
+function missedVisits(work, carriedOver, todayIso) {
+  const thisWeek = (work?.visitsThisWeek ?? []).filter((v) => isOverdue(v, todayIso));
+  const seen = new Set(carriedOver.map((v) => v.id));
+  return [...carriedOver, ...thisWeek.filter((v) => !seen.has(v.id))];
+}
+
+/** this week's visits with the look-ahead's (today to `aheadTo`), the look-ahead's copy winning for the same id. */
+function upcoming(work, ahead) {
+  const byId = new Map((work?.visitsThisWeek ?? []).map((v) => [v.id, v]));
+  ahead.forEach((v) => byId.set(v.id, v));
+  return [...byId.values()];
+}
+
 /**
  * วันนี้ของฉัน — the rep's home at phone width (≤720px, the app's `mobile` breakpoint), design a-mywork's phone block:
- * the date and title, นัดถัดไป, one large บันทึกเข้าพบ, the quick row, a compact ควรตามต่อ and เงินเข้าเดือนนี้. Every
- * action is an existing flow MyWork owns (its dialogs, its call mutation); "ดูหน้าเต็ม" returns the full stacked page,
- * so nothing reachable on a phone before this screen became unreachable.
+ * the date and title, นัดถัดไป, one large บันทึกเข้าพบ, the quick row, ค้าง n นัด, a compact ควรตามต่อ and
+ * เงินเข้าเดือนนี้. Every action is an existing flow MyWork owns (its dialogs, its mutations — the call picker and call
+ * dialog included); "ดูหน้าเต็ม" returns the full stacked page, so nothing reachable on a phone before this screen
+ * became unreachable. บันทึกเข้าพบ and the quick row do not wait on GET /api/sales/my-work: when it fails they stay,
+ * beside the error and a retry.
+ *
+ * นัดถัดไป reads this week's visits plus `ahead` — GET /api/sales/visits from today to `aheadTo` (today + 7) — so a
+ * Monday visit is "next" on a Sunday. `carriedOver` is MyWork's ค้างจากสัปดาห์ก่อน query (the 31 days before Monday).
  *
  * Not built from the drawing: "ส่งตัวอย่าง" — no activity kind or endpoint records a sample sent on a deal
  * (DealActivityKind has none), so the button would be a fake action.
  */
 export function TodayOnPhone({
-  work, failed, todayIso, user, loggingCall, onLogCall, onLog, onPlan, onCreate, onShowFull,
+  work, failed, onRetry, todayIso, user, ahead = [], aheadTo, carriedOver = [], onLog, onCall, onPlan, onTick,
+  onCancelVisit, onCreate, onShowFull,
 }) {
-  const [picking, setPicking] = useState(false);
-  const [calling, setCalling] = useState(null);
   const followUp = work?.followUp ?? [];
   const board = work?.board ?? [];
   const canCall = followUp.length > 0 || board.length > 0;
   const canQuote = canCreateDealQuotationStandalone(user);
+  const missed = missedVisits(work, carriedOver, todayIso);
 
   return (
     <section
@@ -187,43 +232,57 @@ export function TodayOnPhone({
         <h1 id="today-phone-title" className="m-0 text-[26px] font-extrabold leading-tight text-text">วันนี้ของฉัน</h1>
       </header>
 
-      {failed ? <p className="m-0 text-sm font-bold text-danger">โหลดไม่สำเร็จ</p> : !work ? (
-        <div className="grid gap-2" role="status" aria-busy="true" aria-label="กำลังโหลดงานวันนี้">
-          <Skeleton height={88} />
-          <Skeleton height={52} />
-          <Skeleton height={120} />
-        </div>
-      ) : (
-        <>
-          <NextVisitCard next={nextVisit(work.visitsThisWeek, todayIso)} onPlan={onPlan} />
-
-          <Button type="button" className="min-h-[56px] mobile:min-h-[56px] w-full text-base shadow-sm" onClick={onLog}>
-            <Icon name="calendar" size={20} />
-            บันทึกเข้าพบ
+      {failed ? (
+        <div role="alert" className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-danger-border bg-surface p-3.5">
+          <p className="m-0 text-sm font-bold text-danger">โหลดไม่สำเร็จ</p>
+          <Button type="button" variant="secondary" onClick={onRetry}>
+            <Icon name="refresh" size={16} />
+            ลองใหม่
           </Button>
+        </div>
+      ) : !work ? (
+        <div role="status" aria-busy="true" aria-label="กำลังโหลดงานวันนี้"><Skeleton height={88} /></div>
+      ) : (
+        <NextVisitCard
+          next={nextVisit(upcoming(work, ahead), todayIso, aheadTo)}
+          missedCount={missed.length}
+          onPlan={onPlan}
+        />
+      )}
 
-          {canCall || canQuote ? (
-            <div data-testid="today-quick-actions" role="group" aria-label="ทำต่อ" className="grid auto-cols-fr grid-flow-col gap-2">
-              {canCall ? (
-                <Button type="button" variant="secondary" className={TILE} onClick={() => setPicking(true)}>
-                  <Icon name="phone" size={16} />
-                  โทรแล้ว
-                </Button>
-              ) : null}
-              {canQuote ? (
-                // The same entry point and gate as ใบเสนอราคา's own "สร้างใบเสนอราคา" (canCreateDealQuotationStandalone).
-                <Link to="/quotations/new" className={cn(buttonVariants({ variant: 'secondary' }), TILE, 'no-underline')}>
-                  <Icon name="fileText" size={16} />
-                  ทำใบเสนอราคา
-                </Link>
-              ) : null}
-            </div>
+      <Button type="button" className="min-h-[56px] mobile:min-h-[56px] w-full text-base shadow-sm" onClick={onLog}>
+        <Icon name="calendar" size={20} />
+        บันทึกเข้าพบ
+      </Button>
+
+      {canCall || canQuote ? (
+        <div data-testid="today-quick-actions" role="group" aria-label="ทำต่อ" className="grid auto-cols-fr grid-flow-col gap-2">
+          {canCall ? (
+            <Button type="button" variant="secondary" className={TILE} onClick={onCall}>
+              <Icon name="phone" size={16} />
+              โทรแล้ว
+            </Button>
           ) : null}
+          {canQuote ? (
+            // The same entry point and gate as ใบเสนอราคา's own "สร้างใบเสนอราคา" (canCreateDealQuotationStandalone).
+            <Link to="/quotations/new" className={cn(buttonVariants({ variant: 'secondary' }), TILE, 'no-underline')}>
+              <Icon name="fileText" size={16} />
+              ทำใบเสนอราคา
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
 
+      <MissedVisits visits={missed} todayIso={todayIso} onTick={onTick} onCancel={onCancelVisit} />
+
+      {work ? (
+        <>
           <FollowUpCompact deals={followUp} quietDays={work.quietDays ?? 14} />
           {work.cash ? <CashCompact cash={work.cash} todayIso={todayIso} /> : null}
         </>
-      )}
+      ) : !failed ? (
+        <div role="status" aria-busy="true" aria-label="กำลังโหลดงานที่ควรตามต่อ"><Skeleton height={120} /></div>
+      ) : null}
 
       <nav aria-label="หน้าอื่น" className="grid grid-cols-2 gap-2">
         <Link to="/tickets" className={cn(buttonVariants({ variant: 'secondary' }), TILE, 'no-underline')}>ดูงานทั้งหมด</Link>
@@ -234,29 +293,6 @@ export function TodayOnPhone({
         </Button>
         <Button type="button" variant="secondary" className={TILE} onClick={onShowFull}>ดูหน้าเต็ม</Button>
       </nav>
-
-      {picking ? (
-        <CallPicker
-          followUp={followUp}
-          board={board}
-          onClose={() => setPicking(false)}
-          onPick={(deal) => {
-            setPicking(false);
-            setCalling(deal);
-          }}
-        />
-      ) : null}
-      {calling ? (
-        <CallModal
-          deal={calling}
-          submitting={loggingCall}
-          onClose={() => setCalling(null)}
-          onSubmit={async (note) => {
-            // A failure is toasted by MyWork and the dialog stays open with what was typed.
-            if (await onLogCall(calling, note)) setCalling(null);
-          }}
-        />
-      ) : null}
     </section>
   );
 }

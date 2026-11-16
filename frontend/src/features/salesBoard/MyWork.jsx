@@ -17,15 +17,30 @@ import { useStageCatalog } from '../tickets/stageCatalog.js';
 import { currentQuarter, defaultBoardFilter, otherCurrencyTotals, sumValue, totalLabel } from './boardFormat.js';
 import { CashCard } from './CashCard.jsx';
 import { DealBoard } from './DealBoard.jsx';
-import { FollowUpList } from './FollowUpList.jsx';
-import { TodayOnPhone } from './TodayOnPhone.jsx';
+import { CallModal, FollowUpList } from './FollowUpList.jsx';
+import { CallPicker, TodayOnPhone } from './TodayOnPhone.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
 import { CarriedOverVisits, VisitsThisWeek } from './VisitsThisWeek.jsx';
-import { weekRangeLabel, weekStartIso } from './visitWeek.js';
+import { carryOverRange, NEXT_VISIT_DAYS, weekRangeLabel, weekStartIso } from './visitWeek.js';
 
-// ค้างจากสัปดาห์ก่อน looks back 31 days before this Monday — the ranged endpoint's cap. An older unticked visit is
-// still reachable with ‹ สัปดาห์ก่อน.
-const CARRY_OVER_DAYS = 31;
+// ดูหน้าเต็ม on a phone is remembered for the browser session (fix round 1, ruling 4). Storage can be refused (private
+// mode, blocked site data): then it is plain state for this mount.
+const PHONE_VIEW_KEY = 'glr.myWork.phoneView';
+function readFullOnPhone() {
+  try {
+    return globalThis.sessionStorage?.getItem(PHONE_VIEW_KEY) === 'full';
+  } catch {
+    return false;
+  }
+}
+function rememberFullOnPhone(full) {
+  try {
+    if (full) globalThis.sessionStorage?.setItem(PHONE_VIEW_KEY, 'full');
+    else globalThis.sessionStorage?.removeItem(PHONE_VIEW_KEY);
+  } catch {
+    // Not remembered; the switch itself still works.
+  }
+}
 
 function CountPill({ count }) {
   return (
@@ -66,7 +81,11 @@ const BOARD_ID = 'my-work-board';
 export function MyWork({ subtitle, before = null, user, showToast = () => {} }) {
   const navigate = useNavigate();
   const isPhone = useIsMobile();
-  const [fullOnPhone, setFullOnPhone] = useState(false);
+  const [fullOnPhone, setFullOnPhoneState] = useState(readFullOnPhone);
+  const setFullOnPhone = (full) => {
+    rememberFullOnPhone(full);
+    setFullOnPhoneState(full);
+  };
   const phoneToday = isPhone && !fullOnPhone;
   const queryClient = useQueryClient();
   const { catalog } = useStageCatalog();
@@ -78,6 +97,10 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   const [ticking, setTicking] = useState(null);
   const [cancelling, setCancelling] = useState(null);
   const [logging, setLogging] = useState(false);
+  // The phone's โทรแล้ว: pick a deal, then the call dialog. Owned here like every other dialog, so crossing the
+  // breakpoint (TodayOnPhone unmounting) keeps it open with what was typed (ruling 3).
+  const [pickingCall, setPickingCall] = useState(false);
+  const [calling, setCalling] = useState(null);
   const todayIso = bangkokTodayIso();
   const thisMonday = weekStartIso(todayIso);
   const [weekOffset, setWeekOffset] = useState(0);
@@ -89,13 +112,19 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     queryFn: () => api.salesVisits.list({ from: shownMonday, to: shownSunday }),
     enabled: weekOffset !== 0,
   });
-  const carryFrom = addDaysIso(thisMonday, -CARRY_OVER_DAYS);
-  const carryTo = addDaysIso(thisMonday, -1);
+  const { from: carryFrom, to: carryTo } = carryOverRange(thisMonday);
   const carriedQuery = useQuery({
     queryKey: queryKeys.salesVisitsOwn(carryFrom, carryTo),
     queryFn: () => api.salesVisits.list({ from: carryFrom, to: carryTo }),
   });
   const carriedOver = (carriedQuery.data ?? []).filter((v) => v.status === 'PLANNED');
+  // The phone's นัดถัดไป looks ahead across the week boundary: today to today + 7 (ruling 5).
+  const aheadTo = addDaysIso(todayIso, NEXT_VISIT_DAYS);
+  const aheadQuery = useQuery({
+    queryKey: queryKeys.salesVisitsOwn(todayIso, aheadTo),
+    queryFn: () => api.salesVisits.list({ from: todayIso, to: aheadTo }),
+    enabled: isPhone,
+  });
   const showWeek = (offset) => {
     setWeekOffset(offset);
     setLanded(null);
@@ -119,7 +148,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     mutationFn: (payload) => api.tickets.create(payload),
     onSuccess: (response) => {
       setCreating(false);
-      showToast('success', 'สร้างดีลเรียบร้อย');
+      showToast('success', 'สร้างงานเรียบร้อย');
       refresh();
       const id = response?.ticket?.summary?.id;
       if (id != null) navigate(`/tickets/${id}`);
@@ -141,8 +170,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
       // VisitDto.dealMovedToName: the deal belongs to someone else, so the tick stayed on the visit (NEW-2).
       // dealMoved says why: it moved after the visit was planned, or the visit's owner never held it (review LOW).
       showToast('success', !result?.dealMovedToName ? success : result.dealMoved
-        ? `ดีลนี้ย้ายไปให้ ${result.dealMovedToName} แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น`
-        : `บันทึกการเข้าพบไว้กับนัดเท่านั้น — ดีลนี้เป็นของ ${result.dealMovedToName}`);
+        ? `งานนี้ย้ายไปให้ ${result.dealMovedToName} แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น`
+        : `บันทึกการเข้าพบไว้กับนัดเท่านั้น — งานนี้เป็นของ ${result.dealMovedToName}`);
     } catch (error) {
       fail(error);
     }
@@ -190,19 +219,25 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
         <TodayOnPhone
           work={work}
           failed={workQuery.isError}
+          onRetry={() => workQuery.refetch()}
           todayIso={todayIso}
           user={user}
-          loggingCall={callMutation.isPending}
-          onLogCall={logCall}
+          ahead={aheadQuery.data ?? []}
+          aheadTo={aheadTo}
+          carriedOver={carriedOver}
           onLog={openLog}
+          onCall={() => setPickingCall(true)}
           onPlan={() => setPlanning({ deal: null })}
+          onTick={setTicking}
+          onCancelVisit={setCancelling}
           onCreate={() => setCreating(true)}
           onShowFull={() => setFullOnPhone(true)}
         />
       ) : (
         <>
       {isPhone ? (
-        <Button type="button" variant="secondary" className="justify-self-start" onClick={() => setFullOnPhone(false)}>
+        // As visible as the ดูหน้าเต็ม tile that led here (ruling 4): full width, 52px.
+        <Button type="button" variant="secondary" className="min-h-[52px] mobile:min-h-[52px] w-full" onClick={() => setFullOnPhone(false)}>
           <Icon name="chevronLeft" size={16} />
           กลับไปหน้าวันนี้
         </Button>
@@ -314,6 +349,28 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
         </>
       )}
 
+      {pickingCall ? (
+        <CallPicker
+          followUp={work?.followUp ?? []}
+          board={work?.board ?? []}
+          onClose={() => setPickingCall(false)}
+          onPick={(deal) => {
+            setPickingCall(false);
+            setCalling(deal);
+          }}
+        />
+      ) : null}
+      {calling ? (
+        <CallModal
+          deal={calling}
+          submitting={callMutation.isPending}
+          onClose={() => setCalling(null)}
+          onSubmit={async (note) => {
+            // A failure is toasted and the dialog stays open with what was typed.
+            if (await logCall(calling, note)) setCalling(null);
+          }}
+        />
+      ) : null}
       {planning ? (
         <PlanVisitModal
           deals={work?.board ?? []}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  EXPECTED_KIND_LABEL, monthLabel, nextMondays, presetAmount, snapToMonday, weekEndLabel, weekRangeLabel,
+  EXPECTED_KIND_LABEL, monthLabel, nextMondays, presetAmount, snapToMonday, weekEndDay, weekEndLabel, weekRangeLabel,
 } from './cashFormat.js';
 
 describe('cashFormat', () => {
@@ -22,6 +22,13 @@ describe('cashFormat', () => {
     // The month's last week also holds the receipts of the days after its Friday: labelled to the month end.
     expect(weekEndLabel('2026-11-23', '2026-11', true)).toBe('ถึง 30 พ.ย.');
     expect(weekEndLabel('2026-11-23', '2026-11', false)).toBe('ถึง 27 พ.ย.');
+  });
+
+  // The same date without "ถึง", for the phone's "รอบถัดไป 13 พ.ย." (design a-mywork phone block).
+  it('weekEndDay is the date of weekEndLabel alone', () => {
+    expect(weekEndDay('2026-11-09', '2026-11')).toBe('13 พ.ย.');
+    expect(weekEndDay('2026-11-23', '2026-11', true)).toBe('30 พ.ย.');
+    expect(weekEndDay('2026-11-30', '2026-12')).toBe('4 ธ.ค.');
   });
 
   it('snaps any day to its ISO-week Monday and offers this week plus the next three', () => {

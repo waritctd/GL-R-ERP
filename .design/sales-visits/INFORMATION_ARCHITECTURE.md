@@ -44,14 +44,19 @@ Empty week: one message and the plan action.
 
 ### วันนี้ของฉัน (phone home, sales)
 1. Date line + "วันนี้ของฉัน".
-2. นัดถัดไป card — the next unticked planned visit today; else the next one later this week; else an empty state.
-3. One large primary "บันทึกเข้าพบ" (replaces the sticky button; never two).
+2. นัดถัดไป card — the next unticked planned visit today; else the next one in the 7 days ahead (across the week
+   boundary: GET /api/sales/visits today..today+7); else an empty state that stays true while visits are missed.
+3. One large primary "บันทึกเข้าพบ" (replaces the sticky button; never two). Shown even when /my-work fails, beside
+   the error and a retry.
 4. Quick row: "โทรแล้ว" (pick a งาน, then the existing call dialog), "ทำใบเสนอราคา" (only for who may create one).
    "ส่งตัวอย่าง" is not built: there is no way to record a sample sent on a งาน.
+4a. ค้าง n นัด — this week's unticked past visits and those carried over from the 31 days before Monday, tickable.
+   `/visits` shows the same carried-over list on the current week.
 5. ควรตามต่อ (n), compact, each row → its งาน page.
 6. เงินเข้าเดือนนี้, compact, only when the payload carries `cash`.
 7. Way out: ดูงานทั้งหมด (`/tickets`), นัดเข้าพบทั้งสัปดาห์ (`/visits`), งานใหม่, and "ดูหน้าเต็ม" — the full stacked
-   page (board, worklist, money band, carried-over visits, ปิดงาน) so nothing reachable today becomes unreachable.
+   page (board, worklist, money band, carried-over visits, ปิดงาน) so nothing reachable today becomes unreachable. The
+   choice is remembered for the browser session; the full page opens with an equally large "กลับไปหน้าวันนี้".
 
 ## User flows
 

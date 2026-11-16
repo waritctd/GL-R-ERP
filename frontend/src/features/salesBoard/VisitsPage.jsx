@@ -11,9 +11,9 @@ import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { addDaysIso, bangkokTodayIso } from '../../utils/format.js';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
-import { VisitRow, WeekNav } from './VisitsThisWeek.jsx';
+import { CarriedOverVisits, VisitRow, WeekNav } from './VisitsThisWeek.jsx';
 import { VisitWeekGrid } from './VisitWeekGrid.jsx';
-import { visitCounts, weekRangeLabel, weekStartIso } from './visitWeek.js';
+import { carryOverRange, visitCounts, weekRangeLabel, weekStartIso } from './visitWeek.js';
 
 const PAD = 'px-5 py-4 mobile:px-3.5';
 const Failed = () => <p className={`m-0 text-sm font-bold text-danger ${PAD}`}>โหลดไม่สำเร็จ</p>;
@@ -70,6 +70,14 @@ function RepWeek({ showToast }) {
     queryKey: queryKeys.salesVisitsOwn(thisMonday, thisSunday),
     queryFn: () => api.salesVisits.list({ from: thisMonday, to: thisSunday }),
   });
+  // ค้างจากสัปดาห์ก่อน, on the current week only (fix round 1, ruling 1): the same request and key as MyWork's.
+  const carry = carryOverRange(thisMonday);
+  const carriedQuery = useQuery({
+    queryKey: queryKeys.salesVisitsOwn(carry.from, carry.to),
+    queryFn: () => api.salesVisits.list(carry),
+    enabled: weekOffset === 0,
+  });
+  const carriedOver = (carriedQuery.data ?? []).filter((v) => v.status === 'PLANNED');
   // The rep's open deals, for the dialogs' optional deal picker (already scoped to the caller server-side).
   const workQuery = useQuery({ queryKey: queryKeys.salesBoardMyWork(), queryFn: () => api.salesBoard.myWork() });
   const deals = workQuery.data?.board ?? [];
@@ -153,6 +161,10 @@ function RepWeek({ showToast }) {
             {`นัดใหม่อยู่ในสัปดาห์ ${landed.label} — ไปที่สัปดาห์นั้น`}
           </button>
         </p>
+      ) : null}
+
+      {weekOffset === 0 ? (
+        <CarriedOverVisits visits={carriedOver} todayIso={todayIso} onDone={setTicking} onCancel={setCancelling} />
       ) : null}
 
       {weekQuery.isError ? <Panel flush><Failed /></Panel> : !visits ? <Loading label="กำลังโหลดนัดเข้าพบ" /> : visits.length === 0 ? (

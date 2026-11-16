@@ -145,12 +145,12 @@ describe('MyWork — นัดเข้าพบสัปดาห์นี้',
     fireEvent.click(within(section).getByRole('button', { name: /นัดเข้าพบ/ }));
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'นัดเข้าพบ' })).toBeTruthy();
-    expect(within(dialog).getByText('ไปพบผู้ออกแบบหรือเจ้าของได้ แม้ยังไม่มีดีล')).toBeTruthy();
+    expect(within(dialog).getByText('ไปพบผู้ออกแบบหรือเจ้าของได้ แม้ยังไม่มีงาน')).toBeTruthy();
     const save = within(dialog).getByRole('button', { name: 'บันทึกนัด' });
     expect(save.disabled).toBe(true);
 
     fireEvent.change(within(dialog).getByLabelText(/พบใคร/), { target: { value: 'คุณอรุณ · อรุณ อาร์คิเทค' } });
-    fireEvent.change(within(dialog).getByLabelText(/ดีล/), { target: { value: '32' } });
+    fireEvent.change(within(dialog).getByLabelText(/งาน/), { target: { value: '32' } });
     fireEvent.change(within(dialog).getByLabelText(/เวลา/), { target: { value: '10:00' } });
     fireEvent.change(within(dialog).getByLabelText(/เรื่องที่จะคุย/), { target: { value: 'นำตัวอย่างไปเทียบสี' } });
     expect(save.disabled).toBe(false);
@@ -169,7 +169,7 @@ describe('MyWork — นัดเข้าพบสัปดาห์นี้',
 
     fireEvent.click(within(row).getByRole('button', { name: 'นัดเข้าพบ' }));
     const dialog = await screen.findByRole('dialog');
-    expect(within(dialog).getByLabelText(/ดีล/).value).toBe('31');
+    expect(within(dialog).getByLabelText(/งาน/).value).toBe('31');
     expect(within(dialog).getByLabelText(/พบใคร/).value).toBe('เทพสตูดิโอ ดีไซน์');
     fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกนัด' }));
 
@@ -352,7 +352,7 @@ describe('MyWork — visits review fixes', () => {
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'บันทึก' }));
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('success',
-      'ดีลนี้ย้ายไปให้ คุณอรุณี ขายเก่ง แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น'));
+      'งานนี้ย้ายไปให้ คุณอรุณี ขายเก่ง แล้ว — บันทึกการเข้าพบไว้กับนัดเท่านั้น'));
   });
 
   it("ticking a visit on someone else's deal that never moved does not claim it moved (review LOW)", async () => {
@@ -365,7 +365,7 @@ describe('MyWork — visits review fixes', () => {
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'บันทึก' }));
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('success',
-      'บันทึกการเข้าพบไว้กับนัดเท่านั้น — ดีลนี้เป็นของ คุณอรุณี ขายเก่ง'));
+      'บันทึกการเข้าพบไว้กับนัดเท่านั้น — งานนี้เป็นของ คุณอรุณี ขายเก่ง'));
     expect(showToast).not.toHaveBeenCalledWith('success', expect.stringContaining('ย้ายไปให้'));
   });
 });

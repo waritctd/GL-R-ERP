@@ -59,6 +59,18 @@ export function weekRangeLabel(mondayIso, todayIso = null) {
   return otherYear ? `${range} ${Number(sunday.slice(0, 4)) + 543}` : range;
 }
 
+/**
+ * ค้างจากสัปดาห์ก่อน looks back 31 days before this Monday — the ranged endpoint's cap (VisitService.MAX_RANGE_DAYS).
+ * An older unticked visit is still reachable with ‹ สัปดาห์ก่อน. `{ from, to }` for GET /api/sales/visits.
+ */
+export const CARRY_OVER_DAYS = 31;
+export function carryOverRange(thisMondayIso) {
+  return { from: addDaysIso(thisMondayIso, -CARRY_OVER_DAYS), to: addDaysIso(thisMondayIso, -1) };
+}
+
+/** How far the phone's นัดถัดไป looks ahead: today to today + 7 (8 days inclusive, inside the 31-day cap). */
+export const NEXT_VISIT_DAYS = 7;
+
 /** A PLANNED visit whose day has passed without a tick (review M4). */
 export function isOverdue(visit, todayIso) {
   return visit.status === 'PLANNED' && visit.plannedDate < todayIso;
@@ -85,10 +97,12 @@ const byPlan = (a, b) => a.plannedDate.localeCompare(b.plannedDate)
 /**
  * The phone's นัดถัดไป: the first visit still PLANNED for today (a timed one before an untimed one — a visit whose
  * time has passed but is not ticked yet is still the one to log); when today has none left, the first PLANNED visit
- * later in the given visits (the week as served). Overdue ones are never "next". `{ visit, isToday }`, or null.
+ * later in the given visits, up to `lastIso` inclusive when given. Overdue ones are never "next". Same date and time:
+ * the lower id first (VisitRepository's tie-break). `{ visit, isToday }`, or null.
  */
-export function nextVisit(visits, todayIso) {
-  const ahead = (visits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate >= todayIso).sort(byPlan);
+export function nextVisit(visits, todayIso, lastIso = null) {
+  const ahead = (visits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate >= todayIso
+    && (!lastIso || v.plannedDate <= lastIso)).sort(byPlan);
   return ahead.length ? { visit: ahead[0], isToday: ahead[0].plannedDate === todayIso } : null;
 }
 

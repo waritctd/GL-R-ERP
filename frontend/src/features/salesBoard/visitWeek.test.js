@@ -88,6 +88,22 @@ describe('nextVisit — the phone\'s นัดถัดไป (today first, else
     expect(nextVisit(visits, today)).toEqual({ visit: visits[3], isToday: false });
   });
 
+  // Tie-break (VisitRepository ORDER BY planned_date, planned_time NULLS LAST, visit_id): two visits at the same time
+  // on the same day go in id order, the lower id (booked first) being next — whatever order they arrive in.
+  it('breaks a same-time tie by the lower id', () => {
+    const visits = [v({ id: 9, plannedTime: '14:00:00' }), v({ id: 3, plannedTime: '14:00:00' })];
+    expect(nextVisit(visits, today).visit.id).toBe(3);
+    expect(nextVisit([...visits].reverse(), today).visit.id).toBe(3);
+  });
+
+  // The phone looks ahead across the week boundary (fix round 1 ruling 5): up to `lastIso` inclusive.
+  it('looks ahead into next week, but not past the horizon', () => {
+    const sunday = '2026-11-15';
+    const monday = v({ id: 4, plannedDate: '2026-11-16', plannedTime: '09:00:00' });
+    expect(nextVisit([monday], sunday, '2026-11-22')).toEqual({ visit: monday, isToday: false });
+    expect(nextVisit([v({ id: 5, plannedDate: '2026-11-23' })], sunday, '2026-11-22')).toBeNull();
+  });
+
   it('is null when nothing is planned from today on', () => {
     expect(nextVisit([v({ plannedDate: '2026-11-10' }), v({ id: 2, status: 'DONE' })], today)).toBeNull();
     expect(nextVisit(null, today)).toBeNull();

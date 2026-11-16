@@ -200,6 +200,53 @@ describe('VisitsPage — a sales rep\'s own week', () => {
     await waitFor(() => expect(api.salesVisits.cancel).toHaveBeenCalledWith(2));
   });
 
+  // Fix round 1, ruling 1: on the current week the page also lists the visits carried over from the 31 days before
+  // this Monday (the same request as MyWork's ค้างจากสัปดาห์ก่อน), tickable; other weeks do not repeat them.
+  it('shows visits carried over from earlier weeks on the current week only', async () => {
+    const carried = visit({ id: 50, contactName: 'Orbit Studio', plannedDate: '2026-11-03' });
+    api.salesVisits.list.mockImplementation(({ from }) => Promise.resolve(
+      from === '2026-11-09' ? thisWeek : from === '2026-10-09' ? [carried, { ...carried, id: 51, status: 'DONE' }] : [],
+    ));
+    api.salesVisits.done.mockResolvedValue({ ...carried, status: 'DONE' });
+    renderPage();
+
+    const section = await screen.findByTestId('visits-carried-over');
+    expect(api.salesVisits.list).toHaveBeenCalledWith({ from: '2026-10-09', to: '2026-11-08' });
+    expect(within(section).getByTestId('visit-50')).toBeTruthy();
+    expect(within(section).queryByTestId('visit-51')).toBeNull();
+    fireEvent.click(within(section).getByRole('button', { name: 'เข้าพบแล้ว: Orbit Studio' }));
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'บันทึก' }));
+    await waitFor(() => expect(api.salesVisits.done).toHaveBeenCalledWith(50, { note: undefined }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'สัปดาห์ก่อน' }));
+    await screen.findByText('2–8 พ.ย.');
+    expect(screen.queryByTestId('visits-carried-over')).toBeNull();
+  });
+
+  // Ruling 7: the dialogs this page opens say งาน in their own labels and hints.
+  it('opens dialogs that say งาน, not ดีล', async () => {
+    renderPage();
+    await screen.findByTestId('visit-2');
+
+    fireEvent.click(screen.getByRole('button', { name: 'นัดเข้าพบ' }));
+    let dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('ไปพบผู้ออกแบบหรือเจ้าของได้ แม้ยังไม่มีงาน')).toBeTruthy();
+    expect(within(dialog).getByLabelText(/งาน/).querySelector('option').textContent).toBe('ไม่มีงาน');
+    expect(dialog.textContent).not.toMatch(/ดีล/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกเข้าพบ' }));
+    dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: 'ไม่ได้นัด' }));
+    expect(dialog.textContent).not.toMatch(/ดีล/);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+
+    fireEvent.click(within(screen.getByTestId('visit-2')).getByRole('button', { name: 'เข้าพบแล้ว: Linea Interior' }));
+    dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('บันทึกแล้วงานนี้ออกจาก “ควรตามต่อ”')).toBeTruthy();
+    expect(dialog.textContent).not.toMatch(/ดีล/);
+  });
+
   it('never asks for the team list, and says งาน, not ดีล, in its own text', async () => {
     const { container } = renderPage();
     await screen.findByTestId('visit-2');
