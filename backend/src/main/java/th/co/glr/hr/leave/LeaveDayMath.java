@@ -70,7 +70,7 @@ import th.co.glr.hr.attendance.schedule.WorkScheduleResolver;
  * LeaveDayCountBasis} for the announcement text this implements and {@link LeaveService#submit}/
  * {@link LeaveService#computeTotalDays} for where the basis is selected.
  */
-final class LeaveDayMath {
+public final class LeaveDayMath {
     // Renamed from ONE_WORKING_DAY (V119): this constant is now merged per COUNTED day under EITHER basis (working
     // or calendar), not just a working day -- see the basis-aware overloads below. Purely an internal name; not
     // part of any tested/pinned public shape.
@@ -385,8 +385,8 @@ final class LeaveDayMath {
 
     /** The company-wide lunch break subtracted from a boundary segment's worked minutes (leave arithmetic only --
      * see the "Partial-day span" section header above for why this is not a WorkSchedule field). */
-    private static final LocalTime BREAK_START = LocalTime.of(12, 30);
-    private static final LocalTime BREAK_END = LocalTime.of(13, 30);
+    public static final LocalTime BREAK_START = LocalTime.of(12, 30);
+    public static final LocalTime BREAK_END = LocalTime.of(13, 30);
 
     /** The fixed denominator for a boundary-day fraction: 8 WORKED hours, never a schedule's own (break-inclusive)
      * clock span. See the "Partial-day span" section header above. */

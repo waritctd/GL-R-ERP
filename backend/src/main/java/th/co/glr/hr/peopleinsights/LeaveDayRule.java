@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import th.co.glr.hr.attendance.schedule.WorkSchedule;
+import th.co.glr.hr.leave.LeaveDayMath;
 
 /**
  * Whether a day touched by APPROVED leave is still late or an early leave. The stored minutes are measured from the
@@ -13,8 +14,8 @@ import th.co.glr.hr.attendance.schedule.WorkSchedule;
  * that no leave covers, and likewise for leaving early. Times are minutes after midnight in the schedule's zone.
  */
 final class LeaveDayRule {
-    private static final int BREAK_START = 12 * 60 + 30;
-    private static final int BREAK_END = 13 * 60 + 30;
+    private static final int BREAK_START = minute(LeaveDayMath.BREAK_START);
+    private static final int BREAK_END = minute(LeaveDayMath.BREAK_END);
     private static final int DAY = 24 * 60;
 
     private LeaveDayRule() {}
