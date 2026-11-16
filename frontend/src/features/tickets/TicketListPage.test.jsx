@@ -250,6 +250,22 @@ describe('TicketListPage', () => {
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/501'));
   });
 
+  // Owner ruling 2026-11-16: the table is part of งานทั้งหมด, so its own labels say งาน. Only DATA (a deal titled
+  // "ดีลใหม่…") may still contain ดีล.
+  it.each([['sales', salesUser], ['sales_manager', managerUser]])('%s: no label on the table view says ดีล', async (_r, user) => {
+    renderTicketListPage(user);
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง$/ }));
+
+    const visible = document.body.textContent;
+    const labels = [...document.querySelectorAll('[aria-label],[title],[placeholder]')]
+      .map((el) => [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder')].join(' '))
+      .join(' ');
+    const withoutData = `${visible} ${labels}`.replaceAll('ดีลใหม่ยังไม่มีขอราคา', '').replaceAll('บริษัท ดีลใหม่ จำกัด', '');
+    expect(withoutData).not.toContain('ดีล');
+    expect(screen.getByRole('columnheader', { name: /งาน \/ ลูกค้า \/ โครงการ/ })).toBeTruthy();
+  });
+
   // Round-2 LOW 4: the quiet threshold is configurable (app.sales.quiet-days), so the copy reads it from the API.
   it('the ภาพรวมทีม quiet badge names the threshold the API serves, not a hard-coded 14', async () => {
     api.salesBoard.teamOverview.mockResolvedValue({ reps: [], stale: [], quietDays: 21 });
@@ -263,7 +279,7 @@ describe('TicketListPage', () => {
     });
     renderTicketListPage(managerUser);
 
-    expect(await screen.findByText(/1 ดีลเงียบ \(ไม่มีความเคลื่อนไหว 21 วัน\)/)).toBeTruthy();
+    expect(await screen.findByText(/1 งานเงียบ \(ไม่มีความเคลื่อนไหว 21 วัน\)/)).toBeTruthy();
   });
 
   // Final review: the threshold is near-static, so it must not refetch on every ['tickets'] invalidation (an activity,
@@ -323,11 +339,11 @@ describe('TicketListPage', () => {
 
     expect(await screen.findByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
     expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
-    expect(screen.getByRole('searchbox', { name: 'ค้นหาดีล' }).value).toBe('เกินกำหนด');
+    expect(screen.getByRole('searchbox', { name: 'ค้นหางาน' }).value).toBe('เกินกำหนด');
     expect(screen.getByText('ค้นหาในรายการ')).toBeTruthy();
     expect(screen.getByText('เฟส 5: ส่งมอบและปิดงาน')).toBeTruthy();
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหาดีล' }), { target: { value: 'พักไว้' } });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหางาน' }), { target: { value: 'พักไว้' } });
     expect(screen.getByTestId('location-display').textContent).toContain('q=%E0%B8%9E%E0%B8%B1%E0%B8%81%E0%B9%84%E0%B8%A7%E0%B9%89');
 
     fireEvent.click(screen.getByRole('button', { name: /เฟส 4/ }));
@@ -426,8 +442,8 @@ describe('TicketListPage', () => {
     expect(cardScope.getByText(longDeal.projectName).className).toContain('ticket-card-project');
     expect(cardScope.getByText(longDeal.createdByName, { exact: false }).className).toContain('ticket-card-owner');
     expect(cardScope.getByText(/เสนอราคาผู้ออกแบบ/)).toBeTruthy();
-    expect(cardScope.getByRole('button', { name: 'เปิดดีล PR-2026-0507' })).toBeTruthy();
-    expect(screen.getByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
+    expect(cardScope.getByRole('button', { name: 'เปิดงาน PR-2026-0507' })).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: 'ค้นหางาน' })).toBeTruthy();
     // (the create button is sales-only; its visibility is pinned in 'shows create for Sales ...')
 
     const filterToggle = screen.getByRole('button', { name: /^ตัวกรอง/ });
@@ -463,18 +479,18 @@ describe('TicketListPage', () => {
 
     await waitFor(() => expect(api.tickets.create).toHaveBeenCalledWith({ title: 'โครงการใหม่' }));
     await waitFor(() => expect(api.tickets.list).toHaveBeenCalledTimes(2));
-    expect(showToast).toHaveBeenCalledWith('success', 'สร้างดีลเรียบร้อย');
+    expect(showToast).toHaveBeenCalledWith('success', 'สร้างงานเรียบร้อย');
   });
 
   it('distinguishes filtered-empty copy from a truly empty ticket list', async () => {
     const { unmount } = renderTicketListPage(salesUser, ['/tickets?q=ไม่พบแน่นอน']);
     // EmptyState's visible `<strong>` title is `aria-hidden` when `titleAnnouncedElsewhere` is set
     // (DataTable always passes it), so it is never itself what a screen reader hears.
-    expect(await screen.findByText('ไม่พบดีลที่ตรงกับตัวกรอง')).toBeTruthy();
+    expect(await screen.findByText('ไม่พบงานที่ตรงกับตัวกรอง')).toBeTruthy();
     // All 5 role-scoped deals filtered out by the search: the live-region announcement, unlike the
     // visible EmptyState heading, carries the "(กรองจาก 5)" denominator, so the two are different strings.
-    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่พบดีลที่ตรงกับตัวกรอง (กรองจาก 5)');
-    expect(screen.getByText('ไม่พบดีลที่ตรงกับคำค้นหาและตัวกรองที่เลือก')).toBeTruthy();
+    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่พบงานที่ตรงกับตัวกรอง (กรองจาก 5)');
+    expect(screen.getByText('ไม่พบงานที่ตรงกับคำค้นหาและตัวกรองที่เลือก')).toBeTruthy();
     unmount();
 
     api.tickets.list.mockResolvedValueOnce({ tickets: [] });
@@ -482,9 +498,9 @@ describe('TicketListPage', () => {
     // A truly empty list has no unfiltered population to denominate against, so no clause is
     // appended and the heading and live-region text are identical: this distinguishes "filtered
     // down to nothing" from "there was nothing to begin with".
-    expect((await screen.findAllByText('ไม่มีดีล')).length).toBe(2);
-    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่มีดีล');
-    expect(screen.getByText('ยังไม่มีดีลในเงื่อนไขที่เลือก')).toBeTruthy();
+    expect((await screen.findAllByText('ไม่มีงาน')).length).toBe(2);
+    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่มีงาน');
+    expect(screen.getByText('ยังไม่มีงานในเงื่อนไขที่เลือก')).toBeTruthy();
   });
 
   it('does not render role-sensitive financial internals in sales-visible rows or cards', async () => {
@@ -1010,7 +1026,7 @@ describe('TicketListPage', () => {
       // default = absent from the URL
       expect(screen.getByTestId('location-display').textContent).toBe('/tickets');
       // phase chips unchanged
-      expect(screen.getByLabelText('ตัวกรองเฟสของดีล')).toBeTruthy();
+      expect(screen.getByLabelText('ตัวกรองเฟสของงาน')).toBeTruthy();
     });
 
     it('next shifts from/to in the URL by one day and re-queries with the shifted range; "7 วันล่าสุด" clears it', async () => {
@@ -1190,11 +1206,11 @@ describe('TicketListPage', () => {
       await waitFor(() => expect(weekChips().getByRole('button', { name: /^ไม่เคลื่อนไหว/ }).textContent).toMatch(/0/));
     });
 
-    it('sales columns: ดีล/ลูกค้า/โครงการ, ขั้นตอน, มูลค่า, ความเคลื่อนไหวล่าสุด, นัดติดตามถัดไป — no ผู้ดูแล, no ความคืบหน้า', async () => {
+    it('sales columns: งาน/ลูกค้า/โครงการ, ขั้นตอน, มูลค่า, ความเคลื่อนไหวล่าสุด, นัดติดตามถัดไป — no ผู้ดูแล, no ความคืบหน้า', async () => {
       renderTicketListPage(salesUser);
       await screen.findByText('ลูกค้า-ขยับ');
       const headers = columnHeaders().join('|');
-      for (const h of ['ดีล', 'ขั้นตอน', 'มูลค่า', 'ความเคลื่อนไหวล่าสุด', 'นัดติดตามถัดไป']) expect(headers).toContain(h);
+      for (const h of ['งาน', 'ขั้นตอน', 'มูลค่า', 'ความเคลื่อนไหวล่าสุด', 'นัดติดตามถัดไป']) expect(headers).toContain(h);
       expect(headers).not.toContain('ผู้ดูแล');
       expect(headers).not.toContain('ความคืบหน้า');
     });
@@ -1261,7 +1277,7 @@ describe('TicketListPage', () => {
     renderTicketListPage(salesUser);
     await screen.findByText('บริษัท ทดสอบ จำกัด');
 
-    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของดีล'));
+    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของงาน'));
     const allChip = phaseGroup.getByRole('button', { name: 'ทั้งหมด' });
     expect(allChip.textContent.trim()).toBe('ทั้งหมด');
   });
@@ -1274,7 +1290,7 @@ describe('TicketListPage', () => {
     renderTicketListPage(salesUser);
     await screen.findByText('บริษัท ทดสอบ จำกัด');
 
-    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของดีล'));
+    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของงาน'));
     const phase1Chip = phaseGroup.getByRole('button', { name: /เฟส 1 ·/ });
     const phase3Chip = phaseGroup.getByRole('button', { name: /เฟส 3 ·/ });
     const phase5Chip = phaseGroup.getByRole('button', { name: /เฟส 5 ·/ });

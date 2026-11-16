@@ -51,8 +51,8 @@ function scopeCopy(role, inboxOnly) {
       eyebrow: 'ขอบเขตฝ่ายนำเข้า',
       title: inboxOnly ? 'ต้องดำเนินการ' : 'ทั้งหมด',
       description: inboxOnly
-        ? 'ดีลที่อยู่ในช่วงขอราคา จัดซื้อ หรือนำเข้า'
-        : 'ทุกดีลที่ฝ่ายนำเข้าอ่านได้',
+        ? 'งานที่อยู่ในช่วงขอราคา จัดซื้อ หรือนำเข้า'
+        : 'ทุกงานที่ฝ่ายนำเข้าอ่านได้',
     };
   }
   if (role === 'account') {
@@ -60,15 +60,15 @@ function scopeCopy(role, inboxOnly) {
       eyebrow: 'ขอบเขตฝ่ายบัญชี',
       title: inboxOnly ? 'ต้องดำเนินการ' : 'ทั้งหมด',
       description: inboxOnly
-        ? 'ดีลที่มีงานรับเงินหรือติดตามชำระ'
-        : 'ทุกดีลที่ฝ่ายบัญชีอ่านได้',
+        ? 'งานที่รอรับเงินหรือติดตามชำระ'
+        : 'ทุกงานที่ฝ่ายบัญชีอ่านได้',
     };
   }
   if (role === 'sales') {
     return {
       eyebrow: 'ขอบเขตฝ่ายขาย',
-      title: 'ดีลของฉัน',
-      description: 'ดีลที่อยู่ในความรับผิดชอบของคุณ',
+      title: 'งานของฉัน',
+      description: 'งานที่อยู่ในความรับผิดชอบของคุณ',
     };
   }
   if (role === 'sales_manager') {
@@ -81,7 +81,7 @@ function scopeCopy(role, inboxOnly) {
   if (role === 'ceo') {
     return {
       eyebrow: 'ขอบเขตผู้บริหาร',
-      title: 'ทุกดีลที่มองเห็นได้',
+      title: 'ทุกงานที่มองเห็นได้',
       description: 'มุมมองติดตามท่อขายและสถานะงาน',
     };
   }
@@ -254,7 +254,7 @@ function TeamPipelineSummary({ groups, quietDays }) {
         <h2 id="ticket-pipeline-title">ภาพรวมทีม</h2>
         {groups.staleActiveCount > 0 ? (
           <StatusBadge tone="warning">
-            <Icon name="clock" size={12} /> {groups.staleActiveCount} ดีลเงียบ
+            <Icon name="clock" size={12} /> {groups.staleActiveCount} งานเงียบ
             {quietDays != null ? ` (ไม่มีความเคลื่อนไหว ${quietDays} วัน)` : null}
           </StatusBadge>
         ) : null}
@@ -265,7 +265,7 @@ function TeamPipelineSummary({ groups, quietDays }) {
             <dt>{item.label}</dt>
             <dd>
               <strong>{formatMoney(item.group.total)}</strong>
-              <StatusBadge tone={item.tone}>{item.group.count} ดีล</StatusBadge>
+              <StatusBadge tone={item.tone}>{item.group.count} งาน</StatusBadge>
             </dd>
             {item.key === 'expected' ? (
               <small>คาดการณ์ถ่วงน้ำหนัก: {formatMoney(item.group.forecast)}</small>
@@ -385,7 +385,7 @@ function DealOpenButton({ deal, onOpen }) {
       type="button"
       className="ticket-card-open-button"
       onClick={() => onOpen(deal)}
-      aria-label={`เปิดดีล ${deal.code}`}
+      aria-label={`เปิดงาน ${deal.code}`}
     >
       เปิด
       <Icon name="chevronRight" size={14} />
@@ -570,7 +570,7 @@ function buildDealColumns({ role, isManagerView, catalog }) {
   return [
     {
       key: 'customer',
-      header: 'ดีล / ลูกค้า / โครงการ',
+      header: 'งาน / ลูกค้า / โครงการ',
       searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
       // This Link (not the row's `onRowClick`, a mouse-only convenience) is the row's keyboard and
       // assistive-tech activation target, like PricingRequestQueuePage.jsx's `requestCode` column.
@@ -863,18 +863,18 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
   );
 
   const emptyDescription = useMemo(() => {
-    if (searchText.trim()) return 'ไม่พบดีลที่ตรงกับคำค้นหาและตัวกรองที่เลือก';
+    if (searchText.trim()) return 'ไม่พบงานที่ตรงกับคำค้นหาและตัวกรองที่เลือก';
     if (phaseFilter) {
       return stageCatalog.phases.includes(Number(phaseFilter))
-        ? `ไม่มีดีลในเฟส ${phaseFilter} · ${phaseName(Number(phaseFilter))}`
-        : 'ไม่มีดีลในเฟสที่เลือก';
+        ? `ไม่มีงานในเฟส ${phaseFilter} · ${phaseName(Number(phaseFilter))}`
+        : 'ไม่มีงานในเฟสที่เลือก';
     }
-    if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
-    if (flagFilter === 'awaiting_delivery') return 'ไม่มีดีลที่รอส่งมอบ';
-    if (flagFilter === 'partial_delivery') return 'ไม่มีดีลที่ส่งมอบบางส่วน';
-    if (lifecycleFilter) return `ไม่มีดีลในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
-    if (inboxOnly) return 'ไม่มีดีลที่ต้องดำเนินการตอนนี้ — ลองดูแท็บ "ทั้งหมด"';
-    return 'ยังไม่มีดีลในเงื่อนไขที่เลือก';
+    if (flagFilter === 'overdue') return 'ไม่มีงานที่เกินกำหนดชำระ';
+    if (flagFilter === 'awaiting_delivery') return 'ไม่มีงานที่รอส่งมอบ';
+    if (flagFilter === 'partial_delivery') return 'ไม่มีงานที่ส่งมอบบางส่วน';
+    if (lifecycleFilter) return `ไม่มีงานในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
+    if (inboxOnly) return 'ไม่มีงานที่ต้องดำเนินการตอนนี้ — ลองดูแท็บ "ทั้งหมด"';
+    return 'ยังไม่มีงานในเงื่อนไขที่เลือก';
   }, [flagFilter, lifecycleFilter, inboxOnly, phaseFilter, searchText, stageCatalog]);
 
   function invalidateTicketsList() {
@@ -978,7 +978,7 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
     mutationFn: (payload) => api.tickets.create(payload),
     onSuccess: (response) => {
       setCreating(false);
-      showToast('success', 'สร้างดีลเรียบร้อย');
+      showToast('success', 'สร้างงานเรียบร้อย');
       invalidateTicketsList();
       // Commit 6: a new deal starts as an empty DRAFT with no price-request flow of its own any more (see
       // TicketService.create, commit 5) — land the user straight on the deal page, where PricingRequestPanel prompts
@@ -1044,7 +1044,7 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
           footer stays the single statement of "how many rows matched". */}
       <section
         className="flex flex-col gap-3 rounded-md border border-border bg-surface p-3.5 mobile:gap-2.5 mobile:p-2.5"
-        aria-label="ขอบเขตและตัวกรองรายการดีล"
+        aria-label="ขอบเขตและตัวกรองงานทั้งหมด"
       >
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <span className="text-2xs font-extrabold text-text-muted">{scope.eyebrow}</span>
@@ -1062,7 +1062,7 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
         ) : null}
 
         <WorklistFilters
-          ariaLabel="ตัวกรองเฟสของดีล"
+          ariaLabel="ตัวกรองเฟสของงาน"
           items={phaseChipItems}
           activeKey={phaseFilter}
           onSelect={selectPhase}
@@ -1110,17 +1110,17 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
             always loses to FilterBar's own utilities. `mobile:` is the shared <=720px variant. */}
         <FilterBar
           className="ticket-filter-bar !border-0 !bg-transparent !p-0 gap-3 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-2"
-          aria-label="ค้นหาและตัวกรองรายการดีล"
+          aria-label="ค้นหาและตัวกรองงานทั้งหมด"
         >
           <label className="ticket-filter-search search-field">
-            <span className="sr-only">ค้นหาดีล</span>
+            <span className="sr-only">ค้นหางาน</span>
             <Icon name="search" />
             <input
               type="search"
               value={searchText}
               placeholder="ค้นหาเลขที่ / บริษัท / โครงการ / ผู้ดูแล"
               onChange={(event) => updateParam('q', event.target.value)}
-              aria-label="ค้นหาดีล"
+              aria-label="ค้นหางาน"
             />
           </label>
           <Button
@@ -1264,7 +1264,7 @@ export function TicketListPage({ user, showToast, viewSwitch = null }) {
         onRetry={() => ticketsQuery.refetch()}
         emptyState={{
           icon: 'fileText',
-          title: activeFilterCount > 0 ? 'ไม่พบดีลที่ตรงกับตัวกรอง' : 'ไม่มีดีล',
+          title: activeFilterCount > 0 ? 'ไม่พบงานที่ตรงกับตัวกรอง' : 'ไม่มีงาน',
           description: emptyDescription,
         }}
       />

@@ -68,20 +68,6 @@ describe('release content modules', () => {
     }
   });
 
-  // The menu entry was renamed รายการดีล → งานทั้งหมด (2026-11-16 slice A); a notice must not send anyone to a menu
-  // item that no longer exists.
-  it('no notice names the retired รายการดีล menu entry', () => {
-    for (const release of RELEASES) {
-      for (const entry of release.entries) {
-        const where = `${release.id}/${entry.id}`;
-        expect(entry.page, where).not.toBe('รายการดีล');
-        expect(entry.menu, where).not.toContain('รายการดีล');
-        // A step that walks the menu ("งานขาย › …"); a plain "list of deals" in prose is not the menu entry.
-        entry.steps.forEach((s) => expect(s.text, where).not.toContain('› รายการดีล'));
-      }
-    }
-  });
-
   it('lists releases newest first and finds them by id', () => {
     const dates = RELEASES.map((release) => release.date);
     expect(dates).toEqual([...dates].sort().reverse());

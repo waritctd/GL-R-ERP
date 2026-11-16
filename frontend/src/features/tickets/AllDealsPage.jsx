@@ -10,7 +10,7 @@ import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { DealBoard } from '../salesBoard/DealBoard.jsx';
 import {
-  currentQuarter, defaultBoardFilter, otherCurrencyTotals, sumValue, totalLabel,
+  currentQuarter, otherCurrencyTotals, sumValue, totalLabel,
 } from '../salesBoard/boardFormat.js';
 import {
   boardDealMatches, closedCounts, readStoredView, resolveDealsView, sortByQuiet, writeStoredView,
@@ -126,13 +126,18 @@ function AllDealsBoard({ user, showToast, onShowTable }) {
     () => (allDeals ?? []).filter((deal) => boardDealMatches(deal, searchText)),
     [allDeals, searchText],
   );
-  const filter = filterChoice ?? (allDeals ? defaultBoardFilter(allDeals) : 'all');
+  // Always ทั้งหมด first (ruling 2026-11-16): a team board is full of other quarters, and opening on ไตรมาสนี้ could show
+  // nothing at all. งานของฉัน keeps its own rule (defaultBoardFilter).
+  const filter = filterChoice ?? 'all';
   const quarter = currentQuarter();
   const shown = useMemo(() => sortByQuiet(
     filter === 'quarter' ? searched.filter((d) => d.expectedQuarter === quarter)
       : filter === 'quiet' ? searched.filter((d) => d.quiet) : searched,
   ), [filter, quarter, searched]);
+  // The quiet chip's n is the quiet deals in the search results, in every quarter: exactly the cards pressing it
+  // shows (it replaces the quarter chip but keeps the search).
   const quietCount = searched.filter((d) => d.quiet).length;
+  const narrowed = filter !== 'all' || searchText.trim() !== '';
   const counts = closedCounts(ticketsQuery.data);
 
   const createMutation = useMutation({
@@ -154,9 +159,15 @@ function AllDealsBoard({ user, showToast, onShowTable }) {
     }, { replace: true });
   }
 
-  const subtitle = allDeals
-    ? `${shown.length} งานที่เปิดอยู่ · มูลค่ารวม ${totalLabel(sumValue(shown), otherCurrencyTotals(shown))} · เรียงตามวันที่เงียบ`
-    : 'กำลังโหลดงาน…';
+  function showEverything() {
+    setFilterChoice('all');
+    setSearch('');
+  }
+
+  const subtitle = boardQuery.isError && !allDeals ? 'โหลดงานไม่สำเร็จ'
+    : allDeals
+      ? `${shown.length} งานที่เปิดอยู่ · มูลค่ารวม ${totalLabel(sumValue(shown), otherCurrencyTotals(shown))} · เรียงตามวันที่เงียบ`
+      : 'กำลังโหลดงาน…';
 
   return (
     <PageStack>
@@ -214,12 +225,21 @@ function AllDealsBoard({ user, showToast, onShowTable }) {
       </div>
 
       <section aria-label="บอร์ดงานทั้งหมด" className="min-w-0 rounded-md border border-border bg-surface p-3.5 mobile:p-2.5">
-        {boardQuery.isError ? (
-          <div className="flex flex-wrap items-center gap-3 px-1 py-2">
-            <p className="m-0 text-sm font-bold text-danger">โหลดงานไม่สำเร็จ</p>
-            <Button type="button" variant="secondary" size="sm" className={CHIP_CLASS} onClick={() => boardQuery.refetch()}>
-              ลองอีกครั้ง
-            </Button>
+        {boardQuery.isError && !allDeals ? (
+          // Fails soft (e.g. a backend image that predates /api/sales/team-board): say so, retry, or use the table,
+          // which reads the ticket list and does not depend on the board endpoint.
+          <div role="alert" className="flex flex-wrap items-center gap-3 px-1 py-2">
+            <p className="m-0 text-sm font-bold text-danger">โหลดบอร์ดไม่สำเร็จ ลองอีกครั้ง หรือดูแบบตาราง</p>
+            <span className="flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" size="sm" className={CHIP_CLASS} onClick={() => boardQuery.refetch()}>
+                <Icon name="refresh" size={14} />
+                ลองอีกครั้ง
+              </Button>
+              <Button type="button" size="sm" className={CHIP_CLASS} onClick={onShowTable}>
+                <Icon name="menu" size={14} />
+                เปิดแบบตาราง
+              </Button>
+            </span>
           </div>
         ) : !allDeals ? (
           <div className="grid gap-2" role="status" aria-busy="true" aria-label="กำลังโหลดงานทั้งหมด">
@@ -227,12 +247,20 @@ function AllDealsBoard({ user, showToast, onShowTable }) {
             <Skeleton height={36} />
           </div>
         ) : (
-          <>
-            {searchText.trim() && searched.length === 0 ? (
-              <p className="m-0 mb-3 px-0.5 text-sm text-text-muted">ไม่พบงานที่ตรงกับ “{searchText.trim()}”</p>
-            ) : null}
+          narrowed && shown.length === 0 ? (
+            <div className="grid justify-items-start gap-2 px-1 py-6">
+              <p className="m-0 text-sm font-bold text-text">
+                {searchText.trim() && searched.length === 0
+                  ? `ไม่พบงานที่ตรงกับ “${searchText.trim()}”`
+                  : 'ไม่มีงานในตัวกรองนี้'}
+              </p>
+              <Button type="button" variant="secondary" size="sm" className={CHIP_CLASS} onClick={showEverything}>
+                แสดงงานทั้งหมด
+              </Button>
+            </div>
+          ) : (
             <DealBoard deals={shown} showOwner={isTeam} />
-          </>
+          )
         )}
       </section>
 

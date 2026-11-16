@@ -150,15 +150,26 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
 
   // ── header ─────────────────────────────────────────────────────────────
 
-  it('subtitle counts and sums the cards shown, and says the order', async () => {
+  it('subtitle counts and sums exactly the cards shown, and says the order', async () => {
     renderPage(salesUser);
     await board();
 
-    // ไตรมาสนี้ is the default (3 of the 4 deals carry this quarter): 2,500,000 + 640,000 + 3,250,000.
-    expect(await screen.findByText('3 งานที่เปิดอยู่ · มูลค่ารวม ฿6,390,000 · เรียงตามวันที่เงียบ')).toBeTruthy();
-
-    fireEvent.click(screen.getByRole('button', { name: 'ทั้งหมด' }));
+    // ทั้งหมด is the default (ruling 2026-11-16): all four deals.
     expect(await screen.findByText('4 งานที่เปิดอยู่ · มูลค่ารวม ฿6,770,000 · เรียงตามวันที่เงียบ')).toBeTruthy();
+
+    // ไตรมาสนี้ leaves the three deals expected this quarter: 2,500,000 + 640,000 + 3,250,000.
+    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
+    expect(await screen.findByText('3 งานที่เปิดอยู่ · มูลค่ารวม ฿6,390,000 · เรียงตามวันที่เงียบ')).toBeTruthy();
+  });
+
+  it('subtitle adds another currency beside the ฿ total, never into it', async () => {
+    api.salesBoard.myWork.mockResolvedValue({ followUp: [], quietDays: 14, visitsThisWeek: [], cash: null, board: [
+      boardDeal({ ticketId: 41, value: 2000 }),
+      boardDeal({ ticketId: 42, value: 1000, currency: 'USD' }),
+    ] });
+    renderPage(salesUser);
+
+    expect(await screen.findByText('2 งานที่เปิดอยู่ · มูลค่ารวม ฿2,000 + USD 1,000 · เรียงตามวันที่เงียบ')).toBeTruthy();
   });
 
   it('งานใหม่ opens the existing create-deal modal', async () => {
@@ -202,20 +213,129 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     expect(screen.getByRole('searchbox', { name: 'ค้นหางาน' }).getAttribute('placeholder')).toBe('ค้นหาโครงการ ลูกค้า ผู้ออกแบบ');
   });
 
-  it('ไตรมาสนี้ is the default chip; ทั้งหมด adds other quarters; เฉพาะงานเงียบ n keeps only quiet deals', async () => {
+  it('ทั้งหมด is the default chip; ไตรมาสนี้ keeps this quarter; เฉพาะงานเงียบ n keeps only quiet deals', async () => {
     renderPage(salesUser);
     await board();
 
-    expect(screen.getByRole('button', { name: 'ไตรมาสนี้' }).getAttribute('aria-pressed')).toBe('true');
-    expect(screen.queryByTestId('board-card-14')).toBeNull();
+    expect(screen.getByRole('button', { name: 'ทั้งหมด' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByTestId('board-card-14')).toBeTruthy();
 
-    fireEvent.click(screen.getByRole('button', { name: 'ทั้งหมด' }));
-    expect(await screen.findByTestId('board-card-14')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
+    await waitFor(() => expect(screen.queryByTestId('board-card-14')).toBeNull());
+    expect(screen.getByTestId('board-card-11')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: 'เฉพาะงานเงียบ 1' }));
     await waitFor(() => expect(screen.queryByTestId('board-card-11')).toBeNull());
     expect(screen.getByTestId('board-card-12')).toBeTruthy();
   });
+
+  // The adversarial probe: every deal carries some quarter, none this one. The old default (ไตรมาสนี้ once half the
+  // deals had any quarter) showed an empty board here.
+  it('a team whose deals are all in other quarters still opens on every deal', async () => {
+    api.salesBoard.teamBoard.mockResolvedValue({ quietDays: 14, board: [
+      boardDeal({ ticketId: 51, expectedQuarter: '2001-Q2' }),
+      boardDeal({ ticketId: 52, expectedQuarter: '2001-Q3' }),
+      boardDeal({ ticketId: 53, expectedQuarter: null }),
+    ] });
+    renderPage(managerUser);
+
+    expect(await screen.findByTestId('board-card-51')).toBeTruthy();
+    expect(screen.getByTestId('board-card-52')).toBeTruthy();
+    expect(screen.getByTestId('board-card-53')).toBeTruthy();
+    expect(screen.getByText(/^3 งานที่เปิดอยู่/)).toBeTruthy();
+  });
+
+  it('a chip that leaves no card says so, and one action brings every deal back', async () => {
+    api.salesBoard.myWork.mockResolvedValue({ followUp: [], quietDays: 14, visitsThisWeek: [], cash: null, board: [
+      boardDeal({ ticketId: 61, title: 'งานไตรมาสอื่น', expectedQuarter: '2001-Q1' }),
+    ] });
+    renderPage(salesUser);
+    await screen.findByTestId('board-card-61');
+
+    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
+
+    expect(await screen.findByText('ไม่มีงานในตัวกรองนี้')).toBeTruthy();
+    expect(screen.getByText(/^0 งานที่เปิดอยู่ · มูลค่ารวม ฿0/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'แสดงงานทั้งหมด' }));
+
+    expect(await screen.findByTestId('board-card-61')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'ทั้งหมด' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('a search that matches nothing names the search, and the same action clears it', async () => {
+    renderPage(salesUser);
+    await board();
+
+    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหางาน' }), { target: { value: 'ไม่มีแน่นอน' } });
+
+    expect(await screen.findByText('ไม่พบงานที่ตรงกับ “ไม่มีแน่นอน”')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'แสดงงานทั้งหมด' }));
+
+    expect(await screen.findByTestId('board-card-14')).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: 'ค้นหางาน' }).value).toBe('');
+    expect(screen.getByRole('button', { name: 'ทั้งหมด' }).getAttribute('aria-pressed')).toBe('true');
+  });
+
+  // Decision: the chip n = quiet deals among the SEARCH results, in every quarter: exactly the cards pressing it
+  // shows. It ignores the quarter chip (pressing it replaces that chip) but follows the search (which it keeps).
+  it('the quiet chip counts quiet deals in the search results, whatever quarter is selected', async () => {
+    api.salesBoard.myWork.mockResolvedValue({ followUp: [], quietDays: 14, visitsThisWeek: [], cash: null, board: [
+      boardDeal({ ticketId: 71, title: 'Alpha หนึ่ง', quiet: true, daysQuiet: 20 }),
+      boardDeal({ ticketId: 72, title: 'Alpha สอง', quiet: true, daysQuiet: 30, expectedQuarter: '2001-Q1' }),
+      boardDeal({ ticketId: 73, title: 'Beta', quiet: true, daysQuiet: 40 }),
+    ] });
+    renderPage(salesUser);
+    await screen.findByTestId('board-card-71');
+
+    expect(screen.getByRole('button', { name: 'เฉพาะงานเงียบ 3' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'ไตรมาสนี้' }));
+    expect(screen.getByRole('button', { name: 'เฉพาะงานเงียบ 3' })).toBeTruthy();
+
+    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหางาน' }), { target: { value: 'alpha' } });
+    expect(await screen.findByRole('button', { name: 'เฉพาะงานเงียบ 2' })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: 'เฉพาะงานเงียบ 2' }));
+    await waitFor(() => expect(screen.getAllByTestId(/^board-card-\d+$/)).toHaveLength(2));
+  });
+
+  // ── failure and other roles ────────────────────────────────────────────
+
+  it('a failed team-board load (e.g. an older backend) says so in the subtitle and the board, and retries', async () => {
+    api.salesBoard.teamBoard.mockRejectedValue(new Error('404'));
+    renderPage(managerUser);
+
+    expect(await screen.findByText('โหลดงานไม่สำเร็จ')).toBeTruthy();
+    expect(screen.queryByText('กำลังโหลดงาน…')).toBeNull();
+    expect(screen.getByText('โหลดบอร์ดไม่สำเร็จ ลองอีกครั้ง หรือดูแบบตาราง')).toBeTruthy();
+
+    api.salesBoard.teamBoard.mockResolvedValue({ board: TEAM_BOARD, quietDays: 14 });
+    fireEvent.click(screen.getByRole('button', { name: 'ลองอีกครั้ง' }));
+    expect(await screen.findByTestId('board-card-21')).toBeTruthy();
+  });
+
+  it('a failed board load still reaches the table in one tap', async () => {
+    api.salesBoard.teamBoard.mockRejectedValue(new Error('404'));
+    renderPage(managerUser);
+    await screen.findByText('โหลดงานไม่สำเร็จ');
+
+    fireEvent.click(screen.getByRole('button', { name: 'เปิดแบบตาราง' }));
+
+    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
+  });
+
+  it.each([['account', { id: 4, employeeId: 4, role: 'account' }], ['import', { id: 3, employeeId: 3, role: 'import' }]])(
+    '%s gets the table only: no board, no board data, no view toggle',
+    async (_role, user) => {
+      renderPage(user, '/tickets?view=board');
+
+      expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
+      expect(screen.queryByTestId('deal-board')).toBeNull();
+      expect(screen.queryByRole('button', { name: /บอร์ด/ })).toBeNull();
+      expect(api.salesBoard.myWork).not.toHaveBeenCalled();
+      expect(api.salesBoard.teamBoard).not.toHaveBeenCalled();
+    },
+  );
 
   it('links the paused, lost and cancelled counts to the table filtered to each', async () => {
     renderPage(salesUser);
@@ -230,7 +350,7 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
 
     fireEvent.click(within(closed).getByRole('link', { name: /เสียงาน 2/ }));
 
-    expect(await screen.findByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
     expect(screen.queryByTestId('deal-board')).toBeNull();
   });
 
@@ -242,7 +362,7 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /ตาราง/ }));
 
-    expect(await screen.findByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
     expect(screen.queryByTestId('deal-board')).toBeNull();
     expect(screen.getByRole('heading', { level: 1, name: 'งานทั้งหมด' })).toBeTruthy();
     expect(store.getItem(viewStorageKey(salesUser))).toBe('table');
@@ -257,7 +377,7 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     store.setItem(viewStorageKey(salesUser), 'table');
     renderPage(salesUser);
 
-    expect(await screen.findByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
     expect(screen.queryByTestId('deal-board')).toBeNull();
   });
 
@@ -265,7 +385,7 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     store.setItem(viewStorageKey(managerUser), 'board');
     renderPage(managerUser, '/tickets?owner=8');
 
-    expect(await screen.findByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
     expect(screen.queryByTestId('deal-board')).toBeNull();
     expect(api.salesBoard.teamBoard).not.toHaveBeenCalled();
   });
@@ -277,7 +397,7 @@ describe('AllDealsPage (งานทั้งหมด)', () => {
     await board();
     fireEvent.click(screen.getByRole('button', { name: /ตาราง/ }));
 
-    expect(await screen.findByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'ขอบเขตและตัวกรองงานทั้งหมด' })).toBeTruthy();
   });
 
   // ── phone ──────────────────────────────────────────────────────────────
