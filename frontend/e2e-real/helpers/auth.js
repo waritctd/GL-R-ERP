@@ -1,4 +1,5 @@
 import { expect } from '@playwright/test';
+import { userFromAuthResponse } from '../../src/app/authUser.js';
 import { DEMO_PASSWORD, personaFor } from './accounts.js';
 
 // Browser auth helpers for the REAL backend (no VITE_USE_MOCKS). LoginPage.jsx renders the `login-role-*`
@@ -27,8 +28,8 @@ export async function logout(page) {
   await expect(page.getByTestId('login-submit')).toBeVisible();
 }
 
-/** The topbar account-menu trigger — the single identity/logout affordance since issue #396 removed the sidebar
- * footer's duplicate. Present on every role's landing and at every viewport, which is what makes it a reliable
+/** The topbar account-menu trigger — the single identity/logout affordance since issue #396 removed the old sidebar
+ * footer's duplicate (the sidebar itself is now the เมนู launcher). Present on every role's landing and at every viewport, which is what makes it a reliable
  * "we are authenticated" signal. */
 export function userMenu(page) {
   return page.getByRole('button', { name: 'เมนูผู้ใช้' });
@@ -50,8 +51,7 @@ export async function sessionUser(page) {
   if (!response.ok()) {
     throw new Error(`GET /api/auth/me returned ${response.status()} — no live session`);
   }
-  const { user } = await response.json();
-  return user;
+  return userFromAuthResponse(await response.json());
 }
 
 /** True once the app has rendered an authenticated shell rather than the login screen. */

@@ -4,6 +4,7 @@ import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import { DialogSummary } from '../../components/common/DocumentDialogParts.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
 import { downloadBlob } from '../../utils/download.js';
@@ -11,6 +12,39 @@ import { formatMoney } from '../../utils/format.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 const STATUS_LABEL = { DRAFT: 'ร่าง', ISSUED: 'ออกแล้ว', SUPERSEDED: 'ถูกแทนที่แล้ว' };
+
+/**
+ * Drawing m-remaining's summary line: "ส่วนที่เหลือ … = มูลค่า … − มัดจำ …". All three figures are ONE served row's own
+ * fields (the options preview's netAmount/itemsTotal/depositAmount, or a stored row's netAmount/itemsTotal/
+ * depositDeduction), consistent by construction: DepositNoticeService#computeRemainingInvoiceMoney sets
+ * netAmount = itemsTotal − depositAmount. Nothing is computed here. "มัดจำ", not the drawing's "มัดจำที่ได้รับ": the
+ * deduction is the deposit notice's billed deposit (pre-VAT), not a received amount. With no deduction on the row
+ * the equation is left out rather than completed with a zero the server did not send.
+ */
+function RemainingSummaryLine({ net, itemsTotal, deposit }) {
+  const hasDeduction = deposit !== null && deposit !== undefined;
+  return (
+    <DialogSummary testId="remaining-invoice-summary">
+      {`ส่วนที่เหลือ ${formatMoney(net)} (ก่อน VAT)`}
+      {hasDeduction ? ` = มูลค่า ${formatMoney(itemsTotal)} − มัดจำ ${formatMoney(deposit)}` : null}
+    </DialogSummary>
+  );
+}
+
+/**
+ * The drawn footer row: the write buttons, right-aligned. The drawing's source note ("ทุกบรรทัดเติมจากใบเสนอราคาและ
+ * การส่งของแล้ว") is left out (fix round 1, F6): the lines come from the matched deposit notice's snapshot, or the
+ * quotation when there is no notice, or legacy approved prices (DepositNoticeService#resolveFromQuotation /
+ * #resolveLegacy), never from deliveries — and nothing this dialog receives says which, so no one sentence is true
+ * for every deal.
+ */
+function DialogFooterRow({ children }) {
+  return (
+    <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3" data-testid="remaining-invoice-footer">
+      {children}
+    </div>
+  );
+}
 
 /**
  * ใบแจ้งหนี้ส่วนที่เหลือ — a STORED, versioned document: DRAFT ->
@@ -114,7 +148,7 @@ function WaitingForSalesState() {
   return (
     <p className="m-0 rounded-md border border-border-subtle bg-surface-muted p-3 text-sm text-text-secondary"
       data-testid="remaining-invoice-waiting-for-sales">
-      ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับดีลนี้ — รอฝ่ายขายออกเอกสาร
+      ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับงานนี้ — รอฝ่ายขายออกเอกสาร
     </p>
   );
 }
@@ -178,6 +212,7 @@ function IssuedSummary({ issued, canWrite, onRevised, onDownloaded }) {
 
   return (
     <div className="flex flex-col gap-4">
+      <RemainingSummaryLine net={issued.netAmount} itemsTotal={issued.itemsTotal} deposit={issued.depositDeduction} />
       <div className="flex flex-col gap-1 rounded-md border border-border-subtle bg-surface-muted p-3 text-sm" data-testid="remaining-invoice-issued-summary">
         <div className="flex justify-between"><span className="text-text-muted">เลขที่เอกสาร</span><span className="font-bold">{issued.docNumber}</span></div>
         <div className="flex justify-between"><span className="text-text-muted">วันที่</span><span>{issued.docDate}</span></div>
@@ -326,6 +361,9 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
 
   return (
     <div className="flex flex-col gap-4" data-testid="remaining-invoice-draft-editor">
+      {/* The draft's own stored figures, as the preview box below already shows them; the issue confirm still
+          re-reads the server's fresh preview before anything is issued. */}
+      <RemainingSummaryLine net={draft.netAmount} itemsTotal={draft.itemsTotal} deposit={draft.depositDeduction} />
       <div className="flex flex-col gap-1.5">
         <label className="text-sm font-bold text-text-secondary" htmlFor="remaining-invoice-reference">
           อ้างอิงใบเสนอราคา / ใบสั่งซื้อ (H9)
@@ -378,15 +416,8 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
 
       {error ? <p className="m-0 text-sm font-bold text-danger" role="alert">{error}</p> : null}
 
+      {/* Not in the drawing, kept: the draft's preview download and ลบร่าง, each with its old gate. */}
       <div className="flex flex-wrap gap-2">
-        <Button type="button" variant="secondary" disabled={busy} onClick={handleSave}
-          data-testid="remaining-invoice-save-draft">
-          {saving ? 'กำลังบันทึก…' : 'บันทึก'}
-        </Button>
-        <Button type="button" variant="primary" disabled={busy} onClick={() => { depositReferenceOptionsQuery.refetch(); setConfirmingIssue(true); }}
-          data-testid="remaining-invoice-issue">
-          {issuing ? 'กำลังออกเอกสาร…' : 'ออกใบแจ้งหนี้'}
-        </Button>
         <Button type="button" variant="secondary" disabled={downloading} onClick={handleDownload}
           data-testid="remaining-invoice-download-draft">
           {downloading ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด (ตัวอย่าง)'}
@@ -396,6 +427,17 @@ function DraftEditor({ draft, issuedOfSameQuotation, onSaved, onIssued, onDelete
           {deleting ? 'กำลังลบ…' : 'ลบร่าง'}
         </Button>
       </div>
+
+      <DialogFooterRow>
+        <Button type="button" variant="secondary" disabled={busy} onClick={handleSave}
+          data-testid="remaining-invoice-save-draft">
+          {saving ? 'กำลังบันทึก…' : 'บันทึกร่าง'}
+        </Button>
+        <Button type="button" variant="primary" disabled={busy} onClick={() => { depositReferenceOptionsQuery.refetch(); setConfirmingIssue(true); }}
+          data-testid="remaining-invoice-issue">
+          {issuing ? 'กำลังออกเอกสาร…' : 'ออกใบแจ้งหนี้'}
+        </Button>
+      </DialogFooterRow>
 
       <ConfirmDialog
         open={confirmingIssue}
@@ -520,6 +562,11 @@ function CreateForm({ ticketId, onCreated }) {
             </label>
           ) : null}
 
+          {/* A blocked preview is a document the server will not issue, so it gets no headline figures. */}
+          {!blockingReason ? (
+            <RemainingSummaryLine net={options.netAmount} itemsTotal={options.itemsTotal} deposit={options.depositAmount} />
+          ) : null}
+
           {blockingReason ? (
             <p className="m-0 rounded-md border border-danger bg-danger-bg p-3 text-sm font-bold text-danger" role="alert"
               data-testid="remaining-invoice-blocking-reason">
@@ -590,10 +637,13 @@ function CreateForm({ ticketId, onCreated }) {
 
           {createError ? <p className="m-0 text-sm font-bold text-danger" role="alert">{createError}</p> : null}
 
-          <Button type="button" variant="primary" disabled={!canCreate} onClick={handleCreateDraft}
-            data-testid="remaining-invoice-create-draft">
-            {creating ? 'กำลังสร้างร่าง…' : 'สร้างร่าง'}
-          </Button>
+          {/* "สร้างร่าง" became the drawn "บันทึกร่าง": this button creates the stored DRAFT, nothing more. */}
+          <DialogFooterRow>
+            <Button type="button" variant="primary" disabled={!canCreate} onClick={handleCreateDraft}
+              data-testid="remaining-invoice-create-draft">
+              {creating ? 'กำลังบันทึกร่าง…' : 'บันทึกร่าง'}
+            </Button>
+          </DialogFooterRow>
         </>
       )}
     </div>

@@ -30,9 +30,11 @@ const ROUTES = [
   '/settings/leave-policy', // §5 announcement PDF upload
   '/settings/attendance-calendar',
   '/attendance',
+  '/people-insights', // วิเคราะห์การลาและเวลาเข้างาน — ceo/hr (and team heads); with no teams configured it renders the whole-company view
   '/tickets',
   '/tickets/1', // DEMO-TKT-01 (V21) — a real deal
   '/tickets/1/deposit',
+  '/visits', // นัดเข้าพบ — sales: own week (GET /api/sales/visits); sales_manager / ceo: team grid; every other role refuses
   '/pricing-requests',
   '/pricing-requests/1',
   // Direct deal quotation. '/quotations/1' is deliberately a
@@ -53,6 +55,7 @@ const ROUTES = [
   '/catalog',
   '/whats-new', // มีอะไรใหม่ — release notice, every role (static content; no API call to render)
   '/whats-new/2026-11-16', // the same page pinned to one release: where the bell row and the email link land
+  '/whats-new/2026-11-17', // the second release: /whats-new now shows it, and the 16 Nov link above must still load
 ];
 
 // Declared in App.jsx but deliberately outside this sweep, each with the reason.

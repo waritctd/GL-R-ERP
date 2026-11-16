@@ -59,6 +59,18 @@ export function weekRangeLabel(mondayIso, todayIso = null) {
   return otherYear ? `${range} ${Number(sunday.slice(0, 4)) + 543}` : range;
 }
 
+/**
+ * ค้างจากสัปดาห์ก่อน looks back 31 days before this Monday — the ranged endpoint's cap (VisitService.MAX_RANGE_DAYS).
+ * An older unticked visit is still reachable with ‹ สัปดาห์ก่อน. `{ from, to }` for GET /api/sales/visits.
+ */
+export const CARRY_OVER_DAYS = 31;
+export function carryOverRange(thisMondayIso) {
+  return { from: addDaysIso(thisMondayIso, -CARRY_OVER_DAYS), to: addDaysIso(thisMondayIso, -1) };
+}
+
+/** How far the phone's นัดถัดไป looks ahead: today to today + 7 (8 days inclusive, inside the 31-day cap). */
+export const NEXT_VISIT_DAYS = 7;
+
 /** A PLANNED visit whose day has passed without a tick (review M4). */
 export function isOverdue(visit, todayIso) {
   return visit.status === 'PLANNED' && visit.plannedDate < todayIso;
@@ -69,4 +81,29 @@ export function displayStatus(visit, todayIso) {
   return isOverdue(visit, todayIso) ? 'OVERDUE' : visit.status;
 }
 
-export const VISIT_STATUS_LABEL = { DONE: 'ไปแล้ว', PLANNED: 'นัดไว้', CANCELLED: 'ยกเลิก', OVERDUE: 'เลยกำหนด' };
+const LONG_DAY = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
+
+/** "พฤหัสบดี 12 พ.ย." — the phone's วันนี้ของฉัน date line. */
+export function dayLineLabel(iso) {
+  return `${LONG_DAY[isoWeekdayIndex(iso)]} ${Number(iso.slice(8, 10))} ${SHORT_MONTH[Number(iso.slice(5, 7)) - 1]}`;
+}
+
+/** VisitRepository's order: date, time (unset last), id. */
+const byPlan = (a, b) => a.plannedDate.localeCompare(b.plannedDate)
+  || (a.plannedTime == null) - (b.plannedTime == null)
+  || String(a.plannedTime ?? '').localeCompare(String(b.plannedTime ?? ''))
+  || a.id - b.id;
+
+/**
+ * The phone's นัดถัดไป: the first visit still PLANNED for today (a timed one before an untimed one — a visit whose
+ * time has passed but is not ticked yet is still the one to log); when today has none left, the first PLANNED visit
+ * later in the given visits, up to `lastIso` inclusive when given. Overdue ones are never "next". Same date and time:
+ * the lower id first (VisitRepository's tie-break). `{ visit, isToday }`, or null.
+ */
+export function nextVisit(visits, todayIso, lastIso = null) {
+  const ahead = (visits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate >= todayIso
+    && (!lastIso || v.plannedDate <= lastIso)).sort(byPlan);
+  return ahead.length ? { visit: ahead[0], isToday: ahead[0].plannedDate === todayIso } : null;
+}
+
+export const VISIT_STATUS_LABEL ={ DONE: 'ไปแล้ว', PLANNED: 'นัดไว้', CANCELLED: 'ยกเลิก', OVERDUE: 'เลยกำหนด' };

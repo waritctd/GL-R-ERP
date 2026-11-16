@@ -1259,14 +1259,15 @@ describe('TicketDetailPage', () => {
     // only fires once every line is explicitly zeroed out — this is the single-item case.
     const qtyInput = within(dialog).getByLabelText('จำนวนส่งมอบ SCG A1');
     fireEvent.change(qtyInput, { target: { value: '0' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    // Drawing m-delivery: the submit reads บันทึกการส่ง (was บันทึก).
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกการส่ง' }));
 
     expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
     expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
 
     // Fixing the line (qty > 0) lets the save through.
     fireEvent.change(qtyInput, { target: { value: '3' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกการส่ง' }));
     await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledWith(
       701, { source: 'WAREHOUSE', note: null, lines: [{ itemId: 70101, qty: 3 }] },
     ));
@@ -4862,7 +4863,8 @@ describe('TicketDetailPage', () => {
       const dialog = await screen.findByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' });
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
       // The confirm re-checks the factories first; it enables once that answers.
-      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      // Drawing m-ir: the confirm reads ออกใบขอซื้อ (was ออกใบขอซื้อ (IR)).
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' });
       await waitFor(() => expect(confirm.disabled).toBe(false));
       fireEvent.click(confirm);
 

@@ -136,9 +136,21 @@ async function settledIrConfirm() {
   await waitFor(() => expect(dialog.textContent).not.toContain(IR_COVERAGE_LOADING));
   return dialog;
 }
+// Drawing m-ir: the confirm button reads ออกใบขอซื้อ (was ออกใบขอซื้อ (IR)).
+const IR_CONFIRM_LABEL = 'ออกใบขอซื้อ';
+// Fix round 1, F1: the create confirm's irreversibility warning.
+const IR_IRREVERSIBLE = 'ออกเลข IR แล้วลบไม่ได้ · แก้ได้ด้วยการออกฉบับแก้ไขเท่านั้น';
 async function createIrAndConfirm(button) {
   const dialog = await openIrConfirm(button);
-  fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' }));
+  fireEvent.click(within(dialog).getByRole('button', { name: IR_CONFIRM_LABEL }));
+}
+// Drawing m-ir: the factories are a summary line ("N โรงงาน …") plus one table row each (was one sentence
+// "จะออกใบขอซื้อ (IR) N ใบ: A, B"). Same facts: the count and the names, in order.
+function irConfirmFactories(dialog) {
+  return {
+    summary: within(dialog).getByTestId('ir-confirm-summary').textContent,
+    names: within(within(dialog).getByRole('table', { name: 'โรงงานที่จะออกใบขอซื้อ' })).getAllByRole('row').slice(1).map((tr) => tr.textContent),
+  };
 }
 
 // ออกเลข on a draft IR mints its document number, so it asks first.
@@ -160,10 +172,12 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       renderPanel(OWNER, []);
       const dialog = await openIrConfirm();
       expect(dialog.textContent).toContain('หนึ่งใบต่อโรงงาน');
-      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+      // Fix round 1, F1: the irreversibility warning is now "ออกเลข IR แล้วลบไม่ได้ · แก้ได้ด้วยการออกฉบับแก้ไขเท่านั้น"
+      // (was "… ย้อนกลับไม่ได้"; an issued IR can be revised, so "cannot be undone" overstated it).
+      expect(dialog.textContent).toContain(IR_IRREVERSIBLE);
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
 
-      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      const confirm = within(dialog).getByRole('button', { name: IR_CONFIRM_LABEL });
       fireEvent.click(confirm);
       fireEvent.click(confirm);
 
@@ -176,8 +190,8 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] });
       await waitFor(() => expect(api.storedImportRequests.coverage).toHaveBeenCalled());
       const dialog = await openIrConfirm();
-      expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto Industry, Rex Ceramics');
-      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+      expect(irConfirmFactories(dialog)).toEqual({ summary: '2 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที', names: ['Cotto Industry', 'Rex Ceramics'] });
+      expect(dialog.textContent).toContain(IR_IRREVERSIBLE);
     });
 
     it('adds the factory the rep picked for a factory-less line (not in the server list), once', async () => {
@@ -196,7 +210,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(button.disabled).toBe(false));
 
       const dialog = await openIrConfirm(button);
-      expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto, Rex Ceramics');
+      expect(irConfirmFactories(dialog)).toEqual({ summary: '2 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที', names: ['Cotto', 'Rex Ceramics'] });
     });
 
     // The picked factory may already be one the server named (same factory on a catalogued line): once.
@@ -216,7 +230,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(button.disabled).toBe(false));
 
       const dialog = await openIrConfirm(button);
-      expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 1 ใบ: Rex Ceramics');
+      expect(irConfirmFactories(dialog)).toEqual({ summary: '1 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที', names: ['Rex Ceramics'] });
     });
 
     // The picked factory already has a live IR (the server only lists UNcovered ones): nothing new for it.
@@ -237,7 +251,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       await waitFor(() => expect(button.disabled).toBe(false));
 
       const dialog = await openIrConfirm(button);
-      expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 1 ใบ: Cotto');
+      expect(irConfirmFactories(dialog)).toEqual({ summary: '1 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที', names: ['Cotto'] });
       expect(dialog.textContent).not.toContain('Rex Ceramics');
     });
 
@@ -276,7 +290,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
 
       const dialog = await openIrConfirm(button);
       expect(dialog.textContent).toContain('หนึ่งใบต่อโรงงาน');
-      expect(dialog.textContent).toContain('ย้อนกลับไม่ได้');
+      expect(dialog.textContent).toContain(IR_IRREVERSIBLE);
       expect(dialog.textContent).toContain('Rex Ceramics');
       expect(dialog.textContent).not.toContain('จะออกใบขอซื้อ (IR)');
     });
@@ -290,13 +304,16 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       fireEvent.click(await screen.findByTestId('deal-fulfilment-create-ir-drafts'));
 
       const dialog = await screen.findByRole('dialog', { name: IR_CONFIRM_TITLE });
-      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      const confirm = within(dialog).getByRole('button', { name: IR_CONFIRM_LABEL });
       expect(dialog.textContent).toContain(IR_COVERAGE_LOADING);
-      expect(dialog.textContent).not.toContain('จะออกใบขอซื้อ (IR)');
+      expect(within(dialog).queryByTestId('ir-confirm-summary')).toBeNull();
+      expect(within(dialog).queryByRole('table')).toBeNull();
       expect(confirm.disabled).toBe(true);
 
       await act(async () => { resolveFresh({ hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] }); });
-      await waitFor(() => expect(dialog.textContent).toContain('จะออกใบขอซื้อ (IR) 2 ใบ: Cotto Industry, Rex Ceramics'));
+      await waitFor(() => expect(irConfirmFactories(dialog)).toEqual({
+        summary: '2 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที', names: ['Cotto Industry', 'Rex Ceramics'],
+      }));
       expect(confirm.disabled).toBe(false);
     });
 
@@ -309,7 +326,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
 
       expect(dialog.textContent).toContain('ไม่มีใบขอซื้อที่ต้องออก');
       expect(dialog.textContent).not.toContain('หนึ่งใบต่อโรงงาน');
-      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      const confirm = within(dialog).getByRole('button', { name: IR_CONFIRM_LABEL });
       expect(confirm.disabled).toBe(true);
       fireEvent.click(confirm);
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
@@ -334,7 +351,7 @@ describe('DealFulfilmentPanel — ใบขอซื้อรายโรงง�
       const dialog = await settledIrConfirm();
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
 
-      fireEvent.click(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' }));
+      fireEvent.click(within(dialog).getByRole('button', { name: IR_CONFIRM_LABEL }));
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
     });
   });
@@ -1355,6 +1372,269 @@ describe('DealFulfilmentPanel — ส่งมอบสินค้า shows wor
     await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledWith(
       1, { source: 'STOCK', note: null, lines: [{ itemId: 6, qty: 500 }, { itemId: 7, qty: 100 }] },
     ));
+  });
+});
+
+// Drawing m-ir (2026-11-16): the confirm body is rebuilt; createDrafts is sent exactly as before.
+describe('DealFulfilmentPanel — ยืนยันการออกใบขอซื้อ (IR) (drawing m-ir)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.storedImportRequests.createDrafts.mockReset();
+    api.storedImportRequests.createDrafts.mockResolvedValue({ importRequests: [] });
+  });
+  const confirmButton = (dialog) => within(dialog).getByRole('button', { name: /^ออกใบขอซื้อ/ });
+
+  // Payload identity — captured against the pre-rebuild dialog and kept green through it.
+  it('an ordinary deal: confirm sends createDrafts(ticketId, undefined) once', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] });
+    const dialog = await openIrConfirm();
+    fireEvent.click(confirmButton(dialog));
+    await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+    expect(api.storedImportRequests.createDrafts.mock.calls).toEqual([[1, undefined]]);
+  });
+
+  it('a factory-less line: confirm sends the picked factory as itemFactories, once', async () => {
+    const directSummary = { ...summary, liveDirectQuotation: { id: 5, docStatus: 'APPROVED' } };
+    const lines = [
+      { id: 1, brand: 'SCG', model: 'Catalogue', factory: 'Cotto', catalogPriceId: 90, qty: 10 },
+      { id: 3, brand: 'ค่าติดตั้ง', model: 'Free text', factory: null, catalogPriceId: null, qty: 10, qtyFromStock: 0 },
+    ];
+    renderPanel(OWNER, [], { summary: directSummary, items: lines, hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto'] });
+    const button = await screen.findByTestId('deal-fulfilment-create-ir-drafts');
+    const select = await screen.findByTestId('ir-line-factory-3');
+    await waitFor(() => expect(within(select).getByRole('option', { name: 'Rex Ceramics' })).not.toBeNull());
+    fireEvent.change(select, { target: { value: '7' } });
+    await waitFor(() => expect(button.disabled).toBe(false));
+    fireEvent.click(confirmButton(await openIrConfirm(button)));
+    await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
+    expect(api.storedImportRequests.createDrafts.mock.calls).toEqual([[1, { itemFactories: [{ ticketItemId: 3, factoryId: 7 }] }]]);
+  });
+
+  it('shows the drawn "N โรงงาน" summary and one table row per factory the server named', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry', 'Rex Ceramics'] });
+    const dialog = await openIrConfirm();
+    expect(within(dialog).getByTestId('ir-confirm-summary').textContent).toBe('2 โรงงาน · ส่งถึงฝ่ายนำเข้าทันที');
+    const table = within(dialog).getByRole('table', { name: 'โรงงานที่จะออกใบขอซื้อ' });
+    expect(within(table).getAllByRole('columnheader').map((th) => th.textContent)).toEqual(['โรงงาน']);
+    expect(within(table).getAllByRole('row').slice(1).map((tr) => tr.textContent)).toEqual(['Cotto Industry', 'Rex Ceramics']);
+  });
+
+  it('keeps the irreversibility warning, labels its button ออกใบขอซื้อ, and never says ดีล', async () => {
+    renderPanel(OWNER, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'] });
+    const dialog = await openIrConfirm();
+    // Fix round 1, F1: an issued IR can be corrected by a revision (ImportRequestService#revise) — it is only
+    // never deletable — so the warning must not say it cannot be edited.
+    expect(within(dialog).getByTestId('ir-confirm-warning').textContent)
+      .toBe('ออกเลข IR แล้วลบไม่ได้ · แก้ได้ด้วยการออกฉบับแก้ไขเท่านั้น');
+    expect(dialog.textContent).not.toContain('แก้ไขหรือลบไม่ได้');
+    expect(within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' })).toBeTruthy();
+    expect(dialog.textContent).not.toContain('ดีล');
+  });
+
+  // Fix round 1, F4: the warning is first in the scrolling body (both the named and the generic copy), so a short
+  // phone shows it together with the footer's ออกใบขอซื้อ.
+  it.each([
+    ['the server names the factories', { hasUncoveredFactories: true, uncoveredFactoryNames: ['A', 'B', 'C', 'D', 'E'] }],
+    ['no names (older backend)', {}],
+  ])('puts the warning first in the scrolling body: %s', async (_label, coverage) => {
+    renderPanel(OWNER, [], coverage);
+    const dialog = await openIrConfirm();
+    const body = dialog.querySelector('.modal-body');
+    expect(body.firstElementChild.firstElementChild).toBe(within(dialog).getByTestId('ir-confirm-warning'));
+  });
+
+  it('wrong way round: import and sales_manager have no opener at all', async () => {
+    for (const viewer of [IMPORT, SALES_MANAGER]) {
+      const view = renderPanel(viewer, [], { hasUncoveredFactories: true, uncoveredFactoryNames: ['Cotto Industry'] });
+      await screen.findByTestId('deal-fulfilment-stored-ir');
+      expect(screen.queryByTestId('deal-fulfilment-create-ir-drafts')).toBeNull();
+      view.unmount();
+    }
+  });
+});
+
+// Drawing m-delivery (2026-11-16): the body is rebuilt; recordDelivery is sent exactly as before.
+describe('DealFulfilmentPanel — บันทึกการส่งสินค้า (drawing m-delivery)', () => {
+  // ordered / delivered / remaining all differ per line, and from line to line.
+  const lines = [
+    { id: 21, brand: 'Equipe', model: 'Raku 20x20', qty: 120, qtyDelivered: 56, qtyFromStock: 0 },
+    { id: 22, brand: 'Mutina', model: 'Bullnose', qty: 40, qtyDelivered: 40, qtyFromStock: 0 },
+    { id: 23, brand: 'Equipe', model: 'Splendours', qty: 75.5, qtyDelivered: 0, qtyFromStock: 0 },
+  ];
+  const ACTIONS = [{ action: 'RECORD_PARTIAL_DELIVERY' }];
+  const open = async (over = {}) => {
+    renderPanel(OWNER, [], { items: lines, availableActions: ACTIONS, ...over });
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-record-delivery'));
+    return screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
+  };
+  const submit = () => fireEvent.click(screen.getByTestId('deal-fulfilment-record-delivery-submit'));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.recordDelivery.mockReset();
+    api.tickets.recordDelivery.mockResolvedValue({});
+  });
+
+  // Payload identity — captured against the pre-rebuild dialog and kept green through it.
+  it('untouched: sends every line with something left, at its remaining qty, from คลังสินค้า, no note', async () => {
+    await open();
+    submit();
+    await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+    expect(api.tickets.recordDelivery.mock.calls).toEqual([[1, {
+      source: 'WAREHOUSE', note: null, lines: [{ itemId: 21, qty: 64 }, { itemId: 23, qty: 75.5 }],
+    }]]);
+  });
+
+  it('edited: the typed qty, the chosen source and the trimmed note go out unchanged', async () => {
+    const dialog = within(await open());
+    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Raku 20x20'), { target: { value: '10' } });
+    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Splendours'), { target: { value: '0' } });
+    fireEvent.change(dialog.getByLabelText('แหล่งสินค้า'), { target: { value: 'STOCK' } });
+    fireEvent.change(dialog.getByLabelText('หมายเหตุ'), { target: { value: '  ส่งรอบแรก  ' } });
+    submit();
+    await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+    expect(api.tickets.recordDelivery.mock.calls).toEqual([[1, {
+      source: 'STOCK', note: 'ส่งรอบแรก', lines: [{ itemId: 21, qty: 10 }],
+    }]]);
+  });
+
+  it('a FROM_STOCK deal starts on สต็อก', async () => {
+    await open({ summary: { ...summary, fulfillmentStatus: 'FROM_STOCK' } });
+    submit();
+    await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1));
+    expect(api.tickets.recordDelivery.mock.calls[0][1].source).toBe('STOCK');
+  });
+
+  it('every line zeroed: a toast, and nothing is sent', async () => {
+    const showToast = vi.fn();
+    const dialog = within(await open({ showToast }));
+    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Raku 20x20'), { target: { value: '0' } });
+    fireEvent.change(dialog.getByLabelText('จำนวนส่งมอบ Equipe Splendours'), { target: { value: '' } });
+    submit();
+    expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
+    expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
+  });
+
+  it('ยกเลิก and ✕ close it and send nothing', async () => {
+    fireEvent.click(within(await open()).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(await screen.findByTestId('deal-fulfilment-record-delivery'));
+    fireEvent.click(within(await screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' })).getByRole('button', { name: 'ปิด' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
+  });
+
+  it('a second click while saving sends nothing more (submit disabled while pending)', async () => {
+    let finish;
+    api.tickets.recordDelivery.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
+    await open();
+    submit();
+    await waitFor(() => expect(screen.getByTestId('deal-fulfilment-record-delivery-submit').disabled).toBe(true));
+    submit();
+    expect(api.tickets.recordDelivery).toHaveBeenCalledTimes(1);
+    await act(async () => { finish({}); });
+  });
+
+  it('wrong way round: without RECORD_PARTIAL_DELIVERY nobody gets the opener — not the owner, not the CEO', async () => {
+    for (const viewer of [OWNER, CEO]) {
+      const view = renderPanel(viewer, [], { items: lines, availableActions: [] });
+      await screen.findByText('ส่งมอบสินค้า');
+      expect(screen.queryByTestId('deal-fulfilment-record-delivery')).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it('shows the drawn summary and a table of ordered / delivered / remaining / this delivery per line', async () => {
+    const dialog = within(await open());
+    expect(dialog.getByTestId('delivery-summary').textContent).toBe('เหลือส่ง 2 รายการ');
+    const table = dialog.getByRole('table', { name: 'รายการที่ส่งครั้งนี้' });
+    expect(within(table).getAllByRole('columnheader').map((th) => th.textContent))
+      .toEqual(['รายการ', 'สั่ง', 'ส่งแล้ว', 'เหลือส่ง', 'ส่งครั้งนี้']);
+    // Fix round 1, F5: the name cell also carries a phone-only figures line, so the name is read from its own span
+    // and the สั่ง / ส่งแล้ว / เหลือส่ง figures from cells 1-3.
+    const row = (name) => within(table).getByText(name).closest('tr');
+    const figures = (name) => within(row(name)).getAllByRole('cell').slice(1, 4).map((td) => td.textContent);
+    expect(figures('Equipe Raku 20x20')).toEqual(['120', '56', '64']);
+    expect(figures('Mutina Bullnose')).toEqual(['40', '40', '0']);
+    expect(figures('Equipe Splendours')).toEqual(['75.5', '0', '75.5']);
+    expect(dialog.getByLabelText('จำนวนส่งมอบ Equipe Raku 20x20').value).toBe('64');
+    expect(dialog.getByLabelText('จำนวนส่งมอบ Mutina Bullnose').value).toBe('0');
+  });
+
+  // Fix round 1, F5: on a phone (≤520px, the mobile-xs variant) the three figure columns fold into a line under the
+  // name, leaving two columns — the name and the ส่งครั้งนี้ input — so the input is in view at 320px with no
+  // sideways scrolling. jsdom has no layout: this pins the structure; the 320px width was measured in the browser.
+  it('on a phone the figures fold under the name, leaving the name and the input as the only columns', async () => {
+    const dialog = within(await open());
+    const table = dialog.getByRole('table', { name: 'รายการที่ส่งครั้งนี้' });
+    expect(dialog.getByTestId('delivery-line-figures-21').textContent).toBe('สั่ง 120 · ส่งแล้ว 56 · เหลือส่ง 64');
+    expect(dialog.getByTestId('delivery-line-figures-21').className).toMatch(/(^|\s)hidden(\s|$)/);
+    expect(dialog.getByTestId('delivery-line-figures-21').className).toContain('mobile-xs:block');
+    const headers = within(table).getAllByRole('columnheader');
+    expect(headers.filter((th) => th.className.includes('mobile-xs:hidden')).map((th) => th.textContent))
+      .toEqual(['สั่ง', 'ส่งแล้ว', 'เหลือส่ง']);
+    const cells = within(table.querySelector('tbody tr')).getAllByRole('cell');
+    expect(cells.map((td) => td.className.includes('mobile-xs:hidden'))).toEqual([false, true, true, true, false]);
+    expect(table.className).not.toMatch(/min-w-/);
+  });
+
+  it('keeps แหล่งสินค้า and หมายเหตุ, says what the server does when everything is delivered, and has no วันที่ส่ง', async () => {
+    const dialogEl = await open();
+    const dialog = within(dialogEl);
+    expect(dialog.getByLabelText('แหล่งสินค้า')).toBeTruthy();
+    expect(dialog.getByLabelText('หมายเหตุ')).toBeTruthy();
+    expect(dialogEl.textContent).not.toContain('วันที่ส่ง');
+    expect(dialogEl.textContent).not.toContain('ดีล');
+    expect(dialog.getByTestId('deal-fulfilment-record-delivery-submit').textContent).toBe('บันทึกการส่ง');
+  });
+
+  // Fix round 1, F3/F6: the note is CONDITIONAL — whether this save completes the deal is the server's call
+  // (TicketService#recordDeliveryInternal) — and it names the stage once.
+  it('the delivery note is conditional, names S9 once, and says account is notified', async () => {
+    const dialog = within(await open());
+    const info = dialog.getByTestId('delivery-info').textContent;
+    expect(info).toBe('ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ ระบบจะบันทึกว่าส่งครบ เลื่อนงานไป S9 (ถ้ายังไม่ถึง) และแจ้งฝ่ายบัญชี');
+    expect(info.match(/S\d+/g)).toEqual(['S9']);
+  });
+
+  // Re-review ruling: a recorded delivery cannot be voided (TicketController has no void route) and can advance the
+  // stage, so the dialog warns first in its scrolling body — without replacing or moving the conditional S9 note.
+  it('warns first in the body that a recorded delivery cannot be edited or deleted; the S9 note stays last', async () => {
+    const dialogEl = await open();
+    const body = dialogEl.querySelector('.modal-body');
+    const warning = within(dialogEl).getByTestId('delivery-warning');
+    expect(warning.textContent).toBe('บันทึกแล้วแก้ไขหรือลบไม่ได้ ตรวจจำนวนก่อนกดบันทึก');
+    expect(body.firstElementChild.firstElementChild).toBe(warning);
+    const info = within(dialogEl).getByTestId('delivery-info');
+    expect(body.firstElementChild.lastElementChild).toBe(info);
+    expect(info.textContent).toBe('ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ ระบบจะบันทึกว่าส่งครบ เลื่อนงานไป S9 (ถ้ายังไม่ถึง) และแจ้งฝ่ายบัญชี');
+    expect(warning.compareDocumentPosition(within(dialogEl).getByTestId('delivery-summary')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  // Fix round 1, F3: the input's max is the line's REMAINING qty, never its ordered qty.
+  it('each input is capped at the remaining qty, not the ordered qty', async () => {
+    const dialog = within(await open());
+    expect(dialog.getByLabelText('จำนวนส่งมอบ Equipe Raku 20x20').getAttribute('max')).toBe('64');
+    expect(dialog.getByLabelText('จำนวนส่งมอบ Mutina Bullnose').getAttribute('max')).toBe('0');
+    expect(dialog.getByLabelText('จำนวนส่งมอบ Equipe Splendours').getAttribute('max')).toBe('75.5');
+  });
+
+  // Fix round 1, F3: an over-delivered line (only legacy/corrupt rows — the server refuses it) never shows a
+  // negative เหลือส่ง and does not count as left to deliver.
+  it('an over-delivered line shows เหลือส่ง 0, never a negative, and is not counted', async () => {
+    const dialog = within(await open({ items: [...lines, { id: 24, brand: 'Over', model: 'Delivered', qty: 10, qtyDelivered: 12 }] }));
+    const table = dialog.getByRole('table', { name: 'รายการที่ส่งครั้งนี้' });
+    const row = within(table).getByText('Over Delivered').closest('tr');
+    expect(within(row).getAllByRole('cell').slice(1, 4).map((td) => td.textContent)).toEqual(['10', '12', '0']);
+    expect(dialog.getByTestId('delivery-line-figures-24').textContent).toBe('สั่ง 10 · ส่งแล้ว 12 · เหลือส่ง 0');
+    expect(dialog.getByTestId('delivery-summary').textContent).toBe('เหลือส่ง 2 รายการ');
+    expect(table.textContent).not.toMatch(/-\d/);
+  });
+
+  // Fix round 1, F3: the drawn subtitle (the project) is present.
+  it('shows the project as the dialog subtitle', async () => {
+    const dialog = within(await open({ summary: { ...summary, projectName: 'บ้านพักตากอากาศ ชะอำ' } }));
+    expect(dialog.getByText('บ้านพักตากอากาศ ชะอำ').closest('header')).not.toBeNull();
   });
 });
 

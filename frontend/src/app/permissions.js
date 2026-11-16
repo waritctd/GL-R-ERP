@@ -53,6 +53,8 @@ const PATH_GUARDS = [
   // AuthResponse). This only decides whether the route renders; the server re-reads hr.employee.is_admin on
   // every call, so forging `admin` on the client gains nothing.
   { test: (p) => isActivityLogPath(p), can: (u) => Boolean(u.admin) },
+  // Server hint (ceo/hr/team head); PeopleInsightsService re-decides the scope on every call.
+  { test: (p) => p === '/people-insights', can: (u) => Boolean(u.canViewPeopleInsights) },
   { test: (p) => p === '/hr', can: (u) => hasPermission(u.role, 'canViewEmployees') },
   // The bare `/tickets` list is the deal-PIPELINE BROWSER (canViewDealPipeline: sales/sales_manager/ceo);
   // `/tickets/:id` detail is canViewWholeDeal (keeps account; import has its own /import/deals/:id page).
@@ -67,6 +69,10 @@ const PATH_GUARDS = [
   // Whole-deal page (and its sub-paths, e.g. /tickets/:id/deposit). Import is REFUSED here — the backend 403s it
   // the whole-deal read and deposit notices — and gets its own per-deal page below.
   { test: (p) => p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewWholeDeal') },
+  // นัดเข้าพบ: exactly the roles the visit endpoints serve (VisitService.VISIT_ROLES via canViewVisits). Exact match —
+  // the page has no sub-paths. Like /tickets it is NOT on the self-service allowlist: the lock-exempt sales roles keep
+  // it, every locked role loses it.
+  { test: (p) => p === '/visits', can: (u) => hasPermission(u.role, 'canViewVisits') },
   // Import's own per-deal page (GET /api/import/deals/{id}: import + ceo). MANDATORY entry: canAccessPath fails
   // OPEN for a path no guard claims, so without this line every authenticated role would reach
   // /import/deals/:id.
@@ -141,7 +147,7 @@ const PATH_GUARDS = [
   // real gate and are unchanged. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself a mirror of
   // TicketService.FULFILMENT_ROLES {import, ceo}.
   { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') },
-  // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
+  // Matches the launcher's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD).
   // Mirrors the three controllers' requireAnyRole(user, "hr", "ceo") exactly. Frontend gating
@@ -281,13 +287,20 @@ export function dealRedirectFor(path, user) {
   return `${target.prefix}/${match[1]}`;
 }
 
+// Per-path lock exemptions: each opens exactly one path family for the holder of one capability, never a role.
+// (A team head is not hr/ceo, so the lock would otherwise hide their one page.)
+const LOCK_EXEMPTIONS = [
+  { test: isActivityLogPath, can: (u) => Boolean(u.admin) },
+  { test: isQuotationPath, can: isQuotationReleaseUser },
+  { test: (p) => p === '/people-insights', can: (u) => Boolean(u.canViewPeopleInsights) },
+];
+
 export function canAccessPath(path, user) {
   if (!user) return false;
   // Checked BEFORE the guards below, not after: the lockdown has to deny paths the user's role would otherwise
   // pass (a sales rep on /tickets) as well as paths no guard claims at all. Narrow exemption, deliberate.
-  const adminActivityLog = isActivityLogPath(path) && Boolean(user.admin);
-  const quotationRelease = isQuotationPath(path) && isQuotationReleaseUser(user);
-  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease
+  if (isSelfServiceLocked(user) && !isSelfServicePath(path)
+    && !LOCK_EXEMPTIONS.some((entry) => entry.test(path) && entry.can(user))
     && !isReleasedPath(path, user)) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;

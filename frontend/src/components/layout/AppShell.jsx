@@ -8,13 +8,12 @@ import { hasPermission, isDivisionManager, isQuotationReleaseUser, isReleasedPat
 import { PRODUCT_NAME } from '../../app/product.js';
 import { cn } from '../../utils/cn.js';
 import { roleLabel } from '../../utils/format.js';
-import { Button } from '../common/Button.jsx';
 import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
 import { RouteFallback } from '../common/RouteFallback.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
 import { WhatsNewBubble } from '../../features/whatsNew/WhatsNewBubble.jsx';
-import { Sidebar } from './Sidebar.jsx';
+import { Launcher } from './Launcher.jsx';
 import { UserMenu } from './UserMenu.jsx';
 import { ViewAsBanner } from './ViewAsBanner.jsx';
 import { ViewAsPickerModal } from './ViewAsPickerModal.jsx';
@@ -67,18 +66,18 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     retry: false,
   });
   const expressUploadEnabled = expressQuery.data?.uploadEnabled === true;
-  const [isDrawerOpen, setIsDrawerOpen] = useState(false);
+  const [isLauncherOpen, setIsLauncherOpen] = useState(false);
   const [activeTopbarPopover, setActiveTopbarPopover] = useState(null);
   const [isContentScrolled, setIsContentScrolled] = useState(false);
   const [viewAsPickerOpen, setViewAsPickerOpen] = useState(false);
-  const drawerRef = useRef(null);
+  const launcherRef = useRef(null);
   const menuButtonRef = useRef(null);
   // One ref for one element: <main> IS the scroll container (it carries `.content-scroll`), so the skip link's
   // focus target and the scrolled box are the same node — see the JSX comment on <main> below.
   const mainRef = useRef(null);
   const location = useLocation();
   const navigate = useNavigate();
-  const drawerId = 'mobile-navigation-drawer';
+  const launcherId = 'primary-navigation';
   const mainContentId = 'main-content';
 
   // The topbar's bottom border only appears once content is scrolled underneath it. Tracks
@@ -111,13 +110,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const navLocked = isSelfServiceLocked(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
-    // มีอะไรใหม่ release notice: every employee, so ungrouped (survives the lock like the dashboard) and listed in
-    // SELF_SERVICE_PATHS.
-    { path: '/whats-new', label: 'มีอะไรใหม่', helper: "What's new", icon: 'sparkles', show: true, match: ['/whats-new'] },
     // Admin capability, not a role: `user.admin` comes from AuthResponse and is held by exactly one person.
-    // Ungrouped and directly under the dashboard because it is a whole-portal view, not part of any one ฝ่าย's
-    // work.
-    { path: '/activity-log', label: 'บันทึกการใช้งาน', helper: 'Portal activity log', icon: 'clipboard', show: Boolean(user.admin) },
+    { path: '/activity-log', label: 'บันทึกการใช้งาน', helper: 'Portal activity log', icon: 'clipboard', group: 'settings', lockExempt: true, show: Boolean(user.admin) },
     // Division-manager (non-sales) "ทีมของฉัน" group: reuses the /employee-requests, /leave,
     // /attendance routes every role already has (dual submit+approve pages for anyone with
     // reports), framed as team-facing entry points. The 'self' entries below stay the manager's
@@ -166,11 +160,14 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       show: (hasPermission(user.role, 'canViewDealQuotations') || Boolean(user.canCreateQuotation)) && SALES_ENABLED,
       match: ['/quotations'],
     },
-    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'sales', show: user.role === 'ceo' && SALES_ENABLED },
+    // นัดเข้าพบ — after ใบเสนอราคา, where the design's NAV puts it for sales. Same audience as the '/visits'
+    // PATH_GUARDS entry (canViewVisits = VisitService.VISIT_ROLES): a rep's own week; sales_manager / ceo the team's.
+    { path: '/visits', label: 'นัดเข้าพบ', helper: 'Visits', icon: 'calendar', group: 'sales', show: hasPermission(user.role, 'canViewVisits') && SALES_ENABLED },
+    { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'settings', show: user.role === 'ceo' && SALES_ENABLED },
     // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog), not just the
     // feature flag.
     { path: '/catalog', label: 'แคตตาล็อกสินค้า', helper: 'Product catalog', icon: 'search', group: 'sales', show: hasPermission(user.role, 'canViewCatalog') && SALES_ENABLED },
-    { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', group: 'sales', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
+    { path: '/price-import', label: 'นำเข้าราคา', helper: 'Price import', icon: 'upload', group: 'settings', show: hasPermission(user.role, 'canManagePriceImport') && SALES_ENABLED },
     // Import's cross-deal PricingRequest queue — see permissions.js's PATH_GUARDS comment for why this is a
     // narrower audience than a single request's detail page.
     { path: '/pricing-requests', label: 'คิวขอราคา', helper: 'Pricing request queue', icon: 'clipboard', group: 'sales', show: hasPermission(user.role, 'canViewPricingRequestQueue') && SALES_ENABLED },
@@ -195,6 +192,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // (app.receipts.express-upload.enabled, review H4) — read from GET /api/sales/receipt-imports/latest.
     { path: '/finance/receipts-import', label: 'รับเงินจาก Express', helper: 'Express receipts', icon: 'upload', group: 'finance', show: user.role === 'account' && SALES_ENABLED && expressUploadEnabled },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
+    // Leave + check-in analytics: ceo/hr company-wide, a team head for their team. Follows the server's flag, not the role.
+    { path: '/people-insights', label: 'วิเคราะห์การลาและเวลาเข้างาน', helper: 'Leave & check-in insights', icon: 'dashboard', group: 'hr', lockExempt: true, show: Boolean(user.canViewPeopleInsights) },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in the topbar UserMenu, and the two
     // pages are merged into /profile. /requests stays here because an HR review queue is work, not personal admin.
@@ -205,27 +204,15 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     { path: '/tax-allowance-review', label: 'ตรวจสอบค่าลดหย่อนภาษี', helper: 'Tax allowance review (ล.ย.01)', icon: 'badgeCheck', group: 'hr', show: hasPermission(user.role, 'canViewTaxAllowanceRegister') },
     // Attendance calendar admin: hr.holiday CRUD + the manual
     // BOT-fetch trigger, hr.work_schedule_assignment CRUD. HR/CEO only.
-    { path: '/settings/attendance-calendar', label: 'ปฏิทินวันหยุด & ตารางงาน', helper: 'Holiday & work-schedule calendar', icon: 'calendar', group: 'hr', show: hasPermission(user.role, 'canManageAttendanceCalendar') },
+    { path: '/settings/attendance-calendar', label: 'ปฏิทินวันหยุด & ตารางงาน', helper: 'Holiday & work-schedule calendar', icon: 'calendar', group: 'settings', show: hasPermission(user.role, 'canManageAttendanceCalendar') },
     // §5 announcement PDF upload. Sits beside the calendar admin above because they are
     // the same job and the same audience.
     // `fileText` matches the glyph the leave page's own reference bar uses for this document, so the
     // nav item and the thing it administers read as the same object.
-    { path: '/settings/leave-policy', label: 'ประกาศวันลา (PDF)', helper: 'Leave policy announcement', icon: 'fileText', group: 'hr', show: hasPermission(user.role, 'canManageLeavePolicyDocument') },
-    // Nav visibility follows read access (hr+ceo); CEO lands on a read-only
-    // view of the same page (PayrollPage.jsx gates writes on canManagePayroll internally).
-    // `exact` because /payroll/deduction-shortfalls below is a SIBLING item, not a detail page of
-    // this one — without it prefix matching would light both rows at once (see Sidebar.jsx).
-    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'finance', exact: true, show: hasPermission(user.role, 'canViewPayroll') },
-    // Garnishment shortfall ledger. Same audience as /payroll —
-    // `fileText`, not `triangleAlert`: that glyph already means "live warning" across six feature
-    // surfaces (PayrollPage, TaxAllowanceReviewPage, SpecialMoneyPanel …), and no other nav item
-    // uses it. Permanent navigation chrome pointing at a routine ledger would dilute it.
-    { path: '/payroll/deduction-shortfalls', label: 'ยอดค้างหักตามหมายบังคับคดี', helper: 'Deduction shortfalls', icon: 'fileText', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
-    // Written-consent register. Same audience as its two siblings
-    // record action once inside. `clipboard`, not `shield` or `badgeCheck`: this is HR's filing
-    // record of a signed letter, and a shield/check glyph would imply the app is verifying or
-    // clearing something, which is precisely what this register does NOT do.
-    { path: '/payroll/deduction-consents', label: 'ทะเบียนหนังสือยินยอมหักเงิน', helper: 'Written deduction consents', icon: 'clipboard', group: 'finance', show: hasPermission(user.role, 'canViewPayroll') },
+    { path: '/settings/leave-policy', label: 'ประกาศวันลา (PDF)', helper: 'Leave policy announcement', icon: 'fileText', group: 'settings', show: hasPermission(user.role, 'canManageLeavePolicyDocument') },
+    // Read access (hr+ceo); CEO gets a read-only view (writes gate on canManagePayroll inside PayrollPage). The
+    // deduction ledgers are linked from that page, not from the nav.
+    { path: '/payroll', label: 'เงินเดือน', helper: 'Payroll', icon: 'badgeDollar', group: 'hr', show: hasPermission(user.role, 'canViewPayroll') },
     { path: '/attendance', label: 'เวลาทำงาน', helper: 'Attendance', icon: 'calendar', group: 'self', show: true },
     // Combined OT + welfare/special-money page (RequestsPage.jsx, tabs carried in ?tab=). `match` keeps this item
     // highlighted on both /employee-requests and the /overtime redirect alias, mirroring the /tickets pattern
@@ -241,20 +228,17 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       match: ['/employee-requests', '/overtime'],
     },
     { path: '/leave', label: 'วันลา', helper: 'Leave', icon: 'clipboard', group: 'self', show: !!user.employeeId || hasPermission(user.role, 'canViewAllLeave') },
-    // Tax-allowance (ล.ย.01) self-service declaration — mirrors the route's own
-    // guard in permissions.js's PATH_GUARDS (`!!u.employeeId`, same shape as /profile).
-    { path: '/tax-allowance', label: 'ค่าลดหย่อนภาษี', helper: 'Tax allowance (ล.ย.01)', icon: 'calculator', group: 'self', show: !!user.employeeId },
   ]
     .filter((item) => item.show)
     // Release lockdown (SELF_SERVICE_ONLY — see app/features.js). Everyone
     // except HR and CEO keeps only the ungrouped '/' dashboard and the 'self'
-    // group (เวลาทำงาน, คำขอเงินพิเศษ, วันลา, ค่าลดหย่อนภาษี); the 'sales',
-    // 'hr', 'finance' and 'team' groups disappear entirely.
+    // group (เวลาทำงาน, คำขอเงินพิเศษ, วันลา); the 'sales',
+    // 'hr', 'finance', 'team' and 'settings' groups disappear entirely.
     //
-    // Group-based, not path-based, and deliberately so: a new nav item is
+    // Group-based by default, and deliberately so: a new nav item is
     // hidden by default under the lock unless it is explicitly filed under
-    // 'self', which matches how permissions.js's SELF_SERVICE_PATHS allowlist
-    // treats routes. The two lists have to agree — a visible item pointing at a
+    // 'self' (or flagged `lockExempt`), which matches how permissions.js's
+    // SELF_SERVICE_PATHS allowlist treats routes. The two lists have to agree — a visible item pointing at a
     // path canAccessPath refuses would render a nav link straight to the
     // access-denied page.
     //
@@ -262,25 +246,32 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // links: its three entries point at /employee-requests, /leave and
     // /attendance, which are the same routes the surviving 'self' group lists.
     //
-    // One exception: ใบเสนอราคา stays for the quotation audience, the nav
+    // Exceptions: an item flagged `lockExempt` always stays (บันทึกการใช้งาน, which
+    // is admin-only through its own `show`, the twin of canAccessPath's admin
+    // activity-log exemption). ใบเสนอราคา stays for the quotation audience, the nav
     // twin of permissions.js's quotation-release path exemption, keyed on the same predicate so
     // the two cannot disagree. It keeps its 'sales' group, so that header shows with this one item.
     .filter((item) => !navLocked || !item.group || item.group === 'self'
+      || item.lockExempt
       || (item.path === '/quotations' && isQuotationReleaseUser(user))
       // import's งานนำเข้า + คิวขอราคา and account's งานการเงิน survive the lock: the same
       // allowlist canAccessPath applies.
       || isReleasedPath(item.path, user));
 
   const closeTopbarPopover = useCallback(() => setActiveTopbarPopover(null), []);
-  const closeDrawer = useCallback(() => setIsDrawerOpen(false), []);
+  const closeLauncher = useCallback(() => setIsLauncherOpen(false), []);
 
   useEffect(() => {
-    closeDrawer();
+    if (activeTopbarPopover) closeLauncher();
+  }, [activeTopbarPopover, closeLauncher]);
+
+  useEffect(() => {
+    closeLauncher();
     closeTopbarPopover();
-  }, [closeDrawer, closeTopbarPopover, location.pathname]);
+  }, [closeLauncher, closeTopbarPopover, location.pathname]);
 
   useEffect(() => {
-    if (!isDrawerOpen) return undefined;
+    if (!isLauncherOpen) return undefined;
 
     const previouslyFocused = document.activeElement;
     const menuButton = menuButtonRef.current;
@@ -294,15 +285,15 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     ].join(',');
 
     const getFocusableItems = () => Array
-      .from(drawerRef.current?.querySelectorAll(focusableSelector) || [])
+      .from(launcherRef.current?.querySelectorAll(focusableSelector) || [])
       .filter((element) => element.getClientRects().length > 0);
 
     const focusableItems = getFocusableItems();
-    (focusableItems[0] || drawerRef.current)?.focus();
+    (focusableItems[0] || launcherRef.current)?.focus();
 
     const handleKeyDown = (event) => {
       if (event.key === 'Escape') {
-        closeDrawer();
+        closeLauncher();
         return;
       }
 
@@ -326,17 +317,25 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       }
     };
 
+    // Outside = neither the panel nor the menu button (the button's own click toggles).
+    const handlePointer = (event) => {
+      if (launcherRef.current?.contains(event.target) || menuButton?.contains(event.target)) return;
+      closeLauncher();
+    };
+
     document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('mousedown', handlePointer);
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('mousedown', handlePointer);
       if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
         previouslyFocused.focus();
       } else {
         menuButton?.focus();
       }
     };
-  }, [closeDrawer, isDrawerOpen]);
+  }, [closeLauncher, isLauncherOpen]);
 
   return (
     <div className="flex h-dvh w-full max-w-full overflow-hidden">
@@ -349,24 +348,6 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       >
         ข้ามไปยังเนื้อหาหลัก
       </a>
-      <Sidebar
-        id={drawerId}
-        drawerRef={drawerRef}
-        isDrawerOpen={isDrawerOpen}
-        items={navItems}
-      />
-      <button
-        type="button"
-        className={cn(
-          'hidden nav-drawer:block nav-drawer:fixed nav-drawer:inset-0 nav-drawer:z-30 nav-drawer:w-full nav-drawer:min-h-dvh',
-          'nav-drawer:border-0 nav-drawer:bg-overlay-drawer nav-drawer:p-0 nav-drawer:opacity-0 nav-drawer:pointer-events-none',
-          'nav-drawer:transition-opacity nav-drawer:duration-[160ms] nav-drawer:ease-[ease] motion-reduce:transition-none',
-          isDrawerOpen && 'nav-drawer:opacity-100 nav-drawer:pointer-events-auto',
-        )}
-        aria-label="ปิดเมนู"
-        onClick={closeDrawer}
-        tabIndex={-1}
-      />
       {/* The topbar is a SIBLING of <main>, never a child: `<header>` scoped to <body> maps to
           the `banner` landmark, and a banner nested inside `main` is an a11y defect (landmark
           navigation expects them side by side, and `getByRole('main')` would include the
@@ -386,21 +367,29 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             isContentScrolled ? 'border-border' : 'border-transparent',
           )}
         >
-          <Button
-            ref={menuButtonRef}
-            variant="icon"
-            className="!hidden nav-drawer:!inline-flex nav-drawer:flex-[0_0_44px]"
-            type="button"
-            onClick={() => {
-              closeTopbarPopover();
-              setIsDrawerOpen((open) => !open);
-            }}
-            aria-label="เปิดเมนูนำทาง"
-            aria-controls={drawerId}
-            aria-expanded={isDrawerOpen}
-          >
-            <Icon name="menu" />
-          </Button>
+          <div className="relative z-[201] flex-none">
+            <button
+              ref={menuButtonRef}
+              type="button"
+              className="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-md border-0 bg-transparent px-2 text-sm font-bold text-text hover:bg-surface-hover focus-visible:outline-none focus-visible:shadow-[var(--shadow-focus-ring)]"
+              onClick={() => {
+                closeTopbarPopover();
+                setIsLauncherOpen((open) => !open);
+              }}
+              aria-controls={isLauncherOpen ? launcherId : undefined}
+              aria-expanded={isLauncherOpen}
+            >
+              <span data-testid="brand-mark" aria-hidden="true" className="grid size-6 flex-none grid-cols-2 gap-[2px]">
+                <i className="rounded-sm bg-accent" />
+                <i className="rounded-sm bg-primary-hover" />
+                <i className="rounded-sm bg-icon-muted" />
+                <i className="rounded-sm bg-accent" />
+              </span>
+              เมนู
+              <Icon name="chevronDown" size={16} />
+            </button>
+            {isLauncherOpen ? <Launcher id={launcherId} panelRef={launcherRef} items={navItems} onNavigate={closeLauncher} /> : null}
+          </div>
           <div className="topbar-title grid min-w-0 flex-1 gap-0.5" aria-label="พื้นที่ทำงานปัจจุบัน">
             <span className="overflow-hidden text-ellipsis whitespace-nowrap font-extrabold" translate="no">{PRODUCT_NAME}</span>
             <small className="overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-muted">{roleLabel(user.role)}</small>

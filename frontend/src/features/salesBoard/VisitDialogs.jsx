@@ -57,9 +57,9 @@ function NoteField({ value, onChange }) {
 function DealSelect({ id, deals, value, onChange }) {
   return (
     <label className={LABEL} htmlFor={id}>
-      <span>ดีล <Optional /></span>
+      <span>งาน <Optional /></span>
       <select id={id} value={value} onChange={(e) => onChange(e.target.value)} className={INPUT}>
-        <option value="">ไม่มีดีล</option>
+        <option value="">ไม่มีงาน</option>
         {deals.map((d) => <option key={d.ticketId} value={String(d.ticketId)}>{dealLabel(d)}</option>)}
       </select>
     </label>
@@ -102,7 +102,7 @@ export function PlanVisitModal({ deals, initialDeal = null, todayIso, submitting
   return (
     <Modal
       title="นัดเข้าพบ"
-      subtitle="ไปพบผู้ออกแบบหรือเจ้าของได้ แม้ยังไม่มีดีล"
+      subtitle="ไปพบผู้ออกแบบหรือเจ้าของได้ แม้ยังไม่มีงาน"
       onClose={onClose}
       footer={(
         <>
@@ -173,7 +173,7 @@ export function VisitDoneModal({ visit, submitting, onClose, onSubmit }) {
       onClose={onClose}
       footer={(
         <>
-          {visit.ticketId ? footerHint('บันทึกแล้วดีลนี้ออกจาก “ควรตามต่อ”') : null}
+          {visit.ticketId ? footerHint('บันทึกแล้วงานนี้ออกจาก “ควรตามต่อ”') : null}
           <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
           <Button type="button" disabled={submitting} onClick={() => onSubmit(joinNote(outcome, note))}>
             {submitting ? 'กำลังบันทึก…' : 'บันทึก'}

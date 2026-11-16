@@ -60,6 +60,38 @@ describe('RequireAccess', () => {
     expect(screen.queryByText('หน้าดีลเต็ม')).toBeNull();
   });
 
+  // นัดเข้าพบ: typing /visits is refused to every role the visit endpoints refuse, by name, and never renders it.
+  function renderVisits(user) {
+    return render(
+      <MemoryRouter initialEntries={['/visits']}>
+        <Routes>
+          <Route element={<RequireAccess user={user} />}>
+            <Route path="/visits" element={<div>หน้านัดเข้าพบ</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>,
+    );
+  }
+
+  it('refuses /visits by direct navigation to a role outside the visit endpoints', async () => {
+    for (const role of ['hr', 'account', 'import', 'employee']) {
+      const { unmount } = renderVisits({ role, employeeId: 4 });
+      expect(await screen.findByRole('heading', { name: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' })).not.toBeNull();
+      expect(screen.getByText('นัดเข้าพบ').tagName).toBe('STRONG');
+      expect(screen.getByText('/visits')).not.toBeNull();
+      expect(screen.queryByText('หน้านัดเข้าพบ')).toBeNull();
+      unmount();
+    }
+  });
+
+  it('opens /visits for sales, sales_manager and ceo', () => {
+    for (const role of ['sales', 'sales_manager', 'ceo']) {
+      const { unmount } = renderVisits({ role, employeeId: 4 });
+      expect(screen.getByText('หน้านัดเข้าพบ')).not.toBeNull();
+      unmount();
+    }
+  });
+
   it('still renders the whole deal for the CEO', () => {
     renderDealRoutes({ role: 'ceo', employeeId: 1 });
     expect(screen.getByText('หน้าดีลเต็ม')).not.toBeNull();

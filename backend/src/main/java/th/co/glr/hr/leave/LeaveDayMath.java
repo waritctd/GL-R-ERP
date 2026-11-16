@@ -383,16 +383,11 @@ final class LeaveDayMath {
     // (270 clock - 30 break overlap)/480 = 240/480 = 0.50.
     // ─────────────────────────────────────────────────────────────────────
 
-    /** The company-wide lunch break subtracted from a boundary segment's worked minutes (leave arithmetic only --
-     * see the "Partial-day span" section header above for why this is not a WorkSchedule field). */
-    private static final LocalTime BREAK_START = LocalTime.of(12, 30);
-    private static final LocalTime BREAK_END = LocalTime.of(13, 30);
-
     /** The fixed denominator for a boundary-day fraction: 8 WORKED hours, never a schedule's own (break-inclusive)
      * clock span. See the "Partial-day span" section header above. */
     private static final long WORKED_MINUTES_PER_DAY = 480;
 
-    /** One boundary day's fraction: (minutes(from, to) - overlapMinutes(from, to, BREAK_START, BREAK_END)) / 480,
+    /** One boundary day's fraction: (minutes(from, to) - overlapMinutes(from, to, the LeaveBreakWindow)) / 480,
      * rounded HALF_UP to 2dp (matching every other day figure in this class), clamped to [0.00, 1.00]. Zero (never
      * negative) when to is not after from, or the break entirely consumes the segment. */
     private static BigDecimal boundaryFraction(LocalTime from, LocalTime to) {
@@ -400,8 +395,8 @@ final class LeaveDayMath {
         if (minutes <= 0) {
             return BigDecimal.ZERO;
         }
-        long overlapStart = Math.max(from.toSecondOfDay(), BREAK_START.toSecondOfDay());
-        long overlapEnd = Math.min(to.toSecondOfDay(), BREAK_END.toSecondOfDay());
+        long overlapStart = Math.max(from.toSecondOfDay(), LeaveBreakWindow.START.toSecondOfDay());
+        long overlapEnd = Math.min(to.toSecondOfDay(), LeaveBreakWindow.END.toSecondOfDay());
         long overlapMinutes = Math.max(0, overlapEnd - overlapStart) / 60;
         long workedMinutes = minutes - overlapMinutes;
         if (workedMinutes <= 0) {

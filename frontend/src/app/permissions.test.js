@@ -208,6 +208,26 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/tickets', employee)).toBe(false);
   });
 
+  // นัดเข้าพบ (/visits): exactly the roles VisitService serves a visit list to — VISIT_ROLES {sales, sales_manager,
+  // ceo} (own list) ⊇ TEAM_ROLES {sales_manager, ceo} (team list). Wrong-way-round first: every other role is refused,
+  // and the path must not be reachable through a lookalike.
+  it('refuses /visits to every role the visit endpoints refuse', () => {
+    for (const role of ['hr', 'employee', 'import', 'account', 'warehouse', 'qc']) {
+      expect(canAccessPath('/visits', { role, employeeId: 4 }), `${role} -> /visits`).toBe(false);
+      expect(hasPermission(role, 'canViewVisits'), `${role} canViewVisits`).toBe(false);
+    }
+    expect(canAccessPath('/visits', { role: 'employee', employeeId: 4, manager: true })).toBe(false);
+  });
+
+  it('lets sales, sales_manager and ceo reach /visits, mirroring VisitService.VISIT_ROLES', () => {
+    for (const role of ['sales', 'sales_manager', 'ceo']) {
+      expect(canAccessPath('/visits', { role, employeeId: 4 }), `${role} -> /visits`).toBe(true);
+    }
+    expect(hasPermission('sales', 'canViewTeamVisits')).toBe(false);
+    expect(hasPermission('sales_manager', 'canViewTeamVisits')).toBe(true);
+    expect(hasPermission('ceo', 'canViewTeamVisits')).toBe(true);
+  });
+
   // Account role-scoped views: the pipeline BROWSER (the `/tickets` list) is narrower than ticket-DETAIL read
   // (`/tickets/:id`) — account keeps the latter (its worklist deep-links straight to a single deal) but loses
   // the former (its own งานการเงิน worklist replaces it).
@@ -470,6 +490,7 @@ describe('canAccessPath under the release lockdown', () => {
     '/tickets',
     '/tickets/7',
     '/tickets/7/deposit',
+    '/visits',
     '/pricing-requests',
     '/pricing-requests/9',
     '/fulfilment',
@@ -628,6 +649,16 @@ describe('canAccessPath under the release lockdown', () => {
     expect(guard('/tax-allowance', noEmployeeRow)).toBe(false);
   });
 
+  // /visits is handled like /tickets: a PATH_GUARDS entry, not a self-service path. The lock-exempt sales roles keep
+  // it; every locked role loses it (and the guard would refuse them anyway).
+  it('keeps /visits for the lock-exempt sales roles and ceo, and refuses it to every locked role', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const user of [sales, salesManager, ceo]) expect(guard('/visits', user), `${user.role} -> /visits`).toBe(true);
+    for (const user of [importer, account, employee, divisionManager, hr]) {
+      expect(guard('/visits', user), `${user.role} -> /visits`).toBe(false);
+    }
+  });
+
   it('changes nothing when the flag is off', async () => {
     vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'false');
     vi.resetModules();
@@ -720,6 +751,11 @@ describe('activity log access (admin capability)', () => {
       expect(locked('/activity-log', user('import', { admin: true }))).toBe(true);
     });
 
+    it('keeps /activity-log locked for a locked role without the admin flag', async () => {
+      const locked = await lockedCanAccessPath();
+      expect(locked('/activity-log', user('import', { admin: false }))).toBe(false);
+    });
+
     it('unlocks NOTHING else for that admin', async () => {
       // The narrow-exemption check. Being admin must open /activity-log and nothing more; if this goes
       // green for /tickets, the exemption has been widened into a full lockdown bypass (which adding
@@ -729,6 +765,35 @@ describe('activity log access (admin capability)', () => {
       for (const path of ['/tickets', '/payroll', '/employees', '/commissions', '/catalog']) {
         expect(locked(path, admin)).toBe(false);
       }
+    });
+  });
+});
+
+// /people-insights follows the server's canViewPeopleInsights hint (ceo/hr/team head), and a team head is not hr/ceo, so
+// the self-service lockdown must let this one path through for the flag holder and nothing else.
+describe('people insights access (canViewPeopleInsights)', () => {
+  const user = (role, extra = {}) => ({ id: 9, employeeId: 9, role, ...extra });
+
+  it('opens the page only for a flagged user', () => {
+    expect(canAccessPath('/people-insights', user('employee', { canViewPeopleInsights: true }))).toBe(true);
+    expect(canAccessPath('/people-insights', user('employee', { canViewPeopleInsights: false }))).toBe(false);
+    expect(canAccessPath('/people-insights', user('hr'))).toBe(false); // no flag, no page, whatever the role
+  });
+
+  describe('under the self-service lockdown', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('lets a flagged team head through to this page and unlocks nothing else', async () => {
+      vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
+      vi.resetModules();
+      const { canAccessPath: locked } = await import('./permissions.js');
+      const head = user('employee', { canViewPeopleInsights: true });
+      expect(locked('/people-insights', head)).toBe(true);
+      expect(locked('/payroll', head)).toBe(false);
+      expect(locked('/people-insights', user('employee'))).toBe(false);
     });
   });
 });

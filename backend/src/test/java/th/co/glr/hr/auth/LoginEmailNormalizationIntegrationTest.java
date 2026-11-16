@@ -32,7 +32,7 @@ class LoginEmailNormalizationIntegrationTest extends AbstractPostgresIntegration
     void wireRealCollaborators() {
         EmployeeAuthRepository repo = new EmployeeAuthRepository(jdbc);
         AuditService audit = new AuditService(new AuditLogRepository(jdbc), new ObjectMapper().findAndRegisterModules());
-        service = new AuthService(repo, encoder, audit, new ViewAsService(repo, audit, ""));
+        service = new AuthService(repo, encoder, audit, new ViewAsService(repo, audit, ""), org.mockito.Mockito.mock(th.co.glr.hr.peopleinsights.PeopleInsightsService.class));
     }
 
     /** The shape the owner reported: the address is stored with capitals, exactly as HR typed it into the employee

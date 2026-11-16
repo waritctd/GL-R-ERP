@@ -25,11 +25,11 @@ export function CallModal({ deal, submitting, onClose, onSubmit }) {
   return (
     <Modal
       title="โทรแล้ว"
-      subtitle={deal.daysQuiet != null ? `${name} · เงียบ ${deal.daysQuiet} วัน` : name}
+      subtitle={deal.quiet && deal.daysQuiet != null ? `${name} · เงียบ ${deal.daysQuiet} วัน` : name}
       onClose={onClose}
       footer={(
         <>
-          <span className="mr-auto text-xs text-text-muted mobile:hidden">บันทึกแล้วดีลนี้ออกจาก “ควรตามต่อ”</span>
+          <span className="mr-auto text-xs text-text-muted mobile:hidden">บันทึกแล้วงานนี้ออกจาก “ควรตามต่อ”</span>
           <Button type="button" variant="secondary" onClick={onClose}>ยกเลิก</Button>
           {/* An outcome is required (review M4): an empty save would clear the quiet clock with nothing logged. */}
           <Button type="button" disabled={submitting || !outcome} onClick={submit}>{submitting ? 'กำลังบันทึก…' : 'บันทึก'}</Button>
