@@ -24,11 +24,11 @@ The owner approved a before/after review of the sales flow ("Sales Redesign Revi
 | 1 | `/tickets` → งานทั้งหมด board, `GET /api/sales/team-board` | `feat/all-deals-board` | #1317 | **Merged and live** |
 | – | Quotation list: flat by number, search by total, approval date | `feat/quotation-flat-list` | #1314 | **Merged and live** |
 | – | Release-notice email reset marker | `fix/release-note-email-reset` | #1313 | **Merged and live** (reset not run) |
-| 4a | นัดเข้าพบ page + phone วันนี้ของฉัน | `feat/visits-page-and-today-phone` | #1319 | Review clean. Not merged |
-| 2 | Deal page redesign | `feat/deal-page-redesign` | #1320 | Review clean (2 fix rounds). Not merged |
-| 4c | Grouped finance worklist | `feat/finance-grouped-worklist` | #1321 | Review clean. Not merged |
+| 4a | นัดเข้าพบ page + phone วันนี้ของฉัน | `feat/visits-page-and-today-phone` | #1319 | **Merged and live** (release 2026-11-17a) |
+| 2 | Deal page redesign | `feat/deal-page-redesign` | #1320 | **Merged and live** (release 2026-11-17a) |
+| 4c | Grouped finance worklist | `feat/finance-grouped-worklist` | #1321 | **Merged and live** (release 2026-11-17a) |
 | 3a | Lifecycle dialogs (create, S2, pause, lost, cancel) + V219 | `feat/deal-dialogs` (stacked on `feat/deal-page-redesign`) | none yet | Built, pushed at `afe6acbd`. **Adversarial review was running when this was written; its report may not exist.** If `reviews/adversarial-task-3a.md` is absent, re-dispatch the review from `briefs/task-3a-brief.md` (the review prompt's attack list is summarised below) |
-| 3b | Document dialogs (deposit, remaining invoice, IR, delivery) | `feat/deal-document-dialogs` (stacked on `feat/deal-page-redesign`) | opened (see `gh pr list`) | Review clean. Not merged |
+| 3b | Document dialogs (deposit, remaining invoice, IR, delivery) | `feat/deal-document-dialogs` | #1322 | **Merged and live** (release 2026-11-17a) |
 | 6 | Server fields for drawn details that were left out | – | – | Not started |
 | 5 | "ดีล" → "งาน" on the remaining sales screens | – | – | Not started (do last) |
 | – | Refresh the review artifact (งาน wording, quotation list "after") | – | – | Not started |
