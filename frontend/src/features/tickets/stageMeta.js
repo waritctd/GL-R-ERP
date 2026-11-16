@@ -54,13 +54,32 @@ export const LOST_REASON_LABEL = {
   ALREADY_PURCHASED: 'ลูกค้าสั่งซื้อกระเบื้องไปหมดแล้ว',
 };
 
-/** Why the opportunity went away (V56) — distinct from LOST_REASON_LABEL, which is why we lost a deal we were
- * competing for. The code set comes from the catalog (DealCancelReason.ORDER). */
+/** The business's F1–F8 sheet code of each lost reason (DealLostReason.java's own cross-reference). Shown on the
+ * ปิดงาน · เสียงาน chips (drawing m-lost); the stored values are the codes on the left, unchanged. */
+export const LOST_REASON_F_CODE = {
+  PRODUCT_FIT: 'F1',
+  PRICE: 'F2',
+  LEAD_TIME: 'F3',
+  PAYMENT_TERMS: 'F4',
+  RELATIONSHIP: 'F5',
+  PROJECT_ON_HOLD: 'F6',
+  PROJECT_CANCELLED: 'F7',
+  ALREADY_PURCHASED: 'F8',
+};
+
+/** Why a deal was cancelled (V57) — distinct from LOST_REASON_LABEL, which is why we lost a deal we were competing
+ * for. The OFFERED code set comes from the catalog (DealCancelReason.OFFERED); every VALID code — the three retired
+ * on 2026-11-16 included, which already-cancelled deals still carry — is labelled here. Same wording as
+ * DealCancelReason.label (labels say งาน, owner ruling 2026-11-16). */
 export const CANCEL_REASON_LABEL = {
+  DUPLICATE_DEAL:            'เปิดซ้ำกับงานอื่น',
+  WRONG_CUSTOMER_OR_PROJECT: 'เปิดผิดลูกค้า / โครงการ',
+  NO_REAL_PROJECT:           'ไม่มีโครงการจริง',
+  OTHER:                     'อื่น ๆ',
+  // Retired 2026-11-16: no longer offered, still displayed.
   OWNER_CANCELLED:   'เจ้าของยกเลิกโครงการ',
   PROJECT_SUSPENDED: 'โครงการถูกระงับไม่มีกำหนด',
   BUDGET_CANCELLED:  'งบประมาณถูกยกเลิก',
-  OTHER:             'อื่น ๆ (ระบุในหมายเหตุ)',
 };
 
 // Fulfilment sub-steps rendered inside the PROCUREMENT stage — these come from the deal's own

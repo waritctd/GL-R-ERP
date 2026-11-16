@@ -87,3 +87,38 @@ describe('mock tickets.create -- a new deal must state a real entry channel', ()
     expect((await api.tickets.list()).tickets.length).toBe(before);
   });
 });
+
+// The short create form's optional fields (CreateTicketRequest designerName / estimatedValue / startStage, 2026-11-16;
+// fix round 1: the estimate is its own column, estimated_value). Shape only: who may start at S2 is TicketService's
+// stage write gate (DealLifecycleDialogsIntegrationTest).
+describe('mock tickets.create -- the short form fields', () => {
+  async function createWith(fields) {
+    const { customer, project } = await anyCustomerAndProject();
+    return api.tickets.create({
+      title: 'โครงการสั้น', customerId: customer.id, projectId: project.id, items: [], entryChannel: 'DESIGNER_LED',
+      ...fields,
+    });
+  }
+
+  it('stores the designer name and the estimate (shown on the board as the last value fallback)', async () => {
+    const { ticket } = await createWith({ designerName: 'เทพสตูดิโอ ดีไซน์', estimatedValue: 1200000 });
+    expect(ticket.summary).toMatchObject({ designerName: 'เทพสตูดิโอ ดีไซน์', estimatedValue: 1200000 });
+    const { board } = await api.salesBoard.myWork();
+    const row = board.find((d) => d.ticketId === ticket.summary.id);
+    expect(row).toMatchObject({ value: 1200000, currency: 'THB' });
+  });
+
+  it('starts at S1 by default and at S2 when asked, with a STAGE_CHANGED event', async () => {
+    expect((await createWith({})).ticket.summary.salesStage).toBe('LEAD_APPROACH');
+    const { ticket } = await createWith({ startStage: 'SPEC_APPROVED' });
+    expect(ticket.summary.salesStage).toBe('SPEC_APPROVED');
+    expect(ticket.events.some((e) => e.kind === 'STAGE_CHANGED' && e.toStatus === 'SPEC_APPROVED')).toBe(true);
+  });
+
+  it('refuses any other start stage, and an estimate that is not > 0 within NUMERIC(14,2), 400', async () => {
+    await expect(createWith({ startStage: 'QUOTE_BUYER' })).rejects.toMatchObject({ status: 400 });
+    for (const bad of [-1, 0, 1e12, 1.005]) {
+      await expect(createWith({ estimatedValue: bad })).rejects.toMatchObject({ status: 400 });
+    }
+  });
+});

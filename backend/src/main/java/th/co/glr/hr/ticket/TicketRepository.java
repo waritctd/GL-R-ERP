@@ -51,7 +51,7 @@ public class TicketRepository {
                t.cancel_reason, t.cancelled_at,
                t.reopened_at, t.reopen_count,
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
-               t.quotation_only, t.keyed_by,
+               t.quotation_only, t.keyed_by, t.pause_return_on, t.estimated_value,
                (SELECT MAX(da.activity_date) FROM sales.deal_activity da
                  WHERE da.ticket_id = t.ticket_id) AS last_activity_at,
                -- Movement range (inclusive Asia/Bangkok calendar days); both FALSE when no range is given.
@@ -434,12 +434,17 @@ public class TicketRepository {
         jdbc.update("""
             INSERT INTO sales.ticket
                 (code, title, status, priority, created_by, keyed_by, customer_name, customer_id, project_id, contact_id, note, entry_channel,
-                 next_follow_up_at, quotation_only)
+                 next_follow_up_at, quotation_only, designer_name, estimated_value)
             VALUES
                 (:code, :title, :status, :priority, :createdBy, :keyedBy, :customerName, :customerId, :projectId, :contactId, :note, :entryChannel,
-                 :nextFollowUpAt, :quotationOnly)
+                 :nextFollowUpAt, :quotationOnly, :designerName, :estimatedValue)
             """,
             new MapSqlParameterSource()
+                // The short create form's ผู้ออกแบบ and มูลค่าโดยประมาณ (2026-11-16); both null from every other caller.
+                // The estimate has its own column (V220 estimated_value); imported_value stays the pipeline import's.
+                .addValue("designerName", request.designerName() == null || request.designerName().isBlank()
+                    ? null : request.designerName().trim())
+                .addValue("estimatedValue", request.estimatedValue(), java.sql.Types.NUMERIC)
                 .addValue("code", code)
                 .addValue("title", request.title())
                 .addValue("status", status)
@@ -1336,7 +1341,9 @@ public class TicketRepository {
             rs.getBoolean("quotation_only")
         ).withKeyedById(rs.getObject("keyed_by", Long.class))
             .withMovement(rs.getBoolean("stage_changed_in_range"), rs.getBoolean("activity_in_range"),
-                rs.getObject("last_activity_at", LocalDate.class));
+                rs.getObject("last_activity_at", LocalDate.class))
+            .withPauseReturnOn(rs.getObject("pause_return_on", LocalDate.class))
+            .withEstimatedValue(rs.getBigDecimal("estimated_value"));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1424,7 +1431,8 @@ public class TicketRepository {
             due == null ? null : due.creditDays(),
             facts.liveDirectQuotation(), facts.quotedRecipients(),
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
-            s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt());
+            s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(),
+            s.estimatedValue());
     }
 
     /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its
@@ -1673,6 +1681,20 @@ public class TicketRepository {
         jdbc.update(
             "UPDATE sales.ticket SET lifecycle = :lifecycle, updated_at = now() WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("lifecycle", lifecycle).addValue("id", ticketId));
+    }
+
+    /** V220 มูลค่าโดยประมาณ: written by the tracking update (null = cleared). */
+    public void updateEstimatedValue(long ticketId, java.math.BigDecimal estimatedValue) {
+        jdbc.update(
+            "UPDATE sales.ticket SET estimated_value = :v, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("v", estimatedValue, java.sql.Types.NUMERIC).addValue("id", ticketId));
+    }
+
+    /** V220 วันที่จะกลับมาดู: written by hold / dormant (null = no date) and cleared by resume. */
+    public void updatePauseReturnOn(long ticketId, LocalDate pauseReturnOn) {
+        jdbc.update(
+            "UPDATE sales.ticket SET pause_return_on = :on, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("on", pauseReturnOn, java.sql.Types.DATE).addValue("id", ticketId));
     }
 
     public void updateTenderRequirement(long ticketId, String value) {

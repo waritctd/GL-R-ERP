@@ -6,7 +6,11 @@ import { App } from './App.jsx';
 import { MaintenanceGate } from './app/MaintenanceGate.jsx';
 import { ErrorBoundary } from './components/common/ErrorBoundary.jsx';
 import { queryClient } from './api/queryClient.js';
+import { purgeLegacyDealDrafts } from './app/purgeLegacyDealDrafts.js';
 import './index.css';
+
+// Once per browser: drop the removed create form's saved drafts (they can hold customer details).
+purgeLegacyDealDrafts();
 
 createRoot(document.getElementById('root')).render(
   <React.StrictMode>

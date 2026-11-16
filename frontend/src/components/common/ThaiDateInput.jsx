@@ -128,6 +128,10 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
   min,
   max,
   placeholder = 'วว/ดด/ปปปป',
+  // Optional: told the field's own error after each commit ('' when the entry was accepted or emptied). A refused
+  // entry reverts the text to the old value WITHOUT calling onChange, so a parent that must not treat "refused" as
+  // "no date" (e.g. the pause dialog) needs this to know.
+  onErrorChange,
   'aria-describedby': describedBy,
   'aria-invalid': ariaInvalid,
   ...rest
@@ -167,10 +171,13 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
         onChange?.(eventLike(name, parsed.iso));
         setSynced(undefined); // re-derive the text from whatever value the parent keeps (e.g. `|| today`)
       }
+      onErrorChange?.('');
       return;
     }
+    const message = parsed.status === 'valid' ? ERR_RANGE : parsed.error ?? ERR_FORMAT;
     setText(isoToBe(current));
-    setError(parsed.status === 'valid' ? ERR_RANGE : parsed.error ?? ERR_FORMAT);
+    setError(message);
+    onErrorChange?.(message);
   }
 
   function handleBlur(event) {
@@ -200,6 +207,7 @@ export const ThaiDateInput = forwardRef(function ThaiDateInput({
     setText(isoToBe(iso));
     setError('');
     onChange?.(eventLike(name, iso));
+    onErrorChange?.('');
     setOpen(false);
     btnRef.current?.focus();
   }

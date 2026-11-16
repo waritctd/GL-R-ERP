@@ -7,7 +7,7 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
-import { bangkokTodayIso } from '../../utils/format.js';
+import { bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import { PipelineImportDialog } from './PipelineImportDialog.jsx';
 import { baht, columnLabel, money, otherCurrencyTotals, sinceLabel, sumValue, totalLabel } from './boardFormat.js';
 import { monthLabel } from './cashFormat.js';
@@ -184,7 +184,9 @@ export function TeamOverview({ showTitle = true }) {
             title={(
               <span className="grid gap-0.5">
                 <span>ดีลที่ควรโทรตาม</span>
-                <small className="text-xs font-normal text-text-muted">เรียงตามมูลค่า × วันที่เงียบ</small>
+                {/* The real order (SalesBoardService.rankFollowUp): every returning paused deal first — never capped,
+                    listed until resumed or re-dated — then the quiet ones by value × days quiet (review round 2, M-1). */}
+                <small className="text-xs font-normal text-text-muted">งานที่ถึงวันกลับมาดูขึ้นก่อน แล้วเรียงตามมูลค่า × วันที่เงียบ</small>
               </span>
             )}
             actions={(
@@ -214,9 +216,16 @@ export function TeamOverview({ showTitle = true }) {
                     </div>
                     <span className="grid shrink-0 justify-items-end gap-1">
                       <span className="text-sm font-bold tabular-nums text-text">{money(deal.value, deal.currency)}</span>
-                      <span className="rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">
-                        เงียบ {deal.daysQuiet} วัน
-                      </span>
+                      {/* V220: a paused deal whose วันที่จะกลับมาดู has arrived, counted with the quiet ones. */}
+                      {deal.returning ? (
+                        <span className="rounded-full bg-info-bg px-2 py-px text-2xs font-bold text-info-dark">
+                          {`พักไว้ · ถึงวันกลับมาดู ${formatThaiDate(deal.pauseReturnOn)}`}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-warning-bg px-2 py-px text-2xs font-bold text-warning-dark">
+                          เงียบ {deal.daysQuiet} วัน
+                        </span>
+                      )}
                     </span>
                   </li>
                 ))}

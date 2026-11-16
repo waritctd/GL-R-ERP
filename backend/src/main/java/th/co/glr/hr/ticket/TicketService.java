@@ -421,6 +421,18 @@ public class TicketService {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ไม่รองรับระดับความสำคัญ '" + request.priority() + "'");
         }
+        // The short create form (owner-approved drawing, 2026-11-16) starts a deal at S1 or S2 — nowhere else: from S3
+        // the deal moves by its documents. A sales API contract change, stated in the PR body.
+        String startStage = request.startStage() == null || request.startStage().isBlank()
+            ? DealStage.LEAD_APPROACH : request.startStage();
+        if (!DealStage.LEAD_APPROACH.equals(startStage) && !DealStage.SPEC_APPROVED.equals(startStage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "งานใหม่เริ่มได้ที่ S1 หรือ S2 เท่านั้น");
+        }
+        // Mirrors @DecimalMin(exclusive 0) on the request for service-level callers that skip bean validation; without
+        // it a non-positive value would hit chk_ticket_estimated_value and fail closed as a 500.
+        if (request.estimatedValue() != null && request.estimatedValue().signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "มูลค่าโดยประมาณต้องมากกว่า 0");
+        }
         long ownerId = request.ownerEmployeeId() == null ? actor.id() : request.ownerEmployeeId();
         if (ownerId != actor.id()) {
             // Owner/keyer split (2026-11-05): the chosen owner must be someone who could have entered
@@ -439,6 +451,17 @@ public class TicketService {
         // activity since the last stage change". A brand-new deal satisfied neither, so the rep's first forward move
         // always 400'd and the message was the first they heard of it.
         tickets.insertDealActivity(id, LocalDate.now(), "OTHER", "สร้างดีล", actor.id());
+        if (DealStage.SPEC_APPROVED.equals(startStage)) {
+            // Starting at S2 is allowed to exactly the people who may move a deal to S2 by hand: the SAME write gate
+            // updateStage runs (requireStageWriteAccess, unchanged). A refusal throws inside this transaction, so the
+            // deal created above rolls back. The readiness gate is deliberately not run: this is where the deal
+            // starts, not a forward move (the "สร้างดีล" activity above would satisfy half of it anyway).
+            TicketSummaryDto created = requireTicket(id).summary();
+            requireStageWriteAccess(created, DealStage.SPEC_APPROVED, actor);
+            tickets.updateSalesStage(id, DealStage.SPEC_APPROVED);
+            tickets.addEvent(id, actor.id(), actor.name(),
+                TicketEventKind.STAGE_CHANGED, created.salesStage(), DealStage.SPEC_APPROVED, "เริ่มที่ S2 · สเปคผ่าน");
+        }
         // A newly created deal is always the rep's private draft, whether or not products were attached — import/CEO
         // are notified only once a PricingRequest is created and submitted against this ticket, never at deal-creation
         // time.
@@ -773,7 +796,7 @@ public class TicketService {
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
             s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById(),
-            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt());
+            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(), s.estimatedValue());
     }
 
     /** Closing is a three-party sequence, not one person's decision: the goods must be delivered, the balance paid,
@@ -2671,6 +2694,16 @@ public class TicketService {
         if (request.expectedQuarter() != null) { // null = keep (see TrackingUpdateRequest); "" = clear
             tickets.updateExpectedQuarter(ticketId, blankToNull(request.expectedQuarter()));
         }
+        // V220 มูลค่าโดยประมาณ: kept when absent, like expectedQuarter; clearEstimatedValue clears it. Same gate as every
+        // other tracking field (requireDealOwnership + requireActive above, unchanged).
+        if (Boolean.TRUE.equals(request.clearEstimatedValue())) {
+            tickets.updateEstimatedValue(ticketId, null);
+        } else if (request.estimatedValue() != null) {
+            if (request.estimatedValue().signum() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "มูลค่าโดยประมาณต้องมากกว่า 0");
+            }
+            tickets.updateEstimatedValue(ticketId, request.estimatedValue());
+        }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(), "tracking fields updated");
         return requireTicket(ticketId);
@@ -2971,10 +3004,25 @@ public class TicketService {
 
     @Transactional
     public TicketDto placeOnHold(long ticketId, String note, UserPrincipal actor) {
+        return placeOnHold(ticketId, note, null, actor);
+    }
+
+    /** {@link #placeOnHold} with the optional วันที่จะกลับมาดู (V220). The authorization checks are the method's
+     * existing two, unchanged and in the same order; the date is validated only after them, so a caller who may not
+     * pause the deal is told 403, never a date error. */
+    @Transactional
+    public TicketDto placeOnHold(long ticketId, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        // Fix round 1, ruling 5: hold on a deal ALREADY on hold changes only its return date (and logs the note) —
+        // no lifecycle change, no notification, no second ON_HOLD event. Same permission check, above, first.
+        if (DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
+            return changePauseReturnOn(s, note, pauseReturnOn, actor);
+        }
         requireActive(s);
+        requireReturnDateNotPast(pauseReturnOn);
         tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
+        tickets.updatePauseReturnOn(ticketId, pauseReturnOn);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.ON_HOLD, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_ON_HOLD,
@@ -2986,12 +3034,26 @@ public class TicketService {
 
     @Transactional
     public TicketDto markDormant(long ticketId, String note, UserPrincipal actor) {
+        return markDormant(ticketId, note, null, actor);
+    }
+
+    /** {@link #markDormant} with the optional วันที่จะกลับมาดู (V220); the existing checks run first, unchanged. On an
+     * ON_HOLD deal this is also the "re-pause with a new date" the owner ruling names: the new date (or none)
+     * replaces the old one. */
+    @Transactional
+    public TicketDto markDormant(long ticketId, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        // Fix round 1, ruling 5: dormant on a deal ALREADY dormant changes only its return date (see placeOnHold).
+        if (DealLifecycle.DORMANT.equals(s.lifecycle())) {
+            return changePauseReturnOn(s, note, pauseReturnOn, actor);
+        }
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) && !DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT, "พัก dormant ได้เฉพาะดีลที่ active หรือ on hold");
         }
+        requireReturnDateNotPast(pauseReturnOn);
         tickets.updateLifecycle(ticketId, DealLifecycle.DORMANT);
+        tickets.updatePauseReturnOn(ticketId, pauseReturnOn);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.DORMANT, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_DORMANT,
@@ -3009,6 +3071,8 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "ดำเนินการต่อได้เฉพาะดีลที่พักไว้");
         }
         tickets.updateLifecycle(ticketId, DealLifecycle.ACTIVE);
+        // V220: a resumed deal has no return date to come back on.
+        tickets.updatePauseReturnOn(ticketId, null);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.RESUMED, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_RESUMED,
@@ -3822,6 +3886,36 @@ public class TicketService {
                 "ต้องการสถานะ '" + expectedStatus + "' แต่ดีลนี้อยู่ในสถานะ '" + s.status() + "'");
         }
         return s;
+    }
+
+    /** The clock the return-date check reads; the system clock in the app. Tests fix it to an instant at which the
+     * Bangkok and UTC calendar dates differ (00:00–06:59 Bangkok). */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void useClock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
+    /** วันที่จะกลับมาดู may be today or later on the Asia/Bangkok calendar (QuietRule#returningSql reads the same
+     * date) — whatever zone the clock carries; null means "no date". */
+    private void requireReturnDateNotPast(LocalDate pauseReturnOn) {
+        LocalDate bangkokToday = LocalDate.ofInstant(clock.instant(), java.time.ZoneId.of("Asia/Bangkok"));
+        if (pauseReturnOn != null && pauseReturnOn.isBefore(bangkokToday)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่จะกลับมาดูต้องเป็นวันนี้หรือหลังจากนี้");
+        }
+    }
+
+    /**
+     * Fix round 1, ruling 5: the date-only change of an already-paused deal (hold on ON_HOLD, dormant on DORMANT).
+     * Writes the new date (or none) and records it as a POLICY_CHANGED event with the note — no lifecycle change, no
+     * notification, no second pause event. The caller has already run the pause's permission check.
+     */
+    private TicketDto changePauseReturnOn(TicketSummaryDto s, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
+        requireReturnDateNotPast(pauseReturnOn);
+        tickets.updatePauseReturnOn(s.id(), pauseReturnOn);
+        tickets.addEvent(s.id(), actor.id(), actor.name(), TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
+            "pause_return_on → " + (pauseReturnOn == null ? "ไม่ระบุ" : pauseReturnOn.toString()) + noteSuffix(note));
+        return requireTicket(s.id());
     }
 
     private void requireActive(TicketSummaryDto summary) {
