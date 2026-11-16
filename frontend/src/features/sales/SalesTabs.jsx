@@ -4,8 +4,8 @@
 import { NavLink } from 'react-router-dom';
 import { hasPermission } from '../../app/permissions.js';
 
-// The งานขาย (Sales) workspace is one sidebar menu. คำขอราคา and โครงการ were merged into the single
-// deal-pipeline page (/tickets — one ticket = one deal). The sidebar item stays highlighted across it and the
+// The งานขาย (Sales) workspace is one launcher menu item. คำขอราคา and โครงการ were merged into the single
+// deal-pipeline page (/tickets — one ticket = one deal). The launcher item stays highlighted across it and the
 // detail pages via AppShell `match`, and deep links keep working unchanged.
 const DEAL_LIST_TAB = { path: '/tickets', label: 'งานทั้งหมด' };
 

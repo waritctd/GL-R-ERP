@@ -106,8 +106,8 @@ export function sizeTextFromCatalog(cat) {
  * Measured: at an 820px window this row's grid columns are 142px, leaving 58px for digits and
  * cutting "1041.11" to "1041."; at 176px ~90px remain beside the unit. It is a CONTAINER query on
  * the box itself, not a `tablet:`/`mobile:` breakpoint, because the same squeeze happens in two
- * unrelated places: the tablet band (4 columns, no sidebar) and the narrow end of the desktop
- * band (sidebar open). Left OFF for เผื่อ's "กรอกเอง" box, whose label names neither % nor แผ่น, so
+ * unrelated places: the tablet band (4 columns) and the narrow end of the desktop
+ * band (formerly the sidebar-open width). Left OFF for เผื่อ's "กรอกเอง" box, whose label names neither % nor แผ่น, so
  * the in-field unit is the only place that distinction lives.
  */
 function PriceInputWithSuffix({ id, suffix, className, unitInLabel = false, ...inputProps }) {
@@ -877,7 +877,7 @@ export function QuotationItemRow({
           wrapper just below), two otherwise, one on a phone. The four Thai price labels run to 164px
           ("ราคาพิเศษ/ตร.ม. (รวม VAT) *"), so four columns need ~170px each, and the row is narrower
           than that in two places a window-width breakpoint cannot tell apart: the tablet band
-          (721–1040px, no sidebar: 142px columns at 820) and the narrow desktop band with the
+          (721–1040px: 142px columns at 820) and the narrow desktop band, formerly with the
           sidebar open (133px at 1045, an iPad in landscape), where the price label wrapped beside a
           "ส่วนลด %" that did not. Base is two columns and the query WIDENS it, so `mobile:grid-cols-1`
           only competes with an un-prefixed utility.

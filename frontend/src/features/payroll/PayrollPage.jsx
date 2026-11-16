@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -1458,6 +1459,11 @@ export function PayrollPage({ user, showToast }) {
           </div>
         )}
       />
+
+      <nav aria-label="ทะเบียนที่เกี่ยวข้อง" className="flex flex-wrap gap-x-5 gap-y-1 text-sm font-semibold">
+        <Link to="/payroll/deduction-shortfalls">ยอดค้างหักตามหมายบังคับคดี</Link>
+        <Link to="/payroll/deduction-consents">ทะเบียนหนังสือยินยอมหักเงิน</Link>
+      </nav>
 
       {/* Advisory only, never a gate; rendered before every other banner so HR sees it before
           Process. Leave still SUBMITTED does not feed findUnpaidLeaveDaysByEmployeeForMonth, so it

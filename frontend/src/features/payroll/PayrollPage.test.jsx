@@ -1,6 +1,7 @@
 import React from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { PayrollPage } from './PayrollPage.jsx';
 import { api } from '../../api/index.js';
@@ -15,7 +16,7 @@ function renderWithClient(ui) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(<QueryClientProvider client={queryClient}>{ui}</QueryClientProvider>);
+  return render(<QueryClientProvider client={queryClient}><MemoryRouter>{ui}</MemoryRouter></QueryClientProvider>);
 }
 
 // Mirrors App.jsx's wiring: useToast() hands back a `showToast` that is re-created on every render
@@ -191,6 +192,20 @@ describe('PayrollPage adjustment inputs', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  // The two deduction pages left the main nav (AppShell launcher); their routes and guards are unchanged, so this
+  // page is how they stay reachable. Same audience as the page itself (canViewPayroll: hr + ceo).
+  it.each([
+    ['hr', { role: 'hr', employeeId: 10 }],
+    ['ceo (read-only view)', { role: 'ceo', employeeId: 1 }],
+  ])('links to the deduction shortfalls and consents pages for %s', async (_label, user) => {
+    renderWithClient(<PayrollPage user={user} showToast={vi.fn()} />);
+    await screen.findByRole('button', { name: 'เอกสาร' });
+
+    const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
+    expect(hrefs).toContain('/payroll/deduction-shortfalls');
+    expect(hrefs).toContain('/payroll/deduction-consents');
   });
 
   it('allows clearing zero/default amounts and sends them as zeroes', async () => {
@@ -1530,7 +1545,9 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
     api.payroll.current.mockResolvedValueOnce({ period: previewPeriod() });
     render(
       <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
         <PayrollPage user={hrUser} showToast={vi.fn()} />
+      </MemoryRouter>
       </QueryClientProvider>,
     );
 
@@ -1678,6 +1695,7 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
 
     render(
       <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
         <AppShapedHarness
           onShowToast={(kind, message) => {
             showToastCalls.push({ kind, message });
@@ -1688,6 +1706,7 @@ describe('PayrollPage issue #422 (draft correctness + realtime)', () => {
         >
           {(showToast) => <PayrollPage user={hrUser} showToast={showToast} />}
         </AppShapedHarness>
+      </MemoryRouter>
       </QueryClientProvider>,
     );
 

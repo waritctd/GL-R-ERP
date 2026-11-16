@@ -338,7 +338,11 @@ test.describe.serial('cash + ops screens — real pricing-chain deals @cash-ops'
     await loginAs(page, 'account');
     await page.goto('/finance');
     await expect(page.getByText('อัปโหลดไฟล์รับเงินจาก Express')).toHaveCount(0);
+    // The nav lives in the launcher now; open it so the absence check is not vacuous.
+    await page.getByRole('button', { name: 'เมนู', exact: true }).click();
+    await expect(page.getByRole('navigation', { name: 'Primary navigation' })).toBeVisible();
     await expect(page.getByRole('link', { name: /รับเงินจาก Express/ })).toHaveCount(0);
+    await page.keyboard.press('Escape');
     await shot(page, 'cash-10-express-off-account-landing');
     await page.goto('/finance/receipts-import');
     // Reached by URL the page says so and offers no file input (it is a notice, not an upload form).
