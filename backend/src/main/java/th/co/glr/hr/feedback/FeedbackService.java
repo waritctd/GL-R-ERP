@@ -1,0 +1,179 @@
+package th.co.glr.hr.feedback;
+
+import java.time.LocalDate;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import th.co.glr.hr.auth.EmployeeAuthRepository;
+import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.common.ApiException;
+import th.co.glr.hr.feedback.FeedbackDtos.DecisionRequest;
+import th.co.glr.hr.feedback.FeedbackDtos.FeedbackDto;
+import th.co.glr.hr.feedback.FeedbackDtos.SubmitRequest;
+import th.co.glr.hr.feedback.FeedbackDtos.UpdateRequest;
+import th.co.glr.hr.notification.NotificationService;
+
+/** Staff submit and read their own; the admin (live hr.employee.is_admin, as the activity log) decides and tracks. */
+@Service
+public class FeedbackService {
+    static final String LINK = "/whats-new?tab=feedback";
+    static final Set<String> AREAS = Set.of("DEALS", "QUOTATIONS", "VISITS", "CATALOG", "COMMISSION", "ATTENDANCE",
+        "SPECIAL_MONEY", "LEAVE", "TAX_ALLOWANCE", "PAYROLL", "MENU", "LOGIN", "OTHER");
+    private static final Set<String> BUG_IMPACTS = Set.of("BLOCKED", "WORKAROUND", "LOW");
+    private static final Set<String> FEATURE_IMPACTS = Set.of("DAILY", "SOMETIMES", "NICE");
+    private static final int MAX_TEXT = 4000;
+    private static final Map<String, String> STEP_LABEL = Map.of("ACCEPTED", "รับเรื่อง", "IN_PROGRESS", "กำลังทำ",
+        "TESTING", "ทดสอบ", "RELEASED", "ใช้งานได้แล้ว");
+    private static final String[] THAI_MONTHS = {"ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.",
+        "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."};
+
+    private final FeedbackRepository repository;
+    private final EmployeeAuthRepository employees;
+    private final NotificationService notifications;
+
+    public FeedbackService(FeedbackRepository repository, EmployeeAuthRepository employees,
+                           NotificationService notifications) {
+        this.repository = repository;
+        this.employees = employees;
+        this.notifications = notifications;
+    }
+
+    @Transactional
+    public FeedbackDto submit(UserPrincipal actor, SubmitRequest request) {
+        if (actor == null || request == null) {
+            throw bad("คำขอไม่ถูกต้อง");
+        }
+        String details = request.details() == null ? "" : request.details().trim();
+        if (!"BUG".equals(request.kind()) && !"FEATURE".equals(request.kind())) {
+            throw bad("ต้องเลือกประเภท");
+        }
+        if (request.area() == null || !AREAS.contains(request.area())) {
+            throw bad("ต้องเลือกหน้าที่เกี่ยวข้อง");
+        }
+        if (chars(details) < 10 || chars(details) > MAX_TEXT) {
+            throw bad("รายละเอียดต้องยาว 10–4000 ตัวอักษร");
+        }
+        String extra = blankToNull(request.extra());
+        if (extra != null && chars(extra) > MAX_TEXT) {
+            throw bad("ข้อความเพิ่มเติมยาวเกินไป");
+        }
+        String impact = blankToNull(request.impact());
+        if (impact != null && !("BUG".equals(request.kind()) ? BUG_IMPACTS : FEATURE_IMPACTS).contains(impact)) {
+            throw bad("ระดับผลกระทบไม่ถูกต้อง");
+        }
+        SubmitRequest clean = new SubmitRequest(request.kind(), request.area(), details, extra, impact,
+            cut(request.pagePath(), 300), cut(request.userAgent(), 300), cut(request.viewport(), 30));
+        long id = repository.insert(actor.id(), actor.name(), repository.departmentOf(actor.id()), actor.role(), clean);
+        FeedbackDto saved = repository.findById(id).orElseThrow();
+        String subject = ("BUG".equals(clean.kind()) ? "แจ้งปัญหา" : "ขอฟีเจอร์") + " #" + id + " จาก " + actor.name();
+        String body = clean.details();
+        for (long adminId : repository.activeAdminIds()) {
+            notifications.notify(adminId, "FEEDBACK_SUBMITTED", subject, body, LINK, true);
+        }
+        return saved;
+    }
+
+    public List<FeedbackDto> listMine(UserPrincipal actor) {
+        return repository.findByReporter(actor.id());
+    }
+
+    public List<FeedbackDto> listAll(UserPrincipal actor) {
+        requireAdmin(actor);
+        return repository.findAll();
+    }
+
+    @Transactional
+    public FeedbackDto decide(UserPrincipal actor, long id, DecisionRequest request) {
+        requireAdmin(actor);
+        boolean accept = request != null && "ACCEPT".equals(request.decision());
+        boolean deny = request != null && "DENY".equals(request.decision());
+        String reason = request == null || request.reason() == null ? null : request.reason().trim();
+        if (!accept && !deny) {
+            throw bad("ต้องระบุการตัดสินใจ");
+        }
+        if (accept && request.eta() == null) {
+            throw bad("ต้องระบุวันกำหนดเสร็จ");
+        }
+        if (deny && (reason == null || chars(reason) < 5 || chars(reason) > 2000)) {
+            throw bad("เหตุผลต้องยาว 5–2000 ตัวอักษร");
+        }
+        FeedbackDto before = existing(id);
+        if (!repository.decide(id, accept ? "ACCEPTED" : "DENIED", accept ? request.eta() : null,
+            accept ? null : reason, actor.id())) {
+            throw conflict();
+        }
+        String ref = "#" + id;
+        notifications.notify(before.reporterEmployeeId(), "FEEDBACK_DECIDED",
+            accept ? "รับเรื่อง " + ref + " แล้ว" : "ไม่รับเรื่อง " + ref,
+            accept ? "กำหนดเสร็จ " + thaiDate(request.eta()) : "เหตุผล: " + reason, LINK, false);
+        return existing(id);
+    }
+
+    @Transactional
+    public FeedbackDto update(UserPrincipal actor, long id, UpdateRequest request) {
+        requireAdmin(actor);
+        String status = request == null ? null : request.status();
+        if (status != null && !FeedbackRepository.ACCEPTED_FAMILY.contains(status)) {
+            throw bad("สถานะไม่ถูกต้อง");
+        }
+        FeedbackDto before = existing(id);
+        LocalDate eta = request == null ? null : request.eta();
+        if (!FeedbackRepository.ACCEPTED_FAMILY.contains(before.status())) {
+            throw conflict();
+        }
+        boolean statusChanged = status != null && !status.equals(before.status());
+        boolean etaChanged = eta != null && !eta.equals(before.eta());
+        if (!statusChanged && !etaChanged) {
+            return before;
+        }
+        if (!repository.update(id, status, eta)) {
+            throw conflict();
+        }
+        FeedbackDto after = existing(id);
+        notifications.notify(before.reporterEmployeeId(), "FEEDBACK_UPDATED", "อัปเดตเรื่อง #" + id,
+            "ความคืบหน้า: " + STEP_LABEL.get(after.status()) + " · กำหนดเสร็จ " + thaiDate(after.eta()), LINK, false);
+        return after;
+    }
+
+    private FeedbackDto existing(long id) {
+        return repository.findById(id).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบเรื่องนี้"));
+    }
+
+    private void requireAdmin(UserPrincipal actor) {
+        if (actor == null || !employees.isAdmin(actor.id())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+    }
+
+    private static ApiException bad(String message) {
+        return new ApiException(HttpStatus.BAD_REQUEST, message);
+    }
+
+    private static ApiException conflict() {
+        return new ApiException(HttpStatus.CONFLICT, "เรื่องนี้ถูกตัดสินแล้วหรือยังไม่ได้รับเรื่อง");
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
+    }
+
+    /** Characters as Postgres char_length counts them: an emoji is one, not two UTF-16 units. */
+    private static int chars(String value) {
+        return value.codePointCount(0, value.length());
+    }
+
+    /** Cuts to {@code max} characters without splitting a surrogate pair. */
+    private static String cut(String value, int max) {
+        if (value == null || chars(value) <= max) {
+            return value;
+        }
+        return value.substring(0, value.offsetByCodePoints(0, max));
+    }
+
+    private static String thaiDate(LocalDate date) {
+        return date.getDayOfMonth() + " " + THAI_MONTHS[date.getMonthValue() - 1] + " " + (date.getYear() + 543);
+    }
+}

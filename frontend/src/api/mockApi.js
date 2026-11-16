@@ -4122,6 +4122,56 @@ const MOCK_RELEASE_NOTICE_ROLES = ['ceo', 'hr', 'import', 'account', 'warehouse'
 /** `${releaseId}:${userId}` of everyone the mock has "emailed" — the stand-in for the server's audit-log ledger. */
 const mockReleaseNoticeEmailed = new Set();
 
+// แจ้งปัญหา / ขอฟีเจอร์ mock store. Mirrors FeedbackService (admin = the live `admin` seed flag, never a role).
+// Seed reporters are the demo sales (id 6) and employee (id 4) users; the text is synthetic.
+const MOCK_FEEDBACK_AREAS = ['DEALS', 'QUOTATIONS', 'VISITS', 'CATALOG', 'COMMISSION', 'ATTENDANCE', 'SPECIAL_MONEY',
+  'LEAVE', 'TAX_ALLOWANCE', 'PAYROLL', 'MENU', 'LOGIN', 'OTHER'];
+const MOCK_FEEDBACK_IMPACTS = { BUG: ['BLOCKED', 'WORKAROUND', 'LOW'], FEATURE: ['DAILY', 'SOMETIMES', 'NICE'] };
+const MOCK_FEEDBACK_ACCEPTED = ['ACCEPTED', 'IN_PROGRESS', 'TESTING', 'RELEASED'];
+const mockFeedbackSeed = (id, userId, name, department, role, over) => ({
+  id, kind: 'BUG', area: 'QUOTATIONS', details: 'ตัวอย่างข้อมูลสมมติสำหรับทดลองระบบ', extra: null, impact: null,
+  pagePath: '/quotations', userAgent: 'Mock', viewport: '390x844', reporterEmployeeId: userId, reporterName: name,
+  reporterDepartment: department, reporterRole: role, status: 'PENDING', eta: null, denyReason: null,
+  createdAt: '2026-11-14T03:42:00.000Z', updatedAt: '2026-11-14T03:42:00.000Z', ...over,
+});
+const mockFeedback = [
+  mockFeedbackSeed(3, 4, 'พนักงานตัวอย่าง', 'ฝ่ายบัญชี', 'employee',
+    { kind: 'FEATURE', area: 'LEAVE', details: 'อยากเห็นวันลาคงเหลือของทีมในหน้าเดียว', pagePath: '/leave' }),
+  mockFeedbackSeed(2, 6, 'ผู้ขายตัวอย่าง', 'ฝ่ายขาย', 'sales',
+    { kind: 'FEATURE', area: 'CATALOG', details: 'อยากให้แคตตาล็อกแสดงราคาทุนด้วย', status: 'DENIED',
+      denyReason: 'ราคาทุนเปิดให้เฉพาะผู้บริหารตามนโยบาย' }),
+  mockFeedbackSeed(1, 6, 'ผู้ขายตัวอย่าง', 'ฝ่ายขาย', 'sales',
+    { details: 'กดพิมพ์ใบเสนอราคาแล้ว PDF ตัดบรรทัดสุดท้าย', status: 'IN_PROGRESS', eta: '2026-11-21', impact: 'WORKAROUND' }),
+];
+
+const MOCK_FEEDBACK_STEPS = { ACCEPTED: 'รับเรื่อง', IN_PROGRESS: 'กำลังทำ', TESTING: 'ทดสอบ', RELEASED: 'ใช้งานได้แล้ว' };
+const MOCK_FEEDBACK_MONTHS = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+function mockFeedbackDate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return `${d} ${MOCK_FEEDBACK_MONTHS[m - 1]} ${y + 543}`;
+}
+
+function mockRequireFeedbackAdmin() {
+  const user = requireSession();
+  if (!user.admin) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+  return user;
+}
+
+function mockFeedbackNotify(userId, type, title, message) {
+  const id = Math.max(...db.notifications.map((n) => n.id), 0) + 1;
+  db.notifications.unshift({
+    id, userId, ticketId: null, ticketCode: null, type, title, message,
+    link: '/whats-new?tab=feedback', read: false, createdAt: new Date().toISOString(),
+  });
+}
+
+function mockFeedbackById(id) {
+  const found = mockFeedback.find((f) => f.id === Number(id));
+  if (!found) fail('ไม่พบเรื่องนี้', 404);
+  return found;
+}
+
+
 function mockNormalizeReleaseNotice(payload) {
   const releaseId = payload?.releaseId?.trim();
   if (!releaseId || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(releaseId)) fail('รหัสประกาศไม่ถูกต้อง', 400);
@@ -12978,6 +13028,78 @@ export const api = {
       const n = db.notifications.find((item) => item.id === Number(id));
       if (n) n.read = true;
       return delay({ ok: true });
+    },
+  },
+
+  // Mirrors FeedbackController + FeedbackService (feedback/). As with the other mocks, this authz is not evidence
+  // about the Java gate (FeedbackServiceIntegrationTest is).
+  feedback: {
+    async submit(payload = {}) {
+      const user = requireSession();
+      const details = String(payload.details ?? '').trim();
+      if (!['BUG', 'FEATURE'].includes(payload.kind)) fail('ต้องเลือกประเภท');
+      if (!MOCK_FEEDBACK_AREAS.includes(payload.area)) fail('ต้องเลือกหน้าที่เกี่ยวข้อง');
+      if ([...details].length < 10 || [...details].length > 4000) fail('รายละเอียดต้องยาว 10–4000 ตัวอักษร');
+      const extra = String(payload.extra ?? '').trim() || null;
+      if (extra && [...extra].length > 4000) fail('ข้อความเพิ่มเติมยาวเกินไป');
+      const impact = payload.impact || null;
+      if (impact && !MOCK_FEEDBACK_IMPACTS[payload.kind].includes(impact)) fail('ระดับผลกระทบไม่ถูกต้อง');
+      const now = new Date().toISOString();
+      const saved = {
+        id: Math.max(...mockFeedback.map((f) => f.id), 0) + 1, kind: payload.kind, area: payload.area, details, extra,
+        impact, pagePath: [...String(payload.pagePath ?? '')].slice(0, 300).join('') || null,
+        userAgent: [...String(payload.userAgent ?? '')].slice(0, 300).join('') || null,
+        viewport: [...String(payload.viewport ?? '')].slice(0, 30).join('') || null,
+        // Identity is the session's, never the payload's.
+        reporterEmployeeId: user.id, reporterName: user.name, reporterRole: user.role,
+        reporterDepartment: employeeForUser(user)?.departmentTh ?? null,
+        status: 'PENDING', eta: null, denyReason: null, createdAt: now, updatedAt: now,
+      };
+      mockFeedback.unshift(saved);
+      db.users.filter((u) => u.admin && u.active).forEach((admin) => mockFeedbackNotify(
+        admin.id, 'FEEDBACK_SUBMITTED', `${payload.kind === 'BUG' ? 'แจ้งปัญหา' : 'ขอฟีเจอร์'} #${saved.id} จาก ${user.name}`, details));
+      return delay({ ...saved });
+    },
+    async listMine() {
+      const user = requireSession();
+      return delay(mockFeedback.filter((f) => f.reporterEmployeeId === user.id).map((f) => ({ ...f })));
+    },
+    async listAll() {
+      mockRequireFeedbackAdmin();
+      return delay(mockFeedback.map((f) => ({ ...f })));
+    },
+    async decide(id, payload = {}) {
+      mockRequireFeedbackAdmin();
+      const accept = payload.decision === 'ACCEPT';
+      const reason = String(payload.reason ?? '').trim();
+      if (!accept && payload.decision !== 'DENY') fail('ต้องระบุการตัดสินใจ');
+      if (accept && !payload.eta) fail('ต้องระบุวันกำหนดเสร็จ');
+      if (!accept && ([...reason].length < 5 || [...reason].length > 2000)) fail('เหตุผลต้องยาว 5–2000 ตัวอักษร');
+      const found = mockFeedbackById(id);
+      if (found.status !== 'PENDING') fail('เรื่องนี้ถูกตัดสินแล้วหรือยังไม่ได้รับเรื่อง', 409);
+      Object.assign(found, accept
+        ? { status: 'ACCEPTED', eta: payload.eta, denyReason: null }
+        : { status: 'DENIED', eta: null, denyReason: reason }, { updatedAt: new Date().toISOString() });
+      mockFeedbackNotify(found.reporterEmployeeId, 'FEEDBACK_DECIDED',
+        accept ? `รับเรื่อง #${found.id} แล้ว` : `ไม่รับเรื่อง #${found.id}`,
+        accept ? `กำหนดเสร็จ ${mockFeedbackDate(payload.eta)}` : `เหตุผล: ${reason}`);
+      return delay({ ...found });
+    },
+    async update(id, payload = {}) {
+      mockRequireFeedbackAdmin();
+      if (payload.status != null && !MOCK_FEEDBACK_ACCEPTED.includes(payload.status)) fail('สถานะไม่ถูกต้อง');
+      const found = mockFeedbackById(id);
+      if (!MOCK_FEEDBACK_ACCEPTED.includes(found.status)) fail('เรื่องนี้ถูกตัดสินแล้วหรือยังไม่ได้รับเรื่อง', 409);
+      const statusChanged = payload.status != null && payload.status !== found.status;
+      const etaChanged = payload.eta != null && payload.eta !== found.eta;
+      if (statusChanged || etaChanged) {
+        if (statusChanged) found.status = payload.status;
+        if (etaChanged) found.eta = payload.eta;
+        found.updatedAt = new Date().toISOString();
+        mockFeedbackNotify(found.reporterEmployeeId, 'FEEDBACK_UPDATED', `อัปเดตเรื่อง #${found.id}`,
+          `ความคืบหน้า: ${MOCK_FEEDBACK_STEPS[found.status]} · กำหนดเสร็จ ${mockFeedbackDate(found.eta)}`);
+      }
+      return delay({ ...found });
     },
   },
 

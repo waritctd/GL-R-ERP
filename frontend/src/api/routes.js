@@ -372,6 +372,14 @@ export const API_ROUTES = {
     publish: '/api/release-notes/publish',
     email: '/api/release-notes/email',
   },
+  // แจ้งปัญหา / ขอฟีเจอร์ (FeedbackController). list/decide/update are admin-only, enforced by FeedbackService.
+  feedback: {
+    submit: '/api/feedback',
+    mine: '/api/feedback/mine',
+    list: '/api/feedback',
+    decision: (id) => `/api/feedback/${id}/decision`,
+    detail: (id) => `/api/feedback/${id}`,
+  },
   notifications: {
     list: '/api/notifications',
     markRead: (id) => `/api/notifications/${id}/read`,
