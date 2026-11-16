@@ -105,6 +105,83 @@ public class NotificationEmailService {
         }
     }
 
+    /**
+     * One reader's "มีอะไรใหม่" release-notice email (ReleaseNoticeDelivery). SYNCHRONOUS and THROWING, unlike
+     * {@link #send}: the caller records the per-person outcome (sent / failed) in the audit log, so a provider
+     * failure must reach it rather than be logged and swallowed here. Rendered in the same branded shell, with
+     * every piece of the release's copy HTML-escaped (titles and whys come from the publish request), the link as a
+     * button AND as visible text, and a plain-text alternative. No attachment; only the shell's inline logo.
+     */
+    public void sendReleaseNotice(String to, String recipientName, ReleaseNoticeEmail email) {
+        String finalSubject = "[GL&R Portal] " + clean(email.subject()) + subjectSuffix;
+        String url = appBaseUrl + normalizeLink(clean(email.link()));
+        mailer.sendHtml(to, finalSubject, releaseNoticeHtml(recipientName, email, url),
+            releaseNoticeText(recipientName, email, url), logoInlineImages);
+    }
+
+    private String releaseNoticeHtml(String recipientName, ReleaseNoticeEmail email, String url) {
+        String cleanName = clean(recipientName);
+        String greeting = cleanName.isBlank()
+            ? "เรียน ท่านผู้ใช้งาน,"
+            : "เรียน คุณ" + escapeHtml(cleanName) + ",";
+        StringBuilder items = new StringBuilder();
+        for (ReleaseNoticeEmail.Item item : email.items()) {
+            items.append("<tr><td style=\"padding:0 0 14px 0;font-family:").append(FONT_STACK).append(";\">")
+                .append("<p style=\"margin:0;font-size:15px;font-weight:700;color:#111827;\">")
+                .append(escapeHtml(clean(item.title()))).append("</p>");
+            if (!clean(item.why()).isBlank()) {
+                items.append("<p style=\"margin:4px 0 0 0;font-size:14px;color:#4b5563;\">")
+                    .append(escapeHtml(clean(item.why()))).append("</p>");
+            }
+            items.append("</td></tr>");
+        }
+        String more = clean(email.moreLine()).isBlank()
+            ? ""
+            : "<p style=\"margin:0 0 4px 0;font-size:14px;color:#4b5563;\">" + escapeHtml(clean(email.moreLine()))
+                + "</p>";
+        String href = escapeHtml(url);
+        String button = """
+            <table role="presentation" cellpadding="0" cellspacing="0" style="margin:20px 0 0 0;">
+              <tr>
+                <td align="center" bgcolor="%s" style="border-radius:6px;">
+                  <a href="%s" target="_blank" rel="noopener" style="display:inline-block;padding:12px 28px;font-family:%s;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:6px;">%s</a>
+                </td>
+              </tr>
+            </table>
+            """.formatted(BRAND_COLOR, href, FONT_STACK, escapeHtml(clean(email.ctaLabel())));
+        return wrapShell(
+            "<p style=\"margin:0 0 16px 0;\">" + greeting + "</p>"
+                + "<p style=\"margin:0 0 18px 0;\">" + escapeHtml(clean(email.intro())) + "</p>"
+                + "<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\">" + items + "</table>"
+                + more
+                + button
+                + "<p style=\"margin:16px 0 0 0;font-size:13px;color:#4b5563;word-break:break-all;\">หรือเปิดลิงก์นี้: "
+                + "<a href=\"" + href + "\" style=\"color:" + BRAND_COLOR + ";\">" + href + "</a></p>"
+                + "<p style=\"margin:16px 0 0 0;font-size:13px;color:#6b7280;\">" + escapeHtml(clean(email.outro()))
+                + "</p>");
+    }
+
+    private String releaseNoticeText(String recipientName, ReleaseNoticeEmail email, String url) {
+        String cleanName = clean(recipientName);
+        StringBuilder text = new StringBuilder(cleanName.isBlank() ? "เรียน ท่านผู้ใช้งาน," : "เรียน คุณ" + cleanName + ",")
+            .append("\n\n").append(clean(email.intro())).append("\n\n");
+        for (ReleaseNoticeEmail.Item item : email.items()) {
+            text.append("• ").append(clean(item.title())).append('\n');
+            if (!clean(item.why()).isBlank()) {
+                text.append("  ").append(clean(item.why())).append('\n');
+            }
+        }
+        if (!clean(email.moreLine()).isBlank()) {
+            text.append(clean(email.moreLine())).append('\n');
+        }
+        text.append('\n').append(clean(email.ctaLabel())).append(": ").append(url).append("\n\n")
+            .append(clean(email.outro())).append("\n\n")
+            .append("ขอแสดงความนับถือ\n")
+            .append("GL&R Portal\n")
+            .append("— อีเมลฉบับนี้ส่งจากระบบอัตโนมัติ กรุณาอย่าตอบกลับ");
+        return text.toString();
+    }
+
     public void sendWithAttachment(String to, String subject, String body, String filename, byte[] bytes) {
         if ((to == null || to.isBlank()) && !overrideConfigured) {
             throw new IllegalArgumentException("Email recipient is required");

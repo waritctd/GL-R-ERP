@@ -100,3 +100,24 @@ export function publishPayload(release) {
       .filter((change) => change.roles.length > 0),
   };
 }
+
+/**
+ * The request body the CEO/HR control actually sends to /api/release-notes/{audience,publish-with-email,email}:
+ * publishPayload's audience (same role filter, so the email never names a page its reader cannot open) plus the
+ * email's copy, read from the same release file — the release `date` (the subject names it) and each entry's
+ * one-sentence `why` (shown under its title). The backend validates and caps both (ReleaseNoticePolicy.normalize)
+ * and escapes them in the HTML. Nothing here is typed twice: a new release file needs no backend change.
+ */
+export function noticePayload(release) {
+  return {
+    ...publishPayload(release),
+    date: release.date,
+    changes: release.entries
+      .map((entry) => ({
+        title: entry.title,
+        roles: rolesForEntry(release, entry),
+        why: entry.why?.trim() ? entry.why : null,
+      }))
+      .filter((change) => change.roles.length > 0),
+  };
+}

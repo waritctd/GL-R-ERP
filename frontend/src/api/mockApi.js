@@ -4119,7 +4119,9 @@ function requireNoOtherDirectQuotationAfterConfirm(ticket, row) {
 
 // ── มีอะไรใหม่ release notice (mirrors notification/ReleaseNoticePolicy + ReleaseNoticeService) ──
 const MOCK_RELEASE_NOTICE_ROLES = ['ceo', 'hr', 'import', 'account', 'warehouse', 'qc', 'sales_manager', 'sales', 'employee'];
-/** `${releaseId}:${userId}` of everyone the mock has "emailed" — the stand-in for the server's audit-log ledger. */
+/** `${releaseId}:${userId}` of everyone the mock has "emailed" — the stand-in for the server's audit-log ledger. The
+ * mock never sends mail, so every "emailed" person is immediately SENT: it does not model FAILED, SENDING or
+ * UNCONFIRMED (failure, retry and the crash window are proven only by ReleaseNoticeIntegrationTest). */
 const mockReleaseNoticeEmailed = new Set();
 
 function mockNormalizeReleaseNotice(payload) {
@@ -4139,9 +4141,18 @@ function mockNormalizeReleaseNotice(payload) {
       if (!MOCK_RELEASE_NOTICE_ROLES.includes(role)) fail(`ไม่รู้จักแผนก: ${raw}`, 400);
       return role;
     });
-    return { title: changeTitle, roles: [...new Set(roles)] };
+    // ReleaseNoticePolicy.normalizeWhy: one line, control characters dropped, blank = none, at most 300.
+    const why = typeof change.why === 'string'
+      ? change.why.replace(/\s+/g, ' ').replace(/\p{Cc}/gu, '').trim() || null
+      : null;
+    if (why && why.length > 300) fail('คำอธิบายของแต่ละรายการยาวเกิน 300 ตัวอักษร', 400);
+    return { title: changeTitle, roles: [...new Set(roles)], why };
   });
-  return { releaseId, title, changes };
+  const date = typeof payload.date === 'string' && payload.date.trim() ? payload.date.trim() : null;
+  if (date && (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number.isNaN(Date.parse(`${date}T00:00:00Z`)))) {
+    fail('วันที่ของประกาศไม่ถูกต้อง', 400);
+  }
+  return { releaseId, title, changes, date, resendUnconfirmed: payload.resendUnconfirmed === true };
 }
 
 function mockReleaseNoticeTargets(release) {
@@ -4149,6 +4160,21 @@ function mockReleaseNoticeTargets(release) {
     .filter((user) => user.active !== false)
     .map((user) => ({ user, titles: release.changes.filter((c) => c.roles.includes(user.role)).map((c) => c.title) }))
     .filter((target) => target.titles.length > 0);
+}
+
+/** ReleaseNoticeService.sendEmail without the mail: records each due person as emailed (SENT). */
+function mockReleaseNoticeSend(release, targets) {
+  let queued = 0;
+  let alreadyEmailed = 0;
+  let withoutEmail = 0;
+  for (const { user } of targets) {
+    const key = `${release.releaseId}:${user.id}`;
+    if (mockReleaseNoticeEmailed.has(key)) { alreadyEmailed += 1; continue; }
+    if (!user.email?.trim()) { withoutEmail += 1; continue; }
+    mockReleaseNoticeEmailed.add(key);
+    queued += 1;
+  }
+  return { targeted: targets.length, queued, alreadyEmailed, withoutEmail };
 }
 
 function mockReleaseNotifiedUserIds(releaseId) {
@@ -12983,8 +13009,8 @@ export const api = {
 
   // Mirrors ReleaseNoticeController + ReleaseNoticeService (notification/). The authz here is NOT evidence about
   // the Java gate (ReleaseNoticeIntegrationTest is). Targeting uses each seed user's `role` directly, where the
-  // server derives it with DivisionAccessPolicy.roleFor. `email` NEVER sends anything: it only records who would
-  // have been mailed, so it stays idempotent like the server's audit-log ledger.
+  // server derives it with DivisionAccessPolicy.roleFor. Nothing here sends mail: "emailing" only records who
+  // would have been mailed, as SENT at once, so it stays idempotent like the server's audit-log ledger.
   releaseNotes: {
     async audience(payload) {
       hasRole('ceo', 'hr');
@@ -12992,21 +13018,25 @@ export const api = {
       const targets = mockReleaseNoticeTargets(release);
       const notified = mockReleaseNotifiedUserIds(release.releaseId);
       let alreadyNotified = 0;
-      let alreadyEmailed = 0;
-      let pendingEmail = 0;
-      let withoutEmail = 0;
+      let sent = 0;
+      let notYetEmailed = 0;
+      const withoutEmailNames = [];
       for (const { user } of targets) {
         if (notified.has(user.id)) alreadyNotified += 1;
-        if (mockReleaseNoticeEmailed.has(`${release.releaseId}:${user.id}`)) alreadyEmailed += 1;
-        else if (user.email?.trim()) pendingEmail += 1;
-        else withoutEmail += 1;
+        if (mockReleaseNoticeEmailed.has(`${release.releaseId}:${user.id}`)) sent += 1;
+        else if (user.email?.trim()) notYetEmailed += 1;
+        else withoutEmailNames.push(user.name);
       }
       return delay({
         targeted: targets.length, alreadyNotified, pendingNotification: targets.length - alreadyNotified,
-        alreadyEmailed, pendingEmail, withoutEmail,
+        alreadyEmailed: sent, pendingEmail: notYetEmailed, withoutEmail: withoutEmailNames.length,
+        email: {
+          sent, failed: 0, sending: 0, unconfirmed: 0, notYetEmailed, withoutEmail: withoutEmailNames.length,
+          withoutEmailNames, failedNames: [], unconfirmedNames: [],
+        },
       });
     },
-    async publish(payload) {
+    async publishWithEmail(payload) {
       hasRole('ceo', 'hr');
       const release = mockNormalizeReleaseNotice(payload);
       const targets = mockReleaseNoticeTargets(release);
@@ -13024,23 +13054,15 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         });
         inserted += 1;
       }
-      return delay({ targeted: targets.length, inserted, alreadyNotified: targets.length - inserted });
+      const email = mockReleaseNoticeSend(release, targets);
+      return delay({
+        targeted: targets.length, inserted, alreadyNotified: targets.length - inserted, email, emailError: null,
+      });
     },
     async email(payload) {
       hasRole('ceo', 'hr');
       const release = mockNormalizeReleaseNotice(payload);
-      const targets = mockReleaseNoticeTargets(release);
-      let sent = 0;
-      let alreadyEmailed = 0;
-      let withoutEmail = 0;
-      for (const { user } of targets) {
-        const key = `${release.releaseId}:${user.id}`;
-        if (mockReleaseNoticeEmailed.has(key)) { alreadyEmailed += 1; continue; }
-        if (!user.email?.trim()) { withoutEmail += 1; continue; }
-        mockReleaseNoticeEmailed.add(key);
-        sent += 1;
-      }
-      return delay({ targeted: targets.length, sent, alreadyEmailed, withoutEmail });
+      return delay(mockReleaseNoticeSend(release, mockReleaseNoticeTargets(release)));
     },
   },
 

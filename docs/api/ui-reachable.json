@@ -283,7 +283,7 @@
     "POST /api/profile-requests",
     "POST /api/release-notes/audience",
     "POST /api/release-notes/email",
-    "POST /api/release-notes/publish",
+    "POST /api/release-notes/publish-with-email",
     "POST /api/remaining-invoices/{id}/issue",
     "POST /api/remaining-invoices/{id}/revise",
     "POST /api/sales/pipeline-imports",

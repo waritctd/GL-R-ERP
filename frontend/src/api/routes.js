@@ -369,7 +369,7 @@ export const API_ROUTES = {
   // มีอะไรใหม่ release notice (ReleaseNoticeController). CEO/HR only, enforced by ReleaseNoticeService.
   releaseNotes: {
     audience: '/api/release-notes/audience',
-    publish: '/api/release-notes/publish',
+    publishWithEmail: '/api/release-notes/publish-with-email',
     email: '/api/release-notes/email',
   },
   notifications: {

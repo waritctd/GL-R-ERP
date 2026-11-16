@@ -1,5 +1,7 @@
 package th.co.glr.hr.notification;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -26,12 +28,21 @@ public final class ReleaseNoticePolicy {
     /** Publishing a notice and emailing every targeted employee are company-wide broadcasts: CEO and HR only. */
     public static final Set<String> MANAGE_ROLES = Set.of("ceo", "hr");
 
+    /** At most this many entries are listed in one reader's email; the rest become "และอีก n เรื่อง". */
+    public static final int MAX_EMAIL_ITEMS = 5;
+    /** A change's one-sentence "why" (release files hold them to one sentence; this is the server's hard cap). */
+    public static final int MAX_WHY = 300;
+
     /** The id becomes a URL path segment (/whats-new/{id}) and the idempotency key, so it is a plain slug. */
     private static final Pattern RELEASE_ID = Pattern.compile("^[a-z0-9][a-z0-9-]{0,39}$");
     /** hr.notification.title is VARCHAR(200); "มีอะไรใหม่: " + title must fit. */
     private static final int MAX_RELEASE_TITLE = 150;
     private static final int MAX_CHANGE_TITLE = 200;
     private static final int MAX_CHANGES = 50;
+    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
+    private static final Pattern CONTROL = Pattern.compile("\\p{Cntrl}");
+    private static final String[] THAI_MONTHS = {
+        "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."};
 
     private ReleaseNoticePolicy() {
     }
@@ -45,7 +56,8 @@ public final class ReleaseNoticePolicy {
     }
 
     /** Trims, lower-cases the roles, and refuses anything that would address the wrong people: an unknown role
-     * is a 400, never "nobody" and never "everybody". */
+     * is a 400, never "nobody" and never "everybody". The optional {@code why} is put on one line (whitespace
+     * collapsed, control characters dropped) and capped; the optional {@code date} must be ISO yyyy-MM-dd. */
     public static Request normalize(Request request) {
         if (request == null) {
             throw badRequest("ต้องระบุประกาศ");
@@ -65,7 +77,8 @@ public final class ReleaseNoticePolicy {
         for (Change change : request.changes()) {
             changes.add(normalize(change));
         }
-        return new Request(releaseId, title, List.copyOf(changes));
+        return new Request(releaseId, title, List.copyOf(changes), normalizeDate(request.date()),
+            Boolean.TRUE.equals(request.resendUnconfirmed()));
     }
 
     private static Change normalize(Change change) {
@@ -86,18 +99,59 @@ public final class ReleaseNoticePolicy {
                 roles.add(role);
             }
         }
-        return new Change(title, List.copyOf(roles));
+        return new Change(title, List.copyOf(roles), normalizeWhy(change.why()));
+    }
+
+    private static String normalizeWhy(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        // Whitespace first (so a newline or tab becomes a space, not nothing), then the remaining control chars.
+        String oneLine = CONTROL.matcher(WHITESPACE.matcher(raw).replaceAll(" ")).replaceAll("").trim();
+        if (oneLine.isEmpty()) {
+            return null;
+        }
+        if (oneLine.length() > MAX_WHY) {
+            throw badRequest("คำอธิบายของแต่ละรายการยาวเกิน " + MAX_WHY + " ตัวอักษร");
+        }
+        return oneLine;
+    }
+
+    private static String normalizeDate(String raw) {
+        String date = trim(raw);
+        if (date == null || date.isEmpty()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(date).toString();
+        } catch (DateTimeParseException exception) {
+            throw badRequest("วันที่ของประกาศไม่ถูกต้อง");
+        }
     }
 
     /** The titles of the changes whose audience includes {@code role}, in release order. */
     public static List<String> titlesFor(String role, List<Change> changes) {
+        return changesFor(role, changes).stream().map(Change::title).toList();
+    }
+
+    /** The changes whose audience includes {@code role}, in release order: everything one reader is told about,
+     * and nothing else. */
+    public static List<Change> changesFor(String role, List<Change> changes) {
         if (role == null || changes == null) {
             return List.of();
         }
         return changes.stream()
             .filter(change -> change.roles().contains(role))
-            .map(Change::title)
             .toList();
+    }
+
+    /** "2026-11-17" → "17 พ.ย. 2569" (Buddhist year). Null for null. Expects an already-validated ISO date. */
+    public static String thaiDate(String isoDate) {
+        if (isoDate == null) {
+            return null;
+        }
+        LocalDate date = LocalDate.parse(isoDate);
+        return date.getDayOfMonth() + " " + THAI_MONTHS[date.getMonthValue() - 1] + " " + (date.getYear() + 543);
     }
 
     public static String bellTitle(String releaseTitle) {
@@ -110,21 +164,28 @@ public final class ReleaseNoticePolicy {
             + titles.size() + " เรื่องที่เกี่ยวกับงานของคุณ กดเพื่อดูวิธีใช้";
     }
 
-    public static String emailSubject(String releaseTitle) {
-        return "มีอะไรใหม่: " + releaseTitle;
-    }
-
-    /** The email body below NotificationEmailService's own greeting and above its single portal button. */
-    public static String emailBody(List<String> titles) {
-        StringBuilder body = new StringBuilder("ระบบ GL&R Portal มีการอัปเดต ")
-            .append(titles.size())
-            .append(" เรื่องที่เกี่ยวกับงานของคุณ\n\n");
-        for (String title : titles) {
-            body.append("• ").append(title).append('\n');
-        }
-        body.append("\nวิธีใช้ทีละขั้นตอนพร้อมภาพหน้าจออยู่ในพอร์ทัล กดปุ่มด้านล่างเพื่อเปิดดู")
-            .append(" (ต้องเข้าสู่ระบบก่อน) มีคำถาม ติดต่อฝ่าย HR");
-        return body.toString();
+    /**
+     * One reader's email: the release named with its date, the reader's own entries (title + why) capped at
+     * {@link #MAX_EMAIL_ITEMS} with a "และอีก n เรื่อง" line, and the link to the release page. {@code roleChanges}
+     * must already be {@link #changesFor} the reader's role: this method lists exactly what it is given.
+     */
+    public static ReleaseNoticeEmail email(Request release, List<Change> roleChanges) {
+        String date = thaiDate(release.date());
+        String subject = date == null
+            ? "มีอะไรใหม่: " + release.title()
+            : "มีอะไรใหม่ " + date + ": " + release.title();
+        int total = roleChanges.size();
+        String intro = "ระบบ GL&R Portal " + (date == null ? "มีการอัปเดต" : "อัปเดตเมื่อ " + date)
+            + " มี " + total + " เรื่องที่เกี่ยวกับงานของคุณ";
+        List<ReleaseNoticeEmail.Item> items = roleChanges.stream()
+            .limit(MAX_EMAIL_ITEMS)
+            .map(change -> new ReleaseNoticeEmail.Item(change.title(), change.why()))
+            .toList();
+        String moreLine = total > MAX_EMAIL_ITEMS ? "และอีก " + (total - MAX_EMAIL_ITEMS) + " เรื่อง" : null;
+        String outro = "วิธีใช้ทีละขั้นตอนพร้อมภาพหน้าจออยู่ในหน้า มีอะไรใหม่ ของพอร์ทัล (ต้องเข้าสู่ระบบก่อน)"
+            + " มีคำถาม ติดต่อฝ่าย HR";
+        return new ReleaseNoticeEmail(subject, intro, items, moreLine, outro, "เปิดดูมีอะไรใหม่",
+            link(release.releaseId()));
     }
 
     private static String trim(String value) {
