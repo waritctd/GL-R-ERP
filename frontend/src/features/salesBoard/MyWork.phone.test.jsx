@@ -148,7 +148,9 @@ describe('MyWork on a phone — วันนี้ของฉัน', () => {
 
     const buttons = screen.getAllByRole('button', { name: /บันทึกเข้าพบ/ });
     expect(buttons).toHaveLength(1);
-    expect(screen.queryByTestId('log-visit-sticky')).toBeNull();
+    // The one button carries the old sticky button's id (the real-browser suite opens the sheet through it).
+    expect(screen.getAllByTestId('log-visit-sticky')).toEqual(buttons);
+    expect(within(screen.getByTestId('today-phone')).getByTestId('log-visit-sticky')).toBe(buttons[0]);
     expect(screen.queryByTestId('log-visit-header')).toBeNull();
 
     fireEvent.click(buttons[0]);

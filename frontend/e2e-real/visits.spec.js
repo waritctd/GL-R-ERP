@@ -84,7 +84,7 @@ test.describe('visits — happy paths @visits', () => {
     await expect(plan).toBeVisible();
     await shot(page, 'visits-01-plan-dialog');
     await plan.getByLabel('พบใคร').fill(contact);
-    await plan.getByLabel('ดีล').selectOption({ label: `${RUN} visits happy` });
+    await plan.getByLabel('งาน').selectOption({ label: `${RUN} visits happy` });
     await plan.getByRole('button', { name: 'บันทึกนัด' }).click();
     await expect(plan).toHaveCount(0);
 
@@ -133,7 +133,8 @@ test.describe('visits — happy paths @visits', () => {
     const contact = `${RUN} หน้างาน`;
     await page.setViewportSize({ width: 375, height: 812 });
     await loginAs(page, 'sales');
-    await page.getByTestId('log-visit-sticky').click();
+    // At 375px the landing is วันนี้ของฉัน; its one large บันทึกเข้าพบ carries the old sticky button's id.
+    await page.getByTestId('today-phone').getByTestId('log-visit-sticky').click();
     const dialog = page.getByRole('dialog', { name: 'บันทึกเข้าพบ' });
     await expect(dialog).toBeVisible();
     const box = await dialog.boundingBox();
@@ -146,7 +147,7 @@ test.describe('visits — happy paths @visits', () => {
 
     await dialog.getByRole('radio', { name: 'ไม่ได้นัด' }).click();
     await dialog.getByLabel('พบใคร').fill(contact);
-    await dialog.getByLabel('ดีล').selectOption({ label: `${RUN} visits happy` });
+    await dialog.getByLabel('งาน').selectOption({ label: `${RUN} visits happy` });
     await dialog.getByRole('button', { name: 'บันทึก', exact: true }).click();
     await expect(dialog).toHaveCount(0);
 

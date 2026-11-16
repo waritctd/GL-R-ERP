@@ -250,7 +250,8 @@ export function TodayOnPhone({
         />
       )}
 
-      <Button type="button" className="min-h-[56px] mobile:min-h-[56px] w-full text-base shadow-sm" onClick={onLog}>
+      {/* `log-visit-sticky`: the phone's one บันทึกเข้าพบ, the id the stacked page's sticky button had (e2e-real). */}
+      <Button type="button" data-testid="log-visit-sticky" className="min-h-[56px] mobile:min-h-[56px] w-full text-base shadow-sm" onClick={onLog}>
         <Icon name="calendar" size={20} />
         บันทึกเข้าพบ
       </Button>
