@@ -13,6 +13,7 @@ import { ErrorBoundary } from '../common/ErrorBoundary.jsx';
 import { RouteFallback } from '../common/RouteFallback.jsx';
 import { Icon } from '../common/Icon.jsx';
 import { NotificationBell } from '../common/NotificationBell.jsx';
+import { WhatsNewBubble } from '../../features/whatsNew/WhatsNewBubble.jsx';
 import { Sidebar } from './Sidebar.jsx';
 import { UserMenu } from './UserMenu.jsx';
 import { ViewAsBanner } from './ViewAsBanner.jsx';
@@ -110,6 +111,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
   const navLocked = isSelfServiceLocked(user);
   const navItems = [
     { path: '/', label: 'แดชบอร์ด', helper: 'Dashboard', icon: 'dashboard', show: true },
+    // มีอะไรใหม่ release notice: every employee, so ungrouped (survives the lock like the dashboard) and listed in
+    // SELF_SERVICE_PATHS.
+    { path: '/whats-new', label: 'มีอะไรใหม่', helper: "What's new", icon: 'sparkles', show: true, match: ['/whats-new'] },
     // Admin capability, not a role: `user.admin` comes from AuthResponse and is held by exactly one person.
     // Ungrouped and directly under the dashboard because it is a whole-portal view, not part of any one ฝ่าย's
     // work.
@@ -406,6 +410,12 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
               <strong className="text-text">{employee?.nameTh || user.name}</strong>
               <span className="block text-xs font-medium text-text-muted">{user.email}</span>
             </div>
+            <WhatsNewBubble
+              user={user}
+              open={activeTopbarPopover === 'whatsNew'}
+              onOpenChange={(open) => setActiveTopbarPopover(open ? 'whatsNew' : null)}
+              onNavigate={(link) => navigate(link)}
+            />
             <NotificationBell
               open={activeTopbarPopover === 'notifications'}
               onOpenChange={(open) => setActiveTopbarPopover(open ? 'notifications' : null)}

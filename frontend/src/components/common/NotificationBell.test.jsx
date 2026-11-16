@@ -94,4 +94,20 @@ describe('NotificationBell', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'การแจ้งเตือน' })).toBeNull());
     expect(document.activeElement).toBe(trigger);
   });
+
+  // มีอะไรใหม่ (release notice): its bell row gets its own glyph rather than the generic bell fallback, so it reads
+  // as an announcement, not as one more workflow event.
+  it('gives a RELEASE_NOTE row the sparkles icon', async () => {
+    api.notifications.list.mockResolvedValue({
+      notifications: [
+        { id: 5, type: 'RELEASE_NOTE', message: 'มีอะไรใหม่: อัปเดตระบบขาย', read: false, createdAt: new Date().toISOString(), link: '/whats-new/2026-11-16' },
+      ],
+    });
+    renderBell();
+
+    fireEvent.click(await screen.findByRole('button', { name: /การแจ้งเตือน/ }));
+    const row = (await screen.findByText(/มีอะไรใหม่: อัปเดตระบบขาย/)).closest('button');
+    expect(row.querySelector('svg.lucide-sparkles')).not.toBeNull();
+    expect(row.querySelector('svg.lucide-bell')).toBeNull();
+  });
 });

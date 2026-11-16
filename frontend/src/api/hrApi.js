@@ -821,6 +821,13 @@ export const api = {
     },
     markRead: (id) => apiRequest(API_ROUTES.notifications.markRead(id), { method: 'PATCH' }),
   },
+  // มีอะไรใหม่ (ReleaseNoticeController). payload = audiences.js publishPayload(release):
+  // { releaseId, title, changes: [{ title, roles }] }. publish never emails; email is its own explicit call.
+  releaseNotes: {
+    audience: (payload) => apiRequest(API_ROUTES.releaseNotes.audience, { method: 'POST', body: payload }),
+    publish: (payload) => apiRequest(API_ROUTES.releaseNotes.publish, { method: 'POST', body: payload }),
+    email: (payload) => apiRequest(API_ROUTES.releaseNotes.email, { method: 'POST', body: payload }),
+  },
   commissions: {
     list: (params) => apiRequest(withQuery(API_ROUTES.commissions.list, params)),
     // sales_manager/ceo รออนุมัติ view: -> { commissions: [PendingCommissionDto] }.

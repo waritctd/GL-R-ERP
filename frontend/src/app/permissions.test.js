@@ -490,6 +490,9 @@ describe('canAccessPath under the release lockdown', () => {
     '/employee-requests',
     '/overtime',
     '/tax-allowance',
+    // มีอะไรใหม่: every employee must be able to open the release notice their bell row and email link to.
+    '/whats-new',
+    '/whats-new/2026-11-16',
   ];
 
   async function locked() {
@@ -523,6 +526,16 @@ describe('canAccessPath under the release lockdown', () => {
       }
     }
     expect(refused).toEqual([]);
+  });
+
+  // Same prefix trap for the release-notice page: only /whats-new and /whats-new/<id> are released, not a path
+  // that merely starts with the same letters.
+  it('does not let /whats-new admit a lookalike path', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const user of LOCKED_ROLES) {
+      expect(guard('/whats-new-admin', user)).toBe(false);
+      expect(guard('/whats-newsletter', user)).toBe(false);
+    }
   });
 
   // The prefix trap this allowlist is built to avoid: HR's ล.ย.01 REGISTER shares a leading string with the

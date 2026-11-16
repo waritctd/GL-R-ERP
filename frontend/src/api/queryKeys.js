@@ -27,6 +27,8 @@ export const queryKeys = {
   // screen, two different backend tables.
   taxAllowances: (year) => ['taxAllowances', year ?? ''],
   notifications: () => ['notifications'],
+  // มีอะไรใหม่ admin confirm: who publish / email would still reach (POST /api/release-notes/audience).
+  releaseNoteAudience: (releaseId, action) => ['releaseNoteAudience', releaseId, action ?? ''],
   leaveRequests: (filters = {}) => ['leave', 'list', filters.from, filters.to, filters.status, filters.employeeId],
   leaveBalances: (employeeId, year) => ['leave', 'balances', employeeId, year],
   // Manager team-quota summary -- TeamLeaveTab.jsx.
