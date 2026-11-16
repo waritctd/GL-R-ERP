@@ -213,9 +213,23 @@ describe('PeopleInsightsPage', () => {
       expect(screen.getByRole('alert')).toBeTruthy();
     });
 
-    it('clears the alert when the user picks another scope that loads, even with an identical report', async () => {
+    it('keeps the alert when the user clicks the tab that is already shown', async () => {
       await setup();
+      fireEvent.click(tab(base.scope.label));
+      await waitFor(() => expect(screen.getByTestId('people-insights').getAttribute('aria-busy')).toBe('false'));
+      expect(screen.getByRole('alert')).toBeTruthy();
+    });
+
+    it('picking another scope keeps the alert while it loads and clears it when its data arrives, even with an identical report', async () => {
+      await setup();
+      let release;
+      api.peopleInsights.get.mockImplementation((params = {}) => (params.scope === '8'
+        ? new Promise((resolve) => { release = () => resolve(base); })
+        : Promise.resolve(base)));
       fireEvent.click(tab('ทีมสอง'));
+      await waitFor(() => expect(release).toBeTypeOf('function'));
+      expect(screen.getByRole('alert')).toBeTruthy(); // still pending: nothing has succeeded yet
+      release();
       await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     });
 

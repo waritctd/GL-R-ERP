@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -200,6 +200,8 @@ export function PeopleInsightsPage() {
   // The last successful response and the selection it answers: a failed switch keeps showing it instead of replacing the report with an error.
   const [lastGood, setLastGood] = useState(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  // True from the user's own scope/year pick until a fetch lands: only then may fresh data clear the alert, never the automatic snap-back's.
+  const userPicked = useRef(false);
   const query = useQuery({
     queryKey: queryKeys.peopleInsights(scope, year),
     queryFn: () => api.peopleInsights.get({ ...(scope ? { scope } : {}), ...(year ? { year } : {}) }),
@@ -209,12 +211,18 @@ export function PeopleInsightsPage() {
   const fresh = query.isPlaceholderData ? undefined : query.data;
 
   useEffect(() => {
-    if (fresh) setLastGood({ scope, year, data: fresh });
+    if (!fresh) return;
+    setLastGood({ scope, year, data: fresh });
+    if (userPicked.current) {
+      userPicked.current = false;
+      setLoadFailed(false);
+    }
   }, [fresh, scope, year]);
 
   useEffect(() => {
     if (!query.isError || query.error?.status === 403) return;
     setLoadFailed(true);
+    userPicked.current = false;
     // Never when the failed selection is the good one, so a failing refetch cannot loop.
     if (lastGood && (lastGood.scope !== scope || lastGood.year !== year)) {
       setScope(lastGood.scope);
@@ -245,8 +253,8 @@ export function PeopleInsightsPage() {
       </Shell>
     );
   }
-  // The alert belongs to the user's last pick: only their own scope or year choice clears it, never the automatic snap-back.
-  const pickScope = (s) => { setLoadFailed(false); setScope(s); };
-  const pickYear = (y) => { setLoadFailed(false); setYear(y); };
+  // Re-picking what is already shown is not a new selection: no fetch, so nothing may clear the alert.
+  const pickScope = (s) => { if (s === (scope ?? shown.scope.id)) return; userPicked.current = true; setScope(s); };
+  const pickYear = (y) => { if (y === (year ?? shown.year)) return; userPicked.current = true; setYear(y); };
   return <Report data={shown} scope={scope} onScope={pickScope} onYear={pickYear} busy={query.isPlaceholderData} failed={loadFailed} />;
 }
