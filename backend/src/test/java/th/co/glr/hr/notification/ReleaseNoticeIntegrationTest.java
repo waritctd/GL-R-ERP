@@ -274,7 +274,103 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(service.email(actor(hr, "hr"), next)).isEqualTo(new EmailResult(6, 5, 0, 1));
     }
 
+    // ── Email reset: undoing a run whose sends all failed (hr.audit_log is append-only) ─────────────────────
+
+    @Test
+    void aResetMarkerLetsARunWhoseSendsFailedBeSentAgain() {
+        service.email(actor(hr, "hr"), REQUEST);
+        insertEmailReset(RELEASE_ID);
+
+        assertThat(service.audience(actor(ceo, "ceo"), REQUEST)).isEqualTo(new Audience(6, 0, 6, 0, 5, 1));
+        EmailResult afterReset = service.email(actor(ceo, "ceo"), REQUEST);
+
+        assertThat(afterReset).isEqualTo(new EmailResult(6, 5, 0, 1));
+        verify(mailer, times(10)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void afterAResetAndAResend_emailingAgainStillDoesNotDoubleSend() {
+        service.email(actor(hr, "hr"), REQUEST);
+        insertEmailReset(RELEASE_ID);
+        service.email(actor(hr, "hr"), REQUEST);
+
+        EmailResult third = service.email(actor(ceo, "ceo"), REQUEST);
+
+        assertThat(third).isEqualTo(new EmailResult(6, 0, 5, 1));
+        verify(mailer, times(10)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void aResetForAnotherReleaseDoesNotReopenThisOne() {
+        service.email(actor(hr, "hr"), REQUEST);
+        insertEmailReset("2026-12-01");
+
+        EmailResult second = service.email(actor(ceo, "ceo"), REQUEST);
+
+        assertThat(second).isEqualTo(new EmailResult(6, 0, 5, 1));
+        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────────────────────────────────────
+
+    @Test
+    void twoResetsEachReopenTheRun_andEachRunStillSendsOnce() {
+        service.email(actor(hr, "hr"), REQUEST);
+        insertEmailReset(RELEASE_ID);
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1));
+        insertEmailReset(RELEASE_ID);
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1));
+
+        // within the third run nothing is double-sent
+        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
+        verify(mailer, times(15)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void aMarkerWithTheRightActionButAnotherEntityDoesNotReopenTheRun() {
+        service.email(actor(hr, "hr"), REQUEST);
+        jdbc.update("""
+            INSERT INTO hr.audit_log (action, entity, after_json)
+            VALUES ('RELEASE_NOTE_EMAIL_RESET', 'employee', jsonb_build_object('releaseId', :releaseId))
+            """, Map.of("releaseId", RELEASE_ID));
+
+        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
+        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void aMarkerWithNoReleaseIdInItsJsonReopensNothingAndDoesNotError() {
+        service.email(actor(hr, "hr"), REQUEST);
+        jdbc.update("""
+            INSERT INTO hr.audit_log (action, entity, after_json)
+            VALUES ('RELEASE_NOTE_EMAIL_RESET', 'release_note', NULL),
+                   ('RELEASE_NOTE_EMAIL_RESET', 'release_note', jsonb_build_object('other', 'x'))
+            """, Map.of());
+
+        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
+        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void theDocumentedOperatorLockClassIsTheOneTheEmailPathLocks() {
+        // The runbook SQL in ReleaseNoticeRepository's javadoc spells the class id in decimal (0x52454C4E).
+        assertThat(ReleaseNoticeRepository.LOCK_CLASS_ID).isEqualTo(1380273230);
+    }
+
+    /**
+     * The operator's append-only "forget the earlier email run" marker, run exactly as the runbook says: take the
+     * same advisory lock the email path holds, then insert, in ONE transaction (see EMAIL_RESET_ACTION javadoc).
+     */
+    private void insertEmailReset(String releaseId) {
+        transactionTemplate.executeWithoutResult(status -> {
+            jdbc.query("SELECT pg_advisory_xact_lock(1380273230, hashtext('email:' || :releaseId))",
+                Map.of("releaseId", releaseId), (rs, rowNum) -> 0);
+            jdbc.update("""
+                INSERT INTO hr.audit_log (action, entity, after_json)
+                VALUES ('RELEASE_NOTE_EMAIL_RESET', 'release_note', jsonb_build_object('releaseId', :releaseId))
+                """, Map.of("releaseId", releaseId));
+        });
+    }
 
     private Map<String, String> sentHtmlByRecipient(int expectedCalls) {
         ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
