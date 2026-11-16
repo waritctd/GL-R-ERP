@@ -28,7 +28,7 @@ The owner approved a before/after review of the sales flow ("Sales Redesign Revi
 | 2 | Deal page redesign | `feat/deal-page-redesign` | #1320 | Review clean (2 fix rounds). Not merged |
 | 4c | Grouped finance worklist | `feat/finance-grouped-worklist` | #1321 | Review clean. Not merged |
 | 3a | Lifecycle dialogs (create, S2, pause, lost, cancel) + V219 | `feat/deal-dialogs` (stacked on `feat/deal-page-redesign`) | none yet | Built, pushed at `afe6acbd`. **Adversarial review was running when this was written; its report may not exist.** If `reviews/adversarial-task-3a.md` is absent, re-dispatch the review from `briefs/task-3a-brief.md` (the review prompt's attack list is summarised below) |
-| 3b | Document dialogs (deposit, remaining invoice, IR, delivery) | `feat/deal-document-dialogs` (stacked on `feat/deal-page-redesign`) | none yet | Built, pushed at `2ab27ffd`. Review done (`reviews/adversarial-task-3b.md`): FIX BEFORE MERGE (small). **Fix round 1 was in progress and is NOT in the pushed commit**; redo it from the rulings in `ledger.md` if it never arrived |
+| 3b | Document dialogs (deposit, remaining invoice, IR, delivery) | `feat/deal-document-dialogs` (stacked on `feat/deal-page-redesign`) | opened (see `gh pr list`) | Review clean. Not merged |
 | 6 | Server fields for drawn details that were left out | – | – | Not started |
 | 5 | "ดีล" → "งาน" on the remaining sales screens | – | – | Not started (do last) |
 | – | Refresh the review artifact (งาน wording, quotation list "after") | – | – | Not started |
