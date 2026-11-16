@@ -113,11 +113,24 @@ export function UserMenu({
             </button>
           )}
 
+          {user.employeeId ? (
+            <button
+              ref={(node) => { itemRefs.current[1] = node; }}
+              type="button"
+              role="menuitem"
+              className={itemClass}
+              onClick={() => select(() => onNavigate('/tax-allowance'))}
+            >
+              <Icon name="calculator" size={17} />
+              ค่าลดหย่อนภาษี
+            </button>
+          ) : null}
+
           <div className="border-t border-border" />
 
           {onViewAs && (
             <button
-              ref={(node) => { itemRefs.current[1] = node; }}
+              ref={(node) => { itemRefs.current[2] = node; }}
               type="button"
               role="menuitem"
               className={itemClass}
@@ -129,7 +142,7 @@ export function UserMenu({
           )}
 
           <button
-            ref={(node) => { itemRefs.current[2] = node; }}
+            ref={(node) => { itemRefs.current[3] = node; }}
             type="button"
             role="menuitem"
             className={itemClass}

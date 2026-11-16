@@ -877,9 +877,7 @@
   color: var(--color-info);
 }
 
-/* Tablet band (721–1040px): the persistent sidebar is GONE — navigation is the same off-canvas drawer used at
- * ≤720px (Sidebar.jsx's `nav-drawer:` utilities and AppShell.jsx's backdrop button, both gated on the ≤1040px
- * `@custom-variant nav-drawer` in index.css). */
+/* Tablet band (721–1040px). */
 @media (min-width: 721px) and (max-width: 1040px) {
   /* Ticket list tablet band: content is `viewport - 64`, so the generic 900px table minimum only
      clips the row from 721px to 964px. The progress column is dropped across the whole band
