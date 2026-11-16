@@ -48,6 +48,12 @@ public class ReleaseNoticeRepository {
      *
      * <p><b>All-or-nothing.</b> A reset voids EVERY earlier emailed row of that release. After a PARTIAL failure
      * the employees whose mail did arrive are mailed again. Use it only for a run where nothing was delivered.
+     *
+     * <p><b>Wait for the run to finish first.</b> The lock above only covers the transaction that writes the
+     * emailed rows. The mails themselves are handed to the async sender AFTER that commit, when the lock is
+     * already released. A marker inserted while those sends are still in flight voids rows whose mail then
+     * arrives, and the next click sends a second copy. Before inserting, confirm in the backend log that every
+     * send of the run has either succeeded or logged "Failed to send notification email".
      */
     static final String EMAIL_RESET_ACTION = "RELEASE_NOTE_EMAIL_RESET";
     static final String EMAIL_RESET_ENTITY = "release_note";
