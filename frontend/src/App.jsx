@@ -18,6 +18,7 @@ import { RequireAccess } from './app/RequireAccess.jsx';
 // them, not the initial load).
 const toDefault = (name) => (module) => ({ default: module[name] });
 const ChangePasswordModal = lazy(() => import('./features/auth/ChangePasswordModal.jsx').then(toDefault('ChangePasswordModal')));
+const PeopleInsightsPage = lazy(() => import('./features/insights/PeopleInsightsPage.jsx').then(toDefault('PeopleInsightsPage')));
 const HrDashboard = lazy(() => import('./features/dashboard/HrDashboard.jsx').then(toDefault('HrDashboard')));
 const HrOverview = lazy(() => import('./features/dashboard/HrOverview.jsx').then(toDefault('HrOverview')));
 const EmployeeDashboard = lazy(() => import('./features/dashboard/EmployeeDashboard.jsx').then(toDefault('EmployeeDashboard')));
@@ -100,6 +101,8 @@ function userFromAuthResponse(response) {
     canCreateQuotation: Boolean(response.canCreateQuotation),
     canIssueBillingNote: Boolean(response.canIssueBillingNote),
     canViewAs: Boolean(response.canViewAs),
+    // Menu hint only (ceo/hr/team head): the endpoint decides again on every call.
+    canViewPeopleInsights: Boolean(response.canViewPeopleInsights),
     viewAs: response.viewAs ?? null,
   };
 }
@@ -432,6 +435,7 @@ export function App() {
               path="/leave/new"
               element={<LeaveRequestPage user={user} currentEmployee={currentEmployee} showToast={showToast} />}
             />
+            <Route path="/people-insights" element={<PeopleInsightsPage />} />
             <Route
               path="/payroll"
               element={<PayrollPage user={user} showToast={showToast} />}

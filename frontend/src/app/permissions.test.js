@@ -764,6 +764,35 @@ describe('activity log access (admin capability)', () => {
   });
 });
 
+// /people-insights follows the server's canViewPeopleInsights hint (ceo/hr/team head), and a team head is not hr/ceo, so
+// the self-service lockdown must let this one path through for the flag holder and nothing else.
+describe('people insights access (canViewPeopleInsights)', () => {
+  const user = (role, extra = {}) => ({ id: 9, employeeId: 9, role, ...extra });
+
+  it('opens the page only for a flagged user', () => {
+    expect(canAccessPath('/people-insights', user('employee', { canViewPeopleInsights: true }))).toBe(true);
+    expect(canAccessPath('/people-insights', user('employee', { canViewPeopleInsights: false }))).toBe(false);
+    expect(canAccessPath('/people-insights', user('hr'))).toBe(false); // no flag, no page, whatever the role
+  });
+
+  describe('under the self-service lockdown', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    });
+
+    it('lets a flagged team head through to this page and unlocks nothing else', async () => {
+      vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
+      vi.resetModules();
+      const { canAccessPath: locked } = await import('./permissions.js');
+      const head = user('employee', { canViewPeopleInsights: true });
+      expect(locked('/people-insights', head)).toBe(true);
+      expect(locked('/payroll', head)).toBe(false);
+      expect(locked('/people-insights', user('employee'))).toBe(false);
+    });
+  });
+});
+
 // Under the lock, the quotation pages, and nothing else from the sales stack, open for the people
 // who create/approve quotations.
 describe('quotation release through the self-service lockdown', () => {

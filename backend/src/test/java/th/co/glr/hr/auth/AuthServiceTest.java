@@ -123,6 +123,23 @@ class AuthServiceTest {
     }
 
     @Test
+    void loginSurfacesCanViewPeopleInsightsForHrAndForATeamHeadButNotForAnEmployee() {
+        when(employees.findByEmail("hr@glr.co.th"))
+            .thenReturn(Optional.of(employee(17L, encoder.encode("Str0ngPass!"), false)));
+        assertThat(service.login(new LoginRequest("hr@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
+            .canViewPeopleInsights()).isTrue();
+
+        when(employees.findByEmail("employee@glr.co.th"))
+            .thenReturn(Optional.of(employee(3L, encoder.encode("Str0ngPass!"), false)));
+        assertThat(service.login(new LoginRequest("employee@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
+            .canViewPeopleInsights()).isFalse();
+
+        when(employees.isInsightTeamHead(42L)).thenReturn(true);
+        assertThat(service.login(new LoginRequest("employee@glr.co.th", "Str0ngPass!", null), new MockHttpServletRequest())
+            .canViewPeopleInsights()).isTrue();
+    }
+
+    @Test
     void surfacesMustChangePasswordFlagFromTemporaryHash() {
         when(employees.findByEmail("employee@glr.co.th"))
             .thenReturn(Optional.of(employee(3L, encoder.encode("GLR-42"), true)));

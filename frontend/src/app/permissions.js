@@ -53,6 +53,8 @@ const PATH_GUARDS = [
   // AuthResponse). This only decides whether the route renders; the server re-reads hr.employee.is_admin on
   // every call, so forging `admin` on the client gains nothing.
   { test: (p) => isActivityLogPath(p), can: (u) => Boolean(u.admin) },
+  // Server hint (ceo/hr/team head); PeopleInsightsService re-decides the scope on every call.
+  { test: (p) => p === '/people-insights', can: (u) => Boolean(u.canViewPeopleInsights) },
   { test: (p) => p === '/hr', can: (u) => hasPermission(u.role, 'canViewEmployees') },
   // The bare `/tickets` list is the deal-PIPELINE BROWSER (canViewDealPipeline: sales/sales_manager/ceo);
   // `/tickets/:id` detail is canViewWholeDeal (keeps account; import has its own /import/deals/:id page).
@@ -291,7 +293,9 @@ export function canAccessPath(path, user) {
   // pass (a sales rep on /tickets) as well as paths no guard claims at all. Narrow exemption, deliberate.
   const adminActivityLog = isActivityLogPath(path) && Boolean(user.admin);
   const quotationRelease = isQuotationPath(path) && isQuotationReleaseUser(user);
-  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease
+  // A team head is not hr/ceo, so the lock would hide their one page; open exactly this path for the flag holder.
+  const peopleInsights = path === '/people-insights' && Boolean(user.canViewPeopleInsights);
+  if (isSelfServiceLocked(user) && !isSelfServicePath(path) && !adminActivityLog && !quotationRelease && !peopleInsights
     && !isReleasedPath(path, user)) return false;
   const guard = PATH_GUARDS.find((entry) => entry.test(path));
   if (!guard) return true;

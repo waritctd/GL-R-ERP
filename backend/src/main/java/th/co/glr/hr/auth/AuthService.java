@@ -139,7 +139,13 @@ public class AuthService {
             }
         }
         return new AuthResponse(user, employees.isAdmin(user.id()), employees.canCreateQuotation(user.id()),
-            employees.canIssueBillingNote(user.id()), canViewAs, info);
+            employees.canIssueBillingNote(user.id()), canViewAs,
+            canViewPeopleInsights(user), info);
+    }
+
+    /** ceo and hr see the page; so does a team head. A hint for the menu only: the endpoint decides again. */
+    private boolean canViewPeopleInsights(UserPrincipal user) {
+        return "ceo".equals(user.role()) || "hr".equals(user.role()) || employees.isInsightTeamHead(user.id());
     }
 
     public void logout(HttpSession session) {

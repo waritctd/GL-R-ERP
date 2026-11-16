@@ -192,6 +192,8 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     // (app.receipts.express-upload.enabled, review H4) — read from GET /api/sales/receipt-imports/latest.
     { path: '/finance/receipts-import', label: 'รับเงินจาก Express', helper: 'Express receipts', icon: 'upload', group: 'finance', show: user.role === 'account' && SALES_ENABLED && expressUploadEnabled },
     { path: '/hr', label: 'ภาพรวม HR', helper: 'HR overview', icon: 'home', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
+    // Leave + check-in analytics: ceo/hr company-wide, a team head for their team. Follows the server's flag, not the role.
+    { path: '/people-insights', label: 'วิเคราะห์การลาและเวลาเข้างาน', helper: 'Leave & check-in insights', icon: 'dashboard', group: 'hr', show: Boolean(user.canViewPeopleInsights) },
     { path: '/employees', label: 'พนักงานทั้งหมด', helper: 'Employees', icon: 'users', group: 'hr', show: hasPermission(user.role, 'canViewEmployees') },
     // ข้อมูลของฉัน / คำขอของฉัน are deliberately absent: personal admin lives in the topbar UserMenu, and the two
     // pages are merged into /profile. /requests stays here because an HR review queue is work, not personal admin.
@@ -252,6 +254,7 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
     .filter((item) => !navLocked || !item.group || item.group === 'self'
       || item.lockExempt
       || (item.path === '/quotations' && isQuotationReleaseUser(user))
+      || (item.path === '/people-insights' && Boolean(user.canViewPeopleInsights))
       // import's งานนำเข้า + คิวขอราคา and account's งานการเงิน survive the lock: the same
       // allowlist canAccessPath applies.
       || isReleasedPath(item.path, user));

@@ -863,3 +863,18 @@ describe('AppShell navigation — canCreateQuotation grant (#H4)', () => {
     expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
   });
 });
+
+describe('AppShell navigation: วิเคราะห์การลาและเวลาเข้างาน', () => {
+  const base = { employeeId: 2, name: 'ทดสอบ', email: 'x@test.local' };
+
+  it('shows the item only when the user carries canViewPeopleInsights', async () => {
+    const { unmount } = renderShell({ ...base, role: 'employee', canViewPeopleInsights: true });
+    await screen.findByText('เนื้อหา');
+    expect(screen.getAllByText('วิเคราะห์การลาและเวลาเข้างาน').length).toBeGreaterThan(0);
+    unmount();
+
+    renderShell({ ...base, role: 'hr', canViewPeopleInsights: false });
+    await screen.findByText('เนื้อหา');
+    expect(screen.queryByText('วิเคราะห์การลาและเวลาเข้างาน')).toBeNull();
+  });
+});

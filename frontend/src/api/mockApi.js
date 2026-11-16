@@ -83,6 +83,7 @@ import {
   buildDemoDeductionShortfalls,
 } from '../data/demoPayroll.js';
 import { SNAPSHOT_WITH_NOW } from '../test/fixtures/salesAnalyticsSnapshot.js';
+import { PEOPLE_FIXTURE } from '../features/insights/peopleInsightsFixture.js';
 
 const db = createDemoDatabase();
 
@@ -2327,6 +2328,7 @@ function authResponse(user) {
     canCreateQuotation: Boolean(user?.canCreateQuotation),
     canIssueBillingNote: Boolean(user?.canIssueBillingNote),
     canViewAs: false,
+    canViewPeopleInsights: ['ceo', 'hr'].includes(user?.role),
     viewAs: null,
   };
 }
@@ -13756,6 +13758,24 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       if (!['ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ snapshot: mockAnalyticsSnapshot });
+    },
+  },
+
+  // Mirrors PeopleInsightsService with the synthetic PEOPLE_FIXTURE. The role gate (ceo/hr only: the mock has no team
+  // heads) approximates the Java service and is NOT evidence; PeopleInsightsIntegrationTest is.
+  peopleInsights: {
+    async get({ scope } = {}) {
+      const user = requireSession();
+      if (!['ceo', 'hr'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      const served = PEOPLE_FIXTURE.scopes.find((s) => s.id === (scope ?? 'all'));
+      if (!served) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      if (served.id === 'all') return delay(PEOPLE_FIXTURE);
+      const ids = new Set(PEOPLE_FIXTURE.teams.find((t) => t.id === served.id).memberIds);
+      const mine = (row) => ids.has(row.employeeId);
+      return delay({
+        ...PEOPLE_FIXTURE, scope: served, teams: [], people: PEOPLE_FIXTURE.people.filter(mine),
+        leave: PEOPLE_FIXTURE.leave.filter(mine), quotaUsage: PEOPLE_FIXTURE.quotaUsage.filter(mine), attendance: PEOPLE_FIXTURE.attendance.filter(mine),
+      });
     },
   },
 

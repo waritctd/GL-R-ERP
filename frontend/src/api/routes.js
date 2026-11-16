@@ -149,6 +149,10 @@ export const API_ROUTES = {
   salesAnalytics: {
     snapshot: '/api/sales-analytics/snapshot',
   },
+  // PeopleInsightsController (peopleinsights/): leave + check-in analytics, ceo/hr (any scope) and team heads (their team).
+  peopleInsights: {
+    get: '/api/people-insights',
+  },
   // ExpectedPaymentController (salesboard/): a deal's rep-entered expected cash (V212).
   expectedPayments: {
     list: (ticketId) => `/api/tickets/${ticketId}/expected-payments`,

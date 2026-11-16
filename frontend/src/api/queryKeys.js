@@ -126,6 +126,8 @@ export const queryKeys = {
   salesBoardQuietDays: () => ['salesBoard', 'quietDays'],
   // The weekly sales-analytics snapshot. Outside 'tickets': no deal write changes it.
   salesAnalyticsSnapshot: () => ['salesAnalytics', 'snapshot'],
+  // The leave + check-in analytics page, per served scope. No write in the app changes it.
+  peopleInsights: (scope) => ['peopleInsights', scope ?? 'default'],
   // Same reasoning, for UnitBasis's four codes. See features/pricingRequests/unitBasisCatalog.js.
   unitBasisCatalog: () => ['meta', 'unit-bases'],
   // See ticketDetail's comment above for why Number() matters.
