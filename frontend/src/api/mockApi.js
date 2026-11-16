@@ -4114,6 +4114,46 @@ function requireNoOtherDirectQuotationAfterConfirm(ticket, row) {
   fail('ดีลนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว จึงส่ง/อนุมัติใบเสนอราคานี้ไม่ได้', 409);
 }
 
+// ── มีอะไรใหม่ release notice (mirrors notification/ReleaseNoticePolicy + ReleaseNoticeService) ──
+const MOCK_RELEASE_NOTICE_ROLES = ['ceo', 'hr', 'import', 'account', 'warehouse', 'qc', 'sales_manager', 'sales', 'employee'];
+/** `${releaseId}:${userId}` of everyone the mock has "emailed" — the stand-in for the server's audit-log ledger. */
+const mockReleaseNoticeEmailed = new Set();
+
+function mockNormalizeReleaseNotice(payload) {
+  const releaseId = payload?.releaseId?.trim();
+  if (!releaseId || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(releaseId)) fail('รหัสประกาศไม่ถูกต้อง', 400);
+  const title = payload.title?.trim();
+  if (!title || title.length > 150) fail('ต้องระบุหัวข้อประกาศ (ไม่เกิน 150 ตัวอักษร)', 400);
+  if (!Array.isArray(payload.changes) || payload.changes.length === 0 || payload.changes.length > 50) {
+    fail('ต้องมีรายการเปลี่ยนแปลงอย่างน้อย 1 รายการ', 400);
+  }
+  const changes = payload.changes.map((change) => {
+    const changeTitle = change?.title?.trim();
+    if (!changeTitle || changeTitle.length > 200) fail('ต้องระบุหัวข้อของแต่ละรายการ', 400);
+    if (!Array.isArray(change.roles) || change.roles.length === 0) fail('ต้องระบุแผนกที่เกี่ยวข้องของแต่ละรายการ', 400);
+    const roles = change.roles.map((raw) => {
+      const role = typeof raw === 'string' ? raw.trim().toLowerCase() : null;
+      if (!MOCK_RELEASE_NOTICE_ROLES.includes(role)) fail(`ไม่รู้จักแผนก: ${raw}`, 400);
+      return role;
+    });
+    return { title: changeTitle, roles: [...new Set(roles)] };
+  });
+  return { releaseId, title, changes };
+}
+
+function mockReleaseNoticeTargets(release) {
+  return db.users
+    .filter((user) => user.active !== false)
+    .map((user) => ({ user, titles: release.changes.filter((c) => c.roles.includes(user.role)).map((c) => c.title) }))
+    .filter((target) => target.titles.length > 0);
+}
+
+function mockReleaseNotifiedUserIds(releaseId) {
+  return new Set(db.notifications
+    .filter((n) => n.type === 'RELEASE_NOTE' && n.link === `/whats-new/${releaseId}`)
+    .map((n) => n.userId));
+}
+
 function addNotification(userId, ticketId, ticketCode, type, message) {
   const nextId = Math.max(...db.notifications.map((n) => n.id), 0) + 1;
   db.notifications.unshift({ id: nextId, userId, ticketId, ticketCode, type, message, read: false, createdAt: new Date().toISOString() });
@@ -12933,6 +12973,69 @@ export const api = {
       const n = db.notifications.find((item) => item.id === Number(id));
       if (n) n.read = true;
       return delay({ ok: true });
+    },
+  },
+
+  // Mirrors ReleaseNoticeController + ReleaseNoticeService (notification/). The authz here is NOT evidence about
+  // the Java gate (ReleaseNoticeIntegrationTest is). Targeting uses each seed user's `role` directly, where the
+  // server derives it with DivisionAccessPolicy.roleFor. `email` NEVER sends anything: it only records who would
+  // have been mailed, so it stays idempotent like the server's audit-log ledger.
+  releaseNotes: {
+    async audience(payload) {
+      hasRole('ceo', 'hr');
+      const release = mockNormalizeReleaseNotice(payload);
+      const targets = mockReleaseNoticeTargets(release);
+      const notified = mockReleaseNotifiedUserIds(release.releaseId);
+      let alreadyNotified = 0;
+      let alreadyEmailed = 0;
+      let pendingEmail = 0;
+      let withoutEmail = 0;
+      for (const { user } of targets) {
+        if (notified.has(user.id)) alreadyNotified += 1;
+        if (mockReleaseNoticeEmailed.has(`${release.releaseId}:${user.id}`)) alreadyEmailed += 1;
+        else if (user.email?.trim()) pendingEmail += 1;
+        else withoutEmail += 1;
+      }
+      return delay({
+        targeted: targets.length, alreadyNotified, pendingNotification: targets.length - alreadyNotified,
+        alreadyEmailed, pendingEmail, withoutEmail,
+      });
+    },
+    async publish(payload) {
+      hasRole('ceo', 'hr');
+      const release = mockNormalizeReleaseNotice(payload);
+      const targets = mockReleaseNoticeTargets(release);
+      const notified = mockReleaseNotifiedUserIds(release.releaseId);
+      let inserted = 0;
+      for (const { user, titles } of targets) {
+        if (notified.has(user.id)) continue;
+        const nextId = Math.max(...db.notifications.map((n) => n.id), 0) + 1;
+        db.notifications.unshift({
+          id: nextId, userId: user.id, ticketId: null, ticketCode: null, type: 'RELEASE_NOTE',
+          title: `มีอะไรใหม่: ${release.title}`,
+          message: `มีอะไรใหม่: ${release.title}
+${titles.length} เรื่องที่เกี่ยวกับงานของคุณ กดเพื่อดูวิธีใช้`,
+          link: `/whats-new/${release.releaseId}`, read: false, createdAt: new Date().toISOString(),
+        });
+        inserted += 1;
+      }
+      return delay({ targeted: targets.length, inserted, alreadyNotified: targets.length - inserted });
+    },
+    async email(payload) {
+      hasRole('ceo', 'hr');
+      const release = mockNormalizeReleaseNotice(payload);
+      const targets = mockReleaseNoticeTargets(release);
+      let sent = 0;
+      let alreadyEmailed = 0;
+      let withoutEmail = 0;
+      for (const { user } of targets) {
+        const key = `${release.releaseId}:${user.id}`;
+        if (mockReleaseNoticeEmailed.has(key)) { alreadyEmailed += 1; continue; }
+        if (!user.email?.trim()) { withoutEmail += 1; continue; }
+        mockReleaseNoticeEmailed.add(key);
+        sent += 1;
+      }
+      return delay({ targeted: targets.length, sent, alreadyEmailed, withoutEmail });
     },
   },
 

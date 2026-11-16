@@ -35,6 +35,7 @@ import Save from 'lucide-react/dist/esm/icons/save.mjs';
 import Search from 'lucide-react/dist/esm/icons/search.mjs';
 import ShieldCheck from 'lucide-react/dist/esm/icons/shield-check.mjs';
 import SlidersHorizontal from 'lucide-react/dist/esm/icons/sliders-horizontal.mjs';
+import Sparkles from 'lucide-react/dist/esm/icons/sparkles.mjs';
 import TriangleAlert from 'lucide-react/dist/esm/icons/triangle-alert.mjs';
 import Upload from 'lucide-react/dist/esm/icons/upload.mjs';
 import Paperclip from 'lucide-react/dist/esm/icons/paperclip.mjs';
@@ -84,6 +85,7 @@ const icons = {
   save: Save,
   search: Search,
   setting: SlidersHorizontal,
+  sparkles: Sparkles,
   shield: ShieldCheck,
   triangleAlert: TriangleAlert,
   upload: Upload,

@@ -51,6 +51,8 @@ const ROUTES = [
   '/price-import',
   '/ceo-settings',
   '/catalog',
+  '/whats-new', // มีอะไรใหม่ — release notice, every role (static content; no API call to render)
+  '/whats-new/2026-11-16', // the same page pinned to one release: where the bell row and the email link land
 ];
 
 // Declared in App.jsx but deliberately outside this sweep, each with the reason.

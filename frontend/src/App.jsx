@@ -29,6 +29,7 @@ const EmployeeSelfService = lazy(() => import('./features/dashboard/EmployeeSelf
 const DivisionManagerOverview = lazy(() => import('./features/dashboard/DivisionManagerOverview.jsx').then(toDefault('DivisionManagerOverview')));
 // Role-scoped views: Sales Manager's team-cockpit Overview (landing).
 const ManagerOverview = lazy(() => import('./features/dashboard/ManagerOverview.jsx').then(toDefault('ManagerOverview')));
+const WhatsNewPage = lazy(() => import('./features/whatsNew/WhatsNewPage.jsx').then(toDefault('WhatsNewPage')));
 const ActivityLogPage = lazy(() => import('./features/activityLog/ActivityLogPage.jsx').then(toDefault('ActivityLogPage')));
 const EmployeeListPage = lazy(() => import('./features/employees/EmployeeListPage.jsx').then(toDefault('EmployeeListPage')));
 const EmployeeDetailPage = lazy(() => import('./features/employees/EmployeeDetailPage.jsx').then(toDefault('EmployeeDetailPage')));
@@ -384,6 +385,9 @@ export function App() {
             {/* Admin-only. permissions.js guards it on user.admin and exempts it narrowly from the self-service lockdown;
              * the server re-checks hr.employee.is_admin per call. */}
             <Route path="/activity-log" element={<ActivityLogPage />} />
+            {/* มีอะไรใหม่: every employee (SELF_SERVICE_PATHS). The bell row and the release email link to /whats-new/:id. */}
+            <Route path="/whats-new" element={<WhatsNewPage user={user} showToast={showToast} />} />
+            <Route path="/whats-new/:releaseId" element={<WhatsNewPage user={user} showToast={showToast} />} />
             <Route path="/my-requests" element={<Navigate to="/profile" replace />} />
             <Route
               path="/profile"

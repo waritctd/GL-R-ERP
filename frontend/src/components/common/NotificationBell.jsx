@@ -21,6 +21,15 @@ const TYPE_ICON = {
   DEAL_QUOTATION_SUBMITTED: { name: 'fileText', color: '#f59e0b' },
   DEAL_QUOTATION_APPROVED:  { name: 'check',    color: '#22c55e' },
   DEAL_QUOTATION_REJECTED:  { name: 'close',    color: '#dc2626' },
+  // มีอะไรใหม่ release notice (ReleaseNoticePolicy.NOTIFICATION_TYPE). Brand indigo, = --color-primary.
+  RELEASE_NOTE:             { name: 'sparkles', color: '#4f46e5' },
+};
+
+/** The bell's query, shared with the มีอะไรใหม่ bubble and page so all three read ONE cache entry (one poll). */
+export const notificationsQueryOptions = {
+  queryKey: queryKeys.notifications(),
+  queryFn: () => api.notifications.list().then((res) => (Array.isArray(res.notifications) ? res.notifications : [])),
+  refetchInterval: 30_000,
 };
 
 function timeAgo(iso) {
@@ -59,11 +68,7 @@ export function NotificationBell({
   // Polling moves from a manual setInterval to refetchInterval — same 30s cadence, but the cache now lives at
   // queryKeys.notifications() so any mutation elsewhere (e.g. a ticket action) that invalidates that key also
   // refreshes this bell immediately instead of waiting up to 30s.
-  const notificationsQuery = useQuery({
-    queryKey: queryKeys.notifications(),
-    queryFn: () => api.notifications.list().then((res) => (Array.isArray(res.notifications) ? res.notifications : [])),
-    refetchInterval: 30_000,
-  });
+  const notificationsQuery = useQuery(notificationsQueryOptions);
   // On error, fall back to an empty list — matches the original load()'s catch-and-clear behavior (this
   // component has no showToast prop to report through).
   const items = notificationsQuery.data ?? [];

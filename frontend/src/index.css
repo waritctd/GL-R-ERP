@@ -249,6 +249,14 @@
   --ease-standard: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 
+  /* มีอะไรใหม่ (features/whatsNew) entrance motion. Each keyframe ENDS at the element's resting style and is only
+   * applied through `motion-safe:` utilities after the element is on screen, so content never rests hidden and
+   * prefers-reduced-motion gets none of it. 150-300ms ease-out, per the owner's brief. */
+  --animate-wn-pop: wn-pop 180ms var(--ease-standard) both;
+  --animate-wn-rise: wn-rise 260ms var(--ease-standard) both;
+  --animate-wn-fade: wn-fade 220ms ease-out both;
+  --animate-wn-pulse-once: wn-pulse 300ms ease-out 400ms 1;
+
   /* Layout — mirrors the current rendered desktop rail width and the per-breakpoint page gutters already
    * hardcoded per page/breakpoint. */
   --sidebar-width: 260px;
@@ -276,6 +284,33 @@
 @keyframes button-loading-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+
+/* มีอะไรใหม่ keyframes (see the --animate-wn-* tokens). Unlayered for the same reason as the two above. */
+@keyframes wn-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@keyframes wn-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes wn-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes wn-pulse {
+  50% {
+    transform: scale(1.45);
   }
 }
 
