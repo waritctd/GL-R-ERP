@@ -25,12 +25,15 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const accountUser = { role: 'account', name: 'บัญชี ทดสอบ', employeeId: 3 };
 const ceoUser = { role: 'ceo', name: 'ซีอีโอ ทดสอบ', employeeId: 1 };
 
+// Money fixtures keep every field distinct (payable ≠ paid ≠ outstanding ≠ depositDue, paid net of an adjustment
+// where outstanding is 0), so a row that shows the wrong field shows a figure no assertion expects.
+
 const depositTicket = {
   id: 201, code: 'PR-2026-0201', title: 'โครงการดี', customerName: 'บริษัท ดี จำกัด',
   status: 'quotation_issued', paymentStatus: 'DEPOSIT_NOTICE_ISSUED', fulfillmentStatus: null,
   lifecycle: 'ACTIVE', salesStage: 'NEGOTIATION', depositPolicy: 'REQUIRED',
   closeConfirmedAt: null, invoiceOnFile: false,
-  amountPayable: 80000, amountPaid: 0, amountOutstanding: 80000,
+  amountPayable: 85000, amountPaid: 5000, amountOutstanding: 80000, depositDue: 40000,
   overdue: false, paymentDueDate: null, updatedAt: '2026-07-10T00:00:00.000Z',
 };
 
@@ -39,7 +42,7 @@ const finalPaymentTicket = {
   status: 'quotation_issued', paymentStatus: 'AWAITING_FINAL_PAYMENT', fulfillmentStatus: null,
   lifecycle: 'ACTIVE', salesStage: 'DELIVERY_SCHEDULING', depositPolicy: 'REQUIRED',
   closeConfirmedAt: null, invoiceOnFile: false,
-  amountPayable: 120000, amountPaid: 60000, amountOutstanding: 60000,
+  amountPayable: 125000, amountPaid: 65000, amountOutstanding: 60000,
   overdue: false, paymentDueDate: null, updatedAt: '2026-07-11T00:00:00.000Z',
 };
 
@@ -48,7 +51,7 @@ const closedPaidTicket = {
   status: 'quotation_issued', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED',
   lifecycle: 'ACTIVE', salesStage: 'CLOSED_PAID', depositPolicy: 'REQUIRED',
   closeConfirmedAt: '2026-07-01T00:00:00.000Z', invoiceOnFile: true,
-  amountPayable: 90000, amountPaid: 90000, amountOutstanding: 0,
+  amountPayable: 90000, amountPaid: 89500, amountOutstanding: 0,
   overdue: false, paymentDueDate: null, updatedAt: '2026-07-01T00:00:00.000Z',
 };
 
@@ -58,7 +61,7 @@ const idleTicket = {
   status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', fulfillmentStatus: null,
   lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', depositPolicy: 'REQUIRED',
   closeConfirmedAt: null, invoiceOnFile: false,
-  amountPayable: 50000, amountPaid: 0, amountOutstanding: 50000,
+  amountPayable: 52000, amountPaid: 2000, amountOutstanding: 50000,
   overdue: false, paymentDueDate: null, updatedAt: '2026-07-05T00:00:00.000Z',
 };
 
@@ -67,7 +70,7 @@ const overdueTicket = {
   status: 'quotation_issued', paymentStatus: 'AWAITING_FINAL_PAYMENT', fulfillmentStatus: null,
   lifecycle: 'ACTIVE', salesStage: 'DELIVERED', depositPolicy: 'REQUIRED',
   closeConfirmedAt: null, invoiceOnFile: false,
-  amountPayable: 30000, amountPaid: 0, amountOutstanding: 30000,
+  amountPayable: 32000, amountPaid: 2000, amountOutstanding: 30000,
   overdue: true, paymentDueDate: '2026-09-01', updatedAt: '2026-07-12T00:00:00.000Z',
 };
 
@@ -76,8 +79,19 @@ const closeReadyTicket = {
   status: 'quotation_issued', paymentStatus: 'FULLY_PAID', fulfillmentStatus: 'FULLY_DELIVERED',
   lifecycle: 'ACTIVE', salesStage: 'DELIVERED', depositPolicy: 'REQUIRED',
   closeConfirmedAt: null, invoiceOnFile: true,
-  amountPayable: 596000, amountPaid: 596000, amountOutstanding: 0,
+  amountPayable: 596000, amountPaid: 595500, amountOutstanding: 0,
   overdue: false, paymentDueDate: null, updatedAt: '2026-07-13T00:00:00.000Z',
+};
+
+// Legacy (pre-dual-track) close-ready deal: document issued, no payment status, no receipt rows. closeReady()
+// accepts it (accountActions.js closePrerequisitesMet legacyOk); nothing here may claim it was paid in full.
+const legacyCloseReadyTicket = {
+  id: 208, code: 'PR-2026-0208', title: 'โครงการเก่า', customerName: 'บริษัท เก่า จำกัด',
+  status: 'document_issued', paymentStatus: null, fulfillmentStatus: null,
+  lifecycle: 'ACTIVE', salesStage: 'DELIVERED', depositPolicy: 'REQUIRED',
+  closeConfirmedAt: null, invoiceOnFile: false,
+  amountPayable: 70000, amountPaid: 0, amountOutstanding: null,
+  overdue: false, paymentDueDate: null, updatedAt: '2026-07-14T00:00:00.000Z',
 };
 
 function LocationProbe() {
@@ -127,7 +141,7 @@ describe('AccountFinancePage — grouped worklist (design a-fin-land)', () => {
     await screen.findByText('บริษัท ดี จำกัด');
     const sections = screen.getAllByRole('region').filter((r) => r.dataset.testid?.startsWith('fin-group-'));
     expect(sections.map((s) => s.getAttribute('aria-label'))).toEqual(['ยืนยันพร้อมปิดงาน', 'ติดตามชำระ', 'บันทึกใบกำกับ']);
-    expect(within(group('ยืนยันพร้อมปิดงาน')).getByText('ส่งของครบและรับเงินครบแล้ว')).not.toBeNull();
+    expect(within(group('ยืนยันพร้อมปิดงาน')).getByText('พร้อมปิดงาน รอฝ่ายบัญชียืนยัน')).not.toBeNull();
     expect(within(group('ติดตามชำระ')).getByText('ออกใบแจ้งหนี้แล้ว ยังไม่พบเงินในไฟล์ล่าสุด')).not.toBeNull();
     expect(within(group('บันทึกใบกำกับ')).getByText('ใช้คำนวณคำขอค่าคอม (เหมือนเดิม)')).not.toBeNull();
     expect(within(group('ยืนยันพร้อมปิดงาน')).getByTestId('group-count').textContent).toBe('1');
@@ -175,26 +189,38 @@ describe('AccountFinancePage — grouped worklist (design a-fin-land)', () => {
     expect((await screen.findByTestId('location')).textContent).toBe('/finance/deals/206');
   });
 
-  it('rows show the figures the server sent, unchanged: received for close/invoice, outstanding for chase', async () => {
+  // Ruling F6/F2: each row shows exactly what the old table showed for that deal — one figure, labelled คงค้าง,
+  // from amountOutstanding — and none of the other money fields (payable, paid, depositDue).
+  it('every row shows exactly the old table\'s figure: คงค้าง = amountOutstanding, and no other money field', async () => {
     renderPage();
     await screen.findByText('บริษัท ดี จำกัด');
-    expect(within(groupRow(206)).getByText('รับครบ ฿596,000.00')).not.toBeNull();
-    expect(within(groupRow(203)).getByText('ยอดรับจริง ฿90,000.00')).not.toBeNull();
-    expect(within(groupRow(201)).getByText('คงค้าง ฿80,000.00')).not.toBeNull();
-    expect(within(groupRow(202)).getByText('คงค้าง ฿60,000.00')).not.toBeNull();
-    expect(within(groupRow(205)).getByText('คงค้าง ฿30,000.00')).not.toBeNull();
+    const expected = { 206: '฿0.00', 203: '฿0.00', 201: '฿80,000.00', 202: '฿60,000.00', 205: '฿30,000.00' };
+    const others = ['฿596,000.00', '฿595,500.00', '฿90,000.00', '฿89,500.00', '฿85,000.00', '฿5,000.00', '฿40,000.00',
+      '฿125,000.00', '฿65,000.00', '฿32,000.00', '฿2,000.00'];
+    Object.entries(expected).forEach(([id, figure]) => {
+      const row = groupRow(id);
+      expect(within(row).getByText(`คงค้าง ${figure}`)).not.toBeNull();
+      expect(row.textContent.match(/฿[\d,]+\.\d\d/g)).toEqual([figure]);
+      others.forEach((o) => expect(row.textContent).not.toContain(o));
+    });
     // the deal code is the row's id column
     expect(within(groupRow(201)).getByText('PR-2026-0201')).not.toBeNull();
   });
 
-  it('a deposit row shows the server\'s depositDue as มัดจำ (the drawn label), not the whole outstanding', async () => {
-    listReturns([{ ...depositTicket, depositDue: 37450 }, { ...depositTicket, id: 207, code: 'PR-2026-0207', customerName: 'บริษัท ไม่มีมัดจำ จำกัด', depositDue: null }]);
-    renderPage();
+  it('no money label the old table did not have: no รับครบ, ยอดรับจริง or มัดจำ figure anywhere on the grouped view', async () => {
+    const { container } = renderPage();
     await screen.findByText('บริษัท ดี จำกัด');
-    expect(within(groupRow(201)).getByText('มัดจำ ฿37,450.00')).not.toBeNull();
-    expect(within(groupRow(201)).queryByText(/คงค้าง/)).toBeNull();
-    // no depositDue on the row (older payload): fall back to the outstanding the page always showed, never a guess
-    expect(within(groupRow(207)).getByText('คงค้าง ฿80,000.00')).not.toBeNull();
+    expect(container.textContent).not.toMatch(/รับครบ|ยอดรับจริง|มัดจำ ฿/);
+  });
+
+  it('a legacy close-ready deal with no receipts is never described as paid in full; it shows the old table\'s dash', async () => {
+    listReturns([legacyCloseReadyTicket]);
+    renderPage();
+    await screen.findByText('บริษัท เก่า จำกัด');
+    const row = groupRow(208);
+    expect(within(group('ยืนยันพร้อมปิดงาน')).getByText('บริษัท เก่า จำกัด')).not.toBeNull();
+    expect(within(row).getByText('คงค้าง —')).not.toBeNull();
+    expect(row.textContent).not.toMatch(/ครบ ฿|รับครบ|ชำระครบ|฿0\.00|฿70,000\.00/);
   });
 
   it('a chase row says which step waits on the deal page, and flags overdue / shows the due date', async () => {
@@ -217,10 +243,65 @@ describe('AccountFinancePage — grouped worklist (design a-fin-land)', () => {
     expect(screen.queryByText('บริษัท ดี จำกัด')).toBeNull();
     expect(screen.queryByText('บริษัท อี จำกัด')).toBeNull();
     expect(within(group('ติดตามชำระ')).getByTestId('group-count').textContent).toBe('1');
-    // what the CEO is offered today is unchanged: overdue chase, close-ready, invoice
-    expect(within(groupRow(205)).getByRole('link').textContent).toBe('เปิด');
+  });
+
+  // Ruling F1: the server offers CONFIRM_CLOSE only to CLOSE_CONFIRM_ROLES = {account} and RECORD_INVOICE only to
+  // account, so the CEO's button never carries those verbs: it reads เปิด and the step is plain status text.
+  it('CEO (wrong way round): never offered an action button it cannot perform — every button reads เปิด, the step is status text', async () => {
+    renderPage('/finance', ceoUser);
+    await screen.findByText('บริษัท โอเวอร์ จำกัด');
+    [205, 206, 203].forEach((id) => {
+      const link = within(groupRow(id)).getByRole('link');
+      expect(link.textContent).toBe('เปิด');
+      expect(link.getAttribute('href')).toBe(`/finance/deals/${id}`);
+      expect(link.getAttribute('aria-label')).not.toMatch(/ยืนยันพร้อมปิดงาน|บันทึกใบกำกับ/);
+    });
+    expect(within(groupRow(206)).getByText('ยืนยันพร้อมปิดงาน').tagName).not.toBe('A');
+    expect(within(groupRow(203)).getByText('บันทึกใบกำกับ').tagName).not.toBe('A');
+    // no link on the grouped view carries an action verb for the CEO
+    screen.getAllByRole('link').filter((l) => l.closest('[data-testid^="fin-work-row-"]'))
+      .forEach((l) => expect(l.textContent).toBe('เปิด'));
+  });
+
+  it('account (the performer) gets the verb on the button and no duplicate status text', async () => {
+    renderPage();
+    await screen.findByText('บริษัท ปิดงาน จำกัด');
     expect(within(groupRow(206)).getByRole('link').textContent).toBe('ยืนยันพร้อมปิดงาน');
+    expect(within(groupRow(206)).getAllByText('ยืนยันพร้อมปิดงาน')).toHaveLength(1);
     expect(within(groupRow(203)).getByRole('link').textContent).toBe('บันทึกใบกำกับ');
+    expect(within(groupRow(203)).getAllByText('บันทึกใบกำกับ')).toHaveLength(1);
+  });
+
+  it('the ต้องดำเนินการ badge equals the sum of the group counts', async () => {
+    renderPage();
+    await screen.findByText('บริษัท ดี จำกัด');
+    const sum = screen.getAllByTestId('group-count').reduce((n, el) => n + Number(el.textContent), 0);
+    expect(sum).toBe(5);
+    expect(screen.getByRole('tab', { name: new RegExp(`ต้องดำเนินการ.*${sum} งาน`) })).not.toBeNull();
+  });
+
+  // Ruling F4: inside every group, the old table's default order — overdue first, then paymentDueDate ascending
+  // (none last), then rowAmount descending (outstanding when > 0, else payable).
+  it('inside ยืนยันพร้อมปิดงาน and บันทึกใบกำกับ the old table order holds (ties on due date → larger amount first)', async () => {
+    const closeSmall = { ...closeReadyTicket, id: 211, code: 'PR-2026-0211', customerName: 'ปิดเล็ก', amountPayable: 100000, amountPaid: 99000 };
+    const closeBig = { ...closeReadyTicket, id: 212, code: 'PR-2026-0212', customerName: 'ปิดใหญ่', amountPayable: 300000, amountPaid: 299000 };
+    const invSmall = { ...closedPaidTicket, id: 213, code: 'PR-2026-0213', customerName: 'ใบกำกับเล็ก', amountPayable: 20000, amountPaid: 19000 };
+    const invBig = { ...closedPaidTicket, id: 214, code: 'PR-2026-0214', customerName: 'ใบกำกับใหญ่', amountPayable: 400000, amountPaid: 399000 };
+    listReturns([closeSmall, closeBig], [invSmall, invBig]);
+    renderPage();
+    await screen.findByText('ปิดใหญ่');
+    const ids = (label) => within(group(label)).getAllByTestId(/^fin-work-row-/).map((r) => r.dataset.testid);
+    expect(ids('ยืนยันพร้อมปิดงาน')).toEqual(['fin-work-row-212', 'fin-work-row-211']);
+    expect(ids('บันทึกใบกำกับ')).toEqual(['fin-work-row-214', 'fin-work-row-213']);
+  });
+
+  // Ruling F7: the due chip's track is sized to its content, so a long chip widens its column (the fr tracks give
+  // way and wrap) instead of running under the button. jsdom cannot measure; the class is the pin, the on-screen
+  // check is the evidence.
+  it('the chip column is content-sized so the chip cannot run under the button', async () => {
+    renderPage();
+    await screen.findByText('บริษัท โอเวอร์ จำกัด');
+    expect(groupRow(205).className).toMatch(/minmax\(max-content,/);
   });
 
   it('CEO still reaches the deposit / final-payment deals read-only in ทั้งหมด, with no next step shown', async () => {
@@ -319,7 +400,8 @@ describe('AccountFinancePage — ทั้งหมด table and filter deep lin
   it('the CLOSED_PAID row action reads บันทึกใบกำกับ and the old ออกค่าคอม wording renders nowhere', async () => {
     const { container } = renderPage();
     await screen.findByText('บริษัท เอฟ จำกัด');
-    expect(screen.getAllByText('บันทึกใบกำกับ').length).toBeGreaterThan(0);
+    // Adapted (review F8): asserted on the CLOSED_PAID deal's own row, not on the group heading of the same name.
+    expect(within(screen.getByTestId('fin-work-row-203')).getByRole('link').textContent).toBe('บันทึกใบกำกับ');
     expect(container.textContent).not.toContain('ออกค่าคอม');
     expect(screen.queryByText('บันทึกใบกำกับ + ออกค่าคอม')).toBeNull();
   });

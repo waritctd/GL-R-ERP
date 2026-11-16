@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { nextAccountAction } from '../tickets/accountActions.js';
 import { FINANCE_WORK_GROUPS, financeWorkGroupKey, groupFinanceWork } from './financeWorkGroups.js';
@@ -28,7 +29,7 @@ const rowOf = (ticket, role) => ({ ticket, action: nextAccountAction(ticket, rol
 describe('FINANCE_WORK_GROUPS (drawing a-fin-land, verbatim)', () => {
   it('is exactly the three drawn groups, in the drawn order, with the drawn labels, hints and row buttons', () => {
     expect(FINANCE_WORK_GROUPS.map((g) => [g.key, g.label, g.hint, g.buttonLabel])).toEqual([
-      ['closeReady', 'ยืนยันพร้อมปิดงาน', 'ส่งของครบและรับเงินครบแล้ว', 'ยืนยันพร้อมปิดงาน'],
+      ['closeReady', 'ยืนยันพร้อมปิดงาน', 'พร้อมปิดงาน รอฝ่ายบัญชียืนยัน', 'ยืนยันพร้อมปิดงาน'],
       ['chase', 'ติดตามชำระ', 'ออกใบแจ้งหนี้แล้ว ยังไม่พบเงินในไฟล์ล่าสุด', 'เปิด'],
       ['invoice', 'บันทึกใบกำกับ', 'ใช้คำนวณคำขอค่าคอม (เหมือนเดิม)', 'บันทึกใบกำกับ'],
     ]);
@@ -54,9 +55,22 @@ describe('financeWorkGroupKey — maps nextAccountAction keys, adds no rule of i
     expect(financeWorkGroupKey(action)).toBeNull();
   });
 
-  it('an action key it does not know is not silently mapped anywhere', () => {
-    expect(financeWorkGroupKey({ key: 'somethingNew' })).toBeNull();
+  it('an action key it does not know is never dropped: it lands in the fallback group "other"', () => {
+    expect(financeWorkGroupKey({ key: 'somethingNew', label: 'ขั้นใหม่' })).toBe('other');
     expect(financeWorkGroupKey(undefined)).toBeNull();
+    expect(financeWorkGroupKey(null)).toBeNull();
+  });
+
+  // Exhaustiveness. accountActions.js exports no key list, so the keys are read from nextAccountAction's own body
+  // (every `key: '…'` it can return). A new key there that no drawn group lists turns this red.
+  it('every key nextAccountAction can return is mapped to a drawn group (not to the fallback)', () => {
+    const src = readFileSync(`${process.cwd()}/src/features/tickets/accountActions.js`, 'utf8');
+    const body = src.slice(src.indexOf('export function nextAccountAction'), src.indexOf('export function accountMoneyBucket'));
+    const keys = [...body.matchAll(/key:\s*'(\w+)'/g)].map((m) => m[1]);
+    // Pinned as well, so the scan itself cannot quietly find nothing.
+    expect([...keys].sort()).toEqual(['chaseOverdue', 'confirmCloseReady', 'confirmDeposit', 'confirmFinalPayment', 'recordInvoiceCommission']);
+    const mapped = FINANCE_WORK_GROUPS.flatMap((g) => g.actionKeys);
+    keys.forEach((k) => expect([k, mapped.includes(k)]).toEqual([k, true]));
   });
 });
 
@@ -79,6 +93,25 @@ describe('groupFinanceWork', () => {
   it('keeps the incoming row order inside each group (the page sorts once, before grouping)', () => {
     const rows = [T.confirmFinalPayment, T.chaseOverdue, T.confirmDeposit].map((t) => rowOf(t, 'account'));
     expect(groupFinanceWork(rows).find((g) => g.key === 'chase').rows.map((r) => r.ticket.id)).toEqual([3, 1, 2]);
+  });
+
+  it('a row with an unknown action key goes to a last "อื่น ๆ ที่ต้องดำเนินการ" group (button เปิด), so group counts sum to the actionable rows', () => {
+    const rows = [
+      rowOf(T.confirmDeposit, 'account'),
+      { ticket: { id: 99 }, action: { key: 'somethingNew', label: 'ขั้นใหม่' } },
+      rowOf(NONE.idleProcurement, 'account'),
+    ];
+    const groups = groupFinanceWork(rows);
+    const other = groups[groups.length - 1];
+    expect([other.key, other.label, other.buttonLabel]).toEqual(['other', 'อื่น ๆ ที่ต้องดำเนินการ', 'เปิด']);
+    expect(other.rows.map((r) => r.ticket.id)).toEqual([99]);
+    const total = groups.reduce((n, g) => n + g.rows.length, 0);
+    expect(total).toBe(rows.filter((r) => r.action != null).length);
+  });
+
+  it('the fallback group is left out when it has no rows', () => {
+    const groups = groupFinanceWork(Object.values(T).map((t) => rowOf(t, 'account')));
+    expect(groups.map((g) => g.key)).toEqual(['closeReady', 'chase', 'invoice']);
   });
 
   it('always returns all three groups, empty ones included, so an empty group can say so', () => {

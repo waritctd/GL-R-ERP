@@ -12,7 +12,7 @@ export const FINANCE_WORK_GROUPS = Object.freeze([
   {
     key: 'closeReady',
     label: 'ยืนยันพร้อมปิดงาน',
-    hint: 'ส่งของครบและรับเงินครบแล้ว',
+    hint: 'พร้อมปิดงาน รอฝ่ายบัญชียืนยัน',
     buttonLabel: 'ยืนยันพร้อมปิดงาน',
     actionKeys: ['confirmCloseReady'],
   },
@@ -34,18 +34,34 @@ export const FINANCE_WORK_GROUPS = Object.freeze([
 
 const GROUP_BY_ACTION_KEY = new Map(FINANCE_WORK_GROUPS.flatMap((g) => g.actionKeys.map((k) => [k, g.key])));
 
-/** The group key for a nextAccountAction() result, or null when finance has no step (or the key is unknown). */
+// Not in the drawing. A step nextAccountAction() may one day return that no drawn group lists still has to be on the
+// worklist (and in the ต้องดำเนินการ count), so it lands here, last, and only when non-empty. Its button is "เปิด".
+export const OTHER_WORK_GROUP = Object.freeze({
+  key: 'other',
+  label: 'อื่น ๆ ที่ต้องดำเนินการ',
+  hint: null,
+  buttonLabel: 'เปิด',
+  actionKeys: Object.freeze([]),
+});
+
+/** The group key for a nextAccountAction() result: a drawn group, 'other' for a step no group lists, or null when
+ * finance has no step at all. */
 export function financeWorkGroupKey(action) {
-  return GROUP_BY_ACTION_KEY.get(action?.key) ?? null;
+  if (action == null) return null;
+  return GROUP_BY_ACTION_KEY.get(action.key) ?? OTHER_WORK_GROUP.key;
 }
 
-/** Splits already-sorted `{ ticket, action }` rows into the three groups, keeping their order. Always returns all
- * three groups (empty ones included); rows with no group are left out — the ทั้งหมด view still lists them. */
+/** Splits already-sorted `{ ticket, action }` rows into groups, keeping their order. Always returns the three drawn
+ * groups (empty ones included) plus OTHER_WORK_GROUP when it has rows; rows with no step are left out — the ทั้งหมด
+ * view still lists them. Every row with a step is in exactly one group. */
 export function groupFinanceWork(rows) {
-  const buckets = new Map(FINANCE_WORK_GROUPS.map((g) => [g.key, []]));
+  const all = [...FINANCE_WORK_GROUPS, OTHER_WORK_GROUP];
+  const buckets = new Map(all.map((g) => [g.key, []]));
   (rows ?? []).forEach((row) => {
     const key = financeWorkGroupKey(row.action);
     if (key) buckets.get(key).push(row);
   });
-  return FINANCE_WORK_GROUPS.map((g) => ({ ...g, rows: buckets.get(g.key) }));
+  return all
+    .filter((g) => g !== OTHER_WORK_GROUP || buckets.get(g.key).length > 0)
+    .map((g) => ({ ...g, rows: buckets.get(g.key) }));
 }

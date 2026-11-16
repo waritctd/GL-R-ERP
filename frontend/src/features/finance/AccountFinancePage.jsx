@@ -19,6 +19,7 @@ import { dedupeById, rowAmount, useAccountTickets } from './accountTickets.js';
 import { findStage, useStageCatalog } from '../tickets/stageCatalog.js';
 import { MONEY_TRACK, moneyMilestoneOf } from './moneyMilestone.js';
 import { ExpressUploadCard } from './ReceiptsImportPage.jsx';
+import { canPerformFinanceStep } from './financeActionPerformers.js';
 import { groupFinanceWork } from './financeWorkGroups.js';
 
 // The next-action filter. Keys are exactly nextAccountAction()'s own `action.key`, so filtering never drifts
@@ -83,16 +84,19 @@ function DealRow({ row, catalog }) {
   );
 }
 
-// The money figure a grouped row shows — always a field the server sent on the row, never a recomputation.
-function workDetail(groupKey, row) {
+// The row's button: the group's verb only for a viewer the server lets perform that step
+// (financeActionPerformers.js, read from the Java); anyone else gets "เปิด", so no button is a dead end.
+function rowButton(group, action, role) {
+  const verb = group.buttonLabel !== 'เปิด' && canPerformFinanceStep(action.key, role);
+  return { label: verb ? group.buttonLabel : 'เปิด', primary: verb && group.key === 'closeReady' };
+}
+
+// The one figure a grouped row shows is the old table's: the คงค้าง column, amountOutstanding, as sent. The step
+// is the old table's ขั้นตอนที่ต้องทำ text, shown whenever the button does not already say it — except the overdue
+// chase, whose step is its group's own name.
+function workDetail(row, buttonLabel) {
   const { ticket, action } = row;
-  if (groupKey === 'closeReady') return { amount: `รับครบ ${money(ticket.amountPaid)}`, step: null };
-  if (groupKey === 'invoice') return { amount: `ยอดรับจริง ${money(ticket.amountPaid)}`, step: null };
-  // ติดตามชำระ: the step that waits on the deal page, unless it is the group's own name (the overdue chase).
-  const step = action.key === 'chaseOverdue' ? null : action.label;
-  // A deposit row names the deposit as drawn: TicketSummaryDto.depositDue (the open notice's total, the figure
-  // AccountOverview's รอรับมัดจำ sums). Without it, the outstanding the page has always shown.
-  if (action.key === 'confirmDeposit' && ticket.depositDue != null) return { amount: `มัดจำ ${money(ticket.depositDue)}`, step };
+  const step = buttonLabel === action.label || action.key === 'chaseOverdue' ? null : action.label;
   return { amount: `คงค้าง ${money(ticket.amountOutstanding)}`, step };
 }
 
@@ -108,15 +112,18 @@ function dueChip(ticket) {
 // Five columns on a wide screen; below the nav-drawer breakpoint the code and name lead and the rest wraps
 // beneath, never wider than the viewport. The button is the row's only control and goes where today's row link
 // went — the deal's finance page, where the action's own confirm/modal lives.
-function WorkRow({ group, row }) {
+function WorkRow({ group, row, role }) {
   const { ticket } = row;
   const name = ticket.customerName || ticket.title || ticket.code;
-  const { amount, step } = workDetail(group.key, row);
+  const button = rowButton(group, row.action, role);
+  const { amount, step } = workDetail(row, button.label);
   const chip = group.key === 'chase' ? dueChip(ticket) : null;
+  // The chip track is max-content: a long overdue chip widens its own column (the fr columns give way and their
+  // text wraps) instead of running under the button.
   return (
     <li
       data-testid={`fin-work-row-${ticket.id}`}
-      className="grid grid-cols-[8rem_minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1.5 border-t border-border-subtle px-5 py-3 first:border-t-0 nav-drawer:grid-cols-[minmax(0,1fr)_auto] mobile:px-3.5"
+      className="grid grid-cols-[8rem_minmax(0,1.6fr)_minmax(0,1.2fr)_minmax(max-content,1fr)_auto] items-center gap-x-4 gap-y-1.5 border-t border-border-subtle px-5 py-3 first:border-t-0 nav-drawer:grid-cols-[minmax(0,1fr)_auto] mobile:px-3.5"
     >
       <span className="min-w-0 text-sm font-bold tabular-nums text-text-secondary [overflow-wrap:anywhere] nav-drawer:col-span-2">{ticket.code}</span>
       <span className="grid min-w-0 gap-0.5 nav-drawer:col-start-1">
@@ -131,20 +138,20 @@ function WorkRow({ group, row }) {
       <span className="justify-self-end nav-drawer:col-start-2 nav-drawer:row-span-3 nav-drawer:row-start-2 nav-drawer:self-center">
         <Link
           to={`/finance/deals/${ticket.id}`}
-          aria-label={`${group.buttonLabel} · ${name}`}
+          aria-label={`${button.label} · ${name}`}
           className={cn(
-            buttonVariants({ variant: group.key === 'closeReady' ? 'primary' : 'secondary', size: 'sm' }),
+            buttonVariants({ variant: button.primary ? 'primary' : 'secondary', size: 'sm' }),
             'whitespace-nowrap no-underline mobile:min-h-11 pointer-coarse:min-h-11',
           )}
         >
-          {group.buttonLabel}
+          {button.label}
         </Link>
       </span>
     </li>
   );
 }
 
-function WorkGroup({ group }) {
+function WorkGroup({ group, role }) {
   return (
     <section data-testid={`fin-group-${group.key}`} aria-label={group.label} className="border-b border-border last:border-b-0">
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 bg-surface-subtle px-5 py-2.5 mobile:px-3.5">
@@ -152,13 +159,13 @@ function WorkGroup({ group }) {
         <span data-testid="group-count" className="rounded-full bg-surface-muted px-2 text-sm font-bold tabular-nums text-text-secondary">
           {group.rows.length}
         </span>
-        <small className="min-w-0 text-sm text-text-muted">{group.hint}</small>
+        {group.hint ? <small className="min-w-0 text-sm text-text-muted">{group.hint}</small> : null}
       </div>
       {group.rows.length === 0 ? (
         <p className="m-0 px-5 py-3 text-sm text-text-muted mobile:px-3.5">ไม่มีรายการ</p>
       ) : (
         <ul className="m-0 list-none p-0">
-          {group.rows.map((row) => <WorkRow key={row.ticket.id} group={group} row={row} />)}
+          {group.rows.map((row) => <WorkRow key={row.ticket.id} group={group} row={row} role={role} />)}
         </ul>
       )}
     </section>
@@ -354,7 +361,7 @@ export function AccountFinancePage({ user, showToast }) {
           </div>
         ) : (
           <div className="overflow-hidden rounded-md border border-border bg-surface">
-            {groups.map((group) => <WorkGroup key={group.key} group={group} />)}
+            {groups.map((group) => <WorkGroup key={group.key} group={group} role={user?.role} />)}
           </div>
         )
       ) : rows.length === 0 ? (
