@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { api } from './mockApi.js';
+import { isReturning } from '../features/salesBoard/quietRule.js';
 
 // The mock's mirror of the lifecycle-dialog backend changes (2026-11-16): the pause return date (V219, QuietRule
 // #returningSql), the drawn cancel reasons, and the meta catalog. SHAPE ONLY — whose deals the follow-up list and the
@@ -27,7 +28,9 @@ async function newDeal() {
   const customer = customers[0];
   let { projects } = await api.customers.projects(customer.id);
   if (!projects?.length) projects = [(await api.customers.createProject(customer.id, { name: 'โครงการทดสอบ' })).project];
-  const { ticket } = await api.tickets.create({ title: 'งานทดสอบพัก', customerId: customer.id, projectId: projects[0].id, items: [] });
+  const { ticket } = await api.tickets.create({
+    title: 'งานทดสอบพัก', customerId: customer.id, projectId: projects[0].id, items: [], entryChannel: 'DESIGNER_LED',
+  });
   return ticket.summary.id;
 }
 
@@ -83,6 +86,59 @@ describe('mock salesBoard — a paused deal whose date has arrived comes back', 
       const rep = team.reps.find((r) => r.employeeId === ownerId);
       expect(rep.quietDeals).toBeGreaterThanOrEqual(1);
     }
+  });
+});
+
+// Fix round 1 (rulings 3, 4, 5, 8): the mock must not be more permissive than Java, and must mirror the new rules.
+describe('mock — fix round 1', () => {
+  it('a returning paused deal is never crowded out: returning deals lead my followUp, uncapped', async () => {
+    const back = await newDeal();
+    await api.tickets.hold(back, { pauseReturnOn: bangkokToday() });
+    const { followUp } = await api.salesBoard.myWork();
+    expect(followUp.some((d) => d.ticketId === back)).toBe(true);
+    const firstQuiet = followUp.findIndex((d) => !d.returning);
+    const lastReturning = followUp.map((d) => d.returning).lastIndexOf(true);
+    expect(firstQuiet === -1 || lastReturning < firstQuiet).toBe(true);
+    expect(followUp.filter((d) => !d.returning).length).toBeLessThanOrEqual(5);
+  });
+
+  it("another rep's returning paused deal is never in my followUp (owner scope, like Java)", async () => {
+    const theirs = await newDeal(); // sales2's
+    await api.tickets.hold(theirs, { pauseReturnOn: bangkokToday() });
+    await api.auth.login({ role: 'sales' }); // the first seeded rep
+    expect((await api.salesBoard.myWork()).followUp.some((d) => d.ticketId === theirs)).toBe(false);
+  });
+
+  it('isReturning needs a paused lifecycle: an ACTIVE or CANCELLED deal with an arrived date never returns', () => {
+    const today = bangkokToday();
+    expect(isReturning({ lifecycle: 'ON_HOLD', pauseReturnOn: today }, today)).toBe(true);
+    expect(isReturning({ lifecycle: 'DORMANT', pauseReturnOn: today }, today)).toBe(true);
+    for (const lifecycle of ['ACTIVE', 'CANCELLED', 'CLOSED_LOST', 'COMPLETED', undefined]) {
+      expect(isReturning({ lifecycle, pauseReturnOn: today }, today), String(lifecycle)).toBe(false);
+    }
+  });
+
+  it('hold on an ON_HOLD deal changes only the date — no second ON_HOLD event; dormant on DORMANT likewise; DORMANT → ON_HOLD stays 409', async () => {
+    const id = await newDeal();
+    await api.tickets.hold(id, { pauseReturnOn: plusDays(bangkokToday(), 7) });
+    const { ticket } = await api.tickets.hold(id, { pauseReturnOn: plusDays(bangkokToday(), 30) });
+    expect(ticket.summary).toMatchObject({ lifecycle: 'ON_HOLD', pauseReturnOn: plusDays(bangkokToday(), 30) });
+    expect(ticket.events.filter((e) => e.kind === 'ON_HOLD')).toHaveLength(1);
+
+    const d = await newDeal();
+    await api.tickets.dormant(d, { pauseReturnOn: plusDays(bangkokToday(), 7) });
+    const again = await api.tickets.dormant(d, {});
+    expect(again.ticket.summary).toMatchObject({ lifecycle: 'DORMANT', pauseReturnOn: null });
+    expect(again.ticket.events.filter((e) => e.kind === 'DORMANT')).toHaveLength(1);
+    await expect(api.tickets.hold(d, {})).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('the tracking update sets, keeps (when not sent) and clears the estimate', async () => {
+    const id = await newDeal();
+    expect((await api.tickets.updateTracking(id, { estimatedValue: 500 })).ticket.summary.estimatedValue).toBe(500);
+    expect((await api.tickets.updateTracking(id, { nextFollowUpAt: null })).ticket.summary.estimatedValue).toBe(500);
+    expect((await api.tickets.updateTracking(id, { clearEstimatedValue: true })).ticket.summary.estimatedValue).toBeNull();
+    await expect(api.tickets.updateTracking(id, { estimatedValue: 0 })).rejects.toMatchObject({ status: 400 });
   });
 });
 

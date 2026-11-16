@@ -3,6 +3,7 @@ package th.co.glr.hr.ticket;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -61,20 +62,85 @@ class DealLifecycleDialogsIntegrationTest extends AbstractDealQuotationSlice2Int
 
     // ── สร้างงานใหม่: the drawn short form ─────────────────────────────────────────────────────────
 
+    // Fix round 1, ruling 1: the channel stays REQUIRED at creation (owner rule 2026-09-30). Ruling 3: the estimate
+    // has its own column, estimated_value; imported_value stays the pipeline import's alone.
     @Test
-    void shortForm_withNoChannel_createsAnS1DealStoringTheDrawnFields() throws Exception {
+    void shortForm_createsAnS1DealStoringTheDrawnFields_andTheEstimateInItsOwnColumn() throws Exception {
         JsonNode created = ok(post("/api/tickets").contentType(MediaType.APPLICATION_JSON).content("""
-            {"title":"โครงการบ้านสวน","customerId":%d,"customerName":"%s","projectId":%d,
+            {"title":"โครงการบ้านสวน","customerId":%d,"customerName":"%s","projectId":%d,"entryChannel":"OWNER_DIRECT",
              "designerName":"เทพสตูดิโอ ดีไซน์","estimatedValue":1200000}
             """.formatted(customer.id(), customer.name(), projectId)), salesActor);
 
         long id = created.at("/ticket/summary/id").asLong();
         Map<String, Object> row = row(id);
-        assertThat(row.get("entry_channel")).isEqualTo(EntryChannel.UNSPECIFIED);
+        assertThat(row.get("entry_channel")).isEqualTo(EntryChannel.OWNER_DIRECT);
         assertThat(row.get("sales_stage")).isEqualTo(DealStage.LEAD_APPROACH);
         assertThat(row.get("designer_name")).isEqualTo("เทพสตูดิโอ ดีไซน์");
-        assertThat((BigDecimal) row.get("imported_value")).isEqualByComparingTo("1200000");
+        assertThat((BigDecimal) row.get("estimated_value")).isEqualByComparingTo("1200000");
+        assertThat(row.get("imported_value")).isNull();
+        assertThat(created.at("/ticket/summary/estimatedValue").decimalValue()).isEqualByComparingTo("1200000");
         assertThat(eventCount(id, TicketEventKind.STAGE_CHANGED)).isZero();
+    }
+
+    @Test
+    void aDealWithNoChannelIsStillRefused_andNothingIsWritten() throws Exception {
+        int before = dealCount();
+        assertThat(status(post("/api/tickets").contentType(MediaType.APPLICATION_JSON).content("""
+            {"title":"ไม่มีช่องทาง","customerId":%d,"projectId":%d}
+            """.formatted(customer.id(), projectId)), salesActor)).isEqualTo(400);
+        assertThat(dealCount()).isEqualTo(before);
+    }
+
+    /** Ruling 2: a sales_manager cannot edit items afterwards (TicketService.editItems is sales-only), so the create form
+     * sends them; they persist exactly as the old form's did. */
+    @Test
+    void aManagerCreatedDealWithItemsPersistsThem() throws Exception {
+        JsonNode created = ok(post("/api/tickets").contentType(MediaType.APPLICATION_JSON).content(body(
+            ",\"items\":[{\"brand\":\"Padana\",\"model\":\"Raku\",\"color\":\"ขาว\",\"size\":\"20x20\","
+                + "\"factory\":\"Padana\",\"unitBasis\":\"PIECE\",\"qty\":12,\"sourcedFromStock\":false}]")),
+            salesManagerActor);
+
+        long id = created.at("/ticket/summary/id").asLong();
+        assertThat(jdbc.queryForObject("SELECT COUNT(*) FROM sales.ticket_item WHERE ticket_id = :id AND model = 'Raku'",
+            Map.of("id", id), Integer.class)).isEqualTo(1);
+        assertThat(created.at("/ticket/summary/itemCount").asInt()).isEqualTo(1);
+    }
+
+    // ── ruling 3: the estimate is edited through the existing tracking update ─────────────────────
+
+    @Test
+    void theTrackingUpdateSetsAndClearsTheEstimate_andLeavesItWhenNotSent() throws Exception {
+        long id = created(",\"estimatedValue\":500000");
+
+        // A tracking update that does not mention the estimate keeps it (the guided advance sends such updates).
+        ok(put("/api/tickets/" + id + "/tracking").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"nextFollowUpAt\":\"" + today().plusDays(7) + "\"}"), salesActor);
+        assertThat((BigDecimal) row(id).get("estimated_value")).isEqualByComparingTo("500000");
+
+        ok(put("/api/tickets/" + id + "/tracking").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"estimatedValue\":750000}"), salesActor);
+        assertThat((BigDecimal) row(id).get("estimated_value")).isEqualByComparingTo("750000");
+
+        ok(put("/api/tickets/" + id + "/tracking").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"clearEstimatedValue\":true}"), salesActor);
+        assertThat(row(id).get("estimated_value")).isNull();
+    }
+
+    /** Wrong-way-round: the estimate is editable by exactly whoever may edit the tracking info today. */
+    @Test
+    void anotherRepCannotEditTheEstimate() throws Exception {
+        long id = created(",\"estimatedValue\":500000");
+
+        assertThat(status(put("/api/tickets/" + id + "/tracking").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"estimatedValue\":1}"), otherSalesActor)).isEqualTo(403);
+        assertThat((BigDecimal) row(id).get("estimated_value")).isEqualByComparingTo("500000");
+    }
+
+    @Test
+    void aNonPositiveEstimateIsRefusedByTheTrackingUpdate() throws Exception {
+        long id = created("");
+        assertThat(status(put("/api/tickets/" + id + "/tracking").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"estimatedValue\":0}"), salesActor)).isEqualTo(400);
     }
 
     @Test
@@ -115,7 +181,8 @@ class DealLifecycleDialogsIntegrationTest extends AbstractDealQuotationSlice2Int
                 new org.springframework.jdbc.datasource.DataSourceTransactionManager(
                     jdbc.getJdbcTemplate().getDataSource()));
         CreateTicketRequest atS2 = new CreateTicketRequest("โครงการสั้น", null, customer.name(), customer.id(),
-            projectId, null, null, null, List.of(), null, null, null, null, null, DealStage.SPEC_APPROVED);
+            projectId, null, null, EntryChannel.DESIGNER_LED, List.of(), null, null, null, null, null,
+            DealStage.SPEC_APPROVED);
 
         refusal(() -> tx.executeWithoutResult(status -> ticketService.create(atS2, qc)),
             org.springframework.http.HttpStatus.FORBIDDEN);
@@ -242,20 +309,121 @@ class DealLifecycleDialogsIntegrationTest extends AbstractDealQuotationSlice2Int
         assertThat(summary(id).pauseReturnOn()).isNull();
     }
 
+    /** Fix round 1 (B7): the permission check comes BEFORE the date validation, so a caller who may not pause the
+     * deal is told 403 — never a 400 about the date. */
+    @Test
+    void anotherRepWithAPastDate_isToldForbidden_notABadDate() throws Exception {
+        long id = deal(salesActor);
+
+        for (String path : List.of("hold", "dormant")) {
+            assertThat(status(post("/api/tickets/" + id + "/" + path).contentType(MediaType.APPLICATION_JSON)
+                .content("{\"pauseReturnOn\":\"" + today().minusDays(3) + "\"}"), otherSalesActor))
+                .as(path).isEqualTo(403);
+        }
+    }
+
+    // ── ruling 5: changing the return date of an already-paused deal ─────────────────────────────
+
+    @Test
+    void holdOnAnOnHoldDeal_changesOnlyTheDate_withNoNotificationAndNoSecondPauseEvent() throws Exception {
+        long id = deal(salesActor);
+        ok(post("/api/tickets/" + id + "/hold").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"pauseReturnOn\":\"" + today().plusDays(7) + "\"}"), salesActor);
+        int notices = noticeCount(id);
+        int holds = eventCount(id, TicketEventKind.ON_HOLD);
+
+        ok(post("/api/tickets/" + id + "/hold").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"note\":\"เลื่อนอีกเดือน\",\"pauseReturnOn\":\"" + today().plusMonths(1) + "\"}"), salesActor);
+
+        assertThat(row(id).get("lifecycle")).isEqualTo(DealLifecycle.ON_HOLD);
+        assertThat(summary(id).pauseReturnOn()).isEqualTo(today().plusMonths(1));
+        assertThat(noticeCount(id)).as("no second pause notice").isEqualTo(notices);
+        assertThat(eventCount(id, TicketEventKind.ON_HOLD)).as("no second ON_HOLD event").isEqualTo(holds);
+    }
+
+    @Test
+    void dormantOnADormantDeal_changesOrClearsOnlyTheDate_withNoNotification() throws Exception {
+        long id = deal(salesActor);
+        ok(post("/api/tickets/" + id + "/dormant").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"pauseReturnOn\":\"" + today().plusDays(7) + "\"}"), salesActor);
+        int notices = noticeCount(id);
+        int dormants = eventCount(id, TicketEventKind.DORMANT);
+
+        ok(post("/api/tickets/" + id + "/dormant").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"pauseReturnOn\":\"" + today().plusWeeks(2) + "\"}"), salesActor);
+        assertThat(summary(id).pauseReturnOn()).isEqualTo(today().plusWeeks(2));
+        ok(post("/api/tickets/" + id + "/dormant").contentType(MediaType.APPLICATION_JSON).content("{}"), salesActor);
+
+        assertThat(row(id).get("lifecycle")).isEqualTo(DealLifecycle.DORMANT);
+        assertThat(summary(id).pauseReturnOn()).isNull();
+        assertThat(noticeCount(id)).isEqualTo(notices);
+        assertThat(eventCount(id, TicketEventKind.DORMANT)).isEqualTo(dormants);
+    }
+
+    @Test
+    void switchingFromOnHoldToDormant_behavesAsBefore_withItsNotification() throws Exception {
+        long id = deal(salesActor);
+        ok(post("/api/tickets/" + id + "/hold").contentType(MediaType.APPLICATION_JSON).content("{}"), salesActor);
+        int notices = noticeCount(id);
+
+        ok(post("/api/tickets/" + id + "/dormant").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"pauseReturnOn\":\"" + today().plusDays(5) + "\"}"), salesActor);
+
+        assertThat(row(id).get("lifecycle")).isEqualTo(DealLifecycle.DORMANT);
+        assertThat(noticeCount(id)).isGreaterThan(notices);
+        assertThat(eventCount(id, TicketEventKind.DORMANT)).isEqualTo(1);
+    }
+
+    /** DORMANT → ON_HOLD stays refused, as before ruling 5 (a state switch behaves as today). */
+    @Test
+    void holdOnADormantDeal_isStillRefused() throws Exception {
+        long id = deal(salesActor);
+        ok(post("/api/tickets/" + id + "/dormant").contentType(MediaType.APPLICATION_JSON).content("{}"), salesActor);
+
+        assertThat(status(post("/api/tickets/" + id + "/hold").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"pauseReturnOn\":\"" + today().plusDays(5) + "\"}"), salesActor)).isEqualTo(409);
+    }
+
+    /** Wrong-way-round: changing the date needs the same permission as pausing. */
+    @Test
+    void anotherRepCannotChangeTheReturnDate() throws Exception {
+        long id = deal(salesActor);
+        LocalDate on = today().plusDays(7);
+        ok(post("/api/tickets/" + id + "/hold").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"pauseReturnOn\":\"" + on + "\"}"), salesActor);
+
+        assertThat(status(post("/api/tickets/" + id + "/hold").contentType(MediaType.APPLICATION_JSON)
+            .content("{\"pauseReturnOn\":\"" + today().plusMonths(3) + "\"}"), otherSalesActor)).isEqualTo(403);
+        assertThat(summary(id).pauseReturnOn()).isEqualTo(on);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────────────────────────
 
     private static LocalDate today() {
         return LocalDate.now(BANGKOK);
     }
 
+    /** A short-form create body WITH a channel (ruling 1), unless the caller states one itself. */
     private String body(String extra) {
-        return "{\"title\":\"โครงการสั้น\",\"customerId\":%d,\"customerName\":\"%s\",\"projectId\":%d%s}"
-            .formatted(customer.id(), customer.name(), projectId, extra);
+        String channel = extra.contains("\"entryChannel\"") ? "" : ",\"entryChannel\":\"DESIGNER_LED\"";
+        return "{\"title\":\"โครงการสั้น\",\"customerId\":%d,\"customerName\":\"%s\",\"projectId\":%d%s%s}"
+            .formatted(customer.id(), customer.name(), projectId, channel, extra);
+    }
+
+    private long created(String extra) throws Exception {
+        return ok(post("/api/tickets").contentType(MediaType.APPLICATION_JSON).content(body(extra)), salesActor)
+            .at("/ticket/summary/id").asLong();
+    }
+
+    /** Notifications about this deal (every lifecycle notice links to /tickets/{id}). */
+    private int noticeCount(long id) {
+        return jdbc.queryForObject("SELECT COUNT(*) FROM hr.notification WHERE link = :link",
+            Map.of("link", "/tickets/" + id), Integer.class);
     }
 
     private Map<String, Object> row(long id) {
         return jdbc.queryForMap("""
-            SELECT entry_channel, sales_stage, designer_name, imported_value, cancel_reason, lifecycle
+            SELECT entry_channel, sales_stage, designer_name, imported_value, estimated_value, cancel_reason, lifecycle
               FROM sales.ticket WHERE ticket_id = :id
             """, Map.of("id", id));
     }

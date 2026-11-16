@@ -827,6 +827,36 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     }
   });
 
+  // Fix round 1, ruling 6: PUT /tracking REPLACES every column, so the guided advance must send the three party names
+  // back as the deal holds them — it used to send only the date and win%, erasing designer/owner/buyer.
+  it('the guided advance keeps the designer, owner and buyer names', async () => {
+    api.tickets.updateTracking.mockClear();
+    const onUpdateStage = vi.fn().mockResolvedValue({});
+    renderPanel({
+      summary: baseSummary({
+        id: 502, designerName: 'เทพสตูดิโอ', ownerName: 'คุณเจ้าของ', buyerName: 'บริษัท ผู้รับเหมา',
+        winProbabilityOverride: 40, estimatedValue: 750000,
+      }),
+      availableActions: [],
+      stageDecisions: readinessBlocked,
+      onUpdateStage,
+    });
+
+    fireEvent.click(screen.getByTestId('guided-advance-open'));
+    fireEvent.change(screen.getByTestId('guided-advance-followup'), { target: { value: '2026-12-05' } });
+    fireEvent.blur(screen.getByTestId('guided-advance-followup'));
+    fireEvent.change(screen.getByTestId('guided-advance-note'), { target: { value: 'โทรแล้ว' } });
+    fireEvent.click(screen.getByTestId('guided-advance-submit'));
+
+    await waitFor(() => expect(onUpdateStage).toHaveBeenCalled());
+    expect(api.tickets.updateTracking).toHaveBeenCalledWith(502, expect.objectContaining({
+      designerName: 'เทพสตูดิโอ', ownerName: 'คุณเจ้าของ', buyerName: 'บริษัท ผู้รับเหมา',
+      // The win% field ("ถ้ามี") was left blank: the rep's override goes back unchanged, never cleared.
+      winProbability: 40,
+      estimatedValue: 750000,
+    }));
+  });
+
   // The page keys activities with a string route param, the panel with the numeric summary.id.
   it('queryKeys.ticketActivities normalises the id like ticketDetail, so "6" and 6 share a key', () => {
     expect(queryKeys.ticketActivities('6')).toEqual(queryKeys.ticketActivities(6));
@@ -1331,7 +1361,7 @@ describe('DealStagePanel — พักงาน and ย้ายไป S2 (m-hol
     api.tickets.addActivity.mockClear();
     const summary = baseSummary({
       id: 42, salesStage: 'PRESENTATION', nextFollowUpAt: null, designerName: 'เทพสตูดิโอ', ownerName: 'คุณเจ้าของ',
-      buyerName: null, winProbabilityOverride: 35,
+      buyerName: null, winProbabilityOverride: 35, estimatedValue: 1200000,
     });
     const { ref } = renderPanelWithRef({
       summary, availableActions: [{ action: 'UPDATE_STAGE' }], hasRecentActivity: false,
@@ -1348,21 +1378,56 @@ describe('DealStagePanel — พักงาน and ย้ายไป S2 (m-hol
     // updateTracking REPLACES every tracking column, so the other fields are sent back as they are.
     expect(api.tickets.updateTracking).toHaveBeenCalledWith(42, {
       nextFollowUpAt: '2026-12-01', designerName: 'เทพสตูดิโอ', ownerName: 'คุณเจ้าของ', buyerName: null, winProbability: 35,
+      // Fix round 1, ruling 6: the estimate goes back as held too (the endpoint keeps an absent one, so this is belt
+      // and braces, but every guided move resends every field it does not edit).
+      estimatedValue: 1200000,
     });
     expect(api.tickets.addActivity).toHaveBeenCalledWith(42, expect.objectContaining({ kind: 'OTHER', note: 'ตกลงสเปคแล้ว' }));
     expect(onUpdateStage).toHaveBeenCalledWith({ stage: 'SPEC_APPROVED', note: 'ตกลงสเปคแล้ว' });
   });
 
-  // The short create form asks no channel (stored UNSPECIFIED), so the panel's route line is where it is stated.
-  it('a deal whose channel was never stated can state it where the route line would be, only when the server offers it', () => {
-    const unspecified = baseSummary({ entryChannel: 'UNSPECIFIED' });
-    const { rerender } = renderPanel({ summary: unspecified, availableActions: [] });
-    openSteps();
+  // Fix round 1, ruling 1: the channel stays required at creation, so the "ยังไม่ได้ระบุช่องทางงาน" route-line row the
+  // first round added (for channel-less deals) is gone again — the route line is unchanged from before this slice.
+  it('adds no "channel not stated" row to the route line', () => {
+    renderPanel({
+      summary: baseSummary({ entryChannel: 'UNSPECIFIED' }),
+      availableActions: [{ action: 'SET_ENTRY_CHANNEL', requiredFields: ['value'] }],
+      onSetEntryChannel: vi.fn(),
+    });
     expect(screen.queryByTestId('entry-channel-unstated')).toBeNull();
+    expect(screen.queryByText('ยังไม่ได้ระบุช่องทางงาน')).toBeNull();
+  });
 
-    rerender(<DealStagePanel summary={unspecified} stageDecisions={allAllowed} catalog={catalog} availableActions={[{ action: 'SET_ENTRY_CHANNEL', requiredFields: ['value'] }]} {...noopHandlers} onSetEntryChannel={vi.fn()} />);
-    const row = screen.getByTestId('entry-channel-unstated');
-    expect(row.textContent).toContain('ยังไม่ได้ระบุช่องทางงาน');
-    expect(within(row).getByTestId('entry-channel-fix-toggle')).toBeTruthy();
+  // Fix round 1, ruling 5: a paused deal's return date is changed in place, from either pause state, with the same
+  // gate as resuming (RESUME is listed exactly when the caller may hold/dormant it — TicketService.canDealOwnership).
+  it('openChangeReturnDate() is a no-op on an active deal or without RESUME', () => {
+    const { ref, rerender } = renderPanelWithRef({ availableActions: [{ action: 'RESUME' }] });
+    act(() => ref.current.openChangeReturnDate());
+    expect(screen.queryByTestId('pause-deal-modal')).toBeNull();
+
+    rerender(<DealStagePanel ref={ref} summary={baseSummary({ lifecycle: 'ON_HOLD' })} stageDecisions={allAllowed} catalog={catalog} availableActions={[]} {...noopHandlers} />);
+    act(() => ref.current.openChangeReturnDate());
+    expect(screen.queryByTestId('pause-deal-modal')).toBeNull();
+  });
+
+  it.each([
+    ['ON_HOLD', 'พักชั่วคราว', 'onHold'],
+    ['DORMANT', 'ไม่เคลื่อนไหว', 'onDormant'],
+  ])('on a %s deal it opens "เปลี่ยนวันที่จะกลับมาดู" on the current state and date, and posts the same state', async (lifecycle, choice, handler) => {
+    const handlers = { ...noopHandlers, onHold: vi.fn().mockResolvedValue(), onDormant: vi.fn().mockResolvedValue() };
+    const { ref } = renderPanelWithRef({
+      summary: baseSummary({ lifecycle, pauseReturnOn: '2099-01-15' }),
+      availableActions: [{ action: 'RESUME' }, ...(lifecycle === 'ON_HOLD' ? [{ action: 'MARK_DORMANT' }] : [])],
+      ...handlers,
+    });
+
+    act(() => ref.current.openChangeReturnDate());
+    const modal = screen.getByTestId('pause-deal-modal');
+    expect(within(modal).getByRole('heading', { name: 'เปลี่ยนวันที่จะกลับมาดู' })).toBeTruthy();
+    expect(within(modal).getByRole('radio', { name: new RegExp(choice) }).getAttribute('aria-checked')).toBe('true');
+    expect(within(modal).getByLabelText('วันที่จะกลับมาดู').value).toBe('15/01/2642');
+    await act(async () => { fireEvent.click(within(modal).getByRole('button', { name: 'บันทึกวันที่' })); });
+
+    expect(handlers[handler]).toHaveBeenCalledWith({ note: undefined, pauseReturnOn: '2099-01-15' });
   });
 });

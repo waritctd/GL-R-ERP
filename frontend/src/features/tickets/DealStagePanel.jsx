@@ -12,7 +12,6 @@ import { depositBypassed } from './dealMoneyStatus.js';
 import { ACTIVITY_KINDS, STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
 import { goodsArrived, goodsNotArrivedWarning } from '../importProgress/importSteps.js';
 import { DealStageStepper, PhaseSummary, PhaseTracker, skippedStageCodes } from './DealStageStepper.jsx';
-import { EntryChannelFix } from './EntryChannelFix.jsx';
 import { MarkLostModal } from './MarkLostModal.jsx';
 import { MoveToS2Modal } from './MoveToS2Modal.jsx';
 import { PauseDealModal } from './PauseDealModal.jsx';
@@ -166,6 +165,8 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // 'resume' only now: hold / dormant open the one พักงาน dialog (pauseKind) since the m-hold drawing.
   const [noteAction, setNoteAction] = useState(null);
   const [pauseKind, setPauseKind] = useState(null); // null | 'ON_HOLD' | 'DORMANT' — which choice พักงาน opens on
+  // Fix round 1, ruling 5: true when พักงาน is opened on an already-paused deal to change its return date in place.
+  const [pauseChanging, setPauseChanging] = useState(false);
   const [moveS2Open, setMoveS2Open] = useState(false);
   const [note, setNote] = useState('');
   const [showSteps, setShowSteps] = useState(false);
@@ -214,9 +215,17 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
   // this just satisfies it in one place instead of two scattered panels.
   const guidedAdvance = useMutation({
     mutationFn: async () => {
+      // PUT /tracking REPLACES every column it does not keep (TicketRepository.updateTracking): the fields this form
+      // does not edit — the three party names, and the rep's win% when left blank here — go back as the deal holds
+      // them (fix round 1, ruling 6; this used to erase designer/owner/buyer).
       await api.tickets.updateTracking(summary.id, {
         nextFollowUpAt: guidedDraft.nextFollowUpAt || null,
-        winProbability: guidedDraft.winProbability === '' ? null : Number(guidedDraft.winProbability),
+        winProbability: guidedDraft.winProbability === ''
+          ? (summary.winProbabilityOverride ?? null) : Number(guidedDraft.winProbability),
+        designerName: summary.designerName ?? null,
+        ownerName: summary.ownerName ?? null,
+        buyerName: summary.buyerName ?? null,
+        estimatedValue: summary.estimatedValue ?? null, // V219: absent/null KEEPS it server-side; sent as held anyway
       });
       await api.tickets.addActivity(summary.id, {
         activityDate: bangkokTodayIso(),
@@ -256,6 +265,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
           ownerName: summary.ownerName ?? null,
           buyerName: summary.buyerName ?? null,
           winProbability: summary.winProbabilityOverride ?? null,
+          estimatedValue: summary.estimatedValue ?? null, // V219: absent/null KEEPS it server-side; sent as held anyway
         });
       }
       if (s2NeedsActivity && note) {
@@ -270,6 +280,7 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     },
   });
   const canResume = hasAction('RESUME');
+  const paused = lifecycle === 'ON_HOLD' || lifecycle === 'DORMANT';
   const canTender = hasAction('SET_TENDER_REQUIREMENT') && summary.salesStage === 'AWAITING_BUYER';
   // "แก้ช่องทางดีล" is the remedy for a route refusal, not standing chrome (the ช่องทางรับงาน row is
   // not on this panel). The server's own advertisement is handed down to the two places a refusal
@@ -290,8 +301,14 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
     openEditStage: () => { if (canEditStage && !actionLoading) setEditOpen(true); },
     openMarkLost: () => { if (canLost) setLostOpen(true); },
     // The one พักงาน dialog (m-hold): พักชั่วคราว from the quiet link, ไม่เคลื่อนไหว from ⋯ พัก dormant. Same gates.
-    openHold: () => { if (canHold && !actionLoading) setPauseKind('ON_HOLD'); },
-    openDormant: () => { if (canDormant && !actionLoading) setPauseKind('DORMANT'); },
+    openHold: () => { if (canHold && !actionLoading) { setPauseChanging(false); setPauseKind('ON_HOLD'); } },
+    openDormant: () => { if (canDormant && !actionLoading) { setPauseChanging(false); setPauseKind('DORMANT'); } },
+    // เปลี่ยนวันที่จะกลับมาดู on a paused deal: the same hold / dormant request in the SAME state, which the server
+    // treats as a date-only change. RESUME is listed exactly when the caller may hold / dormant it (canDealOwnership).
+    canChangeReturnDate: paused && canResume,
+    openChangeReturnDate: () => {
+      if (paused && canResume && !actionLoading) { setPauseChanging(true); setPauseKind(lifecycle); }
+    },
     // ย้ายไป S2 · สเปคผ่าน (m-stage), the ขั้นต่อไป card's button on an S1 deal. Re-checks canMoveDealToS2.
     openMoveToS2: () => { if (canMoveToS2 && !actionLoading) { moveToS2.reset(); setMoveS2Open(true); } },
     // The old paused / lost banners' buttons, now in the ขั้นต่อไป card. Same gates as those banners had:
@@ -439,19 +456,6 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
             <span data-testid="deal-route-line" className="text-xs font-bold text-text-muted">
               เส้นทาง · {route} · {routeStageCount} ขั้น{days != null ? ` · อยู่ในขั้นนี้ ${days === 0 ? 'วันนี้' : `${days} วัน`}` : ''}
             </span>
-          ) : entryChannelAction && onSetEntryChannel ? (
-            // No route because no channel was stated — the short create form (m-create) does not ask for one. Where
-            // the route would be named, the rep can state it (the server advertises SET_ENTRY_CHANNEL).
-            <div data-testid="entry-channel-unstated" className="flex min-w-0 flex-wrap items-center gap-x-2">
-              <span className="text-xs font-bold text-text-muted">ยังไม่ได้ระบุช่องทางงาน</span>
-              <EntryChannelFix
-                entryChannel={summary.entryChannel}
-                action={entryChannelAction}
-                onSubmit={onSetEntryChannel}
-                disabled={actionLoading}
-                noun="งาน"
-              />
-            </div>
           ) : <span />}
           <Button
             type="button"
@@ -519,8 +523,12 @@ export const DealStagePanel = forwardRef(function DealStagePanel({
       ) : null}
       {pauseKind ? (
         <PauseDealModal
-          canHold={canHold}
-          canDormant={canDormant}
+          // Changing the date: staying in the current state is always open to whoever may resume; switching follows
+          // the server's actions as before (ON_HOLD → DORMANT via MARK_DORMANT; DORMANT → ON_HOLD is never offered).
+          canHold={pauseChanging ? lifecycle === 'ON_HOLD' : canHold}
+          canDormant={pauseChanging ? (lifecycle === 'DORMANT' || canDormant) : canDormant}
+          changing={pauseChanging}
+          currentReturnOn={pauseChanging ? (summary.pauseReturnOn ?? null) : null}
           initialKind={pauseKind}
           submitting={actionLoading}
           onClose={() => setPauseKind(null)}

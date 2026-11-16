@@ -682,6 +682,47 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         assertThat(dashboard.forecastValue().subtract(before)).isEqualByComparingTo("750000");
     }
 
+    // ── the create form's estimate (V219 estimated_value, fix round 1 ruling 3) ───────────────────
+
+    /** The import neither overwrites nor is blocked by a rep's estimate: it still writes imported_value as before,
+     * the estimate is untouched, and the board and the dashboard forecast show the imported value. */
+    @Test
+    void anEstimateNeitherBlocksNorIsOverwrittenByTheImport_andTheImportedValueWins() throws Exception {
+        long id = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET estimated_value = 123456 WHERE ticket_id = :id", Map.of("id", id));
+        var dashboard = new th.co.glr.hr.dashboard.DashboardRepository(jdbc);
+        BigDecimal withEstimate = dashboard.forecastValue();
+
+        JsonNode result = upload(csv(row(repCode, "ดีล slice 2", "สตูดิโอ", "เจ้าของสมมุติ", "", "", "900,000", "S1", "",
+            "", "")), false, salesManagerActor);
+
+        assertThat(result.get("plan").get(0).get("ticketId").asLong()).isEqualTo(id);
+        Map<String, Object> values = jdbc.queryForMap(
+            "SELECT imported_value, estimated_value FROM sales.ticket WHERE ticket_id = :id", Map.of("id", id));
+        assertThat((BigDecimal) values.get("imported_value")).isEqualByComparingTo("900000");
+        assertThat((BigDecimal) values.get("estimated_value")).isEqualByComparingTo("123456");
+        var board = new SalesBoardRepository(jdbc, new QuietRule(jdbc, 14)).activeDealsOwnedBy(salesActor.id())
+            .stream().filter(d -> d.ticketId() == id).findFirst().orElseThrow();
+        assertThat(board.value()).isEqualByComparingTo("900000");
+        assertThat(dashboard.forecastValue().subtract(withEstimate)).isEqualByComparingTo(
+            new BigDecimal("900000").subtract(new BigDecimal("123456")));
+    }
+
+    /** With no quotation and no imported value, the estimate is the last fallback — on the same two consumers. */
+    @Test
+    void anEstimateAloneIsTheLastFallbackOnTheBoardAndTheForecast() throws Exception {
+        var dashboard = new th.co.glr.hr.dashboard.DashboardRepository(jdbc);
+        long id = deal(salesActor);
+        BigDecimal before = dashboard.forecastValue();
+        jdbc.update("UPDATE sales.ticket SET estimated_value = 4200 WHERE ticket_id = :id", Map.of("id", id));
+
+        var board = new SalesBoardRepository(jdbc, new QuietRule(jdbc, 14)).activeDealsOwnedBy(salesActor.id())
+            .stream().filter(d -> d.ticketId() == id).findFirst().orElseThrow();
+        assertThat(board.value()).isEqualByComparingTo("4200");
+        assertThat(board.currency()).isEqualTo("THB");
+        assertThat(dashboard.forecastValue().subtract(before)).isEqualByComparingTo("4200");
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static String[] row(String... cells) {

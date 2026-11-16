@@ -178,8 +178,49 @@ public record TicketSummaryDto(
      * back into its owner's ควรตามต่อ (Asia/Bangkok date, {@code QuietRule#returningSql}). Null when the pause named
      * no date, and cleared on resume. Only meaningful while the deal is paused.
      */
-    LocalDate pauseReturnOn
+    LocalDate pauseReturnOn,
+    /**
+     * V219 {@code sales.ticket.estimated_value} — มูลค่าโดยประมาณ (THB) the rep typed (create dialog / tracking edit).
+     * The board and forecast fall back to it last (quotation → imported_value → this). Nulled by
+     * {@link #withoutMoney()}: it is a selling figure.
+     */
+    BigDecimal estimatedValue
 ) {
+    /** The shape before {@link #estimatedValue}: it defaults to {@code null}. */
+    public TicketSummaryDto(
+        long id, String code, String type, String title, String status, String priority,
+        long createdById, String createdByName, Long assignedToId, String assignedToName,
+        String customerName, Long customerId, Long projectId, String projectName,
+        Long contactId, String contactName, String note,
+        Instant createdAt, Instant updatedAt, Instant closedAt, int itemCount, boolean hasEdits,
+        String paymentStatus, String fulfillmentStatus,
+        String salesStage, String lostReason, Instant lostAt, Instant stageUpdatedAt,
+        String lifecycle, String tenderRequirement, String depositPolicy, String depositPolicyReason,
+        String entryChannel, LocalDate billingDate, LocalDate dueDate, Integer creditTermDays,
+        LocalDate lastFollowUpAt, LocalDate nextFollowUpAt, String paymentStage,
+        BigDecimal amountPayable, BigDecimal amountPaid, BigDecimal amountOutstanding, boolean overdue,
+        Instant closeConfirmedAt, String closeConfirmedByName, boolean invoiceOnFile,
+        String cancelReason, Instant cancelledAt,
+        Integer winProbabilityOverride, String designerName, String ownerName, String buyerName,
+        boolean stale, boolean commissionRecorded, Instant reopenedAt, int reopenCount,
+        boolean quotationOnly, LocalDate paymentDueDate, String paymentDueBasis,
+        Integer paymentDueCreditDays, LiveDirectQuotationDto liveDirectQuotation,
+        Set<String> quotedRecipients, BigDecimal depositDue, Long keyedById,
+        boolean stageChangedInRange, boolean activityInRange, LocalDate lastActivityAt, LocalDate pauseReturnOn
+    ) {
+        this(id, code, type, title, status, priority, createdById, createdByName, assignedToId,
+            assignedToName, customerName, customerId, projectId, projectName, contactId, contactName,
+            note, createdAt, updatedAt, closedAt, itemCount, hasEdits, paymentStatus, fulfillmentStatus,
+            salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle, tenderRequirement, depositPolicy,
+            depositPolicyReason, entryChannel, billingDate, dueDate, creditTermDays, lastFollowUpAt,
+            nextFollowUpAt, paymentStage, amountPayable, amountPaid, amountOutstanding, overdue,
+            closeConfirmedAt, closeConfirmedByName, invoiceOnFile, cancelReason, cancelledAt,
+            winProbabilityOverride, designerName, ownerName, buyerName, stale, commissionRecorded,
+            reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
+            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, null);
+    }
+
     /** The shape before {@link #pauseReturnOn}: it defaults to {@code null}. */
     public TicketSummaryDto(
         long id, String code, String type, String title, String status, String priority,
@@ -442,7 +483,7 @@ public record TicketSummaryDto(
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
-            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn);
+            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue);
     }
 
     /**
@@ -462,7 +503,9 @@ public record TicketSummaryDto(
             null, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, null, null, null, null, Set.of(),
-            null, keyedById, stageChangedInRange, activityInRange, lastActivityAt);
+            null, keyedById, stageChangedInRange, activityInRange, lastActivityAt,
+            null /* pauseReturnOn: withheld here exactly as in the reviewed slice (afe6acbd) — not widened */,
+            null /* estimatedValue: a selling figure */);
     }
 
     /** Copy with {@link #keyedById} set (the row mapper builds the summary through a shorter shape). */
@@ -477,7 +520,7 @@ public record TicketSummaryDto(
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
-            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn);
+            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue);
     }
 
     /** Copy with the movement-range facts set (the row mapper builds the summary through a shorter shape). */
@@ -492,7 +535,22 @@ public record TicketSummaryDto(
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
-            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn);
+            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue);
+    }
+
+    /** Copy with {@link #estimatedValue} set (the row mapper builds the summary through a shorter shape). */
+    public TicketSummaryDto withEstimatedValue(BigDecimal estimatedValue) {
+        return new TicketSummaryDto(id, code, type, title, status, priority, createdById, createdByName,
+            assignedToId, assignedToName, customerName, customerId, projectId, projectName,
+            contactId, contactName, note, createdAt, updatedAt, closedAt, itemCount, hasEdits,
+            paymentStatus, fulfillmentStatus, salesStage, lostReason, lostAt, stageUpdatedAt, lifecycle,
+            tenderRequirement, depositPolicy, depositPolicyReason, entryChannel, billingDate, dueDate,
+            creditTermDays, lastFollowUpAt, nextFollowUpAt, paymentStage, amountPayable, amountPaid,
+            amountOutstanding, overdue, closeConfirmedAt, closeConfirmedByName, invoiceOnFile,
+            cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
+            commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
+            paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
+            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue);
     }
 
     /** Copy with {@link #pauseReturnOn} set (the row mapper builds the summary through a shorter shape). */
@@ -507,7 +565,7 @@ public record TicketSummaryDto(
             cancelReason, cancelledAt, winProbabilityOverride, designerName, ownerName, buyerName, stale,
             commissionRecorded, reopenedAt, reopenCount, quotationOnly, paymentDueDate, paymentDueBasis,
             paymentDueCreditDays, liveDirectQuotation, quotedRecipients, depositDue, keyedById,
-            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn);
+            stageChangedInRange, activityInRange, lastActivityAt, pauseReturnOn, estimatedValue);
     }
 
     /** Copy without the activity facts (lastActivityAt and the range flags), for roles that cannot read deal activities. */

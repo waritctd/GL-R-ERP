@@ -200,10 +200,18 @@ public class SalesBoardService {
         return new SalesBoardDtos.TeamBoard(repository.activeDealsAllReps(), quietRule.quietDays());
     }
 
-    /** The quiet ACTIVE deals plus the returning paused ones, ranked together by {@link #QUIET_RANK}, capped. */
+    /**
+     * Every returning paused deal first (ranked by {@link #QUIET_RANK} among themselves), then the top {@code limit}
+     * quiet ACTIVE deals. Fix round 1, ruling 4: the returning ones are never cut by the cap — each was scheduled by
+     * the rep, they are few, and with no value they would otherwise rank below every valued quiet deal and vanish (the
+     * board never carries a paused deal). The rep's quiet + returning count therefore equals the manager's
+     * {@code quietDeals} for the same rep.
+     */
     private static List<BoardDeal> rankFollowUp(List<BoardDeal> active, List<BoardDeal> returning, int limit) {
-        return java.util.stream.Stream.concat(active.stream().filter(BoardDeal::quiet), returning.stream())
-            .sorted(QUIET_RANK).limit(limit).toList();
+        return java.util.stream.Stream.concat(
+                returning.stream().sorted(QUIET_RANK),
+                active.stream().filter(BoardDeal::quiet).sorted(QUIET_RANK).limit(limit))
+            .toList();
     }
 
     static final String THB = "THB";

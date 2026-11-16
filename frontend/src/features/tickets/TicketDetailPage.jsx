@@ -1461,10 +1461,18 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       : (stickyPrimaryLabel ?? nextStep.title);
   if (!cardAction && nextStep.kind === 'resume' && canResumeDeal) {
     cardAction = (
-      <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action="resume" disabled={actionLoading}
-        onClick={() => dealStagePanelRef.current?.openResume()}>
-        ดำเนินการต่อ
-      </Button>
+      <span className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="primary" data-testid="ticket-primary-action" data-action="resume" disabled={actionLoading}
+          onClick={() => dealStagePanelRef.current?.openResume()}>
+          ดำเนินการต่อ
+        </Button>
+        {/* Fix round 1, ruling 5: change (or clear) the วันที่จะกลับมาดู without leaving the pause — same gate as
+            ดำเนินการต่อ (RESUME is listed exactly when the caller may hold / dormant the deal). */}
+        <Button type="button" variant="secondary" data-testid="change-return-date" disabled={actionLoading}
+          onClick={() => dealStagePanelRef.current?.openChangeReturnDate()}>
+          เปลี่ยนวันที่จะกลับมาดู
+        </Button>
+      </span>
     );
   } else if (!cardAction && nextStep.kind === 'reopen' && canReopenDeal) {
     cardAction = (

@@ -116,7 +116,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     mutationFn: (payload) => api.tickets.create(payload),
     onSuccess: (response) => {
       setCreating(false);
-      showToast('success', 'สร้างดีลเรียบร้อย');
+      showToast('success', 'สร้างงานเรียบร้อย');
       refresh();
       const id = response?.ticket?.summary?.id;
       if (id != null) navigate(`/tickets/${id}`);
@@ -176,7 +176,11 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     ? work.board.filter((d) => d.quiet).length + work.followUp.filter((d) => d.returning).length : 0;
   const boardDeals = !work ? [] : boardFilter === 'quarter'
     ? work.board.filter((d) => d.expectedQuarter === quarter)
-    : boardFilter === 'quiet' ? work.board.filter((d) => d.quiet) : work.board;
+    // งานเงียบ (where ดูทั้งหมด leads) also lists the returning paused deals: they are not ACTIVE board rows, but every
+    // one of them is in ควรตามต่อ (fix round 1, ruling 4), so the full set is complete.
+    : boardFilter === 'quiet'
+      ? [...work.followUp.filter((d) => d.returning), ...work.board.filter((d) => d.quiet)]
+      : work.board;
 
   function showAllQuiet() {
     setBoardFilter('quiet');

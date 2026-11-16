@@ -146,18 +146,18 @@ test.describe.serial('quote stage gates + versioning — real browser walk', () 
     dealA = await newDeal('A', 'DESIGNER_LED');
     const page = salesPage;
     await page.goto(`/tickets/${dealA}`);
-    for (const n of [2, 3]) {
-      await page.getByRole('button', { name: new RegExp(`^เลื่อนไป: ${n}\\.`) }).first().click();
-      // Ready (gate met) → the main button moves at once; otherwise it opens the follow-up + activity form.
-      const modal = page.getByTestId('guided-advance-modal');
-      if (await modal.waitFor({ state: 'visible', timeout: 3000 }).then(() => true, () => false)) {
-        await page.getByTestId('guided-advance-followup').fill(inDays(7));
-        await page.getByTestId('guided-advance-note').fill(`${tag} โทรติดตามก่อนเลื่อนขั้น ${n}`);
-        await page.getByTestId('guided-advance-submit').click();
-        await expect(modal).toHaveCount(0);
-      }
-      await stageIs(page, n);
-    }
+    // Lifecycle dialogs (2026-11-16, drawing m-stage): on an S1 deal the main button is "ย้ายไป S2 · สเปคผ่าน", one
+    // hand move straight to ขั้น 3 (SPEC_APPROVED), replacing the two "เลื่อนไป: 2./3." steps. The dialog asks for the
+    // follow-up date / a note only when the readiness gate needs them (MoveToS2Modal), so fill whichever it shows.
+    await page.getByRole('button', { name: 'ย้ายไป S2 · สเปคผ่าน' }).first().click();
+    const moveModal = page.getByTestId('move-s2-modal');
+    await expect(moveModal).toBeVisible();
+    const followUp = moveModal.getByLabel(/วันติดตามครั้งถัดไป/);
+    if (await followUp.count()) await followUp.fill(inDays(7));
+    await moveModal.getByPlaceholder('เช่น ผู้ออกแบบเลือก Raku 20×20 สีขาว').fill(`${tag} ผู้ออกแบบตกลงสเปค`);
+    await moveModal.getByRole('button', { name: 'ย้ายไป S2', exact: true }).click();
+    await expect(moveModal).toHaveCount(0);
+    await stageIs(page, 3);
     await shot(page, '01-stage3-deal');
 
     // no primary CTA into 4

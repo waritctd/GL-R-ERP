@@ -4651,6 +4651,8 @@ function buildTicketDetail(ticket) {
       cancelledAt: ticket.cancelledAt ?? null,
       // V219 วันที่จะกลับมาดู (TicketSummaryDto.pauseReturnOn): set by hold / dormant, cleared by resume.
       pauseReturnOn: ticket.pauseReturnOn ?? null,
+      // V219 มูลค่าโดยประมาณ (TicketSummaryDto.estimatedValue).
+      estimatedValue: ticket.estimatedValue ?? null,
       closeConfirmedAt: ticket.closeConfirmedAt ?? null,
       closeConfirmedByName: ticket.closeConfirmedByName ?? null,
       invoiceOnFile: hasInvoiceAttachment(ticket),
@@ -8293,6 +8295,24 @@ const MOCK_CANCEL_REASON_VALID = [
   ...DEAL_STAGE_CATALOG.cancelReasons, 'OWNER_CANCELLED', 'PROJECT_SUSPENDED', 'BUDGET_CANCELLED',
 ];
 
+/** TicketService#changePauseReturnOn: the date-only change of an already-paused deal — POLICY_CHANGED, no
+ * lifecycle change, no second pause event (and no notification). */
+function mockChangePauseReturnOn(ticket, user, payload = {}) {
+  mockRequireReturnDateNotPast(payload.pauseReturnOn);
+  ticket.pauseReturnOn = payload.pauseReturnOn || null;
+  ticket.updatedAt = new Date().toISOString().slice(0, 10);
+  const note = (payload.note || '').trim();
+  pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
+    `pause_return_on → ${ticket.pauseReturnOn ?? 'ไม่ระบุ'}${note ? ` — ${note}` : ''}`);
+  return delay({ ticket: buildTicketDetail(ticket) });
+}
+
+/** CreateTicketRequest / TrackingUpdateRequest estimatedValue: > 0, at most two decimals, within NUMERIC(14,2). */
+function mockValidEstimate(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 && n <= 999999999999.99 && Math.round(n * 100) === n * 100;
+}
+
 /** TicketService#requireReturnDateNotPast: วันที่จะกลับมาดู may be today (Asia/Bangkok) or later; null = no date. */
 function mockRequireReturnDateNotPast(pauseReturnOn) {
   if (pauseReturnOn && String(pauseReturnOn) < mockTodayIso()) {
@@ -8336,10 +8356,13 @@ function mockBoardRows(include) {
         boardColumn: mockBoardColumnOf(t.salesStage),
         // No value quotation: the pipeline import's stated value (V215 imported_value, always THB), as
         // SalesBoardRepository#map falls back to it.
+        // ...and with neither, the rep's own estimate (V219 estimated_value), the LAST fallback.
         value: valueQuotation
           ? dealQuotationTotals(valueQuotation.items ?? [], valueQuotation.documentLanguage ?? 'TH').grandTotal
-          : (t.importedValue ?? null),
-        currency: valueQuotation ? (valueQuotation.currency ?? 'THB') : (t.importedValue != null ? 'THB' : null),
+          : (t.importedValue ?? t.estimatedValue ?? null),
+        currency: valueQuotation
+          ? (valueQuotation.currency ?? 'THB')
+          : ((t.importedValue ?? t.estimatedValue) != null ? 'THB' : null),
         valueExpired: valueQuotation?.docStatus === 'EXPIRED',
         designerName: t.designerName ?? null,
         winProbability: dealEffectiveWinProbability(t.winProbabilityOverride, t.salesStage),
@@ -8929,6 +8952,12 @@ function mockRankQuiet(deals) {
 }
 export const rankQuietForTests = mockRankQuiet;
 
+/** SalesBoardService.rankFollowUp (fix round 1, ruling 4): every returning paused deal first, never capped, then the
+ * top `limit` quiet ACTIVE deals. */
+function mockRankFollowUp(active, returning, limit) {
+  return [...mockRankQuiet(returning), ...mockRankQuiet(active.filter((d) => d.quiet)).slice(0, limit)];
+}
+
 export const api = {
   // Mirrors AuthController + AuthService (auth/).
   auth: {
@@ -9281,8 +9310,9 @@ export const api = {
         depositPolicy: t.depositPolicy ?? 'REQUIRED',
         depositPolicyReason: t.depositPolicyReason ?? null,
         entryChannel: t.entryChannel ?? 'UNSPECIFIED',
-        // V219: the list rows are the same TicketSummaryDto, so they carry the pause return date too.
+        // V219: the list rows are the same TicketSummaryDto, so they carry the pause return date and estimate too.
         pauseReturnOn: t.pauseReturnOn ?? null,
+        estimatedValue: t.estimatedValue ?? null,
         // The real TicketSummaryDto (TicketService.java / TicketRepository.java) carries these
         // three fields on the LIST projection, not just the single-ticket detail one; dropping them
         // here would hide real capability. AccountOverview's nextAccountAction() needs
@@ -9488,22 +9518,29 @@ export const api = {
       const user = requireDealEntry();
       // Mirrors TicketService.create (V50): every new deal belongs to a โครงการ.
       if (payload.projectId == null) fail('ต้องเลือกโครงการก่อนสร้างดีล', 400);
-      // Mirrors TicketService.create's channel guard. Since the owner-approved short create form (2026-11-16) the
-      // channel is OPTIONAL (CreateTicketRequest lost @NotBlank): absent / blank is stored UNSPECIFIED below. A
-      // channel that IS sent must be real — UNSPECIFIED is refused as an INPUT though it stays valid as STORED.
-      const statedChannel = typeof payload.entryChannel === 'string' && payload.entryChannel.trim() !== ''
-        ? payload.entryChannel : null;
-      if (statedChannel === 'UNSPECIFIED') {
+      // Mirrors CreateTicketRequest's @NotBlank entryChannel (TicketController @Valid -> 400) plus
+      // TicketService.create's value guard: a NEW deal must state a real channel, because the
+      // channel decides its route (DealRoute). UNSPECIFIED is refused as an INPUT though it stays
+      // valid as STORED. The real service additionally tolerates a null channel when called
+      // internally (Java fixtures); no HTTP caller can reach that path, so the mock has no reason
+      // to.
+      if (typeof payload.entryChannel !== 'string' || payload.entryChannel.trim() === '') {
+        fail('ต้องระบุช่องทางดีลก่อนสร้างดีล', 400);
+      }
+      if (payload.entryChannel === 'UNSPECIFIED') {
         fail('ต้องระบุช่องทางดีลที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างดีล', 400);
       }
-      if (statedChannel != null && !['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(statedChannel)) {
-        fail(`ไม่รองรับช่องทางรับงาน '${statedChannel}'`, 400);
+      if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.entryChannel)) {
+        fail(`ไม่รองรับช่องทางรับงาน '${payload.entryChannel}'`, 400);
       }
       // Mirrors TicketService.create: the short form starts a deal at S1 (LEAD_APPROACH, default) or S2
-      // (SPEC_APPROVED) only, and the estimate (CreateTicketRequest @DecimalMin("0")) is never negative.
+      // (SPEC_APPROVED) only, and the estimate (CreateTicketRequest @DecimalMin(exclusive 0) @Digits(12,2)) is > 0
+      // within NUMERIC(14,2).
       const startStage = payload.startStage || 'LEAD_APPROACH';
       if (!['LEAD_APPROACH', 'SPEC_APPROVED'].includes(startStage)) fail('งานใหม่เริ่มได้ที่ S1 หรือ S2 เท่านั้น', 400);
-      if (payload.estimatedValue != null && !(Number(payload.estimatedValue) >= 0)) fail('มูลค่าโดยประมาณต้องไม่ติดลบ', 400);
+      if (payload.estimatedValue != null && !mockValidEstimate(payload.estimatedValue)) {
+        fail('มูลค่าโดยประมาณต้องมากกว่า 0', 400);
+      }
       // Starting at S2 needs the stage write gate a hand move to S2 needs (TicketService#requireStageWriteAccess:
       // sales roles as owner/keyer, sales_manager, ceo). APPROXIMATION, not evidence — see
       // DealLifecycleDialogsIntegrationTest for the real gate.
@@ -9543,12 +9580,12 @@ export const api = {
         // "designer-led". Defaulting to a real route would make every unattended row assert one, so
         // a deliberate DESIGNER_LED would be indistinguishable from silence. UNSPECIFIED is legal
         // as STORED but never as a setEntryChannel INPUT — see th.co.glr.hr.ticket.EntryChannel.
-        entryChannel: statedChannel || 'UNSPECIFIED',
-        // The short create form's ผู้ออกแบบ and มูลค่าโดยประมาณ (TicketRepository.create writes designer_name and
-        // imported_value — the value the board shows until a quotation gives one).
+        entryChannel: payload.entryChannel || 'UNSPECIFIED',
+        // The short create form's ผู้ออกแบบ and มูลค่าโดยประมาณ (TicketRepository.create writes designer_name and,
+        // since fix round 1, its own estimated_value column — imported_value stays the pipeline import's).
         designerName: typeof payload.designerName === 'string' && payload.designerName.trim()
           ? payload.designerName.trim() : null,
-        importedValue: payload.estimatedValue != null ? Number(payload.estimatedValue) : null,
+        estimatedValue: payload.estimatedValue != null ? Number(payload.estimatedValue) : null,
         // Mirrors TicketRepository.create: `next_follow_up_at` is written from the request
         // (CreateTicketRequest.nextFollowUpAt). Dropping it would be the "mock drops an argument"
         // shape CLAUDE.md names; both TicketCreateModal and the inline deal step on /quotations/new
@@ -9959,6 +9996,8 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // TicketService.placeOnHold on a deal already ON_HOLD: the date (and note) only — no second ON_HOLD event.
+      if (ticket.lifecycle === 'ON_HOLD') return mockChangePauseReturnOn(ticket, user, payload);
       requireActive(ticket);
       mockRequireReturnDateNotPast(payload.pauseReturnOn);
       ticket.lifecycle = 'ON_HOLD';
@@ -9972,6 +10011,8 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      // TicketService.markDormant on a deal already DORMANT: the date (and note) only.
+      if (ticket.lifecycle === 'DORMANT') return mockChangePauseReturnOn(ticket, user, payload);
       if (!['ACTIVE', 'ON_HOLD'].includes(ticket.lifecycle ?? 'ACTIVE')) fail('พัก dormant ได้เฉพาะดีลที่ active หรือ on hold', 409);
       mockRequireReturnDateNotPast(payload.pauseReturnOn);
       ticket.lifecycle = 'DORMANT';
@@ -10090,6 +10131,10 @@ export const api = {
         && (Number(payload.winProbability) < 0 || Number(payload.winProbability) > 100)) {
         fail('win probability ต้องอยู่ระหว่าง 0-100', 400);
       }
+      if (payload?.clearEstimatedValue !== true && payload?.estimatedValue != null
+        && !mockValidEstimate(payload.estimatedValue)) {
+        fail('มูลค่าโดยประมาณต้องมากกว่า 0', 400);
+      }
       // Full-replace semantics (PUT), not a merge — mirrors TrackingUpdateRequest: an omitted/null field CLEARS it
       // (null winProbability = "fall back to the stage default", the intended way to clear an override).
       ticket.winProbabilityOverride = payload?.winProbability ?? null;
@@ -10104,6 +10149,13 @@ export const api = {
           fail('ไตรมาสที่คาดว่าจะปิดต้องอยู่ในรูปแบบ YYYY-Qn เช่น 2026-Q4', 400);
         }
         ticket.expectedQuarter = payload.expectedQuarter || null;
+      }
+      // V219 estimatedValue: like expectedQuarter, absent/null KEEPS it; clearEstimatedValue clears it; a value must
+      // be > 0 within NUMERIC(14,2) (TrackingUpdateRequest @DecimalMin(exclusive 0) @Digits(12,2)).
+      if (payload?.clearEstimatedValue === true) {
+        ticket.estimatedValue = null;
+      } else if (payload?.estimatedValue != null) {
+        ticket.estimatedValue = Number(payload.estimatedValue);
       }
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
       pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามดีล');
@@ -13829,7 +13881,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // ควรตามต่อ also takes the caller's OWN returning paused deals (SalesBoardRepository#returningPausedDealsOwnedBy).
       const returning = mockReturningPausedDeals().filter((d) => d.ownerId === user.id);
       return delay({
-        followUp: mockRankQuiet([...board, ...returning]).slice(0, 5), board, quietDays: MOCK_QUIET_DAYS,
+        followUp: mockRankFollowUp(board, returning, 5), board, quietDays: MOCK_QUIET_DAYS,
         visitsThisWeek: mockVisitsThisWeek(user.id),
         cash: mockCashForMonth(user.id, mockTodayIso().slice(0, 7)),
       });
@@ -13913,7 +13965,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       }
       const reps = [...byRep.values()].sort((a, b) => b.openValue - a.openValue || a.employeeId - b.employeeId);
       return delay({
-        reps, stale: mockRankQuiet([...deals, ...returning]).slice(0, 20), quietDays: MOCK_QUIET_DAYS, teamVisitsThisWeek,
+        reps, stale: mockRankFollowUp(deals, returning, 20), quietDays: MOCK_QUIET_DAYS, teamVisitsThisWeek,
         cash: mockCashForMonth(null, month),
       });
     },

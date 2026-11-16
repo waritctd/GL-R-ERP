@@ -92,7 +92,8 @@ describe('PauseDealModal — พักงาน (m-hold)', () => {
     render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" onClose={vi.fn()} onSubmit={vi.fn()} />);
 
     expect(within(dialog()).getByRole('heading', { name: 'พักงาน' })).toBeTruthy();
-    expect(within(dialog()).getByText('งานที่พักไว้ไม่นับเป็นงานเงียบ')).toBeTruthy();
+    // Fix round 1: the drawn subtitle contradicted ruling 4 (a deal whose date arrives counts with the quiet ones).
+    expect(within(dialog()).getByText('งานที่พักไว้ไม่นับเป็นงานเงียบ จนถึงวันที่จะกลับมาดู')).toBeTruthy();
     expect(screen.getByRole('radio', { name: /พักชั่วคราว/ }).getAttribute('aria-checked')).toBe('true');
     expect(screen.getByRole('radio', { name: /ไม่เคลื่อนไหว/ }).getAttribute('aria-checked')).toBe('false');
     for (const chip of ['2 สัปดาห์', '1 เดือน', '2 เดือน']) expect(screen.getByRole('button', { name: chip })).toBeTruthy();
@@ -134,6 +135,44 @@ describe('PauseDealModal — พักงาน (m-hold)', () => {
     expect(screen.getByRole('radio', { name: /ไม่เคลื่อนไหว/ }).getAttribute('aria-checked')).toBe('true');
   });
 
+  // Fix round 1, ruling 8 (F7): a typed past date is refused in the dialog itself, not only by the server.
+  it('a typed date before today (Bangkok) is refused by the field and never posted', () => {
+    const onSubmit = vi.fn();
+    render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    const date = screen.getByLabelText('วันที่จะกลับมาดู');
+    fireEvent.change(date, { target: { value: '15/11/2569' } }); // 15 Nov 2026, the day before "today"
+    fireEvent.blur(date);
+    expect(screen.getByText('วันที่อยู่นอกช่วงที่เลือกได้')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'พักงาน' }));
+    expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ pauseReturnOn: null }));
+
+    fireEvent.change(date, { target: { value: '16/11/2569' } }); // today is allowed
+    fireEvent.blur(date);
+    fireEvent.click(screen.getByRole('button', { name: 'พักงาน' }));
+    expect(onSubmit).toHaveBeenLastCalledWith(expect.objectContaining({ pauseReturnOn: '2026-11-16' }));
+  });
+
+  it('a current date that has already passed (a returning deal) must be changed before saving', () => {
+    render(<PauseDealModal canHold canDormant initialKind="ON_HOLD" changing currentReturnOn="2026-11-10" onClose={vi.fn()} onSubmit={vi.fn()} />);
+
+    expect(screen.getByText('วันที่จะกลับมาดูต้องเป็นวันนี้หรือหลังจากนี้')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'บันทึกวันที่' }).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: '1 เดือน' }));
+    expect(screen.getByRole('button', { name: 'บันทึกวันที่' }).disabled).toBe(false);
+  });
+
+  // Fix round 1, ruling 5: opened on a paused deal the dialog changes the date in place.
+  it('in change mode it reads เปลี่ยนวันที่จะกลับมาดู and starts from the current state and date', () => {
+    const onSubmit = vi.fn();
+    render(<PauseDealModal canHold={false} canDormant initialKind="DORMANT" currentReturnOn="2026-12-24" changing onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    expect(within(dialog()).getByRole('heading', { name: 'เปลี่ยนวันที่จะกลับมาดู' })).toBeTruthy();
+    expect(screen.getByRole('radio', { name: /ไม่เคลื่อนไหว/ }).getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(screen.getByRole('button', { name: 'บันทึกวันที่' }));
+    expect(onSubmit).toHaveBeenCalledWith({ kind: 'DORMANT', pauseReturnOn: '2026-12-24', note: undefined });
+  });
+
   it('addMonthsIso clamps to the end of a shorter month', () => {
     expect(addMonthsIso('2026-12-31', 2)).toBe('2027-02-28');
     expect(addMonthsIso('2026-11-16', 1)).toBe('2026-12-16');
@@ -164,6 +203,35 @@ describe('MoveToS2Modal — ย้ายไป S2 · สเปคผ่าน (m
     fireEvent.click(screen.getByRole('button', { name: 'ย้ายไป S2' }));
 
     expect(onSubmit).toHaveBeenCalledWith({ note: 'Raku ขาว', nextFollowUpAt: null });
+  });
+
+  // Fix round 1, ruling 8 (F9 / F10): each guard on its own, so dropping either one is caught.
+  it('with only the activity missing, the note alone is required (no date field)', () => {
+    const onSubmit = vi.fn();
+    render(<MoveToS2Modal deal={deal} needsActivity onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    expect(screen.queryByLabelText(/วันติดตามครั้งถัดไป/)).toBeNull();
+    const confirm = screen.getByRole('button', { name: 'ย้ายไป S2' });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText('เช่น ผู้ออกแบบเลือก Raku 20×20 สีขาว'), { target: { value: '   ' } });
+    expect(confirm.disabled).toBe(true);
+    fireEvent.change(screen.getByPlaceholderText('เช่น ผู้ออกแบบเลือก Raku 20×20 สีขาว'), { target: { value: 'คุยแล้ว' } });
+    expect(confirm.disabled).toBe(false);
+  });
+
+  it('with only the follow-up date missing, the date alone is required (the note stays optional)', () => {
+    const onSubmit = vi.fn();
+    render(<MoveToS2Modal deal={deal} needsFollowUp onClose={vi.fn()} onSubmit={onSubmit} />);
+
+    expect(screen.getByText(/โน้ตสั้น ๆ/).textContent).toContain('(ไม่บังคับ)');
+    const confirm = screen.getByRole('button', { name: 'ย้ายไป S2' });
+    expect(confirm.disabled).toBe(true);
+    const date = screen.getByLabelText(/วันติดตามครั้งถัดไป/);
+    fireEvent.change(date, { target: { value: '01/12/2569' } });
+    fireEvent.blur(date);
+    expect(confirm.disabled).toBe(false);
+    fireEvent.click(confirm);
+    expect(onSubmit).toHaveBeenCalledWith({ note: null, nextFollowUpAt: '2026-12-01' });
   });
 
   it('when the readiness gate is unmet it asks for exactly what is missing — a follow-up date and the note', () => {

@@ -297,10 +297,10 @@ describe('shared usage pin — TicketCreateModal.jsx and DealItemsPanel.jsx (the
     return readFileSync(resolve(process.cwd(), relativePath), 'utf8');
   }
 
-  // TicketCreateModal.jsx left this pin on 2026-11-16: the owner-approved short create form (m-create) has no item
-  // editor at all — items are entered on the deal page, i.e. in DealItemsPanel below. Its no-redeclare half would
-  // still pass trivially, so it is dropped rather than kept as a vacuous check.
+  // The create form's item editor moved out of TicketCreateModal.jsx into CreateDealItems.jsx (2026-11-16 short form;
+  // shown only to creators who cannot edit items afterwards), so that file is what is pinned now.
   const files = {
+    'CreateDealItems.jsx': readSource('src/features/tickets/CreateDealItems.jsx'),
     'DealItemsPanel.jsx': readSource('src/features/tickets/DealItemsPanel.jsx'),
   };
 

@@ -525,6 +525,28 @@ describe('relocated actions keep their old permission condition', () => {
     expect(within(pause).getByRole('radio', { name: /ไม่เคลื่อนไหว/ }).getAttribute('aria-checked')).toBe('true');
   });
 
+  // Fix round 1, ruling 5: a paused deal's return date is changed in place from the ขั้นต่อไป card, behind the same
+  // gate as ดำเนินการต่อ (RESUME — listed exactly when the caller may hold / dormant the deal).
+  it('เปลี่ยนวันที่จะกลับมาดู sits beside ดำเนินการต่อ on a paused deal with RESUME, and opens the date dialog', async () => {
+    setDeal({ lifecycle: 'DORMANT', pauseReturnOn: '2099-03-01' }, ['RESUME']);
+    await overviewReady(salesOwner);
+    fireEvent.click(await screen.findByRole('button', { name: 'เปลี่ยนวันที่จะกลับมาดู' }));
+    const modal = await screen.findByRole('dialog', { name: 'เปลี่ยนวันที่จะกลับมาดู' });
+    expect(within(modal).getByRole('radio', { name: /ไม่เคลื่อนไหว/ }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('wrong-way-round: no เปลี่ยนวันที่จะกลับมาดู without RESUME, nor on an active deal', async () => {
+    setDeal({ lifecycle: 'ON_HOLD' }, []);
+    const first = renderPage();
+    await pageReady();
+    await settle();
+    expect(screen.queryByRole('button', { name: 'เปลี่ยนวันที่จะกลับมาดู' })).toBeNull();
+    first.unmount();
+    setDeal({}, ['RESUME', 'PLACE_ON_HOLD']);
+    await overviewReady(salesOwner);
+    expect(screen.queryByRole('button', { name: 'เปลี่ยนวันที่จะกลับมาดู' })).toBeNull();
+  });
+
   it('wrong-way-round: no พัก dormant on a paused deal without MARK_DORMANT', async () => {
     setDeal({ lifecycle: 'ON_HOLD' }, ['RESUME']);
     await overviewReady(salesOwner);

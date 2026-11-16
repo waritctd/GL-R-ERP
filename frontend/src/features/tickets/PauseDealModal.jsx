@@ -28,11 +28,18 @@ const KIND_OPTIONS = [
  * ไม่เคลื่อนไหว can be picked, exactly as before. วันที่จะกลับมาดู is optional (null = the pause behaves as it always
  * did); from that Asia/Bangkok date the deal comes back into ควรตามต่อ (QuietRule#returningSql).
  */
-export function PauseDealModal({ canHold, canDormant, initialKind = 'ON_HOLD', submitting, onClose, onSubmit }) {
+export function PauseDealModal({
+  canHold, canDormant, initialKind = 'ON_HOLD', submitting, onClose, onSubmit,
+  // Fix round 1, ruling 5: opened on an already-paused deal (`changing`) it changes the date in place — the same
+  // request in the SAME state updates only the date and note on the server (no lifecycle switch, no notification).
+  changing = false, currentReturnOn = null,
+}) {
   const today = bangkokTodayIso();
   const fallbackKind = canHold ? 'ON_HOLD' : 'DORMANT';
   const [kind, setKind] = useState((initialKind === 'ON_HOLD' ? canHold : canDormant) ? initialKind : fallbackKind);
-  const [returnOn, setReturnOn] = useState('');
+  const [returnOn, setReturnOn] = useState(currentReturnOn ?? '');
+  // The server refuses a date before today (Asia/Bangkok); say so here instead of after a round trip.
+  const pastDate = Boolean(returnOn) && returnOn < today;
   const [note, setNote] = useState('');
   const chips = [
     { label: '2 สัปดาห์', value: addDaysIso(today, 14) },
@@ -42,12 +49,14 @@ export function PauseDealModal({ canHold, canDormant, initialKind = 'ON_HOLD', s
   const options = KIND_OPTIONS.map((option) => ({
     ...option, disabled: option.value === 'ON_HOLD' ? !canHold : !canDormant,
   }));
-  const canSubmit = !submitting && (kind === 'ON_HOLD' ? canHold : canDormant);
+  const canSubmit = !submitting && !pastDate && (kind === 'ON_HOLD' ? canHold : canDormant);
 
   return (
     <Modal
-      title="พักงาน"
-      subtitle="งานที่พักไว้ไม่นับเป็นงานเงียบ"
+      title={changing ? 'เปลี่ยนวันที่จะกลับมาดู' : 'พักงาน'}
+      // The drawing's "งานที่พักไว้ไม่นับเป็นงานเงียบ" contradicted ruling 4 (a deal whose date arrives IS counted with
+      // the quiet ones), so the subtitle says what actually happens.
+      subtitle="งานที่พักไว้ไม่นับเป็นงานเงียบ จนถึงวันที่จะกลับมาดู"
       onClose={onClose}
       placement="sheet-on-phone"
       testId="pause-deal-modal"
@@ -60,7 +69,7 @@ export function PauseDealModal({ canHold, canDormant, initialKind = 'ON_HOLD', s
             disabled={!canSubmit}
             onClick={() => onSubmit({ kind, pauseReturnOn: returnOn || null, note: note.trim() || undefined })}
           >
-            {submitting ? 'กำลังบันทึก…' : 'พักงาน'}
+            {submitting ? 'กำลังบันทึก…' : changing ? 'บันทึกวันที่' : 'พักงาน'}
           </Button>
         </>
       )}
@@ -91,6 +100,9 @@ export function PauseDealModal({ canHold, canDormant, initialKind = 'ON_HOLD', s
               </button>
             ))}
           </div>
+          {pastDate ? (
+            <p role="alert" className="m-0 text-xs font-bold text-danger">วันที่จะกลับมาดูต้องเป็นวันนี้หรือหลังจากนี้</p>
+          ) : null}
           <span className="text-xs text-text-muted">ถึงวันนั้นงานจะกลับมาที่ “ควรตามต่อ” เอง</span>
         </div>
         <div className="grid gap-1.5">

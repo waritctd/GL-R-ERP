@@ -6,19 +6,27 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
-import { addDaysIso, bangkokTodayIso, dealStageLabel, ticketPriorityLabel } from '../../utils/format.js';
+import {
+  addDaysIso, bangkokTodayIso, dealStageLabel, OFFERED_TO_LABEL, ticketPriorityLabel,
+} from '../../utils/format.js';
 // Imported, not modified: the quotation editor's ผู้ออกแบบ directory picker, with its own "+ เพิ่มผู้ออกแบบใหม่".
 import { DesignerPicker } from '../quotations/DesignerPicker.jsx';
-import { FieldError, FieldLabel, RadioCards } from './dealDialogParts.jsx';
+import {
+  canEditDealItemsAfterCreate, CreateDealItems, createItemsPayload, validateCreateItems,
+} from './CreateDealItems.jsx';
+import { FieldError, FieldLabel, PickChips, RadioCards } from './dealDialogParts.jsx';
+import { ESTIMATE_ERROR, parseEstimatedValue } from './dealEstimate.js';
 
 /**
  * สร้างงานใหม่ — the owner-approved short form (drawing m-create, 2026-11-16): ชื่อโครงการ, ลูกค้า / บริษัท, ผู้ออกแบบ,
  * มูลค่าโดยประมาณ (ไม่บังคับ) and เริ่มที่ S1 / S2. "Fill in what you know now; the rest fills from the quotation."
  *
  * What the old four-section accordion collected and the drawing drops, and where it lives now:
- *   - รายการสินค้า → the deal page's รายการสินค้า panel (DealItemsPanel, PATCH /tickets/{id}/items).
- *   - ช่องทาง (เสนอแก่) → not sent, so the server stores UNSPECIFIED; stated later on the deal page ("ระบุช่องทางงาน"
- *     in the stage panel's ดูขั้นตอนทั้งหมด, EntryChannelFix).
+ *   - รายการสินค้า → for a `sales` creator, the deal page's รายการสินค้า panel (DealItemsPanel). Every OTHER creator
+ *     cannot edit items afterwards (TicketService.editItems is sales-only), so for them the form keeps a collapsed,
+ *     optional รายการสินค้า section (CreateDealItems) and sends the rows exactly as the old form did (fix round 1).
+ *   - ช่องทาง (เสนอแก่) → NOT dropped: still required (owner rule 2026-09-30, kept by fix round 1 ruling 1), as
+ *     three compact chips.
  *   - detailed customer / project data → the customer "add new" sub-form below, and the customer pages.
  *   - ชื่องาน, ความสำคัญ, เจ้าของงาน, วันติดตาม, หมายเหตุ → nowhere on the deal page can set them after creation, so they
  *     stay here behind the collapsed "รายละเอียดเพิ่มเติม" (a secondary control; the drawn form is what opens).
@@ -38,17 +46,19 @@ const START_OPTIONS = [
 
 const PRIORITY_OPTIONS = ['LOW', 'NORMAL', 'HIGH'].map((code) => ({ code, label: ticketPriorityLabel(code).label }));
 
+// เสนอแก่ — the three channels th.co.glr.hr.ticket.EntryChannel accepts as a create INPUT (UNSPECIFIED is refused).
+// No default on purpose, as before: a pre-selected channel would be recorded for a rep who never noticed the control.
+const ENTRY_CHANNEL_OPTIONS = [
+  { value: 'DESIGNER_LED', label: 'ผู้ออกแบบนำ' },
+  { value: 'OWNER_DIRECT', label: 'เจ้าของตรง' },
+  { value: 'BUYER_DIRECT', label: 'ผู้ซื้อตรง' },
+];
+
+
 const EMPTY_CUSTOMER = { name: '', taxId: '', branch: 'สำนักงานใหญ่', address: '', phone: '' };
 
 const normalise = (name) => (name ?? '').trim().replace(/\s+/g, ' ').toLowerCase();
 
-/** '' → null; a non-negative number (thousands separators allowed) → that number; anything else → NaN. */
-export function parseEstimatedValue(text) {
-  const cleaned = String(text ?? '').replace(/[,\s฿]/g, '');
-  if (cleaned === '') return null;
-  const value = Number(cleaned);
-  return Number.isFinite(value) && value >= 0 ? value : Number.NaN;
-}
 
 function CustomerSearch({ value, onSelect, onCreateNew, error, errorId }) {
   const [search, setSearch] = useState('');
@@ -138,6 +148,10 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
   const [designerCode, setDesignerCode] = useState('');
   const [estimatedValue, setEstimatedValue] = useState('');
   const [startStage, setStartStage] = useState('LEAD_APPROACH');
+  const [entryChannel, setEntryChannel] = useState(null);
+  // Only for a creator who cannot add items afterwards (canEditDealItemsAfterCreate); always [] otherwise.
+  const offersItems = !canEditDealItemsAfterCreate(user);
+  const [items, setItems] = useState([]);
 
   // รายละเอียดเพิ่มเติม — the accordion's old รายละเอียดดีล step, collapsed.
   const [detailsOpen, setDetailsOpen] = useState(false);
@@ -224,13 +238,18 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
     const name = projectName.trim().replace(/\s+/g, ' ');
     if (!name) errors.project = 'กรุณากรอกชื่อโครงการ';
     if (!selectedCustomer) errors.customer = 'กรุณาเลือกบริษัท/ลูกค้า';
+    if (!entryChannel) errors.entryChannel = 'กรุณาเลือกว่างานนี้เสนอแก่ใคร';
     const value = parseEstimatedValue(estimatedValue);
-    if (Number.isNaN(value)) errors.value = 'มูลค่าต้องเป็นตัวเลขไม่ติดลบ';
+    if (Number.isNaN(value)) errors.value = ESTIMATE_ERROR;
+    const sentItems = offersItems ? items : [];
+    Object.assign(errors, validateCreateItems(sentItems));
     if (Object.keys(errors).length > 0) {
       setFieldErrors(errors);
       setError('');
-      const first = ['project', 'customer', 'value'].find((key) => errors[key]);
-      document.getElementById({ project: 'deal-project-name', customer: 'deal-customer', value: 'deal-estimated-value' }[first])?.focus();
+      const first = ['project', 'customer', 'entryChannel', 'value'].find((key) => errors[key]);
+      document.getElementById({
+        project: 'deal-project-name', customer: 'deal-customer', value: 'deal-estimated-value',
+      }[first])?.focus();
       return;
     }
     setFieldErrors({});
@@ -256,6 +275,7 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
         customerName: selectedCustomer.name,
         customerId: selectedCustomer.id,
         projectId: project.id,
+        entryChannel,
         designerName,
         estimatedValue: value,
         startStage,
@@ -263,7 +283,7 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
         note: note.trim() || null,
         nextFollowUpAt: nextFollowUpAt || null,
         ...(effectiveOwnerId && effectiveOwnerId !== String(user?.id) ? { ownerEmployeeId: Number(effectiveOwnerId) } : {}),
-        items: [],
+        items: createItemsPayload(sentItems),
       });
     } catch (err) {
       setError(err.message || 'สร้างงานไม่สำเร็จ');
@@ -377,6 +397,20 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
           ) : null}
         </div>
 
+        <div className="grid gap-1.5">
+          <span className="text-sm font-bold text-text-secondary">
+            {OFFERED_TO_LABEL}
+            <span className="text-danger" aria-hidden="true"> *</span>
+          </span>
+          <PickChips
+            label={OFFERED_TO_LABEL}
+            value={entryChannel}
+            onChange={(value) => { setEntryChannel(value); clearError('entryChannel'); }}
+            options={ENTRY_CHANNEL_OPTIONS}
+          />
+          <FieldError id="deal-entry-channel-error">{fieldErrors.entryChannel}</FieldError>
+        </div>
+
         <DesignerPicker value={designerCode} onSelectCode={setDesignerCode} idPrefix="deal-designer" label="ผู้ออกแบบ" />
 
         <div className="grid gap-1.5">
@@ -400,7 +434,21 @@ export function TicketCreateModal({ user, onClose, onSubmit }) {
           <FieldError id="deal-estimated-value-error">{fieldErrors.value}</FieldError>
         </div>
 
-        <RadioCards label="เริ่มที่" options={START_OPTIONS} value={startStage} onChange={setStartStage} />
+        <RadioCards
+          label="เริ่มที่"
+          // Starting at S2 needs the stage write access a hand move to S2 needs (TicketService.requireStageWriteAccess:
+          // sales owner/keyer, sales_manager, ceo); offered to no one the server would refuse.
+          options={START_OPTIONS.map((option) => ({
+            ...option,
+            disabled: option.value === 'SPEC_APPROVED' && !['sales', 'sales_manager', 'ceo'].includes(user?.role),
+          }))}
+          value={startStage}
+          onChange={setStartStage}
+        />
+
+        {offersItems ? (
+          <CreateDealItems items={items} onChange={setItems} errors={fieldErrors} onClearError={clearError} />
+        ) : null}
 
         <div className="border-t border-border-subtle pt-1">
           <Button

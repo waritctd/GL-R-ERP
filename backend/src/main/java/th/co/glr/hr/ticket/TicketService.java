@@ -428,10 +428,10 @@ public class TicketService {
         if (!DealStage.LEAD_APPROACH.equals(startStage) && !DealStage.SPEC_APPROVED.equals(startStage)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "งานใหม่เริ่มได้ที่ S1 หรือ S2 เท่านั้น");
         }
-        // Mirrors @DecimalMin on the request for the service-level callers that skip bean validation; without it a
-        // negative value would hit chk_ticket_imported_value and fail closed as a 500.
-        if (request.estimatedValue() != null && request.estimatedValue().signum() < 0) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "มูลค่าโดยประมาณต้องไม่ติดลบ");
+        // Mirrors @DecimalMin(exclusive 0) on the request for service-level callers that skip bean validation; without
+        // it a non-positive value would hit chk_ticket_estimated_value and fail closed as a 500.
+        if (request.estimatedValue() != null && request.estimatedValue().signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "มูลค่าโดยประมาณต้องมากกว่า 0");
         }
         long ownerId = request.ownerEmployeeId() == null ? actor.id() : request.ownerEmployeeId();
         if (ownerId != actor.id()) {
@@ -796,7 +796,7 @@ public class TicketService {
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
             s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById(),
-            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn());
+            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(), s.estimatedValue());
     }
 
     /** Closing is a three-party sequence, not one person's decision: the goods must be delivered, the balance paid,
@@ -2694,6 +2694,16 @@ public class TicketService {
         if (request.expectedQuarter() != null) { // null = keep (see TrackingUpdateRequest); "" = clear
             tickets.updateExpectedQuarter(ticketId, blankToNull(request.expectedQuarter()));
         }
+        // V219 มูลค่าโดยประมาณ: kept when absent, like expectedQuarter; clearEstimatedValue clears it. Same gate as every
+        // other tracking field (requireDealOwnership + requireActive above, unchanged).
+        if (Boolean.TRUE.equals(request.clearEstimatedValue())) {
+            tickets.updateEstimatedValue(ticketId, null);
+        } else if (request.estimatedValue() != null) {
+            if (request.estimatedValue().signum() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "มูลค่าโดยประมาณต้องมากกว่า 0");
+            }
+            tickets.updateEstimatedValue(ticketId, request.estimatedValue());
+        }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(), "tracking fields updated");
         return requireTicket(ticketId);
@@ -3004,6 +3014,11 @@ public class TicketService {
     public TicketDto placeOnHold(long ticketId, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        // Fix round 1, ruling 5: hold on a deal ALREADY on hold changes only its return date (and logs the note) —
+        // no lifecycle change, no notification, no second ON_HOLD event. Same permission check, above, first.
+        if (DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
+            return changePauseReturnOn(s, note, pauseReturnOn, actor);
+        }
         requireActive(s);
         requireReturnDateNotPast(pauseReturnOn);
         tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
@@ -3029,6 +3044,10 @@ public class TicketService {
     public TicketDto markDormant(long ticketId, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        // Fix round 1, ruling 5: dormant on a deal ALREADY dormant changes only its return date (see placeOnHold).
+        if (DealLifecycle.DORMANT.equals(s.lifecycle())) {
+            return changePauseReturnOn(s, note, pauseReturnOn, actor);
+        }
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) && !DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT, "พัก dormant ได้เฉพาะดีลที่ active หรือ on hold");
         }
@@ -3869,12 +3888,34 @@ public class TicketService {
         return s;
     }
 
+    /** The clock the return-date check reads; the system clock in the app. Tests fix it to an instant at which the
+     * Bangkok and UTC calendar dates differ (00:00–06:59 Bangkok). */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void useClock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
     /** วันที่จะกลับมาดู may be today or later on the Asia/Bangkok calendar (QuietRule#returningSql reads the same
-     * date); null means "no date". */
-    private static void requireReturnDateNotPast(LocalDate pauseReturnOn) {
-        if (pauseReturnOn != null && pauseReturnOn.isBefore(LocalDate.now(java.time.ZoneId.of("Asia/Bangkok")))) {
+     * date) — whatever zone the clock carries; null means "no date". */
+    private void requireReturnDateNotPast(LocalDate pauseReturnOn) {
+        LocalDate bangkokToday = LocalDate.ofInstant(clock.instant(), java.time.ZoneId.of("Asia/Bangkok"));
+        if (pauseReturnOn != null && pauseReturnOn.isBefore(bangkokToday)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่จะกลับมาดูต้องเป็นวันนี้หรือหลังจากนี้");
         }
+    }
+
+    /**
+     * Fix round 1, ruling 5: the date-only change of an already-paused deal (hold on ON_HOLD, dormant on DORMANT).
+     * Writes the new date (or none) and records it as a POLICY_CHANGED event with the note — no lifecycle change, no
+     * notification, no second pause event. The caller has already run the pause's permission check.
+     */
+    private TicketDto changePauseReturnOn(TicketSummaryDto s, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
+        requireReturnDateNotPast(pauseReturnOn);
+        tickets.updatePauseReturnOn(s.id(), pauseReturnOn);
+        tickets.addEvent(s.id(), actor.id(), actor.name(), TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
+            "pause_return_on → " + (pauseReturnOn == null ? "ไม่ระบุ" : pauseReturnOn.toString()) + noteSuffix(note));
+        return requireTicket(s.id());
     }
 
     private void requireActive(TicketSummaryDto summary) {

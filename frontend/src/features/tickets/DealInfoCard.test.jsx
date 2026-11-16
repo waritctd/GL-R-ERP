@@ -57,4 +57,49 @@ describe('DealInfoCard', () => {
       designerName: 'ใหม่', ownerName: 'บริษัท เจ้าของ จำกัด', buyerName: 'ผู้รับเหมา ข.', nextFollowUpAt: '2026-11-14',
     })));
   });
+
+  // Fix round 1, ruling 3: the create form's มูลค่าโดยประมาณ (V219 estimated_value) is shown here and edited through
+  // the same tracking update — set, clear, or (left alone) kept.
+  describe('มูลค่าโดยประมาณ', () => {
+    const withEstimate = { ...summary, estimatedValue: 1200000 };
+    const openForm = () => {
+      const card = screen.getByRole('heading', { name: 'ข้อมูลงาน' }).closest('section');
+      fireEvent.click(within(card).getByRole('button', { name: 'แก้ไข' }));
+    };
+
+    it('is shown as a row', () => {
+      render(<DealInfoCard summary={withEstimate} trackingVisible canEdit={false} onUpdateTracking={vi.fn()} />);
+      expect(row('มูลค่าโดยประมาณ').textContent).toContain('1,200,000');
+    });
+
+    it('is prefilled, and a changed value is sent', async () => {
+      const onUpdateTracking = vi.fn().mockResolvedValue({});
+      render(<DealInfoCard summary={withEstimate} trackingVisible canEdit onUpdateTracking={onUpdateTracking} />);
+      openForm();
+      const input = screen.getByLabelText(/มูลค่าโดยประมาณ/);
+      expect(input.value).toBe('1200000');
+      fireEvent.change(input, { target: { value: '1,500,000' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+      await waitFor(() => expect(onUpdateTracking).toHaveBeenCalledWith(expect.objectContaining({ estimatedValue: 1500000 })));
+    });
+
+    it('emptied, it is cleared', async () => {
+      const onUpdateTracking = vi.fn().mockResolvedValue({});
+      render(<DealInfoCard summary={withEstimate} trackingVisible canEdit onUpdateTracking={onUpdateTracking} />);
+      openForm();
+      fireEvent.change(screen.getByLabelText(/มูลค่าโดยประมาณ/), { target: { value: '' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+      await waitFor(() => expect(onUpdateTracking).toHaveBeenCalledWith(expect.objectContaining({ clearEstimatedValue: true })));
+    });
+
+    it('an invalid value is refused in place and nothing is sent', () => {
+      const onUpdateTracking = vi.fn();
+      render(<DealInfoCard summary={withEstimate} trackingVisible canEdit onUpdateTracking={onUpdateTracking} />);
+      openForm();
+      fireEvent.change(screen.getByLabelText(/มูลค่าโดยประมาณ/), { target: { value: '0' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+      expect(screen.getByText('มูลค่าต้องมากกว่า 0 และไม่เกิน 999,999,999,999.99')).toBeTruthy();
+      expect(onUpdateTracking).not.toHaveBeenCalled();
+    });
+  });
 });

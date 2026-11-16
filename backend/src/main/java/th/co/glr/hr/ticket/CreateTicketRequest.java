@@ -19,11 +19,11 @@ public record CreateTicketRequest(
     @NotNull Long projectId,
     Long contactId,
     String note,
-    // OPTIONAL since the owner-approved short create form (2026-11-16, the สร้างงานใหม่ drawing asks no channel).
-    // Absent/blank is stored UNSPECIFIED ("not stated", V144) and stated later on the deal page. A value that IS
-    // sent must still be a real channel: TicketService.create refuses an unknown one and an explicit UNSPECIFIED.
-    // Before 2026-11-16 this was @NotBlank (owner ruling 2026-09-30, "a new deal must state a real channel").
-    String entryChannel,
+    // Required for every new deal: the channel decides the deal's route
+    // (DealRoute). Enforced HERE, at the API boundary, via TicketController's @Valid -- NOT in
+    // TicketService.create, which still tolerates null so the ~84 existing call sites keep working.
+    // UNSPECIFIED is non-blank, so it passes this annotation; TicketService.create refuses it.
+    @NotBlank String entryChannel,
     // Optional: a deal may start at the lead stage with no product items
     // yet (lightweight DRAFT); items arrive later via editItems before submit.
     List<@Valid TicketItemRequest> items,
@@ -47,9 +47,10 @@ public record CreateTicketRequest(
     /** Optional ผู้ออกแบบ (short create form): the designer's name, written to {@code sales.ticket.designer_name} —
      * the same column the tracking form and the quotation fill write. */
     @Size(max = 200) String designerName,
-    /** Optional มูลค่าโดยประมาณ (THB): written to {@code sales.ticket.imported_value}, the rep's stated value the
-     * board shows until a quotation gives one (V215 / V219). */
-    @DecimalMin("0") @Digits(integer = 12, fraction = 2) BigDecimal estimatedValue,
+    /** Optional มูลค่าโดยประมาณ (THB): written to its own column {@code sales.ticket.estimated_value} (V219), the
+     * board / forecast's LAST value fallback (after a quotation and imported_value). > 0, and NUMERIC(14,2) — the
+     * precision of imported_value (V215). Editable afterwards through PUT /tracking. */
+    @DecimalMin(value = "0", inclusive = false) @Digits(integer = 12, fraction = 2) BigDecimal estimatedValue,
     /** Optional เริ่มที่: {@code LEAD_APPROACH} (S1, the default) or {@code SPEC_APPROVED} (S2). Anything else is a
      * 400; starting at S2 needs the same stage write access as moving a deal there by hand. */
     String startStage

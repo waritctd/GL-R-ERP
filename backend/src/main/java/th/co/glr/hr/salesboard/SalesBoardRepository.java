@@ -39,7 +39,7 @@ public class SalesBoardRepository {
                t.created_by AS owner_id,
                NULLIF(TRIM(CONCAT_WS(' ', e.first_name_th, e.last_name_th)), '') AS owner_name,
                t.sales_stage, t.designer_name, t.win_probability, t.expected_quarter, t.imported_value,
-               t.pause_return_on,
+               t.pause_return_on, t.estimated_value,
                %1$s AS last_touched_at,
                %2$s AS quiet,
                %3$s AS returning,
@@ -90,29 +90,34 @@ public class SalesBoardRepository {
     /** The caller's own ACTIVE deals — the deal's owner ({@code created_by}), not its keyer. */
     public List<BoardDeal> activeDealsOwnedBy(long ownerId) {
         return jdbc.query(BOARD_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
-            Map.of("ownerId", ownerId, "valueStatuses", VALUE_STATUSES, "quietDays", quietRule.quietDays()),
-            this::map);
+            params().addValue("ownerId", ownerId), this::map);
     }
 
     /** Every ACTIVE deal of every rep. Only for the sales_manager/ceo team overview. */
     public List<BoardDeal> activeDealsAllReps() {
-        return jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id",
-            Map.of("valueStatuses", VALUE_STATUSES, "quietDays", quietRule.quietDays()), this::map);
+        return jdbc.query(BOARD_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map);
     }
 
     /** The caller's own paused deals whose วันที่จะกลับมาดู has arrived — owner ({@code created_by}) scoped in the
      * WHERE clause exactly as {@link #activeDealsOwnedBy}. Same row order. */
     public List<BoardDeal> returningPausedDealsOwnedBy(long ownerId) {
         return jdbc.query(RETURNING_SELECT + " AND t.created_by = :ownerId ORDER BY last_touched_at, t.ticket_id",
-            Map.of("ownerId", ownerId, "valueStatuses", VALUE_STATUSES, "quietDays", quietRule.quietDays()),
-            this::map);
+            params().addValue("ownerId", ownerId), this::map);
     }
 
     /** Every rep's returning paused deals. Only for the sales_manager/ceo team overview, like
      * {@link #activeDealsAllReps}. */
     public List<BoardDeal> returningPausedDealsAllReps() {
-        return jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id",
-            Map.of("valueStatuses", VALUE_STATUSES, "quietDays", quietRule.quietDays()), this::map);
+        return jdbc.query(RETURNING_SELECT + " ORDER BY last_touched_at, t.ticket_id", params(), this::map);
+    }
+
+    /** The bind parameters every board read needs: the value statuses, the quiet threshold, and the Asia/Bangkok
+     * "today" QuietRule#returningSql compares the return date with. */
+    private org.springframework.jdbc.core.namedparam.MapSqlParameterSource params() {
+        return new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+            .addValue("valueStatuses", VALUE_STATUSES)
+            .addValue("quietDays", quietRule.quietDays())
+            .addValue("returnToday", quietRule.bangkokToday(), java.sql.Types.DATE);
     }
 
     private BoardDeal map(ResultSet rs, int rowNum) throws SQLException {
@@ -129,6 +134,11 @@ public class SalesBoardRepository {
         String currency = rs.getString("currency");
         if (value == null && rs.getBigDecimal("imported_value") != null) {
             value = rs.getBigDecimal("imported_value");
+            currency = "THB";
+        }
+        // Last fallback (V219): the rep's own มูลค่าโดยประมาณ, THB, only when neither a quotation nor the import gives one.
+        if (value == null && rs.getBigDecimal("estimated_value") != null) {
+            value = rs.getBigDecimal("estimated_value");
             currency = "THB";
         }
         return new BoardDeal(

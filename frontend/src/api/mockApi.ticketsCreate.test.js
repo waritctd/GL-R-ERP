@@ -40,11 +40,10 @@ describe('mock tickets.create -- nextFollowUpAt is persisted like the real INSER
   });
 });
 
-// Mirrors th.co.glr.hr.ticket.CreateTicketRequest + TicketService.create. Since the owner-approved short create form
-// (2026-11-16) an ABSENT channel is no longer refused: it is stored UNSPECIFIED. A channel that IS sent must still be
-// real: UNSPECIFIED (valid as STORED, invalid as a create INPUT) and unknown values are refused. The three tests that
-// used to pin "no / null / blank channel -> 400" now pin the opposite.
-describe('mock tickets.create -- the entry channel is optional, but a stated one must be real', () => {
+// Mirrors th.co.glr.hr.ticket.CreateTicketRequest (@NotBlank entryChannel, enforced by TicketController's
+// @Valid @RequestBody -> 400) plus TicketService.create's explicit refusal of UNSPECIFIED (valid as STORED,
+// invalid as a create INPUT -- see th.co.glr.hr.ticket.EntryChannel).
+describe('mock tickets.create -- a new deal must state a real entry channel', () => {
   async function createWith(channelFields) {
     const { customer, project } = await anyCustomerAndProject();
     return api.tickets.create({
@@ -53,19 +52,17 @@ describe('mock tickets.create -- the entry channel is optional, but a stated one
     });
   }
 
-  it('accepts a request with no entryChannel and stores UNSPECIFIED', async () => {
-    const { ticket } = await createWith({});
-    expect(ticket.summary.entryChannel).toBe('UNSPECIFIED');
+  it('refuses a request with no entryChannel, 400', async () => {
+    await expect(createWith({})).rejects.toMatchObject({ status: 400 });
   });
 
-  it('accepts a null entryChannel and stores UNSPECIFIED', async () => {
-    const { ticket } = await createWith({ entryChannel: null });
-    expect(ticket.summary.entryChannel).toBe('UNSPECIFIED');
+  it('refuses a null entryChannel, 400', async () => {
+    await expect(createWith({ entryChannel: null })).rejects.toMatchObject({ status: 400 });
   });
 
-  it('accepts an empty and a whitespace-only entryChannel as not stated', async () => {
-    expect((await createWith({ entryChannel: '' })).ticket.summary.entryChannel).toBe('UNSPECIFIED');
-    expect((await createWith({ entryChannel: '   ' })).ticket.summary.entryChannel).toBe('UNSPECIFIED');
+  it('refuses an empty and a whitespace-only entryChannel, 400', async () => {
+    await expect(createWith({ entryChannel: '' })).rejects.toMatchObject({ status: 400 });
+    await expect(createWith({ entryChannel: '   ' })).rejects.toMatchObject({ status: 400 });
   });
 
   it('refuses UNSPECIFIED, 400, with a Thai message', async () => {
@@ -91,20 +88,24 @@ describe('mock tickets.create -- the entry channel is optional, but a stated one
   });
 });
 
-// The short create form's three new optional fields (CreateTicketRequest designerName / estimatedValue /
-// startStage). Shape only: who may start at S2 is TicketService's stage write gate (DealLifecycleDialogsIntegrationTest).
+// The short create form's optional fields (CreateTicketRequest designerName / estimatedValue / startStage, 2026-11-16;
+// fix round 1: the estimate is its own column, estimated_value). Shape only: who may start at S2 is TicketService's
+// stage write gate (DealLifecycleDialogsIntegrationTest).
 describe('mock tickets.create -- the short form fields', () => {
   async function createWith(fields) {
     const { customer, project } = await anyCustomerAndProject();
-    return api.tickets.create({ title: 'โครงการสั้น', customerId: customer.id, projectId: project.id, items: [], ...fields });
+    return api.tickets.create({
+      title: 'โครงการสั้น', customerId: customer.id, projectId: project.id, items: [], entryChannel: 'DESIGNER_LED',
+      ...fields,
+    });
   }
 
-  it('stores the designer name and the estimate (shown on the board as the deal value until a quotation)', async () => {
+  it('stores the designer name and the estimate (shown on the board as the last value fallback)', async () => {
     const { ticket } = await createWith({ designerName: 'เทพสตูดิโอ ดีไซน์', estimatedValue: 1200000 });
-    expect(ticket.summary.designerName).toBe('เทพสตูดิโอ ดีไซน์');
+    expect(ticket.summary).toMatchObject({ designerName: 'เทพสตูดิโอ ดีไซน์', estimatedValue: 1200000 });
     const { board } = await api.salesBoard.myWork();
     const row = board.find((d) => d.ticketId === ticket.summary.id);
-    expect(row).toMatchObject({ value: 1200000, currency: 'THB', designerName: 'เทพสตูดิโอ ดีไซน์' });
+    expect(row).toMatchObject({ value: 1200000, currency: 'THB' });
   });
 
   it('starts at S1 by default and at S2 when asked, with a STAGE_CHANGED event', async () => {
@@ -114,8 +115,10 @@ describe('mock tickets.create -- the short form fields', () => {
     expect(ticket.events.some((e) => e.kind === 'STAGE_CHANGED' && e.toStatus === 'SPEC_APPROVED')).toBe(true);
   });
 
-  it('refuses any other start stage and a negative estimate, 400', async () => {
+  it('refuses any other start stage, and an estimate that is not > 0 within NUMERIC(14,2), 400', async () => {
     await expect(createWith({ startStage: 'QUOTE_BUYER' })).rejects.toMatchObject({ status: 400 });
-    await expect(createWith({ estimatedValue: -1 })).rejects.toMatchObject({ status: 400 });
+    for (const bad of [-1, 0, 1e12, 1.005]) {
+      await expect(createWith({ estimatedValue: bad })).rejects.toMatchObject({ status: 400 });
+    }
   });
 });

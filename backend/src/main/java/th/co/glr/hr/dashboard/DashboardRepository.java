@@ -254,9 +254,12 @@ public class DashboardRepository {
             th.co.glr.hr.ticket.DealStage.ORDER.subList(0,
                 th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED)));
         String payable = "(" + TicketRepository.payableAmountSelect("t.ticket_id") + ")";
-        String value = "CASE WHEN t.imported_value IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sales.quotation vq"
+        // V219: with no imported value the rep's own estimate (estimated_value) is the last fallback, exactly as on the
+        // board: quotation → imported_value → estimated_value.
+        String stated = "COALESCE(t.imported_value, t.estimated_value)";
+        String value = "CASE WHEN " + stated + " IS NOT NULL AND NOT EXISTS (SELECT 1 FROM sales.quotation vq"
             + " WHERE vq.ticket_id = t.ticket_id AND vq.doc_status IN ('APPROVED', 'ISSUED', 'SENT', 'ACCEPTED',"
-            + " 'EXPIRED')) THEN t.imported_value ELSE " + payable + " END";
+            + " 'EXPIRED')) THEN " + stated + " ELSE " + payable + " END";
         return jdbc.queryForObject("SELECT COALESCE(SUM(" + value
             + "), 0) FROM sales.ticket t WHERE t.lifecycle = 'ACTIVE' AND t.sales_stage IN (:beforeOrder) "
             + "AND t.status NOT IN ('closed', 'cancelled')", params, java.math.BigDecimal.class);

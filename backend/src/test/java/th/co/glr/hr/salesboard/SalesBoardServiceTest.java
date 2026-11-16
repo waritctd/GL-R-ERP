@@ -253,6 +253,28 @@ class SalesBoardServiceTest {
         assertThat(team.stale()).extracting(BoardDeal::ticketId).containsExactlyInAnyOrder(8L, 9L);
     }
 
+    /** Fix round 1, ruling 4: returning deals are listed AHEAD of the ranked top five and never cut by the cap, even
+     * when they score 0 (no value) against valued quiet deals; the stale list likewise. */
+    @Test
+    void returningDealsLeadFollowUpAndStale_andAreNeverCutByTheCap() {
+        List<BoardDeal> valuedQuiet = IntStream.rangeClosed(1, 7).mapToObj(i -> deal(i, 1L, 20 + i, "100000", true))
+            .toList();
+        when(repository.activeDealsOwnedBy(1L)).thenReturn(valuedQuiet);
+        when(repository.returningPausedDealsOwnedBy(1L)).thenReturn(List.of(returning(90, 1L, 0, null),
+            returning(91, 1L, 3, null)));
+
+        MyWork work = service.myWork(actor(1L, "sales"));
+
+        assertThat(work.followUp()).extracting(BoardDeal::ticketId).containsExactly(91L, 90L, 7L, 6L, 5L, 4L, 3L);
+
+        when(repository.activeDealsAllReps()).thenReturn(IntStream.rangeClosed(1, 25)
+            .mapToObj(i -> deal(i, 10L, 14 + i, "100000", true)).toList());
+        when(repository.returningPausedDealsAllReps()).thenReturn(List.of(returning(99, 10L, 0, null)));
+        TeamOverview team = service.teamOverview(actor(2L, "sales_manager"));
+        assertThat(team.stale()).hasSize(21);
+        assertThat(team.stale().get(0).ticketId()).isEqualTo(99L);
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     private static final Instant NOW = Instant.parse("2026-11-15T03:00:00Z");

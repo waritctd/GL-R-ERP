@@ -23,7 +23,13 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 
 // The real modal fetches customers/projects; this page only has to open it.
 vi.mock('../tickets/TicketCreateModal.jsx', () => ({
-  TicketCreateModal: () => <div role="dialog">สร้างดีลใหม่ (stub)</div>,
+  // The submit button lets the toast test below drive onSubmit without the real form.
+  TicketCreateModal: ({ onSubmit }) => (
+    <div role="dialog">
+      สร้างดีลใหม่ (stub)
+      <button type="button" onClick={() => onSubmit({ title: 'stub' })}>stub submit</button>
+    </div>
+  ),
 }));
 
 const quiet = {
@@ -272,6 +278,23 @@ describe('MyWork — review fixes', () => {
     expect(screen.queryByTestId('board-card-32')).toBeNull();
   });
 
+  // Fix round 1, ruling 4: returning paused deals are never cut from ควรตามต่อ (the server lists all of them ahead of
+  // the five quiet ones), the count includes them, and the board's งานเงียบ view — where ดูทั้งหมด leads — shows them too.
+  it('ดูทั้งหมด counts and shows the returning paused deals as well as the quiet ones', async () => {
+    const quietDeals = [1, 2, 3, 4, 5, 6].map((n) => ({ ...quiet, ticketId: 100 + n, title: `เงียบ ${n}` }));
+    const back = { ...quiet, ticketId: 140, title: 'งานที่พักไว้', quiet: false, returning: true, pauseReturnOn: '2026-11-16' };
+    api.salesBoard.myWork.mockResolvedValue({
+      followUp: [back, ...quietDeals.slice(0, 5)], board: [...quietDeals, fresh], quietDays: 14,
+    });
+    renderMyWork();
+
+    await screen.findByTestId('follow-up-140');
+    fireEvent.click(screen.getByRole('button', { name: 'ดูทั้งหมด (7)' }));
+
+    expect(screen.getByTestId('board-card-140')).toBeTruthy();
+    expect(screen.getByTestId('board-card-106')).toBeTruthy();
+  });
+
   it('ควรตามต่อ has no ดูทั้งหมด link at five quiet deals or fewer', async () => {
     renderMyWork();
 
@@ -308,5 +331,18 @@ describe('MyWork — review fixes', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /งานใหม่/ }));
     expect(await screen.findByText('สร้างดีลใหม่ (stub)')).toBeTruthy();
+  });
+
+  // Fix round 1, ruling 9: the create toast says งาน, as AllDealsPage and TicketListPage already do.
+  it('a created deal is announced as สร้างงานเรียบร้อย', async () => {
+    const showToast = vi.fn();
+    api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 77 } } });
+    renderMyWork({ showToast });
+    await screen.findByTestId('follow-up-31');
+
+    fireEvent.click(screen.getByRole('button', { name: /งานใหม่/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'stub submit' }));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'สร้างงานเรียบร้อย'));
   });
 });

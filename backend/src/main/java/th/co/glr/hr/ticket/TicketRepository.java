@@ -51,7 +51,7 @@ public class TicketRepository {
                t.cancel_reason, t.cancelled_at,
                t.reopened_at, t.reopen_count,
                t.win_probability, t.designer_name, t.owner_name, t.buyer_name,
-               t.quotation_only, t.keyed_by, t.pause_return_on,
+               t.quotation_only, t.keyed_by, t.pause_return_on, t.estimated_value,
                (SELECT MAX(da.activity_date) FROM sales.deal_activity da
                  WHERE da.ticket_id = t.ticket_id) AS last_activity_at,
                -- Movement range (inclusive Asia/Bangkok calendar days); both FALSE when no range is given.
@@ -434,14 +434,14 @@ public class TicketRepository {
         jdbc.update("""
             INSERT INTO sales.ticket
                 (code, title, status, priority, created_by, keyed_by, customer_name, customer_id, project_id, contact_id, note, entry_channel,
-                 next_follow_up_at, quotation_only, designer_name, imported_value)
+                 next_follow_up_at, quotation_only, designer_name, estimated_value)
             VALUES
                 (:code, :title, :status, :priority, :createdBy, :keyedBy, :customerName, :customerId, :projectId, :contactId, :note, :entryChannel,
                  :nextFollowUpAt, :quotationOnly, :designerName, :estimatedValue)
             """,
             new MapSqlParameterSource()
                 // The short create form's ผู้ออกแบบ and มูลค่าโดยประมาณ (2026-11-16); both null from every other caller.
-                // imported_value is the rep's stated value the board shows until a quotation gives one (V215/V219).
+                // The estimate has its own column (V219 estimated_value); imported_value stays the pipeline import's.
                 .addValue("designerName", request.designerName() == null || request.designerName().isBlank()
                     ? null : request.designerName().trim())
                 .addValue("estimatedValue", request.estimatedValue(), java.sql.Types.NUMERIC)
@@ -1342,7 +1342,8 @@ public class TicketRepository {
         ).withKeyedById(rs.getObject("keyed_by", Long.class))
             .withMovement(rs.getBoolean("stage_changed_in_range"), rs.getBoolean("activity_in_range"),
                 rs.getObject("last_activity_at", LocalDate.class))
-            .withPauseReturnOn(rs.getObject("pause_return_on", LocalDate.class));
+            .withPauseReturnOn(rs.getObject("pause_return_on", LocalDate.class))
+            .withEstimatedValue(rs.getBigDecimal("estimated_value"));
     }
 
     /** One row's worth of the enrichment facts {@link SummaryFactsSql#SELECT} computes for a page of deals. */
@@ -1430,7 +1431,8 @@ public class TicketRepository {
             due == null ? null : due.creditDays(),
             facts.liveDirectQuotation(), facts.quotedRecipients(),
             "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus()) ? facts.depositDue() : null,
-            s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn());
+            s.keyedById(), s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(),
+            s.estimatedValue());
     }
 
     /** An INVOICE document is on file. The invoice is produced by an external system and uploaded here, so its
@@ -1679,6 +1681,13 @@ public class TicketRepository {
         jdbc.update(
             "UPDATE sales.ticket SET lifecycle = :lifecycle, updated_at = now() WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("lifecycle", lifecycle).addValue("id", ticketId));
+    }
+
+    /** V219 มูลค่าโดยประมาณ: written by the tracking update (null = cleared). */
+    public void updateEstimatedValue(long ticketId, java.math.BigDecimal estimatedValue) {
+        jdbc.update(
+            "UPDATE sales.ticket SET estimated_value = :v, updated_at = now() WHERE ticket_id = :id",
+            new MapSqlParameterSource().addValue("v", estimatedValue, java.sql.Types.NUMERIC).addValue("id", ticketId));
     }
 
     /** V219 วันที่จะกลับมาดู: written by hold / dormant (null = no date) and cleared by resume. */

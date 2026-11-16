@@ -11,9 +11,9 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.junit.jupiter.api.Test;
 
-/** The API-boundary validation of CreateTicketRequest. TicketController.create takes @Valid @RequestBody, so a
- * violation here is a 400 before TicketService#create is reached. The 2026-09-30 "must state a real channel" rule
- * was relaxed by the owner-approved short create form (2026-11-16): an absent channel is stored UNSPECIFIED. */
+/** The API-boundary half of "a new deal must state a real ช่องทางดีล" (owner ruling 2026-09-30).
+ * TicketController.create takes @Valid @RequestBody CreateTicketRequest, so a violation here is a 400 before
+ * TicketService#create is reached. */
 class CreateTicketRequestValidationTest {
 
     private static final ValidatorFactory FACTORY = Validation.buildDefaultValidatorFactory();
@@ -31,36 +31,19 @@ class CreateTicketRequestValidationTest {
             .collect(Collectors.toSet());
     }
 
-    // Owner-approved สร้างงานใหม่ drawing (2026-11-16): the short form does not ask for a channel, so an absent one is
-    // no longer refused at the boundary. It is stored UNSPECIFIED ("not stated", V144) and stated later on the deal
-    // page. These three tests used to pin the opposite ("...IsRejected"); see DealShortCreateIntegrationTest.
     @Test
-    void absentEntryChannelPassesValidation() {
-        assertThat(violatedFields(withChannel(null))).isEmpty();
+    void absentEntryChannelIsRejected() {
+        assertThat(violatedFields(withChannel(null))).containsExactly("entryChannel");
     }
 
     @Test
-    void emptyEntryChannelPassesValidation() {
-        assertThat(violatedFields(withChannel(""))).isEmpty();
+    void emptyEntryChannelIsRejected() {
+        assertThat(violatedFields(withChannel(""))).containsExactly("entryChannel");
     }
 
     @Test
-    void whitespaceOnlyEntryChannelPassesValidation() {
-        assertThat(violatedFields(withChannel("   "))).isEmpty();
-    }
-
-    @Test
-    void negativeEstimatedValueIsRejected() {
-        CreateTicketRequest request = new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, 77L, null, null,
-            null, List.of(), null, null, null, null, new java.math.BigDecimal("-1"), null);
-        assertThat(violatedFields(request)).containsExactly("estimatedValue");
-    }
-
-    @Test
-    void overlongDesignerNameIsRejected() {
-        CreateTicketRequest request = new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, 77L, null, null,
-            null, List.of(), null, null, null, "ก".repeat(201), null, null);
-        assertThat(violatedFields(request)).containsExactly("designerName");
+    void whitespaceOnlyEntryChannelIsRejected() {
+        assertThat(violatedFields(withChannel("   "))).containsExactly("entryChannel");
     }
 
     @Test
@@ -77,5 +60,32 @@ class CreateTicketRequestValidationTest {
     @Test
     void unspecifiedPassesBeanValidationBecauseTheServiceOwnsThatRefusal() {
         assertThat(violatedFields(withChannel(EntryChannel.UNSPECIFIED))).isEmpty();
+    }
+
+    // The short create form's optional fields (2026-11-16; see DealLifecycleDialogsIntegrationTest). A channel is
+    // stated in each, so the only violation is the field under test.
+    private static CreateTicketRequest shortForm(String designerName, java.math.BigDecimal estimatedValue) {
+        return new CreateTicketRequest("Test deal", "NORMAL", "ลูกค้า", null, 77L, null, null,
+            EntryChannel.DESIGNER_LED, List.of(), null, null, null, designerName, estimatedValue, null);
+    }
+
+    @Test
+    void anEstimateMustBePositive() {
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("-1")))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, java.math.BigDecimal.ZERO))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("0.01")))).isEmpty();
+    }
+
+    /** The ceiling is the column's: NUMERIC(14,2), the same precision as imported_value (V215). */
+    @Test
+    void anEstimateMustFitTheColumn() {
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("999999999999.99")))).isEmpty();
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("1000000000000")))).containsExactly("estimatedValue");
+        assertThat(violatedFields(shortForm(null, new java.math.BigDecimal("1.005")))).containsExactly("estimatedValue");
+    }
+
+    @Test
+    void anOverlongDesignerNameIsRejected() {
+        assertThat(violatedFields(shortForm("ก".repeat(201), null))).containsExactly("designerName");
     }
 }

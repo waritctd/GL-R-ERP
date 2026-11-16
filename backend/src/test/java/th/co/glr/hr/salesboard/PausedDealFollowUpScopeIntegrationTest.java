@@ -148,6 +148,56 @@ class PausedDealFollowUpScopeIntegrationTest extends AbstractDealQuotationSlice2
         assertThat(ids(ok(get("/api/sales/my-work"), salesActor).get("followUp"))).doesNotContain(id);
     }
 
+    /** Fix round 1, ruling 4: a returning deal is never crowded out of ควรตามต่อ by the five-deal cap — five quiet
+     * deals (backdated, so they outrank a just-paused deal with no value) and the returning one all show — and the
+     * rep's quiet + returning count equals the manager's quietDeals for the same rep. */
+    @Test
+    void aReturningDealIsNeverCrowdedOutByTheCap_andTheRepAndManagerCountsAgree() throws Exception {
+        List<Long> quiet = new ArrayList<>();
+        for (int days = 20; days < 25; days++) {
+            long id = deal(salesActor);
+            backdate(id, days);
+            quiet.add(id);
+        }
+        long back = deal(salesActor);
+        pause(back, "hold", today(), salesActor);
+
+        JsonNode work = ok(get("/api/sales/my-work"), salesActor);
+        assertThat(ids(work.get("followUp"))).contains(back).containsAll(quiet).hasSize(6);
+        assertThat(ids(work.get("followUp")).get(0)).as("returning deals lead the list").isEqualTo(back);
+
+        long repQuiet = 0;
+        for (JsonNode d : work.get("board")) {
+            if (d.get("quiet").asBoolean()) repQuiet++;
+        }
+        for (JsonNode d : work.get("followUp")) {
+            if (d.get("returning").asBoolean()) repQuiet++;
+        }
+        JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
+        assertThat(rep(team, salesActor.id()).get("quietDeals").asLong()).isEqualTo(repQuiet).isEqualTo(6);
+        assertThat(ids(team.get("stale"))).contains(back);
+    }
+
+    /** Fix round 1, ruling 8: "today" is the Asia/Bangkok date even when the UTC date is still yesterday (Bangkok
+     * 00:00–06:59). Clock fixed at 2026-11-18 03:00 Bangkok = 2026-11-17 20:00 UTC: a deal due back on the 18th has
+     * come back; one due the 19th has not. Computing "today" in UTC would drop the first. */
+    @Test
+    void theReturnDayIsTheBangkokDate_atTheHoursWhenUtcIsStillYesterday() {
+        long due18 = deal(salesActor);
+        long due19 = deal(salesActor);
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD', pause_return_on = DATE '2026-11-18' WHERE ticket_id = :id",
+            Map.of("id", due18));
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD', pause_return_on = DATE '2026-11-19' WHERE ticket_id = :id",
+            Map.of("id", due19));
+        java.time.Clock bangkok3am = java.time.Clock.fixed(java.time.Instant.parse("2026-11-17T20:00:00Z"),
+            java.time.ZoneOffset.UTC);
+        SalesBoardRepository repo = new SalesBoardRepository(jdbc, new QuietRule(jdbc, 14, bangkok3am));
+
+        List<Long> back = new ArrayList<>();
+        repo.returningPausedDealsOwnedBy(salesActor.id()).forEach(d -> back.add(d.ticketId()));
+        assertThat(back).contains(due18).doesNotContain(due19);
+    }
+
     // ── the manager's quiet figures ──────────────────────────────────────────────────────────────
 
     @Test
