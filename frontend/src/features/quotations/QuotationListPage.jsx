@@ -119,13 +119,23 @@ function splitInForce(versions) {
 
 const KNOWN_ROLES = ['DESIGNER', 'OWNER', 'BUYER'];
 
-// What a search for a total matches (sales request 2026-11-16): the amount as printed ("5,444.80") and as a rep
-// keys it on a number pad ("5444.80", and so "5444.8"). Substring match, like every other column.
+// What a search for a total matches (sales request 2026-11-16): the amount exactly as the cell prints it
+// ("฿5,444.80", so "5,444.80" too) and as a rep keys it on a number pad ("5444.80", and so "5444.8"). Substring
+// match, like every other column: "5,444.80" therefore also finds "15,444.80".
 function totalSearchText(value) {
   const amount = Number(value);
   if (value == null || value === '' || !Number.isFinite(amount)) return '';
-  const fixed = amount.toFixed(2);
-  return `${fixed} ${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  return `${amount.toFixed(2)} ${formatMoney(amount)}`;
+}
+
+// Totals take part in a search only when the query holds a digit. Every printed total contains "." and ","
+// (and "฿"), so a query of only punctuation would otherwise match every row that has a total.
+const hasDigit = (query) => /[0-9]/.test(query);
+
+// A key that orders document numbers the way a person reads them: every digit run is zero-padded, so "-9" sorts
+// before "-10". DataTable's own string comparison is not numeric, and it is the only comparison a header click gets.
+function numberSortKey(number) {
+  return String(number ?? '').replace(/[0-9]+/g, (digits) => digits.padStart(12, '0'));
 }
 
 // The approval instant as its Bangkok calendar day. Parsed at local noon so formatThaiDate's local getDate()
@@ -188,7 +198,9 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
     if (emitted.has(row.ticketId)) continue;
     emitted.add(row.ticketId);
     const headline = members.find((m) => m.partyHeadline) ?? null;
-    const searchText = members.map((m) => `${m.number} ${m.customerName ?? ''} ${m.projectName ?? ''} ${m.salesRepName ?? ''} ${m.docStatus ?? ''} ${totalSearchText(m.grandTotal)}`).join(' ');
+    const searchText = members.map((m) => `${m.number} ${m.customerName ?? ''} ${m.projectName ?? ''} ${m.salesRepName ?? ''} ${m.docStatus ?? ''}`).join(' ');
+    // Kept apart from searchText: the column accessors add it only for a query that holds a digit.
+    const totalsText = members.map((m) => totalSearchText(m.grandTotal)).join(' ');
     // Numbered per contractor: one party's quotations sit together under one number, the ยอดหลัก
     // party first, the rest in server order.
     const byParty = new Map();
@@ -216,6 +228,7 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
       headlineAmount: headline?.grandTotal ?? null,
       // What a search over the group header matches: any of its rows' own text, older versions included.
       searchText,
+      totalsText,
     });
     const ordered = [];
     parties.forEach((party) => {
@@ -244,7 +257,7 @@ export function groupQuotationRows(rows, { collapsed = EMPTY_SET, onToggleVersio
     // The header counts documents (a revision chain is one), so it can say how many quotations the deal holds.
     out[out.length - 1].documentCount = ordered.filter((m) => !m.isOlderVersion).length;
     ordered.forEach((m, i) => out.push({
-      ...m, groupSize: ordered.length, groupSearchText: searchText,
+      ...m, groupSize: ordered.length, groupSearchText: searchText, groupTotalsText: totalsText,
       ...(i === 0 ? { groupFirst: true } : {}), ...(i === ordered.length - 1 ? { groupLast: true } : {}),
     }));
   }
@@ -375,12 +388,14 @@ function PartyChipLine({ row }) {
   );
 }
 
-const COLUMNS = [
+// `searchTotals`: whether a search may match the printed totals (see hasDigit).
+const makeColumns = (searchTotals) => [
   {
     key: 'number',
     header: 'เลขที่',
     sortable: true,
-    searchAccessor: (row) => (row.isGroup ? row.searchText : row.number),
+    sortAccessor: (row) => numberSortKey(row.number),
+    searchAccessor: (row) => (row.isGroup ? `${row.searchText} ${searchTotals ? row.totalsText : ''}` : row.number),
     render: (row) => (row.isGroup ? <GroupRowContent row={row} /> : (
       <span className={cn('inline-flex items-center', row.isOlderVersion && 'pl-4')}>
         <Link to={`/quotations/${row.id}`} className="text-xs text-info underline">
@@ -392,7 +407,7 @@ const COLUMNS = [
   {
     key: 'customer',
     header: 'ลูกค้า / ผู้รับใบเสนอราคา',
-    searchAccessor: (row) => (row.isGroup ? row.searchText : `${row.customerName ?? ''} ${row.projectName ?? ''}`),
+    searchAccessor: (row) => (row.isGroup ? `${row.searchText} ${searchTotals ? row.totalsText : ''}` : `${row.customerName ?? ''} ${row.projectName ?? ''}`),
     // <span>, NOT <div>, and that is load-bearing rather than a style preference. styles.css
     // clips on the CELL — `.data-row > td` is `white-space: nowrap; text-overflow: ellipsis` — and
     // its wrap escape hatch only reaches `> strong`, `> small` and `> span`. A <div> child
@@ -428,13 +443,16 @@ const COLUMNS = [
     header: 'ยอดรวม',
     align: 'right',
     sortable: true,
-    searchAccessor: (row) => (row.isGroup ? null : totalSearchText(row.grandTotal)),
+    // The amount, so a header click orders by the number the cell prints (a missing total sorts as the lowest).
+    sortAccessor: (row) => (row.grandTotal == null || row.grandTotal === '' || !Number.isFinite(Number(row.grandTotal)) ? null : Number(row.grandTotal)),
+    searchAccessor: (row) => (row.isGroup || !searchTotals ? null : totalSearchText(row.grandTotal)),
     render: (row) => (row.isGroup ? null : <span className="tabular-nums text-sm font-bold">{formatMoney(row.grandTotal)}</span>),
   },
   {
     key: 'status',
     header: 'สถานะ',
     sortable: true,
+    sortAccessor: (row) => (row.isGroup ? null : dealQuotationStatusLabel(row.docStatus).label),
     searchAccessor: (row) => (row.isGroup ? null : row.docStatus),
     render: (row) => {
       if (row.isGroup) return null;
@@ -449,17 +467,23 @@ const COLUMNS = [
     key: 'approvedAt',
     header: 'วันที่อนุมัติ',
     sortable: true,
+    // The approval instant itself, not the printed day: two approvals on one day keep their real order, and an
+    // unapproved row (no instant) is the lowest, so those rows sit together at one end.
+    sortAccessor: (row) => {
+      const time = row.approvedAt ? Date.parse(row.approvedAt) : Number.NaN;
+      return Number.isNaN(time) ? null : time;
+    },
     render: (row) => (row.isGroup ? null : <ApprovedDate row={row} className="text-xs" />),
   },
 ];
 
 // In the grouped view no column sorts: a sort would tear a deal's rows out from under its header.
 // Every row of a group answers a search with the whole group's text, so a match keeps the group whole.
-const GROUPED_COLUMNS = COLUMNS.map((column) => ({
+const makeGroupedColumns = (searchTotals) => makeColumns(searchTotals).map((column) => ({
   ...column,
   sortable: false,
   searchAccessor: (row) => {
-    if (row.inGroup) return column.key === 'number' ? row.groupSearchText : null;
+    if (row.inGroup) return column.key === 'number' ? `${row.groupSearchText} ${searchTotals ? row.groupTotalsText : ''}` : null;
     return column.searchAccessor ? column.searchAccessor(row) : null;
   },
 }));
@@ -593,6 +617,13 @@ export function QuotationListPage({ user }) {
     setView(next);
     writeQuotationListView(user?.id, next);
   }
+  // The search text lives here (DataTable's controlled search) so the columns can tell whether it holds a digit.
+  const [searchText, setSearchText] = useState('');
+  const searchTotals = hasDigit(searchText);
+  const columns = useMemo(
+    () => (grouped ? makeGroupedColumns(searchTotals) : makeColumns(searchTotals)),
+    [grouped, searchTotals],
+  );
   const tableRows = useMemo(
     () => (grouped
       ? groupQuotationRows(filteredRows, { collapsed: collapsedVersions, onToggleVersions: toggleVersions })
@@ -783,7 +814,9 @@ export function QuotationListPage({ user }) {
         </div>
 
         <DataTable
-          columns={grouped ? GROUPED_COLUMNS : COLUMNS}
+          columns={columns}
+          searchValue={searchText}
+          onSearchChange={setSearchText}
           rows={tableRows}
           // Group rows count as rows in the footer, so the "(กรองจาก M)" denominator counts them too.
           unfilteredTotal={unfilteredTotal}
