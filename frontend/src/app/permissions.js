@@ -145,7 +145,7 @@ const PATH_GUARDS = [
   // real gate and are unchanged. Mirrors ROLE_PERMISSIONS.canActOnFulfilment, itself a mirror of
   // TicketService.FULFILMENT_ROLES {import, ceo}.
   { test: (p) => p === '/fulfilment', can: (u) => hasPermission(u.role, 'canActOnFulfilment') },
-  // Matches the sidebar's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
+  // Matches the launcher's nav condition exactly (AppShell.jsx: `role === 'ceo'`).
   { test: (p) => p === '/ceo-settings', can: (u) => u.role === 'ceo' },
   // Attendance calendar admin (hr.holiday / hr.work_schedule / hr.work_schedule_assignment CRUD).
   // Mirrors the three controllers' requireAnyRole(user, "hr", "ceo") exactly. Frontend gating
