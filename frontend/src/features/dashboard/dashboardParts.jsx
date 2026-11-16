@@ -7,9 +7,9 @@ export function moneySum(items, pick) {
 
 // One figure of the money band: <div><dt/><dd/><small/></div> (the shared test helper finds it
 // via `dl > div`). Stacked cell on desktop, a label-left / value-right row on a phone.
-export function Figure({ label, value, caption, lead = false, danger = false }) {
+export function Figure({ label, value, caption, lead = false, danger = false, testId }) {
   return (
-    <div className="grid min-w-0 gap-0.5 mobile:grid-cols-[1fr_auto] mobile:items-baseline mobile:gap-x-3">
+    <div data-testid={testId} className="grid min-w-0 gap-0.5 mobile:grid-cols-[1fr_auto] mobile:items-baseline mobile:gap-x-3">
       <dt className="!m-0 !text-xs !font-bold !text-text-muted">{label}</dt>
       <dd
         className={`m-0 font-extrabold tabular-nums mobile:text-right ${lead ? 'text-[26px] mobile:text-xl' : 'text-xl'} ${danger ? '!text-danger' : '!text-text'}`}

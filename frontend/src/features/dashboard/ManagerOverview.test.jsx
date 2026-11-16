@@ -19,6 +19,7 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: { list: vi.fn() },
       commissions: { list: vi.fn(), pendingApproval: vi.fn() },
       salesBoard: { teamOverview: vi.fn() },
+      salesAnalytics: { snapshot: vi.fn(), upload: vi.fn() },
     },
   };
 });
@@ -88,13 +89,13 @@ function LocationProbe() {
   return <div data-testid="location-probe">{location.pathname}{location.search}</div>;
 }
 
-function renderOverview(dashboardSummary = summary) {
+function renderOverview(dashboardSummary = summary, entry = '/') {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={['/']}>
+      <MemoryRouter initialEntries={[entry]}>
         <Routes>
           <Route
             path="/"
@@ -235,5 +236,54 @@ describe('ManagerOverview', () => {
     const panel = heading.closest('section');
     await waitFor(() => expect(panel.textContent).toContain('50%'));
     expect(panel.textContent).toContain('ปิดสำเร็จ 1 · เสีย 1');
+  });
+});
+
+// Sales insights (spec 2026-11-16): same switch as the CEO's, state in ?view=insight; the body is pinned in
+// SalesInsights.test.jsx. A sales_manager reads the snapshot but never gets the upload control.
+describe('ManagerOverview: งานวันนี้ / วิเคราะห์ยอดขาย', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.tickets.list.mockResolvedValue({ tickets: TICKETS });
+    api.commissions.pendingApproval.mockResolvedValue(pendingOf(SUBMITTED));
+    api.salesBoard.teamOverview.mockResolvedValue(TEAM);
+    api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null });
+  });
+
+  it('defaults to today\'s dashboard with the switch present', () => {
+    renderOverview();
+
+    expect(screen.getByRole('tab', { name: 'งานวันนี้' }).getAttribute('aria-selected')).toBe('true');
+    expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' })).toBeTruthy();
+    expect(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' })).toBeTruthy();
+    expect(screen.queryByTestId('sales-insights')).toBeNull();
+  });
+
+  it('keeps the tablist outside the tabpanel in today\'s view', () => {
+    renderOverview();
+
+    const panel = screen.getByRole('tabpanel');
+    expect(panel.contains(screen.getByRole('tablist'))).toBe(false);
+    expect(panel.getAttribute('aria-labelledby')).toBe('landing-view-tab-today');
+    expect(panel.contains(screen.getByRole('heading', { name: 'อัตราปิดงาน' }))).toBe(true);
+    expect(panel.contains(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' }))).toBe(false);
+  });
+
+  it('?view=insight shows the insight view, and the empty state has no upload control for a manager', async () => {
+    renderOverview(summary, '/?view=insight');
+
+    expect(await screen.findByTestId('sales-insights')).toBeTruthy();
+    expect(await screen.findByTestId('insight-empty')).toBeTruthy();
+    expect(screen.queryByLabelText('อัปโหลดข้อมูลวิเคราะห์')).toBeNull();
+    expect(screen.queryByRole('heading', { name: 'อัตราปิดงาน' })).toBeNull();
+  });
+
+  it('clicking the switch toggles the view', async () => {
+    renderOverview();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' }));
+    expect(await screen.findByTestId('sales-insights')).toBeTruthy();
+    fireEvent.click(screen.getByRole('tab', { name: 'งานวันนี้' }));
+    expect(screen.queryByTestId('sales-insights')).toBeNull();
   });
 });
