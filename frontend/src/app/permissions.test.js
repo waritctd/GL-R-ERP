@@ -208,6 +208,26 @@ describe('canAccessPath', () => {
     expect(canAccessPath('/tickets', employee)).toBe(false);
   });
 
+  // นัดเข้าพบ (/visits): exactly the roles VisitService serves a visit list to — VISIT_ROLES {sales, sales_manager,
+  // ceo} (own list) ⊇ TEAM_ROLES {sales_manager, ceo} (team list). Wrong-way-round first: every other role is refused,
+  // and the path must not be reachable through a lookalike.
+  it('refuses /visits to every role the visit endpoints refuse', () => {
+    for (const role of ['hr', 'employee', 'import', 'account', 'warehouse', 'qc']) {
+      expect(canAccessPath('/visits', { role, employeeId: 4 }), `${role} -> /visits`).toBe(false);
+      expect(hasPermission(role, 'canViewVisits'), `${role} canViewVisits`).toBe(false);
+    }
+    expect(canAccessPath('/visits', { role: 'employee', employeeId: 4, manager: true })).toBe(false);
+  });
+
+  it('lets sales, sales_manager and ceo reach /visits, mirroring VisitService.VISIT_ROLES', () => {
+    for (const role of ['sales', 'sales_manager', 'ceo']) {
+      expect(canAccessPath('/visits', { role, employeeId: 4 }), `${role} -> /visits`).toBe(true);
+    }
+    expect(hasPermission('sales', 'canViewTeamVisits')).toBe(false);
+    expect(hasPermission('sales_manager', 'canViewTeamVisits')).toBe(true);
+    expect(hasPermission('ceo', 'canViewTeamVisits')).toBe(true);
+  });
+
   // Account role-scoped views: the pipeline BROWSER (the `/tickets` list) is narrower than ticket-DETAIL read
   // (`/tickets/:id`) — account keeps the latter (its worklist deep-links straight to a single deal) but loses
   // the former (its own งานการเงิน worklist replaces it).
@@ -470,6 +490,7 @@ describe('canAccessPath under the release lockdown', () => {
     '/tickets',
     '/tickets/7',
     '/tickets/7/deposit',
+    '/visits',
     '/pricing-requests',
     '/pricing-requests/9',
     '/fulfilment',
@@ -626,6 +647,16 @@ describe('canAccessPath under the release lockdown', () => {
     const noEmployeeRow = { role: 'sales', employeeId: null };
     expect(guard('/profile', noEmployeeRow)).toBe(false);
     expect(guard('/tax-allowance', noEmployeeRow)).toBe(false);
+  });
+
+  // /visits is handled like /tickets: a PATH_GUARDS entry, not a self-service path. The lock-exempt sales roles keep
+  // it; every locked role loses it (and the guard would refuse them anyway).
+  it('keeps /visits for the lock-exempt sales roles and ceo, and refuses it to every locked role', async () => {
+    const { canAccessPath: guard } = await locked();
+    for (const user of [sales, salesManager, ceo]) expect(guard('/visits', user), `${user.role} -> /visits`).toBe(true);
+    for (const user of [importer, account, employee, divisionManager, hr]) {
+      expect(guard('/visits', user), `${user.role} -> /visits`).toBe(false);
+    }
   });
 
   it('changes nothing when the flag is off', async () => {

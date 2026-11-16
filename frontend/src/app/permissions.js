@@ -67,6 +67,10 @@ const PATH_GUARDS = [
   // Whole-deal page (and its sub-paths, e.g. /tickets/:id/deposit). Import is REFUSED here — the backend 403s it
   // the whole-deal read and deposit notices — and gets its own per-deal page below.
   { test: (p) => p.startsWith('/tickets/'), can: (u) => hasPermission(u.role, 'canViewWholeDeal') },
+  // นัดเข้าพบ: exactly the roles the visit endpoints serve (VisitService.VISIT_ROLES via canViewVisits). Exact match —
+  // the page has no sub-paths. Like /tickets it is NOT on the self-service allowlist: the lock-exempt sales roles keep
+  // it, every locked role loses it.
+  { test: (p) => p === '/visits', can: (u) => hasPermission(u.role, 'canViewVisits') },
   // Import's own per-deal page (GET /api/import/deals/{id}: import + ceo). MANDATORY entry: canAccessPath fails
   // OPEN for a path no guard claims, so without this line every authenticated role would reach
   // /import/deals/:id.

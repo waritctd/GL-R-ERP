@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  displayStatus, isOverdue, shortWeekday, timeLabel, visitCounts, weekDays, weekRangeLabel, weekStartIso,
+  dayLineLabel, displayStatus, isOverdue, nextVisit, shortWeekday, timeLabel, visitCounts, weekDays, weekRangeLabel,
+  weekStartIso,
 } from './visitWeek.js';
 
 describe('visitWeek', () => {
@@ -53,5 +54,42 @@ describe('visitWeek', () => {
 
   it('weekDays of another week marks no day as today', () => {
     expect(weekDays('2026-11-16', '2026-11-12').some((d) => d.isToday)).toBe(false);
+  });
+
+  it('dayLineLabel is the long Thai weekday, the day and the short month', () => {
+    expect(dayLineLabel('2026-11-12')).toBe('พฤหัสบดี 12 พ.ย.');
+    expect(dayLineLabel('2026-11-16')).toBe('จันทร์ 16 พ.ย.');
+    expect(dayLineLabel('2026-11-15')).toBe('อาทิตย์ 15 พ.ย.');
+  });
+});
+
+describe('nextVisit — the phone\'s นัดถัดไป (today first, else later this week, else none)', () => {
+  const today = '2026-11-12';
+  const v = (over) => ({ id: 1, status: 'PLANNED', plannedDate: today, plannedTime: null, ...over });
+
+  it('picks the first unticked visit today, timed before untimed, then by id', () => {
+    const visits = [
+      v({ id: 1, plannedDate: '2026-11-10' }), // overdue — never "next"
+      v({ id: 2, plannedTime: null }),
+      v({ id: 3, plannedTime: '14:00:00' }),
+      v({ id: 4, plannedTime: '09:30:00', status: 'DONE' }),
+      v({ id: 5, plannedDate: '2026-11-13', plannedTime: '08:00:00' }),
+    ];
+    expect(nextVisit(visits, today)).toEqual({ visit: visits[2], isToday: true });
+  });
+
+  it('falls back to the next one later this week when nothing is left today', () => {
+    const visits = [
+      v({ id: 1, status: 'DONE' }),
+      v({ id: 2, status: 'CANCELLED' }),
+      v({ id: 7, plannedDate: '2026-11-14', plannedTime: '10:00:00' }),
+      v({ id: 6, plannedDate: '2026-11-13' }),
+    ];
+    expect(nextVisit(visits, today)).toEqual({ visit: visits[3], isToday: false });
+  });
+
+  it('is null when nothing is planned from today on', () => {
+    expect(nextVisit([v({ plannedDate: '2026-11-10' }), v({ id: 2, status: 'DONE' })], today)).toBeNull();
+    expect(nextVisit(null, today)).toBeNull();
   });
 });

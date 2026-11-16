@@ -15,7 +15,8 @@ import { columnLabel, money } from './boardFormat.js';
 // follow-up row. Spec 2026-11-15 §7.5 records the same decision.
 const CALL_OUTCOMES = ['คุยแล้ว ยังสนใจ', 'ขอใบเสนอราคาใหม่', 'ไม่รับสาย', 'ขอเลื่อนโครงการ'];
 
-function CallModal({ deal, submitting, onClose, onSubmit }) {
+/** m-call. Exported for the phone's โทรแล้ว quick action, which picks the deal first. */
+export function CallModal({ deal, submitting, onClose, onSubmit }) {
   const [outcome, setOutcome] = useState(null);
   const [note, setNote] = useState('');
   const submit = () => onSubmit([outcome, note.trim()].filter(Boolean).join(' — ') || undefined);

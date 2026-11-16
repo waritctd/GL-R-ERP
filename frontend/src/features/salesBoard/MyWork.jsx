@@ -9,6 +9,7 @@ import { Icon } from '../../components/common/Icon.jsx';
 import { PageHeader } from '../../components/common/PageHeader.jsx';
 import { PageStack, Panel } from '../../components/common/Layout.jsx';
 import { Skeleton } from '../../components/common/Skeleton.jsx';
+import { useIsMobile } from '../../hooks/useIsMobile.js';
 import { addDaysIso, bangkokTodayIso, formatThaiDate } from '../../utils/format.js';
 import { MarkLostModal } from '../tickets/MarkLostModal.jsx';
 import { TicketCreateModal } from '../tickets/TicketCreateModal.jsx';
@@ -17,6 +18,7 @@ import { currentQuarter, defaultBoardFilter, otherCurrencyTotals, sumValue, tota
 import { CashCard } from './CashCard.jsx';
 import { DealBoard } from './DealBoard.jsx';
 import { FollowUpList } from './FollowUpList.jsx';
+import { TodayOnPhone } from './TodayOnPhone.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
 import { CarriedOverVisits, VisitsThisWeek } from './VisitsThisWeek.jsx';
 import { weekRangeLabel, weekStartIso } from './visitWeek.js';
@@ -55,10 +57,17 @@ const BOARD_ID = 'my-work-board';
  * five-column board, from GET /api/sales/my-work (already scoped server-side to the caller's own deals and visits).
  * `before` is rendered between the header and ควรตามต่อ — SalesOverview puts the money band and the next-action
  * worklist there. เงินที่จะเข้า (slice 3) is card C beside them: the payload's `cash` month. บันทึกเข้าพบ is in the
- * header on desktop and a sticky bottom button on phone. Action failures use the app's toast.
+ * header on desktop. Action failures use the app's toast.
+ *
+ * At phone width (≤720px, useIsMobile — the app's `mobile` breakpoint) the page opens as วันนี้ของฉัน (TodayOnPhone,
+ * design a-mywork's phone block) instead of the stacked page; "ดูหน้าเต็ม" switches to the stacked page, whose sticky
+ * bottom บันทึกเข้าพบ then takes over. Desktop and tablet render exactly as before. Every dialog stays owned here.
  */
 export function MyWork({ subtitle, before = null, user, showToast = () => {} }) {
   const navigate = useNavigate();
+  const isPhone = useIsMobile();
+  const [fullOnPhone, setFullOnPhone] = useState(false);
+  const phoneToday = isPhone && !fullOnPhone;
   const queryClient = useQueryClient();
   const { catalog } = useStageCatalog();
   const [losing, setLosing] = useState(null);
@@ -177,6 +186,27 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
 
   return (
     <PageStack>
+      {phoneToday ? (
+        <TodayOnPhone
+          work={work}
+          failed={workQuery.isError}
+          todayIso={todayIso}
+          user={user}
+          loggingCall={callMutation.isPending}
+          onLogCall={logCall}
+          onLog={openLog}
+          onPlan={() => setPlanning({ deal: null })}
+          onCreate={() => setCreating(true)}
+          onShowFull={() => setFullOnPhone(true)}
+        />
+      ) : (
+        <>
+      {isPhone ? (
+        <Button type="button" variant="secondary" className="justify-self-start" onClick={() => setFullOnPhone(false)}>
+          <Icon name="chevronLeft" size={16} />
+          กลับไปหน้าวันนี้
+        </Button>
+      ) : null}
       <PageHeader
         title="งานของฉัน"
         subtitle={subtitle ?? formatThaiDate(bangkokTodayIso())}
@@ -281,6 +311,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           บันทึกเข้าพบ
         </Button>
       </div>
+        </>
+      )}
 
       {planning ? (
         <PlanVisitModal

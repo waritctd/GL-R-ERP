@@ -69,4 +69,27 @@ export function displayStatus(visit, todayIso) {
   return isOverdue(visit, todayIso) ? 'OVERDUE' : visit.status;
 }
 
-export const VISIT_STATUS_LABEL = { DONE: 'ไปแล้ว', PLANNED: 'นัดไว้', CANCELLED: 'ยกเลิก', OVERDUE: 'เลยกำหนด' };
+const LONG_DAY = ['จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์', 'อาทิตย์'];
+
+/** "พฤหัสบดี 12 พ.ย." — the phone's วันนี้ของฉัน date line. */
+export function dayLineLabel(iso) {
+  return `${LONG_DAY[isoWeekdayIndex(iso)]} ${Number(iso.slice(8, 10))} ${SHORT_MONTH[Number(iso.slice(5, 7)) - 1]}`;
+}
+
+/** VisitRepository's order: date, time (unset last), id. */
+const byPlan = (a, b) => a.plannedDate.localeCompare(b.plannedDate)
+  || (a.plannedTime == null) - (b.plannedTime == null)
+  || String(a.plannedTime ?? '').localeCompare(String(b.plannedTime ?? ''))
+  || a.id - b.id;
+
+/**
+ * The phone's นัดถัดไป: the first visit still PLANNED for today (a timed one before an untimed one — a visit whose
+ * time has passed but is not ticked yet is still the one to log); when today has none left, the first PLANNED visit
+ * later in the given visits (the week as served). Overdue ones are never "next". `{ visit, isToday }`, or null.
+ */
+export function nextVisit(visits, todayIso) {
+  const ahead = (visits ?? []).filter((v) => v.status === 'PLANNED' && v.plannedDate >= todayIso).sort(byPlan);
+  return ahead.length ? { visit: ahead[0], isToday: ahead[0].plannedDate === todayIso } : null;
+}
+
+export const VISIT_STATUS_LABEL ={ DONE: 'ไปแล้ว', PLANNED: 'นัดไว้', CANCELLED: 'ยกเลิก', OVERDUE: 'เลยกำหนด' };

@@ -14,6 +14,7 @@ const PATH_LABELS = {
   '/my-requests': 'ข้อมูลส่วนตัว',
   '/profile': 'ข้อมูลส่วนตัว',
   '/tickets': 'งานทั้งหมด',
+  '/visits': 'นัดเข้าพบ',
   '/catalog': 'แคตตาล็อกสินค้า',
   '/commissions': 'ค่าคอมมิชชัน',
   '/finance': 'งานการเงิน',

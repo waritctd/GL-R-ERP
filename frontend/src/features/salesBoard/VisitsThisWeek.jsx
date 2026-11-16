@@ -93,7 +93,8 @@ export function VisitRow({ visit, todayIso, onDone, onCancel }) {
   );
 }
 
-function WeekNav({ weekOffset, onWeek }) {
+/** ‹ · สัปดาห์นี้ · › — shared by this card and the นัดเข้าพบ page. */
+export function WeekNav({ weekOffset, onWeek }) {
   return (
     <span className="flex gap-1" role="group" aria-label="เลือกสัปดาห์">
       <Button type="button" size="sm" variant="secondary" aria-label="สัปดาห์ก่อน" title="สัปดาห์ก่อน" onClick={() => onWeek(weekOffset - 1)}>
