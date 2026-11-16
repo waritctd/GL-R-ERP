@@ -270,4 +270,99 @@ describe('SalesInsights', () => {
       expect(within(detail()).getAllByText('OK').length).toBeGreaterThan(0);
     });
   });
+  describe('month picker bars', () => {
+    const heightOf = (i) => parseFloat(screen.getByTestId(`insight-month-${i}`).style.height);
+
+    it('gives a zero or missing month a 0-height bar, keeps a 2% floor for a tiny one, and never exceeds 100%', async () => {
+      const m = SNAPSHOT.monthly;
+      withSnapshot({
+        ...SNAPSHOT,
+        monthly_total: [0, 1, 1000000],
+        monthly: [{ ...m[0], total: 0, reps: [] }, { ...m[1], total: 1 }, m[2]],
+      });
+      renderInsights('ceo');
+      await screen.findByTestId('insight-month-detail');
+      expect(heightOf(0)).toBe(0);
+      expect(heightOf(1)).toBe(2);
+      expect(heightOf(2)).toBe(100);
+    });
+
+    it('renders and selects both columns when two months share a label', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      withSnapshot({ ...SNAPSHOT, months: ['ม.ค. 69', 'ม.ค. 69', 'มี.ค. 69'] });
+      renderInsights('ceo');
+      await screen.findByTestId('insight-month-detail');
+      fireEvent.click(screen.getByTestId('insight-month-0'));
+      expect(within(detail()).getByText('ลูกค้า ก')).toBeTruthy();
+      fireEvent.click(screen.getByTestId('insight-month-1'));
+      expect(within(detail()).getByText('ลูกค้า ข')).toBeTruthy();
+      expect(screen.getByTestId('insight-month-1').getAttribute('aria-pressed')).toBe('true');
+      // Duplicate React keys (columns keyed by label) log this and can drop or duplicate a column.
+      expect(spy.mock.calls.flat().join(' ')).not.toContain('same key');
+      spy.mockRestore();
+    });
+  });
+  describe('review round 2', () => {
+    it('recovers from a snapshot that fails to render once a good one is uploaded', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: { payload: { ...SNAPSHOT, cust: { ...SNAPSHOT.cust, buckets: 'x' } }, asOf: null, uploadedAt: '2026-04-02T03:00:00Z' } });
+      api.salesAnalytics.upload.mockResolvedValue({});
+      renderInsights('ceo');
+      expect((await screen.findByRole('alert')).textContent).toContain('แสดงข้อมูลวิเคราะห์ไม่ได้');
+
+      api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: { payload: SNAPSHOT, asOf: null, uploadedAt: '2026-04-03T03:00:00Z' } });
+      fireEvent.change(screen.getByLabelText('อัปโหลดข้อมูลวิเคราะห์'), {
+        target: { files: [new File([JSON.stringify(SNAPSHOT)], 'kpi.json', { type: 'application/json' })] },
+      });
+      expect(await screen.findByTestId('insight-month-detail')).toBeTruthy();
+      spy.mockRestore();
+    });
+
+    it('treats rows that are not objects with a string rep as an unusable (empty-state) snapshot', async () => {
+      withSnapshot({ ...SNAPSHOT, reps: [null] });
+      const { unmount } = renderInsights('ceo');
+      expect(await screen.findByTestId('insight-empty')).toBeTruthy();
+      unmount();
+
+      withSnapshot({ ...SNAPSHOT, monthly: [{ ...SNAPSHOT.monthly[0], reps: [null] }, SNAPSHOT.monthly[1], SNAPSHOT.monthly[2]] });
+      renderInsights('ceo');
+      expect(await screen.findByTestId('insight-empty')).toBeTruthy();
+    });
+
+    it('refuses a file over 2 MB in the browser, without calling the API', async () => {
+      api.salesAnalytics.snapshot.mockResolvedValue({ snapshot: null });
+      renderInsights('ceo');
+      await screen.findByTestId('insight-empty');
+      const big = new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'big.json', { type: 'application/json' });
+      fireEvent.change(screen.getByLabelText('อัปโหลดข้อมูลวิเคราะห์'), { target: { files: [big] } });
+      expect((await screen.findByRole('alert')).textContent).toContain('ไฟล์ใหญ่เกิน 2 MB');
+      expect(api.salesAnalytics.upload).not.toHaveBeenCalled();
+    });
+
+    it('renders every row when two reps share a name, with no duplicate-key error', async () => {
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const dup = { rep: 'Rep A', rev: 100, comm: 1, corr: 0 };
+      withSnapshot({
+        ...SNAPSHOT,
+        reps: [SNAPSHOT.reps[0], SNAPSHOT.reps[0]],
+        monthly: SNAPSHOT.monthly.map((m) => ({ ...m, reps: [dup, dup] })),
+      });
+      renderInsights('ceo');
+      await screen.findByTestId('insight-month-detail');
+      expect(within(detail()).getAllByRole('row').length).toBeGreaterThanOrEqual(3);
+      expect(spy.mock.calls.flat().join(' ')).not.toContain('same key');
+      spy.mockRestore();
+    });
+
+    it('never truncates a month label; on a phone only every third month and the selected one stay visible', async () => {
+      renderInsights('ceo');
+      await screen.findByTestId('insight-month-detail');
+      const label = (i) => screen.getByTestId(`insight-month-label-${i}`);
+      [0, 1, 2].forEach((i) => expect(label(i).className).not.toContain('truncate'));
+      expect(label(2).className).not.toContain('mobile:sr-only'); // selected
+      expect(label(0).className).not.toContain('mobile:sr-only'); // every third
+      expect(label(1).className).toContain('mobile:sr-only');
+      [0, 1, 2].forEach((i) => expect(screen.getByTestId(`insight-month-${i}`).getAttribute('aria-label')).toContain(SNAPSHOT.months[i]));
+    });
+  });
 });

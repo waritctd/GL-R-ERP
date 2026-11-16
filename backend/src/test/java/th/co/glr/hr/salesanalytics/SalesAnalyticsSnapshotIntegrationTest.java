@@ -174,6 +174,18 @@ class SalesAnalyticsSnapshotIntegrationTest extends AbstractPostgresIntegrationT
     }
 
     @Test
+    void putRejectsRowsThatAreNotObjectsWithAStringRep() throws Exception {
+        putAs("ceo", mutated("{\"reps\":5}"), 400);
+        putAs("ceo", mutated("{\"reps\":[null]}"), 400);
+        putAs("ceo", mutated("{\"reps\":[1,2]}"), 400);
+        putAs("ceo", mutated("{\"reps\":[{\"rev\":1}]}"), 400);
+        putAs("ceo", mutated("{\"monthly\":[{\"total\":1,\"reps\":[null]},{\"total\":2,\"reps\":[]}]}"), 400);
+        putAs("ceo", mutated("{\"monthly\":[{\"total\":1,\"reps\":[{\"rev\":1}]},{\"total\":2,\"reps\":[]}]}"), 400);
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject("SELECT COUNT(*) FROM sales.sales_analytics_snapshot", Map.of(), Long.class)).isZero();
+    }
+
+    @Test
     void aCeoSessionWithNoEmployeeRecordGetsA400NotA500() throws Exception {
         // Same convention as AttendanceService: a user not linked to an employee row is refused with a Thai 400.
         MockHttpSession s = new MockHttpSession();
@@ -189,6 +201,23 @@ class SalesAnalyticsSnapshotIntegrationTest extends AbstractPostgresIntegrationT
         putAs("ceo", snapshot("x"), 200);
         org.assertj.core.api.Assertions.assertThat(
             jdbc.queryForObject("SELECT as_of FROM sales.sales_analytics_snapshot", Map.of(), String.class)).isNull();
+    }
+
+    @Test
+    void aBodyFarOverTheLimitIsRefusedAndNothingIsStored() throws Exception {
+        putAs("ceo", snapshot("x".repeat(6 * 1024 * 1024)), 400);
+        org.assertj.core.api.Assertions.assertThat(
+            jdbc.queryForObject("SELECT COUNT(*) FROM sales.sales_analytics_snapshot", Map.of(), Long.class)).isZero();
+    }
+
+    @Test
+    void aBodyOfExactlyTheLimitIsAcceptedEvenWithMultiByteText() throws Exception {
+        // The cap counts BYTES: pad with Thai (3 bytes/char) plus ASCII so the UTF-8 size is exactly 2 MiB.
+        int max = 2 * 1024 * 1024;
+        int pad = max - snapshot("").getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+        String body = snapshot("ก".repeat(pad / 3) + "a".repeat(pad % 3));
+        org.assertj.core.api.Assertions.assertThat(body.getBytes(java.nio.charset.StandardCharsets.UTF_8).length).isEqualTo(max);
+        putAs("ceo", body, 200);
     }
 
     @Test

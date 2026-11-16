@@ -17,11 +17,11 @@ export function pctOf(part, whole, digits = 0) {
   const r = ratio(part, whole);
   return r == null ? '—' : `${(r * 100).toFixed(digits)}%`;
 }
-/** Bar width 0–100: 0 for nothing (or an undefined ratio), at least 2 for something so it stays visible. */
-export function barWidth(part, whole) {
+/** Bar width 0–100: 0 for nothing (or an undefined ratio), at least `min` (default 2) for something so it stays visible. */
+export function barWidth(part, whole, min = 2) {
   const r = ratio(part, whole);
   if (r == null || r <= 0) return 0;
-  return Math.min(100, Math.max(2, r * 100));
+  return Math.min(100, Math.max(min, r * 100));
 }
 
 /** A snapshot the page can render: months and the two month series agree, every month has a numeric total and reps. */
@@ -29,8 +29,9 @@ export function isUsable(K) {
   if (!K || typeof K !== 'object' || !Array.isArray(K.months) || K.months.length === 0) return false;
   if (!Array.isArray(K.monthly) || !Array.isArray(K.monthly_total) || !Array.isArray(K.reps)) return false;
   if (K.monthly.length !== K.months.length || K.monthly_total.length !== K.months.length) return false;
-  return K.monthly.every((m) => m && typeof m === 'object' && isNum(m.total) && Array.isArray(m.reps))
-    && K.monthly_total.every(isNum);
+  const repRows = (rows) => rows.every((r) => r && typeof r === 'object' && typeof r.rep === 'string');
+  return K.monthly.every((m) => m && typeof m === 'object' && isNum(m.total) && Array.isArray(m.reps) && repRows(m.reps))
+    && K.monthly_total.every(isNum) && repRows(K.reps);
 }
 
 /** Section keys in display order per role: the CEO reads sales first, a sales manager reads the pipeline first. */

@@ -33,8 +33,8 @@ export function Bars({ rows, max }) {
   const top = max || Math.max(0, ...rows.map((r) => r[1]));
   return (
     <div className="grid gap-3">
-      {rows.map(([name, value, caption]) => (
-        <div key={name} className="grid gap-1">
+      {rows.map(([name, value, caption], i) => (
+        <div key={`${i}-${name}`} className="grid gap-1">
           <div className="flex justify-between gap-3 text-sm"><b>{name}</b><span className="tabular-nums text-text-muted">{caption}</span></div>
           <ProgressBar part={value} whole={top} label={`${name}: ${caption}`} />
         </div>

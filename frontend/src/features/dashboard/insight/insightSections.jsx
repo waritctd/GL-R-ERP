@@ -15,8 +15,8 @@ function Sales({ K }) {
     <>
       <InsightPanel id="sales-table" title="ยอดขายตามพนักงานขาย" side={range(K)} foot="ความแกว่ง = ส่วนเบี่ยงเบนของรายรับรายเดือนหารค่าเฉลี่ย">
         <InsightTable cols={[['พนักงานขาย'], ['รายรับ 12 เดือน', true], ['สัดส่วน', true], ...(q ? [[q.prev_label, true], [q.label, true], ['เปลี่ยนแปลง', true]] : []), ['เดือนสูงสุด', true], ['ความแกว่ง', true], ['ใบเสร็จกลาง ๆ', true]]}>
-          {sorted.map((x) => (
-            <tr key={x.rep}>
+          {sorted.map((x, i) => (
+            <tr key={`${i}-${x.rep}`}>
               <Td><b>{x.rep}</b></Td><Td right>{ml(x.rev)}</Td><Td right>{x.share}%</Td>
               {q ? (
                 <>
@@ -51,8 +51,8 @@ function Comm({ K }) {
       </Pad>
       {K.reps?.length ? (
         <InsightTable cols={[['พนักงานขาย'], ['รายรับ', true], ['ค่าคอมจ่ายจริง', true], ['% ของรายรับ', true], ['ตามสูตร', true], ['เดือนที่แจ้งแก้ไข', true]]}>
-          {K.reps.map((x) => (
-            <tr key={x.rep}>
+          {K.reps.map((x, i) => (
+            <tr key={`${i}-${x.rep}`}>
               <Td><b>{x.rep}</b></Td><Td right>{ml(x.rev)}</Td><Td right>{formatMoney(x.comm)}</Td><Td right>{x.rate}%</Td><Td right>{formatMoney(x.formula)}</Td>
               <Td right>{x.corr ? <StatusBadge tone={x.corr >= 9 ? 'warning' : 'neutral'}>{x.corr} จาก {x.n}</StatusBadge> : '—'}</Td>
             </tr>
@@ -92,11 +92,11 @@ function Pipe({ K }) {
       {p.by_rep?.length ? (
         <InsightPanel id="pipe" title="งานในมือตามพนักงานขาย" side="จากไฟล์ล่าสุดของแต่ละคน" foot={`รวม ${ml(p.value)} จาก ${p.n} งาน = ${p.coverage} เท่าของรายรับ 12 เดือน`}>
           <InsightTable cols={[['พนักงานขาย'], ['งานคาดหวัง', true], ['เทียบรายรับ 12 เดือน', true], ['ขายไม่ได้', true], ['ประมาณการแม่น', true], ['รายงานล่าสุด']]}>
-            {p.by_rep.map((x) => {
+            {p.by_rep.map((x, i) => {
               const f = fcByRep[x.rep];
               const c = K.coverage?.[x.rep];
               return (
-                <tr key={x.rep}>
+                <tr key={`${i}-${x.rep}`}>
                   <Td><b>{x.rep}</b></Td>
                   <Td right>{ml(x.exp)}<Small>{x.n} งาน</Small></Td>
                   <Td right>{x.cover >= 0.1 ? `${x.cover} เท่า` : 'ต่ำกว่า 0.1 เท่า'}</Td>
@@ -120,8 +120,8 @@ function Pipe({ K }) {
       {K.fc_stats?.length ? (
         <InsightPanel id="fcs" title="ความแม่นของประมาณการรายคน" side="รับจริง × 1.07 เทียบประมาณการต้นเดือน" foot="เป้าหมายที่ใช้ได้คือ 85–115%">
           <InsightTable cols={[['พนักงานขาย'], ['เดือนที่มีประมาณการ', true], ['รับต่อประมาณ', true], ['คลาดเคลื่อน', true], ['ส่งรายงาน', true]]}>
-            {K.fc_stats.map((x) => (
-              <tr key={x.rep}>
+            {K.fc_stats.map((x, i) => (
+              <tr key={`${i}-${x.rep}`}>
                 <Td><b>{x.rep}</b>{x.xl ? <Small>จากไฟล์ Excel</Small> : null}</Td><Td right>{x.n}</Td>
                 <Td right><StatusBadge tone={fcTone(x.ratio)}>{x.ratio}%</StatusBadge></Td><Td right>±{x.err}%</Td><Td right>{x.weeks}%</Td>
               </tr>
@@ -132,8 +132,8 @@ function Pipe({ K }) {
       {K.pipe_quality?.length ? (
         <InsightPanel id="pq" title="คุณภาพข้อมูลงานคาดหวังรายคน" side="สัดส่วนรายการที่กรอกช่องนั้น">
           <InsightTable cols={[['พนักงานขาย'], ['รายการ', true], ['มูลค่า', true], ['ไตรมาส', true], ['ขั้นงาน', true], ['จะขายได้ %', true], ['ผู้ออกแบบ', true], ['งานใหญ่สุด', true]]}>
-            {K.pipe_quality.map((x) => (
-              <tr key={x.rep}>
+            {K.pipe_quality.map((x, i) => (
+              <tr key={`${i}-${x.rep}`}>
                 <Td><b>{x.rep}</b></Td><Td right>{x.n}</Td><Td right>{ml(x.value)}</Td>
                 {['q', 'stage', 'prob', 'designer'].map((k) => <Td key={k} right><StatusBadge tone={fillTone(x[k])}>{x[k]}%</StatusBadge></Td>)}
                 <Td right>{x.largest}%</Td>

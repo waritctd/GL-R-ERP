@@ -8,6 +8,9 @@ import { MonthDetail, MonthPicker, NowDetail } from './insight/insightMonth.jsx'
 import { isUsable } from './insight/insightFormat.js';
 import { YearPart } from './insight/insightYear.jsx';
 
+// Mirrors SalesAnalyticsService.MAX_BYTES, so an oversize file is refused before any request is made.
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
+
 /** CEO-only: reads a snapshot JSON file in the browser and sends the parsed document. */
 function UploadControl({ onError, onDone }) {
   const queryClient = useQueryClient();
@@ -15,6 +18,11 @@ function UploadControl({ onError, onDone }) {
     const input = event.target;
     const file = input.files?.[0];
     if (!file) return;
+    if (file.size > MAX_UPLOAD_BYTES) {
+      onError('ไฟล์ใหญ่เกิน 2 MB');
+      input.value = '';
+      return;
+    }
     let document;
     try {
       document = JSON.parse(await file.text());
@@ -76,7 +84,7 @@ export function SalesInsights({ user, showToast }) {
         </section>
       ) : null}
       {K ? (
-        <ErrorBoundary fallback={() => <p role="alert" className="m-0 text-sm text-danger">แสดงข้อมูลวิเคราะห์ไม่ได้ รูปแบบไฟล์ไม่ตรงกับที่ระบบรองรับ</p>}>
+        <ErrorBoundary key={query.data?.snapshot?.uploadedAt} fallback={() => <p role="alert" className="m-0 text-sm text-danger">แสดงข้อมูลวิเคราะห์ไม่ได้ กรุณาอัปโหลดไฟล์ใหม่หรือแจ้งผู้ดูแลระบบ</p>}>
           <MonthPicker K={K} sel={sel} onSelect={setPicked} />
           {sel === 'now' ? <NowDetail now={K.now} /> : <MonthDetail K={K} sel={sel} />}
           <YearPart K={K} role={user?.role} section={section} onSection={setSection} />

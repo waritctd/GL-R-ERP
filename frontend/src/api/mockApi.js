@@ -13760,7 +13760,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       if (user.role !== 'ceo') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!document || typeof document !== 'object' || Array.isArray(document)) fail('ข้อมูลวิเคราะห์ต้องเป็น JSON object', 400);
-      mockAnalyticsSnapshot = { payload: document, asOf: null, uploadedAt: new Date().toISOString() };
+      mockAnalyticsSnapshot = { payload: document, asOf: typeof document.as_of === 'string' ? document.as_of : null, uploadedAt: new Date().toISOString() };
       return delay({ ok: true });
     },
   },

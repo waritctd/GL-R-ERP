@@ -2,7 +2,7 @@ import { Button } from '../../../components/common/Button.jsx';
 import { StatusBadge } from '../../../components/common/StatusBadge.jsx';
 import { Figure } from '../dashboardParts.jsx';
 import { FigureBand, InsightPanel, InsightTable, Pad, ProgressBar, Small, Td } from './insightParts.jsx';
-import { ml, pctOf, ratio, signed } from './insightFormat.js';
+import { barWidth, ml, pctOf, ratio, signed } from './insightFormat.js';
 import { cn } from '../../../utils/cn.js';
 import { formatMoney } from '../../../utils/format.js';
 
@@ -40,7 +40,7 @@ export function MonthPicker({ K, sel, onSelect }) {
         <div className="flex h-40 items-end gap-1.5">
           {K.monthly_total.map((v, i) => (
             <button
-              key={K.months[i]}
+              key={`${i}-${K.months[i]}`}
               type="button"
               data-testid={`insight-month-${i}`}
               aria-pressed={sel === i}
@@ -48,12 +48,12 @@ export function MonthPicker({ K, sel, onSelect }) {
               title={`${K.months[i]}: ${ml(v)}`}
               onClick={() => onSelect(i)}
               className={cn('insight-grow-y min-w-0 flex-1 rounded-t border-0 p-0', sel === i ? 'bg-primary' : 'bg-primary/40 hover:bg-primary/60')}
-              style={{ height: `${ratio(v, max) == null ? 2 : Math.max(2, ratio(v, max) * 100)}%` }}
+              style={{ height: `${barWidth(v, max)}%` }}
             />
           ))}
         </div>
         <div className="mt-1 flex gap-1.5 text-center text-2xs text-text-muted">
-          {K.months.map((m, i) => <span key={m} className={cn('min-w-0 flex-1 truncate', sel === i && 'font-extrabold text-primary')}>{m.split(' ')[0]}</span>)}
+          {K.months.map((m, i) => <span key={`${i}-${m}`} data-testid={`insight-month-label-${i}`} className={cn('min-w-0 flex-1', sel === i && 'font-extrabold text-primary', sel !== i && i % 3 !== 0 && 'mobile:sr-only')}>{m.split(' ')[0]}</span>)}
         </div>
       </Pad>
     </InsightPanel>
@@ -103,8 +103,8 @@ export function MonthDetail({ K, sel }) {
       <div className="grid grid-cols-2 items-start gap-[18px] nav-drawer:grid-cols-1">
         <InsightPanel title="รายรับและค่าคอมตามพนักงานขาย">
           <InsightTable cols={[['พนักงานขาย'], ['รายรับ', true], ['สัดส่วน'], ['ค่าคอม', true], ['สถานะ']]}>
-            {d.reps.map((r) => (
-              <tr key={r.rep}>
+            {d.reps.map((r, i) => (
+              <tr key={`${i}-${r.rep}`}>
                 <Td><b>{r.rep}</b></Td><Td right>{formatMoney(r.rev)}</Td>
                 <Td><ProgressBar part={r.rev} whole={top} label={`${r.rep}: ${pctOf(r.rev, d.total)} ของเดือน`} /></Td>
                 <Td right>{formatMoney(r.comm)}</Td>
@@ -117,8 +117,8 @@ export function MonthDetail({ K, sel }) {
           <InsightPanel title="ประมาณการต้นเดือนเทียบรับจริง" side="รวม VAT">
             {fc.length ? (
               <InsightTable cols={[['พนักงานขาย'], ['ประมาณการ', true], ['รับจริง', true], ['% ที่รับได้', true]]}>
-                {fc.map((f) => (
-                  <tr key={f.rep}>
+                {fc.map((f, i) => (
+                  <tr key={`${i}-${f.rep}`}>
                     <Td><b>{f.rep}</b>{f.xl ? <Small>จากไฟล์ Excel</Small> : null}</Td>
                     <Td right>{formatMoney(f.fc)}</Td><Td right>{formatMoney(f.act)}</Td>
                     <Td right><StatusBadge tone={ratioTone(f.ratio)}>{Math.round(f.ratio * 100)}%</StatusBadge></Td>
@@ -157,14 +157,14 @@ export function NowDetail({ now }) {
           <Figure label="ยังต้องรับอีก" value={formatMoney(fc - rc)} caption="ถ้าจะถึงประมาณการ" />
         </FigureBand>
         <InsightTable testId="insight-now-table" cols={[['พนักงานขาย'], ['ประมาณการทั้งเดือน', true], ['รับแล้ว', true], ['ความคืบหน้า'], ['%', true]]}>
-          {rows.map((r) => (r.recv != null ? (
-            <tr key={r.rep}>
+          {rows.map((r, i) => (r.recv != null ? (
+            <tr key={`${i}-${r.rep}`}>
               <Td><b>{r.rep}</b></Td><Td right>{formatMoney(r.fc)}</Td><Td right>{formatMoney(r.recv)}</Td>
               <Td><ProgressBar part={r.recv} whole={r.fc} label={`${r.rep}: ${pctOf(r.recv, r.fc)}`} /></Td>
               <Td right>{ratio(r.recv, r.fc) != null && ratio(r.recv, r.fc) < 0.1 ? <StatusBadge tone="danger">{pctOf(r.recv, r.fc, 1)}</StatusBadge> : pctOf(r.recv, r.fc)}</Td>
             </tr>
           ) : (
-            <tr key={r.rep}>
+            <tr key={`${i}-${r.rep}`}>
               <Td><b>{r.rep}</b></Td><Td right>{formatMoney(r.fc)}</Td>
               <Td colSpan={3} className="text-text-muted">ยังไม่มียอดที่รับแล้วในรายงาน</Td>
             </tr>
