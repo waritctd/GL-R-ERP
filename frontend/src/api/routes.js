@@ -716,6 +716,11 @@ export const ROLE_PERMISSIONS = {
   // item, the SalesTabs deal-list tab) is narrower than ticket-detail read (canViewTickets above, unchanged) —
   // only roles whose job IS the pipeline get it.
   canViewDealPipeline: ['sales', 'sales_manager', 'ceo'],
+  // นัดเข้าพบ (/visits). Mirrors VisitService.VISIT_ROLES — who GET /api/sales/visits serves an own list to — and
+  // TEAM_ROLES — who GET /api/sales/visits/team serves the whole team's week to. Presentation only: VisitService
+  // re-checks the role on every call.
+  canViewVisits: ['sales', 'sales_manager', 'ceo'],
+  canViewTeamVisits: ['sales_manager', 'ceo'],
   // Sales/CRM tool: which roles get the catalog SCREENS, scoped to the same audience as
   // canViewTickets.
   //

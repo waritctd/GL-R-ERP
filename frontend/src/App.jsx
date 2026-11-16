@@ -42,6 +42,7 @@ const LeaveSurfacePage = lazy(() => import('./features/leave/LeaveSurfacePage.js
 // The 3-step /leave/new route the "ยื่นคำขอลา" CTA navigates to -- see LeaveRequestPage.jsx's doc comment.
 const LeaveRequestPage = lazy(() => import('./features/leave/LeaveRequestPage.jsx').then(toDefault('LeaveRequestPage')));
 const AllDealsPage = lazy(() => import('./features/tickets/AllDealsPage.jsx').then(toDefault('AllDealsPage')));
+const VisitsPage = lazy(() => import('./features/salesBoard/VisitsPage.jsx').then(toDefault('VisitsPage')));
 import { AccountFinanceRedirect, TicketDetailRoute } from './features/tickets/TicketDetailRoute.jsx';
 const CommissionPage = lazy(() => import('./features/commissions/CommissionPage.jsx').then(toDefault('CommissionPage')));
 // Role-scoped views: Account's money Overview (landing) + งานการเงิน worklist.
@@ -476,6 +477,11 @@ export function App() {
                 <Route
                   path="/tickets/:ticketId/deposit"
                   element={<AccountFinanceRedirect user={user}><DepositNoticeRoute user={user} showToast={showToast} /></AccountFinanceRedirect>}
+                />
+                {/* นัดเข้าพบ — a rep's own week; sales_manager / ceo the team grid. Guarded by canViewVisits in PATH_GUARDS. */}
+                <Route
+                  path="/visits"
+                  element={<VisitsPage user={user} showToast={showToast} />}
                 />
                 <Route
                   path="/pricing-requests"

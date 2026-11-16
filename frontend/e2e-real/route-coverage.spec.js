@@ -33,6 +33,7 @@ const ROUTES = [
   '/tickets',
   '/tickets/1', // DEMO-TKT-01 (V21) — a real deal
   '/tickets/1/deposit',
+  '/visits', // นัดเข้าพบ — sales: own week (GET /api/sales/visits); sales_manager / ceo: team grid; every other role refuses
   '/pricing-requests',
   '/pricing-requests/1',
   // Direct deal quotation. '/quotations/1' is deliberately a

@@ -166,6 +166,9 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
       show: (hasPermission(user.role, 'canViewDealQuotations') || Boolean(user.canCreateQuotation)) && SALES_ENABLED,
       match: ['/quotations'],
     },
+    // นัดเข้าพบ — after ใบเสนอราคา, where the design's NAV puts it for sales. Same audience as the '/visits'
+    // PATH_GUARDS entry (canViewVisits = VisitService.VISIT_ROLES): a rep's own week; sales_manager / ceo the team's.
+    { path: '/visits', label: 'นัดเข้าพบ', helper: 'Visits', icon: 'calendar', group: 'sales', show: hasPermission(user.role, 'canViewVisits') && SALES_ENABLED },
     { path: '/ceo-settings', label: 'ตั้งค่าราคา', helper: 'CEO price config', icon: 'setting', group: 'sales', show: user.role === 'ceo' && SALES_ENABLED },
     // Catalog browsing is scoped to the sales/CRM audience (canViewCatalog), not just the
     // feature flag.

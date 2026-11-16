@@ -91,14 +91,27 @@ test.describe('sales board — happy paths @sales-board', () => {
     await shot(page, '01-rep-landing-desktop');
   });
 
-  test('sales landing at 375px shows the board without a horizontal page scroll', async ({ page }) => {
+  // At ≤720px the landing is the phone screen วันนี้ของฉัน (TodayOnPhone); the stacked page with the board is one tap
+  // away behind ดูหน้าเต็ม. Both must fit 375px: this is the only real-browser proof that the board fits a phone.
+  test('sales landing at 375px shows วันนี้ของฉัน, and ดูหน้าเต็ม the board, without a horizontal page scroll', async ({ page }) => {
+    const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     await page.setViewportSize({ width: 375, height: 812 });
     await loginAs(page, 'sales');
+
+    const today = page.getByTestId('today-phone');
+    await expect(today.getByRole('heading', { level: 1, name: 'วันนี้ของฉัน' })).toBeVisible();
+    await expect(today.getByTestId('today-next-visit')).toBeVisible();
+    await expect(today.getByTestId('log-visit-sticky')).toBeVisible();
+    await expect(today.getByTestId('today-quick-actions')).toBeVisible();
+    await expect(today.getByTestId('today-follow-up')).toBeVisible();
+    expect(await overflow(), 'horizontal page overflow in px (วันนี้ของฉัน)').toBeLessThanOrEqual(1);
+    await shot(page, '02-rep-landing-375');
+
+    await today.getByRole('button', { name: 'ดูหน้าเต็ม', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'งานของฉัน' })).toBeVisible();
     await expect(page.getByTestId('deal-board')).toBeVisible();
-    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-    expect(overflow, 'horizontal page overflow in px').toBeLessThanOrEqual(1);
-    await shot(page, '02-rep-landing-375');
+    expect(await overflow(), 'horizontal page overflow in px (full page)').toBeLessThanOrEqual(1);
+    await shot(page, '02b-rep-full-page-375');
   });
 
   test('โทรแล้ว with an outcome logs a CALL and the deal leaves ควรตามต่อ', async ({ page }) => {

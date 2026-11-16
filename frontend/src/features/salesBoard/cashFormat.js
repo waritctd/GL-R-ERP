@@ -32,6 +32,12 @@ export function weekRangeLabel(mondayIso) {
  * is later.
  */
 export function weekEndLabel(mondayIso, yearMonth, isLast = false) {
+  const day = weekEndDay(mondayIso, yearMonth, isLast);
+  return day === '—' ? day : `ถึง ${day}`;
+}
+
+/** weekEndLabel's date alone, "13 พ.ย." — the phone's "รอบถัดไป 13 พ.ย.". */
+export function weekEndDay(mondayIso, yearMonth, isLast = false) {
   const friday = addDaysIso(mondayIso, 4);
   const [y, m] = (yearMonth ?? '').split('-').map(Number);
   let end = friday;
@@ -40,7 +46,7 @@ export function weekEndLabel(mondayIso, yearMonth, isLast = false) {
     if (monthEnd > friday) end = monthEnd;
   }
   const p = parts(end);
-  return p ? `ถึง ${p.day} ${SHORT_MONTH[p.month - 1]}` : '—';
+  return p ? `${p.day} ${SHORT_MONTH[p.month - 1]}` : '—';
 }
 
 /** The Monday of the ISO week containing `iso`. */
@@ -72,3 +78,4 @@ export function monthLabel(yearMonth) {
   const m = /^(\d{4})-(\d{2})$/.exec(yearMonth ?? '');
   return m ? SHORT_MONTH[Number(m[2]) - 1] ?? '' : '';
 }
+

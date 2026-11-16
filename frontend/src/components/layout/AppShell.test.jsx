@@ -89,6 +89,32 @@ describe('AppShell navigation (role-scoped views)', () => {
     await screen.findByText('เนื้อหา');
     expect(screen.getByText('งานทั้งหมด')).toBeTruthy();
   });
+
+  // นัดเข้าพบ · Visits (design NAV: sales = mywork, board, quotes, VISITS, catalog, comm). Its audience is the visit
+  // endpoints' — VisitService.VISIT_ROLES {sales, sales_manager, ceo}. Refusals first.
+  it('shows นัดเข้าพบ to no role the visit endpoints refuse', async () => {
+    for (const user of [
+      { role: 'hr' }, { role: 'employee' }, { role: 'import' }, { role: 'account' }, { role: 'warehouse' },
+      { role: 'qc' }, { role: 'employee', manager: true },
+    ]) {
+      const { unmount } = renderShell({ ...user, employeeId: 4, name: 'ทดสอบ', email: `${user.role}@test.local` });
+      await screen.findByText('เนื้อหา');
+      expect(screen.queryByRole('link', { name: 'นัดเข้าพบ (Visits)' }), `${user.role} must not see นัดเข้าพบ`).toBeNull();
+      unmount();
+    }
+  });
+
+  it('shows นัดเข้าพบ to sales, sales_manager and ceo, directly after ใบเสนอราคา', async () => {
+    for (const role of ['sales', 'sales_manager', 'ceo']) {
+      const { unmount } = renderShell({ role, employeeId: 4, name: 'ทดสอบ', email: `${role}@test.local` });
+      await screen.findByText('เนื้อหา');
+      const visits = screen.getByRole('link', { name: 'นัดเข้าพบ (Visits)' });
+      expect(visits.getAttribute('href')).toBe('/visits');
+      const names = within(visits.closest('nav')).getAllByRole('link').map((link) => link.getAttribute('href'));
+      expect(names[names.indexOf('/visits') - 1], `${role}: the item before นัดเข้าพบ`).toBe('/quotations');
+      unmount();
+    }
+  });
 });
 
 // The 721–1040px band no longer has a persistent sidebar/rail at all (it was superseded by the same off-canvas
@@ -379,6 +405,7 @@ describe('AppShell navigation under the release lockdown', () => {
 
     expect(screen.getByText('ใบเสนอราคา')).toBeTruthy();
     expect(screen.getByText('งานทั้งหมด')).toBeTruthy();
+    expect(screen.getByText('นัดเข้าพบ')).toBeTruthy();
     expect(screen.getByText('แคตตาล็อกสินค้า')).toBeTruthy();
     expect(screen.queryByText('งานการเงิน')).toBeNull();
     expect(screen.queryByText('การขนส่ง')).toBeNull();
@@ -400,6 +427,7 @@ describe('AppShell navigation under the release lockdown', () => {
     expect(screen.getByText('การขนส่ง')).toBeTruthy();
     expect(screen.queryByText('ใบเสนอราคา')).toBeNull();
     expect(screen.queryByText('งานทั้งหมด')).toBeNull();
+    expect(screen.queryByText('นัดเข้าพบ')).toBeNull();
     expect(screen.queryByText('แคตตาล็อกสินค้า')).toBeNull();
     // import holds canManagePriceImport, so นำเข้าราคา is removed by the lock filter alone — and
     // '/price-import' must not ride on the '/pricing-requests' prefix.
