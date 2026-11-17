@@ -170,16 +170,30 @@ public class SalesBoardRepository {
      * every open deal at S6 or later in the list (the caller's own on my-work, the team's on team-board).
      */
     public List<BoardDeal> withPaymentDue(List<BoardDeal> rows) {
+        return withPaymentDue(rows, paymentDueOf(rows));
+    }
+
+    /**
+     * The due state of every row from รอมัดจำ on, in ONE statement over all of them (none when no row qualifies) —
+     * for a caller that shows rows of several lists as board cards (my-work: the board AND the returning paused rows of
+     * ควรตามต่อ) and must not pay one statement per list.
+     */
+    public Map<Long, TicketRepository.PaymentDueState> paymentDueOf(java.util.Collection<BoardDeal> rows) {
         List<Long> ids = rows.stream().filter(d -> d.boardColumn() >= FIRST_MONEY_CHIP_COLUMN)
-            .map(BoardDeal::ticketId).toList();
-        if (ids.isEmpty()) {
-            return rows;
-        }
-        Map<Long, TicketRepository.PaymentDueState> due = tickets.paymentDueStates(ids);
-        return rows.stream().map(d -> {
-            TicketRepository.PaymentDueState state = due.get(d.ticketId());
-            return state == null ? d : d.withPaymentDue(state.dueDate(), state.overdue());
-        }).toList();
+            .map(BoardDeal::ticketId).distinct().toList();
+        return ids.isEmpty() ? Map.of() : tickets.paymentDueStates(ids);
+    }
+
+    /** {@code rows} with the state from {@code due} on each row from รอมัดจำ on; other rows unchanged, order kept. */
+    public static List<BoardDeal> withPaymentDue(List<BoardDeal> rows,
+                                                 Map<Long, TicketRepository.PaymentDueState> due) {
+        return rows.stream().map(d -> withPaymentDue(d, due)).toList();
+    }
+
+    /** One row with its state from {@code due} when it is from รอมัดจำ on and has one; otherwise unchanged. */
+    public static BoardDeal withPaymentDue(BoardDeal d, Map<Long, TicketRepository.PaymentDueState> due) {
+        TicketRepository.PaymentDueState state = d.boardColumn() >= FIRST_MONEY_CHIP_COLUMN ? due.get(d.ticketId()) : null;
+        return state == null ? d : d.withPaymentDue(state.dueDate(), state.overdue());
     }
 
     private BoardDeal map(ResultSet rs, int rowNum) throws SQLException {

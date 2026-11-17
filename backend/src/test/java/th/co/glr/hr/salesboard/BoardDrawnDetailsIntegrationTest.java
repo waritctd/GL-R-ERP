@@ -203,41 +203,79 @@ class BoardDrawnDetailsIntegrationTest extends AbstractDealQuotationSlice2Integr
         assertThat(card.path("overdue").asBoolean()).isFalse();
     }
 
-    // ── fix round 1, M1: the due state is computed only where a screen shows it ───────────────────
+    // ── fix rounds 1–2, M1 / NEW-1: the due state is on every row a screen shows as a board card ──
 
     /**
-     * Only the two lists DealBoard renders — my-work {@code board} and team-board {@code board} — carry the due state,
-     * and only on cards in รอมัดจำ / ส่งของ · เก็บเงิน (S6 and later). The SAME deal in ควรตามต่อ ({@code followUp}), in
-     * the team's {@code stale} list, and a returning paused deal, carry none of it: no screen shows it there, so the
-     * summary-facts statement is not run for them (reviewer's B5 + B6).
+     * The rule: every row any screen renders as a DealBoard card with a money chip carries the due state, from
+     * รอมัดจำ (S6) on; nothing else does. DealBoard is fed by my-work {@code board} (งานของฉัน, งานทั้งหมด for a rep),
+     * team-board {@code board} (งานทั้งหมด for sales_manager / ceo), and — in งานของฉัน's "เฉพาะงานเงียบ" view, where
+     * "ดูทั้งหมด" lands — the RETURNING paused rows of my-work {@code followUp} (MyWork.jsx: the quiet view is the
+     * returning followUp rows plus the quiet board rows). Not board cards: the ACTIVE rows of {@code followUp} (shown
+     * only in the ควรตามต่อ list; the quiet board view takes those deals from {@code board}) and team-overview
+     * {@code stale}. Fix round 2: round 1 left the returning rows out, so a deal paused at S9 past its due date read
+     * "ได้มัดจำ" while finance flagged it overdue.
      */
     @Test
-    void theDueStateIsOnlyOnTheBoardListsAndOnlyFromRepsS6() throws Exception {
+    void theDueStateIsOnEveryRowShownAsABoardCard_fromRepsS6_andNowhereElse() throws Exception {
         long quietCol4 = creditDealDelivered(31, "AWAITING_FINAL_PAYMENT");
         jdbc.update("UPDATE sales.ticket SET sales_stage = 'NEGOTIATION' WHERE ticket_id = :id", Map.of("id", quietCol4));
         backdate(quietCol4, 30);
         long col3 = creditDealDelivered(31, "AWAITING_FINAL_PAYMENT");
         jdbc.update("UPDATE sales.ticket SET sales_stage = 'QUOTE_OWNER' WHERE ticket_id = :id", Map.of("id", col3));
         long returning = creditDealDelivered(31, "AWAITING_FINAL_PAYMENT");
-        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD', pause_return_on = :d WHERE ticket_id = :id",
-            Map.of("d", today().minusDays(1), "id", returning));
-        assertThat(summary(quietCol4).overdue()).as("fixture: finance says overdue").isTrue();
-        assertThat(summary(col3).overdue()).as("fixture: finance says overdue").isTrue();
-        assertThat(summary(returning).overdue()).as("fixture: finance says overdue").isTrue();
+        pauseUntil(returning, today().minusDays(1));
+        long returningCol3 = creditDealDelivered(31, "AWAITING_FINAL_PAYMENT");
+        jdbc.update("UPDATE sales.ticket SET sales_stage = 'QUOTE_OWNER' WHERE ticket_id = :id", Map.of("id", returningCol3));
+        pauseUntil(returningCol3, today().minusDays(1));
+        for (long id : List.of(quietCol4, col3, returning, returningCol3)) {
+            assertThat(summary(id).overdue()).as("fixture: finance says %s is overdue", id).isTrue();
+        }
 
         JsonNode work = ok(get("/api/sales/my-work"), salesActor);
-        JsonNode boardCard = byId(work.get("board"), quietCol4);
-        assertThat(boardCard.path("overdue").asBoolean()).as("board").isTrue();
-        assertThat(boardCard.path("paymentDueDate").isNull()).as("board").isFalse();
-        assertNoDueState(byId(work.get("board"), col3), "column-3 card");
-        assertNoDueState(byId(work.get("followUp"), quietCol4), "followUp (quiet)");
-        assertNoDueState(byId(work.get("followUp"), returning), "followUp (returning paused)");
+        assertDueState(byId(work.get("board"), quietCol4), "my-work board, column 4");
+        assertNoDueState(byId(work.get("board"), col3), "my-work board, column 3");
+        assertDueState(byId(work.get("followUp"), returning), "my-work followUp, returning paused S9 (a quiet-view card)");
+        assertNoDueState(byId(work.get("followUp"), returningCol3), "my-work followUp, returning paused S3");
+        assertNoDueState(byId(work.get("followUp"), quietCol4), "my-work followUp, active quiet row (list only)");
 
         JsonNode team = ok(get("/api/sales/team-overview"), salesManagerActor);
         assertNoDueState(byId(team.get("stale"), quietCol4), "team stale (quiet)");
         assertNoDueState(byId(team.get("stale"), returning), "team stale (returning paused)");
-        assertThat(byId(ok(get("/api/sales/team-board"), salesManagerActor).get("board"), quietCol4)
-            .path("overdue").asBoolean()).as("team board").isTrue();
+        assertDueState(byId(ok(get("/api/sales/team-board"), salesManagerActor).get("board"), quietCol4), "team board");
+    }
+
+    /**
+     * The reviewer's scenario: a deal paused at S9 (DELIVERED), fully delivered 31 days ago on 30-day credit, deposit
+     * paid, balance unpaid, its return date reached. On its card in งานของฉัน's quiet view (a returning followUp row) it
+     * reads overdue with the finance worklist's own date, not "ได้มัดจำ".
+     */
+    @Test
+    void aDealPausedAtS9PastItsCreditDate_isOverdueOnItsCard_asOnTheFinanceWorklist() throws Exception {
+        long id = creditDealDelivered(31, "AWAITING_FINAL_PAYMENT"); // REQUIRED policy: the deposit was paid
+        pauseUntil(id, today());
+        UserPrincipal account = actor(createEmployee("บัญชี s6r2", "account-s6r2@glr.co.th", "ACC", "บัญชี", null),
+            "account");
+        TicketSummaryDto finance = ticketService.list(null, account).stream().filter(r -> r.id() == id).findFirst()
+            .orElseThrow(() -> new AssertionError("fixture: the deal is on the finance worklist"));
+        assertThat(finance.overdue()).as("finance worklist").isTrue();
+
+        JsonNode card = byId(ok(get("/api/sales/my-work"), salesActor).get("followUp"), id);
+
+        assertThat(card.path("returning").asBoolean()).as("a returning paused row").isTrue();
+        assertThat(card.path("depositReceived").asBoolean()).as("deposit in hand").isTrue();
+        assertThat(card.path("overdue").asBoolean()).as("card overdue").isTrue();
+        assertThat(card.path("paymentDueDate").asText()).isEqualTo(String.valueOf(finance.paymentDueDate()))
+            .isEqualTo(today().minusDays(1).toString());
+    }
+
+    private void pauseUntil(long ticketId, LocalDate returnOn) {
+        jdbc.update("UPDATE sales.ticket SET lifecycle = 'ON_HOLD', pause_return_on = :d WHERE ticket_id = :id",
+            Map.of("d", returnOn, "id", ticketId));
+    }
+
+    private static void assertDueState(JsonNode card, String where) {
+        assertThat(card.path("overdue").asBoolean()).as("%s overdue", where).isTrue();
+        assertThat(card.path("paymentDueDate").isNull()).as("%s paymentDueDate", where).isFalse();
     }
 
     private static void assertNoDueState(JsonNode card, String where) {
