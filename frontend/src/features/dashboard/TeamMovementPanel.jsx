@@ -20,7 +20,7 @@ function Count({ id, week, range, value, danger = false }) {
   );
 }
 
-const HEADS = ['ผู้ดูแล', 'ดีลที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง'];
+const HEADS = ['ผู้ดูแล', 'งานที่เปิดอยู่', 'ขยับขั้น', 'มีกิจกรรม', 'เลยนัด', 'ไม่เคลื่อนไหว', 'ยอดที่สั่งซื้อแล้ว', 'ยอดคาดหวัง'];
 
 export function TeamMovementPanel({ deals, range }) {
   const { catalog } = useStageCatalog();
@@ -40,7 +40,7 @@ export function TeamMovementPanel({ deals, range }) {
       {rows === null ? (
         <p className="m-0 px-5 py-4 text-sm text-text-muted mobile:px-3.5">กำลังโหลด…</p>
       ) : rows.length === 0 ? (
-        <p className="m-0 px-5 py-4 text-sm text-text-muted mobile:px-3.5">ยังไม่มีดีลที่เปิดอยู่</p>
+        <p className="m-0 px-5 py-4 text-sm text-text-muted mobile:px-3.5">ยังไม่มีงานที่เปิดอยู่</p>
       ) : (
         <div className="overflow-x-auto">
           <table className="w-full border-collapse text-sm">

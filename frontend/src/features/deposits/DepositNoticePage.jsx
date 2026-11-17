@@ -588,8 +588,8 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
     <div className="grid w-full grid-cols-1 gap-[18px] min-w-0 max-w-[1320px]">
       <Breadcrumbs
         items={[
-          { label: 'ดีล', onClick: onNavigateTickets },
-          { label: form.customerName || 'รายละเอียดดีล', onClick: onBack },
+          { label: 'งานทั้งหมด', onClick: onNavigateTickets },
+          { label: form.customerName || 'รายละเอียดงาน', onClick: onBack },
           { label: 'ใบแจ้งยอดเงินรับมัดจำ' },
         ]}
       />
@@ -676,7 +676,7 @@ export function DepositNoticePage({ ticketId, onBack, onNavigateTickets, showToa
           <EmptyState
             icon="fileText"
             title="ยังไม่มีใบแจ้งยอดเงินรับมัดจำ"
-            description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับดีลนี้"
+            description="สร้างเอกสารฉบับร่างเพื่อเริ่มกรอกรายละเอียดใบแจ้งยอดมัดจำสำหรับงานนี้"
           />
           <div className="flex justify-center px-4.5 pb-4.5">
             <Button variant="primary" onClick={handleCreateDraft} disabled={creatingDraft}>

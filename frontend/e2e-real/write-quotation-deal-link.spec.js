@@ -28,7 +28,7 @@ import { directQuotationBody, inDays } from './helpers/sales.js';
  */
 
 const LIVE_PRICING_REQUEST_MESSAGE =
-  'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+  'งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
 
 test.describe('quotation ↔ deal link (slice 2) — the real service', () => {
   let sessions;
@@ -116,7 +116,7 @@ test.describe('quotation ↔ deal link (slice 2) — the real service', () => {
     expect(second.status(), 'a second direct quotation on the same deal').toBe(409);
     const error = await second.json();
     expect(error).toEqual({
-      message: `ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (${quotation.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+      message: `งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (${quotation.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
       status: 409,
       liveQuotationId: quotation.id,
       number: quotation.number,

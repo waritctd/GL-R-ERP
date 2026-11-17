@@ -73,7 +73,7 @@ export function ExpressUploadCard() {
 
 function OutcomeTable({ result }) {
   const rows = [
-    { label: 'จับคู่แล้ว', tone: 'text-success', count: result.matched, sum: result.matchedAmount, next: 'บันทึกเป็นรับเงินของดีลแล้ว' },
+    { label: 'จับคู่แล้ว', tone: 'text-success', count: result.matched, sum: result.matchedAmount, next: 'บันทึกเป็นรับเงินของงานแล้ว' },
     { label: 'อาจซ้ำกับรายการที่บันทึกเอง', tone: 'text-warning-dark', count: result.possibleManualDuplicates ?? 0, sum: null, next: 'ยังไม่บันทึก — เลือกด้านล่างว่าเป็นรายการเดียวกันหรือคนละรายการ' },
     { label: 'ซ้ำ (เคยนำเข้าแล้ว)', tone: 'text-text', count: result.duplicates, sum: result.duplicateAmount, next: 'ไม่นับซ้ำ' },
     { label: 'ยังจับคู่ไม่ได้', tone: 'text-warning-dark', count: result.unmatched, sum: result.unmatchedAmount, next: 'จับคู่เองด้านล่าง' },
@@ -170,7 +170,7 @@ export function ReceiptsImportPage({ showToast = () => {} }) {
         <Panel>
           <p className="m-0 font-bold text-text">ยังไม่เปิดใช้การอัปโหลดไฟล์ Express</p>
           <p className="m-0 mt-1 text-sm text-text-muted">
-            ยังไม่เคยเห็นไฟล์ส่งออกจริงจาก Express — เปิดใช้หลังตรวจไฟล์ตัวอย่างแล้ว ระหว่างนี้บันทึกรับชำระที่หน้าดีลตามเดิม
+            ยังไม่เคยเห็นไฟล์ส่งออกจริงจาก Express — เปิดใช้หลังตรวจไฟล์ตัวอย่างแล้ว ระหว่างนี้บันทึกรับชำระที่หน้ารายละเอียดงานตามเดิม
           </p>
         </Panel>
       ) : null}

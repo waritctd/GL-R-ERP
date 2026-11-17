@@ -427,7 +427,7 @@ describe('"เปลี่ยนลูกค้า" is not offered where the cus
     );
 
     // Slice 2 flow A: /quotations/new opens on เลือกดีลที่มีอยู่; the customer is chosen on สร้างดีลใหม่.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     await waitFor(() => expect(byId(QUOTATION_FIELD_IDS.customer)).not.toBeNull());
     await new Promise((resolve) => { setTimeout(resolve, 60); });
 

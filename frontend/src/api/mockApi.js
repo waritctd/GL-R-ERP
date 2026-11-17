@@ -1214,7 +1214,7 @@ function mockRequireLeadTimeDecider(pr) {
   const user = requireSession();
   const owns = user.role === 'sales' && buildPricingRequestSummary(pr).ticketCreatedById === user.id;
   if (!owns && user.role !== 'sales_manager') {
-    fail('เฉพาะพนักงานขายเจ้าของดีลหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติหรือไม่อนุมัติได้', 403);
+    fail('เฉพาะพนักงานขายเจ้าของงานหรือผู้จัดการฝ่ายขายเท่านั้นที่อนุมัติหรือไม่อนุมัติได้', 403);
   }
   return user;
 }
@@ -1548,7 +1548,7 @@ function reconcileTicketItemsFromPricingRequest(ticket, pr, user) {
   }
   if (anyChange) {
     pushPricingRequestEvent(pr, user, 'TICKET_ITEMS_RECONCILED', null, null,
-      'ปรับจำนวนสินค้าในรายการดีลให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อแล้ว');
+      'ปรับจำนวนสินค้าในรายการของงานให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อแล้ว');
   }
 }
 
@@ -1826,7 +1826,7 @@ function buildPricingRequestSummary(pr) {
 // Mirrors PricingRequestService.requireOrderNotConfirmed.
 function requireMockOrderNotConfirmed(ticket) {
   if (ticket?.paymentStatus != null) {
-    fail('ยืนยันคำสั่งซื้อของดีลนี้แล้ว จึงเริ่มรอบราคาใหม่ไม่ได้ — การเปลี่ยนแปลงหลังยืนยันต้องทำเป็นการแก้ไขคำสั่งซื้อ', 409);
+    fail('ยืนยันคำสั่งซื้อของงานนี้แล้ว จึงเริ่มรอบราคาใหม่ไม่ได้ — การเปลี่ยนแปลงหลังยืนยันต้องทำเป็นการแก้ไขคำสั่งซื้อ', 409);
   }
 }
 
@@ -1848,7 +1848,7 @@ function requirePricingRequestViewable(id, user) {
 
 function requirePricingRequestDealActive(ticket) {
   if ((ticket?.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
-    fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket?.lifecycle}) จึงสร้าง/แก้ไขคำขอราคาไม่ได้`, 409);
+    fail(`งานไม่ได้อยู่ในสถานะ ACTIVE (${ticket?.lifecycle}) จึงสร้าง/แก้ไขคำขอราคาไม่ได้`, 409);
   }
 }
 
@@ -1885,7 +1885,7 @@ function requirePricingRequestItemFieldsValid(items) {
     const identified = item.sourceTicketItemId != null || item.productId != null
       || Boolean(item.model?.trim()) || Boolean(item.productDescription?.trim());
     if (!identified) {
-      fail(`รายการที่ ${index + 1}: ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในดีล หรือระบุรุ่น/รายละเอียด)`, 400);
+      fail(`รายการที่ ${index + 1}: ต้องระบุสินค้าที่ต้องการเสนอราคา (เลือกจากรายการในงาน หรือระบุรุ่น/รายละเอียด)`, 400);
     }
   });
 }
@@ -2245,7 +2245,7 @@ function stripCeoPriceModeFields(decision, user) {
 // per deal, so no new draft while one is ISSUED.
 function requireNoIssuedDepositNotice(ticketId) {
   const issued = mockDepositNotices.find((d) => d.ticketId === Number(ticketId) && d.status === 'ISSUED');
-  if (issued) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`, 409);
+  if (issued) fail(`งานนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`, 409);
 }
 
 function buildMockDoc(doc) {
@@ -2793,7 +2793,7 @@ function mockApplyItemFactoryChoices(ticket, request) {
     const factory = mockPriceImportFactories.find((f) => f.factoryId === Number(choice.factoryId));
     if (!factory) fail('ไม่พบโรงงานที่เลือก', 400);
     const item = (ticket.items ?? []).find((i) => Number(i.id) === Number(choice.ticketItemId));
-    if (!item) fail('รายการที่เลือกไม่ได้อยู่ในดีลนี้', 400);
+    if (!item) fail('รายการที่เลือกไม่ได้อยู่ในงานนี้', 400);
     const hasFactory = item.resolvedFactoryId != null
       || (item.catalogPriceId != null && mockProductPrices.some((p) => p.priceId === Number(item.catalogPriceId)))
       || (item.factory && String(item.factory).trim());
@@ -3447,7 +3447,7 @@ const FINANCE_STAGE_TO_MILESTONE = {
 
 function findTicketRaw(id) {
   const ticket = db.tickets.find((t) => t.id === id);
-  if (!ticket) fail('ไม่พบดีลนี้', 404);
+  if (!ticket) fail('ไม่พบงานนี้', 404);
   return ticket;
 }
 
@@ -3457,7 +3457,7 @@ function findTicketRaw(id) {
 // on the live quotation, not on the quotation_only flag (provenance only; nothing reads it).
 // Callers run their own authz first, so a caller with no access gets the 403, never this 409.
 const DIRECT_QUOTATION_LOCK_REFUSAL =
-  'ดีลนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
+  'งานนี้มีใบเสนอราคาที่ยังใช้งานอยู่ — แก้ไขรายการที่ใบเสนอราคา หรือยกเลิกใบเสนอราคาก่อน';
 function requireNoLiveDirectQuotation(ticket) {
   if (ticket && mockLiveDirectQuotation(ticket.id)) fail(DIRECT_QUOTATION_LOCK_REFUSAL, 409);
 }
@@ -3517,7 +3517,7 @@ function dealActivitiesForTicket(ticketId) {
 
 function requireActive(ticket) {
   if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
-    fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`, 409);
+    fail(`งานไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`, 409);
   }
 }
 
@@ -3528,7 +3528,7 @@ function depositBypassesNotice(ticket) {
 // Mirrors DepositNoticeService.createDraftFromQuotation's policy refusal, shared by both draft routes.
 function requireDepositNoticePath(ticket) {
   if (depositBypassesNotice(ticket)) {
-    fail(`ดีลนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ ${ticket.depositPolicy}) จึงสร้างใบแจ้งรับมัดจำไม่ได้`, 409);
+    fail(`งานนี้ไม่ต้องเก็บมัดจำ (นโยบายมัดจำ ${ticket.depositPolicy}) จึงสร้างใบแจ้งรับมัดจำไม่ได้`, 409);
   }
 }
 
@@ -3812,7 +3812,7 @@ function reserveStockForTicket(ticket, user, payload = {}) {
   let total = 0;
   for (const line of lines) {
     const item = ticket.items.find((it) => it.id === Number(line.itemId));
-    if (!item) fail('ไม่พบรายการนี้ในดีล', 404);
+    if (!item) fail('ไม่พบรายการนี้ในงาน', 404);
     const qty = moneyValue(line.qtyFromStock);
     if (qty < 0 || qty > Number(item.qty || 0)) fail('จำนวนสินค้าจากสต็อกต้องไม่เกินจำนวนที่สั่ง', 400);
     item.qtyFromStock = qty;
@@ -3842,7 +3842,7 @@ function updateItemWeightMultipliersForTicket(ticket, user, payload = {}) {
   if (!lines.length) fail('ต้องระบุรายการสินค้า', 400);
   for (const line of lines) {
     const item = ticket.items.find((it) => it.id === Number(line.itemId));
-    if (!item) fail('ไม่พบรายการนี้ในดีล', 404);
+    if (!item) fail('ไม่พบรายการนี้ในงาน', 404);
     const weight = Number(line.weightMultiplier);
     if (![1, 2, 3].includes(weight)) fail('น้ำหนักคอมมิชชั่นต้องเป็น 1, 2 หรือ 3', 400);
     item.weightMultiplier = weight;
@@ -3862,7 +3862,7 @@ function recordDeliveryForTicket(ticket, user, payload = {}, completing = false)
   const combined = new Map();
   for (const line of lines) {
     const item = ticket.items.find((it) => it.id === Number(line.itemId));
-    if (!item) fail('ไม่พบรายการนี้ในดีล', 404);
+    if (!item) fail('ไม่พบรายการนี้ในงาน', 404);
     const qty = moneyValue(line.qty);
     if (qty <= 0) fail('จำนวนส่งมอบต้องมากกว่า 0', 400);
     combined.set(item.id, moneyValue((combined.get(item.id) ?? 0) + qty));
@@ -4207,7 +4207,7 @@ function requireNoOtherDirectQuotationAfterConfirm(ticket, row) {
   const confirmedPartyId = mockDealQuotations.find((q) => q.id === ticket.orderConfirmedQuotationId)?.partyId ?? null;
   const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
   if (party && party.id !== confirmedPartyId && ['ACTIVE', 'QUOTED', 'NEGOTIATING'].includes(party.status)) return;
-  fail('ดีลนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว จึงส่ง/อนุมัติใบเสนอราคานี้ไม่ได้', 409);
+  fail('งานนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว จึงส่ง/อนุมัติใบเสนอราคานี้ไม่ได้', 409);
 }
 
 // ── มีอะไรใหม่ release notice (mirrors notification/ReleaseNoticePolicy + ReleaseNoticeService) ──
@@ -4391,7 +4391,7 @@ const MOCK_OFF_ROUTE_STAGES = {
 };
 
 const MOCK_ENTRY_CHANNEL_PHRASE = {
-  DESIGNER_LED: 'ผู้ออกแบบนำดีล',
+  DESIGNER_LED: 'ผู้ออกแบบนำงานมา',
   OWNER_DIRECT: 'เจ้าของติดต่อโดยตรง',
   BUYER_DIRECT: 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง',
 };
@@ -4403,8 +4403,8 @@ function mockIsOnRoute(entryChannel, stage) {
 /** Mirrors DealRoute.refusalMessage — names the channel, the stage BY DISPLAY NUMBER, and the remedy. */
 function mockRouteRefusal(entryChannel, stage) {
   const no = DEAL_STAGE_CATALOG.stages.find((s) => s.code === stage)?.no ?? '';
-  return `ดีลนี้เป็น${MOCK_ENTRY_CHANNEL_PHRASE[entryChannel] ?? 'ดีลที่ระบุช่องทางไว้'}`
-    + ` — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+  return `ช่องทางรับงานของงานนี้คือ${MOCK_ENTRY_CHANNEL_PHRASE[entryChannel] ?? 'ช่องทางที่ระบุไว้'}`
+    + ` — ขั้นที่ ${no} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`;
 }
 
 /** Mirrors TicketService.requireQuotationRecipientOnRoute: a direct quotation may not be addressed to a party off
@@ -4601,11 +4601,11 @@ function mockStageDecisions(ticket, user) {
       blockedReason = 'ไม่มีสิทธิ์เข้าถึงรายการนี้';
       // A quotation-first deal is an ordinary deal, so its stages are offered like any other.
     } else if (ticket.lifecycle === 'CLOSED_LOST') {
-      blockedReason = 'ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ';
+      blockedReason = 'งานถูกทำเครื่องหมายเสียงานแล้ว — เปิดงานอีกครั้งก่อนแก้ไขสถานะ';
     } else if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
-      blockedReason = `ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`;
+      blockedReason = `งานไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงแก้ไขขั้นตอนนี้ไม่ได้`;
     } else if (code === ticket.salesStage) {
-      blockedReason = `ดีลนี้อยู่ในขั้นตอน ${code} อยู่แล้ว`;
+      blockedReason = `งานนี้อยู่ในขั้นตอน ${code} อยู่แล้ว`;
     } else if (dealStageIndex(ticket.salesStage) >= dealStageIndex('ORDER_RECEIVED')
         && dealStageIndex(code) < dealStageIndex('ORDER_RECEIVED')) {
       // Mirrors TicketService.requireStageMoveAllowed -- no rewind below ขั้น 10 once the order is
@@ -7842,7 +7842,7 @@ function requireDealPartyWriter(ticket) {
 
 function findMockParty(ticket, partyId) {
   const party = mockDealParties.find((p) => p.id === Number(partyId) && p.ticketId === ticket.id);
-  if (!party) fail('ไม่พบผู้เกี่ยวข้องในดีลนี้', 404);
+  if (!party) fail('ไม่พบผู้เกี่ยวข้องในงานนี้', 404);
   return party;
 }
 
@@ -7947,7 +7947,7 @@ function mockForkChildDeal(parent, party, user) {
     lifecycle: 'ACTIVE', lostReason: null, lostAt: null,
     orderConfirmedQuotationId: null, closeConfirmedAt: null, closeConfirmedByName: null,
     createdAt: now.slice(0, 10), updatedAt: now.slice(0, 10), closedAt: null, stageUpdatedAt: now,
-    events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'DEAL_SPLIT_FROM_PARENT', fromStatus: null, toStatus: 'draft', message: `แยกจากดีล ${parent.code} (ผลประมูล)`, createdAt: now }],
+    events: [{ id: nextId * 1000, ticketId: nextId, actorId: user.id, actorName: user.name, kind: 'DEAL_SPLIT_FROM_PARENT', fromStatus: null, toStatus: 'draft', message: `แยกจากงาน ${parent.code} (ผลประมูล)`, createdAt: now }],
   };
   db.tickets.unshift(child);
   const childParty = mockInsertDealParty({
@@ -8068,7 +8068,7 @@ async function mockRevokeCloseConfirmation(id, payload = {}, viaFinance = false)
   const ticket = findTicketRaw(Number(id));
   requireMockAccountScope(user, ticket);
   requireActive(ticket);
-  if (!ticket.closeConfirmedAt) fail('ดีลนี้ยังไม่ได้ยืนยันปิดงาน', 409);
+  if (!ticket.closeConfirmedAt) fail('งานนี้ยังไม่ได้ยืนยันปิดงาน', 409);
   ticket.closeConfirmedAt = null;
   ticket.closeConfirmedByName = null;
   pushEvent(ticket, user, 'CLOSE_CONFIRM_REVOKED', ticket.status, ticket.status,
@@ -8114,7 +8114,7 @@ async function mockConfirmFinalPayment(id, options = {}) {
   const allowed = (['AWAITING_FINAL_PAYMENT', 'DEPOSIT_PAID'].includes(ticket.paymentStatus)
     || (depositBypassesNotice(ticket) && (ticket.paymentStatus == null || ticket.paymentStatus === 'CUSTOMER_CONFIRMED')))
     && mockPastProcurement(ticket);
-  if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) และดีลต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
+  if (!allowed) fail('ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรืองานนี้ได้รับการยกเว้นมัดจำ) และงานต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้', 409);
   const outstanding = moneyValue(payableAmount(ticket) - sumPaid(ticket.id));
   if (outstanding <= 0) {
     if (ticket.paymentStatus !== 'FULLY_PAID') {
@@ -8255,7 +8255,7 @@ function buildTicketActions(user, ticket) {
     if (availableActions.some((a) => a.kind === 'stage')) add('UPDATE_STAGE', 'stage', 'แก้ไขสถานะ', { requiredFields: ['stage'] });
     if (dealOwner) {
       add('MARK_LOST', 'lifecycle', 'เสียงาน', { requiredFields: ['reason'] });
-      add('PLACE_ON_HOLD', 'lifecycle', 'พักดีลไว้');
+      add('PLACE_ON_HOLD', 'lifecycle', 'พักงานไว้');
       add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
       add('SET_TENDER_REQUIREMENT', 'policy', 'ตั้งค่าสถานะประมูล', { requiredFields: ['value'] });
       // requiredFields carries the note rule, exactly as TicketService.addPolicyActions does: a
@@ -8284,7 +8284,7 @@ function buildTicketActions(user, ticket) {
     add('RESUME', 'lifecycle', 'ดำเนินการต่อ');
     if (ticket.lifecycle === 'ON_HOLD') add('MARK_DORMANT', 'lifecycle', 'พัก dormant');
   } else if (ticket.lifecycle === 'CLOSED_LOST' && dealOwner) {
-    add('REOPEN', 'lifecycle', 'เปิดดีลใหม่');
+    add('REOPEN', 'lifecycle', 'เปิดงานอีกครั้ง');
   }
   return {
     currentState: {
@@ -8347,7 +8347,7 @@ function requireMockFinanceAccess(id) {
   const user = requireSession();
   if (!['account', 'ceo'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   const raw = db.tickets.find((t) => t.id === Number(id));
-  if (!raw) fail('ไม่พบดีลนี้', 404);
+  if (!raw) fail('ไม่พบงานนี้', 404);
   requireMockAccountScope(user, raw);
   return { user, raw };
 }
@@ -8843,14 +8843,14 @@ function mockValidExpectedPayment(payload) {
 /** TicketService#requireDealWriteAccess: 404, then the owner/keyer (sales), sales_manager or ceo. */
 function mockRequireDealWrite(user, ticketId) {
   const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-  if (!ticket) fail('ไม่พบดีลนี้', 404);
+  if (!ticket) fail('ไม่พบงานนี้', 404);
   if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
   return ticket;
 }
 
 /** ExpectedPaymentService.requireActive: rows on a deal that is not ACTIVE are read-only. */
 function mockRequireActiveExpectedDeal(ticket) {
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงแก้ไขเงินที่คาดว่าจะเข้าไม่ได้', 409);
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงแก้ไขเงินที่คาดว่าจะเข้าไม่ได้', 409);
 }
 
 function mockRequireOpenExpected(ticketId, id) {
@@ -9083,9 +9083,9 @@ function mockRefusal(code, message) {
 function mockPlaceExpressReceipt(ticketId, row, user, amount = row.amount, ref = row.docNo.trim()) {
   if (user.role !== 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403); // EXPRESS_RECEIPT_ROLES (H2/H3)
   const ticket = findTicketRaw(Number(ticketId));
-  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') mockRefusal('DEAL_NOT_ACTIVE', 'ดีลไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้');
+  if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') mockRefusal('DEAL_NOT_ACTIVE', 'งานไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้');
   const payable = payableAmount(ticket);
-  if (moneyValue(sumPaid(ticket.id) + amount) > payable) mockRefusal('OVERPAYMENT', 'ยอดนี้เกินยอดที่ดีลต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ');
+  if (moneyValue(sumPaid(ticket.id) + amount) > payable) mockRefusal('OVERPAYMENT', 'ยอดนี้เกินยอดที่งานต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ');
   // TicketService#expressReceiptKind (review N2): DEPOSIT while the latest issued deposit notice is still owed.
   const settled = ['DEPOSIT_PAID', 'AWAITING_FINAL_PAYMENT', 'FULLY_PAID'].includes(ticket.paymentStatus);
   const notice = latestIssuedDepositNotice(ticket.id);
@@ -9615,7 +9615,7 @@ export const api = {
       if (user.role === 'import' || user.role === 'account') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       if (!['sales', 'ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = structuredClone(db.tickets.find((t) => t.id === Number(id)));
-      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      if (!ticket) fail('ไม่พบงานนี้', 404);
       if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const detail = projectTicketDetailForRole(buildTicketDetail(ticket), user.role);
       // Read-path-only fallback (mirrors TicketService#get on the backend) -- every OTHER mock
@@ -9685,18 +9685,18 @@ export const api = {
       if (dealStageIndex(ticket.salesStage) < dealStageIndex('ORDER_RECEIVED')) {
         fail('เลือกที่มาสินค้าได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)', 409);
       }
-      if (ticket.fulfillmentStatus != null) fail('เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้', 409);
+      if (ticket.fulfillmentStatus != null) fail('เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้', 409);
       const lines = payload?.lines ?? [];
       const ids = lines.map((l) => Number(l.itemId));
       const items = ticket.items ?? [];
       if (new Set(ids).size !== ids.length || ids.length !== items.length || !items.every((it) => ids.includes(it.id))) {
         fail('ต้องระบุที่มาสินค้าให้ครบทุกรายการ', 400);
       }
-      if (ticket.procurementDecidedAt) fail('เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้', 409);
+      if (ticket.procurementDecidedAt) fail('เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้', 409);
       const wanted = new Map(lines.map((l) => [Number(l.itemId), Boolean(l.fromStock)]));
       if (!isLegacyStockSource(ticket)) {
         if (items.some((it) => wanted.get(it.id) !== itemFromStock(it))) {
-          fail('ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้', 409);
+          fail('งานนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้', 409);
         }
       } else {
         for (const it of items) {
@@ -9772,7 +9772,7 @@ export const api = {
       // canCreateQuotation grant holder.
       const user = requireDealEntry();
       // Mirrors TicketService.create (V50): every new deal belongs to a โครงการ.
-      if (payload.projectId == null) fail('ต้องเลือกโครงการก่อนสร้างดีล', 400);
+      if (payload.projectId == null) fail('ต้องเลือกโครงการก่อนสร้างงาน', 400);
       // Mirrors CreateTicketRequest's @NotBlank entryChannel (TicketController @Valid -> 400) plus
       // TicketService.create's value guard: a NEW deal must state a real channel, because the
       // channel decides its route (DealRoute). UNSPECIFIED is refused as an INPUT though it stays
@@ -9780,10 +9780,10 @@ export const api = {
       // internally (Java fixtures); no HTTP caller can reach that path, so the mock has no reason
       // to.
       if (typeof payload.entryChannel !== 'string' || payload.entryChannel.trim() === '') {
-        fail('ต้องระบุช่องทางดีลก่อนสร้างดีล', 400);
+        fail('ต้องระบุช่องทางรับงานก่อนสร้างงาน', 400);
       }
       if (payload.entryChannel === 'UNSPECIFIED') {
-        fail('ต้องระบุช่องทางดีลที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างดีล', 400);
+        fail('ต้องระบุช่องทางรับงานที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างงาน', 400);
       }
       if (!['DESIGNER_LED', 'OWNER_DIRECT', 'BUYER_DIRECT'].includes(payload.entryChannel)) {
         fail(`ไม่รองรับช่องทางรับงาน '${payload.entryChannel}'`, 400);
@@ -9805,7 +9805,7 @@ export const api = {
       const ownerOption = payload.ownerEmployeeId != null && payload.ownerEmployeeId !== user.id
         ? mockEligibleQuotationDisplayNameUsers().find((u) => u.id === payload.ownerEmployeeId) : null;
       if (payload.ownerEmployeeId != null && payload.ownerEmployeeId !== user.id && !ownerOption) {
-        fail('เจ้าของงานที่เลือกไม่สามารถเป็นเจ้าของดีลได้', 400);
+        fail('ผู้ที่เลือกไม่สามารถเป็นเจ้าของงานได้', 400);
       }
       const owner = ownerOption ?? { id: user.id, name: user.name };
       const nextId = Math.max(...db.tickets.map((t) => t.id)) + 1;
@@ -10145,7 +10145,7 @@ export const api = {
     async issueImportRequest(id) {
       hasRole('import');
       requireActive(findTicketRaw(Number(id)));
-      fail('ออกคำขอนำเข้าทั้งดีลไม่ได้แล้ว — ให้ฝ่ายขายสร้างและออกเลขใบขอซื้อรายโรงงานแทน', 409);
+      fail('ออกคำขอนำเข้าทั้งงานไม่ได้แล้ว — ให้ฝ่ายขายสร้างและออกเลขใบขอซื้อรายโรงงานแทน', 409);
     },
 
     // The real TicketService#markIrSent/markShipping/markGoodsReceived additionally 409 when
@@ -10159,7 +10159,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       if (mockHasLiveImportRequests(ticket.id)) {
-        fail('ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
+        fail('งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
       }
       if (ticket.fulfillmentStatus !== 'IR_ISSUED') fail('ต้องออกใบขอซื้อ (IR) ก่อนจึงจะทำเครื่องหมายว่าส่งคำขอนำเข้าแล้วได้', 409);
       ticket.fulfillmentStatus = 'IR_SENT';
@@ -10173,7 +10173,7 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       if (mockHasLiveImportRequests(ticket.id)) {
-        fail('ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
+        fail('งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
       }
       if (ticket.fulfillmentStatus !== 'IR_SENT') fail('ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้', 409);
       ticket.fulfillmentStatus = 'SHIPPING';
@@ -10187,9 +10187,9 @@ export const api = {
       const ticket = findTicketRaw(Number(id));
       requireActive(ticket);
       if (mockHasLiveImportRequests(ticket.id)) {
-        fail('ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
+        fail('งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน', 409);
       }
-      if (ticket.fulfillmentStatus !== 'SHIPPING') fail('ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้', 409);
+      if (ticket.fulfillmentStatus !== 'SHIPPING') fail('งานต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้', 409);
       ticket.fulfillmentStatus = 'GOODS_RECEIVED';
       if (ticket.paymentStatus === 'DEPOSIT_PAID') {
         ticket.paymentStatus = 'AWAITING_FINAL_PAYMENT';
@@ -10221,7 +10221,7 @@ export const api = {
       requireActive(ticket);
       if (!DEAL_STAGE_CATALOG.lostReasons.includes(payload.reason)) fail(`ไม่รองรับเหตุผลการเสียงาน '${payload.reason}'`, 400);
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (ticket.lifecycle === 'CLOSED_LOST') fail('ดีลนี้ถูกทำเครื่องหมายเสียงานไปแล้ว', 409);
+      if (ticket.lifecycle === 'CLOSED_LOST') fail('งานนี้ถูกทำเครื่องหมายเสียงานไปแล้ว', 409);
       ticket.lostReason = payload.reason;
       ticket.lostAt = new Date().toISOString();
       ticket.lifecycle = 'CLOSED_LOST';
@@ -10236,7 +10236,7 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('ดีลนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน', 409);
+      if (ticket.lifecycle !== 'CLOSED_LOST' || ticket.lostReason == null) fail('งานนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน', 409);
       // lostReason/lostAt deliberately PRESERVED (V57): erasing them left the row indistinguishable from one never
       // lost, so "why did we lose this before we reopened it" needed parsing Thai free text out of an event message.
       ticket.lifecycle = 'ACTIVE';
@@ -10268,7 +10268,7 @@ export const api = {
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       // TicketService.markDormant on a deal already DORMANT: the date (and note) only.
       if (ticket.lifecycle === 'DORMANT') return mockChangePauseReturnOn(ticket, user, payload);
-      if (!['ACTIVE', 'ON_HOLD'].includes(ticket.lifecycle ?? 'ACTIVE')) fail('พัก dormant ได้เฉพาะดีลที่ active หรือ on hold', 409);
+      if (!['ACTIVE', 'ON_HOLD'].includes(ticket.lifecycle ?? 'ACTIVE')) fail('พัก dormant ได้เฉพาะงานที่ active หรือ on hold', 409);
       mockRequireReturnDateNotPast(payload.pauseReturnOn);
       ticket.lifecycle = 'DORMANT';
       ticket.pauseReturnOn = payload.pauseReturnOn || null;
@@ -10281,7 +10281,7 @@ export const api = {
       const user = requireSession();
       const ticket = findTicketRaw(Number(id));
       if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if (!['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle)) fail('ดำเนินการต่อได้เฉพาะดีลที่พักไว้', 409);
+      if (!['ON_HOLD', 'DORMANT'].includes(ticket.lifecycle)) fail('ดำเนินการต่อได้เฉพาะงานที่พักไว้', 409);
       ticket.lifecycle = 'ACTIVE';
       ticket.pauseReturnOn = null; // V220: resume clears the return date
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
@@ -10415,7 +10415,7 @@ export const api = {
         ticket.estimatedValue = Number(payload.estimatedValue);
       }
       ticket.updatedAt = new Date().toISOString().slice(0, 10);
-      pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามดีล');
+      pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, 'อัปเดตข้อมูลติดตามงาน');
       return delay({ ticket: buildTicketDetail(ticket) });
     },
 
@@ -10445,7 +10445,7 @@ export const api = {
         if (!contact || contact.customerId !== customer.id) fail('ผู้ติดต่อนี้ไม่ได้อยู่ภายใต้ลูกค้าที่เลือก', 400);
       }
       if (mockPartiesOf(ticket.id).some((p) => p.customerId === customer.id && p.role === role)) {
-        fail(`${customer.name} อยู่ในดีลนี้ในบทบาทนี้แล้ว`, 409);
+        fail(`ลูกค้ารายนี้อยู่ในงานนี้ด้วยบทบาทเดียวกันแล้ว`, 409);
       }
       const party = mockInsertDealParty({ ticketId: ticket.id, customerId: customer.id, contactId, role, addedById: user.id });
       pushEvent(ticket, user, 'DEAL_PARTY_ADDED', ticket.status, ticket.status, `เพิ่ม ${customer.name}`);
@@ -10510,7 +10510,7 @@ export const api = {
       let primary = null;
       if (!alreadyAwarded) {
         primary = payload?.primaryPartyId != null ? awarded.find((p) => p.id === Number(payload.primaryPartyId)) : awarded[0];
-        if (!primary) fail('ดีลหลักต้องเป็นหนึ่งในผู้รับเหมาที่ได้งาน', 400);
+        if (!primary) fail('ผู้รับเหมาของงานหลักต้องเป็นหนึ่งในผู้ที่ชนะ', 400);
         if (ticket.paymentStatus != null && ticket.paymentStatus !== 'CUSTOMER_CONFIRMED') {
           fail('ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว', 409);
         }
@@ -10574,7 +10574,7 @@ export const api = {
       }
       // PricingRequestRepository#findOpenIdsForTicket's predicate: status <> 'CANCELLED'.
       if (mockPricingRequests.some((pr) => pr.ticketId === ticket.id && pr.status !== 'CANCELLED')) {
-        fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่', 409);
+        fail('เปลี่ยนลูกค้าไม่ได้ เนื่องจากงานนี้มีคำขอราคาอยู่', 409);
       }
       const customer = mockCustomers.find((c) => c.id === Number(payload?.customerId));
       if (!customer) fail('ไม่พบลูกค้าที่เลือก', 400);
@@ -11872,14 +11872,14 @@ export const api = {
       if (user.role !== 'sales_manager') fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const record = db.commissions.find((item) => item.id === Number(id));
       if (!record) fail('ไม่พบรายการค่าคอมนี้', 404);
-      if (record.kind !== 'SALE' || record.sourceTicketId == null) fail('รายการนี้ไม่ได้เชื่อมกับดีล', 409);
+      if (record.kind !== 'SALE' || record.sourceTicketId == null) fail('รายการนี้ไม่ได้เชื่อมกับงาน', 409);
       if (record.status !== 'SUBMITTED') fail('ปรับน้ำหนักได้เฉพาะรายการที่รอผู้จัดการฝ่ายขายอนุมัติ', 409);
       const lines = payload.lines ?? [];
       if (!lines.length) fail('ต้องระบุรายการสินค้า', 400);
       const ticket = db.tickets.find((t) => t.id === record.sourceTicketId);
-      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      if (!ticket) fail('ไม่พบงานนี้', 404);
       for (const line of lines) {
-        if (!(ticket.items ?? []).some((it) => it.id === Number(line.itemId))) fail('รายการสินค้าไม่อยู่ในดีลนี้', 400);
+        if (!(ticket.items ?? []).some((it) => it.id === Number(line.itemId))) fail('รายการสินค้าไม่อยู่ในงานนี้', 400);
         if (![1, 2, 3].includes(Number(line.weightMultiplier))) fail('น้ำหนักคอมมิชชั่นต้องเป็น 1, 2 หรือ 3', 400);
       }
       updateItemWeightMultipliersForTicket(ticket, user, payload);
@@ -11916,9 +11916,9 @@ export const api = {
       let dealAmountMismatch = false;
       if (payload.sourceTicketId != null) {
         const linkedTicket = db.tickets.find((t) => t.id === Number(payload.sourceTicketId));
-        if (!linkedTicket) fail('ไม่พบดีลนี้', 404);
+        if (!linkedTicket) fail('ไม่พบงานนี้', 404);
         if (linkedTicket.salesStage !== 'CLOSED_PAID') {
-          fail('ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้', 422);
+          fail('งานนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้', 422);
         }
         dealPayableAmountSnapshot = payableAmount(linkedTicket);
         dealAmountMismatch = commissionDealMismatch(payload.grossAmount, dealPayableAmountSnapshot);
@@ -11999,12 +11999,12 @@ export const api = {
       if (!payload.invoiceAttachment) fail('ต้องแนบไฟล์ใบกำกับภาษี', 400);
       const ticketId = Number(payload.ticketId);
       const ticket = db.tickets.find((t) => t.id === ticketId);
-      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      if (!ticket) fail('ไม่พบงานนี้', 404);
       const salesRepId = ticket.createdById;
       if (db.commissions.some((item) => item.sourceTicketId === ticketId
         && item.kind === 'SALE'
         && !['VOID', 'REJECTED'].includes(item.status))) {
-        fail('มีรายการค่าคอมมิชชั่นสำหรับดีลนี้อยู่แล้ว', 409);
+        fail('มีรายการค่าคอมมิชชั่นสำหรับงานนี้อยู่แล้ว', 409);
       }
       // Same null guard, same reason as commissions.create() above — a manual commission's `invoiceDetails` is null
       // and both call sites walked into it.
@@ -12014,7 +12014,7 @@ export const api = {
         fail('เลขที่ใบกำกับภาษีนี้มีอยู่ในระบบแล้ว', 409);
       }
       if (ticket.salesStage !== 'CLOSED_PAID') {
-        fail('ดีลนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้', 422);
+        fail('งานนี้ยังไม่ถึงขั้นตอนรับชำระเงินครบถ้วน (CLOSED_PAID) จึงยังยื่นค่าคอมมิชชั่นไม่ได้', 422);
       }
       const dealPayableAmountSnapshot = payableAmount(ticket);
       const effectiveGrossAmount = payload.grossAmount != null && payload.grossAmount !== ''
@@ -13513,7 +13513,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (user.role === 'import' && !(raw && importListScopeIncludes(raw))) {
         fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
-      if (!raw) fail('ไม่พบดีลนี้', 404);
+      if (!raw) fail('ไม่พบงานนี้', 404);
       // Same display-only fallback tickets.get() applies: ticket_item stays empty until order confirmation, so a
       // pricing-phase deal shows the live quotation's lines instead.
       let lines = raw.items ?? [];
@@ -13590,7 +13590,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       mockApplyItemFactoryChoices(ticket, request);
       const groups = mockResolveFactoryGroups(ticket, request);
       if (groups.length === 0) {
-        fail('ดีลนี้ไม่มีรายการที่ต้องออกใบขอซื้อ (ยังไม่มีรายการสินค้า หรือครอบคลุมจากสต็อกทั้งหมด)', 409);
+        fail('งานนี้ไม่มีรายการที่ต้องออกใบขอซื้อ (ยังไม่มีรายการสินค้า หรือครอบคลุมจากสต็อกทั้งหมด)', 409);
       }
       const alreadyCovered = new Set(mockImportRequests
         .filter((r) => r.ticketId === ticket.id && (r.status === 'DRAFT' || r.status === 'ISSUED'))
@@ -13605,7 +13605,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       if (missingLeadTime.length > 0) {
         fail(`กรุณาระบุระยะเวลานำเข้าให้กับโรงงาน: ${missingLeadTime.join(', ')}`, 409);
       }
-      if (newGroups.length === 0) fail('ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
+      if (newGroups.length === 0) fail('ทุกโรงงานในงานนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว', 409);
       // ImportRequestService.recordProcurementSourceImplied: creating the IR is itself the import decision on a new deal.
       // Latched only once nothing below can refuse (Java rolls a refused create back, the mock cannot).
       if (procurementDecisionOpen(ticket) && !ticket.procurementDecidedAt) ticket.procurementDecidedAt = new Date().toISOString();
@@ -14454,17 +14454,17 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const lines = payload?.allocations?.length
         ? payload.allocations.map((a) => ({ ticketId: Number(a.ticketId), amount: Number(a.amount) }))
         : payload?.ticketId ? [{ ticketId: Number(payload.ticketId), amount: row.amount }] : null;
-      if (!lines) fail('กรุณาเลือกดีล', 400);
+      if (!lines) fail('กรุณาเลือกงาน', 400);
       if (lines.length > 1) {
         const sum = lines.reduce((x, l) => x + Math.round(l.amount * 100), 0);
         if (lines.some((l) => !(l.amount > 0)) || new Set(lines.map((l) => l.ticketId)).size !== lines.length) {
-          fail('แต่ละดีลต้องมียอดมากกว่า 0 และไม่ซ้ำกัน', 400);
+          fail('แต่ละงานต้องมียอดมากกว่า 0 และไม่ซ้ำกัน', 400);
         }
         if (sum !== Math.round(row.amount * 100)) fail(`ยอดที่แบ่งรวมกันต้องเท่ากับยอดรายการพอดี (${row.amount})`, 400);
       }
       for (const l of lines) {
         const ticket = db.tickets.find((x) => x.id === l.ticketId);
-        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        if (!ticket) fail('ไม่พบงานนี้', 404);
         if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE' || !accountListScopeIncludes(ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       }
       if (row.status !== 'UNMATCHED') fail('รายการนี้จับคู่หรือข้ามไปแล้ว', 409);
@@ -14513,7 +14513,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       if (user.role === 'account') {
         const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        if (!ticket) fail('ไม่พบงานนี้', 404);
         requireMockAccountScope(user, ticket);
       } else {
         mockRequireDealWrite(user, ticketId);
@@ -14524,7 +14524,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       const ticket = mockRequireDealWrite(user, ticketId);
       if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
-        fail('ดีลนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงเพิ่มเงินที่คาดว่าจะเข้าไม่ได้', 409);
+        fail('งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงเพิ่มเงินที่คาดว่าจะเข้าไม่ได้', 409);
       }
       const valid = mockValidExpectedPayment(payload);
       const at = new Date().toISOString();
@@ -14595,9 +14595,9 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const ticketId = payload.ticketId == null || payload.ticketId === '' ? null : Number(payload.ticketId);
       if (ticketId != null) {
         const ticket = db.tickets.find((t) => t.id === ticketId);
-        if (!ticket) fail('ไม่พบดีลนี้', 404);
+        if (!ticket) fail('ไม่พบงานนี้', 404);
         if (!mockCanDealOwnership(user, ticket)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในดีลนี้ไม่ได้', 400);
+        if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานนี้ไม่ได้เปิดอยู่ จึงนัดเข้าพบในงานนี้ไม่ได้', 400);
       }
       if (done) {
         // VisitRepository.findRecentDoneLog: the same one-step log within 60 s is the same visit.
@@ -15077,7 +15077,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       requireNoIssuedDepositNotice(ticket.id);
       // Phase 1 lifecycle gate (mirrors DepositNoticeService.createDraft).
       requireActive(ticket);
-      if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('ดีลต้องได้รับการอนุมัติก่อน', 409);
+      if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) fail('งานต้องได้รับการอนุมัติก่อน', 409);
       requireDepositNoticePath(ticket);
 
       // Legacy path: auto-build from approved ticket items (sales.ticket_item.approved_price — written only by the
@@ -15211,7 +15211,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // Mirrors DepositNoticeService.issue's one-notice-per-deal refusal. Checked before the
       // payment-state gate: the mock cannot re-issue from DEPOSIT_NOTICE_ISSUED.
       const other = mockDepositNotices.find((d) => d.ticketId === doc.ticketId && d.id !== doc.id && d.status === 'ISSUED');
-      if (other) fail(`ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${other.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`, 409);
+      if (other) fail(`งานนี้ออกใบแจ้งรับมัดจำเลขที่ ${other.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`, 409);
 
       // Mirrors DepositNoticeService.issue: the document IS the payment-track step. Requires a customer-confirmed
       // quotation; advances paymentStatus and leaves the main status at quotation_issued (no more document_issued
@@ -15337,14 +15337,14 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireRemainingInvoiceWriteGate(ticket);
       requireActive(ticket);
       if (ticket.status !== 'quotation_issued') {
-        fail('ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะดีลที่อยู่ในสถานะ quotation_issued เท่านั้น', 409);
+        fail('ออกใบกำกับภาษีส่วนที่เหลือได้เฉพาะงานที่อยู่ในสถานะ quotation_issued เท่านั้น', 409);
       }
       const quotationId = payload.quotationId ?? null;
       const alreadyLive = mockRemainingInvoices.some((r) => r.ticketId === ticket.id
         && (r.status === 'DRAFT' || r.status === 'ISSUED')
         && (r.customerQuotationId ?? null) === quotationId);
       if (alreadyLive) {
-        fail('ดีลนี้มีใบแจ้งหนี้ส่วนที่เหลือ (ร่างหรือออกแล้ว) สำหรับใบเสนอราคานี้อยู่แล้ว', 409);
+        fail('งานนี้มีใบแจ้งหนี้ส่วนที่เหลือ (ร่างหรือออกแล้ว) สำหรับใบเสนอราคานี้อยู่แล้ว', 409);
       }
       // Mirrors RemainingInvoiceService#createDraft's anotherDraftLive check (the CROSS-chain
       // rule): ONE live remaining invoice per DEAL, not per chain: a DRAFT for a DIFFERENT
@@ -15353,7 +15353,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const anotherDraftLive = mockRemainingInvoices.some((r) => r.ticketId === ticket.id
         && r.status === 'DRAFT' && (r.customerQuotationId ?? null) !== quotationId);
       if (anotherDraftLive) {
-        fail('ดีลนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน', 409);
+        fail('งานนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน', 409);
       }
       const snap = mockRemainingInvoiceSnapshot(ticket);
       const firstQ = (ticket.quotations ?? [])[0];
@@ -15481,7 +15481,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const anotherChainDraftLive = mockRemainingInvoices.some((r) => r.ticketId === issued.ticketId
         && r.status === 'DRAFT' && (r.customerQuotationId ?? null) !== (issued.customerQuotationId ?? null));
       if (anotherChainDraftLive) {
-        fail('ดีลนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน', 409);
+        fail('งานนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน', 409);
       }
       const now = new Date().toISOString();
       const newId = mockRemainingInvoiceSeq++;
@@ -16129,7 +16129,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       if (!PRICING_REQUEST_VIEWER_ROLES.includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      if (!ticket) fail('ไม่พบงานนี้', 404);
       // Mirrors PricingRequestService.listForTicket: sales may only see requests on tickets they created.
       if (user.role === 'sales' && !isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       const draftOversight = user.role === 'ceo' || user.role === 'sales_manager';
@@ -16194,7 +16194,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // validated BEFORE persisting.
       const user = hasRole('sales');
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      if (!ticket) fail('ไม่พบงานนี้', 404);
       requirePricingRequestDealActive(ticket);
       requireMockOrderNotConfirmed(ticket);
       if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
@@ -16205,7 +16205,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         pr.requestedById === user.id && pr.clientRequestId === payload.clientRequestId
       ));
       if (existing) {
-        if (existing.ticketId !== Number(ticketId)) fail('clientRequestId นี้ถูกใช้ไปแล้วกับดีลอื่น', 409);
+        if (existing.ticketId !== Number(ticketId)) fail('clientRequestId นี้ถูกใช้ไปแล้วกับงานอื่น', 409);
         return delay({ pricingRequest: buildPricingRequestDetail(existing) });
       }
       // Mirrors PricingRequestService.createDraft's DirectQuotationLocks check -- after the owner
@@ -16233,7 +16233,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const validSourceItemIds = new Set((ticket.items ?? []).map((i) => i.id));
       for (const item of payload.items) {
         if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
-          fail(`sourceTicketItemId ${item.sourceTicketItemId} ไม่ได้เป็นของดีล ${ticketId}`, 400);
+          fail(`sourceTicketItemId ${item.sourceTicketItemId} ไม่ได้เป็นของงาน ${ticketId}`, 400);
         }
       }
       // Required-field completeness, then derive requestedQty/Unit/Basis — see
@@ -16388,7 +16388,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         const validSourceItemIds = new Set((ticket?.items ?? []).map((i) => i.id));
         for (const item of payload.items) {
           if (item.sourceTicketItemId != null && !validSourceItemIds.has(item.sourceTicketItemId)) {
-            fail(`sourceTicketItemId ${item.sourceTicketItemId} ไม่ได้เป็นของดีล ${pr.ticketId}`, 400);
+            fail(`sourceTicketItemId ${item.sourceTicketItemId} ไม่ได้เป็นของงาน ${pr.ticketId}`, 400);
           }
         }
         // V185 — see create()'s identical comment.
@@ -17871,7 +17871,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // Refused when ANY quotation on this TICKET is already ACCEPTED, the PRICING_REQUEST-origin
       // engine included. Mirrors dealQuotations.recordOutcome's identical check below.
       if (payload.outcome === 'ACCEPTED' && mockHasAcceptedQuotationForTicket(pr.ticketId)) {
-        fail('ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
+        fail('งานนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
       }
       const now = new Date().toISOString();
       quotation.docStatus = payload.outcome;
@@ -18046,7 +18046,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       // like the real backend's requireApprovedTicket.
       requireActive(ticket);
       if (!['approved', 'quotation_issued', 'document_issued'].includes(ticket.status)) {
-        fail('สร้างใบแจ้งรับมัดจำได้เฉพาะดีลที่อนุมัติแล้วเท่านั้น', 409);
+        fail('สร้างใบแจ้งรับมัดจำได้เฉพาะงานที่อนุมัติแล้วเท่านั้น', 409);
       }
       requireDepositNoticePath(ticket);
 
@@ -18355,7 +18355,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async listForTicket(ticketId) {
       const user = requireSession();
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      if (!ticket) fail('ไม่พบงานนี้', 404);
       requireDealQuotationViewAccess(ticket, user);
       // DealQuotationRepository#findByTicket is `origin IN ('DEAL_DIRECT','PRICING_REQUEST')` (this
       // list backs the เอกสาร register's "does the deal have a quotation" answer). #search/#counts
@@ -18447,7 +18447,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
     async create(ticketId, payload = {}) {
       const user = requireSession();
       const ticket = db.tickets.find((t) => t.id === Number(ticketId));
-      if (!ticket) fail('ไม่พบดีลนี้', 404);
+      if (!ticket) fail('ไม่พบงานนี้', 404);
       requireDealQuotationWriteAccess(ticket, user);
       // Mirrors DealQuotationService#create's recipient rule: required on a DEAL_DIRECT create
       // (every row this method writes is one), and only DESIGNER/OWNER/BUYER — UNSPECIFIED is never
@@ -18468,7 +18468,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       let party;
       if (payload.partyId != null) {
         party = mockDealParties.find((p) => p.id === Number(payload.partyId) && p.ticketId === ticket.id);
-        if (!party) fail('ไม่พบผู้รับเหมานี้ในดีล', 400);
+        if (!party) fail('ไม่พบผู้รับเหมานี้ในงาน', 400);
         if (['AWARDED_SPLIT', 'NOT_AWARDED', 'WITHDRAWN'].includes(party.status)) {
           fail(`ผู้รับเหมา ${mockPartyName(party)} ไม่อยู่ในการเสนอราคาแล้ว จึงสร้างใบเสนอราคาใหม่ไม่ได้`, 409);
         }
@@ -18490,7 +18490,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
           .sort((a, b) => b.id - a.id)[0];
       if (blocking) {
         fail(
-          `ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (${blocking.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
+          `งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (${blocking.number}) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่`,
           409,
           { liveQuotationId: blocking.id, number: blocking.number, docStatus: blocking.docStatus },
         );
@@ -18592,7 +18592,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const pr = findPricingRequestRaw(pricingRequestId);
       const ticket = db.tickets.find((t) => t.id === pr.ticketId);
       if (!isOwnerOrKeyer(ticket, user.id)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
-      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('ดีลต้นทางต้องอยู่ในสถานะ ACTIVE', 409);
+      if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') fail('งานต้นทางต้องอยู่ในสถานะ ACTIVE', 409);
       // The service's re-quote: a request already QUOTATION_ISSUED may be quoted again (its quotation was
       // rejected, expired or sent back for changes; the live-quotation guard below refuses the rest),
       // but never once a newer quotation on the deal superseded its latest one.
@@ -18603,7 +18603,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         .filter((q) => q.pricingRequestId === pr.id && q.origin === 'PRICING_REQUEST')
         .reduce((newest, q) => (newest == null || q.id > newest.id ? q : newest), null);
       if (pr.status === 'QUOTATION_ISSUED' && latest?.docStatus === 'SUPERSEDED') {
-        fail('คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่', 409);
+        fail('คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของงานแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่', 409);
       }
       const decision = mockPricingDecisions.find((d) => d.pricingRequestId === pr.id && d.status === 'APPROVED');
       if (!decision) fail('ยังไม่มีราคาขายที่ CEO อนุมัติสำหรับคำขอราคานี้', 409);
@@ -19192,7 +19192,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         fail(SUPERSEDED_PR_OUTCOME_MESSAGE, 409);
       }
       if (payload.outcome === 'ACCEPTED' && mockHasAcceptedQuotationForTicket(row.ticketId)) {
-        fail('ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
+        fail('งานนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)', 409);
       }
       const now = new Date().toISOString();
       row.docStatus = payload.outcome;
@@ -19311,10 +19311,10 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
         fail(`ยืนยันคำสั่งซื้อได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: ${row.docStatus})`, 409);
       }
       if ((ticket.lifecycle ?? 'ACTIVE') !== 'ACTIVE') {
-        fail(`ดีลไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงยืนยันคำสั่งซื้อไม่ได้`, 409);
+        fail(`งานไม่ได้อยู่ในสถานะ ACTIVE (${ticket.lifecycle}) จึงยืนยันคำสั่งซื้อไม่ได้`, 409);
       }
       if (ticket.status !== 'draft') {
-        fail(`ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (${ticket.status}) ผ่านขั้นออกใบเสนอราคาไปแล้ว`, 409);
+        fail(`ยืนยันคำสั่งซื้อไม่ได้ — สถานะงาน (${ticket.status}) ผ่านขั้นออกใบเสนอราคาไปแล้ว`, 409);
       }
       // The backend runs this guard LAST and rolls the whole transaction back when it fails; the mock has no
       // transaction, so it checks it up front to leave the same (untouched) state.

@@ -375,13 +375,13 @@ describe('QuotationListPage — จัดกลุ่มตามโครงก
   it('always on: every deal gets a group row led by the deal, its quotations beneath it', async () => {
     const { container } = renderListPage(salesUser);
     const group = await s26Group();
-    expect(within(group).getByTestId('quotation-group-deal').textContent).toContain('ดีล DL-2026-0280');
+    expect(within(group).getByTestId('quotation-group-deal').textContent).toContain('งาน DL-2026-0280');
     expect(group.textContent).toContain('S26 HOTEL');
     const summary = within(group).getByTestId('quotation-group-summary').textContent;
     expect(summary).toContain('ใบเสนอราคา 3 รายการ');
     expect(summary).toContain('ผู้รับเหมา×3');
     expect(summary).toContain('รอผลประมูล · ยอดหลัก');
-    expect(within(group).getByRole('link', { name: 'เปิดดีล DL-2026-0280' }).getAttribute('href')).toBe('/tickets/18');
+    expect(within(group).getByRole('link', { name: 'เปิดงาน DL-2026-0280' }).getAttribute('href')).toBe('/tickets/18');
     // Order: each group header where its newest row was, then its quotations; the single-quotation deal too.
     const numbers = [...container.querySelectorAll('tbody tr')].map((tr) => tr.textContent);
     expect(numbers[0]).toContain('S26 HOTEL');
@@ -809,7 +809,7 @@ describe('QuotationListPage — flat list by number (sales request 2026-11-16)',
     const { container } = renderListPage(salesManagerUser);
     await screen.findByText('QT-2026-0141-3');
     expect(screen.queryByTestId('quotation-group-row')).toBeNull();
-    expect(screen.queryByRole('link', { name: /เปิดดีล/ })).toBeNull();
+    expect(screen.queryByRole('link', { name: /เปิดงาน/ })).toBeNull();
     expect(screen.queryByTestId('quotation-versions-toggle')).toBeNull();
     expect(bodyRows(container)).toHaveLength(5);
     expect(screen.getByRole('button', { name: 'เรียงตามเลขที่' }).getAttribute('aria-pressed')).toBe('true');
@@ -861,13 +861,13 @@ describe('QuotationListPage — flat list by number (sales request 2026-11-16)',
   it('จัดกลุ่มตามดีล brings the deal headers back, and the choice is remembered for that user', async () => {
     const first = renderListPage(salesManagerUser);
     await screen.findByText('QT-2026-0141-3');
-    fireEvent.click(screen.getByRole('button', { name: 'จัดกลุ่มตามดีล' }));
+    fireEvent.click(screen.getByRole('button', { name: 'จัดกลุ่มตามงาน' }));
     expect(await screen.findAllByTestId('quotation-group-row')).toHaveLength(2);
     first.unmount();
 
     renderListPage(salesManagerUser);
     expect(await screen.findAllByTestId('quotation-group-row')).toHaveLength(2);
-    expect(screen.getByRole('button', { name: 'จัดกลุ่มตามดีล' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'จัดกลุ่มตามงาน' }).getAttribute('aria-pressed')).toBe('true');
   });
 
   it('one user choosing the grouped view does not change the list of another user', async () => {

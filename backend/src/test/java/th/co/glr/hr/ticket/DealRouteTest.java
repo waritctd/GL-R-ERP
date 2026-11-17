@@ -156,16 +156,22 @@ class DealRouteTest {
         assertThat(owner).contains("เจ้าของติดต่อโดยตรง")
             .contains(DealRoute.stagePhrase(DealStage.QUOTE_DESIGN_SIDE))
             .doesNotContain(DealStage.QUOTE_DESIGN_SIDE)
-            .contains("แก้ช่องทางดีล");
+            .contains("แก้ช่องทางรับงาน");
 
         String buyer = DealRoute.refusalMessage(EntryChannel.BUYER_DIRECT, DealStage.AWAITING_BUYER);
         assertThat(buyer).contains("ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง")
             .contains(DealRoute.stagePhrase(DealStage.AWAITING_BUYER))
             .doesNotContain(DealStage.AWAITING_BUYER)
-            .contains("แก้ช่องทางดีล");
+            .contains("แก้ช่องทางรับงาน");
 
         assertThat(owner).isNotEqualTo(buyer);
         assertThat(buyer).doesNotContain("เจ้าของติดต่อโดยตรง");
+
+        // The whole sentence, word for word (frontend stageCatalog.recipientRouteRefusal and mockApi say the same):
+        // the channel is named as the ช่องทางรับงาน field, so "ผู้ออกแบบนำงานมา" never reads as "งานนี้เป็น…งาน".
+        assertThat(DealRoute.refusalMessage(EntryChannel.DESIGNER_LED, DealStage.AWAITING_BUYER)).isEqualTo(
+            "ช่องทางรับงานของงานนี้คือผู้ออกแบบนำงานมา — ขั้นที่ " + DealStage.displayNoOf(DealStage.AWAITING_BUYER)
+                + " ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน");
     }
 
     // ── round-2 N1: where an UNSPECIFIED-recipient quotation puts a deal ─────

@@ -3228,7 +3228,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
       {!ceoNewForm && !importModel ? (
       <Panel flush title="ภาพรวม" actions={<StatusBadge tone={status.tone}>{status.label}</StatusBadge>}>
         <div className="grid gap-3 p-4 md:grid-cols-2">
-          <div className="text-sm"><strong>ดีล</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
+          <div className="text-sm"><strong>งาน</strong> <Link to={`/tickets/${summary.ticketId}`} className="text-info underline">{summary.ticketCode}</Link></div>
           <div className="text-sm"><strong>ผู้รับ</strong> {pricingRequestRecipientLabel(summary.recipientType)}{summary.recipientLabel ? ` · ${summary.recipientLabel}` : ''}</div>
           <div className="text-sm"><strong>ต้องการภายใน</strong> {formatThaiDate(summary.requiredDate)}</div>
           <div className="text-sm"><strong>ฝ่ายนำเข้า</strong> ผู้รับเรื่องและประสานราคาโรงงาน</div>
@@ -3890,7 +3890,7 @@ export function PricingRequestDetailPage({ user, showToast }) {
             ) : null}
             {issuedNotice && canCreateDepositNoticeFromQuotation(user, summary) ? (
               <p className="text-sm text-text-muted">
-                ดีลนี้ออกใบแจ้งยอดเงินรับมัดจำแล้ว —{' '}
+                งานนี้ออกใบแจ้งยอดเงินรับมัดจำแล้ว —{' '}
                 <Link to={`/tickets/${summary.ticketId}/deposit`} className="text-info underline">
                   เปิดเลขที่ {issuedNotice.docNumber}
                 </Link>
@@ -3916,8 +3916,8 @@ export function PricingRequestDetailPage({ user, showToast }) {
                   ? `ยืนยันคำสั่งซื้อแล้วเมื่อ ${formatThaiDate(summary.orderConfirmedAt)}${
                     dealQuotationForPr?.docStatus === 'ACCEPTED' && dealQuotationForPr.depositPercent === 0
                       ? ' — ใบเสนอราคานี้ไม่รับมัดจำ จึงไม่มีใบแจ้งยอดเงินรับมัดจำ'
-                      : ' — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้าดีล'}`
-                  : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของดีล (sales)'}
+                      : ' — ดูใบแจ้งยอดเงินรับมัดจำได้ที่หน้ารายละเอียดงาน'}`
+                  : 'ยืนยันคำสั่งซื้อได้เฉพาะเจ้าของงาน (sales)'}
               </p>
             ) : null}
           </div>

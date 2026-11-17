@@ -254,7 +254,7 @@ describe('mockApi.dealQuotations.createFromPricingRequest — refuses what the s
     await api.tickets.hold(ticketId, { note: 'ลูกค้าขอพักโครงการ' });
 
     await expect(api.dealQuotations.createFromPricingRequest(prId))
-      .rejects.toMatchObject({ status: 409, message: 'ดีลต้นทางต้องอยู่ในสถานะ ACTIVE' });
+      .rejects.toMatchObject({ status: 409, message: 'งานต้นทางต้องอยู่ในสถานะ ACTIVE' });
   });
 
   it('the request\'s quotation already past DRAFT (awaiting approval): 409, and no second quotation is written', async () => {

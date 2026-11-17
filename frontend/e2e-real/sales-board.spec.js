@@ -167,7 +167,7 @@ for (const role of ['sales_manager', 'ceo']) {
         await expect(page.getByTestId('tile-quiet')).toBeVisible();
         const table = page.getByRole('region', { name: 'ภาพรวมทีมขาย' }).getByRole('table');
         await expect(table).toBeVisible();
-        for (const header of ['พนักงานขาย', 'ดีล', 'มูลค่า', 'ดีลเงียบ', 'อัปเดตล่าสุด']) {
+        for (const header of ['พนักงานขาย', 'งาน', 'มูลค่า', 'งานเงียบ', 'อัปเดตล่าสุด']) {
           await expect(table.getByRole('columnheader', { name: header, exact: true })).toBeVisible();
         }
         expect(await table.locator('tbody tr').count()).toBeGreaterThan(0);

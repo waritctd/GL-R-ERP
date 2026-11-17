@@ -67,7 +67,7 @@ final class PipelineStages {
             }
             if (candidate == null) {
                 candidate = onRouteBelow(planned, entryChannel, s -> null);
-                warning = code + " ไม่อยู่ในเส้นทางของดีลที่มีแต่" + partyPhrase(entryChannel) + " — นำเข้าเป็น "
+                warning = code + " ไม่อยู่ในเส้นทางของงานที่มีแต่" + partyPhrase(entryChannel) + " — นำเข้าเป็น "
                     + DealStage.repCodeOf(candidate);
             }
         }

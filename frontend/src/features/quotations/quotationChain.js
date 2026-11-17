@@ -35,7 +35,7 @@ export function quotationChainView(quotation, chain, { dealHref = null } = {}) {
   if (quotation.docStatus === 'SUPERSEDED') {
     return notice('SUPERSEDED', otherLink
       ? `ฉบับนี้ถูกแทนที่แล้ว — เอกสารต่อจากใบเสนอราคาอยู่ที่ ${confirmedNumber}`
-      : 'ฉบับนี้ถูกแทนที่ด้วยฉบับแก้ไขแล้ว — ดูเอกสารต่อที่หน้างาน', otherLink ?? dealLink);
+      : 'ฉบับนี้ถูกแทนที่ด้วยฉบับแก้ไขแล้ว — ดูเอกสารต่อที่หน้ารายละเอียดงาน', otherLink ?? dealLink);
   }
   if (quotation.docStatus === 'CANCELLED') {
     return notice('CANCELLED', 'ใบเสนอราคานี้ถูกยกเลิกแล้ว — ไม่มีเอกสารต่อจากฉบับนี้', otherLink ?? dealLink);
@@ -48,14 +48,14 @@ export function quotationChainView(quotation, chain, { dealHref = null } = {}) {
     return notice('DEAL_CANCELLED', 'งานนี้ยกเลิกแล้ว — ไม่มีเอกสารต่อให้ทำ', dealLink);
   }
   if (PAUSED.includes(chain.lifecycle)) {
-    return notice('DEAL_PAUSED', 'งานนี้พักไว้ — ดำเนินการต่อที่หน้างานก่อน แล้วเอกสารต่อจะกลับมาที่นี่', dealLink);
+    return notice('DEAL_PAUSED', 'งานนี้พักไว้ — ดำเนินการต่อที่หน้ารายละเอียดงานก่อน แล้วเอกสารต่อจะกลับมาที่นี่', dealLink);
   }
   if (confirmedId != null && Number(confirmedId) === Number(quotation.id)) return { mode: 'chain' };
   if (chain.order?.confirmed) {
-    return notice('CONFIRMED_ELSEWHERE', 'งานนี้ยืนยันคำสั่งซื้อแล้ว — ดูเอกสารต่อที่หน้างาน', dealLink);
+    return notice('CONFIRMED_ELSEWHERE', 'งานนี้ยืนยันคำสั่งซื้อแล้ว — ดูเอกสารต่อที่หน้ารายละเอียดงาน', dealLink);
   }
   if (chain.order?.confirmable && quotation.docStatus === 'APPROVED') return { mode: 'chain' };
-  return notice('DEAL_PAST_DRAFT', 'งานนี้ผ่านขั้นยืนยันคำสั่งซื้อไปแล้ว — ดูต่อที่หน้างาน', dealLink);
+  return notice('DEAL_PAST_DRAFT', 'งานนี้ผ่านขั้นยืนยันคำสั่งซื้อไปแล้ว — ดูต่อที่หน้ารายละเอียดงาน', dealLink);
 }
 
 /** Who a waiting step waits on, as the card prints it. */

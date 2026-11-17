@@ -2218,8 +2218,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
             <div className="flex flex-col gap-2">
               <p className="confirm-dialog-message text-text-secondary leading-normal m-0">
                 {hasOutstanding
-                  ? 'ระบบจะบันทึกรับชำระส่วนที่เหลือเต็มจำนวนเป็นรายการ BALANCE แล้วทำเครื่องหมายดีลนี้ว่าชำระครบแล้ว'
-                  : 'ยอดคงเหลือเป็นศูนย์อยู่แล้ว ระบบจะทำเครื่องหมายดีลนี้ว่าชำระครบแล้วโดยไม่บันทึกรายการรับชำระใหม่'}
+                  ? 'ระบบจะบันทึกรับชำระส่วนที่เหลือเต็มจำนวนเป็นรายการ BALANCE แล้วทำเครื่องหมายงานนี้ว่าชำระครบแล้ว'
+                  : 'ยอดคงเหลือเป็นศูนย์อยู่แล้ว ระบบจะทำเครื่องหมายงานนี้ว่าชำระครบแล้วโดยไม่บันทึกรายการรับชำระใหม่'}
               </p>
               {hasOutstanding && (
                 <div className="flex justify-between border-t border-border pt-2 text-md font-bold">
@@ -2243,7 +2243,7 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
       <ConfirmDialog
         open={confirm?.kind === 'verifyClose'}
         title="ยืนยันตรวจสอบและปิดงาน"
-        message="เมื่อตรวจสอบและปิดงานแล้ว ดีลนี้จะปิดและย้อนกลับไม่ได้"
+        message="เมื่อตรวจสอบและปิดงานแล้ว งานนี้จะปิดและย้อนกลับไม่ได้"
         confirmLabel="ตรวจสอบและปิดงาน"
         busy={actionLoading}
         // Close first: a second click on the open dialog would send twice.

@@ -318,7 +318,7 @@ describe('mockApi.pricingRequests.createDepositNoticeFromQuotation — new-engin
     await expect(api.pricingRequests.createDepositNoticeFromQuotation(prId, {}))
       .rejects.toMatchObject({ status: 409, message: expect.stringContaining(`ใบเสนอราคา ${accepted.number} ระบุไม่มีมัดจำ`) });
     await expect(api.depositNotices.createDraft(ticketId, {}))
-      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('ดีลนี้ไม่ต้องเก็บมัดจำ') });
+      .rejects.toMatchObject({ status: 409, message: expect.stringContaining('งานนี้ไม่ต้องเก็บมัดจำ') });
     const { depositNotices } = await api.depositNotices.listByTicket(ticketId);
     expect(depositNotices).toHaveLength(0);
   });
@@ -507,7 +507,7 @@ describe('mockApi.depositNotices.update deposit percent', () => {
     // A second draft that predates the issue takes no number either.
     await expect(api.depositNotices.issue(secondDraft.id)).rejects.toMatchObject({
       status: 409,
-      message: `ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`,
+      message: `งานนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงออกฉบับร่างนี้ไม่ได้`,
     });
     const { depositNotice: secondReread } = await api.depositNotices.get(secondDraft.id);
     expect(secondReread.status).toBe('DRAFT');
@@ -521,7 +521,7 @@ describe('mockApi.depositNotices.update deposit percent', () => {
     expect(reread.depositAmount).toBe(issued.depositAmount);
 
     // One notice per deal (DepositNoticeService.createDraftFromQuotation).
-    const message = `ดีลนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`;
+    const message = `งานนี้ออกใบแจ้งรับมัดจำเลขที่ ${issued.docNumber} แล้ว จึงสร้างฉบับร่างใหม่ไม่ได้`;
     await expect(api.depositNotices.createDraft(ticketId, {})).rejects.toMatchObject({ status: 409, message });
     const prId = (await api.pricingRequests.listForTicket(ticketId)).items
       .find((pr) => pr.status === 'QUOTATION_ACCEPTED').id;

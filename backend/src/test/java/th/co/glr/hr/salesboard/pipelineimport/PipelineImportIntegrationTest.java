@@ -456,7 +456,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
         assertThat(result.get("skippedNeedsDocument").asInt()).isEqualTo(3);
         assertThat(result.get("toCreate").asInt()).isZero();
         assertThat(messages(result, "ERROR")).hasSize(3).allMatch(m -> m.equals(
-            "ดีลที่ได้มัดจำ/ส่งของแล้ว ต้องบันทึกผ่านเอกสารจริง (ใบแจ้งมัดจำ/IR) ไม่นำเข้าจากชีท"));
+            "งานที่ได้มัดจำ/ส่งของแล้ว ต้องบันทึกผ่านเอกสารจริง (ใบแจ้งมัดจำ/IR) ไม่นำเข้าจากชีท"));
         assertThat(counts()).isEqualTo(before);
     }
 
@@ -541,7 +541,7 @@ class PipelineImportIntegrationTest extends AbstractDealQuotationSlice2Integrati
             "")), false, salesManagerActor);
 
         assertThat(result.get("skipped").asInt()).isEqualTo(1);
-        assertThat(messages(result, "ERROR")).contains("ดีลนี้ปิดหรือเสียงานไปแล้ว (" + code + ")");
+        assertThat(messages(result, "ERROR")).contains("งานนี้ปิดหรือเสียงานไปแล้ว (" + code + ")");
         assertThat(counts()).isEqualTo(before);
     }
 

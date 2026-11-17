@@ -284,7 +284,7 @@ class DealQuotationOutcomeIntegrationTest extends AbstractPostgresIntegrationTes
         assertThatThrownBy(() -> depositNoticeService.createDraft(ticketId, emptyDepositDraft(), salesActor))
             .isInstanceOf(ApiException.class)
             .hasFieldOrPropertyWithValue("status", HttpStatus.CONFLICT)
-            .hasMessageContaining("ดีลนี้ไม่ต้องเก็บมัดจำ");
+            .hasMessageContaining("งานนี้ไม่ต้องเก็บมัดจำ");
         assertThat(depositNoticeCount()).isZero();
     }
 

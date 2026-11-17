@@ -454,13 +454,13 @@ describe('SalesInsights', () => {
       it('"แค่" and the make-mandatory recommendation appear only when a fill rate is below 80', async () => {
         const year = await show({});
         expect(year.textContent).toContain('แค่ 50%');
-        expect(year.textContent).toContain('เป็นช่องบังคับในดีล');
+        expect(year.textContent).toContain('เป็นช่องที่ต้องกรอกในทุกงาน');
         cleanup();
 
         // designer is not named by the recommendation, so a low designer rate alone must not trigger it.
         const full = await show({ pipe: { ...SNAPSHOT.pipe, fill: { prob: 90, q: 85, stage: 95, designer: 50 } } });
         expect(full.textContent).not.toContain('แค่ 90%');
-        expect(full.textContent).not.toContain('เป็นช่องบังคับในดีล');
+        expect(full.textContent).not.toContain('เป็นช่องที่ต้องกรอกในทุกงาน');
       });
 
       it('the commission finding is a warning only when paid is above the formula', async () => {

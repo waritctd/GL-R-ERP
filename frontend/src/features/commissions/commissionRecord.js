@@ -40,7 +40,7 @@ export function formatWeight(value) {
 
 // Why this receipt is weighted — one line, or null when there is nothing to explain.
 export function weightExplanation(record) {
-  if (hasItemDerivedWeight(record)) return 'น้ำหนักถ่วงจากรายการสต็อกของดีล (ของสั่งคิด ×1)';
+  if (hasItemDerivedWeight(record)) return 'น้ำหนักถ่วงจากรายการสต็อกของงาน (ของสั่งคิด ×1)';
   if (Number(record?.weightMultiplier) !== 1) return 'น้ำหนักที่ผู้จัดการกำหนด';
   return null;
 }

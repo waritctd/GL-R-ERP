@@ -74,7 +74,7 @@ describe('mock tickets.changeCustomer', () => {
     });
 
     await expect(api.tickets.changeCustomer(ticketId, { customerId: to.id, projectId: toProject.id, contactId: null }))
-      .rejects.toMatchObject({ status: 409, message: 'เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่' });
+      .rejects.toMatchObject({ status: 409, message: 'เปลี่ยนลูกค้าไม่ได้ เนื่องจากงานนี้มีคำขอราคาอยู่' });
     const { ticket } = await api.tickets.get(ticketId);
     expect(ticket.summary.customerId).toBe(from.id);
   });

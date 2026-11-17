@@ -159,7 +159,7 @@ public class ImportRequestService {
             .filter(g -> brand.equals(g.brand()))
             .findFirst()
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND,
-                "ไม่พบรายการสินค้าของแบรนด์ " + brand + " ในดีลนี้"));
+                "ไม่พบรายการสินค้าของแบรนด์ " + brand + " ในงานนี้"));
 
         ImportRequestFormData data = ImportRequestFormAssembler.assemble(
             snapshot, group, docNumber, requiredBy, LocalDate.now(BANGKOK), actor.name());
@@ -182,7 +182,7 @@ public class ImportRequestService {
             .filter(g -> g.brand() != null && g.brand().equals(brand))
             .findFirst()
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND,
-                "ไม่พบรายการสินค้าของแบรนด์ " + brand + " ในดีลนี้"));
+                "ไม่พบรายการสินค้าของแบรนด์ " + brand + " ในงานนี้"));
         return ImportRequestRenderer.pagesRequired(ImportRequestFormAssembler.assemble(
             snapshot, group, null, requiredBy, LocalDate.now(BANGKOK), actor.name()));
     }
@@ -290,7 +290,7 @@ public class ImportRequestService {
         List<FactoryGroup> groups = resolveFactoryGroups(ticketId, actor.id(), request);
         if (groups.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ไม่มีรายการที่ต้องออกใบขอซื้อ (ยังไม่มีรายการสินค้า หรือครอบคลุมจากสต็อกทั้งหมด)");
+                "งานนี้ไม่มีรายการที่ต้องออกใบขอซื้อ (ยังไม่มีรายการสินค้า หรือครอบคลุมจากสต็อกทั้งหมด)");
         }
 
         Set<Long> alreadyCovered = stored.findByTicket(ticketId).stream()
@@ -335,7 +335,7 @@ public class ImportRequestService {
         }
         if (newRows.isEmpty()) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ทุกโรงงานในดีลนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว");
+                "ทุกโรงงานในงานนี้มีใบขอซื้อที่ยังใช้งานอยู่แล้ว");
         }
         for (NewRow n : newRows) {
             FactoryGroup group = n.group();
@@ -1470,7 +1470,7 @@ public class ImportRequestService {
                 // Not an import candidate (e.g. fully reserved from stock): nothing to order, so the pick is
                 // ignored. A line of ANOTHER deal is still a bad request.
                 if (!repository.ticketHasItem(ticketId, choice.ticketItemId())) {
-                    throw new ApiException(HttpStatus.BAD_REQUEST, "รายการที่เลือกไม่ได้อยู่ในดีลนี้");
+                    throw new ApiException(HttpStatus.BAD_REQUEST, "รายการที่เลือกไม่ได้อยู่ในงานนี้");
                 }
                 continue;
             }
@@ -1613,7 +1613,7 @@ public class ImportRequestService {
 
     private void requireDealActive(TicketSnapshot snapshot) {
         if (!"ACTIVE".equals(snapshot.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ไม่ได้อยู่ในสถานะที่ดำเนินการได้");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ไม่ได้อยู่ในสถานะที่ดำเนินการได้");
         }
     }
 
@@ -1710,12 +1710,12 @@ public class ImportRequestService {
 
     private TicketSnapshot requireTicket(long ticketId) {
         return repository.loadTicketSnapshot(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
     }
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
     }
 }

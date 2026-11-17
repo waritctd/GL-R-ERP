@@ -255,6 +255,8 @@ describe('ManagerOverview: งานวันนี้ / วิเคราะ�
 
     expect(screen.getByRole('tab', { name: 'งานวันนี้' }).getAttribute('aria-selected')).toBe('true');
     expect(screen.getByRole('tab', { name: 'วิเคราะห์ยอดขาย' })).toBeTruthy();
+    // fix round 1: the board link names the page it opens, not "ดูงานทีม" beside the tab งานวันนี้.
+    expect(screen.getByRole('button', { name: 'ดูงานทั้งหมด' })).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'ภาพรวมทีมขาย' })).toBeTruthy();
     expect(screen.queryByTestId('sales-insights')).toBeNull();
   });

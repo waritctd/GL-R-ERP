@@ -88,7 +88,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่ดีล/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
   it.each([
@@ -130,14 +130,15 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly: false, status: 'draft' }));
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่ดีล/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
-  it.each([[true], [false]])('(b) once the order is confirmed (status quotation_issued, quotationOnly=%s): "ไปที่ดีล", no confirm', async (quotationOnly) => {
+  it.each([[true], [false]])('(b) once the order is confirmed (status quotation_issued, quotationOnly=%s): "เปิดงาน", no confirm', async (quotationOnly) => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });
     api.tickets.get.mockResolvedValue(ticketSummary({ quotationOnly, status: 'quotation_issued' }));
     renderEditor();
-    const link = await screen.findByRole('link', { name: /ไปที่ดีล/ });
+    const link = await screen.findByTestId('quotation-go-to-deal');
+    expect(link.textContent).toContain('เปิดงาน');
     expect(link.getAttribute('href')).toBe('/tickets/18');
     expect(screen.queryByRole('button', { name: PROMOTE })).toBeNull();
   });
@@ -147,7 +148,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     api.tickets.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์เข้าถึงรายการนี้'), { status: 403 }));
     renderEditor();
     expect(await screen.findByRole('button', { name: PROMOTE })).not.toBeNull();
-    expect(screen.queryByRole('link', { name: /ไปที่ดีล/ })).toBeNull();
+    expect(screen.queryByTestId('quotation-go-to-deal')).toBeNull();
   });
 
   it('(d) confirms first (dialog titled ยืนยันคำสั่งซื้อ), then confirms the order, toasts "ยืนยันคำสั่งซื้อแล้ว" and navigates to the deal', async () => {
@@ -162,7 +163,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
     const dialogEl = screen.getByRole('dialog');
     const dialog = within(dialogEl);
     expect(dialog.getByRole('heading', { name: 'ยืนยันคำสั่งซื้อ' })).not.toBeNull();
-    expect(dialogEl.textContent).not.toMatch(/สร้างดีล/);
+    expect(dialogEl.textContent).not.toMatch(/สร้าง(ดีล|งาน)/);
     expect(dialog.getByText(/ได้รับคำสั่งซื้อ/)).not.toBeNull();
     expect(dialog.getByText(/ย้อนกลับไม่ได้/)).not.toBeNull();
 
@@ -187,7 +188,7 @@ describe('QuotationEditorPage — ยืนยันคำสั่งซื้�
   });
 
   it.each([
-    [409, 'สร้างดีลได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: SUPERSEDED)'],
+    [409, 'สร้างงานได้เฉพาะใบเสนอราคาที่อนุมัติแล้วเท่านั้น (ปัจจุบัน: SUPERSEDED)'],
     [403, 'ไม่มีสิทธิ์เข้าถึงรายการนี้'],
   ])('a %s surfaces the server\'s own Thai message and stays on the quotation', async (status, message) => {
     api.dealQuotations.get.mockResolvedValue({ quotation: quotation() });

@@ -2612,7 +2612,7 @@ public class TicketRepository {
         try {
             PaymentTrack.stepsBetween(policy, expected, next);
         } catch (IllegalStateException e) {
-            throw new ApiException(HttpStatus.CONFLICT, "สถานะการชำระเงินของดีลนี้ไม่ถูกต้อง กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+            throw new ApiException(HttpStatus.CONFLICT, "สถานะการชำระเงินของงานนี้ไม่ถูกต้อง กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         // WALK, and PERSIST every hop: a multi-hop advance writes each intermediate
         // state in turn rather than jumping straight to the target. confirmFinalPayment on a

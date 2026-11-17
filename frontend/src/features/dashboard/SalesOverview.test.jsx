@@ -266,9 +266,9 @@ describe('SalesOverview', () => {
       // Overdue first within ติดตามลูกค้า; the action cascade within ต้องทำต่อ (same order sortWorklist gives).
       expect(groupNames('follow')).toEqual(['บริษัท ดี จำกัด', 'บริษัท อี จำกัด']);
       expect(groupNames('next')).toEqual(['บริษัท ซี จำกัด', 'บริษัท บี จำกัด', 'บริษัท เจ จำกัด', 'บริษัท เอ จำกัด', 'บริษัท ไอ จำกัด']);
-      expect(screen.getByTestId('sales-group-follow').textContent).toContain('2 ดีล');
+      expect(screen.getByTestId('sales-group-follow').textContent).toContain('2 งาน');
       expect(screen.getByTestId('worklist-total').textContent).toBe('7');
-      expect(screen.getByText('รวม 7 ดีล').className).toContain('sr-only');
+      expect(screen.getByText('รวม 7 งาน').className).toContain('sr-only');
     });
 
     it('puts the follow-up date on the row: เลยนัด for overdue, นัดวันนี้ for today', async () => {

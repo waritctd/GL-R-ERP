@@ -581,7 +581,7 @@ public class CustomerQuotationService {
         // included, since both write the SAME sales.quotation table.
         if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
+                "งานนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
         }
         // V75's own (issued_by, outcome_client_request_id)
         // partial unique index is TABLE-WIDE (both origins share sales.quotation), but the two
@@ -859,13 +859,13 @@ public class CustomerQuotationService {
     private void requireActiveDeal(long ticketId) {
         TicketSummaryDto ticket = requireTicketSummary(ticketId);
         if (!DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE");
+            throw new ApiException(HttpStatus.CONFLICT, "งานต้นทางต้องอยู่ในสถานะ ACTIVE");
         }
     }
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
     }
 

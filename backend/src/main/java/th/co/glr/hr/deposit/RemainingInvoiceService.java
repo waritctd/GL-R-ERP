@@ -134,7 +134,7 @@ public class RemainingInvoiceService {
                 && Objects.equals(d.customerQuotationId(), quotationId));
         if (sameChainLive) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้มีใบแจ้งหนี้ส่วนที่เหลือ (ร่างหรือออกแล้ว) สำหรับใบเสนอราคานี้อยู่แล้ว");
+                "งานนี้มีใบแจ้งหนี้ส่วนที่เหลือ (ร่างหรือออกแล้ว) สำหรับใบเสนอราคานี้อยู่แล้ว");
         }
         // ONE live remaining invoice per DEAL, not per chain: a DRAFT for a DIFFERENT quotation
         // chain is also refused, even though issuing it would be legal (issue() supersedes any
@@ -146,7 +146,7 @@ public class RemainingInvoiceService {
             .anyMatch(d -> "DRAFT".equals(d.status()) && !Objects.equals(d.customerQuotationId(), quotationId));
         if (anotherDraftLive) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน");
+                "งานนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน");
         }
 
         List<RemainingInvoiceItemDto> items = resolved.items();
@@ -176,7 +176,7 @@ public class RemainingInvoiceService {
                 itemsTotal, depositAmount, money.netAmount(), money.vatAmount(), money.grandTotal(), actor.id(), actor.name());
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว กรุณาออกหรือลบร่างเดิมก่อน");
+                "งานนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว กรุณาออกหรือลบร่างเดิมก่อน");
         }
         stored.replaceItems(id, items);
         return requireStored(id);
@@ -360,7 +360,7 @@ public class RemainingInvoiceService {
             .anyMatch(d -> "DRAFT".equals(d.status()) && !Objects.equals(d.customerQuotationId(), issued.customerQuotationId()));
         if (anotherDraftLive) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน");
+                "งานนี้มีร่างใบแจ้งหนี้ส่วนที่เหลืออยู่แล้ว (ใบเสนอราคาอื่น) กรุณาออกหรือลบร่างเดิมก่อน");
         }
 
         // The two checks above are a plain SELECT-then-INSERT: two concurrent revise() calls (or a
@@ -430,7 +430,7 @@ public class RemainingInvoiceService {
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
     }
 

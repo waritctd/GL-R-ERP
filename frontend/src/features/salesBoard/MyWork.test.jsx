@@ -64,7 +64,7 @@ describe('MyWork', () => {
     expect(screen.getByRole('heading', { name: 'งานของฉัน' })).toBeTruthy();
     const row = await screen.findByTestId('follow-up-31');
     expect(screen.getByText('ควรตามต่อ')).toBeTruthy();
-    expect(screen.getByText('ดีลที่เงียบเกิน 14 วัน')).toBeTruthy();
+    expect(screen.getByText('งานที่เงียบเกิน 14 วัน')).toBeTruthy();
     expect(within(row).getByText('฿1,240,000')).toBeTruthy();
     expect(within(row).getByText('เงียบ 27 วัน')).toBeTruthy();
     expect(screen.queryByTestId('follow-up-32')).toBeNull();
@@ -113,7 +113,7 @@ describe('MyWork', () => {
     api.salesBoard.myWork.mockResolvedValue({ followUp: [], board: [fresh], quietDays: 14 });
     renderMyWork();
 
-    expect(await screen.findByText('ไม่มีดีลค้าง — ทุกดีลมีความเคลื่อนไหวใน 14 วันที่ผ่านมา')).toBeTruthy();
+    expect(await screen.findByText('ไม่มีงานค้าง — ทุกงานมีความเคลื่อนไหวใน 14 วันที่ผ่านมา')).toBeTruthy();
   });
 
   it('renders the board with every deal', async () => {

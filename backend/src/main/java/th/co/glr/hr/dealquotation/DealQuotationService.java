@@ -378,7 +378,7 @@ public class DealQuotationService {
         }
         TicketSummaryDto ticket = requireTicketSummary(summary.ticketId());
         if (!th.co.glr.hr.ticket.DealLifecycle.ACTIVE.equals(ticket.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้นทางต้องอยู่ในสถานะ ACTIVE");
+            throw new ApiException(HttpStatus.CONFLICT, "งานต้นทางต้องอยู่ในสถานะ ACTIVE");
         }
         // Two concurrent callers (a double-click; this endpoint has no clientRequestId dedupe) would otherwise both pass
         // the idempotent-replay check below and both INSERT, the second hitting UNIQUE(number) as a bare 500. Lock
@@ -411,7 +411,7 @@ public class DealQuotationService {
                 .filter(q -> QuotationStatus.SUPERSEDED.equals(q.docStatus()))
                 .ifPresent(q -> {
                     throw new ApiException(HttpStatus.CONFLICT,
-                        "คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของดีลแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่");
+                        "คำขอราคานี้ถูกแทนที่ด้วยใบเสนอราคาฉบับใหม่ของงานแล้ว — ออกใบเสนอราคาจากคำขอราคาล่าสุด หรือสร้างคำขอราคาใหม่");
                 });
         }
         PricingDecisionDto decision = pricingDecisions.findByPricingRequest(pricingRequestId).stream()
@@ -671,7 +671,7 @@ public class DealQuotationService {
         } else if (!hasQuotationGrant(actor)) {
             requireRole(actor, VIEW_ROLES);
             if ("sales".equals(actor.role()) && !DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
-                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงดีลนี้");
+                throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงงานนี้");
             }
         }
         // The entry gate above is DEAL_DIRECT's broad rule (VIEW_ROLES + a full hasQuotationGrant bypass): fine where
@@ -850,7 +850,7 @@ public class DealQuotationService {
             if (existing.parentQuotationId() != null && !requestedRecipient.equals(existing.recipientType())) {
                 throw new ApiException(HttpStatus.CONFLICT, "ฉบับแก้ไขต้องส่งถึงผู้รับเดิม ("
                     + QuotationRecipient.thaiLabel(existing.recipientType())
-                    + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนดีลนี้");
+                    + ") — หากจะเสนอราคาให้ผู้รับรายอื่น ให้สร้างใบเสนอราคาใหม่บนงานนี้");
             }
             // A CHANGE to a party off the deal's route is refused; the stored recipient re-sent unchanged (a draft addressed
             // before the channel was corrected) is not, so such a draft stays saveable.
@@ -1622,7 +1622,7 @@ public class DealQuotationService {
         }
         if (QuotationStatus.ACCEPTED.equals(request.outcome()) && tickets.hasAcceptedQuotation(fresh.ticketId())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
+                "งานนี้มีใบเสนอราคาที่ลูกค้ายอมรับแล้วฉบับหนึ่ง — ยอมรับซ้ำอีกฉบับไม่ได้ (R8)");
         }
 
         // See CustomerQuotationService#recordOutcome: V75's unique index is table-wide while both origins' replay lookups
@@ -1778,18 +1778,18 @@ public class DealQuotationService {
         }
         if (!DealLifecycle.ACTIVE.equals(locked.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + locked.lifecycle() + ") จึงยืนยันคำสั่งซื้อไม่ได้");
+                "งานไม่ได้อยู่ในสถานะ ACTIVE (" + locked.lifecycle() + ") จึงยืนยันคำสั่งซื้อไม่ได้");
         }
         if (!TicketStatus.DRAFT.equals(locked.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (" + locked.status() + ") ผ่านขั้นออกใบเสนอราคาไปแล้ว");
+                "ยืนยันคำสั่งซื้อไม่ได้ — สถานะงาน (" + locked.status() + ") ผ่านขั้นออกใบเสนอราคาไปแล้ว");
         }
 
         // The status compare-and-set runs under the row lock, so a 0 is unreachable through the API; it is checked, not
         // assumed, and rolls the whole confirmation back.
         if (tickets.markQuotationIssuedForOrderConfirmation(ticketId) != 1) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                "สถานะงานถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
         // Provenance only: flips a quotation-first deal's flag; a no-op on an ordinary deal. Nothing reads the flag, so its
         // rowcount is deliberately ignored.
@@ -2183,7 +2183,7 @@ public class DealQuotationService {
             return;
         }
         throw new ApiException(HttpStatus.CONFLICT,
-            "ดีลนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว จึงส่ง/อนุมัติใบเสนอราคานี้ไม่ได้");
+            "งานนี้ยืนยันคำสั่งซื้อจากใบเสนอราคาอื่นแล้ว จึงส่ง/อนุมัติใบเสนอราคานี้ไม่ได้");
     }
 
     private static boolean isPricingRequestOrigin(DealQuotationDto quotation) {
@@ -2416,7 +2416,7 @@ public class DealQuotationService {
         }
         DealQuotationRepository.PartyRef party = quotations.findParty(partyId)
             .filter(p -> p.ticketId() == ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบผู้รับเหมารายนี้ในดีล"));
+            .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบผู้รับเหมารายนี้ในงาน"));
         if (!QuotationRecipient.isAddressable(party.role())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้รับใบเสนอราคาไม่ถูกต้อง");
         }
@@ -3635,7 +3635,7 @@ public class DealQuotationService {
         if ("sales".equals(actor.role()) && DealOwnership.isOwnerOrKeyer(ticket, actor.id())) {
             return null;
         }
-        return "ไม่มีสิทธิ์เข้าถึงดีลนี้";
+        return "ไม่มีสิทธิ์เข้าถึงงานนี้";
     }
 
     private void requireEditAccessForQuotation(UserPrincipal actor, DealQuotationDto quotation) {
@@ -3745,7 +3745,7 @@ public class DealQuotationService {
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
     }
 

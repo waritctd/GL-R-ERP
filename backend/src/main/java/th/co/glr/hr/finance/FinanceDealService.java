@@ -135,7 +135,7 @@ public class FinanceDealService {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         tickets.findSummaryById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)) {
             if (readOnly && tickets.isDeadDealWithIssuedDepositNotice(ticketId)) {
                 return true;
@@ -151,7 +151,7 @@ public class FinanceDealService {
      */
     private FinanceDealDto build(long ticketId, UserPrincipal actor, boolean deadDealOnly) {
         TicketSummaryDto s = tickets.findSummaryById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
 
         var current = MoneyMilestone.of(s.salesStage());
         List<FinanceDealDto.Milestone> track = MoneyMilestone.TRACK.stream()

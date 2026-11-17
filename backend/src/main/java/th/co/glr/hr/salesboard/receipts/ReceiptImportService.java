@@ -238,7 +238,7 @@ public class ReceiptImportService {
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้"));
         List<Allocation> lines = allocations(request, row);
         for (Allocation a : lines) {
-            tickets.findById(a.ticketId()).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            tickets.findById(a.ticketId()).orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
             if (!imports.isCandidateDeal(a.ticketId())) {
                 throw new ApiException(HttpStatus.FORBIDDEN, FORBIDDEN);
             }
@@ -249,11 +249,11 @@ public class ReceiptImportService {
 
     private static List<Allocation> allocations(ResolveRequest request, QueuedRow row) {
         if (request == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกดีล");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกงาน");
         }
         if (request.allocations() == null || request.allocations().isEmpty()) {
             if (request.ticketId() == null) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกดีล");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "กรุณาเลือกงาน");
             }
             return List.of(new Allocation(request.ticketId(), row.receipt().amount()));
         }
@@ -262,7 +262,7 @@ public class ReceiptImportService {
         for (Allocation a : request.allocations()) {
             if (a == null || a.ticketId() == null || a.amount() == null || a.amount().signum() <= 0
                 || a.amount().stripTrailingZeros().scale() > 2 || !distinct.add(a.ticketId())) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "แต่ละดีลต้องมียอดมากกว่า 0 และไม่ซ้ำกัน");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "แต่ละงานต้องมียอดมากกว่า 0 และไม่ซ้ำกัน");
             }
             sum = sum.add(a.amount());
         }

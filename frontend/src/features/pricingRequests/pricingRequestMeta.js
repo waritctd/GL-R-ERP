@@ -267,8 +267,8 @@ export function confirmOrderBlockedReason(pr) {
   if (pr?.status !== 'QUOTATION_ACCEPTED' || pr?.orderConfirmedAt) return null;
   const ticketStatus = pr?.ticketStatus;
   if (ticketStatus == null || BRIDGEABLE_TICKET_STATUSES.includes(ticketStatus)) return null;
-  return `ยืนยันคำสั่งซื้อไม่ได้ — สถานะดีล (ticket) เป็น '${ticketStatus}' ซึ่งไม่ตรงกับขั้นตอนนี้ `
-    + `(ต้องเป็น 'draft' หรือ 'quotation_issued') กรุณาแจ้งทีมพัฒนา/ฝ่าย IT เพื่อตรวจสอบสถานะดีลนี้`;
+  return `ยืนยันคำสั่งซื้อไม่ได้ — สถานะงาน (ticket) เป็น '${ticketStatus}' ซึ่งไม่ตรงกับขั้นตอนนี้ `
+    + `(ต้องเป็น 'draft' หรือ 'quotation_issued') กรุณาแจ้งทีมพัฒนา/ฝ่าย IT เพื่อตรวจสอบสถานะงานนี้`;
 }
 
 /** Mirrors OrderConfirmationService.createDepositNoticeFromQuotation's gate: sales (ticket owner)

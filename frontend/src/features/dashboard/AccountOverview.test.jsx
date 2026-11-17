@@ -190,7 +190,7 @@ describe('AccountOverview', () => {
       renderOverview({ ...SUMMARY, overdueOutstanding: 200000 });
       await findGroup('chaseOverdue');
       expectFigure('เกินกำหนดชำระ', '฿200,000.00');
-      expectFigure('เกินกำหนดชำระ', '4 ดีล');
+      expectFigure('เกินกำหนดชำระ', '4 งาน');
       expectFigure('เกินกำหนดชำระ', formatThaiDate('2026-06-01'));
     });
 
@@ -200,7 +200,7 @@ describe('AccountOverview', () => {
       await findGroup('chaseOverdue');
       const text = figureRows('เกินกำหนดชำระ')[0];
       expect(text).toContain('ดูรายการทั้งหมดในหน้าการเงิน');
-      expect(text).not.toMatch(/\d ดีล/);
+      expect(text).not.toMatch(/\d (ดีล|งาน)/);
     });
 
     it('รอรับมัดจำ sums depositDue (not the deal outstanding) and counts the issued notices', async () => {
@@ -277,11 +277,11 @@ describe('AccountOverview', () => {
       renderOverview();
       await findGroup('recordInvoiceCommission');
       expect(group('chaseOverdue').textContent).toContain('ติดตามชำระ');
-      expect(group('chaseOverdue').textContent).toContain('4 ดีล · ค้าง ฿200,000.00');
-      expect(group('confirmDeposit').textContent).toContain('2 ดีล · มัดจำ ฿95,418.10');
-      expect(group('confirmFinalPayment').textContent).toContain('1 ดีล · ค้าง ฿40,000.00');
-      expect(group('confirmCloseReady').textContent).toContain('1 ดีล · มูลค่าดีล ฿648,000.00');
-      expect(group('recordInvoiceCommission').textContent).toContain('1 ดีล · มูลค่าดีล ฿792,000.00');
+      expect(group('chaseOverdue').textContent).toContain('4 งาน · ค้าง ฿200,000.00');
+      expect(group('confirmDeposit').textContent).toContain('2 งาน · มัดจำ ฿95,418.10');
+      expect(group('confirmFinalPayment').textContent).toContain('1 งาน · ค้าง ฿40,000.00');
+      expect(group('confirmCloseReady').textContent).toContain('1 งาน · มูลค่างาน ฿648,000.00');
+      expect(group('recordInvoiceCommission').textContent).toContain('1 งาน · มูลค่างาน ฿792,000.00');
     });
 
     it('shows at most 3 rows per group, earliest due first then largest balance, with อีก N รายการ for the rest', async () => {
@@ -383,14 +383,14 @@ describe('AccountOverview', () => {
       renderOverview();
       await screen.findByTestId('awaiting-goods-panel');
       expect(within(panel()).getByText('รอสินค้าเข้า')).not.toBeNull();
-      expect(panel().textContent).toContain('2 ดีล · ฿105,000.00');
+      expect(panel().textContent).toContain('2 งาน · ฿105,000.00');
       const a = within(panel()).getByTestId('awaiting-goods-row-601');
       expect(a.textContent).toContain('ลูกค้ารอสินค้า 601');
       expect(a.textContent).toContain('HD-601 · ขั้น 3 รอสินค้า / นำเข้า');
       expect(a.textContent).toContain('฿80,000.00');
       expect(within(panel()).getByTestId('awaiting-goods-row-602').textContent).toContain('฿25,000.00'); // bypass-confirmed
       expect(within(panel()).queryAllByRole('button')).toHaveLength(0);
-      expect(panel().textContent).toContain('รับชำระส่วนที่เหลือได้เมื่อดีลถึงขั้น 4 ส่งมอบ');
+      expect(panel().textContent).toContain('รับชำระส่วนที่เหลือได้เมื่องานถึงขั้น 4 ส่งมอบ');
     });
 
     it('a held deal with no money milestone yet (pre-order, deposit bypassed) says so and shows — for an unknown balance, not ฿0.00', async () => {

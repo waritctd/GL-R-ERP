@@ -95,11 +95,11 @@ export function InvoiceDetailPanel({
           <div className="grid gap-1 text-sm text-text-muted">
             {!manual && record.sourceTicketId ? (
               <span>
-                ดีล{' '}
-                <Link to={`/tickets/${record.sourceTicketId}`} className="font-bold text-link">{entry?.ticketCode ?? 'เปิดดีล'}</Link>
+                งาน{' '}
+                <Link to={`/tickets/${record.sourceTicketId}`} className="font-bold text-link">{entry?.ticketCode ?? 'เปิดงาน'}</Link>
                 {entry?.customerName ? ` · ${entry.customerName}` : ''}
               </span>
-            ) : entry?.ticketCode ? <span>{`ดีล ${entry.ticketCode}${entry.customerName ? ` · ${entry.customerName}` : ''}`}</span> : null}
+            ) : entry?.ticketCode ? <span>{`งาน ${entry.ticketCode}${entry.customerName ? ` · ${entry.customerName}` : ''}`}</span> : null}
             {invoice ? <span>{`ใบกำกับ ${invoice.invoiceNumber} · ${formatThaiDate(invoice.invoiceDate)}`}</span> : null}
             {invoice?.invoiceAttachmentFileName ? <span>{`ไฟล์ ${invoice.invoiceAttachmentFileName}`}</span> : null}
           </div>

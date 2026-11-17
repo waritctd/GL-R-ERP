@@ -341,7 +341,7 @@ describe('QuotationContactPicker — missing customerId (owner re-report 2026-09
     fireEvent.blur(emailInput);
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith(
-      'error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของดีลนี้',
+      'error', 'แก้ไขข้อมูลผู้ติดต่อไม่ได้ — ไม่พบข้อมูลลูกค้าของงานนี้',
     ));
     expect(api.customers.updateContact).not.toHaveBeenCalled();
     // No request was ever sent, so there is nothing to roll back -- the typed value stays exactly as the rep left

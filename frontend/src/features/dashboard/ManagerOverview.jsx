@@ -109,7 +109,7 @@ function ManagerToday({ user, employee, switcher, panelProps }) {
         actions={(
           <>
             {switcher}
-            <Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูดีลทีม</Button>
+            <Button type="button" variant="secondary" onClick={() => navigate('/tickets')}>ดูงานทั้งหมด</Button>
           </>
         )}
       />

@@ -132,7 +132,7 @@ test.describe.serial('pipeline import — happy path @pipeline-import', () => {
     expect(result).toMatchObject({ committed: true, toCreate: 1, toUpdate: 0, skipped: 4 });
     for (const p of result.plan) if (p.ticketId) created.add(p.ticketId);
     await expect(dialog.getByText('นำเข้าแล้ว')).toBeVisible();
-    await expect(dialog.getByText('สร้างดีลใหม่ 1')).toBeVisible();
+    await expect(dialog.getByText('สร้างงานใหม่ 1')).toBeVisible();
     await shot(page, 'pipeline-02-committed-desktop');
 
     // The deal exists, owned by the rep, and only the good row became a deal.

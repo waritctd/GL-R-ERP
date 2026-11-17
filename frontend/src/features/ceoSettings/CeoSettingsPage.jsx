@@ -296,7 +296,7 @@ function FormulaConfigEditModal({ config, saving, onClose, onSubmit }) {
 
   return (
     <Modal
-      title="แก้ไขสูตรคำนวณราคาขาย (ดีล)"
+      title="แก้ไขสูตรคำนวณราคาขายของงาน"
       subtitle="(จะบันทึกเป็นเวอร์ชันใหม่)"
       onClose={onClose}
       footer={
@@ -1030,7 +1030,7 @@ export function CeoSettingsPage({ showToast }) {
           below the per-country price-calc table above; a distinct config that does not touch it. */}
       <Panel
         flush
-        title="สูตรคำนวณราคาขาย (ดีล)"
+        title="สูตรคำนวณราคาขายของงาน"
         actions={formulaConfig && (
           <Button type="button" variant="secondary" className="text-2xs px-2 py-[3px]"
             onClick={() => setEditingFormulaConfig(true)}>

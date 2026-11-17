@@ -87,9 +87,9 @@ describe('PipelineImportDialog', () => {
     const help = screen.getByTestId('pipeline-import-help').textContent;
     expect(help).toContain('S7–S9');
     expect(help).toContain('ผู้ซื้อหรือเจ้าของโครงการ');
-    expect(help).toContain('ไม่เปลี่ยนสถานะดีลที่มีอยู่');
+    expect(help).toContain('ไม่เปลี่ยนสถานะงานที่มีอยู่');
     expect(help).toContain('เก็บใน Excel ต่อจนกว่าจะบันทึกเอกสารจริง');
-    expect(help).toContain('ชื่อโครงการเดียวกัน = ดีลเดียว');
+    expect(help).toContain('ชื่อโครงการเดียวกัน = งานเดียว');
     expect(help).toContain('เปลี่ยนชื่อโครงการ');
     expect(help).toContain('-1 ถึง -99');
   });
@@ -129,7 +129,7 @@ describe('PipelineImportDialog', () => {
     await screen.findByText('นำเข้าแล้ว');
     expect(api.salesBoard.pipelineImport).toHaveBeenCalledTimes(2);
     expect(api.salesBoard.pipelineImport).toHaveBeenLastCalledWith(expect.any(File), false);
-    expect(screen.getByText(/สร้างดีลใหม่ 1 · อัปเดต 1/)).toBeTruthy();
+    expect(screen.getByText(/สร้างงานใหม่ 1 · อัปเดต 1/)).toBeTruthy();
     // ['tickets'] is the prefix of both the deal list and the sales-board keys (queryKeys.js).
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ['tickets'] });
   });

@@ -123,7 +123,7 @@ public class OrderConfirmationService {
         String ticketStatus = requireTicketSummary(locked.ticketId()).status();
         if (!isBridgeableTicketStatus(ticketStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ไม่สามารถยืนยันคำสั่งซื้อได้ — สถานะดีล (ticket) เป็น '" + ticketStatus
+                "ไม่สามารถยืนยันคำสั่งซื้อได้ — สถานะงาน (ticket) เป็น '" + ticketStatus
                     + "' ซึ่งไม่ตรงกับขั้นตอนนี้ (ต้องเป็น '" + TicketStatus.DRAFT + "' หรือ '"
                     + TicketStatus.QUOTATION_ISSUED + "')");
         }
@@ -149,7 +149,7 @@ public class OrderConfirmationService {
             TicketSummaryDto currentTicket = requireTicketSummary(locked.ticketId());
             if (!TicketStatus.QUOTATION_ISSUED.equals(currentTicket.status())) {
                 throw new ApiException(HttpStatus.CONFLICT,
-                    "ไม่สามารถยืนยันคำสั่งซื้อได้ — สถานะดีล (ticket) เดิมขัดแย้งกับขั้นตอนนี้");
+                    "ไม่สามารถยืนยันคำสั่งซื้อได้ — สถานะงาน (ticket) เดิมขัดแย้งกับขั้นตอนนี้");
             }
         }
 
@@ -179,7 +179,7 @@ public class OrderConfirmationService {
                 actor);
         } else {
             ticketDto = tickets.findById(locked.ticketId())
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         }
 
         pricingRequests.addEvent(pricingRequestId, locked.ticketId(), actor.id(), actor.name(),
@@ -199,7 +199,7 @@ public class OrderConfirmationService {
 
     private OrderConfirmationResultDto currentResult(long pricingRequestId, long ticketId, UserPrincipal actor) {
         TicketDto ticketDto = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         return new OrderConfirmationResultDto(ticketDto, requirePricingRequest(pricingRequestId));
     }
 
@@ -275,7 +275,7 @@ public class OrderConfirmationService {
         if (anyChange) {
             pricingRequests.addEvent(pricingRequestId, ticketId, actor.id(), actor.name(),
                 PricingRequestEventKind.TICKET_ITEMS_RECONCILED, null, null,
-                "ปรับจำนวนสินค้าในรายการดีลให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อแล้ว", null);
+                "ปรับจำนวนสินค้าในรายการของงานให้ตรงกับคำขอราคาที่ยืนยันคำสั่งซื้อแล้ว", null);
         }
     }
 
@@ -413,7 +413,7 @@ public class OrderConfirmationService {
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         return tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"))
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"))
             .summary();
     }
 

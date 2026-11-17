@@ -164,7 +164,7 @@ public class AttachmentController {
 
     private TicketSummaryDto requireTicketSummary(long ticketId) {
         TicketDto ticket = tickets.findById(ticketId)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
         return ticket.summary();
     }
 
