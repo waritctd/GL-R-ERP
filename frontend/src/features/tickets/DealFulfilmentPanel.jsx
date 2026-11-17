@@ -11,10 +11,12 @@ import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
-import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
+import { bangkokTodayIso, formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { depositReadyForIr } from './dealMoneyStatus.js';
+import { deliveryDateBounds } from './deliveryDate.js';
 import { ImportStatusStrip } from '../importProgress/ImportStatusStrip.jsx';
 import { importStepIndex } from '../importProgress/importSteps.js';
 import { nextFulfilmentActionCode } from './importActions.js';
@@ -313,8 +315,43 @@ function SubstepChips({ currentCode, fromStock = null }) {
  * markShipping/markGoodsReceived/reserveStock/recordDelivery/completeDelivery); the `can.*`
  * predicates below are the same status+role checks that used to live in TicketDetailPage.
  */
+/**
+ * วันที่ส่ง (slice 6d), shared by บันทึกการส่งสินค้า and ส่งมอบครบ: today by default, back to the later of today − 7 and
+ * the Bangkok day the order was confirmed (fix round 1, L1 — from `events`, deliveryDateBounds), never a future day.
+ * The server enforces the same window (TicketService#backDatedDeliveryInstant); min/max only spare the rep a refusal.
+ * The due date counts from it, so the hint says so.
+ */
+function DeliveryDateField({ id, value, onChange, events }) {
+  const today = bangkokTodayIso();
+  const { min, max, confirmedOn } = deliveryDateBounds(today, events);
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={id} className="text-sm font-bold text-text-secondary">วันที่ส่ง</label>
+      <ThaiDateInput
+        id={id}
+        value={value ?? today}
+        min={min}
+        max={max}
+        aria-describedby={`${id}-hint`}
+        onChange={(e) => onChange(e.target.value || today)}
+        className="min-h-[44px] w-full text-base"
+      />
+      <p id={`${id}-hint`} data-testid="delivery-date-hint" className="m-0 text-xs text-text-muted">
+        {`${confirmedOn ? `เลือกได้ตั้งแต่วันยืนยันคำสั่งซื้อ ${formatThaiDate(`${confirmedOn}T12:00:00+07:00`)}` : 'ย้อนหลังได้ไม่เกิน 7 วัน'} · วันครบกำหนดชำระนับจากวันที่ส่งครบ`}
+      </p>
+    </div>
+  );
+}
+
+/** Only a past day is sent as deliveredOn; today leaves the request exactly as before (the server stamps the moment),
+ * as an unused ตามครั้งถัดไป does on a call. */
+function withDeliveredOn(payload, deliveredOn) {
+  return deliveredOn && deliveredOn !== bangkokTodayIso() ? { ...payload, deliveredOn } : payload;
+}
+
 export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   user, ticketId, summary, items = [], availableActions = [], procurementSource, onChooseProcurementSource, showToast,
+  events,
 }, ref) {
   const queryClient = useQueryClient();
   const role = user?.role;
@@ -333,6 +370,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const hasAction = (action) => availableActions.some((item) => item.action === action);
 
   const [deliveryOpen, setDeliveryOpen] = useState(false);
+  // ส่งมอบครบ asks for วันที่ส่ง first (fix round 1, M2): null while closed, else the picked day.
+  const [completeOn, setCompleteOn] = useState(null);
   const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
   // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from the
   // stock-declaration modal above, matching the backend's separate authorization boundary
@@ -669,8 +708,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     onError,
   });
   const completeDeliveryMutation = useMutation({
-    mutationFn: () => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน' }),
-    onSuccess: () => { showToast?.('success', 'ส่งมอบครบแล้ว'); invalidateAfterFulfilmentChange(); },
+    mutationFn: (deliveredOn) => api.tickets.completeDelivery(ticketId,
+      withDeliveredOn({ note: 'ส่งมอบครบจากหน้ารายละเอียดงาน' }, deliveredOn)),
+    onSuccess: () => { showToast?.('success', 'ส่งมอบครบแล้ว'); setCompleteOn(null); invalidateAfterFulfilmentChange(); },
     onError,
   });
 
@@ -717,7 +757,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     items.forEach((item) => {
       lines[item.id] = String(Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0)));
     });
-    setDeliveryDraft({ source, note: '', lines });
+    setDeliveryDraft({ source, note: '', lines, deliveredOn: bangkokTodayIso() });
     setDeliveryOpen(true);
   }
 
@@ -736,7 +776,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       showToast?.('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
       return;
     }
-    recordDeliveryMutation.mutate({ source: deliveryDraft.source, note: deliveryDraft.note.trim() || null, lines });
+    recordDeliveryMutation.mutate(withDeliveredOn(
+      { source: deliveryDraft.source, note: deliveryDraft.note.trim() || null, lines }, deliveryDraft.deliveredOn));
   }
 
   function handleSetItemWeight() {
@@ -1120,7 +1161,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               ) : null}
               {can.completeDelivery ? (
                 <Button type="button" variant="secondary" disabled={completeDeliveryMutation.isPending}
-                  onClick={() => completeDeliveryMutation.mutate()} data-testid="deal-fulfilment-complete">
+                  onClick={() => setCompleteOn(bangkokTodayIso())} data-testid="deal-fulfilment-complete">
                   ส่งมอบครบ
                 </Button>
               ) : null}
@@ -1207,6 +1248,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     }).join(', ')}
                     {record.deliveredByName ? ` · ${record.deliveredByName}` : ''}
                     {record.note ? ` · ${record.note}` : ''}
+                    {/* Slice 6d: a back-dated record says when it was keyed in (created_at), so the date shown
+                        first — the delivery day — is not mistaken for the day it was recorded. */}
+                    {record.createdAt && bangkokTodayIso(new Date(record.createdAt)) !== bangkokTodayIso(new Date(record.deliveredAt))
+                      ? ` · บันทึก ${formatThaiDate(record.createdAt)}` : ''}
                   </span>
                 </div>
               ))
@@ -1216,10 +1261,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       </div>
 
       {deliveryOpen ? (
-        // Drawing m-delivery (2026-11-16). The request is unchanged (handleRecordDelivery): source, note, and the
-        // lines with a qty > 0. Not built from the drawing: "งวดที่ N · นัดส่ง …" (no delivery round or appointment
-        // reaches this panel) and "วันที่ส่ง" (RecordDeliveryRequest has no date — the server stamps the record).
-        // Every figure is the item's own qty / qtyDelivered and the remaining the tracker table above derives.
+        // Drawing m-delivery (2026-11-16). The request (handleRecordDelivery): source, note, the lines with a qty > 0,
+        // and — slice 6d — deliveredOn when วันที่ส่ง is a past day. Not built from the drawing: "นัดส่ง …" (owner
+        // answer 3: not now). Every figure is the item's own qty / qtyDelivered and the remaining the tracker table
+        // above derives.
         <Modal
           title="บันทึกการส่งสินค้า"
           subtitle={summary?.projectName || summary?.title || undefined}
@@ -1302,6 +1347,13 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 ))}
               </select>
             </label>
+            {/* วันที่ส่ง (slice 6d, owner answer 2; fix round 1 L1): DeliveryDateField. */}
+            <DeliveryDateField
+              id="delivery-date"
+              value={deliveryDraft.deliveredOn}
+              events={events}
+              onChange={(deliveredOn) => setDeliveryDraft((draft) => ({ ...draft, deliveredOn }))}
+            />
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               หมายเหตุ
               <textarea className="min-h-16" value={deliveryDraft.note}
@@ -1315,6 +1367,32 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             <DialogCallout tone="info" testId="delivery-info">
               ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ ระบบจะบันทึกว่าส่งครบ เลื่อนงานไป S9 (ถ้ายังไม่ถึง) และแจ้งฝ่ายบัญชี
             </DialogCallout>
+          </div>
+        </Modal>
+      ) : null}
+
+      {completeOn ? (
+        // Fix round 1 (M2): ส่งมอบครบ delivers every remaining line in one record (TicketService#completeDelivery); it
+        // now asks for วันที่ส่ง first, as บันทึกการส่งสินค้า does, so the due date can follow the real day.
+        <Modal
+          title="ส่งมอบครบทุกรายการ"
+          subtitle={summary?.projectName || summary?.title || undefined}
+          onClose={() => setCompleteOn(null)}
+          footer={(
+            <>
+              <Button type="button" variant="secondary" onClick={() => setCompleteOn(null)}>ยกเลิก</Button>
+              <Button type="button" variant="primary" disabled={completeDeliveryMutation.isPending}
+                onClick={() => completeDeliveryMutation.mutate(completeOn)} data-testid="deal-fulfilment-complete-submit">
+                ยืนยันส่งมอบครบ
+              </Button>
+            </>
+          )}
+        >
+          <div className="flex flex-col gap-3.5">
+            <DialogCallout tone="warn" testId="complete-warning">
+              {`บันทึกส่งของที่เหลือทั้งหมด ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการในครั้งเดียว — บันทึกแล้วแก้ไขหรือลบไม่ได้`}
+            </DialogCallout>
+            <DeliveryDateField id="complete-date" value={completeOn} events={events} onChange={setCompleteOn} />
           </div>
         </Modal>
       ) : null}

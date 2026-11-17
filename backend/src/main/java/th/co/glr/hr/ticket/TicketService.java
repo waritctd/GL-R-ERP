@@ -1777,7 +1777,9 @@ public class TicketService {
             source,
             request == null ? null : request.note(),
             remaining,
-            request == null ? null : request.recipientName());
+            request == null ? null : request.recipientName(),
+            // Slice 6d fix round 1 (M2): the one-click ส่งมอบครบ takes the dialog's วันที่ส่ง, same window.
+            request == null ? null : request.deliveredOn());
         return recordDeliveryInternal(ticket, delivery, actor, true);
     }
 
@@ -1788,6 +1790,7 @@ public class TicketService {
         if (request == null || request.lines() == null || request.lines().isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุรายการส่งสินค้า");
         }
+        java.time.Instant deliveredAt = backDatedDeliveryInstant(request.deliveredOn(), s.id());
         String source = request.source() == null ? "" : request.source().trim().toUpperCase();
         if (!DELIVERY_SOURCES.contains(source)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "source ต้องเป็น WAREHOUSE หรือ STOCK");
@@ -1824,12 +1827,14 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องรับสินค้าเข้าโกดังก่อนส่งจากคลังสินค้า");
         }
         long deliveryId = tickets.insertDeliveryRecord(
-            s.id(), source, actor.id(), request.note(), request.recipientName(), normalized);
+            s.id(), source, actor.id(), request.note(), request.recipientName(), normalized, deliveredAt);
         TicketDto updated = requireTicket(s.id());
         TicketSummaryDto updatedSummary = updated.summary();
         boolean fullyDelivered = updated.items().stream()
             .allMatch(item -> nullToZero(item.qtyDelivered()).compareTo(nullToZero(item.qty())) >= 0);
-        String message = deliveryMessage(updated.items(), normalized);
+        // A back-dated record says so in the history: the event itself is stamped when it was recorded.
+        String message = deliveryMessage(updated.items(), normalized)
+            + (deliveredAt == null ? "" : " · วันที่ส่ง " + ThaiText.date(request.deliveredOn()));
         tickets.addEventWithDocument(s.id(), actor.id(), actor.name(),
             TicketEventKind.DELIVERY_RECORDED, updatedSummary.status(), updatedSummary.status(), message,
             RelatedDocumentType.DELIVERY_RECORD, deliveryId);
@@ -1859,6 +1864,52 @@ public class TicketService {
             tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.PARTIALLY_DELIVERED);
         }
         return requireTicket(s.id());
+    }
+
+    /** วันที่ส่ง may go back at most this many days (owner answer 2, slice 6d). */
+    static final int MAX_DELIVERY_BACK_DAYS = 7;
+
+    /**
+     * Slice 6d, วันที่ส่ง: the {@code delivered_at} to store for {@code deliveredOn}, or {@code null} for "the moment it
+     * is recorded" (the column's {@code now()} default, exactly as before). Today, or no date, is that moment. A past
+     * day — at most {@link #MAX_DELIVERY_BACK_DAYS} back on the Asia/Bangkok calendar — is stored at 12:00 Bangkok on
+     * that day: every reader of the column takes its Bangkok calendar date (paymentTermsRowSql's
+     * {@code delivered_on}, the history's date), and noon keeps that date the same in any zone from UTC−5 to UTC+12,
+     * so a browser formatting the instant in local time still shows the day (UTC−5 to UTC+14). Never a future day.
+     *
+     * <p>Fix round 1 (L1, controller ruling): never before the day the order was confirmed either — the Asia/Bangkok
+     * date of {@link TicketRepository#findOrderConfirmedAt} (the document chain's own "order confirmed": the latest
+     * confirm-from-quotation event, else the latest CUSTOMER_CONFIRMED). The earliest allowed day is the later of
+     * today − {@link #MAX_DELIVERY_BACK_DAYS} and that day, and the 400 names it. A deal with no confirmation event has
+     * the 7-day window only.
+     *
+     * <p>400, writing nothing: this runs after the caller's permission check and before any write. The window is the
+     * server's, not the client's.
+     */
+    private java.time.Instant backDatedDeliveryInstant(LocalDate deliveredOn, long ticketId) {
+        if (deliveredOn == null) {
+            return null;
+        }
+        LocalDate today = bangkokToday();
+        if (deliveredOn.isAfter(today)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่ส่งต้องไม่เป็นวันในอนาคต");
+        }
+        LocalDate windowStart = today.minusDays(MAX_DELIVERY_BACK_DAYS);
+        LocalDate confirmedOn = tickets.findOrderConfirmedAt(ticketId)
+            .map(at -> LocalDate.ofInstant(at, java.time.ZoneId.of("Asia/Bangkok")))
+            .orElse(null);
+        boolean confirmationGoverns = confirmedOn != null && confirmedOn.isAfter(windowStart);
+        LocalDate earliest = confirmationGoverns ? confirmedOn : windowStart;
+        if (deliveredOn.isBefore(earliest)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, (confirmationGoverns
+                ? "วันที่ส่งต้องไม่ก่อนวันยืนยันคำสั่งซื้อ"
+                : "ย้อนวันที่ส่งได้ไม่เกิน " + MAX_DELIVERY_BACK_DAYS + " วัน")
+                + " — เลือกได้ตั้งแต่ " + ThaiText.date(earliest));
+        }
+        if (deliveredOn.equals(today)) {
+            return null;
+        }
+        return deliveredOn.atTime(12, 0).atZone(java.time.ZoneId.of("Asia/Bangkok")).toInstant();
     }
 
     @Transactional
@@ -2636,12 +2687,20 @@ public class TicketService {
      * requireActive — and the date must be today or later in Asia/Bangkok. Every check runs before any write, so a
      * refused request writes neither the date nor the activity. Never routed through updateTracking: that is a full
      * replace and would wipe the designer/owner/buyer names.
+     *
+     * <p>Slice 6d: ส่งตัวอย่าง ({@link DealActivityKind#SAMPLE_SENT}) takes this same path and rule; its note — what was
+     * sent — must not be blank ({@link DealActivityKind#requiresNote}), checked with the kind, before anything is read.
      */
     @Transactional
     public DealActivityDto addActivity(long ticketId, DealActivityRequest request, UserPrincipal actor) {
         if (!DealActivityKind.isValid(request.kind())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทกิจกรรม '" + request.kind() + "'");
         }
+        if (DealActivityKind.requiresNote(request.kind()) && blankToNull(request.note()) == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ระบุว่าส่งอะไรไป (เช่น ตัวอย่างกระเบื้อง 3 สี)");
+        }
+        // #1353: with a date, the deal's row lock first — before the deal is read and the ACTIVE check runs. Every kind
+        // takes this path, SAMPLE_SENT (slice 6d) included; the body checks above read no row, so they may come first.
         if (request.nextFollowUpAt() != null) {
             tickets.lockTicketForUpdate(ticketId); // so requireActiveForFollowUp reads the locked row
         }

@@ -931,7 +931,7 @@ class TicketServiceTest {
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("40.00"))), null), salesActor);
 
         verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(1L), eq("ส่งบางส่วน"), any(),
-            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0));
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("40.00")) == 0), isNull());
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.PARTIALLY_DELIVERED);
         verify(ticketRepo).addEventWithDocument(eq(10L), eq(1L), anyString(),
             // The event names the line by brand + model + size (the fixture's size is "pcs"), not by item id.
@@ -1026,7 +1026,7 @@ class TicketServiceTest {
         service.completeDelivery(10L, new CompleteDeliveryRequest("ส่งครบจากสต็อก", null), salesActor);
 
         verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("STOCK"), eq(1L), eq("ส่งครบจากสต็อก"), any(),
-            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0), isNull());
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }
 
@@ -1051,7 +1051,7 @@ class TicketServiceTest {
             List.of(new RecordDeliveryRequest.Line(1L, new BigDecimal("60.00"))), null), salesActor);
 
         verify(ticketRepo).insertDeliveryRecord(eq(10L), eq("WAREHOUSE"), eq(1L), anyString(), any(),
-            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0));
+            argThat(lines -> lines.size() == 1 && lines.get(0).qty().compareTo(new BigDecimal("60.00")) == 0), isNull());
         verify(ticketRepo).updateFulfillmentStatus(10L, FulfilmentStatus.FULLY_DELIVERED);
     }
 

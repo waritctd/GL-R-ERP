@@ -21,6 +21,7 @@ import { FollowUpList } from './FollowUpList.jsx';
 import { CallModal } from './CallModal.jsx';
 import { withFollowUp } from './FollowUpPicks.jsx';
 import { CallPicker, TodayOnPhone } from './TodayOnPhone.jsx';
+import { SampleSentModal } from './SampleSentModal.jsx';
 import { LogVisitModal, PlanVisitModal, VisitDoneModal } from './VisitDialogs.jsx';
 import { CarriedOverVisits, VisitsThisWeek } from './VisitsThisWeek.jsx';
 import { carryOverRange, NEXT_VISIT_DAYS, weekRangeLabel, weekStartIso } from './visitWeek.js';
@@ -103,6 +104,8 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
   // breakpoint (TodayOnPhone unmounting) keeps it open with what was typed (ruling 3).
   const [pickingCall, setPickingCall] = useState(false);
   const [calling, setCalling] = useState(null);
+  // The phone's ส่งตัวอย่าง (slice 6d): one sheet, owned here for the same reason.
+  const [sampling, setSampling] = useState(false);
   const todayIso = bangkokTodayIso();
   const thisMonday = weekStartIso(todayIso);
   const [weekOffset, setWeekOffset] = useState(0);
@@ -140,6 +143,13 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
     // Slice 6.4: a picked ตามครั้งถัดไป rides on the same request as the deal's nextFollowUpAt; none, no key at all.
     mutationFn: ({ deal, note, nextFollowUpAt }) => api.tickets.addActivity(deal.ticketId, withFollowUp({
       kind: 'CALL', activityDate: bangkokTodayIso(), note,
+    }, nextFollowUpAt)),
+    onSuccess: refresh,
+  });
+  // Slice 6d: ส่งตัวอย่าง is a SAMPLE_SENT deal activity on the same endpoint as a call; what was sent is its note.
+  const sampleMutation = useMutation({
+    mutationFn: ({ deal, note, nextFollowUpAt }) => api.tickets.addActivity(deal.ticketId, withFollowUp({
+      kind: 'SAMPLE_SENT', activityDate: bangkokTodayIso(), note,
     }, nextFollowUpAt)),
     onSuccess: refresh,
   });
@@ -242,6 +252,7 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           carriedOver={carriedOver}
           onLog={openLog}
           onCall={() => setPickingCall(true)}
+          onSample={() => setSampling(true)}
           onPlan={() => setPlanning({ deal: null })}
           onTick={setTicking}
           onCancelVisit={setCancelling}
@@ -389,6 +400,24 @@ export function MyWork({ subtitle, before = null, user, showToast = () => {} }) 
           onSubmit={async (note, nextFollowUpAt) => {
             // A failure is toasted and the dialog stays open with what was typed.
             if (await logCall(calling, note, nextFollowUpAt)) setCalling(null);
+          }}
+        />
+      ) : null}
+      {sampling ? (
+        <SampleSentModal
+          followUp={work?.followUp ?? []}
+          board={work?.board ?? []}
+          submitting={sampleMutation.isPending}
+          onClose={() => setSampling(false)}
+          onSubmit={async (deal, note, nextFollowUpAt) => {
+            // A failure is toasted and the sheet stays open with what was typed, as the call dialog does.
+            try {
+              await sampleMutation.mutateAsync({ deal, note, nextFollowUpAt });
+              setSampling(false);
+              showToast('success', 'บันทึกส่งตัวอย่างแล้ว');
+            } catch (error) {
+              fail(error);
+            }
           }}
         />
       ) : null}

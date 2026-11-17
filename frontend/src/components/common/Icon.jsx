@@ -24,6 +24,7 @@ import Info from 'lucide-react/dist/esm/icons/info.mjs';
 import LayoutDashboard from 'lucide-react/dist/esm/icons/layout-dashboard.mjs';
 import LockKeyhole from 'lucide-react/dist/esm/icons/lock-keyhole.mjs';
 import Truck from 'lucide-react/dist/esm/icons/truck.mjs';
+import Package from 'lucide-react/dist/esm/icons/package.mjs';
 import LogOut from 'lucide-react/dist/esm/icons/log-out.mjs';
 import Mail from 'lucide-react/dist/esm/icons/mail.mjs';
 import Menu from 'lucide-react/dist/esm/icons/menu.mjs';
@@ -75,6 +76,7 @@ const icons = {
   info: Info,
   lock: LockKeyhole,
   truck: Truck,
+  package: Package,
   logout: LogOut,
   mail: Mail,
   menu: Menu,
