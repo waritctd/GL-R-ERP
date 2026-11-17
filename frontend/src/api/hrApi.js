@@ -643,6 +643,8 @@ export const api = {
   // Read-only here: the weekly refresh job PUTs the document from the CEO's signed-in page, not this client.
   salesAnalytics: {
     snapshot: () => apiRequest(API_ROUTES.salesAnalytics.snapshot),
+    // metrics: {weekStart, computedAt, metrics: [{key, dimension, label, value, previous}], checks: [{key, passed, detail}]}.
+    metrics: () => apiRequest(API_ROUTES.salesAnalytics.metrics),
   },
   // Mirrors PeopleInsightsController (peopleinsights/). get({ year?, scope? }): scope 'all' or a team id the caller may pick.
   peopleInsights: {

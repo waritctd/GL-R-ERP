@@ -8565,6 +8565,23 @@ function buildFinanceDeal(raw, user) {
   return deal;
 }
 
+// Invented figures in the shape of GET /api/sales-analytics/metrics (analytics.metric_weekly); not real sales.
+const mockAnalyticsMetrics = {
+  weekStart: '2026-03-30', computedAt: '2026-03-31T01:00:00Z',
+  metrics: [
+    { key: 'pipeline_value_dedup', dimension: '', label: '', value: 12_000_000, previous: 10_500_000 },
+    { key: 'pipeline_value_raw', dimension: '', label: '', value: 15_000_000, previous: 13_000_000 },
+    { key: 'pipeline_stale_share', dimension: '', label: '', value: 0.25, previous: 0.2 },
+    { key: 'rep_stage_moves_week', dimension: 'rep=1', label: 'Rep A', value: 4, previous: null },
+    { key: 'rep_activities_week', dimension: 'rep=1', label: 'Rep A', value: 12, previous: null },
+    { key: 'rep_quiet_deal_share', dimension: 'rep=1', label: 'Rep A', value: 0.25, previous: null },
+    { key: 'hygiene_score', dimension: 'rep=1', label: 'Rep A', value: 0.8, previous: null },
+    { key: 'quoted_value', dimension: 'brand=Brand X', label: 'Brand X', value: 8_000_000, previous: null },
+    { key: 'quoted_sqm', dimension: 'brand=Brand X', label: 'Brand X', value: 4000, previous: null },
+    { key: 'ordered_value', dimension: 'brand=Brand X', label: 'Brand X', value: 3_000_000, previous: null },
+  ],
+  checks: [{ key: 'stage_mapped', passed: true, detail: 'unmapped tickets=0' }],
+};
 const mockAnalyticsSnapshot = { payload: SNAPSHOT_WITH_NOW, asOf: '2026-03-31', uploadedAt: '2026-04-02T03:00:00Z' };
 
 // ── salesBoard read model (mirrors SalesBoardRepository) ──
@@ -14373,6 +14390,11 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const user = requireSession();
       if (!['ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
       return delay({ snapshot: mockAnalyticsSnapshot });
+    },
+    async metrics() {
+      const user = requireSession();
+      if (!['ceo', 'sales_manager'].includes(user.role)) fail('ไม่มีสิทธิ์เข้าถึงรายการนี้', 403);
+      return delay(mockAnalyticsMetrics);
     },
   },
 

@@ -15,10 +15,20 @@ describe('mockApi.salesAnalytics', () => {
     }
   });
 
+  it('serves the weekly metrics to the CEO and the sales manager', async () => {
+    for (const role of ['ceo', 'sales_manager']) {
+      await api.auth.login({ role });
+      const d = await api.salesAnalytics.metrics();
+      expect(d.weekStart).toBe('2026-03-30');
+      expect(d.metrics.some((m) => m.key === 'pipeline_value_dedup')).toBe(true);
+    }
+  });
+
   it('refuses every other role with 403', async () => {
     for (const role of ['sales', 'account', 'hr']) {
       await api.auth.login({ role });
       await expect(api.salesAnalytics.snapshot()).rejects.toMatchObject({ status: 403 });
+      await expect(api.salesAnalytics.metrics()).rejects.toMatchObject({ status: 403 });
     }
   });
 
