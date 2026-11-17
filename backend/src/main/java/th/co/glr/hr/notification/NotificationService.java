@@ -32,13 +32,13 @@ public class NotificationService {
     @Transactional
     public NotificationDto notify(long employeeId, String type, String subject, String body,
                                   String link, boolean sendEmail) {
-        return notify(employeeId, type, subject, body, link, sendEmail ? body : null);
+        return notifyWithEmailBody(employeeId, type, subject, body, link, sendEmail ? body : null);
     }
 
     /** The bell shows {@code body}; when {@code emailBody} is non-null it is also emailed, so the email can say more. */
     @Transactional
-    public NotificationDto notify(long employeeId, String type, String subject, String body,
-                                  String link, String emailBody) {
+    public NotificationDto notifyWithEmailBody(long employeeId, String type, String subject, String body,
+                                               String link, String emailBody) {
         validate(employeeId, type, subject, body);
         boolean sendEmail = emailBody != null && !emailBody.isBlank();
         String cleanLink = trimmedOrNull(link);

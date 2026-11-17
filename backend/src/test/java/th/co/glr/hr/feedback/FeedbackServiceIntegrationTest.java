@@ -441,9 +441,12 @@ class FeedbackServiceIntegrationTest extends AbstractPostgresIntegrationTest {
         // Only the FIRST move into ใช้งานได้แล้ว (done) emails the reporter; going back and releasing again, and the
         // other steps, are bell only.
         ArgumentCaptor<String> to = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<String> subject = ArgumentCaptor.forClass(String.class);
         ArgumentCaptor<String> text = ArgumentCaptor.forClass(String.class);
-        verify(mailer, times(1)).sendHtml(to.capture(), anyString(), anyString(), text.capture(), anyList());
+        verify(mailer, times(1)).sendHtml(to.capture(), subject.capture(), anyString(), text.capture(), anyList());
         assertThat(to.getAllValues()).containsOnly("rep@glr.co.th");
+        // The subject itself says it is done, so the inbox line alone tells the reporter.
+        assertThat(subject.getValue()).contains("#" + id).contains("ใช้งานได้แล้ว");
         assertThat(text.getValue()).contains("#" + id).contains("ใช้งานได้แล้ว").contains(DETAILS)
             .doesNotContain("RELEASED");
         assertThat(feedbackBells(rep).get(0).message()).doesNotContain(DETAILS);

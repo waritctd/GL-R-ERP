@@ -119,7 +119,7 @@ public class FeedbackService {
         }
         String ref = "#" + id;
         // รับเรื่อง and ไม่รับเรื่อง: a one-line bell, and a detailed email.
-        notifications.notify(before.reporterEmployeeId(), "FEEDBACK_DECIDED",
+        notifications.notifyWithEmailBody(before.reporterEmployeeId(), "FEEDBACK_DECIDED",
             accept ? "รับเรื่อง " + ref + " แล้ว" : "ไม่รับเรื่อง " + ref,
             accept ? "กำหนดเสร็จ " + ThaiText.date(request.eta()) : "เหตุผล: " + reason, LINK,
             accept ? detailedBody(before, "รับเรื่องแล้ว", request.eta(), null)
@@ -151,7 +151,8 @@ public class FeedbackService {
         // Only the first release is emailed: going back a step and releasing again is bell only.
         boolean firstRelease = statusChanged && "RELEASED".equals(after.status())
             && repository.markFirstRelease(id);
-        notifications.notify(before.reporterEmployeeId(), "FEEDBACK_UPDATED", "อัปเดตเรื่อง #" + id,
+        notifications.notifyWithEmailBody(before.reporterEmployeeId(), "FEEDBACK_UPDATED",
+            firstRelease ? "เรื่อง #" + id + " ใช้งานได้แล้ว" : "อัปเดตเรื่อง #" + id,
             "ความคืบหน้า: " + STEP_LABEL.get(after.status()) + " · กำหนดเสร็จ " + ThaiText.date(after.eta()), LINK,
             firstRelease ? detailedBody(after, "ใช้งานได้แล้ว", after.eta(), null) : null);
         return after;

@@ -8,6 +8,13 @@ import { WhatsNewPage } from './WhatsNewPage.jsx';
 
 globalThis.React = React;
 
+// Every real release has an everyone entry, so "mine" is never empty with real data; this forces the empty state.
+const audience = vi.hoisted(() => ({ emptyMine: false }));
+vi.mock('./audiences.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, entriesForViewer: (...args) => (audience.emptyMine ? [] : actual.entriesForViewer(...args)) };
+});
+
 vi.mock('../../api/index.js', () => ({
   api: {
     notifications: { list: vi.fn(), markRead: vi.fn() },
@@ -89,6 +96,21 @@ describe('WhatsNewPage', () => {
       const { unmount } = renderPage(user);
       expect(await screen.findByRole('tab', { name: /ทั้งหมด/ }), user.role).toBeTruthy();
       unmount();
+    }
+  });
+
+  it('an empty "mine" tab points to ทั้งหมด only for viewers who have that tab', async () => {
+    audience.emptyMine = true;
+    try {
+      const { unmount } = renderPage(sales);
+      expect(await screen.findByText('ฉบับนี้ไม่มีเรื่องเฉพาะแผนกของคุณ')).toBeTruthy();
+      expect(screen.queryByText('ดูทุกเรื่องได้ที่แท็บ ทั้งหมด')).toBeNull();
+      unmount();
+
+      renderPage(hr);
+      expect(await screen.findByText('ดูทุกเรื่องได้ที่แท็บ ทั้งหมด')).toBeTruthy();
+    } finally {
+      audience.emptyMine = false;
     }
   });
 

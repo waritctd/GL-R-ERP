@@ -9,7 +9,10 @@ const JAVA = readFileSync(
 
 describe('FEEDBACK_AREAS ↔ FeedbackService', () => {
   it('every area code and label matches the backend email labels and its AREAS set', () => {
-    const javaLabels = [...JAVA.matchAll(/Map\.entry\("([A-Z_]+)", "([^"]+)"\)/g)].map((m) => [m[1], m[2]]);
+    // Only the AREA_LABEL block: another Map.entry elsewhere in the file must not count as an area.
+    const block = JAVA.slice(JAVA.indexOf('AREA_LABEL = Map.ofEntries('), JAVA.indexOf(');', JAVA.indexOf('AREA_LABEL =')));
+    expect(block).not.toBe('');
+    const javaLabels = [...block.matchAll(/Map\.entry\("([A-Z_]+)", "([^"]+)"\)/g)].map((m) => [m[1], m[2]]);
     expect(javaLabels).toEqual(FEEDBACK_AREAS);
     const areas = JAVA.match(/AREAS = Set\.of\(([^)]*)\)/)[1].match(/[A-Z_]+/g);
     expect([...areas].sort()).toEqual(FEEDBACK_AREAS.map(([code]) => code).sort());
