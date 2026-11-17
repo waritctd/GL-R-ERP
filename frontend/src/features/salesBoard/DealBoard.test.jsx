@@ -33,26 +33,33 @@ describe('DealBoard', () => {
   });
 
   /*
-   * The move hints, pinned against where TicketService (backend/src/main/java/th/co/glr/hr/ticket/TicketService.java)
-   * calls autoAdvanceStage — a column's hint must name what moves a deal INTO it, and nothing else does:
-   *   col 3 เสนอราคาแล้ว (QUOTE_DESIGN_SIDE / QUOTE_OWNER / OWNER_SIGNOFF / AWAITING_BUYER): applyApprovedQuotation →
-   *     advanceStageForCustomerQuotationIssue → stageForQuotationRecipient(DESIGNER → QUOTE_DESIGN_SIDE, OWNER →
-   *     QUOTE_OWNER); generateQuotation does the same on a legacy issue. "ใบเสนอราคาอนุมัติ".
-   *   col 4 รอมัดจำ (QUOTE_BUYER / NEGOTIATION / ORDER_RECEIVED): the same quotation path for a BUYER (or an
-   *     UNSPECIFIED recipient, stageForUnspecifiedRecipient, "like a BUYER one") → QUOTE_BUYER; and the order confirm
-   *     → autoAdvanceStage(ORDER_RECEIVED). Both are S6's own step, "ทราบผู้ซื้อแล้ว" (dealSteps.js). "ทราบผู้ซื้อ".
-   *   col 5 ส่งของ · เก็บเงิน (DEPOSIT_RECEIVED … DELIVERED): the deposit confirmed → DEPOSIT_RECEIVED; the first IR
-   *     issued → PROCUREMENT; and routeAllStockDealToDelivery → DELIVERY_SCHEDULING when every line is covered from
-   *     stock (at a no-deposit order confirm, a deposit confirm, or reserveStock). "รับมัดจำ ออกใบขอซื้อ หรือของครบจาก
-   *     สต็อก" — the prototype's "รับมัดจำหรือออกใบขอซื้อ" left out the all-stock path, which skips both.
+   * Fix round 1 (M4): each hint is TRUE and short enough for one line at 1440px; its `title` carries the whole rule.
+   * Pinned against TicketService's autoAdvanceStage call sites by boardMoveHints.test.js (which reads the Java source).
+   *   col 3 (QUOTE_DESIGN_SIDE … AWAITING_BUYER): only a DESIGNER / OWNER quotation approved (or issued) moves a deal IN.
+   *   col 4 (QUOTE_BUYER … ORDER_RECEIVED): a BUYER quotation approved — or one with no recipient
+   *     (stageForUnspecifiedRecipient: QUOTE_BUYER is on every route) — or the order confirmed (ORDER_RECEIVED).
+   *     "ทราบผู้ซื้อ" was not true for the no-recipient case.
+   *   col 5 (DEPOSIT_RECEIVED …): deposit confirmed, first IR issued (สั่งของ), or every line covered from stock
+   *     (routeAllStockDealToDelivery → DELIVERY_SCHEDULING, ส่งของ).
    */
-  it('each auto column says what moves a deal into it, in the words checked against TicketService', () => {
+  it('each auto column says what moves a deal into it, on one line, with the whole rule as its tooltip', () => {
     renderBoard([]);
 
-    expect(within(screen.getByTestId('board-column-3')).getByText('เข้าเองเมื่อใบเสนอราคาอนุมัติ')).toBeTruthy();
-    expect(within(screen.getByTestId('board-column-4')).getByText('เข้าเองเมื่อทราบผู้ซื้อ')).toBeTruthy();
-    expect(within(screen.getByTestId('board-column-5')).getByText('เข้าเองเมื่อรับมัดจำ ออกใบขอซื้อ หรือของครบจากสต็อก'))
-      .toBeTruthy();
+    const expected = {
+      3: ['เข้าเองเมื่ออนุมัติใบถึงผู้ออกแบบ/เจ้าของ',
+        'งานเข้าช่องนี้เองเมื่อใบเสนอราคาถึงผู้ออกแบบหรือเจ้าของโครงการได้รับอนุมัติ'],
+      4: ['เข้าเองเมื่ออนุมัติใบถึงผู้ซื้อหรือยืนยันสั่งซื้อ',
+        'งานเข้าช่องนี้เองเมื่อใบเสนอราคาถึงผู้ซื้อ (หรือใบที่ไม่ระบุผู้รับ) ได้รับอนุมัติ หรือเมื่อยืนยันคำสั่งซื้อ'],
+      5: ['เข้าเองเมื่อรับมัดจำหรือเริ่มสั่ง/ส่งของ',
+        'งานเข้าช่องนี้เองเมื่อรับเงินมัดจำ ออกใบขอซื้อ หรือของครบจากสต็อกจนพร้อมส่ง'],
+    };
+    Object.entries(expected).forEach(([column, [text, rule]]) => {
+      const hint = within(screen.getByTestId(`board-column-${column}`)).getByTestId('board-column-hint');
+      expect(hint.textContent).toBe(text);
+      expect(hint.getAttribute('title')).toBe(rule);
+      // one line whatever the width: no wrap, an ellipsis if it ever overflows
+      expect(hint.className).toContain('truncate');
+    });
   });
 
   it('puts a QUOTE_OWNER deal in column 3 and a DELIVERED deal in column 5', () => {
@@ -159,6 +166,14 @@ describe('DealBoard', () => {
     expect(within(card).getByRole('link').getAttribute('title')).toBe(`ผู้ซื้อ: ${long}`);
     expect(within(card).queryByText(/DWP/)).toBeNull();
     expect(within(card).getByText(/Q4\/69/)).toBeTruthy();
+  });
+
+  it('only a รอมัดจำ card names the buyer: a ส่งของ · เก็บเงิน card with a buyer keeps the designer (F4)', () => {
+    renderBoard([moneyCard({ ticketId: 76, designerName: 'DWP', buyerName: 'บริษัท ผู้ซื้อ จำกัด' })]);
+
+    const card = screen.getByTestId('board-card-76');
+    expect(within(card).getByText('DWP')).toBeTruthy();
+    expect(within(card).queryByText(/ผู้ซื้อ:/)).toBeNull();
   });
 
   it('a รอมัดจำ card with no buyer yet keeps the designer', () => {

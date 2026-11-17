@@ -9,11 +9,22 @@ import { weekEndDay } from './cashFormat.js';
 export const BOARD_COLUMNS = [
   { column: 1, label: 'เสนอสินค้า', code: 'S1', auto: false },
   { column: 2, label: 'สเปคผ่าน', code: 'S2', auto: false },
-  { column: 3, label: 'เสนอราคาแล้ว', code: 'S3–5', auto: true, moveHint: 'เข้าเองเมื่อใบเสนอราคาอนุมัติ' },
-  { column: 4, label: 'รอมัดจำ', code: 'S6', auto: true, moveHint: 'เข้าเองเมื่อทราบผู้ซื้อ' },
+  // Fix round 1: each hint is true and fits one line at 1440px; `moveRule` (the tooltip) is the whole rule.
+  // boardMoveHints.test.js pins every one against TicketService / DealStage / DealRoute.
+  {
+    column: 3, label: 'เสนอราคาแล้ว', code: 'S3–5', auto: true,
+    moveHint: 'เข้าเองเมื่ออนุมัติใบถึงผู้ออกแบบ/เจ้าของ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อใบเสนอราคาถึงผู้ออกแบบหรือเจ้าของโครงการได้รับอนุมัติ',
+  },
+  {
+    column: 4, label: 'รอมัดจำ', code: 'S6', auto: true,
+    moveHint: 'เข้าเองเมื่ออนุมัติใบถึงผู้ซื้อหรือยืนยันสั่งซื้อ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อใบเสนอราคาถึงผู้ซื้อ (หรือใบที่ไม่ระบุผู้รับ) ได้รับอนุมัติ หรือเมื่อยืนยันคำสั่งซื้อ',
+  },
   {
     column: 5, label: 'ส่งของ · เก็บเงิน', code: 'S7–9', auto: true,
-    moveHint: 'เข้าเองเมื่อรับมัดจำ ออกใบขอซื้อ หรือของครบจากสต็อก',
+    moveHint: 'เข้าเองเมื่อรับมัดจำหรือเริ่มสั่ง/ส่งของ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อรับเงินมัดจำ ออกใบขอซื้อ หรือของครบจากสต็อกจนพร้อมส่ง',
   },
 ];
 

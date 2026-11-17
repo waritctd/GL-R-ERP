@@ -122,9 +122,9 @@ export function DealBoard({ deals, showOwner = false }) {
                 {inColumn.length} งาน · {totalLabel(sumValue(inColumn), otherCurrencyTotals(inColumn))}
               </small>
               {col.auto ? (
-                <span className="inline-flex items-start gap-1 text-2xs font-bold leading-snug text-accent-dark">
-                  <Icon name="refresh" size={12} className="mt-px shrink-0" />
-                  {col.moveHint}
+                <span className="flex min-w-0 items-center gap-1 text-2xs font-bold text-accent-dark" title={col.moveRule}>
+                  <Icon name="refresh" size={12} className="shrink-0" />
+                  <span data-testid="board-column-hint" title={col.moveRule} className="min-w-0 truncate">{col.moveHint}</span>
                 </span>
               ) : null}
             </header>
