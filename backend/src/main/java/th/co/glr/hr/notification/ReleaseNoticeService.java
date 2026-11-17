@@ -68,6 +68,9 @@ public class ReleaseNoticeService {
     private final AuditService audit;
     private final TransactionTemplate transaction;
     private final Duration inFlightWindow;
+    /** Test seam only (no-op in production): runs after the email action has read who is due and before it writes
+     * their attempt rows, so a concurrency test can line two presses up exactly where an unlocked read would race. */
+    Runnable afterEmailStatesRead = () -> { };
 
     @Autowired
     public ReleaseNoticeService(EmployeeAuthRepository employees, NotificationRepository notifications,
@@ -206,6 +209,7 @@ public class ReleaseNoticeService {
         releaseNotices.lock("email:" + release.releaseId());
         List<Target> targets = targets(release);
         Map<Long, EmailState> states = releaseNotices.emailStates(release.releaseId(), inFlightWindow);
+        afterEmailStatesRead.run();
 
         List<ReleaseNoticeDelivery.Delivery> deliveries = new ArrayList<>();
         int alreadyEmailed = 0;

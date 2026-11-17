@@ -13,6 +13,7 @@ import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
+import th.co.glr.hr.mail.MailFailures;
 
 /**
  * Sends one release-notice run's mails and records each person's progress, after the run's attempt rows have
@@ -28,9 +29,12 @@ import th.co.glr.hr.auth.UserPrincipal;
  *       If a newer attempt exists (a retry reached this person while this batch waited in the queue), this one is
  *       superseded and nothing is sent. If the start row cannot be written, nothing is sent either: an attempt
  *       with no start row is provably unsent, and after the in-flight window it is retried like a failure.</li>
- *   <li><b>Send.</b> The provider call either returns ({@code RELEASE_NOTE_EMAIL_SENT}) or throws
- *       ({@code RELEASE_NOTE_EMAIL_FAILED}, with a short reason, addresses masked). A Mailer that does not deliver
- *       makes the call throw "mail provider not configured", so it is FAILED, never SENT.</li>
+ *   <li><b>Send.</b> The provider call either returns ({@code RELEASE_NOTE_EMAIL_SENT}) or throws. A failure that
+ *       proves the provider did not accept the mail (th.co.glr.hr.mail.MailFailures: an error response, never
+ *       connected, refused at login or envelope, or a Mailer that does not deliver) is
+ *       {@code RELEASE_NOTE_EMAIL_FAILED}, with a short reason, addresses masked. Any other failure (interrupt,
+ *       timeout, reset after the request was written, anything unrecognised) records NO outcome: the mail may have
+ *       been accepted, so it reads "sending", then "ไม่ทราบผล", and is re-sent only through the warned opt-in.</li>
  * </ol>
  * Every row is append-only and tied to the attempt by its token. A crash between the start row and the outcome
  * leaves "started, no outcome": "sending" while the start is recent, then "unconfirmed" — never "sent", never
@@ -53,6 +57,9 @@ public class ReleaseNoticeDelivery {
     private final AuditService audit;
     private final ReleaseNoticeRepository releaseNotices;
     private final TransactionTemplate ownTransaction;
+    /** Test seam only (no-op in production): runs inside the start transaction, after the supersede check and before
+     * the STARTED row, so a concurrency test can hold a send exactly where an unlocked check would race. */
+    java.util.function.Consumer<Delivery> beforeStartRow = delivery -> { };
 
     public ReleaseNoticeDelivery(NotificationEmailService emailService, AuditService audit,
                                  ReleaseNoticeRepository releaseNotices, PlatformTransactionManager transactionManager) {
@@ -88,13 +95,22 @@ public class ReleaseNoticeDelivery {
             return;
         }
         String outcome;
-        String reason = null;
+        String reason;
         try {
             emailService.sendReleaseNotice(delivery.to().email(), delivery.to().name(), delivery.email());
             outcome = ReleaseNoticeRepository.SENT_ACTION;
+            reason = null;
         } catch (RuntimeException exception) {
-            outcome = ReleaseNoticeRepository.FAILED_ACTION;
             reason = reason(exception);
+            if (!MailFailures.certainlyNotAccepted(exception)) {
+                // The call had begun and its result is unknowable (interrupt, timeout, reset after the request was
+                // written, anything unrecognised): the provider may have accepted it. No outcome is recorded, so it
+                // reads "sending", then "ไม่ทราบผล", and only the warned opt-in sends it again.
+                log.error("Release notice email outcome UNKNOWN, left unrecorded: release={} employee={} error={}",
+                    releaseId, delivery.employeeId(), reason);
+                return;
+            }
+            outcome = ReleaseNoticeRepository.FAILED_ACTION;
             log.error("Release notice email failed: release={} employee={} reason={}",
                 releaseId, delivery.employeeId(), reason);
         }
@@ -110,6 +126,7 @@ public class ReleaseNoticeDelivery {
                 if (!delivery.attempt().equals(latest)) {
                     return false;
                 }
+                beforeStartRow.accept(delivery);
                 audit.record(actor, ReleaseNoticeRepository.STARTED_ACTION, ReleaseNoticeRepository.EMAILED_ENTITY,
                     delivery.employeeId(), null, Map.of("releaseId", releaseId, "attempt", delivery.attempt()));
                 return true;

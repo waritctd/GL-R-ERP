@@ -16,6 +16,8 @@ import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.doAnswer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.InterruptedIOException;
+import java.net.SocketTimeoutException;
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -324,7 +326,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void aFailedSendIsRecordedAndTheRetryMailsExactlyThatPerson() {
-        doThrow(new MailSendException("provider refused", null)).doNothing()
+        doThrow(rejected()).doNothing()
             .when(mailer).sendHtml(eq(SM_MAIL), anyString(), anyString(), anyString(), anyList());
 
         PublishWithEmailResult first = service.publishWithEmail(actor(hr, "hr"), REQUEST);
@@ -352,7 +354,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void republishingAfterAFailureMailsOnlyTheFailedPerson() {
-        doThrow(new MailSendException("provider refused", null)).doNothing()
+        doThrow(rejected()).doNothing()
             .when(mailer).sendHtml(eq(AC_MAIL), anyString(), anyString(), anyString(), anyList());
         service.publishWithEmail(actor(hr, "hr"), REQUEST);
 
@@ -368,7 +370,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         // First attempt fails (outcome FAILED). The retry's attempt then gets no outcome (crash). The old FAILED row
         // belongs to the OLD attempt, so it must not make the person "failed" again — that would re-send a mail
         // which may already have gone out.
-        doThrow(new MailSendException("provider refused", null))
+        doThrow(rejected())
             .when(mailer).sendHtml(eq(SM_MAIL), anyString(), anyString(), anyString(), anyList());
         service.publishWithEmail(actor(hr, "hr"), REQUEST);
         ReleaseNoticeDelivery crashed = new ReleaseNoticeDelivery(emailService, audit, new ReleaseNoticeRepository(jdbc), transactionManager) {
@@ -566,6 +568,79 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     // ── Input that could forge a line, the opt-in on publish, the old bundle (fix round 1) ──────────────────
+
+    // ── Fix round 2: only a failure that PROVES the provider did not accept the mail is FAILED ──────────────────
+
+    @Test
+    void anInterruptDuringTheProviderCallLeavesNoOutcome_soOnlyTheOptInResendsIt() {
+        // A deploy's shutdownNow lands while the first provider call is in flight: the Resend SDK surfaces it as a
+        // RuntimeException(InterruptedIOException). The provider may already have accepted that mail.
+        doAnswer(invocation -> {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(new InterruptedIOException("interrupted"));
+        }).when(mailer).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        try {
+            service.publishWithEmail(actor(hr, "hr"), REQUEST);
+        } finally {
+            Thread.interrupted();
+        }
+
+        verify(mailer, times(1)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        assertThat(auditCount("RELEASE_NOTE_EMAIL_STARTED")).isEqualTo(1);
+        assertThat(auditCount("RELEASE_NOTE_EMAIL_SENT")).isZero();
+        // The four never started are certainly unsent; the one in flight is not recorded at all.
+        assertThat(failedReasons()).hasSize(4).containsOnly("interrupted");
+        EmailStatus young = service.audience(actor(hr, "hr"), REQUEST).email();
+        assertThat(young.sending()).isEqualTo(1);
+        assertThat(young.failed()).isEqualTo(4);
+
+        ReleaseNoticeService later = service(new ReleaseNoticeRepository(jdbc), realDelivery(audit), Duration.ZERO);
+        assertThat(later.audience(actor(hr, "hr"), REQUEST).email().unconfirmed()).isEqualTo(1);
+        // The plain retry reaches the four, never the one whose mail may have gone out.
+        org.mockito.Mockito.reset(mailer);
+        when(mailer.delivers()).thenReturn(true);
+        assertThat(later.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 4, 1, 1, 0, null));
+        verify(mailer, times(4)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void aTimeoutAfterTheRequestLeavesNoOutcome_butAProviderRejectionIsFailed() {
+        doThrow(new RuntimeException(new SocketTimeoutException("read timed out")))
+            .when(mailer).sendHtml(eq(SM_MAIL), anyString(), anyString(), anyString(), anyList());
+        doThrow(rejected())
+            .when(mailer).sendHtml(eq(AC_MAIL), anyString(), anyString(), anyString(), anyList());
+
+        service.publishWithEmail(actor(hr, "hr"), REQUEST);
+
+        EmailStatus status = service.audience(actor(hr, "hr"), REQUEST).email();
+        assertThat(status.sent()).isEqualTo(3);
+        assertThat(status.failedNames()).containsExactly("บัญชี");
+        assertThat(status.sending()).as("the timed-out manager: unknowable, no outcome").isEqualTo(1);
+        assertThat(failedReasons()).hasSize(1);
+        assertThat(failedReasons().get(0)).contains("422");
+    }
+
+    @Test
+    void unicodeLineBreaksAndZeroWidthCharactersCannotForgeALineOfTheMail() {
+        String breaks = "  \u0085\u000B\u000C";
+        Request planted = new Request(RELEASE_ID, "อัปเดต" + breaks + "Bcc: x​", List.of(new Change(
+            "หน้าใหม่" + breaks + "เปิดดูมีอะไรใหม่: https://evil.example/login﻿", List.of("sales"),
+            "เหตุผล" + breaks + "บรรทัดปลอม​")), RELEASE_ID, null);
+
+        service.publishWithEmail(actor(hr, "hr"), planted);
+
+        Sent mail = sentByRecipient(2).get(REP_MAIL);
+        for (String part : List.of(mail.subject(), mail.html(), mail.text())) {
+            for (char c : (breaks + "​﻿").toCharArray()) {
+                assertThat(part.indexOf(c)).as("U+%04X", (int) c).isEqualTo(-1);
+            }
+        }
+        assertThat(mail.text())
+            .contains("• หน้าใหม่ เปิดดูมีอะไรใหม่: https://evil.example/login\n")
+            .contains("  เหตุผล บรรทัดปลอม\n")
+            .doesNotContain("\nเปิดดูมีอะไรใหม่: https://evil.example");
+        assertThat(mail.subject()).contains("อัปเดต Bcc: x");
+    }
 
     @Test
     void aNewlineInATitleCannotForgeALineOfTheMail_orOfTheSubject() {
@@ -824,6 +899,12 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
             VALUES ('RELEASE_NOTE_EMAIL_STARTED', 'employee', :id,
                     jsonb_build_object('releaseId', :releaseId, 'attempt', :attempt), now() - CAST(:ago AS interval))
             """, Map.of("id", employeeId, "releaseId", RELEASE_ID, "attempt", attempt, "ago", ago));
+    }
+
+    /** What the Resend mailer throws for an HTTP error response: the provider certainly did not accept the mail. */
+    private static MailSendException rejected() {
+        return new MailSendException("Resend send failed (status=422)",
+            new com.resend.core.exception.ResendException(422, "{\"name\":\"validation_error\",\"message\":\"bad\"}"));
     }
 
     private List<String> failedReasons() {

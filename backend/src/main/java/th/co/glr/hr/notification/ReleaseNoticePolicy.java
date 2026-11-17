@@ -39,8 +39,13 @@ public final class ReleaseNoticePolicy {
     private static final int MAX_RELEASE_TITLE = 150;
     private static final int MAX_CHANGE_TITLE = 200;
     private static final int MAX_CHANGES = 50;
-    private static final Pattern WHITESPACE = Pattern.compile("\\s+");
-    private static final Pattern CONTROL = Pattern.compile("\\p{Cntrl}");
+    /** Anything a mail client may render as a line break: ASCII whitespace (incl. VT and FF), NEL, and the Unicode
+     * line and paragraph separators. Java's {@code \s} alone is ASCII-only. */
+    private static final Pattern LINE_BREAKING = Pattern.compile("[\\s\\u0085\\p{Zl}\\p{Zp}]+");
+    /** Dropped outright: every control character (C0 and C1) and the zero-width space / BOM. ZWNJ and ZWJ (U+200C,
+     * U+200D) are kept: some scripts need them, and they cannot break a line. */
+    private static final Pattern INVISIBLE = Pattern.compile("[\\p{Cc}\\u200B\\uFEFF]");
+    private static final Pattern SPACE_RUN = Pattern.compile(" {2,}");
     private static final String[] THAI_MONTHS = {
         "ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค."};
 
@@ -104,13 +109,16 @@ public final class ReleaseNoticePolicy {
         return new Change(title, List.copyOf(roles), normalizeWhy(change.why()));
     }
 
-    /** Whitespace runs (CR, LF, tab …) become one space first, so a line break becomes a space and not nothing; then
-     * the remaining control characters are dropped. Null stays null. */
+    /** Anything line-breaking (CR, LF, tab, VT, FF, NEL, U+2028, U+2029) becomes one space first, so a line break
+     * becomes a space and not nothing; then control characters, U+200B and U+FEFF are dropped and space runs
+     * collapsed. Thai text (tone marks, sara am, single spaces) and ZWNJ/ZWJ pass through unchanged. Null stays
+     * null. */
     private static String oneLine(String raw) {
         if (raw == null) {
             return null;
         }
-        return CONTROL.matcher(WHITESPACE.matcher(raw).replaceAll(" ")).replaceAll("").trim();
+        String spaced = LINE_BREAKING.matcher(raw).replaceAll(" ");
+        return SPACE_RUN.matcher(INVISIBLE.matcher(spaced).replaceAll("")).replaceAll(" ").trim();
     }
 
     private static String normalizeWhy(String raw) {

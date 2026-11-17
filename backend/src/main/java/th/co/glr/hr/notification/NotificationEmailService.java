@@ -7,7 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.brand.BrandAssets;
-import th.co.glr.hr.mail.MailSendException;
+import th.co.glr.hr.mail.MailNotDeliveredException;
 import th.co.glr.hr.mail.Mailer;
 
 @Service
@@ -122,7 +122,7 @@ public class NotificationEmailService {
             // mail; this line masks the address.
             log.warn("Release notice email NOT sent: the mail provider does not deliver (to={})",
                 ReleaseNoticeDelivery.maskAddresses(to));
-            throw new MailSendException(MAIL_NOT_CONFIGURED, null);
+            throw new MailNotDeliveredException(MAIL_NOT_CONFIGURED);
         }
         String finalSubject = "[GL&R Portal] " + clean(email.subject()) + subjectSuffix;
         String url = appBaseUrl + normalizeLink(clean(email.link()));

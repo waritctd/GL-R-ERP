@@ -126,6 +126,42 @@ class ReleaseNoticePolicyTest {
     }
 
     @Test
+    void unicodeLineBreaksBecomeOneSpace_andZeroWidthSpacesAreDropped_inEveryTitleAndWhy() {
+        for (String lineBreak : List.of(" ", " ", "\u0085", "\u000B", "\u000C")) {
+            Request normalized = ReleaseNoticePolicy.normalize(new Request("2026-11-17", "ก" + lineBreak + "ข",
+                List.of(new Change("ค" + lineBreak + "ง", List.of("sales"), "จ" + lineBreak + "ฉ")), null, null));
+            String code = String.format("U+%04X", (int) lineBreak.charAt(0));
+            assertThat(normalized.title()).as(code).isEqualTo("ก ข");
+            assertThat(normalized.changes().get(0).title()).as(code).isEqualTo("ค ง");
+            assertThat(normalized.changes().get(0).why()).as(code).isEqualTo("จ ฉ");
+        }
+        for (String zeroWidth : List.of("​", "﻿")) {
+            Request normalized = ReleaseNoticePolicy.normalize(new Request("2026-11-17", "ก" + zeroWidth + "ข",
+                List.of(new Change("ค " + zeroWidth + " ง", List.of("sales"), "จ" + zeroWidth + "ฉ")), null, null));
+            String code = String.format("U+%04X", (int) zeroWidth.charAt(0));
+            assertThat(normalized.title()).as(code).isEqualTo("กข");
+            assertThat(normalized.changes().get(0).title()).as(code).isEqualTo("ค ง");
+            assertThat(normalized.changes().get(0).why()).as(code).isEqualTo("จฉ");
+        }
+    }
+
+    @Test
+    void thaiTextWithToneMarksAndOrdinarySpaces_andJoiners_passThroughByteIdentical() {
+        String toneMarks = "ก่อน ก้อน ก๊อน ก๋อน น้ำ ทำ ที่ เพื่อ";
+        String spaced = "เห็นงานที่ต้องทำวันนี้ ในหน้าเดียว ไม่ต้องไล่หาว่างานค้างอยู่ตรงไหน";
+        String joiners = "a‌b‍c";
+        Request normalized = ReleaseNoticePolicy.normalize(new Request("2026-11-17", toneMarks,
+            List.of(new Change(spaced, List.of("sales"), toneMarks), new Change(joiners, List.of("sales"), spaced)),
+            null, null));
+
+        assertThat(normalized.title()).isEqualTo(toneMarks);
+        assertThat(normalized.changes().get(0).title()).isEqualTo(spaced);
+        assertThat(normalized.changes().get(0).why()).isEqualTo(toneMarks);
+        assertThat(normalized.changes().get(1).title()).isEqualTo(joiners);
+        assertThat(normalized.changes().get(1).why()).isEqualTo(spaced);
+    }
+
+    @Test
     void normalizeRefusesAWhyOverThreeHundredCharacters() {
         String ok = "ท".repeat(ReleaseNoticePolicy.MAX_WHY);
         assertThat(ReleaseNoticePolicy.normalize(new Request("2026-11-17", "t",
