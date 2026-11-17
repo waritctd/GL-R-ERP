@@ -1169,6 +1169,9 @@ export function buildDemoSalesSeed() {
   setNextFollowUp(4, daysAgoIso(-7, '').slice(0, 10));
 
   // Ticket 5: recent activity but NO nextFollowUpAt -> not ready, fresh.
+  // Slice 6d: ส่งตัวอย่าง (SAMPLE_SENT, V224) — an older touch than the email below, so ticket 5's last activity and
+  // its ready/stale state are unchanged.
+  addDealActivity(5, { kind: 'SAMPLE_SENT', activityDate: daysAgoIso(9, '').slice(0, 10), note: 'ตัวอย่างกระเบื้อง Raku 3 สี ส่งถึงผู้ออกแบบ', createdBy: SALES1, at: daysAgoIso(9) });
   addDealActivity(5, { kind: 'EMAIL', activityDate: daysAgoIso(3, '').slice(0, 10), note: 'ส่งอีเมลสรุปรายละเอียดสินค้าที่ลูกค้าสนใจ', createdBy: SALES1, at: daysAgoIso(3) });
 
   // Ticket 6: QUOTATION_FOLLOWUP kind, ready + fresh.

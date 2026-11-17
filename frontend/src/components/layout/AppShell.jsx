@@ -367,7 +367,10 @@ export function AppShell({ user, employee, onLogout, pendingRequestCount }) {
             isContentScrolled ? 'border-border' : 'border-transparent',
           )}
         >
-          <div className="relative z-[201] flex-none">
+          {/* The menu's layer: above the page and its own overlays (drawers / filter sheets top out at z 45) so the
+              launcher covers the page, but BELOW the modal layer (Modal's backdrop, z-50) — at z-[201] it drew over
+              every open dialog that reached the top of a phone screen (slice 6d review L5). */}
+          <div className="relative z-[49] flex-none">
             <button
               ref={menuButtonRef}
               type="button"

@@ -2272,20 +2272,54 @@ public class TicketRepository {
             """, batch);
     }
 
+    /**
+     * When the order was confirmed: the latest confirm-order-from-quotation event ({@code DEAL_PROMOTED_FROM_QUOTATION}),
+     * else the latest {@code CUSTOMER_CONFIRMED} (the pricing-request route). The ONE definition: the document chain
+     * (DocumentChainRepository#findOrderConfirmedAt) and the delivery-date floor (TicketService, slice 6d) both run
+     * this statement. Binds {@code :id}, {@code :promoted}, {@code :confirmed} — see {@link #orderConfirmedAtParams}.
+     */
+    public static final String ORDER_CONFIRMED_AT_SQL = """
+        SELECT created_at FROM sales.ticket_event
+         WHERE ticket_id = :id AND kind IN (:promoted, :confirmed)
+         ORDER BY (kind = :promoted) DESC, created_at DESC, event_id DESC
+         LIMIT 1
+        """;
+
+    public static MapSqlParameterSource orderConfirmedAtParams(long ticketId) {
+        return new MapSqlParameterSource().addValue("id", ticketId)
+            .addValue("promoted", TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)
+            .addValue("confirmed", TicketEventKind.CUSTOMER_CONFIRMED);
+    }
+
+    /** {@link #ORDER_CONFIRMED_AT_SQL}; empty when the deal has no confirmation event. */
+    public Optional<java.time.Instant> findOrderConfirmedAt(long ticketId) {
+        return jdbc.query(ORDER_CONFIRMED_AT_SQL, orderConfirmedAtParams(ticketId),
+            (rs, n) -> rs.getTimestamp("created_at").toInstant()).stream().findFirst();
+    }
+
+    /**
+     * {@code deliveredAt} (slice 6d) is the moment the goods went, for a back-dated delivery; {@code null} stamps the
+     * row with the insert time ({@code now()}), exactly as before. {@code created_at} is always the insert time.
+     */
     @Transactional
     public long insertDeliveryRecord(long ticketId, String source, long deliveredBy, String note,
-                                     String recipientName, List<RecordDeliveryRequest.Line> lines) {
+                                     String recipientName, List<RecordDeliveryRequest.Line> lines,
+                                     java.time.Instant deliveredAt) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note, recipient_name)
-            VALUES (:ticketId, :source, :deliveredBy, :note, :recipientName)
+            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note, recipient_name, delivered_at)
+            VALUES (:ticketId, :source, :deliveredBy, :note, :recipientName,
+                    COALESCE(CAST(:deliveredAt AS timestamptz), now()))
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("source", source)
                 .addValue("deliveredBy", deliveredBy)
                 .addValue("note", note)
-                .addValue("recipientName", recipientName),
+                .addValue("recipientName", recipientName)
+                .addValue("deliveredAt",
+                    deliveredAt == null ? null : deliveredAt.atOffset(java.time.ZoneOffset.UTC),
+                    java.sql.Types.TIMESTAMP_WITH_TIMEZONE),
             keyHolder,
             new String[] {"delivery_id"});
         long deliveryId = keyHolder.getKey().longValue();
@@ -2859,22 +2893,21 @@ public class TicketRepository {
             new MapSqlParameterSource().addValue("q", expectedQuarter).addValue("id", ticketId));
     }
 
-    /** Slice 6.4: the deal's next follow-up date and nothing else (a call's or a visit's ตามครั้งถัดไป / ตามต่อ). Never
-     * {@link #updateTracking}, which rewrites every tracking column. */
+    /** Slice 6.4: the deal's next follow-up date and nothing else (a call's or a visit's ตามครั้งถัดไป / ตามต่อ). Also
+     * used by {@link #updateTracking}'s caller to set or clear the date, since updateTracking no longer writes it. */
     public void updateNextFollowUpAt(long ticketId, LocalDate nextFollowUpAt) {
         jdbc.update("UPDATE sales.ticket SET next_follow_up_at = :d, updated_at = now() WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("d", nextFollowUpAt).addValue("id", ticketId));
     }
 
     public void updateTracking(long ticketId, Integer winProbabilityOverride, String designerName,
-                               String ownerName, String buyerName, LocalDate nextFollowUpAt) {
+                               String ownerName, String buyerName) {
         jdbc.update("""
             UPDATE sales.ticket
                SET win_probability  = :winProbability,
                    designer_name    = :designerName,
                    owner_name       = :ownerName,
                    buyer_name       = :buyerName,
-                   next_follow_up_at = :nextFollowUpAt,
                    updated_at       = now()
              WHERE ticket_id = :ticketId
             """,
@@ -2883,7 +2916,6 @@ public class TicketRepository {
                 .addValue("designerName", designerName)
                 .addValue("ownerName", ownerName)
                 .addValue("buyerName", buyerName)
-                .addValue("nextFollowUpAt", nextFollowUpAt)
                 .addValue("ticketId", ticketId));
     }
 

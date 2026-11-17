@@ -2048,6 +2048,8 @@ export function TicketDetailPage({ user, ticketId, onBack, showToast }) {
                   procurementSource={procurementSource}
                   onChooseProcurementSource={() => setProcurementDialogOpen(true)}
                   showToast={showToast}
+                  // วันที่ส่ง's earliest day is the order-confirmation day (slice 6d fix round 1, L1).
+                  events={events}
                 />
               ) : null}
             </div>

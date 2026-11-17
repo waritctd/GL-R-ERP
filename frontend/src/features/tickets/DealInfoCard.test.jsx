@@ -68,8 +68,53 @@ describe('DealInfoCard', () => {
     fireEvent.change(screen.getByLabelText('ชื่อดีไซเนอร์'), { target: { value: 'ใหม่' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
     await waitFor(() => expect(onUpdateTracking).toHaveBeenCalledWith(expect.objectContaining({
-      designerName: 'ใหม่', ownerName: 'บริษัท เจ้าของ จำกัด', buyerName: 'ผู้รับเหมา ข.', nextFollowUpAt: '2026-11-14',
+      designerName: 'ใหม่', ownerName: 'บริษัท เจ้าของ จำกัด', buyerName: 'ผู้รับเหมา ข.',
     })));
+  });
+
+  // A call or visit may set the follow-up date while this form is open; a save that did not touch the date must not
+  // write back the one the form loaded. Left alone it is not sent (the server keeps it); emptied it is cleared.
+  describe('วันติดตามครั้งถัดไป', () => {
+    const openForm = () => {
+      const card = screen.getByRole('heading', { name: 'ข้อมูลงาน' }).closest('section');
+      fireEvent.click(within(card).getByRole('button', { name: 'แก้ไข' }));
+    };
+
+    it('left alone, it is not sent', async () => {
+      const onUpdateTracking = vi.fn().mockResolvedValue({});
+      render(<DealInfoCard summary={summary} trackingVisible canEdit onUpdateTracking={onUpdateTracking} />);
+      openForm();
+      fireEvent.change(screen.getByLabelText('ชื่อดีไซเนอร์'), { target: { value: 'ใหม่' } });
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+      await waitFor(() => expect(onUpdateTracking).toHaveBeenCalled());
+      const payload = onUpdateTracking.mock.calls[0][0];
+      expect(payload).not.toHaveProperty('nextFollowUpAt');
+      expect(payload).not.toHaveProperty('clearNextFollowUpAt');
+    });
+
+    it('emptied, it is cleared', async () => {
+      const onUpdateTracking = vi.fn().mockResolvedValue({});
+      render(<DealInfoCard summary={summary} trackingVisible canEdit onUpdateTracking={onUpdateTracking} />);
+      openForm();
+      const date = screen.getByLabelText('วันติดตามครั้งถัดไป');
+      fireEvent.change(date, { target: { value: '' } });
+      fireEvent.blur(date);
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+      await waitFor(() => expect(onUpdateTracking).toHaveBeenCalledWith(expect.objectContaining({ clearNextFollowUpAt: true })));
+      expect(onUpdateTracking.mock.calls[0][0]).not.toHaveProperty('nextFollowUpAt');
+    });
+
+    it('changed, the new date is sent', async () => {
+      const onUpdateTracking = vi.fn().mockResolvedValue({});
+      render(<DealInfoCard summary={summary} trackingVisible canEdit onUpdateTracking={onUpdateTracking} />);
+      openForm();
+      const date = screen.getByLabelText('วันติดตามครั้งถัดไป');
+      fireEvent.change(date, { target: { value: '20/11/2569' } });
+      fireEvent.blur(date);
+      fireEvent.click(screen.getByRole('button', { name: 'บันทึก' }));
+      await waitFor(() => expect(onUpdateTracking).toHaveBeenCalledWith(expect.objectContaining({ nextFollowUpAt: '2026-11-20' })));
+      expect(onUpdateTracking.mock.calls[0][0]).not.toHaveProperty('clearNextFollowUpAt');
+    });
   });
 
   // Fix round 1, ruling 3: the create form's มูลค่าโดยประมาณ (V220 estimated_value) is shown here and edited through

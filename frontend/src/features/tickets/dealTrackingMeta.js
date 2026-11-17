@@ -32,15 +32,19 @@ export function effectiveWinProbability(winProbabilityOverride, salesStage) {
   return winProbabilityOverride != null ? Number(winProbabilityOverride) : winProbabilityDefault(salesStage);
 }
 
-// Mirrors DealActivityKind.java's VALID set exactly.
+// Mirrors DealActivityKind.java's VALID set exactly (and chk_deal_activity_kind, V83 widened by V224) —
+// activityKinds.guard.test.js reads both and fails when the three disagree. `icon` is the history row's
+// (DealHistoryPanel's ActivityRow) — an Icon.jsx name.
 export const ACTIVITY_KINDS = [
-  { code: 'CALL', label: 'โทรศัพท์' },
-  { code: 'MEETING', label: 'นัดพบ / ประชุม' },
-  { code: 'SITE_VISIT', label: 'เข้าหน้างาน' },
-  { code: 'EMAIL', label: 'อีเมล' },
-  { code: 'MESSAGE', label: 'ข้อความ (แชท/ไลน์)' },
-  { code: 'QUOTATION_FOLLOWUP', label: 'ติดตามใบเสนอราคา' },
-  { code: 'OTHER', label: 'อื่น ๆ' },
+  { code: 'CALL', label: 'โทรศัพท์', icon: 'phone' },
+  { code: 'MEETING', label: 'นัดพบ / ประชุม', icon: 'users' },
+  { code: 'SITE_VISIT', label: 'เข้าหน้างาน', icon: 'building' },
+  { code: 'EMAIL', label: 'อีเมล', icon: 'mail' },
+  { code: 'MESSAGE', label: 'ข้อความ (แชท/ไลน์)', icon: 'mail' },
+  { code: 'QUOTATION_FOLLOWUP', label: 'ติดตามใบเสนอราคา', icon: 'fileText' },
+  { code: 'OTHER', label: 'อื่น ๆ', icon: 'pencil' },
+  // Slice 6d (V224): a sample sent — its note, what was sent, is required (DealActivityKind.requiresNote).
+  { code: 'SAMPLE_SENT', label: 'ส่งตัวอย่าง', icon: 'package' },
 ];
 
 // Ticket-attachment types (INVOICE is written by commission creation, PO/OTHER by uploads).
@@ -56,6 +60,16 @@ export function activityKindLabel(code) {
 
 export function isValidActivityKind(code) {
   return ACTIVITY_KINDS.some((k) => k.code === code);
+}
+
+/** The history row's icon for a kind (Icon.jsx name); null for an unknown code. */
+export function activityKindIcon(code) {
+  return ACTIVITY_KINDS.find((k) => k.code === code)?.icon ?? null;
+}
+
+/** Mirrors DealActivityKind.requiresNote: only ส่งตัวอย่าง needs its note (what was sent) — the server 400s a blank one. */
+export function activityNoteRequired(code) {
+  return code === 'SAMPLE_SENT';
 }
 
 /** The `created_at` timestamp the stage-advance gate and staleness both compare activity against: the most
