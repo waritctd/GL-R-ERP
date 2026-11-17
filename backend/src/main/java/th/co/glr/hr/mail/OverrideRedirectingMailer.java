@@ -24,6 +24,12 @@ final class OverrideRedirectingMailer implements Mailer {
         this.overrideTo = overrideTo;
     }
 
+    /** Redirecting does not change whether the wrapped transport delivers. */
+    @Override
+    public boolean delivers() {
+        return delegate.delivers();
+    }
+
     @Override
     public void send(String to, String subject, String body) {
         log.info("app.mail.override-to active: redirecting mail from {} to {}", describe(to), overrideTo);

@@ -83,16 +83,20 @@ function RetryMessage({ audience, resendUnconfirmed, onResendUnconfirmed }) {
   if (!audience) return <p className="m-0 text-text-secondary">กำลังนับผู้รับ…</p>;
   const status = audience.email;
   const missing = status?.withoutEmailNames ?? [];
+  // Ticked, the headline is the real reach: the people the next send will mail plus those re-sent on purpose.
+  const secondCopies = resendUnconfirmed ? (status?.unconfirmed ?? 0) : 0;
+  const reach = audience.pendingEmail + secondCopies;
   return (
     <div className="grid gap-2 text-text-secondary leading-normal">
       <p className="m-0">
-        จะส่งอีเมลถึง <strong className="text-text">{audience.pendingEmail} คน</strong> — ส่งแล้วยกเลิกไม่ได้
+        จะส่งอีเมลถึง <strong className="text-text">{reach} คน</strong>
+        {secondCopies > 0 ? ` (${secondCopies} คนอาจได้รับ 2 ฉบับ)` : ''} — ส่งแล้วยกเลิกไม่ได้
       </p>
       {status?.failed > 0 ? (
         <p className="m-0">ส่งไม่สำเร็จครั้งก่อน {status.failed} คน จะส่งใหม่: {names(status.failedNames)}</p>
       ) : null}
-      {audience.alreadyEmailed > 0 ? (
-        <p className="m-0">ได้รับหรือกำลังส่งแล้ว {audience.alreadyEmailed} คน ไม่ส่งซ้ำ</p>
+      {audience.alreadyEmailed - secondCopies > 0 ? (
+        <p className="m-0">ได้รับหรือกำลังส่งแล้ว {audience.alreadyEmailed - secondCopies} คน ไม่ส่งซ้ำ</p>
       ) : null}
       {audience.withoutEmail > 0 ? (
         <p className="m-0">ไม่มีอีเมล {audience.withoutEmail} คน จะไม่ได้รับ{missing.length ? `: ${names(missing)}` : ''}</p>
@@ -134,6 +138,8 @@ export function ReleaseNoticeAdmin({ release, showToast }) {
     queryKey: statusKey,
     queryFn: () => api.releaseNotes.audience(payload),
     refetchInterval: (query) => (query.state.data?.email?.sending > 0 ? SENDING_POLL_MS : false),
+    // Outcomes arrive after the press, so coming back to the page re-reads them rather than showing a 30 s old view.
+    staleTime: 0,
   });
 
   const audienceQuery = useQuery({
@@ -155,10 +161,11 @@ export function ReleaseNoticeAdmin({ release, showToast }) {
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
       const bell = `เผยแพร่แล้ว แจ้งเตือน ${result?.inserted ?? 0} คน`;
-      if (result?.email) {
+      if (result?.email && !(result.email.notQueued > 0)) {
         showToast?.('success', `${bell} · กำลังส่งอีเมล ${result.email.queued} คน ดูผลการส่งใต้ปุ่ม`);
       } else {
-        showToast?.('error', `${bell} แต่${result?.emailError || 'ส่งอีเมลไม่สำเร็จ'} กด "${RETRY_LABEL}" เพื่อลองใหม่`);
+        const count = result?.email?.notQueued > 0 ? ` ${result.email.notQueued} คน` : '';
+        showToast?.('error', `${bell} แต่ส่งอีเมลไม่สำเร็จ${count}: ${result?.emailError || 'เริ่มส่งอีเมลไม่สำเร็จ'} กด "${RETRY_LABEL}" เพื่อลองใหม่`);
       }
       settle();
     },
@@ -168,13 +175,23 @@ export function ReleaseNoticeAdmin({ release, showToast }) {
   const emailMutation = useMutation({
     mutationFn: () => api.releaseNotes.email({ ...payload, resendUnconfirmed }),
     onSuccess: (result) => {
-      showToast?.('success', `กำลังส่งอีเมล ${result?.queued ?? 0} คน ดูผลการส่งใต้ปุ่ม`);
+      if (result?.notQueued > 0) {
+        showToast?.('error', `ส่งอีเมลไม่สำเร็จ ${result.notQueued} คน: ${result.error || 'ระบบส่งอีเมลไม่รับงาน'} ลองกดอีกครั้งภายหลัง`);
+      } else {
+        showToast?.('success', `กำลังส่งอีเมล ${result?.queued ?? 0} คน ดูผลการส่งใต้ปุ่ม`);
+      }
       settle();
     },
     onError: (error) => showToast?.('error', error?.message || 'ส่งอีเมลไม่สำเร็จ'),
   });
 
+  // A backend from before per-person outcomes answers /audience without `email`. Against it, neither button may be
+  // used: its /publish-with-email does not exist and its /email would send the old mail with optimistic rows. The
+  // buttons also wait for the first status read, so a click never races the check.
+  const statusKnown = statusQuery.data != null;
+  const backendReady = statusKnown && statusQuery.data.email != null;
   const open = (next) => {
+    if (!backendReady) return;
     setResendUnconfirmed(false);
     setAction(next);
   };
@@ -209,16 +226,32 @@ export function ReleaseNoticeAdmin({ release, showToast }) {
           ตามแผนก กดซ้ำได้ ไม่มีใครได้รับซ้ำ
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" className={PRESS} onClick={() => open('publish')}>
+          <Button type="button" className={PRESS} disabled={!backendReady} onClick={() => open('publish')}>
             <Icon name="bell" size={16} />
             เผยแพร่ประกาศ
           </Button>
-          <Button type="button" variant="secondary" className={PRESS} onClick={() => open('email')}>
+          <Button
+            type="button"
+            variant="secondary"
+            className={PRESS}
+            disabled={!backendReady}
+            onClick={() => open('email')}
+          >
             <Icon name="mail" size={16} />
             {RETRY_LABEL}
           </Button>
         </div>
       </div>
+
+      {statusKnown && !backendReady ? (
+        <p role="status" className="m-0 rounded-md border border-warning-border bg-warning-bg-soft px-3 py-2 text-sm text-text">
+          เซิร์ฟเวอร์ยังไม่ได้อัปเดตเป็นรุ่นที่ส่งอีเมลพร้อมการเผยแพร่ จึงยังกดเผยแพร่หรือส่งอีเมลจากหน้านี้ไม่ได้
+          แจ้งผู้ดูแลระบบให้อัปเดตเซิร์ฟเวอร์ก่อน
+        </p>
+      ) : null}
+      {statusQuery.isError ? (
+        <p role="status" className="m-0 text-sm text-danger">อ่านสถานะการส่งไม่สำเร็จ ลองโหลดหน้าใหม่</p>
+      ) : null}
 
       <EmailStatus status={statusQuery.data?.email} />
 

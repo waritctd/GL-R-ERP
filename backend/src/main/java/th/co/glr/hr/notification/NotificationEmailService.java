@@ -7,6 +7,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import th.co.glr.hr.brand.BrandAssets;
+import th.co.glr.hr.mail.MailSendException;
 import th.co.glr.hr.mail.Mailer;
 
 @Service
@@ -17,6 +18,8 @@ public class NotificationEmailService {
      * asset-base-url / app.mail.asset-base-url are retired along with it. app-base-url remains, unrelated, for the
      * portal CTA link below. */
     private static final String LOGO_CONTENT_ID = "glr-logo";
+    /** The failure reason a release-notice attempt records when no real provider is configured. */
+    static final String MAIL_NOT_CONFIGURED = "mail provider not configured";
     private static final String BRAND_COLOR = "#4f46e5";
     private static final String FONT_STACK = "'Sarabun',-apple-system,'Segoe UI',Tahoma,sans-serif";
 
@@ -113,6 +116,14 @@ public class NotificationEmailService {
      * button AND as visible text, and a plain-text alternative. No attachment; only the shell's inline logo.
      */
     public void sendReleaseNotice(String to, String recipientName, ReleaseNoticeEmail email) {
+        if (!mailer.delivers()) {
+            // The log provider (or no provider): nothing would leave, so this must not become a "sent". The mailer is
+            // not called at all, so its log line (which prints the full address and body) is never written for this
+            // mail; this line masks the address.
+            log.warn("Release notice email NOT sent: the mail provider does not deliver (to={})",
+                ReleaseNoticeDelivery.maskAddresses(to));
+            throw new MailSendException(MAIL_NOT_CONFIGURED, null);
+        }
         String finalSubject = "[GL&R Portal] " + clean(email.subject()) + subjectSuffix;
         String url = appBaseUrl + normalizeLink(clean(email.link()));
         mailer.sendHtml(to, finalSubject, releaseNoticeHtml(recipientName, email, url),

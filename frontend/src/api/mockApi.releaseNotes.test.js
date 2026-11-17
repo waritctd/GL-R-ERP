@@ -51,7 +51,10 @@ describe('mockApi.releaseNotes', () => {
     const first = await api.releaseNotes.publishWithEmail(request);
     expect(first).toEqual({
       targeted: before.targeted, inserted: before.targeted, alreadyNotified: 0,
-      email: { targeted: before.targeted, queued: before.pendingEmail, alreadyEmailed: 0, withoutEmail: before.withoutEmail },
+      email: {
+        targeted: before.targeted, queued: before.pendingEmail, alreadyEmailed: 0, withoutEmail: before.withoutEmail,
+        notQueued: 0, error: null,
+      },
       emailError: null,
     });
     const second = await api.releaseNotes.publishWithEmail(request);

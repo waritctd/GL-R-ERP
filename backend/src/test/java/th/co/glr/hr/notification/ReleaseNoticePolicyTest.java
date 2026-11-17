@@ -114,6 +114,18 @@ class ReleaseNoticePolicyTest {
     }
 
     @Test
+    void normalizePutsTheReleaseTitleAndEveryChangeTitleOnOneLine() {
+        Request normalized = ReleaseNoticePolicy.normalize(new Request("2026-11-17", " อัปเดต\r\nBcc: x ",
+            List.of(new Change("หน้า\n\nใหม่\t\u0007", List.of("sales"), null)), null, null));
+
+        assertThat(normalized.title()).isEqualTo("อัปเดต Bcc: x");
+        assertThat(normalized.changes().get(0).title()).isEqualTo("หน้า ใหม่");
+        // A title that is nothing but whitespace and control characters is refused, as an empty one is.
+        expectBadRequest(new Request("2026-11-17", "\r\n\u0007", List.of(change("a", List.of("sales"))), null, null));
+        expectBadRequest(new Request("2026-11-17", "t", List.of(change("\n\t", List.of("sales"))), null, null));
+    }
+
+    @Test
     void normalizeRefusesAWhyOverThreeHundredCharacters() {
         String ok = "ท".repeat(ReleaseNoticePolicy.MAX_WHY);
         assertThat(ReleaseNoticePolicy.normalize(new Request("2026-11-17", "t",

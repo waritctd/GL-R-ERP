@@ -158,22 +158,23 @@ public class ReleaseNoticeService {
         EmailResult email = null;
         String emailError = null;
         try {
-            email = transaction.execute(status -> sendEmail(actor, release, false));
+            email = handOff(actor, release, transaction.execute(status -> prepareEmail(actor, release, false)));
+            emailError = email.error();
         } catch (RuntimeException exception) {
             log.error("Release notice published but its email stage failed: release={} error={}",
                 release.releaseId(), exception.getMessage(), exception);
-            emailError = "เผยแพร่ในกระดิ่งแล้ว แต่เริ่มส่งอีเมลไม่สำเร็จ กด \"ส่งอีเมลให้คนที่ยังไม่ได้รับ\" เพื่อลองใหม่";
+            emailError = "เริ่มส่งอีเมลไม่สำเร็จ";
         }
         return new PublishWithEmailResult(bell.targeted(), bell.inserted(), bell.alreadyNotified(), email, emailError);
     }
 
     /** The retry / "not yet emailed" action: emails each targeted employee with an address whose latest attempt is
      * absent or FAILED, plus — only when {@code resendUnconfirmed} is true — those UNCONFIRMED. Never publishes. */
-    @Transactional
     public EmailResult email(UserPrincipal actor, Request request) {
         requireManager(actor);
         Request release = ReleaseNoticePolicy.normalize(request);
-        return sendEmail(actor, release, Boolean.TRUE.equals(release.resendUnconfirmed()));
+        boolean resend = Boolean.TRUE.equals(release.resendUnconfirmed());
+        return handOff(actor, release, transaction.execute(status -> prepareEmail(actor, release, resend)));
     }
 
     private PublishResult publishBell(UserPrincipal actor, Request release) {
@@ -199,8 +200,9 @@ public class ReleaseNoticeService {
         return new PublishResult(targets.size(), inserted, targets.size() - inserted);
     }
 
-    /** Must run inside a transaction: the attempt rows and the after-commit hand-off share it. */
-    private EmailResult sendEmail(UserPrincipal actor, Request release, boolean resendUnconfirmed) {
+    /** Inside the email transaction, under the per-release lock: decides who is due and writes their attempt rows.
+     * Sends nothing; the caller hands the batch over only after this transaction has committed. */
+    private PreparedEmail prepareEmail(UserPrincipal actor, Request release, boolean resendUnconfirmed) {
         releaseNotices.lock("email:" + release.releaseId());
         List<Target> targets = targets(release);
         Map<Long, EmailState> states = releaseNotices.emailStates(release.releaseId(), inFlightWindow);
@@ -228,11 +230,34 @@ public class ReleaseNoticeService {
             deliveries.add(new ReleaseNoticeDelivery.Delivery(target.employeeId(), attempt, recipient.get(),
                 ReleaseNoticePolicy.email(release, target.changes())));
         }
-        if (!deliveries.isEmpty()) {
-            List<ReleaseNoticeDelivery.Delivery> batch = List.copyOf(deliveries);
-            AfterCommit.run(() -> delivery.deliver(actor, release.releaseId(), batch));
+        return new PreparedEmail(new EmailResult(targets.size(), deliveries.size(), alreadyEmailed, withoutEmail, 0,
+            null), List.copyOf(deliveries));
+    }
+
+    /**
+     * After the attempt rows have committed: hands the batch to the async sender. If the hand-off is refused (the
+     * executor is shutting down or full) or throws, nothing was sent, so every attempt of the batch gets a FAILED
+     * outcome ("could not queue") — retryable by the plain retry, no opt-in — and the result says so with its
+     * count instead of throwing a 500 after rows have committed.
+     */
+    private EmailResult handOff(UserPrincipal actor, Request release, PreparedEmail prepared) {
+        if (prepared.batch().isEmpty()) {
+            return prepared.result();
         }
-        return new EmailResult(targets.size(), deliveries.size(), alreadyEmailed, withoutEmail);
+        try {
+            delivery.deliver(actor, release.releaseId(), prepared.batch());
+            return prepared.result();
+        } catch (RuntimeException exception) {
+            log.error("Release notice email batch could not be queued: release={} people={} error={}",
+                release.releaseId(), prepared.batch().size(), exception.getMessage());
+            delivery.recordFailed(actor, release.releaseId(), prepared.batch(), ReleaseNoticeDelivery.NOT_QUEUED);
+            EmailResult result = prepared.result();
+            return new EmailResult(result.targeted(), 0, result.alreadyEmailed(), result.withoutEmail(),
+                prepared.batch().size(), "ระบบส่งอีเมลไม่รับงานในตอนนี้ ยังไม่มีใครได้รับอีเมลรอบนี้");
+        }
+    }
+
+    private record PreparedEmail(EmailResult result, List<ReleaseNoticeDelivery.Delivery> batch) {
     }
 
     private List<Target> targets(Request release) {

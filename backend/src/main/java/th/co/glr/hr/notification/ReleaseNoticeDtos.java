@@ -66,7 +66,8 @@ public final class ReleaseNoticeDtos {
     }
 
     /** {@code queued}: mails handed to the sender by this call. Their outcome arrives later (Audience.email). */
-    public record EmailResult(int targeted, int queued, int alreadyEmailed, int withoutEmail) {
+    public record EmailResult(int targeted, int queued, int alreadyEmailed, int withoutEmail, int notQueued,
+                              String error) {
     }
 
     /** Publish + email in one press. {@code email} is null and {@code emailError} set when the email stage failed;

@@ -31,6 +31,9 @@ public class ReleaseNoticeRepository {
     /** OUTCOME rows, appended by ReleaseNoticeDelivery after the provider call. */
     static final String SENT_ACTION = "RELEASE_NOTE_EMAIL_SENT";
     static final String FAILED_ACTION = "RELEASE_NOTE_EMAIL_FAILED";
+    /** Appended by ReleaseNoticeDelivery, under the email lock, just before the provider call for one person. The
+     * in-flight window runs from this row, not from the batch's attempt rows (fix round 1, review MEDIUM-3). */
+    static final String STARTED_ACTION = "RELEASE_NOTE_EMAIL_STARTED";
     /**
      * Operator-inserted marker that voids every earlier attempt AND outcome row of one release, so a run can be
      * sent again from scratch. hr.audit_log is append-only (trigger audit_log_no_mutate), so those rows cannot be
@@ -61,9 +64,17 @@ public class ReleaseNoticeRepository {
      * <p><b>All-or-nothing.</b> A reset voids EVERY earlier row of that release, sent ones included: after it, the
      * people whose mail did arrive are mailed again. Use it only for a run where nothing was delivered.
      *
-     * <p><b>Wait for the run to finish first.</b> The lock above only covers the transaction that writes the
-     * attempt rows. The mails themselves are sent AFTER that commit, when the lock is already released. Before
-     * inserting, confirm in the app that nobody is still "กำลังส่ง" for the release.
+     * <p><b>Never insert a reset marker while a send is in progress.</b> Check first, in the app (the release's
+     * "ผลการส่งอีเมล" panel) or in SQL, that no attempt of the release is in the sending state ("กำลังส่ง" = 0). The
+     * lock above only covers the transaction that writes attempt rows; the mails are sent after it, one at a time.
+     * A person whose send has already STARTED when the marker lands is not protected: their outcome row is voided
+     * by the marker, they read as not emailed, and the next press mails them again (the adversarial review showed
+     * 12 mails to 6 people this way). People still waiting in the queue are protected: the sender re-checks under
+     * the same lock that their attempt is still the latest one after any reset, and skips them otherwise.
+     *
+     * <p>The reset lookup voids exactly the rows of THAT release with a smaller id than the latest marker (attempt,
+     * start and outcome rows alike, since start and outcome rows are only read through their attempt's token). It
+     * ignores nothing else: other releases, other actions and other entities are untouched.
      */
     static final String EMAIL_RESET_ACTION = "RELEASE_NOTE_EMAIL_RESET";
     static final String EMAIL_RESET_ENTITY = "release_note";
@@ -96,18 +107,49 @@ public class ReleaseNoticeRepository {
             """, Map.of("type", ReleaseNoticePolicy.NOTIFICATION_TYPE, "link", link), Long.class));
     }
 
+    /** The token of the person's latest attempt for the release after the latest reset; null when there is none (or
+     * the latest is a pre-token row). The sender reads it under the email lock to skip a superseded attempt. */
+    public String latestAttempt(String releaseId, long employeeId) {
+        java.util.List<String> tokens = jdbc.queryForList("""
+            SELECT a.after_json ->> 'attempt'
+              FROM hr.audit_log a
+             WHERE a.action = :attemptAction
+               AND a.entity = :entity
+               AND a.entity_id = :employeeId
+               AND a.after_json ->> 'releaseId' = :releaseId
+               AND a.id > COALESCE((
+                       SELECT MAX(r.id)
+                         FROM hr.audit_log r
+                        WHERE r.action = :resetAction
+                          AND r.entity = :resetEntity
+                          AND r.after_json ->> 'releaseId' = :releaseId), 0)
+             ORDER BY a.id DESC
+             LIMIT 1
+            """, new MapSqlParameterSource()
+                .addValue("attemptAction", EMAILED_ACTION)
+                .addValue("entity", EMAILED_ENTITY)
+                .addValue("employeeId", employeeId)
+                .addValue("releaseId", releaseId)
+                .addValue("resetAction", EMAIL_RESET_ACTION)
+                .addValue("resetEntity", EMAIL_RESET_ENTITY), String.class);
+        return tokens.isEmpty() ? null : tokens.get(0);
+    }
+
     /**
-     * Each employee's LATEST attempt for the release (after the latest reset marker), and the outcome recorded for
-     * THAT attempt (matched by token, so a late outcome of an older attempt cannot answer for a newer one):
+     * Each employee's LATEST attempt for the release (after the latest reset marker), with the start and outcome
+     * recorded for THAT attempt (matched by token, so a late row of an older attempt cannot answer for a newer one):
      * <ul>
      *   <li>outcome SENT → {@code SENT}; outcome FAILED → {@code FAILED};</li>
-     *   <li>no outcome, attempt younger than {@code inFlightWindow} → {@code SENDING} (the sender may still be
-     *       working on it);</li>
-     *   <li>no outcome, older → {@code UNCONFIRMED}: the process died, the outcome could not be written, or the row
-     *       predates outcome rows (no token at all). Deliberately not SENT and not FAILED: it may or may not have
-     *       arrived.</li>
+     *   <li>started, no outcome: started less than {@code inFlightWindow} ago → {@code SENDING}; older →
+     *       {@code UNCONFIRMED} (the provider may or may not have accepted it);</li>
+     *   <li>not started: attempted less than {@code inFlightWindow} ago → {@code SENDING} (still in the queue);
+     *       older → {@code FAILED}, because no provider call was ever made — the start row is committed BEFORE the
+     *       call, so its absence proves nothing left. Should that queued attempt still reach the sender later, the
+     *       sender skips it if a newer attempt was made meanwhile (ReleaseNoticeDelivery);</li>
+     *   <li>a row from before attempt tokens (no token, so no start or outcome can match it): younger than the window
+     *       {@code SENDING}, older {@code UNCONFIRMED} — it may have been delivered (production's 16 Nov rows).</li>
      * </ul>
-     * Age is measured on the database clock ({@code now()} against {@code at}), never mixed with the JVM's.
+     * Every age is measured on the database clock ({@code now()} against {@code at}), never mixed with the JVM's.
      */
     public Map<Long, EmailState> emailStates(String releaseId, Duration inFlightWindow) {
         Map<Long, EmailState> states = new HashMap<>();
@@ -128,25 +170,42 @@ public class ReleaseNoticeRepository {
                    AND a.after_json ->> 'releaseId' = :releaseId
                    AND a.id > reset.id
                  ORDER BY a.entity_id, a.id DESC
+            ),
+            tied AS (
+                SELECT latest.entity_id,
+                       latest.attempt,
+                       latest.at,
+                       (SELECT o.action
+                          FROM hr.audit_log o
+                         WHERE o.action IN (:sentAction, :failedAction)
+                           AND o.entity = :entity
+                           AND o.entity_id = latest.entity_id
+                           AND o.after_json ->> 'releaseId' = :releaseId
+                           AND o.after_json ->> 'attempt' = latest.attempt
+                         ORDER BY o.id DESC
+                         LIMIT 1) AS outcome,
+                       (SELECT MAX(s.at)
+                          FROM hr.audit_log s
+                         WHERE s.action = :startedAction
+                           AND s.entity = :entity
+                           AND s.entity_id = latest.entity_id
+                           AND s.after_json ->> 'releaseId' = :releaseId
+                           AND s.after_json ->> 'attempt' = latest.attempt) AS started_at
+                  FROM latest
             )
-            SELECT latest.entity_id,
-                   (SELECT o.action
-                      FROM hr.audit_log o
-                     WHERE o.action IN (:sentAction, :failedAction)
-                       AND o.entity = :entity
-                       AND o.entity_id = latest.entity_id
-                       AND o.after_json ->> 'releaseId' = :releaseId
-                       AND o.after_json ->> 'attempt' = latest.attempt
-                     ORDER BY o.id DESC
-                     LIMIT 1) AS outcome,
-                   latest.at > now() - make_interval(secs => :windowSeconds) AS in_flight
-              FROM latest
+            SELECT entity_id,
+                   outcome,
+                   attempt IS NULL AS legacy,
+                   started_at IS NOT NULL AS started,
+                   COALESCE(started_at, at) > now() - make_interval(secs => :windowSeconds) AS in_flight
+              FROM tied
             """, new MapSqlParameterSource()
                 .addValue("resetAction", EMAIL_RESET_ACTION)
                 .addValue("resetEntity", EMAIL_RESET_ENTITY)
                 .addValue("attemptAction", EMAILED_ACTION)
                 .addValue("sentAction", SENT_ACTION)
                 .addValue("failedAction", FAILED_ACTION)
+                .addValue("startedAction", STARTED_ACTION)
                 .addValue("entity", EMAILED_ENTITY)
                 .addValue("releaseId", releaseId)
                 .addValue("windowSeconds", (double) inFlightWindow.toSeconds()),
@@ -159,8 +218,10 @@ public class ReleaseNoticeRepository {
                     state = EmailState.FAILED;
                 } else if (rs.getBoolean("in_flight")) {
                     state = EmailState.SENDING;
-                } else {
+                } else if (rs.getBoolean("started") || rs.getBoolean("legacy")) {
                     state = EmailState.UNCONFIRMED;
+                } else {
+                    state = EmailState.FAILED;
                 }
                 states.put(rs.getLong("entity_id"), state);
             });

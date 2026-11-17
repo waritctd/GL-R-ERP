@@ -34,6 +34,13 @@ function renderPage(user, path = '/whats-new/2026-11-16', showToast = vi.fn()) {
   return { showToast };
 }
 
+/** An admin button once it is usable: both stay disabled until the first status read says the backend is current. */
+async function readyButton(name) {
+  const button = await screen.findByRole('button', { name });
+  await waitFor(() => expect(button.disabled).toBe(false));
+  return button;
+}
+
 const changeHeadings = () => screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
 
 describe('WhatsNewPage', () => {
@@ -249,7 +256,7 @@ describe('WhatsNewPage', () => {
     it('one press publishes AND emails, behind one confirm that counts both and names who has no address', async () => {
       const { showToast } = renderPage(hr);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'เผยแพร่ประกาศ' }));
+      fireEvent.click(await readyButton('เผยแพร่ประกาศ'));
       const dialog = await screen.findByRole('dialog');
       await within(dialog).findByText(/กระดิ่ง/);
       expect(dialog.textContent).toMatch(/แจ้งเตือนในกระดิ่ง\s*6 คน/);
@@ -275,7 +282,7 @@ describe('WhatsNewPage', () => {
       });
       const { showToast } = renderPage(ceo);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'เผยแพร่ประกาศ' }));
+      fireEvent.click(await readyButton('เผยแพร่ประกาศ'));
       const dialog = await screen.findByRole('dialog');
       await within(dialog).findByText(/กระดิ่ง/);
       fireEvent.click(within(dialog).getByRole('button', { name: 'เผยแพร่และส่งอีเมล' }));
@@ -291,7 +298,7 @@ describe('WhatsNewPage', () => {
       });
       renderPage(ceo);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'ส่งอีเมลให้คนที่ยังไม่ได้รับ' }));
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
       const dialog = await screen.findByRole('dialog');
       await within(dialog).findByText(/2 คน/);
       expect(dialog.textContent).toContain('วาริส');
@@ -311,12 +318,20 @@ describe('WhatsNewPage', () => {
       });
       renderPage(hr);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'ส่งอีเมลให้คนที่ยังไม่ได้รับ' }));
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
       const dialog = await screen.findByRole('dialog');
       const box = await within(dialog).findByRole('checkbox', { name: /ไม่ทราบผล 3 คน/ });
+      // The box names who may get a second copy.
+      expect(box.closest('label').textContent).toMatch(/ก, ข, ค/);
       // Nothing pending and the box unticked: nothing to send.
       expect(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }).disabled).toBe(true);
+      expect(dialog.textContent).toMatch(/จะส่งอีเมลถึง\s*0 คน/);
       fireEvent.click(box);
+      // Ticked, the headline counts them and says how many may get two.
+      expect(dialog.textContent).toMatch(/จะส่งอีเมลถึง\s*3 คน/);
+      expect(dialog.textContent).toMatch(/3 คนอาจได้รับ 2 ฉบับ/);
+      // ...and the "will not be re-sent" line no longer counts the three being re-sent (9 - 3).
+      expect(dialog.textContent).toMatch(/ได้รับหรือกำลังส่งแล้ว 6 คน ไม่ส่งซ้ำ/);
       expect(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }).disabled).toBe(false);
       fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }));
 
@@ -324,10 +339,79 @@ describe('WhatsNewPage', () => {
       expect(api.releaseNotes.email.mock.calls[0][0].resendUnconfirmed).toBe(true);
     });
 
+    it('the opt-in box is never remembered: closing and reopening the confirm finds it unticked', async () => {
+      api.releaseNotes.audience.mockResolvedValue({
+        ...audience, alreadyEmailed: 9, pendingEmail: 0, withoutEmail: 0,
+        email: { ...emailStatus, sent: 6, unconfirmed: 3, notYetEmailed: 0, withoutEmail: 0, withoutEmailNames: [], unconfirmedNames: ['ก', 'ข', 'ค'] },
+      });
+      renderPage(hr);
+
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
+      let dialog = await screen.findByRole('dialog');
+      fireEvent.click(await within(dialog).findByRole('checkbox', { name: /ไม่ทราบผล 3 คน/ }));
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
+      dialog = await screen.findByRole('dialog');
+      const box = await within(dialog).findByRole('checkbox', { name: /ไม่ทราบผล 3 คน/ });
+      expect(box.checked).toBe(false);
+      expect(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }).disabled).toBe(true);
+      expect(api.releaseNotes.email).not.toHaveBeenCalled();
+    });
+
+    it('a refused hand-off on the retry is reported as an error with its count', async () => {
+      api.releaseNotes.email.mockResolvedValue({
+        targeted: 9, queued: 0, alreadyEmailed: 0, withoutEmail: 1, notQueued: 8, error: 'ระบบส่งอีเมลไม่รับงาน',
+      });
+      const { showToast } = renderPage(hr);
+
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
+      const dialog = await screen.findByRole('dialog');
+      await within(dialog).findByText(/8 คน/);
+      fireEvent.click(within(dialog).getByRole('button', { name: 'ส่งอีเมล' }));
+
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', expect.stringContaining('8 คน')));
+      expect(showToast.mock.calls.at(-1)[1]).toContain('ระบบส่งอีเมลไม่รับงาน');
+    });
+
+    it('re-reads the status by itself while mails are still being sent', async () => {
+      api.releaseNotes.audience
+        .mockResolvedValueOnce({ ...audience, email: { ...emailStatus, sending: 8, notYetEmailed: 0 } })
+        .mockResolvedValue({ ...audience, email: { ...emailStatus, sent: 8, notYetEmailed: 0 } });
+      renderPage(hr);
+
+      const status = await screen.findByRole('region', { name: 'ผลการส่งอีเมล' });
+      await within(status).findByText('กำลังส่ง');
+      await waitFor(() => expect(status.textContent).toMatch(/ส่งสำเร็จ\s*8/), { timeout: 7000 });
+      expect(api.releaseNotes.audience.mock.calls.length).toBeGreaterThanOrEqual(2);
+    }, 10000);
+
+    it('against a backend that has not been updated, both buttons are disabled and a click sends nothing', async () => {
+      // The previous backend's /audience: no `email` block (and no per-person outcomes behind it).
+      api.releaseNotes.audience.mockResolvedValue({
+        targeted: 9, alreadyNotified: 0, pendingNotification: 9, alreadyEmailed: 0, pendingEmail: 8, withoutEmail: 1,
+      });
+      renderPage(ceo);
+
+      await screen.findByText(/เซิร์ฟเวอร์ยังไม่ได้อัปเดต/);
+      const publish = screen.getByRole('button', { name: 'เผยแพร่ประกาศ' });
+      const retry = screen.getByRole('button', { name: 'ส่งอีเมลให้คนที่ยังไม่ได้รับ' });
+      expect(publish.disabled).toBe(true);
+      expect(retry.disabled).toBe(true);
+      fireEvent.click(publish);
+      fireEvent.click(retry);
+
+      expect(screen.queryByRole('dialog')).toBeNull();
+      expect(api.releaseNotes.publishWithEmail).not.toHaveBeenCalled();
+      expect(api.releaseNotes.email).not.toHaveBeenCalled();
+      expect(api.releaseNotes.audience).toHaveBeenCalledTimes(1);
+    });
+
     it('cancelling the confirm sends nothing', async () => {
       renderPage(hr);
 
-      fireEvent.click(await screen.findByRole('button', { name: 'ส่งอีเมลให้คนที่ยังไม่ได้รับ' }));
+      fireEvent.click(await readyButton('ส่งอีเมลให้คนที่ยังไม่ได้รับ'));
       const dialog = await screen.findByRole('dialog');
       await within(dialog).findByText(/8 คน/);
       fireEvent.click(within(dialog).getByRole('button', { name: 'ยกเลิก' }));

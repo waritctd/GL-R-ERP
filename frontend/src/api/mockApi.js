@@ -4267,7 +4267,8 @@ function mockReleaseNoticeSend(release, targets) {
     mockReleaseNoticeEmailed.add(key);
     queued += 1;
   }
-  return { targeted: targets.length, queued, alreadyEmailed, withoutEmail };
+  // notQueued / error: the server's refused hand-off; the mock never refuses.
+  return { targeted: targets.length, queued, alreadyEmailed, withoutEmail, notQueued: 0, error: null };
 }
 
 function mockReleaseNotifiedUserIds(releaseId) {

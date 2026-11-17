@@ -15,47 +15,78 @@ import th.co.glr.hr.audit.AuditService;
 import th.co.glr.hr.auth.UserPrincipal;
 
 /**
- * Sends one release-notice run's mails and records each person's OUTCOME, after the run's attempt rows have
- * committed (ReleaseNoticeService hands the batch over in an after-commit hook).
+ * Sends one release-notice run's mails and records each person's progress, after the run's attempt rows have
+ * committed (ReleaseNoticeService hands the batch over once its transaction has returned).
  *
  * <p>One async task per run, sending one mail after another: a run is a few dozen mails, and sending them in
- * sequence keeps the provider's per-second rate limit out of the picture (the 16 Nov run fired all of them at
- * once on the shared pool).
+ * sequence keeps the provider's per-second rate limit out of the picture.
  *
- * <p>For each person: the provider call either returns ({@code RELEASE_NOTE_EMAIL_SENT}) or throws
- * ({@code RELEASE_NOTE_EMAIL_FAILED}, with a short reason whose email addresses are masked). Both rows are
- * append-only audit rows tied to the attempt by its token, written in their own transaction
- * ({@code REQUIRES_NEW}, so it also commits when this runs synchronously inside an after-commit hook). If the
- * process dies before that row commits, or the row cannot be written, the attempt has NO outcome and is reported
- * "sending" and later "unconfirmed" — never "sent", and never re-sent without an explicit opt-in (see
- * ReleaseNoticeRepository#emailStates).
+ * <p>Per person, in this order:
+ * <ol>
+ *   <li><b>Start.</b> In its own transaction, under the SAME advisory lock the email actions hold, check that this
+ *       attempt is still the person's latest one (after any reset) and append {@code RELEASE_NOTE_EMAIL_STARTED}.
+ *       If a newer attempt exists (a retry reached this person while this batch waited in the queue), this one is
+ *       superseded and nothing is sent. If the start row cannot be written, nothing is sent either: an attempt
+ *       with no start row is provably unsent, and after the in-flight window it is retried like a failure.</li>
+ *   <li><b>Send.</b> The provider call either returns ({@code RELEASE_NOTE_EMAIL_SENT}) or throws
+ *       ({@code RELEASE_NOTE_EMAIL_FAILED}, with a short reason, addresses masked). A Mailer that does not deliver
+ *       makes the call throw "mail provider not configured", so it is FAILED, never SENT.</li>
+ * </ol>
+ * Every row is append-only and tied to the attempt by its token. A crash between the start row and the outcome
+ * leaves "started, no outcome": "sending" while the start is recent, then "unconfirmed" — never "sent", never
+ * re-sent without an explicit opt-in (ReleaseNoticeRepository#emailStates).
+ *
+ * <p>Shutdown: the loop checks the thread's interrupt flag before each person. Once interrupted (a deploy's
+ * {@code shutdownNow}), it sends nothing more and records everyone not yet started as FAILED "interrupted", so
+ * they are retried rather than left "sending".
  */
 @Component
 public class ReleaseNoticeDelivery {
     private static final Logger log = LoggerFactory.getLogger(ReleaseNoticeDelivery.class);
     private static final Pattern EMAIL_ADDRESS = Pattern.compile("[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+");
     private static final int MAX_REASON = 300;
+    /** Reason on the FAILED rows written when the executor refuses the batch (ReleaseNoticeService#handOff). */
+    static final String NOT_QUEUED = "could not queue";
+    static final String INTERRUPTED = "interrupted";
 
     private final NotificationEmailService emailService;
     private final AuditService audit;
+    private final ReleaseNoticeRepository releaseNotices;
     private final TransactionTemplate ownTransaction;
 
     public ReleaseNoticeDelivery(NotificationEmailService emailService, AuditService audit,
-                                 PlatformTransactionManager transactionManager) {
+                                 ReleaseNoticeRepository releaseNotices, PlatformTransactionManager transactionManager) {
         this.emailService = emailService;
         this.audit = audit;
+        this.releaseNotices = releaseNotices;
         this.ownTransaction = new TransactionTemplate(transactionManager);
         this.ownTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
     @Async
     public void deliver(UserPrincipal actor, String releaseId, List<Delivery> deliveries) {
+        for (int i = 0; i < deliveries.size(); i++) {
+            if (Thread.currentThread().isInterrupted()) {
+                log.warn("Release notice run interrupted: release={} not sent={}", releaseId, deliveries.size() - i);
+                recordFailed(actor, releaseId, deliveries.subList(i, deliveries.size()), INTERRUPTED);
+                return;
+            }
+            deliverOne(actor, releaseId, deliveries.get(i));
+        }
+    }
+
+    /** Appends a FAILED outcome for each delivery, e.g. when the batch never reached the sender. Each row commits
+     * on its own, so one failing write does not stop the others. */
+    public void recordFailed(UserPrincipal actor, String releaseId, List<Delivery> deliveries, String reason) {
         for (Delivery delivery : deliveries) {
-            deliverOne(actor, releaseId, delivery);
+            recordOutcome(actor, releaseId, delivery, ReleaseNoticeRepository.FAILED_ACTION, reason);
         }
     }
 
     private void deliverOne(UserPrincipal actor, String releaseId, Delivery delivery) {
+        if (!start(actor, releaseId, delivery)) {
+            return;
+        }
         String outcome;
         String reason = null;
         try {
@@ -67,20 +98,65 @@ public class ReleaseNoticeDelivery {
             log.error("Release notice email failed: release={} employee={} reason={}",
                 releaseId, delivery.employeeId(), reason);
         }
+        recordOutcome(actor, releaseId, delivery, outcome, reason);
+    }
+
+    /** True when this attempt may be sent now: it is still the latest one and its start row is committed. */
+    private boolean start(UserPrincipal actor, String releaseId, Delivery delivery) {
+        try {
+            Boolean started = uninterrupted(() -> ownTransaction.execute(status -> {
+                releaseNotices.lock("email:" + releaseId);
+                String latest = releaseNotices.latestAttempt(releaseId, delivery.employeeId());
+                if (!delivery.attempt().equals(latest)) {
+                    return false;
+                }
+                audit.record(actor, ReleaseNoticeRepository.STARTED_ACTION, ReleaseNoticeRepository.EMAILED_ENTITY,
+                    delivery.employeeId(), null, Map.of("releaseId", releaseId, "attempt", delivery.attempt()));
+                return true;
+            }));
+            if (!Boolean.TRUE.equals(started)) {
+                log.info("Release notice email skipped, superseded by a newer attempt: release={} employee={}",
+                    releaseId, delivery.employeeId());
+                return false;
+            }
+            return true;
+        } catch (RuntimeException exception) {
+            // Not started, so provably not sent: after the in-flight window it is retried like a failure.
+            log.error("Release notice email not started (start row not written): release={} employee={} error={}",
+                releaseId, delivery.employeeId(), exception.getMessage());
+            return false;
+        }
+    }
+
+    private void recordOutcome(UserPrincipal actor, String releaseId, Delivery delivery, String action, String reason) {
         Map<String, Object> after = new LinkedHashMap<>();
         after.put("releaseId", releaseId);
         after.put("attempt", delivery.attempt());
         if (reason != null) {
             after.put("reason", reason);
         }
-        String action = outcome;
         try {
-            ownTransaction.executeWithoutResult(status -> audit.record(actor, action,
-                ReleaseNoticeRepository.EMAILED_ENTITY, delivery.employeeId(), null, after));
+            uninterrupted(() -> ownTransaction.execute(status -> {
+                audit.record(actor, action, ReleaseNoticeRepository.EMAILED_ENTITY, delivery.employeeId(), null, after);
+                return null;
+            }));
         } catch (RuntimeException exception) {
-            // Left without an outcome: reported "sending", then "unconfirmed" — never "sent", never auto-resent.
+            // Left without an outcome: "sending", then "unconfirmed" — never "sent", never auto-resent.
             log.error("Release notice email outcome NOT recorded: release={} employee={} outcome={} error={}",
                 releaseId, delivery.employeeId(), action, exception.getMessage());
+        }
+    }
+
+    /** Runs a database write with the interrupt flag cleared (a pool may refuse an interrupted thread), then
+     * restores it, so an interrupted run can still record what it did and did not send. */
+    private static <T> T uninterrupted(java.util.function.Supplier<T> write) {
+        boolean interrupted = Thread.interrupted();
+        try {
+            return write.get();
+        } finally {
+            if (interrupted) {
+                Thread.currentThread().interrupt();
+            }
         }
     }
 
@@ -88,8 +164,13 @@ public class ReleaseNoticeDelivery {
      * bad key from a bad address, without copying an address into the audit log. */
     static String reason(Throwable exception) {
         String message = exception.getMessage() == null ? exception.getClass().getSimpleName() : exception.getMessage();
-        String masked = EMAIL_ADDRESS.matcher(message.replaceAll("\\s+", " ").trim()).replaceAll("<address>");
+        String masked = maskAddresses(message.replaceAll("\\s+", " ").trim());
         return masked.length() > MAX_REASON ? masked.substring(0, MAX_REASON) : masked;
+    }
+
+    /** Replaces every email address in {@code text} with {@code <address>}; null stays null. */
+    static String maskAddresses(String text) {
+        return text == null ? null : EMAIL_ADDRESS.matcher(text).replaceAll("<address>");
     }
 
     /** One person's mail of one attempt; {@code attempt} is the token on that person's attempt row. */

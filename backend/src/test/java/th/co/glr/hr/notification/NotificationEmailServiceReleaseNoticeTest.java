@@ -9,10 +9,15 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.util.List;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.springframework.boot.test.system.CapturedOutput;
+import org.springframework.boot.test.system.OutputCaptureExtension;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.mail.MailSendException;
 import th.co.glr.hr.mail.Mailer;
@@ -22,10 +27,28 @@ import th.co.glr.hr.mail.Mailer;
  * ReleaseNoticePolicy's). The title and why come from the publish request, so they are user-influenced input
  * reaching an email: every one is escaped in the HTML part.
  */
+@ExtendWith(OutputCaptureExtension.class)
 class NotificationEmailServiceReleaseNoticeTest {
     private static final String TO = "reader@example.com";
 
     private final Mailer mailer = mock(Mailer.class);
+
+    @BeforeEach
+    void aRealProvider() {
+        when(mailer.delivers()).thenReturn(true);
+    }
+
+    @Test
+    void aMailerThatDoesNotDeliverIsNeverHandedTheMail_theCallFails_andTheLogMasksTheAddress(CapturedOutput output) {
+        when(mailer.delivers()).thenReturn(false);
+
+        assertThatThrownBy(() -> service("").sendReleaseNotice(TO, "ยา", email))
+            .isInstanceOf(MailSendException.class)
+            .hasMessage("mail provider not configured");
+
+        verify(mailer, never()).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        assertThat(output.getAll()).doesNotContain(TO).contains("<address>");
+    }
 
     private final ReleaseNoticeEmail email = new ReleaseNoticeEmail(
         "มีอะไรใหม่ 17 พ.ย. 2569: เมนูแบบใหม่",

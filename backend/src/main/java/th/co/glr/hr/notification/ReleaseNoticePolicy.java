@@ -66,7 +66,9 @@ public final class ReleaseNoticePolicy {
         if (releaseId == null || !RELEASE_ID.matcher(releaseId).matches()) {
             throw badRequest("รหัสประกาศไม่ถูกต้อง");
         }
-        String title = trim(request.title());
+        // One line: a title reaches the subject, the bell row and the plain-text mail, where a newline would forge
+        // a line of its own (review LOW-1). Same rule as the why.
+        String title = oneLine(request.title());
         if (title == null || title.isEmpty() || title.length() > MAX_RELEASE_TITLE) {
             throw badRequest("ต้องระบุหัวข้อประกาศ (ไม่เกิน " + MAX_RELEASE_TITLE + " ตัวอักษร)");
         }
@@ -82,7 +84,7 @@ public final class ReleaseNoticePolicy {
     }
 
     private static Change normalize(Change change) {
-        String title = change == null ? null : trim(change.title());
+        String title = change == null ? null : oneLine(change.title());
         if (title == null || title.isEmpty() || title.length() > MAX_CHANGE_TITLE) {
             throw badRequest("ต้องระบุหัวข้อของแต่ละรายการ");
         }
@@ -102,13 +104,18 @@ public final class ReleaseNoticePolicy {
         return new Change(title, List.copyOf(roles), normalizeWhy(change.why()));
     }
 
-    private static String normalizeWhy(String raw) {
+    /** Whitespace runs (CR, LF, tab …) become one space first, so a line break becomes a space and not nothing; then
+     * the remaining control characters are dropped. Null stays null. */
+    private static String oneLine(String raw) {
         if (raw == null) {
             return null;
         }
-        // Whitespace first (so a newline or tab becomes a space, not nothing), then the remaining control chars.
-        String oneLine = CONTROL.matcher(WHITESPACE.matcher(raw).replaceAll(" ")).replaceAll("").trim();
-        if (oneLine.isEmpty()) {
+        return CONTROL.matcher(WHITESPACE.matcher(raw).replaceAll(" ")).replaceAll("").trim();
+    }
+
+    private static String normalizeWhy(String raw) {
+        String oneLine = oneLine(raw);
+        if (oneLine == null || oneLine.isEmpty()) {
             return null;
         }
         if (oneLine.length() > MAX_WHY) {

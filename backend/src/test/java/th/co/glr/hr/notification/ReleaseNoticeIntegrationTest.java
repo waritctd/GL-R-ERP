@@ -12,16 +12,20 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doAnswer;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Duration;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.springframework.core.task.TaskRejectedException;
 import org.springframework.http.HttpStatus;
 import th.co.glr.hr.audit.AuditLogRepository;
 import th.co.glr.hr.audit.AuditService;
@@ -95,6 +99,8 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
     @BeforeEach
     void wire() {
         mailer = mock(Mailer.class);
+        // A real provider: the release notice refuses a Mailer that does not deliver.
+        when(mailer.delivers()).thenReturn(true);
         emailService = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://glr-hub.com");
         audit = new AuditService(new AuditLogRepository(jdbc), new ObjectMapper());
         service = service(new ReleaseNoticeRepository(jdbc), realDelivery(audit), Duration.ofMinutes(30));
@@ -243,7 +249,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
     void publishWithEmail_bellsAndMailsTheTargets_eachOnlyTheirOwnEntries() {
         PublishWithEmailResult result = service.publishWithEmail(actor(hr, "hr"), REQUEST);
 
-        assertThat(result).isEqualTo(new PublishWithEmailResult(6, 6, 0, new EmailResult(6, 5, 0, 1), null));
+        assertThat(result).isEqualTo(new PublishWithEmailResult(6, 6, 0, new EmailResult(6, 5, 0, 1, 0, null), null));
         assertThat(releaseNoteRowCount()).isEqualTo(6);
         Map<String, Sent> mail = sentByRecipient(5);
         assertThat(mail).containsOnlyKeys(REP_MAIL, SM_MAIL, CEO_MAIL, AC_MAIL, WH2_MAIL);
@@ -261,6 +267,11 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(mail.get(WH2_MAIL).html()).contains(MY_WORK_WHY).doesNotContain(BOARD).doesNotContain(RECEIPTS);
         assertThat(mail.get(SM_MAIL).html()).contains(MY_WORK).contains(BOARD).contains(BOARD_WHY)
             .doesNotContain(RECEIPTS).doesNotContain(RECEIPTS_WHY);
+        // The bell row and the mail come from the same per-role filter: same count for the same reader.
+        assertThat(releaseNotes(salesManager).get(0).message()).contains("2 เรื่อง");
+        assertThat(mail.get(SM_MAIL).text()).contains("มี 2 เรื่องที่เกี่ยวกับงานของคุณ");
+        assertThat(releaseNotes(rep).get(0).message()).contains("1 เรื่อง");
+        assertThat(mail.get(REP_MAIL).text()).contains("มี 1 เรื่องที่เกี่ยวกับงานของคุณ");
         assertThat(mail.get(AC_MAIL).html()).contains(RECEIPTS).contains(RECEIPTS_WHY)
             .doesNotContain(MY_WORK).doesNotContain(MY_WORK_WHY).doesNotContain(BOARD);
         // No attachment path.
@@ -284,7 +295,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         PublishWithEmailResult second = service.publishWithEmail(actor(ceo, "ceo"), REQUEST);
 
-        assertThat(second).isEqualTo(new PublishWithEmailResult(6, 0, 6, new EmailResult(6, 0, 5, 1), null));
+        assertThat(second).isEqualTo(new PublishWithEmailResult(6, 0, 6, new EmailResult(6, 0, 5, 1, 0, null), null));
         verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
         assertThat(releaseNoteRowCount()).isEqualTo(6);
     }
@@ -318,7 +329,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         PublishWithEmailResult first = service.publishWithEmail(actor(hr, "hr"), REQUEST);
 
-        assertThat(first.email()).isEqualTo(new EmailResult(6, 5, 0, 1));
+        assertThat(first.email()).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
         assertThat(auditCount("RELEASE_NOTE_EMAIL_FAILED")).isEqualTo(1);
         Audience afterFailure = service.audience(actor(hr, "hr"), REQUEST);
         assertThat(afterFailure.email()).isEqualTo(
@@ -329,14 +340,14 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         // The retry action mails only the failed person (and never the four who got it).
         EmailResult retry = service.email(actor(ceo, "ceo"), REQUEST);
 
-        assertThat(retry).isEqualTo(new EmailResult(6, 1, 4, 1));
+        assertThat(retry).isEqualTo(new EmailResult(6, 1, 4, 1, 0, null));
         verify(mailer, times(2)).sendHtml(eq(SM_MAIL), anyString(), anyString(), anyString(), anyList());
         for (String address : List.of(REP_MAIL, CEO_MAIL, AC_MAIL, WH2_MAIL)) {
             verify(mailer, times(1)).sendHtml(eq(address), anyString(), anyString(), anyString(), anyList());
         }
         assertThat(service.audience(actor(hr, "hr"), REQUEST).email())
             .isEqualTo(new EmailStatus(5, 0, 0, 0, 0, 1, List.of("หมวย"), List.of(), List.of()));
-        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
     }
 
     @Test
@@ -347,7 +358,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         PublishWithEmailResult again = service.publishWithEmail(actor(hr, "hr"), REQUEST);
 
-        assertThat(again).isEqualTo(new PublishWithEmailResult(6, 0, 6, new EmailResult(6, 1, 4, 1), null));
+        assertThat(again).isEqualTo(new PublishWithEmailResult(6, 0, 6, new EmailResult(6, 1, 4, 1, 0, null), null));
         verify(mailer, times(2)).sendHtml(eq(AC_MAIL), anyString(), anyString(), anyString(), anyList());
         verify(mailer, times(6)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
@@ -360,66 +371,97 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         doThrow(new MailSendException("provider refused", null))
             .when(mailer).sendHtml(eq(SM_MAIL), anyString(), anyString(), anyString(), anyList());
         service.publishWithEmail(actor(hr, "hr"), REQUEST);
-        ReleaseNoticeDelivery crashed = new ReleaseNoticeDelivery(emailService, audit, transactionManager) {
+        ReleaseNoticeDelivery crashed = new ReleaseNoticeDelivery(emailService, audit, new ReleaseNoticeRepository(jdbc), transactionManager) {
             @Override
             public void deliver(UserPrincipal actor, String releaseId, List<Delivery> deliveries) {
             }
         };
         assertThat(service(new ReleaseNoticeRepository(jdbc), crashed, Duration.ofMinutes(30))
-            .email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 1, 4, 1));
+            .email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 1, 4, 1, 0, null));
 
         EmailStatus status = service.audience(actor(hr, "hr"), REQUEST).email();
         assertThat(status.failed()).isZero();
         assertThat(status.sending()).isEqualTo(1);
-        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
         verify(mailer, times(1)).sendHtml(eq(SM_MAIL), anyString(), anyString(), anyString(), anyList());
     }
 
+    // ── The crash window (fix round 1): a send is "in flight" from its OWN start, and a send that never started is
+    //    known not sent. A STARTED row is written (under the email lock) just before each provider call. ──────
+
     @Test
-    void aCrashAfterTheAttemptIsNeverReportedSentAndNeverSilentlyResent() {
-        // The process dies after the attempt rows commit and before the sender runs: no mail, no outcome.
-        ReleaseNoticeDelivery crashed = new ReleaseNoticeDelivery(emailService, audit, transactionManager) {
-            @Override
-            public void deliver(UserPrincipal actor, String releaseId, List<Delivery> deliveries) {
-            }
-        };
-        service(new ReleaseNoticeRepository(jdbc), crashed, Duration.ofMinutes(30))
+    void aCrashBeforeTheSendStartsIsKnownNotSent_soAfterTheWindowThePlainRetryReachesThem() {
+        // The process dies after the attempt rows commit and before the sender starts anyone: provably no mail.
+        service(new ReleaseNoticeRepository(jdbc), holding(new ArrayList<>()), Duration.ofMinutes(30))
             .publishWithEmail(actor(hr, "hr"), REQUEST);
         verifyNoInteractions(mailer);
 
-        // Inside the in-flight window: "sending" — not sent, and nothing re-sends it, not even the opt-in.
+        // Inside the window they may still be waiting in the queue: "sending", and nothing re-sends them.
         Audience young = service.audience(actor(hr, "hr"), REQUEST);
         assertThat(young.email()).isEqualTo(new EmailStatus(0, 0, 5, 0, 0, 1, List.of("หมวย"), List.of(), List.of()));
-        assertThat(service.publishWithEmail(actor(hr, "hr"), REQUEST).email()).isEqualTo(new EmailResult(6, 0, 5, 1));
-        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
-        assertThat(service.email(actor(hr, "hr"), request(RELEASE_ID, true))).isEqualTo(new EmailResult(6, 0, 5, 1));
-        verifyNoInteractions(mailer);
+        // The old bundle reads alreadyEmailed as "will not be mailed again": it must count these five.
+        assertThat(young.alreadyEmailed()).isEqualTo(5);
+        assertThat(young.pendingEmail()).isZero();
+        assertThat(service.publishWithEmail(actor(hr, "hr"), REQUEST).email())
+            .isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
+        assertThat(service.email(actor(hr, "hr"), request(RELEASE_ID, true)))
+            .isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
+        verify(mailer, never()).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
 
-        // Past the window: "unconfirmed", named — still not sent, still not re-sent by publish or the plain retry.
+        // Past the window with no start: known not sent — shown as failed and reached by the PLAIN retry.
         ReleaseNoticeService later = service(new ReleaseNoticeRepository(jdbc), realDelivery(audit), Duration.ZERO);
         EmailStatus stale = later.audience(actor(hr, "hr"), REQUEST).email();
-        assertThat(stale.sent()).isZero();
-        assertThat(stale.unconfirmed()).isEqualTo(5);
-        assertThat(stale.unconfirmedNames()).containsExactlyInAnyOrder("ยา", "วาริส", "ซีอีโอ", "บัญชี", "คลังขาย");
-        assertThat(later.publishWithEmail(actor(hr, "hr"), REQUEST).email()).isEqualTo(new EmailResult(6, 0, 5, 1));
-        assertThat(later.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
-        verifyNoInteractions(mailer);
-
-        // Only the explicit opt-in re-sends them, once.
-        assertThat(later.email(actor(ceo, "ceo"), request(RELEASE_ID, true))).isEqualTo(new EmailResult(6, 5, 0, 1));
-        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
-        assertThat(later.audience(actor(hr, "hr"), REQUEST).email().sent()).isEqualTo(5);
-        assertThat(later.email(actor(ceo, "ceo"), request(RELEASE_ID, true))).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(stale.unconfirmed()).isZero();
+        assertThat(stale.failed()).isEqualTo(5);
+        assertThat(stale.failedNames()).containsExactlyInAnyOrder("ยา", "วาริส", "ซีอีโอ", "บัญชี", "คลังขาย");
+        assertThat(later.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
         verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
     @Test
-    void anOutcomeThatCannotBeRecordedStaysUnconfirmed_neverSent() {
+    void aQueuedBatchThatStartsAfterARetryIsSkipped_soNobodyGetsTwo() {
+        List<List<ReleaseNoticeDelivery.Delivery>> held = new ArrayList<>();
+        service(new ReleaseNoticeRepository(jdbc), holding(held), Duration.ofMinutes(30))
+            .publishWithEmail(actor(hr, "hr"), REQUEST);
+        ReleaseNoticeService later = service(new ReleaseNoticeRepository(jdbc), realDelivery(audit), Duration.ZERO);
+        assertThat(later.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
+
+        // The original batch finally leaves the queue: every one of its attempts is superseded, so it sends nothing.
+        realDelivery(audit).deliver(actor(hr, "hr"), RELEASE_ID, held.get(0));
+
+        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        assertThat(later.audience(actor(hr, "hr"), REQUEST).email().sent()).isEqualTo(5);
+    }
+
+    @Test
+    void theInFlightWindowRunsFromEachPersonsOwnStart_onTheDatabaseClock() {
+        // All three were attempted two hours ago (database clock). The rep waited in the queue and started just now;
+        // the manager started two hours ago and never reported; the CEO never started at all.
+        insertAttempt(rep, "a-rep", "2 hours");
+        insertStarted(rep, "a-rep", "0 seconds");
+        insertAttempt(salesManager, "a-sm", "2 hours");
+        insertStarted(salesManager, "a-sm", "2 hours");
+        insertAttempt(ceo, "a-ceo", "2 hours");
+
+        EmailStatus status = service.audience(actor(hr, "hr"), REQUEST).email();
+
+        assertThat(status.sending()).as("queued long, started now: still in flight").isEqualTo(1);
+        assertThat(status.unconfirmedNames()).as("started long ago, no outcome").containsExactly("วาริส");
+        assertThat(status.failedNames()).as("never started: known not sent").containsExactly("ซีอีโอ");
+        // The plain retry reaches the CEO and the never-attempted, never the in-flight rep or the unconfirmed manager.
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 3, 2, 1, 0, null));
+        verify(mailer, never()).sendHtml(eq(REP_MAIL), anyString(), anyString(), anyString(), anyList());
+        verify(mailer, never()).sendHtml(eq(SM_MAIL), anyString(), anyString(), anyString(), anyList());
+        verify(mailer, times(1)).sendHtml(eq(CEO_MAIL), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void aSendWhoseOutcomeCannotBeRecordedStaysUnconfirmed_andOnlyTheOptInResendsIt() {
         AuditService outcomeWriteFails = new AuditService(new AuditLogRepository(jdbc), new ObjectMapper()) {
             @Override
             public void record(UserPrincipal actor, String action, String entity, Long entityId, Object before,
                                Object after) {
-                if (action.startsWith("RELEASE_NOTE_EMAIL_")) {
+                if (action.equals("RELEASE_NOTE_EMAIL_SENT") || action.equals("RELEASE_NOTE_EMAIL_FAILED")) {
                     throw new IllegalStateException("simulated outcome write failure");
                 }
                 super.record(actor, action, entity, entityId, before, after);
@@ -429,12 +471,146 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
             .publishWithEmail(actor(hr, "hr"), REQUEST);
         verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
 
-        EmailStatus status = service(new ReleaseNoticeRepository(jdbc), realDelivery(audit), Duration.ZERO)
-            .audience(actor(hr, "hr"), REQUEST).email();
+        ReleaseNoticeService later = service(new ReleaseNoticeRepository(jdbc), realDelivery(audit), Duration.ZERO);
+        Audience stale = later.audience(actor(hr, "hr"), REQUEST);
+        assertThat(stale.email().sent()).isZero();
+        assertThat(stale.email().failed()).isZero();
+        assertThat(stale.email().unconfirmed()).isEqualTo(5);
+        assertThat(stale.alreadyEmailed()).isEqualTo(5);
+        assertThat(later.publishWithEmail(actor(hr, "hr"), REQUEST).email())
+            .isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
+        assertThat(later.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
+        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
 
-        assertThat(status.sent()).isZero();
-        assertThat(status.failed()).isZero();
-        assertThat(status.unconfirmed()).isEqualTo(5);
+        // Only the explicit opt-in re-sends them, once.
+        assertThat(later.email(actor(ceo, "ceo"), request(RELEASE_ID, true)))
+            .isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
+        verify(mailer, times(10)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        assertThat(later.audience(actor(hr, "hr"), REQUEST).email().sent()).isEqualTo(5);
+        assertThat(later.email(actor(ceo, "ceo"), request(RELEASE_ID, true)))
+            .isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
+    }
+
+    // ── A Mailer that does not deliver, a refused hand-off, an interrupted run (fix round 1) ──────────────────
+
+    @Test
+    void aMailerThatDoesNotDeliverNeverRecordsSent_andTheRetryReachesThemOnceMailWorks() {
+        when(mailer.delivers()).thenReturn(false);
+
+        service.publishWithEmail(actor(hr, "hr"), REQUEST);
+
+        verify(mailer, never()).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        assertThat(auditCount("RELEASE_NOTE_EMAIL_SENT")).isZero();
+        assertThat(failedReasons()).hasSize(5).containsOnly("mail provider not configured");
+        assertThat(service.audience(actor(hr, "hr"), REQUEST).email().failed()).isEqualTo(5);
+
+        when(mailer.delivers()).thenReturn(true);
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
+        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        assertThat(service.audience(actor(hr, "hr"), REQUEST).email().sent()).isEqualTo(5);
+    }
+
+    @Test
+    void aRefusedHandOffIsRecordedFailed_reportedWithCounts_andRetriedWithoutTheOptIn() {
+        ReleaseNoticeDelivery rejecting = new ReleaseNoticeDelivery(emailService, audit,
+            new ReleaseNoticeRepository(jdbc), transactionManager) {
+            @Override
+            public void deliver(UserPrincipal actor, String releaseId, List<Delivery> deliveries) {
+                throw new TaskRejectedException("executor shut down");
+            }
+        };
+        ReleaseNoticeService refusing = service(new ReleaseNoticeRepository(jdbc), rejecting, Duration.ofMinutes(30));
+
+        PublishWithEmailResult published = refusing.publishWithEmail(actor(hr, "hr"), REQUEST);
+
+        assertThat(published.inserted()).isEqualTo(6);
+        assertThat(releaseNoteRowCount()).isEqualTo(6);
+        assertThat(published.email()).isNotNull();
+        assertThat(published.email().queued()).isZero();
+        assertThat(published.email().notQueued()).isEqualTo(5);
+        assertThat(published.email().error()).isNotBlank();
+        assertThat(published.emailError()).isNotBlank();
+        assertThat(failedReasons()).hasSize(5).containsOnly("could not queue");
+        assertThat(service.audience(actor(hr, "hr"), REQUEST).email().failed()).isEqualTo(5);
+
+        // The retry path reports a refusal the same way — never a 500 after its rows committed.
+        EmailResult refusedRetry = refusing.email(actor(hr, "hr"), REQUEST);
+        assertThat(refusedRetry.queued()).isZero();
+        assertThat(refusedRetry.notQueued()).isEqualTo(5);
+
+        // Once the sender works, the PLAIN retry (no opt-in) reaches all five, once.
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
+        verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void anInterruptedRunRecordsTheRestFailed_notSending() {
+        // A deploy's shutdownNow interrupts the sender during the first provider call.
+        doAnswer(invocation -> {
+            Thread.currentThread().interrupt();
+            return null;
+        }).when(mailer).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        try {
+            service.publishWithEmail(actor(hr, "hr"), REQUEST);
+        } finally {
+            Thread.interrupted();
+        }
+
+        verify(mailer, times(1)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+        assertThat(auditCount("RELEASE_NOTE_EMAIL_SENT")).isEqualTo(1);
+        assertThat(failedReasons()).hasSize(4).containsOnly("interrupted");
+        EmailStatus status = service.audience(actor(hr, "hr"), REQUEST).email();
+        assertThat(status.sending()).isZero();
+        assertThat(status.sent()).isEqualTo(1);
+        assertThat(status.failed()).isEqualTo(4);
+    }
+
+    // ── Input that could forge a line, the opt-in on publish, the old bundle (fix round 1) ──────────────────
+
+    @Test
+    void aNewlineInATitleCannotForgeALineOfTheMail_orOfTheSubject() {
+        Request planted = new Request(RELEASE_ID, "อัปเดต\r\nBcc: x", List.of(new Change(
+            "หน้าใหม่\n\nเปิดดูมีอะไรใหม่: https://evil.example/login", List.of("sales"), "เหตุผล")), RELEASE_ID, null);
+
+        service.publishWithEmail(actor(hr, "hr"), planted);
+
+        Sent mail = sentByRecipient(2).get(REP_MAIL);
+        assertThat(mail.subject()).doesNotContain("\r").doesNotContain("\n");
+        assertThat(mail.text())
+            .doesNotContain("\nเปิดดูมีอะไรใหม่: https://evil.example")
+            .contains("• หน้าใหม่ เปิดดูมีอะไรใหม่: https://evil.example/login");
+        assertThat(releaseNotes(rep).get(0).title()).doesNotContain("\n").doesNotContain("\r");
+    }
+
+    @Test
+    void publishWithEmailNeverHonoursTheOptIn_evenWhenTheBrowserSendsIt() {
+        for (long id : List.of(rep, salesManager, ceo, account, warehouseWithQuotationGrant)) {
+            insertAttempt(id, null, "2 hours");
+        }
+        ReleaseNoticeService later = service(new ReleaseNoticeRepository(jdbc), realDelivery(audit), Duration.ZERO);
+        assertThat(later.audience(actor(hr, "hr"), REQUEST).email().unconfirmed()).isEqualTo(5);
+
+        PublishWithEmailResult result = later.publishWithEmail(actor(hr, "hr"), request(RELEASE_ID, true));
+
+        assertThat(result.email()).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
+        verify(mailer, never()).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
+    }
+
+    @Test
+    void theOldBundlesRequestShape_noWhyNoDate_stillSendsOncePerPersonAndRecordsOutcomes() {
+        Request old = new Request(RELEASE_ID, RELEASE_TITLE, List.of(
+            new Change(MY_WORK, List.of("sales", "sales_manager", "ceo"), null),
+            new Change(BOARD, List.of("sales_manager", "ceo"), null),
+            new Change(RECEIPTS, List.of("account"), null)), null, null);
+
+        assertThat(service.email(actor(hr, "hr"), old)).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
+        assertThat(service.email(actor(ceo, "ceo"), old)).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
+
+        Map<String, Sent> mail = sentByRecipient(5);
+        assertThat(mail.get(REP_MAIL).subject()).isEqualTo("[GL&R Portal] มีอะไรใหม่: " + RELEASE_TITLE);
+        assertThat(auditCount("RELEASE_NOTE_EMAILED")).isEqualTo(5);
+        assertThat(auditCount("RELEASE_NOTE_EMAIL_SENT")).isEqualTo(5);
+        assertThat(service.audience(actor(hr, "hr"), old).email().sent()).isEqualTo(5);
     }
 
     @Test
@@ -451,7 +627,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(status.sent()).isZero();
         assertThat(status.unconfirmed()).isEqualTo(1);
         assertThat(status.unconfirmedNames()).containsExactly("ยา");
-        assertThat(later.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 4, 1, 1));
+        assertThat(later.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 4, 1, 1, 0, null));
         verify(mailer, never()).sendHtml(eq(REP_MAIL), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -461,7 +637,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
     void ceoEmail_mailsEachTargetedEmployeeWithAnAddress_listingOnlyTheirOwnRolesChanges() {
         EmailResult result = service.email(actor(ceo, "ceo"), REQUEST);
 
-        assertThat(result).isEqualTo(new EmailResult(6, 5, 0, 1));
+        assertThat(result).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
         Map<String, Sent> mail = sentByRecipient(5);
         assertThat(mail).containsOnlyKeys(REP_MAIL, SM_MAIL, CEO_MAIL, AC_MAIL, WH2_MAIL);
         assertThat(mail.get(REP_MAIL).html()).contains("เรียน คุณยา").contains(MY_WORK)
@@ -476,7 +652,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         service.email(actor(hr, "hr"), REQUEST);
         EmailResult second = service.email(actor(ceo, "ceo"), REQUEST);
 
-        assertThat(second).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(second).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
         verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -488,7 +664,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         EmailResult second = service.email(actor(hr, "hr"), REQUEST);
 
-        assertThat(second).isEqualTo(new EmailResult(6, 1, 5, 0));
+        assertThat(second).isEqualTo(new EmailResult(6, 1, 5, 0, 0, null));
         verify(mailer, times(6)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -509,7 +685,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
         Request next = new Request("2026-12-01", "ฉบับถัดไป", REQUEST.changes(), "2026-12-01", null);
 
         assertThat(service.publishWithEmail(actor(hr, "hr"), next))
-            .isEqualTo(new PublishWithEmailResult(6, 6, 0, new EmailResult(6, 5, 0, 1), null));
+            .isEqualTo(new PublishWithEmailResult(6, 6, 0, new EmailResult(6, 5, 0, 1, 0, null), null));
     }
 
     // ── Email reset: undoing a run whose sends all failed (hr.audit_log is append-only) ─────────────────────
@@ -523,7 +699,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
             new EmailStatus(0, 0, 0, 0, 5, 1, List.of("หมวย"), List.of(), List.of())));
         EmailResult afterReset = service.email(actor(ceo, "ceo"), REQUEST);
 
-        assertThat(afterReset).isEqualTo(new EmailResult(6, 5, 0, 1));
+        assertThat(afterReset).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
         verify(mailer, times(10)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -535,7 +711,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
             """, Map.of("id", rep, "releaseId", RELEASE_ID));
         insertEmailReset(RELEASE_ID);
 
-        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1));
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
         verify(mailer, times(1)).sendHtml(eq(REP_MAIL), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -547,7 +723,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         EmailResult third = service.email(actor(ceo, "ceo"), REQUEST);
 
-        assertThat(third).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(third).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
         verify(mailer, times(10)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -558,7 +734,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
 
         EmailResult second = service.email(actor(ceo, "ceo"), REQUEST);
 
-        assertThat(second).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(second).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
         verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -566,12 +742,12 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
     void twoResetsEachReopenTheRun_andEachRunStillSendsOnce() {
         service.email(actor(hr, "hr"), REQUEST);
         insertEmailReset(RELEASE_ID);
-        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1));
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
         insertEmailReset(RELEASE_ID);
-        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1));
+        assertThat(service.email(actor(hr, "hr"), REQUEST)).isEqualTo(new EmailResult(6, 5, 0, 1, 0, null));
 
         // within the third run nothing is double-sent
-        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
         verify(mailer, times(15)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -583,7 +759,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
             VALUES ('RELEASE_NOTE_EMAIL_RESET', 'employee', jsonb_build_object('releaseId', :releaseId))
             """, Map.of("releaseId", RELEASE_ID));
 
-        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
         verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -596,7 +772,7 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
                    ('RELEASE_NOTE_EMAIL_RESET', 'release_note', jsonb_build_object('other', 'x'))
             """, Map.of());
 
-        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1));
+        assertThat(service.email(actor(ceo, "ceo"), REQUEST)).isEqualTo(new EmailResult(6, 0, 5, 1, 0, null));
         verify(mailer, times(5)).sendHtml(anyString(), anyString(), anyString(), anyString(), anyList());
     }
 
@@ -616,8 +792,48 @@ class ReleaseNoticeIntegrationTest extends AbstractPostgresIntegrationTest {
             releaseId, resendUnconfirmed ? Boolean.TRUE : null);
     }
 
+    /** A sender that keeps each batch and sends nothing: a run still in the queue, or a crash before any start. */
+    private ReleaseNoticeDelivery holding(List<List<ReleaseNoticeDelivery.Delivery>> held) {
+        return new ReleaseNoticeDelivery(emailService, audit, new ReleaseNoticeRepository(jdbc), transactionManager) {
+            @Override
+            public void deliver(UserPrincipal actor, String releaseId, List<Delivery> deliveries) {
+                held.add(deliveries);
+            }
+        };
+    }
+
+    /** An attempt row written {@code ago} before now on the DATABASE clock. A null token is a pre-outcome row. */
+    private void insertAttempt(long employeeId, String attempt, String ago) {
+        Map<String, Object> params = new HashMap<>();
+        params.put("id", employeeId);
+        params.put("releaseId", RELEASE_ID);
+        params.put("attempt", attempt);
+        params.put("ago", ago);
+        jdbc.update("""
+            INSERT INTO hr.audit_log (action, entity, entity_id, after_json, at)
+            VALUES ('RELEASE_NOTE_EMAILED', 'employee', :id,
+                    CASE WHEN CAST(:attempt AS text) IS NULL THEN jsonb_build_object('releaseId', :releaseId)
+                         ELSE jsonb_build_object('releaseId', :releaseId, 'attempt', CAST(:attempt AS text)) END,
+                    now() - CAST(:ago AS interval))
+            """, params);
+    }
+
+    private void insertStarted(long employeeId, String attempt, String ago) {
+        jdbc.update("""
+            INSERT INTO hr.audit_log (action, entity, entity_id, after_json, at)
+            VALUES ('RELEASE_NOTE_EMAIL_STARTED', 'employee', :id,
+                    jsonb_build_object('releaseId', :releaseId, 'attempt', :attempt), now() - CAST(:ago AS interval))
+            """, Map.of("id", employeeId, "releaseId", RELEASE_ID, "attempt", attempt, "ago", ago));
+    }
+
+    private List<String> failedReasons() {
+        return jdbc.queryForList("""
+            SELECT after_json ->> 'reason' FROM hr.audit_log WHERE action = 'RELEASE_NOTE_EMAIL_FAILED' ORDER BY id
+            """, Map.of(), String.class);
+    }
+
     private ReleaseNoticeDelivery realDelivery(AuditService auditService) {
-        return new ReleaseNoticeDelivery(emailService, auditService, transactionManager);
+        return new ReleaseNoticeDelivery(emailService, auditService, new ReleaseNoticeRepository(jdbc), transactionManager);
     }
 
     private ReleaseNoticeService service(ReleaseNoticeRepository repository, ReleaseNoticeDelivery delivery,
