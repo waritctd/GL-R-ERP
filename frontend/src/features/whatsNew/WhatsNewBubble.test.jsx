@@ -60,7 +60,8 @@ describe('WhatsNewBubble', () => {
     const popover = screen.getByRole('dialog', { name: 'มีอะไรใหม่' });
     expect(popover.textContent).toContain('17 พ.ย. 2569');
     const items = within(popover).getAllByRole('listitem');
-    expect(items).toHaveLength(7);
+    // A rep's 17 Nov section: the 17a seven plus the create form, the lifecycle dialogs and the chain card (17d).
+    expect(items).toHaveLength(10);
     // Wrong-way-round: a rep is not shown the finance worklist or the team versions.
     expect(popover.textContent).not.toContain('งานการเงิน');
     expect(popover.textContent).not.toContain('ทุกคนในทีม');

@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ROLE_PERMISSIONS } from '../../../api/routes.js';
 import { hasPermission } from '../../../app/permissions.js';
 import { canPerformFinanceStep } from '../../finance/financeActionPerformers.js';
@@ -51,9 +51,40 @@ import visitDialogsSrc from '../../salesBoard/VisitDialogs.jsx?raw';
 import todayOnPhoneSrc from '../../salesBoard/TodayOnPhone.jsx?raw';
 import financePageSrc from '../../finance/AccountFinancePage.jsx?raw';
 import financeGroupsSrc from '../../finance/financeWorkGroups.js?raw';
+// 17d (#1329 lifecycle dialogs, #1330 document chain), live on production 2026-11-17.
+import ticketCreateModalSrc from '../../tickets/TicketCreateModal.jsx?raw';
+import dealDialogPartsSrc from '../../tickets/dealDialogParts.jsx?raw';
+import formatSrc from '../../../utils/format.js?raw';
+import moveToS2Src from '../../tickets/MoveToS2Modal.jsx?raw';
+import pauseDealSrc from '../../tickets/PauseDealModal.jsx?raw';
+import markLostSrc from '../../tickets/MarkLostModal.jsx?raw';
+import cancelDealSrc from '../../tickets/CancelDealModal.jsx?raw';
+import reasonModalSrc from '../../tickets/ReasonModal.jsx?raw';
+import stageMetaSrc from '../../tickets/stageMeta.js?raw';
+import followUpListSrc from '../../salesBoard/FollowUpList.jsx?raw';
+import teamOverviewSrc from '../../salesBoard/TeamOverview.jsx?raw';
+import quotationEditorSrc from '../../quotations/QuotationEditorPage.jsx?raw';
+import chainCardSrc from '../../quotations/QuotationDocumentChain.jsx?raw';
+import quotationChainSrc from '../../quotations/quotationChain.js?raw';
+import documentChainTextSrc from '../../documentChain/documentChainText.js?raw';
+import workStateSrc from '../../tickets/workState.js?raw';
+import { CANCEL_REASON_LABEL, LOST_REASON_LABEL } from '../../tickets/stageMeta.js';
+import { CHAIN_LIST_MARK, CHAIN_STEP_TITLES } from '../../documentChain/documentChainText.js';
+import { canAccessPath } from '../../../app/permissions.js';
 
 const RELEASE_ID = '2026-11-17';
 const user = (role, extra = {}) => ({ id: 1, role, employeeId: 1, ...extra });
+
+// What each lock-exempt sales role is told, lock on and off alike (17d added the create form, the lifecycle dialogs
+// and the document chain to the 17a set).
+const SALES_IDS = ['menu-launcher', 'all-deals', 'deal-create', 'deal-page', 'deal-lifecycle', 'deal-documents',
+  'quotation-list', 'quotation-chain', 'visits', 'today-phone'];
+const MANAGER_IDS = ['menu-launcher', 'all-deals-team', 'deal-page', 'deal-lifecycle-team', 'quotation-list-approver',
+  'quotation-chain-manager', 'visits-team'];
+const NEW_17D_IDS = ['deal-create', 'deal-lifecycle', 'deal-lifecycle-team', 'quotation-chain', 'quotation-chain-manager',
+  'quotation-chain-ceo'];
+const CEO_IDS = ['menu-launcher', 'all-deals-team', 'deal-page', 'deal-lifecycle-team', 'deal-documents-ceo',
+  'quotation-list-approver', 'quotation-chain-ceo', 'visits-team', 'finance-worklist-ceo'];
 const release = findRelease(RELEASE_ID);
 const byId = (id) => release?.entries.find((entry) => entry.id === id);
 
@@ -74,6 +105,15 @@ const DOCUMENTS = [ticketTabsSrc, paymentSectionSrc, depositNoticeSrc, remaining
 const QUOTATIONS = [...NAV, quotationListSrc, quotationMetaSrc];
 const VISITS = [...NAV, visitsPageSrc, visitsThisWeekSrc, visitWeekGridSrc, visitWeekSrc, visitDialogsSrc];
 const FINANCE = [...NAV, financePageSrc, financeGroupsSrc];
+// สร้างงานใหม่: the "งานใหม่" buttons (AllDealsPage, MyWork, TodayOnPhone) and the form (เสนอแก่ is format.js's constant).
+const CREATE = [...BOARD, todayOnPhoneSrc, ticketCreateModalSrc, dealDialogPartsSrc, formatSrc];
+// The lifecycle dialogs open from the deal page; a returning paused deal shows in ควรตามต่อ (rep) / ภาพรวมทีมขาย (team).
+const LIFECYCLE = [...DEAL_PAGE, moveToS2Src, pauseDealSrc, markLostSrc, cancelDealSrc, reasonModalSrc, dealDialogPartsSrc,
+  stageMetaSrc, followUpListSrc, myWorkSrc];
+const LIFECYCLE_TEAM = [...LIFECYCLE, teamOverviewSrc, appShellSrc];
+// The chain card on the quotation page, its words, the dialogs it opens, the list mark, and the deal page's เงิน tab.
+const CHAIN = [...QUOTATIONS, quotationEditorSrc, chainCardSrc, quotationChainSrc, documentChainTextSrc, depositNoticeSrc,
+  remainingInvoiceSrc, ticketTabsSrc, paymentSectionSrc];
 
 /** Entry id → the sources of the screens it describes, comments stripped. Every entry must be listed: an entry with no
  * sources would skip the label check. */
@@ -92,6 +132,12 @@ const ENTRY_SOURCES = Object.fromEntries(Object.entries({
   'today-phone': [...NAV, todayOnPhoneSrc, myWorkSrc, visitDialogsSrc, visitsThisWeekSrc],
   'finance-worklist': FINANCE,
   'finance-worklist-ceo': FINANCE,
+  'deal-create': CREATE,
+  'deal-lifecycle': LIFECYCLE,
+  'deal-lifecycle-team': LIFECYCLE_TEAM,
+  'quotation-chain': CHAIN,
+  'quotation-chain-manager': CHAIN,
+  'quotation-chain-ceo': CHAIN,
 }).map(([id, sources]) => [id, sources.map(code)]));
 
 // The backend's own quiet threshold (QuietRule.DEFAULT_QUIET_DAYS; application.yml defaults app.sales.quiet-days to it).
@@ -101,6 +147,14 @@ const QUIET_RULE_SRC = readFileSync(
   resolve(FRONTEND_ROOT, '../backend/src/main/java/th/co/glr/hr/ticket/QuietRule.java'), 'utf8',
 );
 const DEFAULT_QUIET_DAYS = Number(/DEFAULT_QUIET_DAYS = (\d+);/.exec(QUIET_RULE_SRC)[1]);
+
+// The Java rules that decide who may act in the lifecycle dialogs and the document chain (the mock is not authoritative).
+const JAVA = (path) => readFileSync(resolve(FRONTEND_ROOT, '../backend/src/main/java/th/co/glr/hr', path), 'utf8');
+const TICKET_SERVICE_SRC = JAVA('ticket/TicketService.java');
+const CANCEL_REASON_SRC = JAVA('ticket/DealCancelReason.java');
+const DEAL_QUOTATION_SERVICE_SRC = JAVA('dealquotation/DealQuotationService.java');
+const DEPOSIT_NOTICE_SERVICE_SRC = JAVA('deposit/DepositNoticeService.java');
+const DOCUMENT_CHAIN_SERVICE_SRC = JAVA('documentchain/DocumentChainService.java');
 
 /** Every "quoted" on-screen label in an entry's prose (title, why, each step's text and detail, help). Alt text is
  * not on-screen copy, so it is left out. */
@@ -163,11 +217,16 @@ describe('2026-11-17 release: registration', () => {
   //   - deal-documents step 2: every mock remaining invoice deducts a ฿0 deposit (mockApi remainingInvoiceOptions and
   //     mockRemainingInvoiceSnapshot hardcode 0), beside a step about the deposit.
   //   - quotation-list-view: in mock mode /quotations has no rows for account / import, so the list is empty.
+  // The 17d entries (lifecycle dialogs, document chain) have a screenshot on every step.
   it('exactly the steps that cannot be captured honestly have no screenshot', () => {
     expect(release).not.toBeNull();
     const imageless = release.entries.flatMap((entry) => entry.steps
       .map((step, index) => (step.image === null ? `${entry.id}-${index + 1}` : null)).filter(Boolean));
     expect(imageless).toEqual(['deal-documents-2', 'quotation-list-view-1', 'quotation-list-view-2', 'quotation-list-view-3']);
+    for (const id of ['deal-create', 'deal-lifecycle', 'deal-lifecycle-team', 'quotation-chain', 'quotation-chain-manager',
+      'quotation-chain-ceo']) {
+      expect(byId(id), `${id} is missing`).toBeTruthy();
+    }
   });
 });
 
@@ -176,16 +235,9 @@ describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
 
   it('each role is told about exactly the pages it can open that changed for it', () => {
     expect(release).not.toBeNull();
-    expect(idsFor(user('sales'))).toEqual(
-      ['menu-launcher', 'all-deals', 'deal-page', 'deal-documents', 'quotation-list', 'visits', 'today-phone'],
-    );
-    expect(idsFor(user('sales_manager'))).toEqual(
-      ['menu-launcher', 'all-deals-team', 'deal-page', 'quotation-list-approver', 'visits-team'],
-    );
-    expect(idsFor(user('ceo'))).toEqual(
-      ['menu-launcher', 'all-deals-team', 'deal-page', 'deal-documents-ceo', 'quotation-list-approver', 'visits-team',
-        'finance-worklist-ceo'],
-    );
+    expect(idsFor(user('sales'))).toEqual(SALES_IDS);
+    expect(idsFor(user('sales_manager'))).toEqual(MANAGER_IDS);
+    expect(idsFor(user('ceo'))).toEqual(CEO_IDS);
     // account and import read the ใบเสนอราคา list (canViewDealQuotations) when the lock is off, read-only.
     expect(idsFor(user('account'))).toEqual(['menu-launcher', 'finance-worklist', 'quotation-list-view']);
     expect(idsFor(user('import'))).toEqual(['menu-launcher', 'quotation-list-view']);
@@ -205,7 +257,8 @@ describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
     // Wrong-way-round: import and account are never told about the board, the deal page, visits or the phone screen.
     for (const role of ['import', 'account']) {
       for (const id of ['all-deals', 'all-deals-team', 'deal-page', 'deal-documents', 'deal-documents-ceo', 'visits',
-        'visits-team', 'today-phone']) {
+        'visits-team', 'today-phone', 'deal-create', 'deal-lifecycle', 'deal-lifecycle-team', 'quotation-chain',
+        'quotation-chain-manager', 'quotation-chain-ceo']) {
         expect(idsFor(user(role)), `${role} told about ${id}`).not.toContain(id);
       }
     }
@@ -336,14 +389,9 @@ describe('2026-11-17 audiences under the release lockdown', () => {
     const { entriesForViewer: forViewer, locked } = await lockedModules();
     expect(locked).not.toBeNull();
     const ids = (role, extra) => forViewer(locked, user(role, extra)).map((entry) => entry.id);
-    expect(ids('sales')).toEqual(
-      ['menu-launcher', 'all-deals', 'deal-page', 'deal-documents', 'quotation-list', 'visits', 'today-phone'],
-    );
-    expect(ids('sales_manager')).toEqual(['menu-launcher', 'all-deals-team', 'deal-page', 'quotation-list-approver', 'visits-team']);
-    expect(ids('ceo')).toEqual(
-      ['menu-launcher', 'all-deals-team', 'deal-page', 'deal-documents-ceo', 'quotation-list-approver', 'visits-team',
-        'finance-worklist-ceo'],
-    );
+    expect(ids('sales')).toEqual(SALES_IDS);
+    expect(ids('sales_manager')).toEqual(MANAGER_IDS);
+    expect(ids('ceo')).toEqual(CEO_IDS);
     // Locked, account opens /finance only and import neither /finance nor /quotations: the ใบเสนอราคา entry is hidden.
     expect(ids('account')).toEqual(['menu-launcher', 'finance-worklist']);
     for (const role of ['import', 'hr', 'warehouse', 'qc', 'employee']) expect(ids(role), role).toEqual(['menu-launcher']);
@@ -650,15 +698,234 @@ describe('2026-11-17 wording matches the screens', () => {
     }
   });
 
-  it('does not describe the lifecycle dialogs that are not part of this release', () => {
+  // Replaces "does not describe the lifecycle dialogs that are not part of this release": #1329 is live on production
+  // (release 2026-11-17d), so the dialogs ARE described now, but only in the lifecycle entries, and the create button
+  // only to the role that has it.
+  it('describes the lifecycle dialogs only in the lifecycle entries, and "งานใหม่" only to the role that has it', () => {
     expect(release).not.toBeNull();
-    // The create / move-to-S2 / pause / lost / cancel dialogs ship later: the quiet links may be named, never their
-    // dialogs' contents, and "งานใหม่" (the create dialog) is not offered.
+    const LIFECYCLE_IDS = ['deal-create', 'deal-lifecycle', 'deal-lifecycle-team'];
     for (const entry of release.entries) {
-      for (const text of allText(entry)) {
-        expect(text, entry.id).not.toContain('งานใหม่');
-        expect(text, entry.id).not.toMatch(/เหตุผลที่เสียงาน|เลือกเหตุผล|วันที่จะกลับมา/);
+      const text = allText(entry).join('\n');
+      if (text.includes('งานใหม่')) {
+        expect(LIFECYCLE_IDS, `${entry.id} mentions งานใหม่`).toContain(entry.id);
+        // AllDealsPage / MyWork render "งานใหม่" for ROLE_PERMISSIONS.canCreateTickets only.
+        for (const role of rolesForEntry(release, entry)) {
+          expect(ROLE_PERMISSIONS.canCreateTickets, `${entry.id}: ${role} has no งานใหม่ button`).toContain(role);
+        }
+      }
+      if (/เลือกเหตุผล|วันที่จะกลับมา/.test(text)) {
+        expect(LIFECYCLE_IDS, `${entry.id} describes a lifecycle dialog`).toContain(entry.id);
       }
     }
+    expect(allDealsSrc).toContain('const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);');
+    expect(byId('deal-create'), 'deal-create is missing').toBeTruthy();
+    expect(allText(byId('deal-create')).join(' ')).toContain('"งานใหม่"');
+  });
+});
+
+// ── 17d: the lifecycle dialogs (#1329) and the document chain on the ใบเสนอราคา page (#1330) ─────────────────────
+describe('2026-11-17 lifecycle dialogs and document chain (17d)', () => {
+  // Each case first asserts the entries it reads exist, so a missing entry fails as an assertion, not a TypeError.
+  beforeEach(() => {
+    expect(release).not.toBeNull();
+    for (const id of NEW_17D_IDS) expect(byId(id), `${id} is missing from the release`).toBeTruthy();
+  });
+  const roles = (id) => rolesForEntry(release, byId(id));
+  const prose = (id) => [byId(id).title, byId(id).why, byId(id).help,
+    ...byId(id).steps.flatMap((s) => [s.text, s.detail])].join('\n');
+  /** Entries that tell their reader to press `label` (กด … "label" within a few characters). */
+  const pressing = (label) => release.entries.filter((entry) => entry.steps.some(
+    (step) => new RegExp(`กด[^"\\n]{0,12}"${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}"`).test(`${step.text} ${step.detail}`),
+  ));
+
+  it('each new entry reaches exactly the roles that have the control (Java rules, not the mock)', () => {
+    expect(release).not.toBeNull();
+    // สร้างงานใหม่: the button is canCreateTickets (sales) only.
+    expect(roles('deal-create')).toEqual(ROLE_PERMISSIONS.canCreateTickets);
+    // Hold / dormant / lost / resume: TicketService.canDealOwnership = the owning sales rep, sales_manager, ceo.
+    expect(TICKET_SERVICE_SRC).toContain('private static final Set<String> SALES_ROLES  = Set.of("sales");');
+    expect(TICKET_SERVICE_SRC).toContain('return isOwner || "sales_manager".equals(role) || "ceo".equals(role);');
+    expect(roles('deal-lifecycle')).toEqual(['sales']);
+    expect(roles('deal-lifecycle-team')).toEqual(['sales_manager', 'ceo']);
+    // The chain card's read gate (dealDocumentScope): sales own deals, account in scope, import never, others all.
+    expect(DEPOSIT_NOTICE_SERVICE_SRC).toContain('case "sales" -> DealDocumentScope.OWNER_OR_KEYER;');
+    expect(roles('quotation-chain')).toEqual(['sales']);
+    expect(roles('quotation-chain-manager')).toEqual(['sales_manager']);
+    expect(roles('quotation-chain-ceo')).toEqual(['ceo']);
+    // Wrong-way-round: import, hr, warehouse, qc, employee are told about none of them.
+    for (const role of ['import', 'hr', 'warehouse', 'qc', 'employee', 'account']) {
+      for (const id of ['deal-create', 'deal-lifecycle', 'deal-lifecycle-team', 'quotation-chain', 'quotation-chain-manager',
+        'quotation-chain-ceo']) {
+        expect(roles(id), `${role} told about ${id}`).not.toContain(role);
+      }
+    }
+  });
+
+  it('nobody is told to press a lifecycle control the Java service refuses them', () => {
+    expect(release).not.toBeNull();
+    // Cancel is owner/keyer only (TicketService.canCancel), and only sales has the create button that makes an owner.
+    expect(TICKET_SERVICE_SRC).toMatch(/private boolean canCancel\(TicketSummaryDto s, UserPrincipal actor\) \{\s*return DealOwnership\.isOwnerOrKeyer\(s, actor\.id\(\)\)/);
+    expect(pressing('ยกเลิกงาน').map((e) => e.id)).toEqual(['deal-lifecycle']);
+    expect(byId('deal-lifecycle-team').help).toContain('ยกเลิกงานได้เฉพาะเจ้าของงาน');
+    // พักงาน / ปิดงาน (เสียงาน) / เปลี่ยนวันที่จะกลับมาดู: canDealOwnership roles only.
+    for (const label of ['พักงาน', 'ปิดงาน (เสียงาน)', 'เปลี่ยนวันที่จะกลับมาดู']) {
+      const ids = pressing(label).map((e) => e.id);
+      expect(ids.sort(), label).toEqual(['deal-lifecycle', 'deal-lifecycle-team']);
+    }
+    // เปลี่ยนวันที่จะกลับมาดู sits beside ดำเนินการต่อ, under the same RESUME gate.
+    expect(ticketDetailSrc).toMatch(/nextStep\.kind === 'resume' && canResumeDeal\) \{[\s\S]{0,1200}เปลี่ยนวันที่จะกลับมาดู/);
+    // ย้ายไป S2: TicketService.requireStageWriteAccess lets ceo, sales_manager and the owning rep write a sales stage.
+    expect(TICKET_SERVICE_SRC).toMatch(/if \("ceo"\.equals\(role\)\) \{\s*return;\s*\}\s*if \(DealStage\.SALES_TARGET_STAGES\.contains\(targetStage\)\) \{\s*if \("sales_manager"\.equals\(role\)\)/);
+    for (const entry of pressing('ย้ายไป S2 · สเปคผ่าน')) {
+      for (const role of rolesForEntry(release, entry)) expect(['sales', 'sales_manager', 'ceo'], role).toContain(role);
+    }
+    // …but the button itself is the ขั้นต่อไป card's resolved action, which workState resolves for the rep only
+    // (sales_manager / ceo get an approval action or nothing): the team version must not offer it.
+    expect(workStateSrc).toContain("const action = role === 'sales' ? nextSalesAction(");
+    expect(ticketDetailSrc).toMatch(/actionKey === 'advance_stage'\) \{[\s\S]{0,900}stickyPrimaryLabel = 'ย้ายไป S2 · สเปคผ่าน';/);
+    expect(pressing('ย้ายไป S2 · สเปคผ่าน').map((e) => e.id)).toEqual(['deal-lifecycle']);
+    expect(quotedLabels(byId('deal-lifecycle-team'))).not.toContain('ย้ายไป S2 · สเปคผ่าน');
+  });
+
+  it('nobody is told to press a document-chain control the Java service refuses them', () => {
+    expect(release).not.toBeNull();
+    // ยืนยันคำสั่งซื้อ = DealQuotationService.hasEditAccess: owning sales or any sales_manager — never the CEO.
+    expect(DOCUMENT_CHAIN_SERVICE_SRC).toContain('quotations.hasEditAccess(actor, s), mayWriteDocuments, mayWriteDocuments);');
+    expect(DEAL_QUOTATION_SERVICE_SRC).toContain('private static final Set<String> EDIT_ROLES = Set.of("sales", "sales_manager");');
+    const confirmers = pressing('ยืนยันคำสั่งซื้อ').map((e) => e.id).sort();
+    expect(confirmers).toEqual(['quotation-chain', 'quotation-chain-manager']);
+    // The deposit notice and the remaining invoice: DepositNoticeService.mayWriteDealDocuments = owning sales only.
+    expect(DEPOSIT_NOTICE_SERVICE_SRC).toContain('return SALES_ROLES.contains(actor.role()) && DealOwnership.isOwnerOrKeyer(summary, actor.id());');
+    expect(DEPOSIT_NOTICE_SERVICE_SRC).toContain('private static final java.util.Set<String> SALES_ROLES  = java.util.Set.of("sales");');
+    for (const label of ['สร้างใบแจ้งยอดเงินรับมัดจำ', 'ออกเอกสาร', 'สร้างใบแจ้งหนี้ส่วนที่เหลือ']) {
+      for (const entry of pressing(label)) expect(rolesForEntry(release, entry), `${entry.id} presses ${label}`).toEqual(['sales']);
+    }
+    // Where the viewer cannot act the card says who it waits on (quotationChain WAITING_ON_TEXT.sales).
+    expect(quotationChainSrc).toContain("const WAITING_ON_TEXT = { sales: 'ฝ่ายขายเจ้าของงาน', account: 'ฝ่ายบัญชี' };");
+    for (const id of ['quotation-chain-manager', 'quotation-chain-ceo']) expect(prose(id), id).toContain('ฝ่ายขายเจ้าของงาน');
+  });
+
+  it('account is told about the chain only if it can open the quotation page under the production lock', async () => {
+    expect(release).not.toBeNull();
+    // Unlocked (dev / test) account can open a quotation; locked (production) it cannot, so it gets no chain entry.
+    expect(canAccessPath('/quotations/1', user('account'))).toBe(true);
+    vi.stubEnv('VITE_SELF_SERVICE_ONLY', 'true');
+    vi.resetModules();
+    try {
+      const { canAccessPath: lockedAccess } = await import('../../../app/permissions.js');
+      expect(lockedAccess('/quotations/1', user('account'))).toBe(false);
+      for (const role of ['sales', 'sales_manager', 'ceo']) expect(lockedAccess('/quotations/1', user(role)), role).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+    }
+    for (const entry of release.entries.filter((e) => e.id.startsWith('quotation-chain'))) {
+      expect(release.sections.account, entry.id).not.toContain(entry.id);
+    }
+  });
+
+  it('the create form is described as it renders: required fields, the start step and the collapsed details', () => {
+    expect(release).not.toBeNull();
+    const text = prose('deal-create');
+    for (const label of ['สร้างงานใหม่', 'ชื่อโครงการ', 'ลูกค้า / บริษัท', 'มูลค่าโดยประมาณ', 'ผู้ออกแบบ',
+      'เริ่มที่', 'สร้างงาน', 'รายละเอียดเพิ่มเติม (ไม่บังคับ)']) {
+      expect(quotedLabels(byId('deal-create')), label).toContain(label);
+    }
+    // เสนอแก่ is required (no default chip) with exactly the three channels TicketCreateModal offers.
+    expect(quotedLabels(byId('deal-create'))).toContain(formatSrc.match(/OFFERED_TO_LABEL = '([^']+)'/)[1]);
+    for (const channel of [...ticketCreateModalSrc.matchAll(/\{ value: '[A-Z_]+', label: '([^']+)' \}/g)].map((m) => m[1])) {
+      expect(quotedLabels(byId('deal-create')), channel).toContain(channel);
+    }
+    expect(ticketCreateModalSrc).toContain("if (!entryChannel) errors.entryChannel = 'กรุณาเลือกว่างานนี้เสนอแก่ใคร';");
+    // The two start options, verbatim.
+    for (const option of [...ticketCreateModalSrc.matchAll(/title: '(S[12] · [^']+)'/g)].map((m) => m[1])) {
+      expect(quotedLabels(byId('deal-create')), option).toContain(option);
+    }
+    // A sales creator gets no items section (canEditDealItemsAfterCreate): items are added on the deal page.
+    expect(ticketCreateModalSrc).toContain('const offersItems = !canEditDealItemsAfterCreate(user);');
+    expect(text).toContain('รายการสินค้าเพิ่มได้ในหน้ารายละเอียดงาน');
+    expect(text).not.toMatch(/"รายการสินค้า"/);
+  });
+
+  it('the pause dialog, the return date and where a returning deal shows are pinned to their source', () => {
+    expect(release).not.toBeNull();
+    for (const id of ['deal-lifecycle', 'deal-lifecycle-team']) {
+      const labels = quotedLabels(byId(id));
+      for (const label of ['พักชั่วคราว', 'ไม่เคลื่อนไหว', 'วันที่จะกลับมาดู', '2 สัปดาห์', '1 เดือน', '2 เดือน',
+        'เปลี่ยนวันที่จะกลับมาดู', 'บันทึกวันที่', 'ดำเนินการต่อ', 'พักไว้ · ถึงวันกลับมาดู …']) {
+        expect(labels, `${id}: ${label}`).toContain(label);
+      }
+      // Changing only the date sends no notification (PauseDealModal's own note; TicketService.changePauseReturnOn).
+      expect(pauseDealSrc).toContain('เปลี่ยนเฉพาะวันที่ ไม่มีการแจ้งเตือน');
+      expect(prose(id), id).toContain('ไม่ส่งแจ้งเตือน');
+      // A date in the past is refused, with this message.
+      expect(labels, id).toContain('วันที่จะกลับมาดูต้องเป็นวันนี้หรือหลังจากนี้');
+    }
+    // The rep: back in ควรตามต่อ on งานของฉัน (PauseDealModal's hint, FollowUpList's chip).
+    expect(pauseDealSrc).toContain('ถึงวันนั้นงานจะกลับมาที่ “ควรตามต่อ” เอง');
+    expect(followUpListSrc).toContain('พักไว้ · ถึงวันกลับมาดู ${formatThaiDate(deal.pauseReturnOn)}');
+    expect(quotedLabels(byId('deal-lifecycle'))).toEqual(expect.arrayContaining(['ควรตามต่อ', 'งานของฉัน']));
+    // The team: first in ดีลที่ควรโทรตาม on ภาพรวมทีมขาย, counted in ดีลเงียบ (TeamOverview).
+    expect(teamOverviewSrc).toContain('งานที่ถึงวันกลับมาดูขึ้นก่อน');
+    expect(quotedLabels(byId('deal-lifecycle-team'))).toEqual(expect.arrayContaining(['ภาพรวมทีมขาย', 'ดีลที่ควรโทรตาม', 'ดีลเงียบ']));
+  });
+
+  it('the lost and cancel reasons are the ones the dialogs offer today', () => {
+    expect(release).not.toBeNull();
+    // Cancel: exactly DealCancelReason.OFFERED, by their Thai labels; the three retired reasons are never offered.
+    const offered = /OFFERED = List\.of\(\s*([^)]*)\)/.exec(CANCEL_REASON_SRC)[1].split(',').map((code) => code.trim());
+    expect(offered).toEqual(['DUPLICATE_DEAL', 'WRONG_CUSTOMER_OR_PROJECT', 'NO_REAL_PROJECT', 'OTHER']);
+    const cancelLabels = quotedLabels(byId('deal-lifecycle'));
+    for (const code of offered) expect(cancelLabels, code).toContain(CANCEL_REASON_LABEL[code]);
+    for (const code of ['OWNER_CANCELLED', 'PROJECT_SUSPENDED', 'BUDGET_CANCELLED']) {
+      for (const entry of release.entries) expect(allText(entry).join(' '), `${entry.id}: ${code}`).not.toContain(CANCEL_REASON_LABEL[code]);
+    }
+    // The cancel dialog's own warning: a cancelled deal never comes back.
+    expect(cancelDealSrc).toContain('warning="ยกเลิกแล้วกลับมาไม่ได้ ถ้ายังมีโอกาสขาย');
+    expect(cancelLabels).toContain('ยกเลิกแล้วกลับมาไม่ได้');
+    // Lost: one reason, coded F1–F8 (LOST_REASON_F_CODE), submitted with ยืนยันเสียงาน.
+    expect(Object.keys(LOST_REASON_LABEL)).toHaveLength(8);
+    for (const id of ['deal-lifecycle', 'deal-lifecycle-team']) {
+      expect(prose(id), id).toContain('F1–F8');
+      expect(quotedLabels(byId(id)), id).toEqual(expect.arrayContaining(['ปิดงาน · เสียงาน', 'ยืนยันเสียงาน']));
+    }
+  });
+
+  it('the S2 move says what the dialog says: by hand to S2, by documents from S3', () => {
+    expect(release).not.toBeNull();
+    expect(moveToS2Src).toContain('ตั้งแต่ S3 งานย้ายเอง ไม่ต้องกด');
+    expect(quotedLabels(byId('deal-lifecycle'))).toEqual(expect.arrayContaining(['ย้ายไป S2 · สเปคผ่าน', 'ขั้นต่อไป', 'โน้ตสั้น ๆ']));
+    expect(prose('deal-lifecycle')).toContain('ตั้งแต่ S3 งานย้ายเอง');
+    // The dialog asks for a follow-up date / an activity only when the readiness gate is missing one (needsFollowUp /
+    // needsActivity); the step says so with its condition.
+    expect(moveToS2Src).toContain('ยังไม่มีบันทึกการคุยหลังเปลี่ยนขั้นล่าสุด');
+    expect(prose('deal-lifecycle')).toContain('ยังไม่มีบันทึกการคุยหลังเปลี่ยนขั้นล่าสุด');
+  });
+
+  it('the chain card, its four steps and the list mark are named as the code names them', () => {
+    expect(release).not.toBeNull();
+    for (const id of ['quotation-chain', 'quotation-chain-manager', 'quotation-chain-ceo']) {
+      const labels = quotedLabels(byId(id));
+      expect(labels, id).toContain('เอกสารต่อจากใบเสนอราคานี้');
+      for (const title of CHAIN_STEP_TITLES) expect(labels, `${id}: ${title}`).toContain(title);
+      // Every list mark (DocumentChainRules#listStage → CHAIN_LIST_MARK), shown under the row's สถานะ.
+      for (const mark of Object.values(CHAIN_LIST_MARK)) expect(labels, `${id}: ${mark.label}`).toContain(mark.label);
+      // The deal page's เงิน tab reads the same summary.
+      expect(labels, id).toContain('เงิน');
+      expect(labels, id).toContain('ดาวน์โหลด PDF');
+    }
+    expect(paymentSectionSrc).toContain('const chainQuery = useDocumentChain(ticketId');
+    expect(quotationListSrc).toContain('<ChainMark stage={row.chainStage} />');
+    // The rep's deposit dialog: แก้รายละเอียด leads to the full notice page; ยกเลิก keeps the draft.
+    expect(quotedLabels(byId('quotation-chain'))).toEqual(
+      expect.arrayContaining(['ออกใบแจ้งยอดเงินรับมัดจำ', 'แก้รายละเอียด', 'ออกเอกสาร', 'บันทึกร่าง', 'ออกใบแจ้งหนี้']),
+    );
+    expect(chainCardSrc).toContain('Cancelling keeps the draft.');
+  });
+
+  it('the release title names what 17d added', () => {
+    expect(release).not.toBeNull();
+    expect(release.title).toContain('เอกสารต่อ');
+    expect(release.title).toContain('พักงาน');
   });
 });
