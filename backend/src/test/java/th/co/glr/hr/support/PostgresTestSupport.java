@@ -22,7 +22,7 @@ public final class PostgresTestSupport {
 
     // The schemas the app's Flyway migrations own. Kept in one place so the golden migrate and the external-DB
     // reset (#externalFlyway) stay in lockstep.
-    private static final String[] SCHEMAS = {"hr", "hr_restricted", "sales", "customers", "price_catalog"};
+    private static final String[] SCHEMAS = {"hr", "hr_restricted", "sales", "customers", "price_catalog", "analytics"};
     private static final String DEFAULT_SCHEMA = "hr";
 
     // Migrated once, mounted only as the source of CREATE DATABASE ... TEMPLATE (never connected to by tests).
