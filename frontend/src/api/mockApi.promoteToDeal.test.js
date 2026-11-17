@@ -379,6 +379,27 @@ describe('mock dealQuotations.undoConfirmOrder — refusals and restore parity',
     expect(afterKinds).toEqual([...beforeKinds, 'ORDER_CONFIRMATION_UNDONE']);
   });
 
+  it("a person's POLICY_CHANGED that merely quotes the quotation phrase survives the undo; the system's own is removed", async () => {
+    const ghost = await quotationOnlyTicket();
+    const { quotation: draft } = await api.dealQuotations.create(ghost, {
+      recipientType: 'DESIGNER', depositPercent: 0, fullPaymentTerm: 'BEFORE_DELIVERY', items: [TILE, PLAIN],
+    });
+    await api.dealQuotations.submit(draft.id);
+    await asRole('sales_manager');
+    const { quotation: approved } = await api.dealQuotations.approve(draft.id);
+    await asRole('sales');
+    await api.dealQuotations.promoteToDeal(approved.id);
+    const policyMessages = async () => (await api.tickets.get(ghost)).ticket.events
+      .filter((e) => e.kind === 'POLICY_CHANGED').map((e) => e.message);
+    expect(await policyMessages()).toHaveLength(1); // the system's flip
+    const personsReason = `ลูกค้าขอตามใบเสนอราคา ${approved.number} ครับ`;
+    await api.tickets.setDepositPolicy(ghost, { policy: 'WAIVED', reason: personsReason });
+
+    await api.dealQuotations.undoConfirmOrder(approved.id);
+
+    expect(await policyMessages()).toEqual([`deposit_policy → WAIVED — ${personsReason}`]);
+  });
+
   it.each(['QUOTED', 'NEGOTIATING'])('the awarded party goes back to the status it had (%s)', async (status) => {
     await asRole('sales');
     const { ticket } = await api.tickets.create({

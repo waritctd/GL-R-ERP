@@ -55,7 +55,7 @@ describe('ConfirmOrderDialog auto-cancelled quotations', () => {
 describe('ConfirmOrderDialog undo wording', () => {
   it.each([0, 50])('undoable, depositPercent %i: names the undo and its cut-off, never "ย้อนกลับไม่ได้"', (depositPercent) => {
     const text = open({ depositPercent, undoable: true });
-    expect(text).toContain('ยกเลิกการยืนยันคำสั่งซื้อ');
+    expect(text).toContain('ยกเลิกการยืนยันคำสั่งซื้อ" ในหน้าใบเสนอราคา'); // the button lives only on the quotation page
     expect(text).toContain('เดินหน้าต่อ');
     expect(text).not.toContain('ย้อนกลับไม่ได้');
   });

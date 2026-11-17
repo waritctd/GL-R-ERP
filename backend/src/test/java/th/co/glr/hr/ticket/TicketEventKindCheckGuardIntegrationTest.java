@@ -22,7 +22,7 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
  */
 class TicketEventKindCheckGuardIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final Pattern DECLARATION = Pattern.compile("chk_event_kind\\s+CHECK\\s*\\(");
-    private static final Pattern QUOTED_KIND = Pattern.compile("'([A-Z][A-Z_]*)'");
+    private static final Pattern QUOTED_KIND = Pattern.compile("'([A-Z][A-Z0-9_]*)'");
 
     @Test
     void theLiveConstraintAcceptsEveryKindAnyMigrationEverDeclared() throws Exception {

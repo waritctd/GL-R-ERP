@@ -3623,12 +3623,27 @@ function followQuotationDepositPolicy(ticket, quotation, user) {
   if (ticket.paymentStatus !== 'CUSTOMER_CONFIRMED' || ticket.depositPolicySetBy != null
     || (ticket.depositPolicy ?? 'REQUIRED') !== expected) return;
   const policy = noDeposit ? 'NOT_REQUIRED' : 'REQUIRED';
-  const reason = `ใบเสนอราคา ${quotation.number} `
-    + (noDeposit ? 'ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)' : `ระบุมัดจำ ${percent}%`);
+  const reason = followedPolicyReason(quotation.number, percent);
   ticket.depositPolicy = policy;
   ticket.depositPolicyReason = reason;
-  pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage,
-    `deposit_policy → ${policy} — ${reason}`);
+  pushEvent(ticket, user, 'POLICY_CHANGED', ticket.salesStage, ticket.salesStage, followedPolicyNote(policy, reason));
+}
+
+// TicketRepository.followedPolicyReason / followedPolicyNote: the one place the system's own deposit-policy
+// note is built, shared by the writer above and the undo's matcher so they cannot drift.
+function followedPolicyReason(quotationNumber, percent) {
+  return `ใบเสนอราคา ${quotationNumber} `
+    + (percent === 0 ? 'ระบุไม่รับมัดจำ (ชำระเต็มจำนวน)' : `ระบุมัดจำ ${percent}%`);
+}
+function followedPolicyNote(policy, reason) {
+  return `deposit_policy → ${policy} — ${reason}`;
+}
+// The exact no-deposit note, or the deposit note up to its percent (as the server's LIKE does).
+function isFollowedPolicyNote(message, quotationNumber) {
+  const text = String(message);
+  const withOnePercent = followedPolicyNote('REQUIRED', followedPolicyReason(quotationNumber, 1));
+  return text === followedPolicyNote('NOT_REQUIRED', followedPolicyReason(quotationNumber, 0))
+    || text.startsWith(withOnePercent.slice(0, -'1%'.length));
 }
 
 function moneyValue(value) {
@@ -19654,7 +19669,7 @@ ${titles.length} เรื่องที่เกี่ยวกับงาน
       const promotionId = mockConfirmedQuotationEvent(ticket).id;
       ticket.events = ticket.events.filter((e) => e.id !== promotionId && !(e.id > promotionId && (e.kind === 'CUSTOMER_CONFIRMED'
         || (e.kind === 'STAGE_CHANGED' && e.message === 'อัตโนมัติจากขั้นตอนของดีล')
-        || (e.kind === 'POLICY_CHANGED' && String(e.message).includes(`ใบเสนอราคา ${row.number} `)))));
+        || (e.kind === 'POLICY_CHANGED' && isFollowedPolicyNote(e.message, row.number)))));
       const party = row.partyId != null ? mockDealParties.find((p) => p.id === row.partyId) : null;
       if (party?.status === 'AWARDED') {
         Object.assign(party, {

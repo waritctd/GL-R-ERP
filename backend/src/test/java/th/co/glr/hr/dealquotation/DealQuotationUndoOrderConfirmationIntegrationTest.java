@@ -20,6 +20,16 @@ import th.co.glr.hr.dealquotation.DealQuotationDtos.PromoteToDealResultDto;
 import th.co.glr.hr.deposit.DepositNoticeDraftRequest;
 import th.co.glr.hr.deposit.DepositNoticeDto;
 import th.co.glr.hr.deposit.DepositNoticeService;
+import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
+import th.co.glr.hr.deposit.RemainingInvoiceRepository;
+import th.co.glr.hr.deposit.RemainingInvoiceService;
+import th.co.glr.hr.factory.FactoryConfigRepository;
+import th.co.glr.hr.importrequest.ImportRequestQueryRepository;
+import th.co.glr.hr.importrequest.ImportRequestRenderer;
+import th.co.glr.hr.importrequest.ImportRequestRepository;
+import th.co.glr.hr.importrequest.ImportRequestRequests.CreateImportRequestsRequest;
+import th.co.glr.hr.importrequest.ImportRequestService;
+import th.co.glr.hr.notification.NotificationRepository;
 import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.DepositPolicy;
@@ -813,6 +823,47 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
     void depositDraftCreation_waitsForTheTicketRowLock_andIsRefusedOnceAnUndoCommitted() throws Exception {
         Confirmed c = confirmedDeal();
         DepositNoticeService creator = transactional(depositNoticeService);
+        Throwable outcome = outcomeAfterWaitingForTicketRowLock(c.deal(), () -> creator.createDraft(c.deal(),
+            new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor));
+        assertThat(outcome).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(count("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id", c.deal())).isZero();
+    }
+
+    /** Same model for the remaining invoice: its create must take the ticket row lock before reading the deal. */
+    @Test
+    void remainingInvoiceDraftCreation_waitsForTheTicketRowLock_andIsRefusedOnceAnUndoCommitted() throws Exception {
+        Confirmed c = confirmedDeal();
+        RemainingInvoiceService creator = transactional(new RemainingInvoiceService(new RemainingInvoiceRepository(jdbc),
+            depositNoticeService, tickets, new RemainingInvoicePdfRenderer(), new NotificationRepository(jdbc, mailer)));
+        Throwable outcome = outcomeAfterWaitingForTicketRowLock(c.deal(),
+            () -> creator.createDraft(c.deal(), null, salesActor));
+        assertThat(outcome).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(count("SELECT COUNT(*) FROM sales.remaining_invoice WHERE ticket_id = :id", c.deal())).isZero();
+    }
+
+    /** Same model for import requests: createDrafts must take the ticket row lock before reading the deal. */
+    @Test
+    void importRequestDraftCreation_waitsForTheTicketRowLock_andIsRefusedOnceAnUndoCommitted() throws Exception {
+        Confirmed c = confirmedDeal();
+        ImportRequestService creator = transactional(new ImportRequestService(new ImportRequestQueryRepository(jdbc),
+            new ImportRequestRenderer(), new ImportRequestRepository(jdbc), new FactoryConfigRepository(jdbc),
+            tickets, ticketService, new NotificationRepository(jdbc, mailer)));
+        Throwable outcome = outcomeAfterWaitingForTicketRowLock(c.deal(),
+            () -> creator.createDrafts(c.deal(), new CreateImportRequestsRequest(null, null), ceoActor));
+        assertThat(outcome).isInstanceOfSatisfying(ApiException.class,
+            e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+        assertThat(count("SELECT COUNT(*) FROM sales.import_request WHERE ticket_id = :id", c.deal())).isZero();
+    }
+
+    /**
+     * A second connection holds {@code SELECT ... FOR UPDATE} on the deal's ticket row; {@code creator} runs on another
+     * thread and must still be blocked after 2 s. The holder then commits what an undo commits (deal back to draft)
+     * and the creator's failure is returned (null if it succeeded).
+     */
+    private Throwable outcomeAfterWaitingForTicketRowLock(long deal, java.util.concurrent.Callable<?> creator)
+            throws Exception {
         javax.sql.DataSource ds = ((org.springframework.jdbc.datasource.DataSourceTransactionManager) transactionManager)
             .getDataSource();
         java.util.concurrent.ExecutorService pool = java.util.concurrent.Executors.newSingleThreadExecutor();
@@ -820,29 +871,28 @@ class DealQuotationUndoOrderConfirmationIntegrationTest extends DirectQuotationD
             holder.setAutoCommit(false);
             try (java.sql.PreparedStatement ps = holder.prepareStatement(
                     "SELECT 1 FROM sales.ticket WHERE ticket_id = ? FOR UPDATE")) {
-                ps.setLong(1, c.deal());
+                ps.setLong(1, deal);
                 ps.execute();
             }
-            java.util.concurrent.Future<DepositNoticeDto> create = pool.submit(() -> creator.createDraft(c.deal(),
-                new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor));
+            java.util.concurrent.Future<?> create = pool.submit(creator);
             assertThatThrownBy(() -> create.get(2, java.util.concurrent.TimeUnit.SECONDS))
                 .as("creation must wait on the ticket row lock another transaction holds")
                 .isInstanceOf(java.util.concurrent.TimeoutException.class);
-            // What the undo commits under that lock: the deal goes back to draft.
             try (java.sql.PreparedStatement ps = holder.prepareStatement(
                     "UPDATE sales.ticket SET status = 'draft', payment_status = NULL WHERE ticket_id = ?")) {
-                ps.setLong(1, c.deal());
+                ps.setLong(1, deal);
                 ps.executeUpdate();
             }
             holder.commit();
-            assertThatThrownBy(() -> create.get(20, java.util.concurrent.TimeUnit.SECONDS))
-                .isInstanceOf(java.util.concurrent.ExecutionException.class)
-                .cause().isInstanceOfSatisfying(ApiException.class,
-                    e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
+            try {
+                create.get(20, java.util.concurrent.TimeUnit.SECONDS);
+                return null;
+            } catch (java.util.concurrent.ExecutionException e) {
+                return e.getCause();
+            }
         } finally {
             pool.shutdownNow();
         }
-        assertThat(count("SELECT COUNT(*) FROM sales.deposit_notice WHERE ticket_id = :id", c.deal())).isZero();
     }
 
     // ───────────────────────────────────────────────────────────────────────────────────
