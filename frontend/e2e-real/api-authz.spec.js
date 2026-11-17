@@ -355,3 +355,91 @@ test.describe('follow-up date writes — refused before anything is written', ()
     expect(await nextFollowUpOf(deal.id), 'the deal\'s follow-up date is untouched').toBe(before);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 6d — DENY DIRECTION ONLY, as this file's header requires: every request below is refused before it writes.
+//   ส่งตัวอย่าง: POST /api/tickets/{id}/activities with kind SAMPLE_SENT — the same TicketService#addActivity and
+//     requireDealOwnership as a call (the deal's owner/keyer with the sales role, sales_manager, ceo). What was sent
+//     (the note) is required: a blank one is 400 even for a writer, checked before the deal is read.
+//   วันที่ส่ง: POST /api/tickets/{id}/deliveries with deliveredOn — the same canWriteDelivery as any delivery (ceo, or
+//     the deal's owning rep), and the 7-day / no-future window is the SERVER's (TicketService#backDatedDeliveryInstant),
+//     so a ceo sending tomorrow is 400 before anything is written.
+// The allowed direction and "nothing written" are proven on real Postgres by DealActivitySampleSentIntegrationTest and
+// DeliveryBackDateIntegrationTest (mutation-checked).
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('slice 6d writes — refused before anything is written', () => {
+  /** @type {Record<string, import('@playwright/test').APIRequestContext>} */
+  let sessions;
+  const bangkokToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
+  const plusDays = (iso, n) => {
+    const d = new Date(`${iso}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + n);
+    return d.toISOString().slice(0, 10);
+  };
+
+  test.beforeAll(async () => { sessions = await apiSessionsFor(ALL); });
+  test.afterAll(async () => { await disposeSessions(sessions); });
+
+  async function foreignDeals() {
+    const me = (await (await sessions.sales.get('/api/auth/me')).json()).user;
+    const listed = await sessions.ceo.get('/api/tickets?size=50');
+    expect(listed.status()).toBe(200);
+    return ((await listed.json()).tickets ?? []).filter((deal) => Number(deal.createdById) !== Number(me.id)
+      && Number(deal.keyedById) !== Number(me.id));
+  }
+
+  async function activityCountOf(id) {
+    const response = await sessions.ceo.get(`/api/tickets/${id}/activities`);
+    expect(response.status()).toBe(200);
+    return ((await response.json()).items ?? []).length;
+  }
+
+  test('a ส่งตัวอย่าง on another rep\'s deal is 403 for that rep and for every role outside the deal writers', async () => {
+    const [deal] = await foreignDeals();
+    test.skip(!deal, 'every seeded deal belongs to the sales persona');
+    const before = await activityCountOf(deal.id);
+    const body = { kind: 'SAMPLE_SENT', activityDate: bangkokToday(), note: 'e2e: refused', nextFollowUpAt: plusDays(bangkokToday(), 7) };
+    for (const role of ['sales', ...except('sales', 'sales_manager', 'ceo')]) {
+      const response = await apiWrite(sessions[role], 'post', `/api/tickets/${deal.id}/activities`, body);
+      expect(response.status(), `${role} POST activities SAMPLE_SENT on deal ${deal.id}`).toBe(403);
+    }
+    expect(await activityCountOf(deal.id), 'no activity was written').toBe(before);
+  });
+
+  test('a ส่งตัวอย่าง with nothing said about what was sent is 400, even from the ceo', async () => {
+    const [deal] = await foreignDeals();
+    test.skip(!deal, 'every seeded deal belongs to the sales persona');
+    const before = await activityCountOf(deal.id);
+    const response = await apiWrite(sessions.ceo, 'post', `/api/tickets/${deal.id}/activities`,
+      { kind: 'SAMPLE_SENT', activityDate: bangkokToday(), note: '   ' });
+    expect(response.status(), `ceo POST activities SAMPLE_SENT with a blank note on deal ${deal.id}`).toBe(400);
+    expect(await activityCountOf(deal.id), 'no activity was written').toBe(before);
+  });
+
+  test('a back-dated delivery on another rep\'s deal is 403 for that rep and for every role but the ceo', async () => {
+    const [deal] = await foreignDeals();
+    test.skip(!deal, 'every seeded deal belongs to the sales persona');
+    const body = { source: 'WAREHOUSE', lines: [{ itemId: 1, qty: 1 }], deliveredOn: plusDays(bangkokToday(), -3) };
+    for (const role of ['sales', ...except('sales', 'ceo')]) {
+      const response = await apiWrite(sessions[role], 'post', `/api/tickets/${deal.id}/deliveries`, body);
+      expect(response.status(), `${role} POST deliveries with deliveredOn on deal ${deal.id}`).toBe(403);
+    }
+  });
+
+  test('the window is the server\'s: tomorrow, or 8 days back, is 400 even from the ceo, before any line is read', async () => {
+    const deal = (await foreignDeals()).find((d) => d.lifecycle === 'ACTIVE');
+    test.skip(!deal, 'no ACTIVE deal outside the sales persona to send it to');
+    const before = await sessions.ceo.get(`/api/tickets/${deal.id}/deliveries`);
+    expect(before.status()).toBe(200);
+    const count = ((await before.json()).items ?? []).length;
+    for (const deliveredOn of [plusDays(bangkokToday(), 1), plusDays(bangkokToday(), -8)]) {
+      // itemId 0 is no line of any deal: the date is refused first, so the 400 is the window's, not the line's.
+      const response = await apiWrite(sessions.ceo, 'post', `/api/tickets/${deal.id}/deliveries`,
+        { source: 'WAREHOUSE', lines: [{ itemId: 0, qty: 1 }], deliveredOn });
+      expect(response.status(), `ceo POST deliveries deliveredOn=${deliveredOn} on deal ${deal.id}`).toBe(400);
+      expect(JSON.stringify(await response.json()), 'the window refused it').toMatch(/อนาคต|7 วัน/);
+    }
+    const after = await sessions.ceo.get(`/api/tickets/${deal.id}/deliveries`);
+    expect(((await after.json()).items ?? []).length, 'nothing was delivered').toBe(count);
+  });
+});
