@@ -30,6 +30,15 @@ public class FeedbackService {
     private static final Map<String, String> STEP_LABEL = Map.of("ACCEPTED", "รับเรื่อง", "IN_PROGRESS", "กำลังทำ",
         "TESTING", "ทดสอบ", "RELEASED", "ใช้งานได้แล้ว");
 
+    /** Mirrors frontend feedbackMeta.js FEEDBACK_AREAS. */
+    private static final Map<String, String> AREA_LABEL = Map.ofEntries(
+        Map.entry("DEALS", "งานทั้งหมด (ฝ่ายขาย)"), Map.entry("QUOTATIONS", "ใบเสนอราคา"),
+        Map.entry("VISITS", "นัดเข้าพบ"), Map.entry("CATALOG", "แคตตาล็อกสินค้า"),
+        Map.entry("COMMISSION", "ค่าคอมมิชชัน"), Map.entry("ATTENDANCE", "เวลาทำงาน"),
+        Map.entry("SPECIAL_MONEY", "คำขอเงินพิเศษ"), Map.entry("LEAVE", "วันลา"),
+        Map.entry("TAX_ALLOWANCE", "ค่าลดหย่อนภาษี"), Map.entry("PAYROLL", "เงินเดือน"),
+        Map.entry("MENU", "เมนู / หน้าหลัก"), Map.entry("LOGIN", "เข้าสู่ระบบ"), Map.entry("OTHER", "อื่น ๆ / ไม่แน่ใจ"));
+
     private final FeedbackRepository repository;
     private final EmployeeAuthRepository employees;
     private final NotificationService notifications;
@@ -109,9 +118,12 @@ public class FeedbackService {
             throw conflict();
         }
         String ref = "#" + id;
-        notifications.notify(before.reporterEmployeeId(), "FEEDBACK_DECIDED",
+        // รับเรื่อง and ไม่รับเรื่อง: a one-line bell, and a detailed email.
+        notifications.notifyWithEmailBody(before.reporterEmployeeId(), "FEEDBACK_DECIDED",
             accept ? "รับเรื่อง " + ref + " แล้ว" : "ไม่รับเรื่อง " + ref,
-            accept ? "กำหนดเสร็จ " + ThaiText.date(request.eta()) : "เหตุผล: " + reason, LINK, false);
+            accept ? "กำหนดเสร็จ " + ThaiText.date(request.eta()) : "เหตุผล: " + reason, LINK,
+            accept ? detailedBody(before, "รับเรื่องแล้ว", request.eta(), null)
+                : detailedBody(before, "ไม่รับเรื่อง", null, reason));
         return existing(id);
     }
 
@@ -136,9 +148,30 @@ public class FeedbackService {
             throw conflict();
         }
         FeedbackDto after = existing(id);
-        notifications.notify(before.reporterEmployeeId(), "FEEDBACK_UPDATED", "อัปเดตเรื่อง #" + id,
-            "ความคืบหน้า: " + STEP_LABEL.get(after.status()) + " · กำหนดเสร็จ " + ThaiText.date(after.eta()), LINK, false);
+        // Only the first release is emailed: going back a step and releasing again is bell only.
+        boolean firstRelease = statusChanged && "RELEASED".equals(after.status())
+            && repository.markFirstRelease(id);
+        notifications.notifyWithEmailBody(before.reporterEmployeeId(), "FEEDBACK_UPDATED",
+            firstRelease ? "เรื่อง #" + id + " ใช้งานได้แล้ว" : "อัปเดตเรื่อง #" + id,
+            "ความคืบหน้า: " + STEP_LABEL.get(after.status()) + " · กำหนดเสร็จ " + ThaiText.date(after.eta()), LINK,
+            firstRelease ? detailedBody(after, "ใช้งานได้แล้ว", after.eta(), null) : null);
         return after;
+    }
+
+    /** The reporter-facing email/bell text: which request, its status and date, then their own words back. */
+    private static String detailedBody(FeedbackDto item, String statusLabel, LocalDate eta, String reason) {
+        String kind = "BUG".equals(item.kind()) ? "แจ้งปัญหา" : "ขอฟีเจอร์";
+        StringBuilder body = new StringBuilder()
+            .append("เรื่อง #").append(item.id()).append(" · ").append(kind).append(" · ")
+            .append(AREA_LABEL.getOrDefault(item.area(), item.area())).append('\n')
+            .append("สถานะ: ").append(statusLabel).append('\n');
+        if (eta != null) {
+            body.append("กำหนดเสร็จ: ").append(ThaiText.date(eta)).append('\n');
+        }
+        if (reason != null) {
+            body.append("เหตุผล: ").append(reason).append('\n');
+        }
+        return body.append("\nรายละเอียดที่คุณแจ้ง:\n").append(item.details()).toString();
     }
 
     private FeedbackDto existing(long id) {

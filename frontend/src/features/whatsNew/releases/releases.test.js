@@ -203,11 +203,16 @@ describe('2026-11-16 audiences under the release lockdown', () => {
     return { ...audiences, release: find('2026-11-16') };
   }
 
-  it('hides import’s landing page (their / is the self-service landing while locked) but keeps released pages', async () => {
-    const { entriesForViewer: forViewer, release } = await lockedModules();
+  // import and account keep their own dashboard at / while locked (owner ruling 2026-11-17), so their landing
+  // entry is theirs to read; every other locked role's / is the self-service landing.
+  it('shows import its landing page and released pages; a locked role without its own dashboard gets no landing entry', async () => {
+    const { entriesForViewer: forViewer, entryVisibleTo: visibleTo, release } = await lockedModules();
     expect(forViewer(release, user('import')).map((entry) => entry.id))
-      .toEqual(['address', 'fulfilment', 'import-deal', 'pricing-request']);
+      .toEqual(['address', 'import-home', 'fulfilment', 'import-deal', 'pricing-request']);
     expect(forViewer(release, user('account')).map((entry) => entry.id)).toEqual(['address', 'finance-deal']);
+    const landing = { id: 'x', path: '/', landing: true };
+    expect(['import', 'account', 'warehouse', 'employee'].map((role) => visibleTo(landing, user(role))))
+      .toEqual([true, true, false, false]);
   });
 
   it('keeps the sales pages for the roles the lock exempts', async () => {
@@ -217,10 +222,10 @@ describe('2026-11-16 audiences under the release lockdown', () => {
       .toEqual(['address', 'ceo-home', 'sales-insights', 'deal-list', 'deal-page-ceo', 'fulfilment']);
   });
 
-  it('the publish payload drops a hidden page from the bell and email of the role that cannot open it', async () => {
+  it('the publish payload sends import its landing page', async () => {
     const { publishPayload: payloadOf, release } = await lockedModules();
-    const titles = payloadOf(release).changes.map((change) => change.title);
     const importHome = release.entries.find((entry) => entry.id === 'import-home');
-    expect(titles).not.toContain(importHome.title);
+    const change = payloadOf(release).changes.find((c) => c.title === importHome.title);
+    expect(change?.roles).toContain('import');
   });
 });
