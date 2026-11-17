@@ -1,4 +1,8 @@
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { IMAGE_SHA256_2026_11_16 } from './imageHashes.fixture.js';
 import { RELEASES, findRelease, latestRelease } from './index.js';
 import {
   ALL_ROLES,
@@ -115,6 +119,18 @@ describe('2026-11-16 audiences (unlocked, as the test env runs)', () => {
       entry.steps.forEach((step, index) => expect(step.image, `${entry.id} step ${index + 1}`).toBe(
         `/whats-new/2026-11-16/${entry.id}-${index + 1}.png`,
       ));
+    }
+  });
+
+  // Review wn3 M9b: the published 16 Nov images were pinned only by git. Every file in the folder is now pinned to its
+  // content, so a changed byte fails here, not after it reaches a staff bell. Vitest runs from frontend/.
+  it('the published 16 Nov images are byte-for-byte the ones staff were sent (content hash list)', () => {
+    const folder = resolve(process.cwd(), 'public/whats-new/2026-11-16');
+    const files = readdirSync(folder).sort();
+    expect(files).toEqual(Object.keys(IMAGE_SHA256_2026_11_16).sort());
+    for (const file of files) {
+      expect(createHash('sha256').update(readFileSync(resolve(folder, file))).digest('hex'), file)
+        .toBe(IMAGE_SHA256_2026_11_16[file]);
     }
   });
 

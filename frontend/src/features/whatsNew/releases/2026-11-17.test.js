@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -68,6 +69,10 @@ import chainCardSrc from '../../quotations/QuotationDocumentChain.jsx?raw';
 import quotationChainSrc from '../../quotations/quotationChain.js?raw';
 import documentChainTextSrc from '../../documentChain/documentChainText.js?raw';
 import workStateSrc from '../../tickets/workState.js?raw';
+import thaiDateInputSrc from '../../../components/common/ThaiDateInput.jsx?raw';
+import managerOverviewSrc from '../../dashboard/ManagerOverview.jsx?raw';
+import ceoOverviewSrc from '../../dashboard/CeoOverview.jsx?raw';
+import { IMAGE_SHA256_2026_11_17 } from './imageHashes.fixture.js';
 import { CANCEL_REASON_LABEL, LOST_REASON_LABEL } from '../../tickets/stageMeta.js';
 import { CHAIN_LIST_MARK, CHAIN_STEP_TITLES } from '../../documentChain/documentChainText.js';
 import { canAccessPath } from '../../../app/permissions.js';
@@ -108,9 +113,14 @@ const FINANCE = [...NAV, financePageSrc, financeGroupsSrc];
 // สร้างงานใหม่: the "งานใหม่" buttons (AllDealsPage, MyWork, TodayOnPhone) and the form (เสนอแก่ is format.js's constant).
 const CREATE = [...BOARD, todayOnPhoneSrc, ticketCreateModalSrc, dealDialogPartsSrc, formatSrc];
 // The lifecycle dialogs open from the deal page; a returning paused deal shows in ควรตามต่อ (rep) / ภาพรวมทีมขาย (team).
-const LIFECYCLE = [...DEAL_PAGE, moveToS2Src, pauseDealSrc, markLostSrc, cancelDealSrc, reasonModalSrc, dealDialogPartsSrc,
-  stageMetaSrc, followUpListSrc, myWorkSrc];
-const LIFECYCLE_TEAM = [...LIFECYCLE, teamOverviewSrc, appShellSrc];
+// The past-date message is ThaiDateInput's own (fix round 1, L1).
+const LIFECYCLE_COMMON = [...DEAL_PAGE, moveToS2Src, pauseDealSrc, markLostSrc, cancelDealSrc, reasonModalSrc,
+  dealDialogPartsSrc, stageMetaSrc, thaiDateInputSrc];
+// The rep's returning deal: ควรตามต่อ on งานของฉัน (FollowUpList) and on the phone's วันนี้ของฉัน (TodayOnPhone).
+const LIFECYCLE = [...LIFECYCLE_COMMON, followUpListSrc, myWorkSrc, todayOnPhoneSrc];
+// The team's: ดีลที่ควรโทรตาม in the ภาพรวมทีมขาย section of the landing (TeamOverview, ManagerOverview, CeoOverview).
+const LIFECYCLE_TEAM = [...LIFECYCLE_COMMON, followUpListSrc, teamOverviewSrc, appShellSrc, managerOverviewSrc,
+  ceoOverviewSrc];
 // The chain card on the quotation page, its words, the dialogs it opens, the list mark, and the deal page's เงิน tab.
 const CHAIN = [...QUOTATIONS, quotationEditorSrc, chainCardSrc, quotationChainSrc, documentChainTextSrc, depositNoticeSrc,
   remainingInvoiceSrc, ticketTabsSrc, paymentSectionSrc];
@@ -306,7 +316,13 @@ describe('2026-11-17 audiences (unlocked, as the test env runs)', () => {
     expect(paymentSectionSrc).toMatch(/\{isOwnerSales \? \([\s\S]{0,700}ออกเอกสาร/);
     // Cancel is owner-only (TicketDetailPage can.cancel … && isOwner); the help must say so (review M9).
     expect(ticketDetailSrc).toMatch(/cancel:\s+hasAction\('CANCEL'\) && !TERMINAL\.includes\(st\)\s+&& isOwner,/);
-    expect(byId('deal-page').help).toContain('ยกเลิกได้เฉพาะพนักงานขายเจ้าของงาน');
+    // Review wn3 M1: the gate is owner OR keyer, whatever the role (isOwner = isOwnerOrKeyer; TicketService.canCancel
+    // has no role check), so a manager or the CEO who keyed a deal in (pipeline import) does see ยกเลิกงาน.
+    expect(ticketDetailSrc).toContain('const isOwner = isOwnerOrKeyer(summary, user.id);');
+    expect(byId('deal-page').help).toContain('ยกเลิกได้เฉพาะเจ้าของงานหรือผู้ที่คีย์งานนั้น');
+    for (const entry of release.entries) {
+      for (const text of allText(entry)) expect(text, entry.id).not.toContain('เฉพาะพนักงานขายเจ้าของงาน');
+    }
   });
 
   it('who gets which version of a page follows the page’s own role branch', () => {
@@ -713,7 +729,10 @@ describe('2026-11-17 wording matches the screens', () => {
           expect(ROLE_PERMISSIONS.canCreateTickets, `${entry.id}: ${role} has no งานใหม่ button`).toContain(role);
         }
       }
-      if (/เลือกเหตุผล|วันที่จะกลับมา/.test(text)) {
+      // Review wn3 M17: "เหตุผลที่เสียงาน" was in the replaced test's pattern and is restored here. The one exception is
+      // the ขั้นต่อไป card's own button label "เปลี่ยนวันที่จะกลับมาดู" (deal-page step 2 names it): a button's name, not
+      // the dialog's content, so that exact quoted label is removed before matching.
+      if (/เหตุผลที่เสียงาน|เลือกเหตุผล|วันที่จะกลับมา/.test(text.split('"เปลี่ยนวันที่จะกลับมาดู"').join(''))) {
         expect(LIFECYCLE_IDS, `${entry.id} describes a lifecycle dialog`).toContain(entry.id);
       }
     }
@@ -766,7 +785,9 @@ describe('2026-11-17 lifecycle dialogs and document chain (17d)', () => {
     // Cancel is owner/keyer only (TicketService.canCancel), and only sales has the create button that makes an owner.
     expect(TICKET_SERVICE_SRC).toMatch(/private boolean canCancel\(TicketSummaryDto s, UserPrincipal actor\) \{\s*return DealOwnership\.isOwnerOrKeyer\(s, actor\.id\(\)\)/);
     expect(pressing('ยกเลิกงาน').map((e) => e.id)).toEqual(['deal-lifecycle']);
-    expect(byId('deal-lifecycle-team').help).toContain('ยกเลิกงานได้เฉพาะเจ้าของงาน');
+    // Review wn3 M1: owner or keyer, any role — the link on the page is the answer; otherwise ask the owner.
+    expect(byId('deal-lifecycle-team').help).toContain('ยกเลิกงานได้เฉพาะเจ้าของงานหรือผู้ที่คีย์งานนั้น');
+    expect(byId('deal-lifecycle-team').help).toMatch(/ถ้าเห็นลิงก์ "ยกเลิกงาน"[\s\S]*ถ้าไม่เห็น/);
     // พักงาน / ปิดงาน (เสียงาน) / เปลี่ยนวันที่จะกลับมาดู: canDealOwnership roles only.
     for (const label of ['พักงาน', 'ปิดงาน (เสียงาน)', 'เปลี่ยนวันที่จะกลับมาดู']) {
       const ids = pressing(label).map((e) => e.id);
@@ -859,7 +880,11 @@ describe('2026-11-17 lifecycle dialogs and document chain (17d)', () => {
       expect(pauseDealSrc).toContain('เปลี่ยนเฉพาะวันที่ ไม่มีการแจ้งเตือน');
       expect(prose(id), id).toContain('ไม่ส่งแจ้งเตือน');
       // A date in the past is refused, with this message.
-      expect(labels, id).toContain('วันที่จะกลับมาดูต้องเป็นวันนี้หรือหลังจากนี้');
+      // Review wn3 L1: the field takes min={today}, so a typed past date is refused by ThaiDateInput with ITS message
+      // (ERR_RANGE); PauseDealModal's own "วันที่จะกลับมาดูต้องเป็นวันนี้…" shows only for a stale pre-filled date.
+      expect(pauseDealSrc).toMatch(/id="pause-return-on"[\s\S]{0,80}min=\{today\}/);
+      expect(labels, id).toContain(/const ERR_RANGE = '([^']+)';/.exec(thaiDateInputSrc)[1]);
+      expect(labels, id).not.toContain('วันที่จะกลับมาดูต้องเป็นวันนี้หรือหลังจากนี้');
     }
     // The rep: back in ควรตามต่อ on งานของฉัน (PauseDealModal's hint, FollowUpList's chip).
     expect(pauseDealSrc).toContain('ถึงวันนั้นงานจะกลับมาที่ “ควรตามต่อ” เอง');
@@ -927,5 +952,131 @@ describe('2026-11-17 lifecycle dialogs and document chain (17d)', () => {
     expect(release).not.toBeNull();
     expect(release.title).toContain('เอกสารต่อ');
     expect(release.title).toContain('พักงาน');
+  });
+});
+
+// ── Fix round 1 (review wn3): sentences a reader would find untrue on screen, and the six surviving mutations ─────────
+describe('2026-11-17 fix round 1 (review wn3)', () => {
+  const step = (id, n) => `${byId(id).steps[n - 1].text} ${byId(id).steps[n - 1].detail}`;
+  const prose = (id) => [byId(id).title, byId(id).why, byId(id).help,
+    ...byId(id).steps.flatMap((s) => [s.text, s.detail])].join('\n');
+  const CHAIN_IDS = ['quotation-chain', 'quotation-chain-manager', 'quotation-chain-ceo'];
+
+  it('L2: the ขั้นต่อไป card has one MAIN button; a paused deal also offers เปลี่ยนวันที่จะกลับมาดู', () => {
+    expect(ticketDetailSrc).toMatch(/data-action="resume"[\s\S]{0,900}data-testid="change-return-date"[\s\S]{0,300}เปลี่ยนวันที่จะกลับมาดู/);
+    const text = step('deal-page', 2);
+    expect(text).not.toContain('มีปุ่มเดียว');
+    expect(text).toContain('ปุ่มหลักหนึ่งปุ่ม');
+    expect(text).toContain('"ดำเนินการต่อ"');
+    expect(text).toContain('"เปลี่ยนวันที่จะกลับมาดู"');
+  });
+
+  it('L3: each manager chain step names the waiting party its own picture shows', () => {
+    // manager-1 is the deposit waiting on the rep; manager-3 the issued notice with the remaining invoice on account.
+    expect(step('quotation-chain-manager', 1)).toContain('"ฝ่ายขายเจ้าของงาน"');
+    expect(step('quotation-chain-manager', 3)).toContain('"ฝ่ายบัญชี"');
+    expect(step('quotation-chain-manager', 3)).not.toContain('"ฝ่ายขายเจ้าของงาน"');
+  });
+
+  it('L5: says which quotations show no card or a one-line note instead (quotationChainView)', () => {
+    // No card and no line: a quotation from the pricing-request flow (origin is not DEAL_DIRECT).
+    expect(quotationChainSrc).toContain("if (!quotation || (quotation.origin ?? 'DEAL_DIRECT') !== 'DEAL_DIRECT' || quotation.ticketId == null) return { mode: 'none' };");
+    // A one-line note instead of the card: superseded / cancelled quotation, paused / lost / cancelled deal, an order
+    // confirmed from another quotation or another way.
+    for (const reason of ['SUPERSEDED', 'CANCELLED', 'OTHER_QUOTATION', 'DEAL_LOST', 'DEAL_CANCELLED', 'DEAL_PAUSED',
+      'CONFIRMED_ELSEWHERE', 'DEAL_PAST_DRAFT']) {
+      expect(quotationChainSrc, reason).toContain(`notice('${reason}'`);
+    }
+    for (const id of CHAIN_IDS) {
+      expect(byId(id).help, id).toContain('คำขอราคา');
+      expect(byId(id).help, id).toContain('ไม่มีกล่องนี้');
+      expect(byId(id).help, id).toContain('ข้อความหนึ่งบรรทัด');
+      expect(byId(id).help, id).toContain('ฉบับอื่น');
+    }
+  });
+
+  it('I1/I2: the PDF button and the next-step line are described so they hold on a phone too', () => {
+    // Desktop: a text button; phone: an icon-only button with the same aria-label.
+    expect(chainCardSrc).toContain("{download.busy ? 'กำลังดาวน์โหลด…' : 'ดาวน์โหลด PDF'}");
+    expect(chainCardSrc).toMatch(/aria-label=\{download\.label\} title=\{download\.label\} className="hidden shrink-0 mobile:inline-flex"/);
+    for (const id of CHAIN_IDS) {
+      const text = prose(id);
+      expect(text, id).toContain('ดาวน์โหลด PDF');
+      expect(text, id).toContain('บนมือถือเป็นไอคอนดาวน์โหลด');
+      expect(text, id).not.toContain('มุมขวาบนของกล่อง');
+    }
+  });
+
+  it('I3: ภาพรวมทีมขาย is the landing (manager) or a dashboard section (CEO), never named a page of its own', () => {
+    expect(managerOverviewSrc).toContain('<TeamOverview showTitle={false} />');
+    expect(ceoOverviewSrc).toContain('<TeamOverview />');
+    const text = step('deal-lifecycle-team', 2);
+    expect(text).not.toMatch(/หน้า "ภาพรวมทีมขาย"/);
+    expect(text).toContain('ในส่วน "ภาพรวมทีมขาย" ของหน้าแรก');
+  });
+
+  it('L4: the rep is told the returning deal shows, with ดำเนินการต่อ, on the phone as well (TodayOnPhone)', () => {
+    expect(todayOnPhoneSrc).toContain('{returningLabel(deal)}');
+    expect(todayOnPhoneSrc).toMatch(/onClick=\{\(\) => onResume\?\.\(deal\)\}>\s*ดำเนินการต่อ/);
+    expect(step('deal-lifecycle', 3)).toContain('"วันนี้ของฉัน"');
+  });
+
+  it('I4: the collapsed details are listed in full, เจ้าของงาน included', () => {
+    expect(ticketCreateModalSrc).toContain('<FieldLabel htmlFor="deal-owner">เจ้าของงาน');
+    expect(step('deal-create', 4)).toContain('เจ้าของงาน');
+  });
+
+  it('M13: no prose gives the manager or the CEO the rep-only documents, with or without "กด"', () => {
+    // Strip the quoted step titles and list marks (names of things, not actions), then look for any issuing claim.
+    const names = [...CHAIN_STEP_TITLES, ...Object.values(CHAIN_LIST_MARK).map((m) => m.label)];
+    for (const id of ['quotation-chain-manager', 'quotation-chain-ceo']) {
+      let text = prose(id);
+      for (const name of names) text = text.split(`"${name}"`).join('');
+      expect(text, id).not.toMatch(/ออกแทน|แทนพนักงานขาย|สร้างใบแจ้ง|ออกใบแจ้งยอด|ออกใบแจ้งหนี้ส่วน|ออกเอกสาร|คุณออก|ออกได้เอง/);
+    }
+    expect(prose('quotation-chain-manager')).toContain('พนักงานขายเจ้าของงานเป็นผู้ออก');
+    expect(prose('quotation-chain-ceo')).toContain('ทุกขั้นในกล่องเป็นงานของฝ่ายขายและฝ่ายบัญชี');
+  });
+
+  it('M14: the estimate is the deal value only until a quotation gives one (SalesBoardRepository precedence)', () => {
+    const repo = JAVA('salesboard/SalesBoardRepository.java');
+    const quote = repo.indexOf('BigDecimal value = grandTotal(rs.getBigDecimal("total_amount")');
+    const imported = repo.indexOf('if (value == null && rs.getBigDecimal("imported_value") != null)');
+    const estimate = repo.indexOf('if (value == null && rs.getBigDecimal("estimated_value") != null)');
+    expect(quote).toBeGreaterThan(0);
+    expect(imported).toBeGreaterThan(quote);
+    expect(estimate).toBeGreaterThan(imported);
+    const text = step('deal-create', 3);
+    expect(text).toContain('ใช้มูลค่าโดยประมาณเป็นมูลค่าของงานจนกว่าจะมีตัวเลขจากใบเสนอราคา');
+    expect(text).not.toMatch(/แม้มีใบเสนอราคา|แทนตัวเลขจากใบเสนอราคา|ก่อนตัวเลขจากใบเสนอราคา/);
+  });
+
+  // M5 / M20: an image swapped between steps, or overwritten with another role's frame, kept its file name and so
+  // passed. Every file in the folder is pinned to its content; a re-shoot must update the list on purpose.
+  const sha = (file) => createHash('sha256')
+    .update(readFileSync(resolve(FRONTEND_ROOT, 'public/whats-new/2026-11-17', file))).digest('hex');
+
+  it('M5/M20: every 17 Nov image is the exact picture reviewed for its step (content hash list)', () => {
+    const onDisk = readdirSync(resolve(FRONTEND_ROOT, 'public/whats-new/2026-11-17')).sort();
+    expect(onDisk).toEqual(Object.keys(IMAGE_SHA256_2026_11_17).sort());
+    for (const file of onDisk) expect(sha(file), file).toBe(IMAGE_SHA256_2026_11_17[file]);
+  });
+
+  it('M5/M20: steps that show different states, or a role that sees a different frame, have different pictures', () => {
+    const different = [
+      // Within an entry, every step shows its own state.
+      ...release.entries.flatMap((entry) => {
+        const files = entry.steps.map((s) => s.image).filter(Boolean).map((image) => image.split('/').pop());
+        return files.flatMap((a, i) => files.slice(i + 1).map((b) => [a, b]));
+      }),
+      // The CEO cannot confirm: its card waits on the rep where the rep's and the manager's carry the button.
+      ['quotation-chain-ceo-1.png', 'quotation-chain-1.png'], ['quotation-chain-ceo-1.png', 'quotation-chain-manager-2.png'],
+      // The manager's document steps wait; the rep's own frame has the create button.
+      ['quotation-chain-manager-1.png', 'quotation-chain-5.png'], ['quotation-chain-manager-3.png', 'quotation-chain-5.png'],
+      ['quotation-chain-manager-3.png', 'quotation-chain-3.png'],
+      // The team's returning deal is the ดีลที่ควรโทรตาม row, not the rep's ควรตามต่อ row.
+      ['deal-lifecycle-team-2.png', 'deal-lifecycle-3.png'],
+    ];
+    for (const [a, b] of different) expect(sha(a), `${a} must differ from ${b}`).not.toBe(sha(b));
   });
 });
