@@ -520,7 +520,7 @@ describe('ผู้ติดต่อ — the picked contact fills โทร. / 
     api.customers.search.mockResolvedValue({ customers: [CUSTOMER, OTHER] });
     api.customers.contacts.mockImplementation(async (customerId) => ({ contacts: customerId === OTHER.id ? [OTHER_CONTACT] : [KANNIKA] }));
     renderEditor('/quotations/new');
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'แฟชั่น' } });
     fireEvent.mouseDown(await screen.findByRole('option', { name: new RegExp(CUSTOMER.name) }));
