@@ -35,36 +35,19 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage of the schedule/holiday-aware {@code LeaveDayMath} fix (2026-08-03):
- * before this branch, {@code LeaveDayMath} hardcoded Mon-Fri as the working week and had no
- * {@code hr.holiday} awareness, so (1) an OPS_6D (six-day) employee's Saturday leave was neither
- * counted nor deducted, and (2) a public holiday inside a leave range was counted (and deducted) as
- * an ordinary working day. This class wires the REAL {@link TieredWorkScheduleResolver} and
- * {@link DbHolidayCalendar} against real Postgres -- Mockito cannot verify this: the SQL
- * (division_id/department_id joins, the batched holiday read) and the schedule-resolution
- * precedence are exactly what is under test, mirroring {@link LeaveUnpaidDeductionIntegrationTest}'s
- * own rationale for the surrounding day-counting machinery.
- */
+/** Verifies leave counting uses real work schedules and holidays, including six-day weeks. */
 class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
-    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- every date below is fixed relative to this so the
-    // advance-notice rules are a non-issue (every scenario here uses LEAVE_WITHOUT_PAY/MATERNITY,
-    // both seeded with advance_notice_days = 0 -- see V116).
+    // Wednesday 2026-07-01 09:00 Asia/Bangkok -- every date below is fixed relative to this so the advance-notice
+    // rules are a non-issue (every scenario here uses LEAVE_WITHOUT_PAY/MATERNITY, both seeded with
+    // advance_notice_days = 0 -- see V116).
     private static final Instant FIXED_NOW = Instant.parse("2026-07-01T02:00:00Z");
 
     private LeaveRepository leaveRepository;
     private LeaveService leaveService;
-    // Nit fix (Opus review): hr() used to hardcode employeeId 1L, which -- since every test here
-    // calls insertEmployee(...) for the leave-taking employee(s) BEFORE ever calling hr(), and each
-    // test starts from a fresh IDENTITY sequence (see AbstractPostgresIntegrationTest) -- collided
-    // with whichever employee happened to be inserted FIRST in that test (e.g.
-    // aSixDaySaturdayCountsAsWorkingForAWarehouseEmployeeButNotForAnOfficeEmployee's own
-    // warehouseEmployee). Every approve() in this class was therefore silently "HR approves their own
-    // request", passing only because canReviewAll(user) is role-based with no self-review guard --
-    // not because the fixture proved a genuine third-party reviewer. Fixed with a dedicated reviewer
-    // row, inserted FIRST (before any test method's own insertEmployee calls), so its id can never
-    // coincide with a leave-taking employee's.
+    // Nit fix: hr used to hardcode employeeId 1L, which -- since every test here calls insertEmployee for the
+    // leave-taking employee BEFORE ever calling hr, and each test starts from a fresh IDENTITY sequence --
+    // collided with whichever employee happened to be inserted FIRST in that test.
     private long hrEmployeeId;
 
     @BeforeEach
@@ -82,11 +65,9 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         HolidayCalendar holidayCalendar = new DbHolidayCalendar(jdbc);
         leaveRepository = new LeaveRepository(jdbc, scheduleResolver, holidayCalendar);
 
-        // fileStorage/leaveAttachments are mocked (attachment storage is not under test here), but
-        // MATERNITY requires a real certificate attachment (requires_attachment = TRUE) -- same
-        // technique as LeaveUnpaidDeductionIntegrationTest#sickLeaveBeyondQuotaStillAutoRejects...
-        // V134 storage-durability fix: LeaveService#submit stores attachments to the database now,
-        // via FileStorageService#storeInDatabase + LeaveAttachmentRepository#saveWithContent.
+        // fileStorage/leaveAttachments are mocked (attachment storage is not under test here), but MATERNITY requires
+        // a real certificate attachment (requires_attachment = TRUE) -- same technique as
+        // LeaveUnpaidDeductionIntegrationTest#sickLeaveBeyondQuotaStillAutoRejects...
         FileStorageService fileStorage = mock(FileStorageService.class);
         when(fileStorage.storeInDatabase(anyString(), anyLong(), any(), any()))
             .thenReturn(new FileStorageService.StoredContent(
@@ -117,9 +98,9 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         long warehouseEmployee = insertEmployee("WH-EMP", warehouseDept);
         long officeEmployee = insertEmployee("OFC-EMP", officeDept);
 
-        // Mon 2026-08-03 .. Sat 2026-08-08 (no Sunday in range). LEAVE_WITHOUT_PAY is always fully
-        // unpaid from day one with no quota/notice/consecutive-day gates (V116) -- isolates the
-        // day-COUNTING defect from every other leave rule.
+        // Mon 2026-08-03 .. Sat 2026-08-08 (no Sunday in range). LEAVE_WITHOUT_PAY is always fully unpaid from day one
+        // with no quota/notice/consecutive-day gates (V116) -- isolates the day-COUNTING defect from every other leave
+        // rule.
         LeaveRequestDto warehouseResult = leaveService.submit(
             submitRequest(warehouseEmployee, "LEAVE_WITHOUT_PAY", "2026-08-03", "2026-08-08"),
             employee(warehouseEmployee));
@@ -136,15 +117,14 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         assertThat(warehouseResult.unpaidDays()).isEqualByComparingTo("6.00");
         assertThat(officeResult.unpaidDays()).isEqualByComparingTo("5.00");
 
-        // Leave requires approval (2026-08-05): the payroll deduction query below is filtered to
-        // APPROVED requests (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth) -- drive both
-        // requests there first so this test's actual subject (the corrected counts reaching payroll)
-        // is genuinely exercised.
+        // Leave requires approval (2026-08-05): the payroll deduction query below is filtered to APPROVED requests
+        // (LeaveRepository#findUnpaidLeaveDaysByEmployeeForMonth) -- drive both requests there first so this test's
+        // actual subject (the corrected counts reaching payroll) is genuinely exercised.
         leaveService.approve(warehouseResult.id(), new ReviewLeaveRequest("approved"), hr());
         leaveService.approve(officeResult.id(), new ReviewLeaveRequest("approved"), hr());
 
-        // The payroll deduction query must reflect the same corrected counts -- this is the query
-        // that actually feeds the base/30 unpaid-day deduction (PayrollService#suggestedInputs).
+        // The payroll deduction query must reflect the same corrected counts -- this is the query that actually feeds
+        // the base/30 unpaid-day deduction (PayrollService#suggestedInputs).
         Map<Long, BigDecimal> unpaidAugust =
             leaveRepository.findUnpaidLeaveDaysByEmployeeForMonth(LocalDate.parse("2026-08-01"));
         assertThat(unpaidAugust)
@@ -159,11 +139,8 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         long warehouseControl = insertEmployee("WH-HOL-CTRL", warehouseDept);
         long officeControl = insertEmployee("OFC-HOL-CTRL", officeDept);
 
-        // Vacuous-fixture guard: submit a CONTROL pair over the identical Mon 8/3 - Tue 8/4 range
-        // BEFORE any hr.holiday row exists for 8/4 -- proves both days count as ordinary working
-        // days on this fixture (2.00), so the drop to 1.00 below is genuinely caused by the holiday
-        // seed, not by something else about this date range. hr.holiday is empty by default (V115),
-        // so this also proves the test is not accidentally relying on a pre-seeded row.
+        // Vacuous-fixture guard: submit a CONTROL pair over the identical Mon 8/3. hr.holiday is empty by default
+        // (V115), so this also proves the test is not accidentally relying on a pre-seeded row.
         LeaveRequestDto warehouseControlResult = leaveService.submit(
             submitRequest(warehouseControl, "LEAVE_WITHOUT_PAY", "2026-08-03", "2026-08-04"),
             employee(warehouseControl));
@@ -195,8 +172,8 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
             .as("same for a five-day (OFFICE_5D) schedule -- holiday beats schedule for everyone")
             .isEqualByComparingTo("1.00");
 
-        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered
-        // to APPROVED requests -- drive all four requests (control pair included) there first.
+        // Leave requires approval (2026-08-05): findUnpaidLeaveDaysByEmployeeForMonth is filtered to APPROVED requests
+        // -- drive all four requests (control pair included) there first.
         leaveService.approve(warehouseControlResult.id(), new ReviewLeaveRequest("approved"), hr());
         leaveService.approve(officeControlResult.id(), new ReviewLeaveRequest("approved"), hr());
         leaveService.approve(warehouseResult.id(), new ReviewLeaveRequest("approved"), hr());
@@ -207,22 +184,9 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         assertThat(unpaidAugust)
             .containsEntry(warehouseEmployee, new BigDecimal("1.00"))
             .containsEntry(officeEmployee, new BigDecimal("1.00"))
-            // The CONTROL pair reads 1.00 here, not the 2.00 it was granted at, and that is correct
-            // rather than a bug: findUnpaidLeaveDaysByEmployeeForMonth deliberately RECOMPUTES each
-            // request's unpaid days against the CURRENT hr.holiday contents at read time -- it does
-            // not snapshot holiday state as of the moment leave was granted. The control was
-            // submitted before 8/4 became a holiday (asserted 2.00 above, which is what makes this a
-            // real vacuous-fixture guard); once the row exists, every request over that range
-            // recomputes without 8/4, the control included.
-            //
-            // This matters beyond the test: BotHolidayFetchService adds hr.holiday rows on a monthly
-            // cron, so holidays DO appear after leave has been approved, and past leave recounts.
-            // The blast radius is bounded -- this method feeds PayrollService#suggestedInputs only,
-            // never preview()/process() -- so a late holiday changes what payroll SUGGESTS, not what
-            // has already been paid. Owner-confirmed 2026-08-03 as intended behaviour.
-            //
-            // Scoping is still proven, just not by this line: warehouseResult/officeResult above are
-            // 1.00 and not 0.00, i.e. Monday 8/3 still counts. Only the seeded date drops out.
+            // The CONTROL pair reads 1.00 here, not the 2.00 it was granted at, and that is correct rather than a bug:
+            // findUnpaidLeaveDaysByEmployeeForMonth deliberately RECOMPUTES each request's unpaid days against the CURRENT
+            // hr.holiday contents at read time.
             .containsEntry(warehouseControl, new BigDecimal("1.00"))
             .containsEntry(officeControl, new BigDecimal("1.00"));
     }
@@ -236,11 +200,7 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
         MockMultipartFile certificate =
             new MockMultipartFile("attachment", "cert.pdf", "application/pdf", "pdf".getBytes());
 
-        // Mon 2026-08-03 .. Sun 2026-08-09: 7 calendar days, including the Tue 8/4 holiday and the
-        // Sat 8/8 + Sun 8/9 weekend. MATERNITY (CALENDAR_DAYS) must count all 7 -- exactly the days
-        // a WORKING_DAYS type (the control request, same range) drops, proving MATERNITY is not
-        // accidentally re-filtered through the new schedule/holiday predicate ("double-handling",
-        // the interaction LeaveDayCountBasis's javadoc calls out as the one most likely to go wrong).
+        // Maternity counts all seven calendar days, including holidays and weekends excluded by working-day leave.
         LeaveRequestDto maternityResult = leaveService.submit(
             submitRequest(maternityEmployee, "MATERNITY", "2026-08-03", "2026-08-09"),
             certificate, employee(maternityEmployee));
@@ -276,18 +236,16 @@ class LeaveScheduleHolidayAwareIntegrationTest extends AbstractPostgresIntegrati
             "sub-day maternity on the same holiday", LocalTime.of(8, 30), LocalTime.of(12, 30),
             null, null, null, null, null, null, null);
 
-        // WORKING_DAYS: the new schedule/holiday-aware gate in validateSubDayTimes correctly rejects
-        // a sub-day request whose only date is a holiday -- there is no working day to take partial
-        // leave from.
+        // WORKING_DAYS: the new schedule/holiday-aware gate in validateSubDayTimes correctly rejects a sub-day request
+        // whose only date is a holiday -- there is no working day to take partial leave from.
         assertThatThrownBy(() -> leaveService.submit(subDayOnHolidayWorkingDays, employee(workingDaysEmployee)))
             .isInstanceOf(ApiException.class)
             .extracting(ex -> ((ApiException) ex).getStatus())
             .isEqualTo(HttpStatus.BAD_REQUEST);
 
-        // CALENDAR_DAYS (MATERNITY): the SAME holiday date, the SAME gate, must NOT reject -- this is
-        // the double-handling guard. Before the basis gate in validateSubDayTimes, this would have
-        // been wrongly rejected once holiday-awareness landed (it was accepted, holiday-blind, prior
-        // to this branch).
+        // CALENDAR_DAYS (MATERNITY): the SAME holiday date, the SAME gate, must NOT reject -- this is the
+        // double-handling guard. Before the basis gate in validateSubDayTimes, this would have been wrongly rejected
+        // once holiday-awareness landed (it was accepted, holiday-blind, prior to this branch).
         LeaveRequestDto maternityResult =
             leaveService.submit(subDayOnHolidayMaternity, certificate, employee(maternityEmployee));
         assertThat(maternityResult.status()).isEqualTo("SUBMITTED");

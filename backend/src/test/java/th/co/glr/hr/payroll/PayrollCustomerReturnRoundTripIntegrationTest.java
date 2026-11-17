@@ -16,28 +16,9 @@ import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * D1 (fourth reachability audit, 2026-07-30): {@code customer_return_deduction} stopped
- * round-tripping what HR actually typed, a REGRESSION against origin/main -- see
- * {@code V101__payroll_customer_return_requested_amount.sql} for the full failure narrative.
- *
- * <p>On origin/main the legacy engine passed the field through verbatim, so the stored figure
- * always survived a reload. This branch's classified engine gave the column a second job -- 0 in
- * the "not yet earned" path (netted pre-tax out of commission instead), the full amount in the
- * "already earned" path (a post-tax clawback) -- and only ONE persisted column tried to carry both
- * meanings. In the unearned path (the only reachable state before this branch), the entered amount
- * never survived a reload: {@code PayrollPage.jsx}'s {@code adjustmentFromLine} read {@code
- * customer_return_deduction} back as 0, silently wiping the form field AND the checkbox that gates
- * on it being {@code > 0}, and a reprocess of the same month silently stopped re-applying the
- * pre-tax netting -- net pay would change with no HR action.
- *
- * <p>Fixed with a new column, {@code customer_return_requested}, that always echoes the raw
- * entered amount regardless of the earned flag, leaving {@code customer_return_deduction}'s
- * existing post-tax-bookkeeping meaning untouched. Driven through the real {@link PayrollService}
- * and real Postgres, not Mockito: the whole point under test is that a value survives an actual
- * INSERT/SELECT round trip through {@link PayrollRepository}, which a mocked repository would
- * "pass" regardless of what the SQL actually persists.
- */
+/** D1 (fourth reachability audit, 2026-07-30): customer_return_deduction stopped round-tripping what HR
+ * actually typed, a REGRESSION against origin/main -- see V101__payroll_customer_return_requested_amount.sql
+ * for the full failure narrative. */
 class PayrollCustomerReturnRoundTripIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate MONTH = LocalDate.of(2026, 3, 1);
 
@@ -68,13 +49,9 @@ class PayrollCustomerReturnRoundTripIntegrationTest extends AbstractPostgresInte
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * (a) The entered amount must survive a reload even though it is netted pre-tax and the
-     * post-tax bookkeeping figure stays zero. (c) Also proves the unearned path nets pre-tax
-     * EXACTLY ONCE and does not additionally deduct post-tax -- commissionPay must reflect the
-     * netting exactly once (10,000 - 3,000 = 7,000), and customerReturnDeduction (the post-tax
-     * figure) must be zero, never also 3,000.
-     */
+    /** The entered amount must survive a reload even though it is netted pre-tax and the post-tax bookkeeping
+     * figure stays zero. Also proves the unearned path nets pre-tax EXACTLY ONCE and does not additionally deduct
+     * post-tax. */
     @Test
     void enteredAmountSurvivesAReloadAndTheUnearnedPathNetsPreTaxExactlyOnce() {
         long employeeId = seedEmployee("CRR-001", "คืนสินค้า", "ทดสอบ", new BigDecimal("30000.00"));
@@ -101,14 +78,9 @@ class PayrollCustomerReturnRoundTripIntegrationTest extends AbstractPostgresInte
             .isEqualByComparingTo("7000.00");
     }
 
-    /**
-     * (b) The silent-net-pay-change failure mode itself: reprocessing the same month, with the
-     * second run's input hydrated from what the FIRST run persisted (exactly what {@code
-     * PayrollPage.jsx}'s {@code adjustmentFromLine} does on a reload), must not change net pay.
-     * Before this fix, hydrating from {@code customerReturnDeduction} (which reads back 0 in the
-     * unearned path) would submit a second run with no return amount at all, silently un-netting
-     * the commission and raising net pay with no HR action.
-     */
+    /** (b) The silent-net-pay-change failure mode itself: reprocessing the same month, with the second run's input
+     * hydrated from what the FIRST run persisted (exactly what PayrollPage.jsx's adjustmentFromLine does on a
+     * reload), must not change net pay. */
     @Test
     void reprocessingWithInputsHydratedFromThePersistedLineProducesIdenticalNetPayBothTimes() {
         long employeeId = seedEmployee("CRR-002", "รอบสอง", "ทดสอบ", new BigDecimal("30000.00"));
@@ -119,8 +91,8 @@ class PayrollCustomerReturnRoundTripIntegrationTest extends AbstractPostgresInte
         PayrollPeriodDto firstRun = payrollService.process(new ProcessPayrollRequest(MONTH, List.of(firstInput)), hr());
         BigDecimal firstNetPay = lineFor(firstRun, employeeId).netPay();
 
-        // Simulate a reload: hydrate the SECOND run's request from the persisted line's
-        // customerReturnRequested, exactly as the frontend now does.
+        // Simulate a reload: hydrate the SECOND run's request from the persisted line's customerReturnRequested,
+        // exactly as the frontend now does.
         PayrollLineDto persistedAfterFirstRun = reloadedLineFor(employeeId);
         PayrollEmployeeInputRequest secondInput = customerReturnInputOf(
             employeeId, persistedAfterFirstRun.customerReturnRequested(), false);
@@ -134,12 +106,7 @@ class PayrollCustomerReturnRoundTripIntegrationTest extends AbstractPostgresInte
             .isEqualByComparingTo(firstNetPay);
     }
 
-    /**
-     * The already-earned (post-tax clawback) path is the control case: it must be UNCHANGED by
-     * this fix. customerReturnDeduction (post-tax) carries the full amount, customerReturnRequested
-     * carries the identical figure (they agree in this path, unlike the unearned path above), and
-     * commissionPay is NOT netted -- the amount only ever reduces net pay once, post-tax.
-     */
+    /** The already-earned (post-tax clawback) path is the control case: it must be UNCHANGED by this fix. */
     @Test
     void alreadyEarnedPathStillDeductsPostTaxOnlyAndDoesNotNetCommission() {
         long employeeId = seedEmployee("CRR-003", "รับแล้ว", "ทดสอบ", new BigDecimal("30000.00"));

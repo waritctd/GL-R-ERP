@@ -10,21 +10,9 @@ import java.util.Optional;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/**
- * READ-ONLY source data for the ใบขอซื้อ (F-SM-001).
- *
- * <p><strong>This class writes nothing, and that is the point.</strong> The import request is
- * generated on demand from the deal rather than stored: no {@code sales.import_request} table, no
- * migration, no lifecycle. The stored-aggregate version (draft → issue → supersede, a minted
- * {@code IR<yy><nnn>}, superseding revisions) is designed and its migration written, but it is a
- * schema change against a production Flyway history with six known checksum mismatches, so it
- * ships separately and deliberately later. Everything here is a SELECT against columns that
- * already exist in production.
- *
- * <p>The consequence a reader should know: the document number and "กำหนดวันที่ต้องการของ" are
- * supplied by the caller, not persisted. That matches how the business already works — in the
- * owner's own IR69068 the number is a pasted overlay, not part of the document.
- */
+/** READ-ONLY source data for the ใบขอซื้อ (F-SM-001). This class writes nothing, and that is the point. The
+ * import request is generated on demand from the deal rather than stored: no sales.import_request table, no
+ * migration, no lifecycle. */
 @Repository
 public class ImportRequestQueryRepository {
 
@@ -52,67 +40,16 @@ public class ImportRequestQueryRepository {
 
     public record Line(long ticketItemId, String code, String size, BigDecimal qty, String unit) {}
 
-    /**
-     * One deal line's factory-resolution INPUT (V184) — the raw candidates {@link
-     * ImportRequestService}'s cascade needs, still unresolved. Read-only; the resolve-or-create
-     * decision (including the factory-master WRITE for an unresolved name — owner decision 2) is the
-     * service's job, not this class's, matching this repository's own "writes nothing" discipline.
-     *
-     * @param remainingQty {@code qty - qty_from_stock}, already floored at zero. A line fully covered
-     *                     from stock needs no import at all (owner decision 4: "zero-qty lines
-     *                     omitted") and is filtered out by {@link #factoryResolutionCandidates}
-     *                     before this record is ever built for it.
-     * @param directFactoryId a factory ID already resolved with no name-matching needed — either
-     *                     {@code pricing_request_item.resolved_factory_id} (the catalog-picked path)
-     *                     or {@code product_prices.factory_id} via {@code ticket_item.catalog_price_id}.
-     *                     Takes priority over {@code candidateFactoryName} whenever both are absent-or-
-     *                     present is ambiguous; see the cascade order in this class's Javadoc on
-     *                     {@link #factoryResolutionCandidates}.
-     * @param candidateFactoryName a hand-typed factory NAME with no direct ID — needs matching against
-     *                     the factory master by normalized name, or creating on the fly if it matches
-     *                     nothing (owner decision 2). Null when a direct ID was already found, or when
-     *                     no factory information exists anywhere for this line (in which case the
-     *                     service refuses rather than deriving one from {@code brand}).
-     * @param code         the F-SM-001 line's prefilled "Code" (owner decision 09-18 #3 §A), already
-     *                     resolved by {@link ImportRequestLinePrefill#firstNonBlank}: the catalog
-     *                     product code via {@code ticket_item.catalog_price_id} →
-     *                     {@code price_catalog.product_prices.product_code}, else the order-confirmed
-     *                     pricing_request_item's {@code catalog_product_code}, else the hand-typed
-     *                     {@code ticket_item.model}. Never blank — {@code model} is the floor of the
-     *                     cascade and {@code ticket_item.model} has no NOT NULL constraint of its own,
-     *                     but every deal line is created with one.
-     * @param model        (REVIEW ROUND 2, S-A) the RAW {@code ticket_item.model} text, kept SEPARATE
-     *                     from {@code code} — {@code code} prefers a catalog product code and only
-     *                     falls back to this same text when no catalog code exists anywhere, so the
-     *                     two are frequently different values. Feeds the order-email draft's per-line
-     *                     header ("<Brand> <Model>  (Code: X)") alongside {@link #brand}.
-     * @param color        resolved colour, preferring {@code ticket_item.color} over the
-     *                     order-confirmed pricing_request_item's, for the printed note sub-row and the
-     *                     order-email's Colour/Surface/Size detail line. Null when neither has one.
-     * @param texture      resolved surface/texture — see {@link #color}.
-     */
+    /** One deal line's factory-resolution INPUT (V184) — the raw candidates ImportRequestService's cascade needs,
+     * still unresolved. */
     public record LineFactoryCandidate(
         long ticketItemId, String brand, String code, String model, String size, BigDecimal remainingQty,
         String unit, Long directFactoryId, String candidateFactoryName, String color, String texture
     ) {}
 
-    /**
-     * CR-1 (GLA-167), owner rulings B-R4/B-R5: the lead times on the deal's CURRENT QUOTATION items --
-     * never the pricing-request lines. "Current" is route-specific:
-     * <ul>
-     *   <li>PRICING_REQUEST route: the ACCEPTED quotation ({@code DealQuotationRepository
-     *       #findAcceptedItemQuantitiesByPricingRequest}'s own definition). An item reaches its factory
-     *       through {@code pricing_request_item_id} -> that line's {@code source_ticket_item_id}, which
-     *       is exactly the ticket item the factory-resolution cascade groups on, so the two can never
-     *       disagree about which factory a line belongs to.
-     *   <li>direct route: the APPROVED DEAL_DIRECT quotation. An item reaches its factory through
-     *       {@code catalog_price_id} -> {@code product_prices.factory_id}; a hand-typed line has no
-     *       link, is not returned, and so never counts.
-     * </ul>
-     * The legacy engine ({@code origin IS NULL}) carries no per-item lead time and is ignored. Only
-     * items with BOTH min and max set are returned. Exactly one of {@code ticketItemId}/{@code
-     * factoryId} is non-null per row, matching the route that produced it.
-     */
+    /** CR-1 (GLA-167), owner rulings B-R4/B-R5: the lead times on the deal's CURRENT QUOTATION items -- never the
+     * pricing-request lines. "Current" is route-specific: PRICING_REQUEST route: the ACCEPTED quotation
+     * (DealQuotationRepository #findAcceptedItemQuantitiesByPricingRequest's own definition). */
     public List<QuotationLeadTimeRow> currentQuotationLeadTimes(long ticketId) {
         return jdbc.query("""
             SELECT pri.source_ticket_item_id AS ticket_item_id, NULL::bigint AS factory_id,
@@ -138,38 +75,9 @@ public class ImportRequestQueryRepository {
     /** One quotation item's lead time, attributed to a ticket item (PR route) or a factory (direct route). */
     public record QuotationLeadTimeRow(Long ticketItemId, Long factoryId, int minDays, int maxDays) {}
 
-    /**
-     * Per-line factory resolution inputs for the STORED (factory-grained) ใบขอซื้อ path — replaces
-     * {@link #brandLinesForTicket} for {@code createDrafts}/the rollup, which are per-FACTORY as of
-     * V184. {@link #brandLinesForTicket} itself is UNCHANGED and still serves the singular PREVIEW
-     * routes ({@code render}/{@code brands}/{@code pageCount}), which stay per-brand: those routes are
-     * being demoted to {@code SERVER_ONLY} (owner decision 4, superseded by the stored aggregate's
-     * {@code /file} route in a later PR) rather than rewritten, so this migration does not touch their
-     * grain or their existing tests.
-     *
-     * <p><strong>Cascade, per {@code ticket_item}, in order</strong> (import-request-per-factory-PLAN.md
-     * §2, amended 2026-09-18 after the pricing session's answer that catalog-picked lines get {@code
-     * resolved_factory_id} via {@code snapshotCatalogSelections} while hand-typed lines get only a
-     * {@code factory} NAME once import runs {@code setItemFactory} — before that both are NULL):
-     * <ol>
-     *   <li>The line's {@code pricing_request_item} on the deal's ORDER-CONFIRMED ({@code
-     *       QUOTATION_ACCEPTED}) pricing request, found via {@code source_ticket_item_id}: its {@code
-     *       resolved_factory_id} if set, else its {@code factory} name if non-blank.
-     *   <li>{@code ticket_item.catalog_price_id} → {@code price_catalog.product_prices.factory_id}.
-     *   <li>{@code ticket_item.factory} (hand-typed name).
-     * </ol>
-     * The first step that yields EITHER a direct ID or a name stops the cascade for that line — a
-     * name found at step 1 is not overridden by a direct ID a later step might have produced. Steps
-     * 4/5 of the plan (match-by-normalized-name-or-create, or refuse) are the service's job once it
-     * has these candidates; this method supplies the inputs only.
-     *
-     * <p><strong>{@code brand} is NEVER a factory-resolution input</strong> — it is carried here only
-     * as a display/filename snapshot. One factory makes several brands, and the pricing-flow redesign
-     * (Phase 1, unmerged as of this writing) already has sales no longer picking a factory at all — the
-     * "โรงงาน" label the CEO/import UI shows for a pricing-request line is cosmetic on the {@code brand}
-     * column, not a real factory selection. Deriving a factory from brand would therefore invent a
-     * relationship this codebase's own data does not assert.
-     */
+    /** Per-line factory resolution inputs for the STORED ใบขอซื้อ path. Steps 4/5 of the plan
+     * (match-by-normalized-name-or-create, or refuse) are the service's job once it has these candidates; this
+     * method supplies the inputs only. */
     public boolean ticketHasItem(long ticketId, long ticketItemId) {
         return Boolean.TRUE.equals(jdbc.queryForObject(
             "SELECT EXISTS(SELECT 1 FROM sales.ticket_item WHERE item_id = :item AND ticket_id = :ticket)",
@@ -240,10 +148,9 @@ public class ImportRequestQueryRepository {
                     candidateName = tiFactoryName; // null when truly nothing resolves
                 }
 
-                // Owner decision 09-18 #3 §A: code prefers the catalog link, then the order-confirmed
-                // pricing-request-item's own catalog code, then the hand-typed model — see
-                // ImportRequestLinePrefill's Javadoc for why this and the color/texture cascade below
-                // share one helper.
+                // Owner decision 09-18 #3 §A: code prefers the catalog link, then the order-confirmed pricing-request-item's
+                // own catalog code, then the hand-typed model — see ImportRequestLinePrefill's Javadoc for why this and the
+                // color/texture cascade below share one helper.
                 String code = ImportRequestLinePrefill.firstNonBlank(
                     rs.getString("catalog_product_code"), rs.getString("pri_catalog_product_code"),
                     rs.getString("model"));
@@ -280,22 +187,17 @@ public class ImportRequestQueryRepository {
                 return Optional.of(new TicketSnapshot(
                     rs.getLong("ticket_id"), rs.getString("code"), rs.getString("customer_name"),
                     rs.getString("project_name"), rs.getString("rep_name"),
-                    // Now really persisted: V154 added sales.ticket.required_by_note, set by Sales
-                    // from ORDER_RECEIVED onward. Preview callers may still override it per request;
-                    // the STORED path snapshots this value at issue.
+                    // Now really persisted: V154 added sales.ticket.required_by_note, set by Sales from ORDER_RECEIVED onward.
+                    // Preview callers may still override it per request; the STORED path snapshots this value at issue.
                     rs.getString("required_by_note"),
                     d == null ? null : d.toLocalDate(),
                     rs.getString("status"), rs.getString("lifecycle")));
             });
     }
 
-    /**
-     * Does {@code employeeId} own this deal? Expressed as {@code createdById}, the same way
-     * {@code TicketService.requireDealOwnership} and {@code canDeclareStockCoverage} express it.
-     *
-     * <p>Used only by {@code setRequiredByNote} — the one write here that belongs to SALES rather than
-     * import, so it cannot lean on {@code IR_ROLES}.
-     */
+    /** Does employeeId own this deal? Expressed as createdById, the same way TicketService.requireDealOwnership and
+     * canDeclareStockCoverage express it. Used only by setRequiredByNote — the one write here that belongs to
+     * SALES rather than import, so it cannot lean on IR_ROLES. */
     public boolean isDealOwner(long ticketId, long employeeId) {
         Boolean owns = jdbc.queryForObject(
             "SELECT EXISTS(SELECT 1 FROM sales.ticket WHERE ticket_id = :id AND (created_by = :emp OR keyed_by = :emp))",
@@ -303,14 +205,9 @@ public class ImportRequestQueryRepository {
         return Boolean.TRUE.equals(owns);
     }
 
-    /**
-     * Has the deal reached ORDER_RECEIVED — the floor the owner set for Sales supplying
-     * "กำหนดวันที่ต้องการของ" ("when the order is already confirmed")?
-     *
-     * <p>Compared by POSITION in {@code DealStage.ORDER}, not by a hardcoded list of stage names, so
-     * inserting a stage (as V143 did with QUOTE_OWNER) cannot silently change which deals qualify.
-     * Fails closed on an unknown stage: {@code indexOf} returns -1, which is below the floor.
-     */
+    /** Has the deal reached ORDER_RECEIVED — the floor the owner set for Sales supplying "กำหนดวันที่ต้องการของ"
+     * ("when the order is already confirmed")? Fails closed on an unknown stage: indexOf returns -1, which is
+     * below the floor. */
     public boolean stageAtLeastOrderReceived(long ticketId) {
         String stage = jdbc.queryForObject(
             "SELECT sales_stage FROM sales.ticket WHERE ticket_id = :id",
@@ -319,25 +216,9 @@ public class ImportRequestQueryRepository {
             >= th.co.glr.hr.ticket.DealStage.indexOf(th.co.glr.hr.ticket.DealStage.ORDER_RECEIVED);
     }
 
-    /**
-     * The deal's lines grouped by brand, in printed order — one entry per form to raise.
-     *
-     * <p>Lines with no usable brand come back under a {@code null} brand rather than being bucketed
-     * with anything else, so the service can refuse rather than print a form whose header does not
-     * say what was ordered. F-SM-001 has no unbranded variant and the owner confirmed the field is
-     * necessary.
-     *
-     * <p><strong>"No usable brand" means BLANK, not NULL.</strong> {@code sales.ticket_item.brand}
-     * has been {@code NOT NULL} since V8, so a null can never arrive — the null branch below is
-     * belt-and-braces against a future schema change, not a live case. An empty or whitespace-only
-     * string IS reachable, which is why the check is {@code isBlank()} and not a null test. Verified
-     * against real Postgres by {@code ImportRequestServiceIntegrationTest}, which had to be written
-     * with a blank brand because inserting a null one is rejected by the column itself.
-     *
-     * <p>Ordering is {@code sort_order, item_id} within a brand — the deal's own printed order, the
-     * same one {@code TicketRepository} uses for the items table. Do not reorder here: the Item
-     * column is a positional sequence a reader matches against the deal.
-     */
+    /** The deal's lines grouped by brand, in printed order — one entry per form to raise. sales.ticket_item.brand
+     * has been NOT NULL since V8, so a null can never arrive — the null branch below is belt-and-braces against a
+     * future schema change, not a live case. */
     public List<BrandLines> brandLinesForTicket(long ticketId) {
         Map<String, List<Line>> byBrand = new LinkedHashMap<>();
         jdbc.query("""

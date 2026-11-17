@@ -121,9 +121,8 @@ describe('DealDocumentRegister', () => {
     expect(screen.queryByTestId('register-attachments')).toBeNull();
     expect(screen.queryByTestId('register-import-requests')).toBeNull();
     expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
-    // Never fire a query that would 403 — a swallowed 403 rendering an empty
-    // register reads as "no documents exist", which is worse than the
-    // honest "not available in this view" above.
+    // Never fire a query that would 403 — a swallowed 403 rendering an empty register reads as "no documents
+    // exist", which is worse than the honest "not available in this view" above.
     expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
     expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
   });
@@ -153,7 +152,7 @@ describe('DealDocumentRegister', () => {
   });
 
   // DealQuotationRepository#findByTicket also returns PRICING_REQUEST-origin rows: a deal whose only
-  // quotation is one of those must not show the false "ยังไม่มีใบเสนอราคาสำหรับดีลนี้" empty state.
+  // quotation is one of those must not show the false "ยังไม่มีใบเสนอราคาสำหรับงานนี้" empty state.
   // The register LISTS the rows of that endpoint itself (versions grouped) instead of pointing at
   // the panel below, so the row must be visible here and no pointer sentence shown.
   it('a deal with only a PRICING_REQUEST-origin quotation lists it (no false empty state, no pointer sentence)', async () => {
@@ -171,7 +170,7 @@ describe('DealDocumentRegister', () => {
 
     expect(await screen.findByTestId('register-quotations')).not.toBeNull();
     expect(await screen.findByText('QT-2026-0101-1')).not.toBeNull();
-    expect(screen.queryByText('ยังไม่มีใบเสนอราคาสำหรับดีลนี้')).toBeNull();
+    expect(screen.queryByText('ยังไม่มีใบเสนอราคาสำหรับงานนี้')).toBeNull();
     expect(screen.queryByText(/แสดงอยู่ในแผง/)).toBeNull();
   });
 
@@ -414,9 +413,9 @@ describe('DealDocumentRegister', () => {
     expect(row.queryByRole('button')).toBeNull();
   });
 
-  // Backend RemainingInvoiceRepository#lockIssuedPredecessor continues a base ONLY from an ISSUED
-  // row with the same customer_quotation_id (null matches null). issue() supersedes every other
-  // ISSUED row, so a SUPERSEDED-only group must NOT adopt a draft.
+  // Backend RemainingInvoiceRepository#lockIssuedPredecessor continues a base ONLY from an ISSUED row with the
+  // same customer_quotation_id (null matches null). issue() supersedes every other ISSUED row, so a
+  // SUPERSEDED-only group must NOT adopt a draft.
   const ACCOUNT = { user: { id: 5, role: 'account' }, sections: ACCOUNT_SECTIONS, canViewPricingRequests: false, canViewDocumentsTab: true };
   const groupOf = (id) => screen.getByTestId(`document-version-remaining-${id}`).closest('[data-testid="document-group"]');
   const idsIn = (group) => within(group).getAllByTestId(/^document-version-remaining-/).map((e) => e.getAttribute('data-testid'));
@@ -629,8 +628,8 @@ describe('DealDocumentRegister', () => {
     expect(row.queryByText(/ไม่ระบุผู้รับ/)).toBeNull();
   });
 
-  // Deploy safety: the frontend ships before the backend image, so an older backend omits the
-  // field. No chip is better than a wrong one.
+  // Deploy safety: the frontend ships before the backend image, so an older backend omits the field. No chip is
+  // better than a wrong one.
   it('direct: recipientType absent (older backend) renders NO chip', async () => {
     api.dealQuotations.listForTicket.mockResolvedValue({
       items: [{ id: 93, number: 'QT-2026-0930-1', docStatus: 'APPROVED', revisionNo: 1, grandTotal: 1, origin: 'DEAL_DIRECT' }],
@@ -686,8 +685,8 @@ describe('DealDocumentRegister', () => {
     expect(screen.getByText('QT-2026-0901')).not.toBeNull();
   });
 
-  // Wrong-way-round: viewers failing `canViewQuotations && canViewDealQuotation(user)` must never
-  // trigger the direct-quotation fetch (it would 403).
+  // Wrong-way-round: viewers failing `canViewQuotations && canViewDealQuotation(user)` must never trigger the
+  // direct-quotation fetch (it would 403).
   it.each([
     ['account', { id: 5, role: 'account' }, ACCOUNT_SECTIONS, false],
     ['import', { id: 7, role: 'import' }, IMPORT_SECTIONS, true],
@@ -742,8 +741,8 @@ describe('DealDocumentRegister', () => {
     expect(draft.queryByRole('button')).toBeNull();
   });
 
-  // Wrong-way-round: same gate as the deposit notice (sections.depositNotice) — import is refused
-  // outright, so the stored-invoice query must never fire for it.
+  // Wrong-way-round: same gate as the deposit notice (sections.depositNotice) — import is refused outright, so
+  // the stored-invoice query must never fire for it.
   it('does not fetch stored remaining invoices for a viewer without sections.depositNotice', async () => {
     renderRegister({ user: { id: 7, role: 'import' }, sections: IMPORT_SECTIONS, canViewPricingRequests: true, canViewDocumentsTab: true });
     expect(await screen.findByTestId('register-attachments')).not.toBeNull();
@@ -818,9 +817,9 @@ describe('DealDocumentRegister', () => {
 
     const section = within(await screen.findByTestId('register-deposit'));
 
-    // The bug: SUPERSEDED must read ถูกแทนที่, and never fall back to ฉบับร่าง. Wait for the
-    // deposit-notice rows themselves (the section testid mounts immediately in its loading
-    // skeleton, before the listByTicket query resolves).
+    // The bug: SUPERSEDED must read ถูกแทนที่, and never fall back to ฉบับร่าง. Wait for the deposit-notice rows
+    // themselves (the section testid mounts immediately in its loading skeleton, before the listByTicket query
+    // resolves).
     expect(await section.findByText('ถูกแทนที่')).not.toBeNull();
     expect(section.getByText('ออกแล้ว')).not.toBeNull();
     expect(section.queryByText('ฉบับร่าง')).toBeNull();
@@ -851,9 +850,9 @@ describe('DealDocumentRegister', () => {
     expect(deposit.compareDocumentPosition(remaining) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(within(deposit).getByText('ใบแจ้งยอดมัดจำ')).not.toBeNull();
     expect(within(remaining).getByText('ใบแจ้งหนี้ส่วนที่เหลือ')).not.toBeNull();
-    expect(await within(deposit).findByText('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้')).not.toBeNull();
+    expect(await within(deposit).findByText('ยังไม่มีใบแจ้งยอดมัดจำสำหรับงานนี้')).not.toBeNull();
     // Empty stored list: the readiness row stays at the top, the empty sentence sits beneath it.
-    expect(await within(remaining).findByText('ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับดีลนี้')).not.toBeNull();
+    expect(await within(remaining).findByText('ยังไม่มีใบแจ้งหนี้ส่วนที่เหลือสำหรับงานนี้')).not.toBeNull();
     expect(within(remaining).getByText('ออกใบแจ้งหนี้ส่วนที่เหลือ')).not.toBeNull();
     expect(screen.queryByTestId('register-deposit-and-invoice')).toBeNull();
   });
@@ -883,7 +882,7 @@ describe('DealDocumentRegister', () => {
     });
 
     const deposit = await screen.findByTestId('register-deposit');
-    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้'));
+    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับงานนี้'));
     if (pointed) {
       expect(deposit.textContent).toContain('กดปุ่ม “สร้างใบแจ้งยอดเงินรับมัดจำ” ด้านบนของหน้า');
     } else {
@@ -895,7 +894,7 @@ describe('DealDocumentRegister', () => {
     renderRegister({ ...ACCOUNT, summary: { status: 'price_proposed', fulfillmentStatus: null, salesStage: 'ORDER_RECEIVED', depositPolicy: 'REQUIRED', createdById: 5 } });
 
     const deposit = await screen.findByTestId('register-deposit');
-    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับดีลนี้'));
+    await waitFor(() => expect(deposit.textContent).toContain('ยังไม่มีใบแจ้งยอดมัดจำสำหรับงานนี้'));
     expect(deposit.textContent).not.toContain('สร้างใบแจ้งยอดเงินรับมัดจำ');
   });
 
@@ -1003,9 +1002,9 @@ describe('DealDocumentRegister', () => {
     const section = within(await screen.findByTestId('register-remaining-invoice'));
     fireEvent.click(section.getByRole('button', { name: 'Excel' }));
 
-    // account is not this deal's owning sales rep, so R4 shows the "waiting for sales" state
-    // rather than the create-flow options preview — either way, the register itself never
-    // downloads directly; it only ever opens the dialog.
+    // account is not this deal's owning sales rep, so R4 shows the "waiting for sales" state rather than the
+    // create-flow options preview — either way, the register itself never downloads directly; it only ever opens
+    // the dialog.
     expect(await screen.findByTestId('remaining-invoice-dialog')).not.toBeNull();
   });
 
@@ -1098,7 +1097,7 @@ describe('DealDocumentRegister — ใบขอซื้อ (รายโรง�
   it('shows an honest empty line when the deal has no IR yet', async () => {
     renderRegister(OWNER);
     const section = await screen.findByTestId('register-import-requests');
-    expect(await within(section).findByText('ยังไม่มีใบขอซื้อสำหรับดีลนี้')).not.toBeNull();
+    expect(await within(section).findByText('ยังไม่มีใบขอซื้อสำหรับงานนี้')).not.toBeNull();
   });
 
   it('import (read-only), CEO and sales_manager see the section; a non-owning sales rep and account do not, and never fetch', async () => {

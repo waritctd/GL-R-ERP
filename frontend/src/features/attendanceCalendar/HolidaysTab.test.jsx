@@ -79,8 +79,8 @@ describe('HolidaysTab', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
-  // 409 duplicate date: HolidayAdminService#create's own message, surfaced inline with an
-  // "แก้ไขรายการเดิม" shortcut into edit mode for the already-loaded conflicting row.
+  // 409 duplicate date: HolidayAdminService#create's own message, surfaced inline with an "แก้ไขรายการเดิม"
+  // shortcut into edit mode for the already-loaded conflicting row.
   it('shows the 409 duplicate-date message inline and offers "แก้ไขรายการเดิม" for a row already on screen', async () => {
     api.holidays.create.mockRejectedValue(apiError(
       `มีข้อมูลวันหยุดสำหรับวันที่ ${CURRENT_YEAR}-01-01 อยู่แล้ว กรุณาแก้ไขรายการเดิมแทนการสร้างใหม่`,
@@ -102,8 +102,8 @@ describe('HolidaysTab', () => {
     const useExisting = screen.getByRole('button', { name: 'แก้ไขรายการเดิม' });
     fireEvent.click(useExisting);
 
-    // Switches into edit mode for the conflicting row -- the date input is now disabled and
-    // pre-filled with the existing row's own name, not the just-typed duplicate name.
+    // Switches into edit mode for the conflicting row -- the date input is now disabled and pre-filled with the
+    // existing row's own name, not the just-typed duplicate name.
     expect(screen.getByLabelText(/^ชื่อวันหยุด/).value).toBe('วันขึ้นปีใหม่');
     expect(screen.getByLabelText(/^วันที่/)).toHaveProperty('disabled', true);
   });
@@ -123,9 +123,8 @@ describe('HolidaysTab', () => {
     expect(screen.queryByText(/แปลงวันหยุดจาก ธปท/)).toBeNull();
   });
 
-  // The consequential case this branch's brief calls out by name: PUT forces source='COMPANY'
-  // even on a BANK row. Must go through a named confirm step, and must NOT call update() until
-  // that confirm is accepted.
+  // The consequential case this branch's brief calls out by name: PUT forces source='COMPANY' even on a BANK
+  // row. Must go through a named confirm step, and must NOT call update() until that confirm is accepted.
   it('requires a named confirm before reclassifying a BANK holiday to COMPANY, and only updates after confirming', async () => {
     api.holidays.update.mockResolvedValue({ holidayDate: `${CURRENT_YEAR}-01-01`, nameTh: 'วันขึ้นปีใหม่ (แก้ไข)', source: 'COMPANY' });
     renderTab();
@@ -177,8 +176,8 @@ describe('HolidaysTab', () => {
     expect(await screen.findByText(/นำเข้า 16 วันหยุด/)).not.toBeNull();
   });
 
-  // The exact production incident this branch's brief names: HTTP 200, BOT_HOLIDAY_API_TOKEN
-  // unset, zero holidays actually imported. Must never render as a plain success.
+  // The exact production incident this branch's brief names: HTTP 200, BOT_HOLIDAY_API_TOKEN unset, zero
+  // holidays actually imported. Must never render as a plain success.
   it('reports a zero-row fetch honestly -- no success toast, a persistent non-error breakdown', async () => {
     api.holidays.fetch.mockResolvedValue({ outcomes: [{ year: CURRENT_YEAR, holidayCount: 0, applied: false }] });
     const showToast = vi.fn();
@@ -194,13 +193,11 @@ describe('HolidaysTab', () => {
     expect(screen.getByText(/ไม่มีวันหยุดใหม่ \(ยังไม่ได้ตั้งค่า BOT token/)).not.toBeNull();
   });
 
-  // 429: a deliberate 10-minute cooldown (BotHolidayFetchService.MANUAL_FETCH_COOLDOWN), not a
-  // failure -- must render as a timed, non-error state with a live countdown, and the button must
-  // be disabled for the duration.
+  // 429: a deliberate 10-minute cooldown (BotHolidayFetchService.MANUAL_FETCH_COOLDOWN), not a failure -- must
+  // render as a timed, non-error state with a live countdown, and the button must be disabled for the duration.
   it('renders a 429 as a timed cooldown with a live countdown, and disables the fetch button', async () => {
-    // shouldAdvanceTime lets real promise microtasks (the mutation itself) resolve promptly even
-    // with fake timers installed -- only the countdown's own setInterval macrotask needs the
-    // explicit advance below.
+    // shouldAdvanceTime lets real promise microtasks (the mutation itself) resolve promptly even with fake timers
+    // installed -- only the countdown's own setInterval macrotask needs the explicit advance below.
     vi.useFakeTimers({ shouldAdvanceTime: true });
     api.holidays.fetch.mockRejectedValue(apiError(
       'รอสักครู่ก่อนเรียกดึงข้อมูลวันหยุดจากธนาคารแห่งประเทศไทยอีกครั้ง (ประมาณ 5 วินาที)',
@@ -219,8 +216,8 @@ describe('HolidaysTab', () => {
     expect(await screen.findByText(/เหลืออีกประมาณ 5 วินาที/)).not.toBeNull();
     expect(screen.getByRole('button', { name: /ดึงข้อมูลวันหยุดจาก ธปท/ })).toHaveProperty('disabled', true);
 
-    // Advance past the cooldown -- the banner clears and the button re-enables on its own,
-    // without another fetch attempt.
+    // Advance past the cooldown -- the banner clears and the button re-enables on its own, without another fetch
+    // attempt.
     await vi.advanceTimersByTimeAsync(6000);
     await waitFor(() => expect(screen.queryByText(/เหลืออีกประมาณ/)).toBeNull());
     expect(screen.getByRole('button', { name: /ดึงข้อมูลวันหยุดจาก ธปท/ })).toHaveProperty('disabled', false);

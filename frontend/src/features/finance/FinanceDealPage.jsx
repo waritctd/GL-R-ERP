@@ -20,6 +20,9 @@ import {
 } from './FinanceActionModals.jsx';
 import { MilestoneSections, money, vatCaption } from './FinanceMilestoneSections.jsx';
 import { orderActions, pickPrimaryAction } from './financeDealActions.js';
+import { paymentPrefill } from './paymentPrefill.js';
+import { paymentDueBasisText } from './paymentDueText.js';
+import { invalidateDealDocuments } from '../documentChain/documentChain.js';
 
 const ACTION_LABEL = {
   DEPOSIT_PAID: 'ยืนยันรับมัดจำ',
@@ -44,7 +47,7 @@ function PageSkeleton() {
   return (
     <div
       className="grid w-full min-w-0 max-w-[1200px] items-start gap-x-6 gap-y-4 grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)] nav-drawer:grid-cols-[minmax(0,1fr)]"
-      aria-busy="true" aria-label="กำลังโหลดดีล"
+      aria-busy="true" aria-label="กำลังโหลดงาน"
     >
       <div className="grid gap-4 rounded-md border border-border bg-surface p-5 mobile:p-4">
         <Bone className="h-4 w-24" />
@@ -93,9 +96,7 @@ function MoneyBand({ deal }) {
   const m = deal.money;
   const caption = vatCaption(m.amountVatBasis);
   // Derived from the payable quotation's terms + the delivery date (server-side); nothing is invented here.
-  const basisText = m.paymentDueBasis === 'CREDIT_FROM_DELIVERY'
-    ? `เครดิต ${m.paymentDueCreditDays} วันนับจากวันส่งมอบ`
-    : m.paymentDueBasis === 'ON_DELIVERY' ? 'ชำระเมื่อส่งมอบ' : null;
+  const basisText = paymentDueBasisText(m.paymentDueBasis, m.paymentDueCreditDays);
   let dueText = null;
   if (m.paymentDueDate) dueText = `ครบกำหนด ${formatThaiDate(m.paymentDueDate)}${basisText ? ` · ${basisText}` : ''}`;
   else if (basisText) dueText = 'ยังไม่ถึงกำหนด — รอส่งมอบ';
@@ -187,23 +188,31 @@ function CommentsSection({ deal, onPosted }) {
   );
 }
 
-/**
- * /finance/deals/:id — one deal as finance sees it. Everything on the page comes from the
- * finance-only read model (GET /api/finance/deals/:id, FinanceDealDto): its `milestoneTrack` is the
- * page's structure, its `availableActions` are the only money actions offered, and every money
- * write returns the refreshed `{ deal }`, which replaces the cached view. Presentation only — the
- * server enforces every gate.
- */
-export function FinanceDealPage() {
+/** /finance/deals/:id — one deal as finance sees it. Presentation only — the server enforces every gate. */
+export function FinanceDealPage({ user }) {
   const { id } = useParams();
   const queryClient = useQueryClient();
   const { catalog } = useStageCatalog();
   const key = queryKeys.financeDeal(id);
   const [flow, setFlow] = useState(null);
   const [flowError, setFlowError] = useState('');
+  // Review H1: the server refused a hand-typed receipt that may already be on the deal from an Express upload
+  // (409 POSSIBLE_DUPLICATE). Holds { call, expressDocNo } until account answers.
+  const [possibleDuplicate, setPossibleDuplicate] = useState(null);
   const [downloadError, setDownloadError] = useState('');
   const [invoiceForm, setInvoiceForm] = useState(null); // RECORD_INVOICE form state while it is open
   const [invoiceFileKey, setInvoiceFileKey] = useState(0);
+
+  // The Express-fallback header on the payment modal follows app.receipts.express-upload.enabled — read the same
+  // way the nav and the upload card do. Account-only endpoint: any other role just gets no flag.
+  const expressQuery = useQuery({
+    queryKey: queryKeys.receiptImportLatest(),
+    queryFn: () => api.receiptImports.latest(),
+    enabled: user?.role === 'account',
+    retry: false,
+  });
+
+  const expressUploadEnabled = expressQuery.data?.uploadEnabled === true;
 
   const dealQuery = useQuery({
     queryKey: key,
@@ -217,16 +226,27 @@ export function FinanceDealPage() {
     queryClient.invalidateQueries({ queryKey: ['tickets'] });
     queryClient.invalidateQueries({ queryKey: queryKeys.dashboardSummary() });
     queryClient.invalidateQueries({ queryKey: queryKeys.notifications() });
+    // ยืนยันรับมัดจำ / รับชำระ move the document chain (deposit received, the remaining invoice unlocking): the deal
+    // page's เงิน tab and the quotation page's chain card read those keys.
+    if (deal?.id != null) invalidateDealDocuments(queryClient, deal.id);
   }
 
   const actionMutation = useMutation({
-    mutationFn: ({ call }) => call(),
+    mutationFn: ({ call, options }) => (options ? call(options) : call()),
     onSuccess: (response) => {
       applyDeal(response.deal);
       setFlow(null);
       setFlowError('');
+      setPossibleDuplicate(null);
     },
-    onError: (err) => setFlowError(err.message || 'ดำเนินการไม่สำเร็จ'),
+    onError: (err, { call }) => {
+      if (err?.status === 409 && err?.details?.code === 'POSSIBLE_DUPLICATE') {
+        setFlowError('');
+        setPossibleDuplicate({ call, expressDocNo: err.details.expressDocNo });
+        return;
+      }
+      setFlowError(err.message || 'ดำเนินการไม่สำเร็จ');
+    },
   });
   // RECORD_INVOICE: the existing POST /api/commissions/from-deal (account only), then the deal is re-read so
   // milestone 5 shows the recorded invoice and the action disappears. Not a finance endpoint: no new write API.
@@ -253,16 +273,16 @@ export function FinanceDealPage() {
   if (dealQuery.error) {
     const status = dealQuery.error.status;
     if (status === 403) {
-      return <BlockedState icon="lock" title="ไม่มีสิทธิ์เข้าถึงดีลนี้" description="ดีลนี้อยู่นอกขอบเขตงานการเงินของคุณ" />;
+      return <BlockedState icon="lock" title="ไม่มีสิทธิ์เข้าถึงงานนี้" description="งานนี้อยู่นอกขอบเขตของฝ่ายบัญชี" />;
     }
     if (status === 404) {
-      return <BlockedState icon="search" title="ไม่พบดีลนี้" description="ดีลอาจถูกลบไป หรือเลขที่ในลิงก์ไม่ถูกต้อง" />;
+      return <BlockedState icon="search" title="ไม่พบงานนี้" description="งานอาจถูกลบไป หรือเลขที่ในลิงก์ไม่ถูกต้อง" />;
     }
     return (
       <div className="grid max-w-[520px] gap-3 py-8">
         <p role="alert" className="m-0 flex items-start gap-2 text-sm font-bold text-danger">
           <Icon name="triangleAlert" size={16} className="mt-0.5 shrink-0" />
-          <span>{dealQuery.error.message || 'โหลดดีลไม่สำเร็จ'}</span>
+          <span>{dealQuery.error.message || 'โหลดงานไม่สำเร็จ'}</span>
         </p>
         <Button type="button" variant="secondary" className="justify-self-start whitespace-nowrap" onClick={() => dealQuery.refetch()}>ลองอีกครั้ง</Button>
         <BackLink />
@@ -308,32 +328,33 @@ export function FinanceDealPage() {
     actionMutation.mutate({ call });
   }
 
-  // ConfirmDialog-driven actions: every one is a financial write that cannot be undone, so each
-  // asks first (the sanctioned exception to undo-over-confirm).
+  // ConfirmDialog-driven actions: every one is a financial write that cannot be undone, so each asks first (the
+  // sanctioned exception to undo-over-confirm).
   function confirmConfig(a) {
     switch (a.action) {
       case 'DEPOSIT_PAID':
         return {
           title: 'ยืนยันรับมัดจำ', confirmLabel: 'ยืนยันรับมัดจำ',
-          text: `ยืนยันว่าได้รับเงินมัดจำของดีล ${deal.code} แล้ว? รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
-          call: () => api.finance.confirmDepositPaid(deal.id),
+          // Design m-deposit-confirm: a matched Express receipt confirms the deposit by itself.
+          text: `ยืนยันว่าได้รับเงินมัดจำของงาน ${deal.code} แล้ว? ${expressUploadEnabled ? 'จะยืนยันเองเมื่อจับคู่รายการจาก Express ได้ ใช้ปุ่มนี้เฉพาะเมื่อรับเงินนอก Express — ' : ''}รายการรับเงินจะถูกบันทึกและย้อนกลับไม่ได้`,
+          call: (options) => (options ? api.finance.confirmDepositPaid(deal.id, options) : api.finance.confirmDepositPaid(deal.id)),
         };
       case 'FINAL_PAYMENT':
         return {
           title: 'ยืนยันรับชำระส่วนที่เหลือ', confirmLabel: 'ยืนยันรับชำระส่วนที่เหลือ',
-          text: `ยืนยันว่าได้รับเงินส่วนที่เหลือของดีล ${deal.code} ครบแล้ว? ยอดคงค้างปัจจุบัน ${money(deal.money.amountOutstanding)}`,
-          call: () => api.finance.confirmFinalPayment(deal.id),
+          text: `ยืนยันว่าได้รับเงินส่วนที่เหลือของงาน ${deal.code} ครบแล้ว? ยอดคงค้างปัจจุบัน ${money(deal.money.amountOutstanding)}`,
+          call: (options) => (options ? api.finance.confirmFinalPayment(deal.id, options) : api.finance.confirmFinalPayment(deal.id)),
         };
       case 'CONFIRM_CLOSE':
         return {
           title: 'ยืนยันพร้อมปิดงาน', confirmLabel: 'ยืนยันพร้อมปิดงาน',
-          text: `ยืนยันว่าดีล ${deal.code} ชำระครบและส่งมอบครบแล้ว? หลังยืนยัน ระบบจะรอการตรวจสอบปิดงาน`,
+          text: `ยืนยันว่างาน ${deal.code} ชำระครบและส่งมอบครบแล้ว? หลังยืนยัน ระบบจะรอการตรวจสอบปิดงาน`,
           call: () => api.finance.confirmCloseReady(deal.id),
         };
       case 'ADVANCE_STAGE':
         return {
-          title: 'เลื่อนสถานะดีล', confirmLabel: actionLabel(a),
-          text: `เลื่อนดีล ${deal.code} ไปขั้น ${dealStageLabel(a.targetStage).label}`,
+          title: 'เลื่อนสถานะงาน', confirmLabel: actionLabel(a),
+          text: `เลื่อนงาน ${deal.code} ไปขั้น ${dealStageLabel(a.targetStage).label}`,
           call: () => api.finance.updateStage(deal.id, { stage: a.targetStage }),
         };
       default:
@@ -343,14 +364,13 @@ export function FinanceDealPage() {
 
   const activeAction = flow?.action;
   const confirm = activeAction ? confirmConfig(activeAction) : null;
-  // Mirrors TicketDetailPage's openPaymentModal (something already paid -> BALANCE), plus a skipped
-  // deposit (nothing to collect up front, so the first payment is the balance).
-  const defaultPaymentKind = (Number(deal.money.amountPaid) > 0 || deal.milestoneTrack.some((step) => step.skipped)) ? 'BALANCE' : 'DEPOSIT';
+  // Design m-payment: the open notice/invoice's outstanding amount and kind (paymentPrefill's header has the rule).
+  const recordPaymentPrefill = paymentPrefill(deal);
 
   return (
     <div className="grid w-full min-w-0 max-w-[1200px] items-start gap-x-6 gap-y-4 grid-cols-[minmax(17rem,21rem)_minmax(0,1fr)] nav-drawer:grid-cols-[minmax(0,1fr)]">
-      {/* Sticky identity + money pane: the figures and the primary action stay in view while the five
-          milestones scroll past. Below the nav-drawer breakpoint it is an ordinary first block. */}
+      {/* Sticky identity + money pane: the figures and the primary action stay in view while the five milestones
+       * scroll past. Below the nav-drawer breakpoint it is an ordinary first block. */}
       <aside className="grid min-w-0 gap-4 self-start rounded-md border border-border bg-surface p-5 sticky top-4 nav-drawer:static mobile:p-4">
         <header className="grid gap-2">
           <BackLink />
@@ -446,11 +466,30 @@ export function FinanceDealPage() {
 
       {activeAction?.action === 'RECORD_PAYMENT' ? (
         <RecordPaymentModal
-          defaultKind={defaultPaymentKind} busy={busy} error={flowError}
-          onSubmit={(body) => run(() => api.finance.recordPayment(deal.id, body))}
+          prefill={recordPaymentPrefill} expressUploadEnabled={expressUploadEnabled} busy={busy} error={flowError}
+          onSubmit={(body) => run((options) => api.finance.recordPayment(deal.id, options ? { ...body, ...options } : body))}
           onClose={() => setFlow(null)}
         />
       ) : null}
+      {/* Rendered AFTER the payment modal on purpose: both are fixed z-50 overlays, so the later one paints on top. Before
+          the warning sat above this modal in the source, which hid it (and its บันทึกต่อ button) behind the form. */}
+      {possibleDuplicate ? (
+        <ConfirmDialog
+          open
+          title="อาจซ้ำกับรายการที่อัปโหลดแล้ว"
+          confirmLabel="เป็นคนละรายการ บันทึกต่อ"
+          cancelLabel="ไม่บันทึก"
+          busy={busy}
+          message={(
+            <p className="m-0 text-text-secondary leading-normal">
+              {'อาจซ้ำกับ ' + possibleDuplicate.expressDocNo + ' ที่อัปโหลดแล้ว — ยอดเท่ากันและวันที่ใกล้กันบนงานนี้ บันทึกต่อเฉพาะเมื่อเป็นเงินคนละรายการ'}
+            </p>
+          )}
+          onConfirm={() => actionMutation.mutate({ call: possibleDuplicate.call, options: { confirmPossibleDuplicate: true } })}
+          onCancel={() => { setPossibleDuplicate(null); setFlow(null); }}
+        />
+      ) : null}
+
       {activeAction?.action === 'REVOKE_CLOSE_CONFIRM' ? (
         <RevokeCloseModal
           busy={busy} error={flowError}

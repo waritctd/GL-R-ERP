@@ -90,8 +90,8 @@ function renderEditor(path, showToast = vi.fn()) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // jsdom implements neither -- the real handler calls both unconditionally on a successful
-  // download. Not asserted on directly; just needs to not throw.
+  // jsdom implements neither -- the real handler calls both unconditionally on a successful download. Not
+  // asserted on directly; just needs to not throw.
   global.URL.createObjectURL = vi.fn(() => 'blob:mock');
   global.URL.revokeObjectURL = vi.fn();
   vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});

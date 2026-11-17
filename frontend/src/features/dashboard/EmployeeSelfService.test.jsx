@@ -30,9 +30,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 const employeeUser = { employeeId: 3, name: 'พนักงาน ทดสอบ', role: 'employee', manager: false };
 const employee = { nameTh: 'ทดสอบ ทดสอบ', nickName: 'เอ', positionTh: 'ตำแหน่ง', divisionTh: 'ฝ่าย' };
 
-// Matches the component's own Bangkok-timezone "today", not raw UTC — the
-// clock card looks up `attendanceDays.find(day => day.work_date === todayIso)`
-// using bangkokTodayIso(), so the fixture must use the same clock.
+// Matches the component's own Bangkok-timezone "today", not raw UTC — the clock card looks up
+// `attendanceDays.find(day => day.work_date === todayIso)` using bangkokTodayIso(), so the fixture must use
+// the same clock.
 const today = bangkokTodayIso();
 
 function setupMocks({ days = [], balances = [], leaveRequests = [], overtimeRequests = [] } = {}) {
@@ -79,16 +79,8 @@ describe('EmployeeSelfService — self-service landing', () => {
     expect(screen.getByText('คำขอของฉัน')).not.toBeNull();
   });
 
-  // The three stat tiles were removed on 2026-08-10 (owner call): each was a number this page
-  // could not act on, and the sidebar already reaches /attendance, /leave and the payslip.
-  //
-  // Asserted wrong-way-round on purpose. The leave tile is the reason this is a test and not just
-  // a deletion: it summed EVERY leave type's remaining days into one headline, and MILITARY's
-  // annualQuotaDays is 366 — a deliberate sentinel, not a policy number (mockApi.js's
-  // db.leaveTypes; MyLeaveTab.jsx excludes it from its own quota display for the same reason).
-  // With the real seed that rendered "564 วัน" (7+30+3+98+366+60): a total no employee has,
-  // as the most prominent figure on their home screen. If anyone reinstates these tiles, this
-  // fails and they have to re-decide that rather than re-inherit it.
+  // The three stat tiles were removed on 2026-08-10 (owner call): each was a number this page could not act on,
+  // and the sidebar already reaches /attendance, /leave and the payslip. Asserted wrong-way-round on purpose.
   it('does not render the removed stat tiles', async () => {
     setupMocks({
       days: [{ work_date: today, check_in: `${today}T08:55:00+07:00`, check_out: null, late_minutes: 0 }],
@@ -100,8 +92,8 @@ describe('EmployeeSelfService — self-service landing', () => {
     });
     renderSelfService();
 
-    // Settle on something that DOES render, so the absences below cannot pass merely because
-    // the page had not finished loading.
+    // Settle on something that DOES render, so the absences below cannot pass merely because the page had not
+    // finished loading.
     await waitFor(() => expect(screen.getByText('เข้างานแล้ว')).not.toBeNull());
 
     expect(screen.queryByText('เวลาทำงานเดือนนี้')).toBeNull();
@@ -142,12 +134,12 @@ describe('EmployeeSelfService — self-service landing', () => {
       profileRequests: [{ id: 3, fieldLabel: 'เบอร์โทรศัพท์', status: 'pending', requestedAt: '2026-07-08' }],
     });
 
-    // Wait for the async leave/OT/profile-request queries to settle, not just
-    // the (synchronously rendered) panel header.
+    // Wait for the async leave/OT/profile-request queries to settle, not just the (synchronously rendered) panel
+    // header.
     const leaveTitle = await screen.findByText('ลาพักร้อน');
     const scoped = within(leaveTitle.closest('section'));
-    // "OT" also appears in the panel's "+ ขอ OT" action button, so match the
-    // full own-request row title, not a loose substring.
+    // "OT" also appears in the panel's "+ ขอ OT" action button, so match the full own-request row title, not a
+    // loose substring.
     expect(scoped.getByText('OT 15/07/2569')).not.toBeNull();
     expect(scoped.getByText('ขอแก้ไขเบอร์โทรศัพท์')).not.toBeNull();
     // Approval chain: the manager step should show who approved.
@@ -198,8 +190,8 @@ describe('EmployeeSelfService — self-service landing', () => {
       });
       const feed = (await screen.findByText('คำขอของฉัน')).closest('section');
       expect(within(feed).getByText('แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)')).not.toBeNull();
-      // The three-step chain, not leave's two-step one: HR approval and payroll application are
-      // separate, and an approved-but-unapplied declaration is not yet reducing anyone's tax.
+      // The three-step chain, not leave's two-step one: HR approval and payroll application are separate, and an
+      // approved-but-unapplied declaration is not yet reducing anyone's tax.
       expect(within(feed).getByText('ใช้กับเงินเดือน')).not.toBeNull();
       // Nothing to act on, so the action row stays away.
       expect(screen.queryByText('ยังไม่ได้ยื่นแบบแจ้ง ล.ย.01')).toBeNull();

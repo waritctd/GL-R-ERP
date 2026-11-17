@@ -65,8 +65,8 @@ public final class DealQuotationRequests {
         String wastageMode,
         BigDecimal wastageValue,
         @Min(1) @Max(1000) Integer piecesPerBox,
-        // ⚠️ NO @NotNull/@DecimalMin here any more — see the record Javadoc's "Type-aware price
-        // validation" note. The rule is enforced per line type in DealQuotationService.
+        // ⚠️ NO @NotNull/@DecimalMin here any more — see the record Javadoc's "Type-aware price validation" note. The
+        // rule is enforced per line type in DealQuotationService.
         BigDecimal unitPrice,
         @DecimalMin("0") @DecimalMax("100") BigDecimal discountPct,
         @Size(max = 40) String originCountry,
@@ -79,9 +79,9 @@ public final class DealQuotationRequests {
         // ── quotation v3 ──────────────────────────────────
         /** "TILE" (default when null/blank) | "PLAIN" | "ADJUSTMENT" — see WastageCalculator. */
         String lineType,
-        /** PLAIN/ADJUSTMENT only. On a TILE row the description is auto-composed from
-         * รุ่น/สี/ผิว/ขนาด and anything sent here is IGNORED, never printed. On an ADJUSTMENT row
-         * with a percent it is also derived; it is honoured only for a FLAT-amount adjustment. */
+        /** PLAIN/ADJUSTMENT only. On a TILE row the description is auto-composed from รุ่น/สี/ผิว/ขนาด and anything
+         * sent here is IGNORED, never printed. On an ADJUSTMENT row with a percent it is also derived; it is honoured
+         * only for a FLAT-amount adjustment. */
         @Size(max = 2000) String description,
         /** PLAIN only — the printed จำนวน. BigDecimal, not int: her documents happen to carry
          * whole numbers (1 JOB, 85 Bags, 22 แผ่น) but a half-day of a service or a part ตร.ม. is a
@@ -108,8 +108,8 @@ public final class DealQuotationRequests {
         @DecimalMin("0") @DecimalMax("100") @Digits(integer = 3, fraction = 3) BigDecimal adjustmentPct,
         /** ADJUSTMENT only — the "สั่งซื้อภายใน" date the composed description prints. */
         LocalDate adjustmentDeadline,
-        /** ADJUSTMENT only — a FLAT baht amount, as the alternative to a percent. Positive; the
-         * row prints it negative. Exactly one of this and {@code adjustmentPct} must be given. */
+        /** ADJUSTMENT only — a FLAT baht amount, as the alternative to a percent. Positive; the row prints it negative.
+         * Exactly one of this and adjustmentPct must be given. */
         @DecimalMax("99999999") BigDecimal adjustmentAmount,
 
         /**
@@ -168,14 +168,8 @@ public final class DealQuotationRequests {
          */
         @DecimalMax("9999999") @Digits(integer = 10, fraction = 2) BigDecimal listPriceSqm,
 
-        /**
-         * The same, for the net price in {@code DIRECT_NET} mode (ราคาสุทธิ): บาท per ตร.ม.
-         * INCLUDING VAT, from which the server derives the per-แผ่น net that mode has always
-         * stored. Null means the net is still stated per แผ่น in {@link #directNetPrice}. Read only
-         * in {@code DIRECT_NET} — sent under another mode it prices nothing and is not stored,
-         * exactly as {@link #specialPriceSqm} is only read in its own. Stored in
-         * {@code sales.quotation_item.direct_net_price_sqm}.
-         */
+        /** The same, for the net price in DIRECT_NET mode (ราคาสุทธิ): บาท per ตร.ม. Read only in DIRECT_NET — sent
+         * under another mode it prices nothing and is not stored, exactly as #specialPriceSqm is only read in its own. */
         @DecimalMax("9999999") @Digits(integer = 10, fraction = 2) BigDecimal directNetPriceSqm,
 
         /**
@@ -255,8 +249,7 @@ public final class DealQuotationRequests {
                 listPriceSqm, directNetPriceSqm, null);
         }
 
-        /** This row stating {@code newPriceMode} as its own price mode, everything else unchanged
-         * — see {@link #priceMode}. */
+        /** This row stating newPriceMode as its own price mode, everything else unchanged — see #priceMode. */
         public ItemInput withPriceMode(String newPriceMode) {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
                 thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
@@ -288,12 +281,9 @@ public final class DealQuotationRequests {
                 null);
         }
 
-        /**
-         * This row with its two per-แผ่น prices replaced, and everything else — the typed
-         * per-ตร.ม. figures included — unchanged. {@code DealQuotationService} uses it to turn a
-         * row priced per ตร.ม. into the per-แผ่น shape every rule below it already works with, in
-         * ONE place, before any of them runs.
-         */
+        /** This row with its two per-แผ่น prices replaced, and everything else — the typed per-ตร.ม. figures included —
+         * unchanged. DealQuotationService uses it to turn a row priced per ตร.ม. into the per-แผ่น shape every rule
+         * below it already works with, in ONE place, before any of them runs. */
         public ItemInput withPerPiecePrices(BigDecimal newUnitPrice, BigDecimal newDirectNetPrice) {
             return new ItemInput(locationLabel, catalogPriceId, productCode, brand, model, color, texture, sizeText,
                 thicknessMm, sqmPerPiece, quantityMode, areaSqm, piecesInput, wastageMode, wastageValue,
@@ -303,9 +293,8 @@ public final class DealQuotationRequests {
                 listPriceSqm, directNetPriceSqm, priceMode, stockSource);
         }
 
-        /** The pre-loose-pieces canonical shape (with {@link #sqmPerBox}, no
-         * {@link #roundToFullBox}) — kept so every existing construction site compiles unchanged.
-         * Defaults {@code roundToFullBox} to null, which reads as {@code true}. */
+        /** The pre-loose-pieces canonical shape (with #sqmPerBox, no #roundToFullBox) — kept so every existing
+         * construction site compiles unchanged. Defaults roundToFullBox to null, which reads as true. */
         public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
                          String model, String color, String texture, String sizeText,
                          BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
@@ -323,8 +312,8 @@ public final class DealQuotationRequests {
                 directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, id, sqmPerBox, null);
         }
 
-        /** The pre-V176 canonical shape (with {@link #id}, no {@link #sqmPerBox}/
-         * {@link #roundToFullBox}) — kept so every existing construction site compiles unchanged. */
+        /** The pre-V176 canonical shape (with #id, no #sqmPerBox/ #roundToFullBox) — kept so every existing
+         * construction site compiles unchanged. */
         public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
                          String model, String color, String texture, String sizeText,
                          BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
@@ -342,8 +331,8 @@ public final class DealQuotationRequests {
                 directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, id, null);
         }
 
-        /** The v3 shape — every field except {@link #id}; see the class-level note on the legacy
-         * constructors below. Defaults {@code id} to null (a brand-new item, no picture). */
+        /** The v3 shape — every field except #id; see the class-level note on the legacy constructors below. Defaults
+         * id to null (a brand-new item, no picture). */
         public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
                          String model, String color, String texture, String sizeText,
                          BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
@@ -361,15 +350,9 @@ public final class DealQuotationRequests {
                 directNetPrice, adjustmentPct, adjustmentDeadline, adjustmentAmount, (Long) null);
         }
 
-        /**
-         * The pre-v3 22-argument shape, kept so the many existing call sites (and every test that
-         * builds a plain tile row) compile unchanged — the SAME device, for the same reason, as
-         * {@code QuotationRenderModel.Signatories}' 5-argument legacy constructor. Defaults every
-         * v3 field to null, which reads as: a TILE row, in the quotation's own price mode.
-         *
-         * <p>Jackson deserialises records through the CANONICAL constructor, so this overload
-         * never competes with it on the wire.
-         */
+        /** The pre-v3 22-argument shape, kept so the many existing call sites (and every test that builds a plain tile
+         * row) compile unchanged — the SAME device, for the same reason, as QuotationRenderModel.Signatories'
+         * 5-argument legacy constructor. */
         public ItemInput(String locationLabel, Long catalogPriceId, String productCode, String brand,
                          String model, String color, String texture, String sizeText,
                          BigDecimal thicknessMm, BigDecimal sqmPerPiece, String quantityMode,
@@ -419,11 +402,8 @@ public final class DealQuotationRequests {
          * omits it must not silently flip a DATE document back to counting days from today.
          */
         @Pattern(regexp = "DAYS|DATE", message = "ต้องเป็น DAYS หรือ DATE") String validityMode,
-        /**
-         * DATE mode only — the exact "ภายในวันที่" deadline. Required by
-         * {@code DealQuotationService} when {@code validityMode} resolves to DATE; ignored
-         * (stored NULL) in DAYS mode.
-         */
+        /** DATE mode only — the exact "ภายในวันที่" deadline. Required by DealQuotationService when validityMode
+         * resolves to DATE; ignored (stored NULL) in DAYS mode. */
         LocalDate validityUntil,
         @Size(max = 4000) String customerNotes,
         /**
@@ -449,11 +429,9 @@ public final class DealQuotationRequests {
         @Pattern(regexp = "NET|SPECIAL_SQM|DIRECT_NET|MIXED",
             message = "ต้องเป็น NET, SPECIAL_SQM, DIRECT_NET หรือ MIXED")
         String priceMode,
-        /**
-         * "TH" (default when null) | "EN" — quotation v3b (V169). TH prints the Thai F-SM-002 with
-         * its 7% VAT row; EN prints the English F-SM-008 in USD with NO VAT row. The ONE thing the
-         * rep picks: {@code currency} and the VAT treatment both default from it.
-         */
+        /** "TH" (default when null) | "EN" — quotation v3b (V169). TH prints the Thai F-SM-002 with its 7% VAT row; EN
+         * prints the English F-SM-008 in USD with NO VAT row. The ONE thing the rep picks: currency and the VAT
+         * treatment both default from it. */
         @Pattern(regexp = "TH|EN", message = "ต้องเป็น TH หรือ EN")
         String documentLanguage,
         /**
@@ -475,13 +453,9 @@ public final class DealQuotationRequests {
          * default) means "use the real name".
          */
         Long printedByDisplayId,
-        /**
-         * V179 — PRINT-ONLY override: when non-null, the พนักงานขาย signature slot AND the header
-         * "Sales/{name} T.{phone}" line print THIS employee's name+phone instead of the real
-         * {@code salesRepId}'s. Does NOT change who owns the deal or who earns commission on it.
-         * Same eligibility rule and validation as {@link #printedByDisplayId}. Null (the default)
-         * means "use the real name".
-         */
+        /** V179 — PRINT-ONLY override: when non-null, the พนักงานขาย signature slot AND the header "Sales/{name}
+         * T.{phone}" line print THIS employee's name+phone instead of the real salesRepId's. Does NOT change who owns
+         * the deal or who earns commission on it. */
         Long salesRepDisplayId,
         /**
          * The project name, an editable header field (a rep must be able to correct a typo): the
@@ -696,10 +670,8 @@ public final class DealQuotationRequests {
                 orderedByPhone, orderedByEmail, recipientType, newClearContact, items, partyId);
         }
 
-        /** The pre-orderedByName shape (today's canonical, minus {@link #orderedByName}) — kept
-         * so every existing construction site (tests, mostly) compiles unchanged. Defaults to
-         * null, which reads as "no manual name" — the dotted placeholder — correct for every one
-         * of those fixtures (nothing before this feature ever set it). */
+        /** The pre-orderedByName shape (today's canonical, minus #orderedByName) — kept so every existing construction
+         * site (tests, mostly) compiles unchanged. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
                                           LocalDate offerDate, Integer depositPercent,
                                           String remainderMode, Integer creditDays,
@@ -714,11 +686,8 @@ public final class DealQuotationRequests {
                 omitContactHonorific, fullPaymentTerm, null, items);
         }
 
-        /** The pre-V180/V181 shape (no {@link #omitContactHonorific}/{@link #fullPaymentTerm}) —
-         * kept so every existing construction site (tests, mostly) compiles unchanged. Defaults
-         * omitContactHonorific to null (read as {@code false} — UNticked, today's only behaviour)
-         * and fullPaymentTerm to null (no zero-deposit document existed before this change had a
-         * term to carry). */
+        /** The pre-V180/V181 shape (no #omitContactHonorific/#fullPaymentTerm) — kept so every existing construction
+         * site (tests, mostly) compiles unchanged. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
                                           LocalDate offerDate, Integer depositPercent,
                                           String remainderMode, Integer creditDays,
@@ -732,11 +701,7 @@ public final class DealQuotationRequests {
                 null, null, items);
         }
 
-        /** The pre-projectName shape — kept so every existing construction site (tests, mostly)
-         * compiles unchanged. Defaults to null, which on create falls back to the ticket's own
-         * project name (today's behaviour for every one of those fixtures) and on update would
-         * clear it — but nothing pre-existing calls update() through this overload with a
-         * genuinely different project already stored, so that edge is theoretical here. */
+        /** The pre-projectName shape — kept so every existing construction site (tests, mostly) compiles unchanged. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
                                           LocalDate offerDate, Integer depositPercent,
                                           String remainderMode, Integer creditDays,
@@ -749,9 +714,9 @@ public final class DealQuotationRequests {
                 documentLanguage, currency, printedByDisplayId, salesRepDisplayId, null, items);
         }
 
-        /** The pre-V179 shape (no display-name override fields) — kept so every existing
-         * construction site (tests, mostly) compiles unchanged. Defaults both to null, which
-         * means "use the real name" — today's behaviour for every one of those fixtures. */
+        /** The pre-V179 shape (no display-name override fields) — kept so every existing construction site (tests,
+         * mostly) compiles unchanged. Defaults both to null, which means "use the real name" — today's behaviour for
+         * every one of those fixtures. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
                                           LocalDate offerDate, Integer depositPercent,
                                           String remainderMode, Integer creditDays,
@@ -763,8 +728,8 @@ public final class DealQuotationRequests {
                 documentLanguage, currency, null, null, items);
         }
 
-        /** The pre-v3 shape (no {@code priceMode}) — same legacy-constructor device as
-         * {@link ItemInput}'s, defaulting the mode to null, which reads as {@code NET}. */
+        /** The pre-v3 shape (no priceMode) — same legacy-constructor device as ItemInput's, defaulting the mode to
+         * null, which reads as NET. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
                                           LocalDate offerDate, Integer depositPercent,
                                           String remainderMode, Integer creditDays,
@@ -774,8 +739,8 @@ public final class DealQuotationRequests {
                 creditDays, validityDays, customerNotes, null, items);
         }
 
-        /** The pre-v3b shape (priceMode but no language/currency) — defaults both to null, which
-         * reads as a TH/THB document, i.e. exactly what every v3 client already sends. */
+        /** The pre-v3b shape (priceMode but no language/currency) — defaults both to null, which reads as a TH/THB
+         * document, i.e. exactly what every v3 client already sends. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
                                           LocalDate offerDate, Integer depositPercent,
                                           String remainderMode, Integer creditDays,
@@ -785,10 +750,9 @@ public final class DealQuotationRequests {
                 creditDays, validityDays, customerNotes, priceMode, null, null, items);
         }
 
-        /** The pre-V178 shape (no {@code validityMode}/{@code validityUntil}) — the canonical
-         * shape from v3b until this change, kept so every existing call site (mostly tests)
-         * compiles unchanged. Defaults both to null, which reads as DAYS mode — exactly what
-         * every one of those fixtures means. */
+        /** The pre-V178 shape (no validityMode/validityUntil) — the canonical shape from v3b until this change, kept so
+         * every existing call site (mostly tests) compiles unchanged. Defaults both to null, which reads as DAYS mode
+         * — exactly what every one of those fixtures means. */
         public UpsertDealQuotationRequest(Long contactId, String deptCode, String unitCode,
                                           LocalDate offerDate, Integer depositPercent,
                                           String remainderMode, Integer creditDays,

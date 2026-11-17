@@ -1,11 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// H1: mirrors TicketRepository#appendRoleScope's account branch -- every live order from
-// ORDER_RECEIVED (S10) through CLOSED_PAID, UNIONED with the older pending-payment / overdue rule.
-// The Java real-DB TicketScopeIntegrationTest is the authoritative evidence; this only pins that the
-// mock's list has not drifted back to the payment-status-only scope that hid a PROCUREMENT deal
-// sitting at DEPOSIT_PAID (the S15 bug).
+// mirrors TicketRepository#appendRoleScope's account branch -- every live order from ORDER_RECEIVED (S10)
+// through CLOSED_PAID, UNIONED with the older pending-payment / overdue rule.
 
 const STAGE_ORDER = [
   'LEAD_APPROACH', 'PRESENTATION', 'SPEC_APPROVED', 'QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF',

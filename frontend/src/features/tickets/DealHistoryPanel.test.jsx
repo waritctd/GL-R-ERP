@@ -1,28 +1,22 @@
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import { formatMoney } from '../../utils/format.js';
 import { DealHistoryPanel } from './DealHistoryPanel.jsx';
 
 globalThis.React = React;
 
-// D5 (Opus review finding, see the branch's handoff): sales.ticket_event.created_at
-// defaults to Postgres now() (transaction_timestamp()), so every event written in
-// the same transaction — e.g. TicketService.confirmCustomer writes CUSTOMER_CONFIRMED
-// then STAGE_CHANGED in one transaction — shares one identical instant. The
-// repository's own tiebreak is `ORDER BY created_at ASC, event_id ASC`, and
-// Array#sort is stable, so a naive `b.ts - a.ts` comparator that returns 0 on a tie
-// lets that ascending sub-order survive inside this otherwise-descending
-// (newest-first) list — the two events render reversed.
+// D5: sales.ticket_event.created_at defaults to Postgres now (transaction_timestamp), so every event written
+// in the same transaction — e.g. TicketService.confirmCustomer writes CUSTOMER_CONFIRMED then STAGE_CHANGED in
+// one transaction — shares one identical instant.
 describe('DealHistoryPanel', () => {
   it('D5 regression: two events sharing one timestamp render newest-first by event id, not ticket_event query order', () => {
     const sameInstant = '2026-07-20T10:00:00.000Z';
     render(
       <DealHistoryPanel
         events={[
-          // Sent in the repository's own ORDER BY created_at ASC, event_id ASC —
-          // the exact order that used to leak straight through into the rendered
-          // list under the old comparator.
+          // Sent in the repository's own ORDER BY created_at ASC, event_id ASC — the exact order that used to leak
+          // straight through into the rendered list under the old comparator.
           { id: 10, kind: 'CUSTOMER_CONFIRMED', actorName: 'พนักงานขาย', createdAt: sameInstant },
           { id: 11, kind: 'STAGE_CHANGED', actorName: 'พนักงานขาย', createdAt: sameInstant },
         ]}
@@ -32,10 +26,22 @@ describe('DealHistoryPanel', () => {
 
     const items = screen.getAllByRole('listitem').map((li) => li.textContent);
     expect(items).toHaveLength(2);
-    // id 11 (STAGE_CHANGED) was written later in the same transaction, so it
-    // belongs first in a newest-first list — even though it was passed second.
-    expect(items[0]).toContain('เปลี่ยนสถานะดีล');
+    // id 11 (STAGE_CHANGED) was written later in the same transaction, so it belongs first in a newest-first list
+    // — even though it was passed second.
+    expect(items[0]).toContain('เปลี่ยนสถานะงาน');
     expect(items[1]).toContain('ลูกค้ายืนยันคำสั่งซื้อ');
+  });
+
+  // Slice 5 review M4: an undo is logged as IMPORT_STEP_ADVANCED with a "เลิกทำ" message (ImportRequestService#undoStep),
+  // so the history must not call it an advance.
+  it('an IMPORT_STEP_ADVANCED whose message is an undo reads ฝ่ายนำเข้าเลิกทำการเลื่อนขั้นตอน; a real advance keeps its label', () => {
+    render(<DealHistoryPanel events={[
+      { id: 2, kind: 'IMPORT_STEP_ADVANCED', actorName: 'นำเข้า', createdAt: '2026-11-10T09:01:00.000Z', message: 'โรงงาน Mutina: เลิกทำ สั่งซื้อแล้ว → ติดต่อโรงงาน' },
+      { id: 1, kind: 'IMPORT_STEP_ADVANCED', actorName: 'นำเข้า', createdAt: '2026-11-10T09:00:00.000Z', message: 'โรงงาน Mutina: ติดต่อโรงงาน → สั่งซื้อแล้ว' },
+    ]} activities={[]} />);
+    const [undo, advance] = screen.getAllByRole('listitem').map((li) => li.querySelector('strong').textContent);
+    expect(undo).toBe('ฝ่ายนำเข้าเลิกทำการเลื่อนขั้นตอน');
+    expect(advance).toBe('ฝ่ายนำเข้าเลื่อนขั้นตอน');
   });
 
   it('PROCUREMENT_SOURCE_DECIDED has a Thai label (not the raw kind)', () => {
@@ -56,7 +62,7 @@ describe('DealHistoryPanel', () => {
 
     const items = screen.getAllByRole('listitem').map((li) => li.textContent);
     expect(items[0]).toContain('ส่งเรื่องเข้าระบบ');
-    expect(items[1]).toContain('สร้างดีล');
+    expect(items[1]).toContain('สร้างงาน');
   });
 
   it('a tie that is not between two events (e.g. an unparseable/missing timestamp) keeps a stable order rather than crashing', () => {
@@ -71,9 +77,8 @@ describe('DealHistoryPanel', () => {
       />,
     );
 
-    // Both rows have an unparseable timestamp — `toTimestamp` returns null for
-    // both, so neither is the two-events case the id tiebreak targets. No
-    // crash, and both still render (order unaffected by this fix).
+    // Both rows have an unparseable timestamp — `toTimestamp` returns null for both, so neither is the two-events
+    // case the id tiebreak targets. No crash, and both still render (order unaffected by this fix).
     expect(screen.getAllByRole('listitem')).toHaveLength(2);
   });
 
@@ -84,15 +89,17 @@ describe('DealHistoryPanel', () => {
     vi.setSystemTime(new Date('2026-10-30T23:30:00Z'));
     try {
       render(<DealHistoryPanel canAddActivity />);
+      // The form opens from "+ บันทึก" since the deal page redesign (2026-11-16).
+      fireEvent.click(screen.getByRole('button', { name: '+ บันทึก' }));
       expect(screen.getByLabelText('วันที่').value).toBe('31/10/2569');
     } finally {
       vi.useRealTimers();
     }
   });
 
-  // GLA-74 (Opus review finding, 2026-09-19): DEAL_QUOTATION_SUPERSEDED had no EVENT_KIND_LABEL
-  // entry, so a missing label falls through to the RAW kind string (`EVENT_KIND_LABEL[event.kind]
-  // ?? event.kind`) -- a rep would see "DEAL_QUOTATION_SUPERSEDED" verbatim in the deal history.
+  // GLA-74 (Opus review finding, 2026-09-19): DEAL_QUOTATION_SUPERSEDED had no EVENT_KIND_LABEL entry, so a
+  // missing label falls through to the RAW kind string (`EVENT_KIND_LABEL[event.kind] ?? event.kind`) -- a rep
+  // would see "DEAL_QUOTATION_SUPERSEDED" verbatim in the deal history.
   it('labels DEAL_QUOTATION_SUPERSEDED in Thai rather than falling through to the raw kind string', () => {
     render(
       <DealHistoryPanel
@@ -109,9 +116,9 @@ describe('DealHistoryPanel', () => {
     expect(item).not.toContain('DEAL_QUOTATION_SUPERSEDED');
   });
 
-  // Slice 2 (SLICE-2-FLOW-A.md §F, IA §8): the direct quotation's order confirmation is
-  // "ยืนยันคำสั่งซื้อ", not "สร้างดีล…" — under the linked design the deal already exists, so the
-  // event records the customer's order, and its history label says so.
+  // Slice 2 (SLICE-2-FLOW-A.md §F, IA §8): the direct quotation's order confirmation is "ยืนยันคำสั่งซื้อ", not
+  // "สร้างดีล…" — under the linked design the deal already exists, so the event records the customer's order,
+  // and its history label says so.
   it('labels DEAL_PROMOTED_FROM_QUOTATION as ยืนยันคำสั่งซื้อจากใบเสนอราคา', () => {
     render(
       <DealHistoryPanel
@@ -176,6 +183,36 @@ describe('DealHistoryPanel', () => {
     it('a message that is not in that format is shown as written', () => {
       payment('รับโอนเพิ่มเติมจากลูกค้า');
       expect(screen.getByRole('listitem').textContent).toContain('รับโอนเพิ่มเติมจากลูกค้า');
+    });
+  });
+
+  // TicketService.cancel / markLost write "ยกเลิกดีล (CODE) — note" / "เสียงาน (CODE) — note". The reason code is the
+  // only place a cancelled deal's reason is displayed, so it reads as its label — the drawn new codes AND the three
+  // retired on 2026-11-16 that already-cancelled deals carry. An unknown code is shown as written.
+  describe('cancel / lost reason in the message', () => {
+    const one = (kind, message) => render(
+      <DealHistoryPanel events={[{ id: 1, kind, actorName: 'พนักงานขาย', message, createdAt: '2026-11-16T09:00:00.000Z' }]} activities={[]} />,
+    );
+
+    it.each([
+      ['ยกเลิกดีล (DUPLICATE_DEAL) — ซ้ำกับ PR-2026-0028', 'เปิดซ้ำกับงานอื่น — ซ้ำกับ PR-2026-0028'],
+      ['ยกเลิกดีล (OWNER_CANCELLED)', 'เจ้าของยกเลิกโครงการ'],
+      ['ยกเลิกดีล (BUDGET_CANCELLED)', 'งบประมาณถูกยกเลิก'],
+    ])('a CANCELLED message "%s" reads its label', (message, expected) => {
+      one('CANCELLED', message);
+      const text = screen.getByRole('listitem').textContent;
+      expect(text).toContain(expected);
+      expect(text).not.toMatch(/[A-Z]{3,}_[A-Z]/);
+    });
+
+    it('a MARKED_LOST message reads its F-code and label', () => {
+      one('MARKED_LOST', 'เสียงาน (PRICE) — คู่แข่งถูกกว่า');
+      expect(screen.getByRole('listitem').textContent).toContain('F2 ราคา — คู่แข่งถูกกว่า');
+    });
+
+    it('an unknown code or free text is shown as written', () => {
+      one('CANCELLED', 'ลูกค้าแจ้งยกเลิก');
+      expect(screen.getByRole('listitem').textContent).toContain('ลูกค้าแจ้งยกเลิก');
     });
   });
 });

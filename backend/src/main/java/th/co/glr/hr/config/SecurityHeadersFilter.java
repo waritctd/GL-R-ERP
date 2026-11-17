@@ -10,13 +10,9 @@ import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
-/**
- * Adds defense-in-depth security headers to every API response (issue #32). The backend serves
- * JSON only, so a deny-all CSP plus framing/sniffing protections are safe and strict. HSTS is
- * emitted only over HTTPS so it never pins an insecure localhost dev session.
- *
- * <p>The static SPA (served by Vercel) gets its own header set in {@code vercel.json}.
- */
+/** Adds defense-in-depth security headers to every API response (issue #32). The backend serves JSON only, so a
+ * deny-all CSP plus framing/sniffing protections are safe and strict. HSTS is emitted only over HTTPS so it
+ * never pins an insecure localhost dev session. */
 @Component
 @Order(-100)
 public class SecurityHeadersFilter extends OncePerRequestFilter {

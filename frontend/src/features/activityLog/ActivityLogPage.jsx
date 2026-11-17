@@ -8,26 +8,13 @@ import { Tabs } from '../../components/common/Tabs.jsx';
 import { actionLabel, actionTone } from './actionLabels.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-/**
- * Admin-only view of what everyone has been doing in the portal.
- *
- * <p>Three tabs, because there are genuinely three different questions and one table cannot answer
- * all of them:
- *
- * - **สรุป** — who was in the portal at all, and when. Sourced from hr.activity_log, which the
- *   request filter writes for every /api/ call, so it sees people who only browsed.
- * - **การดำเนินการ** — who requested what and who approved what. Sourced from hr.audit_log, which
- *   is semantic: one row per business action, with a readable name.
- * - **คำขอทั้งหมด** — the raw request stream, for when the other two do not explain something.
- *
- * The gate is server-side (ActivityLogService.requireAdmin re-reads hr.employee.is_admin on every
- * call); `user.admin` here only decides whether the route renders, and a client that forges it
- * still gets 403 from all three endpoints.
- */
+/** Admin-only view of what everyone has been doing in the portal. Three tabs, because there are genuinely three
+ * different questions and one table cannot answer all of them: - **สรุป** — who was in the portal at all, and
+ * when. */
 
-// Tabs.jsx's contract is `items: [{ id, label, ... }]`, not `value` — see PR for the incident
-// this fixed. Exported so ActivityLogPage.test.jsx can drive its tab-switch test off the real
-// array instead of a hardcoded label list.
+// Tabs.jsx's contract is `items: [{ id, label, ... }]`, not `value` — see PR for the incident this fixed.
+// Exported so ActivityLogPage.test.jsx can drive its tab-switch test off the real array instead of a hardcoded
+// label list.
 export const TABS = [
   { id: 'summary', label: 'สรุป' },
   { id: 'actions', label: 'การดำเนินการ' },
@@ -43,26 +30,21 @@ const TONE_CLASS = {
 };
 
 function todayInBangkok() {
-  // The backend windows on Asia/Bangkok, so the default the page sends must agree — a browser in
-  // another timezone would otherwise ask for the wrong day and get a confusingly empty table.
+  // The backend windows on Asia/Bangkok, so the default the page sends must agree — a browser in another
+  // timezone would otherwise ask for the wrong day and get a confusingly empty table.
   return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Bangkok' }).format(new Date());
 }
 
-// `!value` alone is not enough: a non-empty value that doesn't parse to a real date (a malformed
-// timestamp, or an OffsetDateTime serialized wrong by a misconfigured ObjectMapper — this repo has
-// hit exactly that before, see hand-wired-controller-it-objectmapper-instant) leaves `new Date(...)`
-// an Invalid Date. Intl.DateTimeFormat#format then throws RangeError synchronously, during render,
-// inside a DataTable column — not inside a promise, so react-query's isError never sees it. It
-// propagates straight to the route-level ErrorBoundary, which replaces the ENTIRE page for every
-// tab. Same failure class as the Tabs.jsx id/value mismatch fixed on
-// fix/activity-log-page-load-failure; this closes the other trigger for it.
+// `!value` alone is not enough: a non-empty value that doesn't parse to a real date leaves `new Date` an
+// Invalid Date. Intl.DateTimeFormat#format then throws RangeError synchronously, during render, inside a
+// DataTable column — not inside a promise, so react-query's isError never sees it.
 function isValidDate(date) {
   return !Number.isNaN(date.getTime());
 }
 
-// Exported (only) so ActivityLogPage.test.jsx can unit-test the invalid-date guard directly,
-// independent of which tab renders it — formatTime backs summary's firstSeen/lastSeen,
-// formatDateTime backs every other tab's `at` column.
+// Exported (only) so ActivityLogPage.test.jsx can unit-test the invalid-date guard directly, independent of
+// which tab renders it — formatTime backs summary's firstSeen/lastSeen, formatDateTime backs every other tab's
+// `at` column.
 export function formatTime(value) {
   if (!value) return '-';
   const date = new Date(value);
@@ -206,8 +188,8 @@ export function ActivityLogPage() {
     },
   ], []);
 
-  // Lookup rather than chained ternaries: at four tabs the ternary chain stopped being readable,
-  // and a missing branch would have silently rendered the wrong tab's columns.
+  // Lookup rather than chained ternaries: at four tabs the ternary chain stopped being readable, and a missing
+  // branch would have silently rendered the wrong tab's columns.
   const QUERIES = { summary: summaryQuery, actions: auditQuery, requests: requestsQuery, system: systemQuery };
   const COLUMNS = { summary: summaryColumns, actions: auditColumns, requests: requestColumns, system: systemColumns };
   // Whole literal strings so Tailwind's scanner sees them; one template per tab's column count.

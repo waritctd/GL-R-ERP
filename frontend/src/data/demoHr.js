@@ -8,14 +8,9 @@ function iso(year, month, day) {
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Leave requests — mirrors LeaveRequestService. Statuses actually reachable via
-// approve()/reject()/cancel(): SUBMITTED, APPROVED, AUTO_REJECTED, REJECTED,
-// CANCELLED. Leave types: PERSONAL (7 days/yr), SICK (30, requires attachment),
-// VACATION (6). Quota fields (quotaRemainingBefore/After) are informational only
-// — leaveBalance() derives the live remaining count from totalDays/status on the
-// fly, so these just need to look consistent, not be load-bearing.
-// ─────────────────────────────────────────────────────────────────────────────
+// Leave requests — mirrors LeaveRequestService. Leave types: PERSONAL (7 days/yr), SICK (30, requires
+// attachment), VACATION (6). Statuses actually reachable via approve()/reject()/cancel(): SUBMITTED, APPROVED,
+// AUTO_REJECTED, REJECTED, CANCELLED.
 export function buildDemoLeaveRequests(employees) {
   const now = new Date().toISOString();
   const at = (offsetDays) => {
@@ -102,8 +97,8 @@ export function buildDemoLeaveRequests(employees) {
       ...hrReviewer, reviewedAt: at(-62),
     }),
 
-    // AUTO_REJECTED — the create() handler's own synchronous rule (quota unavailable /
-    // SICK with no attachment), so systemNote must be non-null and reviewedBy* stays null.
+    // AUTO_REJECTED — the create() handler's own synchronous rule (quota unavailable / SICK with no attachment),
+    // so systemNote must be non-null and reviewedBy* stays null.
     row({
       id: 7, employeeId: employees[23].id, leaveTypeCode: 'VACATION',
       startDate: iso(2026, 8, 1), endDate: iso(2026, 8, 8), totalDays: 8, quotaYear: 2026,
@@ -187,8 +182,8 @@ export function buildDemoLeaveRequests(employees) {
       requestedById: employees[3].id, requestedByName: employees[3].nameTh, requestedAt: at(-1),
     }),
     row({
-      // Sub-day leave (V90): times present, single date, fractional totalDays — exercises the
-      // expanded row's "ช่วงเวลา (ลาบางส่วนของวัน)" field.
+      // Sub-day leave (V90): times present, single date, fractional totalDays — exercises the expanded row's
+      // "ช่วงเวลา (ลาบางส่วนของวัน)" field.
       id: 15, employeeId: employees[4].id, leaveTypeCode: 'PERSONAL',
       startDate: iso(2026, 8, 26), endDate: iso(2026, 8, 26), totalDays: 0.44, quotaYear: 2026,
       startTime: '13:00', endTime: '17:00',  // 13:00-17:00 = 240 clock min, minus 30 min of the 12:30-13:30 break = 210 worked / 480 = 0.44 (V166)
@@ -215,9 +210,9 @@ export function buildDemoLeaveRequests(employees) {
       ...hrReviewer, reviewedAt: at(-19),
     }),
     row({
-      // 1:45 against a 30-day quota — the LONGEST string this formatter can produce, and the one
-      // that decides whether the day/quota cell has room: "1 ชั่วโมง 45 นาที · เหลือ 28 วัน
-      // 6 ชั่วโมง 15 นาที". Kept deliberately as the layout's worst case.
+      // 1:45 against a 30-day quota — the LONGEST string this formatter can produce, and the one that decides
+      // whether the day/quota cell has room: "1 ชั่วโมง 45 นาที · เหลือ 28 วัน 6 ชั่วโมง 15 นาที". Kept deliberately
+      // as the layout's worst case.
       id: 29, employeeId: employees[8].id, leaveTypeCode: 'SICK',
       startDate: iso(2026, 8, 21), endDate: iso(2026, 8, 21), totalDays: 0.22, quotaYear: 2026,
       startTime: '09:00', endTime: '10:45',
@@ -246,8 +241,8 @@ export function buildDemoLeaveRequests(employees) {
       ...hrReviewer, reviewedAt: at(-19),
     }),
     row({
-      // Partly unpaid — the one seeded row that renders the "ไม่รับค่าจ้าง" badge in the collapsed
-      // status column (leaveRequestTable.jsx), which no other row exercises.
+      // Partly unpaid — the one seeded row that renders the "ไม่รับค่าจ้าง" badge in the collapsed status column
+      // (leaveRequestTable.jsx), which no other row exercises.
       id: 18, employeeId: employees[2].id, leaveTypeCode: 'VACATION',
       startDate: iso(2026, 7, 22), endDate: iso(2026, 7, 23), totalDays: 2, quotaYear: 2026,
       paidDays: 1, unpaidDays: 1,
@@ -257,9 +252,9 @@ export function buildDemoLeaveRequests(employees) {
       ...hrReviewer, reviewedAt: at(-29), reviewerNote: 'อนุมัติ แต่หนึ่งวันเป็นการลาแบบไม่รับค่าจ้าง',
     }),
     row({
-      // The SAL manager's OWN leave. employees[0].managerId is null, so this routes to "hr" —
-      // the branch pendingApproverForLeave falls back to, and the only seeded SUBMITTED row that
-      // shows it on a manager's own "ของฉัน" tab.
+      // The SAL manager's OWN leave. employees[0].managerId is null, so this routes to "hr" — the branch
+      // pendingApproverForLeave falls back to, and the only seeded SUBMITTED row that shows it on a manager's own
+      // "ของฉัน" tab.
       id: 19, employeeId: employees[0].id, leaveTypeCode: 'VACATION',
       startDate: iso(2026, 9, 21), endDate: iso(2026, 9, 22), totalDays: 2, quotaYear: 2026,
       reason: 'พาครอบครัวไปงานรับปริญญา', status: 'SUBMITTED',
@@ -318,8 +313,8 @@ export function buildDemoLeaveRequests(employees) {
       ...hrReviewer, reviewedAt: at(-34),
     }),
     row({
-      // The WHL manager's OWN leave — same "manager has a personal tab too" coverage as row 19/20,
-      // so "ของฉัน" is not empty for either manager persona.
+      // The WHL manager's OWN leave — same "manager has a personal tab too" coverage as row 19/20, so "ของฉัน" is
+      // not empty for either manager persona.
       id: 26, employeeId: employees[5].id, leaveTypeCode: 'VACATION',
       startDate: iso(2026, 7, 27), endDate: iso(2026, 7, 28), totalDays: 2, quotaYear: 2026,
       reason: 'พักผ่อนประจำปี', status: 'APPROVED',
@@ -338,15 +333,8 @@ export function buildDemoLeaveRequests(employees) {
   ];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Overtime requests — mirrors OvertimeRequestService. Two-stage approval:
-// SUBMITTED -> MANAGER_APPROVED -> APPROVED (CEO), or REJECTED at either stage;
-// CANCELLED while SUBMITTED/MANAGER_APPROVED/APPROVED. dayType WORKDAY (x1.5) /
-// HOLIDAY (x3). Two backdated rows: one inside the 60-day retroactive window
-// (OT_RETROACTIVE_WINDOW_DAYS), one representing an older historical entry
-// outside it (imported by some other means — create() itself would reject it,
-// but a pre-existing row is a legitimate thing for the UI to display).
-// ─────────────────────────────────────────────────────────────────────────────
+// Overtime requests — mirrors OvertimeRequestService. Two-stage approval: SUBMITTED -> MANAGER_APPROVED ->
+// APPROVED (CEO), or REJECTED at either stage; CANCELLED while SUBMITTED/MANAGER_APPROVED/APPROVED.
 export function buildDemoOvertimeRequests(employees) {
   const now = new Date().toISOString();
   const at = (offsetDays) => {
@@ -440,9 +428,8 @@ export function buildDemoOvertimeRequests(employees) {
       ceoApprovedBy: ceo.id, ceoApprovedByName: ceo.name, ceoApprovedAt: at(-26),
     }),
     row({
-      // Historical entry outside the 60-day retroactive window — a legitimate
-      // pre-existing row (e.g. imported), even though a fresh create() call
-      // dated this far back would now be rejected.
+      // Historical entry outside the 60-day retroactive window — a legitimate pre-existing row (e.g. imported), even
+      // though a fresh create() call dated this far back would now be rejected.
       id: 8, employeeId: employees[29].id, workDate: iso(2026, 5, 15),
       plannedStartAt: '2026-05-15T08:00:00+07:00', plannedEndAt: '2026-05-15T11:20:00+07:00',
       plannedMinutes: 200, actualMinutes: 200, payableMinutes: 600, dayType: 'HOLIDAY',
@@ -492,12 +479,9 @@ export function buildDemoOvertimeRequests(employees) {
   ];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Special money requests — mirrors SpecialMoneyService / SPECIAL_MONEY_TYPES
-// (12 kinds). Keeps the 5 rows already covering MEDICAL/TRAVEL_PER_DIEM/
-// AID_WEDDING/UNIFORM_ANNUAL/TRAINING, and adds the remaining 7 kinds so every
-// SPECIAL_MONEY_TYPES entry has at least one row.
-// ─────────────────────────────────────────────────────────────────────────────
+// Special money requests — mirrors SpecialMoneyService / SPECIAL_MONEY_TYPES (12 kinds). Keeps the 5 rows
+// already covering MEDICAL/TRAVEL_PER_DIEM/ AID_WEDDING/UNIFORM_ANNUAL/TRAINING, and adds the remaining 7
+// kinds so every SPECIAL_MONEY_TYPES entry has at least one row.
 export function buildDemoSpecialMoneyRequests(employees) {
   const now = new Date().toISOString();
   const row = (overrides) => ({
@@ -651,12 +635,9 @@ export function buildDemoSpecialMoneyRequests(employees) {
   ];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Profile-change requests — mirrors ProfileRequestService. Only 'pending' and
-// 'approved' are literal-checked in code (approved triggers the employee-field
-// apply side effect); 'rejected' is exercised by mockApi.profileRequests.test.js
-// and is a legitimate free-form status value the UI renders.
-// ─────────────────────────────────────────────────────────────────────────────
+// Profile-change requests — mirrors ProfileRequestService. Only 'pending' and 'approved' are literal-checked
+// in code (approved triggers the employee-field apply side effect); 'rejected' is exercised by
+// mockApi.profileRequests.test.js and is a legitimate free-form status value the UI renders.
 export function buildDemoProfileRequests(employees) {
   return [
     { id: 101, employeeId: employees[8].id, fieldKey: 'phone', fieldLabel: 'เบอร์โทรศัพท์', oldValue: employees[8].phone, newValue: '089-555-2210', requestedBy: employees[8].nameTh, requestedAt: '2026-06-09', status: 'pending' },
@@ -670,11 +651,8 @@ export function buildDemoProfileRequests(employees) {
   ];
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Notifications — free-form `type`; addNotification() literals seen in the
-// ticket/pricing-request flow, plus the original 4 legacy seed rows.
-// userId is a db.users[].id (login/account id), NOT an employeeId.
-// ─────────────────────────────────────────────────────────────────────────────
+// Notifications — free-form `type`; addNotification() literals seen in the ticket/pricing-request flow, plus
+// the original 4 legacy seed rows. userId is a db.users[].id (login/account id), NOT an employeeId.
 export function buildDemoNotifications() {
   return [
     { id: 1, userId: 8, ticketId: 2, ticketCode: 'PR-2026-0002', type: 'PRICE_PROPOSED', message: 'Ticket PR-2026-0002 มีราคาเสนอรอการอนุมัติ', read: false, createdAt: '2026-06-18T14:00:00Z' },
@@ -752,9 +730,8 @@ export function buildDemoAttendanceCorrectionRequests(employees) {
       reason: 'ออกงานหลังปิดคลัง ลืมสแกนออก',
       status: 'SUBMITTED', requestedById: manager.id, requestedAt: at(-2, '19:30'),
     }),
-    // BOTH + a deliberately long reason: the longest realistic free-text this
-    // table has to lay out, and the row that shows whether the เหตุผล column
-    // wraps or clips at tablet.
+    // BOTH + a deliberately long reason: the longest realistic free-text this table has to lay out, and the row
+    // that shows whether the เหตุผล column wraps or clips at tablet.
     row({
       id: 3, employeeId: employee.id, workDate: day(-3), correctionType: 'BOTH',
       requestedCheckIn: at(-3, '08:30'), requestedCheckOut: at(-3, '17:30'),

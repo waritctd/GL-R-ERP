@@ -379,8 +379,8 @@ describe('canApproveDealQuotation / canDecideDealQuotation', () => {
     expect(canApproveDealQuotation(hrUser)).toBe(false);
   });
 
-  // #H4: approve/reject stay sales_manager/ceo ONLY -- the canCreateQuotation grant does NOT
-  // extend to them (unlike create/edit/view, which treat the grant as "any deal").
+  // #H4: approve/reject stay sales_manager/ceo ONLY -- the canCreateQuotation grant does NOT extend to them
+  // (unlike create/edit/view, which treat the grant as "any deal").
   it('the canCreateQuotation grant does NOT make a qc user an approver', () => {
     expect(canApproveDealQuotation(qcWithGrant)).toBe(false);
     expect(canDecideDealQuotation(qcWithGrant, quotation({ docStatus: 'PENDING_APPROVAL' }))).toBe(false);
@@ -477,43 +477,23 @@ describe('validateQuotationItem (#M4, owner ruling 2026-09-10)', () => {
     expect(validateQuotationItem(completeItem({ quantityMode: 'PIECES', areaSqm: '', piecesInput: 50 }))).toEqual({});
   });
 
-  it('flags a missing รุ่น', () => {
-    expect(validateQuotationItem(completeItem({ model: '' }))).toEqual({ model: 'กรุณาระบุรุ่น' });
-    expect(validateQuotationItem(completeItem({ model: '   ' }))).toEqual({ model: 'กรุณาระบุรุ่น' });
-  });
-
-  it('flags a missing สี', () => {
-    expect(validateQuotationItem(completeItem({ color: '' }))).toEqual({ color: 'กรุณาระบุสี' });
-  });
-
-  it('flags a missing ผิว', () => {
-    expect(validateQuotationItem(completeItem({ texture: '' }))).toEqual({ texture: 'กรุณาระบุผิว' });
-  });
-
-  it('flags a missing ขนาด', () => {
-    expect(validateQuotationItem(completeItem({ sizeText: '' }))).toEqual({ sizeText: 'กรุณาระบุขนาด' });
-  });
-
-  it('flags a missing or non-positive ความหนา', () => {
-    expect(validateQuotationItem(completeItem({ thicknessMm: null }))).toEqual({ thicknessMm: 'กรุณาระบุความหนา (มม.)' });
-    expect(validateQuotationItem(completeItem({ thicknessMm: 0 }))).toEqual({ thicknessMm: 'กรุณาระบุความหนา (มม.)' });
-  });
-
-  it('flags a missing or non-positive แผ่น/ตร.ม.', () => {
-    expect(validateQuotationItem(completeItem({ sqmPerPiece: null }))).toEqual({ sqmPerPiece: 'กรุณาระบุแผ่น/ตร.ม.' });
-    expect(validateQuotationItem(completeItem({ sqmPerPiece: 0 }))).toEqual({ sqmPerPiece: 'กรุณาระบุแผ่น/ตร.ม.' });
-  });
-
-  it('flags a missing or sub-1 แผ่น/กล่อง', () => {
-    expect(validateQuotationItem(completeItem({ piecesPerBox: null }))).toEqual({ piecesPerBox: 'กรุณาระบุแผ่น/กล่อง' });
-    expect(validateQuotationItem(completeItem({ piecesPerBox: 0 }))).toEqual({ piecesPerBox: 'กรุณาระบุแผ่น/กล่อง' });
-  });
-
-  // The box this names on a Thai tile row is ราคา/ตร.ม.; the error KEY is still `unitPrice`
-  // (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
-  it('flags a missing or non-positive price', () => {
-    expect(validateQuotationItem(completeItem({ unitPrice: null }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
-    expect(validateQuotationItem(completeItem({ unitPrice: 0 }))).toEqual({ unitPrice: 'กรุณาระบุราคา/ตร.ม.' });
+  // One row per required field: blanking it (each listed bad value in turn) must produce exactly that field's
+  // error and nothing else. Columns: test name, field, bad values, expected message.
+  it.each([
+    ['flags a missing รุ่น', 'model', ['', '   '], 'กรุณาระบุรุ่น'],
+    ['flags a missing สี', 'color', [''], 'กรุณาระบุสี'],
+    ['flags a missing ผิว', 'texture', [''], 'กรุณาระบุผิว'],
+    ['flags a missing ขนาด', 'sizeText', [''], 'กรุณาระบุขนาด'],
+    ['flags a missing or non-positive ความหนา', 'thicknessMm', [null, 0], 'กรุณาระบุความหนา (มม.)'],
+    ['flags a missing or non-positive แผ่น/ตร.ม.', 'sqmPerPiece', [null, 0], 'กรุณาระบุแผ่น/ตร.ม.'],
+    ['flags a missing or sub-1 แผ่น/กล่อง', 'piecesPerBox', [null, 0], 'กรุณาระบุแผ่น/กล่อง'],
+    // The box this names on a Thai tile row is ราคา/ตร.ม.; the error KEY is still `unitPrice`
+    // (it names the box, `price-N`). See quotationPerSqmPrice.test.jsx.
+    ['flags a missing or non-positive price', 'unitPrice', [null, 0], 'กรุณาระบุราคา/ตร.ม.'],
+  ])('%s', (_name, field, badValues, message) => {
+    for (const value of badValues) {
+      expect(validateQuotationItem(completeItem({ [field]: value }))).toEqual({ [field]: message });
+    }
   });
 
   it('AREA mode requires a positive พื้นที่, ignoring piecesInput entirely', () => {
@@ -678,8 +658,8 @@ describe('piecesPerSqmFromSqmPerPiece / sqmPerPieceFromPiecesPerSqm (แผ่�
   it('mirrors WastageCalculator#piecesPerSqm — round(1/x, 2, HALF_UP)', () => {
     expect(piecesPerSqmFromSqmPerPiece(0.72)).toBe(1.39);
     expect(piecesPerSqmFromSqmPerPiece(0.36)).toBe(2.78);
-    // The real disagreement this feature exists to route around: a 300x600 mesh sheet whose
-    // covered area is genuinely 0.135 sqm/piece, not the 0.18 width x height geometry would say.
+    // The real disagreement this feature exists to route around: a 300x600 mesh sheet whose covered area is
+    // genuinely 0.135 sqm/piece, not the 0.18 width x height geometry would say.
     expect(piecesPerSqmFromSqmPerPiece(0.135)).toBe(7.41);
   });
 
@@ -765,8 +745,8 @@ describe('sqmPerPieceFromSizeCm (ขนาด (ซม.) → ตร.ม./แผ�
   });
 
   it('returns null outside the WastageCalculator MIN/MAX_SQM_PER_PIECE bound (0.001-10 m² per piece) -- catches millimetres typed into the cm field', () => {
-    // "600x1200" parses as a clean number pair but reads as 72 m²/piece, ~100x a real tile --
-    // exactly the millimetres-in-a-cm-field mistake WastageCalculator.java:87-88 guards against.
+    // "600x1200" parses as a clean number pair but reads as 72 m²/piece, ~100x a real tile -- exactly the
+    // millimetres-in-a-cm-field mistake WastageCalculator.java:87-88 guards against.
     expect(sqmPerPieceFromSizeCm('600x1200')).toBeNull();
   });
 });
@@ -827,8 +807,7 @@ describe('parseSizeText (shared size grammar, 2026-09-16)', () => {
     expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // thin space
     expect(parseSizeText('30 x 60')).toEqual({ width: 30, height: 60, unit: null }); // narrow NBSP
     expect(parseSizeText('﻿30x60')).toEqual({ width: 30, height: 60, unit: null }); // BOM/ZWNBSP
-    expect(parseSizeText('30x60\u2028')).toEqual({ width: 30, height: 60, unit: null }); // line separator
-    // The OTHER direction: a bare control byte, which JS's own `\s`/`.trim()` never treated as
+    expect(parseSizeText('30x60\u2028')).toEqual({ width: 30, height: 60, unit: null }); // line separator The OTHER direction: a bare control byte, which JS's own `\s`/`.trim()` never treated as
     // whitespace (Java's `String.trim()` always stripped it -- this closes the gap from the JS side).
     expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
     expect(parseSizeText('30x60')).toEqual({ width: 30, height: 60, unit: null });
@@ -861,8 +840,8 @@ describe('parseSizeText ReDoS guard (F1, 2026-09-16 review)', () => {
   });
 
   it('longer than the 64-char length guard is rejected outright, even for an otherwise-genuine shape', () => {
-    // The padding is INTERNAL (between the first number and the separator), so no trimming step
-    // could shrink it away -- this pins the length guard itself, not just the regex fix.
+    // The padding is INTERNAL (between the first number and the separator), so no trimming step could shrink it
+    // away -- this pins the length guard itself, not just the regex fix.
     const genuineButLong = '30' + ' '.repeat(60) + 'x60';
     expect(genuineButLong.length).toBe(65);
     expect(parseSizeText(genuineButLong)).toBeNull();
@@ -879,9 +858,8 @@ describe('sqmPerPieceFromSizeCm / sizeTextDiffersFromCatalogFaceSize agree on th
   });
 
   it('an explicit mm unit is trusted for area, not compared against the cm sanity bound', () => {
-    // 300mm x 600mm = 0.18 sqm/piece -- a real, small tile; the cm reading (300x600) would be 18
-    // sqm/piece and get rejected by the sanity bound, which is exactly the bug this unit-aware
-    // conversion avoids.
+    // 300mm x 600mm = 0.18 sqm/piece -- a real, small tile; the cm reading (300x600) would be 18 sqm/piece and get
+    // rejected by the sanity bound, which is exactly the bug this unit-aware conversion avoids.
     expect(sqmPerPieceFromSizeCm('300x600mm')).toBe(0.18);
   });
 
@@ -915,8 +893,8 @@ describe('sizeTextMatchesCatalogFaceSize (prod QT-2026-0034-1, 2026-09-15 — mi
   });
 
   it('matches when the typed size is the catalogue size in millimetres (the exact prod bug shape)', () => {
-    // catalogue was picked as 60x60 cm (a 600x600mm tile); the rep typed the mm figures straight
-    // into this cm-labelled field.
+    // catalogue was picked as 60x60 cm (a 600x600mm tile); the rep typed the mm figures straight into this
+    // cm-labelled field.
     expect(sizeTextMatchesCatalogFaceSize('600x600', '60x60')).toBe(true);
     expect(sizeTextMatchesCatalogFaceSize('600x1200', '60x120')).toBe(true);
     expect(sizeTextMatchesCatalogFaceSize('1200x600', '60x120')).toBe(true);
@@ -961,9 +939,9 @@ describe('sizeTextDiffersFromCatalogFaceSize (review fix, 2026-09-15 -- "can\'t 
     expect(sizeTextDiffersFromCatalogFaceSize('', '60x60')).toBe(false);
     expect(sizeTextDiffersFromCatalogFaceSize('3', '60x60')).toBe(false);
     expect(sizeTextDiffersFromCatalogFaceSize('30x', '60x60')).toBe(false);
-    // catalogSizeText itself unparseable (a catalogue row with no width/height, sizeTextFromCatalog's
-    // sizeRaw fallback) -- even a genuinely different-looking typed size must not read as "different"
-    // when there is nothing reliable to compare it against.
+    // catalogSizeText itself unparseable (a catalogue row with no width/height, sizeTextFromCatalog's sizeRaw
+    // fallback) -- even a genuinely different-looking typed size must not read as "different" when there is
+    // nothing reliable to compare it against.
     expect(sizeTextDiffersFromCatalogFaceSize('30x60', 'JOLLY COCO 60x120')).toBe(false);
     expect(sizeTextDiffersFromCatalogFaceSize(null, null)).toBe(false);
   });
@@ -1013,8 +991,8 @@ describe('originCountryFromCode (F1 catalog autofill)', () => {
     expect(meta.originCountryFromCode(' it ')).toBe('อิตาลี');
   });
 
-  // Blank, not 'อื่นๆ': that option carries no lead time, so guessing it would look filled in
-  // while telling the customer nothing.
+  // Blank, not 'อื่นๆ': that option carries no lead time, so guessing it would look filled in while telling the
+  // customer nothing.
   it('returns "" for an unmapped, empty or absent code', () => {
     expect(meta.originCountryFromCode('PT')).toBe('');
     expect(meta.originCountryFromCode('')).toBe('');
@@ -1071,8 +1049,8 @@ describe('locationGroupsFromItems (F1)', () => {
     expect(items.map((it) => it.groupId)).toEqual([groups[0].groupId, groups[0].groupId, groups[1].groupId]);
   });
 
-  // Two SEPARATE runs of the same label are two groups — collecting them together would reorder
-  // items the rep arranged deliberately, and the document does not do that either.
+  // Two SEPARATE runs of the same label are two groups — collecting them together would reorder items the rep
+  // arranged deliberately, and the document does not do that either.
   it('does not merge non-adjacent runs of the same label', () => {
     const { groups } = meta.locationGroupsFromItems([item('ชั้น 1', 'A'), item('ชั้น 2', 'B'), item('ชั้น 1', 'C')]);
     expect(groups).toHaveLength(3);
@@ -1680,7 +1658,7 @@ describe('buildQuotationChecklist', () => {
   it('slice 2: no deal picked yet blocks with "ต้องเลือกดีล…" and skips the new-deal customer/project checks', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, isInlineCreate: true, customer: null, needsDeal: true });
     expect(entries.map((e) => [e.check, e.blocking])).toEqual([['deal', true]]);
-    expect(entries[0].message).toBe('ต้องเลือกดีลก่อนบันทึกร่าง');
+    expect(entries[0].message).toBe('ต้องเลือกงานก่อนบันทึกร่าง');
     expect(entries[0].targetId).toBe('deal-picker');
   });
 
@@ -1702,7 +1680,7 @@ describe('buildQuotationChecklist', () => {
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: live })).toEqual([expect.objectContaining({
       check: 'liveDirectQuotation',
       blocking: true,
-      message: 'ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
+      message: 'งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่',
     })]);
     expect(meta.buildQuotationChecklist({ ...complete, liveDirectQuotation: { ...live, docStatus: 'CANCELLED' } })).toEqual([]);
   });
@@ -1763,9 +1741,9 @@ describe('buildQuotationChecklist', () => {
     expect(blocks(ownerDraft, 'BUYER')).toBe(true);
 
     expect(messages([row(79, 'APPROVED', 'DESIGNER'), ownerPending], 'BUYER'))
-      .toEqual(['ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
+      .toEqual(['งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0078-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่']);
     // Two blockers: the newest (highest id) is named, whatever the list order.
-    const newestNamed = ['ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
+    const newestNamed = ['งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0081-1) — แก้ไขฉบับนั้น หรือสร้างฉบับแก้ไขแทนการออกเลขใหม่'];
     expect(messages([row(81, 'DRAFT', 'OWNER'), row(79, 'PENDING_APPROVAL', 'DESIGNER')], 'BUYER')).toEqual(newestNamed);
     expect(messages([row(79, 'PENDING_APPROVAL', 'DESIGNER'), row(81, 'DRAFT', 'OWNER')], 'BUYER')).toEqual(newestNamed);
     expect(messages([approvedDesigner], 'BUYER')).toEqual([]);
@@ -1791,14 +1769,14 @@ describe('buildQuotationChecklist', () => {
     expect(meta.hasLivePricingRequest([pr('DRAFT')], '18')).toBe(true);
     expect(meta.hasLivePricingRequest(null, 18)).toBe(false);
     expect(meta.LIVE_PRICING_REQUEST_BLOCK_MESSAGE)
-      .toBe('ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
+      .toBe('งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน');
   });
 
   it('the checklist blocks a NEW quotation on a deal with a live pricing request, with that sentence', () => {
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: true })).toEqual([expect.objectContaining({
       check: 'livePricingRequest',
       blocking: true,
-      message: 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
+      message: 'งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน',
     })]);
     expect(meta.buildQuotationChecklist({ ...complete, livePricingRequest: false })).toEqual([]);
   });
@@ -1808,7 +1786,7 @@ describe('buildQuotationChecklist', () => {
   // find out from the 409. The caller (the editor) passes the sentence ONLY for a NEW or CHANGED recipient: an
   // unchanged stored recipient on a legacy draft still saves (the server only refuses a change), so it passes none.
   it('the checklist blocks the save with the route sentence when an off-route party is chosen', () => {
-    const sentence = 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน';
+    const sentence = 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน';
     const entries = meta.buildQuotationChecklist({ ...complete, recipientRequired: true, recipientType: 'DESIGNER',
       offRouteRecipientMessage: sentence });
     expect(entries).toEqual([expect.objectContaining({ message: sentence, blocking: true })]);
@@ -1894,7 +1872,7 @@ describe('buildQuotationChecklist', () => {
 
   it('on a deal with no โครงการ only WARNS — the quotation service does not refuse it, and it is not editable here', () => {
     const entries = meta.buildQuotationChecklist({ ...complete, projectName: null });
-    expect(entries).toEqual([{ check: 'dealProject', message: 'ดีลนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดดีล)', targetId: null, blocking: false, submitBlocking: false }]);
+    expect(entries).toEqual([{ check: 'dealProject', message: 'งานนี้ยังไม่มีโครงการ (แก้ได้ที่หน้ารายละเอียดงาน)', targetId: null, blocking: false, submitBlocking: false }]);
   });
 
   it('BLOCKS on an incomplete row and targets its FIRST missing field', () => {
@@ -2006,9 +1984,9 @@ describe('isEffectiveZeroDeposit', () => {
     expect(meta.isEffectiveZeroDeposit({ noDeposit: true, depositPercentCustom: false, depositPercent: 30 })).toBe(true);
   });
 
-  // The Opus review finding (F2): typing "0" into the custom "อื่นๆ" input while UNticked must be
-  // recognised identically to the checkbox — this is the exact gap that let a rep save/attempt to
-  // submit depositPercent = 0 with no fullPaymentTerm without ever ticking "ไม่รับมัดจำ".
+  // The Opus review finding (F2): typing "0" into the custom "อื่นๆ" input while UNticked must be recognised
+  // identically to the checkbox — this is the exact gap that let a rep save/attempt to submit depositPercent = 0
+  // with no fullPaymentTerm without ever ticking "ไม่รับมัดจำ".
   it('is true for a custom-typed "0" even with the checkbox unticked', () => {
     expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: '0' })).toBe(true);
     expect(meta.isEffectiveZeroDeposit({ noDeposit: false, depositPercentCustom: true, depositPercent: 0 })).toBe(true);
@@ -2109,7 +2087,7 @@ describe('acceptOutcomeConfirmCopy', () => {
   it('DESIGNER and OWNER keep the skip-the-later-parties copy', () => {
     expect(meta.acceptOutcomeConfirmCopy('DESIGNER')).toEqual({
       title: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้',
-      message: 'ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป',
+      message: 'ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป',
     });
     expect(meta.acceptOutcomeConfirmCopy('OWNER').message).toContain('เจ้าของโครงการ');
   });
@@ -2128,12 +2106,12 @@ describe('acceptOutcomeConfirmCopy', () => {
 describe('CONFIRM_ORDER_FROM_QUOTATION_COPY.lead', () => {
   it('names the quotation number when there is one', () => {
     expect(meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead('QT-2026-0101-1'))
-      .toBe('ระบบจะนำดีลของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+      .toBe('ระบบจะนำงานของใบเสนอราคา QT-2026-0101-1 เข้าสู่ขั้นตอนการขาย ที่ขั้น');
   });
 
   it.each([undefined, null, ''])('falls back to ใบเสนอราคานี้ with no stray double space when the number is %j', (number) => {
     const lead = meta.CONFIRM_ORDER_FROM_QUOTATION_COPY.lead(number);
-    expect(lead).toBe('ระบบจะนำดีลของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
+    expect(lead).toBe('ระบบจะนำงานของใบเสนอราคานี้ เข้าสู่ขั้นตอนการขาย ที่ขั้น');
     expect(lead).not.toMatch(/\s{2,}/);
   });
 });

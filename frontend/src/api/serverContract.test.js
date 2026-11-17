@@ -52,9 +52,7 @@ import {
  * pair that asserted overlapping properties from different sources.
  */
 
-// ─────────────────────────────────────────────────────────────────────────────
 // The server surface
-// ─────────────────────────────────────────────────────────────────────────────
 
 const SERVER_ENDPOINTS = backendOperations();
 const normaliseServerPath = normalisePath;
@@ -63,9 +61,7 @@ const endpointKey = (e) => `${e.verb} ${normaliseServerPath(e.path)}`;
 const SERVER_KEYS = new Set(SERVER_ENDPOINTS.map(endpointKey));
 const DEPRECATED_KEYS = new Set(SERVER_ENDPOINTS.filter((e) => e.deprecated).map(endpointKey));
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Capturing what hrApi.js actually issues
-// ─────────────────────────────────────────────────────────────────────────────
 
 const CAPTURED = [];
 
@@ -83,17 +79,13 @@ vi.mock('./client.js', async () => {
 
 const { api } = await import('./hrApi.js');
 
-/**
- * The sentinel every placeholder argument carries. Any path segment containing it is a path
- * VARIABLE — that is how a composed client path is matched against a server `{id}`.
- */
+/** The sentinel every placeholder argument carries. Any path segment containing it is a path VARIABLE — that is
+ * how a composed client path is matched against a server `{id}`. */
 const SENTINEL = '__P__';
 
-/**
- * Argument profiles, tried in order until one runs without throwing. Different methods want
- * different shapes: an id (string), a payload (object), and `priceImport.updateProfile` which
- * runs `JSON.parse(json)` on its argument and needs valid JSON text.
- */
+/** Argument profiles, tried in order until one runs without throwing. Different methods want different shapes:
+ * an id (string), a payload (object), and `priceImport.updateProfile` which runs `JSON.parse(json)` on its
+ * argument and needs valid JSON text. */
 const ARGUMENT_PROFILES = [() => SENTINEL, () => ({}), () => '{}', () => 1];
 
 function normaliseClientPath(path) {
@@ -132,8 +124,8 @@ function probeClient() {
         let returnedPath = null;
         for (const profile of ARGUMENT_PROFILES) {
           try {
-            // Arity is a lower bound: several methods declare fewer parameters than they use
-            // via defaults, so pass a few extra — surplus arguments are ignored.
+            // Arity is a lower bound: several methods declare fewer parameters than they use via defaults, so pass a few
+            // extra — surplus arguments are ignored.
             const result = fn(...Array.from({ length: Math.max(fn.length, 4) }, profile));
             // `*Url` helpers return a path for a link or image attribute instead of fetching it.
             if (typeof result === 'string' && result.startsWith('/api')) returnedPath = result;
@@ -165,11 +157,8 @@ const { calls: CLIENT_CALLS, unprobed: UNPROBED_METHODS } = probeClient();
 const clientKey = ({ verb, path }) => `${verb === 'HEAD' ? 'GET' : verb} ${path}`;
 const CLIENT_KEYS = new Set(CLIENT_CALLS.map(clientKey));
 
-// Which of those calls a SCREEN can actually reach — see the Direction 3 block below. Defined
-// here, next to CLIENT_KEYS, because the API_SURFACE_REPORT block further down reads it and
-// module-level code runs top to bottom: declaring it beside its own describe() put it in the
-// temporal dead zone and the report crashed with "Cannot access before initialization". That is
-// env-gated code, so neither lint nor the suite would have caught it.
+// Which of those calls a SCREEN can actually reach — see the Direction 3 block below. That is env-gated code,
+// so neither lint nor the suite would have caught it.
 const UI_CALLED_METHODS = componentCalledMethods();
 const UI_REACHABLE_KEYS = new Set(
   CLIENT_CALLS
@@ -190,6 +179,10 @@ const UI_REACHABLE_KEYS = new Set(
 // Whether to surface or retire any of them is a product decision, not something a test decides.
 const SERVER_ONLY = {
   // ── Live, via a client this harness cannot see ────────────────────────────
+  'PUT /api/sales-analytics/snapshot':
+    "Sent by the weekly sales-insights refresh job from the CEO's signed-in page, so the requester is an outside "
+    + 'script this harness cannot see. No screen and no hrApi method calls it since the upload button was removed. '
+    + 'CEO-only on the server (SalesAnalyticsService).',
   'GET /api/public/brand/logo.png':
     'Fetched by the MAIL CLIENT, not by this app — it is the <img> src in the notification email '
     + 'templates, so the requester is Gmail/Outlook rendering a message, with no session and no hrApi '
@@ -212,6 +205,7 @@ const SERVER_ONLY = {
   'PATCH /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
   'DELETE /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
   'GET /api/deal-quotations/{}/items/{}/picture': 'GLA-75 quotation item pictures (V170), built BACKEND-FIRST: the per-item picture endpoints landed before the quotation editor UI that calls them (a separate frontend branch). Gated like editing / viewing the quotation and covered by DealQuotationPictureIntegrationTest. LIVE, not dead — delete this entry when hrApi.js calls it.',
+  'POST /api/release-notes/publish': 'มีอะไรใหม่ bell-only publish (sends NO email). Since 2026-11-17 the admin button calls POST /api/release-notes/publish-with-email instead; this endpoint is kept for ONE release so the bundle deployed before that change keeps doing exactly what its confirm says ("ไม่ส่งอีเมล") rather than 404 or, worse, mail staff. CEO/HR only (ReleaseNoticeService), pinned by ReleaseNoticeIntegrationTest. Remove with the controller mapping next release.',
   'POST /api/deal-quotations/{}/promote-to-deal': 'GLA-136 legacy alias of …/confirm-order (same handler), kept for ONE release so a still-cached frontend bundle keeps working; the frontend now calls …/confirm-order. Pinned by DealQuotationControllerTest. Remove with the controller alias.',
 
 
@@ -276,15 +270,9 @@ const CALLS_DEPRECATED = {
     + 'Always 409s.',
 };
 
-// ─────────────────────────────────────────────────────────────────────────────
 // The assertions
-// ─────────────────────────────────────────────────────────────────────────────
 
-// The whole reconciliation, on demand:
-//   cd frontend && API_SURFACE_REPORT=1 npx vitest run src/api/serverContract.test.js
-// Printed rather than committed as a checked-in table, deliberately: a static 278-row list is a
-// hand-maintained mirror of exactly the kind this file exists to guard against, and it would be
-// stale the first time someone added an endpoint. See docs/api-surface-reconciliation.md.
+// Set API_SURFACE_REPORT=1 when running this test to print the current API reconciliation table.
 if (process.env.API_SURFACE_REPORT) {
   const callersFor = (key) => CLIENT_CALLS
     .filter((c) => clientKey(c) === key)
@@ -294,9 +282,8 @@ if (process.env.API_SURFACE_REPORT) {
     `hrApi call sites: ${CLIENT_CALLS.length} (unique verb+path: ${CLIENT_KEYS.size})`,
     `reachable from a screen: ${UI_REACHABLE_KEYS.size}`,
     '',
-    // The owning controller is no longer shown: the digest is verb+path only, deliberately, so
-    // that its diff stays a readable record of contract changes. springdoc's `tags` carry the
-    // controller if a triage ever needs it.
+    // The owning controller is no longer shown: the digest is verb+path only, deliberately, so that its diff stays
+    // a readable record of contract changes. springdoc's `tags` carry the controller if a triage ever needs it.
     '| Verb | Path | hrApi caller | reachable from a screen |',
     '|---|---|---|---|',
   ];
@@ -307,24 +294,22 @@ if (process.env.API_SURFACE_REPORT) {
       + ` | ${callers.join('<br>') || '**— none —**'}`
       + ` | ${UI_REACHABLE_KEYS.has(key) ? 'yes' : '**no**'} |`);
   }
-  // process.stdout directly, not console.log: vitest buffers module-level console output during
-  // collection and the report never appears.
+  // process.stdout directly, not console.log: vitest buffers module-level console output during collection and
+  // the report never appears.
   process.stdout.write(`${lines.join('\n')}\n`);
 }
 
 describe('controller surface / hrApi.js contract — harness sanity', () => {
-  // Every assertion below is trivially true against an empty extraction. These run first so a
-  // digest that failed to load, or a harness that stopped driving hrApi, fails LOUDLY instead of
-  // passing on zero matches. The floors are set well under today's real numbers (276 operations,
-  // 261 captured calls) and far above a broken derivation's output.
+  // Every assertion below is trivially true against an empty extraction. These run first so a digest that failed
+  // to load, or a harness that stopped driving hrApi, fails LOUDLY instead of passing on zero matches.
   it('read a plausible surface out of the committed digest', () => {
     expect(SERVER_ENDPOINTS.length).toBeGreaterThan(250);
     expect(SERVER_KEYS.size).toBeGreaterThan(250);
   });
 
   it('every digest entry is a concrete /api path', () => {
-    // The digest is generated, so a malformed entry means the generator broke — which would
-    // otherwise surface as a pile of phantom "hrApi calls an endpoint that does not exist".
+    // The digest is generated, so a malformed entry means the generator broke — which would otherwise surface as a
+    // pile of phantom "hrApi calls an endpoint that does not exist".
     const malformed = SERVER_ENDPOINTS.filter((e) => !e.path.startsWith('/api/'));
     expect(malformed.map((e) => e.raw), 'digest entries that are not /api paths').toEqual([]);
   });
@@ -338,9 +323,9 @@ describe('controller surface / hrApi.js contract — harness sanity', () => {
   });
 
   it('drove every hrApi method to an observable request', () => {
-    // The client-side anti-vacuity check. A method this harness cannot call — a new argument shape
-    // none of ARGUMENT_PROFILES satisfies — would otherwise drop silently out of the comparison,
-    // and its endpoint would look uncalled while its call went unchecked.
+    // The client-side anti-vacuity check. A method this harness cannot call — a new argument shape none of
+    // ARGUMENT_PROFILES satisfies — would otherwise drop silently out of the comparison, and its endpoint would
+    // look uncalled while its call went unchecked.
     expect(UNPROBED_METHODS, 'hrApi methods that issued no request under any argument profile')
       .toEqual([]);
     expect(CLIENT_CALLS.length).toBeGreaterThan(200);
@@ -362,9 +347,9 @@ describe('controller surface / hrApi.js contract', () => {
         + (otherVerbs.length ? ` (the path exists server-side under ${otherVerbs.join(', ')})` : ''),
       );
     }
-    // No allowlist, by design: a client call with no endpoint behind it is already a 404 in
-    // production. The "path exists under another verb" hint is there because a verb mismatch is
-    // the likeliest cause and the least obvious from the path alone.
+    // No allowlist, by design: a client call with no endpoint behind it is already a 404 in production. The "path
+    // exists under another verb" hint is there because a verb mismatch is the likeliest cause and the least
+    // obvious from the path alone.
     expect([...new Set(broken)].sort()).toEqual([]);
   });
 
@@ -411,8 +396,8 @@ describe('controller surface / hrApi.js contract', () => {
   });
 
   it('every CALLS_DEPRECATED entry is still deprecated and still called', () => {
-    // Self-verifying, and it doubles as the anti-vacuity check on the @Deprecated parse: if
-    // isDeprecatedAt() stopped matching, DEPRECATED_KEYS would empty and these assertions fail.
+    // Self-verifying, and it doubles as the anti-vacuity check on the @Deprecated parse: if isDeprecatedAt()
+    // stopped matching, DEPRECATED_KEYS would empty and these assertions fail.
     for (const [key, reason] of Object.entries(CALLS_DEPRECATED)) {
       expect(SERVER_KEYS.has(key), `CALLS_DEPRECATED lists "${key}", which no controller serves`).toBe(true);
       expect(
@@ -430,8 +415,8 @@ describe('controller surface / hrApi.js contract', () => {
   it('every SERVER_ONLY entry is a real, still-uncalled endpoint with a written reason', () => {
     for (const [key, reason] of Object.entries(SERVER_ONLY)) {
       expect(SERVER_KEYS.has(key), `SERVER_ONLY lists "${key}", which no controller serves`).toBe(true);
-      // Stale entries rot: once hrApi starts calling an endpoint, its exemption must go, or the
-      // next time that endpoint disappears server-side nothing notices.
+      // Stale entries rot: once hrApi starts calling an endpoint, its exemption must go, or the next time that
+      // endpoint disappears server-side nothing notices.
       expect(
         CLIENT_KEYS.has(key),
         `SERVER_ONLY["${key}"] is now called by hrApi — delete the entry`,
@@ -441,9 +426,7 @@ describe('controller surface / hrApi.js contract', () => {
   });
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
 // Direction 3 — is the endpoint reachable from a SCREEN?
-// ─────────────────────────────────────────────────────────────────────────────
 
 
 /**
@@ -572,9 +555,9 @@ const UNREACHABLE_FROM_UI = new Set([
 
 describe('controller surface / hrApi.js contract — UI reachability', () => {
   it('drove the UI scan to a plausible result', () => {
-    // Anti-vacuity, same shape as the harness-sanity block. If the scan matched nothing —
-    // a moved src tree, a changed call idiom — every endpoint would look unreachable and the
-    // allowlist below would silently become the whole surface.
+    // Anti-vacuity, same shape as the harness-sanity block. If the scan matched nothing — a moved src tree, a
+    // changed call idiom — every endpoint would look unreachable and the allowlist below would silently become the
+    // whole surface.
     expect(UI_CALLED_METHODS.size).toBeGreaterThan(150);
     expect(UI_REACHABLE_KEYS.size).toBeGreaterThan(150);
   });
@@ -638,9 +621,9 @@ describe('controller surface / hrApi.js contract — UI reachability', () => {
   });
 
   it('no module outside src/api builds an /api/ path itself', () => {
-    // A component that hand-builds a URL escapes this file, contract.test.js and the e2e sweep
-    // alike — none of them can see it. Comments are stripped first: UpcomingHolidays.jsx
-    // documents `/api/holidays` in prose precisely to explain that it does NOT call it.
+    // A component that hand-builds a URL escapes this file, contract.test.js and the e2e sweep alike — none of
+    // them can see it. Comments are stripped first: UpcomingHolidays.jsx documents `/api/holidays` in prose
+    // precisely to explain that it does NOT call it.
     expect(apiPathBypasses()).toEqual([]);
   });
 });

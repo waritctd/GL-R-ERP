@@ -8,8 +8,8 @@ export function Toast({ toast, onDismiss }) {
     : toast.kind === 'error'
       ? 'text-danger-soft'
       : 'text-surface';
-  // Errors interrupt (assertive); success/info are announced politely. role makes the
-  // message reach assistive tech without replacing the dismiss button's semantics.
+  // Errors interrupt (assertive); success/info are announced politely. role makes the message reach assistive
+  // tech without replacing the dismiss button's semantics.
   const isError = toast.kind === 'error';
   return (
     <div

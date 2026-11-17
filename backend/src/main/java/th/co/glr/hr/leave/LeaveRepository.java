@@ -52,24 +52,15 @@ public class LeaveRepository {
             return Set.of();
         }
 
-        // Consistent with this stand-in's whole premise (no calendar data exists, for any date) --
-        // every year reports zero rows, same as isHoliday reports false for every date.
+        // Consistent with this stand-in's whole premise (no calendar data exists, for any date) -- every year reports
+        // zero rows, same as isHoliday reports false for every date.
         @Override
         public boolean hasHolidaysForYear(int year) {
             return false;
         }
     };
-    // Phase A0a (structured rejection outcome, V131): serializes/deserializes
-    // hr.leave_request.system_note_params (a flat Map<String,String>) to/from jsonb -- see #toJson/
-    // #fromJson below. A private, LOCAL ObjectMapper instance (not Spring-injected, unlike
-    // SpecialMoneyRepository's identical-shape precedent) is a DELIBERATE choice: injecting one
-    // would add a constructor parameter to BOTH LeaveRepository constructors, and this repository is
-    // constructed directly (bypassing Spring DI) by ~40 payroll/leave integration tests across this
-    // codebase (see the 1-arg constructor's own Javadoc) -- every one of those call sites would need
-    // editing for a change wholly unrelated to what they test. A flat String-to-String map needs
-    // nothing from Spring's configured ObjectMapper (no custom modules, no date types), so a plain
-    // instance is equivalent in behaviour and keeps this phase's diff to the files it is actually
-    // about.
+    // Phase A0a (structured rejection outcome, V131): serializes/deserializes hr.leave_request.system_note_params
+    // (a flat Map<String,String>) to/from jsonb -- see #toJson/ #fromJson below.
     private static final ObjectMapper SYSTEM_NOTE_PARAMS_MAPPER = new ObjectMapper();
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -129,45 +120,15 @@ public class LeaveRepository {
     private record EmployeeScheduleContext(Long divisionId, Long departmentId) {
     }
 
-    /**
-     * The caller's own resolved {@link WorkSchedule}, evaluated at {@code onDate} -- reuses the
-     * SAME division/department lookup ({@link #findScheduleContext}) and {@link WorkScheduleResolver}
-     * call {@link #workingDayPredicate} makes internally (EMPLOYEE&gt;DEPARTMENT&gt;DIVISION
-     * precedence, effective-dated), so {@code GET /api/leave/calendar-context}
-     * ({@code LeaveCalendarContextService}) can show an employee WHICH schedule governs their own
-     * leave-day counting without re-deriving division/department or re-implementing the tier
-     * precedence there.
-     *
-     * <p>{@code onDate} matters because a schedule assignment can change mid-range (a genuine
-     * reassignment, effective-dated) -- this single-date snapshot is for DISPLAY only (workStart/
-     * workEnd/graceMinutes/requiresCheckOut/workdays). The actual per-day working/non-working
-     * determination for a whole range still comes from {@link #workingDayPredicate}, which resolves
-     * per-date and stays the one source of truth for day flags; this method must never be used to
-     * derive those flags itself.
-     */
+    /** The caller's own resolved WorkSchedule, evaluated at onDate. onDate matters because a schedule assignment
+     * can change mid-range (a genuine reassignment, effective-dated) -- this single-date snapshot is for DISPLAY
+     * only (workStart/ workEnd/graceMinutes/requiresCheckOut/workdays). */
     public WorkSchedule resolveOwnSchedule(long employeeId, LocalDate onDate) {
         EmployeeScheduleContext context = findScheduleContext(employeeId);
         return scheduleResolver.resolve(employeeId, context.divisionId(), context.departmentId(), onDate);
     }
 
-    /**
-     * Partial-day span (V166): the public, cross-package entry point to {@link
-     * LeaveDayMath#spanDayFractions} -- {@code th.co.glr.hr.attendance.AttendanceMonthlySummaryService}
-     * (a DIFFERENT package, so it cannot reach this package-private {@code LeaveDayMath} directly)
-     * calls this to correctly split a multi-day TIMED {@code ApprovedLeaveSpanDto} across the dates
-     * it actually covers, instead of dumping its whole {@code totalDays} onto {@code startDate} alone
-     * (which is only valid for a SINGLE-day sub-day span -- see that service's own "Leave-day
-     * attribution" Javadoc, unchanged for that case). Resolves {@code startDate}/{@code endDate}'s
-     * schedules and the request's own {@link #workingDayPredicate} internally, the same two-query
-     * cost every other schedule-aware method in this class already pays -- never called for a
-     * single-day span, where the caller's existing "attribute the whole total_days to that one date"
-     * rule already needs no schedule lookup at all.
-     *
-     * <p>{@code leaveTypeCode} resolves its own {@link LeaveDayCountBasis} via {@link #findLeaveType}
-     * -- falls back to {@link LeaveDayCountBasis#WORKING_DAYS} if the type has since been
-     * deactivated/removed, same defensive fallback {@code LeaveService#recordPayrollCorrectionIfNeeded}
-     * already uses for the identical reason.
-     */
+    /** Partial-day span: the public, cross-package entry point to LeaveDayMath#spanDayFractions. */
     public Map<LocalDate, BigDecimal> spanDayFractions(
             long employeeId, LocalDate startDate, LocalDate endDate, LocalTime startTime, LocalTime endTime,
             String leaveTypeCode) {
@@ -207,16 +168,11 @@ public class LeaveRepository {
             .findFirst();
     }
 
-    /**
-     * Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
-     * position/department/division -- phone from {@code hr.employee.phone}, the rest from the
-     * employee's CURRENT {@code hr.employee_address} row (LEFT JOIN: a missing address just leaves
-     * those fields null, it doesn't fail the lookup). See LeaveService#contactDefaults.
-     */
-    /** The employee's ชื่อเล่น (nickname), for the leave-submission email subject/body. Separate from
-     * {@link #findContactDefaults} (which supplies position/department/division for the ใบลา header)
-     * because the nickname is the only field the leave form/email needs that neither
-     * {@link LeaveRequestDto} nor that method already carries. Empty when the row has no nickname. */
+    /** Paper-form autofill for the contact-during-leave block, plus read-only position/department/division -- phone
+     * from hr.employee.phone, the rest from the employee's CURRENT hr.employee_address row. See
+     * LeaveService#contactDefaults. */
+    /** The employee's ชื่อเล่น (nickname), for the leave-submission email subject/body. Empty when the row has no
+     * nickname. */
     public Optional<String> findNickname(long employeeId) {
         return jdbc.query(
             "SELECT NULLIF(TRIM(nickname), '') AS nickname FROM hr.employee WHERE employee_id = :employeeId",
@@ -322,16 +278,13 @@ public class LeaveRepository {
             .findFirst();
     }
 
-    /**
-     * §5 leave-rules-as-data (V116), min-service-months gate: {@code hr.employee.hire_date} is
-     * nullable, so this is {@code Optional.empty()} exactly when the column is NULL -- see
-     * LeaveService#submit for how a missing hire date is handled (deliberately NOT a silent pass).
-     */
+    /** §5 leave-rules-as-data (V116), min-service-months gate: hr.employee.hire_date is nullable, so this is
+     * Optional.empty() exactly when the column is NULL -- see LeaveService#submit for how a missing hire date is
+     * handled (deliberately NOT a silent pass). */
     public Optional<LocalDate> findHireDate(long employeeId) {
-        // NOTE: deliberately NOT .stream().findFirst() -- Stream#findFirst() boxes its result via
-        // Optional.of(element) internally, which throws NPE the moment the single element IS null
-        // (exactly the hire_date IS NULL case this method exists to represent as Optional.empty()).
-        // List#get(0) has no such trap.
+        // NOTE: deliberately NOT .stream().findFirst() -- Stream#findFirst() boxes its result via Optional.of(element)
+        // internally, which throws NPE the moment the single element IS null (exactly the hire_date IS NULL case this
+        // method exists to represent as Optional.empty()). List#get(0) has no such trap.
         List<LocalDate> rows = jdbc.query("""
             SELECT hire_date
               FROM hr.employee
@@ -341,15 +294,12 @@ public class LeaveRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
     }
 
-    /**
-     * §5.2 PERSONAL "passed probation" gate (review fix, V116): {@code hr.employee.probation_days}
-     * is nullable -- callers fall back to {@code SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS},
-     * the same convention {@code SpecialMoneyPolicyEvaluator#evaluateStandardProbationEligibility}
-     * already applies for special-money aid eligibility. See LeaveService#autoRejectNote.
-     */
+    /** §5.2 PERSONAL "passed probation" gate: hr.employee.probation_days is nullable -- callers fall back to
+     * SpecialMoneyPolicyEvaluator.DEFAULT_PROBATION_DAYS, the same convention
+     * SpecialMoneyPolicyEvaluator#evaluateStandardProbationEligibility already applies for special-money aid eligibility. */
     public Optional<Integer> findProbationDays(long employeeId) {
-        // Same List#get(0) pattern as findHireDate -- .stream().findFirst() NPEs the moment the
-        // single row's probation_days IS null (Optional.of(null) inside Stream#findFirst()).
+        // Same List#get(0) pattern as findHireDate -- .stream().findFirst() NPEs the moment the single row's
+        // probation_days IS null (Optional.of(null) inside Stream#findFirst()).
         List<Integer> rows = jdbc.query("""
             SELECT probation_days
               FROM hr.employee
@@ -359,14 +309,9 @@ public class LeaveRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
     }
 
-    /**
-     * HR's recorded {@code hr.employee.confirm_date}, consulted by §5.2 PERSONAL's "passed
-     * probation" gate (see {@code LeaveService#personalProbationRuleOutcome}) ahead of the
-     * computed {@code hire_date + probation_days} fallback, per {@link
-     * th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator#hasPassedProbation}. Nullable, so same
-     * List#get(0) pattern as findHireDate/findProbationDays above -- Stream#findFirst() would NPE
-     * the moment the single row's confirm_date IS null.
-     */
+    /** HR's recorded hr.employee.confirm_date, consulted by §5.2 PERSONAL's "passed probation" gate (see
+     * LeaveService#personalProbationRuleOutcome) ahead of the computed hire_date + probation_days fallback, per
+     * th.co.glr.hr.specialmoney.SpecialMoneyPolicyEvaluator#hasPassedProbation. */
     public Optional<LocalDate> findConfirmDate(long employeeId) {
         List<LocalDate> rows = jdbc.query("""
             SELECT confirm_date
@@ -377,12 +322,8 @@ public class LeaveRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.ofNullable(rows.get(0));
     }
 
-    /**
-     * §5.6 ORDINATION once-per-employment gate (V116), Java-level pre-check paired with the
-     * race-proof {@code ux_leave_once_per_employment} partial unique index (see V116's migration
-     * comment). Matches the index's own status scope exactly: SUBMITTED/APPROVED count as an
-     * outstanding or consumed claim, CANCELLED/REJECTED/AUTO_REJECTED do not.
-     */
+    /** §5.6 ORDINATION once-per-employment gate (V116), Java-level pre-check paired with the race-proof
+     * ux_leave_once_per_employment partial unique index (see V116's migration comment). */
     public boolean hasOutstandingOrGrantedRequest(long employeeId, String leaveTypeCode) {
         Boolean exists = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -399,12 +340,9 @@ public class LeaveRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /**
-     * §5.3.4 (ประกาศ "วันเวลาทำงาน และการหยุดงาน" eff. 1 ต.ค. 2567): does {@code hr.resignation} (V1)
-     * carry a row for this employee at all -- see {@link LeaveService}'s resignation-gate Javadoc for
-     * why mere presence, not {@code resign_date}, is what this gate reads. {@code employee_id} is
-     * that table's PRIMARY KEY (1:1), so this is a plain existence check.
-     */
+    /** §5.3.4 (ประกาศ "วันเวลาทำงาน และการหยุดงาน" eff. 1 ต.ค. 2567): does hr.resignation (V1) carry a row for this
+     * employee at all -- see LeaveService's resignation-gate Javadoc for why mere presence, not resign_date, is
+     * what this gate reads. */
     public boolean hasSubmittedResignation(long employeeId) {
         Boolean exists = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -416,13 +354,9 @@ public class LeaveRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /**
-     * §5.3.3 contiguous-leave-type gate: SUBMITTED/APPROVED {@code leaveTypeCode} requests for
-     * {@code employeeId} whose range overlaps [{@code fromDate}, {@code toDate}] -- a small padding
-     * window around the new request's own dates (see {@code LeaveService#CONTIGUOUS_CHECK_WINDOW_DAYS}),
-     * not the employee's whole history. Same SUBMITTED/APPROVED scope as {@link
-     * #hasOutstandingOrGrantedRequest} -- a still-pending request counts as taken for this gate too.
-     */
+    /** §5.3.3 contiguous-leave-type gate: SUBMITTED/APPROVED leaveTypeCode requests for employeeId whose range
+     * overlaps [fromDate, toDate] -- a small padding window around the new request's own dates (see
+     * LeaveService#CONTIGUOUS_CHECK_WINDOW_DAYS), not the employee's whole history. */
     public List<LeaveRequestSpan> findActiveRequestsByType(
             long employeeId, String leaveTypeCode, LocalDate fromDate, LocalDate toDate) {
         return jdbc.query("""
@@ -444,19 +378,9 @@ public class LeaveRepository {
                 rs.getObject("end_date", LocalDate.class)));
     }
 
-    /**
-     * §5.3.2 department-coverage gate: the employee_id of every OTHER active employee in {@code
-     * employeeId}'s own department (excluding {@code employeeId} itself) -- see {@code
-     * LeaveService#departmentCoverageRuleOutcome}, which resolves each one's own working-day
-     * predicate via {@link #workingDayPredicate} rather than this method carrying schedule columns.
-     *
-     * <p>Returns an EMPTY list -- not an error -- when {@code employeeId} has no {@code
-     * department_id} on file, or has no active colleagues at all. {@code LeaveService} derives the
-     * department's total active size directly from this list's length ({@code colleagueIds.size() +
-     * 1} for the requester themself, see {@code LeaveService#MIN_DEPARTMENT_SIZE_FOR_COVERAGE_GATE})
-     * rather than issuing a separate headcount query -- so this one list answers both "who else is
-     * there" and "how many active people does this department have".
-     */
+    /** §5.3.2 department-coverage gate: the employee_id of every OTHER active employee in employeeId's own
+     * department -- see LeaveService#departmentCoverageRuleOutcome, which resolves each one's own working-day
+     * predicate via #workingDayPredicate rather than this method carrying schedule columns. */
     public List<Long> findActiveDepartmentColleagues(long employeeId) {
         return jdbc.query("""
             SELECT e.employee_id
@@ -468,13 +392,8 @@ public class LeaveRepository {
             """, Map.of("employeeId", employeeId), (rs, rowNum) -> rs.getLong("employee_id"));
     }
 
-    /**
-     * §5.3.2 department-coverage gate: SUBMITTED/APPROVED requests of ANY leave type, for the given
-     * {@code employeeIds} (a department's OTHER active employees), overlapping [{@code fromDate},
-     * {@code toDate}]. {@code employeeIds} empty short-circuits to an empty list without querying --
-     * an empty SQL {@code IN (...)} list is invalid, and {@link #findActiveDepartmentColleagues}
-     * already guarantees this is only ever called with a non-empty set in practice.
-     */
+    /** §5.3.2 department-coverage gate: SUBMITTED/APPROVED requests of ANY leave type, for the given employeeIds (a
+     * department's OTHER active employees), overlapping [fromDate, toDate]. */
     public List<EmployeeLeaveSpan> findActiveLeaveSpans(
             Collection<Long> employeeIds, LocalDate fromDate, LocalDate toDate) {
         if (employeeIds.isEmpty()) {
@@ -497,26 +416,9 @@ public class LeaveRepository {
                 rs.getObject("end_date", LocalDate.class)));
     }
 
-    /**
-     * Monthly attendance summary: APPROVED leave requests for
-     * {@code employeeIds} overlapping [{@code fromDate}, {@code toDate}], feeding {@code
-     * th.co.glr.hr.attendance.AttendanceMonthlySummaryService}'s leave-day attribution so that
-     * report's ขาดงาน column means genuinely unexcused absence rather than conflating it with
-     * approved ลา (decision #1 in the plan).
-     *
-     * <p><strong>APPROVED only</strong> -- deliberately narrower than {@link
-     * #findActiveLeaveSpans}'s SUBMITTED/APPROVED scope just above. A still-SUBMITTED request has
-     * not actually kept anyone from work yet (it might still be rejected), so counting it here would
-     * misreport a day that could still turn into an ordinary ขาดงาน as already-settled leave.
-     *
-     * <p>Joins {@code hr.leave_type} for {@code name_th} -- see {@link ApprovedLeaveSpanDto}'s own
-     * javadoc for why the caller must never hardcode a Thai label per {@code leaveTypeCode} instead.
-     *
-     * <p>{@code employeeIds} empty short-circuits to an empty list without querying, same convention
-     * as {@link #findActiveLeaveSpans} -- an empty SQL {@code IN (...)} list is invalid, and an
-     * attendance scope that resolved to zero employees (e.g. a ฝ่าย manager's out-of-division
-     * {@code employeeId}) has no one left to ask about anyway.
-     */
+    /** Monthly attendance summary: APPROVED leave requests for employeeIds overlapping [fromDate, toDate], feeding
+     * th.co.glr.hr.attendance.AttendanceMonthlySummaryService's leave-day attribution so that report's ขาดงาน
+     * column means genuinely unexcused absence rather than conflating it with approved ลา. */
     public List<ApprovedLeaveSpanDto> findApprovedLeaveOverlapping(
             Collection<Long> employeeIds, LocalDate fromDate, LocalDate toDate) {
         if (employeeIds.isEmpty()) {
@@ -584,16 +486,9 @@ public class LeaveRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    /**
-     * §5 leave-rules-as-data (V116), paid_days_cap gate: sum of the {@code paid_days} (not
-     * {@code total_days} -- see {@link #sumUsedDays}) already granted/pending this quota year, for
-     * types whose paid allowance is capped independently of the quota itself (e.g. MATERNITY: 98-day
-     * quota, 45-day paid cap). See LeaveService#submit.
-     *
-     * <p>V118 cross-year quota fix: same per-year child-table read as {@link #sumUsedDays} above, and
-     * for the same reason -- a capped type's paid allowance is also a per-calendar-year concept (see
-     * {@link LeaveQuotaYearSplit}'s Javadoc for the "per-year-independent cap" design decision).
-     */
+    /** §5 leave-rules-as-data (V116), paid_days_cap gate: sum of the paid_days (not total_days -- see #sumUsedDays)
+     * already granted/pending this quota year, for types whose paid allowance is capped independently of the quota
+     * itself (e.g. MATERNITY: 98-day quota, 45-day paid cap). See LeaveService#submit. */
     public BigDecimal sumPaidDays(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
         BigDecimal value = jdbc.queryForObject("""
             SELECT COALESCE(sum(lrqy.paid_days), 0)::numeric(5,2)
@@ -612,16 +507,9 @@ public class LeaveRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    /**
-     * §5.3.5 pool choice (V161): sum of {@code carried_in_days} already charged against this (employee,
-     * leave type, quota year)'s carry-in pool -- i.e. how much of {@code
-     * LeaveService#carryInDays}'s grant is already spoken for by other ACTIVE-status requests, before
-     * a new one is computed. Mirrors {@link #sumUsedDays}'s child-table read and status scoping
-     * exactly, summing {@code carried_in_days} instead of {@code total_days}. Always {@code ZERO} for
-     * a leave type where {@link LeaveTypeDto#carriesForward()} is FALSE, since {@code
-     * LeaveService#computeQuotaSplit} never writes a nonzero {@code carried_in_days} for one (see
-     * {@link LeaveQuotaYearSplit}'s Javadoc).
-     */
+    /** §5.3.5 pool choice (V161): sum of carried_in_days already charged against this (employee, leave type, quota
+     * year)'s carry-in pool -- i.e. how much of LeaveService#carryInDays's grant is already spoken for by other
+     * ACTIVE-status requests, before a new one is computed. */
     public BigDecimal sumCarriedInDaysUsed(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
         BigDecimal value = jdbc.queryForObject("""
             SELECT COALESCE(sum(lrqy.carried_in_days), 0)::numeric(5,2)
@@ -640,15 +528,9 @@ public class LeaveRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    /**
-     * §5.3.5 pool choice (V161): sum of {@code own_quota_days} already charged against this
-     * (employee, leave type, quota year)'s OWN annual quota -- the counterpart to {@link
-     * #sumCarriedInDaysUsed} above, and the figure {@code LeaveService#ensureCarryoverGrant} now
-     * subtracts from that year's own quota to compute its carry-OUT (replacing the old
-     * aggregate-{@code sumUsedDays}-based inference -- see that method's Javadoc for why). Mirrors
-     * {@link #sumUsedDays}'s child-table read and status scoping exactly, summing {@code
-     * own_quota_days} instead of {@code total_days}.
-     */
+    /** §5.3.5 pool choice: sum of own_quota_days already charged against this's OWN annual quota -- the counterpart
+     * to #sumCarriedInDaysUsed above, and the figure LeaveService#ensureCarryoverGrant now subtracts from that
+     * year's own quota to compute its carry-OUT. */
     public BigDecimal sumOwnQuotaDaysUsed(long employeeId, String leaveTypeCode, int quotaYear, Collection<LeaveStatus> statuses) {
         BigDecimal value = jdbc.queryForObject("""
             SELECT COALESCE(sum(lrqy.own_quota_days), 0)::numeric(5,2)
@@ -667,16 +549,9 @@ public class LeaveRepository {
         return value == null ? BigDecimal.ZERO : value;
     }
 
-    /**
-     * §5.1 SICK no-certificate monthly tolerance (V124): counts EXISTING certificate-less
-     * ({@code attachment_id IS NULL}) requests of this type, in the given status set, whose {@code
-     * start_date} falls within {@code [monthStart, monthEndInclusive]} -- the SAME start_date-only
-     * month attribution {@code quota_year} already uses (see {@link LeaveService#submit}). Counts
-     * REQUESTS (occasions), not days -- see {@link LeaveService#sickCertificateRuleOutcome}'s Javadoc for
-     * why. Does NOT include the request currently being submitted (it does not exist yet at the time
-     * this is called, since {@link LeaveService#submit} evaluates {@code autoRejectNote} before
-     * {@link #create}).
-     */
+    /** §5.1 SICK no-certificate monthly tolerance: counts EXISTING certificate-less requests of this type, in the
+     * given status set, whose start_date falls within [monthStart, monthEndInclusive] -- the SAME start_date-only
+     * month attribution quota_year already uses. */
     public int countNoCertificateRequestsInMonth(long employeeId, String leaveTypeCode,
             LocalDate monthStart, LocalDate monthEndInclusive, Collection<LeaveStatus> statuses) {
         Integer value = jdbc.queryForObject("""
@@ -697,18 +572,9 @@ public class LeaveRepository {
         return value == null ? 0 : value;
     }
 
-    /**
-     * V118 cross-year quota fix: persists the per-calendar-year attribution {@code LeaveService#submit}
-     * computed for a just-created leave request -- one row per year in {@code splits}, always at
-     * least one (every request touches at least its own start year). Called in the same transaction
-     * as {@link #create}, right after it returns the new id.
-     *
-     * <p>V161 §5.3.5 pool attribution: also persists {@code carriedInDays}/{@code ownQuotaDays} --
-     * see {@link LeaveQuotaYearSplit}'s Javadoc. {@code chk_lrqy_pool_matches_consumed} (V161) is the
-     * DB-level backstop that these two always sum to exactly {@code quotaRemainingBefore -
-     * quotaRemainingAfter}; this method does not itself verify that, it only persists what {@link
-     * LeaveService#computeQuotaSplit} computed.
-     */
+    /** V118 cross-year quota fix: persists the per-calendar-year attribution LeaveService#submit computed for a
+     * just-created leave request -- one row per year in splits, always at least one (every request touches at
+     * least its own start year). */
     public void insertQuotaYearSplits(long leaveRequestId, List<LeaveQuotaYearSplit> splits) {
         for (LeaveQuotaYearSplit split : splits) {
             jdbc.update("""
@@ -736,18 +602,9 @@ public class LeaveRepository {
         }
     }
 
-    /**
-     * V118 cross-year quota fix: reads back a leave request's per-year attribution -- used by {@code
-     * LeaveService#cancel}'s cancel-after-close reversal ({@code recordPayrollCorrectionIfNeeded}),
-     * which needs each year's own (paidDays, totalDays) to correctly re-derive which calendar months
-     * were unpaid via {@link LeaveDayMath#unpaidWorkingDaysByMonthAcrossYears}. Ordered by quota_year
-     * so the earliest (start) year is always first.
-     *
-     * <p>V161: also reads back {@code carried_in_days}/{@code own_quota_days} -- unused by the
-     * cancel-after-close reversal above (that reversal only ever needs paidDays/totalDays/basis, per
-     * its own Javadoc), but this is the ONE place {@code hr.leave_request_quota_year} rows are mapped
-     * back to {@link LeaveQuotaYearSplit}, so every column the record now carries is read here.
-     */
+    /** V118 cross-year quota fix: reads back a leave request's per-year attribution -- used by
+     * LeaveService#cancel's cancel-after-close reversal, which needs each year's own to correctly re-derive which
+     * calendar months were unpaid via LeaveDayMath#unpaidWorkingDaysByMonthAcrossYears. */
     public List<LeaveQuotaYearSplit> findQuotaYearSplits(long leaveRequestId) {
         return jdbc.query("""
             SELECT quota_year, total_days, paid_days, unpaid_days,
@@ -770,13 +627,9 @@ public class LeaveRepository {
             ));
     }
 
-    /**
-     * §5.3.5 VACATION carry-forward (V127): the persisted grant for (employeeId, leaveTypeCode,
-     * earnedYear), if {@link LeaveService#ensureCarryoverGrant} has already computed and memoized
-     * it -- {@code Optional.empty()} means "not computed yet" (either the year has not fully
-     * elapsed yet, or nothing has needed this figure yet), NOT "computed as zero". A computed-zero
-     * grant is still a present row (carried_days = 0.00).
-     */
+    /** §5.3.5 VACATION carry-forward: the persisted grant for, if LeaveService#ensureCarryoverGrant has already
+     * computed and memoized it -- Optional.empty means "not computed yet", NOT "computed as zero". A computed-zero
+     * grant is still a present row (carried_days = 0.00). */
     public Optional<BigDecimal> findCarryover(long employeeId, String leaveTypeCode, int earnedYear) {
         List<BigDecimal> rows = jdbc.query("""
             SELECT carried_days
@@ -792,13 +645,7 @@ public class LeaveRepository {
         return rows.isEmpty() ? Optional.empty() : Optional.of(rows.get(0));
     }
 
-    /**
-     * §5.3.5 VACATION carry-forward (V127): memoizes a just-computed grant. {@code ON CONFLICT DO
-     * NOTHING} makes this race-safe against a concurrent call computing the same
-     * (employeeId, leaveTypeCode, earnedYear) grant at the same time -- whichever commits first
-     * wins, the loser's (identical, since both derive from the same finalized-year data) figure is
-     * simply discarded rather than erroring. See {@link LeaveService#ensureCarryoverGrant}.
-     */
+    /** §5.3.5 VACATION carry-forward (V127): memoizes a just-computed grant. See LeaveService#ensureCarryoverGrant. */
     public void insertCarryoverIfAbsent(
             long employeeId, String leaveTypeCode, int earnedYear, int usableYear,
             BigDecimal ownQuotaDays, BigDecimal usedDays, BigDecimal carriedInDays, BigDecimal carriedDays) {
@@ -897,9 +744,9 @@ public class LeaveRepository {
                 nullableLong(rs, "department_id")
             ));
 
-        // One holiday read for the WHOLE month, shared by every span/employee below -- see this
-        // method's javadoc. A payroll month is at most 31 days, so this is one bounded query no
-        // matter how many employees have an unpaid span inside it.
+        // One holiday read for the WHOLE month, shared by every span/employee below -- see this method's javadoc. A
+        // payroll month is at most 31 days, so this is one bounded query no matter how many employees have an unpaid
+        // span inside it.
         Set<LocalDate> holidaysThisMonth = holidayCalendar.holidaysBetween(monthStart, monthEndInclusive);
 
         Map<Long, BigDecimal> byEmployee = new LinkedHashMap<>();
@@ -911,15 +758,8 @@ public class LeaveRepository {
             Predicate<LocalDate> isWorkingDay = LeaveDayMath.workingDayPredicate(
                 scheduleResolver, span.employeeId(), span.divisionId(), span.departmentId(), holidaysThisMonth);
             BigDecimal unpaidInMonth;
-            // Partial-day span (V166): a multi-day TIMED request needs the fraction-aware ledger --
-            // the plain rank-based #unpaidWorkingDaysByMonth below cannot represent a fractional
-            // boundary day. Built from the request's TRUE (un-clipped) start/end date+time -- the
-            // boundary fraction only means something relative to the REAL start/end -- then FILTERED
-            // to this year's clipped sub-range before consuming `span.paidDays()`, mirroring exactly
-            // how the pre-existing whole-day path already clips to `year` before applying that year's
-            // own paid_days (see LeaveQuotaYearSplit's "paid consumption resets per calendar year"
-            // rule). Every other request shape (whole-day, or single-day timed) is UNCHANGED, still
-            // reading #unpaidWorkingDaysByMonth exactly as before this migration.
+            // Partial-day span (V166): a multi-day TIMED request needs the fraction-aware ledger -- the plain rank-based
+            // #unpaidWorkingDaysByMonth below cannot represent a fractional boundary day.
             if (span.startTime() != null && !span.startDate().equals(span.endDate())) {
                 WorkSchedule startSchedule = scheduleResolver.resolve(
                     span.employeeId(), span.divisionId(), span.departmentId(), span.startDate());
@@ -1156,29 +996,21 @@ public class LeaveRepository {
             .addValue("contactDistrict", contactDistrict)
             .addValue("contactProvince", contactProvince)
             .addValue("contactPhone", contactPhone)
-            // §5.2 leave purpose (V125): same trim/uppercase normalization as leaveTypeCode above --
-            // the whitelist check itself already ran in LeaveService#normalizePurposeCode before this
-            // was ever called, so no re-validation happens here (matches leaveTypeCode's own split of
-            // concerns: Java validates, the repository just persists the normalized form).
+            // §5.2 leave purpose: same trim/uppercase normalization as leaveTypeCode above -- the whitelist check itself
+            // already ran in LeaveService#normalizePurposeCode before this was ever called, so no re-validation happens
+            // here.
             .addValue("purposeCode", request.purposeCode() == null || request.purposeCode().isBlank()
                 ? null : request.purposeCode().trim().toUpperCase())
-            // §5.3.5 pool choice (V161): resolved (null -> CARRIED_IN_FIRST) BEFORE binding --
-            // hr.leave_request.quota_pool_preference is NOT NULL, and an explicit bound NULL would
-            // override its column DEFAULT rather than fall back to it (a DEFAULT only applies when
-            // the column is omitted from the INSERT entirely, not when NULL is passed for it). See
+            // §5.3.5 pool choice: resolved BEFORE binding -- hr.leave_request.quota_pool_preference is NOT NULL, and an
+            // explicit bound NULL would override its column DEFAULT rather than fall back to it. See
             // LeaveQuotaPoolPreference#orDefault.
             .addValue("quotaPoolPreference", LeaveQuotaPoolPreference.orDefault(request.quotaPoolPreference()).name()),
             Long.class);
         return id == null ? 0 : id;
     }
 
-    /**
-     * §5.2 emergency-filing exception (V125): marks a just-created request as having been approved
-     * via the emergency tolerance rather than by meeting its type's ordinary advance notice. Called
-     * conditionally after {@link #create}, in the same transaction -- mirrors {@link #attachFile}'s
-     * shape (a small follow-up UPDATE by id, kept OUT of {@link #create}'s own parameter list so
-     * every existing caller/test of that method is unaffected by this addition).
-     */
+    /** §5.2 emergency-filing exception (V125): marks a just-created request as having been approved via the
+     * emergency tolerance rather than by meeting its type's ordinary advance notice. */
     public int markEmergencyFiling(long leaveRequestId) {
         return jdbc.update("""
             UPDATE hr.leave_request
@@ -1188,16 +1020,9 @@ public class LeaveRepository {
             """, new MapSqlParameterSource().addValue("leaveRequestId", leaveRequestId));
     }
 
-    /**
-     * Phase A0a (structured rejection outcome, V131): persists the structured
-     * {@code (LeaveRuleCode, params)} pair behind an AUTO_REJECTED request's {@code system_note} --
-     * a small follow-up UPDATE by id, called ONLY for a rejected outcome, same shape as {@link
-     * #markEmergencyFiling}/{@link #attachFile} above and for the identical reason: kept OUT of
-     * {@link #create}'s own parameter list so every pre-existing caller/test of that method is
-     * unaffected by this addition. {@code system_note_code}/{@code system_note_params} stay NULL for
-     * an APPROVED request -- {@link #create} never sets them to anything but their SQL default, so
-     * there is no separate "clear" path to write.
-     */
+    /** Phase A0a: persists the structured pair behind an AUTO_REJECTED request's system_note.
+     * system_note_code/system_note_params stay NULL for an APPROVED request -- #create never sets them to anything
+     * but their SQL default, so there is no separate "clear" path to write. */
     public void recordAutoRejectReason(long leaveRequestId, LeaveRuleCode code, Map<String, String> params) {
         jdbc.update("""
             UPDATE hr.leave_request
@@ -1235,19 +1060,9 @@ public class LeaveRepository {
             .addValue("unpaidByRuleDays", unpaidByRuleDays));
     }
 
-    /**
-     * §5.2 emergency-filing exception (V125): rolling monthly count of this employee's PRIOR
-     * requests of {@code leaveTypeCode} that were themselves approved via the emergency exception
-     * ({@code emergency_filing = TRUE}), for the calendar month containing {@code requestStartDate}
-     * -- see LeaveService#autoRejectNote for how a NEW request's own eligibility for the exception is
-     * bounded by this count. A plain COUNT over existing rows, never a separately-maintained counter
-     * -- see V125's migration comment for why.
-     *
-     * <p>Scoped to {@code statuses} the same way {@link #sumUsedDays} is scoped to
-     * ACTIVE_QUOTA_STATUSES (SUBMITTED/APPROVED): a CANCELLED emergency filing releases its slot for
-     * the month, mirroring {@code ux_leave_once_per_employment}'s identical "cancelling releases the
-     * claim" precedent (V116).
-     */
+    /** §5.2 emergency-filing exception: rolling monthly count of this employee's PRIOR requests of leaveTypeCode
+     * that were themselves approved via the emergency exception, for the calendar month containing
+     * requestStartDate. */
     public int countEmergencyFilings(long employeeId, String leaveTypeCode, LocalDate requestStartDate, Collection<LeaveStatus> statuses) {
         LocalDate monthStart = requestStartDate.withDayOfMonth(1);
         LocalDate monthStartNext = monthStart.plusMonths(1);
@@ -1315,16 +1130,9 @@ public class LeaveRepository {
         return jdbc.query(sql.toString(), params, this::mapRequest);
     }
 
-    /**
-     * GET /api/leave/review-summary (Phase A0b): whether {@code employeeId} is the {@code
-     * reports_to_employee_id} of at least one ACTIVE employee -- i.e. whether they are a reviewer AT
-     * ALL, independent of whether anything is currently SUBMITTED. This is the filter-INDEPENDENT
-     * half of {@code LeaveReviewSummaryDto} ({@code isReviewer}); {@link #countReviewableSubmitted}
-     * below is the filter-DEPENDENT half ({@code pendingCount}). Deliberately separate queries, not
-     * "count > 0 implies reviewer" reasoning from the pending count -- a manager whose whole team is
-     * currently caught up (zero SUBMITTED rows) must still read as a reviewer, or the frontend cannot
-     * tell "empty queue" from "no permission" (see {@code LeaveService#reviewSummary}'s Javadoc).
-     */
+    /** GET /api/leave/review-summary (Phase A0b): whether employeeId is the reports_to_employee_id of at least one
+     * ACTIVE employee -- i.e. whether they are a reviewer AT ALL, independent of whether anything is currently
+     * SUBMITTED. */
     public boolean hasActiveDirectReports(long employeeId) {
         Boolean exists = jdbc.queryForObject("""
             SELECT EXISTS (
@@ -1337,22 +1145,9 @@ public class LeaveRepository {
         return Boolean.TRUE.equals(exists);
     }
 
-    /**
-     * GET /api/leave/review-summary (Phase A0b): count of SUBMITTED requests {@code
-     * managerEmployeeId} may actually act on -- mirrors {@code LeaveService#canReviewEmployee}'s OWN
-     * decision ({@code canReviewAll(user)} OR direct-manager), NOT a role check: {@code
-     * REVIEW_ALL_ROLES} is {@code {hr}} only, but any ฝ่าย manager may review their own direct
-     * reports too (see {@code LeaveService#isDirectManager}). {@code includeAll = true} bypasses the
-     * manager filter entirely (HR/CEO see every SUBMITTED request, {@code managerEmployeeId} ignored
-     * -- pass {@code null}); otherwise {@code managerEmployeeId} is required and matches ONLY ACTIVE
-     * direct reports ({@code e.is_active = TRUE AND e.reports_to_employee_id = :managerEmployeeId}),
-     * the SAME two conditions {@code LeaveService#isDirectManager} checks via {@link
-     * #findEmployeeAccess}. Deliberately does NOT also match {@code lr.employee_id =
-     * :managerEmployeeId} (the manager's OWN submitted requests) -- a manager cannot review their own
-     * leave, and {@code isDirectManager} never returns true for one's own employeeId either (it would
-     * require the employee to be their own manager), so including that clause here would silently
-     * inflate the count beyond what {@code canReviewEmployee} actually grants.
-     */
+    /** GET /api/leave/review-summary: count of SUBMITTED requests managerEmployeeId may actually act on -- mirrors
+     * LeaveService#canReviewEmployee's OWN decision (canReviewAll OR direct-manager), NOT a role check:
+     * REVIEW_ALL_ROLES is {hr} only, but any ฝ่าย manager may review their own direct reports too. */
     public int countReviewableSubmitted(Long managerEmployeeId, boolean includeAll) {
         StringBuilder sql = new StringBuilder("""
             SELECT count(*)
@@ -1402,18 +1197,9 @@ public class LeaveRepository {
     }
 
     public int cancel(long id, Long reviewedById, String reviewerNote) {
-        // Found via a live real-backend click-through (self-cancel: an employee cancelling their
-        // OWN request, reviewedById == null): "could not determine data type of parameter $2".
-        // Unlike #approve/#reject, where :reviewedById binds directly into a typed assignment
-        // (reviewed_by_id = :reviewedById), here BOTH bind params appear only inside
-        // COALESCE(...)/CASE WHEN ... IS NULL -- never in a context with an inferable column type
-        // on their own. Postgres' extended query protocol cannot infer a type from that shape,
-        // and a NULL value at bind time gives it nothing else to go on either. approve/reject
-        // never hit this because their SET target IS the type hint; cancel's self-cancel path
-        // (the only caller that can legitimately pass reviewedById == null) is the one shape that
-        // was never covered -- mocks don't touch real SQL, and no existing test exercises a real
-        // Postgres self-cancel. Explicit SQL types make the driver's job possible regardless of
-        // value or position.
+        // Found via a live real-backend click-through (self-cancel: an employee cancelling their OWN request,
+        // reviewedById == null): "could not determine data type of parameter $2". IS NULL -- never in a context with
+        // an inferable column type on their own.
         return jdbc.update("""
             UPDATE hr.leave_request
                SET status = 'CANCELLED',
@@ -1480,9 +1266,9 @@ public class LeaveRepository {
                    manager.is_active AS manager_is_active,
                    COALESCE(NULLIF(TRIM(manager.nickname), ''), manager.first_name_th) AS manager_display_name,
                    """
-            // feat/pending-approver-info: the "hr generically" fallback when there is no active
-            // direct manager -- see PendingApproverSql's Javadoc for the single-active-match rule
-            // and why this SQL must stay in lockstep with DivisionAccessPolicy#roleFor.
+            // feat/pending-approver-info: the "hr generically" fallback when there is no active direct manager -- see
+            // PendingApproverSql's Javadoc for the single-active-match rule and why this SQL must stay in lockstep with
+            // DivisionAccessPolicy#roleFor.
             + PendingApproverSql.SINGLE_ACTIVE_HR_NAME_SQL + " AS hr_single_approver_name"
             + """
 
@@ -1568,27 +1354,16 @@ public class LeaveRepository {
             false,
             resolvePendingApproverRole(rs),
             resolvePendingApproverName(rs),
-            // V164 WARN_UNPAID_* gates: NULL rule_warnings (no warning fired, or a pre-V164 row -- NO
-            // BACKFILL) maps to List.of(), matching systemNoteParams' identical null-safe contract.
+            // V164 WARN_UNPAID_* gates: NULL rule_warnings (no warning fired, or a pre-V164 row -- NO BACKFILL) maps to
+            // List.of(), matching systemNoteParams' identical null-safe contract.
             fromWarningsJson(rs.getString("rule_warnings")),
             rs.getObject("unpaid_by_rule_days", BigDecimal.class)
         );
     }
 
-    /**
-     * feat/pending-approver-info: "manager" when the requester has an active direct manager, else
-     * "hr" -- leave has no CEO stage (see {@code LeaveService.REVIEW_ALL_ROLES}). {@code null} for
-     * any non-SUBMITTED status: an already-decided or auto-rejected request has nobody left to
-     * wait on.
-     *
-     * <p><strong>Not the same active-check as {@code LeaveService#isDirectManager}</strong> (review
-     * #pending-approver-info): that method's {@code access.active()} is the REQUESTER's own active
-     * flag (from {@code findEmployeeAccess(employeeId)}, keyed on the employee whose leave it is),
-     * not the manager's. {@link #hasActiveManager} below checks {@code manager_is_active} -- the
-     * MANAGER's own flag, off the already-joined manager row. This is a genuinely different (and
-     * stricter) check: an inactive-but-still-assigned manager here correctly falls through to "hr"
-     * rather than naming someone who can no longer act.
-     */
+    /** feat/pending-approver-info: "manager" when the requester has an active direct manager, else "hr" -- leave
+     * has no CEO stage (see LeaveService.REVIEW_ALL_ROLES). null for any non-SUBMITTED status: an already-decided
+     * or auto-rejected request has nobody left to wait on. */
     String resolvePendingApproverRole(ResultSet rs) throws SQLException {
         if (!"SUBMITTED".equals(rs.getString("status"))) {
             return null;
@@ -1596,14 +1371,8 @@ public class LeaveRepository {
         return hasActiveManager(rs) ? "manager" : "hr";
     }
 
-    /**
-     * feat/pending-approver-info: the paired display name for {@link #resolvePendingApproverRole}.
-     * For "manager" this is always non-null when the role is "manager" (an active manager row was,
-     * by construction, found and joined). For "hr" this is {@code null} whenever more than one
-     * active hr-role employee exists -- {@link PendingApproverSql#SINGLE_ACTIVE_HR_NAME_SQL} only
-     * resolves a name for an UNAMBIGUOUS single match; HR ambiguity resolution (name omitted, role
-     * shown alone) is a deliberate judgement call, not an oversight -- see this feature's PR body.
-     */
+    /** feat/pending-approver-info: the paired display name for #resolvePendingApproverRole. For "manager" this is
+     * always non-null when the role is "manager" (an active manager row was, by construction, found and joined). */
     String resolvePendingApproverName(ResultSet rs) throws SQLException {
         if (!"SUBMITTED".equals(rs.getString("status"))) {
             return null;
@@ -1631,11 +1400,9 @@ public class LeaveRepository {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    /**
-     * Phase A0a (structured rejection outcome, V131): serializes {@code params} for
-     * {@code system_note_params}, matching {@code SpecialMoneyRepository#toJson}'s identical
-     * shape/precedent (empty map for {@code null}, never a NULL jsonb value for a rejected request).
-     */
+    /** Phase A0a (structured rejection outcome, V131): serializes params for system_note_params, matching
+     * SpecialMoneyRepository#toJson's identical shape/precedent (empty map for null, never a NULL jsonb value for
+     * a rejected request). */
     private String toJson(Map<String, String> params) {
         try {
             return SYSTEM_NOTE_PARAMS_MAPPER.writeValueAsString(params == null ? Map.of() : params);
@@ -1644,12 +1411,8 @@ public class LeaveRepository {
         }
     }
 
-    /**
-     * Phase A0a (structured rejection outcome, V131): the read-side counterpart of {@link #toJson}
-     * for {@code system_note_params} -- {@code null}/blank (an APPROVED request, or any historical
-     * pre-V131 row, since V131 deliberately backfills nothing) maps to {@link Map#of()}, never
-     * {@code null}, matching {@link LeaveRequestDto#systemNoteParams}'s null-safe contract.
-     */
+    /** Phase A0a: the read-side counterpart of #toJson for system_note_params -- null/blank maps to Map#of, never
+     * null, matching LeaveRequestDto#systemNoteParams's null-safe contract. */
     private Map<String, String> fromJson(String json) {
         if (json == null || json.isBlank()) {
             return Map.of();
@@ -1662,15 +1425,9 @@ public class LeaveRepository {
         }
     }
 
-    /**
-     * §5 WARN_UNPAID_* gates (V164): serializes the accumulated {@link LeaveRuleOutcome} list for
-     * {@code rule_warnings} -- reuses {@link #SYSTEM_NOTE_PARAMS_MAPPER} (a plain, unconfigured
-     * mapper is equally sufficient for this shape too; see that field's own Javadoc for why this
-     * repository does not take an injected one). {@link LeaveRuleOutcome#code} (a {@link
-     * LeaveRuleCode} enum) serializes as its plain {@code name()} string by Jackson's default enum
-     * handling -- matching {@link #recordAutoRejectReason}'s {@code code.name()} precedent for
-     * {@code system_note_code}.
-     */
+    /** §5 WARN_UNPAID_* gates (V164): serializes the accumulated LeaveRuleOutcome list for rule_warnings -- reuses
+     * #SYSTEM_NOTE_PARAMS_MAPPER (a plain, unconfigured mapper is equally sufficient for this shape too; see that
+     * field's own Javadoc for why this repository does not take an injected one). */
     private String toWarningsJson(List<LeaveRuleOutcome> warnings) {
         try {
             return SYSTEM_NOTE_PARAMS_MAPPER.writeValueAsString(warnings == null ? List.of() : warnings);
@@ -1679,12 +1436,9 @@ public class LeaveRepository {
         }
     }
 
-    /**
-     * §5 WARN_UNPAID_* gates (V164): the read-side counterpart of {@link #toWarningsJson} for {@code
-     * rule_warnings} -- {@code null}/blank (no WARN gate fired, or a pre-V164 row, NO BACKFILL) maps
-     * to {@link List#of()}, never {@code null}, matching {@link LeaveRequestDto#ruleWarnings}'
-     * null-safe contract.
-     */
+    /** §5 WARN_UNPAID_* gates (V164): the read-side counterpart of #toWarningsJson for rule_warnings -- null/blank
+     * (no WARN gate fired, or a pre-V164 row, NO BACKFILL) maps to List#of(), never null, matching
+     * LeaveRequestDto#ruleWarnings' null-safe contract. */
     private List<LeaveRuleWarningDto> fromWarningsJson(String json) {
         if (json == null || json.isBlank()) {
             return List.of();

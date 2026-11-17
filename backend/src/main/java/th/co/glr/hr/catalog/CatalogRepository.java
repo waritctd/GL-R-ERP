@@ -14,13 +14,8 @@ import org.springframework.stereotype.Repository;
 
 @Repository
 public class CatalogRepository {
-    /**
-     * {@link #findPricingKeys} chunk size — defensive, not a real Postgres limit (an {@code IN}
-     * list binds each element as its own parameter, comfortably clear of the 65535-parameter
-     * protocol ceiling even at several thousand items). A pricing request realistically carries a
-     * handful to a few dozen items, never hundreds, but chunking costs nothing and means this
-     * method never needs revisiting if that assumption ever stops holding.
-     */
+    /** #findPricingKeys chunk size — defensive, not a real Postgres limit (an IN list binds each element as its own
+     * parameter, comfortably clear of the 65535-parameter protocol ceiling even at several thousand items). */
     private static final int PRICE_ID_CHUNK_SIZE = 500;
 
     private final NamedParameterJdbcTemplate jdbc;
@@ -29,49 +24,9 @@ public class CatalogRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Replacement for two now-deleted single-row lookups: {@code findThicknessMm} and {@code
-     * findOriginCountryCode}. Both were {@code LandedCostCalculator}'s own single-row methods;
-     * {@code findOriginCountryCode} was deleted first (verified by grep before removal, see this
-     * method's own commit), and {@code findThicknessMm} was deleted by F1 (2026-09 review) once
-     * this method took over as the engine's seam and its only remaining caller was its own test
-     * (repointed at this method — see {@code CatalogRepositoryFindPricingKeysIntegrationTest} and
-     * the repointed {@code ThicknessResolutionReachesTheEngineIntegrationTest}). Issue P1b.2:
-     * {@code LandedCostCalculator#resolveItemPhysicals} used to call two single-row lookups PER
-     * pricing-request item (2N round trips for N items, one of this class's own tables/views each
-     * time); this resolves every distinct {@code priceId} in ONE round trip per field (chunked
-     * defensively — see {@link #PRICE_ID_CHUNK_SIZE}), keyed by price_id so the caller reads each
-     * item's physicals from an in-memory map afterwards.
-     *
-     * <p><b>Two queries, not one — deliberate, but for a narrower reason than it first looks.</b>
-     * {@code price_catalog.v_priceable_product} exposes both {@code thickness_mm} and {@code
-     * origin_country_code} from a single row, which looks like it would let one SELECT answer
-     * both fields at once. Doing so would change what a NON-ACTIVE {@code price_id} returns: the
-     * view filters {@code WHERE v.status = 'ACTIVE'} (V153), while the origin-country query below
-     * ({@code product_prices} joined straight to {@code factories}, no {@code
-     * price_list_versions} join at all) never applies that filter — so for a {@code price_id}
-     * sitting on an ARCHIVED or DRAFT version, a combined query would return NULL for BOTH fields
-     * where today only thickness does.
-     *
-     * <p><b>F3 correction — that is NOT a costable/uncostable behaviour change.</b> An earlier
-     * version of this Javadoc called the two-query split necessary to avoid "a BEHAVIOUR CHANGE
-     * on the origin-country side" — literally true, but overstating the stakes. {@code
-     * LandedCostCalculator#uncostableReason} already marks an item UNCOSTABLE when EITHER field is
-     * null, so a non-ACTIVE row is uncostable either way, merged query or not. What the split
-     * actually buys is a more precise Thai reason message: today such a row can correctly name
-     * only the missing thickness (origin country genuinely resolves off the base tables); a
-     * combined query would make it claim both fields are missing when only one really is. That
-     * precision is worth keeping — a CEO misled by a wrong "both missing" message could waste time
-     * relinking a catalog row whose only real problem is a stale price-list version — but it is a
-     * message-precision benefit, not a load-bearing correctness one. Do not collapse this to one
-     * query believing it would change what gets costed; it would not, only what the error says.
-     *
-     * @return a map with one entry per DISTINCT id in {@code priceIds} that was passed in (even
-     *         when neither field resolves, so the caller can distinguish "no catalog link at all"
-     *         from "linked but nothing resolved" the same way the deleted single-row methods'
-     *         {@code Optional.empty()} did — a missing map entry never happens for a requested id,
-     *         only a {@link CatalogPricingKey} whose fields are null).
-     */
+    /** Replacement for two now-deleted single-row lookups: findThicknessMm and findOriginCountryCode. Do not
+     * collapse this to one query believing it would change what gets costed; it would not, only what the error
+     * says. */
     public Map<Long, CatalogPricingKey> findPricingKeys(Collection<Long> priceIds) {
         if (priceIds == null || priceIds.isEmpty()) {
             return Map.of();
@@ -82,8 +37,8 @@ public class CatalogRepository {
         for (int start = 0; start < distinctIds.size(); start += PRICE_ID_CHUNK_SIZE) {
             List<Long> chunk = distinctIds.subList(start, Math.min(start + PRICE_ID_CHUNK_SIZE, distinctIds.size()));
             MapSqlParameterSource params = new MapSqlParameterSource().addValue("priceIds", chunk);
-            // Thickness: the SAME view and ACTIVE-only semantics the deleted findThicknessMm used
-            // (F1) — see this method's own Javadoc for why this cannot also carry origin country.
+            // Thickness: the SAME view and ACTIVE-only semantics the deleted findThicknessMm used (F1) — see this method's
+            // own Javadoc for why this cannot also carry origin country.
             jdbc.query("""
                 SELECT price_id, thickness_mm
                   FROM price_catalog.v_priceable_product
@@ -91,9 +46,9 @@ public class CatalogRepository {
                 """, params, rs -> {
                     thicknessById.put(rs.getLong("price_id"), rs.getBigDecimal("thickness_mm"));
                 });
-            // Origin country: the SAME base-table join and NO version filter — the old
-            // findOriginCountryCode's exact semantics (V151: price_catalog.factories.country via
-            // product_prices.factory_id, never sales.factory_config.country).
+            // Origin country: the SAME base-table join and NO version filter — the old findOriginCountryCode's exact
+            // semantics (V151: price_catalog.factories.country via product_prices.factory_id, never
+            // sales.factory_config.country).
             jdbc.query("""
                 SELECT pp.price_id, f.country
                   FROM price_catalog.product_prices pp
@@ -126,9 +81,8 @@ public class CatalogRepository {
         return names;
     }
 
-    /** One price row's batched pricing-lookup keys (P1b.2) — a null field means "did not
-     * resolve", mirroring the deleted single-row {@code findThicknessMm}/{@code
-     * findOriginCountryCode}'s {@code Optional.empty()} exactly (see {@link #findPricingKeys}). */
+    /** One price row's batched pricing-lookup keys (P1b.2) — a null field means "did not resolve", mirroring the
+     * deleted single-row findThicknessMm/findOriginCountryCode's Optional.empty() exactly (see #findPricingKeys). */
     public record CatalogPricingKey(BigDecimal thicknessMm, String originCountryCode) {}
 
     public List<CatalogDto> search(String q) {
@@ -218,25 +172,9 @@ public class CatalogRepository {
         );
     }
 
-    /**
-     * One catalog price row's {@code sqm_per_piece}/{@code price_unit}/{@code width_mm}/
-     * {@code height_mm}, by its {@code price_id} — used by {@code DealQuotationService
-     * #resolveSqmPerPiece} to resolve a tile's ตร.ม./แผ่น from the catalogue rather than guessing
-     * the unit of a free-text size string (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง").
-     *
-     * <p>Deliberately its own record and its own query rather than widening {@link #findPricingKeys}'s
-     * {@link CatalogPricingKey} — that record and its callers ({@code DealQuotationService} would
-     * become a third, alongside the pre-existing {@code LandedCostCalculator}) are keyed and
-     * batched for a DIFFERENT purpose; broadening it here risks an unrelated caller.
-     *
-     * <p>NOT {@code ACTIVE}-version-filtered on purpose (unlike {@link #searchProductPrices}): a
-     * saved item may point at a price row whose {@code price_list_versions} has since gone
-     * non-ACTIVE (a superseded price list), and the catalogue's own geometry for that EXACT row is
-     * still the right fallback — this is "what does the row Sales already picked say", not "what
-     * can Sales currently pick".
-     *
-     * @return {@code Optional.empty()} when {@code priceId} does not exist at all.
-     */
+    /** One catalog price row's sqm_per_piece/price_unit/width_mm/ height_mm, by its price_id — used by
+     * DealQuotationService #resolveSqmPerPiece to resolve a tile's ตร.ม./แผ่น from the catalogue rather than
+     * guessing the unit of a free-text size string (owner ruling 2026-09-12, "2) ไม่มีค่อยคำนวนเอง"). */
     public record CatalogSqmBasis(BigDecimal sqmPerPiece, String priceUnit, BigDecimal widthMm, BigDecimal heightMm) {}
 
     public Optional<CatalogSqmBasis> findSqmBasis(long priceId) {
@@ -257,24 +195,9 @@ public class CatalogRepository {
         return rows.stream().findFirst();
     }
 
-    /**
-     * Batched twin of {@link #findSqmBasis} — same SELECT shape, one round trip for every distinct
-     * {@code priceId} instead of one call per row. Added for {@code DealQuotationRepository}'s
-     * item-mapping path (owner ruling 2026-09-12, "normalize it in the database so its the same in
-     * unit. make the size cm and the thickness mm"): a loaded quotation can carry a few dozen tile
-     * rows, and {@code DealQuotationLines#sizeLine} needs each row's {@code width_mm}/{@code
-     * height_mm} to print the face size in centimetres — looking that up ONE ROW AT A TIME while
-     * mapping the result set would reintroduce the exact N+1 shape {@link #findPricingKeys}'s own
-     * Javadoc already documents fixing for {@code LandedCostCalculator}.
-     *
-     * <p>Same non-{@code ACTIVE}-filtered semantics as {@link #findSqmBasis} — deliberately: a
-     * stored quotation item may point at a price row whose version has since gone non-ACTIVE, and
-     * the catalogue's geometry for that EXACT row is still the right one to print.
-     *
-     * @return a map with one entry per DISTINCT id in {@code priceIds} that exists in {@code
-     *         price_catalog.product_prices} — an id that does not exist there (deleted row) simply
-     *         has no entry, same as {@link #findSqmBasis}'s {@code Optional.empty()}.
-     */
+    /** Batched twin of #findSqmBasis — same SELECT shape, one round trip for every distinct priceId instead of one
+     * call per row. Added for DealQuotationRepository's item-mapping path (owner ruling 2026-09-12, "normalize it
+     * in the database so its the same in unit. */
     public Map<Long, CatalogSqmBasis> findSqmBases(Collection<Long> priceIds) {
         if (priceIds == null || priceIds.isEmpty()) {
             return Map.of();

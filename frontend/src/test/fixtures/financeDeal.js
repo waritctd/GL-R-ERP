@@ -1,5 +1,6 @@
-// Test fixture (downloadPath values are opaque server-supplied strings, so none is an /api/ literal): a FinanceDealDto-shaped object (backend FinanceDealDto.java). Every field the page
-// reads is present, so a test overrides only what it is about.
+// Test fixture (downloadPath values are opaque server-supplied strings, so none is an /api/ literal): a
+// FinanceDealDto-shaped object (backend FinanceDealDto.java). Every field the page reads is present, so a test
+// overrides only what it is about.
 const TRACK = [
   { key: 'ORDER_RECEIVED', index: 1, label: 'ได้รับคำสั่งซื้อ' },
   { key: 'DEPOSIT_RECEIVED', index: 2, label: 'ได้รับมัดจำ' },

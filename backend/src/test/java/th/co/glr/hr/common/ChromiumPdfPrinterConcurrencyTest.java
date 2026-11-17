@@ -18,12 +18,9 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.dealquotation.QuotationHtmlDocument;
 import th.co.glr.hr.ticket.QuotationRenderModel;
 
-/**
- * The review findings on the first cut of {@link ChromiumPdfPrinter}: Playwright objects are
- * thread-confined (a 4-thread probe failed 4/4 with {@code Cannot find object to call
- * __adopt__}), a dead browser handle was reused forever, and one failed launch cached
- * "unavailable" for the JVM's life. Each is pinned here; guarded by {@link ChromiumTestGate}.
- */
+/** The review findings on the first cut of ChromiumPdfPrinter: Playwright objects are thread-confined (a
+ * 4-thread probe failed 4/4 with Cannot find object to call __adopt__), a dead browser handle was reused
+ * forever, and one failed launch cached "unavailable" for the JVM's life. */
 class ChromiumPdfPrinterConcurrencyTest {
 
     @BeforeEach
@@ -31,9 +28,9 @@ class ChromiumPdfPrinterConcurrencyTest {
         ChromiumTestGate.requireOrSkip();
     }
 
-    /** Six threads render six DIFFERENT documents at once, released by one latch so they really
-     * overlap. Every PDF must be valid and carry ITS OWN quotation number — a shared, unguarded
-     * Playwright connection either throws or hands one caller another caller's page. */
+    /** Six threads render six DIFFERENT documents at once, released by one latch so they really overlap. Every PDF
+     * must be valid and carry ITS OWN quotation number — a shared, unguarded Playwright connection either throws
+     * or hands one caller another caller's page. */
     @Test
     void sixParallelRendersAllSucceedWithTheirOwnContent() throws Exception {
         int n = 6;
@@ -75,8 +72,8 @@ class ChromiumPdfPrinterConcurrencyTest {
         }
     }
 
-    /** The browser process dies between two renders (crash, OOM kill): the stale handle must be
-     * noticed and a fresh browser launched, not reused. */
+    /** The browser process dies between two renders (crash, OOM kill): the stale handle must be noticed and a fresh
+     * browser launched, not reused. */
     @Test
     void relaunchesWhenTheBrowserHasDied() throws Exception {
         String html = QuotationHtmlDocument.render(ChromiumPdfPrinterTest.model(2, "QT-DEAD-0001"));
@@ -97,9 +94,9 @@ class ChromiumPdfPrinterConcurrencyTest {
         assertThat(ChromiumPdfPrinter.launchAttemptsForTest()).as("exactly one relaunch").isEqualTo(launchesBefore + 1);
     }
 
-    /** A launch that fails (no executable) answers "unavailable" for the cooldown WITHOUT
-     * relaunching on every call, and is retried once the cooldown has elapsed — it never poisons
-     * availability for the rest of the JVM's life. */
+    /** A launch that fails (no executable) answers "unavailable" for the cooldown WITHOUT relaunching on every
+     * call, and is retried once the cooldown has elapsed — it never poisons availability for the rest of the JVM's
+     * life. */
     @Test
     void failedLaunchIsRetriedAfterTheCooldown() {
         try {

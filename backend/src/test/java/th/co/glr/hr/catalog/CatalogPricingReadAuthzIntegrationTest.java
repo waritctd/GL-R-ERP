@@ -76,11 +76,8 @@ import tools.jackson.databind.json.JsonMapper;
  */
 class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    /**
-     * The roles {@code DivisionAccessPolicy} hands ordinary staff, plus hr. Used two ways below:
-     * as the pin that they DO reach both open catalog reads, and as part of the denial set that
-     * they do NOT reach the cost model.
-     */
+    /** The roles DivisionAccessPolicy hands ordinary staff, plus hr. Used two ways below: as the pin that they DO
+     * reach both open catalog reads, and as part of the denial set that they do NOT reach the cost model. */
     private static final List<String> ORDINARY_STAFF = List.of("employee", "warehouse", "qc", "hr");
 
     /** Everyone outside RAW_COSTING_ROLES — ordinary staff plus the whole sales/account side. */
@@ -99,19 +96,14 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
     void wireRealCollaborators() {
         SessionContext sessions = new SessionContext();
 
-        // PriceImportService is reached only from CatalogController's WRITE paths, which this class
-        // never exercises — mocking it keeps the whole import engine out of the fixture. It still
-        // needs the Jackson 2 ObjectMapper JacksonConfig provides in production (src/main keeps that
-        // bean for internal use — see JacksonConfig's javadoc), which is a separate object from the
-        // Jackson 3 JsonMapper below that drives the MockMvc HTTP layer.
+        // PriceImportService is reached only from CatalogController's WRITE paths, which this class never exercises —
+        // mocking it keeps the whole import engine out of the fixture.
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.findAndRegisterModules();
 
         // Real HTTP responses go through Boot's Jackson-3-backed JacksonJsonHttpMessageConverter
-        // (JacksonAutoConfiguration), not a bare ObjectMapper — so the MockMvc layer is wired with
-        // the same converter type, built the same way. accept-empty-string-as-null-object mirrors the
-        // one Jackson property this app sets (src/main/resources/application.yml); Jackson 3 needs no
-        // JavaTimeModule registration, unlike the Jackson 2 ObjectMapper above.
+        // (JacksonAutoConfiguration), not a bare ObjectMapper — so the MockMvc layer is wired with the same converter
+        // type, built the same way.
         JsonMapper jsonMapper = JsonMapper.builder()
             .configure(DeserializationFeature.ACCEPT_EMPTY_STRING_AS_NULL_OBJECT, true)
             .build();
@@ -235,11 +227,8 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
         }
     }
 
-    /**
-     * The read widening is deliberately narrow: it must not leak into the write. A plain
-     * {@code sales} session — now able to GET the same rate — must still be refused the real
-     * {@code PUT}, through the real repository.
-     */
+    /** The read widening is deliberately narrow: it must not leak into the write. A plain sales session — now able
+     * to GET the same rate — must still be refused the real PUT, through the real repository. */
     @Test
     void salesCannotWriteFxRatesDespiteTheReadWidening() throws Exception {
         fxMvc.perform(put("/api/fx-rates/EUR")
@@ -319,11 +308,9 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
 
     // ── helpers ───────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The Jackson converter is wired explicitly, matching production's Boot-4-auto-configured
-     * {@code JacksonJsonHttpMessageConverter}: several of these DTOs carry {@code Instant}/
-     * {@code LocalDate} fields, and Jackson 3 handles both natively (no module registration needed).
-     */
+    /** The Jackson converter is wired explicitly, matching production's Boot-4-auto-configured
+     * JacksonJsonHttpMessageConverter: several of these DTOs carry Instant/ LocalDate fields, and Jackson 3
+     * handles both natively (no module registration needed). */
     private static MockMvc standalone(Object controller, JsonMapper jsonMapper) {
         return MockMvcBuilders.standaloneSetup(controller)
             .setMessageConverters(new JacksonJsonHttpMessageConverter(jsonMapper))
@@ -339,17 +326,8 @@ class CatalogPricingReadAuthzIntegrationTest extends AbstractPostgresIntegration
         return session;
     }
 
-    /**
-     * Real rows behind all five endpoints. V91 deleted V24's/V25's sample catalog and factory_config
-     * seed from the core migrations, so a freshly migrated schema has neither — without these
-     * inserts the "permitted role" controls would pass against empty tables and prove nothing.
-     * {@code sales.fx_rates} and {@code sales.price_calc_config} are still seeded by V26, but this
-     * adds its own distinguishable rows so the assertions do not depend on that seed surviving.
-     *
-     * <p>V163 merged {@code sales.factory_config} (email/unit/notes) onto {@code
-     * price_catalog.factories} and dropped the former table, so the email/unit fixture below is now
-     * an UPDATE on the row {@link #insertCatalogProduct} already created, not a separate INSERT.
-     */
+    /** Real rows behind all five endpoints. sales.fx_rates and sales.price_calc_config are still seeded by V26, but
+     * this adds its own distinguishable rows so the assertions do not depend on that seed surviving. */
     private void seedFixtures() {
         insertCatalogProduct("Authz Factory 388", "IT", "AUTHZ-388-001",
             new BigDecimal("123.45"), "EUR", "per_sqm");

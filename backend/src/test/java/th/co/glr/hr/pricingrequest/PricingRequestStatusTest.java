@@ -5,39 +5,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.util.List;
 import org.junit.jupiter.api.Test;
 
-/**
- * Review remediation (COMMIT 5, P1 finding 1): {@link PricingRequestStatus#ALLOWED} used to be
- * decorative — nothing outside {@code PricingRequestService.cancel()}'s own pre-check consulted
- * {@link PricingRequestStatus#canTransition}, so {@code PricingRequestRepository.transition()}
- * would happily persist a transition the map itself did not list. These tests exercise the pure
- * decision function in isolation (no database); {@code PricingRequestRepositoryIntegrationTest}
- * separately proves {@code transition()} now enforces this map against a real Postgres row.
- */
+/** Review remediation: PricingRequestStatus#ALLOWED used to be decorative — nothing outside
+ * PricingRequestService.cancel's own pre-check consulted PricingRequestStatus#canTransition, so
+ * PricingRequestRepository.transition would happily persist a transition the map itself did not list. */
 class PricingRequestStatusTest {
 
     @Test
     void readyForCeoReview_toAwaitingFactoryResponse_isAllowedAgain_forADifferentReason() {
-        // V140-era history: the direct READY_FOR_CEO_REVIEW -> AWAITING_FACTORY_RESPONSE (then
-        // named "...toCostingInProgress...") entry let Import silently reopen a SUBMITTED costing
-        // without any CEO action, so it was removed ("submitted costing is immutable"). V141
-        // ("CEO owns costing") reintroduces the SAME edge for a DIFFERENT reason: there is no
-        // submitted-costing row sitting around any more for a factory-quote revision to mark
-        // "stale" (markOpenCostingsStale, deleted) — the cost is computed fresh, once, at
-        // CEO-review time. So FactoryQuoteService.receive()'s revision branch now pulls the
-        // REQUEST back here instead when a revision arrives while READY_FOR_CEO_REVIEW: the price
-        // the CEO would be about to review is about to change under them. Import must re-mark the
-        // revised quote ready to re-advance (FactoryQuoteService.markReadyForCosting).
+        // V140-era history: the direct READY_FOR_CEO_REVIEW -> AWAITING_FACTORY_RESPONSE (then named
+        // "...toCostingInProgress...") entry let Import silently reopen a SUBMITTED costing without any CEO action, so
+        // it was removed ("submitted costing is immutable").
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isTrue();
     }
 
     @Test
     void importReviewing_toReadyForCeoReview_isAllowed_theNewEdgeForRequestsWithNoImportLines() {
-        // Stock-line feature, slice 1 (IA .design/stock-item-pricing 1.2): a request made only of
-        // stock lines (IN_THAILAND / IN_TRANSIT, no import line) has no factory quote to move it
-        // through AWAITING_FACTORY_RESPONSE, so once import has saved the last ETA it goes
-        // IMPORT_REVIEWING -> READY_FOR_CEO_REVIEW directly. PricingRequestRepository.transition
-        // ASSERTS this map, so without the edge that advance throws IllegalStateException.
+        // Stock-line feature, slice 1: a request made only of stock lines has no factory quote to move it through
+        // AWAITING_FACTORY_RESPONSE, so once import has saved the last ETA it goes IMPORT_REVIEWING ->
+        // READY_FOR_CEO_REVIEW directly.
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.IMPORT_REVIEWING, PricingRequestStatus.READY_FOR_CEO_REVIEW)).isTrue();
         // ...and it is a NEW edge only: nothing else about IMPORT_REVIEWING's exits changed.
@@ -51,8 +37,7 @@ class PricingRequestStatusTest {
 
     @Test
     void readyForCeoReview_toCeoReviewing_isAllowed() {
-        // The CEO explicitly starting review (PricingDecisionService.startReview) — the one entry
-        // point into Step 3.
+        // The CEO explicitly starting review (PricingDecisionService.startReview) — the one entry point into Step 3.
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.CEO_REVIEWING)).isTrue();
     }
@@ -61,23 +46,17 @@ class PricingRequestStatusTest {
     void ceoReviewing_toApprovedForQuotationOrAwaitingFactoryResponse_isAllowed() {
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.APPROVED_FOR_QUOTATION)).isTrue();
-        // V141 ("CEO owns costing"): PricingDecisionService.returnToImport now sends a returned
-        // request straight to AWAITING_FACTORY_RESPONSE — the replacement for the retired
-        // COSTING_REVISION_REQUIRED (see the next test). There is no standalone costing draft any
-        // more for Import to revise; its only remaining job is to renegotiate/re-mark a factory
-        // quote ready, and the CEO's next startReview recomputes the cost from scratch.
+        // V141 ("CEO owns costing"): PricingDecisionService.returnToImport now sends a returned request straight to
+        // AWAITING_FACTORY_RESPONSE — the replacement for the retired COSTING_REVISION_REQUIRED (see the next test).
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.CEO_REVIEWING, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isTrue();
     }
 
     @Test
     void costingRevisionRequired_statusNoLongerExists() {
-        // V141 ("CEO owns costing"): COSTING_REVISION_REQUIRED is RETIRED — a submitted costing
-        // used to be "revised" by sending the pricing request back to Import for a brand-new
-        // DRAFT/CALCULATED/SUBMITTED cycle; now there is no draft cycle to send it back TO (see
-        // the two tests above for what replaced both of its edges). The constant itself is
-        // deleted from PricingRequestStatus, so this test uses the literal string — the DB's own
-        // chk_pricing_request_status CHECK constraint was narrowed the same way by V141.
+        // V141: COSTING_REVISION_REQUIRED is RETIRED — a submitted costing used to be "revised" by sending the pricing
+        // request back to Import for a brand-new DRAFT/CALCULATED/SUBMITTED cycle; now there is no draft cycle to send
+        // it back TO.
         assertThat(PricingRequestStatus.VALUES).doesNotContain("COSTING_REVISION_REQUIRED");
         assertThat(PricingRequestStatus.isValid("COSTING_REVISION_REQUIRED")).isFalse();
         // A status that no longer exists can transition neither from nor to anywhere.
@@ -88,25 +67,9 @@ class PricingRequestStatusTest {
             PricingRequestStatus.CEO_REVIEWING, "COSTING_REVISION_REQUIRED")).isFalse();
     }
 
-    // Step 4 (Customer Quotation Generation and Issuance) deliberately extends this map:
-    // APPROVED_FOR_QUOTATION -> QUOTATION_ISSUED is now the ONE forward exit (issuing a
-    // customer quotation via CustomerQuotationService.issue). This test used to assert
-    // APPROVED_FOR_QUOTATION was terminal (true for Step 3's own scope, which explicitly
-    // deferred Step 4) — renamed and inverted to assert the new, intentional edge instead of
-    // the old absence, per this repo's own precedent for a map change (see
-    // PricingRequestStatusTest's Step 3 predecessor commit and
-    // docs/agent-handoffs/92_feat-sales-ceo-pricing-decision.md's "isNoLongerAllowed" rename).
-    //
-    // Reissue-through-CEO-chain (owner ruling 2026-08-13) extends it once more: SUPERSEDED is now
-    // declared from every NON-TERMINAL status, because a customer-change revision is legitimate
-    // from all of them and PricingRequestRepository.supersedeForCustomerRevision now asserts
-    // against this map instead of bypassing it with a raw negative-guard UPDATE.
-    //
-    // The cancel cutoff (owner ruling 2026-08-13) extends it a third time: CANCELLED is now
-    // declared here too. APPROVED_FOR_QUOTATION is the LAST status from which cancel is legal —
-    // a selling price exists but nothing has been shown to the customer, so abandoning it is
-    // still purely internal. See PricingRequestStatus.ALLOWED's own Javadoc for where the line
-    // is drawn and why QUOTATION_ISSUED is on the other side of it.
+    // Step 4 (Customer Quotation Generation and Issuance) deliberately extends this map: APPROVED_FOR_QUOTATION ->
+    // QUOTATION_ISSUED is now the ONE forward exit (issuing a customer quotation via
+    // CustomerQuotationService.issue).
     @Test
     void approvedForQuotation_toQuotationIssuedCancelledOrSuperseded_isNowAllowed_andNothingElseIs() {
         assertThat(PricingRequestStatus.canTransition(
@@ -123,12 +86,7 @@ class PricingRequestStatusTest {
         }
     }
 
-    /**
-     * SUBMITTED's own negative space, which had no test at all before this change and now carries
-     * two new edges. READY_FOR_CEO_REVIEW is the factory-quote carry-forward shortcut (a
-     * commercial-only revision reusing its parent's quotes) and SUPERSEDED is a revision created
-     * while the request still sits in the Import queue.
-     */
+    /** SUBMITTED's own negative space, which had no test at all before this change and now carries two new edges. */
     @Test
     void submitted_toImportReviewingReadyForCeoReviewCancelledOrSuperseded_andNothingElse() {
         assertThat(PricingRequestStatus.canTransition(
@@ -148,31 +106,23 @@ class PricingRequestStatusTest {
         }
     }
 
-    /**
-     * The one status the reissue change deliberately did NOT give a SUPERSEDED edge, asserted
-     * wrong-way-round because it is the capability being REMOVED. Before this change the raw
-     * UPDATE in supersedeForCustomerRevision reached QUOTATION_ACCEPTED regardless of what this
-     * map said; now the map is what the repository enforces, so this assertion has teeth.
-     */
+    /** The one status the reissue change deliberately did NOT give a SUPERSEDED edge, asserted wrong-way-round
+     * because it is the capability being REMOVED. */
     @Test
     void quotationAccepted_toSuperseded_isNotAllowed_soAnAcceptedDealCannotBeRevised() {
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.QUOTATION_ACCEPTED, PricingRequestStatus.SUPERSEDED)).isFalse();
     }
 
-    // Step 5 (Customer Decision and Commercial Revisions) deliberately extends this map again:
-    // QUOTATION_ISSUED -> QUOTATION_ACCEPTED is now the ONE forward exit (recordOutcome's
-    // ACCEPTED path). This test used to assert QUOTATION_ISSUED was terminal (true for Step 4's
-    // own scope) — renamed and inverted to assert the new, intentional edge instead of the old
-    // absence, per this repo's own precedent for a map change (see the
-    // approvedForQuotation_toQuotationIssued_... rename above and
+    // Step 5 (Customer Decision and Commercial Revisions) deliberately extends this map again: QUOTATION_ISSUED ->
+    // QUOTATION_ACCEPTED is now the ONE forward exit (recordOutcome's ACCEPTED path). rename above and
     // docs/agent-handoffs/92_feat-sales-ceo-pricing-decision.md's "isNoLongerAllowed" rename).
     @Test
     void quotationIssued_toQuotationAcceptedOrSuperseded_isNowAllowed_andNothingElseIs() {
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.QUOTATION_ISSUED, PricingRequestStatus.QUOTATION_ACCEPTED)).isTrue();
-        // The reissue window: the customer has an issued quotation and comes back to haggle. This
-        // is the status the whole "every reissue goes through the CEO chain" flow starts from.
+        // The reissue window: the customer has an issued quotation and comes back to haggle. This is the status the
+        // whole "every reissue goes through the CEO chain" flow starts from.
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.QUOTATION_ISSUED, PricingRequestStatus.SUPERSEDED)).isTrue();
         for (String to : PricingRequestStatus.VALUES) {
@@ -191,24 +141,15 @@ class PricingRequestStatusTest {
 
     @Test
     void readyForCeoReview_toSuperseded_remainsAllowed() {
-        // Pre-existing entry (a customer-change revision superseding the request under CEO
-        // review) — must not have been dropped by adding the new entry above.
+        // Pre-existing entry (a customer-change revision superseding the request under CEO review) — must not have
+        // been dropped by adding the new entry above.
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.READY_FOR_CEO_REVIEW, PricingRequestStatus.SUPERSEDED)).isTrue();
     }
 
-    /**
-     * The cancel cutoff (owner ruling 2026-08-13), asserted across the whole internal stretch. This
-     * test used to be {@code readyForCeoReview_toCancelled_isStillNotAllowedForANormalCaller} and
-     * asserted the exact opposite — that only {@code cancelForDeadDeal}'s bypass could cancel from
-     * here. That was the gap: a deal that died while the CEO held the request could not be
-     * cancelled at all without killing the whole ticket. Renamed and inverted per this file's own
-     * precedent for a deliberate map change (see the two
-     * {@code ..._isNowAllowed_andNothingElseIs} renames above).
-     *
-     * <p>{@code cancelForDeadDeal} still bypasses this map and still must — it has to reach
-     * QUOTATION_ISSUED, which a live user action deliberately may not.
-     */
+    /** The cancel cutoff (owner ruling 2026-08-13), asserted across the whole internal stretch. This test used to
+     * be readyForCeoReview_toCancelled_isStillNotAllowedForANormalCaller and asserted the exact opposite — that
+     * only cancelForDeadDeal's bypass could cancel from here. */
     @Test
     void cancel_isAllowedThroughEveryInternalStatus_upToApprovedForQuotation() {
         for (String from : List.of(
@@ -225,13 +166,7 @@ class PricingRequestStatusTest {
         }
     }
 
-    /**
-     * The guard itself, wrong-way-round: the cutoff is only worth anything if it REFUSES. Once a
-     * quotation has been issued the customer holds an offer, and retracting an offer is a
-     * different commercial act from cancelling internal work — it goes through the deal
-     * (markLost/cancel, whose cascade uses the cancelForDeadDeal bypass), or through a
-     * customer-change revision, not through this map.
-     */
+    /** The guard itself, wrong-way-round: the cutoff is only worth anything if it REFUSES. */
     @Test
     void cancel_isRefusedOnceAQuotationHasReachedTheCustomer() {
         assertThat(PricingRequestStatus.canTransition(
@@ -242,8 +177,8 @@ class PricingRequestStatusTest {
 
     @Test
     void draft_toCostingInProgress_isNotAllowed() {
-        // Sanity check the map wasn't accidentally widened globally: a DRAFT can never jump
-        // straight to COSTING_IN_PROGRESS.
+        // Sanity check the map wasn't accidentally widened globally: a DRAFT can never jump straight to
+        // COSTING_IN_PROGRESS.
         assertThat(PricingRequestStatus.canTransition(
             PricingRequestStatus.DRAFT, PricingRequestStatus.AWAITING_FACTORY_RESPONSE)).isFalse();
     }

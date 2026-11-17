@@ -227,16 +227,15 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         assertThat(uncostedItem.frozenLandedCostPerRequestedUnitThb()).isNull();
         assertThat(uncostedItem.listUnitPrice()).isNull();
 
-        // 2. Apply overrideItemCost -- the CEO supplies a landed cost by hand, exactly as the
-        // uncosted-item UI flow requires (approve()'s uncosted gate).
+        // 2. Apply overrideItemCost -- the CEO supplies a landed cost by hand, exactly as the uncosted-item UI flow
+        // requires (approve()'s uncosted gate).
         PricingDecisionDto afterOverride = decisionService.overrideItemCost(decision.id(), uncostedItem.id(),
             new CostOverrideRequest(new BigDecimal("500.0000"), "ไม่มีข้อมูลความหนาในแคตตาล็อก ใส่ต้นทุนเอง"), ceoActor);
         PricingDecisionItemDto costedItem = itemById(afterOverride, uncostedItem.id());
         assertThat(costedItem.frozenLandedCostPerRequestedUnitThb()).isNotNull();
 
-        // 3. Assert list_unit_price is now populated -- this is the exact fix: overrideItemCost
-        // must refresh list_unit_price the same way startReview originally did, not leave it
-        // frozen at null forever.
+        // 3. Assert list_unit_price is now populated -- this is the exact fix: overrideItemCost must refresh
+        // list_unit_price the same way startReview originally did, not leave it frozen at null forever.
         assertThat(costedItem.listUnitPrice()).isNotNull();
         assertThat(costedItem.listUnitPrice()).isEqualByComparingTo(
             costedItem.proposedSellingPricePerRequestedUnit().setScale(2, RoundingMode.HALF_UP));
@@ -248,9 +247,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         assertThat(pricedItem.netUnitPrice()).isNotNull();
         assertThat(pricedItem.netUnitPrice()).isEqualByComparingTo(pricedItem.listUnitPrice());
 
-        // 5. Approve succeeds at approved = net = list -- the uncosted item, which the ORIGINAL
-        // (wrong) design could never approve under NET even after overrideItemCost, now clears
-        // approve()'s uncosted gate AND its missing-price gate in one shot.
+        // 5. Approve succeeds at approved = net = list -- the uncosted item, which the ORIGINAL (wrong) design could
+        // never approve under NET even after overrideItemCost, now clears approve()'s uncosted gate AND its
+        // missing-price gate in one shot.
         PricingDecisionDto approved = decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest("อนุมัติ", null), ceoActor);
         PricingDecisionItemDto approvedItem = itemById(approved, uncostedItem.id());
@@ -270,11 +269,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         assertThat(beforeRecalc.netUnitPrice()).isEqualByComparingTo(
             beforeRecalc.listUnitPrice().multiply(new BigDecimal("0.90")).setScale(2, RoundingMode.HALF_UP));
 
-        // A manual cost override on the OTHER item changes nothing about itemA's own cost, but
-        // recalculateCost re-derives EVERY item's frozen cost + formula reference from the bound
-        // costing -- itemA's list_unit_price/net_unit_price must come out identical (same cost,
-        // same margin, same stored discount), proving the refresh path is exercised and stable,
-        // not merely a no-op that happens to leave stale values looking unchanged.
+        // A manual cost override on the OTHER item changes nothing about itemA's own cost, but recalculateCost
+        // re-derives EVERY item's frozen cost + formula reference from the bound costing.
         PricingDecisionItemDto itemB = decision.items().get(1);
         decisionService.overrideItemCost(decision.id(), itemB.id(),
             new CostOverrideRequest(new BigDecimal("42.0000"), "ทดสอบ: เปลี่ยนต้นทุนรายการอื่น"), ceoActor);
@@ -298,9 +294,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void approve_uncostedDirectNetItem_withOverride_isStillBlocked_reviewMinor1Probe() {
-        // The review's own probe: an uncosted DIRECT_NET item with directNetPrice=100 and an
-        // override of 300 must NOT approve at 100 with no cost backing it at all -- DIRECT_NET's
-        // own computeNetUnitPrice branch never even looks at manualSellingPricePerRequestedUnit.
+        // The review's own probe: an uncosted DIRECT_NET item with directNetPrice=100 and an override of 300 must NOT
+        // approve at 100 with no cost backing it at all -- DIRECT_NET's own computeNetUnitPrice branch never even
+        // looks at manualSellingPricePerRequestedUnit.
         long pricingRequestId = oneItemUncostedSubmittedCosting();
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -365,8 +361,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void overrideItemCost_hugeCost_is400_neverA500_reviewMinor3Probe() {
-        // The review's own probe value: 1e15 overflows manual_landed_cost_per_unit_thb's own
-        // NUMERIC(18,4) column before the derived selling price is even computed.
+        // The review's own probe value: 1e15 overflows manual_landed_cost_per_unit_thb's own NUMERIC(18,4) column
+        // before the derived selling price is even computed.
         PricingDecisionDto decision = startNewFormReview();
         long itemId = decision.items().get(0).id();
         assertThatThrownBy(() -> decisionService.overrideItemCost(decision.id(), itemId,
@@ -400,9 +396,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void overrideItemCost_moderateCostWithLargeMargin_overflowsDerivedListPrice_is400_reviewMinor3Probe() {
-        // Neither the cost NOR the margin individually exceeds ITS OWN bound, but their PRODUCT
-        // overflows list_unit_price's NUMERIC(14,2) column -- the multiplicative case only
-        // deriveListAndNet's own bound check (not the two input-level ones) can catch.
+        // Neither the cost NOR the margin individually exceeds ITS OWN bound, but their PRODUCT overflows
+        // list_unit_price's NUMERIC(14,2) column -- the multiplicative case only deriveListAndNet's own bound check
+        // (not the two input-level ones) can catch.
         long pricingRequestId = twoItemSubmittedCosting();
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("500"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -414,9 +410,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Net derivation per mode (reuses WastageCalculator, never reimplements it)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void net_derivesFromListPriceAndDiscount_andFreezesOnApprove() {
@@ -490,8 +484,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         PricingDecisionDto decision = startNewFormReview();
         PricingDecisionItemDto itemA = decision.items().get(0);
 
-        // CEO sets "ปรับราคาเอง" (mirrors the legacy override mutation exactly) BEFORE picking a
-        // mode -- must still work; the override is not itself mode-dependent.
+        // CEO sets "ปรับราคาเอง" (mirrors the legacy override mutation exactly) BEFORE picking a mode -- must still
+        // work; the override is not itself mode-dependent.
         decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
             null, List.of(overrideItem(itemA.id(), new BigDecimal("2000"), "ราคาพิเศษลูกค้า VIP"))), ceoActor);
 
@@ -527,8 +521,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         PricingDecisionDto switched = decisionService.update(decision.id(),
             new UpdatePricingDecisionRequest(null, "DIRECT_NET", List.of()), ceoActor);
         for (PricingDecisionItemDto item : switched.items()) {
-            // Never the OLD NET figure (900.00) -- the item has no direct_net_price yet, so its
-            // net must be NULL, not a stale carry-over.
+            // Never the OLD NET figure (900.00) -- the item has no direct_net_price yet, so its net must be NULL, not a
+            // stale carry-over.
             assertThat(item.netUnitPrice()).isNull();
         }
 
@@ -553,8 +547,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         decisionService.update(decision.id(),
             new UpdatePricingDecisionRequest(null, "DIRECT_NET", List.of()), ceoActor);
 
-        // Switch BACK to NET -- list_unit_price/discount_pct were never cleared by the trip
-        // through DIRECT_NET (only net_unit_price was), so the net recomputes to the same figure.
+        // Switch BACK to NET -- list_unit_price/discount_pct were never cleared by the trip through DIRECT_NET (only
+        // net_unit_price was), so the net recomputes to the same figure.
         PricingDecisionDto backToNet = decisionService.update(decision.id(),
             new UpdatePricingDecisionRequest(null, "NET", List.of()), ceoActor);
         assertThat(itemById(backToNet, itemA.id()).netUnitPrice()).isEqualByComparingTo("900.00");
@@ -589,8 +583,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     void update_itemEntryThatTouchesNothing_isSkipped_notCountedAsAChange() {
         PricingDecisionDto decision = startNewFormReview();
         long eventsBefore = countUpdatedEvents(decision.pricingRequestId());
-        // A request naming a real item id but setting nothing on it -- exactly what a CEO
-        // clicking "save" on an untouched row would send.
+        // A request naming a real item id but setting nothing on it -- exactly what a CEO clicking "save" on an
+        // untouched row would send.
         UpdatePricingDecisionItemRequest noOp = new UpdatePricingDecisionItemRequest(
             decision.items().get(0).id(), null, null, null, null, false,
             null, false, null, false, null, false);
@@ -655,8 +649,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             null, "NET", List.of(discountItem(itemA.id(), new BigDecimal("12.345")))),
             ceoActor);
         PricingDecisionItemDto updatedA = itemById(updated, itemA.id());
-        // 12.345 rounds HALF_UP to 12.35 -- both the STORED discount and the net it derives from
-        // must reflect the ROUNDED figure, so the two can always reproduce each other.
+        // 12.345 rounds HALF_UP to 12.35 -- both the STORED discount and the net it derives from must reflect the
+        // ROUNDED figure, so the two can always reproduce each other.
         assertThat(updatedA.discountPct()).isEqualByComparingTo("12.35");
         assertThat(updatedA.netUnitPrice()).isEqualByComparingTo(
             new BigDecimal("1000").multiply(new BigDecimal("1").subtract(new BigDecimal("12.35").divide(new BigDecimal("100"))))
@@ -724,13 +718,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void update_specialSqmWithoutSqmPerPiece_is422_evenThoughPhase1RequiresIt() {
-        // Defence-in-depth: requireNewFormEligible already guarantees sqm_per_piece is non-null
-        // for every item of a mode-bearing decision, but computeNetUnitPrice must still refuse a
-        // null one rather than NPE if that invariant is ever violated. Exercised in two steps so
-        // requireNewFormEligible's OWN (correct, and stricter) rejection is not what fires
-        // instead: step 1 locks the decision into SPECIAL_SQM via itemB (still fully eligible);
-        // only THEN is itemA's sqm_per_piece removed and itemA priced -- a state
-        // requireNewFormEligible never re-checks after the mode is already set.
+        // Defence-in-depth: requireNewFormEligible already guarantees sqm_per_piece is non-null for every item of a
+        // mode-bearing decision, but computeNetUnitPrice must still refuse a null one rather than NPE if that
+        // invariant is ever violated.
         PricingDecisionDto decision = startNewFormReview();
         long itemAId = decision.items().get(0).id();
         long itemBId = decision.items().get(1).id();
@@ -780,14 +770,12 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Legacy decisions keep today's behaviour exactly
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void legacyDecision_cannotSetPriceMode() {
-        // PER_BOX request items are NOT the Phase 1 new-form shape -- singleItemSubmittedCosting
-        // mirrors PricingDecisionIntegrationTest's own legacy (non-PER_PIECE) fixture.
+        // PER_BOX request items are NOT the Phase 1 new-form shape -- singleItemSubmittedCosting mirrors
+        // PricingDecisionIntegrationTest's own legacy (non-PER_PIECE) fixture.
         long pricingRequestId = legacyPerBoxSubmittedCosting();
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -798,8 +786,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             .isInstanceOfSatisfying(ApiException.class,
                 e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST));
 
-        // The margin path is untouched: a plain (no priceMode) update still works exactly as
-        // before for this legacy decision.
+        // The margin path is untouched: a plain (no priceMode) update still works exactly as before for this legacy
+        // decision.
         PricingDecisionDto updated = decisionService.update(decision.id(), new UpdatePricingDecisionRequest(
             null, List.of(new UpdatePricingDecisionItemRequest(decision.items().get(0).id(),
                 new BigDecimal("0.30"), null, null, null, false))),
@@ -808,10 +796,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         assertThat(itemById(updated, decision.items().get(0).id()).proposedMarginPct()).isEqualByComparingTo("0.30");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // AUTHZ (mandatory, wrong-way-round, real DB, through the real service): CEO-only fields
-    // must be null for import on get()/list(), even though import CAN see cost/margin.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // AUTHZ (mandatory, wrong-way-round, real DB, through the real service): CEO-only fields must be null for
+    // import on get()/list(), even though import CAN see cost/margin.
 
     @Test
     void ceoOnlyFields_areStrippedForImport_onGetAndList_butVisibleForCeo() {
@@ -832,8 +818,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
         // Import still sees cost -- this phase must not narrow that.
         assertThat(ceoItemA.frozenLandedCostPerRequestedUnitThb()).isNotNull();
 
-        // Import sees cost/margin (unchanged) but NEVER the new price-mode fields -- wrong-way-round:
-        // assert the field is ABSENT for the role that should not see it, not merely present for ceo.
+        // Import sees cost/margin (unchanged) but NEVER the new price-mode fields -- wrong-way-round: assert the field
+        // is ABSENT for the role that should not see it, not merely present for ceo.
         PricingDecisionDto asImport = decisionService.get(decision.id(), importActor);
         assertThat(asImport.priceMode()).isNull();
         PricingDecisionItemDto importItemA = itemById(asImport, itemA.id());
@@ -868,10 +854,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
 
     @Test
     void salesAndAccount_cannotReachRawDecisionAtAll_soPriceModeFieldsAreUnreachable() {
-        // sales/sales_manager/account never reach get()/list() in the first place (design
-        // correction 2, unchanged by this phase) -- the strip in this phase is therefore only
-        // ever exercised for import, but this pins that the OTHER non-ceo roles stay refused
-        // outright rather than accidentally gaining a read path to the new fields.
+        // sales/sales_manager/account never reach get/list in the first place -- the strip in this phase is therefore
+        // only ever exercised for import, but this pins that the OTHER non-ceo roles stay refused outright rather than
+        // accidentally gaining a read path to the new fields.
         PricingDecisionDto decision = startNewFormReview();
         assertThatThrownBy(() -> decisionService.get(decision.id(), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
@@ -924,9 +909,7 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             """, Map.of("id", draft.id()), Long.class)).isZero();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private long countUpdatedEvents(long pricingRequestId) {
         Long count = jdbc.queryForObject("""
@@ -1065,13 +1048,9 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
             false, "อื่นๆ", 3, 7, null, null, null, "โปรตุเกส", null);
     }
 
-    /** A single PER_BOX item (not the Phase 1 new-form shape) driven to READY_FOR_CEO_REVIEW --
-     * the "legacy" fixture the mode-picker eligibility gate must refuse. Bypasses
-     * PricingRequestService.createDraft on purpose, exactly like
-     * PricingDecisionIntegrationTest#singleItemSubmittedCosting's own identical comment explains:
-     * createDraft (as of V185) forces every item's requestedUnitBasis to PER_PIECE, which would
-     * make it impossible to construct the non-PER_PIECE shape this test needs.
-     * PricingRequestRepository.create performs the exact same DB write createDraft would. */
+    /** A single PER_BOX item (not the Phase 1 new-form shape) driven to READY_FOR_CEO_REVIEW -- the "legacy"
+     * fixture the mode-picker eligibility gate must refuse. PricingRequestRepository.create performs the exact
+     * same DB write createDraft would. */
     private long legacyPerBoxSubmittedCosting() {
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductIdFactoryA, null, "SCG", "Tile Legacy", "SCG Tile Legacy", null, null,
@@ -1111,9 +1090,8 @@ class PricingDecisionCeoPriceModeIntegrationTest extends AbstractPostgresIntegra
     ) {
         Long productId = "Factory A-CEOP".equals(factory) ? catalogProductIdFactoryA
             : "Factory B-CEOP".equals(factory) ? catalogProductIdFactoryB : null;
-        // V185 (direct-deal-form parity): PER_PIECE, sqm_per_piece=0.36 -- the Phase 1 new-form
-        // shape Phase 2's mode picker is eligible for. Mirrors PricingDecisionIntegrationTest's
-        // own identical fixture.
+        // V185 (direct-deal-form parity): PER_PIECE, sqm_per_piece=0.36 -- the Phase 1 new-form shape Phase 2's mode
+        // picker is eligible for. Mirrors PricingDecisionIntegrationTest's own identical fixture.
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
             brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
             QuantityType.CONFIRMED, null, null, null,

@@ -33,12 +33,8 @@ import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 
-/**
- * Mockito decision-level tests, modelled on {@code OvertimeServiceTest}: each gate's happy path and
- * its 403, the 409 on re-review, the over-cap-without-reason 400, and the 25th-cutoff month
- * arithmetic. Permission enforcement itself (the SQL scoping surviving into the WHERE clause) is
- * NOT provable here -- see {@code SpecialMoneyScopeIntegrationTest} for that evidence.
- */
+/** Mockito decision-level tests, modelled on OvertimeServiceTest: each gate's happy path and its 403, the 409
+ * on re-review, the over-cap-without-reason 400, and the 25th-cutoff month arithmetic. */
 class SpecialMoneyServiceTest {
     private final SpecialMoneyRepository repository = mock(SpecialMoneyRepository.class);
     private final SpecialMoneyPolicyEvaluator evaluator = new SpecialMoneyPolicyEvaluator();
@@ -49,19 +45,15 @@ class SpecialMoneyServiceTest {
     private final SpecialMoneyService service = new SpecialMoneyService(
         repository, evaluator, auditService, notificationService, appProperties, ceoApprovers);
 
-    /**
-     * Evidence-required types cannot be approved with nothing attached. Default the count to 1 so
-     * each approval case below stays about the rule it names; the gate itself is proven by
-     * {@link #approvalIsRefusedWhenAnEvidenceRequiredTypeHasNoAttachment()}.
-     */
+    /** Evidence-required types cannot be approved with nothing attached. Default the count to 1 so each approval
+     * case below stays about the rule it names; the gate itself is proven by
+     * #approvalIsRefusedWhenAnEvidenceRequiredTypeHasNoAttachment(). */
     @BeforeEach
     void assumeEvidenceIsOnFile() {
         when(repository.countAttachments(anyLong())).thenReturn(1);
     }
 
-    // ---------------------------------------------------------------------
     // submit()
-    // ---------------------------------------------------------------------
 
     @Test
     void employeesCanSubmitOwnRequestWhenPolicyIsClean() {
@@ -105,11 +97,9 @@ class SpecialMoneyServiceTest {
         verify(repository, never()).create(anyLong(), any(), any(), any(), any());
     }
 
-    /**
-     * Welfare has no submit-on-behalf for anyone, so the target employee is the ONLY thing this
-     * gate looks at -- not the caller's role, not their ฝ่าย. All three shapes that used to differ
-     * (a plain colleague, the employee's own ผู้จัดการ, HR) now take the same branch.
-     */
+    /** Welfare has no submit-on-behalf for anyone, so the target employee is the ONLY thing this gate looks at --
+     * not the caller's role, not their ฝ่าย. All three shapes that used to differ (a plain colleague, the
+     * employee's own ผู้จัดการ, HR) now take the same branch. */
     @ParameterizedTest(name = "{0} cannot submit a welfare request for someone else")
     @MethodSource("nonSelfSubmitters")
     void nobodyCanSubmitAWelfareRequestForAnotherEmployee(String label, UserPrincipal caller) {
@@ -126,8 +116,8 @@ class SpecialMoneyServiceTest {
         return java.util.stream.Stream.of(
             org.junit.jupiter.params.provider.Arguments.of("an unrelated colleague",
                 new UserPrincipal(10L, "e@glr.co.th", "e", "employee", 10L, true, LocalDate.now(), false, 5L, false)),
-            // THE case this change is about: employee 11 sits in division 5 and so does this
-            // ผู้จัดการ. Before 2026-08-10 managesEmployee() made this succeed.
+            // THE case this change is about: employee 11 sits in division 5 and so does this ผู้จัดการ. Before 2026-08-10
+            // managesEmployee() made this succeed.
             org.junit.jupiter.params.provider.Arguments.of("the employee's own ฝ่าย manager",
                 new UserPrincipal(88L, "m@glr.co.th", "m", "employee", 88L, true, LocalDate.now(), false, 5L, true)),
             org.junit.jupiter.params.provider.Arguments.of("hr",
@@ -136,18 +126,12 @@ class SpecialMoneyServiceTest {
                 new UserPrincipal(501L, "ceo@glr.co.th", "ceo", "ceo", 501L, true, LocalDate.now(), false, 5L, false)));
     }
 
-    // ---------------------------------------------------------------------
-    // The read-scope DECISION (which branch list()/canAccessEmployee take).
-    // Enforcement -- that the branch survives into the SQL WHERE clause -- is NOT provable here;
-    // see SpecialMoneyScopeIntegrationTest.
-    // ---------------------------------------------------------------------
+    // The read-scope DECISION (which branch list()/canAccessEmployee take). Enforcement -- that the branch
+    // survives into the SQL WHERE clause -- is NOT provable here; see SpecialMoneyScopeIntegrationTest.
 
-    /**
-     * A ฝ่าย manager must be scoped to their OWN employee id, exactly like a plain employee. The
-     * captured filter is the decision: {@link SpecialMoneyFilter} no longer even has a division
-     * field, so the only way to widen the scope would be to leave {@code ownEmployeeId} null, which
-     * is the hr/ceo branch.
-     */
+    /** A ฝ่าย manager must be scoped to their OWN employee id, exactly like a plain employee. The captured filter
+     * is the decision: SpecialMoneyFilter no longer even has a division field, so the only way to widen the scope
+     * would be to leave ownEmployeeId null, which is the hr/ceo branch. */
     @Test
     void managerListIsScopedToTheirOwnEmployeeIdNotTheirDivision() {
         UserPrincipal divisionManager = manager(88L, 5L);
@@ -171,10 +155,8 @@ class SpecialMoneyServiceTest {
         assertThat(captor.getAllValues()).allSatisfy(filter -> assertThat(filter.ownEmployeeId()).isNull());
     }
 
-    /**
-     * The employee picker must not offer a ผู้จัดการ their ฝ่าย: {@code includeAll} false means
-     * "self only" now that {@code findEmployeeOptions} has no division parameter to widen it.
-     */
+    /** The employee picker must not offer a ผู้จัดการ their ฝ่าย: includeAll false means "self only" now that
+     * findEmployeeOptions has no division parameter to widen it. */
     @Test
     void managerEmployeePickerAsksForSelfOnly() {
         service.employeeOptions(manager(88L, 5L));
@@ -201,11 +183,9 @@ class SpecialMoneyServiceTest {
         verify(repository, never()).findRequests(any());
     }
 
-    /**
-     * {@code requested_by_id} is no longer a key to anybody else's row. Both gates that honoured it
-     * are asserted here because they are separate methods with separate copies of the check --
-     * fixing one and not the other is the realistic mistake.
-     */
+    /** requested_by_id is no longer a key to anybody else's row. Both gates that honoured it are asserted here
+     * because they are separate methods with separate copies of the check -- fixing one and not the other is the
+     * realistic mistake. */
     @Test
     void aLegacyOnBehalfFilerCanNoLongerCancelOrAttachToTheEmployeesRow() {
         // employee 10's row, filed back when a ผู้จัดการ could file on their behalf: requested_by_id 88.
@@ -241,15 +221,10 @@ class SpecialMoneyServiceTest {
         assertThat(service.cancel(77L, null, user("employee", 10L)).status()).isEqualTo("CANCELLED");
     }
 
-    // ---------------------------------------------------------------------
     // approve() -- manager stage
-    // ---------------------------------------------------------------------
 
-    /**
-     * Welfare is CEO-only in ONE stage. These are the shapes that could each be mistaken for an
-     * approver: the requester's ผู้จัดการ (the tempting one -- it is the rule overtime uses), HR,
-     * and the requester themselves.
-     */
+    /** Welfare is CEO-only in ONE stage. These are the shapes that could each be mistaken for an approver: the
+     * requester's ผู้จัดการ (the tempting one -- it is the rule overtime uses), HR, and the requester themselves. */
     @ParameterizedTest(name = "{0} cannot approve a welfare request")
     @MethodSource("nonCeoApprovers")
     void nobodyBelowCeoCanApproveSubmittedRequest(String label, UserPrincipal caller) {
@@ -259,8 +234,8 @@ class SpecialMoneyServiceTest {
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.FORBIDDEN);
-        // No stage advanced and nothing was written -- a service that threw after writing would
-        // still satisfy a status-code-only assertion.
+        // No stage advanced and nothing was written -- a service that threw after writing would still satisfy a
+        // status-code-only assertion.
         verify(repository, never()).ceoDirectApprove(anyLong(), anyLong(), any(), any(), any(), any());
     }
 
@@ -288,8 +263,8 @@ class SpecialMoneyServiceTest {
         SpecialMoneyRequestDto result = service.approve(77L, null, user("ceo", 500L));
 
         assertThat(result.status()).isEqualTo("APPROVED");
-        // The SUBMITTED-guarded statement, not the MANAGER_APPROVED-guarded one: picking the wrong
-        // statement would update zero rows and surface as a spurious 409.
+        // The SUBMITTED-guarded statement, not the MANAGER_APPROVED-guarded one: picking the wrong statement would
+        // update zero rows and surface as a spurious 409.
         verify(repository).ceoDirectApprove(eq(77L), eq(500L), any(), any(), isNull(), isNull());
         verify(repository, never()).ceoApprove(anyLong(), anyLong(), any(), any(), any(), any());
         verify(auditService).record(any(), eq("CEO_APPROVE_SPECIAL_MONEY_REQUEST"), eq("special_money_request"), eq(77L), eq(submitted), eq(approved));
@@ -305,9 +280,7 @@ class SpecialMoneyServiceTest {
             .isEqualTo(HttpStatus.CONFLICT);
     }
 
-    // ---------------------------------------------------------------------
     // approve() -- CEO stage / cap re-check / cutoff
-    // ---------------------------------------------------------------------
 
     @Test
     void ceoApprovalWithinCapNeedsNoOverrideReason() {
@@ -375,8 +348,8 @@ class SpecialMoneyServiceTest {
         when(repository.findUsage(eq(10L), anyInt())).thenReturn(emptyUsage());
         when(repository.findPolicyAmounts(eq("AID_WEDDING"), any(LocalDate.class))).thenReturn(weddingPolicy());
         when(repository.findExcludedProvinces()).thenReturn(Set.of());
-        // The service assigns the month from the Bangkok date. LocalDate.now() (JVM default, UTC on
-        // CI) disagrees from 17:00-24:00 UTC on a month's last day, and the stub below then misses.
+        // The service assigns the month from the Bangkok date. LocalDate.now() (JVM default, UTC on CI) disagrees from
+        // 17:00-24:00 UTC on a month's last day, and the stub below then misses.
         LocalDate expectedMonth = LocalDate.now(SpecialMoneyService.BUSINESS_ZONE).withDayOfMonth(1);
         when(repository.payrollMonthProcessed(expectedMonth)).thenReturn(false);
         when(repository.ceoApprove(eq(77L), eq(500L), any(), eq(expectedMonth), any(), any())).thenReturn(1);
@@ -407,16 +380,11 @@ class SpecialMoneyServiceTest {
         verify(repository).ceoApprove(eq(77L), eq(500L), any(), eq(nextMonth), any(), any());
     }
 
-    // ---------------------------------------------------------------------
     // reject()
-    // ---------------------------------------------------------------------
 
-    /**
-     * The regression test for gap #4. OTHER is a DISCRETIONARY type: its "eligible amount" IS the
-     * requested amount, so when the cap re-check was fed the CEO's own figure the comparison
-     * `approved > eligible` reduced to `approved > approved` and could never fire. A CEO could
-     * approve ฿50,000 against a ฿5,000 request and never be asked why.
-     */
+    /** The regression test for gap #4. OTHER is a DISCRETIONARY type: its "eligible amount" IS the requested
+     * amount, so when the cap re-check was fed the CEO's own figure the comparison `approved > eligible` reduced
+     * to `approved > approved` and could never fire. */
     @Test
     void approvingMoreThanRequestedOnAnUncappedTypeNeedsAReason() {
         SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "OTHER");
@@ -464,15 +432,15 @@ class SpecialMoneyServiceTest {
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
             .isEqualTo(HttpStatus.BAD_REQUEST);
-        // Refused BEFORE any write -- approving money with no document trail is the whole failure
-        // this gate exists to stop.
+        // Refused BEFORE any write -- approving money with no document trail is the whole failure this gate exists to
+        // stop.
         verify(repository, never()).ceoDirectApprove(anyLong(), anyLong(), any(), any(), any(), any());
     }
 
     @Test
     void approvalIsAllowedWithoutEvidenceForATypeThatDoesNotRequireIt() {
-        // TRAVEL_PER_DIEM is the one evidenceRequired=false type; the gate must not block it, or
-        // the rule would read as "always require evidence" and the flag would be decoration.
+        // TRAVEL_PER_DIEM is the one evidenceRequired=false type; the gate must not block it, or the rule would read
+        // as "always require evidence" and the flag would be decoration.
         Map<String, String> driverInBangkok = Map.of("destination", "DOMESTIC", "role", "driver", "province", "ตาก");
         SpecialMoneyRequestDto submitted = dto(77L, 10L, "SUBMITTED", "TRAVEL_PER_DIEM", driverInBangkok);
         when(repository.findById(77L)).thenReturn(Optional.of(submitted))
@@ -509,8 +477,8 @@ class SpecialMoneyServiceTest {
     void managerCannotRejectASubmittedRequest() {
         when(repository.findById(77L)).thenReturn(Optional.of(dto(77L, 10L, "SUBMITTED", "AID_WEDDING")));
 
-        // Reject must be gated exactly as approve is; a manager who can refuse but not approve
-        // still controls the outcome.
+        // Reject must be gated exactly as approve is; a manager who can refuse but not approve still controls the
+        // outcome.
         assertThatThrownBy(() -> service.reject(77L, null, manager(88L, 5L)))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
@@ -518,9 +486,7 @@ class SpecialMoneyServiceTest {
         verify(repository, never()).reject(anyLong(), anyLong(), any());
     }
 
-    // ---------------------------------------------------------------------
     // cancel()
-    // ---------------------------------------------------------------------
 
     @Test
     void ownerCanCancelOwnSubmittedRequest() {
@@ -554,9 +520,7 @@ class SpecialMoneyServiceTest {
             .isEqualTo(HttpStatus.CONFLICT);
     }
 
-    // ---------------------------------------------------------------------
     // helpers
-    // ---------------------------------------------------------------------
 
     private SubmitSpecialMoneyRequest weddingRequest(Long employeeId, LocalDate eventDate) {
         return new SubmitSpecialMoneyRequest(
@@ -585,11 +549,9 @@ class SpecialMoneyServiceTest {
         return dto(id, employeeId, status, requestType, Map.of());
     }
 
-    /**
-     * A row whose {@code requested_by_id} is someone OTHER than the employee -- i.e. one filed
-     * on-behalf before that capability was removed. Nothing can create this shape any more, which
-     * is precisely why the gates that used to key on it need a fixture that still can.
-     */
+    /** A row whose requested_by_id is someone OTHER than the employee -- i.e. one filed on-behalf before that
+     * capability was removed. Nothing can create this shape any more, which is precisely why the gates that used
+     * to key on it need a fixture that still can. */
     private SpecialMoneyRequestDto dtoRequestedBy(
             long id, long employeeId, String status, String requestType, long requestedById) {
         return dto(id, employeeId, status, requestType, Map.of(), requestedById);
@@ -643,25 +605,18 @@ class SpecialMoneyServiceTest {
             0,
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
             OffsetDateTime.parse("2026-06-14T10:00:00+07:00"),
-            // feat/pending-approver-info: computed by SpecialMoneyRepository#mapRequest (a real SQL
-            // row mapper this Mockito-level class never exercises), so no test in this class
-            // asserts on them via the helper.
+            // feat/pending-approver-info: computed by SpecialMoneyRepository#mapRequest (a real SQL row mapper this
+            // Mockito-level class never exercises), so no test in this class asserts on them via the helper.
             null,
             null
         );
     }
 
-    // ---------------------------------------------------------------------
     // usage()
-    // ---------------------------------------------------------------------
 
-    /**
-     * The snapshot has always carried a per-year count (the once-per-year uniform gate needs it),
-     * but {@code usage()} built the DTO from only two of the three maps and silently dropped it. The
-     * UI therefore could not warn "you already filed this year" and the employee learned it from the
-     * 400 on submit. The three maps here hold three different values on purpose: copying the wrong
-     * one through fails this test rather than passing by coincidence.
-     */
+    /** The snapshot has always carried a per-year count (the once-per-year uniform gate needs it), but usage()
+     * built the DTO from only two of the three maps and silently dropped it. The UI therefore could not warn "you
+     * already filed this year" and the employee learned it from the 400 on submit. */
     @Test
     void usageCarriesThePerYearCountThroughToTheDtoInsteadOfDroppingIt() {
         when(repository.findUsage(10L, 2026)).thenReturn(new UsageSnapshot(

@@ -51,8 +51,8 @@ class DealQuotationHideProjectNameRenderTest {
         assertThat(model.projectName()).isNull();
     }
 
-    /** "Hide" must not mean "delete": the DTO — what the editor, the register and the deal read —
-     * still names the project. Only what is handed to the RENDERER loses it. */
+    /** "Hide" must not mean "delete": the DTO — what the editor, the register and the deal read — still names the
+     * project. Only what is handed to the RENDERER loses it. */
     @Test
     void hidden_theQuotationItselfStillNamesItsProject() {
         DealQuotationDto hidden = quotation(true, null);
@@ -60,8 +60,8 @@ class DealQuotationHideProjectNameRenderTest {
         assertThat(hidden.projectName()).isEqualTo(PROJECT);
     }
 
-    /** The flag touches ONE line. Everything else the adapter builds — the เรียน line, the
-     * address/phone line, the remarks, the signature block's names — is identical either way. */
+    /** The flag touches ONE line. Everything else the adapter builds — the เรียน line, the address/phone line, the
+     * remarks, the signature block's names — is identical either way. */
     @Test
     void hiding_changesNothingElseOnTheDocument() {
         QuotationRenderModel shown = DealQuotationRenderAdapter.toRenderModel(quotation(false, null), null, null);
@@ -78,18 +78,17 @@ class DealQuotationHideProjectNameRenderTest {
 
     // ── 2. workbook ──────────────────────────────────────────────────────────────────────────
 
-    /** Regression guard for the pair below: the shown document really does print the line these
-     * tests look for, so "no cell mentions it" cannot pass merely because the fixture never
-     * printed one. */
+    /** Regression guard for the pair below: the shown document really does print the line these tests look for, so
+     * "no cell mentions it" cannot pass merely because the fixture never printed one. */
     @Test
     void shown_theSheetPrintsTheProjectLine() throws Exception {
         List<String> cells = sheetTexts(quotation(false, null));
         assertThat(cells).anyMatch(text -> text.contains(PROJECT_LABEL) && text.contains(PROJECT));
     }
 
-    /** Wrong-way-round, and deliberately broader than "the name is absent": no cell may carry the
-     * "Project" label either, so a hidden project does not print as a dangling "Project  : " with
-     * nothing after it — including any placeholder the template itself might hold in that cell. */
+    /** Wrong-way-round, and deliberately broader than "the name is absent": no cell may carry the "Project" label
+     * either, so a hidden project does not print as a dangling "Project : " with nothing after it — including any
+     * placeholder the template itself might hold in that cell. */
     @Test
     void hidden_noCellOfTheSheetMentionsTheProject() throws Exception {
         List<String> cells = sheetTexts(quotation(true, null));
@@ -97,13 +96,9 @@ class DealQuotationHideProjectNameRenderTest {
         assertThat(cells).noneMatch(text -> text.contains(PROJECT_LABEL));
     }
 
-    /**
-     * What this feature must NOT change. {@code quotation_template.xls} carries the literal label
-     * "Project  : " in its project cell, so a document whose name is merely BLANK has always
-     * printed that bare label. Documents are rendered fresh from the database on every request —
-     * an already-approved one included — so "blank the cell whenever there is no name" would
-     * quietly alter documents this feature has nothing to do with. Only the tick box blanks it.
-     */
+    /** What this feature must NOT change. Only the tick box blanks it. quotation_template.xls carries the literal
+     * label "Project : " in its project cell, so a document whose name is merely BLANK has always printed that
+     * bare label. */
     @Test
     void aMerelyBlankProjectName_stillPrintsTheTemplatesBareLabel_exactlyAsBefore() throws Exception {
         List<String> cells = sheetTexts(quotation(false, null, null));
@@ -163,9 +158,9 @@ class DealQuotationHideProjectNameRenderTest {
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────────
 
-    /** A DRAFT with no item lines — the header block is all these tests read. Built through one of
-     * the record's older constructor shapes (which know nothing of this field) plus the wither,
-     * the same device the V180 tests in {@code DealQuotationRenderAdapterV3Test} use. */
+    /** A DRAFT with no item lines — the header block is all these tests read. Built through one of the record's
+     * older constructor shapes (which know nothing of this field) plus the wither, the same device the V180 tests
+     * in DealQuotationRenderAdapterV3Test use. */
     private static DealQuotationDto quotation(boolean hideProjectName, String documentLanguage) {
         return quotation(hideProjectName, documentLanguage, PROJECT);
     }

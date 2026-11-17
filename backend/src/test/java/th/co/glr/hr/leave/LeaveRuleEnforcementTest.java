@@ -8,23 +8,14 @@ import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
 
-/**
- * V164 (owner-approved change, 2026-09-09): plain-unit coverage for the pieces of the WARN_UNPAID_*
- * redesign that do not need a real database or a mocked {@code LeaveRepository} -- the {@link
- * LeaveRuleCode#enforcement()} mapping itself, {@link LeaveService#isBlocking}'s BLOCK/WARN dispatch,
- * and {@link LeaveService#dominantUnpaidByRuleDays}'s dominance rule. {@code isBlocking}/{@code
- * dominantUnpaidByRuleDays} are package-private specifically so this class can exercise them in
- * isolation from the rest of {@link LeaveService#autoRejectNote}'s branches -- see
- * {@code LeaveRelationalRulesIntegrationTest}/a real-DB quota-non-consumption test for the end-to-end
- * proof that {@link LeaveService#submit} actually wires these into a SUBMITTED row correctly.
- */
+/** V164: plain-unit coverage for the pieces of the WARN_UNPAID_* redesign that do not need a real database or a
+ * mocked LeaveRepository -- the LeaveRuleCode#enforcement mapping itself, LeaveService#isBlocking's BLOCK/WARN
+ * dispatch, and LeaveService#dominantUnpaidByRuleDays's dominance rule. */
 class LeaveRuleEnforcementTest {
 
-    // ─────────────────────────────────────────────────────────────────────
-    // LeaveRuleCode#enforcement() mapping -- pinned against the task brief's explicit code lists, not
-    // against LeaveRuleCode's own source, so this test would actually fail if a future edit silently
-    // moved a code between buckets.
-    // ─────────────────────────────────────────────────────────────────────
+    // LeaveRuleCode#enforcement() mapping -- pinned against the task brief's explicit code lists, not against
+    // LeaveRuleCode's own source, so this test would actually fail if a future edit silently moved a code between
+    // buckets.
 
     @Test
     void tenCodesAreWarnUnpaidAllOrExcessAndSevenStayBlock() {
@@ -59,8 +50,8 @@ class LeaveRuleEnforcementTest {
             assertThat(code.enforcement()).as("%s", code).isEqualTo(LeaveRuleEnforcement.BLOCK);
         }
 
-        // Exhaustiveness: the three lists above must partition EVERY LeaveRuleCode with no overlap
-        // and no gap -- catches a code added later that nobody classified either way.
+        // Exhaustiveness: the three lists above must partition EVERY LeaveRuleCode with no overlap and no gap --
+        // catches a code added later that nobody classified either way.
         assertThat(warnUnpaidAll.size() + warnUnpaidExcess.size() + staysBlocking.size())
             .isEqualTo(LeaveRuleCode.values().length);
         List<LeaveRuleCode> all = new ArrayList<>();
@@ -70,9 +61,7 @@ class LeaveRuleEnforcementTest {
         assertThat(all).containsExactlyInAnyOrder(LeaveRuleCode.values());
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // LeaveService#isBlocking dispatch
-    // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void isBlockingReturnsTrueForABlockCodeAndDoesNotTouchWarnings() {
@@ -124,9 +113,7 @@ class LeaveRuleEnforcementTest {
         assertThat(warnings).containsExactly(adviceOutcome, weddingOutcome);
     }
 
-    // ─────────────────────────────────────────────────────────────────────
     // LeaveService#dominantUnpaidByRuleDays -- owner ruling #3, "never sum an ALL with an EXCESS".
-    // ─────────────────────────────────────────────────────────────────────
 
     @Test
     void dominanceIsZeroWhenNoWarningsFired() {
@@ -154,9 +141,9 @@ class LeaveRuleEnforcementTest {
         LeaveRuleOutcome firstYearOutcome = LeaveRuleOutcome.of(LeaveRuleCode.FIRST_YEAR_MAX_DAYS, Map.of(
             "leaveTypeNameTh", "ลากิจ", "effectiveCap", "3", "excessDays", "2.50"));
 
-        // maxExcessDays (2.50) is passed in as ALREADY the max the caller computed across its own
-        // EXCESS check sites -- dominantUnpaidByRuleDays itself does not recompute per-warning
-        // amounts (see its Javadoc), so this proves it returns exactly that max, not 1.00 + 2.50.
+        // maxExcessDays (2.50) is passed in as ALREADY the max the caller computed across its own EXCESS check sites
+        // -- dominantUnpaidByRuleDays itself does not recompute per-warning amounts (see its Javadoc), so this proves
+        // it returns exactly that max, not 1.00 + 2.50.
         BigDecimal result = LeaveService.dominantUnpaidByRuleDays(
             List.of(weddingOutcome, firstYearOutcome), new BigDecimal("2.50"), new BigDecimal("5.00"));
 
@@ -165,8 +152,8 @@ class LeaveRuleEnforcementTest {
 
     @Test
     void dominanceIsTotalDaysNeverSummedWithExcessWhenBothAnAllAndAnExcessFired() {
-        // Owner ruling #3, verbatim: "Never sum an ALL with an EXCESS." An ALL always wins outright,
-        // regardless of how large -- or small -- the accumulated EXCESS amount is.
+        // Owner ruling #3, verbatim: "Never sum an ALL with an EXCESS." An ALL always wins outright, regardless of how
+        // large -- or small -- the accumulated EXCESS amount is.
         LeaveRuleOutcome allOutcome = LeaveRuleOutcome.of(LeaveRuleCode.ADVANCE_NOTICE,
             Map.of("leaveTypeNameTh", "ลากิจ", "noticeDays", "3", "days", "5.00"));
         LeaveRuleOutcome excessOutcome = LeaveRuleOutcome.of(LeaveRuleCode.WEDDING_MAX_DAYS,

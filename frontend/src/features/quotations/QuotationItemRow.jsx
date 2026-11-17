@@ -106,8 +106,8 @@ export function sizeTextFromCatalog(cat) {
  * Measured: at an 820px window this row's grid columns are 142px, leaving 58px for digits and
  * cutting "1041.11" to "1041."; at 176px ~90px remain beside the unit. It is a CONTAINER query on
  * the box itself, not a `tablet:`/`mobile:` breakpoint, because the same squeeze happens in two
- * unrelated places: the tablet band (4 columns, no sidebar) and the narrow end of the desktop
- * band (sidebar open). Left OFF for เผื่อ's "กรอกเอง" box, whose label names neither % nor แผ่น, so
+ * unrelated places: the tablet band (4 columns) and the narrow end of the desktop
+ * band (formerly the sidebar-open width). Left OFF for เผื่อ's "กรอกเอง" box, whose label names neither % nor แผ่น, so
  * the in-field unit is the only place that distinction lives.
  */
 function PriceInputWithSuffix({ id, suffix, className, unitInLabel = false, ...inputProps }) {
@@ -490,8 +490,8 @@ export function QuotationItemRow({
                 )}
               </>
             ) : hideDuplicate ? null : (
-              // One location only: there is nowhere to move to and only one place to copy into,
-              // so the duplicate degrades to a plain button rather than a one-option dropdown.
+              // One location only: there is nowhere to move to and only one place to copy into, so the duplicate degrades to
+              // a plain button rather than a one-option dropdown.
               <Button variant="secondary" size="sm" onClick={() => onDuplicate?.(groupId)}>ทำซ้ำรายการ</Button>
             )}
             {/* No onRemove means nothing to remove (the PCR form's lone row), so no dead ✕. */}
@@ -877,7 +877,7 @@ export function QuotationItemRow({
           wrapper just below), two otherwise, one on a phone. The four Thai price labels run to 164px
           ("ราคาพิเศษ/ตร.ม. (รวม VAT) *"), so four columns need ~170px each, and the row is narrower
           than that in two places a window-width breakpoint cannot tell apart: the tablet band
-          (721–1040px, no sidebar: 142px columns at 820) and the narrow desktop band with the
+          (721–1040px: 142px columns at 820) and the narrow desktop band, formerly with the
           sidebar open (133px at 1045, an iPad in landscape), where the price label wrapped beside a
           "ส่วนลด %" that did not. Base is two columns and the query WIDENS it, so `mobile:grid-cols-1`
           only competes with an un-prefixed utility.
@@ -1283,8 +1283,8 @@ export function itemInputFromRow(item, priceMode = 'NET', documentLanguage = 'TH
       : wireListSqm != null ? null
         : netStandsInForList ? directNet : unitPrice,
     listPriceSqm: isEnglishPerSqm(priceMode, documentLanguage) ? null : wireListSqm,
-    // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server
-    // nulls the stored percent in those modes anyway (DealQuotationService#buildTileItem).
+    // A mode with no percent: SPECIAL_SQM and DIRECT_NET both print พิเศษ/Net, and the server nulls the stored
+    // percent in those modes anyway (DealQuotationService#buildTileItem).
     discountPct: priceMode === 'NET' ? (item.discountPct ?? 0) : null,
     specialPriceSqm: priceMode === 'SPECIAL_SQM' && hasTypedPrice(item.specialPriceSqm)
       ? Number(item.specialPriceSqm) : null,
@@ -1359,11 +1359,8 @@ function tileInputFromRow(item) {
   };
 }
 
-/** The editor's own per-row key, distinct from the server `id` a saved row also carries (a row
- * that has never been saved has no server id at all). Exported so QuotationEditorPage's
- * "ทำซ้ำรายการ" can mint one for the copy without duplicating the fallback — and, incidentally,
- * so `crypto`/`Date`/`Math.random` stay out of a component body, where the react-hooks purity rule
- * (correctly) refuses to distinguish an event handler from render. */
+/** The editor's own per-row key, distinct from the server `id` a saved row also carries (a row that has never
+ * been saved has no server id at all). */
 export function newItemClientId() {
   return crypto.randomUUID?.() ?? `tmp-${Date.now()}-${Math.random()}`;
 }

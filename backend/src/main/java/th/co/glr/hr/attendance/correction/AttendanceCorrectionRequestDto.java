@@ -24,10 +24,9 @@ public record AttendanceCorrectionRequestDto(
     OffsetDateTime cancelledAt,
     OffsetDateTime createdAt,
     OffsetDateTime updatedAt,
-    // Computed server-side per requesting actor (CEO or the requester themselves), the same
-    // "could this actor act on this row right now" flag LeaveRequestDto#canReview carries -- not a
-    // bare role check, so the frontend never has to re-derive it and can never disagree with what
-    // the server will actually enforce on approve/reject.
+    // Computed server-side per requesting actor, the same "could this actor act on this row right now" flag
+    // LeaveRequestDto#canReview carries -- not a bare role check, so the frontend never has to re-derive it and
+    // can never disagree with what the server will actually enforce on approve/reject.
     boolean canReview
 ) {
 }

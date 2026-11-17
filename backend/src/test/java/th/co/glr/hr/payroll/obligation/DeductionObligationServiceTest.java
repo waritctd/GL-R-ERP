@@ -28,13 +28,8 @@ import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligati
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationOverrideRequest;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationUpdateRequest;
 
-/**
- * Unit-tests the DECISION: which role may do what, and how {@link
- * DeductionObligationService#resolveMonthlyAmount} picks the amount to deduct. Mockito proves the
- * branch chosen here; it cannot prove the decision survives into real SQL (a mocked repository
- * "finds" whatever the test tells it to) — that half is {@link
- * DeductionObligationScopeIntegrationTest}, against real Postgres.
- */
+/** Unit-tests the DECISION: which role may do what, and how DeductionObligationService#resolveMonthlyAmount
+ * picks the amount to deduct. */
 class DeductionObligationServiceTest {
     private final DeductionObligationRepository repository = mock(DeductionObligationRepository.class);
     private final EmployeeRepository employeeRepository = mock(EmployeeRepository.class);
@@ -118,8 +113,8 @@ class DeductionObligationServiceTest {
 
     @Test
     void anEmployeeCannotReadHrProgressByIdEvenForTheirOwnObligation() {
-        // Deliberately NOT stubbing repository.findById -- requireRole must fail before any lookup,
-        // so an employee gets 403, never a 200 for their own row and never a 404 leaking existence.
+        // Deliberately NOT stubbing repository.findById -- requireRole must fail before any lookup, so an employee
+        // gets 403, never a 200 for their own row and never a 404 leaking existence.
         assertForbidden(() -> service.progress(5L, employee(10L)));
         verifyNoInteractions(repository);
     }
@@ -145,11 +140,8 @@ class DeductionObligationServiceTest {
 
         service.getOwn(employee(10L));
 
-        // The decision under test: getOwn() must ask the repository for THIS caller's employeeId,
-        // never any other -- there is no employeeId parameter anywhere on this call for a caller to
-        // widen. The real "does employee A's row leak to employee B" proof needs the actual SQL
-        // (DeductionObligationScopeIntegrationTest); this only proves the service asks the right
-        // question.
+        // The decision under test: getOwn() must ask the repository for THIS caller's employeeId, never any other --
+        // there is no employeeId parameter anywhere on this call for a caller to widen.
         verify(repository).findForEmployee(10L);
         verify(repository, never()).findForEmployee(eq(20L));
     }
@@ -181,14 +173,8 @@ class DeductionObligationServiceTest {
         assertThat(resolved).isEqualByComparingTo("0.00");
     }
 
-    /**
-     * D2 regression (Opus review): an obligation with a start_date after this payroll month must be
-     * invisible to this call -- enforced by {@link DeductionObligationRepository#findDrivingObligation}'s
-     * own {@code start_date <= :payrollMonth} filter (proven against real Postgres in {@link
-     * DeductionObligationPayrollEngineIntegrationTest}). At the service layer this collapses to the
-     * same "no obligation found" fallback as the tests above -- documented here so the connection is
-     * explicit: a future-start obligation must never surface as a hit.
-     */
+    /** D2 regression: an obligation with a start_date after this payroll month must be invisible to this call --
+     * enforced by DeductionObligationRepository#findDrivingObligation's own start_date <= :payrollMonth filter. */
     @Test
     void anObligationThatHasNotStartedYetIsInvisibleForThisMonth() {
         when(repository.findDrivingObligation(10L, DeductionObligationKind.STUDENT_LOAN, MONTH)).thenReturn(Optional.empty());
@@ -226,14 +212,9 @@ class DeductionObligationServiceTest {
         assertThat(resolved).isEqualByComparingTo("640.00"); // the remainder, never an overshoot
     }
 
-    /**
-     * D1 fix (Opus review): the DTO's stored {@code status} is COMPLETED (a stale snapshot from a
-     * PRIOR run of this very month), but the ledger EXCLUDING this month shows only 2,000 remitted
-     * against a 2,640 total -- 640 genuinely remains. The decision must be driven by the ledger, not
-     * the stale status column, or the final instalment vanishes on every re-run of the completing
-     * month (see the integration-level reproduction in {@code
-     * DeductionObligationPayrollEngineIntegrationTest#theCompletingMonthYieldsTheSameFinalInstalmentOnEveryReprocess}).
-     */
+    /** D1 fix (Opus review): the DTO's stored status is COMPLETED (a stale snapshot from a PRIOR run of this very
+     * month), but the ledger EXCLUDING this month shows only 2,000 remitted against a 2,640 total -- 640 genuinely
+     * remains. */
     @Test
     void theAmountIsDerivedFromTheLedgerNotTheStaleStoredStatus() {
         DeductionObligationDto staleCompleted = new DeductionObligationDto(

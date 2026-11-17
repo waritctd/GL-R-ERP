@@ -32,19 +32,9 @@ import org.apache.poi.ss.usermodel.Workbook;
 import org.apache.poi.ss.util.AreaReference;
 import org.apache.poi.ss.util.CellRangeAddress;
 
-/**
- * The ONE row plan both PDF engines print from. It is read straight off the POI sheet the XLS
- * engine ({@code QuotationRenderer#toXls}) has already written — every row (index, height),
- * column (width), merged region, cell (evaluated + formatted text, font, alignment, borders,
- * fill), picture anchor and the print setup — and turned into LibreOffice's page geometry with
- * {@link LibreOfficeMetrics}: integer zoom, 1/100 mm scaled sizes, page assignment (repeat rows,
- * manual row breaks, overflow breaks), horizontal centring. {@link SheetHtmlRenderer} then draws
- * exactly this plan. There is no second copy of the quotation's row arithmetic anywhere: whatever
- * the XLS path cloned, shifted, merged or blanked is what the HTML path prints, by construction.
- *
- * <p>Generic on purpose (html-fidelity-spec.md §4): any template this app already fills with POI
- * (deposit notice, invoice, …) renders through the same plan with no per-form descriptor.
- */
+/** The ONE row plan both PDF engines print from. SheetHtmlRenderer then draws exactly this plan. There is no
+ * second copy of the quotation's row arithmetic anywhere: whatever the XLS path cloned, shifted, merged or
+ * blanked is what the HTML path prints, by construction. */
 public final class SheetPlan {
     public enum HAlign { LEFT, CENTER, RIGHT }
     public enum VAlign { TOP, CENTER, BOTTOM }
@@ -63,9 +53,9 @@ public final class SheetPlan {
                          HAlign hAlign, boolean generalAlign, VAlign vAlign, boolean wrap, boolean shrink,
                          Borders borders, String fillHex) {}
 
-    /** One rendered cell. Covered cells of a merged region are NOT planned — the region's top-left
-     * cell carries {@code lastRow}/{@code lastCol} instead. {@code text} is the evaluated, number-
-     * formatted display string (formulas evaluated with POI, falling back to the cached result). */
+    /** One rendered cell. Covered cells of a merged region are NOT planned — the region's top-left cell carries
+     * lastRow/lastCol instead. text is the evaluated, number- formatted display string (formulas evaluated with
+     * POI, falling back to the cached result). */
     public record PlannedCell(int row, int col, int lastRow, int lastCol, String text, boolean numeric, Facets facets) {
         public boolean merged() {
             return lastRow > row || lastCol > col;
@@ -76,14 +66,13 @@ public final class SheetPlan {
 
     public record Column(int index, int twips, int scaledHmm) {}
 
-    /** An HSSF picture anchor: dx in 1/1024ths of the anchor column's width, dy in 1/256ths of the
-     * anchor row's height (both engines — LibreOffice and POI — read them that way). */
+    /** An HSSF picture anchor: dx in 1/1024ths of the anchor column's width, dy in 1/256ths of the anchor row's
+     * height (both engines — LibreOffice and POI — read them that way). */
     public record Picture(byte[] data, String mimeType, int row1, int dy1, int col1, int dx1,
                           int row2, int dy2, int col2, int dx2) {}
 
-    /** Rows printed on one page, in order; the first {@code repeatedRowCount} are the sheet's
-     * repeating title rows (LibreOffice prints them, pictures included, on every page after the
-     * first). */
+    /** Rows printed on one page, in order; the first repeatedRowCount are the sheet's repeating title rows
+     * (LibreOffice prints them, pictures included, on every page after the first). */
     public record Page(int number, List<Integer> rowIndices, int repeatedRowCount) {}
 
     public record HeaderFooter(String left, String center, String right) {
@@ -123,8 +112,8 @@ public final class SheetPlan {
     public final Map<Integer, PlannedRow> rows;
     /** Planned cells (row, col) → cell; covered merged cells absent. */
     public final Map<Long, PlannedCell> cells;
-    /** Border facets of EVERY cell in range, covered ones included (a merged region's perimeter is
-     * drawn from its perimeter cells' own edges — the Excel/LibreOffice model). */
+    /** Border facets of EVERY cell in range, covered ones included (a merged region's perimeter is drawn from its
+     * perimeter cells' own edges — the Excel/LibreOffice model). */
     public final Map<Long, Borders> borders;
     public final List<CellRangeAddress> mergedRegions;
     public final List<Picture> pictures;
@@ -274,8 +263,8 @@ public final class SheetPlan {
 
         private void readPageSetup() {
             PrintSetup ps = sh.getPrintSetup();
-            // Only A4 (paper 9) is used by this app's templates; everything else falls back to
-            // A4 too rather than guessing a paper table.
+            // Only A4 (paper 9) is used by this app's templates; everything else falls back to A4 too rather than guessing
+            // a paper table.
             pageWidthHmm = ps.getLandscape() ? A4_HEIGHT_HMM : A4_WIDTH_HMM;
             pageHeightHmm = ps.getLandscape() ? A4_WIDTH_HMM : A4_HEIGHT_HMM;
             marginLeftHmm = LibreOfficeMetrics.inchesToHmm(sh.getMargin(PageMargin.LEFT));
@@ -404,10 +393,9 @@ public final class SheetPlan {
             }
         }
 
-        /** Excel's {@code _x} format token reserves the width of {@code x} — LibreOffice draws it
-         * as a space ("8,640.00 " for {@code #,##0.00_ }); POI's DataFormatter drops it, which
-         * shifts every right-aligned amount by a space width. Re-add one space per trailing (and
-         * leading) skip token of the section that applies to the value. */
+        /** Excel's _x format token reserves the width of x — LibreOffice draws it as a space ("8,640.00 " for #,##0.00_
+         * ); POI's DataFormatter drops it, which shifts every right-aligned amount by a space width. Re-add one space
+         * per trailing (and leading) skip token of the section that applies to the value. */
         static String padForSkipTokens(String text, String format) {
             if (text == null || text.isEmpty() || format == null || format.isEmpty()) return text;
             String[] sections = format.split(";", -1);
@@ -483,9 +471,9 @@ public final class SheetPlan {
             return null;
         }
 
-        /** LibreOffice prints (and fits) the print range trimmed to the last row/column holding a
-         * value or a visible attribute — measured: adding a value one row below the last used row
-         * changed the fit zoom from 72% to 71%, a value outside the print area did not. */
+        /** LibreOffice prints (and fits) the print range trimmed to the last row/column holding a value or a visible
+         * attribute — measured: adding a value one row below the last used row changed the fit zoom from 72% to 71%, a
+         * value outside the print area did not. */
         private void trimToUsedArea() {
             int usedRow = firstRow;
             int usedCol = firstCol;
@@ -510,12 +498,9 @@ public final class SheetPlan {
             lastCol = Math.min(lastCol, usedCol);
         }
 
-        /** Measured, not documented: LibreOffice takes the fit-to-pages intent from the WSBOOL bit
-         * POI exposes as {@code Sheet#getAutobreaks()} (POI and LibreOffice disagree on the byte
-         * order of that record) — true → fit to {@code fitWidth × fitHeight} and IGNORE the
-         * explicit scale; false → the explicit scale and ignore the fit counts. Confirmed on the
-         * template-derived sheets (autobreaks true, scale 71 → rendered fit 72%) and the owner's
-         * hand-filled workbook (autobreaks false, scale 86, fit 1×1 → rendered 86%, two pages). */
+        /** Measured, not documented: LibreOffice takes the fit-to-pages intent from the WSBOOL bit POI exposes as
+         * Sheet#getAutobreaks — true → fit to fitWidth × fitHeight and IGNORE the explicit scale; false → the explicit
+         * scale and ignore the fit counts. */
         private void computeZoom() {
             PrintSetup ps = sh.getPrintSetup();
             int fitW = Math.max(0, ps.getFitWidth());
@@ -559,9 +544,9 @@ public final class SheetPlan {
             }
         }
 
-        /** LibreOffice's page fill: rows in order, a new page after a manual row break or when the
-         * next row would overflow the page body (paper minus margins — the header/footer bands
-         * live inside the margins); every page after the first starts with the repeating rows. */
+        /** LibreOffice's page fill: rows in order, a new page after a manual row break or when the next row would
+         * overflow the page body (paper minus margins — the header/footer bands live inside the margins); every page
+         * after the first starts with the repeating rows. */
         private void paginate() {
             int bodyHmm = pageHeightHmm - marginTopHmm - marginBottomHmm;
             Set<Integer> breakAfter = new HashSet<>();

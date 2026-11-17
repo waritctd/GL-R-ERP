@@ -22,9 +22,9 @@ vi.mock('../../utils/download.js', () => ({
   downloadBlob: vi.fn(),
 }));
 
-// Computed the same way the component computes it (leaveFormatting.js#yearFrom with no
-// argument -- today's date in Asia/Bangkok, CE), rather than hardcoded, so this test stays
-// correct across a year boundary instead of quietly going stale on 2027-01-01.
+// Computed the same way the component computes it (leaveFormatting.js#yearFrom with no argument -- today's
+// date in Asia/Bangkok, CE), rather than hardcoded, so this test stays correct across a year boundary instead
+// of quietly going stale on 2027-01-01.
 const currentYear = yearFrom();
 
 function renderDownload(scope, showToast = vi.fn()) {
@@ -97,8 +97,8 @@ describe('LeaveReportDownload', () => {
 
       await waitFor(() => expect(api.leave.downloadMyReport).toHaveBeenCalledTimes(1));
       const params = api.leave.downloadMyReport.mock.calls[0][0];
-      // Strict: must be undefined, not the falsy-but-wrong 0 or '' a naive Number(month)
-      // or a missing `? :` fallback could produce.
+      // Strict: must be undefined, not the falsy-but-wrong 0 or '' a naive Number(month) or a missing `? :` fallback
+      // could produce.
       expect(params.month).toBeUndefined();
       expect(params.year).toBe(currentYear);
     });

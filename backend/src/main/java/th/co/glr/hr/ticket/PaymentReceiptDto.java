@@ -15,5 +15,9 @@ public record PaymentReceiptDto(
     String note,
     Long depositNoticeId,
     String receiptRef,
-    Instant createdAt
+    Instant createdAt,
+    // V213: MANUAL (typed by account) or EXPRESS (uploaded; receiptRef is then the Express document number), and the
+    // payer name as the Express file printed it (null for MANUAL).
+    String source,
+    String customerName
 ) {}

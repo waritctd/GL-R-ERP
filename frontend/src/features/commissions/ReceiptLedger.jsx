@@ -58,13 +58,9 @@ function WeightChip({ record }) {
   return <StatusBadge tone="info">{formatWeight(weight)}</StatusBadge>;
 }
 
-/**
- * The rep's receipts for the month, one row each: date · number · status · ex-VAT amount · weight
- * chip (only when it is not ×1) · what it puts into the base. There is deliberately NO per-receipt
- * commission in baht: the ladder is marginal over the month's total, so a per-sale figure would be
- * invented — the note under the heading says so. Desktop is a table; on a phone each receipt becomes
- * a card (identity · status · the two facts · expand) rather than a squeezed grid.
- */
+/** The rep's receipts for the month, one row each: date · number · status · ex-VAT amount · weight chip (only
+ * when it is not ×1) · what it puts into the base. Desktop is a table; on a phone each receipt becomes a card
+ * (identity · status · the two facts · expand) rather than a squeezed grid. */
 export function ReceiptLedger({ records, loading }) {
   const isMobile = useIsMobile();
   const [expandedId, setExpandedId] = useState(null);

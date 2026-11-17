@@ -57,14 +57,9 @@ class PricingRequestServiceTest {
     private final NotificationRepository notifRepo = mock(NotificationRepository.class);
     private final ContactRepository contactRepo = mock(ContactRepository.class);
     private final FileStorageService fileStorage = mock(FileStorageService.class);
-    /**
-     * Mocked here, and only here: this class's whole point is that every collaborator is a mock,
-     * and its default {@code false} from {@code carryForwardOnSubmit} is the ordinary
-     * not-a-revision answer, so submit() behaves exactly as it did. The carry-forward branch
-     * itself is therefore NOT covered by this class — it is proved against a real database in
-     * {@code PricingFactoryQuoteCostingIntegrationTest}, which is the only place a mocked
-     * repository could not fake the answer.
-     */
+    /** Mocked here, and only here: this class's whole point is that every collaborator is a mock, and its default
+     * false from carryForwardOnSubmit is the ordinary not-a-revision answer, so submit() behaves exactly as it
+     * did. */
     private final FactoryQuoteCarryForward carryForward = mock(FactoryQuoteCarryForward.class);
     private final PricingRequestService service =
         new PricingRequestService(requestRepo, ticketRepo, notifRepo, new ObjectMapper(), contactRepo, fileStorage,
@@ -298,10 +293,9 @@ class PricingRequestServiceTest {
 
     @Test
     void createDraft_rejectsItemIdentifiedByBrandAlone() {
-        // Brand alone is explicitly NOT sufficient — a brand with no model
-        // does not identify a product. Same assertion as the no-fields test
-        // above, kept separate so a future change that (wrongly) special-cases
-        // "at least one field is non-null" fails this test specifically.
+        // Brand alone is explicitly NOT sufficient — a brand with no model does not identify a product. Same assertion
+        // as the no-fields test above, kept separate so a future change that (wrongly) special-cases "at least one
+        // field is non-null" fails this test specifically.
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(itemRequestWithIdentity(null, null, "Some Brand", null, null)));
@@ -324,9 +318,8 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of(501L));
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        // V185: model is now unconditionally required (see itemRequestWithIdentity's own
-        // Javadoc) — this test isolates sourceTicketItemId as the identity signal, ALONGSIDE the
-        // now-mandatory model, not instead of it.
+        // V185: model is now unconditionally required (see itemRequestWithIdentity's own Javadoc) — this test isolates
+        // sourceTicketItemId as the identity signal, ALONGSIDE the now-mandatory model, not instead of it.
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(itemRequestWithIdentity(501L, null, null, "Model (baseline)", null)));
         when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(20L);
@@ -334,9 +327,9 @@ class PricingRequestServiceTest {
 
         service.createDraft(10L, request, salesActor);
 
-        // any(), not eq(request): resolveItems() derives requestedQty/Unit/Basis and the wastage
-        // audit columns onto a NEW PricingRequestItemRequest before this call, so the object the
-        // repository actually receives is never equal to the one this test built.
+        // any(), not eq(request): resolveItems() derives requestedQty/Unit/Basis and the wastage audit columns onto a
+        // NEW PricingRequestItemRequest before this call, so the object the repository actually receives is never
+        // equal to the one this test built.
         verify(requestRepo).create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L));
     }
 
@@ -385,8 +378,8 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        // V185: see createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone's identical comment
-        // — model is now unconditionally required alongside whatever else identifies the item.
+        // V185: see createDraft_acceptsItemIdentifiedBySourceTicketItemIdAlone's identical comment — model is now
+        // unconditionally required alongside whatever else identifies the item.
         CreatePricingRequestRequest request = createRequest(PricingRequestRecipient.BUYER, 1L, null,
             List.of(itemRequestWithIdentity(null, null, null, "Model (baseline)", null,
                 "กระเบื้องพอร์ซเลน 60x60 สีขาว")));
@@ -433,9 +426,9 @@ class PricingRequestServiceTest {
         when(requestRepo.findItems(20L)).thenReturn(List.of());
         when(requestRepo.findEvents(20L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
-        // any(), not eq(sampleCreateRequest()): resolveItems() derives requestedQty/Unit/Basis
-        // onto a new item object before this call, so the actual argument is never equal to a
-        // fresh sampleCreateRequest() call's own (unresolved) items.
+        // any(), not eq(sampleCreateRequest()): resolveItems() derives requestedQty/Unit/Basis onto a new item object
+        // before this call, so the actual argument is never equal to a fresh sampleCreateRequest() call's own
+        // (unresolved) items.
         when(requestRepo.create(eq(10L), eq("PCR-2026-0001"), any(), eq(1L))).thenReturn(0L);
 
         var replay = service.createDraft(10L, sampleCreateRequest(), salesActor);
@@ -459,10 +452,9 @@ class PricingRequestServiceTest {
 
     @Test
     void submit_rejectsPreExistingDraftWithUnidentifiedItem() {
-        // Simulates a draft created BEFORE this rule existed (or otherwise
-        // persisted with an unidentified line): submit() must re-check the
-        // PERSISTED items, not just rely on createDraft/updateDraft having
-        // validated them at write time.
+        // Simulates a draft created BEFORE this rule existed (or otherwise persisted with an unidentified line):
+        // submit() must re-check the PERSISTED items, not just rely on createDraft/updateDraft having validated them
+        // at write time.
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItems(20L)).thenReturn(List.of(itemDtoWithIdentity(null, null, "Brand only", null, null, null)));
@@ -493,8 +485,8 @@ class PricingRequestServiceTest {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         when(requestRepo.findItems(20L)).thenReturn(List.of(
             itemDtoWithoutCatalogSnapshot(null, null, "Brand", "Model")));
-        // transition() returns the compare-and-set row count; Mockito's int default of 0 would
-        // make submit() throw the optimistic-lock 409 before this test could observe anything.
+        // transition() returns the compare-and-set row count; Mockito's int default of 0 would make submit() throw the
+        // optimistic-lock 409 before this test could observe anything.
         when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null))
             .thenReturn(1);
 
@@ -503,8 +495,8 @@ class PricingRequestServiceTest {
         verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
-    // Same, with several free-text lines mixed in beside a fully-snapshotted one — the old gate
-    // reported "รายการที่ 2, 3" here and blocked the submit.
+    // Same, with several free-text lines mixed in beside a fully-snapshotted one — the old gate reported
+    // "รายการที่ 2, 3" here and blocked the submit.
     @Test
     void submit_acceptsAMixOfCatalogBackedAndFreeTextItems() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
@@ -521,8 +513,8 @@ class PricingRequestServiceTest {
         verify(requestRepo).transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.SUBMITTED, null, null);
     }
 
-    // A request whose items already have a full catalog snapshot (simulating a real submit(),
-    // where snapshotCatalogSelections has already populated these fields) submits cleanly.
+    // A request whose items already have a full catalog snapshot (simulating a real submit(), where
+    // snapshotCatalogSelections has already populated these fields) submits cleanly.
     @Test
     void submit_acceptsPreExistingDraftWithFullCatalogSnapshot() {
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT, 1L, null, null);
@@ -580,15 +572,9 @@ class PricingRequestServiceTest {
 
     @Test
     void createDraft_skipsContactOwnershipCheckWhenTicketHasNoCustomer() {
-        // Older deals may have customerId == null (no customer link at all).
-        // The ownership check has nothing to compare the contact against in
-        // that case, so it is skipped rather than treated as a mismatch —
-        // this is "nothing to check", NOT "any contact is fine" in general.
-        // contactRepo is deliberately never stubbed: if this code path
-        // incorrectly called it anyway, Mockito's default Optional.empty()
-        // would fail this test for the wrong reason (contact not found)
-        // instead of the assertion below, and verifyNoInteractions makes
-        // that failure mode explicit rather than accidental.
+        // Older deals may have customerId == null (no customer link at all). The ownership check has nothing to
+        // compare the contact against in that case, so it is skipped rather than treated as a mismatch — this is
+        // "nothing to check", NOT "any contact is fine" in general.
         stubTicket(10L, 1L, DealLifecycle.ACTIVE); // customerId defaults to null
         when(requestRepo.findItemIdsForTicket(10L)).thenReturn(List.of());
         when(requestRepo.nextRequestCode()).thenReturn("PCR-2026-0001");
@@ -661,9 +647,8 @@ class PricingRequestServiceTest {
 
     @Test
     void updateDraft_rejectsInvalidRecipientType() {
-        // Proves the replacement payload's recipientType is re-validated against
-        // PricingRequestRecipient, the same as createDraft — not merely checked
-        // for blankness.
+        // Proves the replacement payload's recipientType is re-validated against PricingRequestRecipient, the same as
+        // createDraft — not merely checked for blankness.
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         UpdatePricingRequestRequest request = new UpdatePricingRequestRequest(
@@ -710,9 +695,8 @@ class PricingRequestServiceTest {
 
     @Test
     void updateDraft_skipsItemValidationWhenItemsOmitted() {
-        // items == null means "leave the item list untouched" (the one field
-        // that keeps sparse-PATCH semantics under the otherwise full-replacement
-        // PUT — see PricingRequestRepository.updateDraft's Javadoc), so neither
+        // items == null means "leave the item list untouched" (the one field that keeps sparse-PATCH semantics under
+        // the otherwise full-replacement PUT — see PricingRequestRepository.updateDraft's Javadoc), so neither
         // validateItems nor validateSourceItemsBelongToTicket should run at all.
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
@@ -768,8 +752,8 @@ class PricingRequestServiceTest {
 
         assertConflict(() -> service.updateDraft(21L, request, salesActor));
 
-        // The guard must fire BEFORE either mutating repository call in this method — enumerated
-        // from PricingRequestService#updateDraft itself, not guessed: the row write and its event.
+        // The guard must fire BEFORE either mutating repository call in this method — enumerated from
+        // PricingRequestService#updateDraft itself, not guessed: the row write and its event.
         verify(requestRepo, never()).updateDraft(anyLong(), any());
         verify(requestRepo, never()).addEvent(anyLong(), anyLong(), anyLong(), any(), any(), any(), any(), any(), any());
     }
@@ -789,14 +773,8 @@ class PricingRequestServiceTest {
 
     @Test
     void updateDraft_allowsRecipientTypeChangeOnRootPricingRequest_scopeBoundaryPinned() {
-        // Deliberate scope boundary: a ROOT pricing request (parentPricingRequestId == null) may
-        // still have its recipientType changed via updateDraft — fixing a mistake before
-        // submission is legitimate, and it is provably safe HERE specifically because updateDraft
-        // only ever reaches a row still in DRAFT, and DRAFT has no outgoing SUPERSEDED edge
-        // (PricingRequestStatus.ALLOWED), so a root in DRAFT cannot yet have spawned any
-        // customer-change-revision child — there is nothing downstream for a recipient change to
-        // orphan. This pins that reasoning against a future regression that widens the guard to
-        // roots without re-deriving it.
+        // Deliberate scope boundary: a ROOT pricing request may still have its recipientType changed via updateDraft.
+        // This pins that reasoning against a future regression that widens the guard to roots without re-deriving it.
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT); // recipientType BUYER, parentPricingRequestId null
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
         UpdatePricingRequestRequest request = validUpdateRequest(); // recipientType DESIGNER — DIFFERENT from BUYER
@@ -956,12 +934,8 @@ class PricingRequestServiceTest {
 
     @Test
     void cancel_succeedsOnNonActiveDealWithoutCheckingTicketLifecycle() {
-        // cancel() must remain callable no matter the deal's lifecycle — a request
-        // left over on a deal that just went ON_HOLD/DORMANT/lost must still be
-        // cancellable (see the comment on cancel() itself). Deliberately no
-        // stubTicket() call: if cancel() ever gained a requireTicket/requireActive
-        // check, ticketRepo.findById would return empty and this would blow up
-        // with 404 "Ticket not found" instead of succeeding.
+        // cancel() must remain callable no matter the deal's lifecycle — a request left over on a deal that just went
+        // ON_HOLD/DORMANT/lost must still be cancellable (see the comment on cancel() itself).
         stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.DRAFT);
         when(requestRepo.transition(20L, PricingRequestStatus.DRAFT, PricingRequestStatus.CANCELLED, null, 1L))
             .thenReturn(1);
@@ -984,8 +958,8 @@ class PricingRequestServiceTest {
 
     @Test
     void createCustomerChangeRevision_rejectsDifferentRecipientTypeAndMutatesNothing() {
-        // Mirrors the bug's own narrative: an ISSUED quotation to the DESIGNER, "revised" into a
-        // request addressed to the OWNER instead.
+        // Mirrors the bug's own narrative: an ISSUED quotation to the DESIGNER, "revised" into a request addressed to
+        // the OWNER instead.
         stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
             PricingRequestRecipient.DESIGNER);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
@@ -993,8 +967,8 @@ class PricingRequestServiceTest {
         assertConflict(() -> service.createCustomerChangeRevision(
             20L, customerChangeRevisionRequest(PricingRequestRecipient.OWNER), salesActor));
 
-        // The guard must fire BEFORE any state change: nothing about the parent or a new row may
-        // be touched once the recipientType mismatch is detected.
+        // The guard must fire BEFORE any state change: nothing about the parent or a new row may be touched once the
+        // recipientType mismatch is detected.
         verify(requestRepo, never()).createCustomerChangeRevision(any(), any(), anyLong());
         verify(requestRepo, never()).supersedeForCustomerRevision(anyLong(), any(), anyLong());
         verify(requestRepo, never()).cancelOpenStep2Children(anyLong(), any(), anyLong());
@@ -1023,13 +997,9 @@ class PricingRequestServiceTest {
 
     @Test
     void createCustomerChangeRevision_nullRecipientType_stillRejectedAsBadRequestNotByTheNewGuard() {
-        // request.recipientType() is @NotBlank on the wire (CustomerChangeRevisionRequest,
-        // enforced by @Valid at the controller), so a real caller can never reach this method with
-        // recipientType == null — it is not an "unchanged" signal, it is invalid input. A direct
-        // service call (as a test, or any future caller that skips bean validation) with null
-        // must keep failing the way it always did — validateRecipient()'s existing 400 — and NOT
-        // be reclassified as this new guard's 409, which would be reachable only for a non-null,
-        // differing value.
+        // request.recipientType() is @NotBlank on the wire (CustomerChangeRevisionRequest, enforced by @Valid at the
+        // controller), so a real caller can never reach this method with recipientType == null — it is not an
+        // "unchanged" signal, it is invalid input.
         stubPricingRequestWithRecipient(20L, 10L, 1L, PricingRequestStatus.QUOTATION_ISSUED,
             PricingRequestRecipient.DESIGNER);
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
@@ -1106,8 +1076,8 @@ class PricingRequestServiceTest {
         assertThat(service.get(20L, salesActor).summary().id()).isEqualTo(20L);
     }
 
-    // list()/findSummaries: another rep's DRAFT must never leak into the queue,
-    // regardless of the status filter used, unless the caller has oversight.
+    // list()/findSummaries: another rep's DRAFT must never leak into the queue, regardless of the status filter
+    // used, unless the caller has oversight.
     @Test
     void list_importDoesNotSeeAnotherRepsDraft_statusFilterNull() {
         when(requestRepo.findSummaries(null, null, null, true, false, 3L)).thenReturn(List.of());
@@ -1150,8 +1120,7 @@ class PricingRequestServiceTest {
         verify(requestRepo, never()).findSummaries(any(), any(), any(), anyBoolean(), anyBoolean(), any());
     }
 
-    // listForTicket is a separate read path from get()/list() and must honour the
-    // same DRAFT-privacy rule.
+    // listForTicket is a separate read path from get()/list() and must honour the same DRAFT-privacy rule.
     @Test
     void listForTicket_importDoesNotSeeDraftRequestsOnTicket() {
         stubTicket(10L, 1L, DealLifecycle.ACTIVE);
@@ -1213,18 +1182,17 @@ class PricingRequestServiceTest {
     @Test
     void list_salesFiltersToOwnDeals() {
         service.list(null, null, true, salesActor);
-        // draftOversight=false (sales is not ceo/sales_manager), draftOwnerId=1L
-        // (salesActor's own id) — see findSummaries's Javadoc/clause comment.
+        // draftOversight=false (sales is not ceo/sales_manager), draftOwnerId=1L (salesActor's own id) — see
+        // findSummaries's Javadoc/clause comment.
         verify(requestRepo).findSummaries(null, null, 1L, true, false, 1L);
     }
 
     @Test
     void list_nonSalesSeesAllDeals() {
         service.list(null, null, true, importActor);
-        // import is not ceo/sales_manager, so draftOversight=false — import still
-        // relies on the draftOwnerId=t.created_by match, which the DRAFT-hiding
-        // matrix below (list_import...) proves does NOT let import see another
-        // rep's draft.
+        // import is not ceo/sales_manager, so draftOversight=false — import still relies on the
+        // draftOwnerId=t.created_by match, which the DRAFT-hiding matrix below (list_import...) proves does NOT let
+        // import see another rep's draft.
         verify(requestRepo).findSummaries(null, null, null, true, false, 3L);
     }
 
@@ -1237,11 +1205,8 @@ class PricingRequestServiceTest {
 
     @Test
     void list_defaultQueueExcludesOnHoldDealButGetStillReachesIt() {
-        // list(..., activeDealsOnly=true) must exclude a request whose deal is not
-        // ACTIVE (repo-level behaviour proved by
-        // PricingRequestRepositoryIntegrationTest#findSummaries_...); this test
-        // proves the SERVICE actually passes activeDealsOnly through unmangled, and
-        // that get(id) — which never touches deal lifecycle, only ownership/role —
+        // list must exclude a request whose deal is not ACTIVE; this test proves the SERVICE actually passes
+        // activeDealsOnly through unmangled, and that get — which never touches deal lifecycle, only ownership/role —
         // still reaches the same request directly.
         when(requestRepo.findSummaries(null, null, null, true, false, 3L)).thenReturn(List.of());
         PricingRequestSummaryDto onHoldDealRequest = stubPricingRequest(20L, 10L, 1L, PricingRequestStatus.SUBMITTED);
@@ -1329,10 +1294,9 @@ class PricingRequestServiceTest {
         verify(notifRepo).notifyEmployeeForPricingRequest(eq(1L), eq(20L), eq("PICKED_UP"), any());
         verify(notifRepo).notifyByRoleForPricingRequest(
             eq("ceo"), eq(20L), eq(PricingRequestEventKind.PRICING_REQUEST_PICKED_UP), any());
-        // The landmine guard: this repository call must be the ONLY interaction with
-        // TicketRepository — pickup must never write sales.ticket.assigned_to. The
-        // real end-to-end assertion (assigned_to IS NULL after a real pickup) lives
-        // in PricingRequestRepositoryIntegrationTest.
+        // The landmine guard: this repository call must be the ONLY interaction with TicketRepository — pickup must
+        // never write sales.ticket.assigned_to. The real end-to-end assertion (assigned_to IS NULL after a real
+        // pickup) lives in PricingRequestRepositoryIntegrationTest.
         verify(ticketRepo, times(1)).findById(10L);
         verifyNoMoreInteractions(ticketRepo);
     }
@@ -1363,9 +1327,9 @@ class PricingRequestServiceTest {
 
     @Test
     void cancelOpenForTicket_rowGoneEntirelyIsSettledNotAbandoned() {
-        // 20L: already gone entirely by the time findSummary runs (findOpenIdsForTicket's
-        // read is not in the same transaction snapshot as the loop body). Nothing left
-        // to cancel, so this is settled on the first read — not retried, not abandoned.
+        // 20L: already gone entirely by the time findSummary runs (findOpenIdsForTicket's read is not in the same
+        // transaction snapshot as the loop body). Nothing left to cancel, so this is settled on the first read — not
+        // retried, not abandoned.
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(20L, 22L));
         when(requestRepo.findSummary(20L)).thenReturn(java.util.Optional.empty());
         stubPricingRequest(22L, 10L, 1L, PricingRequestStatus.SUBMITTED);
@@ -1384,10 +1348,9 @@ class PricingRequestServiceTest {
 
     @Test
     void cancelOpenForTicket_alreadyCancelledByARaceIsSettledNotDoubleCancelled() {
-        // 21L: by the time the loop reaches it, something else already raced it to
-        // CANCELLED. The wanted end state already holds, so this must count as
-        // settled (no retry, no abandonment, no duplicate cancel event) rather than
-        // either "cancelled by us" or "gave up".
+        // 21L: by the time the loop reaches it, something else already raced it to CANCELLED. The wanted end state
+        // already holds, so this must count as settled (no retry, no abandonment, no duplicate cancel event) rather
+        // than either "cancelled by us" or "gave up".
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L));
         stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.CANCELLED);
 
@@ -1407,8 +1370,8 @@ class PricingRequestServiceTest {
     void cancelOpenForTicket_retriesARacedTransitionAndEndsCancelled() {
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L));
         stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.DRAFT);
-        // First attempt races and misses; second attempt (still reading DRAFT, since
-        // the stub is a fixed answer) succeeds.
+        // First attempt races and misses; second attempt (still reading DRAFT, since the stub is a fixed answer)
+        // succeeds.
         when(requestRepo.cancelForDeadDeal(21L, PricingRequestStatus.DRAFT, 4L)).thenReturn(0, 1);
 
         PricingRequestService.CancelOpenForTicketResult result = service.cancelOpenForTicket(10L, "OTHER", PricingRequestService.DeadDealCause.LOST, ceoActor);
@@ -1424,9 +1387,8 @@ class PricingRequestServiceTest {
 
     @Test
     void cancelOpenForTicket_givesUpAfterMaxAttemptsAndReportsAbandonment() {
-        // 21L: every attempt races and misses. The loop must not abort the whole
-        // cascade over this — 22L, which comes after it, must still be cancelled —
-        // and 21L's failure must be reported back, not silently swallowed into a
+        // 21L: every attempt races and misses. The loop must not abort the whole cascade over this — 22L, which comes
+        // after it, must still be cancelled — and 21L's failure must be reported back, not silently swallowed into a
         // plain count that looks identical to "nothing was open".
         when(requestRepo.findOpenIdsForTicket(10L)).thenReturn(List.of(21L, 22L));
         stubPricingRequest(21L, 10L, 1L, PricingRequestStatus.DRAFT);
@@ -1448,12 +1410,8 @@ class PricingRequestServiceTest {
             eq(PricingRequestStatus.CANCELLED), eq("OTHER"), any());
     }
 
-    // ── Pricing Request attachments (V69, review remediation COMMIT 4) ─────
-    //
-    // "Unit-test the decision" half of the two-layer evidence CLAUDE.md requires for an
-    // authorization change — every branch here is proved with every collaborator mocked;
-    // PricingRequestFlowIntegrationTest's attachment tests are the other half (real Postgres,
-    // real repository, real service) that a mocked repository cannot substitute for.
+    // Pricing Request attachments ───── "Unit-test the decision" half of the two-layer evidence CLAUDE.md requires
+    // for an authorization change.
 
     @Test
     void uploadAttachment_rejectsNonSalesRoles() {
@@ -1649,25 +1607,16 @@ class PricingRequestServiceTest {
             List.of(sampleItemRequest(null, QuantityType.REFERENCE)));
     }
 
-    /**
-     * Catalog snapshot fields (positions 20-25: priceListVersionId, catalogPriceId,
-     * catalogBasePrice, catalogCurrency, resolvedFactoryId, resolvedFactoryName) are fully
-     * populated here so the Finding A catalog-completeness gate in submit() does not interfere
-     * with unrelated tests that use this DTO — dedicated catalog-gate tests build their own
-     * items with those fields deliberately null/incomplete instead of reusing this helper.
-     */
+    /** Catalog snapshot fields are fully populated here so the Finding A catalog-completeness gate in submit does
+     * not interfere with unrelated tests that use this DTO — dedicated catalog-gate tests build their own items
+     * with those fields deliberately null/incomplete instead of reusing this helper. */
     private static PricingRequestItemDto sampleItem(Long sourceTicketItemId) {
         return itemDtoWithIdentity(sourceTicketItemId, null, "Brand", "Model", null);
     }
 
-    // V185 (direct-deal-form parity): color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a
-    // quantity are now REQUIRED on every item reaching PricingRequestService#resolveItems (every
-    // createDraft/updateDraft/createCustomerChangeRevision item, unconditionally) — see that
-    // method's own Javadoc. sampleItemRequest and itemRequestWithIdentity below supply a complete
-    // baseline of those fields so every "accepts ..." test in this file (which reaches
-    // resolveItems on its happy path) keeps passing; the "rejects ..." identity tests never reach
-    // that far (validateItems' isProductIdentified check throws first), so the baseline is inert
-    // for them either way.
+    // V185 (direct-deal-form parity): color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+    // REQUIRED on every item reaching PricingRequestService#resolveItems (every
+    // createDraft/updateDraft/createCustomerChangeRevision item, unconditionally) — see that method's own Javadoc.
     private static PricingRequestItemRequest sampleItemRequest(Long sourceTicketItemId, String quantityType) {
         return sampleItemRequest(sourceTicketItemId, quantityType, null);
     }
@@ -1682,16 +1631,9 @@ class PricingRequestServiceTest {
             null, "ไทย-สต็อก", 3, 7, null, null, null);
     }
 
-    /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null —
-     * INCLUDING {@code model}, so a "rejects" test isolating sourceTicketItemId/productId/
-     * productDescription/brand/specialRequirement alone still hits {@code isProductIdentified}'s
-     * rejection exactly as before V185 (that check runs BEFORE {@code resolveItems}, so a null
-     * model here never reaches the new completeness gate on those tests). An "accepts ... alone"
-     * test that isolates a NON-model field DOES reach {@code resolveItems} on its happy path and
-     * must pass its own real {@code model} value at the call site instead — see e.g.
-     * {@code createDraft_acceptsItemIdentifiedByProductIdAlone} below, which no longer describes
-     * "productId with model blank" (impossible now that model is unconditionally required) but
-     * "productId identifies the item, on top of the now-mandatory baseline fields". */
+    /** Lets each Part 1 identity test set exactly one identifying field and leave the rest null — INCLUDING model,
+     * so a "rejects" test isolating sourceTicketItemId/productId/ productDescription/brand/specialRequirement
+     * alone still hits isProductIdentified's rejection exactly as before V185. */
     private static PricingRequestItemRequest itemRequestWithIdentity(Long sourceTicketItemId, Long productId,
                                                                      String brand, String model, String specialRequirement) {
         return itemRequestWithIdentity(sourceTicketItemId, productId, brand, model, specialRequirement, null);
@@ -1717,12 +1659,8 @@ class PricingRequestServiceTest {
     private static PricingRequestItemDto itemDtoWithIdentity(Long sourceTicketItemId, Long productId,
                                                              String brand, String model, String specialRequirement,
                                                              String productDescription) {
-        // Catalog snapshot fields populated (see sampleItem's javadoc above) so this helper's
-        // callers exercise submit()'s Finding A gate the same (passing) way regardless of
-        // whether productId itself is null — most callers are testing identity rules, not the
-        // catalog gate, and a free-text item (productId null) must still be able to pass the
-        // catalog gate once catalog fields are populated by snapshotCatalogSelections in
-        // production; this fixture simulates that already having happened.
+        // Catalog snapshot fields populated so this helper's callers exercise submit's Finding A gate the same way
+        // regardless of whether productId itself is null.
         return new PricingRequestItemDto(1L, 20L, sourceTicketItemId, productId, null,
             brand, model, productDescription, null, null, null, null,
             new BigDecimal("1"), null, "PIECE", UnitBasis.PER_PIECE, QuantityType.REFERENCE,

@@ -9,18 +9,9 @@ const KIND_OPTIONS = [
   { code: 'AMOUNT', label: 'เป็นจำนวนเงิน' },
 ];
 
-/**
- * A ส่วนลดพิเศษ row — quotation v3 S3 (owner feedback pass 3, 2026-09-11). The rep types a percent
- * and (optionally) a date; the amount and the description are DERIVED and shown, never typed:
- * "ส่วนลดพิเศษ 3% สำหรับการสั่งซื้อภายใน 31/07/2569", −฿38,198.21 on her QN6900704-2. A flat baht
- * amount is the alternative for the case that is not a percentage.
- *
- * `amount` / `description` are what to SHOW, and the parent decides where they come from: the
- * server's own saved figures when the editor is clean, or a labelled estimate while it holds
- * unsaved edits (`estimated` — see quotationMeta#estimateAdjustmentAmount for why the live preview
- * endpoint cannot produce this figure). Every adjustment prints LAST on the document, so the parent
- * renders these after all ตำแหน่งติดตั้ง groups rather than inside one.
- */
+/** A ส่วนลดพิเศษ row — quotation v3 S3 (owner feedback pass 3, 2026-09-11). The rep types a percent and
+ * (optionally) a date; the amount and the description are DERIVED and shown, never typed: "ส่วนลดพิเศษ 3%
+ * สำหรับการสั่งซื้อภายใน 31/07/2569", −฿38,198.21 on her QN6900704-2. */
 export function QuotationAdjustmentRow({
   adjustment, index, readOnly, errors = {}, onChange, onRemove,
   amount = null, description = '', estimated = true, currency = 'THB',

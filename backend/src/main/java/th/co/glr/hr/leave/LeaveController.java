@@ -9,10 +9,9 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.List;
 import java.util.Map;
-// Both resource kinds now serve from Postgres: ByteArrayResource for the leave POLICY DOCUMENT
-// (V133) and, as of V134, for ATTACHMENTS too (hr.file_attachment_blob) -- FileSystemResource only
-// remains live here for pre-V134 DISK_LEGACY attachment rows whose bytes still resolve on disk. See
-// #downloadAttachment below for the storage_state branch.
+// Both resource kinds now serve from Postgres: ByteArrayResource for the leave POLICY DOCUMENT (V133) and, as
+// of V134, for ATTACHMENTS too (hr.file_attachment_blob) -- FileSystemResource only remains live here for
+// pre-V134 DISK_LEGACY attachment rows whose bytes still resolve on disk.
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -48,10 +47,8 @@ import th.co.glr.hr.leave.LeaveResponses.LeaveTypesResponse;
 @RestController
 @RequestMapping("/api/leave")
 public class LeaveController {
-    // A ~70KB real-world PDF (the owner's actual §5 announcement file) with generous headroom --
-    // not a tight bound, just enough to refuse something wildly wrong (a misdirected upload, an
-    // accidental non-PDF renamed to .pdf that happens to pass the content-type check) before it
-    // reaches the database as a BYTEA row.
+    // A ~70KB real-world PDF with generous headroom -- not a tight bound, just enough to refuse something wildly
+    // wrong before it reaches the database as a BYTEA row.
     private static final long MAX_POLICY_DOCUMENT_BYTES = 10L * 1024 * 1024;
 
     private final LeaveService leaveService;
@@ -115,9 +112,9 @@ public class LeaveController {
             @RequestParam(value = "contactPhone", required = false) String contactPhone,
             @RequestParam(value = "purposeCode", required = false) String purposeCode,
             @RequestParam(value = "requestedAsEmergency", required = false) Boolean requestedAsEmergency,
-            // §5.3.5 pool choice (V161): Spring resolves this String query param to the enum via
-            // Enum.valueOf against LeaveQuotaPoolPreference's constant names -- an unrecognized value
-            // fails request binding (400), same as any other malformed param on this endpoint.
+            // §5.3.5 pool choice (V161): Spring resolves this String query param to the enum via Enum.valueOf against
+            // LeaveQuotaPoolPreference's constant names -- an unrecognized value fails request binding (400), same as any
+            // other malformed param on this endpoint.
             @RequestParam(value = "quotaPoolPreference", required = false) LeaveQuotaPoolPreference quotaPoolPreference,
             @RequestParam(value = "attachment", required = false) MultipartFile attachment,
             HttpSession session) {
@@ -141,22 +138,9 @@ public class LeaveController {
         return new LeaveTypesResponse(leaveService.leaveTypes());
     }
 
-    /**
-     * The §5 company-announcement PDF (rules tab). {@code sessions.requireUser} only -- every
-     * employee may read the rules that bind them, same access as {@link #leaveTypes}. Unchanged by
-     * the write endpoint below being added: this stays a read, not a write, authorization question.
-     *
-     * <p>404 with a clear Thai message whenever {@link LeavePolicyDocumentRepository#findCurrent}
-     * has nothing to serve -- the common case on a fresh environment (an empty table) reads
-     * identically to a real environment whose upload happens to be mid-flight; both are honestly
-     * "nothing to serve right now". The frontend never lets a user reach a raw 404: it HEAD-probes
-     * this same route first and renders a disabled, explained state when it 404s -- see
-     * {@code RulesTab.jsx}'s {@code policyDocumentAvailable} query.
-     *
-     * <p>Also transparently answers {@code HEAD /api/leave/policy-document} -- Spring's
-     * {@code DispatcherServlet} serves HEAD for any {@code @GetMapping} by running this same method
-     * and dropping the body, so the frontend's availability probe needs no separate endpoint.
-     */
+    /** The §5 company-announcement PDF (rules tab). sessions.requireUser only -- every employee may read the rules
+     * that bind them, same access as #leaveTypes. Unchanged by the write endpoint below being added: this stays a
+     * read, not a write, authorization question. */
     @GetMapping("/policy-document")
     ResponseEntity<Resource> policyDocument(HttpSession session) {
         sessions.requireUser(session);
@@ -173,23 +157,9 @@ public class LeaveController {
             .body(new ByteArrayResource(content));
     }
 
-    /**
-     * Uploads a new version of the §5 announcement PDF -- HR/CEO only ({@code requireAnyRole},
-     * matching {@code HolidayController}'s write gate), since this is the one write path that puts
-     * real content in front of every employee via {@link #policyDocument}. Never overwrites: each
-     * call inserts a brand-new {@link LeavePolicyDocumentRepository#insert} row tied to the
-     * {@code effectiveFrom} date the caller supplies, so an older announcement's document stays
-     * retrievable by id even after a newer one supersedes it as "current" -- see V133's migration
-     * comment.
-     *
-     * <p>This is a brand-new authorization surface, so it ships with a real-Postgres integration
-     * test through this exact controller ({@code LeaveControllerPolicyDocumentIntegrationTest})
-     * proving the wrong roles get 403 -- see CLAUDE.md "Permission changes must ship evidence".
-     *
-     * <p>Only {@code application/pdf} is accepted (the announcement is always a PDF; there is no
-     * legitimate reason for this endpoint to accept anything else) and capped at
-     * {@link #MAX_POLICY_DOCUMENT_BYTES}.
-     */
+    /** Uploads a new version of the §5 announcement PDF -- HR/CEO only (requireAnyRole, matching
+     * HolidayController's write gate), since this is the one write path that puts real content in front of every
+     * employee via #policyDocument. */
     @PostMapping("/policy-document")
     Map<String, LeavePolicyDocumentDto> uploadPolicyDocument(
             @RequestParam("file") MultipartFile file,
@@ -220,8 +190,8 @@ public class LeaveController {
     }
 
     // Paper-form (ใบลาหยุด F-HR-020) autofill for the contact-during-leave block, plus read-only
-    // position/department/division -- reuses the /balances access predicate (own record, or HR/CEO,
-    // or the employee's direct manager). See LeaveService#contactDefaults.
+    // position/department/division -- reuses the /balances access predicate (own record, or HR/CEO, or the
+    // employee's direct manager). See LeaveService#contactDefaults.
     @GetMapping("/contact-defaults")
     LeaveContactDefaultsResponse contactDefaults(
             @RequestParam(value = "employeeId", required = false) Long employeeId,
@@ -230,23 +200,8 @@ public class LeaveController {
         return new LeaveContactDefaultsResponse(leaveService.contactDefaults(user, employeeId));
     }
 
-    /**
-     * The CALLING employee's own holiday + resolved work-schedule context for {@code [from, to]}
-     * -- so the leave composer can show why {@code LeaveDayMath}'s schedule/holiday-aware count
-     * differs from the plain calendar span. {@code sessions.requireUser} only, same access as
-     * {@link #leaveTypes}/{@link #policyDocument}: unlike {@code HolidayController}/
-     * {@code WorkScheduleController} (hr/ceo only, admin surfaces this deliberately does not
-     * widen -- see {@link LeaveCalendarContextService}'s javadoc), this is inherently self-scoped.
-     * There is no {@code employeeId} request parameter: the employee id always comes from the
-     * session, never from the caller, so there is no code path by which this can return anyone
-     * else's schedule -- including for HR/CEO callers, who get their own data here same as anyone
-     * else (an admin wanting someone ELSE's resolved schedule is what
-     * {@code WorkScheduleController} is for, and that stays hr/ceo-gated, untouched).
-     *
-     * <p>{@code from}/{@code to} validated the same way as {@code HolidayController}'s admin GET
-     * (both required, {@code to} not before {@code from}) -- see
-     * {@link LeaveCalendarContextService#get}.
-     */
+    /** The CALLING employee's own holiday + resolved work-schedule context for [from, to] -- so the leave composer
+     * can show why LeaveDayMath's schedule/holiday-aware count differs from the plain calendar span. */
     @GetMapping("/calendar-context")
     LeaveCalendarContextResponse calendarContext(
             @RequestParam("from") @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -283,12 +238,9 @@ public class LeaveController {
         return new LeaveTeamBalancesResponse(leaveService.teamBalances(user, year));
     }
 
-    /**
-     * Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): the CALLING employee's own
-     * section for {@code year}/optional {@code month}. No {@code employeeId} parameter -- see
-     * {@link LeaveService#ownLeaveReport}'s Javadoc for why that removes the authorization
-     * question this endpoint would otherwise need to answer.
-     */
+    /** Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): the CALLING employee's own section for
+     * year/optional month. No employeeId parameter -- see LeaveService#ownLeaveReport's Javadoc for why that
+     * removes the authorization question this endpoint would otherwise need to answer. */
     @GetMapping("/reports/me.pdf")
     ResponseEntity<byte[]> ownReportPdf(
             @RequestParam(value = "year", required = false) Integer year,
@@ -306,14 +258,9 @@ public class LeaveController {
             .body(body);
     }
 
-    /**
-     * Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): ONE grouped PDF covering every
-     * direct report (or, for hr/ceo, every active employee -- {@link
-     * LeaveService#teamBalances}'s existing {@code canViewAll} reach) for {@code year}/optional
-     * {@code month}. Owner ruling: one document, grouped per employee, not one PDF per person. No
-     * {@code employeeId} parameter -- the scope is entirely server-derived from {@link
-     * LeaveService#teamLeaveReport}, see its Javadoc.
-     */
+    /** Printable leave-records report (รายงานสรุปใบลางาน, 2026-09): ONE grouped PDF covering every direct report
+     * (or, for hr/ceo, every active employee -- LeaveService#teamBalances's existing canViewAll reach) for
+     * year/optional month. */
     @GetMapping("/reports/team.pdf")
     ResponseEntity<byte[]> teamReportPdf(
             @RequestParam(value = "year", required = false) Integer year,
@@ -331,8 +278,8 @@ public class LeaveController {
             .body(body);
     }
 
-    /** Same "no year given -> this year" default {@link LeaveService}'s own report/balances
-     * methods already apply, needed here again only for the download filename. */
+    /** Same "no year given -> this year" default LeaveService's own report/balances methods already apply, needed
+     * here again only for the download filename. */
     private static int resolvedYear(Integer year) {
         return year == null ? LocalDate.now().getYear() : year;
     }
@@ -364,34 +311,25 @@ public class LeaveController {
         return new LeaveDetailResponse(leaveService.cancel(id, request, user));
     }
 
-    // Phase A0b dry-run: runs the identical gate chain #submit runs, against an uncommitted
-    // request, writing nothing -- see LeaveService#preview for the FULL vs QUICK depth and the
-    // nullable-dates contract.
+    // Phase A0b dry-run: runs the identical gate chain #submit runs, against an uncommitted request, writing
+    // nothing -- see LeaveService#preview for the FULL vs QUICK depth and the nullable-dates contract.
     @PostMapping("/preview")
     LeavePreviewResponse preview(@Valid @RequestBody LeavePreviewRequest request, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new LeavePreviewResponse(leaveService.preview(request, user));
     }
 
-    // Phase A0b: count of SUBMITTED requests THIS actor may act on -- see
-    // LeaveService#reviewSummary for why this is canReviewEmployee-shaped, not a role check.
+    // Phase A0b: count of SUBMITTED requests THIS actor may act on -- see LeaveService#reviewSummary for why this
+    // is canReviewEmployee-shaped, not a role check.
     @GetMapping("/review-summary")
     LeaveReviewSummaryResponse reviewSummary(HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
         return new LeaveReviewSummaryResponse(leaveService.reviewSummary(user));
     }
 
-    // Phase A0b AUTHORIZATION CHANGE: leave attachments (e.g. a SICK medical certificate) were
-    // upload-only before this endpoint existed -- nothing could read one back. Modelled on
-    // SpecialMoneyController#downloadAttachment: authorize BEFORE serving, 404 (not 403) for an
-    // unknown id so this cannot be used to probe which ids exist. See
-    // LeaveService#resolveAttachmentForDownload for the access predicate.
-    //
-    // V134 storage-durability fix: resolveAttachmentForDownload has ALREADY confirmed the bytes are
-    // available (DATABASE, or DISK_LEGACY with a file that still resolves) before returning --
-    // throwing 410 GONE itself when they are not, strictly after its 404/403 checks (see that
-    // method's javadoc for why the ordering matters). This method only needs to pick the right
-    // byte source for the state it got back.
+    // Phase A0b AUTHORIZATION CHANGE: leave attachments (e.g. a SICK medical certificate) were upload-only before
+    // this endpoint existed -- nothing could read one back. This method only needs to pick the right byte source
+    // for the state it got back.
     @GetMapping("/attachments/{attachmentId}")
     ResponseEntity<Resource> downloadAttachment(@PathVariable long attachmentId, HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);

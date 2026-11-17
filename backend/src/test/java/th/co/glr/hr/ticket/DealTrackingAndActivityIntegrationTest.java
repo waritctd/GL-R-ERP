@@ -26,18 +26,9 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Slice B1 "kill the weekly report" (handoff 103): confirms the manual stage-advance gate, the
- * win% default/override, and the staleness computation against the real service and real SQL —
- * mirrors {@link th.co.glr.hr.attendance.AttendanceScopeIntegrationTest} and
- * {@link TicketScopeIntegrationTest}. Mockito cannot reach this: {@code updateStage}'s gate reads
- * {@code sales.deal_activity} and {@code sales.ticket_event} through real repository SQL, and a
- * mocked repository would happily "pass" while that SQL does something else.
- *
- * <p>The gate tests are written wrong-way-round on purpose: assert the caller CANNOT advance
- * without the required state, and that the deal's stage genuinely did not move, not merely that
- * the happy path works.
- */
+/** Slice B1 "kill the weekly report" (handoff 103): confirms the manual stage-advance gate, the win%
+ * default/override, and the staleness computation against the real service and real SQL — mirrors
+ * th.co.glr.hr.attendance.AttendanceScopeIntegrationTest and TicketScopeIntegrationTest. */
 class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -53,10 +44,7 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         CustomerRepository customers = new CustomerRepository(jdbc);
 
         // PricingRequestService is mocked: none of updateStage/addActivity/listActivities/
-        // updateTracking/confirmCustomer ever call it — only markLost/cancel reach
-        // PricingRequestService.cancelOpenForTicket (used by the staleness-on-lost-deal test
-        // below), which is stubbed to a real "nothing was open" result since Mockito's default
-        // null return for an object type would NPE inside markLost.
+        // updateTracking/confirmCustomer ever call it.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -117,29 +105,26 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
     }
 
-    /**
-     * The boundary the gate is actually checking: an activity logged BEFORE the most recent
-     * STAGE_CHANGED event does not satisfy a SUBSEQUENT advance attempt, even though it satisfied
-     * the one before it. Reusing the same activity across two stage changes must not be possible.
-     */
+    /** The boundary the gate is actually checking: an activity logged BEFORE the most recent STAGE_CHANGED event
+     * does not satisfy a SUBSEQUENT advance attempt, even though it satisfied the one before it. Reusing the same
+     * activity across two stage changes must not be possible. */
     @Test
     void activityLoggedBeforeTheLastStageChange_doesNotSatisfyTheNextAdvance() {
         long ticketId = createTicket();
         setNextFollowUp(ticketId, LocalDate.now().plusDays(3));
         logActivity(ticketId, DealActivityKind.CALL);
-        // First advance succeeds — this activity was logged before any STAGE_CHANGED event, so it
-        // satisfies the "since the last stage change" baseline (the ticket's own created_at).
+        // First advance succeeds — this activity was logged before any STAGE_CHANGED event, so it satisfies the "since
+        // the last stage change" baseline (the ticket's own created_at).
         ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
 
-        // Immediately try to advance again with NO new activity — the STAGE_CHANGED event just
-        // written now postdates the only activity on file, so this must be blocked.
+        // Immediately try to advance again with NO new activity — the STAGE_CHANGED event just written now postdates
+        // the only activity on file, so this must be blocked.
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.PRESENTATION);
 
-        // Log a fresh activity now (after the PRESENTATION STAGE_CHANGED event) — the same advance
-        // now succeeds.
+        // Log a fresh activity now (after the PRESENTATION STAGE_CHANGED event) — the same advance now succeeds.
         logActivity(ticketId, DealActivityKind.MEETING);
         ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep);
         assertThat(currentStage(ticketId)).isEqualTo(DealStage.SPEC_APPROVED);
@@ -164,9 +149,9 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         logActivity(ticketId, DealActivityKind.CALL);
         ticketService.updateStage(ticketId, DealStage.QUOTE_DESIGN_SIDE, null, salesRep);
 
-        // QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the routine backward move (DealStage
-        // .isRoutineBackwardMove) — no note required, and no tracking-field gate at all, even
-        // though the deal was just advanced with no fresh activity/follow-up date set since.
+        // QUOTE_DESIGN_SIDE -> SPEC_APPROVED is the routine backward move (DealStage .isRoutineBackwardMove) — no note
+        // required, and no tracking-field gate at all, even though the deal was just advanced with no fresh
+        // activity/follow-up date set since.
         TicketDto result = ticketService.updateStage(ticketId, DealStage.SPEC_APPROVED, null, salesRep);
 
         assertThat(result.summary().salesStage()).isEqualTo(DealStage.SPEC_APPROVED);
@@ -180,9 +165,8 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         logActivity(ticketId, DealActivityKind.CALL);
         ticketService.updateStage(ticketId, DealStage.PRESENTATION, null, salesRep);
 
-        // PRESENTATION -> LEAD_APPROACH is a genuine backward move (not the QUOTE_DESIGN_SIDE ->
-        // SPEC_APPROVED exception), so it needs a note but — unlike a forward move — no
-        // follow-up-date/activity state at all.
+        // PRESENTATION -> LEAD_APPROACH is a genuine backward move (not the QUOTE_DESIGN_SIDE -> SPEC_APPROVED
+        // exception), so it needs a note but — unlike a forward move — no follow-up-date/activity state at all.
         assertThatThrownBy(() -> ticketService.updateStage(ticketId, DealStage.LEAD_APPROACH, null, salesRep))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(400));
 
@@ -190,18 +174,15 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(result.summary().salesStage()).isEqualTo(DealStage.LEAD_APPROACH);
     }
 
-    /**
-     * autoAdvanceStage (system-driven, e.g. confirmCustomer's ORDER_RECEIVED advance) is a
-     * separate code path from updateStage and must never be gated by tracking fields — a deal
-     * missing both nextFollowUpAt and any activity must still auto-advance.
-     */
+    /** autoAdvanceStage (system-driven, e.g. confirmCustomer's ORDER_RECEIVED advance) is a separate code path from
+     * updateStage and must never be gated by tracking fields — a deal missing both nextFollowUpAt and any activity
+     * must still auto-advance. */
     @Test
     void autoAdvanceStage_confirmCustomer_isNotGatedByTrackingFields() {
         long ticketId = createTicket();
-        // Drive the deal to QUOTATION_ISSUED / paymentStatus=null directly — the mechanics of
-        // getting there are exercised elsewhere (e.g. TicketEventStatusIntegrationTest); here we
-        // only care that confirmCustomer's autoAdvanceStage(ORDER_RECEIVED) is unaffected by the
-        // complete absence of nextFollowUpAt/deal_activity.
+        // Drive the deal to QUOTATION_ISSUED / paymentStatus=null directly — the mechanics of getting there are
+        // exercised elsewhere; here we only care that confirmCustomer's autoAdvanceStage is unaffected by the complete
+        // absence of nextFollowUpAt/deal_activity.
         jdbc.update("UPDATE sales.ticket SET status = 'quotation_issued' WHERE ticket_id = :id",
             java.util.Map.of("id", ticketId));
 
@@ -252,6 +233,30 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
         assertThat(summary.nextFollowUpAt()).isEqualTo(LocalDate.now().plusDays(5));
     }
 
+    /** A call or visit set the date after the ข้อมูลงาน form loaded; saving the form without a date must keep it. */
+    @Test
+    void trackingUpdate_withoutADate_keepsTheDateACallSet() {
+        long ticketId = createTicket();
+        LocalDate fromCall = LocalDate.now().plusDays(9);
+        tickets.updateNextFollowUpAt(ticketId, fromCall);
+
+        ticketService.updateTracking(ticketId,
+            new TrackingUpdateRequest(null, "ดีไซเนอร์ ก", null, null, null), salesRep);
+
+        assertThat(currentNextFollowUp(ticketId)).isEqualTo(fromCall);
+    }
+
+    @Test
+    void trackingUpdate_clearNextFollowUpAt_clearsTheDate() {
+        long ticketId = createTicket();
+        tickets.updateNextFollowUpAt(ticketId, LocalDate.now().plusDays(9));
+
+        ticketService.updateTracking(ticketId, new TrackingUpdateRequest(null, null, null, null, null, null, null,
+            null, true), salesRep);
+
+        assertThat(currentNextFollowUp(ticketId)).isNull();
+    }
+
     // ── deal activity CRUD ───────────────────────────────────────────────────
 
     @Test
@@ -295,9 +300,13 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
 
     // ── staleness ─────────────────────────────────────────────────────────────
 
+    // The 14-day QuietRule (ticket.QuietRule) replaced the 7-day activity-only rule; these pin it through the
+    // service. Last touched = latest of created_at, activity, STAGE_CHANGED/QUOTATION_ISSUED event.
+
     @Test
-    void staleness_trueForAnActiveDealWithNoRecentActivity() {
+    void staleness_trueForAnActiveDealUntouchedFor14Days() {
         long ticketId = createTicket();
+        backdateDeal(ticketId, 20);
 
         TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
 
@@ -305,8 +314,18 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
     }
 
     @Test
-    void staleness_falseOnceActivityIsLoggedWithinTheLast7Days() {
+    void staleness_falseForABrandNewDealWithNoActivity() {
         long ticketId = createTicket();
+
+        TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
+
+        assertThat(summary.stale()).isFalse();
+    }
+
+    @Test
+    void staleness_falseOnceActivityIsLoggedWithinTheLast14Days() {
+        long ticketId = createTicket();
+        backdateDeal(ticketId, 20);
         logActivity(ticketId, DealActivityKind.CALL);
 
         TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
@@ -315,16 +334,17 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
     }
 
     @Test
-    void staleness_falseForAnActivityLoggedMoreThan7DaysAgo() {
+    void staleness_trueForAnActivityLoggedMoreThan14DaysAgo() {
         long ticketId = createTicket();
+        backdateDeal(ticketId, 30);
         // Backdate the activity's created_at directly — insertDealActivity always stamps now().
         jdbc.update("""
             INSERT INTO sales.deal_activity (ticket_id, activity_date, kind, note, created_by_id, created_at)
-            VALUES (:ticketId, :date, :kind, NULL, :createdBy, now() - interval '10 days')
+            VALUES (:ticketId, :date, :kind, NULL, :createdBy, now() - interval '15 days')
             """,
             java.util.Map.of(
                 "ticketId", ticketId,
-                "date", LocalDate.now().minusDays(10),
+                "date", LocalDate.now().minusDays(15),
                 "kind", DealActivityKind.CALL,
                 "createdBy", salesRepId));
 
@@ -336,13 +356,22 @@ class DealTrackingAndActivityIntegrationTest extends AbstractPostgresIntegration
     @Test
     void staleness_neverFlaggedOnANonActiveDeal() {
         long ticketId = createTicket();
-        // No activity at all — would be stale if it were ACTIVE — but mark it lost.
+        backdateDeal(ticketId, 20);
+        // Untouched for 20 days — would be stale if it were ACTIVE — but mark it lost.
         ticketService.markLost(ticketId, DealLostReason.PRICE, null, salesRep);
 
         TicketSummaryDto summary = ticketService.get(ticketId, salesRep).summary();
 
         assertThat(summary.lifecycle()).isEqualTo(DealLifecycle.CLOSED_LOST);
         assertThat(summary.stale()).isFalse();
+    }
+
+    /** Pushes the deal and every event already written for it {@code days} into the past. */
+    private void backdateDeal(long ticketId, int days) {
+        java.util.Map<String, Object> p = java.util.Map.of("d", days, "id", ticketId);
+        jdbc.update("UPDATE sales.ticket SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id", p);
+        jdbc.update("UPDATE sales.ticket_event SET created_at = now() - make_interval(days => :d) WHERE ticket_id = :id",
+            p);
     }
 
     // ── helpers ───────────────────────────────────────────────────────────────

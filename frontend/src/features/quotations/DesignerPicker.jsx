@@ -4,42 +4,9 @@ import { Button } from '../../components/common/Button.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
 
-/**
- * ผู้ออกแบบ (designer) picker for the quotation editor's combined designer/D.Co. field. Picking a
- * designer displays NAME + CODE to the user, while the parent receives the CODE ONLY for saving.
- *
- * 🚨 THE NAME IS CONFIDENTIAL ("เป็นความลับ") AND MUST NEVER REACH A PRINTED DOCUMENT. This
- * component only ever calls `onSelectCode(code)` -- it never hands the parent a name, and the
- * parent (QuotationEditorPage) writes that code into `terms.unitCode`. The name is used HERE ONLY,
- * to search and to show which designer a code currently resolves to; see DesignerDto's backend
- * Javadoc for the structural half of this guarantee (there is nowhere in the render path for a
- * name to travel through even by accident).
- *
- * Interaction mirrors DealCustomerCard's โครงการ combobox -- the standard ARIA 1.2 pattern (input
- * `role="combobox"`, `aria-expanded`/`aria-controls`/`aria-autocomplete="list"`/
- * `aria-activedescendant`, arrow keys move a highlighted INDEX rather than DOM focus, Enter picks
- * the highlighted row, Escape closes) -- combined with a debounced SERVER search, the same 280ms
- * debounce DealCustomerCard's ลูกค้า combobox uses, because the designer directory (~1,100 rows,
- * V173) is too large for the โครงการ picker's client-side-filter-over-an-already-loaded-array
- * approach. This is deliberately the ONE extra combobox variant CLAUDE.md's "do not build a third
- * variant" note allows: it reuses BOTH existing patterns' mechanics rather than inventing new ones.
- *
- * ⚠️ REVERSAL (owner ask relayed 2026-09-26, task "designer-add-from-ui"): the directory used to be
- * read-only from this picker's point of view. A sticky "+ เพิ่มผู้ออกแบบใหม่" first row now opens a
- * small modal (code + name) that calls `api.designers.create`, mirroring DealCustomerCard's
- * "+ เพิ่มลูกค้าใหม่" flow exactly -- same sticky-row placement, same seed-from-typed-query
- * behaviour, same select-on-success. `code` is entered by hand (the table's PK, e.g. "A001") -- see
- * DesignerController#create's own doc for the auto-generated-code follow-up this deliberately does
- * not attempt.
- *
- * The designer is OPTIONAL (owner ruling 2026-09-14 -- the backend blankToNull's unit_code and
- * never required it) and CLEARABLE: typing the box down to blank and leaving it (blur) clears a
- * previously-picked code back to '', but only when the rep actually edited the text -- a plain
- * focus-then-blur, or an Enter/click pick followed by blur, never clears. A `value` the directory
- * does not resolve (a legacy code, or a lookup that failed) is not an error state here: closed, the
- * picker shows that raw code as-is rather than going blank, and reopening seeds the search box with
- * it so the rep can search onward from it.
- */
+/** ผู้ออกแบบ (designer) picker for the quotation editor's combined designer/D.Co. Picking a designer displays
+ * NAME + CODE to the user, while the parent receives the CODE ONLY for saving. 🚨 THE NAME IS CONFIDENTIAL
+ * ("เป็นความลับ") AND MUST NEVER REACH A PRINTED DOCUMENT. */
 export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix = 'designer-picker', label = 'ค้นหาผู้ออกแบบ', showToast }) {
   const [search, setSearch] = useState('');
   const [results, setResults] = useState([]);
@@ -48,9 +15,9 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
   const [activeIndex, setActiveIndex] = useState(-1);
   const timer = useRef(null);
   useEffect(() => () => clearTimeout(timer.current), []);
-  // Whether the rep has typed into the box since it was last opened or a designer was last
-  // selected — the signal that distinguishes "cleared on purpose" (blur below) from a plain
-  // focus-then-blur or an Enter/click pick that also leaves `search` blank.
+  // Whether the rep has typed into the box since it was last opened or a designer was last selected — the signal
+  // that distinguishes "cleared on purpose" (blur below) from a plain focus-then-blur or an Enter/click pick
+  // that also leaves `search` blank.
   const editedRef = useRef(false);
 
   // ── "+ เพิ่มผู้ออกแบบใหม่" (reversal, see this file's class doc) ─────────────────────────────
@@ -85,9 +52,8 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
     if (disabled) return;
     setOpen(true);
     editedRef.current = false;
-    // Seed from the current code whenever there is one — not only once the directory has
-    // resolved it to a name — so reopening a legacy/unresolved code still searches onward from
-    // it instead of starting blank.
+    // Seed from the current code whenever there is one — not only once the directory has resolved it to a name —
+    // so reopening a legacy/unresolved code still searches onward from it instead of starting blank.
     const trimmedValue = (value ?? '').trim();
     const query = trimmedValue ? value : search;
     if (trimmedValue) setSearch(value);
@@ -102,10 +68,8 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
     closeDropdown();
   }
 
-  // Keep the text the rep already typed into the search box when opening the create form, so
-  // adding a new designer does not require retyping it — mirrors DealCustomerCard's own
-  // เพิ่มลูกค้าใหม่ seed exactly. Seeds NAME only: `code` is a separate hand-entered field (the
-  // table's PK), not something a free-text search query should guess at.
+  // Keep the text the rep already typed into the search box when opening the create form, so adding a new
+  // designer does not require retyping it — mirrors DealCustomerCard's own เพิ่มลูกค้าใหม่ seed exactly.
   function openNewDesignerFromDropdown() {
     setNewDesigner({ code: '', name: search.trim() });
     setShowNewDesigner(true);
@@ -135,10 +99,9 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
     }
   }
 
-  // Blur commits a deliberate clear: the rep edited the box (not just opened and left it, and not
-  // just picked a result) and left it blank while a code was set. Anything else -- a plain
-  // focus/blur, or an Enter/click selection whose own reset already zeroed `editedRef` -- leaves
-  // `value` exactly as it was.
+  // Blur commits a deliberate clear: the rep edited the box (not just opened and left it, and not just picked a
+  // result) and left it blank while a code was set. Anything else -- a plain focus/blur, or an Enter/click
+  // selection whose own reset already zeroed `editedRef` -- leaves `value` exactly as it was.
   function handleBlur() {
     setTimeout(() => {
       if (editedRef.current && !search.trim() && (value ?? '').trim()) {
@@ -276,23 +239,16 @@ export function DesignerPicker({ value, onSelectCode, disabled = false, idPrefix
   );
 }
 
-/**
- * What the closed field shows: the resolved name + code (with a cancelled-designer suffix, since
- * `useDesignerHint` resolves ANY status), or -- when there is a code but the directory has not
- * resolved it (a legacy code, or a lookup that failed) -- the raw code rather than an empty field,
- * or '' when there is no code at all.
- */
+/** What the closed field shows: the resolved name + code, or -- when there is a code but the directory has not
+ * resolved it -- the raw code rather than an empty field, or '' when there is no code at all. */
 function closedDisplayValue(hint, value) {
   if (hint) return `${hint.name} (${value})${hint.active === false ? ' · ยกเลิกแล้ว' : ''}`;
   return value || '';
 }
 
-/**
- * Resolves the CURRENT unit_code to a designer, for the picker's own display hint -- ANY status
- * (active or not), mirroring `DesignerRepository.findByCode` exactly, so reopening an old
- * quotation whose D.Co. names a since-cancelled (ยกเลิก) designer still shows who that was. Not
- * exported -- this state belongs to the picker's own hint, nowhere else.
- */
+/** Resolves the CURRENT unit_code to a designer, for the picker's own display hint -- ANY status (active or
+ * not), mirroring `DesignerRepository.findByCode` exactly, so reopening an old quotation whose D.Co. names a
+ * since-cancelled (ยกเลิก) designer still shows who that was. */
 function useDesignerHint(code) {
   const [hint, setHint] = useState(null);
   useEffect(() => {

@@ -74,14 +74,8 @@ function renderPage({ entry = '/tax-allowance', showToast = vi.fn() } = {}) {
   );
 }
 
-/**
- * Waits for an evidence picker to actually mount before firing at it.
- *
- * The panel only renders once `evidenceMode` is set, and the page deliberately refuses to decide
- * whether this year is editable until the declarations query has SETTLED — so a picker queried
- * synchronously right after `findByRole` resolves is reliably null. `last` picks the sign-off
- * panel's picker when more than one ข้อ is open.
- */
+/** Waits for an evidence picker to actually mount before firing at it. `last` picks the sign-off panel's picker
+ * when more than one ข้อ is open. */
 async function findPicker({ last = false } = {}) {
   return waitFor(() => {
     const pickers = document.querySelectorAll('input[type="file"]');
@@ -240,8 +234,8 @@ describe('TaxAllowancePage', () => {
             submittedAt: `${currentYear}-01-01T00:00:00.000Z`,
             allowances: { lifeInsuranceAllowance: 60000 },
           }),
-          // Deliberately submitted LATER than the APPROVED row above -- proves `current` wins because
-          // it IS current, not merely because it happens to be the most recent row overall.
+          // Deliberately submitted LATER than the APPROVED row above -- proves `current` wins because it IS current, not
+          // merely because it happens to be the most recent row overall.
           declaration({
             declarationId: 40,
             status: 'WITHDRAWN',
@@ -315,12 +309,9 @@ describe('TaxAllowancePage', () => {
       expect(screen.queryByRole('button', { name: 'ยื่นฉบับแก้ไข' })).toBeNull();
     });
 
-    /**
-     * The header-prefill invariant, wrong-way-round. A confirmed declaration shows WHAT WAS FILED —
-     * seeding its blank header from today's employee master would show the employee an address they
-     * never declared, on a document HR has already accepted. Making it revisable must not leak the
-     * prefill into the read-only view it is still sitting in.
-     */
+    /** The header-prefill invariant, wrong-way-round. A confirmed declaration shows WHAT WAS FILED — seeding its
+     * blank header from today's employee master would show the employee an address they never declared, on a
+     * document HR has already accepted. */
     it('does NOT seed the header from the master while the confirmed declaration is only being viewed', async () => {
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
         items: [applied()],
@@ -431,9 +422,9 @@ describe('TaxAllowancePage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'ยื่นแบบแจ้ง' }));
 
       await waitFor(() => expect(api.payroll.submitMyTaxAllowanceDeclaration).toHaveBeenCalled());
-      // Flushed against the REAL declarationId the submit just returned, tagged with the ข้อ it was
-      // picked under while filling in -- proves this is not "attach after a first submit", it is
-      // the SAME pick from mid-fill-in finally reaching the server.
+      // Flushed against the REAL declarationId the submit just returned, tagged with the ข้อ it was picked under
+      // while filling in -- proves this is not "attach after a first submit", it is the SAME pick from mid-fill-in
+      // finally reaching the server.
       await waitFor(() => expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, file, 'item7'));
       expect(api.payroll.uploadTaxAllowanceAttachment).toHaveBeenCalledWith(77, signed, 'signed_form');
     });
@@ -558,8 +549,8 @@ describe('TaxAllowancePage', () => {
       renderPage();
 
       expect(await screen.findByRole('button', { name: 'ยกเลิกการยื่น' })).not.toBeNull();
-      // ข้อมูลผู้มีเงินได้ is collapsed on a read-only declaration, so the slots have to be
-      // disclosed before they can be read — being blank is still the assertion.
+      // ข้อมูลผู้มีเงินได้ is collapsed on a read-only declaration, so the slots have to be disclosed before they
+      // can be read — being blank is still the assertion.
       openIdentity();
       expect(document.getElementById('ta-taxpayer-id').value).toBe('');
       expect(document.getElementById('ta-addr-houseNo').value).toBe('');
@@ -582,8 +573,8 @@ describe('TaxAllowancePage', () => {
     });
 
     it('lets a REJECTED declaration\'s own header win over the master', async () => {
-      // The employee is re-preparing a filing they already corrected once. Seeding the master over
-      // the top would revert that correction under them.
+      // The employee is re-preparing a filing they already corrected once. Seeding the master over the top would
+      // revert that correction under them.
       api.payroll.getMyTaxAllowanceDeclarations.mockResolvedValue({
         items: [declaration({
           status: 'REJECTED',
@@ -616,9 +607,9 @@ describe('TaxAllowancePage', () => {
       renderPage();
 
       expect(await screen.findByText('ยังไม่ได้ยื่น')).not.toBeNull();
-      // `findByText` above resolves on the FIRST paint — the badge already reads ยังไม่ได้ยื่น while
-      // the query is in flight — so this has to wait for the form to actually become editable
-      // before reading a slot that only the editable form discloses.
+      // `findByText` above resolves on the FIRST paint — the badge already reads ยังไม่ได้ยื่น while the query is in
+      // flight — so this has to wait for the form to actually become editable before reading a slot that only the
+      // editable form discloses.
       await waitFor(() => {
         expect(document.getElementById('ta-taxpayer-id')).not.toBeNull();
       });
@@ -683,9 +674,9 @@ describe('TaxAllowancePage', () => {
 
       await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
       expect(api.payroll.submitMyTaxAllowanceDeclaration).not.toHaveBeenCalled();
-      // Still editable, still holding the staged signed form — dismissing returns you to the form,
-      // it does not reset it. `getAllByText`: the filename legitimately appears twice, once in
-      // FileUploadField's picked-file echo and once in the staged-evidence list.
+      // Still editable, still holding the staged signed form — dismissing returns you to the form, it does not reset
+      // it. `getAllByText`: the filename legitimately appears twice, once in FileUploadField's picked-file echo and
+      // once in the staged-evidence list.
       expect(screen.getAllByText('signed.pdf').length).toBeGreaterThan(0);
       expect(screen.getByRole('button', { name: 'ยื่นแบบแจ้ง' }).disabled).toBe(false);
     });
@@ -696,9 +687,9 @@ describe('TaxAllowancePage', () => {
       });
       const submit = await fillToSubmittable();
 
-      // A value typed before the dialog opened must survive into what is actually filed. The gate
-      // holds the submitted values, and handing the mutation a stale or empty snapshot is the
-      // obvious way to get this refactor subtly wrong.
+      // A value typed before the dialog opened must survive into what is actually filed. The gate holds the
+      // submitted values, and handing the mutation a stale or empty snapshot is the obvious way to get this refactor
+      // subtly wrong.
       fireEvent.click(screen.getByRole('button', { name: /ข้อ 7/ }));
       fireEvent.change(await screen.findByLabelText('จำนวนเงิน'), { target: { value: '4321' } });
 
@@ -711,8 +702,8 @@ describe('TaxAllowancePage', () => {
         taxYear: currentYear,
         lifeInsuranceAllowance: 4321,
       });
-      // The /me endpoint never carries an employeeId — the server resolves the caller from the
-      // session. Asserted here because this change moved the body-building call site.
+      // The /me endpoint never carries an employeeId — the server resolves the caller from the session. Asserted
+      // here because this change moved the body-building call site.
       expect(api.payroll.submitMyTaxAllowanceDeclaration.mock.calls[0][0].employeeId).toBeUndefined();
     });
   });

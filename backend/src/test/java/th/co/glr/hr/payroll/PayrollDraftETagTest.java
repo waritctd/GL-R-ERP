@@ -6,14 +6,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.payroll.PayrollRepository.DraftRowVersion;
 
-/**
- * Pure-function unit coverage for {@link PayrollDraftETag} -- the "does the decision hash the
- * right thing" half, mirroring how a {@code resolveScope}-style test proves an authz decision. The
- * real-DB proof that this ETag is actually enforced (locked compare-then-write, genuine
- * concurrent race, the ABA hazard across a real delete-and-reinsert) lives in {@code
- * PayrollDraftOptimisticConcurrencyIntegrationTest}; Mockito/plain unit tests cannot reach that
- * half at all.
- */
+/** Pure-function unit coverage for PayrollDraftETag -- the "does the decision hash the right thing" half,
+ * mirroring how a resolveScope-style test proves an authz decision. */
 class PayrollDraftETagTest {
 
     @Test
@@ -78,18 +72,15 @@ class PayrollDraftETagTest {
         assertThat(first).isNotEqualTo(second);
     }
 
-    /**
-     * Opus review finding F1 (ABA hazard): the SAME {@code (employeeId, version)} pairs, but
-     * different {@code draftId}s -- exactly what a delete-and-reinsert (process() clearing a
-     * month's drafts, then a fresh save landing back at version 0) produces. The token must differ,
-     * or a stale pre-process {@code If-Match} would incorrectly match the post-process state.
-     */
+    /** Opus review finding F1 (ABA hazard): the SAME (employeeId, version) pairs, but different draftIds -- exactly
+     * what a delete-and-reinsert (process() clearing a month's drafts, then a fresh save landing back at version
+     * 0) produces. */
     @Test
     void sameEmployeeAndVersionPairsButDifferentDraftIdsProduceDifferentTokens() {
         String beforeProcess = PayrollDraftETag.compute(
             List.of(new DraftRowVersion(101L, 1L, 0), new DraftRowVersion(102L, 2L, 0)));
-        // After process() deleted rows 101/102 and HR re-saved: brand-new draft_ids (203/204, an
-        // IDENTITY sequence never reuses a value), but versions land back at 0 either way.
+        // After process() deleted rows 101/102 and HR re-saved: brand-new draft_ids (203/204, an IDENTITY sequence
+        // never reuses a value), but versions land back at 0 either way.
         String afterReinsert = PayrollDraftETag.compute(
             List.of(new DraftRowVersion(203L, 1L, 0), new DraftRowVersion(204L, 2L, 0)));
 
@@ -98,12 +89,9 @@ class PayrollDraftETagTest {
             .isNotEqualTo(beforeProcess);
     }
 
-    /**
-     * Opus review finding F6: a two-row set where digit boundaries could plausibly collide if the
-     * fields were concatenated without a real separator -- draftId=1/employeeId=23 vs
-     * draftId=12/employeeId=3 both stringify to "123" if simply glued together. Proves the `:`
-     * delimiter genuinely separates fields, not just rows.
-     */
+    /** Opus review finding F6: a two-row set where digit boundaries could plausibly collide if the fields were
+     * concatenated without a real separator -- draftId=1/employeeId=23 vs draftId=12/employeeId=3 both stringify
+     * to "123" if simply glued together. */
     @Test
     void twoDigitIdsThatWouldCollideIfFieldsWereUnseparatedProduceDifferentTokens() {
         String first = PayrollDraftETag.compute(List.of(new DraftRowVersion(1L, 23L, 0)));

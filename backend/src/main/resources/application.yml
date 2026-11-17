@@ -46,7 +46,7 @@ spring:
         reWriteBatchedInserts: true
   flyway:
     enabled: ${APP_FLYWAY_ENABLED:true}
-    schemas: hr,hr_restricted,sales,customers,price_catalog
+    schemas: hr,hr_restricted,sales,customers,price_catalog,analytics
     default-schema: hr
     baseline-on-migrate: true
     baseline-version: 1
@@ -206,6 +206,9 @@ app:
   # factory-quote-dispatch (the async outbox worker for factory RFQ emails, V67) was removed:
   # factory RFQ email is manual-only now (owner decision) -- FactoryQuoteService.send just records
   # that a human sent it, so there is no dispatch/worker left to tune.
+  sales:
+    # A deal untouched this many days is "quiet" (QuietRule, spec 2026-11-15 §7.5).
+    quiet-days: ${APP_SALES_QUIET_DAYS:14}
   quotation-expiry:
     # Step 5 (V75): flips ISSUED customer quotations whose validity_date has passed to EXPIRED.
     # A single guarded UPDATE per tick -- no outbox/claim/retry machinery.

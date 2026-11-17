@@ -17,10 +17,9 @@ vi.mock('../../api/index.js', () => ({
       reject: vi.fn(),
       cancel: vi.fn(),
     },
-    // #ot-holiday-visibility: OvertimePanel now reads this unconditionally (UpcomingHolidays'
-    // ~90-day panel AND the single-day verdict-badge lookup both call it) -- every describe block
-    // below that renders OvertimePage needs its own default resolved value, or the verdict/panel
-    // queries error out under every pre-existing test too.
+    // #ot-holiday-visibility: OvertimePanel now reads this unconditionally -- every describe block below that
+    // renders OvertimePage needs its own default resolved value, or the verdict/panel queries error out under
+    // every pre-existing test too.
     leave: {
       calendarContext: vi.fn(),
     },
@@ -86,19 +85,17 @@ describe('OvertimePage form validation', () => {
     });
     api.overtime.list.mockResolvedValue({ requests: [] });
     api.overtime.create.mockResolvedValue({ request: { id: 1001 } });
-    // Default: no holidays anywhere -- keeps every test below on the WORKDAY verdict/empty
-    // UpcomingHolidays panel, uninvolved with what each test actually asserts on. The verdict
-    // states themselves are covered by their own describe block further down.
+    // Default: no holidays anywhere -- keeps every test below on the WORKDAY verdict/empty UpcomingHolidays panel,
+    // uninvolved with what each test actually asserts on. The verdict states themselves are covered by their own
+    // describe block further down.
     api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
   });
 
   it('blocks submit when planned end is not after planned start', async () => {
     renderOvertimePage();
 
-    // A2: two dates + two times now, not two datetime-local inputs -- both same-day here (วันที่
-    // ทำ OT / วันที่สิ้นสุด default to the same day), so this exercises the time-only ordering rule
-    // in isolation. Anchored regex, not an exact string: FormField appends a `required` asterisk
-    // to the label's actual text content, and `^เวลาสิ้นสุด` cannot also match "วันที่สิ้นสุด".
+    // two dates + two times now, not two datetime-local inputs -- both same-day here (วันที่ ทำ OT / วันที่สิ้นสุด
+    // default to the same day), so this exercises the time-only ordering rule in isolation.
     const startTimeInput = await screen.findByLabelText(/^เวลาเริ่ม/);
     const endTimeInput = screen.getByLabelText(/^เวลาสิ้นสุด/);
     const submitButton = screen.getByRole('button', { name: /ส่งคำขอ/ });
@@ -192,11 +189,9 @@ describe('OvertimePage form validation', () => {
     expect(api.overtime.create).not.toHaveBeenCalled();
   });
 
-  // A2 (OT UAT defect #3): mirrors OvertimeService#validatePlannedWindow's ≤24h guard client-side
-  // -- the two backend boundary tests (plannedWindowLongerThanOneDayIsRejected /
-  // ...ExactlyOneDayAfterWorkDateIsAccepted) have no frontend counterpart until now. Anchored
-  // regex for วันที่สิ้นสุด, not a bare substring match: "เวลาสิ้นสุด" also contains "สิ้นสุด", and
-  // FormField's required asterisk sits outside the anchor either way.
+  // mirrors OvertimeService#validatePlannedWindow's ≤24h guard client-side -- the two backend boundary tests
+  // (plannedWindowLongerThanOneDayIsRejected / ...ExactlyOneDayAfterWorkDateIsAccepted) have no frontend
+  // counterpart until now.
   it('blocks submit when วันที่สิ้นสุด is more than one day after วันที่ทำ OT', async () => {
     renderOvertimePage();
     const workDate = isoDaysFromToday(3);
@@ -215,9 +210,9 @@ describe('OvertimePage form validation', () => {
     expect(api.overtime.create).not.toHaveBeenCalled();
   });
 
-  // The boundary the guard above must still ACCEPT -- the overnight window the two-date redesign
-  // exists to support. เวลาเริ่ม/เวลาสิ้นสุด are left at their form defaults (18:00/20:00): the point
-  // of this case is วันที่สิ้นสุด = วันที่ทำ OT + 1 day exactly, not any particular time pair.
+  // The boundary the guard above must still ACCEPT -- the overnight window the two-date redesign exists to
+  // support. เวลาเริ่ม/เวลาสิ้นสุด are left at their form defaults (18:00/20:00): the point of this case is
+  // วันที่สิ้นสุด = วันที่ทำ OT + 1 day exactly, not any particular time pair.
   it('accepts a request whose วันที่สิ้นสุด is exactly one day after วันที่ทำ OT', async () => {
     renderOvertimePage();
     const workDate = isoDaysFromToday(3);
@@ -296,33 +291,27 @@ describe('OvertimePage pending-approver note', () => {
     renderOvertimePage();
 
     const row = (await screen.findByText('ไม่มีผู้จัดการฝ่าย')).closest('.data-row');
-    // Scoped to the "ขั้นอนุมัติ" column specifically, NOT the whole row -- the row's own "เหตุผล"
-    // column legitimately contains the substring "ผู้จัดการ" in this fixture's reason text
-    // ("ไม่มีผู้จัดการฝ่าย"), which would otherwise make a row-wide /ผู้จัดการ/ query match for the
-    // wrong reason.
+    // Scoped to the "ขั้นอนุมัติ" column specifically, NOT the whole row -- the row's own "เหตุผล" column
+    // legitimately contains the substring "ผู้จัดการ" in this fixture's reason text ("ไม่มีผู้จัดการฝ่าย"), which
+    // would otherwise make a row-wide /ผู้จัดการ/ query match for the wrong reason.
     const approvalColumn = row.querySelector('[data-label="ขั้นอนุมัติ"]');
 
-    // A1 (OT UAT defect #1): the StatusBadge itself must read "รอ CEO", not the "รอผู้จัดการ" a
-    // status-only map would give every SUBMITTED row regardless of route -- and the ผู้จัดการ:
-    // audit line, which could never fill on this manager-less route, must not render at all. This
-    // is the exact fixture the header comment on this describe block warned had locked in the
-    // buggy badge.
+    // the StatusBadge itself must read "รอ CEO", not the "รอผู้จัดการ" a status-only map would give every
+    // SUBMITTED row regardless of route -- and the ผู้จัดการ: audit line, which could never fill on this
+    // manager-less route, must not render at all.
     expect(within(approvalColumn).getByText('รอ CEO')).not.toBeNull();
     expect(within(approvalColumn).queryByText(/ผู้จัดการ/)).toBeNull();
 
-    // ...and with NO name resolved, that badge is the ONLY thing this column says. This assertion
-    // replaces one that required a bare "CEO" note here. That note was correct when the badge read
-    // a generic "รอผู้จัดการ" for every pending row, but A1 made the badge name the role, and the
-    // note then merely repeated it -- the owner's screenshot showed "รอ CEO" / "CEO" / "CEO: -",
-    // three lines carrying one fact. The role-only note and the unfilled audit lines are both gone.
+    // ...and with NO name resolved, that badge is the ONLY thing this column says. The role-only note and the
+    // unfilled audit lines are both gone. This assertion replaces one that required a bare "CEO" note here.
     expect(approvalColumn.querySelector('small.text-text-muted')).toBeNull();
     expect(within(approvalColumn).queryByText(/^CEO:/)).toBeNull();
   });
 
   it('keeps the approver note when a NAME was resolved — that is the part the badge cannot say', async () => {
-    // The other side of the rule above: the note earns its line only by naming who holds the
-    // request. Without this case, "drop the note when it has no name" could silently decay into
-    // "drop the note", and nobody would notice the one informative variant had gone too.
+    // The other side of the rule above: the note earns its line only by naming who holds the request. Without this
+    // case, "drop the note when it has no name" could silently decay into "drop the note", and nobody would notice
+    // the one informative variant had gone too.
     api.overtime.list.mockResolvedValue({
       requests: [{
         id: 804, employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001',
@@ -344,13 +333,9 @@ describe('OvertimePage pending-approver note', () => {
   });
 });
 
-// A2 (OT UAT defect #3): the "แผน OT" column must show " (+1 วัน)" only when plannedEndAt genuinely
-// lands on a different Bangkok-local calendar day than workDate (OvertimePanel.jsx's
-// isOvernightWindow) -- this is the one behaviour the whole two-date-picker redesign exists to
-// support, and until this block it had no permanent regression test (only a throwaway one written
-// and discarded during manual verification). Both a same-day and an overnight request render in
-// ONE list so the negative (same-day) assertion is not vacuous for an unrelated reason -- e.g. both
-// rows happening to share a status/route that coincidentally never shows the suffix.
+// the "แผน OT" column must show "" only when plannedEndAt genuinely lands on a different Bangkok-local
+// calendar day than workDate -- this is the one behaviour the whole two-date-picker redesign exists to
+// support, and until this block it had no permanent regression test.
 describe('OvertimePage แผน OT column (A2 overnight display)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -377,11 +362,7 @@ describe('OvertimePage แผน OT column (A2 overnight display)', () => {
         {
           id: 902, employeeId: 1, employeeName: 'พนักงาน ทดสอบ', employeeCode: 'GLR-001',
           workDate: '2026-07-07',
-          // 22:00 -> 02:00 the NEXT Bangkok day. Real +07:00 instants, not bare local strings --
-          // isOvernightWindow compares dateIso(new Date(plannedEndAt)) (parsed in Asia/Bangkok)
-          // against workDate, so an offset-less string would instead be parsed in whatever zone
-          // the test happens to run in and could pass or fail for the wrong reason depending on
-          // where the suite executes.
+          // 22:00 -> 02:00 the NEXT Bangkok day.
           plannedStartAt: '2026-07-07T22:00:00+07:00', plannedEndAt: '2026-07-08T02:00:00+07:00',
           plannedMinutes: 240, dayType: 'WORKDAY', reason: 'overnight shift', status: 'SUBMITTED',
           actualMinutes: 0, payableMinutes: 0, hasManagerApprover: true,
@@ -399,10 +380,7 @@ describe('OvertimePage แผน OT column (A2 overnight display)', () => {
     const sameDayPlan = sameDayRow.querySelector('[data-label="แผน OT"] strong');
     const overnightPlan = overnightRow.querySelector('[data-label="แผน OT"] strong');
 
-    // Negative case: a same-day request shows the time range with NO (+1 วัน) suffix. Exact-match,
-    // not a substring check -- วันที่ / พนักงาน (the first column) already prints วันที่ทำ OT once,
-    // so pinning the WHOLE string here also proves this column never repeats it: there is no room
-    // for a stray date to sneak into an exact match.
+    // Negative case: a same-day request shows the time range with NO (+1 วัน) suffix.
     expect(sameDayPlan.textContent).toBe('18:00–20:00 น.');
 
     // Positive case: the overnight request appends the suffix, same exact-match reasoning.
@@ -410,10 +388,7 @@ describe('OvertimePage แผน OT column (A2 overnight display)', () => {
   });
 });
 
-// Mirrors MyLeaveTab.test.jsx's "Phase A4: self-cancel confirmation" case -- OT's own-request
-// cancel used to skip the ConfirmDialog entirely (falling through to doCancel(id, '') for the
-// canCancel path while only canManagerCancel opened it), the one self-service cancel in the app
-// with no confirmation step before an irreversible mutation.
+// Mirrors MyLeaveTab.test.jsx's "Phase A4: self-cancel confirmation" case.
 describe('OvertimePage self-cancel confirmation', () => {
   const ownSubmittedRow = {
     id: 2002,
@@ -452,13 +427,13 @@ describe('OvertimePage self-cancel confirmation', () => {
     await screen.findByText('ทดสอบระบบ');
     fireEvent.click(screen.getByRole('button', { name: 'ยกเลิก' }));
 
-    // Same-tick sanity check, not the real proof -- mutate() doesn't invoke the mutationFn
-    // synchronously, so this alone would still pass under the old bug. The dialog actually
-    // appearing (next line) is what proves the row action didn't cancel by itself.
+    // Same-tick sanity check, not the real proof -- mutate() doesn't invoke the mutationFn synchronously, so this
+    // alone would still pass under the old bug. The dialog actually appearing (next line) is what proves the row
+    // action didn't cancel by itself.
     expect(api.overtime.cancel).not.toHaveBeenCalled();
     const dialogConfirmButton = await screen.findByRole('button', { name: 'ยกเลิกคำขอ' });
-    // Optional reason -- an employee cancelling their own request is not held to the mandatory
-    // reason an approver's reject requires.
+    // Optional reason -- an employee cancelling their own request is not held to the mandatory reason an
+    // approver's reject requires.
     expect(dialogConfirmButton.disabled).toBe(false);
 
     fireEvent.click(dialogConfirmButton);
@@ -466,11 +441,9 @@ describe('OvertimePage self-cancel confirmation', () => {
   });
 });
 
-// #ot-holiday-visibility (PR 2): the verdict badge and its pre-flight mismatch note, both driven
-// by api.leave.calendarContext -- see OvertimePanel.jsx's own comments on dayTypeVerdictQuery/
-// dayTypeMismatch for the decision table this predicts (OvertimeService#validateDayTypeClaim).
-// Mock-mode only: this exercises the FRONTEND's reading of calendarContext's response shape, not
-// whether the real backend actually derives/validates day types correctly (see PR 1 for that).
+// #ot-holiday-visibility (PR 2): the verdict badge and its pre-flight mismatch note, both driven by
+// api.leave.calendarContext -- see OvertimePanel.jsx's own comments on dayTypeVerdictQuery/ dayTypeMismatch
+// for the decision table this predicts (OvertimeService#validateDayTypeClaim).
 describe('OvertimePage holiday verdict', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -487,20 +460,17 @@ describe('OvertimePage holiday verdict', () => {
     api.overtime.create.mockResolvedValue({ request: { id: 1001 } });
   });
 
-  // Uses a REAL production holiday name (2026-12-07, 149 chars -- the longest row in prod's
-  // hr.holiday, and the reason V129 widened name_th from VARCHAR(120) to TEXT), not a tidy
-  // 12-char stand-in. The verdict pill is `rounded-full`, a shape that asserts "one short line";
-  // interpolating a name this long into it wrapped inside the pill and read as broken. Pinning a
-  // realistic worst-case label here is what keeps the pill and the name structurally separate.
+  // Uses a REAL production holiday name (2026-12-07, 149 chars -- the longest row in prod's hr.holiday, and the
+  // reason V129 widened name_th from VARCHAR(120) to TEXT), not a tidy 12-char stand-in. Pinning a realistic
+  // worst-case label here is what keeps the pill and the name structurally separate.
   const LONGEST_REAL_HOLIDAY_NAME =
     'ชดเชยวันคล้ายวันพระบรมราชสมภพ พระบาทสมเด็จพระบรมชนกาธิเบศร มหาภูมิพลอดุลยเดชมหาราช บรมนาถบพิตร วันชาติ และวันพ่อแห่งชาติ (วันเสาร์ที่ 5 ธันวาคม 2569)';
 
   it('shows the HOLIDAY verdict (3x) and the holiday name separately, so a long real name cannot break the pill', async () => {
     const today = isoDaysFromToday(0);
-    // feat/ot-nonworkday-rate-suggestion: the verdict now reads nonWorkingDates (the
-    // schedule-aware answer), not holidays[0] -- a realistic fixture for "today is a genuine
-    // holiday" carries both, matching the real LeaveCalendarContextService#get contract (a
-    // recorded holiday is always folded into nonWorkingDates too).
+    // feat/ot-nonworkday-rate-suggestion: the verdict now reads nonWorkingDates, not holidays[0] -- a realistic
+    // fixture for "today is a genuine holiday" carries both, matching the real LeaveCalendarContextService#get
+    // contract.
     api.leave.calendarContext.mockResolvedValue({
       calendarContext: {
         holidays: [{ holidayDate: today, nameTh: LONGEST_REAL_HOLIDAY_NAME }],
@@ -509,15 +479,13 @@ describe('OvertimePage holiday verdict', () => {
     });
     renderOvertimePage();
 
-    // The pill carries ONLY the fixed verdict + rate -- an exact-match query, so if the
-    // variable-length name is ever interpolated back into it this fails immediately.
+    // The pill carries ONLY the fixed verdict + rate -- an exact-match query, so if the variable-length name is
+    // ever interpolated back into it this fails immediately.
     expect(await screen.findByText('วันหยุดบริษัท · 3x')).not.toBeNull();
 
-    // ...and the name is still shown, as its own wrappable element. TWO matches is correct, not a
-    // duplicate-render bug: the same holiday is legitimately both an entry in the วันหยุดที่จะถึง
-    // panel (it is upcoming) and the verdict for the currently selected date. Asserting the count
-    // rather than using findAllByText loosely, so a genuine double-render inside one region would
-    // still fail.
+    // ...and the name is still shown, as its own wrappable element. TWO matches is correct, not a duplicate-render
+    // bug: the same holiday is legitimately both an entry in the วันหยุดที่จะถึง panel (it is upcoming) and the
+    // verdict for the currently selected date.
     expect(screen.getAllByText(LONGEST_REAL_HOLIDAY_NAME)).toHaveLength(2);
   });
 
@@ -525,8 +493,8 @@ describe('OvertimePage holiday verdict', () => {
     api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [] } });
     renderOvertimePage();
 
-    // Disambiguated from the identically-worded ประเภท OT <option> (Testing Library sees option
-    // text too) -- same technique the pending-approver-note tests above already use.
+    // Disambiguated from the identically-worded ประเภท OT <option> (Testing Library sees option text too) -- same
+    // technique the pending-approver-note tests above already use.
     expect(await screen.findByText('วันทำงานปกติ · 1.5x', { selector: 'span' })).not.toBeNull();
   });
 
@@ -537,9 +505,9 @@ describe('OvertimePage holiday verdict', () => {
     expect(await screen.findByText('ปฏิทินยังไม่ได้โหลด')).not.toBeNull();
   });
 
-  // feat/ot-nonworkday-rate-suggestion: owner ruling 2026-08-08 removed the outright refusal --
-  // an over-claim is now accepted and flagged for the approver, never refused. Renamed from
-  // "...will be refused when the date is not a holiday" and its assertion updated accordingly.
+  // feat/ot-nonworkday-rate-suggestion: owner ruling 2026-08-08 removed the outright refusal -- an over-claim is
+  // now accepted and flagged for the approver, never refused. Renamed from "...will be refused when the date is
+  // not a holiday" and its assertion updated accordingly.
   it('notes inline that an over-claim will be flagged for the approver, not refused', async () => {
     api.leave.calendarContext.mockResolvedValue({ calendarContext: { holidays: [], nonWorkingDates: [] } });
     renderOvertimePage();
@@ -550,8 +518,8 @@ describe('OvertimePage holiday verdict', () => {
     expect(await screen.findByText(/ระบบจะแนะนำผู้อนุมัติให้ใช้อัตรา 1\.5x/)).not.toBeNull();
   });
 
-  // Renamed from "...pays 3x automatically..." -- the approver, not an automatic recalculation,
-  // now decides the final rate (owner ruling 2026-08-08).
+  // Renamed from "...pays 3x automatically..." -- the approver, not an automatic recalculation, now decides the
+  // final rate (owner ruling 2026-08-08).
   it('notes inline that a suggested-HOLIDAY date will be flagged for the approver even while WORKDAY stays selected', async () => {
     const today = isoDaysFromToday(0);
     api.leave.calendarContext.mockResolvedValue({
@@ -566,12 +534,8 @@ describe('OvertimePage holiday verdict', () => {
   });
 });
 
-// feat/ot-nonworkday-rate-suggestion: the approve dialog's day-type selector. Shown only when the
-// request is FLAGGED (a non-workday suggestion, or an explicit calculation_note flag) AND on the
-// stage that can still set the rate (SUBMITTED) -- the freeze point does not move, so the
-// second-stage CEO sign-off (MANAGER_APPROVED) never shows it, matching
-// OvertimeService#ceoApprove never reading dayType. Defaults to the suggestion; the approver's
-// selection, not the request's stored claim, is what gets sent.
+// feat/ot-nonworkday-rate-suggestion: the approve dialog's day-type selector. Defaults to the suggestion; the
+// approver's selection, not the request's stored claim, is what gets sent.
 describe('OvertimePage approve dialog day-type override', () => {
   const managerUser = {
     employeeId: 99,
@@ -679,8 +643,8 @@ describe('OvertimePage approve dialog day-type override', () => {
 
     const selector = await screen.findByRole('combobox', { name: 'อัตราที่จะอนุมัติ' });
     expect(selector.value, 'defaults to the SUGGESTION (WORKDAY), never the employee\'s claimed HOLIDAY').toBe('WORKDAY');
-    // Two matches is correct, not a duplicate-render bug: the same flag note legitimately shows
-    // both in the list row's เหตุผล column AND inside the dialog (beside the selector).
+    // Two matches is correct, not a duplicate-render bug: the same flag note legitimately shows both in the list
+    // row's เหตุผล column AND inside the dialog (beside the selector).
     expect(screen.getAllByText(/ไม่ตรงกับที่ระบบแนะนำ/).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
@@ -711,14 +675,9 @@ describe('OvertimePage approve dialog day-type override', () => {
   });
 });
 
-// Whose task is this page for? The two roles open the OT tab to do opposite things, and the page
-// order should follow that rather than one order serving both.
-//
-// This asserts DOM ORDER, which jsdom genuinely can do (unlike geometry — every rect here is 0×0).
-// The measurement that motivated it can only come from a browser: at 390px the "ยื่นคำขอ OT"
-// heading sat 1,180px down a 2,301px page, i.e. off-screen on arrival, behind a five-tile strip
-// reading 0/0/0/0 and a four-field date-range filter for a table the user had not reached. After:
-// y=594, on-screen.
+// Whose task is this page for? The two roles open the OT tab to do opposite things, and the page order should
+// follow that rather than one order serving both. This asserts DOM ORDER, which jsdom genuinely can do (unlike
+// geometry — every rect here is 0×0).
 describe('OvertimePanel section order follows the role', () => {
   function orderOf(...nodes) {
     // DOCUMENT_POSITION_FOLLOWING (4) === b comes after a.
@@ -730,8 +689,8 @@ describe('OvertimePanel section order follows the role', () => {
     vi.clearAllMocks();
     api.overtime.employees.mockResolvedValue({ employees: [] });
     api.overtime.list.mockResolvedValue({ requests: [] });
-    // Same default every other describe here sets — see the #ot-holiday-visibility note on the
-    // api mock above: UpcomingHolidays and the verdict badge both read leave.calendarContext.
+    // Same default every other describe here sets — see the #ot-holiday-visibility note on the api mock above:
+    // UpcomingHolidays and the verdict badge both read leave.calendarContext.
     api.leave.calendarContext.mockResolvedValue({ holidays: [], workingDays: [] });
   });
 
@@ -742,18 +701,16 @@ describe('OvertimePanel section order follows the role', () => {
     const holidays = screen.getByRole('heading', { name: 'วันหยุดที่จะถึง' });
     const searchButton = screen.getByRole('button', { name: /ค้นหา/ });
 
-    // Holidays still precede the form — #ot-holiday-visibility requires the holiday answer to
-    // arrive before the claim is made, and this reorder must not quietly undo that.
+    // Holidays still precede the form — #ot-holiday-visibility requires the holiday answer to arrive before the
+    // claim is made, and this reorder must not quietly undo that.
     expect(orderOf(holidays, form)).toBe(true);
     // ...and the range filter now follows the form instead of burying it.
     expect(orderOf(form, searchButton)).toBe(true);
   });
 
   it('keeps the history stats/filter ABOVE the form for a manager, whose task is triage', async () => {
-    // `canSubmitForTeam` is derived from the EMPLOYEES payload — `submitEmployeeOptions.some(e =>
-    // e.directReport)` (OvertimePanel.jsx) — not from `user.manager`. Mocking an empty list here
-    // renders the self-service order and the test passes for the wrong reason; a direct report is
-    // what actually constructs the manager state this case is about.
+    // `canSubmitForTeam` is derived from the EMPLOYEES payload — `submitEmployeeOptions.some(e => e.directReport)`
+    // (OvertimePanel.jsx) — not from `user.manager`.
     api.overtime.employees.mockResolvedValue({
       employees: [
         { employeeId: 99, employeeName: 'ผู้จัดการ ทดสอบ', employeeCode: 'MGR-001', self: true, directReport: false },
@@ -770,15 +727,15 @@ describe('OvertimePanel section order follows the role', () => {
       </QueryClientProvider>,
     );
 
-    // Await the TEAM sub-header first: it is rendered from the same  flag the
-    // ordering keys off, so this fails loudly if the fixture did not actually construct the
-    // manager state, instead of silently asserting the self-service order.
+    // Await the TEAM sub-header first: it is rendered from the same flag the ordering keys off, so this fails
+    // loudly if the fixture did not actually construct the manager state, instead of silently asserting the
+    // self-service order.
     await screen.findByText(/ยื่นคำขอแทนทีม/);
     const searchButton = screen.getByRole('button', { name: /ค้นหา/ });
     const form = screen.getByRole('heading', { name: 'ยื่นคำขอ OT' });
 
-    // Wrong-way-round on purpose: the risk of this change is that it reorders BOTH views, which
-    // would push a manager's queue controls below a form they rarely use.
+    // Wrong-way-round on purpose: the risk of this change is that it reorders BOTH views, which would push a
+    // manager's queue controls below a form they rarely use.
     expect(orderOf(searchButton, form)).toBe(true);
   });
 });

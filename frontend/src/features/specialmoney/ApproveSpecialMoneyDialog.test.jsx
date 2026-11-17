@@ -7,9 +7,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// This project does not wire up jest-dom's matchers (see LoginPage.test.jsx's own note) -- plain
-// DOM assertions (.disabled, queryByText returning null, etc.) throughout, not toBeInTheDocument/
-// toBeDisabled.
+// This project does not wire up jest-dom's matchers (see LoginPage.test.jsx's own note) -- plain DOM
+// assertions (.disabled, queryByText returning null, etc.) throughout, not toBeInTheDocument/ toBeDisabled.
 vi.mock('../../api/index.js', () => ({
   api: {
     specialMoney: {
@@ -36,13 +35,9 @@ function renderDialog(props = {}) {
   return { ...view, props: merged, queryClient };
 }
 
-/** Waits for the underlying react-query cache entry to actually SETTLE (status 'success' or
- * 'error'), rather than merely for the mock fn to have been CALLED -- a promise resolving is a
- * microtask away from the mock recording the call, so "called" can be true a render before the
- * component has re-rendered with the result. Reviewed in (Opus, post-#1015-stack): asserting "no
- * ceiling UI" right after only `toHaveBeenCalled()` cannot distinguish "genuinely no ceiling" from
- * "the fetch simply hasn't resolved yet" -- a test that passes for the wrong reason and could never
- * catch a real regression. */
+/** Waits for the underlying react-query cache entry to actually SETTLE, rather than merely for the mock fn to
+ * have been CALLED -- a promise resolving is a microtask away from the mock recording the call, so "called"
+ * can be true a render before the component has re-rendered with the result. */
 async function waitForPreviewSettled(queryClient, id) {
   await waitFor(() => {
     const state = queryClient.getQueryState(['specialMoney', 'approvalPreview', id]);
@@ -50,14 +45,7 @@ async function waitForPreviewSettled(queryClient, id) {
   });
 }
 
-/**
- * Coverage for the GET `/api/special-money/{id}/approval-preview` wiring: the ceiling line, the
- * over-ceiling warning + "ใช้ยอดเพดาน" shortcut, the client-side reason gate that mirrors
- * `SpecialMoneyService#ceoApproveFrom`'s own 400, the ฿0-ceiling wording/no-shortcut case, the
- * staleness/freshness gate (Opus review: never trust a cached or failed-refetch figure), and the
- * "no ceiling available" fallback (preview error, or the mock's deliberate `eligibleAmount: null`)
- * which must leave the dialog behaving exactly as #1015 shipped it.
- */
+/** Tests approval ceilings, reason requirements, zero/missing ceilings, and stale preview handling. */
 describe('ApproveSpecialMoneyDialog approval-ceiling preview', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -94,8 +82,8 @@ describe('ApproveSpecialMoneyDialog approval-ceiling preview', () => {
     });
     renderDialog({ request: { id: 1, requestedAmount: 1500, employeeName: 'พนักงานทดสอบ' } });
 
-    // The ceiling line still shows "฿0" -- zero is a REAL ceiling (an excluded per-diem province,
-    // an exhausted MEDICAL balance), not "no data".
+    // The ceiling line still shows "฿0" -- zero is a REAL ceiling (an excluded per-diem province, an exhausted
+    // MEDICAL balance), not "no data".
     expect(await screen.findByText('เพดานตามระเบียบสำหรับคำขอนี้ ฿0')).not.toBeNull();
     expect(screen.getByText('ไม่มีวงเงินคงเหลือตามระเบียบ — ต้องระบุเหตุผลหากต้องการอนุมัติ')).not.toBeNull();
     // Nothing to shortcut TO -- ฿0 is not a usable approved amount -- so no button is offered.
@@ -112,8 +100,8 @@ describe('ApproveSpecialMoneyDialog approval-ceiling preview', () => {
     renderDialog();
 
     await screen.findByText(/เพดานตามระเบียบสำหรับคำขอนี้/);
-    // amountInput already reads 5000 (the pre-filled requested amount), which is over the 1960
-    // ceiling -- so the reason-required gate should already be active with no reason typed.
+    // amountInput already reads 5000 (the pre-filled requested amount), which is over the 1960 ceiling -- so the
+    // reason-required gate should already be active with no reason typed.
     expect(screen.getByText('ต้องระบุเหตุผลเมื่อจำนวนเงินที่อนุมัติเกินเพดานตามระเบียบ')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'อนุมัติ' }).disabled).toBe(true);
 
@@ -161,12 +149,8 @@ describe('ApproveSpecialMoneyDialog approval-ceiling preview', () => {
   });
 
   it('a refetch that FAILS while the dialog stays open (no close/reopen) does not resurrect the previous ceiling (M2)', async () => {
-    // First fetch succeeds (฿3,000 renders); a SECOND fetch, triggered while this dialog stays
-    // open the whole time, then fails. This is the one scenario the cache-clear-on-close effect
-    // does NOT cover by itself -- react-query keeps the old successful `data` in place across a
-    // failed refetch (confirmed against the installed @tanstack/query-core: after a rejected
-    // refetch, `state.status` is `'error'` but `state.data` still holds the PREVIOUS success), so
-    // only the `status === 'success'` gate (not "data is present") can catch this.
+    // First fetch succeeds (฿3,000 renders); a SECOND fetch, triggered while this dialog stays open the whole
+    // time, then fails.
     api.specialMoney.approvalPreview
       .mockResolvedValueOnce({ preview: { requestedAmount: 5000, eligibleAmount: 3000, payrollMonth: '2026-08-01' } })
       .mockRejectedValueOnce(new Error('network blip'));
@@ -174,14 +158,14 @@ describe('ApproveSpecialMoneyDialog approval-ceiling preview', () => {
 
     await screen.findByText('เพดานตามระเบียบสำหรับคำขอนี้ ฿3,000');
 
-    // Simulate `invalidateSpecialMoney()` firing from ELSEWHERE (another of the same employee's
-    // requests just got approved) while THIS dialog stays open -- no close/reopen involved, so
-    // the cache-clear-on-close effect never runs.
+    // Simulate `invalidateSpecialMoney()` firing from ELSEWHERE (another of the same employee's requests just got
+    // approved) while THIS dialog stays open -- no close/reopen involved, so the cache-clear-on-close effect never
+    // runs.
     queryClient.invalidateQueries({ queryKey: ['specialMoney', 'approvalPreview'] });
 
-    // A single `waitFor` polling the RENDERED DOM (not just the query cache directly, which can
-    // update a poll-cycle ahead of the component's own re-render): the old ฿3,000 must disappear,
-    // not be resurrected by react-query's own stale `data` retention across the failed refetch.
+    // A single `waitFor` polling the RENDERED DOM (not just the query cache directly, which can update a
+    // poll-cycle ahead of the component's own re-render): the old ฿3,000 must disappear, not be resurrected by
+    // react-query's own stale `data` retention across the failed refetch.
     await waitFor(() => {
       const state = queryClient.getQueryState(['specialMoney', 'approvalPreview', 1]);
       expect(state?.status).toBe('error');
@@ -195,9 +179,9 @@ describe('ApproveSpecialMoneyDialog approval-ceiling preview', () => {
     });
     const { queryClient } = renderDialog();
 
-    // Waits for the query to actually SETTLE (not just for the mock to have been "called") --
-    // see waitForPreviewSettled's own comment for why the weaker check cannot tell "no ceiling
-    // because eligibleAmount is null" apart from "no ceiling because the fetch hasn't resolved".
+    // Waits for the query to actually SETTLE (not just for the mock to have been "called") -- see
+    // waitForPreviewSettled's own comment for why the weaker check cannot tell "no ceiling because eligibleAmount
+    // is null" apart from "no ceiling because the fetch hasn't resolved".
     await waitForPreviewSettled(queryClient, 1);
     expect(screen.queryByText(/เพดานตามระเบียบสำหรับคำขอนี้/)).toBeNull();
     expect(screen.queryByText(/ยอดที่ขอเบิกเกินเพดาน/)).toBeNull();
@@ -248,9 +232,9 @@ describe('ApproveSpecialMoneyDialog approval-ceiling preview', () => {
     // First opening: ceiling ฿3,000 renders.
     await screen.findByText('เพดานตามระเบียบสำหรับคำขอนี้ ฿3,000');
 
-    // Close the dialog (simulates the CEO cancelling), then -- elsewhere -- another request from
-    // the same employee gets approved, consuming most of the ฿3,000 cap. Reopen for the SAME
-    // request: the second fetch is still pending (deliberately held open above).
+    // Close the dialog (simulates the CEO cancelling), then -- elsewhere -- another request from the same employee
+    // gets approved, consuming most of the ฿3,000 cap. Reopen for the SAME request: the second fetch is still
+    // pending (deliberately held open above).
     rerender(
       <QueryClientProvider client={queryClient}>
         <ApproveSpecialMoneyDialog {...props} request={request} open={false} />
@@ -262,9 +246,9 @@ describe('ApproveSpecialMoneyDialog approval-ceiling preview', () => {
       </QueryClientProvider>,
     );
 
-    // While the fresh fetch is still in flight, the OLD ฿3,000 figure must NOT render -- this is
-    // the exact staleness bug the Opus review found (queryClient.js's global staleTime: 30_000
-    // would otherwise let the cached value straight through).
+    // While the fresh fetch is still in flight, the OLD ฿3,000 figure must NOT render -- this is the exact
+    // staleness bug the Opus review found (queryClient.js's global staleTime: 30_000 would otherwise let the
+    // cached value straight through).
     expect(screen.queryByText('เพดานตามระเบียบสำหรับคำขอนี้ ฿3,000')).toBeNull();
     expect(screen.queryByText(/เพดานตามระเบียบสำหรับคำขอนี้/)).toBeNull();
 

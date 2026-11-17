@@ -9,39 +9,15 @@ import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData.LorYor01Addres
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData.MaritalState;
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01FormData.SpousalStatus;
 
-/**
- * Turns a stored declaration into the shape {@link LorYor01Renderer} prints.
- *
- * <p>Pure and static on purpose: everything it needs is a parameter, so it can be unit-tested
- * without a database, and the two callers (render a saved declaration, render an unsaved draft so
- * the employee can sign it) share one mapping instead of two that drift.
- *
- * <h2>The one rule that matters here: zero is not blank</h2>
- *
- * Every amount column is {@code NOT NULL DEFAULT 0}, so an item the employee never declared reads
- * back as {@code 0}, and printing it literally would put a "0.00" on every unused line of a
- * government form — asserting to the Revenue Department that the employee actively declared nothing
- * for fifteen separate categories. A paper form leaves those boxes empty. {@link #blankIfZero} is
- * what keeps the two apart, and {@code LorYor01RendererTest} pins that a blank declaration prints a
- * blank form.
- *
- * <p>Counts are treated the same way, and the renderer's own {@code count()} drops zero as well —
- * belt and braces, because a "0 คน" in a dotted count slot reads as badly as a 0.00 in a baht box.
- */
+/** Turns a stored declaration into the shape LorYor01Renderer prints. A paper form leaves those boxes empty.
+ * #blankIfZero is what keeps the two apart, and LorYor01RendererTest pins that a blank declaration prints a
+ * blank form. */
 public final class LorYor01FormAssembler {
 
     private LorYor01FormAssembler() {
     }
 
-    /**
-     * @param allowances            the 21 shared allowance figures (the declaration's own amounts)
-     * @param form                  the ล.ย.01-only detail; {@code null} is tolerated and prints blank
-     * @param withholdingAgentName  ชื่อหน่วยงานผู้มีหน้าที่หักภาษี ณ ที่จ่าย, from employer config
-     * @param socialSecurityForYear ข้อ 13 — DERIVED, never declared by the employee. Actual
-     *                              contributions recorded for the tax year, so a form filed in
-     *                              January legitimately shows nothing here yet.
-     * @param declaredOn            วัน/เดือน/ปี ที่แจ้งรายการ — submission date, or today for a draft
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public static LorYor01FormData assemble(
             PayrollTaxAllowanceInput allowances,
             LorYor01Details form,
@@ -91,8 +67,8 @@ public final class LorYor01FormAssembler {
                 // ข้อ 10
                 blankIfZero(allowances.rmfAllowance()),
                 blankIfEmpty(f.rmfSellerName()),
-                // ข้อ 11 — LTF ceased to be deductible after tax year 2019. The form still prints the
-                // line, so it prints; there is nothing to put in it and no column behind it (V137).
+                // ข้อ 11 — LTF ceased to be deductible after tax year 2019. The form still prints the line, so it prints;
+                // there is nothing to put in it and no column behind it (V137).
                 null,
                 null,
                 // ข้อ 12-15
@@ -115,10 +91,8 @@ public final class LorYor01FormAssembler {
                 blankIfEmpty(a.province()), blankIfEmpty(a.postalCode()));
     }
 
-    /**
-     * An amount of exactly zero means "this line was never declared" — the column is
-     * {@code NOT NULL DEFAULT 0}, so there is no other way for the row to say it. Print nothing.
-     */
+    /** An amount of exactly zero means "this line was never declared" — the column is NOT NULL DEFAULT 0, so there
+     * is no other way for the row to say it. Print nothing. */
     static BigDecimal blankIfZero(BigDecimal value) {
         return value == null || value.signum() == 0 ? null : value;
     }
@@ -131,11 +105,9 @@ public final class LorYor01FormAssembler {
         return value == null || value.isBlank() ? null : value.trim();
     }
 
-    /**
-     * Tolerates an unrecognised stored value rather than throwing. The columns are CHECK-constrained
-     * (V137) so this should be unreachable, but a form that prints with one box un-ticked is a far
-     * better failure than a 500 that stops an employee filing at all.
-     */
+    /** Tolerates an unrecognised stored value rather than throwing. The columns are CHECK-constrained (V137) so
+     * this should be unreachable, but a form that prints with one box un-ticked is a far better failure than a 500
+     * that stops an employee filing at all. */
     private static <E extends Enum<E>> E enumOrNull(Class<E> type, String raw) {
         if (raw == null || raw.isBlank()) {
             return null;

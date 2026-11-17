@@ -1,16 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { api } from './mockApi.js';
 
-// Guards mockApi's customers.updateContact() SHAPE, PATCH semantics and authz-approximation
-// directly against the mock module (not through a UI test) — see CLAUDE.md "Mock API contract".
-// contract.test.js only compares parameter COUNTS, so a missing field or a wrong PATCH behaviour
-// here would fail nothing there.
-//
-// ⚠️ Real authorization evidence for the backend gate (DealEntryAccess.requireCanEnterDeal) lives
-// in DealEntryAccessIntegrationTest (real Postgres, real CustomerController) — this file only pins
-// that the MOCK's own requireDealEntry() approximation behaves the way CustomerController#update /
-// CustomerRepository.update's PATCH discipline already documents, per CLAUDE.md's own caution that
-// mock authz is never authoritative.
+// Guards mockApi's customers.updateContact() SHAPE, PATCH semantics and authz-approximation directly against
+// the mock module (not through a UI test) — see CLAUDE.md "Mock API contract".
 describe('mockApi.customers.updateContact', () => {
   it('a sales rep updates only the field sent (PATCH semantics) — an omitted field is left alone', async () => {
     await api.auth.login({ role: 'sales' });
@@ -61,13 +53,8 @@ describe('mockApi.customers.updateContact', () => {
       .rejects.toMatchObject({ status: 404 });
   });
 
-  // Wrong-way-round (CLAUDE.md): a role OUTSIDE the deal-entry gate must be refused, not merely
-  // "not tested for success". This is the mock's own approximation only — see the file header.
-  // Deliberately 'hr', not 'employee': demoData.js's seeded plain-employee login
-  // (employee@glr.co.th, id 4) carries canCreateQuotation: true, so it is INSIDE the gate and
-  // would make this assertion pass for the wrong reason. 'hr' has neither a sales role nor the
-  // grant, and the known contact id 1 (mockContacts' seed fixture) is used directly rather than
-  // fetched under this role (hr is also outside CUSTOMER_VIEWER_ROLES).
+  // Wrong-way-round (CLAUDE.md): a role OUTSIDE the deal-entry gate must be refused, not merely "not tested for
+  // success". This is the mock's own approximation only — see the file header.
   it('a role outside requireDealEntry() is refused (mock approximation only — verify against Java)', async () => {
     await api.auth.login({ role: 'hr' });
 

@@ -1,11 +1,9 @@
-/**
- * Pure helpers for DealDocumentRegister's "all versions of each document" view.
- * No React, no API — grouping and ordering only, so the rules are unit-testable.
- */
+/** Pure helpers for DealDocumentRegister's "all versions of each document" view. No React, no API — grouping
+ * and ordering only, so the rules are unit-testable. */
 
-// Revisions are the base number plus a short `-<n>` suffix (QT-2026-0016-3). Only a 1-2 digit
-// tail is treated as a revision suffix: a bare number such as QT-2026-0901 ends in a 4-digit
-// running sequence, and stripping that would merge unrelated documents.
+// Revisions are the base number plus a short `-<n>` suffix (QT-2026-0016-3). Only a 1-2 digit tail is treated
+// as a revision suffix: a bare number such as QT-2026-0901 ends in a 4-digit running sequence, and stripping
+// that would merge unrelated documents.
 export function baseNumberOf(number) {
   if (!number) return null;
   return String(number).replace(/-\d{1,2}$/, '');
@@ -16,15 +14,8 @@ function timeOf(value) {
   return Number.isFinite(t) ? t : 0;
 }
 
-/**
- * Group rows into documents. Versions inside a group are newest first (version desc, id desc as
- * the tie-break); groups are ordered by their newest version's date, then id, descending.
- *
- * @param rows      the rows to group
- * @param keyOf     row -> group key (rows with no usable key should return a unique one)
- * @param versionOf row -> numeric version (missing counts as 0)
- * @param dateOf    row -> date string used only to order groups
- */
+/** Group rows into documents. Versions inside a group are newest first (version desc, id desc as the
+ * tie-break); groups are ordered by their newest version's date, then id, descending. */
 function groupVersions(rows, { keyOf, versionOf, dateOf }) {
   const byKey = new Map();
   for (const row of rows) {
@@ -52,24 +43,24 @@ export function dropLegacyDuplicatedByChain(legacyRows, chainRows) {
   return legacyRows.filter((r) => !chainIds.has(r.id));
 }
 
-// Group keys are prefixed with the family so keys stay unique once families are merged.
-// Chain: revisions of one pricing request are ONE document even when their numbers are unrelated
-// (revisions before 2026-09-18 got fresh numbers, CustomerQuotationService).
+// Group keys are prefixed with the family so keys stay unique once families are merged. Chain: revisions of
+// one pricing request are ONE document even when their numbers are unrelated (revisions before 2026-09-18 got
+// fresh numbers, CustomerQuotationService).
 export const groupChainQuotations = (rows) => groupVersions(rows, {
   keyOf: (r) => (r.pricingRequestId != null ? `chain:pr-${r.pricingRequestId}` : `chain:id-${r.id}`),
   versionOf: (r) => r.quotationRevisionNo,
   dateOf: (r) => r.issuedAt ?? r.createdAt,
 });
-// Legacy: every version gets a fresh bare number, but `quotationVersion` is counted per
-// (ticket, recipientType) — so recipientType is what identifies the document.
+// Legacy: every version gets a fresh bare number, but `quotationVersion` is counted per (ticket,
+// recipientType) — so recipientType is what identifies the document.
 export const groupLegacyQuotations = (rows) => groupVersions(rows, {
   keyOf: (r) => `legacy:${r.recipientType ?? 'UNSPECIFIED'}`,
   versionOf: (r) => r.quotationVersion,
   dateOf: (r) => r.issuedAt,
 });
-// Direct: revisions share `{base}-n`. Strip exactly `-${revisionNo}` when the number ends with it
-// (mirrors QuotationNumbering.baseNumber); a number that does not end with it is returned
-// unchanged. The short-suffix regex is only a guess for rows with no revisionNo at all.
+// Direct: revisions share `{base}-n`. Strip exactly `-${revisionNo}` when the number ends with it (mirrors
+// QuotationNumbering.baseNumber); a number that does not end with it is returned unchanged. The short-suffix
+// regex is only a guess for rows with no revisionNo at all.
 function directBaseNumber(r) {
   if (!r.number) return null;
   if (r.revisionNo == null) return baseNumberOf(r.number);
@@ -121,13 +112,9 @@ export function inForceFirst(versions, orderConfirmedQuotationId = null) {
   return [...versions].sort((a, b) => inForceRank(a, orderConfirmedQuotationId) - inForceRank(b, orderConfirmedQuotationId));
 }
 
-/**
- * Stored remaining invoices, grouped by baseNumber. A DRAFT has no baseNumber yet. The backend
- * (RemainingInvoiceRepository#lockIssuedPredecessor) continues a base ONLY from an ISSUED row with
- * the same customer_quotation_id (null matches null), so a draft joins only a group holding such an
- * ISSUED row, as its newest (top) row. A SUPERSEDED-only group is never adopted; otherwise the
- * draft stands alone.
- */
+/** Stored remaining invoices, grouped by baseNumber. The backend (RemainingInvoiceRepository#lockIssuedPredecessor)
+ * continues a base ONLY from an ISSUED row with the same customer_quotation_id (null matches null), so a draft
+ * joins only a group holding such an ISSUED row, as its newest (top) row. */
 export function groupRemainingInvoices(rows) {
   const numbered = rows.filter((r) => r.baseNumber);
   const drafts = rows.filter((r) => !r.baseNumber);
@@ -152,8 +139,8 @@ export function groupRemainingInvoices(rows) {
   return sortGroupsNewestFirst([...groups, ...alone]);
 }
 
-// One deposit notice per deal, many versions -> a single group. The API returns newest first but
-// the mock does not, so the order is imposed here.
+// One deposit notice per deal, many versions -> a single group. The API returns newest first but the mock does
+// not, so the order is imposed here.
 export const groupDepositNotices = (rows) => groupVersions(rows, {
   keyOf: () => 'deposit', versionOf: (r) => r.version, dateOf: (r) => r.issueDate ?? r.createdAt,
 });

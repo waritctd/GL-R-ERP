@@ -9,14 +9,8 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
-/**
- * Hand-written {@code NamedParameterJdbcTemplate} repository for {@code hr.password_reset_token}
- * (V190) — this codebase has no JPA, so every repository is hand-wired SQL, same as
- * {@link EmployeeAuthRepository}.
- *
- * <p>Only ever stores/queries the SHA-256 hash of a raw token, never the raw value itself — see
- * {@code PasswordResetService} for where the raw token is generated and hashed.
- */
+/** Hand-written NamedParameterJdbcTemplate repository for hr.password_reset_token (V190) — this codebase has no
+ * JPA, so every repository is hand-wired SQL, same as EmployeeAuthRepository. */
 @Repository
 public class PasswordResetTokenRepository {
     private final NamedParameterJdbcTemplate jdbc;
@@ -25,12 +19,9 @@ public class PasswordResetTokenRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Marks every currently-unused token for this employee as used, without touching already-used
-     * or already-expired-but-marked-used rows. Called before issuing a fresh token, so at most one
-     * token is ever live per employee at a time — an old emailed link stops working the moment a
-     * newer one is requested.
-     */
+    /** Marks every currently-unused token for this employee as used, without touching already-used or
+     * already-expired-but-marked-used rows. Called before issuing a fresh token, so at most one token is ever live
+     * per employee at a time — an old emailed link stops working the moment a newer one is requested. */
     public void invalidateOutstanding(long employeeId) {
         jdbc.update("""
             UPDATE hr.password_reset_token
@@ -40,12 +31,9 @@ public class PasswordResetTokenRepository {
             """, Map.of("employeeId", employeeId));
     }
 
-    /**
-     * The creation time of this employee's most recent still-open (unused) token, expired or not —
-     * used only for the 60-second anti-spam cooldown in {@code PasswordResetService#forgotPassword},
-     * which must fire even against an already-expired token so a caller cannot dodge the cooldown
-     * by waiting it out mid-window. Not restricted to {@code expires_at > now()} for that reason.
-     */
+    /** The creation time of this employee's most recent still-open token, expired or not — used only for the
+     * 60-second anti-spam cooldown in PasswordResetService#forgotPassword, which must fire even against an
+     * already-expired token so a caller cannot dodge the cooldown by waiting it out mid-window. */
     public Optional<Instant> mostRecentOpenTokenCreatedAt(long employeeId) {
         try {
             Timestamp createdAt = jdbc.queryForObject("""
@@ -89,22 +77,9 @@ public class PasswordResetTokenRepository {
         }
     }
 
-    /**
-     * Atomically consumes the token — sets {@code used_at} ONLY if it is still unused — and
-     * reports whether THIS call was the one that consumed it. This is the guard against a
-     * concurrent double-redemption: {@code findValidByTokenHash} (read) and the caller's own
-     * {@code password_hash} write are separated by a slow BCrypt hash, hundreds of milliseconds
-     * wide, so two requests bearing the same valid token can both pass the read and race to
-     * "consume" it. Because the {@code WHERE used_at IS NULL} is evaluated by Postgres as part of
-     * the same atomic {@code UPDATE}, only one concurrent caller's statement can match the row —
-     * the other's {@code UPDATE} affects zero rows, and {@link PasswordResetService#resetPassword}
-     * treats that as the same invalid/expired-token rejection a normal miss gets, never touching
-     * {@code password_hash} for the loser. Plain {@code markUsed} (unconditional) is deliberately
-     * not offered alongside this — every caller needs the race-safe version.
-     *
-     * @return {@code true} if this call consumed the token (it was still unused), {@code false} if
-     *     it was already used (by a concurrent request or a prior one) and nothing changed.
-     */
+    /** Atomically consumes the token — sets used_at ONLY if it is still unused — and reports whether THIS call was
+     * the one that consumed it. Plain markUsed (unconditional) is deliberately not offered alongside this — every
+     * caller needs the race-safe version. */
     public boolean markUsedIfUnused(long tokenId) {
         int updated = jdbc.update("""
             UPDATE hr.password_reset_token

@@ -11,29 +11,9 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.SpringBootTest.WebEnvironment;
 import org.springframework.test.context.ActiveProfiles;
 
-/**
- * Sales feedback #8 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06) and the owner's rulings of the same day:
- *
- * <ol>
- *   <li><b>A session never expires.</b> A rep left a quotation open for an hour, came back to a
- *       dead session and retyped everything. Ruling: no idle logout at all, for every role — a
- *       session ends when its owner logs out.</li>
- *   <li><b>…so every request re-checks the account.</b> Until now the 30-minute idle timeout was
- *       the ONLY thing that ever ended a stale session: the principal (role, active flag) is put
- *       into the session at login and was never looked at again. Take the timeout away and an
- *       employee HR deactivates — or moves out of HR — would keep their old access for as long as
- *       they liked, on every device already signed in. Ruling: re-check on every request.</li>
- * </ol>
- *
- * <p>Runs against the real container, real HTTP and real Postgres — see
- * {@link AbstractRealSessionIntegrationTest} for why nothing less can answer these questions, and
- * for where a session actually lives in this build. {@code SessionIdleTimeoutOverrideIntegrationTest}
- * proves the same ageing really does expire a session once a limit is configured, so "still
- * accepted" below is not vacuous.
- *
- * <p>Written wrong-way-round: what a deactivated employee can no longer reach, what an ex-HR
- * session can no longer read.
- */
+/** Sales feedback #8 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06) and the owner's rulings of the same day: A
+ * session never expires. A rep left a quotation open for an hour, came back to a dead session and retyped
+ * everything. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -58,9 +38,8 @@ class SessionLifetimeIntegrationTest extends AbstractRealSessionIntegrationTest 
         assertThat(stored(browser)).isNotNull();
     }
 
-    /** The mechanism, pinned. To the servlet container a session whose max-inactive-interval is
-     * zero or negative never times out ({@code HttpSession#setMaxInactiveInterval}); any positive
-     * number of seconds is an idle limit. */
+    /** The mechanism, pinned. To the servlet container a session whose max-inactive-interval is zero or negative
+     * never times out (HttpSession#setMaxInactiveInterval); any positive number of seconds is an idle limit. */
     @Test
     void aNewSession_carriesNoIdleLimitAtAll() throws Exception {
         Browser browser = signIn(employee("IT", "IT-ไอที"));
@@ -109,8 +88,8 @@ class SessionLifetimeIntegrationTest extends AbstractRealSessionIntegrationTest 
         assertThat(stored(laptop)).isNull();
         assertThat(stored(phone)).isNull();
 
-        // …so re-activating the account does not bring the old cookies back to life. Coming back
-        // means signing in again.
+        // …so re-activating the account does not bring the old cookies back to life. Coming back means signing in
+        // again.
         setActive(account, true);
         assertThat(laptop.get(ME).statusCode()).isEqualTo(401);
         assertThat(phone.get(ME).statusCode()).isEqualTo(401);
@@ -146,9 +125,9 @@ class SessionLifetimeIntegrationTest extends AbstractRealSessionIntegrationTest 
         assertThat(browser.get(ME).body()).contains("\"role\":\"hr\"");
     }
 
-    /** Resetting a password flags the account must-change. A session already open under the OLD
-     * password is confined to changing it at once (MustChangePasswordFilter), instead of carrying
-     * on with full access for as long as its owner cares to keep it. */
+    /** Resetting a password flags the account must-change. A session already open under the OLD password is
+     * confined to changing it at once (MustChangePasswordFilter), instead of carrying on with full access for as
+     * long as its owner cares to keep it. */
     @Test
     void anAccountFlaggedMustChangePassword_confinesItsOpenSessionAtOnce() throws Exception {
         Account account = employee("HR", "HR-บุคคล");
@@ -164,8 +143,8 @@ class SessionLifetimeIntegrationTest extends AbstractRealSessionIntegrationTest 
         assertThat(me.body()).contains("\"mustChangePassword\":true");
     }
 
-    /** Regression guard for the tests above: an account that has NOT changed is not disturbed —
-     * same role, request after request, and its session is still the same one. */
+    /** Regression guard for the tests above: an account that has NOT changed is not disturbed — same role, request
+     * after request, and its session is still the same one. */
     @Test
     void anUnchangedAccount_keepsItsSessionAndItsRole() throws Exception {
         Browser browser = signIn(employee("HR", "HR-บุคคล"));

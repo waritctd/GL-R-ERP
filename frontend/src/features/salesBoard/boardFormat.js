@@ -1,0 +1,135 @@
+// Display helpers shared by งานของฉัน and ภาพรวมทีมขาย. Labels only — every number is served by SalesBoardService.
+import { weekEndDay } from './cashFormat.js';
+
+/**
+ * The five board columns (DealStage.boardColumnOf), with the reps' own S-codes. `moveHint` (slice 6.1) says what moves
+ * a deal INTO an auto column, read off TicketService's autoAdvanceStage call sites — DealBoard.test.jsx pins each one
+ * against its source.
+ */
+export const BOARD_COLUMNS = [
+  { column: 1, label: 'เสนอสินค้า', code: 'S1', auto: false },
+  { column: 2, label: 'สเปคผ่าน', code: 'S2', auto: false },
+  // Fix round 1: each hint is true and fits one line at 1440px; `moveRule` (the tooltip) is the whole rule.
+  // boardMoveHints.test.js pins every one against TicketService / DealStage / DealRoute.
+  {
+    column: 3, label: 'เสนอราคาแล้ว', code: 'S3–5', auto: true,
+    moveHint: 'เข้าเองเมื่ออนุมัติใบถึงผู้ออกแบบ/เจ้าของ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อใบเสนอราคาถึงผู้ออกแบบหรือเจ้าของโครงการได้รับอนุมัติ',
+  },
+  {
+    column: 4, label: 'รอมัดจำ', code: 'S6', auto: true,
+    moveHint: 'เข้าเองเมื่ออนุมัติใบถึงผู้ซื้อหรือยืนยันสั่งซื้อ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อใบเสนอราคาถึงผู้ซื้อ (หรือใบที่ไม่ระบุผู้รับ) ได้รับอนุมัติ หรือเมื่อยืนยันคำสั่งซื้อ',
+  },
+  {
+    column: 5, label: 'ส่งของ · เก็บเงิน', code: 'S7–9', auto: true,
+    moveHint: 'เข้าเองเมื่อรับมัดจำหรือเริ่มสั่ง/ส่งของ',
+    moveRule: 'งานเข้าช่องนี้เองเมื่อรับเงินมัดจำ ออกใบขอซื้อ หรือของครบจากสต็อกจนพร้อมส่ง',
+  },
+];
+
+/** The columns whose cards carry the money chip in place of the % chip (approved prototype, slice 6.2). */
+export const MONEY_CHIP_COLUMNS = new Set([4, 5]);
+
+const SHORT_MONTH = ['ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.', 'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.'];
+
+/** "23 พ.ย." from "2026-11-23" — a card is too narrow for the year. */
+function chipDay(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? '');
+  return m ? `${Number(m[3])} ${SHORT_MONTH[Number(m[2]) - 1]}` : null;
+}
+
+/**
+ * The ONE money chip a รอมัดจำ / ส่งของ · เก็บเงิน card carries, from BoardDeal's served money state, or null (the card
+ * then keeps its % chip). Priority: a due date (เกินกำหนด when the SERVER says overdue, else ครบกำหนด), then มัดจำ in
+ * hand, then the rep's expected deposit week. The week is a Monday the rep picked, so the chip names that week's Friday
+ * the way the เงินที่จะเข้า card labels a week ("ถึง 4 ธ.ค."), never a single day the rep did not give. Labels only:
+ * nothing here decides what is due or overdue.
+ */
+export function cardMoneyChip(deal) {
+  if (deal.paymentDueDate) {
+    return deal.overdue
+      ? { tone: 'danger', text: `เกินกำหนด ${chipDay(deal.paymentDueDate)}` }
+      : { tone: 'warning', text: `ครบกำหนด ${chipDay(deal.paymentDueDate)}` };
+  }
+  if (deal.depositReceived) return { tone: 'success', text: 'ได้มัดจำ' };
+  if (deal.expectedDepositWeek) return { tone: 'info', text: `นัดรับ ถึง ${weekEndDay(deal.expectedDepositWeek)}` };
+  return null;
+}
+
+export const columnLabel = (column) => BOARD_COLUMNS.find((c) => c.column === column)?.label ?? '';
+
+const BAHT = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 0 });
+
+/** ฿ with th-TH grouping, whole baht. Null stays a dash: no quotation yet means no value, not ฿0. */
+export function baht(value) {
+  if (value === null || value === undefined || value === '') return '—';
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `฿${BAHT.format(amount)}` : '—';
+}
+
+/** "2026-Q4" → "Q4/69" — the reps' workbook style (Buddhist-era year, two digits). */
+export function quarterLabel(expectedQuarter) {
+  const match = /^(\d{4})-Q([1-4])$/.exec(expectedQuarter ?? '');
+  if (!match) return null;
+  return `Q${match[2]}/${String(Number(match[1]) + 543).slice(-2)}`;
+}
+
+/** วันนี้ / เมื่อวาน / n วันก่อน, from an ISO instant. */
+export function sinceLabel(iso, now = new Date()) {
+  if (!iso) return '—';
+  const then = new Date(iso);
+  if (Number.isNaN(then.getTime())) return '—';
+  const day = (d) => d.toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' });
+  const days = Math.round((new Date(day(now)) - new Date(day(then))) / 86_400_000);
+  if (days <= 0) return 'วันนี้';
+  if (days === 1) return 'เมื่อวาน';
+  return `${days} วันก่อน`;
+}
+
+const isThb = (currency) => !currency || currency === 'THB';
+
+/** A deal value in its own currency: ฿ for THB, otherwise the ISO code ("USD 1,000"). */
+export function money(value, currency) {
+  if (isThb(currency)) return baht(value);
+  if (value === null || value === undefined || value === '') return '—';
+  const amount = Number(value);
+  return Number.isFinite(amount) ? `${currency} ${BAHT.format(amount)}` : '—';
+}
+
+/** The THB sum only — another currency is never added into a ฿ figure (review M1). */
+export const sumValue = (deals) => deals.reduce((sum, d) => (isThb(d.currency) ? sum + Number(d.value ?? 0) : sum), 0);
+
+/** Non-THB values summed per currency, e.g. { USD: 1000 }. */
+export function otherCurrencyTotals(deals) {
+  const totals = {};
+  deals.forEach((d) => {
+    if (!isThb(d.currency) && d.value != null) totals[d.currency] = (totals[d.currency] ?? 0) + Number(d.value);
+  });
+  return totals;
+}
+
+/** "฿2,000 + USD 1,000": the ฿ total, then each other currency on its own. `totals` maps code → amount. */
+export function totalLabel(thb, totals = {}) {
+  return [baht(thb), ...Object.keys(totals).sort().map((code) => `+ ${money(totals[code], code)}`)].join(' ');
+}
+
+/** "2026-Q4" for today in Asia/Bangkok — what the board's ไตรมาสนี้ filter keeps. */
+export function currentQuarter(now = new Date()) {
+  const [year, month] = now.toLocaleDateString('sv-SE', { timeZone: 'Asia/Bangkok' }).split('-').map(Number);
+  return `${year}-Q${Math.floor((month - 1) / 3) + 1}`;
+}
+
+/**
+ * The board's first filter (round-2 LOW 1): ไตรมาสนี้ only once at least half of the rep's open deals carry an expected
+ * quarter — before that most deals have none, and ไตรมาสนี้ would hide most of the board. A rep's own click wins.
+ */
+export function defaultBoardFilter(openDeals) {
+  const deals = openDeals ?? [];
+  const withQuarter = deals.filter((d) => d.expectedQuarter).length;
+  return deals.length > 0 && withQuarter * 2 >= deals.length ? 'quarter' : 'all';
+}
+
+/** The board's owner tag (sales_manager / ceo): the rep's first name, as the review draws it; the card keeps the full
+ * name in the tag's title. */
+export const ownerShortName = (name) => (name ?? '').trim().split(/\s+/)[0] ?? '';

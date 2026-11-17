@@ -27,17 +27,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * V88 withholding-tax override, proven through the real {@link PayrollService}/{@link
- * PayrollRepository} + Postgres seam (not the calculator in isolation): the two-layer "Both" model.
- *
- * <p>GUARDRAIL asserted throughout: the override only SUBSTITUTES the final withheld amount. The
- * progressive-tax figures ({@code annualTax}, {@code taxableAnnualIncome}, {@code
- * projectedAnnualIncome}) are still computed and reported UNCHANGED. Baseline for this salary
- * (40,000, January, no YTD, no stored allowance) is pinned elsewhere in the suite: taxableAnnualIncome
- * 309,500.00, annualTax 8,450.00, computed withholdingTax 704.00 (whole baht since 2026-08-28; see
- * PayrollAllowanceDirectorNonTaxableIntegrationTest).
- */
+/** V88 withholding-tax override, proven through the real PayrollService/PayrollRepository + Postgres seam (not
+ * the calculator in isolation): the two-layer "Both" model. GUARDRAIL asserted throughout: the override only
+ * SUBSTITUTES the final withheld amount. */
 class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final BigDecimal COMPUTED_WITHHOLDING = new BigDecimal("704.00");
 
@@ -75,11 +67,9 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * Layer 1: the standing per-employee override on hr.employee flows through preview and substitutes
-     * the withheld amount, while the progressive-tax computation stays intact and is still reported.
-     * The per-run typed field on the line stays null (the standing value is not a per-run entry).
-     */
+    /** Layer 1: the standing per-employee override on hr.employee flows through preview and substitutes the
+     * withheld amount, while the progressive-tax computation stays intact and is still reported. The per-run typed
+     * field on the line stays null (the standing value is not a per-run entry). */
     @Test
     void standingEmployeeOverrideSubstitutesWithheldAmountButLeavesComputationIntact() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -100,19 +90,17 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
         assertThat(overridden.annualTax()).isEqualByComparingTo(computed.annualTax());
         assertThat(overridden.taxableAnnualIncome()).isEqualByComparingTo(computed.taxableAnnualIncome());
         assertThat(overridden.projectedAnnualIncome()).isEqualByComparingTo(computed.projectedAnnualIncome());
-        // The line's per-run typed field is null: the standing value is not a per-run entry, so it must
-        // not be persisted onto the line or carried forward.
+        // The line's per-run typed field is null: the standing value is not a per-run entry, so it must not be
+        // persisted onto the line or carried forward.
         assertThat(overridden.withholdingTaxOverride()).isNull();
         // Net pay reflects the smaller withheld amount exactly.
         assertThat(overridden.netPay())
             .isEqualByComparingTo(computed.netPay().add(COMPUTED_WITHHOLDING).subtract(new BigDecimal("500.00")));
     }
 
-    /**
-     * Layer 2 precedence: a per-run HR-typed override WINS over the standing employee override. Same
-     * employee, standing = 500.00, per-run = 250.00 -> withheld = 250.00, and the per-run typed value
-     * is what gets stored on the line (so it can carry forward), not the standing value.
-     */
+    /** Layer 2 precedence: a per-run HR-typed override WINS over the standing employee override. Same employee,
+     * standing = 500.00, per-run = 250.00 -> withheld = 250.00, and the per-run typed value is what gets stored on
+     * the line (so it can carry forward), not the standing value. */
     @Test
     void perRunOverrideWinsOverStandingOverrideAndIsTheValueStoredOnTheLine() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -138,8 +126,8 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
         assertThat(reread.withholdingTax()).isEqualByComparingTo("250.00");
         assertThat(reread.withholdingTaxOverride()).isEqualByComparingTo("250.00");
 
-        // And the per-run typed override carries forward as a suggestion for the following month, while
-        // the standing employee value is NOT carried (it re-applies from the employee record on its own).
+        // And the per-run typed override carries forward as a suggestion for the following month, while the standing
+        // employee value is NOT carried (it re-applies from the employee record on its own).
         PayrollCarryForwardDtos.SuggestedInputsResponse suggestions =
             payrollService.suggestedInputs(LocalDate.of(2026, 2, 1), hr());
         PayrollCarryForwardDtos.SuggestedInputRow row = suggestions.suggestions().stream()
@@ -149,10 +137,8 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
         assertThat(row.withholdingTaxOverride()).isEqualByComparingTo("250.00");
     }
 
-    /**
-     * Zero is a meaningful per-run override (withhold nothing) and must be honoured, distinct from "no
-     * override" -- proving the null-vs-zero distinction survives the JSON/DB round trip.
-     */
+    /** Zero is a meaningful per-run override (withhold nothing) and must be honoured, distinct from "no override"
+     * -- proving the null-vs-zero distinction survives the JSON/DB round trip. */
     @Test
     void perRunOverrideOfZeroForcesZeroWithheldTaxThroughTheService() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -169,12 +155,9 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
         assertThat(line.annualTax()).isEqualByComparingTo("8450.00");
     }
 
-    /**
-     * The employee-update clear path (bug fix under test, EmployeeRepository.update): setting the
-     * standing override then clearing it back to NULL through the real update() path must restore
-     * COMPUTED withholding on the very next payroll line -- not just leave the stale override value in
-     * place. Proven wrong-way-round: assert the DB column is actually NULL before checking payroll.
-     */
+    /** The employee-update clear path (bug fix under test, EmployeeRepository.update): setting the standing
+     * override then clearing it back to NULL through the real update() path must restore COMPUTED withholding on
+     * the very next payroll line -- not just leave the stale override value in place. */
     @Test
     void clearingStandingOverrideThroughEmployeeUpdateRestoresComputedWithholdingOnNextPayrollLine() {
         LocalDate month = LocalDate.of(2026, 1, 1);
@@ -187,8 +170,8 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
         setStandingOverride(employeeId, new BigDecimal("500.00"));
         assertThat(previewLineFor(month, employeeId).withholdingTax()).isEqualByComparingTo("500.00");
 
-        // Clear it through EmployeeRepository.update (the actual HR employee-edit code path), not the
-        // direct-SQL helper -- this is what proves the fix, not just the DB state.
+        // Clear it through EmployeeRepository.update (the actual HR employee-edit code path), not the direct-SQL
+        // helper -- this is what proves the fix, not just the DB state.
         EmployeeRepository employeeRepository =
             new EmployeeRepository(jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         employeeRepository.update(employeeId, clearWithholdingOverrideRequest());
@@ -205,10 +188,8 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
         assertThat(restored.withholdingTax()).isEqualByComparingTo(computed.withholdingTax());
     }
 
-    /**
-     * Zero is a meaningful standing override ("withhold nothing") and must survive an update() call
-     * distinctly from NULL -- it must NOT be treated as a clear.
-     */
+    /** Zero is a meaningful standing override ("withhold nothing") and must survive an update() call distinctly
+     * from NULL -- it must NOT be treated as a clear. */
     @Test
     void settingStandingOverrideToZeroThroughEmployeeUpdateStaysZeroNotNull() {
         long employeeId = seedEmployee("WHT-ZEROSTAND", "ศูนย์คงที่", "ทดสอบ", new BigDecimal("40000.00"));
@@ -303,9 +284,9 @@ class PayrollWithholdingTaxOverrideIntegrationTest extends AbstractPostgresInteg
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
-        // Task 2 (2026-07-29): this file is about the withholding-tax override, not classification --
-        // seed the real production SSO-inclusion defaults so socialSecurity comes out non-zero as
-        // pinned. SALARY needs no tax-treatment seed (locked to REGULAR_REPROJECT regardless).
+        // Task 2 (2026-07-29): this file is about the withholding-tax override, not classification -- seed the real
+        // production SSO-inclusion defaults so socialSecurity comes out non-zero as pinned. SALARY needs no
+        // tax-treatment seed (locked to REGULAR_REPROJECT regardless).
         new PayrollRepository(jdbc).seedSsoInclusionDefaults(employeeId, 2026, employeeId);
         return employeeId;
     }

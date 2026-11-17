@@ -5,14 +5,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 
-/**
- * Everything {@link LeaveFormRenderer} needs to print one ใบลาหยุด (F-HR-020) for a single request.
- * A pure data carrier, assembled by {@link LeaveService#buildLeaveForm} from the already-computed
- * {@link LeaveRequestDto} plus two read-only lookups the DTO does not carry: the employee's
- * nickname/position/department/division (from {@link LeaveRepository#findLeaveFormHeader}) and their
- * year-to-date approved usage per type (from the leave balances). No query and no leave-day math
- * happens in the renderer -- same division of labour as {@link LeaveReportRenderer}.
- */
+/** Everything LeaveFormRenderer needs to print one ใบลาหยุด (F-HR-020) for a single request. No query and no
+ * leave-day math happens in the renderer -- same division of labour as LeaveReportRenderer. */
 public record LeaveFormData(
     String employeeCode,
     String employeeName,
@@ -41,14 +35,9 @@ public record LeaveFormData(
     BigDecimal usedPersonalDays,
     BigDecimal usedSickDays,
     BigDecimal usedVacationDays,
-    // Approval outcome (2026-09, auto-filled ความเห็นผู้บังคับบัญชา / HR-receipt boxes). All three are
-    // null on the SUBMITTED form emailed to HR (the boxes render blank for a human to sign); they are
-    // populated only when the form is regenerated after a manual decision, so the copy emailed to the
-    // employee shows the ticked box, the approver's signature, and the decision date/time.
-    // decision: "APPROVED" | "REJECTED" | null (pending -- boxes blank).
-    // approverName: the ผู้อนุมัติ signature -- the employee's reports-to manager on file.
-    // approvedAt: the decision timestamp (Bangkok), null when pending; carries both the date and the
-    //   time the HR-receipt box prints.
+    // Approval outcome (2026-09, auto-filled ความเห็นผู้บังคับบัญชา / HR-receipt boxes). decision: "APPROVED" |
+    // "REJECTED" | null (pending -- boxes blank). approverName: the ผู้อนุมัติ signature -- the employee's
+    // reports-to manager on file.
     String decision,
     String approverName,
     LocalDateTime approvedAt

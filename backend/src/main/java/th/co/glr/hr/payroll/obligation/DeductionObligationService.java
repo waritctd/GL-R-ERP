@@ -24,26 +24,9 @@ import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligati
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationUpdateRequest;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.RemittanceLedgerRowDto;
 
-/**
- * Business logic for the deduction-obligation record + remittance ledger (issue #373).
- *
- * <p><b>{@link #resolveMonthlyAmount}</b> is the payroll-engine hook: {@code PayrollService
- * #calculateLine} calls it in place of reading the HR-typed {@code studentLoanDeduction}/
- * {@code legalExecutionDeduction} field directly, for both {@code STUDENT_LOAN} and
- * {@code LEGAL_EXECUTION}. Read-only — safe to call from both {@code preview} and {@code process}.
- * When no obligation exists for the employee/kind it falls back to whatever HR typed this run,
- * exactly reproducing pre-existing behaviour for anyone not yet migrated to an obligation record.
- *
- * <p><b>{@link #recordRemittances}</b> is the only side-effecting hook, called by {@code
- * PayrollService#process} once (inside process's own transaction) after the period's lines are
- * persisted — it upserts one ledger row per (obligation, payrollMonth) using the ACTUAL persisted
- * deduction (after every other cap, e.g. ป.วิ.พ. ม.302, has already been applied), then re-derives
- * the obligation's ACTIVE/COMPLETED state from the recomputed cumulative total.
- *
- * <p>Every mutating HR method here double-checks its role, the same {@code requireRole} idiom
- * {@code PayrollService}/{@code TaxAllowanceDeclarationService} already use — the controller's
- * {@code @PreAuthorize} is not the only gate.
- */
+/** Business logic for the deduction-obligation record + remittance ledger. #resolveMonthlyAmount is the
+ * payroll-engine hook: PayrollService #calculateLine calls it in place of reading the HR-typed
+ * studentLoanDeduction/ legalExecutionDeduction field directly, for both STUDENT_LOAN and LEGAL_EXECUTION. */
 @Service
 public class DeductionObligationService {
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
@@ -68,35 +51,12 @@ public class DeductionObligationService {
         this.shortfallRepository = shortfallRepository;
     }
 
-    // ==================================================================================
-    // Payroll-engine hooks — no actor/role check; these are internal service-to-service calls,
-    // never exposed directly over HTTP.
-    // ==================================================================================
+    // Payroll-engine hooks — no actor/role check; these are internal service-to-service calls, never exposed
+    // directly over HTTP.
 
-    /**
-     * The monthly figure {@code PayrollCalculator} should be asked to deduct for this employee/kind
-     * this period.
-     *
-     * <ul>
-     *   <li>No obligation on file for this employee/kind for THIS payroll month (either none exists,
-     *       or one exists but its {@code start_date} is after this month — D2 fix, Opus review) -&gt;
-     *       {@code manualFallback} (whatever HR typed this run, or zero) — unchanged legacy behaviour.
-     *   <li>Obligation has no {@code instructedTotal} (nullable — open question to the owner, see
-     *       V106's header) -&gt; the monthly instructed amount, uncapped, always.
-     *   <li>Otherwise, {@code remaining} is computed FRESH every call as {@code instructedTotal}
-     *       minus every OTHER period's already-recorded remittance (see {@link
-     *       DeductionObligationRepository#sumRemittanceExcludingMonth}) — deliberately NEVER from
-     *       the stored {@code status} column (D1 fix, Opus review). {@code status} is a snapshot
-     *       {@link #recordRemittances} writes AFTER a run finishes; trusting it here made a re-run of
-     *       the very month that caused completion see "COMPLETED" and stop BEFORE recomputing that
-     *       month's own remainder, silently deleting the final instalment. If {@code remaining == 0}
-     *       (every OTHER period alone already reaches the total) this is the genuine auto-stop --
-     *       {@code 0} unless HR has recorded an explicit {@code overrideContinuePastTotal}, in which
-     *       case the monthly figure resumes uncapped. Otherwise {@code min(monthlyInstructedAmount,
-     *       remaining)} — the draw-down clamp: the final instalment before completion is exactly the
-     *       remainder, never an overshoot, which structurally removes the overpay case.
-     * </ul>
-     */
+    /** The monthly figure PayrollCalculator should be asked to deduct for this employee/kind this period.
+     * Obligation has no instructedTotal (nullable — open question to the owner, see V106's header) -> the monthly
+     * instructed amount, uncapped, always. */
     public BigDecimal resolveMonthlyAmount(
         long employeeId, DeductionObligationKind kind, LocalDate payrollMonth, BigDecimal manualFallback
     ) {
@@ -117,12 +77,8 @@ public class DeductionObligationService {
         return monthly.min(remaining);
     }
 
-    /**
-     * Records what was ACTUALLY deducted this processed period against every employee's driving
-     * obligation (if any), then re-derives ACTIVE/COMPLETED from the recomputed cumulative total.
-     * Called once from {@code PayrollService#process}, inside that method's own {@code
-     * @Transactional} — never from {@code preview}, which must have no side effects.
-     */
+    /** Records what was ACTUALLY deducted this processed period against every employee's driving obligation (if
+     * any), then re-derives ACTIVE/COMPLETED from the recomputed cumulative total. */
     public void recordRemittances(LocalDate payrollMonth, long payrollPeriodId, List<PayrollLineDto> lines) {
         for (PayrollLineDto line : lines) {
             recordOne(line.employeeId(), DeductionObligationKind.STUDENT_LOAN, payrollMonth, payrollPeriodId, line.studentLoanDeduction());
@@ -130,49 +86,9 @@ public class DeductionObligationService {
         }
     }
 
-    /**
-     * Issue #376's shortfall tracking, generalising #373's requested/actual/shortfall triple: records
-     * a row in {@code hr.payroll_deduction_shortfall} for every employee whose LEGAL_EXECUTION
-     * deduction came out lower than what was actually asked for this period -- pure record-keeping,
-     * changes NO deducted amount (every figure here is read back from what {@code
-     * PayrollCalculator}/{@code PayrollService#calculateLine} already computed and {@code
-     * hr.payroll_line} already persisted).
-     *
-     * <p><b>D-376-1 fix (Opus review):</b> {@code requested} is read from {@link
-     * PayrollLineDto#legalExecutionRequested()} -- the EXACT value {@code calculateLine} resolved and
-     * fed to {@code PayrollCalculator} as {@code garnishmentRequested} for THIS line -- never
-     * recomputed by calling {@link #resolveMonthlyAmount} again here. A second call is unsafe: this
-     * method runs AFTER {@link #recordRemittances} in {@code PayrollService#process}, which may have
-     * just flipped an obligation's ACTIVE/COMPLETED status; {@link
-     * DeductionObligationRepository#findDrivingObligation}'s {@code ORDER BY (status='ACTIVE') DESC}
-     * means a second resolve, for an employee with more than one LEGAL_EXECUTION obligation on file,
-     * can pick a DIFFERENT obligation than the one {@code calculateLine} actually used earlier in the
-     * same run -- fabricating a "requested" figure the court order never asked for. Reviewer's probe:
-     * a completing obligation (monthly ฿5,000, override set) and a separate ACTIVE ฿100/฿100 total
-     * obligation together produced a phantom ฿4,900 shortfall against a ฿100 court order that was
-     * satisfied in full. Reading the value off the line instead of re-deriving it removes the bug
-     * class entirely, in both directions (the same flip could also silently SUPPRESS a real
-     * shortfall by resolving to a smaller or zero figure the second time).
-     *
-     * <p>Any difference between {@code legalExecutionRequested} and the persisted {@code
-     * line.legalExecutionDeduction()} can therefore only be the ALREADY-enforced ป.วิ.พ. ม.302 cap
-     * that ran inside the calculator (issue #376's explicit instruction: reuse that machinery, never
-     * duplicate it) -- this method does not reimplement any part of that cap, it only reads its
-     * output.
-     *
-     * <p>{@code STUDENT_LOAN} is deliberately excluded: no cap is enforced against it (see {@link
-     * DeductionObligationKind#STUDENT_LOAN}'s own javadoc -- item (1) territory, {@code
-     * DeductionCapGroup.NONE}), so requested always equals actual and there is nothing to record. A
-     * period where the obligation's OWN remaining-balance clamp reduces the monthly figure (the final
-     * instalment, or auto-stop at the instructed total) is NOT a shortfall either -- it is the
-     * obligation being correctly satisfied, already fully visible via {@code
-     * hr.deduction_obligation.status} and #373's remittance ledger.
-     *
-     * <p>Idempotent per (employee, payrollMonth, LEGAL_EXECUTION_GARNISHMENT) via {@link
-     * PayrollDeductionShortfallRepository#upsert}/{@link PayrollDeductionShortfallRepository#delete}
-     * -- a reprocess self-corrects instead of duplicating or stranding a stale row, matching {@link
-     * #recordRemittances}'s own guarantee.
-     */
+    /** Issue #376's shortfall tracking, generalising #373's requested/actual/shortfall triple: records a row in
+     * hr.payroll_deduction_shortfall for every employee whose LEGAL_EXECUTION deduction came out lower than what
+     * was actually asked for this period -- pure record-keeping, changes NO deducted amount. */
     public void recordGarnishmentShortfalls(LocalDate payrollMonth, long payrollPeriodId, List<PayrollLineDto> lines) {
         for (PayrollLineDto line : lines) {
             BigDecimal requested = money(line.legalExecutionRequested());
@@ -202,10 +118,8 @@ public class DeductionObligationService {
         DeductionObligationDto obligation = maybeObligation.get();
         BigDecimal amount = money(actualAmount);
         if (amount.signum() == 0) {
-            // A period where nothing was actually deducted is not a remittance -- delete (never just
-            // skip) so a reprocess that newly zeroes out a previously-nonzero period removes the
-            // STALE row instead of leaving it stranded. Keeps countRemittedPeriods/findLedger honest
-            // as "periods money actually moved" (issue #373's "N of M งวด" progress figure).
+            // A period where nothing was actually deducted is not a remittance -- delete (never just skip) so a reprocess
+            // that newly zeroes out a previously-nonzero period removes the STALE row instead of leaving it stranded.
             repository.deleteRemittance(obligation.id(), payrollMonth);
         } else {
             repository.upsertRemittance(obligation.id(), payrollMonth, amount, payrollPeriodId);
@@ -217,9 +131,7 @@ public class DeductionObligationService {
         }
     }
 
-    // ==================================================================================
     // HR CRUD
-    // ==================================================================================
 
     @Transactional
     public DeductionObligationDto create(DeductionObligationCreateRequest request, UserPrincipal actor) {
@@ -267,11 +179,9 @@ public class DeductionObligationService {
         return updated;
     }
 
-    /**
-     * Decision 3's "prominent, HR must confirm" state: recorded, never assumed. Purely evidentiary
-     * — does NOT itself change deduction behaviour (a {@code COMPLETED} obligation already deducts
-     * 0 the moment it transitions, see {@link #resolveMonthlyAmount}).
-     */
+    /** Decision 3's "prominent, HR must confirm" state: recorded, never assumed. Purely evidentiary — does NOT
+     * itself change deduction behaviour (a COMPLETED obligation already deducts 0 the moment it transitions, see
+     * #resolveMonthlyAmount). */
     @Transactional
     public DeductionObligationDto acknowledgeCompletion(long obligationId, UserPrincipal actor) {
         requireRole(actor, EDIT_ROLES);
@@ -289,12 +199,9 @@ public class DeductionObligationService {
         return updated;
     }
 
-    /**
-     * Decision 3's required mitigation: the ONLY way a deduction resumes past {@code
-     * instructedTotal}. A reason is mandatory (see {@link DeductionObligationOverrideRequest}) — this
-     * is a deliberate decision to keep deducting a court-ordered/statutory obligation past the figure
-     * on file, and it must be defensible later.
-     */
+    /** Decision 3's required mitigation: the ONLY way a deduction resumes past instructedTotal. A reason is
+     * mandatory (see DeductionObligationOverrideRequest) — this is a deliberate decision to keep deducting a
+     * court-ordered/statutory obligation past the figure on file, and it must be defensible later. */
     @Transactional
     public DeductionObligationDto overrideContinue(long obligationId, DeductionObligationOverrideRequest request, UserPrincipal actor) {
         requireRole(actor, EDIT_ROLES);
@@ -327,9 +234,7 @@ public class DeductionObligationService {
         return updated;
     }
 
-    // ==================================================================================
     // Reads
-    // ==================================================================================
 
     public List<DeductionObligationDto> list(Long employeeId, DeductionObligationKind kind, DeductionObligationStatus status, UserPrincipal actor) {
         requireRole(actor, VIEW_ROLES);
@@ -343,11 +248,9 @@ public class DeductionObligationService {
         return buildProgress(obligation);
     }
 
-    /**
-     * Employee read-only view (decision 4): every obligation ever recorded for the caller, each with
-     * total/paid-to-date/remaining/expected-end. No mutation path exists here or anywhere else for an
-     * employee — the dispute route is to the authority, never HR (see the issue's own references).
-     */
+    /** Employee read-only view (decision 4): every obligation ever recorded for the caller, each with
+     * total/paid-to-date/remaining/expected-end. No mutation path exists here or anywhere else for an employee —
+     * the dispute route is to the authority, never HR (see the issue's own references). */
     public List<DeductionObligationProgressDto> getOwn(UserPrincipal actor) {
         requireEmployeeActor(actor);
         return repository.findForEmployee(actor.employeeId()).stream()
@@ -381,9 +284,7 @@ public class DeductionObligationService {
             obligation, totalRemitted, remaining, periodsRemitted, estimatedPeriodsRemaining, estimatedEndMonth, ledger);
     }
 
-    // ==================================================================================
     // helpers
-    // ==================================================================================
 
     private DeductionObligationDto requireObligation(long obligationId) {
         return repository.findById(obligationId)

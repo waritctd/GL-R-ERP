@@ -1,29 +1,6 @@
-// Client-side APPROXIMATION of the welfare policy figures seeded in
-// V66__special_money_request_schema.sql (hr.special_money_policy, "2018-06-08
-// welfare policy figures") and the exclusion/eligibility rules in
+// Client-side APPROXIMATION of the welfare policy figures seeded in V66__special_money_request_schema.sql
+// (hr.special_money_policy, "2018-06-08 welfare policy figures") and the exclusion/eligibility rules in
 // SpecialMoneyPolicyEvaluator.java.
-//
-// This exists ONLY to give the submitter fast, inline feedback (live amount,
-// "over the cap" warnings) before they submit — it is not a second source of
-// truth. The server re-evaluates every request against the live
-// hr.special_money_policy table and hr.special_money_excluded_province, and
-// its answer is the one that counts; nothing here is ever trusted for the
-// actual submitted amount validation. If the effective-dated policy amounts
-// change in the database, this file will silently drift and only the
-// server-side response is authoritative — that is an accepted tradeoff for a
-// fast-feedback-only slice (see backend/.../SpecialMoneyController.java,
-// which has no endpoint that exposes these numbers to the frontend).
-//
-// EXTENDED (welfare page IA redesign, 2026-08) with TYPE_GROUPS, RULE_CARD and
-// DETAIL_KEYS -- the same approximation warning above applies to every string
-// in RULE_CARD below: each is either one of this file's own numeric
-// constants (already an approximation of hr.special_money_policy) or a
-// verbatim paraphrase of a comment/branch actually present in
-// SpecialMoneyPolicyEvaluator.java, never an invented figure. The
-// PREPROBATION_KIT_* rates below are read straight from the same V66 seed
-// row set the rest of this file's constants already cite (see the comment on
-// PREPROBATION_KIT_TSHIRT_RATE) -- an earlier version of this file left them
-// out on the mistaken assumption they were not derivable client-side.
 import { isExcludedProvince } from './thaiProvinces.js';
 
 export const MEDICAL_ANNUAL_CAP = 3000;
@@ -33,11 +10,9 @@ const UNIFORM_ANNUAL_MAX_PIECES = 4;
 const UNIFORM_ANNUAL_SHIRT_RATE = 300;
 const UNIFORM_ANNUAL_TROUSER_RATE = 350;
 
-// §2.1.3 pre-probation kit — seeded in V66__special_money_request_schema.sql:164-171
-// (hr.special_money_policy, same 2018-06-08 row set every other constant above cites). สายรัดหลัง
-// is conditional on the request's own `needsBackSupport` detail flag (evaluateUniformPreprobationKit
-// only adds it "กรณีของเดิมที่มีไม่เพียงพอ"), so it is broken out as its own rate/qty pair rather than
-// folded into a single fixed total.
+// §2.1.3 pre-probation kit — seeded in V66__special_money_request_schema.sql:164-171. สายรัดหลัง is
+// conditional on the request's own `needsBackSupport` detail flag, so it is broken out as its own rate/qty
+// pair rather than folded into a single fixed total.
 const PREPROBATION_KIT_TSHIRT_RATE = 220;
 const PREPROBATION_KIT_TSHIRT_QTY = 3;
 const PREPROBATION_KIT_TROUSER_RATE = 300;
@@ -68,11 +43,8 @@ export function taxChip(payrollBucket) {
     : { label: 'ไม่คิดภาษี', tone: 'success' };
 }
 
-/**
- * Fast client-side amount estimate + working text + warnings, per request type.
- * Returns { amount, working, warnings: string[] }. Never throws — an
- * incomplete form just yields amount 0 with no warnings.
- */
+/** Fast client-side amount estimate + working text + warnings, per request type. Returns { amount, working,
+ * warnings: string[] }. Never throws — an incomplete form just yields amount 0 with no warnings. */
 export function estimateAmount(requestType, form, usage) {
   switch (requestType) {
     case 'TRAVEL_PER_DIEM':
@@ -133,11 +105,7 @@ function estimateAid(requestType, usage) {
   return { amount: AID_FIXED_CAP, working: `เงินช่วยเหลือคงที่ ฿${AID_FIXED_CAP.toLocaleString('th-TH')}`, warnings };
 }
 
-// Mode-aware (evaluateUniformAnnual): SELF_BUY prices from the per-piece shirt/trouser rates
-// (unchanged math, the only mode this used to support); TAILORED is a flat amount up to the cap
-// -- the evaluator's TAILORED branch returns `request.requestedAmount()` clamped at the cap, it
-// does not compute anything from piece counts, even though the piece-count CHECK itself still
-// applies in both modes (see the caller's own warning below).
+// Mode-aware: SELF_BUY prices from the per-piece shirt/trouser rates; TAILORED is a flat amount up to the cap.
 function estimateUniformAnnual(form) {
   const warnings = [];
   const shirtCount = Number(form.shirtCount || 0);
@@ -178,14 +146,8 @@ function daysBetween(start, end) {
   return diff >= 1 ? diff : 1;
 }
 
-/**
- * The 25th-of-month payroll cutoff (APP_SPECIAL_MONEY_PAYROLL_CUTOFF_DAY,
- * default 25 — see application.yml / AppProperties.SpecialMoney). This is an
- * informational client-side estimate of which payroll period a request would
- * land in if approved today; the server assigns the real payrollMonth at CEO
- * approval time (SpecialMoneyService#ceoApprove), rolling forward past any
- * already-processed month.
- */
+/** The 25th-of-month payroll cutoff (APP_SPECIAL_MONEY_PAYROLL_CUTOFF_DAY, default 25 — see application.yml /
+ * AppProperties.SpecialMoney). */
 export function payrollCutoffInfo(today = new Date(), cutoffDay = 25) {
   const day = today.getDate();
   const daysRemaining = day <= cutoffDay ? cutoffDay - day : monthLength(today) - day + cutoffDay;
@@ -207,22 +169,16 @@ export function formatThaiMonthYear(date) {
   return `${THAI_MONTHS[date.getMonth()]} ${String(buddhistYear).slice(-2)}`;
 }
 
-/**
- * th-TH, no decimals — shared by SpecialMoneyPanel.jsx (every money figure on that panel; several
- * tests pin the exact string, e.g. '฿1,200') and ApproveSpecialMoneyDialog.jsx (the request
- * summary's "ยอดที่ขอเบิก ฿X"). Not utils/format.js's own `formatMoney`, which uses en-US with 2
- * decimals for payroll-style figures — this panel's amounts have always rendered the other way.
- */
+/** th-TH, no decimals — shared by SpecialMoneyPanel.jsx (every money figure on that panel; several tests pin
+ * the exact string, e.g. '฿1,200') and ApproveSpecialMoneyDialog.jsx (the request summary's "ยอดที่ขอเบิก
+ * ฿X"). */
 export function formatMoney(value) {
   return `฿${Number(value || 0).toLocaleString('th-TH')}`;
 }
 
-/**
- * Evidence document expected per type. Moved here (was a SpecialMoneyPanel.jsx-local
- * function) so RuleCard.jsx and SpecialMoneyPanel.jsx share one copy — both need it, and a
- * second copy is exactly how the panel's own "หลักฐานประกอบ" hint and the rule card's
- * "หลักฐานที่ต้องแนบ" row could drift apart.
- */
+/** Evidence document expected per type. Moved here (was a SpecialMoneyPanel.jsx-local function) so RuleCard.jsx
+ * and SpecialMoneyPanel.jsx share one copy — both need it, and a second copy is exactly how the panel's own
+ * "หลักฐานประกอบ" hint and the rule card's "หลักฐานที่ต้องแนบ" row could drift apart. */
 export function evidenceLabel(requestType) {
   const map = {
     MEDICAL: 'ใบเสร็จรับเงินค่ารักษาพยาบาล',
@@ -244,14 +200,8 @@ function money(value) {
   return `฿${Number(value || 0).toLocaleString('th-TH')}`;
 }
 
-/**
- * Fixed, rule-derived type grouping (plan §"Type grouping"): ordered by how often the money
- * actually moves, not alphabetically or by backend enum order, so twelve types never compete
- * with equal visual weight. Group 1 is open by default in TypePicker.jsx; the rest disclose on
- * demand. Every SpecialMoneyType the backend defines must appear in exactly one group — see
- * SpecialMoneyPanel.test.jsx's "grouping puts common types first" test, which asserts this
- * table's shape directly rather than re-deriving it.
- */
+/** Fixed, rule-derived type grouping (plan §"Type grouping"): ordered by how often the money actually moves,
+ * not alphabetically or by backend enum order, so twelve types never compete with equal visual weight. */
 export const TYPE_GROUPS = [
   { key: 'FREQUENT', label: 'เบิกได้บ่อย', types: ['TRAVEL_PER_DIEM', 'TRAVEL_LODGING', 'MEDICAL'] },
   { key: 'LIFE_EVENT', label: 'เหตุการณ์สำคัญ', types: ['AID_WEDDING', 'AID_ORDINATION', 'AID_CHILDBIRTH', 'AID_FUNERAL'] },
@@ -259,36 +209,22 @@ export const TYPE_GROUPS = [
   { key: 'OTHER', label: 'อื่นๆ', types: ['TRAINING', 'OTHER'] },
 ];
 
-/**
- * `detail` keys each type actually reads server-side (SpecialMoneyPolicyEvaluator
- * #detailValue), for documentation and for pinning the string-typing contract in tests --
- * `detail` is `Map<String,String>` on the wire, so a numeric/boolean value here must already be
- * a string by the time it reaches `create()`'s payload (see SpecialMoneyPanel.jsx's
- * `detailFor()`, and the evaluator's own `parseIntOrZero`/`Boolean.parseBoolean` callers).
- */
+/** `detail` keys each type actually reads server-side, for documentation and for pinning the string-typing
+ * contract in tests. */
 export const DETAIL_KEYS = {
   TRAVEL_PER_DIEM: ['destination', 'province', 'role'],
   TRAVEL_LODGING: ['destination', 'province'],
   UNIFORM_ANNUAL: ['uniformMode', 'shirtCount', 'trouserCount'],
   UNIFORM_NEW_STAFF: ['shirtCount', 'trouserCount'],
-  // evaluateUniformPreprobationKit reads ONLY needsBackSupport -- it does not read
-  // shirtCount/trouserCount at all (the kit's piece counts are fixed by policy, not chosen by the
-  // requester). This used to list shirtCount/trouserCount (a path this type never reads) and omit
-  // needsBackSupport (the only key it does read), so the belt could never actually be requested.
+  // evaluateUniformPreprobationKit reads ONLY needsBackSupport -- it does not read shirtCount/trouserCount at
+  // all (the kit's piece counts are fixed by policy, not chosen by the requester).
   UNIFORM_PREPROBATION_KIT: ['needsBackSupport'],
   AID_FUNERAL: ['relation'],
 };
 
-/**
- * The rule card table (plan §"The rule card"): one entry per SpecialMoneyType, restating only
- * what SpecialMoneyPolicyEvaluator.java actually enforces for that type, so RuleCard.jsx can
- * render "only that type's rules" instead of the employee reading all twelve. `eligibility` is
- * populated ONLY where the evaluator restricts who may claim beyond the standard "passed
- * probation" gate every type gets (evaluateStandardProbationEligibility) -- i.e. TRAVEL_PER_DIEM
- * (driver/loader role), AID_FUNERAL (relation), and UNIFORM_PREPROBATION_KIT
- * (evaluatePreprobationKitEligibility's department/position gate) -- matching the plan's "only
- * where restrictive" instruction.
- */
+/** The rule card table (plan §"The rule card"): one entry per SpecialMoneyType, restating only what
+ * SpecialMoneyPolicyEvaluator.java actually enforces for that type, so RuleCard.jsx can render "only that
+ * type's rules" instead of the employee reading all twelve. */
 export const RULE_CARD = {
   TRAVEL_PER_DIEM: {
     cap: `${money(PER_DIEM_RATE_DRIVER)}/วัน (คนขับ) หรือ ${money(PER_DIEM_RATE_LOADER)}/วัน (ผู้ช่วย/ยกของ) — จังหวัดในรายการยกเว้น (ถือเป็นการเดินทางในพื้นที่) จ่าย ฿0`,
@@ -338,18 +274,17 @@ export const RULE_CARD = {
     frequency: 'ปีละ 1 ครั้ง',
     eligibility: null,
   },
-  // No baht figure exists anywhere for this type (see evaluateUniformNewStaff's javadoc); the
-  // "3 ชุด (6 ชิ้น)" figure is quoted verbatim from that comment, not invented here.
+  // No baht figure exists anywhere for this type (see evaluateUniformNewStaff's javadoc); the "3 ชุด (6 ชิ้น)"
+  // figure is quoted verbatim from that comment, not invented here.
   UNIFORM_NEW_STAFF: {
     cap: 'ตามนโยบาย: 3 ชุด (6 ชิ้น) สำหรับปีแรกที่เข้าทำงาน — ไม่มีวงเงินบาทตายตัว',
     deadline: 'เฉพาะภายในปีแรกนับจากวันเริ่มงานเท่านั้น',
     frequency: 'เบิกได้ครั้งเดียวตลอดการเป็นพนักงาน',
     eligibility: null,
   },
-  // PREPROBATION_KIT_* rates are the V66 seed (see the constant declarations above) -- an earlier
-  // version of this table claimed no client constant existed for these and described the cap only
-  // in words; that was wrong, the same seed row set every other figure in this file already cites
-  // does carry them.
+  // PREPROBATION_KIT_* rates are the V66 seed (see the constant declarations above) -- an earlier version of
+  // this table claimed no client constant existed for these and described the cap only in words; that was wrong,
+  // the same seed row set every other figure in this file already cites does carry them.
   UNIFORM_PREPROBATION_KIT: {
     cap: `รวม ${money(PREPROBATION_KIT_BASE_TOTAL)} (เสื้อยืด ${money(PREPROBATION_KIT_TSHIRT_RATE)}×${PREPROBATION_KIT_TSHIRT_QTY} · กางเกง `
       + `${money(PREPROBATION_KIT_TROUSER_RATE)}×${PREPROBATION_KIT_TROUSER_QTY} · รองเท้า ${money(PREPROBATION_KIT_SHOES_RATE)}×${PREPROBATION_KIT_SHOES_QTY}) `

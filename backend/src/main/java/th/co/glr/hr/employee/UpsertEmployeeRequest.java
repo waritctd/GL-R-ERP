@@ -30,9 +30,9 @@ public record UpsertEmployeeRequest(
     @Size(max = 10) String statusId,
     @DecimalMin("0.00") BigDecimal salary,
     @DecimalMin("0.00") BigDecimal directorRemuneration,
-    // Standing withholding-tax override (2026-07-24, V88). HR-only (this whole request is HR-gated at
-    // the controller). NULLABLE and meaningful: null = no standing override (compute normally);
-    // @DecimalMin still permits null and only enforces >= 0 when a value is present.
+    // Standing withholding-tax override (2026-07-24, V88). HR-only (this whole request is HR-gated at the
+    // controller). NULLABLE and meaningful: null = no standing override (compute normally); @DecimalMin still
+    // permits null and only enforces >= 0 when a value is present.
     @DecimalMin("0.00") BigDecimal withholdingTaxOverride,
     @PastOrPresent LocalDate hireDate,
     @PastOrPresent LocalDate confirmationDate,
@@ -41,14 +41,9 @@ public record UpsertEmployeeRequest(
     @Size(max = 80) String emergencyRelationship,
     @Size(max = 40) String emergencyPhone
 ) {
-    /**
-     * Legacy constructor: the signature as it stood before {@code withholdingTaxOverride} (V88) was
-     * inserted. Keeps every positional call site that predates the override (a number of ticket /
-     * pricing / procurement integration tests build this request positionally) compiling unchanged;
-     * {@code withholdingTaxOverride} defaults to {@code null} = "no standing override". Jackson binds
-     * incoming JSON via the canonical constructor, so this secondary constructor does not affect the
-     * request wire contract.
-     */
+    /** Legacy constructor: the signature as it stood before withholdingTaxOverride (V88) was inserted. Jackson
+     * binds incoming JSON via the canonical constructor, so this secondary constructor does not affect the request
+     * wire contract. */
     public UpsertEmployeeRequest(
         String code,
         String badge,

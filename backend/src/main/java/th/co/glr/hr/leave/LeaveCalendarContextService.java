@@ -10,23 +10,8 @@ import th.co.glr.hr.attendance.schedule.HolidayRepository;
 import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * Backs {@code GET /api/leave/calendar-context} (self-scoped only -- see {@link LeaveController}).
- * A separate, small service rather than a new method on {@link LeaveService} on purpose: this
- * endpoint needs a brand-new dependency ({@link HolidayRepository}, from attendance/schedule/) that
- * {@link LeaveService} does not otherwise need, and {@code LeaveService}'s constructor is
- * hand-wired directly by ~14 payroll/leave integration tests (see {@link LeaveRepository}'s own
- * 1-arg test-convenience constructor javadoc for the same concern) -- adding a parameter there
- * would force an unrelated edit onto every one of them. This class has no such history, so its
- * constructor is free to take exactly what this one endpoint needs.
- *
- * <p>Deliberately does NOT reimplement {@code LeaveDayMath}'s holiday/schedule-aware day counting:
- * {@link #get} calls {@link LeaveRepository#workingDayPredicate}, the exact predicate
- * {@code LeaveService#submit}/{@code #cancel} build for real day counting, to derive
- * {@code nonWorkingDates}. If that logic is ever wrong, this endpoint is wrong the same way --
- * which is the point: an employee should see the SAME "is this day counted" answer the leave
- * engine itself uses, not a second, possibly-diverging opinion.
- */
+/** Backs GET /api/leave/calendar-context (self-scoped only -- see LeaveController). This class has no such
+ * history, so its constructor is free to take exactly what this one endpoint needs. */
 @Service
 public class LeaveCalendarContextService {
 
@@ -38,11 +23,7 @@ public class LeaveCalendarContextService {
         this.holidayRepository = holidayRepository;
     }
 
-    /**
-     * @param employeeId the CALLING user's own employee id -- never a caller-supplied id (there is
-     *                   no such parameter on the controller method; see its javadoc for why this
-     *                   endpoint is self-scoped by construction, not by an access-predicate check)
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public LeaveCalendarContextDto get(long employeeId, LocalDate from, LocalDate to) {
         validateRange(from, to);
 
@@ -59,12 +40,9 @@ public class LeaveCalendarContextService {
         return new LeaveCalendarContextDto(from, to, holidays, toScheduleDto(schedule), nonWorkingDates);
     }
 
-    /**
-     * Same shape of check as {@code HolidayAdminService#list} ({@code HolidayController}'s admin
-     * GET) -- both required, {@code to} not before {@code from} -- mirrored with the identical
-     * Thai messages so the two endpoints behave identically for the same bad-input shape, even
-     * though they are otherwise unrelated authorization surfaces.
-     */
+    /** Same shape of check as HolidayAdminService#list (HolidayController's admin GET) -- both required, to not
+     * before from -- mirrored with the identical Thai messages so the two endpoints behave identically for the
+     * same bad-input shape, even though they are otherwise unrelated authorization surfaces. */
     private static void validateRange(LocalDate from, LocalDate to) {
         if (from == null || to == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุวันที่เริ่มต้นและวันที่สิ้นสุด");

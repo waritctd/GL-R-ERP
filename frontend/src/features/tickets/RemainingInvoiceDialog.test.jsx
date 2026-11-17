@@ -14,6 +14,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
     api: {
       tickets: {
         remainingInvoiceOptions: vi.fn(),
+        // slice 6.1: the dialog reads the deal's served payment terms (same query as the deal page).
+        get: vi.fn(),
       },
       storedRemainingInvoices: {
         listForTicket: vi.fn(),
@@ -84,9 +86,8 @@ function renderDialog(props = {}) {
   return { onClose };
 }
 
-// This project does not wire up jest-dom's matchers (see LoginPage.test.jsx's own note) —
-// assertions below read plain DOM properties (.value/.checked/.disabled) rather than
-// toHaveValue/toBeChecked/toBeDisabled.
+// This project does not wire up jest-dom's matchers (see LoginPage.test.jsx's own note) — assertions below
+// read plain DOM properties (.value/.checked/.disabled) rather than toHaveValue/toBeChecked/toBeDisabled.
 
 describe('RemainingInvoiceDialog — no live stored document (create flow)', () => {
   beforeEach(() => {
@@ -288,16 +289,15 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
         { id: 2, text: 'หมายเหตุ 2', defaultSelected: false, sortOrder: 2 },
       ],
     });
-    // P7 (GLA-99 step 2 review-round-2): DraftEditor now queries this endpoint too, for the
-    // deposit-reference DATALIST only — see that test below for the "never overwrites the stored
-    // value" invariant this default keeps out of every other test's way.
+    // DraftEditor now queries this endpoint too, for the deposit-reference DATALIST only — see that test below for
+    // the "never overwrites the stored value" invariant this default keeps out of every other test's way.
     api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions() });
   });
 
   it('prefills every FIELD VALUE from the stored draft row, never from the stateless preview', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
-    // A deliberately DIFFERENT preview shape — if the editor's field values ever leaked from this
-    // response instead of the stored draft, this test would show it immediately.
+    // A deliberately DIFFERENT preview shape — if the editor's field values ever leaked from this response instead
+    // of the stored draft, this test would show it immediately.
     api.tickets.remainingInvoiceOptions.mockResolvedValue({
       options: baseOptions({ defaultReference: 'SHOULD-NOT-APPEAR', defaultDepositReference: 'SHOULD-NOT-APPEAR-EITHER' }),
     });
@@ -310,10 +310,8 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     expect(screen.queryByDisplayValue('SHOULD-NOT-APPEAR-EITHER')).toBeNull();
   });
 
-  // P7 (Opus review, GLA-99 step 2 review-round-2): the deposit-reference suggestion list review-
-  // round-1 had dropped as "not cheap" is restored — a NON-BLOCKING query feeding a <datalist>
-  // only, same pattern as the reference field's own `list=` attribute. This pins BOTH halves: the
-  // endpoint IS called now (for the datalist), and it still never overwrites the field's own value.
+  // the deposit-reference suggestion list review- round-1 had dropped as "not cheap" is restored — a
+  // NON-BLOCKING query feeding a <datalist> only, same pattern as the reference field's own `list=` attribute.
   it('P7: offers a datalist of matched deposit-reference suggestions without ever overwriting the stored value', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
     api.tickets.remainingInvoiceOptions.mockResolvedValue({
@@ -556,10 +554,9 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     await waitFor(() => expect(api.storedRemainingInvoices.deleteDraft).toHaveBeenCalledWith(900));
   });
 
-  // R2 (Opus review, GLA-99 step 2 review-round-1): editing a field then clicking "ออกใบแจ้งหนี้"
-  // directly (WITHOUT clicking "บันทึก" first) must not silently discard the edit — issue() on the
-  // backend freezes whatever was LAST SAVED, and only re-snapshots the COMPUTED content (O3), never
-  // the dialog fields. The dialog itself must therefore save the pending edit before issuing.
+  // editing a field then clicking "ออกใบแจ้งหนี้" directly must not silently discard the edit — issue on the
+  // backend freezes whatever was LAST SAVED, and only re-snapshots the COMPUTED content, never the dialog
+  // fields. The dialog itself must therefore save the pending edit before issuing.
   it('ออกใบแจ้งหนี้ saves a pending (unsaved) edit before issuing, in that order', async () => {
     api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
     api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: docRow({ reference: 'PO-NEVER-SAVED' }) });
@@ -584,12 +581,9 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
     expect(updateOrder).toBeLessThan(issueOrder);
   });
 
-  // P4 (Opus review, GLA-99 step 2 review-round-2, 2026-09-20): before this fix, `draft &&
-  // canWrite` won the main render slot outright and the live ISSUED predecessor — plus its own
-  // download button — disappeared entirely while a revision DRAFT was open (RemainingInvoiceService
-  // #revise's own Javadoc: "the form being corrected STAYS ISSUED until the replacement is
-  // actually issued"). A caller mid-revision could not download the very document they were about
-  // to replace.
+  // before this fix, `draft && canWrite` won the main render slot outright and the live ISSUED predecessor —
+  // plus its own download button — disappeared entirely while a revision DRAFT was open. A caller mid-revision
+  // could not download the very document they were about to replace.
   it('P4: keeps the live ISSUED document (and its download) visible in version history while a revision DRAFT is open', async () => {
     const issuedRow = docRow({ id: 900, status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001', version: 1 });
     const revisionDraft = docRow({ id: 901, status: 'DRAFT', docNumber: null, baseNumber: null, version: 1 });
@@ -598,13 +592,13 @@ describe('RemainingInvoiceDialog — a live DRAFT exists', () => {
 
     // The revision draft's own editor wins the main slot.
     expect(await screen.findByTestId('remaining-invoice-draft-editor')).not.toBeNull();
-    // But the predecessor's own ISSUED row, and its download, must still be reachable via the
-    // version history — it is still the live document until this revision is itself issued.
+    // But the predecessor's own ISSUED row, and its download, must still be reachable via the version history — it
+    // is still the live document until this revision is itself issued.
     const history = screen.getByTestId('remaining-invoice-history');
     expect(within(history).getByText('GLR6900001-1')).not.toBeNull();
     expect(screen.getByTestId('remaining-invoice-download-version-900')).not.toBeNull();
-    // The read-only ISSUED summary panel itself is not ALSO shown — the draft editor still wins
-    // the main slot; only the history list carries the live document alongside it.
+    // The read-only ISSUED summary panel itself is not ALSO shown — the draft editor still wins the main slot;
+    // only the history list carries the live document alongside it.
     expect(screen.queryByTestId('remaining-invoice-issued-summary')).toBeNull();
   });
 });
@@ -621,8 +615,8 @@ describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
     renderDialog();
 
     const summary = await screen.findByTestId('remaining-invoice-issued-summary');
-    // This ONE live row also appears a second time, in the version-history list below (ISSUED
-    // rows are listed there too, per plan) — scope to the summary panel specifically.
+    // This ONE live row also appears a second time, in the version-history list below (ISSUED rows are listed
+    // there too, per plan) — scope to the summary panel specifically.
     expect(within(summary).getByText('GLR6900001-1')).not.toBeNull();
 
     fireEvent.click(screen.getByTestId('remaining-invoice-download'));
@@ -644,11 +638,144 @@ describe('RemainingInvoiceDialog — a live ISSUED document exists', () => {
   });
 });
 
-// R4 (Opus review, GLA-99 step 2 review-round-1): write actions (create/save/issue/revise/delete)
-// hidden unless the viewer is the deal's OWNING sales rep — mirrors
-// RemainingInvoiceService#requireDepositNoticeIssueGate exactly (no CEO carve-out for THIS
-// document either — see that class's own Javadoc). `canWrite={false}` is what a caller passes for
-// every other role (account/ceo/sales_manager/a different sales rep/import).
+// Drawing m-remaining (2026-11-16): the summary line and footer are rebuilt; every request is unchanged. These
+// figures all differ (itemsTotal ≠ deposit ≠ net), so showing one field in another's place fails.
+describe('RemainingInvoiceDialog — drawing m-remaining', () => {
+  const money = { itemsTotal: 912300.45, depositAmount: 300100.15, netAmount: 612200.3, vatAmount: 42854.02, totalPayable: 655054.32 };
+  const stored = { itemsTotal: 812300.45, depositDeduction: 200100.15, netAmount: 612199.3, vatAmount: 42853.95, grandTotal: 655053.25 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.depositNotices.noteTemplates.mockResolvedValue({
+      templates: [{ id: 1, text: 'หมายเหตุ 1', defaultSelected: true, sortOrder: 1 }, { id: 2, text: 'หมายเหตุ 2', defaultSelected: false, sortOrder: 2 }],
+    });
+    api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions(money) });
+  });
+
+  // Payload identity — captured against the pre-rebuild dialog and kept green through it.
+  it('บันทึกร่าง on a draft sends exactly update(id, { reference, depositReference, docDate, notes })', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+    api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: docRow() });
+    renderDialog();
+
+    fireEvent.change(await screen.findByDisplayValue('QT-2026-0099'), { target: { value: 'PO-77' } });
+    fireEvent.click(screen.getByText('หมายเหตุ 2').closest('label').querySelector('input'));
+    fireEvent.click(screen.getByTestId('remaining-invoice-save-draft'));
+
+    await waitFor(() => expect(api.storedRemainingInvoices.update).toHaveBeenCalledTimes(1));
+    expect(api.storedRemainingInvoices.update.mock.calls).toEqual([[900, {
+      reference: 'PO-77', depositReference: 'AI2600145', docDate: '2026-09-01', notes: ['หมายเหตุ 1', 'หมายเหตุ 2'],
+    }]]);
+    expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+  });
+
+  it('ออกใบแจ้งหนี้ (confirmed) sends the same update, then issue(id) — nothing else', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+    api.storedRemainingInvoices.update.mockResolvedValue({ remainingInvoice: docRow() });
+    api.storedRemainingInvoices.issue.mockResolvedValue({ remainingInvoice: docRow({ status: 'ISSUED', docNumber: 'GLR6900001-1' }) });
+    renderDialog();
+
+    await screen.findByTestId('remaining-invoice-draft-editor');
+    fireEvent.click(screen.getByTestId('remaining-invoice-issue'));
+    const confirm = within(await screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' })).getByRole('button', { name: 'ออกใบแจ้งหนี้' });
+    await waitFor(() => expect(confirm.disabled).toBe(false));
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(api.storedRemainingInvoices.issue).toHaveBeenCalledTimes(1));
+    expect(api.storedRemainingInvoices.update.mock.calls).toEqual([[900, {
+      reference: 'QT-2026-0099', depositReference: 'AI2600145', docDate: '2026-09-01', notes: ['หมายเหตุ 1'],
+    }]]);
+    expect(api.storedRemainingInvoices.issue.mock.calls).toEqual([[900]]);
+    expect(api.storedRemainingInvoices.createDraft).not.toHaveBeenCalled();
+  });
+
+  it('closing the dialog (ปิด) sends nothing', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+    const { onClose } = renderDialog();
+    await screen.findByTestId('remaining-invoice-draft-editor');
+    fireEvent.click(within(screen.getByTestId('remaining-invoice-dialog')).getAllByRole('button', { name: 'ปิด' })[0]);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(api.storedRemainingInvoices.update).not.toHaveBeenCalled();
+    expect(api.storedRemainingInvoices.issue).not.toHaveBeenCalled();
+    expect(api.storedRemainingInvoices.createDraft).not.toHaveBeenCalled();
+  });
+
+  it('create: the summary line is the preview\'s netAmount = itemsTotal − depositAmount', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    renderDialog();
+    await screen.findByDisplayValue('QT-2026-0099');
+    expect(screen.getByTestId('remaining-invoice-summary').textContent)
+      .toBe('ส่วนที่เหลือ ฿612,200.30 (ก่อน VAT) = มูลค่า ฿912,300.45 − มัดจำ ฿300,100.15');
+  });
+
+  it('create: a blocking reason shows no summary line (the server will not issue these figures)', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions({ ...money, blockingReason: 'ยอดหลังหักมัดจำติดลบ' }) });
+    renderDialog();
+    await screen.findByTestId('remaining-invoice-blocking-reason');
+    expect(screen.queryByTestId('remaining-invoice-summary')).toBeNull();
+  });
+
+  it('draft: the summary line is the stored draft\'s own netAmount / itemsTotal / depositDeduction', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow(stored)] });
+    renderDialog();
+    await screen.findByTestId('remaining-invoice-draft-editor');
+    expect(screen.getByTestId('remaining-invoice-summary').textContent)
+      .toBe('ส่วนที่เหลือ ฿612,199.30 (ก่อน VAT) = มูลค่า ฿812,300.45 − มัดจำ ฿200,100.15');
+  });
+
+  it('issued: the summary line is the issued row\'s own figures', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({
+      remainingInvoices: [docRow({ ...stored, status: 'ISSUED', docNumber: 'GLR6900001-1', baseNumber: 'GLR6900001' })],
+    });
+    renderDialog();
+    await screen.findByTestId('remaining-invoice-issued-summary');
+    expect(screen.getByTestId('remaining-invoice-summary').textContent)
+      .toBe('ส่วนที่เหลือ ฿612,199.30 (ก่อน VAT) = มูลค่า ฿812,300.45 − มัดจำ ฿200,100.15');
+  });
+
+  it('a row with no deduction shows the remaining amount without the equation', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow({ ...stored, depositDeduction: null })] });
+    renderDialog();
+    await screen.findByTestId('remaining-invoice-draft-editor');
+    expect(screen.getByTestId('remaining-invoice-summary').textContent).toBe('ส่วนที่เหลือ ฿612,199.30 (ก่อน VAT)');
+  });
+
+  // Fix round 1, F6: the drawn source sentence is dropped. Lines come from the matched deposit notice, OR the
+  // quotation (no notice), OR legacy approved prices (DepositNoticeService#resolveFromQuotation / #resolveLegacy),
+  // and nothing the dialog receives says which, so no wording is true for every deal.
+  it('draft footer: บันทึกร่าง then ออกใบแจ้งหนี้, no source claim; no วันครบกำหนด / เงื่อนไข field', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [docRow()] });
+    renderDialog();
+    const editor = await screen.findByTestId('remaining-invoice-draft-editor');
+    const footer = within(editor).getByTestId('remaining-invoice-footer');
+    expect(within(footer).getAllByRole('button').map((b) => b.textContent)).toEqual(['บันทึกร่าง', 'ออกใบแจ้งหนี้']);
+    expect(footer.textContent).toBe('บันทึกร่างออกใบแจ้งหนี้');
+    expect(screen.getByTestId('remaining-invoice-dialog').textContent).not.toMatch(/ทุกบรรทัด|เติมจาก/);
+    expect(editor.textContent).not.toMatch(/วันครบกำหนด|เงื่อนไข/);
+  });
+
+  it('create footer: บันทึกร่าง alone, no source claim', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    renderDialog();
+    await screen.findByDisplayValue('QT-2026-0099');
+    const footer = screen.getByTestId('remaining-invoice-footer');
+    expect(footer.textContent).toBe('บันทึกร่าง');
+    expect(within(footer).getByTestId('remaining-invoice-create-draft').textContent).toBe('บันทึกร่าง');
+    expect(screen.getByTestId('remaining-invoice-dialog').textContent).not.toMatch(/ทุกบรรทัด|เติมจาก/);
+  });
+
+  it('its own labels never say ดีล (the waiting state included)', async () => {
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    renderDialog({ canWrite: false });
+    await screen.findByTestId('remaining-invoice-waiting-for-sales');
+    expect(screen.getByTestId('remaining-invoice-dialog').textContent).not.toContain('ดีล');
+  });
+});
+
+// write actions (create/save/issue/revise/delete) hidden unless the viewer is the deal's OWNING sales rep —
+// mirrors RemainingInvoiceService#requireDepositNoticeIssueGate exactly (no CEO carve-out for THIS document
+// either — see that class's own Javadoc).
 describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sales rep)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -693,5 +820,59 @@ describe('RemainingInvoiceDialog — canWrite=false (not this deal\'s owning sal
     renderDialog({ canWrite: false });
 
     expect(await screen.findByTestId('remaining-invoice-history')).not.toBeNull();
+  });
+});
+
+// ── slice 6.1: the payment terms, read-only, from the summary the server already serves ─────────────────────────
+describe('RemainingInvoiceDialog — payment terms (read-only, slice 6.1)', () => {
+  const dealWith = (summary) => api.tickets.get.mockResolvedValue({ ticket: { summary: { id: 701, ...summary } } });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] });
+    api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: baseOptions() });
+  });
+
+  it('credit terms: the served basis, credit days and due date, as text — no field to change them', async () => {
+    dealWith({ paymentDueBasis: 'CREDIT_FROM_DELIVERY', paymentDueCreditDays: 30, paymentDueDate: '2026-11-28' });
+    renderDialog();
+
+    const terms = await screen.findByTestId('remaining-invoice-terms');
+    expect(terms.textContent).toBe('เงื่อนไขชำระเครดิต 30 วันนับจากวันส่งมอบ · ครบกำหนด 28 พ.ย. 2569');
+    expect(terms.querySelector('input, select, textarea, button')).toBeNull();
+    expect(api.tickets.get).toHaveBeenCalledWith(701);
+  });
+
+  it('pay on delivery: says so, with the served due date', async () => {
+    dealWith({ paymentDueBasis: 'ON_DELIVERY', paymentDueCreditDays: null, paymentDueDate: '2026-11-20' });
+    renderDialog();
+
+    expect((await screen.findByTestId('remaining-invoice-terms')).textContent)
+      .toBe('เงื่อนไขชำระชำระเมื่อส่งมอบ · ครบกำหนด 20 พ.ย. 2569');
+  });
+
+  it('a term with no due date yet (not fully delivered) says it is waiting for delivery, inventing no date', async () => {
+    dealWith({ paymentDueBasis: 'CREDIT_FROM_DELIVERY', paymentDueCreditDays: 45, paymentDueDate: null });
+    renderDialog();
+
+    expect((await screen.findByTestId('remaining-invoice-terms')).textContent)
+      .toBe('เงื่อนไขชำระเครดิต 45 วันนับจากวันส่งมอบ · ยังไม่ถึงกำหนด — รอส่งมอบ');
+  });
+
+  it('no structured term on the quotation: no terms line at all', async () => {
+    dealWith({ paymentDueBasis: null, paymentDueCreditDays: null, paymentDueDate: null });
+    renderDialog();
+
+    await screen.findByDisplayValue('QT-2026-0099');
+    await waitFor(() => expect(api.tickets.get).toHaveBeenCalled());
+    expect(screen.queryByTestId('remaining-invoice-terms')).toBeNull();
+  });
+
+  it('a deal the viewer cannot read (the read fails): the dialog still works, without the terms line', async () => {
+    api.tickets.get.mockRejectedValue(Object.assign(new Error('ไม่มีสิทธิ์'), { status: 403 }));
+    renderDialog();
+
+    await screen.findByDisplayValue('QT-2026-0099');
+    expect(screen.queryByTestId('remaining-invoice-terms')).toBeNull();
   });
 });

@@ -11,20 +11,12 @@ const PASSWORD_MISMATCH_MESSAGE = 'รหัสผ่านใหม่และ
 const INVALID_LINK_MESSAGE = 'ลิงก์สำหรับตั้งรหัสผ่านใหม่ไม่ถูกต้องหรือหมดอายุแล้ว กรุณาขอลิงก์ใหม่อีกครั้ง';
 const GENERIC_RETRY_MESSAGE = 'ตั้งรหัสผ่านใหม่ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง';
 
-// Non-jarring auto-redirect after a successful reset: long enough to read the confirmation,
-// short enough not to feel stuck. The manual "เข้าสู่ระบบ" button below always works immediately
-// regardless of this timer.
+// Non-jarring auto-redirect after a successful reset: long enough to read the confirmation, short enough not
+// to feel stuck. The manual "เข้าสู่ระบบ" button below always works immediately regardless of this timer.
 const AUTO_REDIRECT_MS = 4000;
 
-/**
- * Self-service "forgot password" step 2 — lands here from the emailed
- * {@code /reset-password?token=...} link. Rendered by {@code App.jsx}'s logged-out branch
- * alongside {@link LoginPage} / {@link ForgotPasswordPage} (see that file's routing comment).
- *
- * <p>Reads {@code token} from the query string rather than a route param, since this page is
- * reached outside the authenticated {@code <Routes>} tree entirely (App.jsx switches on
- * `location.pathname` while `user` is falsy — there is no router-parsed param here to read).
- */
+/** Self-service "forgot password" step 2 — lands here from the emailed /reset-password?token=... link. Rendered
+ * by App.jsx's logged-out branch alongside LoginPage / ForgotPasswordPage (see that file's routing comment). */
 export function ResetPasswordPage({ onNavigateToLogin, onNavigateToForgotPassword }) {
   const location = useLocation();
   const token = useMemo(() => new URLSearchParams(location.search).get('token'), [location.search]);
@@ -41,8 +33,8 @@ export function ResetPasswordPage({ onNavigateToLogin, onNavigateToForgotPasswor
     return () => clearTimeout(timer);
   }, [succeeded, onNavigateToLogin]);
 
-  // No token at all in the URL: this is the same invalid/expired state a rejected token gets,
-  // shown immediately rather than attempting a call with an empty token.
+  // No token at all in the URL: this is the same invalid/expired state a rejected token gets, shown immediately
+  // rather than attempting a call with an empty token.
   if (!token) {
     return (
       <InvalidLinkCard onNavigateToForgotPassword={onNavigateToForgotPassword} onNavigateToLogin={onNavigateToLogin} />
@@ -67,8 +59,8 @@ export function ResetPasswordPage({ onNavigateToLogin, onNavigateToForgotPasswor
       await api.auth.resetPassword({ token, newPassword });
       setSucceeded(true);
     } catch (err) {
-      // The server's own message is safe to show verbatim here (unlike login): it reveals only
-      // whether THIS caller's token is currently valid, never whether any account exists.
+      // The server's own message is safe to show verbatim here (unlike login): it reveals only whether THIS caller's
+      // token is currently valid, never whether any account exists.
       setError(err?.message || GENERIC_RETRY_MESSAGE);
     } finally {
       setLoading(false);

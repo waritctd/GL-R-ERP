@@ -32,39 +32,8 @@ import th.co.glr.hr.employee.EmployeeRepository;
 import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * F5 (2026-07-30, owner reversed the earlier "track it separately" decision — fix it): real-DB,
- * real-{@link AttachmentController} coverage that the sales rep a commission pays cannot destroy
- * the receipt behind it.
- *
- * <p>The defect: {@code CommissionService#createFromDeal} registers ONE physical file into TWO
- * independent registries that share nothing but the file's path — {@code sales.attachment} (the
- * ticket's {@code INVOICE} attachment) and {@code hr.file_attachment} (the commission's ข้อ 15
- * evidence, via {@code sales.invoice_details.invoice_attachment_id}). {@link
- * AttachmentController#delete} only ever knew about the first registry: it deleted the row AND
- * called {@code Files.deleteIfExists} on the shared path, and {@code requireAttachmentAccess}
- * admits the ticket's {@code createdById} — which {@code createFromDeal} always sets to the
- * commission's OWN sales rep. So the rep could delete their own commission's evidence: {@code
- * invoice_attachment_id} stayed non-null (V102's CHECK never re-examines whether the file it
- * points at still exists), {@code RECORD_SELECT} kept joining a filename that no longer resolved
- * to anything, and payroll paid against a receipt nobody could produce.
- *
- * <p>The fix, in {@link AttachmentRepository#backsLiveCommission(String)} +
- * {@link AttachmentController#delete}: before deleting anything, check whether the SAME file path
- * still backs a commission_record that is not VOID/REJECTED; if so, refuse the whole delete (row
- * and file both survive) rather than only skipping the disk unlink, so the ticket's own attachment
- * list stays truthful too. Every case below is written wrong-way-round (CLAUDE.md): "the rep
- * cannot delete the receipt backing their own commission" is the assertion that matters, not "an
- * unrelated attachment can still be deleted".
- *
- * <p>This does NOT need {@code CommissionInvoiceSentinelRollbackIntegrationTest}'s
- * {@code DataSourceTransactionManager} pattern: that test proves a claim about what happens if a
- * multi-statement write fails PARTWAY through and must roll back. This guard is a single read-then
- * -decide check that runs BEFORE any mutation at all — there is no partial-commit state for it to
- * get wrong, so a hand-wired {@link AttachmentController} calling straight into real repositories
- * against real Postgres (no Spring proxy needed) is sufficient to prove both the decision and its
- * enforcement.
- */
+/** real-DB, real-AttachmentController coverage that the sales rep a commission pays cannot destroy the receipt
+ * behind it. */
 class AttachmentCommissionEvidenceIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate INVOICE_DATE = LocalDate.of(2026, 6, 15);
     private static final LocalDate PAYROLL_MONTH = LocalDate.of(2026, 7, 1);
@@ -89,21 +58,8 @@ class AttachmentCommissionEvidenceIntegrationTest extends AbstractPostgresIntegr
         accountEmployeeId = createEmployee(employees, "บัญชี หลักฐาน", "account-evidence@glr.co.th");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Wrong-way-round: the rep being paid cannot delete the receipt behind their own commission,
-    // at any live status -- not just APPROVED (a MANAGER_APPROVED commission's approver still
-    // needs the file to review it).
-    //
-    // MUTATION-CHECK RECORD: temporarily changed AttachmentController#delete's guard from
-    // `if (attachments.backsLiveCommission(filePath))` to `if (false)` (reproducing the exact
-    // vulnerability this test guards against -- the check compiles and runs, it just never blocks
-    // anything, same as if it had never been added). Every one of the three
-    // repCannotDelete_evenAtXxx tests below went red (expected ApiException/CONFLICT, delete
-    // succeeded instead) and no other test in this class flipped; `unrelatedAttachment...` and
-    // `onceVoided...` both stayed green throughout, as expected (they exercise the FALSE branch,
-    // which is unchanged either way). Reverted; `git diff` against the pre-mutation tree was empty
-    // afterwards.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Wrong-way-round: the rep being paid cannot delete the receipt behind their own commission, at any live
+    // status -- not just APPROVED (a MANAGER_APPROVED commission's approver still needs the file to review it).
 
     @Test
     void repCannotDelete_evenAtSubmittedStatus_evidenceStillNeededForApproval() {
@@ -136,10 +92,8 @@ class AttachmentCommissionEvidenceIntegrationTest extends AbstractPostgresIntegr
             .isTrue();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Positive controls: the guard is scoped to files that actually back a live commission, not a
-    // blanket "sales reps can never delete their own attachments" rule.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Positive controls: the guard is scoped to files that actually back a live commission, not a blanket "sales
+    // reps can never delete their own attachments" rule.
 
     @Test
     void unrelatedAttachment_notBackingAnyCommission_stillDeletesNormally() throws Exception {
@@ -170,13 +124,7 @@ class AttachmentCommissionEvidenceIntegrationTest extends AbstractPostgresIntegr
         assertThat(Files.exists(Path.of(fixture.filePath()))).isFalse();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Fixture: reproduces exactly what CommissionService#createFromDeal does -- one physical file,
-    // registered independently in sales.attachment (ticket INVOICE) and hr.file_attachment
-    // (commission evidence via invoice_details.invoice_attachment_id) -- without needing the full
-    // deal pipeline CommissionAutoCreateIntegrationTest drives, since this guard only cares about
-    // the shared file path, not how the deal got there.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Fixture: reproduces exactly what CommissionService#createFromDeal does.
 
     private record SharedFileFixture(long ticketAttachmentId, String filePath, long commissionId) {}
 

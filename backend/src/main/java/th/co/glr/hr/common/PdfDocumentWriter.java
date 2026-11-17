@@ -13,15 +13,9 @@ import org.apache.pdfbox.pdmodel.font.PDFont;
 import org.apache.pdfbox.pdmodel.font.PDType0Font;
 import org.springframework.core.io.ClassPathResource;
 
-// Shared simple-text PDF builder with an embeddable Thai font and automatic pagination.
-// Used by document renderers (deposit notices, quotations, payslips) that need
-// Thai-correct PDF output without pulling in a full templating engine.
-//
-// Input safety: PDFBox's showText() throws on control characters (U+000A crashes
-// PDType0Font), so every drawing method sanitizes its input — multiline values are
-// split on newlines and each line has remaining control characters replaced. text()
-// additionally wraps lines that exceed the printable width instead of clipping them
-// off the right edge of the page.
+// Shared simple-text PDF builder with an embeddable Thai font and automatic pagination. Used by document
+// renderers (deposit notices, quotations, payslips) that need Thai-correct PDF output without pulling in a
+// full templating engine.
 public final class PdfDocumentWriter implements AutoCloseable {
     public static final String FONT_REGULAR = "fonts/Sarabun-Regular.ttf";
     public static final String FONT_BOLD = "fonts/Sarabun-Bold.ttf";
@@ -57,10 +51,8 @@ public final class PdfDocumentWriter implements AutoCloseable {
         return pageWidth - PAGE_MARGIN;
     }
 
-    /**
-     * Paragraph text at the left margin: splits on newlines, wraps lines wider than
-     * the printable area, advances the cursor, and paginates as needed.
-     */
+    /** Paragraph text at the left margin: splits on newlines, wraps lines wider than the printable area, advances
+     * the cursor, and paginates as needed. */
     public void text(PDFont font, float size, String value) throws IOException {
         for (String line : splitLines(value)) {
             for (String piece : wrap(font, size, line, right() - left())) {
@@ -131,8 +123,8 @@ public final class PdfDocumentWriter implements AutoCloseable {
                     out.add(current.toString());
                     current = new StringBuilder();
                 }
-                // Hard-break a single word that alone exceeds the width (Thai text has
-                // no spaces, so long Thai runs land here rather than in the space split).
+                // Hard-break a single word that alone exceeds the width (Thai text has no spaces, so long Thai runs land here
+                // rather than in the space split).
                 String rest = word;
                 while (width(font, size, rest) > maxWidth && rest.length() > 1) {
                     int cut = rest.length() - 1;

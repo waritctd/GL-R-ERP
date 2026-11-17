@@ -8,10 +8,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// Each case here mounts the WHOLE editor and drives it through a debounced calculate-line and a
-// save — 1–4 s alone, and measured at 6.6 s for one of them under the full parallel suite, past
-// vitest's 5 s default. The budget is raised for this file only; nothing here relies on real time
-// beyond the page's own 300 ms / 2 s debounces.
+// Each case here mounts the WHOLE editor and drives it through a debounced calculate-line and a save — 1–4 s
+// alone, and measured at 6.6 s for one of them under the full parallel suite, past vitest's 5 s default.
 vi.setConfig({ testTimeout: 15000 });
 
 // Quotation v3 / v3b controls (customer address, repeat-customer autofill, the "ข้อมูลที่ยังไม่ครบ"
@@ -264,9 +262,9 @@ describe('v3/v3b document settings', () => {
     await waitFor(() => expect(byId('round-loose-0').disabled).toBe(true));
     expect(byId('round-loose-0').checked).toBe(false);
 
-    // Switch BACK to a mode where the checkbox re-enables. If the stored flag had merely been
-    // masked (not actually reset), it would silently re-appear CHECKED here with no re-entry —
-    // this is the assertion a reset-less `applyPriceMode` cannot pass.
+    // Switch BACK to a mode where the checkbox re-enables. If the stored flag had merely been masked (not actually
+    // reset), it would silently re-appear CHECKED here with no re-entry — this is the assertion a reset-less
+    // `applyPriceMode` cannot pass.
     fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /ไทย/ }));
     await waitFor(() => expect(byId('round-loose-0').disabled).toBe(false));
     expect(byId('round-loose-0').checked).toBe(false);
@@ -303,14 +301,14 @@ describe('v3/v3b document settings', () => {
 
     fireEvent.click(within(group('ภาษาเอกสาร')).getByRole('button', { name: /English/ }));
 
-    // English per-sqm, no box area: the checkbox stays ENABLED and CHECKED — not reset, not
-    // disabled — unlike the box-area case above.
+    // English per-sqm, no box area: the checkbox stays ENABLED and CHECKED — not reset, not disabled — unlike the
+    // box-area case above.
     await waitFor(() => expect(byId('special-0')?.value).toBe(''));
     expect(byId('round-loose-0').disabled).toBe(false);
     expect(byId('round-loose-0').checked).toBe(true);
 
-    // Re-enter what English per-sqm needs (no box area required) and save — the loose-pieces
-    // selection is accepted, not silently discarded.
+    // Re-enter what English per-sqm needs (no box area required) and save — the loose-pieces selection is
+    // accepted, not silently discarded.
     fireEvent.change(byId('special-0'), { target: { value: '64' } });
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
@@ -377,8 +375,8 @@ describe('lead time required to submit (owner feedback #7, 2026-09-14)', () => {
     expect(within(await screen.findByTestId('checklist-submit-blocking'))
       .getByText('กรุณาระบุระยะเวลานำเข้า (วัน) ของรายการที่ 1')).not.toBeNull();
     expect(screen.queryByText('ข้อมูลในเอกสารครบแล้ว')).toBeNull();
-    // The SAME rule the server enforces at submit is not a draft-completeness rule -- บันทึกร่าง
-    // must stay clickable with no lead time typed anywhere.
+    // The SAME rule the server enforces at submit is not a draft-completeness rule -- บันทึกร่าง must stay
+    // clickable with no lead time typed anywhere.
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false);
   });
 
@@ -640,8 +638,8 @@ describe('customer address + repeat-customer autofill (owner, 2026-09-11)', () =
 
     await waitFor(() => expect(api.customers.update).toHaveBeenCalledWith(5, { address: '1 ถนนพระราม 9' }));
     await waitFor(() => expect(screen.queryByText('ยังไม่ได้กรอกที่อยู่ลูกค้า')).toBeNull());
-    // The document snapshots the customer on a DRAFT save, so the address edit must trigger one —
-    // here the 2-second autosave.
+    // The document snapshots the customer on a DRAFT save, so the address edit must trigger one — here the
+    // 2-second autosave.
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalled(), { timeout: 4000 });
   });
 
@@ -691,8 +689,8 @@ describe('ยืนราคา — จำนวนวัน / ระบุว�
 
     const dateInput = screen.getByLabelText('ยืนราคาถึงวันที่');
     expect(dateInput).not.toBeNull();
-    // The days select is gone from the DOM while DATE mode shows, but its VALUE (30, from the
-    // draft) must still be sent on save — see #buildUpsertPayload's own comment.
+    // The days select is gone from the DOM while DATE mode shows, but its VALUE (30, from the draft) must still be
+    // sent on save — see #buildUpsertPayload's own comment.
     expect(screen.queryByLabelText('validityDays')).toBeNull();
     // The rep types the date in พ.ศ.; the API still receives ค.ศ. ISO (PDF adds 543 itself). A พ.ศ.
     // year landing in a ค.ศ. field would turn 31/01/2570 into "31/01/3113".
@@ -779,8 +777,8 @@ describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedb
     expect(await savedItem()).toMatchObject({ id: 101, listPriceSqm: 1800, unitPrice: null });
   });
 
-  // The no-drift guarantee for every draft that exists today. 850 a piece shows as 2,528.41 per
-  // ตร.ม. (850 × 2.78 × 1.07) — and is saved back as 850 a piece, not as a re-derived figure.
+  // The no-drift guarantee for every draft that exists today. 850 a piece shows as 2,528.41 per ตร.ม. (850 ×
+  // 2.78 × 1.07) — and is saved back as 850 a piece, not as a re-derived figure.
   it('a draft saved before this change is SHOWN per ตร.ม. but saved back per แผ่น, so an untouched price cannot move', async () => {
     renderEditor('/quotations/5');
     await screen.findByTestId('checklist-warnings');
@@ -803,8 +801,8 @@ describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedb
     expect(await savedItem()).toMatchObject({ id: 101, listPriceSqm: 2012, unitPrice: null });
   });
 
-  // A refused preview must not leave the PREVIOUS price's per-แผ่น figure sitting under a box
-  // that now says something else.
+  // A refused preview must not leave the PREVIOUS price's per-แผ่น figure sitting under a box that now says
+  // something else.
   it('a refused preview clears the per-แผ่น figure and keeps what was typed', async () => {
     api.dealQuotations.get.mockResolvedValue({ quotation: draft({ items: [TYPED_ITEM] }) });
     api.dealQuotations.calculateLine.mockRejectedValue(new Error('400'));
@@ -819,8 +817,8 @@ describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedb
     expect(byId('price-0').value).toBe('1900');
   });
 
-  // The server refuses to convert a per-ตร.ม. price with no area per piece, so nothing is asked —
-  // and the row says what is missing instead of showing a number.
+  // The server refuses to convert a per-ตร.ม. price with no area per piece, so nothing is asked — and the row
+  // says what is missing instead of showing a number.
   it('a per-ตร.ม. price on a row with no แผ่น/ตร.ม. is not sent for a preview', async () => {
     renderEditor('/quotations/new?ticket=18');
     await screen.findByRole('group', { name: 'วิธีกรอกราคากระเบื้อง' });
@@ -844,14 +842,14 @@ describe('ราคา/ตร.ม. รวม VAT ทุกแบบ (sales feedb
 
     await waitFor(() => expect(screen.getByTestId('direct-net-per-piece-0').textContent).toBe('= สุทธิ ฿531.16/แผ่น (ก่อน VAT)'));
     expect(lastPreviewed()).toMatchObject({ directNetPriceSqm: 790, listPriceSqm: 790, unitPrice: null, directNetPrice: null });
-    // "เว้นว่าง = ใช้ราคาสุทธิ" has to stay blank: the list price the server derived for THIS request
-    // was the editor's own stand-in, not something the rep typed.
+    // "เว้นว่าง = ใช้ราคาสุทธิ" has to stay blank: the list price the server derived for THIS request was the
+    // editor's own stand-in, not something the rep typed.
     expect(byId('price-0').value).toBe('');
   });
 
-  // docHasSpecialPricing (a ราคาสุทธิ row whose list and net differ) gates ระบุวันที่, and losing it
-  // resets ยืนราคา to จำนวนวัน on the spot. The per-แผ่น list price must therefore not blink out
-  // between a keystroke and the server's answer.
+  // docHasSpecialPricing (a ราคาสุทธิ row whose list and net differ) gates ระบุวันที่, and losing it resets
+  // ยืนราคา to จำนวนวัน on the spot. The per-แผ่น list price must therefore not blink out between a keystroke
+  // and the server's answer.
   it('ราคาสุทธิ: retyping ราคาตั้ง does not knock ยืนราคา out of ระบุวันที่ while the server works it out', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: draft({ priceMode: 'DIRECT_NET', items: [TYPED_NET_ITEM], validityMode: 'DATE', validityUntil: '2026-12-31' }),

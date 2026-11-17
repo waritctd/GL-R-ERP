@@ -90,8 +90,8 @@ export function resolveWorkState(user, deal, pricingRequests = [], { reviseTarge
       : role === 'account' ? nextAccountAction(deal)
         : null;
 
-  // The rep's AWAIT_DIRECT_APPROVAL bucket is a WAITING state, not a button: it becomes the
-  // header's one work-state line, naming who it waits on and which document.
+  // The rep's AWAIT_DIRECT_APPROVAL bucket is a WAITING state, not a button: it becomes the header's one
+  // work-state line, naming who it waits on and which document.
   if (action?.key === SALES_ACTION.AWAIT_DIRECT_APPROVAL) {
     return {
       action: null,

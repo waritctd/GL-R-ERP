@@ -142,8 +142,8 @@ function line(itemId, description, qty, qtyFromStock, weightMultiplier = 1) {
   return { itemId, description, qty, qtyFromStock, weightMultiplier };
 }
 
-// Two stock lines and one import line, so "all stock" and "import stays untouched" are both
-// observable in one fixture.
+// Two stock lines and one import line, so "all stock" and "import stays untouched" are both observable in one
+// fixture.
 function pendingDto(weights = {}, over = {}) {
   return {
     commission: submittedRecord(),
@@ -161,8 +161,8 @@ function pendingDto(weights = {}, over = {}) {
   };
 }
 
-// Server echo: applies the submitted lines to the current weights and returns a fresh entry with
-// a recognisably different weighted base, so a refresh from the response is observable.
+// Server echo: applies the submitted lines to the current weights and returns a fresh entry with a
+// recognisably different weighted base, so a refresh from the response is observable.
 function echoAdjust() {
   const weights = {};
   api.commissions.adjustItemWeights.mockImplementation(async (_id, payload) => {
@@ -223,10 +223,8 @@ describe('weights in the detail panel — ×1/×2/×3 segmented control per line
     await act(async () => { resolve({ pending: pendingDto({ 11: 3 }) }); });
   });
 
-  // Review fix (HIGH): two parallel item-weights writes to ONE entry race in the backend (no row
-  // lock) and the frozen effective weight can ignore a line, and the later response could overwrite
-  // the earlier one. So the WHOLE entry is locked while any of its lines is saving -- siblings and
-  // the bulk button included. (This replaces the earlier "only that line is disabled" test.)
+  // Review fix (HIGH): two parallel item-weights writes to ONE entry race in the backend (no row lock) and the
+  // frozen effective weight can ignore a line, and the later response could overwrite the earlier one.
   it('locks the WHOLE entry while one line saves: sibling lines and the bulk button are disabled, and a click on a sibling sends nothing', async () => {
     let resolve;
     api.commissions.adjustItemWeights.mockImplementation(() => new Promise((r) => { resolve = r; }));
@@ -269,8 +267,8 @@ describe('weights in the detail panel — ×1/×2/×3 segmented control per line
     await act(async () => { resolve({ pending: pendingDto({ 11: 2 }) }); });
   });
 
-  // Review fix (MEDIUM): focus used to move to the next segment BEFORE select() refused the change,
-  // leaving focus on the old segment while the new one was checked.
+  // Review fix (MEDIUM): focus used to move to the next segment BEFORE select() refused the change, leaving
+  // focus on the old segment while the new one was checked.
   it('keyboard during a save: focus stays put and nothing is selected or sent', async () => {
     let resolve;
     api.commissions.adjustItemWeights.mockImplementation(() => new Promise((r) => { resolve = r; }));
@@ -308,8 +306,8 @@ describe('weights in the detail panel — ×1/×2/×3 segmented control per line
     expect(api.commissions.adjustItemWeights.mock.calls[0][1].lines).toEqual([{ itemId: 13, weightMultiplier: 2 }]);
   });
 
-  // Review fix (MEDIUM-LOW): the month table and the picked rep's statement were stale after a
-  // weight change, because only the pending entry was refreshed.
+  // Review fix (MEDIUM-LOW): the month table and the picked rep's statement were stale after a weight change,
+  // because only the pending entry was refreshed.
   it("after a weight change, reloads the month's records and the picked rep's statement", async () => {
     echoAdjust();
     api.commissions.list.mockResolvedValue({ commissions: [submittedRecord({ id: 801, status: 'APPROVED', invoiceDetails: invoiceDetails({ id: 801, invoiceNumber: 'INV-OK-801' }) })] });
@@ -430,8 +428,8 @@ describe('weights in the detail panel — ×1/×2/×3 segmented control per line
 describe('record-level weight (records with NO deal lines) uses the same segmented control', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // A legacy / directly-submitted SUBMITTED record: no deal lines, so no pending entry to weight
-    // line by line -- the record-level weightMultiplier in the edit panel is the only lever.
+    // A legacy / directly-submitted SUBMITTED record: no deal lines, so no pending entry to weight line by line --
+    // the record-level weightMultiplier in the edit panel is the only lever.
     api.commissions.list.mockResolvedValue({ commissions: [submittedRecord({ id: 601, invoiceDetails: invoiceDetails({ id: 601, invoiceNumber: 'INV-LEGACY-601' }) })] });
     api.commissions.pendingApproval.mockResolvedValue({ commissions: [] });
     api.commissions.reps.mockResolvedValue({ reps: [] });

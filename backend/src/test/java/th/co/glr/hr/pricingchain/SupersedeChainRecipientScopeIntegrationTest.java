@@ -66,29 +66,8 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * GLA-124: {@code CustomerQuotationRepository#supersedeSupersededChainQuotations} used to key its
- * chain-wide sweep on {@code root_pricing_request_id} alone, with no {@code recipient_type}
- * clause. A revision chain is only ever supposed to hold ONE recipient — PR #999 closed the two
- * write paths that could put a mismatched recipient into a chain ({@code
- * PricingRequestRepository#createCustomerChangeRevision}, {@code updateDraft}) — but the sweep
- * itself had no way to know that invariant held for every row it might touch. A chain that DOES
- * contain two recipients (legacy pre-guard production data, or any future write path that
- * reintroduces the gap) would have the OTHER recipient's still-live, customer-held ISSUED
- * quotation silently flipped to SUPERSEDED the moment this recipient's quotation issues.
- *
- * <p>Driven end to end through the real {@link PricingRequestService}/{@link
- * CustomerQuotationService} against real Postgres, exactly like {@code
- * ReissueThroughCeoChainIntegrationTest} (whose fixture wiring this class mirrors) — a mocked
- * repository would pass while the SQL does something else, and the bug lives entirely in SQL.
- *
- * <p>The mismatched-recipient chain member is seeded with raw SQL rather than through the
- * service, on purpose: PR #999's guards now refuse to create one through {@code
- * createCustomerChangeRevision}/{@code updateDraft}, so raw SQL is the only way left to reproduce
- * the legacy pre-guard shape this test defends against. This is not a gap in the guard being
- * tested around — it is the fixture standing in for rows that already exist in production from
- * before PR #999 merged.
- */
+/** GLA-124: CustomerQuotationRepository#supersedeSupersededChainQuotations used to key its chain-wide sweep on
+ * root_pricing_request_id alone, with no recipient_type clause. */
 class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final String FACTORY = "Factory GLA-124";
@@ -159,16 +138,11 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The fix, both directions from ONE mixed-recipient chain and ONE issue() call
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * The bug, wrong-way-round: a chain that contains a mismatched-recipient (OWNER) member
-     * alongside the DESIGNER chain being revised must NOT have that other recipient's ISSUED
-     * quotation swept up just because it shares a chain root and is itself SUPERSEDED. This is
-     * the assertion that matters — see the class javadoc for why the mismatch can exist at all.
-     */
+    /** The bug, wrong-way-round: a chain that contains a mismatched-recipient (OWNER) member alongside the DESIGNER
+     * chain being revised must NOT have that other recipient's ISSUED quotation swept up just because it shares a
+     * chain root and is itself SUPERSEDED. */
     @Test
     void issuingASecondRecipientsQuotation_leavesAnotherRecipientsIssuedQuotationInTheSameChainAlone() {
         MixedRecipientChain chain = buildMixedRecipientChainAndIssueTheDesignerReplacement();
@@ -176,13 +150,9 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
         assertThat(docStatus(chain.mismatchedRecipientQuotationId())).isEqualTo("ISSUED");
     }
 
-    /**
-     * The positive case, in the SAME fixture: the fix must not over-scope. The DESIGNER chain's
-     * own earlier ISSUED quotation — same recipient as the request that just issued — is still
-     * exactly the row {@code supersedeSupersededChainQuotations} exists to retire, and must still
-     * go to SUPERSEDED. A fix that silently stopped ALL chain supersession (e.g. an always-false
-     * predicate) would pass the test above and fail this one.
-     */
+    /** The positive case, in the SAME fixture: the fix must not over-scope. The DESIGNER chain's own earlier ISSUED
+     * quotation — same recipient as the request that just issued — is still exactly the row
+     * supersedeSupersededChainQuotations exists to retire, and must still go to SUPERSEDED. */
     @Test
     void issuingASecondRecipientsQuotation_stillSupersedesAnEarlierSameRecipientRevisionInTheChain() {
         MixedRecipientChain chain = buildMixedRecipientChainAndIssueTheDesignerReplacement();
@@ -192,27 +162,9 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
 
     private record MixedRecipientChain(long sameRecipientParentQuotationId, long mismatchedRecipientQuotationId) {}
 
-    /**
-     * Builds one revision chain with two recipients and drives the second, DESIGNER-recipient
-     * quotation all the way to ISSUED through the real service path — the same call
-     * ({@code CustomerQuotationService#issue} -> {@code
-     * CustomerQuotationRepository#supersedeSupersededChainQuotations}) production uses.
-     *
-     * <ol>
-     *   <li>Root pricing request A, recipient DESIGNER, driven to APPROVED_FOR_QUOTATION and
-     *       issued as quotation QA (ISSUED).</li>
-     *   <li>A mismatched chain member C is inserted DIRECTLY (raw SQL, not through the service —
-     *       see the class javadoc): recipient_type OWNER, same chain root as A, status
-     *       SUPERSEDED — reproducing legacy pre-PR-#999 data where a chain acquired a second
-     *       recipient. Its own quotation QC is ISSUED, exactly the live customer-held document
-     *       the bug would retire.</li>
-     *   <li>A LEGITIMATE same-recipient (DESIGNER) customer-change revision D is created from A
-     *       through the real service — this is the path PR #999 still allows, and it is what
-     *       puts A's own status at SUPERSEDED (a precondition for QA to be swept at all).</li>
-     *   <li>D is driven to APPROVED_FOR_QUOTATION and its quotation is issued — the call under
-     *       test.</li>
-     * </ol>
-     */
+    /** Builds one revision chain with two recipients and drives the second, DESIGNER-recipient quotation all the
+     * way to ISSUED through the real service path — the same call (CustomerQuotationService#issue ->
+     * CustomerQuotationRepository#supersedeSupersededChainQuotations) production uses. */
     private MixedRecipientChain buildMixedRecipientChainAndIssueTheDesignerReplacement() {
         long designerRootId = approvedPricingRequest(new BigDecimal("10"));
         CustomerQuotationDto designerRootQuotation = issueQuotation(designerRootId);
@@ -236,14 +188,8 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
         return new MixedRecipientChain(designerRootQuotation.id(), mismatchedRecipientQuotationId);
     }
 
-    /**
-     * Raw-SQL fixture only (see class javadoc): PR #999 removed every service-level path that
-     * could produce this row, so this reproduces the legacy shape directly. {@code revision_no}
-     * 50 is picked to sit well clear of the root (1) and the legitimate same-recipient revision
-     * this test also creates (2), so it cannot collide with {@code
-     * uq_pricing_request_chain_revision} (V71: unique on {@code (COALESCE(root_pricing_request_id,
-     * pricing_request_id), revision_no)}).
-     */
+    /** Raw-SQL fixture only (see class javadoc): PR #999 removed every service-level path that could produce this
+     * row, so this reproduces the legacy shape directly. */
     private long insertLegacyMismatchedRecipientChainMember(long chainRootId) {
         return jdbc.queryForObject("""
             INSERT INTO sales.pricing_request
@@ -264,8 +210,8 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
             Long.class);
     }
 
-    /** Raw-SQL fixture companion to {@link #insertLegacyMismatchedRecipientChainMember}: the
-     * ISSUED, customer-held quotation the bug would incorrectly retire. */
+    /** Raw-SQL fixture companion to #insertLegacyMismatchedRecipientChainMember: the ISSUED, customer-held
+     * quotation the bug would incorrectly retire. */
     private long insertIssuedQuotationFor(long pricingRequestId, String recipientType) {
         return jdbc.queryForObject("""
             INSERT INTO sales.quotation
@@ -290,9 +236,7 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
             Map.of("id", quotationId), String.class);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixtures — mirrors ReissueThroughCeoChainIntegrationTest's own helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** Drives a fresh single-item pricing request from DRAFT to APPROVED_FOR_QUOTATION. */
     private long approvedPricingRequest(BigDecimal quantity) {
@@ -337,10 +281,9 @@ class SupersedeChainRecipientScopeIntegrationTest extends AbstractPostgresIntegr
             new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
     }
 
-    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-    // quantity are now required on every item PricingRequestService#createDraft persists —
-    // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-    // piecesInput=quantity keeps the derived requestedQty byte-identical to `quantity`.
+    // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+    // required on every item PricingRequestService#createDraft persists —
+    // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
     private PricingRequestRequests.PricingRequestItemRequest pricingItem(BigDecimal quantity) {
         return new PricingRequestRequests.PricingRequestItemRequest(null, catalogProductId, null, "SCG",
             "Tile GLA-124", "SCG Tile GLA-124", "White", "Matte", "60x60", FACTORY, null, null, null, null,

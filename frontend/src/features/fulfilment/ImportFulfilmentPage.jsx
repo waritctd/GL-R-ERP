@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { api } from '../../api/index.js';
@@ -14,7 +14,41 @@ import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
 import { FactoryProgressBar } from '../importProgress/FactoryProgressBar.jsx';
-import { IMPORT_STEPS } from '../importProgress/importSteps.js';
+import { IMPORT_STEPS, importStepMeta } from '../importProgress/importSteps.js';
+
+// Spec 2026-11-15 §7.11 item 3 (design a-fulfil): this page is the ONE place a factory step is advanced, and an
+// advance is reversible for this long through POST .../advance-step/undo (V216; the server enforces the same 30 s,
+// actor-only and step-unchanged rules). An advance to RECEIVED is not offered: it completes the shipment and may roll
+// the deal up, which the undo endpoint refuses.
+export const STEP_UNDO_WINDOW_MS = 30_000;
+
+// Announced politely (role=status, aria-live) and focused on its เลิกทำ when it appears, so a keyboard or
+// screen-reader user can reach the undo inside its window; the page hands focus back when it closes.
+function StepUndoSnackbar({ undo, busy, onUndo }) {
+  const buttonRef = useRef(null);
+  useEffect(() => { buttonRef.current?.focus(); }, [undo.key]);
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      data-testid="step-undo-snackbar"
+      className="fixed inset-x-4 bottom-4 z-40 mx-auto flex max-w-xl flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-md bg-text px-4 py-3 text-sm text-surface shadow-lg"
+    >
+      <span className="min-w-0 [overflow-wrap:anywhere]">
+        เลื่อนเป็น “{undo.label}”{undo.docNumber ? ` · ${undo.docNumber}` : ''}
+      </span>
+      <button
+        ref={buttonRef}
+        type="button"
+        disabled={busy}
+        onClick={onUndo}
+        className="min-h-9 shrink-0 cursor-pointer rounded-md border-0 bg-transparent px-2 font-bold text-surface underline disabled:opacity-60 mobile:min-h-11"
+      >
+        เลิกทำ
+      </button>
+    </div>
+  );
+}
 
 /**
  * งานนำเข้า — Import's cross-deal fulfilment worklist, tracking per FACTORY (see
@@ -115,12 +149,31 @@ function LeadTimeInline({ row, editable, onSave, saving, showToast }) {
 
 export function ImportFulfilmentPage({ user, showToast }) {
   const queryClient = useQueryClient();
-  // Nav-gated to import/ceo; anyone here may advance. A read-only viewer (should one ever reach
-  // it) still gets the bars, just without the controls.
+  // Nav-gated to import/ceo; anyone here may advance. A read-only viewer (should one ever reach it) still gets
+  // the bars, just without the controls.
   const editable = user?.role === 'import' || user?.role === 'ceo';
   const [stepFilter, setStepFilter] = useState('ALL');
   const [search, setSearch] = useState('');
   const [emailRow, setEmailRow] = useState(null);
+  // The latest advance that can still be undone: { rowId, ticketId, targetStep, label, docNumber, key }.
+  const [undo, setUndo] = useState(null);
+  // Closes when the SERVER's window does: the advance answers with undoUntil (server time, review LOW); the 30 s
+  // constant is only the fallback for a response without it.
+  useEffect(() => {
+    if (!undo) return undefined;
+    const until = undo.undoUntil ? Date.parse(undo.undoUntil) : NaN;
+    const ms = Number.isFinite(until) ? Math.max(0, until - Date.now()) : STEP_UNDO_WINDOW_MS;
+    const timer = setTimeout(() => setUndo((cur) => (cur?.key === undo.key ? null : cur)), ms);
+    return () => clearTimeout(timer);
+  }, [undo]);
+  // Focus goes back where it was before the snackbar took it (the advance button), if that is still on the page.
+  const focusBeforeUndo = useRef(null);
+  const closingUndo = useRef(false);
+  useEffect(() => {
+    if (undo) { closingUndo.current = true; return; }
+    if (closingUndo.current && focusBeforeUndo.current?.isConnected) focusBeforeUndo.current.focus();
+    closingUndo.current = false;
+  }, [undo]);
   // Field names MUST be emailTo/emailSubject/emailBody, matching Java's UpdateEmailDraftRequest
   // exactly — see ImportRequestFactoryCard.jsx's comment on the failure mode (`to`/`subject`/`body`
   // silently dropped, old value kept, 200 OK).
@@ -178,8 +231,18 @@ export function ImportFulfilmentPage({ user, showToast }) {
     // deal: TicketService#applyImportRequestRollup (backend/.../TicketService.java ~942-948)
     // writes only the GOODS_RECEIVED EVENT for that status, never fulfillment_status itself. Only
     // worth taking when the row could have completed the deal (targetStep RECEIVED).
-    onSuccess: async (_data, { ticketId, targetStep }) => {
+    onSuccess: async (data, { rowId, ticketId, targetStep, docNumber, focusFrom }) => {
       invalidateAfterAdvance(ticketId);
+      if (targetStep !== 'RECEIVED') {
+        // The snackbar IS the confirmation here; it replaces the toast.
+        focusBeforeUndo.current = focusFrom ?? null;
+        setUndo({
+          rowId, ticketId, targetStep, docNumber, undoUntil: data?.undoUntil ?? null,
+          label: importStepMeta(targetStep)?.label ?? targetStep,
+          key: `${rowId}:${targetStep}:${Date.now()}`,
+        });
+        return;
+      }
       let completesDeal = false;
       if (targetStep === 'RECEIVED') {
         try {
@@ -196,8 +259,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
               && !all.some((r) => r.status === 'DRAFT');
           }
         } catch {
-          // A failed confirmation read must not claim completion — fall through to the ordinary
-          // toast, same as "not GOODS_RECEIVED" would.
+          // A failed confirmation read must not claim completion — fall through to the ordinary toast, same as "not
+          // GOODS_RECEIVED" would.
           completesDeal = false;
         }
       }
@@ -206,6 +269,18 @@ export function ImportFulfilmentPage({ user, showToast }) {
         : 'อัปเดตสถานะรายโรงงานแล้ว');
     },
     onError: (e) => showToast?.('error', e?.message ?? 'อัปเดตไม่สำเร็จ'),
+  });
+  const undoStep = useMutation({
+    mutationFn: ({ rowId, targetStep }) => api.storedImportRequests.undoStep(rowId, { expectedStep: targetStep }),
+    onSuccess: (_d, { ticketId }) => {
+      invalidateAfterAdvance(ticketId);
+      setUndo(null);
+      showToast?.('success', 'เลิกทำการเลื่อนขั้นตอนแล้ว');
+    },
+    onError: (e) => {
+      setUndo(null);
+      showToast?.('error', e?.message ?? 'เลิกทำไม่สำเร็จ');
+    },
   });
   const setLeadTime = useMutation({
     mutationFn: ({ rowId, payload }) => api.storedImportRequests.setLeadTime(rowId, payload),
@@ -254,13 +329,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
           ticketCode: ticket?.code,
           customerName: ticket?.customerName ?? null,
           title: ticket?.title ?? null,
-          message: query.error?.message ?? 'โหลดใบขอซื้อของดีลนี้ไม่สำเร็จ',
+          message: query.error?.message ?? 'โหลดใบขอซื้อของงานนี้ไม่สำเร็จ',
         });
         return;
       }
       const factoryRows = query?.data ?? [];
-      // Only ISSUED rows are shipments this page tracks — a stray DRAFT (e.g. mid-creation on the
-      // deal page) is not this worklist's concern.
+      // Only ISSUED rows are shipments this page tracks — a stray DRAFT (e.g. mid-creation on the deal page) is not
+      // this worklist's concern.
       const issuedRows = factoryRows.filter((r) => r.status === 'ISSUED');
       if (issuedRows.length === 0) {
         // The legacy section is for the pre-V184 chain only — IR_ISSUED/IR_SENT/SHIPPING
@@ -310,9 +385,9 @@ export function ImportFulfilmentPage({ user, showToast }) {
         // computed just above).
         allReceived: ticket?.fulfillmentStatus === 'GOODS_RECEIVED'
           || (ticket?.fulfillmentStatus === 'PARTIALLY_DELIVERED' && received === rows.length
-            // A factory still in DRAFT is not received: Java's allFactoriesReceived requires every
-            // required factory to have an ISSUED row. (A required factory with no row at all is not
-            // visible to this list — the deal page shows it.)
+            // A factory still in DRAFT is not received: Java's allFactoriesReceived requires every required factory to
+            // have an ISSUED row. (A required factory with no row at all is not visible to this list — the deal page shows
+            // it.)
             && !factoryRows.some((r) => r.status === 'DRAFT')),
       });
     });
@@ -370,8 +445,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
   return (
     <PageStack>
       <PageHeader
-        title="งานนำเข้า"
-        subtitle="ติดตามและเลื่อนสถานะนำเข้ารายโรงงาน — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง"
+        title="การขนส่ง"
+        subtitle="ที่เดียวที่เลื่อนขั้นตอนการนำเข้าได้ — ส่ง IR ให้จัดซื้อ → สั่งซื้อผู้ผลิต → ขนส่งรับของ → กำลังเดินทาง → ถึงไทย รอออกของ → ถึงโกดัง · ฝ่ายขายเห็นขั้นตอนเดียวกันในหน้ารายละเอียดงาน (ดูอย่างเดียว)"
         actions={(
           <Button
             type="button"
@@ -410,12 +485,12 @@ export function ImportFulfilmentPage({ user, showToast }) {
           );
         })}
         <label className="ml-auto flex items-center gap-2 mobile:ml-0 mobile:w-full">
-          <span className="sr-only">ค้นหาดีล</span>
+          <span className="sr-only">ค้นหางาน</span>
           <input
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}
-            placeholder="ค้นหาลูกค้า / เลขที่ดีล"
+            placeholder="ค้นหาลูกค้า / เลขที่งาน"
             className="min-h-9 w-52 rounded-md border border-border-input px-3 text-sm mobile:w-full"
             data-testid="fulfilment-search"
           />
@@ -428,13 +503,13 @@ export function ImportFulfilmentPage({ user, showToast }) {
       {ticketsQuery.isError ? (
         <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-tickets-error">
           <p className="text-sm text-danger-dark">
-            โหลดรายชื่อดีลไม่สำเร็จ — {ticketsQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}
+            โหลดรายชื่องานไม่สำเร็จ — {ticketsQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}
           </p>
         </Panel>
       ) : null}
       {erroredDeals.length > 0 ? (
         <Panel className="border-danger-border bg-danger-bg" data-testid="fulfilment-rows-error">
-          <p className="mb-1.5 text-sm font-bold text-danger-dark">โหลดใบขอซื้อของดีลต่อไปนี้ไม่สำเร็จ</p>
+          <p className="mb-1.5 text-sm font-bold text-danger-dark">โหลดใบขอซื้อของงานต่อไปนี้ไม่สำเร็จ</p>
           <ul className="m-0 list-disc pl-5 text-xs text-danger-dark">
             {erroredDeals.map((d) => (
               <li key={d.ticketId}>
@@ -456,7 +531,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
         <EmptyState
           icon="check"
           title="ยังไม่มีงานนำเข้ารายโรงงาน"
-          description="เมื่อมีการออกใบขอซื้อของโรงงานในดีลใดดีลหนึ่ง แต่ละโรงงานจะขึ้นที่นี่ให้เลื่อนสถานะ"
+          description="เมื่อมีการออกใบขอซื้อของโรงงานในงานใดงานหนึ่ง แต่ละโรงงานจะขึ้นที่นี่ให้เลื่อนสถานะ"
         />
       ) : visibleActive.length === 0 && doneDeals.length === 0 && visibleLegacy.length === 0 ? (
         <EmptyState
@@ -507,6 +582,8 @@ export function ImportFulfilmentPage({ user, showToast }) {
                           rowId: r.id,
                           targetStep,
                           ticketId: deal.ticketId,
+                          docNumber: row.docNumber,
+                          focusFrom: document.activeElement,
                         })}
                         onOpenEmail={editable ? openEmail : undefined}
                       />
@@ -545,7 +622,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
 
           {visibleActive.length === 0 ? (
             <p className="rounded-lg border border-dashed border-border px-4 py-6 text-center text-xs text-text-muted">
-              ไม่มีงานนำเข้าที่ตรงกับตัวกรองนี้ — ดูดีลที่รับครบแล้วด้านล่าง
+              ไม่มีงานนำเข้าที่ตรงกับตัวกรองนี้ — ดูรายการงานที่รับของครบแล้วด้านล่าง
             </p>
           ) : null}
 
@@ -586,7 +663,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
           {visibleLegacy.length > 0 ? (
             <section className="rounded-xl border border-dashed border-border bg-surface p-3" data-testid="fulfilment-legacy">
               <p className="mb-2 text-xs font-bold text-text-muted">
-                ดีลอื่นที่ยังไม่ติดตามแบบรายโรงงาน — เปิดที่หน้าดีลเพื่อดำเนินการ
+                งานอื่นที่ยังไม่ติดตามแบบรายโรงงาน — เปิดที่หน้ารายละเอียดงานเพื่อดำเนินการ
               </p>
               <div className="flex flex-col gap-1.5">
                 {visibleLegacy.map((deal) => (
@@ -601,7 +678,7 @@ export function ImportFulfilmentPage({ user, showToast }) {
                       ) : null}
                     </span>
                     <Link to={`/import/deals/${deal.ticketId}`} className="text-info underline">
-                      ไปที่หน้าดีล <code>{deal.ticketCode}</code>
+                      เปิดงาน <code>{deal.ticketCode}</code>
                     </Link>
                   </div>
                 ))}
@@ -612,8 +689,16 @@ export function ImportFulfilmentPage({ user, showToast }) {
       )}
 
       <p className="text-2xs text-text-muted">
-        การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ จัดซื้อ-ส่งมอบ ของดีลนั้น
+        การส่งมอบสินค้าให้ลูกค้าไม่ได้อยู่ในหน้านี้ — บันทึกที่แท็บ จัดซื้อ-ส่งมอบ ของงานนั้น
       </p>
+
+      {undo ? (
+        <StepUndoSnackbar
+          undo={undo}
+          busy={undoStep.isPending}
+          onUndo={() => undoStep.mutate({ rowId: undo.rowId, targetStep: undo.targetStep, ticketId: undo.ticketId })}
+        />
+      ) : null}
 
       {emailRow ? (
         <Modal

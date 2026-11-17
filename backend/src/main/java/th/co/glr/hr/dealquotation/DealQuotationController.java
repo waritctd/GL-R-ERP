@@ -38,25 +38,36 @@ import th.co.glr.hr.dealquotation.DealQuotationRequests.RecordOutcomeRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.RejectRequest;
 import th.co.glr.hr.dealquotation.DealQuotationRequests.UpsertDealQuotationRequest;
 
-/**
- * Quotation v2 (direct deal quotation, V165) endpoints — see docs/sales/quotation-v2-plan.md's "API"
- * section for the exact routes/envelopes this implements. Detail-shaped responses are wrapped as
- * {@code {quotation: ...}}, list-shaped as {@code {items: [...]}} and the single-item preview as
- * {@code {item: ...}} — mirrors {@code CustomerQuotationController}'s own envelope convention.
- *
- * <p>Every authz decision lives in {@link DealQuotationService}; this class only resolves the
- * session and delegates.
- */
+/** Quotation v2 (direct deal quotation, V165) endpoints — see docs/sales/quotation-v2-plan.md's "API" section
+ * for the exact routes/envelopes this implements. Every authz decision lives in DealQuotationService; this
+ * class only resolves the session and delegates. */
 @RestController
 @RequestMapping("/api")
 public class DealQuotationController {
     private final DealQuotationService quotations;
     private final SessionContext sessions;
+    /** The list's per-row chain mark; null only in a standalone controller test that does not exercise it. */
+    private final th.co.glr.hr.documentchain.DocumentChainService documentChain;
 
     public DealQuotationController(DealQuotationService quotations, SessionContext sessions) {
+        this(quotations, sessions, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public DealQuotationController(DealQuotationService quotations, SessionContext sessions,
+                                   th.co.glr.hr.documentchain.DocumentChainService documentChain) {
         this.quotations = quotations;
         this.sessions = sessions;
+        this.documentChain = documentChain;
     }
+
+    /**
+     * One row of {@code GET /api/deal-quotations}: the quotation, unwrapped, plus {@code chainStage} — where an APPROVED
+     * direct quotation stands in its deal's document chain (DocumentChainRules#listStage), null on every other row and
+     * for a viewer who may not read that deal's documents. Sales API contract change (2026-11-17): additive.
+     */
+    public record DealQuotationListRow(@com.fasterxml.jackson.annotation.JsonUnwrapped DealQuotationDto quotation,
+                                       String chainStage) {}
 
     @PostMapping("/tickets/{ticketId}/deal-quotations")
     ResponseEntity<Map<String, DealQuotationDto>> create(@PathVariable long ticketId,
@@ -116,12 +127,14 @@ public class DealQuotationController {
      * {@code readOnly}); optional {@code origin} ∈ {@code DEAL_DIRECT | PRICING_REQUEST | LEGACY}
      * narrows to one (anything else 400). */
     @GetMapping("/deal-quotations")
-    Map<String, List<DealQuotationDto>> search(@RequestParam(required = false) List<String> status,
+    Map<String, List<DealQuotationListRow>> search(@RequestParam(required = false) List<String> status,
                                                @RequestParam(required = false, defaultValue = "false") boolean needsRework,
                                                @RequestParam(required = false) String origin,
                                                HttpSession session) {
         UserPrincipal user = sessions.requireUser(session);
-        return Map.of("items", quotations.search(status, needsRework, origin, user));
+        List<DealQuotationDto> rows = quotations.search(status, needsRework, origin, user);
+        Map<Long, String> stages = documentChain == null ? Map.of() : documentChain.listStages(rows, user);
+        return Map.of("items", rows.stream().map(row -> new DealQuotationListRow(row, stages.get(row.id()))).toList());
     }
 
     /** Per-status counts for the caller's own list scope — {@code {all, pendingApproval,
@@ -257,11 +270,8 @@ public class DealQuotationController {
         if (!"xlsx".equalsIgnoreCase(format) && !"pdf".equalsIgnoreCase(format)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับรูปแบบไฟล์ '" + format + "'");
         }
-        // Download filename is the quotation NUMBER, not the internal id -- "deal-quotation-42.pdf"
-        // told the rep nothing about which document they just downloaded when they have several
-        // deals open. quotations.get() re-runs requireViewAccess (also re-run inside
-        // renderPdf/renderXlsx below) -- an extra read, not a second authz decision; both are the
-        // same view-access check on the same row.
+        // Download filename is the quotation NUMBER, not the internal id -- "deal-quotation-42.pdf" told the rep
+        // nothing about which document they just downloaded when they have several deals open.
         String number = quotations.get(id, user).number();
         String filename = sanitizeFilename(number);
         if ("xlsx".equalsIgnoreCase(format)) {
@@ -283,9 +293,8 @@ public class DealQuotationController {
     // DealQuotationService#uploadItemPicture for the rule. Writes answer {quotation: ...} so the
     // client re-reads hasPicture/picturePlacement/pictureUrl from one response.
 
-    /** Multipart {@code file} (PNG/JPEG by magic bytes, ≤ 2 MB) and optional {@code placement}
-     * ({@code BELOW} default | {@code BESIDE}). Replaces any existing picture on the item. PUT +
-     * multipart, like {@code EmployeeSignatureController#upload}. */
+    /** Multipart file (PNG/JPEG by magic bytes, ≤ 2 MB) and optional placement (BELOW default | BESIDE). Replaces
+     * any existing picture on the item. PUT + multipart, like EmployeeSignatureController#upload. */
     @PutMapping("/deal-quotations/{id}/items/{itemId}/picture")
     Map<String, DealQuotationDto> uploadItemPicture(@PathVariable long id, @PathVariable long itemId,
                                                     @RequestParam("file") MultipartFile file,

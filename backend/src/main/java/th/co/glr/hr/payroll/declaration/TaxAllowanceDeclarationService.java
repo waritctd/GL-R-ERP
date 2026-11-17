@@ -43,20 +43,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceOnBehalfRequest;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceReviewRequest;
 
-/**
- * Service layer for the tax-allowance self-declaration workflow (PR A). Every mutating method
- * double-checks its role (the controller's {@code @PreAuthorize} is not the only gate — see
- * {@code PayrollService} for the same idiom) and audits via {@link AuditService}, which
- * deliberately joins the caller's transaction.
- *
- * <p><b>Writes NO SQL against {@code hr.employee_tax_allowance} directly.</b> {@code
- * #promoteToPayrollAllowances} is the ONLY method that touches the parent table, and it does so
- * exclusively through {@link PayrollRepository}: {@code deleteMidYearTaxAllowances},
- * {@code upsertTaxAllowances}, {@code markTaxAllowanceVerified}, {@code
- * setTaxAllowanceVerificationDeadline}. {@code PayrollCalculator.java} and
- * {@code PayrollRepository#findTaxAllowancesByEmployee}'s SQL are untouched by this entire class —
- * see {@code V105}'s header comment for why that separation is the point of this feature.
- */
+/** Service layer for the tax-allowance self-declaration workflow (PR A). Every mutating method double-checks
+ * its role (the controller's @PreAuthorize is not the only gate — see PayrollService for the same idiom) and
+ * audits via AuditService, which deliberately joins the caller's transaction. */
 @Service
 public class TaxAllowanceDeclarationService {
     // View: HR + CEO (mirrors PayrollService's PAYROLL_VIEW_ROLES for the register). Edit
@@ -89,22 +78,11 @@ public class TaxAllowanceDeclarationService {
         Set.of("application/pdf", "image/jpeg", "image/png");
 
     // V135 (feat/tax-allowance-sections): mirrors TAX_ALLOWANCE_GROUPS' five `key`s in
-    // frontend/src/features/taxAllowance/taxAllowanceSchema.js. No shared enum exists between the
-    // frontend and backend for this grouping -- unlike TaxAllowanceCapEntry's `category` strings,
-    // which TaxAllowanceCapCatalog owns authoritatively, the five-section grouping is a UI
-    // information-architecture concept with no backend equivalent to reuse. Keep both lists in sync
-    // by hand if a section is ever added, renamed, or removed.
-    /**
-     * One key per ข้อ of แบบ ล.ย.01, plus {@code signed_form} for the signed scan the employee
-     * returns before HR will accept the filing.
-     *
-     * <p>Replaces the five invented category keys (family/insurance/savings/housing/donation) that
-     * predate the form restructure. Mirrored BY HAND in {@code mockApi.js}'s
-     * {@code TAX_ALLOWANCE_SECTION_KEYS} and in {@code LOR_YOR_01_SECTIONS} — nothing enforces the
-     * three stay in step, so a key added to the form and not here uploads cleanly under mocks and
-     * 400s against this service. ข้อ 11 and ข้อ 13 are absent deliberately: neither is fillable, so
-     * neither can carry evidence.
-     */
+    // frontend/src/features/taxAllowance/taxAllowanceSchema.js. Keep both lists in sync by hand if a section is
+    // ever added, renamed, or removed.
+    /** One key per ข้อ of แบบ ล.ย.01, plus signed_form for the signed scan the employee returns before HR will
+     * accept the filing. Replaces the five invented category keys (family/insurance/savings/housing/donation) that
+     * predate the form restructure. */
     /** The bucket holding the signed, scanned form — the one attachment approval depends on. */
     static final String SIGNED_FORM_SECTION_KEY = "signed_form";
 
@@ -119,24 +97,17 @@ public class TaxAllowanceDeclarationService {
     private final AuditService auditService;
     private final FileStorageService fileStorage;
     private final PayrollService payrollService;
-    /** The HR role fan-out only — see {@link #notifyOwner} for why the employee-facing path below
-     * uses {@link #notificationService} instead. */
+    /** The HR role fan-out only — see #notifyOwner for why the employee-facing path below uses #notificationService
+     * instead. */
     private final NotificationRepository notifications;
     private final NotificationService notificationService;
-    /**
-     * วัน/เดือน/ปี ที่แจ้งรายการ is a Thai calendar date on a Thai tax form, so it must be derived in
-     * Bangkok. Bare {@code LocalDate.now()} (as used elsewhere in this class) reads the JVM default,
-     * which on a UTC CI box is the PREVIOUS day between 17:00 and 23:59 Bangkok — a filing dated a
-     * day early. Same constant and same reasoning as OvertimeService.
-     */
+    /** วัน/เดือน/ปี ที่แจ้งรายการ is a Thai calendar date on a Thai tax form, so it must be derived in Bangkok.
+     * Bare LocalDate.now() (as used elsewhere in this class) reads the JVM default, which on a UTC CI box is the
+     * PREVIOUS day between 17:00 and 23:59 Bangkok — a filing dated a day early. */
     private static final Logger LOG = LoggerFactory.getLogger(TaxAllowanceDeclarationService.class);
 
-    /**
-     * The shared {@code hr.audit} sink, same logger name {@code EmployeeService} writes its own
-     * {@code sensitive_data_access} lines to — one stream to grep for every read of
-     * {@code hr_restricted}, rather than one per feature. Distinct from {@code auditService}, which
-     * writes structured business events to the database; this is the PII-access trail.
-     */
+    /** The shared hr.audit sink, same logger name EmployeeService writes its own sensitive_data_access lines to —
+     * one stream to grep for every read of hr_restricted, rather than one per feature. */
     private static final Logger AUDIT = LoggerFactory.getLogger("th.co.glr.hr.audit");
 
     private static final ZoneId BUSINESS_ZONE = ZoneId.of("Asia/Bangkok");
@@ -228,18 +199,9 @@ public class TaxAllowanceDeclarationService {
                 blankToNull(source.postalCode())));
     }
 
-    /**
-     * {@code hr.employee.marital_status} -> ข้อ 1's enum. The exact inverse of
-     * {@link #maritalStatusForMaster}, and it must stay that way: prefill then approve then prefill
-     * again has to be a fixed point, or every re-filing would silently flip the employee's สถานภาพ.
-     *
-     * <p>Only the two values that mapping can produce are recognised. That column is
-     * {@code VARCHAR(30)} with no CHECK constraint, so it can hold anything a decade of HR data
-     * entry put there; an unrecognised value leaves ข้อ 1 un-ticked for the employee to answer
-     * rather than guessing a legal status on their behalf. {@code WIDOWED} and
-     * {@code DIED_DURING_YEAR} are unmapped in BOTH directions — see {@link #maritalStatusForMaster}
-     * for why.
-     */
+    /** hr.employee.marital_status -> ข้อ 1's enum. The exact inverse of #maritalStatusForMaster, and it must stay
+     * that way: prefill then approve then prefill again has to be a fixed point, or every re-filing would silently
+     * flip the employee's สถานภาพ. */
     private String maritalStateFromMaster(String maritalStatus) {
         if (maritalStatus == null) {
             return null;
@@ -251,11 +213,9 @@ public class TaxAllowanceDeclarationService {
         };
     }
 
-    /**
-     * Creates a new PENDING declaration for the CALLER. {@code employeeId} is never read from the
-     * request body — there is no such field on {@link TaxAllowanceDeclarationSubmitRequest} — only
-     * {@code actor.employeeId()}, copying {@code PayrollService#ownPayslipPdf}'s idiom.
-     */
+    /** Creates a new PENDING declaration for the CALLER. employeeId is never read from the request body — there is
+     * no such field on TaxAllowanceDeclarationSubmitRequest — only actor.employeeId(), copying
+     * PayrollService#ownPayslipPdf's idiom. */
     @Transactional
     public TaxAllowanceDeclarationDto submitOwn(TaxAllowanceDeclarationSubmitRequest request, UserPrincipal actor) {
         requireEmployeeActor(actor);
@@ -265,8 +225,8 @@ public class TaxAllowanceDeclarationService {
         long employeeId = actor.employeeId();
         int taxYear = request.taxYear();
 
-        // uq_tad_one_pending_per_employee_year is a hard DB constraint; check first for a clean 409
-        // rather than a raw constraint-violation 500.
+        // uq_tad_one_pending_per_employee_year is a hard DB constraint; check first for a clean 409 rather than a raw
+        // constraint-violation 500.
         if (repository.existsPending(employeeId, taxYear)) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "มีแบบแจ้งค่าลดหย่อนที่รอการอนุมัติสำหรับปีนี้อยู่แล้ว กรุณายกเลิกรายการเดิมก่อนยื่นใหม่");
@@ -282,11 +242,9 @@ public class TaxAllowanceDeclarationService {
         return created;
     }
 
-    /**
-     * Withdraws the caller's own PENDING declaration. 404 (not 403) if the id belongs to someone
-     * else or does not exist — a 403 would leak whether the id exists at all, the same reasoning
-     * {@code PayrollService#ownPayslipPdf} already applies.
-     */
+    /** Withdraws the caller's own PENDING declaration. 404 (not 403) if the id belongs to someone else or does not
+     * exist — a 403 would leak whether the id exists at all, the same reasoning PayrollService#ownPayslipPdf
+     * already applies. */
     @Transactional
     public void withdrawOwn(long declarationId, UserPrincipal actor) {
         requireEmployeeActor(actor);
@@ -457,27 +415,8 @@ public class TaxAllowanceDeclarationService {
             null, header);
     }
 
-    /**
-     * ข้อ 1's enum -> the vocabulary {@code hr.employee.marital_status} actually holds.
-     *
-     * <p>That column is {@code VARCHAR(30)} with <b>no CHECK constraint and no enum anywhere in the
-     * backend</b>; the only values attested in this repository are the Thai words its fixtures use
-     * ({@code โสด} / {@code สมรส} in {@code demoData.js}, {@code mockApi.js},
-     * {@code EmployeeDetailPage.test.jsx}). Writing the declaration's {@code SINGLE} /
-     * {@code MARRIED} token straight through would introduce a second vocabulary into a column
-     * nothing validates, and the employee screens would start showing English next to everyone
-     * else's Thai.
-     *
-     * <p><b>Only the two unambiguous states are mapped.</b> {@code WIDOWED} and
-     * {@code DIED_DURING_YEAR} return null — the master is left alone — for two reasons: the Thai
-     * word for widowed appears nowhere in this repository, so any value chosen here would be
-     * invented rather than matched; and {@code DIED_DURING_YEAR}
-     * ("คู่สมรสถึงแก่ความตายระหว่างปีภาษี") is a statement about the tax year, not a standing HR
-     * marital status. HR sets those by hand in the employee editor.
-     *
-     * <p>Re-check this mapping against what production's {@code marital_status} column really holds
-     * before extending it; it could not be queried when this was written.
-     */
+    /** ข้อ 1's enum -> the vocabulary hr.employee.marital_status actually holds. Only the two unambiguous states
+     * are mapped. HR sets those by hand in the employee editor. */
     private String maritalStatusForMaster(String maritalState) {
         if (maritalState == null) {
             return null;
@@ -510,8 +449,8 @@ public class TaxAllowanceDeclarationService {
             .orElseThrow(() -> new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Declaration not found after reject"));
         auditService.record(actor, "REJECT_TAX_ALLOWANCE_DECLARATION", "tax_allowance_declaration",
             declarationId, existing, updated);
-        // The reason travels in the notification body: it is the only thing that tells the employee
-        // what to change, and re-opening the page to find it is exactly the round trip this avoids.
+        // The reason travels in the notification body: it is the only thing that tells the employee what to change,
+        // and re-opening the page to find it is exactly the round trip this avoids.
         notifyOwner(existing.employeeId(), "TAX_ALLOWANCE_REJECTED",
             "แบบแจ้ง ล.ย.01 ถูกปฏิเสธ",
             "ฝ่ายบุคคลปฏิเสธแบบแจ้งค่าลดหย่อนภาษีปี " + existing.taxYear() + ": " + reviewerNote);
@@ -614,38 +553,9 @@ public class TaxAllowanceDeclarationService {
 
     // ---- Yearly expiry (decision #10) ------------------------------------------------------
 
-    /**
-     * The sweep {@link TaxAllowanceExpiryWorker}'s {@code @Scheduled} method triggers. ALL the
-     * logic lives here (not on the worker) so tests drive it directly with no scheduler involved —
-     * see {@code CustomerQuotationService#expireOverdueQuotations} for the identical split this
-     * mirrors.
-     *
-     * <p>THE trap (plan doc): for each candidate this calls {@code
-     * PayrollRepository#expireTaxAllowanceVerification(employeeId, taxYear)}, which flips EVERY
-     * dated row on the parent table for that employee/tax-year — never just the one row this
-     * declaration happens to reference. Expiring only the latest dated row would make {@code
-     * findTaxAllowancesByEmployee}'s {@code DISTINCT ON ... ORDER BY effective_month DESC} silently
-     * fall back to an OLDER still-VERIFIED row instead of returning nothing.
-     *
-     * <p>Never retro-alters an already-filed month: this only flips read-time gating columns
-     * ({@code hr.tax_allowance_declaration.status}/{@code hr.employee_tax_allowance
-     * .verification_status}), which {@code PayrollService#preview} resolves FRESH on every call —
-     * an already-{@code PROCESSED} period's persisted {@code hr.payroll_line} rows are never
-     * touched by any statement in this method.
-     *
-     * <p>Idempotent by construction: {@link TaxAllowanceDeclarationRepository#expireApplied} only
-     * matches a row that is still {@code APPROVED AND applied_at IS NOT NULL}, so a second sweep
-     * over an already-expired row (which {@link TaxAllowanceDeclarationRepository
-     * #findExpirySweepCandidates} would not even select again, since it too filters on {@code
-     * status = 'APPROVED'}) is a safe no-op rather than a duplicate transition.
-     *
-     * <p>No {@link AuditService} call — a scheduled system sweep has no {@link UserPrincipal}
-     * actor, matching {@code CustomerQuotationService#expireOverdueQuotations}'s own choice not to
-     * force one.
-     *
-     * @return the number of declarations flipped to EXPIRED, for the worker to log and tests to
-     *     assert against without a second query.
-     */
+    /** The sweep TaxAllowanceExpiryWorker's @Scheduled method triggers. Expiring only the latest dated row would
+     * make findTaxAllowancesByEmployee's DISTINCT ON ... ORDER BY effective_month DESC silently fall back to an
+     * OLDER still-VERIFIED row instead of returning nothing. */
     @Transactional
     public int expireOverdueVerifications() {
         List<TaxAllowanceDeclarationRepository.ExpirySweepCandidate> candidates =
@@ -655,9 +565,8 @@ public class TaxAllowanceDeclarationService {
             int rows = repository.expireApplied(candidate.declarationId());
             if (rows > 0) {
                 payrollRepository.expireTaxAllowanceVerification(candidate.employeeId(), candidate.taxYear());
-                // Notified per row, inside the `rows > 0` guard: a candidate whose conditional
-                // UPDATE matched nothing (a concurrent sweep already flipped it) must not produce a
-                // second notification for the same expiry.
+                // Notified per row, inside the `rows > 0` guard: a candidate whose conditional UPDATE matched nothing (a
+                // concurrent sweep already flipped it) must not produce a second notification for the same expiry.
                 notifyOwner(candidate.employeeId(), "TAX_ALLOWANCE_EXPIRED",
                     "แบบแจ้ง ล.ย.01 หมดอายุ",
                     "แบบแจ้งค่าลดหย่อนภาษีปี " + candidate.taxYear()
@@ -711,17 +620,8 @@ public class TaxAllowanceDeclarationService {
 
     // ---- Tax-effect estimate (decision #4) -------------------------------------------------
 
-    /**
-     * "What this saves me" — decision #4. NO {@code employeeId} parameter exists anywhere on this
-     * method or the HTTP endpoint above it: the employee whose situation is being estimated is
-     * ALWAYS {@code actor.employeeId()}, the strongest form of the self-scoping guard (copy of
-     * {@code PayrollService#ownPayslipPdf}'s idiom). Reuses {@link TaxAllowanceDeclarationSubmitRequest}
-     * verbatim as the request shape — the same 16 allowances + counts a real submission takes,
-     * since an estimate is "what would this submission do to my tax", not a different shape.
-     *
-     * <p>All arithmetic happens in {@code PayrollService#estimateAllowanceEffect}, which runs the
-     * REAL {@code PayrollCalculator} twice — never reimplemented here or in the frontend.
-     */
+    /** "What this saves me" — decision #4. All arithmetic happens in PayrollService#estimateAllowanceEffect, which
+     * runs the REAL PayrollCalculator twice — never reimplemented here or in the frontend. */
     public PayrollAllowanceEstimateResult estimateOwn(TaxAllowanceDeclarationSubmitRequest request, UserPrincipal actor) {
         requireEmployeeActor(actor);
         if (request == null || request.taxYear() == null) {
@@ -757,9 +657,9 @@ public class TaxAllowanceDeclarationService {
         // FileStorageService#storeInDatabase's javadoc.
         FileStorageService.StoredContent stored =
             fileStorage.storeInDatabase("tax-allowance-declaration", declarationId, file, EVIDENCE_MIME_TYPES);
-        // uploaded_by is actor.employeeId(), NOT actor.id() -- the column FKs hr.employee, and for
-        // an HR-on-behalf upload actor.employeeId() is HR's own employee row, correctly distinct
-        // from the declaration's beneficiary employee_id.
+        // uploaded_by is actor.employeeId(), NOT actor.id() -- the column FKs hr.employee, and for an HR-on-behalf
+        // upload actor.employeeId() is HR's own employee row, correctly distinct from the declaration's beneficiary
+        // employee_id.
         TaxAllowanceAttachmentDto attachment = repository.saveAttachmentWithContent(declarationId, stored.fileName(),
             stored.storageKey(), stored.mimeType(), stored.fileSize(), actor.employeeId(), normalizedSectionKey,
             stored.content());
@@ -768,14 +668,9 @@ public class TaxAllowanceDeclarationService {
         return attachment;
     }
 
-    /**
-     * Blank/whitespace-only ({@code @RequestParam(required = false)} on the controller means an
-     * omitted form field arrives as {@code null}, but an EMPTY one arrives as {@code ""}) normalizes
-     * to {@code null} ("general/uncategorized", V135's own nullable-by-design choice — see that
-     * migration's header). Anything else must be one of {@link #EVIDENCE_SECTION_KEYS} or the
-     * upload is rejected outright, rather than silently storing an unrecognised tag the frontend's
-     * per-section filter would never match.
-     */
+    /** Blank/whitespace-only (@RequestParam(required = false) on the controller means an omitted form field arrives
+     * as null, but an EMPTY one arrives as "") normalizes to null ("general/uncategorized", V135's own
+     * nullable-by-design choice — see that migration's header). */
     private String normalizeSectionKey(String sectionKey) {
         if (sectionKey == null || sectionKey.isBlank()) {
             return null;
@@ -791,11 +686,9 @@ public class TaxAllowanceDeclarationService {
         return repository.findAttachments(declarationId);
     }
 
-    /**
-     * Resolves an attachment id, RE-CHECKING access against its parent declaration right here —
-     * this method is called on every single download, so there is no cached/short-circuited
-     * decision from upload time to go stale.
-     */
+    /** Resolves an attachment id, RE-CHECKING access against its parent declaration right here — this method is
+     * called on every single download, so there is no cached/short-circuited decision from upload time to go
+     * stale. */
     public TaxAllowanceAttachmentDownload getAttachmentForDownload(long attachmentId, UserPrincipal actor) {
         TaxAllowanceAttachmentDto attachment = repository.findAttachment(attachmentId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบไฟล์แนบนี้"));
@@ -841,12 +734,9 @@ public class TaxAllowanceDeclarationService {
             attachment.declarationId(), attachment, null);
     }
 
-    /**
-     * The one check every evidence method above funnels through. Re-resolves {@code declaration}
-     * FRESH from the repository every call — never trusts a value computed earlier in the same
-     * request, let alone a cached one from upload time. 404 (not 403) on failure, matching every
-     * other self-scoped check in this class.
-     */
+    /** The one check every evidence method above funnels through. Re-resolves declaration FRESH from the repository
+     * every call — never trusts a value computed earlier in the same request, let alone a cached one from upload
+     * time. */
     private TaxAllowanceDeclarationDto requireOwnerOrHr(long declarationId, UserPrincipal actor) {
         TaxAllowanceDeclarationDto declaration = repository.findById(declarationId)
             .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบแบบแจ้งค่าลดหย่อนนี้"));
@@ -978,9 +868,9 @@ public class TaxAllowanceDeclarationService {
             zeroInt(request.childCount()), zeroInt(request.childCountDouble()), zeroInt(request.disabledCareCount()),
             Boolean.TRUE.equals(request.disabilityCardHolder()),
             request.parentCareCount() == null ? 0 : request.parentCareCount(),
-            // ข้อ 9 lives on the ล.ย.01 sub-payload, not at the top level of the request, because it
-            // is a form item rather than one of the pre-V137 allowance fields. Pulled across here so
-            // the /estimate preview withholds on the same figure the applied declaration will.
+            // ข้อ 9 lives on the ล.ย.01 sub-payload, not at the top level of the request, because it is a form item rather
+            // than one of the pre-V137 allowance fields. Pulled across here so the /estimate preview withholds on the same
+            // figure the applied declaration will.
             lorYor01Zero(request.lorYor01())
         );
     }
@@ -1035,11 +925,8 @@ public class TaxAllowanceDeclarationService {
 
     // ---- แบบ ล.ย.01 PDF -----------------------------------------------------------------------
 
-    /**
-     * The official ล.ย.01 for a SAVED declaration, as a flattened PDF. Owner or HR only — same gate
-     * as the evidence files, so a declaration's rendered form is never more widely readable than the
-     * documents behind it.
-     */
+    /** The official ล.ย.01 for a SAVED declaration, as a flattened PDF. Owner or HR only — same gate as the
+     * evidence files, so a declaration's rendered form is never more widely readable than the documents behind it. */
     public byte[] renderLorYor01(long declarationId, UserPrincipal actor) {
         TaxAllowanceDeclarationDto declaration = requireOwnerOrHr(declarationId, actor);
         LocalDate declaredOn = declaration.submittedAt() == null
@@ -1049,17 +936,9 @@ public class TaxAllowanceDeclarationService {
             declaration.lorYor01(), declaredOn);
     }
 
-    /**
-     * The official ล.ย.01 for an UNSAVED draft.
-     *
-     * <p>This exists because of the order the paper process runs in: the employee has to sign the
-     * form before HR will accept it, so they need the filled PDF while the declaration is still
-     * being typed and has no id yet. Mirrors the {@code /declarations/me/estimate} idiom — a request
-     * body in, a result out, nothing persisted.
-     *
-     * <p>Always rendered for the ACTOR's own employee id, never a target in the body, so this cannot
-     * become a way to read someone else's ข้อ 13 figure.
-     */
+    /** The official ล.ย.01 for an UNSAVED draft. Always rendered for the ACTOR's own employee id, never a target in
+     * the body, so this cannot become a way to read someone else's ข้อ 13 figure. Mirrors the
+     * /declarations/me/estimate idiom — a request body in, a result out, nothing persisted. */
     public byte[] renderLorYor01Draft(TaxAllowanceDeclarationSubmitRequest request, UserPrincipal actor) {
         requireEmployeeActor(actor);
         long employeeId = actor.employeeId();

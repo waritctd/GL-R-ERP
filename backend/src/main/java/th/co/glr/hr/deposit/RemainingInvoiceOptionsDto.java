@@ -48,15 +48,13 @@ public record RemainingInvoiceOptionsDto(
     Long       defaultQuotationId,
     String     blockingReason
 ) {
-    /** One selectable reference/deposit-reference suggestion: {@code value} is what the caller
-     * would send back as the query param, {@code label} is what the dialog displays (identical
-     * today, kept separate so a future richer label — e.g. amount alongside a receipt ref — does
-     * not require a shape change). */
+    /** One selectable reference/deposit-reference suggestion: value is what the caller would send back as the query
+     * param, label is what the dialog displays (identical today, kept separate so a future richer label — e.g.
+     * amount alongside a receipt ref — does not require a shape change). */
     public record ReferenceOption(String value, String label) {}
 
-    /** One selectable "final quotation" source: {@code value} is the quotation id the caller
-     * would send back as {@code quotationId}, {@code label} is the quotation's own number plus
-     * (when available) its recipient type/label — e.g. "QT-2026-0042 (ผู้ซื้อ)" — so the dialog
-     * can tell a designer's early quotation apart from the buyer's final one. */
+    /** One selectable "final quotation" source: value is the quotation id the caller would send back as
+     * quotationId, label is the quotation's own number plus its recipient type/label — e.g. "QT-2026-0042" — so
+     * the dialog can tell a designer's early quotation apart from the buyer's final one. */
     public record QuotationOption(long value, String label) {}
 }

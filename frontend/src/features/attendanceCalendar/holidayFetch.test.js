@@ -14,8 +14,8 @@ describe('summarizeFetchOutcomes', () => {
     expect(summarizeFetchOutcomes(null).allZero).toBe(true);
   });
 
-  // The production incident this branch's brief cites by name: HTTP 200, but the BOT token was
-  // unset, so BotHolidayFetchService#runFetch returned List.of() before ever calling BOT.
+  // The production incident this branch's brief cites by name: HTTP 200, but the BOT token was unset, so
+  // BotHolidayFetchService#runFetch returned List.of() before ever calling BOT.
   it('treats { applied: false, holidayCount: 0 } as a zero-row result, not a success', () => {
     const result = summarizeFetchOutcomes([{ year: 2026, holidayCount: 0, applied: false }]);
     expect(result.rows).toEqual([{ year: 2026, holidayCount: 0, applied: false, ok: false }]);

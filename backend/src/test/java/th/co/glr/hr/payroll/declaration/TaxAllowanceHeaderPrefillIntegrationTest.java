@@ -25,39 +25,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.MyTaxAllowan
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * The ล.ย.01 header prefill (owner decision #4, the read half) against real Postgres, through the
- * real {@link TaxAllowanceDeclarationService} and the real {@link EmployeeRepository}.
- *
- * <h2>Why this class exists separately from {@code TaxAllowanceDeclarationScopeIntegrationTest}</h2>
- *
- * That class wires {@code mock(EmployeeRepository.class)}, which is exactly the thing CLAUDE.md
- * warns cannot prove a scope filter: a mocked repository happily answers while the SQL does
- * something else. The prefill's whole security property lives in one {@code WHERE} clause, so it
- * needs the real repository and a real database or it is not tested at all.
- *
- * <h2>What is actually at stake</h2>
- *
- * {@code hr_restricted.employee_pii.tax_id} is PDPA-restricted. Before this feature, an employee
- * could not read their own tax ID through any endpoint — {@code EmployeeService#get} strips the
- * whole {@code sensitive} block for a self-service viewer ({@code
- * withoutSensitiveSelfServiceFields()}). This is a new self-read path, so the cases below are
- * written <b>wrong-way-round</b> per CLAUDE.md: what matters is that employee A cannot obtain
- * employee B's tax ID, never that A can obtain their own.
- *
- * <h2>Mutation checks performed against this class (2026-08-09)</h2>
- *
- * <ol>
- *   <li>Dropping {@code WHERE e.employee_id = :employeeId} from
- *       {@code EmployeeRepository#findLorYor01HeaderSource} — {@code
- *       employeeCannotObtainAnotherEmployeesTaxIdThroughTheHeaderPrefill} goes red.</li>
- *   <li>Passing a constant employee id instead of {@code actor.employeeId()} in
- *       {@code TaxAllowanceDeclarationService#headerPrefill} — the same test goes red.</li>
- * </ol>
- *
- * Both outcomes are recorded in the PR body. Without a mutation check a green test here would be
- * evidence of nothing, which is the failure mode this repo has been bitten by before.
- */
+/** The ล.ย.01 header prefill (owner decision #4, the read half) against real Postgres, through the real
+ * TaxAllowanceDeclarationService and the real EmployeeRepository. What is actually at stake
+ * hr_restricted.employee_pii.tax_id is PDPA-restricted. */
 class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TaxAllowanceDeclarationService service;
@@ -91,13 +61,8 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
 
     // --- the wrong-way-round case ---------------------------------------------------------------
 
-    /**
-     * A reads their own form; B's restricted tax ID must not be anywhere in the answer.
-     *
-     * <p>B is given a tax ID and A is <b>not</b>, which is the arrangement that catches an unfiltered
-     * or mis-parameterised query: with both populated, a query returning "some row" would still look
-     * plausible. Here the only way A's response can carry a tax ID at all is if it leaked B's.
-     */
+    /** A reads their own form; B's restricted tax ID must not be anywhere in the answer. Here the only way A's
+     * response can carry a tax ID at all is if it leaked B's. */
     @Test
     void employeeCannotObtainAnotherEmployeesTaxIdThroughTheHeaderPrefill() {
         givenTaxId(employeeB, TAX_ID_B);
@@ -124,11 +89,9 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
         assertThat(prefillFor(employeeB).taxpayerId()).isEqualTo(TAX_ID_B).isNotEqualTo(TAX_ID_A);
     }
 
-    /**
-     * The address is scoped by the same clause and is worth its own assertion: it is the other half
-     * of what identifies a person, and {@code employee_address} is joined separately from
-     * {@code employee_pii}, so one join can be right while the other is not.
-     */
+    /** The address is scoped by the same clause and is worth its own assertion: it is the other half of what
+     * identifies a person, and employee_address is joined separately from employee_pii, so one join can be right
+     * while the other is not. */
     @Test
     void employeeCannotObtainAnotherEmployeesAddressThroughTheHeaderPrefill() {
         givenCurrentAddress(employeeB, "99/9", "บ้านคู่สมรส", "ลาดพร้าว", "10310");
@@ -143,11 +106,9 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
 
     // --- the shape the client depends on --------------------------------------------------------
 
-    /**
-     * All thirteen address slots survive the round trip, including the five V137 added. A subset
-     * arriving would be invisible to the employee (blank boxes look identical to "we have nothing"),
-     * and they would silently retype what the master already held.
-     */
+    /** All thirteen address slots survive the round trip, including the five V137 added. A subset arriving would be
+     * invisible to the employee (blank boxes look identical to "we have nothing"), and they would silently retype
+     * what the master already held. */
     @Test
     void everyOneOfTheThirteenAddressSlotsIsPrefilled() {
         jdbc.update("""
@@ -175,13 +136,7 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
         assertThat(address.postalCode()).isEqualTo("10310");
     }
 
-    /**
-     * Read and write must agree on {@code address_type}. The write-back
-     * ({@code EmployeeRepository#upsertCurrentAddressFromDeclaration}) targets {@code 'CURRENT'};
-     * if the read reached {@code 'REGISTERED'} instead, an approved correction would never come back
-     * on the next filing and the employee would retype it forever — a defect that looks like nothing
-     * at all from the outside.
-     */
+    /** Read and write must agree on address_type. */
     @Test
     void theRegisteredAddressIsNotWhatPrefillsTheForm() {
         jdbc.update("""
@@ -195,22 +150,17 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
         assertThat(address.province()).isNull();
     }
 
-    /**
-     * ข้อ 1 must survive prefill -> approve -> prefill unchanged, or every re-filing would flip the
-     * employee's สถานภาพ. This pins the two mappings as inverses; they live in different methods and
-     * nothing else would notice them drifting apart.
-     */
+    /** ข้อ 1 must survive prefill -> approve -> prefill unchanged, or every re-filing would flip the employee's
+     * สถานภาพ. This pins the two mappings as inverses; they live in different methods and nothing else would
+     * notice them drifting apart. */
     @Test
     void maritalStatusRoundTripsThroughTheFormsOwnVocabulary() {
         assertThat(prefillFor(employeeA).maritalState()).isEqualTo("SINGLE");   // master holds โสด
         assertThat(prefillFor(employeeB).maritalState()).isEqualTo("MARRIED");  // master holds สมรส
     }
 
-    /**
-     * The column is {@code VARCHAR(30)} with no CHECK, so a decade of hand entry can have put
-     * anything in it. An unrecognised value must leave ข้อ 1 un-ticked rather than guess a legal
-     * status on the employee's behalf.
-     */
+    /** The column is VARCHAR(30) with no CHECK, so a decade of hand entry can have put anything in it. An
+     * unrecognised value must leave ข้อ 1 un-ticked rather than guess a legal status on the employee's behalf. */
     @Test
     void anUnrecognisedMaritalStatusLeavesTheBoxUnticked() {
         jdbc.update("UPDATE hr.employee SET marital_status = 'หย่าร้าง' WHERE employee_id = :id",
@@ -219,11 +169,9 @@ class TaxAllowanceHeaderPrefillIntegrationTest extends AbstractPostgresIntegrati
         assertThat(prefillFor(employeeA).maritalState()).isNull();
     }
 
-    /**
-     * An employee with no PII row and no address must still get a usable, non-null envelope — the
-     * form has to open and be typeable by hand. A null {@code headerPrefill} (or a null
-     * {@code address}) would be a client-side crash on the most common state in production.
-     */
+    /** An employee with no PII row and no address must still get a usable, non-null envelope — the form has to open
+     * and be typeable by hand. A null headerPrefill (or a null address) would be a client-side crash on the most
+     * common state in production. */
     @Test
     void anEmployeeWithNoMasterDataStillGetsAnEmptyPrefillRatherThanNothing() {
         LorYor01HeaderPrefill prefill = prefillFor(employeeA);

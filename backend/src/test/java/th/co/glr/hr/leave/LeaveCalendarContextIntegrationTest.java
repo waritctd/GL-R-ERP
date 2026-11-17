@@ -22,26 +22,13 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres coverage of {@code GET /api/leave/calendar-context} (2026-08-03) -- a brand-new
- * authorization surface: it widens who may read holiday/schedule-derived data from hr/ceo-only
- * ({@code HolidayController}/{@code WorkScheduleController}) to every authenticated employee, for
- * their OWN data. See CLAUDE.md "Permission changes must ship evidence" -- Mockito cannot prove
- * this; the whole point under test is whether the SQL joins (employee -> division/department,
- * {@code hr.work_schedule_assignment}'s EMPLOYEE&gt;DEPARTMENT&gt;DIVISION precedence,
- * {@code hr.holiday}) resolve to the CALLING session's own employee, never another one.
- *
- * <p>Every scoping test here is deliberately wrong-way-round (CLAUDE.md's phrase): the endpoint
- * takes no {@code employeeId} parameter at all, so there is no "wrong id" a caller could pass --
- * the only way to prove correct scoping is to seed two employees with genuinely DIFFERENT
- * schedule assignments and show that calling the identical endpoint under two different sessions,
- * in the identical date range, returns each employee's OWN schedule and never the other's. See
- * {@link #employeeANeverReceivesEmployeeBsScheduleOrViceVersa}.
- */
+/** Real-Postgres coverage of GET /api/leave/calendar-context (2026-08-03) -- a brand-new authorization surface:
+ * it widens who may read holiday/schedule-derived data from hr/ceo-only
+ * (HolidayController/WorkScheduleController) to every authenticated employee, for their OWN data. */
 class LeaveCalendarContextIntegrationTest extends AbstractPostgresIntegrationTest {
 
-    // Mon 2026-08-03 .. Sun 2026-08-09: one full week including both a Saturday (workday under
-    // OPS_6D, not under OFFICE_5D) and a Sunday (non-workday under either).
+    // Mon 2026-08-03 .. Sun 2026-08-09: one full week including both a Saturday (workday under OPS_6D, not under
+    // OFFICE_5D) and a Sunday (non-workday under either).
     private static final LocalDate RANGE_FROM = LocalDate.of(2026, 8, 3);
     private static final LocalDate RANGE_TO = LocalDate.of(2026, 8, 9);
     private static final LocalDate SATURDAY = LocalDate.of(2026, 8, 8);
@@ -91,9 +78,9 @@ class LeaveCalendarContextIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(context.schedule().workdays()).containsExactly(1, 2, 3, 4, 5, 6);
         assertThat(context.schedule().requiresCheckOut()).isTrue();
 
-        // nonWorkingDates = LeaveRepository#workingDayPredicate's own answer, not a reimplementation:
-        // the holiday counts even though it falls on an OPS_6D workday (Wednesday), Sunday counts
-        // (no schedule works Sundays), and Saturday must NOT count for a six-day schedule.
+        // nonWorkingDates = LeaveRepository#workingDayPredicate's own answer, not a reimplementation: the holiday
+        // counts even though it falls on an OPS_6D workday (Wednesday), Sunday counts (no schedule works Sundays), and
+        // Saturday must NOT count for a six-day schedule.
         assertThat(context.nonWorkingDates()).contains(HOLIDAY_DATE, SUNDAY);
         assertThat(context.nonWorkingDates())
             .as("OPS_6D employee: Saturday is a working day, must not be flagged non-working")
@@ -127,8 +114,8 @@ class LeaveCalendarContextIntegrationTest extends AbstractPostgresIntegrationTes
             .as("B (five-day) does not work Saturday — the opposite of A's answer for the same date")
             .contains(SATURDAY);
 
-        // Belt-and-suspenders: A's whole response must not equal B's, and neither is some third,
-        // fixed default either — each is genuinely derived from the calling session's own employee id.
+        // Belt-and-suspenders: A's whole response must not equal B's, and neither is some third, fixed default either
+        // — each is genuinely derived from the calling session's own employee id.
         assertThat(asA).isNotEqualTo(asB);
     }
 

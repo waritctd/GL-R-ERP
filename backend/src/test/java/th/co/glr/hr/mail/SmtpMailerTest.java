@@ -19,8 +19,8 @@ import org.springframework.mail.javamail.JavaMailSender;
 
 class SmtpMailerTest {
 
-    /** A real MimeMessage (no mock) - JavaMailSenderImpl.createMimeMessage() would also return one of
-     * these, and MimeMessageHelper needs a real Session-backed instance to build multipart content. */
+    /** A real MimeMessage (no mock) - JavaMailSenderImpl.createMimeMessage() would also return one of these, and
+     * MimeMessageHelper needs a real Session-backed instance to build multipart content. */
     private static MimeMessage newMimeMessage() {
         return new MimeMessage(Session.getInstance(new Properties()));
     }
@@ -70,9 +70,9 @@ class SmtpMailerTest {
         mailer.sendHtml("employee.personal@gmail.com", "OT submitted", "<p>Hello</p>", "Hello");
 
         verify(sender).send(mimeMessage);
-        // saveChanges() finalizes the Content-Type header from the DataHandler chain that
-        // MimeMessageHelper built. Normally Transport.send() does this as part of a real send; the
-        // mocked sender here bypasses that, so the test does it explicitly.
+        // saveChanges() finalizes the Content-Type header from the DataHandler chain that MimeMessageHelper built.
+        // Normally Transport.send() does this as part of a real send; the mocked sender here bypasses that, so the
+        // test does it explicitly.
         mimeMessage.saveChanges();
         assertThat(mimeMessage.getContentType()).startsWith("multipart/mixed");
         assertThat(mimeMessage.getFrom()[0].toString()).isEqualTo("job@glr.co.th");
@@ -99,12 +99,8 @@ class SmtpMailerTest {
             .hasMessageContaining("SMTP HTML send failed to x@example.com");
     }
 
-    // MUTATION-CHECK (verified live, not just by reasoning): temporarily emptied the addInline loop
-    // body in SmtpMailer.sendHtml -- exactly this test went red (missing "Content-ID:" in the raw
-    // MIME dump; "glr-logo" and the <img> tag alone stayed present from the html argument, which is
-    // why the Content-ID assertion, not those two, is the one doing real work here). Nothing else in
-    // this class broke. Reverted to an empty diff. Also separately confirmed replyToIsSetOnPlainAndHtmlSendsWhenConfigured
-    // goes red (and nothing else does) if the `if (!replyTo.isBlank())` guard in send() is removed.
+    // MUTATION-CHECK: temporarily emptied the addInline loop body in SmtpMailer.sendHtml -- exactly this test went
+    // red. Nothing else in this class broke. Reverted to an empty diff.
     @Test
     void sendHtmlWithInlineImageEmbedsItWithAMatchingContentId() throws Exception {
         JavaMailSender sender = mock(JavaMailSender.class);
@@ -122,11 +118,9 @@ class SmtpMailerTest {
         var writer = new java.io.ByteArrayOutputStream();
         mimeMessage.writeTo(writer);
         String raw = writer.toString(java.nio.charset.StandardCharsets.UTF_8);
-        // addInline() is called AFTER setText() in SmtpMailer specifically so the multipart tree
-        // orders the related (inline-image-bearing) part correctly - a wrong order is what makes
-        // some clients show the "inline" image as a plain attachment instead. The one thing a raw
-        // MIME dump can directly confirm either way is that the Content-ID Spring set is present and
-        // matches the cid: reference the HTML uses.
+        // addInline() is called AFTER setText() in SmtpMailer specifically so the multipart tree orders the related
+        // (inline-image-bearing) part correctly - a wrong order is what makes some clients show the "inline" image as
+        // a plain attachment instead.
         assertThat(raw).contains("Content-ID:");
         assertThat(raw).contains("glr-logo");
         assertThat(raw).contains("<img src=\"cid:glr-logo\">");
@@ -179,8 +173,8 @@ class SmtpMailerTest {
 
     @Test
     void replyToIsOmittedWhenBlank() {
-        // No address is ever invented - the 2-arg test-seam constructor defaults replyTo to blank,
-        // mirroring app.mail.reply-to being unset.
+        // No address is ever invented - the 2-arg test-seam constructor defaults replyTo to blank, mirroring
+        // app.mail.reply-to being unset.
         JavaMailSender sender = mock(JavaMailSender.class);
         SmtpMailer mailer = new SmtpMailer("job@glr.co.th", sender);
 

@@ -19,17 +19,11 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
-/**
- * Pins the {@code GET /api/customer-quotations/{id}/file} response contract — the same MockMvc
- * standalone pattern {@code DepositNoticeControllerTest} uses for the sibling deposit-notice and
- * remaining-invoice endpoints. All three renderers (this one's {@code QuotationRenderer}
- * included) fill a real BIFF8 (.xls) company template via WorkbookFactory/HSSFWorkbook, so
- * {@code wb.write(out)} always emits OLE2 {@code .xls} bytes, never OOXML {@code .xlsx} — the
- * response must say so, or Excel warns "the file format and extension don't match".
- */
+/** Pins the GET /api/customer-quotations/{id/file} response contract — the same MockMvc standalone pattern
+ * DepositNoticeControllerTest uses for the sibling deposit-notice and remaining-invoice endpoints. */
 class CustomerQuotationControllerTest {
-    // OLE2/Compound File Binary magic (BIFF8 .xls, per [MS-CFB]) — real HSSFWorkbook output
-    // starts with these bytes, never the ZIP "PK\x03\x04" of an OOXML .xlsx.
+    // OLE2/Compound File Binary magic (BIFF8 .xls, per [MS-CFB]) — real HSSFWorkbook output starts with these
+    // bytes, never the ZIP "PK\x03\x04" of an OOXML .xlsx.
     private static final byte[] OLE2_MAGIC_BYTES =
         {(byte) 0xD0, (byte) 0xCF, 0x11, (byte) 0xE0, (byte) 0xA1, (byte) 0xB1, 0x1A, (byte) 0xE1};
 
@@ -52,9 +46,9 @@ class CustomerQuotationControllerTest {
 
     @Test
     void fileWithFormatXlsxParamReturnsHonestXlsContentTypeAndFilename() throws Exception {
-        // The ?format=xlsx REQUEST param is the existing wire contract and stays as-is (frontend
-        // + mockApi both send it); only the RESPONSE filename/content-type must advertise what
-        // QuotationRenderer's bytes actually are. Regression test for that mismatch.
+        // The ?format=xlsx REQUEST param is the existing wire contract and stays as-is (frontend + mockApi both send
+        // it); only the RESPONSE filename/content-type must advertise what QuotationRenderer's bytes actually are.
+        // Regression test for that mismatch.
         when(service.renderXlsx(eq(42L), any(UserPrincipal.class))).thenReturn(OLE2_MAGIC_BYTES);
 
         mvc.perform(get("/api/customer-quotations/42/file?format=xlsx").session(session()))

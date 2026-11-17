@@ -144,9 +144,8 @@ describe('HrOverview', () => {
     expect(within(monitorPanel).getByText('คำขอลารออนุมัติ')).not.toBeNull();
     expect(within(monitorPanel).getByText('OT รออนุมัติ')).not.toBeNull();
 
-    // No button anywhere on the page is an approval action (e.g. "อนุมัติ") —
-    // HR approves nothing here; it only monitors leave/OT. This deliberately
-    // does not match "รออนุมัติ" ("awaiting approval") labels, which are
+    // No button anywhere on the page is an approval action (e.g. "อนุมัติ") — HR approves nothing here; it only
+    // monitors leave/OT. This deliberately does not match "รออนุมัติ" ("awaiting approval") labels, which are
     // informational counts, not approve buttons.
     const approveButtons = screen.queryAllByRole('button')
       .filter((button) => /^อนุมัติ/.test(button.textContent.trim()));
@@ -174,8 +173,8 @@ describe('HrOverview', () => {
     renderOverview();
     const panel = screen.getByText('งานของฝ่ายบุคคล').closest('section');
     expect(within(panel).getByText('แบบแจ้ง ล.ย.01 (ค่าลดหย่อนภาษี)')).not.toBeNull();
-    // Two PENDING out of three declarations — the APPROVED row must not be counted. Awaited: the
-    // label renders synchronously, the count only once the register query resolves.
+    // Two PENDING out of three declarations — the APPROVED row must not be counted. Awaited: the label renders
+    // synchronously, the count only once the register query resolves.
     expect(await within(panel).findByText('2 รายการรอตรวจ')).not.toBeNull();
   });
 

@@ -9,6 +9,9 @@ import { TicketDetailPage } from './TicketDetailPage.jsx';
 import { ITEM_FIELD_META, missingQtyMessage } from './ticketItemFields.jsx';
 import { api } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
+import { documentChainFromMocks } from '../../test/documentChainFromMocks.js';
+import { useDocumentChain } from '../documentChain/documentChain.js';
+import { QuotationDocumentChain } from '../quotations/QuotationDocumentChain.jsx';
 import { formatThaiDate } from '../../utils/format.js';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { STAGE_ADVANCE_GATE_MESSAGE } from './dealTrackingMeta.js';
@@ -30,11 +33,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   return {
     ...actual,
     api: {
-      // The pipeline enumeration (GET /api/meta/deal-stages). Served here as the SAME canned
-      // payload mockApi serves — data/dealStageCatalog.js, which stageCatalog.test.js pins against
-      // DealStage.java — so this fixture cannot quietly describe a pipeline the backend does not
-      // have. A fixture more populated (or differently shaped) than production is the failure mode
-      // CLAUDE.md names; reusing the guarded one is how that is avoided.
+      // The pipeline enumeration (GET /api/meta/deal-stages). Served here as the SAME canned payload mockApi serves
+      // — data/dealStageCatalog.js, which stageCatalog.test.js pins against DealStage.java — so this fixture cannot
+      // quietly describe a pipeline the backend does not have.
       meta: {
         dealStages: vi.fn().mockResolvedValue(DEAL_STAGE_CATALOG),
       },
@@ -73,6 +74,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         updateParty: vi.fn(),
         removeParty: vi.fn(),
         recordBidOutcome: vi.fn(),
+        // Document chain fix round 1 (F-1): the deal page's own lifecycle / confirm actions.
+        confirmCustomer: vi.fn(),
+        hold: vi.fn(),
         // The revoke-close-confirm control lives in the "การเงิน" tab, outside the money section.
         revokeCloseConfirmation: vi.fn(),
         // Fulfilment: DealFulfilmentPanel's own mutations, same self-contained pattern.
@@ -141,11 +145,16 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         deleteDraft: vi.fn(),
         download: vi.fn(),
       },
-      // The items table converts a foreign-currency factory price to baht. Mocked because an
-      // unmocked namespace makes every fxRates.list() call throw (api.fxRates is undefined),
-      // which would silently leave the baht line absent rather than exercising it.
+      // The items table converts a foreign-currency factory price to baht. Mocked because an unmocked namespace
+      // makes every fxRates.list() call throw (api.fxRates is undefined), which would silently leave the baht line
+      // absent rather than exercising it.
       fxRates: {
         list: vi.fn(),
+      },
+      // The document chain summary (2026-11-17): the เงิน tab's step states. beforeEach answers it from the
+      // ticket / notice / invoice fixtures (documentChainFromMocks), the way the server computes it.
+      documentChain: {
+        get: vi.fn(),
       },
       // ใบขอซื้อ (F-SM-001). Mocked like fxRates: DealFulfilmentPanel's IR block queries brands for
       // every import/CEO viewer, and an undefined namespace would throw rather than render the block.
@@ -187,9 +196,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
 });
 
 const ceoUser = { id: 9, employeeId: 9, name: 'CEO ทดสอบ', role: 'ceo' };
-// Quotation issuing (can.generateQuotation) requires role 'sales' AND
-// isOwner (user.id === summary.createdById) — buildTicket()'s default
-// summary.createdById is 1, so this user matches it out of the box.
+// Quotation issuing (can.generateQuotation) requires role 'sales' AND isOwner (user.id ===
+// summary.createdById) — buildTicket()'s default summary.createdById is 1, so this user matches it out of the
+// box.
 const salesOwnerUser = { id: 1, employeeId: 1, name: 'พนักงานขาย', role: 'sales' };
 const accountUser = { id: 5, employeeId: 5, name: 'ฝ่ายบัญชี', role: 'account' };
 
@@ -231,7 +240,11 @@ function buildTicket(overrides = {}) {
   };
 }
 
+// The viewer api.documentChain.get answers for (its "may act" flags follow the Java gates for this user).
+let chainViewer = null;
+
 function renderTicketDetailPage(user = ceoUser, showToast = vi.fn()) {
+  chainViewer = user;
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -264,6 +277,13 @@ async function openTab(namePattern) {
   fireEvent.click(await screen.findByRole('tab', { name: namePattern }));
 }
 
+// Deal page redesign (2026-11-16): the ประวัติ tab merged into ภาพรวม's timeline, whose comment box and activity
+// form open from "+ บันทึก" (they were always open on ประวัติ).
+async function openComposer() {
+  await openTab(/^ภาพรวม/);
+  fireEvent.click(await screen.findByRole('button', { name: '+ บันทึก' }));
+}
+
 // Exposes the router location's search string as text, so a test can assert `?tab=` was written
 // (and with `replace: true`) without reaching into react-router's internals.
 function LocationProbe() {
@@ -272,6 +292,7 @@ function LocationProbe() {
 }
 
 function renderTicketDetailPageAtRoute(initialEntries, user = ceoUser, showToast = vi.fn()) {
+  chainViewer = user;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
@@ -299,8 +320,8 @@ async function stickyInputsSettled() {
 describe('TicketDetailPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: no brands. Tests that care about the ใบขอซื้อ block set their own — a default with
-    // brands would make the block appear in unrelated assertions.
+    // Default: no brands. Tests that care about the ใบขอซื้อ block set their own — a default with brands would
+    // make the block appear in unrelated assertions.
     api.importRequests.brands.mockResolvedValue({ brands: [] });
     api.importRequests.pages.mockResolvedValue({ pageCount: 1 });
     api.tickets.get.mockResolvedValue({ ticket: buildTicket() });
@@ -323,16 +344,16 @@ describe('TicketDetailPage', () => {
     api.tickets.listPayments.mockResolvedValue({ items: [] });
     api.tickets.listDeliveries.mockResolvedValue({ items: [] });
     api.tickets.comment.mockResolvedValue({ ticket: buildTicket() });
-    // H1: recordPayment/confirmFinalPayment/confirmCloseReady are re-pointed at the finance routes and
-    // return the finance view `{ deal }`, NOT `{ ticket }` (see hrApi.js `tickets.recordPayment`).
+    // recordPayment/confirmFinalPayment/confirmCloseReady are re-pointed at the finance routes and return the
+    // finance view `{ deal }`, NOT `{ ticket }` (see hrApi.js `tickets.recordPayment`).
     api.tickets.recordPayment.mockResolvedValue({ deal: { id: 701 } });
     api.tickets.reserveStock.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.recordDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.completeDelivery.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.revision.mockResolvedValue({ ticket: buildTicket() });
     api.tickets.editItems.mockResolvedValue({ ticket: buildTicket() });
-    // Default: no catalog matches. Tests that exercise the edit-items brand/model autocomplete
-    // set their own — see the "edit-items required fields" describe block below.
+    // Default: no catalog matches. Tests that exercise the edit-items brand/model autocomplete set their own — see
+    // the "edit-items required fields" describe block below.
     api.catalog.prices.mockResolvedValue({ items: [] });
     api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
     api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [] });
@@ -346,16 +367,17 @@ describe('TicketDetailPage', () => {
     // DealDepositPanel mounts for every role that isn't 'import' (sections.depositNotice), so its list
     // query needs a default resolve or every test above would reject.
     api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
-    // FX rates back the baht companion beside a foreign-currency factory price. Defaults to an
-    // empty table — no rate, so no conversion — which keeps every unrelated test's item rows
-    // showing exactly one figure; the conversion test below supplies real rates itself.
+    api.documentChain.get.mockImplementation((id) => documentChainFromMocks(api, id, chainViewer));
+    // FX rates back the baht companion beside a foreign-currency factory price. Defaults to an empty table — no
+    // rate, so no conversion — which keeps every unrelated test's item rows showing exactly one figure; the
+    // conversion test below supplies real rates itself.
     api.fxRates.list.mockResolvedValue({ fxRates: [] });
   });
 
   it('renders a ticket from a mocked api.tickets.get', async () => {
     renderTicketDetailPage();
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    expect(await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' })).not.toBeNull();
     expect(screen.getAllByText('PR-2026-0701').length).toBeGreaterThan(0);
     expect(api.tickets.get).toHaveBeenCalledWith(701);
   });
@@ -381,7 +403,7 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage();
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    expect(await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' })).not.toBeNull();
     await waitFor(() => expect(api.tickets.actions).toHaveBeenCalledWith(701));
 
     expect(screen.queryByRole('button', { name: /^อนุมัติ$/ })).toBeNull();
@@ -393,44 +415,41 @@ describe('TicketDetailPage', () => {
     expect(screen.queryByRole('heading', { level: 2, name: 'การอนุมัติราคา' })).toBeNull();
   });
 
-  // The state header sits above every other section and names the sales stage, PCR status,
-  // payment/fulfilment status, and deal value at a glance.
-  it('renders the DealStateHeader stat strip', async () => {
+  // Redesign (drawing a-deal, 2026-11-16): the header's five status chips gave way to ONE S stepper ("สถานะ 4–5 ชุด →
+  // แถบขั้น S อันเดียว") and one line of who / how much under the project name. The current step is marked on the
+  // stepper; the value is on that line (the เงิน tab also shows it).
+  it('renders the deal header: the S stepper marks the stage, the sub line carries the value', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({ summary: { salesStage: 'QUOTE_DESIGN_SIDE', amountPayable: 50000 } }),
     });
 
     renderTicketDetailPage();
 
-    expect(await screen.findByText('ขั้นตอนดีล')).not.toBeNull();
-    // DealStagePanel below also names the current stage: assert presence, not uniqueness.
-    expect(screen.getAllByText('เสนอราคาผู้ออกแบบ').length).toBeGreaterThan(0);
-    expect(screen.getByText('มูลค่าดีล')).not.toBeNull();
-    // The payment panel below also renders amountPayable — assert presence, not uniqueness.
-    expect(screen.getAllByText('฿50,000.00').length).toBeGreaterThan(0);
+    const header = await screen.findByTestId('deal-state-header');
+    const current = (await within(header).findByRole('list', { name: 'ขั้นของงาน' })).querySelector('[aria-current="step"]');
+    expect(current.getAttribute('data-step')).toBe('S3');
+    expect(within(header).getByTestId('deal-header-sub').textContent).toContain('฿50,000');
   });
 
-  it('folds updated-at into the header and does not re-render the duplicate overview summary panel', async () => {
+  it('keeps updated-at on the page (ข้อมูลงาน) and does not re-render the duplicate overview summary panel', async () => {
     renderTicketDetailPage();
 
-    const header = await screen.findByTestId('deal-state-header');
-    expect(within(header).getByText('อัปเดตล่าสุด', { exact: false })).not.toBeNull();
-    expect(within(header).getByText('2 ก.ค. 2569')).not.toBeNull();
+    const info = (await screen.findByRole('heading', { level: 2, name: 'ข้อมูลงาน' })).closest('section');
+    expect(within(info).getByText('อัปเดตล่าสุด')).not.toBeNull();
+    expect(within(info).getByText('2 ก.ค. 2569')).not.toBeNull();
     expect(screen.queryByRole('heading', { level: 2, name: 'ข้อมูลทั่วไป' })).toBeNull();
-    // The items table lives in its own "สินค้าและราคา" tab, not the default "ดีล" tab.
-    await openTab(/สินค้าและราคา/);
+    // The items table lives in the ใบเสนอราคา tab, not the default ภาพรวม tab.
+    await openTab(/ใบเสนอราคา/);
     expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ })).not.toBeNull();
   });
 
-  it('pins the refresh button out of the mobile flex-wrap flow', async () => {
+  it('keeps the refresh button a 44px tap target on a phone', async () => {
     renderTicketDetailPage();
 
     const header = await screen.findByTestId('deal-state-header');
     const refresh = within(header).getByRole('button', { name: 'รีเฟรช' });
-    expect(refresh.className).toContain('mobile:absolute');
-    expect(refresh.className).toContain('mobile:right-0');
-    expect(refresh.className).toContain('mobile:top-0');
-    expect(header.querySelector('.mobile\\:pr-12')).not.toBeNull();
+    expect(refresh.className).toContain('mobile:min-h-[44px]');
+    expect(refresh.className).toContain('mobile:min-w-[44px]');
   });
 
   it('keeps the ticket header and tabs in one measured sticky chrome for focus-safe offsets', async () => {
@@ -439,7 +458,7 @@ describe('TicketDetailPage', () => {
     const stickyChrome = await screen.findByTestId('ticket-detail-sticky-chrome');
     expect(stickyChrome.className).toContain('sticky');
     expect(stickyChrome.className).toContain('top-[calc(var(--deal-scroll-pad-y)*-1)]');
-    expect(within(stickyChrome).getByRole('tablist', { name: 'รายละเอียดดีล' })).not.toBeNull();
+    expect(within(stickyChrome).getByRole('tablist', { name: 'รายละเอียดงาน' })).not.toBeNull();
     // Desktop header clearance for focus/jumps sits on the content wrapper (the chrome's next
     // sibling) so the header's own controls never get it.
     expect(stickyChrome.nextElementSibling.className).toContain(
@@ -524,17 +543,17 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  it('renders a dash for มูลค่าดีล until a price exists', async () => {
+  // The header's value: no ฿0 until a price exists (the old มูลค่าดีล chip read "—"; the sub line now leaves it out).
+  it('shows no deal value in the header until a price exists', async () => {
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({ summary: { status: 'approved', amountPayable: 0 } }),
     });
 
     renderTicketDetailPage();
 
-    const label = await screen.findByText('มูลค่าดีล');
-    const chip = label.closest('div');
-    expect(within(chip).getByText('—')).not.toBeNull();
-    expect(within(chip).queryByText('฿0.00')).toBeNull();
+    const header = await screen.findByTestId('deal-state-header');
+    expect(within(header).queryByText(/฿0/)).toBeNull();
+    expect(within(header).queryByText(/฿/)).toBeNull();
   });
 
   // A ตร.ม. line shows its area; the small "N แผ่น" line is for a count that is real: derived from a tile
@@ -550,7 +569,7 @@ describe('TicketDetailPage', () => {
         }),
       });
       renderTicketDetailPage();
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
       return (await screen.findByText('400.00 ตร.ม.')).closest('span');
     }
 
@@ -576,8 +595,8 @@ describe('TicketDetailPage', () => {
   // ราคาตั้ง (ประมาณการ) estimate column.
   describe('factory price in baht (ราคาตั้ง estimate removed)', () => {
     it('shows the factory price in its own currency with a baht conversion beside it', async () => {
-      // The suite-wide default is an empty rate table (no conversion possible); this test is
-      // specifically about the converted figure, so it supplies the real prod USD rate.
+      // The suite-wide default is an empty rate table (no conversion possible); this test is specifically about the
+      // converted figure, so it supplies the real prod USD rate.
       api.fxRates.list.mockResolvedValue({
         fxRates: [{ currency: 'THB', rateToThb: 1 }, { currency: 'USD', rateToThb: 35.2 }],
       });
@@ -597,7 +616,7 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage();
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
 
       // 8.80 USD at 35.20 THB/USD = 309.76 บาท — a pure conversion, with no markup applied.
       expect(await screen.findByText('8.80')).not.toBeNull();
@@ -615,7 +634,7 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage();
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
 
       await screen.findByText('Custom');
       expect(screen.queryByText('ราคาตั้ง')).toBeNull();
@@ -645,7 +664,7 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
 
       // The borrowed line renders, read-only, with the count reflecting it.
       expect(await screen.findByRole('heading', { level: 2, name: 'รายการสินค้า (1 รายการ)' })).not.toBeNull();
@@ -655,10 +674,9 @@ describe('TicketDetailPage', () => {
       // The banner is present...
       expect(screen.getByTestId('items-pricing-chain-banner')).not.toBeNull();
       expect(screen.getByText(/รายการจากใบเสนอราคา/)).not.toBeNull();
-      // ...and the edit affordance (the only entry point to edit mode / the add-item control)
-      // is gone, even though the actions() response advertises EDIT_ITEMS and the role/status/
-      // ownership gate would otherwise allow it — proves the fallback-specific guard, not just
-      // the pre-existing role gate.
+      // ...and the edit affordance (the only entry point to edit mode / the add-item control) is gone, even though
+      // the actions() response advertises EDIT_ITEMS and the role/status/ ownership gate would otherwise allow it —
+      // proves the fallback-specific guard, not just the pre-existing role gate.
       expect(screen.queryByRole('button', { name: 'แก้ไขรายการสินค้า' })).toBeNull();
     });
 
@@ -680,7 +698,7 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
 
       expect(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' })).not.toBeNull();
       expect(screen.queryByTestId('items-pricing-chain-banner')).toBeNull();
@@ -692,7 +710,7 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
 
       expect(await screen.findByRole('heading', { level: 2, name: 'รายการสินค้า (0 รายการ)' })).not.toBeNull();
       expect(screen.getByText('ไม่มีรายการสินค้า')).not.toBeNull();
@@ -738,7 +756,7 @@ describe('TicketDetailPage', () => {
             id: 3,
             kind: 'COMMENTED',
             actorName: 'สมชาย ใจดี',
-            message: 'บันทึกสำหรับบริบทดีล',
+            message: 'บันทึกสำหรับบริบทงาน',
             createdAt: '2026-07-18T09:00:00.000Z',
           },
         ],
@@ -747,8 +765,9 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    const keyDatesHeading = await screen.findByRole('heading', { level: 2, name: /วันสำคัญ/ });
-    const keyDatesSection = keyDatesHeading.closest('section');
+    // Redesign (2026-11-16): วันสำคัญ and ผู้เกี่ยวข้อง merged into ONE "ข้อมูลงาน" card; every row they held is kept.
+    const infoHeading = await screen.findByRole('heading', { level: 2, name: 'ข้อมูลงาน' });
+    const keyDatesSection = infoHeading.closest('section');
     expect(within(keyDatesSection).getByText('20 ก.ค. 2569')).not.toBeNull();
     // วางบิล is out of scope: neither the billing date nor the due date has a row here, even when set.
     expect(within(keyDatesSection).queryByText('วันวางบิล')).toBeNull();
@@ -756,22 +775,20 @@ describe('TicketDetailPage', () => {
     expect(within(keyDatesSection).queryByText('21 ก.ค. 2569')).toBeNull();
     expect(within(keyDatesSection).queryByText('31 ก.ค. 2569')).toBeNull();
 
-    const peopleHeading = screen.getByRole('heading', { level: 2, name: /ผู้เกี่ยวข้อง/ });
-    const peopleSection = peopleHeading.closest('section');
-    // สมชาย ใจดี is also named in DealStateHeader's "สร้างโดย" line (always on
-    // screen) — assert presence in THIS section specifically, not page-wide
-    // uniqueness.
+    const peopleSection = keyDatesSection;
+    // สมชาย ใจดี is the deal's owner (เจ้าของงาน) — assert presence in THIS card specifically.
     expect(within(peopleSection).getByText('สมชาย ใจดี')).not.toBeNull();
     expect(within(peopleSection).getByText('ยังไม่มีคำขอราคา')).not.toBeNull();
-    // Wrong-way-round: the deal shows no ผู้ติดต่อ (the contact is picked per quotation). FieldRow
-    // renders its label even when empty, so the missing label proves the row is gone; the fixture
-    // still sets contactName, so the missing value proves it doesn't surface another way.
+    // Wrong-way-round: the deal shows no ผู้ติดต่อ (the contact is picked per quotation). The row label is absent,
+    // and the fixture still sets contactName, so the missing value proves it doesn't surface another way.
     expect(within(peopleSection).queryByText('ผู้ติดต่อ')).toBeNull();
     expect(within(peopleSection).queryByText('คุณอรุณ ติดต่อ')).toBeNull();
 
-    // Wrong-way-round: the deleted roll-up's content must be absent from the whole page while ภาพรวม
-    // is active.
-    expect(screen.queryByText('บันทึกสำหรับบริบทดีล')).toBeNull();
+    // The old read-only "3 most recent comments" roll-up stays deleted: the comment surfaces exactly once on ภาพรวม,
+    // in the merged timeline (which moved onto this tab), never in ข้อมูลงาน.
+    expect(within(peopleSection).queryByText('บันทึกสำหรับบริบทงาน')).toBeNull();
+    expect(await screen.findAllByText('บันทึกสำหรับบริบทงาน')).toHaveLength(1);
+    expect(within(screen.getByTestId('deal-timeline')).getByText('บันทึกสำหรับบริบทงาน')).not.toBeNull();
   });
 
   // The backend only writes summary.lastFollowUpAt from the CEO billing form, so logging an
@@ -794,7 +811,8 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    const keyDates = (await screen.findByRole('heading', { level: 2, name: /วันสำคัญ/ })).closest('section');
+    // Redesign: the วันสำคัญ rows live in the ข้อมูลงาน card.
+    const keyDates = (await screen.findByRole('heading', { level: 2, name: 'ข้อมูลงาน' })).closest('section');
     const row = within(keyDates).getByText('ติดตามล่าสุด').parentElement;
     await waitFor(() => expect(within(row).getByText(formatThaiDate(expectedIso))).not.toBeNull());
   });
@@ -803,23 +821,24 @@ describe('TicketDetailPage', () => {
   // unmounts every inactive TabPanel it is reachable from exactly the one tab it lives in. Checking
   // both tabs is what the mutation-check exercises: reintroducing a rail-shaped duplicate makes the
   // ภาพรวม assertion (0) go red.
-  it('renders the comment composer exactly once, only inside the ประวัติ tab', async () => {
+  // Redesign: the composer is on ภาพรวม (the default tab) behind "+ บันทึก", not on a separate ประวัติ tab.
+  it('renders the comment composer exactly once, only behind the timeline\'s "+ บันทึก"', async () => {
     renderTicketDetailPage(salesOwnerUser);
-    await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+    await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
 
-    // ดีล is the default tab. Wrong-way-round: no composer anywhere on the page while it's active.
+    // ภาพรวม is the default tab. Wrong-way-round: no composer anywhere on the page until "+ บันทึก".
     expect(screen.queryAllByPlaceholderText('เพิ่มความคิดเห็น…')).toHaveLength(0);
     expect(screen.queryAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(0);
 
-    await openTab(/ประวัติ/);
+    await openComposer();
     expect(screen.getAllByPlaceholderText('เพิ่มความคิดเห็น…')).toHaveLength(1);
     expect(screen.getAllByRole('button', { name: 'ส่งความคิดเห็น' })).toHaveLength(1);
   });
 
-  it('posts a ประวัติ-tab comment through the shared commentText/handleComment path', async () => {
+  it('posts a timeline comment through the shared commentText/handleComment path', async () => {
     renderTicketDetailPage(salesOwnerUser);
 
-    await openTab(/ประวัติ/);
+    await openComposer();
     fireEvent.change(screen.getByPlaceholderText('เพิ่มความคิดเห็น…'), { target: { value: 'จดไว้จากแท็บกิจกรรม' } });
     fireEvent.click(screen.getByRole('button', { name: 'ส่งความคิดเห็น' }));
 
@@ -830,9 +849,10 @@ describe('TicketDetailPage', () => {
   // this pins where it rendered.
   it('renders no "รอ…" waiting line in the sticky action bar', async () => {
     api.tickets.get.mockResolvedValueOnce({ ticket: buildTicket() });
+    // Redesign: the work-state line sits in the ขั้นต่อไป card now (the action bar holds only the button).
     renderTicketDetailPage(salesOwnerUser);
     await screen.findByTestId('deal-stage-panel');
-    const bar = screen.queryByTestId('ticket-action-bar');
+    const bar = screen.queryByTestId('next-step-card');
     expect(bar?.textContent ?? '').not.toMatch(/รอ(ฝ่าย|CEO)/);
   });
 
@@ -903,7 +923,7 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage();
-    await openTab(/เอกสาร/);
+    await openTab(/ใบเสนอราคา/);
 
     // Scoped to DealLegacyQuotations' own panel (not `screen` globally): DealDocumentRegister also
     // lists these legacy rows in the same tab ("a register is an index, not a replacement for the
@@ -960,7 +980,7 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage();
-    await openTab(/การเงิน/);
+    await openTab(/^เงิน/);
 
     expect((await screen.findAllByText('ชำระบางส่วน')).length).toBeGreaterThan(0);
     // The billing control left this page: even with SET_BILLING offered there is no button for it.
@@ -968,21 +988,17 @@ describe('TicketDetailPage', () => {
     expect(screen.getAllByText('เกินกำหนด').length).toBeGreaterThan(0);
     // DealStateHeader's "มูลค่าดีล" chip also renders amountPayable — assert presence, not uniqueness.
     expect(screen.getAllByText('฿1,000.00').length).toBeGreaterThan(0);
-    // Scoped to the "ชำระแล้ว"/"คงเหลือ" summary tiles specifically: by the
-    // time this async assertion runs, the receipt-history row below (also
-    // ฿400.00, same receipt) has settled in too — dom-testing-library's default
-    // text matcher only looks at an element's own direct text children, so
-    // the receipt row's outer wrapper (a bare "฿400.00" text node next to a
-    // sibling <small>) matches the same string as the summary tile. A bare
-    // `getByText('฿400.00')` is therefore genuinely ambiguous on this page, not
-    // a test bug to paper over with getAllByText/greaterThan(0).
-    const paidTile = screen.getByText('ชำระแล้ว').parentElement;
+    // Scoped to the "รับแล้ว"/"คงค้าง" KPI tiles specifically (were the ชำระแล้ว / คงเหลือ tiles before the
+    // redesign): by the time this async assertion runs, the receipt-history row has settled in too. A bare
+    // `getByText('฿400.00')` is therefore genuinely ambiguous on this page, not a test bug to paper over.
+    const kpis = await screen.findByTestId('money-kpis');
+    const paidTile = within(kpis).getByText('รับแล้ว').closest('[data-testid="money-kpi"]');
     expect(within(paidTile).getByText('฿400.00')).not.toBeNull();
-    const outstandingTile = screen.getByText('คงเหลือ').parentElement;
+    const outstandingTile = within(kpis).getByText('คงค้าง').closest('[data-testid="money-kpi"]');
     expect(within(outstandingTile).getByText('฿600.00')).not.toBeNull();
     expect((await screen.findByText(/คุณบัญชี/)).closest('li').textContent).toContain('มัดจำ');
-    // The receipt row itself really did render (not just the tile) — proves
-    // the scoped assertion above didn't accidentally start passing vacuously.
+    // The receipt row itself really did render (not just the tile) — proves the scoped assertion above didn't
+    // accidentally start passing vacuously.
     expect(screen.getByText(/คุณบัญชี/)).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
   });
@@ -999,7 +1015,7 @@ describe('TicketDetailPage', () => {
     api.tickets.revokeCloseConfirmation.mockResolvedValue({ ticket: buildTicket() });
 
     renderTicketDetailPage(accountUser);
-    await openTab(/การเงิน/);
+    await openTab(/^เงิน/);
 
     const button = await screen.findByRole('button', { name: 'ยกเลิกการยืนยันปิดงาน' });
     fireEvent.click(button);
@@ -1018,9 +1034,10 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage(accountUser);
-    await openTab(/การเงิน/);
+    await openTab(/^เงิน/);
 
-    await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
+    // The tab really rendered (was the "การชำระเงิน" panel heading; the redesign made it KPI tiles + two cards).
+    await screen.findByTestId('money-kpis');
     expect(screen.queryByRole('button', { name: 'ยกเลิกการยืนยันปิดงาน' })).toBeNull();
     expect(api.tickets.revokeCloseConfirmation).not.toHaveBeenCalled();
   });
@@ -1062,15 +1079,15 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(accountUser);
 
-    expect(await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' })).not.toBeNull();
+    expect(await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' })).not.toBeNull();
     // PricingRequestPanel is an INNER render condition inside "สินค้าและราคา"
     // (pricing_accountCannotReadAPricingRequest, see ticketDetailTabs.js). Account still gets the
     // tab (the items table lives there), just not this panel, and never the fetch behind it.
-    await openTab(/สินค้าและราคา/);
+    await openTab(/ใบเสนอราคา/);
     expect(screen.queryByRole('heading', { name: 'คำขอราคา' })).toBeNull();
     expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
 
-    await openTab(/การเงิน/);
+    await openTab(/^เงิน/);
     expect((await screen.findByText(/คุณบัญชี/)).closest('li').textContent).toContain('มัดจำ');
     expect(screen.getAllByText('฿400.00').length).toBeGreaterThan(0);
   });
@@ -1112,9 +1129,8 @@ describe('TicketDetailPage', () => {
     // The single click must NOT call the mutation directly: it only opens the confirm dialog.
     expect(api.tickets.confirmFinalPayment).not.toHaveBeenCalled();
 
-    // The dialog states the real outstanding amount, sourced from the same
-    // summary.amountOutstanding the payment panel's "คงเหลือ" tile renders
-    // (not a separately-computed figure).
+    // The dialog states the real outstanding amount, sourced from the same summary.amountOutstanding the payment
+    // panel's "คงเหลือ" tile renders (not a separately-computed figure).
     expect(await screen.findByText('ยืนยันการรับชำระครบถ้วน')).not.toBeNull();
     expect(screen.getAllByText('฿32,500.00').length).toBeGreaterThan(0);
 
@@ -1123,8 +1139,8 @@ describe('TicketDetailPage', () => {
     await waitFor(() => expect(api.tickets.confirmFinalPayment).toHaveBeenCalledWith(701));
     // Dialog closes after a successful confirm.
     await waitFor(() => expect(screen.queryByText('ยืนยันการรับชำระครบถ้วน')).toBeNull());
-    // A `{ deal }` response carries no ticket: the page re-reads the ticket instead of writing
-    // `undefined` into the detail cache (which would blank the page).
+    // A `{ deal }` response carries no ticket: the page re-reads the ticket instead of writing `undefined` into
+    // the detail cache (which would blank the page).
     await waitFor(() => expect(api.tickets.get.mock.calls.length).toBeGreaterThanOrEqual(2));
     expect(screen.getAllByText(/PR-2026-0701/).length).toBeGreaterThan(0);
   });
@@ -1169,7 +1185,7 @@ describe('TicketDetailPage', () => {
 
     // The delivery progress, delivery HISTORY rows (คลังสินค้า source) and the record-delivery button
     // are only inside DealFulfilmentPanel, in the "จัดซื้อ-ส่งมอบ" tab (DealStagePanel has no copy).
-    await openTab(/จัดซื้อ-ส่งมอบ/);
+    await openTab(/ส่งของ/);
     expect((await screen.findAllByText('40 / 100')).length).toBeGreaterThan(0);
     expect(screen.getAllByText('ส่งมอบบางส่วน').length).toBeGreaterThan(0);
     expect(await screen.findByText('คลังสินค้า')).not.toBeNull();
@@ -1179,19 +1195,18 @@ describe('TicketDetailPage', () => {
 
   it('comment posts and invalidates the tickets-list/dashboard/notifications caches', async () => {
     const { queryClient } = renderTicketDetailPage();
-    // Seed cache entries so invalidateQueries has something to mark stale —
-    // an invalidate against a key with no existing entry is a no-op we can't
-    // observe, so this mirrors a real session where those queries are (or
-    // were) mounted elsewhere in the app.
+    // Seed cache entries so invalidateQueries has something to mark stale — an invalidate against a key with no
+    // existing entry is a no-op we can't observe, so this mirrors a real session where those queries are (or were)
+    // mounted elsewhere in the app.
     queryClient.setQueryData(['tickets', 'list', ''], []);
     queryClient.setQueryData(queryKeys.dashboardSummary(), {});
     queryClient.setQueryData(queryKeys.notifications(), []);
     // The finance deal view (account/ceo) is money state too: the ceo can open it, so it must go stale.
     queryClient.setQueryData(queryKeys.financeDeal(701), { deal: {} });
 
-    await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-    // The comment box lives in DealHistoryPanel, in the "ประวัติ" tab.
-    await openTab(/ประวัติ/);
+    await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
+    // The comment box lives in DealHistoryPanel, behind "+ บันทึก" on ภาพรวม.
+    await openComposer();
 
     const textarea = screen.getByPlaceholderText('เพิ่มความคิดเห็น…');
     fireEvent.change(textarea, { target: { value: 'ทดสอบความคิดเห็น' } });
@@ -1210,9 +1225,12 @@ describe('TicketDetailPage', () => {
   // ── Inline validation for the quotation/payment/delivery modals, mirroring the aria-invalid +
   // aria-describedby + role="alert" contract of TicketCreateModal.jsx / DepositNoticePage.jsx. ──
 
-  // recordPayment is account-only, but renderTicketDetailPage()'s default actor is ceoUser: render as
-  // accountUser so this test reaches the button.
-  it('payment modal: submitting with an empty amount marks the amount field inline and does not call recordPayment', async () => {
+  // Spec 2026-11-15 §7.11 item 8: the sales deal page's own บันทึกรับชำระเงิน dialog was dead UI — recording a payment
+  // is account-only (PAYMENT_RECORD_ROLES) and account never mounts this page (TicketDetailRoute.test.jsx: account is
+  // redirected to /finance/deals/:id before any ticket query; RequireAccess.test.jsx: the same under the self-service
+  // lock, query string included). Account records payments on FinanceDealPage. So even rendered for account with the
+  // server listing RECORD_PAYMENT, the page offers no payment form.
+  it('offers no บันทึกรับชำระเงิน dialog, even for account with RECORD_PAYMENT listed (account works on /finance/deals/:id)', async () => {
     api.tickets.actions.mockResolvedValueOnce({
       currentState: {
         lifecycle: 'ACTIVE', salesStage: 'DEPOSIT_RECEIVED', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed',
@@ -1221,31 +1239,12 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage(accountUser);
-    // "บันทึกรับชำระเงิน" lives in the "การเงิน" tab's payment section; the Modal, once opened, stays
-    // mounted regardless of the active tab (it's not inside any TabPanel).
-    await openTab(/การเงิน/);
+    await openTab(/^เงิน/);
 
-    fireEvent.click(await screen.findByRole('button', { name: 'บันทึกรับชำระเงิน' }));
-    const dialog = await screen.findByRole('dialog', { name: 'บันทึกรับชำระเงิน' });
-
-    // buildTicket()'s default amountOutstanding is 0, so openPaymentModal()
-    // leaves the amount field blank (its own suggested-amount logic only
-    // fills in a value when amountOutstanding > 0) — submitting right away
-    // exercises the "empty amount" branch of the guard.
-    const amountInput = within(dialog).getByLabelText('จำนวนเงิน');
-    expect(amountInput.value).toBe('');
-    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
-
-    const error = await within(dialog).findByText('กรุณากรอกยอดรับชำระ');
-    expect(error.getAttribute('role')).toBe('alert');
-    expect(amountInput.getAttribute('aria-invalid')).toBe('true');
-    expect(amountInput.getAttribute('aria-describedby')).toBe(error.id);
+    await screen.findByRole('heading', { level: 3, name: 'รับแล้ว' }); // the timeline (was ไทม์ไลน์การชำระเงิน)
+    expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
     expect(api.tickets.recordPayment).not.toHaveBeenCalled();
-
-    // Fixing the field clears its inline error (and only that error).
-    fireEvent.change(amountInput, { target: { value: '500' } });
-    await waitFor(() => expect(within(dialog).queryByText('กรุณากรอกยอดรับชำระ')).toBeNull());
-    expect(amountInput.getAttribute('aria-invalid')).toBeNull();
   });
 
   // The delivery modal (and its "at least 1 line qty > 0" guard) lives in DealFulfilmentPanel, which
@@ -1268,24 +1267,24 @@ describe('TicketDetailPage', () => {
     const showToast = vi.fn();
     renderTicketDetailPage(ceoUser, showToast);
     // DealFulfilmentPanel lives in the "จัดซื้อ-ส่งมอบ" tab.
-    await openTab(/จัดซื้อ-ส่งมอบ/);
+    await openTab(/ส่งของ/);
 
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการส่งสินค้า' }));
     const dialog = await screen.findByRole('dialog', { name: 'บันทึกการส่งสินค้า' });
 
-    // openDeliveryModal() prefills each line with its remaining qty (here
-    // 10), so the "no line has qty > 0" rule only fires once every line is
-    // explicitly zeroed out — this is the single-item case.
+    // openDeliveryModal() prefills each line with its remaining qty (here 10), so the "no line has qty > 0" rule
+    // only fires once every line is explicitly zeroed out — this is the single-item case.
     const qtyInput = within(dialog).getByLabelText('จำนวนส่งมอบ SCG A1');
     fireEvent.change(qtyInput, { target: { value: '0' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    // Drawing m-delivery: the submit reads บันทึกการส่ง (was บันทึก).
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกการส่ง' }));
 
     expect(showToast).toHaveBeenCalledWith('error', 'กรุณาระบุจำนวนส่งมอบอย่างน้อย 1 รายการ');
     expect(api.tickets.recordDelivery).not.toHaveBeenCalled();
 
     // Fixing the line (qty > 0) lets the save through.
     fireEvent.change(qtyInput, { target: { value: '3' } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึก' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'บันทึกการส่ง' }));
     await waitFor(() => expect(api.tickets.recordDelivery).toHaveBeenCalledWith(
       701, { source: 'WAREHOUSE', note: null, lines: [{ itemId: 70101, qty: 3 }] },
     ));
@@ -1315,7 +1314,7 @@ describe('TicketDetailPage', () => {
     renderTicketDetailPage(salesOwnerUser);
 
     // "แก้ไขรายการสินค้า" sits in the items table's panel header, inside the "สินค้าและราคา" tab.
-    await openTab(/สินค้าและราคา/);
+    await openTab(/ใบเสนอราคา/);
     fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
     fireEvent.click(await screen.findByRole('button', { name: 'บันทึกการแก้ไข' }));
 
@@ -1370,7 +1369,7 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    await openTab(/สินค้าและราคา/);
+    await openTab(/ใบเสนอราคา/);
     fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
 
     const checkbox = await screen.findByRole('checkbox', { name: 'จากสต็อก' });
@@ -1406,7 +1405,7 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    await openTab(/สินค้าและราคา/);
+    await openTab(/ใบเสนอราคา/);
     fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
 
     const checkbox = await screen.findByRole('checkbox', { name: 'จากสต็อก' });
@@ -1442,7 +1441,7 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage(ceoUser);
-    await openTab(/สินค้าและราคา/);
+    await openTab(/ใบเสนอราคา/);
 
     expect(await screen.findByText('จากสต็อก')).toBeTruthy();
     expect(screen.queryByText('฿420.50')).toBeNull();
@@ -1468,7 +1467,7 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage(ceoUser);
-    await openTab(/สินค้าและราคา/);
+    await openTab(/ใบเสนอราคา/);
 
     expect(await screen.findByText('จากสต็อก')).toBeTruthy();
     expect(screen.getByText('฿999.00')).toBeTruthy();
@@ -1497,7 +1496,7 @@ describe('TicketDetailPage', () => {
     });
 
     renderTicketDetailPage(ceoUser);
-    await openTab(/สินค้าและราคา/);
+    await openTab(/ใบเสนอราคา/);
 
     // Calc-breakdown headers confirm the CEO variant rendered, not the plain ราคาที่อนุมัติ one.
     expect(await screen.findByText('ต้นทุน (THB/ชิ้น)')).toBeTruthy();
@@ -1554,11 +1553,11 @@ describe('TicketDetailPage', () => {
         availableActions: [{ action: 'EDIT_ITEMS', kind: 'operational', label: 'แก้ไขรายการสินค้า' }],
       });
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
       fireEvent.click(await screen.findByRole('button', { name: 'แก้ไขรายการสินค้า' }));
-      // Confirms edit mode has actually mounted before a test starts poking at row fields — the
-      // save button is unique (unlike the per-row ยี่ห้อ label/placeholder, which repeats once per
-      // row and would make findByLabelText/findByPlaceholderText throw on "multiple elements").
+      // Confirms edit mode has actually mounted before a test starts poking at row fields — the save button is
+      // unique (unlike the per-row ยี่ห้อ label/placeholder, which repeats once per row and would make
+      // findByLabelText/findByPlaceholderText throw on "multiple elements").
       await screen.findByRole('button', { name: 'บันทึกการแก้ไข' });
     }
 
@@ -1722,16 +1721,16 @@ describe('TicketDetailPage', () => {
       await openEditMode({ unitBasis: 'SQM', qty: 0, qtySqm: '', sqmPerPiece: null });
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกการแก้ไข' }));
 
-      // The real missingQtyMessage output, not a hand-typed copy of it — this is exactly the
-      // string the save handler must produce for row 1 in SQM basis.
+      // The real missingQtyMessage output, not a hand-typed copy of it — this is exactly the string the save handler
+      // must produce for row 1 in SQM basis.
       expect(await screen.findByText(missingQtyMessage('SQM', 1))).toBeTruthy();
       expect(api.tickets.editItems).not.toHaveBeenCalled();
     });
   });
 
   it('revise form: opens as a modal, the confirm button is disabled on a blank reason (pre-existing guard, unchanged), and submits once filled', async () => {
-    // can.revise has no hasAction() gate — only status + role + isOwner — so
-    // no availableActions entry is needed for this button to appear.
+    // can.revise has no hasAction() gate — only status + role + isOwner — so no availableActions entry is needed
+    // for this button to appear.
     api.tickets.get.mockResolvedValueOnce({
       ticket: buildTicket({ summary: { status: 'approved', createdById: 1 } }),
     });
@@ -1744,8 +1743,8 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPage(salesOwnerUser);
 
-    // ขอแก้ไข collapsed into the header's "⋯" overflow menu
-    // (ticket-detail IA rebuild Phase 1) — open the menu, then its item.
+    // ขอแก้ไข collapsed into the header's "⋯" overflow menu (ticket-detail IA rebuild Phase 1) — open the menu,
+    // then its item.
     fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
     fireEvent.click(await screen.findByRole('menuitem', { name: /ขอแก้ไข/ }));
 
@@ -1768,8 +1767,8 @@ describe('TicketDetailPage', () => {
     fireEvent.click(confirmButton);
     await waitFor(() => expect(api.tickets.revision).toHaveBeenCalledWith(701, { scope: 'QTY_OR_NOTE', reason: 'ลูกค้าขอเปลี่ยนจำนวน' }));
     expect(screen.queryByRole('alert')).toBeNull();
-    // Success closes the modal (resetActionDrafts sets showReviseForm false),
-    // same as every other action modal on this page.
+    // Success closes the modal (resetActionDrafts sets showReviseForm false), same as every other action modal on
+    // this page.
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'ขอแก้ไข' })).toBeNull());
   });
 
@@ -1820,7 +1819,7 @@ describe('TicketDetailPage', () => {
 
     renderTicketDetailPageAtRoute(['/tickets/701?tab=money'], salesOwnerUser);
 
-    const moneyTab = await screen.findByRole('tab', { name: /^การเงิน/ });
+    const moneyTab = await screen.findByRole('tab', { name: /^เงิน/ });
     await waitFor(() => expect(moneyTab.getAttribute('aria-selected')).toBe('true'));
 
     fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
@@ -1832,7 +1831,7 @@ describe('TicketDetailPage', () => {
     expect(screen.getByTestId('location-probe').textContent).toContain('tab=money');
     expect(moneyTab.getAttribute('aria-selected')).toBe('true');
     // Wrong-way-round: the tab this used to force a switch TO is not the one selected.
-    expect(screen.getByRole('tab', { name: /^ดีล/ }).getAttribute('aria-selected')).not.toBe('true');
+    expect(screen.getByRole('tab', { name: /^ภาพรวม/ }).getAttribute('aria-selected')).not.toBe('true');
   });
 
   // CREATE_PCR: the sticky bar opens PricingRequestPanel's create modal via its forwardRef, and the
@@ -1868,9 +1867,8 @@ describe('TicketDetailPage', () => {
       fireEvent.click(stickyButtons[0]);
 
       expect(await screen.findByRole('dialog')).not.toBeNull();
-      // Still exactly one "สร้างคำขอราคา" trigger even with the modal open —
-      // the modal's own title text uses the same string, so this scopes to
-      // buttons only (not headings) to keep proving "no duplicate button".
+      // Still exactly one "สร้างคำขอราคา" trigger even with the modal open — the modal's own title text uses the
+      // same string, so this scopes to buttons only (not headings) to keep proving "no duplicate button".
       expect(screen.getAllByRole('button', { name: /สร้างคำขอราคา/ })).toHaveLength(1);
     });
   });
@@ -1924,17 +1922,20 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByTestId('guided-advance-modal')).toBeNull();
     });
 
-    it('ขั้น 2, not ready: the main button reads เลื่อนไป: 3. … and opens the follow-up + activity form instead of moving', async () => {
+    // S1 → S2 is the m-stage drawing's ย้ายไป S2 · สเปคผ่าน since 2026-11-16. This used to pin "เลื่อนไป: 3. …"
+    // opening the guided follow-up + activity form; the new dialog asks for exactly those two things itself.
+    it('ขั้น 2, not ready: the main button reads ย้ายไป S2 · สเปคผ่าน and opens that dialog, asking for what is missing, instead of moving', async () => {
       earlyDeal('PRESENTATION', 'SPEC_APPROVED');
       renderTicketDetailPage(salesOwnerUser);
 
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('advance_stage'));
-      expect(screen.getByTestId('ticket-primary-action').textContent).toMatch(/เลื่อนไป: 3\./);
-      // One เลื่อนไป button on the page body: the stage panel's own opener steps aside for it.
+      expect(screen.getByTestId('ticket-primary-action').textContent).toContain('ย้ายไป S2 · สเปคผ่าน');
+      // One move button on the page body: the stage panel's own opener steps aside for it.
       expect(screen.queryByTestId('guided-advance-open')).toBeNull();
 
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
-      expect(await screen.findByTestId('guided-advance-modal')).not.toBeNull();
+      const dialog = await screen.findByTestId('move-s2-modal');
+      expect(within(dialog).getByLabelText(/วันติดตามครั้งถัดไป/)).toBeTruthy();
       expect(api.tickets.updateStage).not.toHaveBeenCalled();
     });
 
@@ -1946,13 +1947,13 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(salesOwnerUser);
 
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('advance_stage'));
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
       await screen.findByText('ยังไม่มีคำขอราคา');
       expect(screen.queryByRole('button', { name: /สร้างคำขอราคา/ })).toBeNull();
     });
 
     it('cannot reach: when the server refuses the move for another reason, no เลื่อนไป main button is offered', async () => {
-      earlyDeal('LEAD_APPROACH', 'PRESENTATION', { decision: { blockedReason: 'เฉพาะผู้รับผิดชอบดีลเท่านั้น' } });
+      earlyDeal('LEAD_APPROACH', 'PRESENTATION', { decision: { blockedReason: 'เฉพาะผู้รับผิดชอบงานเท่านั้น' } });
       renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
 
       // The stage panel's "who moves it" hint proves the server's verdict has loaded.
@@ -2109,7 +2110,7 @@ describe('TicketDetailPage', () => {
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={['/tickets/701']}>
             <LocationProbe />
-            <Link to="/tickets">ไปหน้ารายการดีล</Link>
+            <Link to="/tickets">ไปหน้ารายการงาน</Link>
             <Routes>
               <Route path="/tickets/701" element={<TicketDetailPage user={salesOwnerUser} ticketId={701} onBack={vi.fn()} showToast={vi.fn()} />} />
               <Route path="*" element={null} />
@@ -2121,7 +2122,7 @@ describe('TicketDetailPage', () => {
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
       await waitFor(() => expect(api.dealQuotations.createFromPricingRequest).toHaveBeenCalledWith(501));
 
-      fireEvent.click(screen.getByRole('link', { name: 'ไปหน้ารายการดีล' }));
+      fireEvent.click(screen.getByRole('link', { name: 'ไปหน้ารายการงาน' }));
       expect(location()).toBe('/tickets');
       expect(screen.queryByTestId('ticket-primary-action')).toBeNull(); // the deal page is gone
 
@@ -2243,7 +2244,7 @@ describe('TicketDetailPage', () => {
         });
         renderTicketDetailPage(salesOwnerUser);
         // Wait until the panel itself shows the quotation it will name, so the click cannot race the loads.
-        await openTab(/เอกสาร/);
+        await openTab(/ใบเสนอราคา/);
         const panel = within(await screen.findByTestId('deal-quotation-panel'));
         expect((await panel.findAllByText(oldEngineRows[0]?.number ?? 'QT-2026-0501-NEW')).length).toBeGreaterThan(0);
         const sticky = await screen.findAllByRole('button', { name: /ยืนยันคำสั่งซื้อ/ });
@@ -2326,10 +2327,120 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe(action));
       return screen.getByTestId('ticket-primary-action');
     }
-    const actionBarOf = (element) => element.closest('[data-testid="ticket-action-bar"]');
+    const actionBarOf = (element) => element.closest('[data-testid="next-step-card"]');
 
     // Later describes in this file read listForTicket bare (a rejected query) — keep it that way.
     afterEach(() => { api.dealQuotations.listForTicket.mockReset(); });
+
+    // Fix round 1 (ruling 1): the ใบเสนอราคา tab may carry a SECOND trigger for the page's primary ONLY while that
+    // primary is the quotation route choice (เสนอราคา<party>) — same handler, same choice, same visibility — and
+    // nothing in every other state. Wrong-way-round cases first.
+    describe('the ใบเสนอราคา tab second trigger for the quotation route choice', () => {
+      const trigger = () => screen.queryByTestId('quote-tab-route-choice');
+      function summaryOverride(extra) {
+        api.tickets.get.mockResolvedValue({
+          ticket: buildTicket({
+            summary: {
+              lifecycle: 'ACTIVE', salesStage: 'QUOTE_DESIGN_SIDE', createdById: 1, status: 'draft', entryChannel: 'DESIGNER_LED',
+              designerName: 'สมชาย ผู้ออกแบบ', ownerName: 'บริษัท เจ้าของ จำกัด', buyerName: 'ผู้รับเหมา ข.', ...extra,
+            },
+          }),
+        });
+      }
+      async function onQuoteTab() {
+        await openTab(/ใบเสนอราคา/);
+        await screen.findByTestId('deal-quotations-card');
+        await stickyInputsSettled();
+      }
+
+      it('wrong-way: absent while the primary is สร้างคำขอราคา (no request yet)', async () => {
+        deal({ requests: [], quotations: [], stage: 'SPEC_APPROVED' });
+        renderTicketDetailPage(salesOwnerUser);
+        await primaryWithAction('create_pcr');
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it('wrong-way: absent while a live direct quotation drives the primary', async () => {
+        deal({ requests: [], quotations: [] });
+        summaryOverride({ liveDirectQuotation: { id: 77, number: 'QT-2026-0077-1', docStatus: 'DRAFT', recipientType: 'DESIGNER' } });
+        renderTicketDetailPage(salesOwnerUser);
+        await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).not.toBe('quote_next_party'));
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it('wrong-way: absent once the order is confirmed', async () => {
+        deal();
+        summaryOverride({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'ORDER_RECEIVED' });
+        renderTicketDetailPage(salesOwnerUser);
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it('wrong-way: absent while a later party already has a live request', async () => {
+        deal({ requests: [sentRequest(), sentRequest({ id: 502, requestCode: 'PCR-2026-0502', recipientType: 'OWNER', status: 'SUBMITTED' })] });
+        renderTicketDetailPage(salesOwnerUser);
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it('wrong-way: absent on a deal that is not active', async () => {
+        deal();
+        summaryOverride({ lifecycle: 'ON_HOLD' });
+        renderTicketDetailPage(salesOwnerUser);
+        await onQuoteTab();
+        expect(trigger()).toBeNull();
+      });
+
+      it.each([
+        ['another sales rep', { id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' }],
+        ['account', accountUser],
+      ])('wrong-way: absent for a viewer without the right (%s)', async (_label, user) => {
+        deal();
+        // What the server answers this viewer: PricingRequestService.listForTicket gives a sales rep only the
+        // requests on deals they own, so another rep reads none (account never reads the list at all).
+        if (user.role === 'sales') api.pricingRequests.listForTicket.mockResolvedValue({ items: [] });
+        renderTicketDetailPage(user);
+        await openTab(/ใบเสนอราคา/);
+        await screen.findByTestId('deal-quotations-card');
+        await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 80); }); });
+        expect(trigger()).toBeNull();
+      });
+
+      // Fix round 2, item 4: one party left — the route choice is a plain button, and its second trigger runs the
+      // same single-party handler (`onSingle`).
+      it('single party: the second trigger is the same plain button and opens the same request form', async () => {
+        deal({ entryChannel: 'BUYER_DIRECT', actionsAnswered: false });
+        renderTicketDetailPage(salesOwnerUser);
+        const primary = await primaryWithAction('quote_next_party');
+        await openTab(/ใบเสนอราคา/);
+        await screen.findByTestId('deal-quotations-card');
+        const second = await screen.findByTestId('quote-tab-route-choice');
+        expect(second.textContent).toBe(primary.textContent);
+        expect(second.textContent).toBe('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
+        expect(second.getAttribute('aria-haspopup')).toBeNull();
+        fireEvent.click(second);
+        const dialog = within(await screen.findByRole('dialog'));
+        expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
+      });
+
+      it('present beside the route choice, and it opens the SAME choice: the party picked there opens its request form', async () => {
+        deal();
+        renderTicketDetailPage(salesOwnerUser);
+        const primary = await primaryWithAction('quote_next_party');
+        await onQuoteTab();
+        const second = trigger();
+        expect(second).not.toBeNull();
+        expect(second.textContent).toBe(primary.textContent);
+        fireEvent.click(second);
+        const items = await screen.findAllByRole('menuitem');
+        expect(items.map((item) => item.textContent)).toEqual(['เสนอราคาเจ้าของโครงการ', 'ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา']);
+        fireEvent.click(screen.getByRole('menuitem', { name: 'ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา' }));
+        const dialog = within(await screen.findByRole('dialog'));
+        expect(dialog.getByRole('radio', { name: /ผู้ซื้อ \/ ผู้รับเหมา/ }).getAttribute('aria-checked')).toBe('true');
+      });
+    });
 
     // The menu's trigger is the neutral เสนอราคา ▾, not the first party.
     it('a sent designer quotation: the primary เสนอราคา is a menu (owner, then ข้ามไปเสนอราคาผู้ซื้อ/ผู้รับเหมา) beside "ใบเสนอราคาผู้ออกแบบส่งแล้ว…"', async () => {
@@ -2545,7 +2656,7 @@ describe('TicketDetailPage', () => {
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').textContent).toContain('ส่งคำขอราคาถึงเจ้าของโครงการ'));
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
 
-      await waitFor(() => expect(screen.getByRole('tab', { name: /สินค้าและราคา/ }).getAttribute('aria-selected')).toBe('true'));
+      await waitFor(() => expect(screen.getByRole('tab', { name: /ใบเสนอราคา/ }).getAttribute('aria-selected')).toBe('true'));
       if (sent) {
         await waitFor(() => expect(api.pricingRequests.submit).toHaveBeenCalledWith(502));
       } else {
@@ -3008,7 +3119,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(accountUser);
 
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
       expect(screen.queryByText(/รอชำระมัดจำ/)).toBeNull();
     });
 
@@ -3059,7 +3170,7 @@ describe('TicketDetailPage', () => {
     it('does not show to the CEO once the deal is COMPLETED (the CEO has no verify action left)', async () => {
       closeConfirmedDeal('COMPLETED');
       renderTicketDetailPage(ceoUser);
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
       expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
     });
 
@@ -3068,14 +3179,14 @@ describe('TicketDetailPage', () => {
       async (lifecycle) => {
         closeConfirmedDeal(lifecycle);
         renderTicketDetailPage(salesManagerUser);
-        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+        await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
         expect(screen.queryByText('รอ CEO ตรวจสอบปิดงาน')).toBeNull();
       },
     );
   });
 
-  // Deal tracking: DealTrackingPanel is in "ดีล" (the default tab; see ticketDetailTabs.js), so
-  // these tests don't call openTab.
+  // Deal tracking: the tracking readouts and edit live in ข้อมูลงาน on ภาพรวม (the default tab; see
+  // ticketDetailTabs.js), so these tests don't call openTab.
   describe('deal tracking panel', () => {
     it('shows the section and the SERVER win%; the pre-emptive gate hint now sits next to the advance button, not here', async () => {
       api.tickets.get.mockResolvedValue({
@@ -3090,7 +3201,7 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(ceoUser);
 
-      expect(await screen.findByRole('heading', { level: 2, name: 'การติดตามดีล' })).not.toBeNull();
+      expect(await screen.findByRole('heading', { level: 2, name: 'ข้อมูลงาน' })).not.toBeNull();
       expect(await screen.findByText('ยังไม่พร้อม')).not.toBeNull();
       expect(screen.getByText('37%')).not.toBeNull();
       expect(screen.queryByText('40%')).toBeNull();
@@ -3117,11 +3228,11 @@ describe('TicketDetailPage', () => {
       expect(screen.queryByText(/ต้องระบุวันติดตามครั้งถัดไป/)).toBeNull();
     });
 
-    // The add-activity form lives in DealHistoryPanel ("ประวัติ" tab), not DealTrackingPanel ("ดีล").
+    // The add-activity form lives in DealHistoryPanel (ภาพรวม's timeline, behind "+ บันทึก").
     it('submits a new activity via api.tickets.addActivity', async () => {
       renderTicketDetailPage(ceoUser);
-      await openTab(/ประวัติ/);
-      await screen.findByRole('heading', { level: 2, name: 'ประวัติดีล' });
+      await screen.findByRole('heading', { level: 2, name: 'ประวัติ' });
+      await openComposer();
 
       fireEvent.change(screen.getByLabelText('บันทึก (ถ้ามี)'), { target: { value: 'โทรคุยเรื่องราคา' } });
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกกิจกรรม' }));
@@ -3136,20 +3247,21 @@ describe('TicketDetailPage', () => {
     // gated on requireDealOwnership (see ticketDetailTabs.js's doc comment on "history" and
     // TicketDetailPage.jsx's on the "deal"/"history" TabPanels). The two assertions are on different
     // tabs: DealTrackingPanel on the default "ดีล" (absent for account), the audit trail on "ประวัติ".
-    it('account gets the "ประวัติ" tab (FIX 1) but not the deal-tracking panel or the activity feed fetch', async () => {
+    // Redesign: the ประวัติ tab merged into ภาพรวม; the deal-tracking readouts (โอกาส, แก้ไข) live in ข้อมูลงาน.
+    it('account gets the timeline (FIX 1) but not the deal-tracking readouts or the activity feed fetch', async () => {
       renderTicketDetailPage(accountUser);
 
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      // Default "ดีล" tab: DealTrackingPanel stays gated.
-      expect(screen.queryByRole('heading', { level: 2, name: 'การติดตามดีล' })).toBeNull();
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
+      // ข้อมูลงาน renders for everyone, but its tracking half stays gated.
+      const info = (await screen.findByRole('heading', { level: 2, name: 'ข้อมูลงาน' })).closest('section');
+      expect(within(info).queryByText('โอกาส', { selector: 'dt' })).toBeNull();
+      expect(within(info).queryByRole('button', { name: 'แก้ไข' })).toBeNull();
       expect(api.tickets.listActivities).not.toHaveBeenCalled();
 
-      // "ประวัติ" tab: the plain audit trail (this ticket's one seeded
-      // SUBMITTED event) still renders — proves the tab isn't a shell with
-      // nothing in it.
-      expect(screen.queryByRole('tab', { name: /ประวัติ/ })).not.toBeNull();
-      await openTab(/ประวัติ/);
-      expect(await screen.findByRole('heading', { level: 2, name: 'ประวัติดีล' })).not.toBeNull();
+      // The plain audit trail (this ticket's one seeded SUBMITTED event) still renders — proves the timeline isn't a
+      // shell with nothing in it.
+      const timeline = await screen.findByTestId('deal-timeline');
+      expect(within(timeline).getByText('ส่งเรื่องเข้าระบบ')).not.toBeNull();
     });
   });
 
@@ -3191,8 +3303,8 @@ describe('TicketDetailPage', () => {
       // Present-but-disabled, not reachable: clicking it must not fire the mutation.
       fireEvent.click(advanceItem);
       expect(api.tickets.updateStage).not.toHaveBeenCalled();
-      // Same reason it's a no-op still applies (list, not just its own gate) — see
-      // the DealStagePanel-side openAdvance() re-check tests for the pure gate.
+      // Same reason it's a no-op still applies (list, not just its own gate) — see the DealStagePanel-side
+      // openAdvance() re-check tests for the pure gate.
     });
 
     it('lists เลื่อนไป enabled with no disabled reason once ready, and it actually advances the stage', async () => {
@@ -3244,15 +3356,14 @@ describe('TicketDetailPage', () => {
       fireEvent.click(await screen.findByTestId('deal-stage-advance'));
       await waitFor(() => expect(api.tickets.updateStage).toHaveBeenCalledTimes(1));
 
-      // Reopen the menu while the first request is still pending (actionLoading
-      // is true) and click "เลื่อนไป" again.
+      // Reopen the menu while the first request is still pending (actionLoading is true) and click "เลื่อนไป" again.
       fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
       const advanceItemAgain = await screen.findByTestId('deal-stage-advance');
       expect(advanceItemAgain.getAttribute('aria-disabled')).toBe('true');
       fireEvent.click(advanceItemAgain);
 
-      // Still exactly one request — both the item's own disabled state and
-      // openAdvance()'s actionLoading re-check block the second click.
+      // Still exactly one request — both the item's own disabled state and openAdvance()'s actionLoading re-check
+      // block the second click.
       expect(api.tickets.updateStage).toHaveBeenCalledTimes(1);
 
       resolveUpdateStage({ ticket: buildTicket() });
@@ -3306,39 +3417,32 @@ describe('TicketDetailPage', () => {
   });
 
   // Ticket-detail IA rebuild Phase 1: the header overflow menu recomputes
-  // canEditStage/canHoldDeal/canDormantDeal/canLostDeal itself (it can't
-  // read them off DealStagePanel's ref during the parent's own render), so
-  // it must mirror DealStagePanel's full gate — including the IMPLICIT
-  // "only while lifecycle is plain ACTIVE" the panel enforced via which JSX
-  // branch rendered those buttons, not just the bare `hasAction(...)` calls.
+  // canEditStage/canHoldDeal/canDormantDeal/canLostDeal itself, so it must mirror DealStagePanel's full gate.
   describe('header overflow menu / danger zone (ON_HOLD lifecycle regression)', () => {
-    it('does not duplicate "พัก dormant" when the deal is ON_HOLD (DealStagePanel already offers it in its own banner)', async () => {
+    // Redesign (2026-11-16): DealStagePanel's ON_HOLD banner is gone (the ขั้นต่อไป card offers ดำเนินการต่อ), so its
+    // "พัก dormant" button moved into ⋯ — still exactly ONE copy on the page, behind the same MARK_DORMANT gate.
+    it('offers "พัก dormant" exactly once when the deal is ON_HOLD — in ⋯ now, where the paused banner used to have it', async () => {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({ summary: { lifecycle: 'ON_HOLD', salesStage: 'QUOTE_DESIGN_SIDE' } }),
       });
       api.tickets.actions.mockResolvedValue({
         currentState: { lifecycle: 'ON_HOLD', salesStage: 'QUOTE_DESIGN_SIDE', paymentStatus: null, fulfillmentStatus: null, status: 'price_proposed' },
-        // Mirrors the real service: an ON_HOLD deal's availableActions only
-        // ever include RESUME/MARK_DORMANT (see DealStagePanel's own
-        // ON_HOLD banner) — MARK_DORMANT being present here is exactly what
-        // makes the header menu's naive `hasAction('MARK_DORMANT')` check
-        // insufficient on its own.
+        // Mirrors the real service: an ON_HOLD deal's availableActions only ever include RESUME/MARK_DORMANT (see
+        // DealStagePanel's own ON_HOLD banner) — MARK_DORMANT being present here is exactly what makes the header
+        // menu's naive `hasAction('MARK_DORMANT')` check insufficient on its own.
         availableActions: [{ action: 'RESUME' }, { action: 'MARK_DORMANT' }],
       });
 
       renderTicketDetailPage(salesOwnerUser);
 
-      // DealStagePanel's own ON_HOLD banner renders one "พัก dormant" button.
-      expect(await screen.findAllByText('พัก dormant')).toHaveLength(1);
-
-      // The header overflow trigger must not even offer a second copy —
-      // either it doesn't render at all (no other items available either),
-      // or its menu doesn't contain "พัก dormant".
-      const trigger = screen.queryByRole('button', { name: 'การดำเนินการเพิ่มเติม' });
-      if (trigger) {
-        fireEvent.click(trigger);
-        expect(screen.queryByRole('menuitem', { name: 'พัก dormant' })).toBeNull();
-      }
+      // No banner copy on the page any more…
+      await screen.findByTestId('next-step-card');
+      expect(screen.queryAllByText('พัก dormant')).toHaveLength(0);
+      // …and exactly one in the header menu.
+      fireEvent.click(await screen.findByRole('button', { name: 'การดำเนินการเพิ่มเติม' }));
+      expect(screen.getAllByRole('menuitem', { name: 'พัก dormant' })).toHaveLength(1);
+      // The resume the banner offered is the card's one button.
+      expect(within(screen.getByTestId('next-step-card')).getByRole('button', { name: 'ดำเนินการต่อ' })).not.toBeNull();
     });
   });
 
@@ -3357,10 +3461,10 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage(salesOwnerUser);
 
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
       // DealQuotationPanel's home tab is still visible to sales (it also hosts the legacy quotation
       // docs): open it to prove the panel itself renders nothing, not merely that we never looked.
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
     });
 
@@ -3369,13 +3473,13 @@ describe('TicketDetailPage', () => {
 
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
       // "เอกสาร" is role-unconditional (see ticketDetailTabs.js), so a non-assignee import rep sees the
       // TAB, but the "KNOWN GAP" in ticketDetailTabs.js is unchanged: salesViewScope.js hides BOTH
       // dealQuotation and quotation from import outright, so neither DealQuotationPanel's section nor
       // a quotation row inside DealDocumentRegister ever appears for it.
-      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
-      await openTab(/เอกสาร/);
+      expect(await screen.findByRole('tab', { name: /ใบเสนอราคา/ })).not.toBeNull();
+      await openTab(/ใบเสนอราคา/);
       expect(screen.queryByRole('heading', { level: 2, name: 'ราคาและใบเสนอราคา' })).toBeNull();
       expect(screen.queryByTestId('register-quotations')).toBeNull();
       expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
@@ -3389,7 +3493,7 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
 
       const panel = within(await screen.findByTestId('deal-quotation-panel'));
       expect(panel.getByText('ลูกค้ายอมรับใบเสนอราคาแล้ว — กดปุ่ม “ยืนยันคำสั่งซื้อ” บนแถบด้านบนของหน้าเพื่อเริ่มขั้นตอนรับมัดจำและนำเข้าสินค้า')).not.toBeNull();
@@ -3407,11 +3511,11 @@ describe('TicketDetailPage', () => {
       api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: { id: 9301, docStatus: 'ACCEPTED' } });
 
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
       fireEvent.click(await screen.findByTestId('deal-quotation-accept'));
 
       const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
-      expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ ดีลจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
+      expect(dialog.getByText('ใบเสนอราคานี้ส่งถึงผู้ออกแบบ ถ้าลูกค้ายอมรับ งานจะใช้ใบนี้ยืนยันคำสั่งซื้อและข้ามผู้รับรายถัดไป')).not.toBeNull();
       expect(api.pricingRequests.recordCustomerQuotationOutcome).not.toHaveBeenCalled();
       fireEvent.click(dialog.getByRole('button', { name: 'ยืนยัน' }));
 
@@ -3431,7 +3535,7 @@ describe('TicketDetailPage', () => {
       api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: { id: 9301, docStatus: 'ACCEPTED' } });
 
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
       fireEvent.click(await screen.findByTestId('deal-quotation-accept'));
 
       const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
@@ -3454,7 +3558,7 @@ describe('TicketDetailPage', () => {
       api.pricingRequests.recordCustomerQuotationOutcome.mockResolvedValue({ quotation: { id: 9301, docStatus: 'ACCEPTED' } });
 
       const { queryClient } = renderTicketDetailPage(salesOwnerUser);
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
       fireEvent.click(await screen.findByTestId('deal-quotation-accept'));
       const dialog = within(await screen.findByRole('dialog', { name: 'ยืนยันว่าลูกค้ายอมรับใบเสนอราคานี้' }));
 
@@ -3483,7 +3587,7 @@ describe('TicketDetailPage', () => {
         });
         api.pricingRequests.listCustomerQuotations.mockResolvedValue({ items: [issuedQuotation(9301, 'QT-2026-0301-1')] });
         ctx = renderTicketDetailPage(salesOwnerUser, showToast);
-        await openTab(/เอกสาร/);
+        await openTab(/ใบเสนอราคา/);
       }
       // The panel's current quotation becomes a different ISSUED one (a refetch brings it in).
       async function switchQuotationTo(id, number) {
@@ -3614,7 +3718,7 @@ describe('TicketDetailPage', () => {
         });
 
         renderTicketDetailPage(salesOwnerUser);
-        await openTab(/เอกสาร/);
+        await openTab(/ใบเสนอราคา/);
 
         const panel = within(await screen.findByTestId('deal-quotation-panel'));
         expect(await panel.findByText('QT-2026-0101-1')).not.toBeNull();
@@ -3643,8 +3747,8 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(user);
-      await openTab(/การเงิน/);
-      await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
+      await openTab(/^เงิน/);
+      await screen.findByTestId('money-kpis'); // the money section rendered (was the การชำระเงิน panel heading)
 
       expect(screen.queryByRole('heading', { level: 2, name: 'มัดจำ' })).toBeNull();
       expect(screen.queryByTestId('deal-deposit-panel')).toBeNull();
@@ -3657,11 +3761,10 @@ describe('TicketDetailPage', () => {
     it('import (no business in the money tab) never gets a "การเงิน" tab at all', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused —
-      // both money sub-reads deny import, so the whole tab is absent (see
-      // ticketDetailTabs.js's "money" gate), not just this one section.
-      expect(screen.queryByRole('tab', { name: /การเงิน/ })).toBeNull();
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
+      // ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused — both money sub-reads deny import,
+      // so the whole tab is absent (see ticketDetailTabs.js's "money" gate), not just this one section.
+      expect(screen.queryByRole('tab', { name: /^เงิน/ })).toBeNull();
       expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
     });
 
@@ -3689,7 +3792,7 @@ describe('TicketDetailPage', () => {
 
     // DealFulfilmentPanel lives in the "จัดซื้อ-ส่งมอบ" tab.
     async function fulfilmentSection() {
-      await openTab(/จัดซื้อ-ส่งมอบ/);
+      await openTab(/ส่งของ/);
       const heading = await screen.findByRole('heading', { level: 2, name: 'การส่งมอบ / นำเข้า' });
       return within(heading.closest('section'));
     }
@@ -3707,8 +3810,8 @@ describe('TicketDetailPage', () => {
         scrolledIds.push(this.id);
       };
       try {
-        // lifecycle ACTIVE is required: resolveWorkState returns no action without it, so the
-        // sticky bar would never render and this test would pass vacuously.
+        // lifecycle ACTIVE is required: resolveWorkState returns no action without it, so the sticky bar would never
+        // render and this test would pass vacuously.
         api.tickets.get.mockResolvedValue({
           ticket: buildTicket({
             summary: {
@@ -3723,17 +3826,16 @@ describe('TicketDetailPage', () => {
         });
 
         renderTicketDetailPage(importUser);
-        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+        await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
 
         const sticky = await screen.findByTestId('ticket-primary-action');
         expect(sticky.getAttribute('data-action')).toBe('markShipping');
 
         fireEvent.click(sticky);
 
-        // The in-page branch ran and landed on the fulfilment panel specifically. Asserting the
-        // scroll target rather than "did not navigate" because a MemoryRouter with no /fulfilment
-        // route renders blank either way, so a negative navigation assertion would itself be
-        // vacuous.
+        // The in-page branch ran and landed on the fulfilment panel specifically. Asserting the scroll target rather
+        // than "did not navigate" because a MemoryRouter with no /fulfilment route renders blank either way, so a
+        // negative navigation assertion would itself be vacuous.
         await waitFor(() => expect(scrolledIds).toContain('deal-fulfilment-panel'));
       } finally {
         Element.prototype.scrollIntoView = original;
@@ -3767,7 +3869,7 @@ describe('TicketDetailPage', () => {
         });
 
         renderTicketDetailPage(salesOwnerUser);
-        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+        await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
 
         const sticky = await screen.findByTestId('ticket-primary-action');
         expect(sticky.getAttribute('data-action')).toBe('record_delivery');
@@ -3803,9 +3905,8 @@ describe('TicketDetailPage', () => {
           { target: { value: 'IR69068' } });
         fireEvent.click(section.getByTestId('deal-fulfilment-ir-download-Padana'));
 
-        // requiredBy is null on purpose: it is SALES's field and nothing stores it yet, so the form
-        // prints it blank. If this ever starts passing a value, the panel has begun filling in
-        // another department's field.
+        // requiredBy is null on purpose: it is SALES's field and nothing stores it yet, so the form prints it blank.
+        // If this ever starts passing a value, the panel has begun filling in another department's field.
         await waitFor(() => expect(api.importRequests.download)
           .toHaveBeenCalledWith(701, 'Padana', 'IR69068', null));
       });
@@ -3819,19 +3920,17 @@ describe('TicketDetailPage', () => {
         expect(await section.findByText('2 แผ่น')).toBeTruthy();
       });
 
-      /**
-       * ImportRequestService.IR_ROLES is {import, ceo}, so rendering this for sales would offer a
-       * control that 403s. Sales DOES see the rest of this panel (read-only), which is why the gate
-       * has to be on the block rather than the tab.
-       */
+      /** ImportRequestService.IR_ROLES is {import, ceo}, so rendering this for sales would offer a control that 403s.
+       * Sales DOES see the rest of this panel (read-only), which is why the gate has to be on the block rather than
+       * the tab. */
       it('is absent for sales, which may read this panel but not the document', async () => {
         api.importRequests.brands.mockResolvedValue({ brands: ['Padana'] });
         renderTicketDetailPage(salesOwnerUser);
         const section = await fulfilmentSection();
 
         expect(section.queryByTestId('deal-fulfilment-import-request')).toBeNull();
-        // And the query is not even issued — a 403 in the console for every sales viewer of this
-        // tab would be noise, so `enabled` carries the same gate as the markup.
+        // And the query is not even issued — a 403 in the console for every sales viewer of this tab would be noise,
+        // so `enabled` carries the same gate as the markup.
         expect(api.importRequests.brands).not.toHaveBeenCalled();
       });
     });
@@ -3970,8 +4069,8 @@ describe('TicketDetailPage', () => {
       renderTicketDetailPage(ceoUser);
       const section = await fulfilmentSection();
 
-      // findAllByText: the from-stock label appears twice on purpose — once as the
-      // fulfilmentStatus badge, once as the single chip of the from-stock path.
+      // findAllByText: the from-stock label appears twice on purpose — once as the fulfilmentStatus badge, once as
+      // the single chip of the from-stock path.
       expect((await section.findAllByText('สินค้าจากสต็อก')).length).toBeGreaterThan(0);
       for (const label of ['ออกใบขอซื้อ (IR) แล้ว', 'สั่งซื้อไปยังผู้ผลิตแล้ว', 'สินค้าอยู่ระหว่างเดินทาง', 'สินค้าถึงโกดังแล้ว']) {
         expect(section.queryByText(label)).toBeNull();
@@ -4002,89 +4101,66 @@ describe('TicketDetailPage', () => {
 
   });
 
-  // DealStateHeader's stat-chip set is role-aware (see DealStateHeader.jsx's
-  // CAN_VIEW_PRICING_REQUESTS_ROLES doc comment). ขั้นตอนดีล and การนำเข้า are unconditional for every
-  // role that reaches this page; คำขอราคา, การชำระเงิน, and มูลค่าดีล vary. Assertions are scoped to the
-  // header (`deal-state-header`): some labels have similar Thai copy elsewhere (the "การเงิน" tab, the
-  // money panel's "การชำระเงิน" <h2>), so an unscoped query would be weaker.
-  describe('DealStateHeader chip visibility per role (Slice A "chip diet")', () => {
-    it('sales, sales_manager, and ceo all get every one of the 5 header chips', async () => {
+  // Redesign (drawing a-deal, 2026-11-16): DealStateHeader's five stat chips (ขั้นตอนดีล / คำขอราคา / การชำระเงิน /
+  // การนำเข้า / มูลค่าดีล) gave way to the S stepper and ONE sub line (customer · designer · value · chance). The
+  // role-aware part survives on that line: the value keeps the old มูลค่าดีล chip's gate (sections.payment), the
+  // chance keeps the old tracking panel's (canViewDealTracking). Request status, payment stage and import progress
+  // are read on their tabs (ใบเสนอราคา's คำขอราคา panel, เงิน's เอกสาร card, ส่งของ's trackers).
+  describe('deal header sub line per role', () => {
+    const header = () => screen.findByTestId('deal-state-header');
+    const valuedDeal = () => api.tickets.get.mockResolvedValue({
+      ticket: buildTicket({ summary: { amountPayable: 50000, effectiveWinProbability: 37 } }),
+    });
+
+    it('sales, sales_manager, and ceo get the stepper, the value and the chance', async () => {
       for (const user of [salesOwnerUser, { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }, ceoUser]) {
+        valuedDeal();
         const { unmount } = renderTicketDetailPage(user);
-        const header = await screen.findByTestId('deal-state-header');
-        for (const label of ['ขั้นตอนดีล', 'คำขอราคา', 'การชำระเงิน', 'การนำเข้า', 'มูลค่าดีล']) {
-          expect(within(header).getByText(label)).not.toBeNull();
-        }
+        const h = await header();
+        expect(within(h).getByRole('list', { name: 'ขั้นของงาน' })).not.toBeNull();
+        expect(within(h).getByTestId('deal-header-sub').textContent).toContain('฿50,000');
+        expect(within(h).getByTestId('deal-header-sub').textContent).toContain('โอกาส 37%');
         unmount();
       }
     });
 
-    // Correctness, not decluttering (see DealStateHeader.jsx's doc comment): canViewPricingRequests
-    // excludes `account`, so `pricingRequests` is hard-coded to `[]` for that role whether or not
-    // requests exist, and the chip would read "ยังไม่มี" even when requests are live.
-    it('account never gets the "คำขอราคา" chip (wrong-way-round: it cannot see this even though it keeps การชำระเงิน/มูลค่าดีล)', async () => {
+    // Wrong-way-round: account keeps the value (it may read the ledger) but not the chance (deal tracking).
+    it('account gets the value but never the chance', async () => {
+      valuedDeal();
       renderTicketDetailPage(accountUser);
-      const header = await screen.findByTestId('deal-state-header');
-      expect(within(header).queryByText('คำขอราคา')).toBeNull();
-      expect(within(header).getByText('ขั้นตอนดีล')).not.toBeNull();
-      expect(within(header).getByText('การชำระเงิน')).not.toBeNull();
-      expect(within(header).getByText('การนำเข้า')).not.toBeNull();
-      expect(within(header).getByText('มูลค่าดีล')).not.toBeNull();
+      const sub = within(await header()).getByTestId('deal-header-sub');
+      expect(sub.textContent).toContain('฿50,000');
+      expect(sub.textContent).not.toContain('โอกาส');
     });
 
-    // Reduces what import is SHOWN here, NOT a security fix (see DealStateHeader.jsx's doc comment):
-    // TicketService.projectForRole still sends summary.amountPayable to import over the wire.
-    it('import never gets "การชำระเงิน" or "มูลค่าดีล" (wrong-way-round: it cannot see either, even though it keeps ขั้นตอนดีล/คำขอราคา/การนำเข้า)', async () => {
+    // Reduces what import is SHOWN here, NOT a security fix: TicketService.projectForRole still sends
+    // summary.amountPayable to import over the wire. Wrong-way-round: neither the value nor the chance.
+    it('import never gets the value or the chance (it keeps the stepper)', async () => {
+      valuedDeal();
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
-      const header = await screen.findByTestId('deal-state-header');
-      expect(within(header).queryByText('การชำระเงิน')).toBeNull();
-      expect(within(header).queryByText('มูลค่าดีล')).toBeNull();
-      expect(within(header).getByText('ขั้นตอนดีล')).not.toBeNull();
-      expect(within(header).getByText('คำขอราคา')).not.toBeNull();
-      expect(within(header).getByText('การนำเข้า')).not.toBeNull();
+      const h = await header();
+      expect(within(h).getByRole('list', { name: 'ขั้นของงาน' })).not.toBeNull();
+      expect(h.textContent).not.toContain('฿50,000');
+      expect(h.textContent).not.toContain('โอกาส');
     });
   });
 
-  // The header's การนำเข้า chip follows the per-factory IR steps, so the page reads the stored IRs
-  // (not only the fulfilment tab) for every role the backend lets read them, and passes them down.
-  describe('การนำเข้า header chip follows the stored IRs (QA-22)', () => {
-    function dealWithTwoFactories() {
-      api.tickets.get.mockResolvedValue({
-        ticket: buildTicket({ summary: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', fulfillmentStatus: 'IR_ISSUED', createdById: 1 } }),
-      });
-      api.tickets.actions.mockResolvedValue({
-        currentState: { lifecycle: 'ACTIVE', salesStage: 'PROCUREMENT', paymentStatus: null, fulfillmentStatus: 'IR_ISSUED', status: 'price_proposed' },
-        availableActions: [],
-      });
-      api.storedImportRequests.listForTicket.mockResolvedValue({
-        importRequests: [
-          { id: 31, status: 'ISSUED', ticketId: 701, importStep: 'IN_TRANSIT' },
-          { id: 32, status: 'ISSUED', ticketId: 701, importStep: 'RECEIVED' },
-        ],
-      });
-    }
-    afterEach(() => {
-      api.storedImportRequests.listForTicket.mockResolvedValue({ importRequests: [] });
-    });
-    const chip = async () => {
-      const header = await screen.findByTestId('deal-state-header');
-      return within(within(header).getByText('การนำเข้า').parentElement);
-    };
-
+  // QA-22's stored-IR read stays: the page still reads the per-factory IRs for every role the backend lets read
+  // them (they drive the สร้างใบขอซื้อ main button and the ส่งของ trackers), and never for a role it would refuse.
+  describe('stored IR read gate (QA-22)', () => {
     it.each([
       ['the owning sales rep', salesOwnerUser],
       ['import (not the owner)', { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' }],
       ['sales_manager (not the owner)', { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }],
-    ])('shows the slowest factory step with the arrival count to %s', async (_name, viewer) => {
-      dealWithTwoFactories();
+    ])('reads the stored IRs for %s', async (_name, viewer) => {
       renderTicketDetailPage(viewer);
-      expect(await (await chip()).findByText('กำลังเดินทาง · ถึงโกดัง 1/2')).not.toBeNull();
+      await waitFor(() => expect(api.storedImportRequests.listForTicket).toHaveBeenCalledWith(701));
     });
 
-    it('a non-owner sales rep cannot read stored IRs: the chip keeps the deal-level label and no request is made', async () => {
-      dealWithTwoFactories();
+    it('a non-owner sales rep cannot read stored IRs: no request is made', async () => {
       renderTicketDetailPage({ id: 2, employeeId: 2, name: 'พนักงานขายอีกคน', role: 'sales' });
-      expect((await chip()).getByText('ออกใบขอซื้อแล้ว')).not.toBeNull();
+      await screen.findByTestId('deal-state-header');
+      await stickyInputsSettled().catch(() => {});
       expect(api.storedImportRequests.listForTicket).not.toHaveBeenCalled();
     });
   });
@@ -4096,16 +4172,19 @@ describe('TicketDetailPage', () => {
     // roll-up once it is this deal's assignee), but the KNOWN GAP in this file's doc comment is
     // unchanged: salesViewScope.js hides both dealQuotation and quotation from import, so it reaches
     // zero quotation rows inside that tab (see DealDocumentRegister.test.jsx).
-    it('import never gets "การเงิน", but now gets "เอกสาร" too (Slice D) — keeps "สินค้าและราคา", "จัดซื้อ-ส่งมอบ", and "ประวัติ"', async () => {
+    // Redesign (2026-11-16): the five tabs keep the old gates — เงิน is the old การเงิน predicate, ส่งของ the old
+    // จัดซื้อ-ส่งมอบ one, and ภาพรวม / ใบเสนอราคา / ไฟล์ are role-unconditional like ดีล / สินค้าและราคา / เอกสาร /
+    // ประวัติ were.
+    it('import never gets "เงิน" — keeps "ภาพรวม", "ใบเสนอราคา", "ส่งของ" and "ไฟล์"', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
       // ledger_importCannotReadThePaymentLedger
-      expect(screen.queryByRole('tab', { name: /การเงิน/ })).toBeNull();
-      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
-      expect(await screen.findByRole('tab', { name: /สินค้าและราคา/ })).not.toBeNull();
-      expect(screen.getByRole('tab', { name: /จัดซื้อ-ส่งมอบ/ })).not.toBeNull();
-      expect(screen.getByRole('tab', { name: /ประวัติ/ })).not.toBeNull();
+      expect(screen.queryByRole('tab', { name: /^เงิน/ })).toBeNull();
+      expect(await screen.findByRole('tab', { name: /^ไฟล์/ })).not.toBeNull();
+      expect(await screen.findByRole('tab', { name: /ใบเสนอราคา/ })).not.toBeNull();
+      expect(screen.getByRole('tab', { name: /ส่งของ/ })).not.toBeNull();
+      expect(screen.getByRole('tab', { name: /^ภาพรวม/ })).not.toBeNull();
     });
 
     // PricingRequestPanel is an inner condition inside the unconditionally-visible "สินค้าและราคา", so
@@ -4113,23 +4192,23 @@ describe('TicketDetailPage', () => {
     // describe proves it still cannot reach the panel inside it). "เอกสาร" is widened to account (it
     // confirms money against the deposit-notice/attachment rows the register lists) though it can't
     // reach a quotation row inside it (quotation_accountCannotListCustomerQuotations).
-    it('account now gets "เอกสาร" too (Slice D) — keeps "สินค้าและราคา", "การเงิน", "จัดซื้อ-ส่งมอบ", and "ประวัติ"', async () => {
+    it('account keeps every one of the 5 tabs ("ไฟล์" included)', async () => {
       renderTicketDetailPage(accountUser);
 
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      expect(await screen.findByRole('tab', { name: /เอกสาร/ })).not.toBeNull();
-      expect(await screen.findByRole('tab', { name: /สินค้าและราคา/ })).not.toBeNull();
-      expect(await screen.findByRole('tab', { name: /การเงิน/ })).not.toBeNull();
-      expect(screen.getByRole('tab', { name: /จัดซื้อ-ส่งมอบ/ })).not.toBeNull();
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
+      expect(await screen.findByRole('tab', { name: /^ไฟล์/ })).not.toBeNull();
+      expect(await screen.findByRole('tab', { name: /ใบเสนอราคา/ })).not.toBeNull();
+      expect(await screen.findByRole('tab', { name: /^เงิน/ })).not.toBeNull();
+      expect(screen.getByRole('tab', { name: /ส่งของ/ })).not.toBeNull();
       // Role-unconditional (see ticketDetailTabs.js).
-      expect(screen.getByRole('tab', { name: /ประวัติ/ })).not.toBeNull();
+      expect(screen.getByRole('tab', { name: /^ภาพรวม/ })).not.toBeNull();
     });
 
-    it('sales (deal owner), sales_manager, and ceo all see every one of the 6 tabs', async () => {
+    it('sales (deal owner), sales_manager, and ceo all see every one of the 5 tabs', async () => {
       for (const user of [salesOwnerUser, { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }, ceoUser]) {
         const { unmount } = renderTicketDetailPage(user);
-        await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-        for (const namePattern of [/^ดีล/, /สินค้าและราคา/, /^เอกสาร/, /การเงิน/, /จัดซื้อ-ส่งมอบ/, /ประวัติ/]) {
+        await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
+        for (const namePattern of [/^ภาพรวม/, /ใบเสนอราคา/, /^เงิน/, /ส่งของ/, /^ไฟล์/]) {
           expect(screen.getByRole('tab', { name: namePattern })).not.toBeNull();
         }
         unmount();
@@ -4144,25 +4223,30 @@ describe('TicketDetailPage', () => {
   describe('role -> reachable-content projection is unchanged by the 7->6 tab restructure', () => {
     it('account still cannot reach pricing-request content (formerly its own "ราคา" tab, now an inner condition inside "สินค้าและราคา")', async () => {
       renderTicketDetailPage(accountUser);
-      await openTab(/สินค้าและราคา/);
+      await openTab(/ใบเสนอราคา/);
       expect(screen.queryByRole('heading', { name: 'คำขอราคา' })).toBeNull();
       expect(api.pricingRequests.listForTicket).not.toHaveBeenCalled();
     });
 
     // account reaches the "เอกสาร" TAB but still cannot reach a single quotation ROW inside it
     // (quotation_accountCannotListCustomerQuotations).
-    it('account reaches "เอกสาร" but still zero quotation rows inside DealDocumentRegister', async () => {
+    // Redesign: the register's quotation family moved to ใบเสนอราคา, the rest to ไฟล์ — account reaches both tabs and
+    // still zero quotation rows in either.
+    it('account reaches "ใบเสนอราคา" and "ไฟล์" but still zero quotation rows inside DealDocumentRegister', async () => {
       renderTicketDetailPage(accountUser);
-      await openTab(/เอกสาร/);
+      await openTab(/^ไฟล์/);
       expect(await screen.findByTestId('deal-document-register')).not.toBeNull();
+      expect(screen.queryByTestId('register-quotations')).toBeNull();
+      await openTab(/ใบเสนอราคา/);
+      expect(await screen.findByTestId('deal-quotations-card')).not.toBeNull();
       expect(screen.queryByTestId('register-quotations')).toBeNull();
       expect(api.pricingRequests.listCustomerQuotations).not.toHaveBeenCalled();
     });
 
     it('import still cannot reach payment content (the "การเงิน" tab predicate is unchanged)', async () => {
       renderTicketDetailPage({ id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
-      expect(screen.queryByRole('tab', { name: /การเงิน/ })).toBeNull();
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
+      expect(screen.queryByRole('tab', { name: /^เงิน/ })).toBeNull();
       expect(screen.queryByText('การชำระเงิน')).toBeNull();
       expect(api.depositNotices.listByTicket).not.toHaveBeenCalled();
     });
@@ -4172,39 +4256,35 @@ describe('TicketDetailPage', () => {
   // ROLE_PERMISSIONS.canViewTicketDocuments) decides DealAttachmentsPanel's presence as an inner
   // render condition inside "ประวัติ" (reachable regardless; see ticketDetailTabs.js); only the panel
   // comes and goes.
-  describe('attachments panel inside "ประวัติ" follows the document-read gate, not the deal-read gate', () => {
-    // ticketDetailTabs.js's role-level predicate for "ประวัติ" is coarse (`() => true`) because role
-    // + sections can't express the identity half of the document gate (a deal's participants reach
-    // its documents regardless of role); TicketDetailPage.jsx applies `canViewDocumentsTab` on top,
-    // around DealAttachmentsPanel.
+  describe('attachments panel inside "ไฟล์" follows the document-read gate, not the deal-read gate', () => {
+    // Redesign (2026-11-16): DealAttachmentsPanel moved from the old ประวัติ tab to ไฟล์, behind the same INNER
+    // condition. ticketDetailTabs.js's role-level predicate for ไฟล์ is coarse (`() => true`) because role +
+    // sections can't express the identity half of the document gate (a deal's participants reach its documents
+    // regardless of role); TicketDetailPage.jsx applies `canViewDocumentsTab` on top, around DealAttachmentsPanel.
     //
     // Reading a deal's documents is the same question as reading the deal
     // (TicketAccessPolicy.canViewDocuments), so `account` and `import` DO see the panel: account
     // confirms deposit/final-payment receipts against these files, and hiding it would hide the
     // backend fix. A `sales` rep on someone else's deal is still refused: that one 403s for real.
-    it('the panel follows canViewDocumentsTab; the "ประวัติ" tab itself never disappears', async () => {
-      // Presence of the panel's own heading is the READ signal — it renders
-      // for all four roles below regardless of `canManageDocuments` (account
-      // reads every document but may not upload one; see the dedicated
-      // "offers NO upload control to account" test for that narrower WRITE
-      // gate, which `#ticket-attachment-file` alone would conflate with here).
+    it('the panel follows canViewDocumentsTab; the "ไฟล์" tab itself never disappears', async () => {
+      // Presence of the panel's own heading is the READ signal — it renders for all four roles below regardless of
+      // `canManageDocuments`.
       for (const user of [ceoUser, salesOwnerUser, accountUser,
         { id: 11, employeeId: 11, name: 'ผจก.ขาย', role: 'sales_manager' }]) {
         const { unmount } = renderTicketDetailPage(user);
-        await openTab(/ประวัติ/);
-        expect(await screen.findByRole('heading', { level: 2, name: 'ประวัติดีล' })).not.toBeNull();
+        await openTab(/^ไฟล์/);
         expect(await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' })).not.toBeNull();
         unmount();
       }
 
       // A sales rep who is neither this deal's creator (buildTicket()'s default createdById is 1, i.e.
       // salesOwnerUser) nor its assignee: refused, as the backend refuses them. Wrong-way-round:
-      // "ประวัติ" is still reachable (its gate is `() => true`); only the attachments panel vanishes.
+      // "ไฟล์" is still reachable (its gate is `() => true`); only the attachments panel vanishes.
       const otherSales = { id: 42, employeeId: 42, name: 'พนักงานขายอื่น', role: 'sales' };
       const { container: otherContainer, unmount: unmountOther } = renderTicketDetailPage(otherSales);
-      expect(await screen.findByRole('tab', { name: /ประวัติ/ })).not.toBeNull();
-      await openTab(/ประวัติ/);
-      expect(await screen.findByRole('heading', { level: 2, name: 'ประวัติดีล' })).not.toBeNull();
+      expect(await screen.findByRole('tab', { name: /^ไฟล์/ })).not.toBeNull();
+      await openTab(/^ไฟล์/);
+      expect(await screen.findByTestId('deal-document-register')).not.toBeNull();
       expect(screen.queryByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' })).toBeNull();
       expect(otherContainer.querySelector('#ticket-attachment-file')).toBeNull();
       unmountOther();
@@ -4216,22 +4296,24 @@ describe('TicketDetailPage', () => {
       // AttachmentTicketAccessIntegrationTest.importIsRefusedDocumentsOnADealItHasNotPickedUp.
       const nonAssigneeImport = { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' };
       const { container: importContainer, unmount: unmountImport } = renderTicketDetailPage(nonAssigneeImport);
-      await openTab(/ประวัติ/);
-      expect(await screen.findByRole('heading', { level: 2, name: 'ประวัติดีล' })).not.toBeNull();
+      await openTab(/^ไฟล์/);
+      expect(await screen.findByTestId('deal-document-register')).not.toBeNull();
       expect(importContainer.querySelector('#ticket-attachment-file')).toBeNull();
       unmountImport();
 
-      // The participant grant is per-instance, for import and sales alike: whoever picked the
-      // deal up (assignedToId) reaches its documents regardless of role.
+      // The participant grant is per-instance, for import and sales alike: whoever picked the deal up (assignedToId)
+      // reaches its documents regardless of role.
       api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { assignedToId: 7 } }) });
       const { container: assigneeContainer, unmount: unmountAssignee } = renderTicketDetailPage(nonAssigneeImport);
-      await openTab(/ประวัติ/);
+      await openTab(/^ไฟล์/);
+      await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' });
       expect(assigneeContainer.querySelector('#ticket-attachment-file')).not.toBeNull();
       unmountAssignee();
 
       api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { assignedToId: 42 } }) });
       const { container: assigneeSalesContainer } = renderTicketDetailPage(otherSales);
-      await openTab(/ประวัติ/);
+      await openTab(/^ไฟล์/);
+      await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' });
       expect(assigneeSalesContainer.querySelector('#ticket-attachment-file')).not.toBeNull();
     });
 
@@ -4241,14 +4323,15 @@ describe('TicketDetailPage', () => {
     // invoiceOnFile check while the rep silently loses their commission.
     it('offers NO upload control to account, which may read documents but not write them', async () => {
       const { container, unmount } = renderTicketDetailPage(accountUser);
-      fireEvent.click(await screen.findByRole('tab', { name: /ประวัติ/ }));
+      fireEvent.click(await screen.findByRole('tab', { name: /^ไฟล์/ }));
       expect(await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' })).not.toBeNull();
       expect(container.querySelector('#ticket-attachment-file')).toBeNull();
       unmount();
 
       // The deal's own rep keeps it — this is a targeted narrowing, not a gutting of the panel.
       const { container: ownerContainer } = renderTicketDetailPage(salesOwnerUser);
-      fireEvent.click(await screen.findByRole('tab', { name: /ประวัติ/ }));
+      fireEvent.click(await screen.findByRole('tab', { name: /^ไฟล์/ }));
+      await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' });
       expect(ownerContainer.querySelector('#ticket-attachment-file')).not.toBeNull();
     });
 
@@ -4265,14 +4348,15 @@ describe('TicketDetailPage', () => {
      * commission together. A second control would satisfy the close gate's invoiceOnFile while
      * skipping the commission. If this test goes red, someone reintroduced that path.
      */
-    it('offers NO ใบกำกับภาษี upload control in "ประวัติ" — the invoice comes from createFromDeal', async () => {
+    it('offers NO ใบกำกับภาษี upload control in "ไฟล์" — the invoice comes from createFromDeal', async () => {
       const { container } = renderTicketDetailPage(ceoUser);
-      fireEvent.click(await screen.findByRole('tab', { name: /ประวัติ/ }));
+      fireEvent.click(await screen.findByRole('tab', { name: /^ไฟล์/ }));
+      await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' });
 
       expect(container.querySelector('#ticket-invoice-file')).toBeNull();
       expect(screen.queryByText('แนบใบกำกับภาษี')).toBeNull();
-      // The generic attachment control (PO / signed docs) must survive — this is a
-      // targeted removal, not a gutting of the panel.
+      // The generic attachment control (PO / signed docs) must survive — this is a targeted removal, not a gutting
+      // of the panel.
       expect(container.querySelector('#ticket-attachment-file')).not.toBeNull();
     });
 
@@ -4291,7 +4375,8 @@ describe('TicketDetailPage', () => {
     it('reports back after an attachment upload, and refetches the ticket detail', async () => {
       const showToast = vi.fn();
       const { container } = renderTicketDetailPage(ceoUser, showToast);
-      fireEvent.click(await screen.findByRole('tab', { name: /ประวัติ/ }));
+      fireEvent.click(await screen.findByRole('tab', { name: /^ไฟล์/ }));
+      await screen.findByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' });
 
       const input = container.querySelector('#ticket-attachment-file');
       expect(input).not.toBeNull();
@@ -4309,68 +4394,64 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth
-  // for which tab is open (TicketListPage.jsx's own filter-param convention).
+  // Ticket-detail IA rebuild Phase 2: `?tab=` is the single source of truth for which tab is open
+  // (TicketListPage.jsx's own filter-param convention). Redesign: old keys map to their new tab.
   describe('?tab= URL state', () => {
-    it('opens the tab named by ?tab= on first load, when this role may see it', async () => {
+    it('opens the tab named by ?tab= on first load, when this role may see it (an old key lands on its new tab)', async () => {
       renderTicketDetailPageAtRoute(['/tickets/701?tab=items'], salesOwnerUser);
 
-      const itemsTab = await screen.findByRole('tab', { name: /สินค้าและราคา/ });
+      const itemsTab = await screen.findByRole('tab', { name: /ใบเสนอราคา/ });
       await waitFor(() => expect(itemsTab.getAttribute('aria-selected')).toBe('true'));
-      // "ดีล"-only content (วันสำคัญ) is absent — proves the panel actually
-      // swapped, not just that the tab button LOOKS selected.
-      expect(screen.queryByRole('heading', { level: 2, name: /วันสำคัญ/ })).toBeNull();
+      // ภาพรวม-only content (ข้อมูลงาน) is absent — proves the panel actually swapped, not just that the tab button
+      // LOOKS selected.
+      expect(screen.queryByRole('heading', { level: 2, name: 'ข้อมูลงาน' })).toBeNull();
       expect(await screen.findByRole('heading', { level: 2, name: /^รายการสินค้า/ })).not.toBeNull();
     });
 
-    it('falls back to ดีล when ?tab= names a tab this role cannot see', async () => {
-      // "documents" is role-unconditional (account can see it), so this case uses "money": import
-      // still cannot see it (ledger_importCannotReadThePaymentLedger / depositNotice_import...Refused),
-      // and resolveTicketDetailTab must fall back rather than render nothing/crash.
+    it('falls back to ภาพรวม when ?tab= names a tab this role cannot see', async () => {
+      // "money" is still the gated one: import cannot see it (ledger_importCannotReadThePaymentLedger /
+      // depositNotice_import...Refused), and resolveTicketDetailTab must fall back rather than render nothing/crash.
       renderTicketDetailPageAtRoute(['/tickets/701?tab=money'], { id: 7, employeeId: 7, name: 'ฝ่ายนำเข้า', role: 'import' });
 
-      const dealTab = await screen.findByRole('tab', { name: /^ดีล/ });
-      await waitFor(() => expect(dealTab.getAttribute('aria-selected')).toBe('true'));
-      expect(await screen.findByRole('heading', { level: 2, name: /วันสำคัญ/ })).not.toBeNull();
+      const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
+      await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
+      expect(await screen.findByRole('heading', { level: 2, name: 'ข้อมูลงาน' })).not.toBeNull();
     });
 
-    // There is no per-instance TAB-level gate: DealAttachmentsPanel is an inner render condition
-    // inside "ประวัติ" (an unconditionally-visible tab). A per-instance-excluded viewer's
-    // `?tab=history` deep link resolves normally (no fallback; the tab's gate really is `() => true`),
-    // and only the attachments panel inside it is missing (see the "attachments panel inside ประวัติ"
-    // describe block above for the same predicate without the URL entry point).
-    it('never falls back off "ประวัติ" for a per-instance-hidden attachments panel — the tab itself is unconditional', async () => {
+    // There is no per-instance TAB-level gate: DealAttachmentsPanel is an inner render condition inside "ไฟล์" (an
+    // unconditionally-visible tab). A per-instance-excluded viewer's old `?tab=history` link resolves to ภาพรวม
+    // normally (no fallback), and the attachments panel is not there either.
+    it('an old ?tab=history link lands on ภาพรวม (the timeline) for a viewer without the attachments panel', async () => {
       const otherSales = { id: 42, employeeId: 42, name: 'พนักงานขายอื่น', role: 'sales' };
       renderTicketDetailPageAtRoute(['/tickets/701?tab=history'], otherSales);
 
-      const historyTab = await screen.findByRole('tab', { name: /^ประวัติ/ });
-      await waitFor(() => expect(historyTab.getAttribute('aria-selected')).toBe('true'));
-      expect(await screen.findByRole('heading', { level: 2, name: 'ประวัติดีล' })).not.toBeNull();
+      const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
+      await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
+      expect(await screen.findByRole('heading', { level: 2, name: 'ประวัติ' })).not.toBeNull();
       expect(screen.queryByRole('heading', { level: 2, name: 'ไฟล์แนบ (PO / ใบเซ็น)' })).toBeNull();
     });
 
-    it('falls back to ดีล for an absent or unknown ?tab= value', async () => {
+    it('falls back to ภาพรวม for an absent or unknown ?tab= value', async () => {
       renderTicketDetailPageAtRoute(['/tickets/701?tab=not-a-real-tab'], ceoUser);
 
-      const dealTab = await screen.findByRole('tab', { name: /^ดีล/ });
-      await waitFor(() => expect(dealTab.getAttribute('aria-selected')).toBe('true'));
+      const overviewTab = await screen.findByRole('tab', { name: /^ภาพรวม/ });
+      await waitFor(() => expect(overviewTab.getAttribute('aria-selected')).toBe('true'));
     });
 
     it('clicking a tab writes ?tab= to the URL', async () => {
       renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
-      await screen.findByRole('heading', { level: 1, name: 'บริษัท ทดสอบ จำกัด' });
+      await screen.findByRole('heading', { level: 1, name: 'โครงการทดสอบ' });
 
-      await openTab(/การเงิน/);
+      await openTab(/^เงิน/);
 
       await waitFor(() => expect(screen.getByTestId('location-probe').textContent).toContain('tab=money'));
     });
   });
 
-  // Ticket-detail IA rebuild Phase 2: the merged กิจกรรม timeline
-  // (DealHistoryPanel — its own test file covers the id-tiebreak sort in
-  // isolation; this proves TicketDetailPage actually feeds it BOTH streams).
-  describe('merged กิจกรรม history (events + activities)', () => {
-    it('renders both the ticket-events audit trail and the rep activity log in one list, in the ประวัติ tab', async () => {
+  // Ticket-detail IA rebuild Phase 2: the merged timeline (DealHistoryPanel — its own test file covers the
+  // id-tiebreak sort in isolation; this proves TicketDetailPage actually feeds it BOTH streams).
+  describe('merged history (events + activities)', () => {
+    it('renders both the ticket-events audit trail and the rep activity log in one list, on ภาพรวม', async () => {
       api.tickets.get.mockResolvedValue({
         ticket: buildTicket({
           events: [
@@ -4386,18 +4467,17 @@ describe('TicketDetailPage', () => {
       });
 
       renderTicketDetailPage(ceoUser);
-      await openTab(/ประวัติ/);
 
-      // The audit event (from `events`) and the rep activity (from
-      // `activities`) both show up, in the same "ประวัติดีล" panel — not two
-      // separate histories any more.
-      expect(await screen.findByText('สร้างดีล')).not.toBeNull();
-      expect(screen.getByText('โทรติดตามลูกค้า')).not.toBeNull();
+      // The audit event (from `events`) and the rep activity (from `activities`) both show up, in the same
+      // "ประวัติ" panel — not two separate histories.
+      const timeline = await screen.findByTestId('deal-timeline');
+      expect(await within(timeline).findByText('สร้างงาน')).not.toBeNull();
+      expect(await within(timeline).findByText('โทรติดตามลูกค้า')).not.toBeNull();
     });
   });
 
-  // Finding 6 (both entry points must open the dialog, not download directly): this is one of
-  // the two entry points — DealDocumentRegister.test.jsx pins the other.
+  // Finding 6 (both entry points must open the dialog, not download directly): this is one of the two entry
+  // points — DealDocumentRegister.test.jsx pins the other.
   describe('remaining invoice download entry point (docActions button)', () => {
     afterEach(() => { api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [] }); });
     it('clicking "ดาวน์โหลดใบแจ้งหนี้ส่วนที่เหลือ" opens the RemainingInvoiceDialog rather than downloading directly', async () => {
@@ -4431,24 +4511,30 @@ describe('TicketDetailPage', () => {
     });
   });
 
-  // The การเงิน tab is ONE "การชำระเงิน" panel (balance + paid bar, the three document steps, the
-  // timeline); there is no สถานะการเงิน, ใบวางบิล step or วางบิล control.
-  describe('การเงิน tab — one การชำระเงิน panel', () => {
+  // The เงิน tab (was การเงิน, ONE "การชำระเงิน" panel) is the drawn KPI tiles + รับแล้ว + เอกสาร (the three
+  // document steps); there is no สถานะการเงิน, ใบวางบิล step or วางบิล control.
+  describe('เงิน tab — KPI tiles, รับแล้ว and เอกสาร', () => {
     const readyDeal = () => api.tickets.get.mockResolvedValue({
       ticket: buildTicket({
         summary: { status: 'quotation_issued', paymentStatus: 'DEPOSIT_PAID', fulfillmentStatus: 'GOODS_RECEIVED', createdById: 1 },
       }),
     });
 
-    it.each([['the owning rep', salesOwnerUser], ['account', accountUser]])('%s: a single การชำระเงิน panel, no สถานะการเงิน and no วางบิล anywhere on the tab', async (_label, user) => {
+    it.each([['the owning rep', salesOwnerUser], ['account', accountUser]])('%s: one KPI row + รับแล้ว + เอกสาร, no สถานะการเงิน and no วางบิล anywhere on the tab', async (_label, user) => {
       readyDeal();
       renderTicketDetailPage(user);
-      await openTab(/^การเงิน/);
+      await openTab(/^เงิน/);
 
-      await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
+      await screen.findByTestId('money-kpis');
       await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
       const panel = screen.getByRole('tabpanel');
-      expect(within(panel).getAllByRole('heading', { level: 2 })).toHaveLength(1);
+      // One money section (three tiles, รับแล้ว, เอกสาร). The owner also gets เงินที่คาดว่าจะเข้า (design a-deal-money,
+      // slice 3) — a separate card for the rep's own cash plan; account never does (it reads expected cash on its
+      // finance page).
+      expect(within(panel).getAllByTestId('money-kpi')).toHaveLength(3);
+      expect(within(panel).getAllByRole('heading', { level: 3 }).map((h) => h.textContent)).toEqual(['รับแล้ว', 'เอกสาร']);
+      expect(within(panel).queryAllByRole('heading', { level: 2 }).map((h) => h.textContent))
+        .toEqual(user === accountUser ? [] : ['เงินที่คาดว่าจะเข้า']);
       expect(within(panel).getByTestId('payment-step-deposit')).toBeTruthy();
       expect(within(panel).getByTestId('payment-step-remaining')).toBeTruthy();
       expect(within(panel).getByTestId('payment-step-final')).toBeTruthy();
@@ -4458,7 +4544,7 @@ describe('TicketDetailPage', () => {
     it('the owning rep on a ready deal: สร้างใบแจ้งหนี้ส่วนที่เหลือ in the step opens the RemainingInvoiceDialog', async () => {
       readyDeal();
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/^การเงิน/);
+      await openTab(/^เงิน/);
 
       const step = within(await screen.findByTestId('payment-step-remaining'));
       fireEvent.click(await step.findByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' }));
@@ -4470,7 +4556,7 @@ describe('TicketDetailPage', () => {
       api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices: [{ id: 901, ticketId: 701, status: 'ISSUED', docNumber: 'GLRI69001' }] });
       api.tickets.remainingInvoiceOptions.mockResolvedValue({ options: { docNumber: 'GLRI69001', noteTemplates: [], referenceOptions: [], depositReferenceOptions: [], quotationOptions: [] } });
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/^การเงิน/);
+      await openTab(/^เงิน/);
 
       const step = within(await screen.findByTestId('payment-step-remaining'));
       expect(await step.findByRole('button', { name: 'PDF' })).toBeTruthy();
@@ -4481,7 +4567,7 @@ describe('TicketDetailPage', () => {
     it('account on a ready deal gets no remaining-invoice control (can.downloadRemainingInvoice is sales only)', async () => {
       readyDeal();
       renderTicketDetailPage(accountUser);
-      await openTab(/^การเงิน/);
+      await openTab(/^เงิน/);
 
       const step = within(await screen.findByTestId('payment-step-remaining'));
       await waitFor(() => expect(api.storedRemainingInvoices.listForTicket).toHaveBeenCalled());
@@ -4667,8 +4753,8 @@ describe('TicketDetailPage', () => {
       depositStageDeal();
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await waitFor(() => expect(primaryAction()).toBe('create_deposit_notice'));
-      await openTab(/การเงิน/);
-      await screen.findByRole('heading', { level: 2, name: 'การชำระเงิน' });
+      await openTab(/^เงิน/);
+      await screen.findByTestId('money-kpis');
       await stickyInputsSettled();
       expect(screen.queryByRole('heading', { level: 2, name: 'มัดจำ' })).toBeNull();
       expect(screen.queryByTestId('deal-deposit-create-notice')).toBeNull();
@@ -4687,7 +4773,7 @@ describe('TicketDetailPage', () => {
     it('เอกสาร tab: after the order is confirmed the quotation panel points at the main button, not at the "มัดจำ" section below', async () => {
       depositStageDeal();
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
       const panel = within(await screen.findByTestId('deal-quotation-panel'));
       expect(await panel.findByText(/ยืนยันคำสั่งซื้อแล้วเมื่อ/)).not.toBeNull();
       expect(panel.queryByText(/ส่วน "มัดจำ"/)).toBeNull();
@@ -4698,10 +4784,10 @@ describe('TicketDetailPage', () => {
       depositStageDeal();
       renderTicketDetailPageAtRoute(['/tickets/701'], ceoUser);
       await stickyInputsSettled();
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
       const panel = within(await screen.findByTestId('deal-quotation-panel'));
       expect(await panel.findByText(/ยืนยันคำสั่งซื้อแล้วเมื่อ/)).not.toBeNull();
-      expect(panel.getByText(/แท็บ "การเงิน"/)).not.toBeNull();
+      expect(panel.getByText(/แท็บ "เงิน"/)).not.toBeNull();
       expect(panel.queryByText(/ทะเบียนเอกสาร/)).toBeNull();
     });
 
@@ -4709,11 +4795,11 @@ describe('TicketDetailPage', () => {
       depositStageDeal({ summary: { paymentStatus: 'DEPOSIT_NOTICE_ISSUED' }, notices: [{ id: 801, status: 'ISSUED', version: 1, docNumber: 'GLRD6900012' }] });
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await stickyInputsSettled();
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
       const panel = within(await screen.findByTestId('deal-quotation-panel'));
       expect(await panel.findByText(/ยืนยันคำสั่งซื้อแล้วเมื่อ/)).not.toBeNull();
-      expect(panel.getByText(/ใบแจ้งยอดเงินรับมัดจำดูได้ในทะเบียนเอกสารของแท็บนี้/)).not.toBeNull();
-      expect(panel.queryByText(/แท็บ "การเงิน"/)).toBeNull();
+      expect(panel.getByText(/ใบแจ้งยอดเงินรับมัดจำดูได้ในแท็บ "ไฟล์"/)).not.toBeNull();
+      expect(panel.queryByText(/แท็บ "เงิน"/)).toBeNull();
       expect(panel.queryByText(/ด้านบน/)).toBeNull();
     });
 
@@ -4794,13 +4880,14 @@ describe('TicketDetailPage', () => {
       const dialog = await screen.findByRole('dialog', { name: 'ยืนยันการออกใบขอซื้อ (IR)' });
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
       // The confirm re-checks the factories first; it enables once that answers.
-      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ (IR)' });
+      // Drawing m-ir: the confirm reads ออกใบขอซื้อ (was ออกใบขอซื้อ (IR)).
+      const confirm = within(dialog).getByRole('button', { name: 'ออกใบขอซื้อ' });
       await waitFor(() => expect(confirm.disabled).toBe(false));
       fireEvent.click(confirm);
 
       await waitFor(() => expect(api.storedImportRequests.createDrafts).toHaveBeenCalledTimes(1));
       expect(api.storedImportRequests.createDrafts).toHaveBeenCalledWith(701, undefined);
-      await waitFor(() => expect(location()).toContain('tab=fulfilment'));
+      await waitFor(() => expect(location()).toContain('tab=ship'));
       await waitFor(() => expect(scrolledToIrSection()).toBe(true));
     });
 
@@ -4812,7 +4899,7 @@ describe('TicketDetailPage', () => {
 
       fireEvent.click(primary());
 
-      await waitFor(() => expect(location()).toContain('tab=fulfilment'));
+      await waitFor(() => expect(location()).toContain('tab=ship'));
       expect(api.storedImportRequests.createDrafts).not.toHaveBeenCalled();
       await waitFor(() => expect(scrolledToIrSection()).toBe(true));
       // createIrDrafts() opens the issue confirm, so "not called" alone doesn't pin the branch.
@@ -4821,14 +4908,13 @@ describe('TicketDetailPage', () => {
 
     const undecided = (legacy) => ({ legacy, pending: true, editable: legacy, decidedAt: null, quotationNumber: 'QT-2026-0001', lines: [{ itemId: 70101, fromStock: false }] });
 
-    it('source not decided: the main button is จัดซื้อสินค้า (not the IR), the banner follows the deal kind, and the header chip reads ยังไม่ได้จัดซื้อ', async () => {
+    it('source not decided: the main button is จัดซื้อสินค้า (not the IR) and the banner follows the deal kind (the header การนำเข้า chip that read ยังไม่ได้จัดซื้อ is gone with the redesign)', async () => {
       irStageDeal();
       api.tickets.getProcurementSource.mockResolvedValue(undecided(false));
       renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
       await waitFor(() => expect(primaryAction()).toBe('choose_procurement_source'));
       expect(primary().textContent).toContain('จัดซื้อสินค้า');
       expect(await screen.findByText('ตรวจที่มาสินค้าตามใบเสนอราคา')).toBeTruthy();
-      expect(await screen.findByText('ยังไม่ได้จัดซื้อ')).toBeTruthy();
     });
 
     it('an old (legacy) deal reads the choose-it-yourself banner', async () => {
@@ -4856,7 +4942,7 @@ describe('TicketDetailPage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: 'ยืนยัน' }));
 
       await waitFor(() => expect(api.tickets.decideProcurementSource).toHaveBeenCalledWith(701, { lines: [{ itemId: 70101, fromStock: false }] }));
-      await waitFor(() => expect(location()).toContain('tab=fulfilment'));
+      await waitFor(() => expect(location()).toContain('tab=ship'));
       await waitFor(() => expect(primaryAction()).toBe('create_import_request'));
       expect(primary().textContent).toContain('ออกใบขอซื้อ (IR)');
       expect(screen.queryByTestId('procurement-source-dialog')).toBeNull();
@@ -4951,6 +5037,9 @@ describe('TicketDetailPage', () => {
     // (สร้างคำขอราคา / ใบเสนอราคาตรง + helper note) are GONE from the เอกสาร tab. Quotations stay listed
     // (with PDF/Excel) in the document register at the top; the one way to start a pricing request is
     // the sticky CTA.
+    // Restored verbatim from 5560009a (fix round 1 ruling): there is NO independent link to /quotations/new on the
+    // deal page. Only the tab it opens follows the content (the quotation list lives on ใบเสนอราคา since the
+    // redesign; the rest of the old เอกสาร tab is ไฟล์), and the same check runs on both.
     it.each([
       ['the owning rep', salesOwnerUser],
       ['a role that may not create a quotation (account)', accountUser],
@@ -4958,31 +5047,33 @@ describe('TicketDetailPage', () => {
     ])('the เอกสาร tab has no ใบเสนอราคา panel, route buttons or helper line for %s', async (_label, user) => {
       activeDeal();
       renderTicketDetailPage(user);
-      await openTab(/เอกสาร/);
-      await screen.findByTestId('deal-document-register');
-      expect(screen.queryByRole('heading', { name: 'ใบเสนอราคา', level: 2 })).toBeNull();
-      expect(screen.queryByRole('link', { name: 'ใบเสนอราคาตรง' })).toBeNull();
-      expect(document.querySelector('a[href*="/quotations/new"]')).toBeNull();
-      expect(screen.queryByText(/ใบเสนอราคาตรง = กรอกราคาเอง/)).toBeNull();
-      expect(screen.queryByText('สร้างได้จากหน้า ใบเสนอราคา')).toBeNull();
+      for (const tab of [/ใบเสนอราคา/, /^ไฟล์/]) {
+        await openTab(tab);
+        await screen.findByTestId(tab.source === 'ใบเสนอราคา' ? 'deal-quotations-card' : 'deal-document-register');
+        expect(screen.queryByRole('heading', { name: 'ใบเสนอราคา', level: 2 })).toBeNull();
+        expect(screen.queryByRole('link', { name: 'ใบเสนอราคาตรง' })).toBeNull();
+        expect(document.querySelector('a[href*="/quotations/new"]')).toBeNull();
+        expect(screen.queryByText(/ใบเสนอราคาตรง = กรอกราคาเอง/)).toBeNull();
+        expect(screen.queryByText('สร้างได้จากหน้า ใบเสนอราคา')).toBeNull();
+      }
     });
 
-    it('สร้างคำขอราคา exists exactly once for the owning rep — the sticky CTA, not a second copy in the documents tab', async () => {
+    it('สร้างคำขอราคา exists exactly once for the owning rep — the primary button, not a second copy on the ใบเสนอราคา tab', async () => {
       activeDeal({ salesStage: 'SPEC_APPROVED' });
       renderTicketDetailPage(salesOwnerUser);
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('create_pcr'));
-      await openTab(/เอกสาร/);
-      await screen.findByTestId('deal-document-register');
+      await openTab(/ใบเสนอราคา/);
+      await screen.findByTestId('deal-quotations-card');
       expect(screen.getAllByRole('button', { name: 'สร้างคำขอราคา' })).toHaveLength(1);
     });
 
-    it('the document register still lists the deal\'s direct quotations (the panel\'s listing is not lost)', async () => {
+    it('the quotation card still lists the deal\'s direct quotations (the panel\'s listing is not lost)', async () => {
       activeDeal();
       api.dealQuotations.listForTicket.mockResolvedValue({
         items: [{ id: 77, number: 'QT-2026-0077-1', docStatus: 'APPROVED', recipientType: 'DESIGNER', salesRepId: 1, revisionNo: 1, grandTotal: 1070 }],
       });
       renderTicketDetailPage(salesOwnerUser);
-      await openTab(/เอกสาร/);
+      await openTab(/ใบเสนอราคา/);
       expect(await screen.findByTestId('document-version-direct-77')).not.toBeNull();
     });
 
@@ -5080,13 +5171,13 @@ describe('TicketDetailPage', () => {
     it('a refused confirm surfaces the server\'s own Thai message', async () => {
       activeDeal({ liveDirectQuotation: { ...DRAFT_LIVE, docStatus: 'APPROVED', recipientType: 'BUYER' } });
       api.dealQuotations.listForTicket.mockResolvedValue({ items: [{ ...DRAFT_LIVE, docStatus: 'APPROVED' }] }); // the confirm waits for the row
-      api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error('ดีลไม่ได้อยู่ในสถานะ ACTIVE'), { status: 409 }));
+      api.dealQuotations.promoteToDeal.mockRejectedValue(Object.assign(new Error('งานไม่ได้อยู่ในสถานะ ACTIVE'), { status: 409 }));
       const showToast = vi.fn();
       renderTicketDetailPage(salesOwnerUser, showToast);
       await waitFor(() => expect(screen.getByTestId('ticket-primary-action').getAttribute('data-action')).toBe('confirm_order_direct'));
       fireEvent.click(screen.getByTestId('ticket-primary-action'));
       fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'ยืนยันคำสั่งซื้อ' }));
-      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ดีลไม่ได้อยู่ในสถานะ ACTIVE'));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'งานไม่ได้อยู่ในสถานะ ACTIVE'));
     });
   });
 
@@ -5361,7 +5452,7 @@ describe('TicketDetailPage', () => {
           no: stage.no,
           allowed: stage.code !== salesStage && (onRoute || lax),
           requiresReason: false,
-          blockedReason: onRoute || lax ? null : 'ขั้นตอนนี้ไม่อยู่ในเส้นทางของดีลนี้',
+          blockedReason: onRoute || lax ? null : 'ขั้นตอนนี้ไม่อยู่ในเส้นทางนี้',
           onRoute,
         };
       });
@@ -5521,7 +5612,7 @@ describe('TicketDetailPage', () => {
         allowed: stage.code !== 'SPEC_APPROVED' && !off.has(stage.code),
         requiresReason: false,
         blockedReason: off.has(stage.code)
-          ? 'ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน'
+          ? 'ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ 4 ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน'
           : null,
         onRoute: !off.has(stage.code),
       }));
@@ -5547,29 +5638,29 @@ describe('TicketDetailPage', () => {
 
     it('shows nothing when the server did not advertise SET_ENTRY_CHANNEL', async () => {
       const group = await openSteps([]);
-      expect(within(group).queryByRole('button', { name: /แก้ช่องทางดีล/ })).toBeNull();
+      expect(within(group).queryByRole('button', { name: /แก้ช่องทาง/ })).toBeNull();
       expect(api.tickets.setEntryChannel).not.toHaveBeenCalled();
     });
 
     it('a first correction needs no note: it calls the API, then the route refreshes without a reload', async () => {
       const group = await openSteps([FIRST]);
-      // What the server answers once the channel is corrected: the new ticket, and — on the refetch —
-      // a route with nothing off it.
+      // What the server answers once the channel is corrected: the new ticket, and — on the refetch — a route with
+      // nothing off it.
       api.tickets.setEntryChannel.mockResolvedValue({
         ticket: buildTicket({ summary: { salesStage: 'SPEC_APPROVED', entryChannel: 'DESIGNER_LED', nextFollowUpAt: '2026-07-15' } }),
       });
       api.tickets.actions.mockResolvedValue(actionsFor(new Set(), [FIRST]));
       const before = api.tickets.actions.mock.calls.length;
 
-      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทางดีล/ }));
+      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทาง/ }));
       expect(screen.queryByTestId('entry-channel-fix-reason')).toBeNull();
-      fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+      fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
 
       await waitFor(() => expect(api.tickets.setEntryChannel).toHaveBeenCalledWith(701, { value: 'DESIGNER_LED', note: null }));
       await waitFor(() => expect(api.tickets.actions.mock.calls.length).toBeGreaterThan(before));
       await waitFor(() => expect(screen.queryByTestId('off-route-group')).toBeNull());
-      expect(screen.getByTestId('deal-route-line').textContent).toContain('ผู้ออกแบบนำดีล');
+      expect(screen.getByTestId('deal-route-line').textContent).toContain('ผู้ออกแบบนำงานมา');
     });
 
     it('changing a stated channel asks for the reason the server listed, and sends it', async () => {
@@ -5577,8 +5668,8 @@ describe('TicketDetailPage', () => {
       api.tickets.setEntryChannel.mockResolvedValue({
         ticket: buildTicket({ summary: { salesStage: 'SPEC_APPROVED', entryChannel: 'DESIGNER_LED', nextFollowUpAt: '2026-07-15' } }),
       });
-      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทางดีล/ }));
-      fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+      fireEvent.click(within(group).getByRole('button', { name: /แก้ช่องทาง/ }));
+      fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
       expect(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }).disabled).toBe(true);
       fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบเข้ามาร่วมจริง' } });
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
@@ -5657,7 +5748,7 @@ describe('TicketDetailPage', () => {
       const primary = await screen.findByTestId('ticket-primary-action');
       await waitFor(() => expect(primary.getAttribute('data-action')).toBe('record_bid_outcome'));
       expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('GRAND RIVER HOTEL');
-      expect(screen.getByText('รอผลประมูล · 3 ราย')).toBeTruthy();
+      expect(within(screen.getByTestId('deal-state-header')).getByText('ลูกค้าผู้ชำระเงิน · รอผลประมูล 3 ราย')).toBeTruthy();
     });
 
     it('a viewer who may not edit the deal gets no บันทึกผลประมูล and no add button', async () => {
@@ -5685,7 +5776,10 @@ describe('TicketDetailPage', () => {
 
       fireEvent.click(within(dialog.getByTestId('bid-winner-1')).getByRole('checkbox'));
       fireEvent.click(within(dialog.getByTestId('bid-winner-2')).getByRole('checkbox'));
-      expect(dialog.getByText('ได้งานมากกว่า 1 ราย · แยกดีล')).toBeTruthy();
+      expect(dialog.getByText('ชนะมากกว่า 1 ราย · แยกงาน')).toBeTruthy();
+      // fix round 1: งาน (the deal) and ได้งาน (won) never share a sentence; "won" reads ชนะ where both meet.
+      expect(dialog.getByText(/ระบบจึงแยกงานให้ผู้รับเหมาที่ชนะรายละหนึ่งงาน/)).toBeTruthy();
+      expect(dialog.getByText(/ชนะ 2 ราย/)).toBeTruthy();
       expect(dialog.getAllByText('DL-2026-0280-A').length).toBeGreaterThan(0);
       // Make the second winner the primary: the first becomes -A.
       fireEvent.click(dialog.getAllByRole('radio', { name: /บจก.สมมติ ก่อสร้าง/ })[0]);
@@ -5723,6 +5817,142 @@ describe('TicketDetailPage', () => {
       renderDealPage(ceoUser);
       expect(await screen.findByTestId('ticket-detail-verify-close')).toBeTruthy();
       expect(document.querySelector('[data-action="record_bid_outcome"]')).toBeNull();
+    });
+  });
+
+  // Document chain (2026-11-17): the deal page and the quotation page's chain card read ONE server summary.
+  describe('TicketDetailPage — the document chain on the เงิน tab and the ขั้นต่อไป card', () => {
+    const buyer = (overrides) => ({
+      id: 1, ticketId: 701, customerId: 5, customerName: 'บริษัท ก จำกัด', contactId: null, contactName: null,
+      role: 'BUYER', status: 'AWARDED', notAwardedReason: null, headline: true, splitTicketId: null, splitTicketCode: null,
+      latestQuotationId: 11, latestQuotationNumber: 'QT-2026-0011-1', latestQuotationStatus: 'APPROVED', latestQuotationAmount: 512900,
+      ...overrides,
+    });
+    function confirmedDeal({ summary = {}, notices = [], parties = [] } = {}) {
+      const state = {
+        lifecycle: 'ACTIVE', salesStage: 'ORDER_RECEIVED', paymentStatus: 'CUSTOMER_CONFIRMED', fulfillmentStatus: null,
+        status: 'quotation_issued', ...summary,
+      };
+      api.tickets.get.mockResolvedValue({ ticket: buildTicket({ summary: { ...state, createdById: 1, entryChannel: 'BUYER_DIRECT' } }) });
+      api.tickets.actions.mockResolvedValue({ currentState: state, availableActions: [] });
+      api.tickets.parties.mockResolvedValue({ parties });
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: notices });
+    }
+
+    it('the main button is บันทึกผลประมูล (a bidder kept in the running): the deposit step offers its OWN create, never "the button above"', async () => {
+      confirmedDeal({ parties: [buyer({}), buyer({ id: 2, customerName: 'บจก. ข', status: 'QUOTED', headline: false })] });
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=money'], salesOwnerUser);
+      const primary = await screen.findByTestId('ticket-primary-action');
+      await waitFor(() => expect(primary.getAttribute('data-action')).toBe('record_bid_outcome'));
+      const step = within(await screen.findByTestId('payment-step-deposit'));
+      await waitFor(() => expect(step.getByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeTruthy());
+      expect(step.queryByText(/ด้านบน/)).toBeNull();
+    });
+
+    it('notice issued: the ขั้นต่อไป card names ฝ่ายบัญชี\'s step in the SAME words the quotation card uses', async () => {
+      confirmedDeal({
+        summary: { paymentStatus: 'DEPOSIT_NOTICE_ISSUED' },
+        notices: [{ id: 801, ticketId: 701, status: 'ISSUED', docNumber: 'GLRD69005', version: 1, issueDate: '2026-11-17' }],
+      });
+      renderTicketDetailPageAtRoute(['/tickets/701'], salesOwnerUser);
+      const card = await screen.findByTestId('next-step-card');
+      await waitFor(() => expect(card.textContent).toContain('ขั้นถัดไป: ฝ่ายบัญชียืนยันรับมัดจำที่หน้าการเงิน'));
+    });
+  });
+
+  // Fix round 1, F-1 (the owner's condition): the deal page's OWN actions move the chain, and the เงิน tab (and a
+  // quotation card on the same client) must follow without a manual refetch. A tiny server: the mutation mocks move
+  // `deal`, and tickets.get / actions / documentChain.get answer from it.
+  describe('TicketDetailPage — F-1: the deal page\'s own actions refresh the document chain', () => {
+    let deal;
+    let actions;
+    function serve(summary, availableActions) {
+      deal = { lifecycle: 'ACTIVE', createdById: 1, entryChannel: 'BUYER_DIRECT', depositPolicy: 'REQUIRED', ...summary };
+      actions = availableActions;
+      api.tickets.get.mockImplementation(async () => ({ ticket: buildTicket({ summary: { ...deal } }) }));
+      api.tickets.actions.mockImplementation(async () => ({ currentState: { ...deal }, availableActions: actions }));
+      api.dealQuotations.listForTicket.mockResolvedValue({ items: [] });
+      api.depositNotices.listByTicket.mockResolvedValue({ depositNotices: [] });
+    }
+    const moveTo = (patch, nextActions = []) => {
+      Object.assign(deal, patch);
+      actions = nextActions;
+      return { ticket: buildTicket({ summary: { ...deal } }) };
+    };
+    const depositStep = () => within(screen.getByTestId('payment-step-deposit'));
+
+    it('ลูกค้ายืนยัน on the deal page: the deposit step moves to ยังไม่สร้าง with no manual refetch', async () => {
+      serve({ status: 'quotation_issued', paymentStatus: null, salesStage: 'QUOTE_BUYER', fulfillmentStatus: null },
+        [{ action: 'CONFIRM_CUSTOMER', kind: 'operational', label: 'ลูกค้ายืนยัน' }]);
+      api.tickets.confirmCustomer.mockImplementation(async () => moveTo({ paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'ORDER_RECEIVED' }));
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=money'], salesOwnerUser);
+      await waitFor(() => expect(depositStep().getByText('ยังไม่ถึงขั้นตอน')).toBeTruthy());
+      fireEvent.click(await screen.findByTestId('ticket-detail-confirm-customer'));
+      await waitFor(() => expect(api.tickets.confirmCustomer).toHaveBeenCalledWith(701));
+      await waitFor(() => expect(depositStep().getByText('ยังไม่สร้าง')).toBeTruthy());
+    });
+
+    it('พักงาน on the deal page: the เงิน tab then offers no create the server would refuse (409 requireActiveLifecycle)', async () => {
+      serve({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'ORDER_RECEIVED', fulfillmentStatus: null },
+        [{ action: 'PLACE_ON_HOLD' }]);
+      api.tickets.hold.mockImplementation(async () => moveTo({ lifecycle: 'ON_HOLD' }, [{ action: 'RESUME' }]));
+      const showToast = vi.fn();
+      renderTicketDetailPageAtRoute(['/tickets/701?tab=overview'], salesOwnerUser, showToast);
+      await waitFor(() => expect(api.documentChain.get).toHaveBeenCalled());
+      fireEvent.click(await screen.findByRole('button', { name: 'พักงาน' }));
+      fireEvent.click(within(await screen.findByTestId('pause-deal-modal')).getByRole('button', { name: 'พักงาน' }));
+      await waitFor(() => expect(showToast).toHaveBeenCalledWith('success', 'พักงานไว้แล้ว'));
+      await new Promise((resolve) => setTimeout(resolve, 100)); // let any refresh the action triggered land
+      // From here the server never answers again: the tab can only show what the action itself refreshed.
+      api.documentChain.get.mockImplementation(() => new Promise(() => {}));
+      api.depositNotices.listByTicket.mockImplementation(() => new Promise(() => {}));
+      await openTab(/^เงิน/);
+      expect(depositStep().queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+      expect(depositStep().getByText(/งานพักหรือปิดอยู่/)).toBeTruthy();
+    });
+
+    // บันทึกผลประมูล CONFIRMS THE ORDER on the Java side (DealPartyService -> confirmOrderFromDirectQuotation).
+    function CardOnSameClient() {
+      const { data } = useDocumentChain(701);
+      const quotation = { id: 11, number: 'QT-2026-0011-1', ticketId: 701, docStatus: 'APPROVED', origin: 'DEAL_DIRECT', depositPercent: 30 };
+      return data ? <QuotationDocumentChain quotation={quotation} chain={data} onConfirmOrder={vi.fn()} /> : null;
+    }
+
+    it('บันทึกผลประมูล (award): the เงิน tab and a quotation card on the same client both show the order confirmed', async () => {
+      const bidder = (overrides) => ({
+        id: 1, ticketId: 701, customerId: 5, customerName: 'บริษัท ก จำกัด', contactId: null, contactName: null,
+        role: 'BUYER', status: 'QUOTED', notAwardedReason: null, headline: true, splitTicketId: null, splitTicketCode: null,
+        latestQuotationId: 11, latestQuotationNumber: 'QT-2026-0011-1', latestQuotationStatus: 'APPROVED', latestQuotationAmount: 512900,
+        ...overrides,
+      });
+      serve({ status: 'draft', paymentStatus: null, salesStage: 'QUOTE_BUYER', fulfillmentStatus: null, code: 'DL-2026-0280', projectName: 'GRAND RIVER HOTEL' }, []);
+      api.tickets.parties.mockResolvedValue({ parties: [bidder({}), bidder({ id: 2, customerName: 'บจก. ข', headline: false, latestQuotationId: 12, latestQuotationNumber: 'QT-2026-0012-1' })] });
+      api.tickets.recordBidOutcome.mockImplementation(async () => {
+        moveTo({ status: 'quotation_issued', paymentStatus: 'CUSTOMER_CONFIRMED', salesStage: 'ORDER_RECEIVED' });
+        return { result: { ticketId: 701 } };
+      });
+      chainViewer = salesOwnerUser;
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+      render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/tickets/701?tab=money']}>
+            <TicketDetailPage user={salesOwnerUser} ticketId={701} onBack={vi.fn()} showToast={vi.fn()} />
+            <div data-testid="quotation-page-card"><CardOnSameClient /></div>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+      await waitFor(() => expect(depositStep().getByText('ยังไม่ถึงขั้นตอน')).toBeTruthy());
+      const card = await screen.findByTestId('quotation-document-chain');
+      expect(card.querySelector('li[data-step="2"]').getAttribute('data-state')).not.toBe('done');
+      fireEvent.click(await screen.findByRole('button', { name: /บันทึกผลประมูล/ }));
+      const dialog = within(await screen.findByTestId('bid-outcome-modal'));
+      fireEvent.click(within(dialog.getByTestId('bid-winner-1')).getByRole('checkbox'));
+      fireEvent.click(dialog.getByRole('radio', { name: 'ราคา' }));
+      fireEvent.click(dialog.getByTestId('bid-outcome-submit'));
+      await waitFor(() => expect(api.tickets.recordBidOutcome).toHaveBeenCalled());
+      await waitFor(() => expect(depositStep().getByText('ยังไม่สร้าง')).toBeTruthy());
+      await waitFor(() => expect(card.querySelector('li[data-step="2"]').getAttribute('data-state')).toBe('done'));
     });
   });
 });

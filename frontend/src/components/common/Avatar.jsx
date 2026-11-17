@@ -1,17 +1,9 @@
 import { cn } from '../../utils/cn.js';
 import { initialsFromName } from '../../utils/format.js';
 
-/**
- * Size -> dimension/font-size utilities. Ported from `.avatar-xs/-sm/-md/-lg/-xl`
- * in styles.css. Sizes use arbitrary pixel values (28/38/46/64/78px) rather
- * than the spacing scale to match byte-for-byte without depending on whether
- * Tailwind's dynamic spacing multipliers cover non-standard steps like 9.5 or
- * 19.5. Font-size deliberately uses the `text-[length:...]` form: the named
- * `text-*` scale utilities (text-sm/text-xl/text-3xl) bundle a Tailwind
- * default line-height via `--text-*--line-height` (confirmed in the built
- * CSS), which the legacy `.avatar-*` rules never set. `md` sets no font-size
- * at all on purpose — it inherits, matching the legacy rule exactly.
- */
+/** Size -> dimension/font-size utilities. Font-size deliberately uses the `text-[length:...]` form: the named
+ * `text-*` scale utilities (text-sm/text-xl/text-3xl) bundle a Tailwind default line-height via
+ * `--text-*--line-height` (confirmed in the built CSS), which the legacy `.avatar-*` rules never set. */
 const AVATAR_SIZE_CLASSES = {
   xs: 'h-[28px] w-[28px] text-[length:var(--text-2xs)]',
   sm: 'h-[38px] w-[38px] text-[length:var(--text-sm)]',

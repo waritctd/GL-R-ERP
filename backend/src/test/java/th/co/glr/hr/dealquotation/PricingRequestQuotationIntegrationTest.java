@@ -197,9 +197,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Create + prefill fidelity
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void net_prefillsQuotation_netEqualsDecisionNet() {
@@ -212,8 +210,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(quotation.docStatus()).isEqualTo("DRAFT");
         assertThat(quotation.priceMode()).isEqualTo("NET");
         assertThat(quotation.items()).hasSize(decision.items().size());
-        // The computed net on EVERY line equals ITS OWN decision item's net — ceoNetUnitPrice is
-        // the exact value the repository joined in from THIS item's own pricing_decision_item.
+        // The computed net on EVERY line equals ITS OWN decision item's net — ceoNetUnitPrice is the exact value the
+        // repository joined in from THIS item's own pricing_decision_item.
         for (DealQuotationItemDto item : quotation.items()) {
             assertThat(item.ceoNetUnitPrice()).isNotNull();
             assertThat(item.netUnitPrice()).isEqualByComparingTo(item.ceoNetUnitPrice());
@@ -236,10 +234,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     void net_withManualOverride_effectiveListPriceIsTheOverride_notTheAutoFormulaPrice() {
         PricingDecisionDto decision = approvedDecision("NET",
             items -> List.of(overrideItem(items.get(0).id(), new BigDecimal("150"), "ปรับราคาพิเศษ", new BigDecimal("10"))));
-        // Sanity: the auto-formula price is a real, DIFFERENT number from the override (otherwise
-        // this test could pass by coincidence) — see WastageCalculator's landed-cost-based
-        // proposedSellingPricePerRequestedUnit, which this fixture's margin/cost inputs put well
-        // above 150.
+        // Sanity: the auto-formula price is a real, DIFFERENT number from the override (otherwise this test could pass
+        // by coincidence) — see WastageCalculator's landed-cost-based proposedSellingPricePerRequestedUnit, which this
+        // fixture's margin/cost inputs put well above 150.
         assertThat(decision.items().get(0).listUnitPrice()).isNotEqualByComparingTo(new BigDecimal("150"));
 
         DealQuotationDto quotation = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
@@ -318,8 +315,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()),
             ceoActor);
-        // Never calls decisionService.update(...) to set a price_mode — approve it as-is via the
-        // legacy margin path (approve() requires positive selling prices, already auto-populated).
+        // Never calls decisionService.update(...) to set a price_mode — approve it as-is via the legacy margin path
+        // (approve() requires positive selling prices, already auto-populated).
         PricingDecisionDto decision = decisionRepository.findByPricingRequest(pricingRequestId).get(0);
         decisionService.approve(decision.id(),
             new ApprovePricingDecisionRequest("อนุมัติแบบเดิม", UUID.randomUUID().toString()), ceoActor);
@@ -350,19 +347,15 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         DealQuotationDto second = quotationService.createFromPricingRequest(decision.pricingRequestId(), salesActor);
 
         assertThat(second.id()).isEqualTo(first.id());
-        // Count the PRICING_REQUEST row directly with raw SQL rather than via #listForTicket —
-        // unrelated to which origins that method includes (see directDealSearch_...
-        // includesPricingRequestOriginRows for that), this just avoids depending on this
-        // origin-agnostic dedupe test on that method's own return shape at all.
+        // Count the PRICING_REQUEST row directly with raw SQL rather than via #listForTicket — unrelated to which
+        // origins that method includes (see directDealSearch_...
         Integer count = jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.quotation WHERE ticket_id = :id AND origin = 'PRICING_REQUEST'
             """, Map.of("id", ticketId), Integer.class);
         assertThat(count).isEqualTo(1);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // AUTHZ, wrong-way-round, real DB. Mutation-checked below (see the *_mutationCheck test).
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void anotherSalesRep_cannotCreate_403_noRowInserted() {
@@ -391,9 +384,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(countPricingRequestQuotationsForTicket()).isZero();
     }
 
-    /** Mirrors {@code CustomerQuotationService.create}'s own gate exactly — sales_manager is NOT
-     * admitted (unlike {@code DealQuotationService#EDIT_ROLES}' broader allowance for editing an
-     * EXISTING DEAL_DIRECT quotation). */
+    /** Mirrors CustomerQuotationService.create's own gate exactly — sales_manager is NOT admitted (unlike
+     * DealQuotationService#EDIT_ROLES' broader allowance for editing an EXISTING DEAL_DIRECT quotation). */
     @Test
     void salesManager_cannotCreate_403_noRowInserted() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
@@ -503,9 +495,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(cancelled.docStatus()).isEqualTo("CANCELLED");
     }
 
-    /** Coordinator follow-up: recipient_label was passed into InsertDraftParams by
-     * #createFromPricingRequest but silently dropped (never bound in insertDraft's SQL) —
-     * mirrors CustomerQuotationRepository#insertDraft, which has always carried it. */
+    /** Coordinator follow-up: recipient_label was passed into InsertDraftParams by #createFromPricingRequest but
+     * silently dropped (never bound in insertDraft's SQL) — mirrors CustomerQuotationRepository#insertDraft, which
+     * has always carried it. */
     @Test
     void recipientLabel_carriedOverFromPricingRequestAtCreate() {
         long pricingRequestId = twoItemSubmittedCosting();
@@ -567,8 +559,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         // Switch the whole document to DIRECT_NET.
         List<ItemInput> directNetItems = quotation.items().stream()
             // DIRECT_NET still requires a positive "reference" unitPrice, same as every mode
-            // (DealQuotationService#requirePriceValidForType has no mode exemption for a TH
-            // document) — reuse the line's own current unitPrice rather than null.
+            // (DealQuotationService#requirePriceValidForType has no mode exemption for a TH document) — reuse the line's
+            // own current unitPrice rather than null.
             .map(item -> tileItemInput(item, item.unitPrice(), null, null, new BigDecimal("999.00")))
             .toList();
         DealQuotationDto switched = quotationService.update(quotation.id(),
@@ -733,11 +725,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             .extracting("status").isEqualTo(HttpStatus.FORBIDDEN);
     }
 
-    /** Positive control for the wrong-way-round tests above (account, granted-account, import):
-     * ceo (unlike any of them) IS admitted by PRICING_REQUEST_VIEW_ROLES. Mutation-checked by
-     * temporarily reverting requireViewAccess's origin branch to the plain DEAL_DIRECT rules and
-     * confirming every wrong-way-round test in this section goes red while this one and the rest
-     * of the suite stay green — see the PR body for the before/after run. */
+    /** Positive control for the wrong-way-round tests above (account, granted-account, import): ceo (unlike any of
+     * them) IS admitted by PRICING_REQUEST_VIEW_ROLES. */
     @Test
     void ceoRole_canGet_mutationCheckControl() {
         PricingDecisionDto decision = approvedDecision("NET", id -> List.of());
@@ -839,14 +828,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(legacyCount).isZero();
     }
 
-    /** Positive control for the pair above: with no quotation on either chain yet, BOTH create
-     * paths succeed independently. Mutation-checked by temporarily disabling the live-quotation
-     * check in {@code DealQuotationService#createFromPricingRequest} (the new-chain guard) and
-     * confirming exactly {@code oldQuotationAlreadyExists_newCreateRefused409} goes red — a
-     * second quotation gets inserted instead of a 409 — while the rest of the suite, including
-     * the mirror-image {@code newQuotationAlreadyExists_oldCreateRefused409}, stays green; then
-     * the same for {@code CustomerQuotationService#create}'s own check and the other test. See
-     * the PR body for the before/after run. */
+    /** Positive control for the pair above: with no quotation on either chain yet, BOTH create paths succeed
+     * independently. See the PR body for the before/after run. */
     @Test
     void neitherChainStarted_bothCreatePathsIndependentlySucceed_mutationCheckControl() {
         PricingDecisionDto decisionA = approvedDecision("NET", id -> List.of());
@@ -1014,8 +997,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(restored.items()).hasSize(2);
         assertThat(restored.itemsRemovedFromCeoCount()).isZero();
         assertThat(restored.removedCeoItems()).isEmpty();
-        // The restored row is a NEW quotation_item_id (the old one was hard-deleted when dropped),
-        // still carrying the SAME product identity as before.
+        // The restored row is a NEW quotation_item_id (the old one was hard-deleted when dropped), still carrying the
+        // SAME product identity as before.
         DealQuotationItemDto restoredItem = restored.items().stream()
             .filter(i -> i.id() != kept.id())
             .findFirst().orElseThrow();
@@ -1056,8 +1039,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             .filter(link -> link.itemId() == dropped.id())
             .findFirst().orElseThrow().pricingDecisionItemId();
         BigDecimal originalSubtotal = quotation.subtotalAmount();
-        // Sanity: the two-item fixture's lines are not all zero, so a silent "leave the old total"
-        // bug could not pass this test by coincidence.
+        // Sanity: the two-item fixture's lines are not all zero, so a silent "leave the old total" bug could not pass
+        // this test by coincidence.
         assertThat(originalSubtotal).isGreaterThan(BigDecimal.ZERO);
 
         DealQuotationDto afterDrop = quotationService.update(quotation.id(),
@@ -1085,9 +1068,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         // It must NOT still be the stale post-drop total (the bug this whole test pins).
         assertThat(restored.subtotalAmount()).isNotEqualByComparingTo(afterDrop.subtotalAmount());
 
-        // A render right after the restore reflects the SAME persisted total -- get()/renderPdf
-        // share the same #mapQuotation read path, so this proves it is not merely the in-memory
-        // return value of #restoreRemovedItem that is correct while the DATABASE row is stale.
+        // A render right after the restore reflects the SAME persisted total -- get()/renderPdf share the same
+        // #mapQuotation read path, so this proves it is not merely the in-memory return value of #restoreRemovedItem
+        // that is correct while the DATABASE row is stale.
         DealQuotationDto reread = quotationService.get(quotation.id(), salesActor);
         assertThat(reread.subtotalAmount()).isEqualByComparingTo(expectedSubtotal);
         assertThat(reread.vatAmount()).isEqualByComparingTo(expectedVat);
@@ -1262,9 +1245,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(afterRevision.docStatus()).isEqualTo("SUPERSEDED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Direct-deal list queries do not include PRICING_REQUEST rows
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void directDealSearch_includesPricingRequestOriginRows() {
@@ -1304,9 +1285,7 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         assertThat(listed.recipientLabel()).isEqualTo("คุณสมชาย (ผู้ซื้อ)");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private DealQuotationItemDto itemById(DealQuotationDto quotation, long itemId) {
         return quotation.items().stream().filter(i -> i.id() == itemId).findFirst().orElseThrow();
@@ -1316,13 +1295,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         return tileItemInput(item, item.unitPrice(), item.discountPct(), item.specialPriceSqm(), null);
     }
 
-    /** One TILE {@link ItemInput}, carrying {@code item}'s own physical fields (location, catalog
-     * link, brand/model/color/texture/size, thickness, sqm/piece, quantity mode, wastage, box
-     * data) UNCHANGED, with the price fields set explicitly by the caller — the ONE place this
-     * test class builds a TILE {@code ItemInput}, so the 34-positional-argument record can never
-     * be miscounted at more than one call site. {@code directNetPrice} is threaded through even
-     * though the current priceMode might not be DIRECT_NET — harmless (the server only reads the
-     * field relevant to whichever priceMode the request's header carries). */
+    /** One TILE ItemInput, carrying item's own physical fields UNCHANGED, with the price fields set explicitly by
+     * the caller — the ONE place this test class builds a TILE ItemInput, so the 34-positional-argument record can
+     * never be miscounted at more than one call site. */
     private ItemInput tileItemInput(DealQuotationItemDto item, BigDecimal unitPrice, BigDecimal discountPct,
                                     BigDecimal specialPriceSqm, BigDecimal directNetPrice) {
         return new ItemInput(item.locationLabel(), item.catalogPriceId(), item.productCode(), item.brand(),
@@ -1357,9 +1332,8 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
             item.id(), item.sqmPerBox(), true);
     }
 
-    /** Positive-control fixture — the SAME linked row, unchanged except {@code piecesInput}
-     * (quantity IS freely editable on a linked line; see {@code
-     * linkedLine_quantityChanged_allowed}). */
+    /** Positive-control fixture — the SAME linked row, unchanged except piecesInput (quantity IS freely editable on
+     * a linked line; see linkedLine_quantityChanged_allowed). */
     private ItemInput withPiecesInput(DealQuotationItemDto item, BigDecimal newPiecesInput) {
         return new ItemInput(item.locationLabel(), item.catalogPriceId(), item.productCode(), item.brand(),
             item.model(), item.color(), item.texture(), item.sizeText(), item.thicknessMm(), item.sqmPerPiece(),
@@ -1373,10 +1347,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
     /** A brand-new PLAIN row — used only by {@link #addingAnExtraPlainRow_refused400} to prove the
      * server refuses it for a PRICING_REQUEST-origin quotation. */
     private ItemInput plainItemInput() {
-        // unitPrice (position 17) MUST be positive — requirePriceValidForType requires it for
-        // EVERY TILE/PLAIN row regardless of origin, so a null here would 400 for an unrelated
-        // reason and mask whatever the origin-specific extra-row guard does (confirmed by mutation
-        // check: with the guard disabled and unitPrice left null, the test still passed).
+        // unitPrice MUST be positive — requirePriceValidForType requires it for EVERY TILE/PLAIN row regardless of
+        // origin, so a null here would 400 for an unrelated reason and mask whatever the origin-specific extra-row
+        // guard does.
         return new ItemInput(null, null, null, null, null, null, null, null, null, null, null, null,
             null, null, null, null, new BigDecimal("500.00"), null, null, null, null, null,
             "PLAIN", "ค่าติดตั้ง", new BigDecimal("1"), "JOB", null, null, null, null, null,
@@ -1445,14 +1418,9 @@ class PricingRequestQuotationIntegrationTest extends AbstractPostgresIntegration
         return count;
     }
 
-    /** Drives the golden path to an APPROVED, price_mode-carrying decision (V187), returning the
-     * FULL (CEO-shaped) {@link PricingDecisionDto} — mirrors {@code
-     * PricingDecisionCeoPriceModeIntegrationTest#startNewFormReview} plus the mode-set/approve
-     * steps. {@code itemUpdates} builds the per-item {@link UpdatePricingDecisionItemRequest} list
-     * from the STARTED decision's own two items (ids assigned by the DB, not predictable up
-     * front) — SPECIAL_SQM/DIRECT_NET need EVERY item explicitly priced before approve() accepts
-     * it (unlike NET, which auto-populates a formula list price + 0% discount for any item the
-     * caller does not mention), so the callback receives the full item list, not just the first. */
+    /** Drives the golden path to an APPROVED, price_mode-carrying decision (V187), returning the FULL (CEO-shaped)
+     * PricingDecisionDto — mirrors PricingDecisionCeoPriceModeIntegrationTest#startNewFormReview plus the
+     * mode-set/approve steps. */
     private PricingDecisionDto approvedDecision(String priceMode,
             java.util.function.Function<List<PricingDecisionItemDto>, List<UpdatePricingDecisionItemRequest>> itemUpdates) {
         long pricingRequestId = twoItemSubmittedCosting();

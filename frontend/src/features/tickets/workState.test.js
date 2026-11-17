@@ -182,9 +182,8 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
     });
     const action = nextSalesAction(deal, []);
     expect(action?.key).not.toBe('create_pcr');
-    // Nothing else in the cascade applies either (no follow-up due, not
-    // stale) — the fixed bucket 1 must fall through to "nothing pending",
-    // not invent a different bogus action.
+    // Nothing else in the cascade applies either (no follow-up due, not stale) — the fixed bucket 1 must fall
+    // through to "nothing pending", not invent a different bogus action.
     expect(action).toBeNull();
   });
 
@@ -246,10 +245,9 @@ describe('nextSalesAction — CREATE_PCR gate on legacy/no-PR deals (UAT regress
     expect(action).toMatchObject({ key: 'create_pcr' });
   });
 
-  // The three cases below are why the guard reads `status`/`paymentStatus`
-  // rather than salesStage/fulfillmentStatus: each is a deal that has
-  // genuinely never been priced, and suppressing the CTA on any of them would
-  // strand the rep with no button and a "รอฝ่ายขาย" banner naming themselves.
+  // The three cases below are why the guard reads `status`/`paymentStatus` rather than
+  // salesStage/fulfillmentStatus: each is a deal that has genuinely never been priced, and suppressing the CTA
+  // on any of them would strand the rep with no button and a "รอฝ่ายขาย" banner naming themselves.
   it('still offers create_pcr after TicketService.reserveStock sets FROM_STOCK and auto-advances the stage — that path has no pricing precondition', () => {
     const deal = baseDeal({ salesStage: 'DELIVERY_SCHEDULING', fulfillmentStatus: 'FROM_STOCK' });
     expect(nextSalesAction(deal, [])).toMatchObject({ key: 'create_pcr' });

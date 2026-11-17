@@ -22,15 +22,9 @@ public final class DeductionObligationDtos {
         // Nullable -- see V106's header. NULL means this obligation never auto-stops.
         BigDecimal instructedTotal,
         String authorityReference,
-        // The date ON THE AUTHORITY'S DOCUMENT (the กยศ notification / LED order date) -- NOT "the
-        // first payroll month to deduct". Drives payroll from the CALENDAR MONTH CONTAINING this
-        // date onward: a document dated 2026-01-15 drives January in full, not February (see
-        // DeductionObligationRepository#findDrivingObligation's month-truncated comparison, fixed
-        // after an Opus review caught the raw-date off-by-one). This reading is a judgment call --
-        // there is no UI yet to confirm it matches how HR actually enters it. UI-phase handoff: the
-        // entry form must label this field unambiguously (e.g. "วันที่ตามหนังสือแจ้ง" rather than a
-        // bare "วันที่เริ่ม"), since the alternative reading ("first month to actually deduct") would
-        // change which month a mid-month document drives.
+        // The date ON THE AUTHORITY'S DOCUMENT (the กยศ notification / LED order date) -- NOT "the first payroll month
+        // to deduct". This reading is a judgment call -- there is no UI yet to confirm it matches how HR actually
+        // enters it.
         LocalDate startDate,
         DeductionObligationStatus status,
         OffsetDateTime completedAt,
@@ -52,17 +46,15 @@ public final class DeductionObligationDtos {
         // Deliberately nullable and NOT defaulted -- an absent total must never be read as zero.
         @PositiveOrZero BigDecimal instructedTotal,
         @NotBlank String authorityReference,
-        // See DeductionObligationDto#startDate's own comment: the authority's document date, not a
-        // "first month to deduct" field -- it drives payroll from the calendar month containing it.
+        // See DeductionObligationDto#startDate's own comment: the authority's document date, not a "first month to
+        // deduct" field -- it drives payroll from the calendar month containing it.
         @NotNull LocalDate startDate,
         String notes
     ) {}
 
-    /**
-     * HR correcting the instruction on file (the authority raised/lowered the monthly figure or
-     * total, or HR fixes a typo in the reference). Deliberately does NOT touch status/override --
-     * those go through their own dedicated actions below, each with its own audit trail.
-     */
+    /** HR correcting the instruction on file (the authority raised/lowered the monthly figure or total, or HR fixes
+     * a typo in the reference). Deliberately does NOT touch status/override -- those go through their own
+     * dedicated actions below, each with its own audit trail. */
     public record DeductionObligationUpdateRequest(
         @NotNull @PositiveOrZero BigDecimal monthlyInstructedAmount,
         @PositiveOrZero BigDecimal instructedTotal,
@@ -82,13 +74,8 @@ public final class DeductionObligationDtos {
         Long payrollPeriodId
     ) {}
 
-    /**
-     * The shape both the HR progress read and the employee read-only view return -- "show progress,
-     * not a number" (issue #373's UX principle). {@code remaining}/{@code estimatedPeriodsRemaining}/
-     * {@code estimatedEndMonth} are all {@code null} when {@code instructedTotal} is null: an
-     * uncapped obligation has no remaining balance or end date to show, and that must render as
-     * "not stated by the authority", never as zero/now.
-     */
+    /** The shape both the HR progress read and the employee read-only view return -- "show progress, not a number"
+     * (issue #373's UX principle). */
     public record DeductionObligationProgressDto(
         DeductionObligationDto obligation,
         BigDecimal totalRemitted,

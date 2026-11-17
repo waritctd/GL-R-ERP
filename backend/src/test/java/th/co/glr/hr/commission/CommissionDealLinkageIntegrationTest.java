@@ -92,24 +92,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Step 9 (final payment / closeout / commission gate) — real-DB acceptance coverage.
- *
- * <p>Two things had never been proven against real Postgres before this step: (1) that a chain
- * deal (PricingRequest → ... → delivery, Steps 1-8) can actually reach {@link
- * DealStage#CLOSED_PAID} end-to-end — final payment recorded on top of full delivery — and (2)
- * that {@link CommissionService#submit} genuinely gates and cross-checks a commission submission
- * against that deal's real state, not just against a Mockito stub. This class drives the real
- * Steps 1-8 services (same fixture pattern as {@code InventoryDeliveryFulfilmentIntegrationTest})
- * one step further, through real payment, into a real {@link CommissionService} backed by a real
- * {@link CommissionRepository} and {@link TicketRepository}.
- *
- * <p>{@link AuditService} and {@link NotificationService} are mocked deliberately — they are
- * side effects of the gate decision (an already-audited, already-notified business action per
- * {@code NotificationService}'s own class comment), not the SQL behavior under test here. Every
- * other collaborator that participates in either the gate/cross-check decision or its persistence
- * (TicketRepository, CommissionRepository, CommissionCalculator) is real.
- */
+/** Step 9 (final payment / closeout / commission gate) — real-DB acceptance coverage. Every other collaborator
+ * that participates in either the gate/cross-check decision or its persistence (TicketRepository,
+ * CommissionRepository, CommissionCalculator) is real. */
 class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -153,8 +138,8 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
@@ -163,8 +148,8 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
             landedCostCalculator);
 
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         PricingDecisionRepository decisionRepository = new PricingDecisionRepository(jdbc);
@@ -209,10 +194,8 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     private void insertFactory(String name) {
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // (1) The pipeline itself: a chain deal genuinely reaches CLOSED_PAID end-to-end. Never
-    // proven by an integration test before Step 9 — see class Javadoc.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // (1) The pipeline itself: a chain deal genuinely reaches CLOSED_PAID end-to-end. Never proven by an
+    // integration test before Step 9 — see class Javadoc.
 
     @Test
     void fullChainDeal_reachesClosedPaid_afterFullDeliveryAndFinalPayment() {
@@ -224,10 +207,8 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(after.summary().paymentStatus()).isEqualTo("FULLY_PAID");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // (2) The gate: a commission cannot be submitted against a deal that hasn't reached
-    // CLOSED_PAID yet — rejected outright, no commission_record row created.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // (2) The gate: a commission cannot be submitted against a deal that hasn't reached CLOSED_PAID yet — rejected
+    // outright, no commission_record row created.
 
     @Test
     void submit_rejectsWhenLinkedDealHasNotReachedClosedPaid_andCreatesNoRecord() {
@@ -242,9 +223,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // (3) Cross-check within threshold: succeeds, no mismatch flag, snapshot recorded.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void submit_withGrossAmountWithinThreshold_succeedsWithNoMismatchFlag() {
@@ -281,9 +260,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
             .dealAmountMismatch()).isTrue();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // (4) Cross-check beyond threshold: NOT blocked, but flagged for reviewers.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void submit_withGrossAmountBeyondThreshold_succeedsButFlagsMismatch() {
@@ -304,10 +281,8 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(reloaded.dealAmountMismatch()).isTrue();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // (5) Regression guard: an unlinked (sourceTicketId = null) commission keeps working exactly
-    // as it did before Step 9 — this must never start requiring a linked deal.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // (5) Regression guard: an unlinked (sourceTicketId = null) commission keeps working exactly as it did before
+    // Step 9 — this must never start requiring a linked deal.
 
     @Test
     void submit_withNoLinkedDeal_stillSucceeds_snapshotNullMismatchFalse() {
@@ -324,9 +299,7 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(created.dealAmountMismatch()).isFalse();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private SubmitCommissionRequest submitRequestLinkedTo(long ticketId, BigDecimal grossAmount) {
         return new SubmitCommissionRequest(
@@ -346,20 +319,18 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         return count == null ? 0 : count;
     }
 
-    /** Drives a brand-new deal all the way to {@link DealStage#CLOSED_PAID}: full chain
-     * (Steps 1-6) to QUOTATION_ACCEPTED, confirmOrder, deposit paid, reserve+deliver the full
-     * quantity from stock (Step 8), then confirmFinalPayment records the remaining balance and
-     * the CLOSED_PAID auto-advance fires (paymentFullyPaid AND FULLY_DELIVERED). */
+    /** Drives a brand-new deal all the way to DealStage#CLOSED_PAID: full chain to QUOTATION_ACCEPTED,
+     * confirmOrder, deposit paid, reserve+deliver the full quantity from stock, then confirmFinalPayment records
+     * the remaining balance and the CLOSED_PAID auto-advance fires. */
     private long driveDealToClosedPaid(BigDecimal quantity) {
         long ticketId = driveDealThroughDeliveryOnly(quantity);
         ticketService.confirmFinalPayment(ticketId, accountActor);
         return ticketId;
     }
 
-    /** Same as {@link #driveDealToClosedPaid} but stops right after delivery completes —
-     * DealStage.DELIVERED / FulfilmentStatus.FULLY_DELIVERED, deposit paid but final balance not
-     * yet collected, so the deal is deliberately NOT YET at CLOSED_PAID. Used by the "gate
-     * rejects a not-yet-closed deal" test. */
+    /** Same as #driveDealToClosedPaid but stops right after delivery completes — DealStage.DELIVERED /
+     * FulfilmentStatus.FULLY_DELIVERED, deposit paid but final balance not yet collected, so the deal is
+     * deliberately NOT YET at CLOSED_PAID. Used by the "gate rejects a not-yet-closed deal" test. */
     private long driveDealThroughDeliveryOnly(BigDecimal quantity) {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-COMM-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
@@ -376,11 +347,9 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         long ticketId = created.summary().id();
         long ticketItemId = created.items().get(0).id();
 
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead, so this fixture
-        // supplies the tile fields directly. roundToFullBox=false + piecesInput=quantity keeps the
-        // derived requestedQty byte-identical to `quantity`, which this file's assertions depend on.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required
+        // on every item PricingRequestService#createDraft persists — requestedQty/requestedUnit/requestedUnitBasis are
+        // derived instead, so this fixture supplies the tile fields directly.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             ticketItemId, catalogProductId, null, "SCG", "Tile Commission", "SCG Tile Commission",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -405,15 +374,15 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
         assertThat(issuedNotice.status()).isEqualTo("ISSUED");
         ticketService.confirmDepositPaid(ticketId, accountActor);
 
-        // S18 owner decision 2026-09-28: import no longer declares stock coverage. This is setup for
-        // a commission test, so the CEO (allowed on any deal) stands in for the declarer.
+        // S18 owner decision 2026-09-28: import no longer declares stock coverage. This is setup for a commission
+        // test, so the CEO (allowed on any deal) stands in for the declarer.
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(ticketItemId, quantity, "จองครบจากสต็อก"))),
             ceoActor);
-        // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep}
-        // to {ceo, owning-rep} only -- import no longer completes delivery. salesActor (the deal
-        // owner) is used here instead of importActor; this fixture is not testing delivery authz.
+        // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep} to {ceo,
+        // owning-rep} only -- import no longer completes delivery. salesActor (the deal owner) is used here instead of
+        // importActor; this fixture is not testing delivery authz.
         TicketDto delivered = ticketService.completeDelivery(
             ticketId, new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), salesActor);
         assertThat(delivered.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
@@ -443,10 +412,9 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
-        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
-        // computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the (only, here) factory quote is ready — Import no longer creates/recalculates/submits a costing
+        // of its own; the CEO's startReview below computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -467,10 +435,9 @@ class CommissionDealLinkageIntegrationTest extends AbstractPostgresIntegrationTe
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

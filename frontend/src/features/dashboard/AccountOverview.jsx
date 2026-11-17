@@ -16,8 +16,8 @@ const GROUPS = [
   { key: 'chaseOverdue', label: 'ติดตามชำระ', dot: 'bg-danger', tint: 'bg-danger-bg', field: 'amountOutstanding', sumLabel: 'ค้าง', cta: 'danger' },
   { key: 'confirmDeposit', label: 'ยืนยันรับมัดจำ', dot: 'bg-warning', field: 'depositDue', sumLabel: 'มัดจำ', cta: 'success' },
   { key: 'confirmFinalPayment', label: 'รับชำระส่วนที่เหลือ', dot: 'bg-accent', field: 'amountOutstanding', sumLabel: 'ค้าง', cta: 'success' },
-  { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน', dot: 'bg-primary', field: 'amountPayable', sumLabel: 'มูลค่าดีล', cta: 'primary' },
-  { key: 'recordInvoiceCommission', label: 'บันทึกใบกำกับ', dot: 'bg-info', field: 'amountPayable', sumLabel: 'มูลค่าดีล', cta: 'text' },
+  { key: 'confirmCloseReady', label: 'ยืนยันพร้อมปิดงาน', dot: 'bg-primary', field: 'amountPayable', sumLabel: 'มูลค่างาน', cta: 'primary' },
+  { key: 'recordInvoiceCommission', label: 'บันทึกใบกำกับ', dot: 'bg-info', field: 'amountPayable', sumLabel: 'มูลค่างาน', cta: 'text' },
 ];
 
 const money = (value) => (value == null ? '—' : formatMoney(value));
@@ -88,8 +88,8 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
   let overdueCaption = '';
   if (overdue != null && overdueTickets) {
     if (!listAddsUp) overdueCaption = 'ดูรายการทั้งหมดในหน้าการเงิน';
-    else if (overdueTickets.length === 0) overdueCaption = 'ไม่มีดีลเกินกำหนด';
-    else overdueCaption = `${overdueTickets.length} ดีล${earliestDue === Infinity ? '' : ` · เก่าสุดครบ ${formatThaiDate(earliestDue)}`}`;
+    else if (overdueTickets.length === 0) overdueCaption = 'ไม่มีงานเกินกำหนด';
+    else overdueCaption = `${overdueTickets.length} งาน${earliestDue === Infinity ? '' : ` · เก่าสุดครบ ${formatThaiDate(earliestDue)}`}`;
   }
 
   const firstName = employee?.nickName || employee?.nameTh || user?.name || '';
@@ -140,7 +140,7 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
               failed={g.isFailed}
               to={`/finance?action=${g.key}`}
               onOpen={onOpen}
-              summary={`${g.count} ดีล · ${g.sumLabel} ${formatMoney(moneySum(g.list ?? [], ({ ticket }) => ticket[g.field]))}`}
+              summary={`${g.count} งาน · ${g.sumLabel} ${formatMoney(moneySum(g.list ?? [], ({ ticket }) => ticket[g.field]))}`}
               rows={g.list?.map(({ ticket: t, action }) => ({
                 testId: `worklist-row-${g.key}-${t.id}`,
                 entity: t.customerName || t.title,
@@ -161,7 +161,7 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
             title="รอสินค้าเข้า"
             actions={scopedFailed
               ? <small className="font-semibold text-danger">โหลดไม่สำเร็จ</small>
-              : <span className="text-xs font-semibold text-text-muted">{held.length} ดีล · {formatMoney(moneySum(held, owed))}</span>}
+              : <span className="text-xs font-semibold text-text-muted">{held.length} งาน · {formatMoney(moneySum(held, owed))}</span>}
           >
             {scopedFailed ? null : held.map((t) => (
               <div key={t.id} data-testid={`awaiting-goods-row-${t.id}`} className="flex items-center justify-between gap-3 border-b border-border px-5 py-2 mobile:px-3.5">
@@ -174,7 +174,7 @@ export function AccountOverview({ user, employee, dashboardSummary, showToast })
             ))}
             <p className="m-0 flex items-start gap-2 px-5 py-3 text-xs text-text-muted mobile:px-3.5">
               <Icon name="lock" size={14} className="mt-0.5 shrink-0" />
-              <span>รับชำระส่วนที่เหลือได้เมื่อดีลถึงขั้น 4 ส่งมอบ</span>
+              <span>รับชำระส่วนที่เหลือได้เมื่องานถึงขั้น 4 ส่งมอบ</span>
             </p>
           </Panel>
         ) : null}

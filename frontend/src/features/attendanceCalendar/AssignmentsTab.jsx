@@ -17,20 +17,9 @@ import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
 const GRID = 'grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)_minmax(0,0.8fr)] nav-drawer:min-w-[760px] reflow-cards';
 
-/**
- * การมอบหมาย tab: list/create/end for hr.work_schedule_assignment.
- *
- * The create response (`WorkScheduleAssignmentDto`) never echoes which predecessor rows the write
- * auto-closed — that detail is written only into the audit log
- * (`WorkScheduleAssignmentAdminService#create`'s `auditService.record(..., Map.of("assignment",
- * created, "closedPredecessorAssignmentIds", closedPredecessorIds))`), not returned to this caller.
- * So this tab derives it itself: it snapshots the assignment list immediately before the POST, then
- * re-lists immediately after, and reports every id present in BOTH snapshots whose `effectiveTo`
- * changed. `WorkScheduleAssignmentRepository#closeOverlappingPredecessors` closes exactly the rows
- * for this same scope that were still live at the new `effectiveFrom` — nothing else can change an
- * existing row's `effectiveTo` in the same request — so this diff is an accurate read of what the
- * server actually did, not a guess at its business rule.
- */
+/** การมอบหมาย tab: list/create/end for hr.work_schedule_assignment. So this tab derives it itself: it snapshots
+ * the assignment list immediately before the POST, then re-lists immediately after, and reports every id
+ * present in BOTH snapshots whose `effectiveTo` changed. */
 export function AssignmentsTab({ showToast }) {
   const queryClient = useQueryClient();
 
@@ -69,8 +58,8 @@ export function AssignmentsTab({ showToast }) {
       setCreateOpen(false);
       setCreateError('');
       if (closedPredecessors.length > 0) {
-        // Never silent: a user who just ended three assignments they didn't explicitly ask to end
-        // needs to see that plainly, not infer it later from a gap in the timeline.
+        // Never silent: a user who just ended three assignments they didn't explicitly ask to end needs to see that
+        // plainly, not infer it later from a gap in the timeline.
         setLastAutoClosed({
           count: closedPredecessors.length,
           ids: closedPredecessors.map((row) => row.assignmentId),
@@ -82,9 +71,9 @@ export function AssignmentsTab({ showToast }) {
       }
     },
     onError: (error) => {
-      // Both WorkScheduleAssignmentAdminService#create failure modes this tab must explain land
-      // here: 400 back-dating rejection, 409 conflicting successor. Either way the modal stays
-      // open with the exact server message so the dates are fixable in place.
+      // Both WorkScheduleAssignmentAdminService#create failure modes this tab must explain land here: 400
+      // back-dating rejection, 409 conflicting successor. Either way the modal stays open with the exact server
+      // message so the dates are fixable in place.
       setCreateError(error?.message || 'สร้างรายการมอบหมายไม่สำเร็จ');
     },
   });
@@ -109,8 +98,8 @@ export function AssignmentsTab({ showToast }) {
       setEndError('');
     },
     onError: (error) => {
-      // Back-dating the END is rejected the same way as create — keep the dialog open with the
-      // server's own message rather than closing on failure.
+      // Back-dating the END is rejected the same way as create — keep the dialog open with the server's own message
+      // rather than closing on failure.
       setEndError(error?.message || 'สิ้นสุดการมอบหมายไม่สำเร็จ');
     },
   });

@@ -24,8 +24,8 @@ const PILL_OFF = 'border-border bg-surface';
 
 // "ดีล" step: which way the quotation gets its deal.
 const DEAL_MODES = [
-  { code: 'pick', label: 'เลือกดีลที่มีอยู่' },
-  { code: 'create', label: 'สร้างดีลใหม่' },
+  { code: 'pick', label: 'เลือกงานที่มีอยู่' },
+  { code: 'create', label: 'สร้างงานใหม่' },
 ];
 
 /**
@@ -141,14 +141,14 @@ export function ExistingDealNotice({
   const choices = [
     {
       value: 'existing',
-      title: `เพิ่ม ${customerName} เป็น${roleLabel}ในดีลเดิม (แนะนำ)`,
+      title: `เพิ่ม ${customerName} เป็น${roleLabel}ในงานเดิม (แนะนำ)`,
       hint: isBuyer
-        ? 'ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง · ผลประมูลบันทึกต่อราย'
-        : 'ดีลนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง',
+        ? 'งานนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง · ผลประมูลบันทึกต่อราย'
+        : 'งานนับใน pipeline ครั้งเดียว · ใบเสนอราคาได้เลขใหม่ของตัวเอง',
     },
     {
       value: 'new',
-      title: 'สร้างดีลใหม่แยกต่างหาก',
+      title: 'สร้างงานใหม่แยกต่างหาก',
       hint: 'ใช้เมื่อเป็นคนละงาน คนละขอบเขต แม้ชื่อโครงการเหมือนกัน',
     },
   ];
@@ -156,7 +156,7 @@ export function ExistingDealNotice({
     <div role="group" aria-labelledby="existing-deal-title" data-testid="existing-deal-notice" className="mt-4 grid gap-3 rounded-md border border-info-border bg-info-bg p-3.5 text-sm">
       <div id="existing-deal-title" className="flex items-center gap-2 font-extrabold text-info-dark">
         <Icon name="info" size={16} className="shrink-0" />
-        โครงการนี้มีดีลของคุณอยู่แล้ว
+        โครงการนี้มีงานของคุณอยู่แล้ว
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md bg-surface px-3 py-2">
         <code className="text-xs text-text-muted">{deal.code}</code>
@@ -166,7 +166,7 @@ export function ExistingDealNotice({
         {buyers.length ? <span className="text-xs text-text-muted">{buyers.map((p) => p.customerName).join(' · ')}</span> : null}
         <StatusBadge tone={stage.tone}>{stage.label}</StatusBadge>
       </div>
-      <div role="radiogroup" aria-label="ใช้ดีลเดิมหรือสร้างดีลใหม่" className="grid gap-2">
+      <div role="radiogroup" aria-label="เลือกงานเดิมหรือสร้างงานใหม่" className="grid gap-2">
         {choices.map((option) => (
           <label
             key={option.value}
@@ -193,8 +193,8 @@ export function ExistingDealNotice({
       <p className="m-0 text-xs font-bold text-info-dark" data-testid="existing-deal-result">
         {choice === 'existing'
           ? `จะสร้างใบเสนอราคาใหม่ภายใต้ ${deal.code}${isBuyer ? ` · ผู้รับเหมา ${resultCount} ราย` : ` · เสนอแก่${roleLabel}`}`
-          : 'จะสร้างดีลใหม่และใบเสนอราคาใหม่ · ดีลนี้จะนับแยกใน pipeline'}
-        {moreCount > 0 ? ` (โครงการนี้มีดีลของคุณอีก ${moreCount} ดีล)` : ''}
+          : 'จะสร้างงานใหม่และใบเสนอราคาใหม่ · งานนี้จะนับแยกใน pipeline'}
+        {moreCount > 0 ? ` (โครงการนี้มีงานของคุณอีก ${moreCount} งาน)` : ''}
       </p>
     </div>
   );
@@ -378,9 +378,9 @@ export function DealCustomerCard({
   }
 
   function selectCustomer(next) {
-    // Picking a NEW customer always resets โครงการ -- it was scoped to the previous customer and
-    // cannot carry over. Also drops any in-progress โครงการ filter text/popup state, which
-    // otherwise would go on filtering the NEW customer's project list.
+    // Picking a NEW customer always resets โครงการ -- it was scoped to the previous customer and cannot carry
+    // over. Also drops any in-progress โครงการ filter text/popup state, which otherwise would go on filtering the
+    // NEW customer's project list.
     onChange({ customer: next, project: null });
     setCustomerSearch('');
     setCustomerResults([]);
@@ -418,9 +418,8 @@ export function DealCustomerCard({
     if (!foreignCustomer && !completeThaiAddress(newCustomer)) return;
     setSavingCustomer(true);
     try {
-      // Foreign mode omits every structured field entirely (not just blanks them) -- see the
-      // foreignCustomer state comment above for why that distinction is what actually reaches
-      // the backend's non-structured create() path.
+      // Foreign mode omits every structured field entirely (not just blanks them) -- see the foreignCustomer state
+      // comment above for why that distinction is what actually reaches the backend's non-structured create() path.
       const res = await api.customers.create(foreignCustomer ? {
         name: newCustomer.name.trim(),
         taxId: newCustomer.taxId.trim() || null,
@@ -463,11 +462,11 @@ export function DealCustomerCard({
   }
 
   return (
-    <Panel title="ดีล">
+    <Panel title="งาน">
       {onModeChange ? (
-        // A segmented choice, not a modal (DESIGN.md §16): both branches live on this one panel.
-        // aria-pressed toggle buttons in the same pill voice as ช่องทางรับงาน.
-        <div role="group" aria-label="วิธีเลือกดีล" className="mb-4 flex flex-wrap gap-2">
+        // A segmented choice, not a modal (DESIGN.md §16): both branches live on this one panel. aria-pressed toggle
+        // buttons in the same pill voice as ช่องทางรับงาน.
+        <div role="group" aria-label="วิธีเลือกงาน" className="mb-4 flex flex-wrap gap-2">
           {DEAL_MODES.map((option) => (
             <button
               key={option.code}
@@ -523,11 +522,8 @@ export function DealCustomerCard({
             )}
           </FormField>
           {!customer && customerOpen ? (
-            // `list-none pl-0`: this renders as a real bulleted list without it — measured
-            // list-style-type `disc` with a 40 px padding-inline-start, so every suggestion sat
-            // behind a bullet and indented off the popup's left edge. The `role="listbox"` /
-            // `role="option"` pair is the other half: a suggestion popup announced as a plain list
-            // gives a screen-reader user no way to know these are choices for the field above.
+            // `list-none pl-0`: this renders as a real bulleted list without it — measured list-style-type `disc` with a
+            // 40 px padding-inline-start, so every suggestion sat behind a bullet and indented off the popup's left edge.
             <ul
               id="customer-typeahead-list"
               role="listbox"
@@ -540,8 +536,8 @@ export function DealCustomerCard({
                   className="flex w-full items-center gap-1.5 border-0 bg-transparent px-3 py-2 text-left text-xs font-bold text-link"
                   onMouseDown={(e) => {
                     e.preventDefault();
-                    // Keep the name the rep already typed in the search box when opening the
-                    // create form, so adding a new customer does not require retyping it.
+                    // Keep the name the rep already typed in the search box when opening the create form, so adding a new customer
+                    // does not require retyping it.
                     setNewCustomer((p) => ({ ...p, name: customerSearch.trim() }));
                     setShowNewCustomer(true);
                     setCustomerOpen(false);
@@ -556,8 +552,8 @@ export function DealCustomerCard({
                 <li role="presentation" className="px-3 py-2 text-xs text-text-muted">ไม่พบข้อมูล</li>
               ) : null}
               {customerResults.map((c) => (
-                // The OPTION is the button, not the <li>: a listbox child must be an option, and
-                // putting the role on the wrapper would nest an interactive control inside one.
+                // The OPTION is the button, not the : a listbox child must be an option, and putting the role on the wrapper
+                // would nest an interactive control inside one.
                 <li key={c.id} role="presentation">
                   <button
                     type="button"
@@ -660,10 +656,9 @@ export function DealCustomerCard({
       </div>
 
       {customer && !pickOnly ? (
-        // Present, prefilled and editable the moment a customer is selected — deliberately NOT
-        // behind an "แก้ไข" affordance, because the point is that the rep sees what the document is
-        // about to print, and a repeat customer arrives already filled. Saved on blur; none is
-        // required.
+        // Present, prefilled and editable the moment a customer is selected — deliberately NOT behind an "แก้ไข"
+        // affordance, because the point is that the rep sees what the document is about to print, and a repeat
+        // customer arrives already filled. Saved on blur; none is required.
         <div className="mt-3">
           <CustomerDetailsFields customer={customer} onChange={(next) => onChange({ customer: next })} showToast={showToast} />
         </div>

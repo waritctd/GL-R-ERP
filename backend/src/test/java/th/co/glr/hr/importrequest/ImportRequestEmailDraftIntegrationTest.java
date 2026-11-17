@@ -34,14 +34,9 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * The per-factory order-email DRAFT (owner decision 09-18 #3 §B: "go ahead [order-email draft]") —
- * against real Postgres, through the real service. Mirrors the factory RFQ composer's own
- * discipline: the backend drafts, a human copies and sends, this system never sends mail itself.
- *
- * <p>Editing and mark-sent are both authz-and-lifecycle-shaped (who may touch a draft, and only
- * before it is marked sent), so per CLAUDE.md this needs real-DB evidence, written wrong-way-round.
- */
+/** The per-factory order-email DRAFT (owner decision 09-18 #3 §B: "go ahead [order-email draft]") — against
+ * real Postgres, through the real service. Mirrors the factory RFQ composer's own discipline: the backend
+ * drafts, a human copies and sends, this system never sends mail itself. */
 class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private ImportRequestService service;
@@ -99,40 +94,21 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         assertThat(issued.emailBody()).contains("Lithos Nero").contains("60x60 cm").contains("100");
         assertThat(issued.emailSentAt()).isNull();
         // Cheap nit (REVIEW ROUND 2): "Attached:" must name the REAL download filename
-        // (ImportRequestController#storedFile's own "IR-<doc>-<factory>.pdf") so a human copying
-        // this line into their mail client names what they actually downloaded.
+        // (ImportRequestController#storedFile's own "IR-<doc>-<factory>.pdf") so a human copying this line into their
+        // mail client names what they actually downloaded.
         assertThat(issued.emailBody())
             .contains("Attached: IR-" + issued.docNumber() + "-" + issued.factoryName() + ".pdf");
 
-        // No price/discount/pricing-mode/wastage anywhere in the draft (hard boundary, extended
-        // from ImportRequestDtosNoPricingFieldsTest's record-shape check to actual body CONTENT).
+        // No price/discount/pricing-mode/wastage anywhere in the draft (hard boundary, extended from
+        // ImportRequestDtosNoPricingFieldsTest's record-shape check to actual body CONTENT).
         String lower = issued.emailBody().toLowerCase(java.util.Locale.ROOT);
         assertThat(lower).doesNotContain("price").doesNotContain("discount")
             .doesNotContain("wastage").doesNotContain("cost");
     }
 
-    /**
-     * The numbered-block layout (owner decision 09-18 #3, second pass) that replaced the old
-     * fixed-width table — mirrors {@code FactoryQuoteService#appendItemBlock}'s shape: a
-     * Brand/Model (Code) header, a Colour/Surface/Size detail line, a Quantity line with no
-     * trailing zeros, and the free-text note indented as its own line. Blank fields (here: no
-     * colour, no surface on the second line) are skipped outright rather than printed as "-" or
-     * "null".
-     *
-     * <p><b>REVIEW ROUND 2, S-A</b> (this test used to pin the PRE-fix header/note shape — fixed
-     * here rather than left green over stale behaviour): the header is now "<Brand> <Model>  (Code:
-     * X)", not the bare code alone, and the auto-derived colour/surface note ("สี Grigio · ผิว
-     * Matte") is SKIPPED on the first line because it exactly duplicates the "Colour: Grigio |
-     * Surface: Matte" detail line one row up — printing both said the same thing twice in an email a
-     * factory actually reads.
-     *
-     * <p><b>REVIEW ROUND 3 nit</b> (this test's fixture happens to have {@code code == model} for
-     * both lines, since there is no catalog link — see {@code
-     * ImportRequestFactoryResolutionIntegrationTest#createDrafts_prefillsCodeSizeQtyUnitAndNote_forCatalogLinkedAndHandTypedLines}
-     * for the catalog-linked case where they genuinely differ): the "(Code: X)" suffix is no longer
-     * printed when X is identical to the model already shown a few words earlier — "... Lithos Nero
-     * (Code: Lithos Nero)" told a factory nothing a second time.
-     */
+    /** The numbered-block layout that replaced the old fixed-width table — mirrors
+     * FactoryQuoteService#appendItemBlock's shape: a Brand/Model header, a Colour/Surface/Size detail line, a
+     * Quantity line with no trailing zeros, and the free-text note indented as its own line. */
     @Test
     void issue_bodyUsesTheNumberedBlockLayout_skippingBlankFieldsAndNeverPrintingNull() {
         insertFactory("Block Layout Factory", "IT", "sales@blocklayout.example");
@@ -149,9 +125,8 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         assertThat(body).contains("1. Living Ceramics Lithos Nero")
             .doesNotContain("(Code: Lithos Nero)") // code == model here -- the suffix is redundant
             .contains("Colour: Grigio | Surface: Matte | Size: 60x60 cm")
-            .contains("Quantity: 308 pcs");   // no trailing zeros: "308", not "308.000"
-        // The auto-derived colour/surface sentence is NOT repeated as a separate "Note:" line — it
-        // is already shown as the Colour/Surface detail line above (S-A).
+            .contains("Quantity: 308 pcs");   // no trailing zeros: "308", not "308.000" The auto-derived colour/surface sentence is NOT repeated as a
+            // separate "Note:" line — it is already shown as the Colour/Surface detail line above (S-A).
         assertThat(body).doesNotContain("Note: สี Grigio");
         assertThat(body).contains("2. Terrazzo Co Terrazzo White")
             .doesNotContain("(Code: Terrazzo White)")
@@ -191,19 +166,17 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
             .doesNotContain("ซม. cm");
     }
 
-    /**
-     * REVIEW ROUND 2, S-A: a business-typed note that does NOT match the auto-derived colour/surface
-     * sentence is never skipped — only the exact duplicate is.
-     */
+    /** REVIEW ROUND 2, S-A: a business-typed note that does NOT match the auto-derived colour/surface sentence is
+     * never skipped — only the exact duplicate is. */
     @Test
     void issue_bodyKeepsABusinessTypedNote_whenItDiffersFromTheAutoDerivedOne() {
         insertFactory("Custom Note Factory", "IT", "note@example.com");
         long ticketId = insertTicket("EM-CUSTOM-NOTE");
         insertItemWithBrandModelColor(ticketId, "Living Ceramics", "Custom Note Factory", "Lithos Nero",
             "60x60 cm", "10", "pcs", 0, "Grigio", "Matte");
-        // Business hand-edits the auto-derived note to something else before drafts are raised is not
-        // reachable pre-createDrafts in this flow (the note is only ever set AT creation), so this
-        // exercises the draft-stage item edit via update() instead.
+        // Business hand-edits the auto-derived note to something else before drafts are raised is not reachable
+        // pre-createDrafts in this flow (the note is only ever set AT creation), so this exercises the draft-stage
+        // item edit via update() instead.
         long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         ImportRequestDto draft = service.get(id, owner);
         java.util.List<ImportRequestRequests.ImportRequestItemInput> edited = draft.items().stream()
@@ -218,11 +191,9 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         assertThat(issued.emailBody()).contains("Note: Pack in wooden crates, fragile");
     }
 
-    /**
-     * The catalog-linked case where the code GENUINELY differs from the model — the "(Code: X)"
-     * suffix still prints (REVIEW ROUND 3 nit's positive case, complementing the negative case
-     * pinned above where {@code code == model} and the suffix is now skipped).
-     */
+    /** The catalog-linked case where the code GENUINELY differs from the model — the "(Code: X)" suffix still
+     * prints (REVIEW ROUND 3 nit's positive case, complementing the negative case pinned above where code == model
+     * and the suffix is now skipped). */
     @Test
     void issue_bodyShowsTheCodeSuffix_whenItGenuinelyDiffersFromTheModel() {
         long catalogPriceId = insertCatalogProduct("Code Differs Factory", "IT", "CAT-CODE-777",
@@ -243,12 +214,9 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
             .contains("1. Living Ceramics Lithos Nero Hand-Typed  (Code: CAT-CODE-777)");
     }
 
-    /**
-     * Cheap nit (REVIEW ROUND 3): the "Attached:" filename and the download route's own filename
-     * ({@link ImportRequestController#storedFile}) must be produced by the SAME helper ({@link
-     * ImportRequestService#downloadFileName}) — asserted here by calling that helper directly rather
-     * than hand-duplicating its string shape a third time in a test.
-     */
+    /** Cheap nit: the "Attached:" filename and the download route's own filename must be produced by the SAME
+     * helper — asserted here by calling that helper directly rather than hand-duplicating its string shape a third
+     * time in a test. */
     @Test
     void issue_attachedFilename_matchesTheDownloadRoutesOwnFilenameHelper() {
         insertFactory("Filename Tie Factory", "IT", "a@example.com");
@@ -262,20 +230,15 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         assertThat(issued.emailBody()).contains("Attached: " + expectedFilename);
     }
 
-    /**
-     * REVIEW ROUND 3, item 4 (S-F email half): the email's "Required by:" line must match what
-     * ACTUALLY lands on the form. The bug was that {@code buildEmailDraft} read {@code
-     * draft.requiredByNote()} directly, which can be BLANK on the draft even though {@code #issue}'s
-     * own deal-snapshot fallback is what really gets written onto the issued row — so the printed
-     * form and the email could silently disagree.
-     */
+    /** REVIEW ROUND 3, item 4 (S-F email half): the email's "Required by:" line must match what ACTUALLY lands on
+     * the form. */
     @Test
     void issue_emailRequiredByLine_matchesWhatActuallyGetsSnapshottedOntoTheForm() {
         insertFactory("Required By Consistency Factory", "IT", "a@example.com");
         long ticketId = insertTicket("EM-REQBY-CONSIST");
         insertItem(ticketId, "Required By Consistency Factory", "Line", "60x60", "10", "pcs", 0);
-        // The draft is raised BEFORE the deal-level value is set, so the draft's OWN requiredByNote
-        // starts (and stays) blank until #issue's re-snapshot fallback fires.
+        // The draft is raised BEFORE the deal-level value is set, so the draft's OWN requiredByNote starts (and stays)
+        // blank until #issue's re-snapshot fallback fires.
         long id = DraftSeed.seed(jdbc, ticketId, owner).get(0).id();
         assertThat(service.get(id, owner).requiredByNote()).isNull();
         service.setRequiredByNote(ticketId, new SetRequiredByNoteRequest("Within 30 days"), owner);
@@ -287,11 +250,9 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
             .contains("Required by: Within 30 days");
     }
 
-    /**
-     * OWNER DECISION 09-19 #2: the order-email subject/body must never name the customer or the
-     * project — a supplier has no business learning either. The subject used to read
-     * "Purchase order &lt;doc&gt; - GL&amp;R (&lt;project&gt;)"; the parenthetical is gone outright.
-     */
+    /** OWNER DECISION 09-19 #2: the order-email subject/body must never name the customer or the project — a
+     * supplier has no business learning either. The subject used to read "Purchase order <doc> - GL&R
+     * (<project>)"; the parenthetical is gone outright. */
     @Test
     void issue_emailSubjectAndBody_neverNameTheCustomerOrTheProject() {
         insertFactory("Privacy Factory", "IT", "sales@privacyfactory.example");
@@ -344,12 +305,8 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
 
     // ── REVIEW ROUND 3, item 3 (S-D regression): setLeadTime's email regeneration ────────────────
 
-    /**
-     * The OLD code regenerated the unsent draft UNCONDITIONALLY on every {@code setLeadTime} call,
-     * silently clobbering a hand-edit made via {@link #emailDraft_isEditableByOwningRepCeoOrImport_notByANonOwningRep}'s
-     * own route. Regeneration must now happen ONLY when the stored body is still exactly what
-     * generation would have produced — i.e. nobody touched it since.
-     */
+    /** The OLD code regenerated the unsent draft UNCONDITIONALLY on every setLeadTime call, silently clobbering a
+     * hand-edit made via #emailDraft_isEditableByOwningRepCeoOrImport_notByANonOwningRep's own route. */
     @Test
     void setLeadTime_neverClobbersAHandEditedUnsentEmailBody() {
         insertFactory("Hand Edit Preserve Factory", "IT", "a@example.com");
@@ -368,12 +325,8 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
             .isEqualTo("A completely hand-written email, please ship ASAP");
     }
 
-    /**
-     * When the draft is STILL unedited, {@code setLeadTime} does regenerate it (the content must
-     * move with the new range) — but the signature must always read the ORIGINAL issuer, never
-     * whoever happens to be the one nudging the lead time (here: {@code import}, a different person
-     * from the {@code owner} who actually issued the form).
-     */
+    /** When the draft is STILL unedited, setLeadTime does regenerate it — but the signature must always read the
+     * ORIGINAL issuer, never whoever happens to be the one nudging the lead time. */
     @Test
     void setLeadTime_regeneratesAnUneditedEmail_butAlwaysSignsAsTheOriginalIssuer_notTheCaller() {
         insertFactory("Original Signer Factory", "IT", "a@example.com");
@@ -444,14 +397,8 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
         assertThat(service.get(id, owner).emailTo()).isEqualTo("a@example.com");
     }
 
-    // ── repository-level compare-and-set (cheap nit, REVIEW ROUND 2) ─────────────────────────────
-    //
-    // The service already refuses a non-ISSUED/already-sent row BEFORE calling the repository, so a
-    // test that only ever drives the service could never distinguish "the repository's own WHERE
-    // clause also checks this" from "the repository writes unconditionally and the service check is
-    // the only thing stopping it" -- exactly the "green test that cannot fail is not evidence" trap.
-    // These call ImportRequestRepository DIRECTLY, bypassing the service's own gate entirely, so they
-    // actually exercise (and mutation-check) the SQL WHERE clause itself.
+    // Exercises repository compare-and-set guards directly so service validation cannot hide an unconditional SQL
+    // update.
 
     @Test
     void updateEmailDraftSql_refusesADraftRow_directlyAtTheRepository() {
@@ -600,12 +547,7 @@ class ImportRequestEmailDraftIntegrationTest extends AbstractPostgresIntegration
             color, texture);
     }
 
-    /**
-     * Like {@link #insertItemWithColor}, but with a REAL product {@code brand} distinct from the
-     * factory name — REVIEW ROUND 2, S-A's order-email header ("<Brand> <Model>  (Code: X)") needs a
-     * genuine brand value to test against; every other test in this file uses the simpler
-     * {@code brand == factory} shape above since it does not assert on brand text at all.
-     */
+    /** Like #insertItemWithColor, but with a REAL product brand distinct from the factory name. */
     private void insertItemWithBrandModelColor(long ticket, String brand, String factory, String model,
             String size, String qty, String unit, int sortOrder, String color, String texture) {
         jdbc.update("""

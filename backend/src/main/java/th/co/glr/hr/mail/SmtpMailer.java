@@ -14,23 +14,9 @@ import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Component;
 
-/**
- * {@link Mailer} over authenticated SMTP submission. Selected by {@code app.mail.provider=smtp} -
- * the on-prem transport: sends AS the company mailbox ({@code app.mail.from}, e.g. job@glr.co.th)
- * through the company mail host, to each recipient's real address (1-to-many). $0 - reuses an
- * existing mailbox; no per-email fee, no domain verification.
- *
- * <p>Builds its own {@link JavaMailSenderImpl} from {@code app.mail.smtp.*} rather than relying on
- * Spring Boot's mail auto-configuration - so no {@code JavaMailSender} bean exists on
- * resend/log deployments (which would otherwise activate Spring's SMTP-connecting mail health
- * indicator), and all SMTP config lives under one {@code app.mail} namespace.
- *
- * <p>M365 note: Microsoft 365 retired Basic-Auth SMTP (app-password) as of 30 Apr 2026. If the mail
- * host is M365, use a connector relay or Azure Communication Services instead of this transport.
- *
- * <p>{@code List-Unsubscribe} is deliberately not sent here either - see {@link ResendMailer}'s
- * class Javadoc for why (transactional mail with no real list to unsubscribe from).
- */
+/** Mailer over authenticated SMTP submission. M365 note: Microsoft 365 retired Basic-Auth SMTP (app-password)
+ * as of 30 Apr 2026. If the mail host is M365, use a connector relay or Azure Communication Services instead
+ * of this transport. */
 @Component
 @ConditionalOnProperty(name = "app.mail.provider", havingValue = "smtp")
 public class SmtpMailer implements Mailer {
@@ -40,10 +26,9 @@ public class SmtpMailer implements Mailer {
     private final String fromAddress;
     private final String replyTo;
 
-    // @Autowired marks THIS as the constructor Spring uses — required because the class also has
-    // package-private test-seam constructors below, and with multiple constructors and none
-    // annotated Spring falls back to a (nonexistent) no-arg constructor and fails to wire the whole
-    // context when app.mail.provider=smtp (would crash-loop an on-prem SMTP deploy at startup).
+    // @Autowired marks THIS as the constructor Spring uses — required because the class also has package-private
+    // test-seam constructors below, and with multiple constructors and none annotated Spring falls back to a
+    // no-arg constructor and fails to wire the whole context when app.mail.provider=smtp.
     @Autowired
     public SmtpMailer(@Value("${app.mail.from:noreply@glr.co.th}") String fromAddress,
                       @Value("${app.mail.reply-to:}") String replyTo,
@@ -70,8 +55,8 @@ public class SmtpMailer implements Mailer {
         this.replyTo = replyTo == null ? "" : replyTo.trim();
     }
 
-    /** Test seam: inject a sender directly so message-building can be verified without a network.
-     * No Reply-To - see the 3-arg overload below for tests that need one. */
+    /** Test seam: inject a sender directly so message-building can be verified without a network. No Reply-To - see
+     * the 3-arg overload below for tests that need one. */
     SmtpMailer(String fromAddress, JavaMailSender sender) {
         this(fromAddress, "", sender);
     }
@@ -105,8 +90,8 @@ public class SmtpMailer implements Mailer {
     public void sendHtml(String to, String subject, String htmlBody, String textBody, List<InlineImage> inlineImages) {
         try {
             var message = sender.createMimeMessage();
-            // 2-arg setText(text, html) builds a proper multipart/alternative part nested inside the
-            // multipart/mixed root, so clients that reject/strip HTML fall back to textBody.
+            // 2-arg setText(text, html) builds a proper multipart/alternative part nested inside the multipart/mixed root,
+            // so clients that reject/strip HTML fall back to textBody.
             var helper = new MimeMessageHelper(message, true, "UTF-8");
             helper.setFrom(fromAddress);
             if (!replyTo.isBlank()) {
@@ -115,10 +100,9 @@ public class SmtpMailer implements Mailer {
             helper.setTo(to);
             helper.setSubject(subject);
             helper.setText(textBody, htmlBody);
-            // addInline MUST come after setText(): MimeMessageHelper builds the multipart tree
-            // incrementally as parts are added, and adding an inline resource before the text part
-            // orders the MIME sections so some clients (Outlook in particular) show the "inline"
-            // image as a plain attachment instead of rendering it in place.
+            // addInline MUST come after setText: MimeMessageHelper builds the multipart tree incrementally as parts are
+            // added, and adding an inline resource before the text part orders the MIME sections so some clients show the
+            // "inline" image as a plain attachment instead of rendering it in place.
             for (InlineImage image : inlineImages) {
                 helper.addInline(image.contentId(), new ByteArrayResource(image.bytes()),
                     image.mimeType() != null ? image.mimeType() : "application/octet-stream");
@@ -134,8 +118,8 @@ public class SmtpMailer implements Mailer {
     public void send(OutgoingEmail email) {
         try {
             var message = sender.createMimeMessage();
-            // multipart=true -> MIXED_RELATED, so one message can carry the multipart/alternative
-            // (text+html), related inline images, and mixed file attachments together.
+            // multipart=true -> MIXED_RELATED, so one message can carry the multipart/alternative (text+html), related
+            // inline images, and mixed file attachments together.
             var helper = new MimeMessageHelper(message, true, "UTF-8");
             helper.setFrom(fromAddress);
             if (!replyTo.isBlank()) {

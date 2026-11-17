@@ -15,34 +15,15 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.brand.BrandAssets;
 import th.co.glr.hr.mail.Mailer;
 
-// Issue #782 narrowed what this class is responsible for: recipient redirection (app.mail.override-to)
-// now lives entirely in th.co.glr.hr.mail.OverrideRedirectingMailer, which wraps the Mailer bean this
-// class is handed - see that class, and NotificationEmailService's own overrideConfigured Javadoc.
-// `mailer` below is a bare Mockito mock, NOT wrapped in the real decorator, so nothing in THIS file can
-// observe an address actually being swapped any more - that assertion moved to
-// OverrideRedirectingMailerTest / MailOverrideContainmentTest (both in th.co.glr.hr.mail), which drive
-// this exact class through a REAL decorator. What stays here, and is still exactly this class's job:
-//   - the send-or-skip decision when `to` is blank (an override rescues it; nothing else does)
-//   - `to` reaching the Mailer completely unchanged either way (proves this class no longer swaps it)
-//   - subject-suffix (an unrelated, still-local feature - #782 is only about the recipient)
-//   - the HTML/text template itself: escaping, line breaks, CTA, the inline logo
-//
-// Every send() now routes through Mailer.sendHtml(to, subject, html, text, inlineImages): assertions
-// check both text alternatives (so a regression in either builder is caught) plus that the GL&R logo
-// is always handed to the Mailer as an inline image (so a regression that silently drops the
-// attachment while leaving the <img src="cid:..."> in place would be caught too).
+// Issue #782 narrowed what this class is responsible for: recipient redirection (app.mail.override-to) now
+// lives entirely in th.co.glr.hr.mail.OverrideRedirectingMailer, which wraps the Mailer bean this class is
+// handed - see that class, and NotificationEmailService's own overrideConfigured Javadoc.
 class NotificationEmailServiceTest {
     private final Mailer mailer = mock(Mailer.class);
 
-    /** True when the inline-image list is exactly the GL&R logo the constructor loads from the
-     * classpath (static/brand/glr-logo.png, via BrandAssets.logoBytes()) - real bytes, not a
-     * test fixture, since NotificationEmailService always loads the real asset.
-     *
-     * <p>MUTATION-CHECK (verified live, not just by reasoning): temporarily changed {@code send()}
-     * to call {@code mailer.sendHtml(..., List.of())} instead of {@code logoInlineImages} -- 7 of
-     * this class's 8 tests went red (every send-path one; only {@code
-     * skipsSendWhenNoEmailAndNoOverrideConfigured} stayed green, correctly, since it never sends),
-     * plus {@code NotificationServiceTest}'s equivalent assertion. Reverted to an empty diff. */
+    /** True when the inline-image list is exactly the GL&R logo the constructor loads from the classpath
+     * (static/brand/glr-logo.png, via BrandAssets.logoBytes()) - real bytes, not a test fixture, since
+     * NotificationEmailService always loads the real asset. */
     private static boolean hasGlrLogoInline(List<Mailer.InlineImage> images) {
         return images.size() == 1
             && "glr-logo".equals(images.get(0).contentId())
@@ -50,11 +31,8 @@ class NotificationEmailServiceTest {
             && images.get(0).bytes().length > 0;
     }
 
-    // This class never emits its own "Redirected for testing" note any more (see the class comment
-    // above) - so the absence assertions here hold unconditionally now, not just when overrideTo is
-    // blank. Kept anyway (rather than deleted) because a blank-override deployment is still the
-    // baseline every OTHER test in this file implicitly relies on, and this is where that baseline
-    // gets its own explicit pin.
+    // This class never emits its own "Redirected for testing" note any more (see the class comment above) - so the
+    // absence assertions here hold unconditionally now, not just when overrideTo is blank.
     @Test
     void sendsToRealAddressWhenNoOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
@@ -87,16 +65,9 @@ class NotificationEmailServiceTest {
         verifyNoInteractions(mailer);
     }
 
-    // Formerly "redirectsToOverrideAddressAndSuffixesSubjectWhenConfigured": before #782's fix this
-    // asserted mailer.sendHtml received the OVERRIDE address ("tester@example.com"), because this
-    // class used to compute that swap itself. It no longer does - see the class comment - so `to`
-    // below is asserted UNCHANGED even with an override configured, which is now the whole point of
-    // this test: proving this class stopped implementing that half of the rule. The subject-suffix
-    // assertion is the one part of the old test that is still this class's own behaviour.
-    //
-    // MUTATION-CHECK (verified live, not just by reasoning, pre-#782): temporarily changed send() back
-    // to `subjectSuffix + "[GL&R HR] " + subject` (the old prefix order) -- exactly this one test went
-    // red, nothing else.
+    // Formerly "redirectsToOverrideAddressAndSuffixesSubjectWhenConfigured": before #782's fix this asserted
+    // mailer.sendHtml received the OVERRIDE address ("tester@example.com"), because this class used to compute
+    // that swap itself.
     @Test
     void passesRecipientThroughUnchangedAndAppliesSubjectSuffixEvenWithOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "tester@example.com", " (UAT)",
@@ -118,22 +89,8 @@ class NotificationEmailServiceTest {
             argThat(NotificationEmailServiceTest::hasGlrLogoInline));
     }
 
-    // Formerly "redirectsToOverrideEvenWhenEmployeeHasNoEmailOnFile", which also asserted the HTML/text
-    // contained "no email on file" - that phrase was always part of the OLD redirect note this class
-    // used to generate (" (no email on file)." in the pre-#782 source), never part of the base
-    // template, so it is gone from this class's output entirely now, not just when overrideTo is
-    // blank; asserting its absence here would be as vacuous as asserting its presence used to be
-    // informative. What THIS test still needs to prove, and does: an addressless employee is NOT
-    // skipped when an override is configured (see overrideConfigured's Javadoc) - `to` reaches the
-    // Mailer as null, the generic greeting is used (recipientName was also null), and no CTA renders
-    // (link was also null) - the same content a no-override, no-link, no-name send would produce,
-    // MINUS being skipped. The regression this guards - NotificationService used to gate on the
-    // address before this class ever ran, so an addressless employee was silently dropped even with an
-    // override configured (see NotificationServiceTest's equivalent test) - is unchanged by #782; only
-    // WHERE the eventual redirect address comes from moved. See
-    // MailOverrideContainmentTest#notificationEmailServiceStillRedirectsWhenTheEmployeeHasNoAddressOnFile
-    // for the real-decorator version of this exact scenario, which is where that address is actually
-    // pinned end-to-end.
+    // Formerly "redirectsToOverrideEvenWhenEmployeeHasNoEmailOnFile", which also asserted the HTML/text contained
+    // "no email on file".
     @Test
     void attemptsTheSendWhenEmployeeHasNoEmailOnFileButOverrideIsConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "tester@example.com", " (UAT)",
@@ -156,9 +113,9 @@ class NotificationEmailServiceTest {
 
     @Test
     void htmlEscapesUserSuppliedNameAndBody() {
-        // reviewerNote-style free text: a manager can type anything, including markup. An unescaped
-        // '<' or '&' would corrupt the email (or worse, inject markup) - assert the raw characters
-        // never appear unescaped in the HTML alternative.
+        // reviewerNote-style free text: a manager can type anything, including markup. An unescaped '<' or '&' would
+        // corrupt the email (or worse, inject markup) - assert the raw characters never appear unescaped in the HTML
+        // alternative.
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
 
         service.send(7L, "employee@glr.co.th", "<b>Somchai</b> & Co",
@@ -204,15 +161,9 @@ class NotificationEmailServiceTest {
             argThat(NotificationEmailServiceTest::hasGlrLogoInline));
     }
 
-    // The logo used to be a remote <img src> built from a SEPARATE asset-base-url host (the
-    // backend's own Render origin), specifically to dodge a Vercel Deployment-Protection auth wall
-    // that could block Gmail's image-fetching proxy. That whole failure mode - and the Gmail
-    // spam-folder image-blocking defect that actually reached UAT - is gone now that the logo
-    // travels INSIDE the message as a cid: reference: there is no URL for anything to block. What's
-    // worth pinning now: the HTML references "cid:glr-logo" (not a URL), the portal CTA still
-    // resolves through app-base-url (the only base URL left), and an inline image with that exact
-    // content-id is actually handed to the Mailer - so a regression that drops the attachment while
-    // leaving the <img src> alone would be caught.
+    // The logo used to be a remote <img src> built from a SEPARATE asset-base-url host (the backend's own Render
+    // origin), specifically to dodge a Vercel Deployment-Protection auth wall that could block Gmail's
+    // image-fetching proxy.
     @Test
     void logoIsCidInlineImageWhilePortalCtaUsesAppBaseUrlLink() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
@@ -233,12 +184,9 @@ class NotificationEmailServiceTest {
                 && images.get(0).bytes().length > 0));
     }
 
-    // Formerly "sendWithAttachmentDropsTheBracketedRedirectShapeWhenOverrideConfigured". Before #782's
-    // fix this asserted mailer.sendWithAttachment received the OVERRIDE address and a body carrying a
-    // redirect note, because this method used to compute both itself. Neither happens here any more -
-    // `to` and `body` are asserted UNCHANGED even with an override configured. See
-    // OverrideRedirectingMailerTest / MailOverrideContainmentTest for where the redirect + note
-    // coverage on this exact Mailer method now lives.
+    // Formerly "sendWithAttachmentDropsTheBracketedRedirectShapeWhenOverrideConfigured". Before #782's fix this
+    // asserted mailer.sendWithAttachment received the OVERRIDE address and a body carrying a redirect note,
+    // because this method used to compute both itself.
     @Test
     void sendWithAttachmentPassesRecipientAndBodyThroughUnchangedEvenWithOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(),
@@ -256,9 +204,9 @@ class NotificationEmailServiceTest {
             aryEq("%PDF".getBytes()));
     }
 
-    // The no-override baseline this class has always had, still true after #782 - kept alongside the
-    // with-override test above (rather than merged) to show the invariant ("no note, recipient
-    // unchanged") holds in EITHER configuration, not only the blank one.
+    // The no-override baseline this class has always had, still true after #782 - kept alongside the with-override
+    // test above (rather than merged) to show the invariant ("no note, recipient unchanged") holds in EITHER
+    // configuration, not only the blank one.
     @Test
     void sendWithAttachmentOmitsTheRedirectNoteWhenNoOverrideConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "", "", "https://portal.example");
@@ -286,9 +234,8 @@ class NotificationEmailServiceTest {
     }
 
     // New coverage (no prior test drove this method's blank-to branch at all): parity with
-    // attemptsTheSendWhenEmployeeHasNoEmailOnFileButOverrideIsConfigured above - the same "attempt
-    // anyway, let the Mailer redirect it" rescue applies to the attachment path too, not only the
-    // async notification path.
+    // attemptsTheSendWhenEmployeeHasNoEmailOnFileButOverrideIsConfigured above - the same "attempt anyway, let the
+    // Mailer redirect it" rescue applies to the attachment path too, not only the async notification path.
     @Test
     void sendWithAttachmentAttemptsTheSendWhenNoRecipientButOverrideIsConfigured() {
         NotificationEmailService service = new NotificationEmailService(mailer, new BrandAssets(), "tester@example.com", "",

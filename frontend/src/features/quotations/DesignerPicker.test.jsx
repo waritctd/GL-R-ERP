@@ -25,8 +25,8 @@ function Harness({ initial = '', showToast }) {
   return <DesignerPicker value={code} onSelectCode={setCode} idPrefix="dp" showToast={showToast} />;
 }
 
-// Owner ask (2026-09-14): the picker displays designer NAME + CODE in one field, while the
-// consuming quotation state receives the CODE only.
+// Owner ask (2026-09-14): the picker displays designer NAME + CODE in one field, while the consuming quotation
+// state receives the CODE only.
 describe('DesignerPicker', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -46,18 +46,14 @@ describe('DesignerPicker', () => {
     const option = await screen.findByRole('option', { name: /ABACUS DESIGN/ });
     fireEvent.mouseDown(option);
 
-    // The consuming field is a plain string (unit_code) — asserting the closed field shows the
-    // bare CODE (not the name) right after picking, before getByCode's own hint lookup has even
-    // resolved (it rejects by default in this file's beforeEach), is the frontend half of "the
-    // name must never print": there is nowhere downstream for the name to leak from once this
-    // call carries only the code, and the raw-code fallback proves it without waiting on a hint.
+    // The consuming field is a plain string.
     await waitFor(() => expect(screen.getByLabelText('ค้นหาผู้ออกแบบ').value).toBe('A001'));
   });
 
   it('search results never render inactive designers is enforced server-side; the client renders whatever the search endpoint returns', async () => {
-    // This test documents the boundary rather than re-testing the server: DesignerRepository.search
-    // (and its mock mirror) filters active=true, so the picker itself does not need its own
-    // active-only filter — it is not a defense-in-depth requirement here, only a display concern.
+    // This test documents the boundary rather than re-testing the server: DesignerRepository.search (and its mock
+    // mirror) filters active=true, so the picker itself does not need its own active-only filter — it is not a
+    // defense-in-depth requirement here, only a display concern.
     api.designers.search.mockResolvedValue({ items: [] });
     render(<Harness />);
     fireEvent.focus(screen.getByLabelText('ค้นหาผู้ออกแบบ'));
@@ -77,8 +73,8 @@ describe('DesignerPicker', () => {
     api.designers.getByCode.mockRejectedValue(new Error('not found'));
     render(<Harness initial="Z999" />);
 
-    // getByCode already rejects by default (beforeEach) — this just asserts the closed field
-    // never blanks out a code the directory cannot explain.
+    // getByCode already rejects by default (beforeEach) — this just asserts the closed field never blanks out a
+    // code the directory cannot explain.
     await waitFor(() => expect(api.designers.getByCode).toHaveBeenCalledWith('Z999'));
     expect(screen.getByLabelText('ค้นหาผู้ออกแบบ').value).toBe('Z999');
   });
@@ -96,8 +92,8 @@ describe('DesignerPicker', () => {
     await waitFor(() => expect(input.value).toBe(''));
   });
 
-  // Wrong-way-round: neither of these leaves `search` non-blank on its own, so a clear-on-blank
-  // guard with no "did the rep actually type" check would wipe the code in both cases too.
+  // Wrong-way-round: neither of these leaves `search` non-blank on its own, so a clear-on-blank guard with no
+  // "did the rep actually type" check would wipe the code in both cases too.
   it('does NOT clear after an Enter selection followed by blur', async () => {
     api.designers.search.mockResolvedValue({ items: [{ code: 'A001', name: 'ABACUS DESIGN CO.,LTD', active: true }] });
     api.designers.getByCode.mockResolvedValue({ code: 'A001', name: 'ABACUS DESIGN CO.,LTD', active: true });
@@ -145,8 +141,8 @@ describe('DesignerPicker', () => {
     expect(screen.getByRole('option', { name: /DEVELOPMENT DESIGN STUDIO/ }).getAttribute('aria-selected')).toBe('true');
 
     fireEvent.keyDown(input, { key: 'Enter' });
-    // The closed field shows the picked CODE right away (raw-code fallback, getByCode rejects by
-    // default), not the name and not blank.
+    // The closed field shows the picked CODE right away (raw-code fallback, getByCode rejects by default), not the
+    // name and not blank.
     await waitFor(() => expect(input.value).toBe('D002'));
   });
 
@@ -184,8 +180,8 @@ describe('DesignerPicker', () => {
       fireEvent.click(screen.getByRole('button', { name: 'บันทึกผู้ออกแบบใหม่' }));
 
       await waitFor(() => expect(api.designers.create).toHaveBeenCalledWith({ code: 'A200', name: 'NEW DESIGN STUDIO' }));
-      // The modal closes and the picker's own field carries the CODE the create call returned,
-      // not the name -- the same confidentiality-shaped guarantee the existing pick tests assert.
+      // The modal closes and the picker's own field carries the CODE the create call returned, not the name -- the
+      // same confidentiality-shaped guarantee the existing pick tests assert.
       await waitFor(() => expect(screen.queryByRole('button', { name: 'บันทึกผู้ออกแบบใหม่' })).toBeNull());
       await waitFor(() => expect(input.value).toBe('A200'));
     });

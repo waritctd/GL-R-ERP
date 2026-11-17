@@ -1,26 +1,10 @@
-// Demo seed data for the payroll/commission stores that are genuinely fake-able
-// in mock mode (see CLAUDE.md — payroll/tax calculation itself stays untouched;
-// payroll.preview/process and saveTaxAllowances still throw "not supported in
-// mock mode", unchanged by this file. applyTaxAllowanceDeclaration STOPPED being
-// one of them on 2026-08-31 — it now shares approve's promotion helper, which is
-// a field copy of declared amounts, not tax math; see mockApi.js's
-// promoteTaxAllowanceDeclaration for why that is honest and what it still does
-// NOT prove).
-//
-// db.commissions / db.taxAllowanceDeclarations / db.taxAllowanceAttachments /
-// db.deductionObligations / db.payrollInputDrafts are workflow/tracking state —
-// moving a row between statuses performs no money math — so they can be seeded
-// directly. db.deductionObligationRemittances is NOT included here: real
-// remittance rows are only ever written by PayrollService#process, mocked as
-// "not supported", so that store must stay permanently empty (see its own
-// comment in mockApi.js).
+// Demo seed data for the payroll/commission stores that are genuinely fake-able in mock mode (see CLAUDE.md —
+// payroll/tax calculation itself stays untouched; payroll.preview/process and saveTaxAllowances still throw
+// "not supported in mock mode", unchanged by this file.
 
-// ── Commissions (db.commissions) — mirrors CommissionService. kind: SALE
-// (auto, invoice-driven) / CLAWBACK (reversal) / the four MANUAL_COMMISSION_KINDS
-// (ADJUSTMENT, MANAGER, STOCK_BONUS, INCENTIVE). status: SUBMITTED ->
-// MANAGER_APPROVED -> APPROVED, or REJECTED at either stage. VOID is a real
-// backend status no mock handler ever produces — seeded directly here so the
-// UI has a row to render for it.
+// Commissions (db.commissions) — mirrors CommissionService. kind: SALE (auto, invoice-driven) / CLAWBACK
+// (reversal) / the four MANUAL_COMMISSION_KINDS (ADJUSTMENT, MANAGER, STOCK_BONUS, INCENTIVE). status:
+// SUBMITTED -> MANAGER_APPROVED -> APPROVED, or REJECTED at either stage.
 export function buildDemoCommissions() {
   const now = new Date().toISOString();
   const invoice = (overrides) => ({
@@ -55,17 +39,8 @@ export function buildDemoCommissions() {
     ...overrides,
   });
 
-  // A MANUAL commission (ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE). Separate from `row`
-  // because the two shapes genuinely differ rather than overlapping: a manual entry carries
-  // `manualAmount` + `manualReason` and NO invoice, where an invoice-backed SALE carries
-  // `invoiceDetails` and a computed `commissionableBase`. Building both from one helper would
+  // A MANUAL commission (ADJUSTMENT / MANAGER / STOCK_BONUS / INCENTIVE). Building both from one helper would
   // mean a pile of nulls at every call site and would hide which fields each kind actually has.
-  //
-  // Field-for-field with createManualCommission()'s own record, including the parts that look
-  // odd out of context: `actualReceived`/`commissionableBase` are 0 (there is no invoice to
-  // derive them from), `approvedById`/`approvedAt` are always set (the creator approves at the
-  // level they act on), and the manager/ceo approval pair is mutually exclusive — a
-  // sales_manager entry lands MANAGER_APPROVED, a CEO entry lands APPROVED.
   const manualRow = (overrides) => ({
     sourceTicketId: null,
     weightMultiplier: 1,
@@ -83,28 +58,18 @@ export function buildDemoCommissions() {
     createdAt: now,
     updatedAt: now,
     ...overrides,
-    // Timestamps belong to whichever approval the caller named, so they are applied AFTER the
-    // spread rather than being repeated at every call site.
+    // Timestamps belong to whichever approval the caller named, so they are applied AFTER the spread rather than
+    // being repeated at every call site.
     ...(overrides.managerApprovedBy ? { managerApprovedAt: now } : {}),
     ...(overrides.ceoApprovedBy ? { ceoApprovedAt: now } : {}),
   });
 
-  // D1 fix (review pass): db.tickets only has TWO tickets whose salesStage derives to
-  // CLOSED_PAID — ticket 9 (status 'closed') and ticket 14 (paymentStatus 'FULLY_PAID'); see
-  // the derivation loop at the top of this file's companion mockApi.js (the `if (t.salesStage)
-  // continue; ... CLOSED_PAID` block). Both handlers that create a linked commission
-  // (commissions.create / commissions.createFromDeal, mockApi.js) 422 unless
-  // `ticket.salesStage === 'CLOSED_PAID'`, so every commission below that isn't legitimately
-  // tied to ticket 9 or 14 is now unlinked (`sourceTicketId: null`, matching snapshot fields
-  // nulled too — both handlers leave dealPayableAmountSnapshot/dealAmountMismatch at their
-  // null/false defaults for an unlinked commission). Commission #4 already pointed at ticket
-  // 14 and is left untouched.
+  // D1 fix (review pass): db.tickets only has TWO tickets whose salesStage derives to CLOSED_PAID — ticket 9
+  // (status 'closed') and ticket 14 (paymentStatus 'FULLY_PAID'); see the derivation loop at the top of this
+  // file's companion mockApi.js (the `if (t.salesStage) continue; ... CLOSED_PAID` block).
   return [
-    // SUBMITTED — auto SALE, pending manager review. Linked to ticket 9: a CLOSED_PAID deal owned by
-    // this rep (so the createFromDeal gate is satisfied) that #3 no longer claims since it was unlinked
-    // (D1). Linked so the รออนุมัติ view has real item lines to render (pendingApproval builds `items`
-    // from the linked ticket, like CommissionRepository#findPendingItems). The snapshot is the deal's
-    // payable (96,000) and the 125,000 invoice diverges from it by >5%, so the mismatch flag is true.
+    // SUBMITTED — auto SALE, pending manager review. Linked to ticket 9: a CLOSED_PAID deal owned by this rep (so
+    // the createFromDeal gate is satisfied) that #3 no longer claims since it was unlinked (D1).
     row({
       id: 1, sourceTicketId: 9, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
       kind: 'SALE', status: 'SUBMITTED', payrollMonth: '2026-08-01',
@@ -121,9 +86,9 @@ export function buildDemoCommissions() {
       managerApprovedBy: 9, managerApprovedByName: 'คุณมณี ผู้จัดการฝ่ายขาย', managerApprovedAt: now,
       invoiceDetails: invoice({ id: 2, invoiceNumber: 'INV-2026-07050', invoiceDate: '2026-07-14', grossAmount: 600000 }),
     }),
-    // APPROVED — normal, in payroll-ready pool. Unlinked (D1): ticket 4 never reaches
-    // CLOSED_PAID (both real CLOSED_PAID tickets, 9 and 14, are single-use per the
-    // hasActiveCommissionForTicket guard in createFromDeal, and 14 is already #4's).
+    // APPROVED — normal, in payroll-ready pool. Unlinked (D1): ticket 4 never reaches CLOSED_PAID (both real
+    // CLOSED_PAID tickets, 9 and 14, are single-use per the hasActiveCommissionForTicket guard in createFromDeal,
+    // and 14 is already #4's).
     row({
       id: 3, sourceTicketId: null, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
       kind: 'SALE', status: 'APPROVED', payrollMonth: '2026-07-01',
@@ -134,9 +99,9 @@ export function buildDemoCommissions() {
       approvedById: 8, approvedAt: now,
       invoiceDetails: invoice({ id: 3, invoiceNumber: 'INV-2026-07051', invoiceDate: '2026-07-10', grossAmount: 1200000 }),
     }),
-    // APPROVED with a deal-amount mismatch flag (gross vs. deal payable diverges > 5%). Linked
-    // to ticket 14 — the one real CLOSED_PAID deal owned by this rep. Legal as-is (D1: this was
-    // the sole pre-existing commission whose sourceTicketId already satisfied the gate).
+    // APPROVED with a deal-amount mismatch flag (gross vs. deal payable diverges > 5%). Linked to ticket 14 — the
+    // one real CLOSED_PAID deal owned by this rep. Legal as-is (D1: this was the sole pre-existing commission
+    // whose sourceTicketId already satisfied the gate).
     row({
       id: 4, sourceTicketId: 14, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
       kind: 'SALE', status: 'APPROVED', payrollMonth: '2026-07-01',
@@ -157,8 +122,8 @@ export function buildDemoCommissions() {
       rejectionReason: 'เลขที่ใบแจ้งหนี้ซ้ำกับรายการที่บันทึกไว้แล้ว',
       invoiceDetails: invoice({ id: 5, invoiceNumber: 'INV-2026-06090', invoiceDate: '2026-06-25', grossAmount: 95000 }),
     }),
-    // VOID — hand-set (no mock handler reaches this status; a legitimate backend state).
-    // Unlinked (D1): ticket 8 derives to QUOTE_BUYER, never CLOSED_PAID.
+    // VOID — hand-set (no mock handler reaches this status; a legitimate backend state). Unlinked (D1): ticket 8
+    // derives to QUOTE_BUYER, never CLOSED_PAID.
     row({
       id: 6, sourceTicketId: null, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
       kind: 'SALE', status: 'VOID', payrollMonth: '2026-05-01',
@@ -169,11 +134,9 @@ export function buildDemoCommissions() {
       approvedById: 8, approvedAt: now,
       invoiceDetails: invoice({ id: 6, invoiceNumber: 'INV-2026-05010', invoiceDate: '2026-05-08', grossAmount: 52000 }),
     }),
-    // CLAWBACK — reversal of commission #3. Mirrors the real clawback() handler's
-    // `...structuredClone(original)`, which carries the original SALE's invoiceDetails AND
-    // sourceTicketId (now null, D1) over verbatim (a clawback is never invoice-less). D2: kept
-    // in July (alongside the sale it reverses) instead of August, so August isn't left with a
-    // lone negative row.
+    // CLAWBACK — reversal of commission #3. Mirrors the real clawback() handler's `...structuredClone(original)`,
+    // which carries the original SALE's invoiceDetails AND sourceTicketId (now null, D1) over verbatim (a clawback
+    // is never invoice-less).
     row({
       id: 7, sourceTicketId: null, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี',
       kind: 'CLAWBACK', status: 'APPROVED', payrollMonth: '2026-07-01',
@@ -182,29 +145,9 @@ export function buildDemoCommissions() {
       approvedById: 8, approvedAt: now,
       invoiceDetails: invoice({ id: 8, invoiceNumber: 'INV-2026-07051', invoiceDate: '2026-07-10', grossAmount: 1200000 }),
     }),
-    // MANUAL_COMMISSION_KINDS (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE) are seeded below.
-    //
-    // They used to be impossible to seed: createManualCommission() sets `invoiceDetails: null`
-    // (the faithful shape for a manual entry — V84), and BOTH commissions.create() and
-    // commissions.createFromDeal() did an unguarded
-    // `db.commissions.some(item => item.invoiceDetails.invoiceNumber === ...)`. One such row
-    // and every subsequent create threw a TypeError — in the live mock app, not only in tests.
-    // The previous pass recorded that as "could not seed" under a seed-data-only constraint.
-    // Both call sites now null-guard (mockApi.js), matching the real backend rather than merely
-    // dodging the crash: the Java duplicate check is a SQL comparison, and a NULL invoice number
-    // is never equal to anything in SQL.
-    //
-    // Four kinds x the two statuses createManualCommission itself can produce — a
-    // sales_manager entry lands MANAGER_APPROVED, a CEO entry lands APPROVED — so the manual
-    // path's own branch is visible in the list rather than only its happy end state. Kept in
-    // 2026-08 (the current month) because these are the four kinds a UAT tester has no other
-    // way to see: they have no auto-generated equivalent to find in another month.
-    // SALE for the second sales rep. Unlinked (D1): ticket 17 sits at QUOTE_DESIGN_SIDE with no
-    // quotation at all, and rep2 (id 12) doesn't own either real CLOSED_PAID ticket (both are
-    // rep1's), so null is the only option that keeps this "genuinely tied to a rep pointing at
-    // a deal that rep owns." D2: promoted MANAGER_APPROVED->APPROVED (ceoApproved*/approvedBy
-    // fields added) so 2026-08 has a real, nonzero payrollReady pool instead of only the
-    // clawback. #2 stays MANAGER_APPROVED so that status still has matrix coverage.
+    // MANUAL_COMMISSION_KINDS (ADJUSTMENT/MANAGER/STOCK_BONUS/INCENTIVE) are seeded below. One such row and every
+    // subsequent create threw a TypeError — in the live mock app, not only in tests. The previous pass recorded
+    // that as "could not seed" under a seed-data-only constraint.
     row({
       id: 8, sourceTicketId: null, salesRepId: 12, salesRepName: 'คุณอรุณี ขายเก่ง',
       kind: 'SALE', status: 'APPROVED', payrollMonth: '2026-08-01',
@@ -215,14 +158,7 @@ export function buildDemoCommissions() {
       approvedById: 8, approvedAt: now,
       invoiceDetails: invoice({ id: 7, invoiceNumber: 'INV-2026-08002', invoiceDate: '2026-08-01', grossAmount: 210000 }),
     }),
-    // ── Manual entries. `invoiceDetails: null` and `actualReceived/commissionableBase: 0` are
-    // not omissions: a manual commission has no invoice behind it and no progressive
-    // calculation, so the amount lives in `manualAmount` and the justification in
-    // `manualReason`. Mirrors createManualCommission()'s record shape field for field.
-    //
-    // ADJUSTMENT is the one kind the backend permits to be NEGATIVE (a correction); MANAGER is
-    // explicitly sign-checked against it. Seeding a negative ADJUSTMENT is what makes that
-    // asymmetry visible instead of merely asserted.
+    // Manual commission rows carry amount and reason without invoices; only ADJUSTMENT permits a negative amount.
     manualRow({
       id: 9, salesRepId: 6, salesRepName: 'คุณสมหมาย ขายดี', submittedById: 9,
       kind: 'ADJUSTMENT', status: 'MANAGER_APPROVED',
@@ -250,24 +186,9 @@ export function buildDemoCommissions() {
   ];
 }
 
-// ── Tax allowance declarations (db.taxAllowanceDeclarations / db.taxAllowanceAttachments) —
-// mirrors the DECLARATION workflow only (submit/withdraw/approve/reject/on-behalf never run
-// real tax math). status: PENDING / APPROVED / REJECTED / SUPERSEDED / WITHDRAWN.
-//
-// `effectiveMonth`/`appliedEffectiveMonth` are plain 1-12 month NUMBERS, never a 'YYYY-MM' string —
-// TaxAllowanceDeclarationDto declares them `int` / `Integer` (backend/.../declaration/
-// TaxAllowanceDeclarationDtos.java), and `taxYear` alongside already carries the year. These were
-// seeded as strings until 2026-08; contract.test.js compares the method surface and arity only,
-// never field value types, so nothing caught it. Three UI sites read the month raw and all three
-// were wrong under VITE_USE_MOCKS=true: TaxAllowanceReviewPage's applied column and
-// taxAllowanceStatus.js's APPLIED badge both rendered "ตั้งแต่เดือน 2026-07", and ApplyDialog seeds
-// its <select> from `declaration.effectiveMonth` against options 1-12, which a string matches none
-// of. Keep these integers — see buildDemoEmployeeTaxAllowances below, which seeds the same field.
-//
-// The months 2-12 still seeded here are deliberate since the whole-year ruling (2026-08-31): they
-// are the PRE-RULING shape, and they are what makes the register's split visible in mock mode — a
-// month-7 row keeps reading "ตั้งแต่เดือน 7" while anything approved now reads "ทั้งปีภาษี". ApplyDialog
-// no longer has a <select> to seed, and nothing written from here on will be anything but 1.
+// Tax allowance declarations (db.taxAllowanceDeclarations / db.taxAllowanceAttachments) — mirrors the
+// DECLARATION workflow only (submit/withdraw/approve/reject/on-behalf never run real tax math). status:
+// PENDING / APPROVED / REJECTED / SUPERSEDED / WITHDRAWN.
 function blankAllowances(overrides = {}) {
   return {
     spouseAllowance: 0, childAllowance: 0, parentCareAllowance: 0, disabledCareAllowance: 0,
@@ -281,18 +202,8 @@ function blankAllowances(overrides = {}) {
   };
 }
 
-/**
- * The non-amount half of แบบ ล.ย.01 — mirrors {@code TaxAllowanceDeclarationDtos.LorYor01Details},
- * which the DTO documents as "never null on a read". Every row below therefore carries one.
- *
- * Seeding it is not decoration. `defaultAllowanceValues` reads `declaration.lorYor01` for the whole
- * header block, ข้อ 1/2 สถานภาพ, the eight ข้อ 4/ข้อ 6 ticks and three sub-amounts; with the field
- * absent — as it was until 2026-08-10 — every filed declaration rendered read-only with a blank
- * header and no ticks under `VITE_USE_MOCKS=true`, which is indistinguishable from the feature being
- * broken. See mockApi.js's `taxAllowanceLorYor01FromBody` for the write half of the same gap.
- *
- * `null` means "not answered" here exactly as it does on the wire: a blank box is not a ticked "no".
- */
+/** The non-amount half of แบบ ล.ย.01 — mirrors TaxAllowanceDeclarationDtos.LorYor01Details, which the DTO
+ * documents as "never null on a read". Every row below therefore carries one. Seeding it is not decoration. */
 function blankLorYor01(overrides = {}) {
   const { address, ...rest } = overrides;
   return {
@@ -316,11 +227,9 @@ function blankLorYor01(overrides = {}) {
 
 export function buildDemoTaxAllowanceDeclarations(employees) {
   const now = new Date().toISOString();
-  // The self-service page (/tax-allowance) only ever shows the SIGNED-IN employee's own rows, and
-  // in mock mode that is always employees[8] (users.js: employee@glr.co.th). Rows 1/7/8 below are
-  // therefore the only ones that screen can reach — one per selectable tax year (2026/2025/2024),
-  // so every state the year picker can land on has something in it. Everything else here belongs to
-  // other employees and is only visible from HR's register.
+  // The self-service page (/tax-allowance) only ever shows the SIGNED-IN employee's own rows, and in mock mode
+  // that is always employees[8] (users.js: employee@glr.co.th). Everything else here belongs to other employees
+  // and is only visible from HR's register.
   const self = employees[8];
   const hr = employees[20];
   // นายภาคภูมิ ศรีสุข's own ล.ย.01 header, consistent with his employee record (demoData.js).
@@ -337,9 +246,9 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
     {
       declarationId: 1, employeeId: self.id, employeeCode: self.code, employeeName: self.nameTh,
       taxYear: 2026, effectiveMonth: 8,
-      // Deliberately spans ข้อ 3-15 rather than the two amounts it used to carry: the section rows
-      // on /tax-allowance show a per-ข้อ subtotal, so a sparse declaration leaves eleven of them
-      // reading "ไม่ได้ประกาศ" and the collapsed page can't be judged against a real one.
+      // Deliberately spans ข้อ 3-15 rather than the two amounts it used to carry: the section rows on /tax-allowance
+      // show a per-ข้อ subtotal, so a sparse declaration leaves eleven of them reading "ไม่ได้ประกาศ" and the
+      // collapsed page can't be judged against a real one.
       allowances: blankAllowances({
         spouseAllowance: 60000,
         childAllowance: 30000, childCount: 1, childCountDouble: 1,
@@ -484,14 +393,7 @@ export function buildDemoTaxAllowanceDeclarations(employees) {
   ];
 }
 
-/**
- * Evidence files. `sectionKey` is the field that matters and every row below carries one now:
- * /tax-allowance renders ONE evidence panel per ข้อ, each filtered to its own key
- * (`TaxAllowanceEvidencePanel`, `showUncategorized={false}`), so a row with `sectionKey: null` —
- * which is what all three of these were — is invisible on that screen no matter how many there are.
- * Valid keys are `TaxAllowanceDeclarationService#EVIDENCE_SECTION_KEYS`: item3/4/5/6/7/8/9/10/12/
- * 14/15 and signed_form.
- */
+/** Give every demo evidence file a sectionKey so it appears in the section-filtered evidence panels. */
 export function buildDemoTaxAllowanceAttachments() {
   const now = new Date().toISOString();
   const file = (attachmentId, declarationId, fileName, sectionKey, fileSize, uploadedBy) => ({
@@ -500,8 +402,8 @@ export function buildDemoTaxAllowanceAttachments() {
     uploadedAt: now, deletedAt: null, deletedBy: null, deleteReason: null,
   });
   return [
-    // Declaration 1 — the signed-in mock employee's PENDING 2026 filing, evidenced across the ข้อ
-    // it actually declares, so the per-section panels are not all empty on the page that owns them.
+    // Declaration 1 — the signed-in mock employee's PENDING 2026 filing, evidenced across the ข้อ it actually
+    // declares, so the per-section panels are not all empty on the page that owns them.
     file(1, 1, 'life-insurance-policy.pdf', 'item7', 184320, 9),
     file(4, 1, 'สูติบัตร-บุตรคนที่-1.pdf', 'item3', 128440, 9),
     file(5, 1, 'ทะเบียนบ้าน-บิดามารดา.pdf', 'item4', 210880, 9),
@@ -524,44 +426,9 @@ export function buildDemoTaxAllowanceAttachments() {
   ];
 }
 
-// ── Stored tax allowance (db.employeeTaxAllowances) — mirrors hr.employee_tax_allowance, the table
-// PayrollCalculator actually reads to compute withholding (PayrollRepository
-// #findTaxAllowancesByEmployee), NOT tax_allowance_declaration above. Its own verification_status
-// (V95): VERIFIED / GRANDFATHERED_UNVERIFIED / EXPIRED_UNVERIFIED. Until this seed (2026-08,
-// "register shows what payroll actually uses"), GET /api/payroll/tax-allowances returned an empty
-// fixture unconditionally regardless of the year argument (contract.test.js's own former note on
-// that ARITY_EXEMPTIONS entry) — the exact "mock omits a field the feature keys on" shape CLAUDE.md
-// warns about: TaxAllowanceReviewPage's new join would never see a single row under
-// VITE_USE_MOCKS=true. Genuinely fake-able for the same reason taxAllowanceDeclarations is: reading
-// these rows performs no tax calculation. Writing them (mockApi's saveTaxAllowances, the legacy bulk
-// PUT) IS real payroll math and stays a "not supported in mock mode" stub, unchanged by this seed.
-//
-// Four rows, covering every combination this feature's UI branches on. `effectiveMonth` values are
-// chosen to still qualify under `resolvePayrollAllowance` (taxAllowanceStatus.js) for any "today"
-// from August 2026 onward -- see that function's own comment on why a past tax year always resolves
-// against December instead of drifting out of range.
-//  - employees[5] (id 6): GRANDFATHERED_UNVERIFIED, NO declaration at all -- the central case this
-//    whole feature exists for ("42 rows imported from personreduce.csv" in prod): still reducing
-//    this employee's withholding right now, never reviewed through any declaration. Also carries the
-//    F1 review-remediation demonstration case: an rmfAllowance of 600,000, chosen to exceed BOTH
-//    PayrollCalculator#retirementAllowance's flat 500,000 retirement-cluster ceiling and its 30%-of-
-//    projected-income sub-cap for this employee's salary (~156,000/month here) -- the concrete
-//    "stored 600,000, payroll applies far less" example the relabelled panel (TaxAllowanceBreakdown)
-//    must not misreport as the applied figure. See that component's own comment on `payrollTotal`.
-//    spouseAllowance stays too (60,000, exactly its own flat cap -- a control field that does NOT
-//    clamp, so the panel isn't demonstrating a difference on every field at once).
-//  - employees[10] (id 11): EXPIRED_UNVERIFIED, NO declaration -- the grace period lapsed;
-//    PayrollRepository's WHERE clause now excludes it, so it no longer reduces withholding, but it
-//    is a real (lapsed) figure, not "nothing" -- must read distinctly from employees[5] AND from a
-//    genuinely-empty employee.
-//  - employees[12] (id 13): GRANDFATHERED_UNVERIFIED, alongside declarationId 2 (APPROVED, applied,
-//    declared total 80,000) -- but this row's total is 90,000. Models a legacy bulk-PUT edit made
-//    after the declaration was applied and never reconciled -- the disagreement case.
-//  - employees[19] (id 20): VERIFIED, alongside declarationId 5 (APPROVED, applied, declared total
-//    120,000) -- this row totals 120,000 too. The normal, correctly-wired path
-//    (TaxAllowanceDeclarationService#apply upserts + verifies in one transaction), included so
-//    "disagreement only on disagreement" has a real agreeing case to prove the negative against, not
-//    just the absence of the other three rows.
+// Stored tax allowance (db.employeeTaxAllowances) — mirrors hr.employee_tax_allowance, the table
+// PayrollCalculator actually reads to compute withholding (PayrollRepository #findTaxAllowancesByEmployee),
+// NOT tax_allowance_declaration above.
 export function buildDemoEmployeeTaxAllowances(employees) {
   const now = new Date().toISOString();
   const row = (overrides) => ({
@@ -615,10 +482,9 @@ export function buildDemoEmployeeTaxAllowances(employees) {
   ];
 }
 
-// ── Deduction obligations (db.deductionObligations) — mirrors the tracking-only
-// workflow (issue #373). kind: STUDENT_LOAN (กยศ.) / LEGAL_EXECUTION (บังคับคดี).
-// status: ACTIVE / STOPPED / COMPLETED (COMPLETED is only ever written by
-// PayrollService#process on the real backend, so it's hand-set here for display).
+// Deduction obligations (db.deductionObligations) — mirrors the tracking-only workflow (issue #373). status:
+// ACTIVE / STOPPED / COMPLETED (COMPLETED is only ever written by PayrollService#process on the real backend,
+// so it's hand-set here for display).
 export function buildDemoDeductionObligations(employees) {
   const now = new Date().toISOString();
   const row = (overrides) => ({
@@ -672,20 +538,9 @@ export function buildDemoDeductionObligations(employees) {
   ];
 }
 
-// ── Garnishment shortfall ledger (db.deductionShortfalls) — mirrors the rows
-// DeductionObligationService#recordGarnishmentShortfalls writes on every payroll run, and read
-// back by PayrollDeductionShortfallController (issue #376).
-//
-// deductionKind is PayrollDeductionKind, which is NOT the same enum as the obligation's `kind`
-// above. Only LEGAL_EXECUTION_GARNISHMENT can ever appear: recordGarnishmentShortfalls writes that
-// value exclusively, and its javadoc excludes STUDENT_LOAN deliberately — no cap is enforced
-// against กยศ., so requested always equals actual and there is nothing to record. Seeding any
-// other kind here would make the fixture more populated than production, which is precisely the
-// lie CLAUDE.md warns about.
-//
-// A row exists only where the ป.วิ.พ. ม.302 cap bit, so shortfallAmount is always
-// requestedAmount - actualAmount and always > 0 (a zero shortfall is DELETED, never stored).
-// shortfallReason reproduces the sentence recordGarnishmentShortfalls actually builds.
+// Garnishment shortfall ledger (db.deductionShortfalls) — mirrors the rows
+// DeductionObligationService#recordGarnishmentShortfalls writes on every payroll run, and read back by
+// PayrollDeductionShortfallController (issue #376).
 export function buildDemoDeductionShortfalls(employees) {
   const now = new Date().toISOString();
   const reason = (type, requested, actual) => (
@@ -711,8 +566,8 @@ export function buildDemoDeductionShortfalls(employees) {
   });
 
   return [
-    // employees[2] carries obligation #3 (บค-2569-004410) above — the same person short two
-    // months running is the case HR most needs to see.
+    // employees[2] carries obligation #3 (บค-2569-004410) above — the same person short two months running is the
+    // case HR most needs to see.
     row({ id: 1, employee: employees[2], payrollMonth: '2026-07-01', requested: 5000, actual: 3120.5, garnishmentType: 'SALARY', payrollPeriodId: 7 }),
     row({ id: 2, employee: employees[2], payrollMonth: '2026-06-01', requested: 5000, actual: 4210, garnishmentType: 'SALARY', payrollPeriodId: 6 }),
     row({ id: 3, employee: employees[19], payrollMonth: '2026-07-01', requested: 4000, actual: 1875.25, garnishmentType: 'SALARY', payrollPeriodId: 7 }),
@@ -721,8 +576,8 @@ export function buildDemoDeductionShortfalls(employees) {
   ];
 }
 
-// ── Payroll input drafts (db.payrollInputDrafts, a Map keyed `${employeeId}-${payrollMonth}`) —
-// saving a draft performs no calculation, so this is genuinely fake-able.
+// Payroll input drafts (db.payrollInputDrafts, a Map keyed `${employeeId}-${payrollMonth}`) — saving a draft
+// performs no calculation, so this is genuinely fake-able.
 export function buildDemoPayrollInputDrafts(employees) {
   return [
     { employeeId: employees[8].id, payrollMonth: '2026-08-01', input: { specialAllowance: 500, note: 'ค่าตำแหน่งเพิ่มชั่วคราว' } },

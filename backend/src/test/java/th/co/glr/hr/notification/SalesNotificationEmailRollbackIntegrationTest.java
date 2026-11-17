@@ -40,32 +40,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Mail cannot be un-sent, so a sales notification raised inside a transaction that later rolls back
- * must reach nobody. This drives the real {@link PricingRequestService#submit} — which raises two
- * sales notifications, one to Import and one to the CEO — and then fails the transaction.
- *
- * <p><b>Why the harness is what it is.</b> Every integration test in this suite hand-wires its
- * services with {@code new}: no Spring context, no AOP proxy, so the {@code @Transactional} on
- * {@code submit} is inert and a plain call would commit each statement on its own. {@link
- * AbstractPostgresIntegrationTest#transactional} wraps the service in a real transactional proxy so
- * the production annotation is honoured exactly as it is in production.
- *
- * <p><b>What this test does and does not pin.</b> The rollback is forced from an enclosing {@link
- * AbstractPostgresIntegrationTest#transactionTemplate} because {@code submit} has no reachable
- * failure after the notification — it notifies and returns. So this pins the <b>deferral</b>
- * ({@code SalesNotificationMailRouter} → {@link AfterCommit}), which is the thing being added here,
- * and not {@code submit}'s own {@code @Transactional}. The zero-rows assertion is load-bearing: it
- * proves the transaction really did roll back, rather than the test never reaching the notification.
- *
- * <p><b>MUTATION-CHECK RECORD (actually run, not simulated).</b> Removing {@code AfterCommit.run(...)}
- * from both {@code SalesNotificationMailRouter} entry points — so mail sends inline at notify time —
- * turned {@link #aRolledBackPricingRequestSubmissionEmailsNobody} red and nothing else in the suite;
- * the source was then restored and verified byte-identical by SHA-256. Mutation 2 in {@code
- * SalesNotificationMailRoutingIntegrationTest}'s record (resolving the CEO address from the employee
- * row) turned {@link #aCommittedPricingRequestSubmissionEmailsImportAndTheCeo} red, which is what
- * stops the pair of tests here from passing vacuously on wiring that could never send.
- */
+/** Mail cannot be un-sent, so a sales notification raised inside a transaction that later rolls back must reach
+ * nobody. The zero-rows assertion is load-bearing: it proves the transaction really did roll back, rather than
+ * the test never reaching the notification. */
 class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private PricingRequestService pricingRequestService;
@@ -98,8 +75,8 @@ class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresInte
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
 
         long salesRepId = createEmployee(employees, "ณภา ขายดี", "napa.sales@glr.co.th", "SALES", "ฝ่ายขาย");
-        // Real recipients for the two notifications submit() raises, so the "no mail" assertion is
-        // about the deferral rather than about there being nobody to mail in the first place.
+        // Real recipients for the two notifications submit() raises, so the "no mail" assertion is about the deferral
+        // rather than about there being nobody to mail in the first place.
         createEmployee(employees, "สมศักดิ์ นำเข้า", "somsak.import@glr.co.th", "PCIM", "จัดซื้อต่างประเทศ");
         createManagingDirector(employees, "ราม อิฐรัตน์", "someone.else@example.com");
         salesActor = actor(salesRepId, "sales");
@@ -115,8 +92,8 @@ class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresInte
                 null, null, List.of(ticketItem())),
             salesActor).summary().id();
 
-        // The deal creation above must not leave anything behind for the assertions below to
-        // mistake for a rolled-back send: TicketService.create raises no notification at all.
+        // The deal creation above must not leave anything behind for the assertions below to mistake for a rolled-back
+        // send: TicketService.create raises no notification at all.
         assertThat(mailer.recipients()).isEmpty();
     }
 
@@ -131,8 +108,8 @@ class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresInte
             throw new IllegalStateException("forced rollback after the notifications were raised");
         })).isInstanceOf(IllegalStateException.class);
 
-        // Load-bearing: zero rows proves the transaction actually rolled back, so the "no mail"
-        // assertion below is about the deferral and not about a submit() that never ran.
+        // Load-bearing: zero rows proves the transaction actually rolled back, so the "no mail" assertion below is
+        // about the deferral and not about a submit() that never ran.
         assertThat(countNotificationRows()).isZero();
         assertThat(mailer.sent())
             .as("a rolled-back submission must not email Import or the CEO about a pricing request "
@@ -140,11 +117,9 @@ class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresInte
             .isEmpty();
     }
 
-    /**
-     * The other half of the same contract, and the reason this file cannot consist of the rollback
-     * case alone: a test that only ever asserts "no mail" stays green if the wiring can never send.
-     * Committing the same submission must mail both recipients.
-     */
+    /** The other half of the same contract, and the reason this file cannot consist of the rollback case alone: a
+     * test that only ever asserts "no mail" stays green if the wiring can never send. Committing the same
+     * submission must mail both recipients. */
     @Test
     void aCommittedPricingRequestSubmissionEmailsImportAndTheCeo() {
         long pricingRequestId = pricingRequestService
@@ -170,9 +145,9 @@ class SalesNotificationEmailRollbackIntegrationTest extends AbstractPostgresInte
             List.of(pricingItem()));
     }
 
-    // V185 (direct-deal-form parity): color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a
-    // quantity are now required on every item PricingRequestService#createDraft persists — see
-    // PricingRequestService#resolveItems' Javadoc.
+    // V185 (direct-deal-form parity): color/texture/size/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+    // required on every item PricingRequestService#createDraft persists — see PricingRequestService#resolveItems'
+    // Javadoc.
     private PricingRequestItemRequest pricingItem() {
         return new PricingRequestItemRequest(null, catalogProductId, null, "Toyota", "Hilux", "Toyota Hilux",
             "White", "Matte", "60x60", null, null, null, null, null,

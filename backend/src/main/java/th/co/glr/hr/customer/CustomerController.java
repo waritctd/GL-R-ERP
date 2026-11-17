@@ -30,8 +30,8 @@ public class CustomerController {
     private final ProjectRepository  projects;
     private final CustomerService    customerService;
     private final SessionContext     sessions;
-    // Deal-ENTRY authz only (see DealEntryAccess's own Javadoc) -- the three create() endpoints
-    // below use this; nothing else on this controller does.
+    // Deal-ENTRY authz only (see DealEntryAccess's own Javadoc) -- the three create() endpoints below use this;
+    // nothing else on this controller does.
     private final EmployeeAuthRepository employeeAuth;
 
     public CustomerController(CustomerRepository customers,
@@ -65,8 +65,8 @@ public class CustomerController {
         // DealEntryAccess's own Javadoc. The three reads below are gated the same way
         // (CustomerService).
         DealEntryAccess.requireCanEnterDeal(sessions.requireUser(session), employeeAuth);
-        // branch has a DB default ('สำนักงานใหญ่') but an explicit NULL bypasses it and
-        // violates NOT NULL; coalesce so a create that omits branch succeeds (mirrors the mock).
+        // branch has a DB default ('สำนักงานใหญ่') but an explicit NULL bypasses it and violates NOT NULL; coalesce so
+        // a create that omits branch succeeds (mirrors the mock).
         if (structured(req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode())) {
             return Map.of("customer", customers.createStructured(req.name(), req.taxId(), branchOrDefault(req.branch()), req.phone(),
                 req.addressLine(), req.provinceCode(), req.districtCode(), req.subdistrictCode(), req.postalCode()));
@@ -106,8 +106,8 @@ public class CustomerController {
         return Map.of("customer", updated);
     }
 
-    /** A field the body OMITS is null and simply not applied; a field it sends as an empty string
-     * is a deliberate clear — which the two NOT NULL columns cannot accept. */
+    /** A field the body OMITS is null and simply not applied; a field it sends as an empty string is a deliberate
+     * clear — which the two NOT NULL columns cannot accept. */
     private static void requireNotBlankIfPresent(String value, String message) {
         if (value != null && value.isBlank()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, message);
@@ -209,8 +209,8 @@ public class CustomerController {
         @Size(max = 5) String postalCode
     ) {}
 
-    /** Every field optional — see {@link #update}: null means "leave it alone". The @Size caps
-     * mirror {@code CreateCustomerRequest}'s, which mirror V16's own column widths. */
+    /** Every field optional — see #update: null means "leave it alone". The @Size caps mirror
+     * CreateCustomerRequest's, which mirror V16's own column widths. */
     record UpdateCustomerRequest(
         @Size(max = 200) String name,
         @Size(max = 20)  String taxId,
@@ -235,8 +235,8 @@ public class CustomerController {
         @Size(max = 50) String phone
     ) {}
 
-    /** Every field optional — see {@link #updateContact}: null means "leave it alone". The @Size
-     * caps mirror {@code CreateContactRequest}'s, which mirror V23's own column widths. */
+    /** Every field optional — see #updateContact: null means "leave it alone". The @Size caps mirror
+     * CreateContactRequest's, which mirror V23's own column widths. */
     record UpdateContactRequest(
         @Size(max = 100) String firstName,
         @Size(max = 100) String lastName,

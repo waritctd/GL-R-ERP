@@ -183,10 +183,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         projectId = project.id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Happy path — owner confirms; the deal lands at S10 with the quotation's own lines, and the
-    // ticket-keyed money side (deposit-notice draft) unlocks.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Happy path — owner confirms; the deal lands at S10 with the quotation's own lines, and the ticket-keyed
+    // money side (deposit-notice draft) unlocks.
 
     /** The quotation-first ("ghost") deal confirms. */
     @Test
@@ -282,8 +280,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(depositNoticeService.update(draft.id(), pagePut, salesActor).subtotal()).isEqualByComparingTo("1900.00");
     }
 
-    /** The same deposit-notice draft is REFUSED before confirmation — the negative half of "the money
-     * side unlocks", so the positive assertion above cannot be passing for an unrelated reason. */
+    /** The same deposit-notice draft is REFUSED before confirmation — the negative half of "the money side
+     * unlocks", so the positive assertion above cannot be passing for an unrelated reason. */
     @Test
     void depositDraft_isRefused_untilTheOrderIsConfirmed() {
         long ghost = quotationOnlyTicket(salesActor);
@@ -451,12 +449,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             accountNoDepositMessage(deal), "/finance/deals/" + deal, accountId);
     }
 
-    /**
-     * Atomicity, through the real {@code @Transactional} proxy: the LAST step (confirmCustomer's
-     * payment-track guard) fails AFTER quotation_only/status/items/event have all been written. The
-     * whole promotion must roll back — a half-promoted ticket (out of the quotation-only state but
-     * without CUSTOMER_CONFIRMED) would be stranded: invisible to promotion, visible in the pipeline.
-     */
+    /** Atomicity, through the real @Transactional proxy: the LAST step (confirmCustomer's payment-track guard)
+     * fails AFTER quotation_only/status/items/event have all been written. */
     @Test
     void failureInTheLastStep_rollsTheWholePromotionBack() {
         long ghost = quotationOnlyTicket(salesActor);
@@ -719,9 +713,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             Map.of("id", ticketId), Integer.class);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authz — WRONG-WAY-ROUND. Each refusal asserts nothing was written.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void nonOwningSales_isRefused_403_andNothingIsWritten() {
@@ -764,9 +756,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertForbidden(() -> confirmer.confirmOrderFromDirectQuotation(draft.id(), otherSalesActor));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Preconditions — 409, nothing written.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void draftDirectQuotation_isRefused_409() {
@@ -786,9 +776,9 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertNothingPromoted(ghost);
     }
 
-    /** R10 / separation: a PRICING_REQUEST-origin quotation is never promoted by this route — it has
-     * its own confirmOrder. Its row is produced here by re-tagging an approved direct one (the
-     * origin column is the only thing the guard reads), linked to a real pricing_request row. */
+    /** R10 / separation: a PRICING_REQUEST-origin quotation is never promoted by this route — it has its own
+     * confirmOrder. Its row is produced here by re-tagging an approved direct one (the origin column is the only
+     * thing the guard reads), linked to a real pricing_request row. */
     @Test
     void pricingRequestOriginQuotation_isRefused_409() {
         long ghost = quotationOnlyTicket(salesActor);
@@ -802,9 +792,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertNothingPromoted(ghost);
     }
 
-    /** Reached quotation_issued by ANOTHER path (the pricing-request confirmOrder bridge writes the
-     * same status) — no confirmation event, so not a replay: 409 on the ticket-status precondition,
-     * nothing overwritten. */
+    /** Reached quotation_issued by ANOTHER path (the pricing-request confirmOrder bridge writes the same status) —
+     * no confirmation event, so not a replay: 409 on the ticket-status precondition, nothing overwritten. */
     @Test
     void ticketAlreadyPastDraftByAnotherPath_isRefused_409() {
         long pipeline = pipelineTicket(salesActor);
@@ -832,9 +821,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // A quotation-first deal is a real pipeline deal (IA §7) — listed, and movable by hand.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** The quotation-first deal is listed (and
      * counted) from the moment it exists, for the owning rep and for the manager. */
@@ -881,10 +868,8 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(tender.summary().tenderRequirement()).isEqualTo("REQUIRED");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Items / pricing-request refusals are keyed on "a LIVE DEAL_DIRECT quotation exists" —
-    // not on the quotation_only flag. Written on ORDINARY deals so the flag cannot be the cause.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Items / pricing-request refusals are keyed on "a LIVE DEAL_DIRECT quotation exists" — not on the
+    // quotation_only flag. Written on ORDINARY deals so the flag cannot be the cause.
 
     @Test
     void editItems_isRefused_whileALiveDirectQuotationExists_andAllowedOnceCancelled() {
@@ -901,8 +886,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(itemCount(deal)).isEqualTo(1);
     }
 
-    /** PENDING_APPROVAL and APPROVED are live as well (the latter is the one the order would be
-     * confirmed from). */
+    /** PENDING_APPROVAL and APPROVED are live as well (the latter is the one the order would be confirmed from). */
     @Test
     void editItems_isRefused_whileAPendingOrApprovedDirectQuotationExists() {
         long deal = pipelineTicket(salesActor);
@@ -961,9 +945,7 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(moved.summary().entryChannel()).isEqualTo("OWNER_DIRECT");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // V193 backfill — V193 re-executed VERBATIM from the classpath over hand-shaped rows.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /**
      * V193's backfill predicate includes {@code sales_stage = 'LEAD_APPROACH'} — "it has never left
@@ -1041,12 +1023,10 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
         assertThat(eventCount(ticket, TicketEventKind.DEAL_PROMOTED_FROM_QUOTATION)).isEqualTo(1);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /** Exactly what the quotation editor's inline create sends (QuotationEditorPage
-     * #handleInlineCreate): no contact, no items, a follow-up date, and quotationOnly=true. */
+    /** Exactly what the quotation editor's inline create sends (QuotationEditorPage #handleInlineCreate): no
+     * contact, no items, a follow-up date, and quotationOnly=true. */
     // ─────────────────────────────────────────────────────────────────────────────────────
     // Confirm-order on a DIRECT quotation must hand each
     // ticket_item the quotation line's catalogue link and factory, as the pricing-request route does —
@@ -1489,9 +1469,9 @@ class DealQuotationConfirmOrderIntegrationTest extends AbstractPostgresIntegrati
                 .addValue("by", issuedBy));
     }
 
-    /** V193 AS SHIPPED — the whole file, verbatim, from the classpath. The ghost fixture starts at
-     * quotation_only = FALSE (it was created without the flag), so only the backfill UPDATE can turn
-     * it TRUE; if that statement is removed or its predicate loosened/tightened, the test goes red. */
+    /** V193 AS SHIPPED — the whole file, verbatim, from the classpath. The ghost fixture starts at quotation_only =
+     * FALSE (it was created without the flag), so only the backfill UPDATE can turn it TRUE; if that statement is
+     * removed or its predicate loosened/tightened, the test goes red. */
     private void runV193() throws Exception {
         String text;
         try (InputStream in = getClass().getClassLoader().getResourceAsStream(V193)) {

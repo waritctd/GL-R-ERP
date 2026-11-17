@@ -20,22 +20,9 @@ import org.springframework.test.web.servlet.setup.MockMvcBuilders;
 import org.springframework.web.context.WebApplicationContext;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Complements {@link ActuatorHealthIntegrationTest} (which only asserts {@code UP}): verifies
- * {@code GET /actuator/health} reports HTTP 503 with status {@code DOWN} when the database becomes
- * unreachable, and that {@code management.endpoint.health.show-details: never} still hides
- * component/detail leakage in the DOWN response, matching the UP test's assertion style.
- *
- * <p>The app boots normally against a real, reachable Postgres (resolved by
- * {@link PostgresTestSupport}, same as the UP test) — Flyway migration and the Spring Session JDBC
- * store both need a working DB at startup, so the datasource cannot simply point at a bad URL from
- * boot. Instead, once the context is up, the underlying connection pool is closed in-process to
- * simulate the DB going away, then the health endpoint is hit again. Closing the pool is
- * irreversible (Hikari does not support reopening), which is fine here: this class holds no other
- * tests, and Spring's test context cache keys contexts by configuration, so other test classes
- * (with different {@code @DynamicPropertySource}/filter wiring) get their own fresh context rather
- * than reusing this closed one.
- */
+/** Complements ActuatorHealthIntegrationTest: verifies GET /actuator/health reports HTTP 503 with status DOWN
+ * when the database becomes unreachable, and that management.endpoint.health.show-details: never still hides
+ * component/detail leakage in the DOWN response, matching the UP test's assertion style. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -73,8 +60,8 @@ class ActuatorHealthDownIntegrationTest {
         mvc.perform(get("/actuator/health"))
             .andExpect(status().isServiceUnavailable())
             .andExpect(jsonPath("$.status").value("DOWN"))
-            // show-details: never -> no component breakdown (e.g. no "db" detail/error message)
-            // leaks to an anonymous caller even while reporting DOWN.
+            // show-details: never -> no component breakdown (e.g. no "db" detail/error message) leaks to an anonymous
+            // caller even while reporting DOWN.
             .andExpect(jsonPath("$.components").doesNotExist())
             .andExpect(jsonPath("$.details").doesNotExist());
     }

@@ -1,12 +1,6 @@
-// Tests for the CI dependency-audit gate.
-//
-// The point of these is adversarial: an allowlist-based gate is only worth having if
-// it still goes RED for anything not explicitly reviewed. Most of the cases below are
-// written wrong-way-round -- they assert the gate FAILS -- because a gate that cannot
-// fail is not a gate. See CLAUDE.md, "Mutation-check the guard".
-//
-// The script is driven as a real subprocess against fixture reports (AUDIT_REPORT_FILE)
-// so exit codes, not just return values, are what gets asserted.
+// Tests for the CI dependency-audit gate. The point of these is adversarial: an allowlist-based gate is only
+// worth having if it still goes RED for anything not explicitly reviewed. See CLAUDE.md, "Mutation-check the
+// guard".
 
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
 import { spawnSync } from 'node:child_process';
@@ -45,10 +39,9 @@ function runGate({ report, allowlist, today = '2026-07-25', level }) {
   });
   const out = `${res.stdout}${res.stderr}`;
 
-  // An unhandled exception also exits 1, so exit code alone cannot tell a deliberate
-  // gate failure from a crash. This bit us for real: an earlier draft of the script
-  // threw a TypeError under a mutation, and every "must fail" test passed on the
-  // crash while the guard itself was defeated. `rejected` is what the assertions use.
+  // An unhandled exception also exits 1, so exit code alone cannot tell a deliberate gate failure from a crash.
+  // This bit us for real: an earlier draft of the script threw a TypeError under a mutation, and every "must
+  // fail" test passed on the crash while the guard itself was defeated.
   const crashed = /\b(TypeError|ReferenceError|SyntaxError|RangeError)\b/.test(out);
   const rejected = res.status === 1 && !crashed && /^FAIL[:!]?/m.test(out);
   return { code: res.status, out, crashed, rejected };
@@ -190,8 +183,8 @@ describe('audit-gate — must fail (mutation checks)', () => {
   });
 
   it('FAILS a package vulnerable via both a reviewed AND an unreviewed advisory', () => {
-    // Partial coverage must not clear a package -- otherwise a reviewed advisory
-    // could silently shelter a new one sharing the same dependency.
+    // Partial coverage must not clear a package -- otherwise a reviewed advisory could silently shelter a new one
+    // sharing the same dependency.
     const r = report(
       {
         'react-router': {
@@ -241,9 +234,9 @@ describe('audit-gate — must fail (mutation checks)', () => {
   });
 });
 
-// These four were found by attacking the gate after it was already "done" and passing.
-// Every one of them originally failed OPEN -- the gate returned 0 on input it should
-// have refused. They are the reason the gate treats unknown input as in-scope.
+// These four were found by attacking the gate after it was already "done" and passing. Every one of them
+// originally failed OPEN -- the gate returned 0 on input it should have refused. They are the reason the gate
+// treats unknown input as in-scope.
 describe('audit-gate — fail-closed on malformed input', () => {
   it('FAILS on a record with no severity field, rather than skipping it as below-threshold', () => {
     const r = report({ pkg: { via: [advisory('GHSA-zzzz-zzzz-zzzz')] } }, { high: 1 });
@@ -257,8 +250,8 @@ describe('audit-gate — fail-closed on malformed input', () => {
   });
 
   it('FAILS on a non-zero-padded reviewBy that would sort as far-future', () => {
-    // "2026-9-01" > "2026-10-23" under string comparison, so a typo would have granted
-    // a permanent waiver. This is the highest-consequence of the four.
+    // "2026-9-01" > "2026-10-23" under string comparison, so a typo would have granted a permanent waiver. This is
+    // the highest-consequence of the four.
     const bad = { allow: [entry({ reviewBy: '2026-9-01' })] };
     const res = runGate({ report: REAL_REPORT, allowlist: bad });
     expect(res.out).toContain('zero-padded ISO date');

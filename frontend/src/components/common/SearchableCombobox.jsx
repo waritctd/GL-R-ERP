@@ -1,9 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from './Icon.jsx';
 
-/** Reuses the quotation project picker's input/listbox keyboard pattern.
- * The bounded list stays in the modal's scroll flow so it can never be clipped by its body.
- */
+/** Reuses the quotation project picker's input/listbox keyboard pattern. The bounded list stays in the modal's
+ * scroll flow so it can never be clipped by its body. */
 export function SearchableCombobox({ id, label, value, options, onChange, disabled = false,
   loading = false, placeholder = 'พิมพ์ค้นหา…', ...aria }) {
   const [query, setQuery] = useState('');

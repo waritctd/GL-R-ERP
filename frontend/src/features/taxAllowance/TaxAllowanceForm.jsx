@@ -43,14 +43,9 @@ const ADDRESS_LABELS = {
 const money = () => z.coerce.number({ invalid_type_error: 'กรุณาระบุตัวเลข' }).min(0, 'ต้องไม่ติดลบ');
 const count = (max) => money().int('ต้องเป็นจำนวนเต็ม').max(max, `กรอกได้ไม่เกิน ${max}`);
 
-/**
- * Validation mirrors the CONSTRAINTS THE PRINTED FORM IMPOSES, not looser ones of our own.
- *
- * The count boxes accept a single character in the template's own AcroForm, so 0–9 is the document's
- * limit and it is the limit here — a two-digit count could never be printed in the box it belongs
- * to. Same reasoning for the 13-digit tax ID and the 5-digit postcode: those are comb fields with
- * exactly that many printed cells.
- */
+/** Validation mirrors the CONSTRAINTS THE PRINTED FORM IMPOSES, not looser ones of our own. The count boxes
+ * accept a single character in the template's own AcroForm, so 0–9 is the document's limit and it is the limit
+ * here — a two-digit count could never be printed in the box it belongs to. */
 function lorYor01Schema() {
   const shape = {};
   for (const section of LOR_YOR_01_SECTIONS) {
@@ -101,20 +96,9 @@ function MoneyInput({ id, disabled, register, name }) {
   );
 }
 
-/**
- * The employee-facing แบบ ล.ย.01, structured as the government prints it: one collapsible per ข้อ,
- * in the form's order, quoting the form's wording.
- *
- * <p>This replaced a hub-and-spoke of `?view=` URLs across five invented categories. The categories
- * were grouped around modern Thai deductions rather than around the document being filed, so an
- * employee holding the PDF could not follow along. Owner ruling 2026-08-08: the page follows the
- * paper, and disclosure happens in place rather than by navigating away.
- *
- * <p><b>Why collapsing is safe.</b> `CollapsibleSection` unmounts its children, and these are
- * `register`ed inputs — which works only because react-hook-form defaults `shouldUnregister: false`,
- * so a collapsed ข้อ keeps its value. That is a library default this form depends on, so
- * `TaxAllowanceForm.test.jsx` pins it rather than trusting it.
- */
+/** The employee-facing แบบ ล.ย.01, structured as the government prints it: one collapsible per ข้อ, in the
+ * form's order, quoting the form's wording. This replaced a hub-and-spoke of `?view=` URLs across five
+ * invented categories. */
 export function TaxAllowanceForm({
   caps = [],
   defaultValues,
@@ -129,16 +113,12 @@ export function TaxAllowanceForm({
   /** Renders the filled PDF from the current (unsaved) values so the employee can print and sign. */
   onGeneratePdf,
   generatingPdf = false,
-  /**
-   * Fetches the PDF of the declaration ALREADY FILED, from the server. Undefined when this tax year
-   * has no saved declaration to fetch. Distinct from `onGeneratePdf`, which renders today's draft.
-   */
+  /** Fetches the PDF of the declaration ALREADY FILED, from the server. Undefined when this tax year has no saved
+   * declaration to fetch. Distinct from `onGeneratePdf`, which renders today's draft. */
   onDownloadFiledForm,
   downloadingFiledForm = false,
-  /**
-   * Owner decision #3: the signed scan is required before submit. The PAGE owns that state because
-   * it owns the staged-evidence buckets; this component only gates on it.
-   */
+  /** Owner decision #3: the signed scan is required before submit. The PAGE owns that state because it owns the
+   * staged-evidence buckets; this component only gates on it. */
   signedFormAttached = false,
   evidenceMode,
   evidenceDeclarationId = null,
@@ -148,17 +128,8 @@ export function TaxAllowanceForm({
   showToast,
 }) {
   const schema = useMemo(() => lorYor01Schema(), []);
-  /**
-   * `mode: 'onTouched'` — validate a field the first time it is left, then on every change.
-   *
-   * react-hook-form's default is `onSubmit`, and on THIS form that meant the validation messages
-   * could not be reached at all: submission is gated behind the signed scan (`canSubmit` below), so
-   * the resolver never ran until the employee had already generated the PDF, printed it, signed it
-   * and attached the scan. A 3-digit เลขประจำตัวผู้เสียภาษีอากร or a 2-digit รหัสไปรษณีย์ was
-   * accepted in silence right up to that point — and the PDF button hands `watchedValues` straight
-   * to the renderer, so the malformed value went onto the government form they signed. The per-field
-   * error wiring already existed (`FormField error=…`); only the trigger was missing.
-   */
+  /** `mode: 'onTouched'` — validate a field the first time it is left, then on every change. The per-field error
+   * wiring already existed (`FormField error=…`); only the trigger was missing. */
   const { register, handleSubmit, reset, control, trigger, formState: { errors, isDirty } } = useForm({
     resolver: zodResolver(schema),
     mode: 'onTouched',
@@ -175,13 +146,9 @@ export function TaxAllowanceForm({
     onSubmit?.(values);
   }
 
-  /**
-   * The ล.ย.01 the employee is about to print and SIGN is rendered from whatever is typed right now,
-   * so it gets the same validation the submit path gets — otherwise a malformed tax ID or postcode
-   * is discovered only after a signature is on the paper. Invalid fields are revealed inline by
-   * `trigger()` itself; the toast exists because some of them are inside collapsed ข้อ, where an
-   * inline message alone would leave a button that silently did nothing.
-   */
+  /** The ล.ย.01 the employee is about to print and SIGN is rendered from whatever is typed right now, so it gets
+   * the same validation the submit path gets — otherwise a malformed tax ID or postcode is discovered only after
+   * a signature is on the paper. */
   async function generatePdf() {
     if (!(await trigger())) {
       showToast?.('error', 'ยังสร้างไฟล์ไม่ได้ — มีช่องที่กรอกไม่ถูกต้อง กรุณาตรวจสอบและแก้ไขก่อน');
@@ -309,10 +276,8 @@ export function TaxAllowanceForm({
     return <span className="text-xs text-text-muted">ไม่ได้ประกาศ</span>;
   };
 
-  // No "มีผลตั้งแต่งวดเดือน" control: a ล.ย.01 is a whole-tax-year declaration (owner ruling
-  // 2026-08-31) and HR's approval is what makes it live, so there is no month for the employee to
-  // choose. The backend dropped `effectiveMonth` from TaxAllowanceDeclarationSubmitRequest in the
-  // same change — sending one would simply not bind.
+  // No "มีผลตั้งแต่งวดเดือน" control: a ล.ย.01 is a whole-tax-year declaration (owner ruling 2026-08-31) and
+  // HR's approval is what makes it live, so there is no month for the employee to choose.
   const declarationFields = (
     <FormGrid>
       <FormField label="เลขที่เอกสารอ้างอิง (ถ้ามี)" htmlFor="ta-document-reference">
@@ -324,23 +289,8 @@ export function TaxAllowanceForm({
 
   const sections = LOR_YOR_01_SECTIONS.map((section) => (
     <CollapsibleSection
-      /*
-       * ข้อมูลผู้มีเงินได้ opens only while the form is EDITABLE, where it is genuinely step 1 —
-       * sixteen mostly-blank header slots the employee has to check before anything else. On a
-       * READ-ONLY declaration it is the least interesting block on the screen (a prefilled name and
-       * address, already accepted) and it was pushing all fifteen ข้อ — the actual content — about
-       * 600px below the fold. Everything else on this page is collapsed by default; this makes the
-       * one exception conditional on it still being an exception.
-       *
-       * ⚠️ The KEY has to move with it. `defaultOpen` is an INITIAL value — CollapsibleSection seeds
-       * `useState` from it and never reads it again — and TaxAllowancePage starts every render pass
-       * read-only (`editing` is false until an effect settles the declarations query). So a plain
-       * `defaultOpen={!readOnly}` evaluates false on the first mount and the section stays shut
-       * after the form becomes editable. Varying the key remounts THIS section, and only this one,
-       * at the moment its default should change; the other fourteen keep whatever the reader
-       * toggled. Remounting is safe here for the same reason collapsing is (see the class javadoc):
-       * react-hook-form's `shouldUnregister: false` keeps the values.
-       */
+      /* ข้อมูลผู้มีเงินได้ opens only while the form is EDITABLE, where it is genuinely step 1 — sixteen
+       * mostly-blank header slots the employee has to check before anything else. */
       key={section.kind === 'identity' ? `${section.key}-${readOnly ? 'ro' : 'rw'}` : section.key}
       id={`ta-section-${section.key}`}
       title={section.no ? `ข้อ ${section.no} · ${section.title}` : section.title}
@@ -367,12 +317,8 @@ export function TaxAllowanceForm({
     </CollapsibleSection>
   ));
 
-  /**
-   * One line, not a card. There is exactly one auto-granted row today (ส่วนตัว) and it carried no
-   * amount, so the previous bordered box rendered as an eyebrow above a single word — a card that
-   * looked like it had failed to load. The figure comes from the caps endpoint like every other
-   * number on this page; it is never hardcoded here.
-   */
+  /** One line, not a card. The figure comes from the caps endpoint like every other number on this page; it is
+   * never hardcoded here. */
   const autoGranted = (
     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-md border border-border-subtle bg-surface-subtle px-3 py-2">
       <span className="text-2xs font-extrabold uppercase tracking-wide text-text-muted">หักให้อัตโนมัติ</span>
@@ -387,15 +333,9 @@ export function TaxAllowanceForm({
     </div>
   );
 
-  /**
-   * Reference material, not part of filling the form — so it is COLLAPSED by default.
-   *
-   * <p>Expanded it is six citations with a vintage line and a caveat paragraph each: measured at
-   * ~900px tall on desktop and taller still on mobile, i.e. a full screen of prose sitting under
-   * the submit button that nobody needs in order to declare an allowance. It is genuinely useful
-   * (the caveats say which rd.go.th numbers are stale), so it stays on the page — behind the same
-   * disclosure every other section on this screen already uses, rather than as a wall of text.
-   */
+  /** Reference material, not part of filling the form — so it is COLLAPSED by default. It is genuinely useful
+   * (the caveats say which rd.go.th numbers are stale), so it stays on the page — behind the same disclosure
+   * every other section on this screen already uses, rather than as a wall of text. */
   const lawSources = Object.values(LAW_SOURCES);
   const lawReferences = (
     <CollapsibleSection
@@ -426,17 +366,9 @@ export function TaxAllowanceForm({
 
   const declaredTotal = formatMoney(declaredAllowanceTotalFromValues(watchedValues));
 
-  /**
-   * CRITICAL: every control now lives in ONE form with a visible submit button, so HTML's implicit
-   * submission fires a real submit on Enter in any text field — and there are many. The previous
-   * version of this file carried a long comment about the same hazard; the hazard did not go away
-   * with the wizard, it got broader. `canSubmit` narrows submission to the state where submitting is
-   * actually meaningful: the signed form is attached (owner decision #3). SafeForm's own submitter
-   * guard then applies ON TOP, because `canSubmit` is a RESTRICTION and never a permission.
-   *
-   * jsdom does not implement implicit submission, so a green unit suite says nothing here — the
-   * real-browser check is what covers it.
-   */
+  /** CRITICAL: every control now lives in ONE form with a visible submit button, so HTML's implicit submission
+   * fires a real submit on Enter in any text field — and there are many. SafeForm's own submitter guard then
+   * applies ON TOP, because `canSubmit` is a RESTRICTION and never a permission. */
   const canSubmit = !readOnly && signedFormAttached;
 
   /** Displayed in both the read-only view and the sign-off panel — one markup, one figure. */
@@ -447,14 +379,8 @@ export function TaxAllowanceForm({
     </div>
   );
 
-  /**
-   * What a filed declaration offers: the figure that was declared, and a copy of the document.
-   *
-   * <p>The download is the point. Read-only does not render the sign-off panel, which held the only
-   * PDF button on the page, so a declaration became unretrievable the moment it was submitted — the
-   * employee could produce the sheet they were about to sign and never get back the one they filed.
-   * It applies at ANY saved status, not just an approved one: a PENDING filing is equally theirs.
-   */
+  /** What a filed declaration offers: the figure that was declared, and a copy of the document. The download is
+   * the point. It applies at ANY saved status, not just an approved one: a PENDING filing is equally theirs. */
   const filedFormBlock = (
     <div className="grid gap-3">
       {declaredTotalRow}
@@ -507,16 +433,9 @@ export function TaxAllowanceForm({
     </CollapsibleSection>
   );
 
-  /**
-   * Why the disabled submit button states its own reason.
-   *
-   * The gate ("attach the signed scan first") used to be explained ONLY inside the sign-off section,
-   * which is collapsed by default — so the normal state of this page was a greyed-out primary button
-   * with no visible explanation anywhere on screen, and the answer one disclosure away. The same
-   * sentence used to sit a third time at the bottom of that section, next to the evidence panel's
-   * own "ต้องแนบแบบที่ลงนามแล้วก่อนจึงจะยื่นได้" empty state; that copy is gone and this is the one
-   * place it lives now.
-   */
+  /** Why the disabled submit button states its own reason. The same sentence used to sit a third time at the
+   * bottom of that section, next to the evidence panel's own "ต้องแนบแบบที่ลงนามแล้วก่อนจึงจะยื่นได้" empty
+   * state; that copy is gone and this is the one place it lives now. */
   const submitBlockedReason = !readOnly && !signedFormAttached
     ? 'ยังยื่นไม่ได้ — เปิดหัวข้อ “ตรวจทาน ลงนาม และยื่น” เพื่อแนบแบบ ล.ย.01 ที่ลงนามแล้ว'
     : null;
@@ -541,9 +460,9 @@ export function TaxAllowanceForm({
       </div>
       {autoGranted}
       <div className="grid gap-2">{sections}</div>
-      {/* Read-only loses the sign-off panel, and with it the only place the grand total and the PDF
-          button appeared — so a filed declaration showed fifteen per-ข้อ subtotals, no total, and no
-          way to get the document back. Both live here instead, in the slot the panel would occupy. */}
+      {/* Read-only loses the sign-off panel, and with it the only place the grand total and the PDF button appeared —
+       * so a filed declaration showed fifteen per-ข้อ subtotals, no total, and no way to get the document back. Both
+       * live here instead, in the slot the panel would occupy. */}
       {readOnly ? filedFormBlock : signOffPanel}
       {submitFooter}
       {lawReferences}

@@ -6,16 +6,9 @@ import java.math.RoundingMode;
 import java.nio.charset.Charset;
 import java.util.List;
 
-/**
- * Byte-level text building for the Thai statutory payroll files (KBank PCT, PND1, SSO สปส.1-10).
- *
- * <p>These bank/government formats are fixed-width in <b>bytes</b> under the legacy Thai code page
- * CP874 (a.k.a. TIS-620 / windows-874), <b>not</b> UTF-8 — one Thai character is one byte. Writing
- * the file as UTF-8 would push every field after a Thai name out of alignment and the bank/agency
- * would reject the file. All padding/truncation here is therefore measured on the CP874-encoded byte
- * array, and the whole file is encoded once, with CRLF line endings (including a trailing CRLF) and
- * no BOM.
- */
+/** Byte-level text building for the Thai statutory payroll files (KBank PCT, PND1, SSO สปส.1-10). These
+ * bank/government formats are fixed-width in bytes under the legacy Thai code page CP874 (a.k.a. TIS-620 /
+ * windows-874), not UTF-8 — one Thai character is one byte. */
 public final class Cp874 {
     /** CP874 / TIS-620 / windows-874 — the Thai ANSI code page KBank + RD + SSO expect. */
     public static final Charset CHARSET = Charset.forName("x-windows-874");
@@ -30,20 +23,16 @@ public final class Cp874 {
         return (value == null ? "" : value).getBytes(CHARSET);
     }
 
-    /**
-     * Right-pad (text convention): encode to CP874, then pad on the right with ASCII spaces to
-     * exactly {@code width} bytes, truncating on the right if longer. Safe to truncate on any byte
-     * boundary because every CP874 character is a single byte.
-     */
+    /** Right-pad (text convention): encode to CP874, then pad on the right with ASCII spaces to exactly width
+     * bytes, truncating on the right if longer. Safe to truncate on any byte boundary because every CP874
+     * character is a single byte. */
     public static byte[] rpad(String value, int width) {
         return pad(bytes(value), width, SPACE, /* padLeft= */ false, /* truncateLeft= */ false);
     }
 
-    /**
-     * Left-pad with '0' (numeric convention): the string must already be the digits to place. Longer
-     * than {@code width} is a programming error (an amount/id that would overflow its column) and
-     * throws rather than silently corrupting the record.
-     */
+    /** Left-pad with '0' (numeric convention): the string must already be the digits to place. Longer than width is
+     * a programming error (an amount/id that would overflow its column) and throws rather than silently corrupting
+     * the record. */
     public static byte[] zpad(String digits, int width) {
         byte[] raw = bytes(digits);
         if (raw.length > width) {
@@ -61,10 +50,8 @@ public final class Cp874 {
         return zpad(Long.toString(value), width);
     }
 
-    /**
-     * A baht amount as satang (baht × 100), left-zero-padded to {@code width}. e.g. 145,000.00 →
-     * {@code "000000014500000"} at width 15. Used by KBank PCT (amounts carry no decimal point).
-     */
+    /** A baht amount as satang (baht × 100), left-zero-padded to width. e.g. 145,000.00 → "000000014500000" at
+     * width 15. Used by KBank PCT (amounts carry no decimal point). */
     public static byte[] satang(BigDecimal baht, int width) {
         long satang = baht.movePointRight(2).setScale(0, RoundingMode.HALF_UP).longValueExact();
         return zpad(satang, width);
@@ -82,10 +69,8 @@ public final class Cp874 {
         return out;
     }
 
-    /**
-     * Join records into a file: every record followed by CRLF, including the last (the golden KBank
-     * and PND1 files both end with a trailing CRLF).
-     */
+    /** Join records into a file: every record followed by CRLF, including the last (the golden KBank and PND1 files
+     * both end with a trailing CRLF). */
     public static byte[] file(List<byte[]> records) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         for (byte[] record : records) {

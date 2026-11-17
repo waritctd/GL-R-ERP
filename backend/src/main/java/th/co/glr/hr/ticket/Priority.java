@@ -2,11 +2,8 @@ package th.co.glr.hr.ticket;
 
 import java.util.Set;
 
-/**
- * Ticket priority vocabulary. Mirrors the {@code chk_ticket_priority} CHECK
- * constraint (V6) so an unvalidated API value can never reach the column and
- * fail closed with a 500. {@link EntryChannel} is the sibling pattern.
- */
+/** Ticket priority vocabulary. Mirrors the chk_ticket_priority CHECK constraint (V6) so an unvalidated API
+ * value can never reach the column and fail closed with a 500. EntryChannel is the sibling pattern. */
 public final class Priority {
     public static final String LOW = "LOW";
     public static final String NORMAL = "NORMAL";

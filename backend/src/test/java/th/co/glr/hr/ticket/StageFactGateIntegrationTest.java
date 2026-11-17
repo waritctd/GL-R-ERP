@@ -83,10 +83,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         tickets = new TicketRepository(jdbc);
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
-        // PricingRequestService is mocked exactly as in the two sibling classes: nothing
-        // exercised here calls it. The stub on cancelOpenForTicket only guards against a future
-        // edit routing through markLost/cancel and NPE-ing on Mockito's null default. The two
-        // things under test — TicketService's gates and TicketRepository's SQL — are both real.
+        // PricingRequestService is mocked exactly as in the two sibling classes: nothing exercised here calls it. The
+        // stub on cancelOpenForTicket only guards against a future edit routing through markLost/cancel and NPE-ing on
+        // Mockito's null default.
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -296,11 +295,8 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.QUOTE_OWNER);
     }
 
-    /**
-     * {@code ORDER_RECEIVED} claims a verified customer order. The payment track's single entry
-     * edge is {@code confirmCustomer}'s {@code CUSTOMER_CONFIRMED} write, so an untouched track is
-     * exactly "no order verified".
-     */
+    /** ORDER_RECEIVED claims a verified customer order. The payment track's single entry edge is confirmCustomer's
+     * CUSTOMER_CONFIRMED write, so an untouched track is exactly "no order verified". */
     @Test
     void orderReceived_withNoVerifiedCustomerOrder_isRefused_andTheDealDoesNotMove() {
         long ticketId = readyToAdvanceFrom(DealStage.NEGOTIATION);
@@ -316,11 +312,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(ticketId)).isZero();
     }
 
-    /**
-     * A deposit <em>notice</em> is a document; the money is a separate event ({@code
-     * confirmDepositPaid}). {@code DEPOSIT_NOTICE_ISSUED} is therefore the interesting refusal —
-     * the deal is demonstrably in the deposit half of the track and still has received nothing.
-     */
+    /** A deposit notice is a document; the money is a separate event (confirmDepositPaid). DEPOSIT_NOTICE_ISSUED is
+     * therefore the interesting refusal — the deal is demonstrably in the deposit half of the track and still has
+     * received nothing. */
     @Test
     void depositReceived_withOnlyTheNoticeIssued_isRefused_andTheDealDoesNotMove() {
         long ticketId = readyToAdvanceFrom(DealStage.ORDER_RECEIVED);
@@ -373,11 +367,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    /**
-     * {@code CLOSED_PAID} is the revenue-bearing one. {@code AWAITING_FINAL_PAYMENT} is the
-     * wrong-way-round case worth pinning: the deposit is in and the goods are delivered, so
-     * everything except the balance is done — and the balance is exactly what the stage claims.
-     */
+    /** CLOSED_PAID is the revenue-bearing one. AWAITING_FINAL_PAYMENT is the wrong-way-round case worth pinning:
+     * the deposit is in and the goods are delivered, so everything except the balance is done — and the balance is
+     * exactly what the stage claims. */
     @Test
     void closedPaid_withTheBalanceStillOutstanding_isRefused_andTheDealDoesNotMove() {
         long ticketId = readyToAdvanceFrom(DealStage.DELIVERED);
@@ -394,17 +386,8 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageChangedEvents(ticketId)).isZero();
     }
 
-    /**
-     * The case an earlier draft of this gate let through, and the reason it now tests BOTH halves:
-     * the money is all in, but the customer does not have the goods. {@code maybeAdvanceClosedPaid}
-     * has always required payment AND delivery, so a manual move that needed only {@code FULLY_PAID}
-     * could claim a stage the automatic path would have refused — a manual bar lower than the
-     * automatic one, which inverts the principle the whole gate rests on.
-     *
-     * <p>Driven across the fulfilment states a fully-paid deal can really be sitting in, including
-     * {@code GOODS_RECEIVED} (goods at GLR's warehouse, customer has nothing) and {@code null} (a
-     * deal never tracked for delivery at all).
-     */
+    /** The case an earlier draft of this gate let through, and the reason it now tests BOTH halves: the money is
+     * all in, but the customer does not have the goods. */
     @Test
     void closedPaid_fullyPaidButNotFullyDelivered_isRefused_andTheDealDoesNotMove() {
         for (String fulfilment : new String[] {null, FulfilmentStatus.FROM_STOCK,
@@ -428,14 +411,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         }
     }
 
-    /**
-     * …and the manual gate now matches {@link TicketService} {@code maybeAdvanceClosedPaid} exactly:
-     * with delivery completed as well, the move is accepted.
-     *
-     * <p>Walked from {@code DELIVERED} rather than {@code DELIVERY_SCHEDULING} on purpose — that is
-     * the adjacent move, so no MANDATORY stage is stepped over and no note is required. The facts
-     * are then the only thing that can be permitting this, which is what the test is for.
-     */
+    /** …and the manual gate now matches TicketService maybeAdvanceClosedPaid exactly: with delivery completed as
+     * well, the move is accepted. The facts are then the only thing that can be permitting this, which is what the
+     * test is for. */
     @Test
     void closedPaid_isAcceptedOnceBothPaymentAndDeliveryAreComplete() {
         long ticketId = readyToAdvanceFrom(DealStage.DELIVERED);
@@ -482,8 +460,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(delivered)).isEqualTo(DealStage.DELIVERED);
 
         // CLOSED_PAID is the one stage with TWO facts behind it — payment AND delivery, exactly as
-        // maybeAdvanceClosedPaid requires. See closedPaid_fullyPaidButNotFullyDelivered_… for the
-        // half-satisfied case.
+        // maybeAdvanceClosedPaid requires. See closedPaid_fullyPaidButNotFullyDelivered_… for the half-satisfied case.
         long closed = readyToAdvanceFrom(DealStage.DELIVERED);
         tickets.updatePaymentStatusUnchecked(closed, PaymentTrack.FULLY_PAID);
         tickets.updateFulfillmentStatus(closed, FulfilmentStatus.FULLY_DELIVERED);
@@ -491,12 +468,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(closed)).isEqualTo(DealStage.CLOSED_PAID);
     }
 
-    /**
-     * The eleven ungated stages keep their manual fallback with no facts recorded at all —
-     * {@code NEGOTIATION}, {@code PROCUREMENT} and {@code DELIVERY_SCHEDULING} above all, the
-     * operational stages where a wrong value misreports nothing financial. A gate that quietly
-     * swallowed these would be worse than the hole it closes.
-     */
+    /** The eleven ungated stages keep their manual fallback with no facts recorded at all — NEGOTIATION,
+     * PROCUREMENT and DELIVERY_SCHEDULING above all, the operational stages where a wrong value misreports nothing
+     * financial. A gate that quietly swallowed these would be worse than the hole it closes. */
     @Test
     void theUngatedStagesKeepTheirManualFallbackWithNoFactsRecorded() {
         long negotiation = readyToAdvanceFrom(DealStage.QUOTE_BUYER);
@@ -561,11 +535,8 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.NEGOTIATION);
     }
 
-    /**
-     * Case A — the full route, walked by hand with each fact recorded as it happens. The front
-     * half needs nothing; the back half needs exactly the fact its stage claims, in the order the
-     * business produces them.
-     */
+    /** Case A — the full route, walked by hand with each fact recorded as it happens. The front half needs nothing;
+     * the back half needs exactly the fact its stage claims, in the order the business produces them. */
     @Test
     void caseA_theFullRoute_walksEveryStageWithItsFactsInPlace() {
         long ticketId = readyToAdvanceFrom(DealStage.LEAD_APPROACH);
@@ -628,26 +599,7 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ The automatic path must be completely unaffected ════════════════════
 
-    /**
-     * <b>Required evidence.</b> {@code autoAdvanceStage} is the path that fires <em>because</em> a
-     * fact just became true, so it must never be routed through the fact gate — that would be
-     * circular and would brick every operational advance.
-     *
-     * <p>This drives the REAL service methods against real Postgres, from a deal at
-     * {@code LEAD_APPROACH} with no facts at all, and asserts the deal reaches all four gated
-     * stages by itself:
-     *
-     * <pre>
-     * confirmCustomer     -> CUSTOMER_CONFIRMED  -> ORDER_RECEIVED      (S10)
-     * recordPayment       -> DEPOSIT_PAID        -> DEPOSIT_RECEIVED    (S11)
-     * reserveStock (full) -> FROM_STOCK          -> DELIVERY_SCHEDULING (S18, skipping PROCUREMENT)
-     * completeDelivery    -> FULLY_DELIVERED     -> DELIVERED           (S19)
-     * confirmFinalPayment -> FULLY_PAID          -> CLOSED_PAID         (S20)
-     * </pre>
-     *
-     * <p>It doubles as the owner's all-from-stock route (Case D — no import journey, PROCUREMENT
-     * never visited) and as Case G's ordering (delivered first, then paid).
-     */
+    /** Checks operational actions still advance all four fact-gated stages automatically. */
     @Test
     void autoAdvanceStillReachesAllFourGatedStagesWhenTheFactBecomesTrue() {
         long ticketId = createDealWithOneItem();
@@ -807,11 +759,9 @@ class StageFactGateIntegrationTest extends AbstractPostgresIntegrationTest {
             .map(TicketResponses.TicketActionDto::action).toList();
     }
 
-    /**
-     * The last fallback of {@code TicketRepository.payableAmount} is
-     * {@code SUM(approved_price * qty)}, so this is the smallest honest way to give a deal a
-     * payable amount without dragging the whole pricing-request chain into a test about stages.
-     */
+    /** The last fallback of TicketRepository.payableAmount is SUM(approved_price * qty), so this is the smallest
+     * honest way to give a deal a payable amount without dragging the whole pricing-request chain into a test
+     * about stages. */
     private void setApprovedPrice(long itemId, String price) {
         jdbc.update("UPDATE sales.ticket_item SET approved_price = :price WHERE item_id = :id",
             new MapSqlParameterSource().addValue("price", new BigDecimal(price)).addValue("id", itemId));

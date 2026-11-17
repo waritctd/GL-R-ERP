@@ -16,12 +16,7 @@ public final class PayrollClassificationDtos {
 
     // ---- Tax-treatment classification (hr.payroll_component_tax_treatment) --------------------
 
-    /**
-     * One employee's full classification map for a tax year: component -> treatment. A component
-     * absent from the map, or present with a {@code null} value, means "not yet classified" --
-     * these are distinct storage states (absent = no row at all; present+null = a row exists but
-     * HR has not set a treatment) and callers must not conflate them with a default.
-     */
+    /** One employee's full classification map for a tax year: component -> treatment. */
     public record EmployeeComponentTaxTreatments(
         long employeeId,
         Map<PayrollComponent, PayrollTaxTreatment> byComponent
@@ -30,8 +25,8 @@ public final class PayrollClassificationDtos {
     public record ComponentTaxTreatmentUpsertRequest(
         @NotNull Long employeeId,
         @NotNull PayrollComponent component,
-        // Nullable and meaningful: null explicitly resets the component back to "not yet
-        // classified" rather than being coerced to any treatment.
+        // Nullable and meaningful: null explicitly resets the component back to "not yet classified" rather than being
+        // coerced to any treatment.
         PayrollTaxTreatment taxTreatment
     ) {}
 
@@ -54,13 +49,8 @@ public final class PayrollClassificationDtos {
         long employeeId,
         String employeeCode,
         String employeeName,
-        // EFFECTIVE classification (see class javadoc above): synthesized defaults are merged in for
-        // every component with no stored row. A present-and-null entry (visible via
-        // explicitlyClassifiedComponents below) still means "HR deliberately left this unclassified"
-        // and still blocks a non-zero amount -- it is never overwritten by a default. SALARY is
-        // deliberately never a key here: it is locked to REGULAR_REPROJECT without ever needing a
-        // stored row (see PayrollClassifiedCalculationDtos#treatmentOf), so the matrix screen must
-        // render it as a fixed label, never an editable cell.
+        // EFFECTIVE classification (see class javadoc above): synthesized defaults are merged in for every component
+        // with no stored row.
         Map<PayrollComponent, PayrollTaxTreatment> byComponent,
         // Components for which HR (or a migration backfill)
         // has an actual stored row -- i.e. a value NOT synthesized by this snapshot. Includes a
@@ -75,11 +65,9 @@ public final class PayrollClassificationDtos {
 
     // ---- SSO wage-base inclusion (hr.payroll_component_sso_inclusion) --------------------------
 
-    /**
-     * One employee's full SSO-inclusion map for a tax year: component -> included. Unlike
-     * classification, inclusion is a plain boolean with a real default (seeded by {@code
-     * PayrollRepository#seedSsoInclusionDefaults}), so there is no "unset" state once seeded.
-     */
+    /** One employee's full SSO-inclusion map for a tax year: component -> included. Unlike classification,
+     * inclusion is a plain boolean with a real default (seeded by PayrollRepository#seedSsoInclusionDefaults), so
+     * there is no "unset" state once seeded. */
     public record EmployeeComponentSsoInclusion(
         long employeeId,
         Map<PayrollComponent, Boolean> byComponent

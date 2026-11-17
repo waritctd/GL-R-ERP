@@ -47,66 +47,18 @@ import th.co.glr.hr.ticket.QuotationRenderModel.RenderItem;
 import th.co.glr.hr.ticket.QuotationRenderModel.Signatories;
 import th.co.glr.hr.ticket.QuotationRenderer;
 
-/**
- * html-fidelity-spec.md §5/§6 — the owner's acceptance for the Chromium engine: the HTML render
- * of a quotation must be visually the same as the LibreOffice render of the same XLS,
- * "including border coverage and line thickness". Both engines print the SAME workbook; the two
- * PDFs are rasterised at 110 dpi, EVERY page, and every ruled line is measured ({@link RuleScanner}):
- * <ul>
- *   <li>every LibreOffice rule has an HTML counterpart within {@value #POS_TOL_MM} mm of position
- *       and both ends within {@value #EXTENT_TOL_MM} mm — that is border coverage, per rule;</li>
- *   <li>no rule exists in the HTML render that the LibreOffice render does not have;</li>
- *   <li>each matched pair's stroke agrees within {@value #STROKE_TOL_PT} pt;</li>
- *   <li>page counts agree.</li>
- * </ul>
- * Spec §7 ("the border of the line covers each section properly") is pinned on top of that, in
- * BOTH renders, from the sheet plan the HTML was drawn from (i.e. the borders the XLS path wrote):
- * every planned rule is CONTINUOUS along its whole extent (no gap over {@value #GAP_TOL_MM} mm),
- * and each section is a closed box — the column-title row (four edges plus every column
- * separator), the item+remark box (outer left/right rules from the title row down to a bottom
- * rule at or below remark line 8, never an open bottom above รวมเป็นเงิน), each totals amount
- * cell; on a paginated document the box closes at the bottom of every page but the last.
- *
- * <p>Spec §8 (the remark block is its OWN closed box B..H — top rule under the last item line
- * stopping at the เป็นเงิน column, interior separators B|C…G|H ending there, A|B and H|I running
- * on to the bottom rule) is asserted from the plan AND from the ink of both renders
- * ({@link #assertRemarkBoxInk}). Spec §9 (multi-page) is asserted on 12- and 30-item fixtures:
- * identical page counts in both engines, "หน้า X/Y" on every page at the same position and size
- * in both (and on no single-page render), every page but the last closed by an A..I rule that the
- * column rules end on, no item block or heading split across pages (from the plan and from each
- * page's own extracted text), §5 tolerances and §7 continuity on every page.
- *
- * <p>Text: on every page of every fixture the two renders must print the SAME TEXT
- * ({@link #assertSameText}): each page's text is extracted in geometric order (PDFBox
- * {@code sortByPosition} — the two PDFs' content streams are in different orders, LibreOffice a
- * row at a time, Chromium its absolutely positioned boxes in DOM order, so geometric order is the
- * only one they share), NFC-normalised, and compared with ALL whitespace removed — PDFBox's own
- * word-gap heuristic splits a Thai glyph run differently in the two PDFs ("จำกัด" comes back as
- * "จำ กัด" from the Chromium one), which is an artefact of extraction, not of what was printed.
- * A missing, extra or altered character anywhere on the page fails; when only the ORDER differs
- * (PDFBox's line grouping splits a large-font title differently once the host substitutes the
- * fonts), the characters are compared as a sorted multiset instead — see {@link #assertSameText}.
- * One known exception is
- * declared per fixture where it applies, and asserted to be present rather than silently
- * substituted — see {@link KnownTextDifference}.
- *
- * <p>Fixtures: the 5-item reference through the XLS path, the owner's REAL filled workbook
- * ({@code fixtures/QN6900-CHN1A-HUB.xls}, fit-to-page 1×1 on a POI copy — spec §6; its own cells
- * carry the template's column separators through the remark rows, so the §8 box is not asserted
- * on it), and the 12/30-item paginated references. Side-by-side and diff PNGs, page rasters and
- * the numeric reports go to {@code -Dfidelity.outDir} (default {@code target/fidelity}).
- * Skipped where LibreOffice or Chromium is absent — except under {@code REQUIRE_CHROMIUM=1}
- * (CI), where absence fails ({@link ChromiumTestGate}).
- */
+/** html-fidelity-spec.md §5/§6 — the owner's acceptance for the Chromium engine: the HTML render of a quotation
+ * must be visually the same as the LibreOffice render of the same XLS, "including border coverage and line
+ * thickness". */
 class HtmlXlsFidelityTest {
     static final double POS_TOL_MM = 1.0;
     static final double EXTENT_TOL_MM = 1.0;
     static final double STROKE_TOL_PT = 0.2;
     /** §7 continuity: the longest stretch of a planned rule with no ink is at most this. */
     static final double GAP_TOL_MM = 0.3;
-    /** Perpendicular window around a planned rule's position in which its ink is looked for —
-     * the two renders sit within 0.15 mm of each other and of the plan (see the v3/v4 reports);
-     * neighbouring rules are never closer than 5 mm. */
+    /** Perpendicular window around a planned rule's position in which its ink is looked for — the two renders sit
+     * within 0.15 mm of each other and of the plan (see the v3/v4 reports); neighbouring rules are never closer
+     * than 5 mm. */
     static final double SEARCH_MM = 0.75;
     /** §5 text: baselines within 1.5 mm — applied to the page-number footer in both engines. */
     static final double TEXT_TOL_MM = 1.5;
@@ -170,10 +122,9 @@ class HtmlXlsFidelityTest {
         assertPlannedRulesContinuous(rendered.plan(), loPdf, htmlPdf, name);
     }
 
-    /** The last items and the whole tail share the final page, so the remark box's top rule
-     * sits directly under an item line on a paginated document (9 items with the licensed
-     * fonts, 13 with CI's substitutes; the two fixtures below carry their tail alone on the last page, under the repeated
-     * title row). The counts are found from the plan, not hardcoded — see {@link #itemCountFor}. */
+    /** The last items and the whole tail share the final page, so the remark box's top rule sits directly under an
+     * item line on a paginated document (9 items with the licensed fonts, 13 with CI's substitutes; the two
+     * fixtures below carry their tail alone on the last page, under the repeated title row). */
     @Test
     void tailSharesItsPageWithTheLastItems() throws Exception {
         int n = itemCountFor(true, 6, 2);
@@ -192,15 +143,9 @@ class HtmlXlsFidelityTest {
         assertPaginated(n, "paginated-v5-" + n, false);
     }
 
-    /** The smallest item count at or above {@code from} whose plan fills at least {@code minPages}
-     * pages and lands the remark box on its page the way {@code tailWithItems} says. Which count
-     * produces which page shape is a function of the page fill, and the page fill moves with the
-     * column unit of whatever font the host resolves the workbook's default font to
-     * ({@link th.co.glr.hr.common.sheet.FontResolver}): the licensed Cordia New gives 9 / 11 / 27
-     * here, CI's fonts-thai-tlwg substitute (Umpush, a 156-twip unit against Cordia's 102) prints
-     * shorter rows and lands on 13 / 10 / 25. The
-     * plan is read from the XLS engine alone — no LibreOffice, no Chromium — so this costs a few
-     * hundred milliseconds. */
+    /** The smallest item count at or above from whose plan fills at least minPages pages and lands the remark box
+     * on its page the way tailWithItems says. The plan is read from the XLS engine alone — no LibreOffice, no
+     * Chromium — so this costs a few hundred milliseconds. */
     static int itemCountFor(boolean tailWithItems, int from, int minPages) {
         for (int n = from; n <= from + 40; n++) {
             QuotationRenderModel model = reference(n, String.format(Locale.US, "QT-2026-%04d", n));
@@ -216,9 +161,8 @@ class HtmlXlsFidelityTest {
             + " over " + minPages + "+ pages");
     }
 
-    /** Spec §9 on an {@code n}-item reference. {@code tailWithItems} pins which shape the fixture
-     * exercises: the tail under the last item line (its top rule B..H is then asserted as ink)
-     * or the tail alone under the repeated title row. */
+    /** Spec §9 on an n-item reference. tailWithItems pins which shape the fixture exercises: the tail under the
+     * last item line (its top rule B..H is then asserted as ink) or the tail alone under the repeated title row. */
     private void assertPaginated(int n, String name, boolean tailWithItems) throws Exception {
         QuotationRenderModel model = reference(n, String.format(Locale.US, "QT-2026-%04d", n));
         byte[] xls = new QuotationRenderer().toXls(model);
@@ -270,9 +214,9 @@ class HtmlXlsFidelityTest {
                 }
             }
 
-            // §9: the page's last drawn horizontal rule closes the box across A..I, and the
-            // column rules end on it (on the last page the last rules are the signature
-            // underscores; its box bottom is pinned by assertClosed + continuity instead).
+            // §9: the page's last drawn horizontal rule closes the box across A..I, and the column rules end on it (on the
+            // last page the last rules are the signature underscores; its box bottom is pinned by assertClosed +
+            // continuity instead).
             double ox = plan.originXHmm() / 100.0;
             double left = ox + plan.columnLeftHmm(plan.firstCol) / 100.0;
             double right = ox + plan.contentWidthHmm() / 100.0;
@@ -317,9 +261,8 @@ class HtmlXlsFidelityTest {
                     + " | footer ink LO %s HTML %s | last rule LO %.2fmm HTML %.2fmm%n",
                 page.number(), lo.x0Mm(), lo.x1Mm(), lo.yMm(), html.x0Mm(), html.x1Mm(), html.yMm(),
                 loInk, htmlInk, lastRuleY[0], lastRuleY[1]));
-            // Position and size are compared as INK (both rasters at 110 dpi): PDFBox reports
-            // Chromium's text at its CSS pixel size (14 for an 11 pt footer), so its font size is
-            // no oracle; the glyphs' own bounding box is.
+            // Position and size are compared as INK (both rasters at 110 dpi): PDFBox reports Chromium's text at its CSS
+            // pixel size (14 for an 11 pt footer), so its font size is no oracle; the glyphs' own bounding box is.
             assertThat(Math.abs(lo.centerMm() - html.centerMm())).as(name + " page " + page.number() + ": footer text centre").isLessThanOrEqualTo(TEXT_TOL_MM);
             assertThat(Math.abs(loInk.centerMm() - htmlInk.centerMm())).as(name + " page " + page.number() + ": footer ink centre").isLessThanOrEqualTo(TEXT_TOL_MM);
             assertThat(Math.abs(loInk.y1Mm() - htmlInk.y1Mm())).as(name + " page " + page.number() + ": footer baseline").isLessThanOrEqualTo(TEXT_TOL_MM);
@@ -395,10 +338,9 @@ class HtmlXlsFidelityTest {
         }
     }
 
-    /** [left, top, right, bottom] in page mm of every picture on {@code page} — the badge
-     * picture has a thin frame that the scanner reads as faint rules (0.15–0.2 pt); pictures are
-     * compared as pixels in the diff map, not as borders, so rules lying inside a picture box are
-     * ignored. */
+    /** [left, top, right, bottom] in page mm of every picture on page — the badge picture has a thin frame that the
+     * scanner reads as faint rules (0.15–0.2 pt); pictures are compared as pixels in the diff map, not as borders,
+     * so rules lying inside a picture box are ignored. */
     static List<double[]> pictureBoxesMm(SheetPlan plan, SheetPlan.Page page) {
         List<double[]> boxes = new ArrayList<>();
         Map<Integer, Integer> rowTop = new java.util.HashMap<>();
@@ -430,8 +372,8 @@ class HtmlXlsFidelityTest {
         return false;
     }
 
-    /** §5 on EVERY page of both renders. Page 1's images keep the plain {@code -side}/{@code -diff}
-     * names; later pages get {@code -side-pN}/{@code -diff-pN}. */
+    /** §5 on EVERY page of both renders. Page 1's images keep the plain -side/-diff names; later pages get
+     * -side-pN/-diff-pN. */
     static Comparison compare(SheetPlan plan, byte[] loPdf, byte[] htmlPdf, String name) throws IOException {
         int pagesA = RuleScanner.pageCount(loPdf);
         int pagesB = RuleScanner.pageCount(htmlPdf);
@@ -572,14 +514,13 @@ class HtmlXlsFidelityTest {
         return null;
     }
 
-    /** A text difference between the two renders that is known, explained, and must be PRESENT
-     * (an exception that stops occurring is stale and fails): {@code libreOffice} and
-     * {@code chromium} are the whitespace-stripped forms each engine prints for the same cell. */
+    /** A text difference between the two renders that is known, explained, and must be PRESENT (an exception that
+     * stops occurring is stale and fails): libreOffice and chromium are the whitespace-stripped forms each engine
+     * prints for the same cell. */
     record KnownTextDifference(String what, String libreOffice, String chromium) {}
 
-    /** Every page's text, both engines, in geometric order with all whitespace removed (see the
-     * class Javadoc, "Text"). Writes {@code <name>-text.txt} with each page's text and the first
-     * divergence. */
+    /** Every page's text, both engines, in geometric order with all whitespace removed (see the class Javadoc,
+     * "Text"). Writes <name>-text.txt with each page's text and the first divergence. */
     static void assertSameText(SheetPlan plan, byte[] loPdf, byte[] htmlPdf, String name, KnownTextDifference... known) throws IOException {
         int pagesA = RuleScanner.pageCount(loPdf);
         int pagesB = RuleScanner.pageCount(htmlPdf);
@@ -608,12 +549,9 @@ class HtmlXlsFidelityTest {
                     p + 1, i, a.substring(Math.max(0, i - 20), Math.min(a.length(), i + 40)),
                     b.substring(Math.max(0, i - 20), Math.min(b.length(), i + 40)));
                 rep.append(sameCharacters ? "  ORDER " : "  DIFF ").append(where).append('\n');
-                // Geometric order is PDFBox's line-grouping heuristic, and with a SUBSTITUTED font
-                // (CI has only fonts-thai-tlwg) the two PDFs' glyph metrics differ enough that a
-                // large-font title ("ใบเสนอราคา") is split across "lines" in one PDF and not the
-                // other, moving "ราคา" past the address line. That is extraction, not print: the
-                // same characters, each the same number of times, is what the page printed. A
-                // missing, extra or altered character anywhere still fails.
+                // Geometric order is PDFBox's line-grouping heuristic, and with a SUBSTITUTED font (CI has only
+                // fonts-thai-tlwg) the two PDFs' glyph metrics differ enough that a large-font title ("ใบเสนอราคา") is split
+                // across "lines" in one PDF and not the other, moving "ราคา" past the address line.
                 if (!sameCharacters) failures.add(where);
             }
         }
@@ -622,23 +560,16 @@ class HtmlXlsFidelityTest {
         assertThat(failures).as(name + ": the two renders print different text\n" + rep).isEmpty();
     }
 
-    /** The page's characters sorted — the order-insensitive form {@link #assertSameText} falls
-     * back to when the two extraction orders differ (see its comment). */
+    /** The page's characters sorted — the order-insensitive form #assertSameText falls back to when the two
+     * extraction orders differ (see its comment). */
     static String sortedChars(String s) {
         char[] chars = s.toCharArray();
         java.util.Arrays.sort(chars);
         return new String(chars);
     }
 
-    /** The page's PRINTED text in PDFBox's position-sorted order, NFC-normalised, every
-     * whitespace character removed. Printed: only glyphs that intersect the page's sheet box
-     * horizontally (the print range, {@code SheetPlan#originXHmm}..{@code + contentWidthHmm}) —
-     * both engines clip text at that edge, but LibreOffice's PDF keeps the clipped glyphs in
-     * the content stream behind a clip path while Chromium's culls a glyph that lies entirely
-     * outside its clip, so a run that overflows the range (the owner's workbook title in a
-     * substitute font wider than Angsana New) is extracted whole from one PDF and cut from the
-     * other although the two pages show the same ink. The footer band (page number) is inside
-     * the box horizontally and is kept. */
+    /** The page's PRINTED text in PDFBox's position-sorted order, NFC-normalised, every whitespace character
+     * removed. The footer band (page number) is inside the box horizontally and is kept. */
     static String textStream(byte[] pdf, int pageIndex, SheetPlan plan) throws IOException {
         double left = LibreOfficeMetrics.hmmToPt(plan.originXHmm()) - 0.5;
         double right = LibreOfficeMetrics.hmmToPt(plan.originXHmm() + plan.contentWidthHmm()) + 0.5;
@@ -678,8 +609,7 @@ class HtmlXlsFidelityTest {
         }
     }
 
-    /** The ink below {@code fromMm} down to the page bottom — the bottom-margin footer band — or
-     * null when empty. */
+    /** The ink below fromMm down to the page bottom — the bottom-margin footer band — or null when empty. */
     static InkBox inkBelow(BufferedImage img, double fromMm) {
         int[][] g = RuleScanner.gray(img);
         int h = g.length, w = g[0].length;
@@ -695,19 +625,16 @@ class HtmlXlsFidelityTest {
         return new InkBox(x0 * RuleScanner.PX_TO_MM, (x1 + 1) * RuleScanner.PX_TO_MM, y0 * RuleScanner.PX_TO_MM, (y1 + 1) * RuleScanner.PX_TO_MM);
     }
 
-    /** Thai combining marks (vowel signs, tone marks) can come back from a PDF in a different
-     * order than the source string — drop them and collapse whitespace before matching. */
+    /** Thai combining marks (vowel signs, tone marks) can come back from a PDF in a different order than the source
+     * string — drop them and collapse whitespace before matching. */
     static String norm(String s) {
         return s.replaceAll("[ัิ-ฺ็-๎]", "").replaceAll("\\s+", " ").trim();
     }
 
     // ── §7/§8: section closure and rule continuity, from the plan ────────────────────────
 
-    /** Drawn edges of the plan's cells: a cell edge is drawn when either cell sharing it has the
-     * facet, and never inside a merged region (the Excel/LibreOffice model SheetPlan documents on
-     * {@code borders}). Vertical neighbours are the rows printed above/below on the PAGE when one
-     * is given — a repeated title row on page 2+ sits on a different row than in the sheet, and
-     * an edge the sheet neighbour draws is not drawn there (the ราคา hole this gate found). */
+    /** Drawn edges of the plan's cells: a cell edge is drawn when either cell sharing it has the facet, and never
+     * inside a merged region (the Excel/LibreOffice model SheetPlan documents on borders). */
     static final class Edges {
         final SheetPlan plan;
         private final Map<Integer, Integer> above = new java.util.HashMap<>();
@@ -769,9 +696,9 @@ class HtmlXlsFidelityTest {
         }
     }
 
-    /** The quotation's sections located by their template texts, and the row that closes the
-     * item+remark box (the lowest row at or below remark line 8, above รวมเป็นเงิน, whose bottom
-     * edge is drawn in column A) — absent when the box is left open. */
+    /** The quotation's sections located by their template texts, and the row that closes the item+remark box (the
+     * lowest row at or below remark line 8, above รวมเป็นเงิน, whose bottom edge is drawn in column A) — absent
+     * when the box is left open. */
     record Sections(SheetPlan plan, int titleRow, int remarkRow, int line8Row, int subtotalRow, int vatRow, int totalRow,
                     int boxBottomRow) {
         /** The remark box's columns (spec §8): B..H. */
@@ -841,10 +768,8 @@ class HtmlXlsFidelityTest {
             }
         }
 
-        /** Spec §8, from the plan: the remark box B..H is closed on all four edges by the cells'
-         * own borders, has no interior separator, and the item zone above it keeps every column
-         * separator (A|B, B|C, C|D, D|E, E|F, G|H, H|I — F|G is never drawn on an item row, the
-         * template's ส่วนลด spans F:G) down to the box's top rule. */
+        /** Spec §8, from the plan: the remark box B..H is closed on all four edges by the cells' own borders, has no
+         * interior separator, and the item zone above it keeps every column separator down to the box's top rule. */
         void assertRemarkBox(String name) {
             Edges e = new Edges(plan);
             int a = plan.firstCol, i = plan.lastCol;
@@ -854,8 +779,8 @@ class HtmlXlsFidelityTest {
             }
             assertThat(e.b(remarkRow, a).top()).as(name + ": remark box top rule must not cross ลำดับ").isEqualTo(BorderStyle.NONE);
             assertThat(e.b(remarkRow, i).top()).as(name + ": remark box top rule must not cross เป็นเงิน").isEqualTo(BorderStyle.NONE);
-            // The last item line has no rule of its own under ลำดับ/เป็นเงิน — unless it is a page
-            // bottom, which the XLS path closes across A..I on purpose (spec §7/§9).
+            // The last item line has no rule of its own under ลำดับ/เป็นเงิน — unless it is a page bottom, which the XLS
+            // path closes across A..I on purpose (spec §7/§9).
             if (pageOf(plan, remarkRow - 1) == pageOf(plan, remarkRow)) {
                 assertThat(e.b(remarkRow - 1, a).bottom()).as(name + ": the row above the box has no bottom rule in ลำดับ").isEqualTo(BorderStyle.NONE);
                 assertThat(e.b(remarkRow - 1, i).bottom()).as(name + ": the row above the box has no bottom rule in เป็นเงิน").isEqualTo(BorderStyle.NONE);
@@ -886,10 +811,9 @@ class HtmlXlsFidelityTest {
         }
     }
 
-    /** Spec §8 as INK, in both renders: at the interior separators' x positions every detected
-     * column rule ends at the box's top; at A|B, H|I and the two outer rules it runs on to the
-     * bottom rule; the top rule spans exactly B..H (unless the box opens directly under the
-     * repeated title row, whose own A..I rule then coincides); the bottom rule spans A..I. */
+    /** Spec §8 as INK, in both renders: at the interior separators' x positions every detected column rule ends at
+     * the box's top; at A|B, H|I and the two outer rules it runs on to the bottom rule; the top rule spans exactly
+     * B..H; the bottom rule spans A..I. */
     static void assertRemarkBoxInk(SheetPlan plan, Sections s, byte[] loPdf, byte[] htmlPdf, String name) throws IOException {
         int pageIdx = pageOf(plan, s.remarkRow) - 1;
         SheetPlan.Page page = plan.pages.get(pageIdx);
@@ -964,9 +888,9 @@ class HtmlXlsFidelityTest {
         throw new AssertionError("row " + row + " is on no page");
     }
 
-    /** The item blocks of the item zone, from the plan's own cells: an underlined heading row
-     * belongs to the item below it; a numbered row (ลำดับ) starts an item; every following
-     * unnumbered text row is that item's continuation line. */
+    /** The item blocks of the item zone, from the plan's own cells: an underlined heading row belongs to the item
+     * below it; a numbered row (ลำดับ) starts an item; every following unnumbered text row is that item's
+     * continuation line. */
     static List<List<Integer>> itemBlocks(SheetPlan plan, Sections s) {
         List<List<Integer>> blocks = new ArrayList<>();
         List<Integer> pending = new ArrayList<>();
@@ -998,9 +922,8 @@ class HtmlXlsFidelityTest {
         }
     }
 
-    /** Every drawn edge on {@code page}, coalesced into maximal collinear runs: the outer left
-     * rule of the box is ONE segment from the title row to the box bottom, so a break anywhere
-     * along it is a gap, not two shorter rules. */
+    /** Every drawn edge on page, coalesced into maximal collinear runs: the outer left rule of the box is ONE
+     * segment from the title row to the box bottom, so a break anywhere along it is a gap, not two shorter rules. */
     static List<Segment> plannedRules(SheetPlan plan, SheetPlan.Page page) {
         Edges e = new Edges(plan, page);
         double ox = plan.originXHmm() / 100.0;
@@ -1045,9 +968,9 @@ class HtmlXlsFidelityTest {
         raw.computeIfAbsent(key, k -> new ArrayList<>()).add(new double[]{from, to});
     }
 
-    /** Longest ink-free stretch (mm) along {@code s} in the rasterised page: at every pixel step
-     * along the rule's extent (ends trimmed by {@link #SEARCH_MM} so a corner's rounding does not
-     * count), some pixel within ±{@link #SEARCH_MM} of the planned position must be dark. */
+    /** Longest ink-free stretch (mm) along s in the rasterised page: at every pixel step along the rule's extent
+     * (ends trimmed by #SEARCH_MM so a corner's rounding does not count), some pixel within ±#SEARCH_MM of the
+     * planned position must be dark. */
     static double longestGapMm(int[][] g, Segment s) {
         double pxPerMm = 1.0 / RuleScanner.PX_TO_MM;
         int win = (int) Math.ceil(SEARCH_MM * pxPerMm);
@@ -1071,8 +994,8 @@ class HtmlXlsFidelityTest {
         return longest * RuleScanner.PX_TO_MM;
     }
 
-    /** §7 continuity on EVERY page of both renders, against the plan they were drawn from. Also
-     * appends the per-page segment count and the worst gap to {@code <name>-continuity.txt}. */
+    /** §7 continuity on EVERY page of both renders, against the plan they were drawn from. Also appends the
+     * per-page segment count and the worst gap to <name>-continuity.txt. */
     static void assertPlannedRulesContinuous(SheetPlan plan, byte[] loPdf, byte[] htmlPdf, String name) throws IOException {
         StringBuilder rep = new StringBuilder("=== " + name + " continuity (gap tolerance " + GAP_TOL_MM + " mm) ===\n");
         List<String> failures = new ArrayList<>();
@@ -1101,18 +1024,14 @@ class HtmlXlsFidelityTest {
 
     // ── fixtures ─────────────────────────────────────────────────────────────────────────
 
-    /** The 5-item single-page reference: two location headings, three description lines per item
-     * (the calculation line wraps inside column B), 10%/Net discounts, all 8 remark lines, real
-     * signatory names and an approver signature picture. */
+    /** The 5-item single-page reference: two location headings, three description lines per item (the calculation
+     * line wraps inside column B), 10%/Net discounts, all 8 remark lines, real signatory names and an approver
+     * signature picture. */
     static QuotationRenderModel fiveItemReference() {
         return reference(5, "QT-2026-0005");
     }
 
-    /** {@link #fiveItemReference()} with {@code n} items — 12 and 30 paginate. The number is
-     * product-shaped ({@code DealQuotationRepository#nextQuotationCode}: {@code QT-<year>-<seq>}):
-     * a longer, fixture-only number spilt past column I's right edge, where the two engines clip
-     * a run of glyphs at different points — a difference the text comparison must not be asked
-     * to explain away. */
+    /** #fiveItemReference() with n items — 12 and 30 paginate. */
     static QuotationRenderModel reference(int n, String number) {
         List<RenderItem> items = new ArrayList<>();
         for (int i = 1; i <= n; i++) {
@@ -1140,8 +1059,8 @@ class HtmlXlsFidelityTest {
             "Sales/สมชาย ใจดี T.081-234-5678",
             "คุณลูกค้า   /   Test Customer Co., Ltd.   เลขที่ผู้เสียภาษี : 0105542000000",
             "โทร. 02-000-0000", "Showroom V2 Project", items, remarks,
-            // Owner feedback pass 1: slot 4 carries the ผู้สั่งซื้อ name (F2) and the dates row is
-            // filled for the three staff slots (F4) — both engines must print them identically.
+            // Owner feedback pass 1: slot 4 carries the ผู้สั่งซื้อ name (F2) and the dates row is filled for the three
+            // staff slots (F4) — both engines must print them identically.
             new Signatories("จินตนา", "จุฑาทิพ", "ผึ้ง", "สมหญิง ใจดี", signaturePng(), "image/png",
                 LocalDate.of(2026, 7, 14), LocalDate.of(2026, 7, 15), LocalDate.of(2026, 7, 16)), true);
     }
@@ -1170,33 +1089,20 @@ class HtmlXlsFidelityTest {
         }
     }
 
-    /** The owner's workbook's B4 ({@code =TODAY()}, cached on the day it was saved), as the serial
-     * {@link #fitToOnePageCopy} pins it to. */
+    /** The owner's workbook's B4 (=TODAY(), cached on the day it was saved), as the serial #fitToOnePageCopy pins
+     * it to. */
     static final int WORKBOOK_DATE_SERIAL = 46178; // 2026-06-05
 
-    /**
-     * The single known text difference, on the owner's real workbook only: B4 carries Excel's
-     * THAI-LOCALE date format {@code d ดดดด bbbb} (ดดดด = Thai month name, bbbb = Buddhist-era
-     * year), which NEITHER engine understands. LibreOffice prints the unknown codes literally
-     * ("5 ดดดด bbbb"); POI's DataFormatter does not recognise the format as a date at all and
-     * prints the raw serial ("46178.0"). Excel would print "5 มิถุนายน 2569". The product's own
-     * XLS path never writes such a cell (it writes the date as text), so this is a fixture
-     * property, not a renderer defect to paper over — it is declared here, asserted present in
-     * both renders, and everything else on the page must still agree. Pinned to a fixed serial
-     * so the gate does not move with the calendar.
-     */
+    /** The single known text difference, on the owner's real workbook only: B4 carries Excel's THAI-LOCALE date
+     * format d ดดดด bbbb (ดดดด = Thai month name, bbbb = Buddhist-era year), which NEITHER engine understands. */
     static final KnownTextDifference WORKBOOK_DATE_CELL = new KnownTextDifference(
         "B4 d ดดดด bbbb (Thai-locale date format)",
         LocalDate.of(2026, 6, 5).getDayOfMonth() + "ดดดดbbbb",
         WORKBOOK_DATE_SERIAL + ".0");
 
-    /** Spec §6: the owner's workbook is not set to fit-to-page (LibreOffice spilt its signature
-     * rows to page 2); Excel prints it on one page. Fit 1×1 on a copy, and pin B4's
-     * {@code =TODAY()} to the value cached in the file ({@link #WORKBOOK_DATE_SERIAL}) so both
-     * engines print the same day — nothing else touched.
-     * {@code setAutobreaks(true)} is what LibreOffice actually reads as "fit to pages" (see
-     * SheetPlan#computeZoom) — without it LibreOffice keeps the workbook's 86% scale and two
-     * pages, whatever the fit counts say. */
+    /** Spec §6: the owner's workbook is not set to fit-to-page (LibreOffice spilt its signature rows to page 2);
+     * Excel prints it on one page. Fit 1×1 on a copy, and pin B4's =TODAY() to the value cached in the file
+     * (#WORKBOOK_DATE_SERIAL) so both engines print the same day — nothing else touched. */
     static byte[] fitToOnePageCopy(ClassPathResource xls) throws IOException {
         try (InputStream in = xls.getInputStream(); Workbook wb = WorkbookFactory.create(in)) {
             Sheet sh = wb.getSheet("Update");
@@ -1209,10 +1115,9 @@ class HtmlXlsFidelityTest {
             org.apache.poi.ss.usermodel.Cell dateCell = sh.getRow(3).getCell(1);
             assertThat(dateCell.getCellFormula()).as("B4 is the workbook's =TODAY() cell").isEqualTo("TODAY()");
             assertThat((int) dateCell.getNumericCellValue()).as("B4's cached serial").isEqualTo(WORKBOOK_DATE_SERIAL);
-            // HSSF's setCellValue on a FORMULA cell only updates the cached result and keeps the
-            // formula (and so does removeFormula() once the sheet is written back) — and TODAY()
-            // is volatile, so BOTH engines would recompute it on load. Blank the cell first: that
-            // replaces the formula record outright; then restore the style (its date format).
+            // HSSF's setCellValue on a FORMULA cell only updates the cached result and keeps the formula (and so does
+            // removeFormula() once the sheet is written back) — and TODAY() is volatile, so BOTH engines would recompute
+            // it on load.
             org.apache.poi.ss.usermodel.CellStyle dateStyle = dateCell.getCellStyle();
             dateCell.setBlank();
             dateCell.setCellValue((double) WORKBOOK_DATE_SERIAL);

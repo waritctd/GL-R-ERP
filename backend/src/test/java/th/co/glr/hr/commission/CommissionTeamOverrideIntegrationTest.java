@@ -27,27 +27,9 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Manager TEAM OVERRIDE (V199) -- real-DB coverage, through the REAL {@link CommissionService} and
- * {@link CommissionRepository} (never Mockito): the override's base is a company-wide {@code SUM}
- * whose status filter, kind filter and weighting are all SQL, and a mocked repository would happily
- * "pass" while the SQL summed the wrong rows. The override pays real money to two named people and
- * its base is company-wide data, so most cases are written wrong-way-round: what must NOT move the
- * figure (an unapproved receipt, a weight, a manual kind) and who must NOT see the company base (a
- * non-recipient rep).
- *
- * <p>Independent of the V199 seed: every case inserts its OWN config generation at a month
- * {@code >= 2027-01-01} with its OWN freshly-created employees, so it never depends on employees
- * 142/47 existing.
- *
- * <p>Annotated with {@link EnabledIf} on the class itself because {@code @EnabledIf} is NOT
- * {@code @Inherited} -- the annotation on {@link AbstractPostgresIntegrationTest} gates nothing
- * here (see CLAUDE.md quick facts).
- *
- * <p>Fixture arithmetic (actual_received 2,140,000 = exactly 2,000,000.00 ex-VAT at /1.07):
- * threshold 3,000,000, rate 0.0750% -- a company ex-VAT base of 4,000,000 pays (4M - 3M) x 0.075% =
- * 750.00 to EACH recipient.
- */
+/** Manager TEAM OVERRIDE -- real-DB coverage, through the REAL CommissionService and CommissionRepository: the
+ * override's base is a company-wide SUM whose status filter, kind filter and weighting are all SQL, and a
+ * mocked repository would happily "pass" while the SQL summed the wrong rows. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -101,10 +83,7 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         repB = createEmployee("พนักงานขาย บี", "rep-b-teamoverride@glr.co.th", "SA", "แผนกขาย");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Payroll path (computeRepPayrollCommissions, via payrollReadySummary / payrollCommission-
-    // TotalsByEmployee)
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Payroll path (computeRepPayrollCommissions, via payrollReadySummary / payrollCommission- TotalsByEmployee)
 
     @Test
     void bothRecipientsEachGetTheFullAmount_notSplit_evenWithNoSaleRowsOfTheirOwn() {
@@ -160,8 +139,8 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
 
         // The weight DID apply to rep A's own tier base (2,000,000 x 2)...
         assertThat(repRow(summary, repA).orElseThrow().commissionableBase()).isEqualByComparingTo("4000000.00");
-        // ...but the company base is raw money: 4,000,000 -> 750.00. A weighted company base
-        // (6,000,000) would have paid (6M - 3M) x 0.075% = 2,250.00 -- the wrong-way-round check.
+        // ...but the company base is raw money: 4,000,000 -> 750.00. A weighted company base (6,000,000) would have
+        // paid (6M - 3M) x 0.075% = 2,250.00 -- the wrong-way-round check.
         SalesRepCommissionSummaryDto r1 = repRow(summary, recipient1).orElse(null);
         assertThat(r1).isNotNull();
         assertThat(r1.teamOverrideAmount()).isEqualByComparingTo("750.00");
@@ -175,11 +154,7 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
         seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
         seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        // A SUBMITTED (nobody approved it) receipt of ฿1,070,000 = ฿1,000,000 ex-VAT. On the
-        // preview filter it would lift the base to 5,000,000 and the override to 1,500.00; payroll
-        // pays only approved money, so the override must stay 750.00. (This repo already paid ฿5,000
-        // on an unapproved receipt once -- the same invariant CommissionIncentiveStockBonus-
-        // IntegrationTest pins for the stock bonus.)
+        // A SUBMITTED (nobody approved it) receipt of ฿1,070,000 = ฿1,000,000 ex-VAT.
         seedSubmitted(repA, new BigDecimal("1070000.00"), MARCH_2027);
 
         PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(MARCH_2027, hrActor);
@@ -197,8 +172,7 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
         seedApproved(repA, new BigDecimal("3210000.00"), MARCH_2027);                 // 3,000,000 ex-VAT
         long clawedBack = seedApproved(repB, new BigDecimal("1070000.00"), MARCH_2027); // 1,000,000
-        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);                                   // 2,000,000
-        // Σ = 6,000,000 -> (6M - 3M) x 0.075% = 2,250.00 before the clawback.
+        seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);                                   // 2,000,000 Σ = 6,000,000 -> (6M - 3M) x 0.075% = 2,250.00 before the clawback.
         assertThat(repRow(commissionService.payrollReadySummary(MARCH_2027, hrActor), recipient1)
             .map(SalesRepCommissionSummaryDto::teamOverrideAmount).orElse(ZERO2))
             .isEqualByComparingTo("2250.00");
@@ -246,9 +220,9 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
 
         SalesRepCommissionSummaryDto r1 = repRow(commissionService.payrollReadySummary(MARCH_2027, hrActor), recipient1).orElseThrow();
 
-        // Same rule as INCENTIVE/STOCK_BONUS: only a STRICTLY POSITIVE manual entry replaces.
-        // (A NEGATIVE manual MANAGER cannot be created -- createManualCommission 400s it -- so the
-        // zero case is the only "not a replacement" MANAGER shape reachable through the service.)
+        // Same rule as INCENTIVE/STOCK_BONUS: only a STRICTLY POSITIVE manual entry replaces. (A NEGATIVE manual
+        // MANAGER cannot be created -- createManualCommission 400s it -- so the zero case is the only "not a
+        // replacement" MANAGER shape reachable through the service.)
         assertThat(r1.teamOverrideAmount()).isEqualByComparingTo("750.00");
         assertThat(r1.manualAdjustmentAmount()).isEqualByComparingTo(ZERO2);
         assertThat(r1.commissionAmount()).isEqualByComparingTo("750.00");
@@ -282,8 +256,8 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         SalesRepCommissionSummaryDto r1 = repRow(commissionService.payrollReadySummary(MARCH_2027, hrActor), recipient1).orElse(null);
         assertThat(r1).as("recipient 1 has a payroll row").isNotNull();
 
-        // Payroll only ever sees APPROVED rows: the pending 5,000 is not paid AND does not switch
-        // the auto limb off -- otherwise the recipient would silently get nothing this month.
+        // Payroll only ever sees APPROVED rows: the pending 5,000 is not paid AND does not switch the auto limb off --
+        // otherwise the recipient would silently get nothing this month.
         assertThat(r1.teamOverrideAmount()).isEqualByComparingTo("750.00");
         assertThat(r1.manualAdjustmentAmount()).isEqualByComparingTo(ZERO2);
         assertThat(r1.commissionAmount()).isEqualByComparingTo("750.00");
@@ -292,10 +266,9 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
     @Test
     void noConfigGenerationForTheMonth_noOverrideForAnyone() {
         wireService();
-        // Sep 2026 is before every generation, so no generation applies at all. Feb 2027 IS covered
-        // by the V199 seed generation (effective 2026-10-01), but that generation has ZERO
-        // recipients in this DB (employees 142/47 do not exist here), so it pays nobody. The
-        // generation inserted below starts 2027-03-01 and applies to neither month.
+        // Sep 2026 is before every generation, so no generation applies at all. Feb 2027 IS covered by the V199 seed
+        // generation (effective 2026-10-01), but that generation has ZERO recipients in this DB (employees 142/47 do
+        // not exist here), so it pays nobody.
         insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1, recipient2);
         seedApproved(repA, TWO_M_EX_VAT, FEB_2027);
         seedApproved(repB, TWO_M_EX_VAT, FEB_2027);
@@ -305,8 +278,8 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         for (LocalDate month : new LocalDate[] {FEB_2027, SEPTEMBER_2026}) {
             PayrollCommissionSummaryDto summary = commissionService.payrollReadySummary(month, hrActor);
             assertThat(summary.totalTeamOverrideAmount()).as("total override %s", month).isEqualByComparingTo(ZERO2);
-            // No recipients => no override was computed, so there is no company base to show: NULL
-            // (the UI hides it), NOT a misleading "company receipts 0.00".
+            // No recipients => no override was computed, so there is no company base to show: NULL (the UI hides it), NOT
+            // a misleading "company receipts 0.00".
             assertThat(summary.companyCommissionableBase())
                 .as("companyCommissionableBase %s: no recipients -> null, not 0.00", month).isNull();
             assertThat(repRow(summary, recipient1)).as("no row for recipient 1 in %s", month).isEmpty();
@@ -416,9 +389,7 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(payrollMap.get(recipient2)).isEqualByComparingTo("1050.00"); // 750 override + 300 adjustment
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // monthlySummary -- the rep-facing "how was my commission built" read model
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void monthlySummary_rawPlusWeightUpliftEqualsTheCommissionableBase() {
@@ -507,8 +478,8 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         insertConfig(MARCH_2027, true, "3000000.00", "0.0750", recipient1);
         seedApproved(repA, TWO_M_EX_VAT, MARCH_2027);
         seedApproved(repB, TWO_M_EX_VAT, MARCH_2027);
-        // A still-SUBMITTED ฿1,070,000 receipt: the live ESTIMATE counts it (same NOT IN
-        // ('VOID','REJECTED') preview filter the rest of monthlySummary uses), payroll does not.
+        // A still-SUBMITTED ฿1,070,000 receipt: the live ESTIMATE counts it (same NOT IN ('VOID','REJECTED') preview
+        // filter the rest of monthlySummary uses), payroll does not.
         seedSubmitted(repA, new BigDecimal("1070000.00"), MARCH_2027);
 
         CommissionMonthlySummaryDto dto = commissionService.monthlySummary(recipient1, MARCH_2027, principal(recipient1, "sales"));
@@ -671,9 +642,7 @@ class CommissionTeamOverrideIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(dto.teamOverrideAmount()).isEqualByComparingTo(ZERO2);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private Optional<SalesRepCommissionSummaryDto> repRow(PayrollCommissionSummaryDto summary, long salesRepId) {
         return summary.salesReps().stream().filter(r -> r.salesRepId() == salesRepId).findFirst();

@@ -83,11 +83,9 @@ class QuotationRendererNoPictureGoldenTest {
         }
         assertThat(Files.exists(golden)).as("golden %s missing", golden).isTrue();
         String expected = Files.readString(golden, StandardCharsets.UTF_8);
-        // The renderer's page-break and anchor arithmetic is LibreOffice's column unit, which is
-        // the workbook font's widest digit AS THIS MACHINE'S fontconfig resolves it. The goldens
-        // were written where the licensed Cordia New resolves (102 twips); a machine without it
-        // (CI: the Thai fonts are gitignored, #666) legitimately computes different breaks. Skip
-        // there rather than fail on an environment difference — the first line says which.
+        // The renderer's page-break and anchor arithmetic is LibreOffice's column unit, which is the workbook font's
+        // widest digit AS THIS MACHINE'S fontconfig resolves it. Skip there rather than fail on an environment
+        // difference — the first line says which.
         Assumptions.assumeTrue(expected.lines().findFirst().orElse("").equals(dump.lines().findFirst().orElse("")),
             "golden written under a different LibreOffice column unit (" + expected.lines().findFirst().orElse("")
                 + " vs " + dump.lines().findFirst().orElse("") + ") — skipping on this machine");

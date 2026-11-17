@@ -19,25 +19,9 @@ import th.co.glr.hr.common.ApiExceptionHandler;
 import th.co.glr.hr.dealquotation.DealQuotationRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-DB evidence for the frontend fix (prod customer_id 4326 "DONG NGO GROUP..." /
- * QT-2026-0039-1): {@code CustomerDetailsFields.jsx} now lets a rep switch a customer that already
- * has a Thai STRUCTURED address (province/district/subdistrict codes) to a free-text
- * ("ลูกค้าต่างประเทศ / ที่อยู่นอกประเทศไทย") one, by sending {@code PUT /api/customers/{id}} with
- * ONLY {@code {"address": "<text>"}} — no structured keys at all.
- *
- * <p>This required NO backend change: {@link CustomerController#update} already routes a body that
- * carries no structured field to the non-structured {@link CustomerRepository#update} overload
- * (its own {@code structured(...)} check), and that method already clears every structured column
- * to NULL whenever {@code :address} is non-null (see its own Javadoc/SQL). This test pins that
- * EXISTING behaviour through the REAL controller and REAL repository on REAL Postgres, per
- * CLAUDE.md's "permission changes must ship evidence" discipline — applied here even though this
- * is not a role/scope change, because the frontend fix depends entirely on this specific SQL
- * behaviour continuing to hold. No {@code DealEntryAccess} gate change: {@code PUT
- * /api/customers/{id}} keeps its existing {@code requireCanEnterDeal} authz, exercised by
- * {@code DealEntryAccessIntegrationTest} already — this class is scoped to the clearing contract,
- * not to authz.
- */
+/** Real-DB evidence for the frontend fix: CustomerDetailsFields.jsx now lets a rep switch a customer that
+ * already has a Thai STRUCTURED address to a free-text one, by sending PUT /api/customers/{id} with ONLY
+ * {"address": "<text>"} — no structured keys at all. */
 class CustomerForeignAddressSwitchIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private MockMvc mvc() {
@@ -61,8 +45,8 @@ class CustomerForeignAddressSwitchIntegrationTest extends AbstractPostgresIntegr
         return session;
     }
 
-    /** Shaped like prod customer_id 4326: a Bangkok structured address standing in for a foreign
-     * (Vietnamese) customer whose rep had no real Thai address to give. */
+    /** Shaped like prod customer_id 4326: a Bangkok structured address standing in for a foreign (Vietnamese)
+     * customer whose rep had no real Thai address to give. */
     private long seedStructuredCustomer() {
         CustomerRepository customers = new CustomerRepository(jdbc);
         return customers.createStructured("DONG NGO GROUP INVESTMENT AND DEVELOPMENT JSC", null,
@@ -97,16 +81,15 @@ class CustomerForeignAddressSwitchIntegrationTest extends AbstractPostgresIntegr
         assertThat(after.provinceNameTh()).isNull();
         assertThat(after.districtNameTh()).isNull();
         assertThat(after.subdistrictNameTh()).isNull();
-        // The old structured display string is preserved as legacyAddress (CustomerRepository.update's
-        // own COALESCE(legacy_address, address)), the same discipline CustomerThaiAddressIntegrationTest
-        // already pins for a plain legacy customer.
+        // The old structured display string is preserved as legacyAddress (CustomerRepository.update's own
+        // COALESCE(legacy_address, address)), the same discipline CustomerThaiAddressIntegrationTest already pins for
+        // a plain legacy customer.
         assertThat(after.legacyAddress()).isEqualTo(before.address());
     }
 
-    /** Wrong-way-round (CLAUDE.md): a normal single-field PATCH that carries no address at all must
-     * NOT disturb an existing structured address — proves the {@code structured(...)}/{@code
-     * :address IS NOT NULL} gate in {@link CustomerRepository#update} only fires when the caller
-     * actually sends {@code address}, never as a side effect of some other field. */
+    /** Wrong-way-round: a normal single-field PATCH that carries no address at all must NOT disturb an existing
+     * structured address — proves the structured/:address IS NOT NULL gate in CustomerRepository#update only fires
+     * when the caller actually sends address, never as a side effect of some other field. */
     @Test
     void aPhoneOnlyUpdateOnAStructuredCustomerLeavesTheStructuredAddressUntouched() throws Exception {
         long id = seedStructuredCustomer();

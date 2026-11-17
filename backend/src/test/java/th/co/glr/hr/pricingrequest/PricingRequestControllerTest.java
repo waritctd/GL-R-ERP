@@ -65,8 +65,8 @@ class PricingRequestControllerTest {
 
     @Test
     void createDraft_rejectsInvalidBody() throws Exception {
-        // recipientType is @NotBlank and items is @NotEmpty — an empty body fails
-        // bean validation before the controller ever calls the service.
+        // recipientType is @NotBlank and items is @NotEmpty — an empty body fails bean validation before the
+        // controller ever calls the service.
         mvc.perform(post("/api/tickets/10/pricing-requests").session(session("sales"))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))

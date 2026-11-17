@@ -29,78 +29,9 @@ import th.co.glr.hr.notification.SalesNotificationMailer;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Real-Postgres proof that the owner's real sales routes are actually WALKABLE, end to end,
- * through the REAL {@link TicketService} — not merely that {@code sales_stage} accepts every
- * value in {@link DealStage#ORDER}.
- *
- * <p><b>This is the acceptance criterion.</b> Issues #736 and #738, and the rest of the pipeline
- * symptom list, are each individually fixable without ever proving the thing that actually
- * matters: that a real deal, walked the way the business actually walks one, can be driven from
- * its entry stage to its terminal stage without hitting a refusal that has no legitimate escape.
- * A ROUTE is the target. A symptom is only where a broken route happened to be noticed first.
- *
- * <p><b>Six routes</b>, named from {@link DealStage}'s own Javadoc (A-D) and the owner's routing
- * rules beyond it (E, G):
- *
- * <ul>
- *   <li>{@code routeA_…} — designer -&gt; owner -&gt; contractor, the full 15-stage spine (S1
- *       through S20), including the S4 -&gt; S3 routine backward step.
- *   <li>{@code routeB_…} — the owner buys directly (the {@link EntryChannel#OWNER_DIRECT} route,
- *       see {@link DealRoute}): {@link DealStage#SPEC_APPROVED} (S3) IS kept — it means "the party
- *       who specifies has agreed the spec", only its wording differs per party — and {@link
- *       DealStage#QUOTE_DESIGN_SIDE} (S4, no designer to quote) is the only stage the route
- *       excludes; a manual move into it is refused. This walk takes the O-b continuation (the owner
- *       buys themselves), so {@link DealStage#AWAITING_BUYER} and {@link DealStage#QUOTE_BUYER}
- *       are on-route but not visited. (Before the route gate this test asserted S3 never happens;
- *       that pinned business rule was reversed by owner ruling 2026-09-30.)
- *   <li>{@code routeC_…} — a contractor arrives with a BOQ and a spec already in hand: the deal
- *       OPENS at {@link DealStage#QUOTE_BUYER} (S8), skipping S1-S7, and is also the
- *       BUYER_DIRECT entry channel.
- *   <li>{@code routeD_…} — everything is already in stock: {@link DealStage#PROCUREMENT} is
- *       skipped entirely by {@code reserveStock}'s full-coverage jump straight to {@link
- *       DealStage#DELIVERY_SCHEDULING}.
- *   <li>{@code routeE_…} — partial stock, split per line item on a two-item deal: one line
- *       declared from stock, the other genuinely imported through the real IR -&gt; warehouse
- *       journey, delivered from two different sources in two different calls.
- *   <li>{@code routeG_…} — credit after delivery: on {@code CREDIT_CUSTOMER} terms no deposit is
- *       ever required, so {@link DealStage#DEPOSIT_RECEIVED} is skipped outright; the goods go
- *       out first and the whole invoice is settled afterward, on credit.
- * </ul>
- *
- * <p><b>Case F (paid in full before delivery) is OUT OF SCOPE by owner ruling and is
- * deliberately NOT covered here.</b> Do not add it without a fresh ruling.
- *
- * <p><b>Why operational methods, not bare {@code updateStage}.</b> Four of the fifteen stages —
- * {@link DealStage#ORDER_RECEIVED}, {@link DealStage#DEPOSIT_RECEIVED}, {@link
- * DealStage#DELIVERED}, {@link DealStage#CLOSED_PAID} — are FACT-GATED by {@code
- * TicketService.requireStageFactsHold}: a manual {@code updateStage} into any of them is refused
- * with 409 unless the fact the stage claims is already on the row. A route walk that only ever
- * called {@code updateStage} would therefore prove nothing about whether the route is actually
- * reachable — it would only prove the CHECK constraint accepts the string. Every hop onto one of
- * those four (and, for realism, {@link DealStage#PROCUREMENT} too) is instead driven through the
- * real service method that records the underlying fact and lets {@code autoAdvanceStage} do the
- * rest: {@code confirmCustomer}, {@code confirmDepositPaid}, {@code issueImportRequest} (plus, on
- * every route that genuinely imports, the real {@code markIrSent -&gt; markShipping -&gt;
- * markGoodsReceived} warehouse journey — {@code completeDelivery}'s own WAREHOUSE-source gate,
- * {@code warehouseDeliveryAvailable}, only ever becomes true from a genuine {@code
- * GOODS_RECEIVED} event or full stock coverage, so shortcutting that journey would make the later
- * delivery call fail for a reason that has nothing to do with the route under test),
- * {@code completeDelivery} / {@code recordPartialDelivery}, {@code confirmFinalPayment}, and
- * {@code reserveStock} for the from-stock jump. The remaining ungated stages are reached with
- * plain {@code TicketService.updateStage}, exactly as a rep would click through them.
- *
- * <p>Every route test asserts {@code salesStage} after EACH hop (not just the terminal one), the
- * terminal triple (CLOSED_PAID / FULLY_PAID / FULLY_DELIVERED — no route here is an exception),
- * and — the property that actually distinguishes a route from a straight line through {@link
- * DealStage#ORDER} — that the stage(s) the route defines as SKIPPED never appear as a {@code
- * STAGE_CHANGED} target in {@code sales.ticket_event}, queried directly against Postgres.
- *
- * <p>Copies the hand-wiring idiom of {@link DealStageQuoteOwnerAndRouteIntegrationTest} and
- * {@link StageFactGateIntegrationTest} verbatim: {@code @Transactional} is inert in this suite
- * (services are hand-wired with {@code new}, no Spring AOP proxy), so every route test builds its
- * own fresh ticket rather than relying on rollback between assertions.
- */
+/** Real-Postgres proof that the owner's real sales routes are actually WALKABLE, end to end, through the REAL
+ * TicketService — not merely that sales_stage accepts every value in DealStage#ORDER. A symptom is only where
+ * a broken route happened to be noticed first. */
 class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -111,11 +42,9 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
     private UserPrincipal accountActor;
     /** Per-line stock declaration is CEO-only; the from-stock jump below is driven by this actor. */
     private UserPrincipal ceo;
-    /** V184: {@code canWriteDelivery} transferred stages 13-14 to {ceo, owning-rep} only, so every
-     * {@code completeDelivery}/{@code recordPartialDelivery} call below uses {@link #ownerRep}
-     * (every deal here is created with {@code ownerRepId}) rather than this actor — see
-     * DeliveryAuthzIntegrationTest for the dedicated authz pin. Still used for the import-axis
-     * calls ({@code issueImportRequest}, {@code markIrSent}, ...) this file also walks. */
+    /** V184: canWriteDelivery transferred stages 13-14 to {ceo, owning-rep} only, so every
+     * completeDelivery/recordPartialDelivery call below uses #ownerRep (every deal here is created with
+     * ownerRepId) rather than this actor — see DeliveryAuthzIntegrationTest for the dedicated authz pin. */
     private UserPrincipal importActor;
 
     @BeforeEach
@@ -141,15 +70,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Route A — designer -> owner -> contractor, the full spine ═══════════
 
-    /**
-     * S1 -&gt; S2 -&gt; S4 -&gt; S3 -&gt; S5 -&gt; S6 -&gt; S7 -&gt; S8 -&gt; S9 -&gt; S10 -&gt;
-     * S11 -&gt; S12…S17 -&gt; S18 -&gt; S19 -&gt; S20. Every stage in {@link DealStage#ORDER} is
-     * visited once, including the one routine backward pair (S4 -&gt; S3).
-     *
-     * <p>Also carries the branch's own extra assertion (issue #738 / #736): the served fields on
-     * the final {@link TicketSummaryDto} still hold on a deal that was actually walked, not just
-     * constructed in a gated state.
-     */
+    /** > S2 -> S4 -> S3 -> S5 -> S6 -> S7 -> S8 -> S9 -> S10 -> S11 -> S12…S17 -> S18 -> S19 -> S20. Every stage in
+     * DealStage#ORDER is visited once, including the one routine backward pair (S4 -> S3). */
     @Test
     void routeA_designerOwnerContractor_fullSpine() {
         long ticketId = createOneItemDeal("ดีล A: ครบทุกขั้นตอน", "100.00", "1000.00"); // payable 100,000
@@ -186,9 +108,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
-        // Issue #738 / #736: the served fields still hold on a fully walked deal — 100% at
-        // CLOSED_PAID (not a stale override), and commissionRecorded honestly false since this
-        // walk never touched CommissionService.
+        // Issue #738 / #736: the served fields still hold on a fully walked deal — 100% at CLOSED_PAID (not a stale
+        // override), and commissionRecorded honestly false since this walk never touched CommissionService.
         TicketSummaryDto finalState = ticketService.get(ticketId, ownerRep).summary();
         assertThat(finalState.effectiveWinProbability()).isEqualTo(100);
         assertThat(finalState.commissionRecorded()).isFalse();
@@ -196,11 +117,9 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Route B — the owner buys directly ════════════════════════════════════
 
-    /**
-     * Owner-direct: S3 (re-worded "the owner agreed the spec") IS visited; S4 is the only stage
-     * the route excludes and a manual move into it is refused. S7/S8 are on-route but this walk
-     * takes the O-b branch (the owner buys themselves) straight from S6 to S9.
-     */
+    /** Owner-direct: S3 (re-worded "the owner agreed the spec") IS visited; S4 is the only stage the route excludes
+     * and a manual move into it is refused. S7/S8 are on-route but this walk takes the O-b branch (the owner buys
+     * themselves) straight from S6 to S9. */
     @Test
     void routeB_ownerBuysDirect_keepsSpecApproval_andExcludesOnlyTheDesignerQuote() {
         long ticketId = createOneItemDeal("ดีล B: เจ้าของซื้อตรง", "100.00", "800.00"); // payable 80,000
@@ -248,11 +167,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Route C — a contractor arrives with a BOQ ════════════════════════════
 
-    /**
-     * The deal OPENS at {@link DealStage#QUOTE_BUYER} (S8), skipping S1-S7 entirely — the first
-     * stage move ever made on this deal lands on S8. Also the BUYER_DIRECT entry channel: route C
-     * IS that channel.
-     */
+    /** The deal OPENS at DealStage#QUOTE_BUYER (S8), skipping S1-S7 entirely — the first stage move ever made on
+     * this deal lands on S8. Also the BUYER_DIRECT entry channel: route C IS that channel. */
     @Test
     void routeC_contractorWithBoq_opensAtQuoteBuyer() {
         long ticketId = createOneItemDeal("ดีล C: ผู้รับเหมามี BOQ", "50.00", "2000.00"); // payable 100,000
@@ -297,8 +213,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.FULLY_PAID);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
 
-        // The defining property: S1-S7 never appear as a STAGE_CHANGED target anywhere in this
-        // deal's history — its very first recorded stage move landed on QUOTE_BUYER.
+        // The defining property: S1-S7 never appear as a STAGE_CHANGED target anywhere in this deal's history — its
+        // very first recorded stage move landed on QUOTE_BUYER.
         assertStageNeverVisited(ticketId, DealStage.LEAD_APPROACH, DealStage.PRESENTATION,
             DealStage.SPEC_APPROVED, DealStage.QUOTE_DESIGN_SIDE, DealStage.QUOTE_OWNER,
             DealStage.OWNER_SIGNOFF, DealStage.AWAITING_BUYER);
@@ -306,11 +222,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Route D — everything already in stock ════════════════════════════════
 
-    /**
-     * {@code reserveStock}'s full-coverage branch jumps the deal straight from {@link
-     * DealStage#DEPOSIT_RECEIVED} to {@link DealStage#DELIVERY_SCHEDULING} — {@link
-     * DealStage#PROCUREMENT} (S12-S17) is never visited.
-     */
+    /** reserveStock's full-coverage branch jumps the deal straight from DealStage#DEPOSIT_RECEIVED to
+     * DealStage#DELIVERY_SCHEDULING — DealStage#PROCUREMENT (S12-S17) is never visited. */
     @Test
     void routeD_allFromStock_skipsProcurement() {
         long ticketId = createOneItemDeal("ดีล D: ของพร้อมจากสต็อกทั้งหมด", "100.00", "500.00"); // payable 50,000
@@ -353,13 +266,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Route E — partial stock, split per line item ═════════════════════════
 
-    /**
-     * A two-item deal: item 1 (40 pcs) is declared fully from stock, item 2 (60 pcs) is genuinely
-     * imported. Delivered in two calls from two different sources — this is exactly the "Case 8"
-     * scenario {@code TicketService#warehouseDeliveryAvailable}'s own Javadoc names (stock
-     * delivered first, the imported remainder still to go), proven here rather than merely
-     * described.
-     */
+    /** A two-item deal: item 1 (40 pcs) is declared fully from stock, item 2 (60 pcs) is genuinely imported. */
     @Test
     void routeE_partialStock_splitsPerLineItem() {
         long ticketId = createTwoItemDeal("ดีล E: สต็อกบางส่วน",
@@ -383,8 +290,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketService.confirmDepositPaid(ticketId, accountActor);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DEPOSIT_RECEIVED);
 
-        // Declare item 1 fully covered from stock; item 2 is left untouched (0). Coverage is
-        // PARTIAL, so this must NOT auto-advance the stage or set FROM_STOCK.
+        // Declare item 1 fully covered from stock; item 2 is left untouched (0). Coverage is PARTIAL, so this must NOT
+        // auto-advance the stage or set FROM_STOCK.
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(item1, new BigDecimal("40.00"), "มีของครบในสต็อก"))),
@@ -394,8 +301,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(qtyFromStockOf(item1)).isEqualByComparingTo("40.00");
         assertThat(qtyFromStockOf(item2)).isEqualByComparingTo("0.00");
 
-        // fulfillment_status is still null (the partial declaration above did not set it), so the
-        // rest is procured for real — same journey as routes A/B/C.
+        // fulfillment_status is still null (the partial declaration above did not set it), so the rest is procured for
+        // real — same journey as routes A/B/C.
         walkImportJourneyToDeliveryScheduling(ticketId);
 
         // Deliver item 1 from stock first ...
@@ -406,10 +313,7 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERY_SCHEDULING);
         assertThat(fulfilmentOf(ticketId)).isEqualTo(FulfilmentStatus.PARTIALLY_DELIVERED);
 
-        // ... then the imported remainder from the warehouse. warehouseDeliveryAvailable falls
-        // back to the permanent GOODS_RECEIVED event (fired by markGoodsReceived above) even
-        // though fulfillment_status just moved off the import axis to PARTIALLY_DELIVERED — that
-        // fallback is exactly what lets this second, warehouse-sourced call succeed.
+        // The goods-received event keeps warehouse delivery available after the status becomes partially delivered.
         ticketService.completeDelivery(ticketId,
             new CompleteDeliveryRequest("ส่งส่วนนำเข้าที่เหลือ", "ลูกค้า"), ownerRep);
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.DELIVERED);
@@ -428,12 +332,9 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ═══ Route G — credit after delivery ═══════════════════════════════════════
 
-    /**
-     * On {@code CREDIT_CUSTOMER} terms {@link PaymentTrack}'s bypass path has no {@code
-     * DEPOSIT_NOTICE_ISSUED}/{@code DEPOSIT_PAID} state at all, so {@link
-     * DealStage#DEPOSIT_RECEIVED} is skipped outright — not merely "not required", genuinely
-     * unreachable on this policy. The goods go out first; the whole invoice is settled afterward.
-     */
+    /** On CREDIT_CUSTOMER terms PaymentTrack's bypass path has no DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID state at all,
+     * so DealStage#DEPOSIT_RECEIVED is skipped outright — not merely "not required", genuinely unreachable on this
+     * policy. The goods go out first; the whole invoice is settled afterward. */
     @Test
     void routeG_creditAfterDelivery_skipsDepositAndPaysAfterDelivery() {
         long ticketId = createOneItemDeal("ดีล G: เครดิตหลังส่งของ", "100.00", "300.00"); // payable 30,000
@@ -444,10 +345,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         advanceTo(ticketId, DealStage.OWNER_SIGNOFF, null);
         advanceTo(ticketId, DealStage.NEGOTIATION, null);
 
-        // Credit terms, decided before the order is confirmed: payment_status is still null here,
-        // so waiveDeposit's own "no deposit invoice issued yet" guard holds.
-        // GLA-118: deposit policy is set by the OWNING sales rep (or a sales_manager) now, not account -- driven
-        // as ownerRep (createTicketWithItems's ownerRepId owns this deal).
+        // Credit terms, decided before the order is confirmed: payment_status is still null here, so waiveDeposit's
+        // own "no deposit invoice issued yet" guard holds.
         ticketService.waiveDeposit(ticketId, DepositPolicy.CREDIT_CUSTOMER,
             "ลูกค้าเครดิต 30 วัน ตามสัญญาก่อสร้าง", ownerRep);
         assertThat(depositPolicyOf(ticketId)).isEqualTo(DepositPolicy.CREDIT_CUSTOMER);
@@ -457,8 +356,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(paymentStatusOf(ticketId)).isEqualTo(PaymentTrack.CUSTOMER_CONFIRMED);
 
         // No deposit notice, no confirmDepositPaid: PaymentTrack.BYPASS_ALLOWED has no entry for
-        // DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID at all. issueImportRequest's bypass clause
-        // (bypassesDepositNotice && CUSTOMER_CONFIRMED) is what actually lets this proceed.
+        // DEPOSIT_NOTICE_ISSUED/DEPOSIT_PAID at all. issueImportRequest's bypass clause (bypassesDepositNotice &&
+        // CUSTOMER_CONFIRMED) is what actually lets this proceed.
         walkImportJourneyToDeliveryScheduling(ticketId);
 
         ticketService.completeDelivery(ticketId,
@@ -515,14 +414,8 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(stageOf(ticketId)).as("expected to land on %s", stage).isEqualTo(stage);
     }
 
-    /**
-     * The real IR -&gt; warehouse journey — {@code issueImportRequest}, {@code markIrSent}, {@code
-     * markShipping}, {@code markGoodsReceived} — so that a later {@code completeDelivery} may
-     * legitimately source from WAREHOUSE. {@code completeDelivery}'s own {@code
-     * warehouseDeliveryAvailable} gate only ever becomes true from a genuine {@code
-     * GOODS_RECEIVED} event (or full stock coverage), and only {@code markGoodsReceived} writes
-     * that event — there is no shortcut through {@code updateStage} that produces it.
-     */
+    /** The real IR -> warehouse journey — issueImportRequest, markIrSent, markShipping, markGoodsReceived — so that
+     * a later completeDelivery may legitimately source from WAREHOUSE. */
     private void walkImportJourneyToDeliveryScheduling(long ticketId) {
         ticketService.recordFirstImportRequestIssued(ticketId, 0L, importActor); // pre-V184 shape: IR_ISSUED, no rows
         assertThat(stageOf(ticketId)).isEqualTo(DealStage.PROCUREMENT);
@@ -596,11 +489,9 @@ class SalesRouteWalkIntegrationTest extends AbstractPostgresIntegrationTest {
         return items.get(0).id();
     }
 
-    /**
-     * The last fallback of {@code TicketRepository.payableAmount} is
-     * {@code SUM(approved_price * qty)}, so this is the smallest honest way to give a deal a
-     * payable amount without dragging the whole pricing-request chain into a test about routes.
-     */
+    /** The last fallback of TicketRepository.payableAmount is SUM(approved_price * qty), so this is the smallest
+     * honest way to give a deal a payable amount without dragging the whole pricing-request chain into a test
+     * about routes. */
     private void setApprovedPrice(long itemId, String price) {
         jdbc.update("UPDATE sales.ticket_item SET approved_price = :price WHERE item_id = :id",
             new MapSqlParameterSource().addValue("price", new BigDecimal(price)).addValue("id", itemId));

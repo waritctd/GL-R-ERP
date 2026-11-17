@@ -17,18 +17,9 @@ import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * {@code GET}/{@code POST /api/leave/policy-document} against a real, freshly-migrated Postgres
- * schema (V133). The write side ({@code uploadPolicyDocument}) is a brand-new authorization
- * surface (HR/CEO only), so CLAUDE.md "Permission changes must ship evidence" requires this exact
- * real-service/real-repository proof — a Mockito-mocked {@code LeavePolicyDocumentRepository}
- * cannot show the SQL in V133 actually behaves as the migration's comment claims.
- *
- * <p>Every forbidden case asks the question the wrong way round: can a caller who should not reach
- * the upload endpoint actually reach it. {@code leaveService} is never constructed (it is irrelevant
- * to either endpoint under test), matching {@code LeaveController}'s constructor taking it only for
- * the OTHER endpoints on this controller.
- */
+/** GET/POST /api/leave/policy-document against a real, freshly-migrated Postgres schema (V133). leaveService is
+ * never constructed (it is irrelevant to either endpoint under test), matching LeaveController's constructor
+ * taking it only for the OTHER endpoints on this controller. */
 class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private LeaveController controller;
@@ -68,9 +59,8 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
     void anyAuthenticatedRoleCanReadOnceADocumentExists() throws Exception {
         upload(hr(), samplePdfBytes(), LocalDate.of(2024, 10, 1));
 
-        // A plain employee (never hr/ceo) can still read -- this is the "every employee may read
-        // the rules that bind them" access CLAUDE.md's brief specified, unchanged by the write
-        // gate above.
+        // A plain employee (never hr/ceo) can still read -- this is the "every employee may read the rules that bind
+        // them" access CLAUDE.md's brief specified, unchanged by the write gate above.
         ResponseEntity<Resource> response = get(employee());
         assertThat(response.getStatusCode().value()).isEqualTo(200);
         assertThat(response.getBody().getContentAsByteArray()).isEqualTo(samplePdfBytes());
@@ -90,8 +80,8 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
         ResponseEntity<Resource> response = get(employee());
         assertThat(response.getBody().getContentAsByteArray()).isEqualTo(current);
 
-        // The superseded version is still byte-for-byte retrievable by id — not deleted, not
-        // overwritten (V133's migration comment).
+        // The superseded version is still byte-for-byte retrievable by id — not deleted, not overwritten (V133's
+        // migration comment).
         LeavePolicyDocumentDto currentDto = repository.findCurrent().orElseThrow();
         assertThat(currentDto.effectiveFrom()).isEqualTo(LocalDate.of(2024, 10, 1));
     }
@@ -125,8 +115,8 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
         assertForbidden(() -> upload(sales(), samplePdfBytes(), LocalDate.of(2024, 10, 1)));
     }
 
-    /** {@code manager()} below is role {@code "employee"} with {@code manager=true} — a department
-     * manager is still gated out; {@code requireAnyRole} checks role, not the manager flag. */
+    /** manager() below is role "employee" with manager=true — a department manager is still gated out;
+     * requireAnyRole checks role, not the manager flag. */
     @Test
     void aDepartmentManagerCannotUpload() {
         assertForbidden(() -> upload(manager(), samplePdfBytes(), LocalDate.of(2024, 10, 1)));
@@ -145,8 +135,8 @@ class LeaveControllerPolicyDocumentIntegrationTest extends AbstractPostgresInteg
 
     @Test
     void anOversizeFileIsRejectedWith400() {
-        // MockMultipartFile.getSize() reflects the actual byte array length, so this genuinely
-        // exceeds LeaveController.MAX_POLICY_DOCUMENT_BYTES (10MB) rather than faking a reported size.
+        // MockMultipartFile.getSize() reflects the actual byte array length, so this genuinely exceeds
+        // LeaveController.MAX_POLICY_DOCUMENT_BYTES (10MB) rather than faking a reported size.
         byte[] oversized = new byte[11 * 1024 * 1024];
         MockMultipartFile file = new MockMultipartFile("file", "big.pdf", "application/pdf", oversized);
 

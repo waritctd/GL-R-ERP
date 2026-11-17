@@ -21,40 +21,9 @@ import th.co.glr.hr.payroll.PayrollPeriodDto;
 import th.co.glr.hr.payroll.PayrollSpecialPayDto;
 import th.co.glr.hr.payroll.PayrollYearToDate;
 
-/**
- * Unit test for {@link PayrollDetailExporter}'s 3-tab workbook (สรุปเงินเดือน / การคำนวณภาษี /
- * อัตราภาษีและหมายเหตุ), driven directly (no DB, no {@code PayrollService}) with three hand-built
- * {@link PayrollLineDto} fixtures -- an ordinary employee, a director (a non-null {@code
- * withholdingTaxOverride}), and a commission earner -- plus YTD carry-forward for the two
- * non-director lines.
- *
- * <p>The commission-earner fixture is the pin for BOTH correctness fixes (a payroll export must
- * always agree with what was actually withheld/paid):
- * <ul>
- *   <li><b>WHT fidelity</b>: its {@link PayrollLineDto#withholdingTax()} (฿3,200) is deliberately far
- *       from what the naive (annualTax − ytdWithheld) ÷ remainingPeriods estimate on this same data
- *       would produce (฿125 -- see the fixture's own comment for the arithmetic) -- exactly the
- *       shape a real commission spike produces under the actual regular/known/cumulative three-limb
- *       engine.</li>
- *   <li><b>Net-pay fidelity</b>: it ALSO carries a ฿245 unpaid-leave deduction this month (the real
- *       สนั่น เปรมานุพันธ์ case), a ฿500 garnishment, and a ฿150 warning-letter deduction, all at
- *       once alongside the commission -- so รวมรายได้ (R), ประกันสังคม (S), หักกรมบังคับคดี (V), and
- *       คงเหลือจ่ายสุทธิ (Y) are asserted directly against {@link PayrollLineDto#grossTaxableIncome()}
- *       / {@link PayrollLineDto#socialSecurity()} / {@link PayrollLineDto#legalExecutionDeduction()}
- *       / {@link PayrollLineDto#netPay()}, not hand-copied numbers, so the test would catch a
- *       regression in either the D-column unpaid-leave adjustment or the S/V/W literal wiring.</li>
- * </ul>
- *
- * <p>All three fixtures are additionally constructed so the ป.96 recon block on
- * {@code อัตราภาษีและหมายเหตุ} ties to zero on every row (see {@code
- * reconciliationShowsNoDifferenceOnAnyRow}) to demonstrate the mechanism holds exactly whenever no
- * untracked income category (bonus/other-one-off/welfare/per-diem-taxable/non-taxable) applies (see
- * the class javadoc's "residual gap" note).
- *
- * <p>Formula cells are read back via a {@link FormulaEvaluator} rather than {@code
- * getNumericCellValue()} (which throws on a formula cell) -- this is a real check of what Excel
- * would display, not just that a formula string was written.
- */
+/** Unit test for PayrollDetailExporter's 3-tab workbook, driven directly with three hand-built PayrollLineDto
+ * fixtures -- an ordinary employee, a director, and a commission earner -- plus YTD carry-forward for the two
+ * non-director lines. */
 class PayrollDetailExporterTest {
     private final PayrollDetailExporter exporter = new PayrollDetailExporter();
 
@@ -104,14 +73,14 @@ class PayrollDetailExporterTest {
             assertThat(directorRow.getCell(summaryCols.get("ค่าตอบแทน\nกรรมการ")).getNumericCellValue())
                 .isEqualTo(150000.00);
 
-            // Commission earner: THE pin for BOTH correctness fixes. WHT/net must track the DTO
-            // exactly, not a recompute -- see commissionEarnerLine()'s own comment for the arithmetic.
+            // Commission earner: THE pin for BOTH correctness fixes. WHT/net must track the DTO exactly, not a recompute
+            // -- see commissionEarnerLine()'s own comment for the arithmetic.
             PayrollLineDto commission = commissionEarnerLine();
             Row commissionRow = summary.getRow(6); // row 7, third employee
             assertThat(commissionRow.getCell(summaryCols.get("รหัส")).getStringCellValue()).isEqualTo("10099");
 
-            // D (เงินเดือน): baseSalary NET of this month's unpaid-leave deduction (สนั่น-style), with
-            // a cell comment explaining the adjustment.
+            // D (เงินเดือน): baseSalary NET of this month's unpaid-leave deduction (สนั่น-style), with a cell comment
+            // explaining the adjustment.
             Cell commissionSalaryCell = commissionRow.getCell(summaryCols.get("เงินเดือน"));
             assertThat(commissionSalaryCell.getNumericCellValue())
                 .as("baseSalary(20000) - unpaidLeaveDeduction(245)")
@@ -120,8 +89,8 @@ class PayrollDetailExporterTest {
             assertThat(commissionSalaryCell.getCellComment().getString().getString())
                 .contains("20000").contains("245");
 
-            // R (รวมรายได้ที่ต้องเสียภาษี) must equal grossTaxableIncome() -- the D-column adjustment
-            // above is what makes SUM(D:Q) foot to it despite the unpaid-leave deduction.
+            // R (รวมรายได้ที่ต้องเสียภาษี) must equal grossTaxableIncome() -- the D-column adjustment above is what makes
+            // SUM(D:Q) foot to it despite the unpaid-leave deduction.
             Cell commissionGrossCell = commissionRow.getCell(summaryCols.get("รวมรายได้\nที่ต้องเสียภาษี"));
             assertThat(evaluator.evaluate(commissionGrossCell).getNumberValue())
                 .isEqualTo(commission.grossTaxableIncome().doubleValue());
@@ -147,9 +116,9 @@ class PayrollDetailExporterTest {
                     + "September -> ROUND(500/4,0)=125) -- that estimate is the bug this fixture pins")
                 .isNotEqualTo(125.00);
 
-            // Y (คงเหลือจ่ายสุทธิ) must foot to netPay() now that D/S/V/W are all wired to the actual
-            // figures -- this line carries an unpaid-leave deduction, a garnishment, AND a
-            // warning-letter deduction on top of the commission spike, so this is not a coincidence.
+            // Y (คงเหลือจ่ายสุทธิ) must foot to netPay() now that D/S/V/W are all wired to the actual figures -- this line
+            // carries an unpaid-leave deduction, a garnishment, AND a warning-letter deduction on top of the commission
+            // spike, so this is not a coincidence.
             Cell commissionNetCell = commissionRow.getCell(summaryCols.get("คงเหลือ\nจ่ายสุทธิ"));
             assertThat(evaluator.evaluate(commissionNetCell).getNumberValue())
                 .isEqualTo(commission.netPay().doubleValue());
@@ -196,14 +165,7 @@ class PayrollDetailExporterTest {
             assertThat(commissionTaxWhtCell.getNumericCellValue())
                 .as("literal DTO value, not MAX(0,ROUND(K/remainingPeriods,0))")
                 .isEqualTo(3200.00);
-            // The projection columns stay live formulas (context only) -- confirm K (ภาษีคงเหลือทั้งปี)
-            // is still a formula cell over the annual-projection chain, to prove it was deliberately
-            // decoupled from the money cell above rather than accidentally removed. (Its EVALUATED
-            // value is not asserted here: this SUMPRODUCT-based progressive-tax formula, taken
-            // verbatim from the accountant's reference workbook, is valid Excel and computes correctly
-            // there, but POI's own formula evaluator does not correctly evaluate this particular
-            // SUMPRODUCT/array-comparison shape (returns 0) -- a POI limitation unrelated to this
-            // fix, and irrelevant to it: the money cells asserted below never read J/K back.)
+            // The projection columns stay live formulas.
             Cell remainingTaxCell = taxCommissionRow.getCell(taxCols.get("ภาษีคงเหลือ\nทั้งปี"));
             assertThat(remainingTaxCell.getCellType()).isEqualTo(CellType.FORMULA);
             assertThat(remainingTaxCell.getCellFormula()).contains("MAX(0,J", "-E");
@@ -243,14 +205,9 @@ class PayrollDetailExporterTest {
         }
     }
 
-    /**
-     * The recon block on อัตราภาษีและหมายเหตุ must show ZERO difference on every row now that
-     * เงินเดือน/ประกันสังคม/หักกรมบังคับคดี/หักอื่นๆ/ภาษีหัก ณ ที่จ่าย on สรุปเงินเดือน are all wired
-     * to the actual {@link PayrollLineDto} figures (WHT and SSO reconcile to zero STRUCTURALLY now,
-     * since both are literal copies of the DTO on both sides of the recon; รวมรายได้/คงเหลือ
-     * reconcile to zero for this fixture set because none of the three lines carries an untracked
-     * income category -- see the class javadoc's "residual gap" note for when they would not).
-     */
+    /** The recon block on อัตราภาษีและหมายเหตุ must show ZERO difference on every row now that
+     * เงินเดือน/ประกันสังคม/หักกรมบังคับคดี/หักอื่นๆ/ภาษีหัก ณ ที่จ่าย on สรุปเงินเดือน are all wired to the
+     * actual PayrollLineDto figures. */
     @Test
     void reconciliationShowsNoDifferenceOnAnyRow() throws Exception {
         byte[] bytes = exportThreeFixtures();
@@ -315,9 +272,9 @@ class PayrollDetailExporterTest {
             money("1000000.00"), money("40000.00"),
             BigDecimal.ZERO, BigDecimal.ZERO,
             BigDecimal.ZERO));
-        // Employee 2 (director): no YTD stub -> must default to PayrollYearToDate.empty(), not NPE.
-        // Employee 3 (commission earner): ฿4,000 already withheld Jan-Aug -- see
-        // commissionEarnerLine()'s own comment for how this feeds the naive-vs-actual divergence.
+        // Employee 2 (director): no YTD stub -> must default to PayrollYearToDate.empty(), not NPE. Employee 3
+        // (commission earner): ฿4,000 already withheld Jan-Aug -- see commissionEarnerLine()'s own comment for how
+        // this feeds the naive-vs-actual divergence.
         yearToDate.put(3L, new PayrollYearToDate(
             money("300000.00"), BigDecimal.ZERO, money("4375.00"),
             money("4000.00"), BigDecimal.ZERO,
@@ -338,12 +295,9 @@ class PayrollDetailExporterTest {
         return col;
     }
 
-    /**
-     * Built via the 58-arg legacy {@link PayrollLineDto} constructor (fields id..perDiemBasis) --
-     * this test needs {@code withholdingTaxOverride} (field 40, the director marker) and {@code
-     * mealAllowance} (field 55, so it feeds the sheet1 รวมรายได้ formula) explicit, which no shorter
-     * legacy arity exposes together.
-     */
+    /** Built via the 58-arg legacy PayrollLineDto constructor (fields id..perDiemBasis) -- this test needs
+     * withholdingTaxOverride (field 40, the director marker) and mealAllowance (field 55, so it feeds the sheet1
+     * รวมรายได้ formula) explicit, which no shorter legacy arity exposes together. */
     private PayrollLineDto employeeLine() {
         List<PayrollSpecialPayDto> specialPays = List.of(
             special("specialPay1", BigDecimal.ZERO),
@@ -397,36 +351,7 @@ class PayrollDetailExporterTest {
             BigDecimal.ZERO, BigDecimal.ZERO, BigDecimal.ZERO, null);
     }
 
-    /**
-     * Commission earner: the pin for BOTH correctness fixes. A big one-off commission this period
-     * (฿50,000, {@link PayrollLineDto#commissionPay()}) makes the ACTUAL withholding this month
-     * (฿3,200, produced by the real regular/known/cumulative three-limb engine reacting to the
-     * spike) very different from what the naive (annualTax-ytdWithheld)/remainingPeriods estimate on
-     * this same annual-projection data would produce:
-     * <pre>
-     *   I (เงินได้สุทธิทั้งปี)  = MAX(0, 400000 - MIN(400000*0.5,100000) - 60000) = 240000
-     *   J (ภาษีทั้งปี ขั้นบันได) = 0% x 150000 + 5% x (240000-150000) = 4500
-     *   K (ภาษีคงเหลือทั้งปี)   = MAX(0, J - ytdWithheld(4000)) = 500
-     *   naive monthly (dropped) = MAX(0, ROUND(K / remainingPeriods(4 in Sept), 0)) = 125
-     * </pre>
-     * The exported ภาษีหัก ณ ที่จ่าย must be ฿3,200 (the DTO value), not ฿125.
-     *
-     * <p>This fixture ALSO carries a ฿245 unpaid-leave deduction this month (the same figure as the
-     * real สนั่น เปรมานุพันธ์ case the reference workbook documents), a ฿500 garnishment
-     * (legalExecutionDeduction), and a ฿150 warning-letter deduction (one of the "other post-tax"
-     * categories folded into หักอื่น ๆ) -- together with the commission spike, this exercises every
-     * money column the net-pay-fidelity fix touches at once:
-     * <pre>
-     *   D (เงินเดือน, adjusted)  = 20000 - 245 (unpaidLeaveDeduction) - 0 + 0 = 19755
-     *   R (รวมรายได้)            = D(19755) + Q(commissionPay 50000) = 69755 = grossTaxableIncome()
-     *   S (ประกันสังคม)          = socialSecurity() verbatim = 875
-     *   V (หักกรมบังคับคดี)      = legalExecutionDeduction() verbatim = 500
-     *   W (หักอื่น ๆ)            = otherPostTaxDeductions(0) + warningLetterDeduction(150)
-     *                              + customerReturnDeduction(0) = 150
-     *   X (รวมรายการหัก)         = S(875) + T(WHT 3200) + U(0) + V(500) + W(150) = 4725
-     *   Y (คงเหลือจ่ายสุทธิ)     = R(69755) - X(4725) = 65030 = netPay()
-     * </pre>
-     */
+    /** Commission earner: the pin for BOTH correctness fixes. */
     private PayrollLineDto commissionEarnerLine() {
         List<PayrollSpecialPayDto> zeros = List.of(
             special("specialPay1", BigDecimal.ZERO), special("specialPay2", BigDecimal.ZERO),

@@ -1,31 +1,14 @@
-// Parser for e2e-visual/accepted-changes.txt — the list of snapshots whose pixel
-// change is intended and reviewed for ONE specific PR.
-//
-// See accepted-changes.txt for the format and the rules. The two properties this
-// file exists to guarantee:
-//
-//   1. AN ENTRY ONLY APPLIES TO THE PR IT NAMES. Entries for any other PR are
-//      dropped here, so a line left behind after a merge is inert by
-//      construction -- it can never exempt a future PR. Pruning the file is
-//      housekeeping, not a guarantee anything depends on.
-//   2. NO PR NUMBER, NO ACCEPTANCES. A local run, or any context that does not
-//      set VISUAL_PR_NUMBER, gets an empty map and therefore full strictness.
-//
-// Both failure directions are deliberately safe: a typo in the PR number or the
-// snapshot name means the entry is NOT honoured, so the job stays red rather
-// than silently waving a diff through.
+// Parser for e2e-visual/accepted-changes.txt — the list of snapshots whose pixel change is intended and
+// reviewed for ONE specific PR. AN ENTRY ONLY APPLIES TO THE PR IT NAMES. See accepted-changes.txt for the
+// format and the rules.
 
 import fs from 'node:fs';
 
-/**
+/** Parses snapshot-change approvals scoped to the current PR.
  * @param {string} text     contents of accepted-changes.txt
  * @param {string|number} prNumber  the PR this run belongs to; falsy disables all acceptances
  * @param {Set<string>} [knownSnapshots]  every snapshot name the spec can produce; when
- *   supplied, an entry for THIS PR naming something outside it throws. Entries for other
- *   PRs are never validated -- a stale line pointing at a since-deleted route must stay
- *   harmless, not break the suite.
- * @returns {Map<string, string>} snapshot name (no .png) -> reason
- */
+ * @returns {Map<string, string>} snapshot name (no .png) -> reason */
 export function parseAcceptedChanges(text, prNumber, knownSnapshots) {
   const accepted = new Map();
   if (!prNumber) return accepted;

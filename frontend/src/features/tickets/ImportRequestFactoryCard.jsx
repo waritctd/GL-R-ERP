@@ -16,7 +16,8 @@ const STATUS_TONE = { DRAFT: 'info', ISSUED: 'success', SUPERSEDED: 'neutral' };
 // Both sentences hold whatever else is true of the deal, so neither needs the deal's state: a row
 // gets its import step at issue, and the server refuses the deal-level chain from the first ISSUED
 // row on (TicketRepository#hasLiveImportRequests).
-const FIRST_DRAFT_HINT = 'ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของดีลหรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้งดีล';
+// `noun`: งาน everywhere since 2026-11-17 (owner ruling: sales screens say งาน, not ดีล).
+const firstDraftHint = (noun) => `ยังเป็นร่าง — ยังไม่มีขั้นนำเข้าให้เลื่อน เมื่อฝ่ายขายเจ้าของ${noun}หรือ CEO ออกเลขแล้ว จะติดตามการนำเข้ารายโรงงาน (S12–S17) แทนการเลื่อนสถานะทั้ง${noun}`;
 // revise() leaves the ISSUED predecessor live until this draft is issued; issue() then supersedes
 // it, carries its step forward and resets the order e-mail to unsent (ImportRequestRepository#issue).
 const REVISION_DRAFT_HINT = 'ร่างฉบับแก้ไข — ฉบับที่ออกเลขแล้วยังติดตามและเลื่อนขั้นได้ตามปกติ เมื่อออกเลขฉบับนี้จะได้เลขใบขอซื้อใหม่แทนฉบับเดิม ขั้นนำเข้าปัจจุบันยกมาต่อ และต้องส่งอีเมลสั่งซื้อใหม่';
@@ -44,38 +45,41 @@ function downloadBlob(blob, filename) {
  * Role shape (mirrors ImportRequestService — see its own Javadoc for the authoritative matrix):
  *   - `canFullWrite` (owning sales rep or CEO): edit the draft body/lead-time, issue, revise, delete.
  *   - `canFooterWrite` (CEO only): Checked/Approved By+date, vessel ETA.
- *   - `canAdvance` (import/CEO): advance the per-factory step, set lead time AFTER issue.
+ *   - `canSetLeadTime` (import/CEO): set lead time AFTER issue. The per-factory STEP is never advanced here: the
+ *     tracker is read-only on both surfaces and the step moves on /fulfilment only (spec 2026-11-15 §7.11 item 3 —
+ *     a UI narrowing; ImportRequestService's import/ceo advance gate is unchanged).
  *   - `canEmailWrite` (owning rep, CEO, or import): edit/mark-sent the order-email draft.
  * `showOrderEmail` (import's surfaces only): the order-email row; the sales deal tab omits it (owner ruling 2026-10-29).
  * Everyone who can reach this card at all may read it and download the PDF — the buttons above
  * are an affordance; the server is the authority, so a 403/409 surfaces its own Thai message.
  */
 export function ImportRequestFactoryCard({
-  row, ticketId, canFullWrite, canFooterWrite, canAdvance, canEmailWrite, showToast,
+  row, ticketId, canFullWrite, canFooterWrite, canSetLeadTime, canEmailWrite, showToast,
   showInlineDownload = false, showOrderEmail = false,
+  // Deal page only (redesign 2026-11-16): the "ดูอย่างเดียว" chip on a card this viewer cannot edit.
+  dealNoun = 'งาน', showReadOnlyChip = false,
 }) {
   const queryClient = useQueryClient();
   const [leadTimeDraft, setLeadTimeDraft] = useState({ min: row.leadTimeMinDays ?? '', max: row.leadTimeMaxDays ?? '' });
   const [requiredByDraft, setRequiredByDraft] = useState(row.requiredByNote ?? '');
   const [emailOpen, setEmailOpen] = useState(false);
-  // PR-B REVIEW ROUND 1, B1: field names MUST be emailTo/emailSubject/emailBody — Java's
-  // UpdateEmailDraftRequest (ImportRequestRequests.java) has no `to`/`subject`/`body` components,
-  // so those were silently dropped by Jackson (unknown properties ignored) and the update's own
-  // COALESCE(:field, existing) kept the OLD value with a 200 OK and no error anywhere.
+  // PR-B REVIEW ROUND 1, B1: field names MUST be emailTo/emailSubject/emailBody — Java's UpdateEmailDraftRequest
+  // has no `to`/`subject`/`body` components, so those were silently dropped by Jackson and the update's own
+  // COALESCE kept the OLD value with a 200 OK and no error anywhere.
   const [emailDraft, setEmailDraft] = useState({ emailTo: row.emailTo ?? '', emailSubject: row.emailSubject ?? '', emailBody: row.emailBody ?? '' });
   const [footerOpen, setFooterOpen] = useState(false);
   const [footerDraft, setFooterDraft] = useState(() => footerDraftOf(row));
-  // Nit: window.confirm() replaced with the app's own ConfirmDialog pattern (see that
-  // component's own Javadoc-style header — "Replaces window.confirm/window.prompt call sites").
+  // Nit: window.confirm() replaced with the app's own ConfirmDialog pattern (see that component's own
+  // Javadoc-style header — "Replaces window.confirm/window.prompt call sites").
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   // ออกเลข mints the document number and cannot be undone, so it asks first (W3-11, owner ruling 2026-10-30).
   const [issueConfirmOpen, setIssueConfirmOpen] = useState(false);
 
   function invalidate() {
     queryClient.invalidateQueries({ queryKey: queryKeys.storedImportRequests(ticketId) });
-    // This card is rendered by BOTH the deal tab and import's own per-deal page (ImportDealPage,
-    // which reads GET /api/import/deals/{id} — a different query key). A mutation from either must
-    // refresh the other, or a stale step shows there until a hard reload.
+    // This card is rendered by BOTH the deal tab and import's own per-deal page (ImportDealPage, which reads GET
+    // /api/import/deals/{id} — a different query key). A mutation from either must refresh the other, or a stale
+    // step shows there until a hard reload.
     queryClient.invalidateQueries({ queryKey: queryKeys.importDeal(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketDetail(ticketId) });
     queryClient.invalidateQueries({ queryKey: queryKeys.ticketActions(ticketId) });
@@ -107,11 +111,6 @@ export function ImportRequestFactoryCard({
   const deleteMutation = useMutation({
     mutationFn: () => api.storedImportRequests.deleteDraft(row.id),
     onSuccess: () => { showToast?.('success', 'ลบร่างแล้ว'); setDeleteConfirmOpen(false); invalidate(); },
-    onError,
-  });
-  const advanceMutation = useMutation({
-    mutationFn: (targetStep) => api.storedImportRequests.advanceStep(row.id, { targetStep }),
-    onSuccess: () => { showToast?.('success', 'อัปเดตสถานะรายโรงงานแล้ว'); invalidate(); },
     onError,
   });
   const setLeadTimeMutation = useMutation({
@@ -157,9 +156,9 @@ export function ImportRequestFactoryCard({
       showToast?.('error', 'กรุณาระบุระยะเวลานำเข้า (วัน) ทั้งค่าต่ำสุดและสูงสุด');
       return;
     }
-    // Nit: both branches of this used to build the identical payload — the actual DRAFT/ISSUED
-    // branching already lives in setLeadTimeMutation's own mutationFn (update() vs setLeadTime()),
-    // so restating it here as a ternary with two identical arms was dead branching.
+    // Nit: both branches of this used to build the identical payload — the actual DRAFT/ISSUED branching already
+    // lives in setLeadTimeMutation's own mutationFn (update() vs setLeadTime()), so restating it here as a ternary
+    // with two identical arms was dead branching.
     setLeadTimeMutation.mutate({ leadTimeMinDays: min, leadTimeMaxDays: max });
   };
 
@@ -169,12 +168,9 @@ export function ImportRequestFactoryCard({
   // a predecessor that is still being advanced (ImportRequestService#revise).
   const isRevisionDraft = isDraft && row.version > 1;
 
-  // Yang-style compact card (feat/import-panel-yang-visual, frontend-only visual port): the
-  // document-heavy / secondary controls below are grouped into a collapsed-by-default <details>
-  // so the default view reads as factory name → progress bar → email action, matching Yang's
-  // FactoryImportProgressPanel. Native <details> keeps its children in the DOM while collapsed
-  // (just visually hidden), so every data-testid here stays queryable by existing tests exactly
-  // as before — nothing here is conditionally unmounted.
+  // Yang-style compact card (feat/import-panel-yang-visual, frontend-only visual port): the document-heavy /
+  // secondary controls below are grouped into a collapsed-by-default <details> so the default view reads as
+  // factory name → progress bar → email action, matching Yang's FactoryImportProgressPanel.
   const documentDetails = (
     <details className="rounded-md border border-border-subtle open:bg-surface-muted" data-testid={`ir-details-${row.id}`}>
       <summary className="cursor-pointer select-none rounded-md px-3 py-2 mobile:py-3.5 text-xs font-bold text-text-secondary hover:bg-surface-muted hover:text-text">
@@ -204,15 +200,10 @@ export function ImportRequestFactoryCard({
           </Button>
         </div>
 
-        {/* เนื้อหา (draft body): lead time + required-by, editable by the owning rep/CEO only while
-            DRAFT. Post-issue the min/max here is READ-ONLY — the edit control below (import/CEO)
-            is the one that still writes.
-            PR-B REVIEW ROUND 1, S1: a viewer who cannot write (sales_manager always; sales/CEO once
-            ISSUED; import while still DRAFT) gets PLAIN TEXT here, not a disabled input — a disabled
-            input is a look-alike control that implies "there is a field here you almost can edit",
-            which is misleading for a role with no path to ever edit it. */}
+        {/* เนื้อหา (draft body): lead time + required-by, editable by the owning rep/CEO only while DRAFT. Post-issue
+         * the min/max here is READ-ONLY — the edit control below (import/CEO) is the one that still writes. */}
         {(() => {
-          const canWriteLeadTimeNow = isDraft ? canFullWrite : canAdvance;
+          const canWriteLeadTimeNow = isDraft ? canFullWrite : canSetLeadTime;
           if (!canWriteLeadTimeNow) {
             return (
               <div className="flex flex-wrap items-center gap-3 text-xs" data-testid={`ir-lead-readonly-${row.id}`}>
@@ -258,10 +249,9 @@ export function ImportRequestFactoryCard({
           );
         })()}
 
-        {/* Nit: the CEO-only footer (checked/approved/vessel ETA) is editable from DRAFT onward —
-            not gated on isIssued — and its current status stays visible READ-ONLY to every other
-            viewer who can reach this card, at any status, rather than only once ISSUED and only the
-            vessel ETA line. */}
+        {/* Nit: the CEO-only footer (checked/approved/vessel ETA) is editable from DRAFT onward — not gated on isIssued
+         * — and its current status stays visible READ-ONLY to every other viewer who can reach this card, at any
+         * status, rather than only once ISSUED and only the vessel ETA line. */}
         {canFooterWrite ? (
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-border-subtle bg-surface-subtle p-2 text-xs">
             <strong>ท้ายฟอร์ม (CEO):</strong>
@@ -288,20 +278,26 @@ export function ImportRequestFactoryCard({
     </details>
   );
 
-  // v# · status · doc number — the quiet identity line of this stored row. For an ISSUED row it is
-  // handed to the progress bar (which owns the header line: name → step → ETA → last update); for a
-  // DRAFT row there is no bar, so it renders after the name in the card's own header below.
+  // v# · status · doc number — the quiet identity line of this stored row. For an ISSUED row it is handed to the
+  // progress bar (which owns the header line: name → step → ETA → last update); for a DRAFT row there is no bar,
+  // so it renders after the name in the card's own header below.
   const docMeta = (
     <>
       <span className="text-2xs text-text-muted">v{row.version}</span>
       <StatusBadge tone={STATUS_TONE[row.status]}>{STATUS_LABEL[row.status] ?? row.status}</StatusBadge>
       {row.docNumber ? <code className="text-2xs text-text-muted">{row.docNumber}</code> : null}
+      {/* Drawing a-deal-ship: the card says ดูอย่างเดียว only when it offers this viewer nothing to edit — the same
+          conditions the controls below render on (ออกฉบับแก้ไข, the post-issue lead-time editor, the CEO footer, the
+          order e-mail). */}
+      {showReadOnlyChip && isIssued && !(
+        (canFullWrite && row.importStep !== 'RECEIVED') || canSetLeadTime || canFooterWrite || (showOrderEmail && canEmailWrite)
+      ) ? <StatusBadge tone="neutral">ดูอย่างเดียว</StatusBadge> : null}
     </>
   );
 
-  // The card is the ONE per-factory unit on both surfaces (the deal tab and import's own page), so
-  // its frame, header and rhythm are defined here only: 16px padding (12px on a phone), 12px between
-  // blocks, hairline rules between the supporting blocks so the tracker (header + bar) leads.
+  // The card is the ONE per-factory unit on both surfaces (the deal tab and import's own page), so its frame,
+  // header and rhythm are defined here only: 16px padding (12px on a phone), 12px between blocks, hairline rules
+  // between the supporting blocks so the tracker (header + bar) leads.
   return (
     <div className="flex min-w-0 flex-col gap-3 rounded-md border border-border-strong bg-surface p-4 mobile:p-3" data-testid={`ir-factory-card-${row.id}`}>
       {isIssued ? (
@@ -313,9 +309,7 @@ export function ImportRequestFactoryCard({
             expectedArrivalFrom: row.expectedArrivalFrom, expectedArrivalTo: row.expectedArrivalTo,
             leadTimeMinDays: row.leadTimeMinDays, leadTimeMaxDays: row.leadTimeMaxDays,
           }}
-          editable={canAdvance}
-          advancing={advanceMutation.isPending}
-          onAdvance={(_r, targetStep) => advanceMutation.mutate(targetStep)}
+          editable={false}
         />
       ) : (
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
@@ -323,6 +317,12 @@ export function ImportRequestFactoryCard({
           {docMeta}
         </div>
       )}
+
+      {isIssued ? (
+        <p className="m-0 text-xs text-text-muted" data-testid={`ir-step-readonly-${row.id}`}>
+          ฝ่ายนำเข้าเลื่อนขั้นตอนนี้ที่หน้า การขนส่ง เท่านั้น หน้านี้แสดงผลให้เห็นตรงกัน
+        </p>
+      ) : null}
 
       {/* QA BUG-21: a DRAFT has no import step, so the tracker's slot says why instead of sitting
           empty. The wording is the same for every viewer and names no one to wait for: issuing can
@@ -332,7 +332,7 @@ export function ImportRequestFactoryCard({
       {isDraft ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-border-subtle pt-3">
           <p className="m-0 min-w-0 flex-1 basis-64 text-xs text-text-muted" data-testid={`ir-draft-hint-${row.id}`}>
-            {isRevisionDraft ? REVISION_DRAFT_HINT : FIRST_DRAFT_HINT}
+            {isRevisionDraft ? REVISION_DRAFT_HINT : firstDraftHint(dealNoun)}
           </p>
           {canFullWrite ? (
             <Button type="button" size="sm" variant="primary" className="whitespace-nowrap" disabled={issueMutation.isPending}
@@ -365,9 +365,9 @@ export function ImportRequestFactoryCard({
         </div>
       ) : null}
 
-      {/* Per-factory ใบขอซื้อ download, surfaced on the import page (showInlineDownload) so import
-          can grab each factory's F-SM-001 without opening the details expander. Same download as
-          the details block (internal copy — import's working reference); both copies stay there. */}
+      {/* Per-factory ใบขอซื้อ download, surfaced on the import page (showInlineDownload) so import can grab each
+       * factory's F-SM-001 without opening the details expander. Same download as the details block (internal copy —
+       * import's working reference); both copies stay there. */}
       {showInlineDownload && isIssued ? (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-2 border-t border-border-subtle pt-3 text-xs">
           <strong className="text-text-secondary">ใบขอซื้อ (F-SM-001):</strong>
@@ -414,9 +414,9 @@ export function ImportRequestFactoryCard({
           footer={(
             <>
               <Button type="button" variant="secondary" onClick={() => setEmailOpen(false)}>ปิด</Button>
-              {/* Nit: hide "บันทึก" once sent — the fields are already readOnly below, but an
-                  enabled save button next to them still implied an edit that PATCH would refuse
-                  (ImportRequestService#updateEmailDraft 409s once emailSentAt is set). */}
+              {/* Nit: hide "บันทึก" once sent — the fields are already readOnly below, but an enabled save button next to
+               * them still implied an edit that PATCH would refuse (ImportRequestService#updateEmailDraft 409s once
+               * emailSentAt is set). */}
               {!row.emailSentAt ? (
                 <Button type="button" variant="secondary" disabled={updateEmailMutation.isPending}
                   onClick={() => updateEmailMutation.mutate(emailDraft)} data-testid={`ir-email-save-${row.id}`}>

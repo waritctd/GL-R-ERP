@@ -32,10 +32,7 @@ class ApiExceptionHandlerTest {
 
     @Test
     void wrongVerbReturns405WithAllowHeaderNot500() {
-        // GET on a POST-only endpoint. Before this handler existed the exception fell through to
-        // handleUnexpected and the caller was told the server had broken, which is why
-        // frontend/e2e-real/helpers/surface.js has to read each endpoint's real verb out of
-        // hrApi.js — GETting everything would have reported ~130 phantom server errors.
+        // GET on a POST-only endpoint.
         HttpRequestMethodNotSupportedException exception =
             new HttpRequestMethodNotSupportedException("GET", List.of("POST"));
 
@@ -51,8 +48,8 @@ class ApiExceptionHandlerTest {
 
     @Test
     void wrongVerbStillReturns405WhenNoSupportedMethodsAreKnown() {
-        // getSupportedHttpMethods() is nullable — Spring leaves it null when no candidate handler
-        // resolved. The status must not depend on the header being populatable.
+        // getSupportedHttpMethods() is nullable — Spring leaves it null when no candidate handler resolved. The status
+        // must not depend on the header being populatable.
         ResponseEntity<ApiExceptionHandler.ErrorResponse> response =
             handler.handleMethodNotSupported(new HttpRequestMethodNotSupportedException("TRACE"));
 
@@ -60,11 +57,9 @@ class ApiExceptionHandlerTest {
         assertThat(response.getHeaders().getAllow()).isEmpty();
     }
 
-    // ── Upload endpoints: a malformed request is the CLIENT's error, never a 500 ──────────
-    //
-    // All three of these reached handleUnexpected before these handlers existed, so every one of
-    // the eleven multipart endpoints answered 500 to an ordinary client mistake. Content
-    // negotiation runs before any role gate, so all nine roles could reach it.
+    // Upload endpoints: a malformed request is the CLIENT's error, never a 500 ────────── All three of these
+    // reached handleUnexpected before these handlers existed, so every one of the eleven multipart endpoints
+    // answered 500 to an ordinary client mistake.
 
     @Test
     void unsupportedContentTypeReturns415WithAcceptHeaderNot500() {
@@ -84,8 +79,8 @@ class ApiExceptionHandlerTest {
 
     @Test
     void unsupportedContentTypeStillReturns415WhenNoSupportedTypesAreKnown() {
-        // Mirrors wrongVerbStillReturns405…: the status must not depend on the header being
-        // populatable, which it is not when no candidate handler resolved.
+        // Mirrors wrongVerbStillReturns405…: the status must not depend on the header being populatable, which it is
+        // not when no candidate handler resolved.
         ResponseEntity<ApiExceptionHandler.ErrorResponse> response =
             handler.handleMediaTypeNotSupported(
                 new HttpMediaTypeNotSupportedException("Content-Type is not supported"));
@@ -106,10 +101,9 @@ class ApiExceptionHandlerTest {
 
     @Test
     void oversizedUploadReturns413NotTheGeneric400() {
-        // MaxUploadSizeExceededException extends MultipartException, so without its own handler it
-        // would collapse into the 400 above — telling the caller their request was malformed when
-        // it was merely larger than APP_MAX_FILE_SIZE. Spring resolves the most specific handler,
-        // so this stays 413 regardless of declaration order.
+        // MaxUploadSizeExceededException extends MultipartException, so without its own handler it would collapse into
+        // the 400 above — telling the caller their request was malformed when it was merely larger than
+        // APP_MAX_FILE_SIZE.
         ResponseEntity<ApiExceptionHandler.ErrorResponse> response =
             handler.handleUploadTooLarge(new MaxUploadSizeExceededException(10_485_760L));
 
@@ -132,9 +126,9 @@ class ApiExceptionHandlerTest {
 
     @Test
     void unexpectedExceptionLogsAnonymousWhenNoSession() {
-        // No session on the request → currentUserId falls back to "anonymous"; response body
-        // (asserted above) stays generic either way. This just exercises the no-session branch
-        // without throwing, since the log line itself isn't asserted here.
+        // No session on the request → currentUserId falls back to "anonymous"; response body (asserted above) stays
+        // generic either way. This just exercises the no-session branch without throwing, since the log line itself
+        // isn't asserted here.
         MockHttpServletRequest request = new MockHttpServletRequest("POST", "/api/whatever");
 
         ResponseEntity<ApiExceptionHandler.ErrorResponse> response =

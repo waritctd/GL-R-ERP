@@ -22,8 +22,8 @@ public final class PricingFormulaConfigRequests {
         @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal costBuffer,
         @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal sellingBuffer,
         @NotNull @DecimalMin(value = "0", inclusive = true) @DecimalMax(value = "1", inclusive = true) BigDecimal defaultMarginPct,
-        // Must be strictly positive -- it's the rounding step SP is rounded up to; zero would make
-        // RoundUp() a division by zero downstream, in the engine branches build on top of this config.
+        // Must be strictly positive -- it's the rounding step SP is rounded up to; zero would make RoundUp() a
+        // division by zero downstream, in the engine branches build on top of this config.
         @NotNull @DecimalMin(value = "0", inclusive = false) BigDecimal sellingPriceRoundUpTo,
         LocalDate effectiveFrom,
         @NotEmpty @Valid List<FreightRateRequest> freightRates,
@@ -32,8 +32,8 @@ public final class PricingFormulaConfigRequests {
     ) {}
 
     public record FreightRateRequest(
-        // ISO 3166-1 alpha-2, must exist in price_catalog.country -- the FK rejects anything else,
-        // which is the point: a free-text country is what made the freight lookup never match.
+        // ISO 3166-1 alpha-2, must exist in price_catalog.country -- the FK rejects anything else, which is the point:
+        // a free-text country is what made the freight lookup never match.
         @NotBlank @Pattern(regexp = "^[A-Z]{2}$", message = "ต้องเป็นรหัสประเทศ 2 ตัวอักษร")
         String originCountryCode,
         @NotNull @DecimalMin(value = "0", inclusive = true) BigDecimal thicknessMinMm,

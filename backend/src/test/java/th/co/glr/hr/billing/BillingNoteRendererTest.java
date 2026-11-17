@@ -91,19 +91,17 @@ class BillingNoteRendererTest {
         assertThat(text).contains("100,000.00");
         assertThat(text).contains("26,977.20");
         assertThat(text).contains("126,977.20");
-        // The computed Thai baht-text literal — the exact figure/string ThaiTextTest pins against
-        // the owner's own sample sheet.
+        // The computed Thai baht-text literal — the exact figure/string ThaiTextTest pins against the owner's own
+        // sample sheet.
         assertThat(text).contains("หนึ่งแสนสองหมื่นหกพันเก้าร้อยเจ็ดสิบเจ็ดบาทยี่สิบสตางค์");
         assertThat(text).contains("หมายเหตุทดสอบ");
     }
 
     @Test
     void totalCellIsALiteralNotAFormula_soANonRecalculatingReaderCannotSeeItDisagreeWithTheBahtWords() throws Exception {
-        // F4 (Opus review, GLA-99 step 3 round 1): before the fix, F27 kept the template's own
-        // SUM(F12:F26) formula — reading the raw cell (as any consumer that does not open the file
-        // in a real spreadsheet program and recalculate it would) sees the template's STALE cached
-        // formula result, not the real total, even though B27's baht-text literal is always
-        // correct. Both must now come from the same computed `total` and F27 must be a literal.
+        // before the fix, F27 kept the template's own SUM formula — reading the raw cell sees the template's STALE
+        // cached formula result, not the real total, even though B27's baht-text literal is always correct. Both must
+        // now come from the same computed `total` and F27 must be a literal.
         byte[] xlsx = renderer.toXlsx(document());
         try (Workbook wb = WorkbookFactory.create(new ByteArrayInputStream(xlsx))) {
             Sheet sh = wb.getSheetAt(0);
@@ -115,11 +113,8 @@ class BillingNoteRendererTest {
 
     @Test
     void totalCellKeepsTheTemplatesOwnStyle_bordersAndFont() throws Exception {
-        // S5 (Opus review, GLA-99 step 3 round 2) — the F4 fix (round 1) introduced a NEW
-        // regression: it applied the freshly-created, borderless/default-font `moneyStyle` (meant
-        // ONLY for the 15 blank line-amount cells) to F27 itself too, discarding the template's own
-        // printed borders + Thai font on the total cell. F27 must keep whatever style the template
-        // shipped with — moneyStyle is applied only to the 15 line-amount cells.
+        // the F4 fix introduced a NEW regression: it applied the freshly-created, borderless/default-font `moneyStyle`
+        // to F27 itself too, discarding the template's own printed borders + Thai font on the total cell.
         org.apache.poi.ss.usermodel.BorderStyle expectedBottom, expectedTop, expectedLeft, expectedRight;
         String expectedFontName;
         try (java.io.InputStream tpl = new org.springframework.core.io.ClassPathResource(

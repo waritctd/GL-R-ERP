@@ -11,8 +11,8 @@ beforeEach(async () => {
 });
 
 // Mirrors DealQuotationService.forViewer / DealQuotationDtos#withoutPriceInternals (ruling 3, 2026-09-30):
-// `account` sees a quotation's number, totals and each line's NET price, never list price / discount / CEO pricing.
-// The Java DealQuotationOutcomeIntegrationTest is the evidence; this pins that the mock is no MORE permissive.
+// `account` sees a quotation's number, totals and each line's NET price, never list price / discount / CEO
+// pricing.
 
 const ITEM_KEYS = ['unitPrice', 'discountPct', 'specialPriceSqm', 'adjustmentPct', 'adjustmentAmount',
   'catalogPriceId', 'specialPriceLine', 'calculationLine', 'priceChangedFromCeo', 'ceoListUnitPrice',
@@ -78,9 +78,7 @@ describe('mockApi.dealQuotations -- account redaction (mirrors forViewer)', () =
     }
   });
 
-  // list() mirrors DealQuotationService.search: every row goes through forViewer. Account only ever sees quotations
-  // on deals it created, and the mock cannot make account own a deal, so this is a guard against a future
-  // un-redacted path rather than a proof of the populated case (the Java IT proves that one).
+  // list() mirrors DealQuotationService.search: every row goes through forViewer.
   it('list() rows are redacted for account', async () => {
     await createApprovedQuotation();
     await api.auth.login({ role: 'account' });

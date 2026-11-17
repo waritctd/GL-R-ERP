@@ -5,6 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class ThaiTextTest {
 
@@ -39,25 +41,21 @@ class ThaiTextTest {
         assertThat(ThaiText.dateRange(LocalDate.of(2026, 8, 9), null)).isEqualTo("9 สิงหาคม 2569");
     }
 
-    @Test
-    void dateRangeWithinSameMonthAndYearIsCompactWithNoSpacesAroundTheEnDash() {
-        assertThat(ThaiText.dateRange(LocalDate.of(2026, 8, 9), LocalDate.of(2026, 8, 12)))
-            .isEqualTo("9–12 สิงหาคม 2569");
-    }
-
-    @Test
-    void dateRangeAcrossMonthsInTheSameYearShowsEachSideAndOneYearAtTheEndWithSpacedEnDash() {
-        assertThat(ThaiText.dateRange(LocalDate.of(2026, 7, 30), LocalDate.of(2026, 8, 2)))
-            .isEqualTo("30 กรกฎาคม – 2 สิงหาคม 2569");
-    }
-
-    @Test
-    void dateRangeAcrossYearsStillUsesTheOtherwiseFormAndOmitsTheFromYear() {
-        // Deliberate per the approved copy: a two-way split (same month+year vs. everything else),
-        // not a third cross-year case -- see ThaiText#dateRange's Javadoc. The FROM side never shows
-        // its own year in the "otherwise" branch, even when it differs from TO's year.
-        assertThat(ThaiText.dateRange(LocalDate.of(2026, 12, 30), LocalDate.of(2027, 1, 2)))
-            .isEqualTo("30 ธันวาคม – 2 มกราคม 2570");
+    // Columns: case name, from, to, expected rendering.
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "dateRangeWithinSameMonthAndYearIsCompactWithNoSpacesAroundTheEnDash,"
+            + " 2026-08-09, 2026-08-12, 9–12 สิงหาคม 2569",
+        "dateRangeAcrossMonthsInTheSameYearShowsEachSideAndOneYearAtTheEndWithSpacedEnDash,"
+            + " 2026-07-30, 2026-08-02, 30 กรกฎาคม – 2 สิงหาคม 2569",
+        // Deliberate per the approved copy: a two-way split (same month+year vs. everything else), not a third
+        // cross-year case -- see ThaiText#dateRange's Javadoc. The FROM side never shows its own year in the
+        // "otherwise" branch, even when it differs from TO's year.
+        "dateRangeAcrossYearsStillUsesTheOtherwiseFormAndOmitsTheFromYear,"
+            + " 2026-12-30, 2027-01-02, 30 ธันวาคม – 2 มกราคม 2570",
+    })
+    void dateRangeOfTwoDistinctDates(String caseName, String from, String to, String expected) {
+        assertThat(ThaiText.dateRange(LocalDate.parse(from), LocalDate.parse(to))).isEqualTo(expected);
     }
 
     // ── money ───────────────────────────────────────────────────────────────────────────────
@@ -145,10 +143,20 @@ class ThaiTextTest {
         assertThat(ThaiText.bahtText(new BigDecimal("1.50"))).isEqualTo("หนึ่งบาทห้าสิบสตางค์");
     }
 
-    @Test
-    void bahtTextTensAndTeensUseSipNotNuengSip() {
-        assertThat(ThaiText.bahtText(new BigDecimal("10.00"))).isEqualTo("สิบบาทถ้วน");
-        assertThat(ThaiText.bahtText(new BigDecimal("15.00"))).isEqualTo("สิบห้าบาทถ้วน");
+    // Cases pinned as a PAIR of amounts each. Columns: case name, first amount, its expected text, second amount, its
+    // expected text.
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        "bahtTextTensAndTeensUseSipNotNuengSip,   10.00,      สิบบาทถ้วน,           15.00,       สิบห้าบาทถ้วน",
+        "bahtTextMillionsChunkByGroupsOfSix,      1000001.00, หนึ่งล้านเอ็ดบาทถ้วน,    10000000.00, สิบล้านบาทถ้วน",
+        // Second pair: 1.005 -> HALF_UP -> 1.01: a lone satang digit of 1 reads "หนึ่ง", not "เอ็ด" -- the same "a lone 1
+        // is never เอ็ด" rule bahtTextOfExactlyOneBahtDoesNotUseEd pins for the baht side.
+        "bahtTextRoundsToTwoDecimalPlacesHalfUp,  99.999,     หนึ่งร้อยบาทถ้วน,       1.005,       หนึ่งบาทหนึ่งสตางค์",
+    })
+    void bahtTextPairs(String caseName, String firstAmount, String firstExpected, String secondAmount,
+                       String secondExpected) {
+        assertThat(ThaiText.bahtText(new BigDecimal(firstAmount))).isEqualTo(firstExpected);
+        assertThat(ThaiText.bahtText(new BigDecimal(secondAmount))).isEqualTo(secondExpected);
     }
 
     @Test
@@ -171,55 +179,32 @@ class ThaiTextTest {
         assertThat(ThaiText.bahtText(new BigDecimal("101.00"))).isEqualTo("หนึ่งร้อยเอ็ดบาทถ้วน");
     }
 
-    @Test
-    void bahtTextMillionsChunkByGroupsOfSix() {
-        assertThat(ThaiText.bahtText(new BigDecimal("1000001.00"))).isEqualTo("หนึ่งล้านเอ็ดบาทถ้วน");
-        assertThat(ThaiText.bahtText(new BigDecimal("10000000.00"))).isEqualTo("สิบล้านบาทถ้วน");
-    }
+    // เอ็ด was wrong for every NON-FINAL ล้าน group's own ones digit, and a group two or more ล้าน-levels above
+    // the base only ever got ONE ล้าน regardless of how many it actually represented. Both fixed in
+    // ThaiText#readNumber/ #appendGroup; these pin the exact regressions the review named.
 
-    // ── F1 (Opus review, GLA-99 step 3 round 1): เอ็ด was wrong for every NON-FINAL ล้าน group's
-    // own ones digit, and a group two or more ล้าน-levels above the base only ever got ONE ล้าน
-    // regardless of how many it actually represented. Both fixed in ThaiText#readNumber/
-    // #appendGroup; these pin the exact regressions the review named. ─────────────────────────
-
-    @Test
-    void bahtTextElevenMillionUsesEdForTheNonFinalGroupsOwnOnesDigit() {
-        // Before the fix: "สิบหนึ่งล้าน" -- the "11" group's own ones digit read หนึ่ง because the
-        // เอ็ด check only ever looked at the number's OWN FINAL six-digit group.
-        assertThat(ThaiText.bahtText(new BigDecimal("11000000.00"))).isEqualTo("สิบเอ็ดล้านบาทถ้วน");
-    }
-
-    @Test
-    void bahtTextTwentyOneMillionUsesEdForTheNonFinalGroupsOwnOnesDigit() {
-        assertThat(ThaiText.bahtText(new BigDecimal("21000000.00"))).isEqualTo("ยี่สิบเอ็ดล้านบาทถ้วน");
-    }
-
-    @Test
-    void bahtTextOneHundredOneMillionUsesEdAcrossAZeroTensDigitToo() {
-        assertThat(ThaiText.bahtText(new BigDecimal("101000000.00"))).isEqualTo("หนึ่งร้อยเอ็ดล้านบาทถ้วน");
-    }
-
-    @Test
-    void bahtTextOneTrillionRepeatsLanOncePerMagnitudeLevel() {
-        // Before the fix: "หนึ่งล้าน" -- a group two ล้าน-levels above the base (10^12) only ever
-        // got ONE ล้าน appended, the same as a group one level up, dropping a level whenever an
-        // intervening group (here, the 10^6..10^11 group) was entirely zero.
-        assertThat(ThaiText.bahtText(new BigDecimal("1000000000000.00"))).isEqualTo("หนึ่งล้านล้านบาทถ้วน");
+    // Columns: case name, amount, expected text.
+    @ParameterizedTest(name = "{0}")
+    @CsvSource({
+        // Before the fix: "สิบหนึ่งล้าน" -- the "11" group's own ones digit read หนึ่ง because the เอ็ด check only
+        // ever looked at the number's OWN FINAL six-digit group.
+        "bahtTextElevenMillionUsesEdForTheNonFinalGroupsOwnOnesDigit,     11000000.00,      สิบเอ็ดล้านบาทถ้วน",
+        "bahtTextTwentyOneMillionUsesEdForTheNonFinalGroupsOwnOnesDigit,  21000000.00,      ยี่สิบเอ็ดล้านบาทถ้วน",
+        "bahtTextOneHundredOneMillionUsesEdAcrossAZeroTensDigitToo,       101000000.00,     หนึ่งร้อยเอ็ดล้านบาทถ้วน",
+        // Before the fix: "หนึ่งล้าน" -- a group two ล้าน-levels above the base (10^12) only ever got ONE ล้าน
+        // appended, the same as a group one level up, dropping a level whenever an intervening group (here, the
+        // 10^6..10^11 group) was entirely zero.
+        "bahtTextOneTrillionRepeatsLanOncePerMagnitudeLevel,              1000000000000.00, หนึ่งล้านล้านบาทถ้วน",
+    })
+    void bahtTextNonFinalLanGroupRegressions(String caseName, String amount, String expected) {
+        assertThat(ThaiText.bahtText(new BigDecimal(amount))).isEqualTo(expected);
     }
 
     @Test
     void bahtTextMatchesTheOwnersSampleSheetExactly() {
-        // The exact figure and exact string the owner's ฟอร์มใบวางบิล.xls sample reads via its own
-        // BAHTTEXT formula cell -- the ground truth this whole method exists to reproduce in Java.
+        // The exact figure and exact string the owner's ฟอร์มใบวางบิล.xls sample reads via its own BAHTTEXT formula
+        // cell -- the ground truth this whole method exists to reproduce in Java.
         assertThat(ThaiText.bahtText(new BigDecimal("126977.20")))
             .isEqualTo("หนึ่งแสนสองหมื่นหกพันเก้าร้อยเจ็ดสิบเจ็ดบาทยี่สิบสตางค์");
-    }
-
-    @Test
-    void bahtTextRoundsToTwoDecimalPlacesHalfUp() {
-        assertThat(ThaiText.bahtText(new BigDecimal("99.999"))).isEqualTo("หนึ่งร้อยบาทถ้วน");
-        // 1.005 -> HALF_UP -> 1.01: a lone satang digit of 1 reads "หนึ่ง", not "เอ็ด" -- the same
-        // "a lone 1 is never เอ็ด" rule bahtTextOfExactlyOneBahtDoesNotUseEd pins for the baht side.
-        assertThat(ThaiText.bahtText(new BigDecimal("1.005"))).isEqualTo("หนึ่งบาทหนึ่งสตางค์");
     }
 }

@@ -11,34 +11,15 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import org.springframework.stereotype.Component;
 
-/**
- * Pure policy-decision function for special-money requests: no repositories, no clock, no I/O.
- * Every input the rules need is passed in by the caller, which is what makes this cheap to unit
- * test exhaustively (see {@code SpecialMoneyPolicyEvaluatorTest}).
- *
- * <p>Never throws for a rule failure -- every violation found is accumulated into {@link
- * PolicyDecision#violations()} rather than short-circuiting, so the caller sees the whole picture.
- */
+/** Pure policy-decision function for special-money requests: no repositories, no clock, no I/O. Never throws
+ * for a rule failure -- every violation found is accumulated into PolicyDecision#violations() rather than
+ * short-circuiting, so the caller sees the whole picture. */
 @Component
 public class SpecialMoneyPolicyEvaluator {
 
-    /**
-     * Company convention, NOT statute: Thai labour law defines no fixed "probation period". The
-     * Labour Protection Act s.118(1) only sets a 120-day *severance-pay* threshold (below 120 days
-     * of service, no severance is owed) -- it says nothing about when an employee is "confirmed".
-     * This company treats 119 days since hire as "probation passed" absent an explicit confirm
-     * date; do not cite this as a legal requirement.
-     *
-     * <p>NOT the company norm: real production {@code hr.employee.probation_days} is populated for
-     * almost every active row and is mostly {@code 90}. This 119-day figure only ever applies to
-     * the rare row where {@code probation_days} itself is NULL -- see {@link #hasPassedProbation}.
-     *
-     * <p>Public (not package-private) so {@code LeaveService}'s §5.2 PERSONAL-leave
-     * "passed probation" gate (V116) can reference this exact constant instead of duplicating the
-     * literal 119 -- the two eligibility rules resolve "passed probation" identically on purpose,
-     * and referencing the same constant is what actually prevents them drifting apart, not just a
-     * comment saying they should stay in sync.
-     */
+    /** Company convention, NOT statute: Thai labour law defines no fixed "probation period". The Labour Protection
+     * Act s.118(1) only sets a 120-day *severance-pay* threshold (below 120 days of service, no severance is owed)
+     * -- it says nothing about when an employee is "confirmed". */
     public static final int DEFAULT_PROBATION_DAYS = 119;
 
     /**
@@ -122,9 +103,7 @@ public class SpecialMoneyPolicyEvaluator {
         return new PolicyDecision(eligibleAmount, type.payrollBucket(), amounts.version(), violations);
     }
 
-    // ---------------------------------------------------------------------
     // Eligibility
-    // ---------------------------------------------------------------------
 
     /**
      * The หมายเหตุ's eligibility conditions: (1) เป็นพนักงานประจำ, (2) ผ่านการทดลองงาน.
@@ -200,9 +179,7 @@ public class SpecialMoneyPolicyEvaluator {
         return value == null ? "" : value.trim();
     }
 
-    // ---------------------------------------------------------------------
     // Cap rules
-    // ---------------------------------------------------------------------
 
     private BigDecimal evaluateFixedAid(
             SpecialMoneyType type,
@@ -286,8 +263,8 @@ public class SpecialMoneyPolicyEvaluator {
             violations.add("การเบิกเครื่องแบบประจำปีต้องยื่นภายในเดือนมิถุนายน");
         }
 
-        // "ให้พนักงานเบิกชุดฟอร์มได้ปีละ 1 ครั้ง". The June-only window alone does not enforce this --
-        // it leaves the whole of June open for a second claim.
+        // "ให้พนักงานเบิกชุดฟอร์มได้ปีละ 1 ครั้ง". The June-only window alone does not enforce this -- it leaves the
+        // whole of June open for a second claim.
         if (usage.activeCountThisYear(SpecialMoneyType.UNIFORM_ANNUAL) >= 1) {
             violations.add("เบิกเครื่องแบบประจำปีได้ปีละ 1 ครั้งเท่านั้น");
         }

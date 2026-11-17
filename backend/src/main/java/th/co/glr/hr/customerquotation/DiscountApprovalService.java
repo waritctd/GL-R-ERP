@@ -14,26 +14,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestDtos.PricingRequestSummaryDto;
 import th.co.glr.hr.pricingrequest.PricingRequestEventKind;
 import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 
-/**
- * Phase 2 of the discount-approval work (owner ruling 2026-08-16): the CEO-facing half —
- * approve/reject a pending discount request, and the two read surfaces (a quotation's own current
- * per-line status; the CEO's cross-quotation queue). The ASK half (opening a request when Sales
- * saves a below-minimum line, and the issue-time gate) lives in {@link CustomerQuotationService}
- * itself, which calls {@link DiscountApprovalRepository} directly — this service only ever reads
- * that repository for its own two queries and writes it for approve/reject.
- *
- * <p><b>CEO only — deliberately, not {@code sales_manager}.</b> The owner's words were "must be
- * approved by CEO"; unlike {@code TicketService.cancel} (CEO empowered alongside the owner) or the
- * documented sales_manager read-only oversight role elsewhere in this chain, nothing in the task
- * brief grants sales_manager write access here, so {@link #CEO_ROLES} is a singleton set. Stated
- * explicitly per CLAUDE.md's "decide and state" instruction, not left implicit.
- *
- * <p>Read access ({@link #listForQuotation}) deliberately reuses {@link
- * CustomerQuotationService#get}'s OWN view-access check (owner-scoped sales rep, plus
- * sales_manager/ceo/import) rather than re-implementing it — CLAUDE.md's authz-drift warning
- * applies here as much as anywhere: two independent copies of "who may view this quotation" is
- * exactly the shape that goes stale silently.
- */
+/** Phase 2 of the discount-approval work (owner ruling 2026-08-16): the CEO-facing half — approve/reject a
+ * pending discount request, and the two read surfaces (a quotation's own current per-line status; the CEO's
+ * cross-quotation queue). */
 @Service
 public class DiscountApprovalService {
     private static final Set<String> CEO_ROLES = Set.of("ceo");
@@ -51,9 +34,8 @@ public class DiscountApprovalService {
         this.notifications = notifications;
     }
 
-    /** Current per-line approval status for one quotation — the same document {@code actor} is
-     * already allowed to view. Throws exactly as {@link CustomerQuotationService#get} would
-     * (404/403) if they are not. */
+    /** Current per-line approval status for one quotation — the same document actor is already allowed to view.
+     * Throws exactly as CustomerQuotationService#get would (404/403) if they are not. */
     public List<DiscountApprovalDto> listForQuotation(long quotationId, UserPrincipal actor) {
         quotations.get(quotationId, actor);
         return approvals.findCurrentByQuotationId(quotationId);
@@ -80,9 +62,9 @@ public class DiscountApprovalService {
         String message = "CEO อนุมัติส่วนลดรายการที่ " + approved.quotationItemId() + " ในใบเสนอราคา "
             + approved.quotationNumber() + " ที่ราคา " + approved.approvedFinalUnitPrice();
         addEvent(summary, actor, PricingRequestEventKind.DISCOUNT_APPROVED, message);
-        // Notify the requesting sales rep too, mirroring PricingDecisionService.approve's own
-        // "tell the person who asked" pattern — not explicitly required by the task brief, but
-        // keeps this decision consistent with every other CEO decision in the pricing chain.
+        // Notify the requesting sales rep too, mirroring PricingDecisionService.approve's own "tell the person who
+        // asked" pattern — not explicitly required by the task brief, but keeps this decision consistent with every
+        // other CEO decision in the pricing chain.
         notifications.notifyEmployeeForPricingRequest(approved.requestedBy(), summary.id(),
             PricingRequestEventKind.DISCOUNT_APPROVED, message);
         return approved;
@@ -106,10 +88,9 @@ public class DiscountApprovalService {
         String message = "CEO ปฏิเสธส่วนลดรายการที่ " + rejected.quotationItemId() + " ในใบเสนอราคา "
             + rejected.quotationNumber() + ": " + rejected.rejectionReason();
         addEvent(summary, actor, PricingRequestEventKind.DISCOUNT_REJECTED, message);
-        // Rejection leaving the quotation blocked (task brief) is enforced by
-        // CustomerQuotationService#issue's own gate, not here — this call only records the
-        // decision and reason and tells Sales about it so they know to revise the price or drop
-        // the discount and re-request.
+        // Rejection leaving the quotation blocked (task brief) is enforced by CustomerQuotationService#issue's own
+        // gate, not here — this call only records the decision and reason and tells Sales about it so they know to
+        // revise the price or drop the discount and re-request.
         notifications.notifyEmployeeForPricingRequest(rejected.requestedBy(), summary.id(),
             PricingRequestEventKind.DISCOUNT_REJECTED, message);
         return rejected;

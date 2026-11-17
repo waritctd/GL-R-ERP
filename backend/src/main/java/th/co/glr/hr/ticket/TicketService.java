@@ -71,9 +71,6 @@ public class TicketService {
     // manager-or-CEO, and the more granular per-item control has no reason to be MORE restrictive.
     private static final Set<String> ITEM_WEIGHT_ROLES = Set.of("sales_manager", "ceo");
     // Money-receipt confirmations belong to ฝ่ายบัญชี (accounting), with CEO as fallback.
-    // NOTE: the CEO fallback here still governs SET_BILLING (and read access generally) — it does
-    // NOT govern payment recording or deposit confirmation any more; see PAYMENT_RECORD_ROLES and
-    // DEPOSIT_CONFIRM_ROLES below, both of which deliberately do NOT reuse this constant.
     private static final Set<String> ACCOUNT_ROLES = Set.of("account", "ceo");
     // ยืนยันรับมัดจำ (confirmDepositPaid) is account ONLY —
     // the CEO fallback ACCOUNT_ROLES still grants SET_BILLING (and read access generally) but is
@@ -92,10 +89,13 @@ public class TicketService {
     // recording to the CEO. Every other role (sales/sales_manager/import, including the owning
     // rep) is refused too — recording money received was never a sales-side action.
     private static final Set<String> PAYMENT_RECORD_ROLES = Set.of("account");
-    // Step 1 of the three-party close. Deliberately EXCLUDES ceo, unlike ACCOUNT_ROLES:
-    // the CEO signs the second half (verifyClose), so letting them sign the first half
-    // too would collapse a two-signature gate into one person. Same reasoning as
-    // CommissionService's manager→ceo chain. Do not "fix" this by reusing ACCOUNT_ROLES.
+    // Placing ONE row of account's uploaded Express receipts file on a deal (spec 2026-11-15 §7.8): ACCOUNT ONLY
+    // (review H2/H3 — the CEO, who approves and closes deals, does not also put cash on them; no sales role attaches
+    // money). A separate constant from PAYMENT_RECORD_ROLES because the two may diverge (they hold the same set today).
+    private static final Set<String> EXPRESS_RECEIPT_ROLES = Set.of("account");
+    // Step 1 of the three-party close. Do not "fix" this by reusing ACCOUNT_ROLES. Deliberately EXCLUDES ceo,
+    // unlike ACCOUNT_ROLES: the CEO signs the second half (verifyClose), so letting them sign the first half too
+    // would collapse a two-signature gate into one person.
     private static final Set<String> CLOSE_CONFIRM_ROLES = Set.of("account");
     // Who may read tickets at all. Mirrors the frontend's canViewTickets and the mock's
     // list/get gates — hr/employee have no business reading customer pricing.
@@ -119,12 +119,12 @@ public class TicketService {
     private final ObjectMapper objectMapper;
     private final CustomerRepository customers;
     private final QuotationRenderer quotationRenderer;
-    // Dead-deal cascade only (see markLost/cancel below) — PricingRequestService
-    // injects TicketRepository, not TicketService, so this dependency direction
-    // (TicketService -> PricingRequestService -> TicketRepository) is acyclic.
+    // Dead-deal cascade only (see markLost/cancel below) — PricingRequestService injects TicketRepository, not
+    // TicketService, so this dependency direction (TicketService -> PricingRequestService -> TicketRepository) is
+    // acyclic.
     private final PricingRequestService pricingRequests;
-    // Deal-ENTRY authz only (see DealEntryAccess's own Javadoc) -- create() below is the ONE call
-    // site that uses this; every other SALES_ROLES check in this class is untouched.
+    // Deal-ENTRY authz only (see DealEntryAccess's own Javadoc) -- create() below is the ONE call site that uses
+    // this; every other SALES_ROLES check in this class is untouched.
     private final EmployeeAuthRepository employeeAuth;
     // changeCustomer only. Repositories, not DealQuotationService: that service holds a TicketService
     // (wireTicketService), so injecting it here would be a constructor/setter cycle -- the same
@@ -162,10 +162,40 @@ public class TicketService {
      * handed. Applied after the query, so ordering, paging and counts are untouched.
      */
     private static List<TicketSummaryDto> forRole(List<TicketSummaryDto> rows, String role) {
-        if (!IMPORT_ROLES.contains(role)) {
-            return rows;
+        List<TicketSummaryDto> out = rows;
+        if (IMPORT_ROLES.contains(role)) {
+            out = out.stream().map(TicketSummaryDto::withoutMoney).toList();
         }
-        return rows.stream().map(TicketSummaryDto::withoutMoney).toList();
+        if (!canReadActivities(role)) {
+            out = out.stream().map(TicketSummaryDto::withoutActivity).toList();
+        }
+        return out;
+    }
+
+    /** The activity facts (lastActivityAt, range flags) removed for roles that cannot read a deal's activities. */
+    private static TicketDto withoutUnreadableActivity(TicketDto ticket, String role) {
+        if (canReadActivities(role)) {
+            return ticket;
+        }
+        return new TicketDto(ticket.summary().withoutActivity(), ticket.items(), ticket.events(),
+            ticket.quotation(), ticket.quotations(), ticket.fromPricingChain());
+    }
+
+    /**
+     * For responses built straight from the raw deal (the mutation endpoints), which do not pass through
+     * {@link #projectForRole}: only the activity facts are removed there, nothing else about those responses changes.
+     */
+    public TicketDto withoutUnreadableActivity(TicketDto ticket, UserPrincipal actor) {
+        return withoutUnreadableActivity(ticket, actor.role());
+    }
+
+    /**
+     * Who may read a deal's activities (the same rule as {@link #requireDealOwnership}: owner/keyer, sales_manager,
+     * ceo). A sales list is already own-deals only, so the role alone decides for list rows. Account and import
+     * get no lastActivityAt / range flags: they would leak activity they cannot open.
+     */
+    private static boolean canReadActivities(String role) {
+        return SALES_ROLES.contains(role) || "sales_manager".equals(role) || "ceo".equals(role);
     }
 
     public Page<TicketSummaryDto> listPage(String status, UserPrincipal actor, PageRequest page) {
@@ -177,13 +207,29 @@ public class TicketService {
      *                    {@code status} — used by the commission "Linked Deal" picker.
      */
     public Page<TicketSummaryDto> listPage(String status, String salesStage, UserPrincipal actor, PageRequest page) {
+        return listPage(status, salesStage, null, null, actor, page);
+    }
+
+    /**
+     * @param movementFrom / movementTo optional inclusive Asia/Bangkok day range: both or neither, from <= to
+     *                     (else 400). When given each row carries stageChangedInRange / activityInRange.
+     */
+    public Page<TicketSummaryDto> listPage(String status, String salesStage, LocalDate movementFrom,
+                                           LocalDate movementTo, UserPrincipal actor, PageRequest page) {
         requireRole(actor, VIEWER_ROLES);
+        if ((movementFrom == null) != (movementTo == null)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุ movementFrom และ movementTo ทั้งคู่");
+        }
+        if (movementFrom != null && movementFrom.isAfter(movementTo)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "movementFrom ต้องไม่เกิน movementTo");
+        }
         Long createdByFilter = "sales".equals(actor.role()) ? actor.id() : null;
         // Role-scoped views: import/account only see the slice of the deal
         // pipeline relevant to their own worklist — see TicketRepository.appendRoleScope.
         // ceo/sales_manager/sales are unaffected (the repository ignores any other role).
         List<TicketSummaryDto> rows =
-            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page), actor.role());
+            forRole(tickets.findSummaries(status, salesStage, createdByFilter, actor.role(), page, movementFrom, movementTo),
+                actor.role());
         // Skip the COUNT round-trip when the whole result set fits on page 0.
         int total = (page.page() == 0 && rows.size() < page.size())
             ? rows.size()
@@ -198,9 +244,7 @@ public class TicketService {
         // read (every item's cost fields, the full event feed) is therefore refused to it. This
         // guard is on this ONE read only: requireViewAccess (shared by actions, listDeliveries,
         // comment, ...) is deliberately untouched, and so are import's /import-requests routes.
-        if (IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
+        refuseImportWholeDealRead(actor);
         TicketDto ticket = requireViewAccess(id, actor);
         // Display-only fallback, scoped to THIS single read endpoint on purpose. Every
         // other reader of ticket.items() (actions()'s canRecordDelivery/
@@ -222,20 +266,16 @@ public class TicketService {
 
     public List<PaymentReceiptDto> listPayments(long ticketId, UserPrincipal actor) {
         requireViewAccess(ticketId, actor);
-        // Phase B: the payment ledger is ฝ่ายบัญชี's own document — import has no
-        // business reading it (mirrors salesViewScope.js hiding the "payment" section
-        // from import's view of TicketDetailPage).
+        // Phase B: the payment ledger is ฝ่ายบัญชี's own document — import has no business reading it (mirrors
+        // salesViewScope.js hiding the "payment" section from import's view of TicketDetailPage).
         if (IMPORT_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
         return tickets.findReceiptsByTicket(ticketId);
     }
 
-    /**
-     * The one read-access rule for a single ticket: viewer role required, and sales
-     * reps only see their own tickets. Every endpoint that returns or renders ticket
-     * data must go through this.
-     */
+    /** The one read-access rule for a single ticket: viewer role required, and sales reps only see their own
+     * tickets. Every endpoint that returns or renders ticket data must go through this. */
     private TicketDto requireViewAccess(long ticketId, UserPrincipal actor) {
         requireRole(actor, VIEWER_ROLES);
         // Account does not read a deal through the ticket
@@ -254,13 +294,9 @@ public class TicketService {
         return projectForRole(ticket, actor.role());
     }
 
-    /**
-     * The account role's ROW scope for the finance paths: {@code account} may act on / read a deal
-     * only when it is inside its list scope ({@link TicketRepository#isInAccountScope} -- the SAME
-     * predicate that filters {@code GET /api/tickets} for account). Any other role passes through
-     * untouched. Enforced here, in the shared business methods, so that a caller reaching them by
-     * any path (the finance controller today) cannot skip it.
-     */
+    /** The account role's ROW scope for the finance paths: account may act on / read a deal only when it is inside
+     * its list scope (TicketRepository#isInAccountScope -- the SAME predicate that filters GET /api/tickets for
+     * account). */
     private void requireAccountScope(long ticketId, UserPrincipal actor) {
         if ("account".equals(actor.role()) && !tickets.isInAccountScope(ticketId)) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -285,6 +321,7 @@ public class TicketService {
      * rep may already read their own deal's quotations through {@link #requireViewAccess}.
      */
     private TicketDto projectForRole(TicketDto ticket, String role) {
+        ticket = withoutUnreadableActivity(ticket, role);
         if (!IMPORT_ROLES.contains(role)) {
             return ticket;
         }
@@ -300,11 +337,9 @@ public class TicketService {
         return new TicketDto(ticket.summary().withoutMoney(), items, events, null, List.of());
     }
 
-    /**
-     * A copy of {@code i} with every price/cost-bearing column blanked. {@code weightMultiplier} is
-     * a primitive {@code int} (the commission weighting), so it cannot be null — it is reset to the
-     * neutral column default 1 rather than left carrying the manager-set value.
-     */
+    /** A copy of i with every price/cost-bearing column blanked. weightMultiplier is a primitive int (the
+     * commission weighting), so it cannot be null — it is reset to the neutral column default 1 rather than left
+     * carrying the manager-set value. */
     private static TicketItemDto withoutCosts(TicketItemDto i) {
         return new TicketItemDto(i.id(), i.ticketId(), i.brand(), i.model(), i.color(), i.texture(), i.size(),
             i.factory(), i.qty(), i.qtySqm(),
@@ -326,10 +361,40 @@ public class TicketService {
         // is the ONE gate on this class that widens; every other SALES_ROLES check below is
         // deliberately untouched.
         DealEntryAccess.requireCanEnterDeal(actor, employeeAuth);
-        // V50: every new deal belongs to a โครงการ (one deal = one ticket; a project
-        // can hold many deals over time). Pre-existing project-less tickets stay valid.
+        return createDeal(request, actor);
+    }
+
+    /** Who may run the one-time pipeline import (spec 2026-11-15 §7.9). */
+    private static final Set<String> PIPELINE_IMPORT_ROLES = Set.of("sales_manager", "ceo");
+
+    /**
+     * The pipeline import's way into {@link #create}: the SAME creation path (project required, real channel, valid
+     * priority, owner eligibility, CREATED event, "สร้างดีล" activity, headline party), with one deliberate
+     * difference — the gate is sales_manager / ceo instead of {@link DealEntryAccess}, because the CEO, who may run
+     * the import, is not a deal-entry role. The owner must be named: an imported row always belongs to a rep.
+     * Stated as a sales permission change in the PR body.
+     *
+     * <p><b>For the PR body:</b> through this method the CEO (and a sales_manager) can create deals OWNED BY OTHER
+     * REPS — a capability the CEO does not have by hand. It is still limited to owners who are active and eligible
+     * (the เจ้าของงาน picker's set, re-checked in {@link #createDeal} via {@code isEligibleDealOwner}), and the deal
+     * still records the importer in {@code keyed_by}.
+     */
+    @Transactional
+    public TicketDto createForPipelineImport(CreateTicketRequest request, UserPrincipal actor) {
+        if (!PIPELINE_IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+        if (request.ownerEmployeeId() == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องระบุเจ้าของงานที่นำเข้า");
+        }
+        return createDeal(request, actor);
+    }
+
+    private TicketDto createDeal(CreateTicketRequest request, UserPrincipal actor) {
+        // V50: every new deal belongs to a โครงการ (one deal = one ticket; a project can hold many deals over time).
+        // Pre-existing project-less tickets stay valid.
         if (request.projectId() == null) {
-            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องเลือกโครงการก่อนสร้างดีล");
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องเลือกโครงการก่อนสร้างงาน");
         }
         // A NEW deal must state a real channel -- it decides the deal's
         // route (DealRoute). The split is deliberate: "absent/blank" is refused at the API boundary
@@ -344,16 +409,27 @@ public class TicketService {
                     || EntryChannel.UNSPECIFIED.equals(request.entryChannel()))) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 EntryChannel.UNSPECIFIED.equals(request.entryChannel())
-                    ? "ต้องระบุช่องทางดีลที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างดีล"
+                    ? "ต้องระบุช่องทางรับงานที่แท้จริง (ออกแบบนำ / เจ้าของโครงการ / ผู้ซื้อตรง) ก่อนสร้างงาน"
                     : "ไม่รองรับช่องทางรับงาน '" + request.entryChannel() + "'");
         }
-        // Guard priority the same way as entryChannel: an unvalidated value hits the
-        // chk_ticket_priority CHECK column in the repository and fails closed (500).
-        // Null/blank is fine — the repository defaults it to NORMAL.
+        // Guard priority the same way as entryChannel: an unvalidated value hits the chk_ticket_priority CHECK column
+        // in the repository and fails closed (500). Null/blank is fine — the repository defaults it to NORMAL.
         if (request.priority() != null && !request.priority().isBlank()
                 && !Priority.isValid(request.priority())) {
             throw new ApiException(HttpStatus.BAD_REQUEST,
                 "ไม่รองรับระดับความสำคัญ '" + request.priority() + "'");
+        }
+        // The short create form (owner-approved drawing, 2026-11-16) starts a deal at S1 or S2 — nowhere else: from S3
+        // the deal moves by its documents. A sales API contract change, stated in the PR body.
+        String startStage = request.startStage() == null || request.startStage().isBlank()
+            ? DealStage.LEAD_APPROACH : request.startStage();
+        if (!DealStage.LEAD_APPROACH.equals(startStage) && !DealStage.SPEC_APPROVED.equals(startStage)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "งานใหม่เริ่มได้ที่ S1 หรือ S2 เท่านั้น");
+        }
+        // Mirrors @DecimalMin(exclusive 0) on the request for service-level callers that skip bean validation; without
+        // it a non-positive value would hit chk_ticket_estimated_value and fail closed as a 500.
+        if (request.estimatedValue() != null && request.estimatedValue().signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "มูลค่าโดยประมาณต้องมากกว่า 0");
         }
         long ownerId = request.ownerEmployeeId() == null ? actor.id() : request.ownerEmployeeId();
         if (ownerId != actor.id()) {
@@ -362,47 +438,46 @@ public class TicketService {
             // division members + can_create_quotation holders).
             boolean eligible = tickets.isEligibleDealOwner(ownerId);
             if (!eligible) {
-                throw new ApiException(HttpStatus.BAD_REQUEST, "เจ้าของงานที่เลือกไม่สามารถเป็นเจ้าของดีลได้");
+                throw new ApiException(HttpStatus.BAD_REQUEST, "ผู้ที่เลือกไม่สามารถเป็นเจ้าของงานได้");
             }
         }
         String code = tickets.nextTicketCode();
         long id = ownerId == actor.id()
             ? tickets.create(request, code, actor.id(), actor.name())
             : tickets.create(request, code, ownerId, actor.id(), actor.name());
-        // The readiness gate has TWO halves — next_follow_up_at (collected on the request now) and
-        // "at least one activity since the last stage change". A brand-new deal satisfied neither,
-        // so the rep's first forward move always 400'd and the message was the first they heard of
-        // it. Creating the deal IS the first recorded piece of work on it, so it is logged as one:
-        // OTHER rather than CALL/MEETING because nothing was claimed to have happened yet, only
-        // that the deal now exists. This does not weaken the gate — after the first stage change,
-        // a NEW activity is still required, exactly as before.
-        tickets.insertDealActivity(id, LocalDate.now(), "OTHER", "สร้างดีล", actor.id());
-        // A newly created deal is always the rep's private draft, whether or not
-        // products were attached — import/CEO are notified only once a
-        // PricingRequest is created and submitted against this ticket, never at
-        // deal-creation time.
+        // The readiness gate has TWO halves — next_follow_up_at (collected on the request now) and "at least one
+        // activity since the last stage change". A brand-new deal satisfied neither, so the rep's first forward move
+        // always 400'd and the message was the first they heard of it.
+        tickets.insertDealActivity(id, LocalDate.now(), "OTHER", "สร้างงาน", actor.id());
+        if (DealStage.SPEC_APPROVED.equals(startStage)) {
+            // Starting at S2 is allowed to exactly the people who may move a deal to S2 by hand: the SAME write gate
+            // updateStage runs (requireStageWriteAccess, unchanged). A refusal throws inside this transaction, so the
+            // deal created above rolls back. The readiness gate is deliberately not run: this is where the deal
+            // starts, not a forward move (the "สร้างดีล" activity above would satisfy half of it anyway).
+            TicketSummaryDto created = requireTicket(id).summary();
+            requireStageWriteAccess(created, DealStage.SPEC_APPROVED, actor);
+            tickets.updateSalesStage(id, DealStage.SPEC_APPROVED);
+            tickets.addEvent(id, actor.id(), actor.name(),
+                TicketEventKind.STAGE_CHANGED, created.salesStage(), DealStage.SPEC_APPROVED, "เริ่มที่ S2 · สเปคผ่าน");
+        }
+        // A newly created deal is always the rep's private draft, whether or not products were attached — import/CEO
+        // are notified only once a PricingRequest is created and submitted against this ticket, never at deal-creation
+        // time.
         return requireTicket(id);
     }
 
-    /**
-     * Deprecated: ticket-level price-request submission has been replaced by the
-     * PricingRequest aggregate. Create a pricing request via
-     * {@code POST /api/tickets/{ticketId}/pricing-requests} and submit it via
-     * {@code POST /api/pricing-requests/{id}/submit} instead.
-     */
+    /** Deprecated: ticket-level price-request submission has been replaced by the PricingRequest aggregate. Create
+     * a pricing request via POST /api/tickets/{ticketId/pricing-requests} and submit it via POST
+     * /api/pricing-requests/{id/submit} instead. */
     @Deprecated
     public TicketDto submit(long ticketId, UserPrincipal actor) {
         throw new ApiException(HttpStatus.CONFLICT,
-            "การส่งขอราคาย้ายไปอยู่ที่คำขอราคา (PCR) แล้ว — กรุณาสร้างคำขอราคาจากหน้าดีลแทน");
+            "การส่งขอราคาย้ายไปอยู่ที่คำขอราคา (PCR) แล้ว — กรุณาสร้างคำขอราคาจากหน้ารายละเอียดงานแทน");
     }
 
-    /**
-     * Deprecated: intake pickup for the legacy submit → pickup → propose-price loop that
-     * {@link #submit} permanently severed for new deals (always 409s from {@code draft}).
-     * Reachable only for the handful of pre-redesign tickets stranded at {@code submitted}
-     * status; no {@code @PostMapping} route exposes this anymore. See
-     * {@link th.co.glr.hr.pricingrequest.PricingRequestService} for the current intake flow.
-     */
+    /** Deprecated: intake pickup for the legacy submit → pickup → propose-price loop that #submit permanently
+     * severed for new deals (always 409s from draft). Reachable only for the handful of pre-redesign tickets
+     * stranded at submitted status; no @PostMapping route exposes this anymore. */
     @Deprecated
     @Transactional
     public TicketDto pickup(long ticketId, UserPrincipal actor) {
@@ -416,14 +491,9 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /**
-     * Deprecated: superseded by the PricingRequest → FactoryQuote → PricingDecision chain
-     * ({@link th.co.glr.hr.pricingrequest.PricingRequestService},
-     * {@link th.co.glr.hr.factoryquote.FactoryQuoteService},
-     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService}). Reachable only for
-     * legacy tickets stuck in {@code in_review}/{@code price_proposed}; no controller route
-     * exposes this anymore.
-     */
+    /** Deprecated: superseded by the PricingRequest → FactoryQuote → PricingDecision chain
+     * (th.co.glr.hr.pricingrequest.PricingRequestService, th.co.glr.hr.factoryquote.FactoryQuoteService,
+     * th.co.glr.hr.pricingdecision.PricingDecisionService). */
     @Deprecated
     @Transactional
     public TicketDto proposePrice(long ticketId, ProposePriceRequest request, UserPrincipal actor) {
@@ -436,14 +506,14 @@ public class TicketService {
         String currentStatus = s.status();
         if (!PROPOSE_ALLOWED_STATUSES.contains(currentStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "เสนอราคาไม่ได้เมื่อดีลอยู่ในสถานะ '" + currentStatus + "'");
+                "เสนอราคาไม่ได้เมื่องานอยู่ในสถานะ '" + currentStatus + "'");
         }
         tickets.replaceItems(ticketId, request.items());
         String snapshot = buildItemSnapshot(request.items());
         boolean isRevision = !TicketStatus.IN_REVIEW.equals(currentStatus);
         String eventKind = isRevision ? TicketEventKind.PRICE_REVISED : TicketEventKind.PRICE_PROPOSED;
-        // PROPOSE_ALLOWED_STATUSES is exactly {in_review, price_proposed, approved}; the middle
-        // one is the declared price_proposed -> price_proposed self-edge (a re-proposal).
+        // PROPOSE_ALLOWED_STATUSES is exactly {in_review, price_proposed, approved}; the middle one is the declared
+        // price_proposed -> price_proposed self-edge (a re-proposal).
         requireStatusAdvanced(
             tickets.transitionStatus(ticketId, currentStatus, TicketStatus.PRICE_PROPOSED));
         tickets.addEventWithSnapshot(ticketId, actor.id(), actor.name(),
@@ -467,12 +537,9 @@ public class TicketService {
         }
     }
 
-    /**
-     * Deprecated: CEO price approval now happens on the PricingDecision aggregate — see
-     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService#approve}. Reachable only
-     * for legacy tickets stuck at {@code price_proposed}; no controller route exposes this
-     * anymore.
-     */
+    /** Deprecated: CEO price approval now happens on the PricingDecision aggregate — see
+     * th.co.glr.hr.pricingdecision.PricingDecisionService#approve. Reachable only for legacy tickets stuck at
+     * price_proposed; no controller route exposes this anymore. */
     @Deprecated
     @Transactional
     public TicketDto approve(long ticketId, UserPrincipal actor) {
@@ -490,12 +557,9 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /**
-     * Deprecated: CEO price rejection now happens on the PricingDecision aggregate — see
-     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService#returnToImport}. Reachable
-     * only for legacy tickets stuck at {@code price_proposed}; no controller route exposes
-     * this anymore.
-     */
+    /** Deprecated: CEO price rejection now happens on the PricingDecision aggregate — see
+     * th.co.glr.hr.pricingdecision.PricingDecisionService#returnToImport. Reachable only for legacy tickets stuck
+     * at price_proposed; no controller route exposes this anymore. */
     @Deprecated
     @Transactional
     public TicketDto reject(long ticketId, RejectRequest request, UserPrincipal actor) {
@@ -511,14 +575,9 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /**
-     * Deprecated: ticket-native quotation generation, superseded by
-     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#create} +
-     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#issue} against the
-     * PricingRequest/PricingDecision chain. No controller route exposes this anymore.
-     * Quotation download/read for both legacy and PCR-issued quotations stays available via
-     * {@link #getQuotationXlsx}/{@link #getQuotationPdf} — this deprecation is write-only.
-     */
+    /** Deprecated: ticket-native quotation generation, superseded by
+     * th.co.glr.hr.customerquotation.CustomerQuotationService#create +
+     * th.co.glr.hr.customerquotation.CustomerQuotationService#issue against the PricingRequest/PricingDecision chain. */
     @Deprecated
     @Transactional
     public TicketDto generateQuotation(long ticketId, GenerateQuotationRequest request, UserPrincipal actor) {
@@ -536,10 +595,10 @@ public class TicketService {
         String fromStatus = s.status();
         if (!QUOTATION_ALLOWED_STATUSES.contains(fromStatus)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ออกใบเสนอราคาได้เฉพาะดีลที่อยู่ในสถานะ 'approved' หรือ 'quotation_issued' เท่านั้น (สถานะปัจจุบัน: '" + fromStatus + "')");
+                "ออกใบเสนอราคาได้เฉพาะงานที่อยู่ในสถานะ 'approved' หรือ 'quotation_issued' เท่านั้น (สถานะปัจจุบัน: '" + fromStatus + "')");
         }
         if (!DealOwnership.isOwnerOrKeyer(s, actor.id())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของดีลเท่านั้นที่สามารถออกใบเสนอราคาได้");
+            throw new ApiException(HttpStatus.FORBIDDEN, "เฉพาะเจ้าของงานเท่านั้นที่สามารถออกใบเสนอราคาได้");
         }
         boolean acceptedInChain = full.quotations().stream()
             .anyMatch(q -> recipientType.equals(q.recipientType()) && QuotationStatus.ACCEPTED.equals(q.docStatus()));
@@ -560,18 +619,13 @@ public class TicketService {
             blankToNull(request.leadTime()), blankToNull(request.deliveryTerms()), request.validityDate(),
             request.offerDate(), request.depositPercent(), request.deliveryLeadDays());
 
-        // Freeze this quotation at issue time (V49): item data + customer/project header,
-        // in the same transaction as createQuotation, so a later ticket edit or customer-
-        // record change can never alter an already-issued quotation's downloaded content
-        // (legal-compliance requirement — quotation v1 re-downloaded after a revision must
-        // still show v1's items/prices, not today's).
+        // Freeze this quotation at issue time: item data + customer/project header, in the same transaction as
+        // createQuotation, so a later ticket edit or customer- record change can never alter an already-issued
+        // quotation's downloaded content.
         tickets.insertQuotationItems(created.id(), full.items());
         CustomerDto customer = s.customerId() != null ? customers.findById(s.customerId()).orElse(null) : null;
-        // Freeze what the renderer would have PRINTED at issue time: the header name is
-        // the TICKET's customer display name (toXlsx/toPdf have always rendered
-        // s.customerName()), with the master record's name only as a fallback;
-        // address/taxId/phone come from the master record because that's what the live
-        // render pulls from CustomerDto.
+        // Freeze the displayed customer name from the ticket and contact details from the customer master at issue
+        // time.
         String issuedCustomerName = s.customerName() != null && !s.customerName().isBlank()
             ? s.customerName()
             : (customer != null ? customer.name() : null);
@@ -586,8 +640,8 @@ public class TicketService {
             + (request.amendmentReason() != null && !request.amendmentReason().isBlank()
                 ? " — amendment: " + request.amendmentReason().trim()
                 : "");
-        // QUOTATION_ALLOWED_STATUSES is exactly {approved, quotation_issued}; the latter is the
-        // declared quotation_issued -> quotation_issued self-edge (an amended re-issue).
+        // QUOTATION_ALLOWED_STATUSES is exactly {approved, quotation_issued}; the latter is the declared
+        // quotation_issued -> quotation_issued self-edge (an amended re-issue).
         requireStatusAdvanced(
             tickets.transitionStatus(ticketId, fromStatus, TicketStatus.QUOTATION_ISSUED));
         tickets.addEventWithDocument(ticketId, actor.id(), actor.name(),
@@ -600,13 +654,7 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /**
-     * Deprecated: ticket-native "mark sent" tracking. The redesigned PCR/CustomerQuotation
-     * flow does not track a separate sent step between issue and customer decision (see
-     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#issue} /
-     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#recordOutcome}) — there
-     * is no direct replacement. No controller route exposes this anymore.
-     */
+    /** Deprecated: ticket-native "mark sent" tracking. No controller route exposes this anymore. */
     @Deprecated
     @Transactional
     public TicketDto markQuotationSent(long ticketId, long quotationId, String note, UserPrincipal actor) {
@@ -614,12 +662,9 @@ public class TicketService {
             TicketEventKind.QUOTATION_SENT, note, actor);
     }
 
-    /**
-     * Deprecated: superseded by
-     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#recordOutcome} (outcome
-     * {@code ACCEPTED}), which also correctly transitions the owning PricingRequest. No
-     * controller route exposes this anymore.
-     */
+    /** Deprecated: superseded by th.co.glr.hr.customerquotation.CustomerQuotationService#recordOutcome (outcome
+     * ACCEPTED), which also correctly transitions the owning PricingRequest. No controller route exposes this
+     * anymore. */
     @Deprecated
     @Transactional
     public TicketDto markQuotationAccepted(long ticketId, long quotationId, String note, UserPrincipal actor) {
@@ -627,11 +672,8 @@ public class TicketService {
             TicketEventKind.QUOTATION_ACCEPTED, note, actor);
     }
 
-    /**
-     * Deprecated: superseded by
-     * {@link th.co.glr.hr.customerquotation.CustomerQuotationService#recordOutcome} (outcome
-     * {@code REJECTED}). No controller route exposes this anymore.
-     */
+    /** Deprecated: superseded by th.co.glr.hr.customerquotation.CustomerQuotationService#recordOutcome (outcome
+     * REJECTED). No controller route exposes this anymore. */
     @Deprecated
     @Transactional
     public TicketDto markQuotationRejected(long ticketId, long quotationId, String note, UserPrincipal actor) {
@@ -670,8 +712,8 @@ public class TicketService {
         return false;
     }
 
-    // Renders the quotation from its issue-time snapshot when one exists (V49); falls back
-    // to live ticket data only for pre-V49 quotations that predate the snapshot.
+    // Renders the quotation from its issue-time snapshot when one exists (V49); falls back to live ticket data
+    // only for pre-V49 quotations that predate the snapshot.
     public byte[] getQuotationXlsx(long ticketId, long quotationId, UserPrincipal actor) {
         var ctx = loadQuotationContext(ticketId, quotationId, actor);
         return quotationRenderer.toXlsx(ctx.ticket(), ctx.quotation(), ctx.customer());
@@ -685,8 +727,8 @@ public class TicketService {
     private record QuotationRenderContext(TicketDto ticket, QuotationDto quotation, CustomerDto customer) {}
 
     private QuotationRenderContext loadQuotationContext(long ticketId, long quotationId, UserPrincipal actor) {
-        // H1 lockdown: requireViewAccess refuses account outright, but the finance view links the deal's
-        // accepted quotation here, so account gets a SCOPED path -- the deal must be inside its list scope.
+        // H1 lockdown: requireViewAccess refuses account outright, but the finance view links the deal's accepted
+        // quotation here, so account gets a SCOPED path -- the deal must be inside its list scope.
         TicketDto ticket;
         if ("account".equals(actor.role())) {
             requireRole(actor, VIEWER_ROLES);
@@ -695,9 +737,9 @@ public class TicketService {
         } else {
             ticket = requireViewAccess(ticketId, actor);
         }
-        // Phase B: explicit denial rather than relying on projectForRole's stripped
-        // quotations list to fall through to a "quotation not found" 404 — import
-        // downloading a quotation file is a permission question, not a lookup miss.
+        // Phase B: explicit denial rather than relying on projectForRole's stripped quotations list to fall through to
+        // a "quotation not found" 404 — import downloading a quotation file is a permission question, not a lookup
+        // miss.
         if (IMPORT_ROLES.contains(actor.role())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
         }
@@ -725,8 +767,8 @@ public class TicketService {
             return new QuotationRenderContext(frozenTicket, quotation, frozenCustomer);
         }
 
-        // Legacy fallback: no snapshot rows (quotation issued before V49) — render from
-        // live data exactly as before this change.
+        // Legacy fallback: no snapshot rows (quotation issued before V49) — render from live data exactly as before
+        // this change.
         CustomerDto customer = ticket.summary().customerId() != null
             ? customers.findById(ticket.summary().customerId()).orElse(null)
             : null;
@@ -751,16 +793,14 @@ public class TicketService {
             s.winProbabilityOverride(), s.designerName(), s.ownerName(), s.buyerName(), s.stale(),
             s.commissionRecorded(), s.reopenedAt(), s.reopenCount(), s.quotationOnly(),
             s.paymentDueDate(), s.paymentDueBasis(), s.paymentDueCreditDays(),
-            s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById());
+            s.liveDirectQuotation(), s.quotedRecipients(), s.depositDue(), s.keyedById(),
+            s.stageChangedInRange(), s.activityInRange(), s.lastActivityAt(), s.pauseReturnOn(), s.estimatedValue(),
+            s.expectedQuarter(), s.receiptSource());
     }
 
-    /**
-     * Closing is a three-party sequence, not one person's decision: the goods must
-     * be delivered, the balance paid, the invoice on file, ฝ่ายบัญชี must confirm,
-     * and the CEO must verify. Sales no longer closes deals.
-     *
-     * Throws if the deal is not ready; returns quietly if it is.
-     */
+    /** Closing is a three-party sequence, not one person's decision: the goods must be delivered, the balance paid,
+     * the invoice on file, ฝ่ายบัญชี must confirm, and the CEO must verify. Sales no longer closes deals. Throws
+     * if the deal is not ready; returns quietly if it is. */
     private void requireClosePrerequisites(TicketSummaryDto s) {
         String st = s.status();
         // Legacy path: status=DOCUMENT_ISSUED — only for pre-dual-track tickets
@@ -812,10 +852,8 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /**
-     * Withdraw the confirmation before the CEO acts. The {@code /api/tickets} entrypoint: ceo only since
-     * the H1 lockdown -- account revokes through {@link #financeRevokeCloseConfirmation} instead.
-     */
+    /** Withdraw the confirmation before the CEO acts. The /api/tickets entrypoint: ceo only since the H1 lockdown
+     * -- account revokes through #financeRevokeCloseConfirmation instead. */
     @Transactional
     public TicketDto revokeCloseConfirmation(long ticketId, String note, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -834,7 +872,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         if (s.closeConfirmedAt() == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ยังไม่ได้ยืนยันปิดงาน");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ยังไม่ได้ยืนยันปิดงาน");
         }
         tickets.clearCloseConfirmation(ticketId);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -857,13 +895,9 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    /**
-     * CEO verifies and the deal is closed. Step 2 of 2.
-     *
-     * The CEO verifies, never overrides: every prerequisite is re-checked here, so
-     * a deal that regressed between the two signatures (a refund, a returned
-     * delivery, a deleted invoice) cannot slip through on a stale confirmation.
-     */
+    /** CEO verifies and the deal is closed. Step 2 of 2. The CEO verifies, never overrides: every prerequisite is
+     * re-checked here, so a deal that regressed between the two signatures (a refund, a returned delivery, a
+     * deleted invoice) cannot slip through on a stale confirmation. */
     @Transactional
     public TicketDto verifyClose(long ticketId, UserPrincipal actor) {
         requireRole(actor, CEO_ROLES);
@@ -874,8 +908,8 @@ public class TicketService {
                 "ปิดงานไม่ได้: ต้องให้ฝ่ายบัญชียืนยันก่อน");
         }
         requireClosePrerequisites(s);
-        // requireClosePrerequisites admits exactly {quotation_issued, document_issued}, which are
-        // the only two states TicketStatus.ALLOWED lets reach CLOSED.
+        // requireClosePrerequisites admits exactly {quotation_issued, document_issued}, which are the only two states
+        // TicketStatus.ALLOWED lets reach CLOSED.
         requireStatusAdvanced(tickets.transitionStatus(ticketId, s.status(), TicketStatus.CLOSED));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.CLOSED, s.status(), TicketStatus.CLOSED, "CEO ตรวจสอบและปิดงาน");
@@ -953,17 +987,15 @@ public class TicketService {
      */
     private TicketDto applyCustomerConfirmation(long ticketId, TicketSummaryDto s, String quotationNumber,
                                                 Integer quotationDepositPercent, UserPrincipal actor) {
-        // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming
-        // would reset paymentStatus and deadlock the later transitions.
+        // Never downgrade the payment track: once past CUSTOMER_CONFIRMED, re-confirming would reset paymentStatus and
+        // deadlock the later transitions.
         if (s.paymentStatus() != null && !"CUSTOMER_CONFIRMED".equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ขั้นตอนการรับชำระเงินผ่านสถานะ CUSTOMER_CONFIRMED ไปแล้ว");
         }
-        // Idempotent no-op when already CUSTOMER_CONFIRMED: PaymentTrack has no
-        // CUSTOMER_CONFIRMED -> CUSTOMER_CONFIRMED self-loop (unlike DEPOSIT_NOTICE_ISSUED's one
-        // legal revision loop), so re-confirming must skip the write and the event entirely
-        // rather than attempt an edge the machine does not recognise. This preserves the prior
-        // observable behaviour (a harmless re-click) without adding a new edge to the machine.
+        // Idempotent no-op when already CUSTOMER_CONFIRMED: PaymentTrack has no CUSTOMER_CONFIRMED ->
+        // CUSTOMER_CONFIRMED self-loop (unlike DEPOSIT_NOTICE_ISSUED's one legal revision loop), so re-confirming must
+        // skip the write and the event entirely rather than attempt an edge the machine does not recognise.
         boolean firstConfirmation = !"CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         if (firstConfirmation) {
             int rows = tickets.advancePaymentStatus(
@@ -1025,12 +1057,7 @@ public class TicketService {
         }
     }
 
-    /**
-     * Turns a lost payment-track compare-and-set race into a 409. {@code advancePaymentStatus}'s
-     * 0 rowcount means a concurrent writer moved {@code payment_status} out from under this
-     * request between the read and the write — per that method's own Javadoc, the correct
-     * response is a conflict, never a re-SELECT to build a nicer message.
-     */
+    /** Turns a lost payment-track compare-and-set race into a 409. */
     private void requirePaymentAdvanced(int rows) {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT,
@@ -1038,29 +1065,25 @@ public class TicketService {
         }
     }
 
-    /**
-     * Turns a lost ticket-status compare-and-set race into a 409, mirroring
-     * {@link #requirePaymentAdvanced}. {@code transitionStatus}'s 0 rowcount means a concurrent
-     * writer moved {@code sales.ticket.status} out from under this request between the read that
-     * chose {@code expected} and the write — per that method's Javadoc the correct response is a
-     * conflict, never a re-SELECT to build a nicer message. (An UNDECLARED edge is a different
-     * thing entirely and throws {@link IllegalStateException} inside the repository before any
-     * SQL runs; it never reaches here.)
-     */
+    /** Turns a lost ticket-status compare-and-set race into a 409, mirroring #requirePaymentAdvanced. */
     private void requireStatusAdvanced(int rows) {
         if (rows == 0) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "สถานะดีลถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
+                "สถานะงานถูกเปลี่ยนโดยผู้ใช้อื่น กรุณาโหลดข้อมูลใหม่แล้วลองอีกครั้ง");
         }
     }
 
-    // NOTE: the former issueDepositNotice endpoint (advance payment track with no
-    // document) was removed — issuing the real deposit-notice document
-    // (DepositNoticeService.issue) is now the single action that sets
+    // NOTE: the former issueDepositNotice endpoint (advance payment track with no document) was removed — issuing
+    // the real deposit-notice document (DepositNoticeService.issue) is now the single action that sets
     // paymentStatus=DEPOSIT_NOTICE_ISSUED.
 
     @Transactional
     public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor) {
+        return confirmDepositPaid(ticketId, actor, false);
+    }
+
+    @Transactional
+    public TicketDto confirmDepositPaid(long ticketId, UserPrincipal actor, boolean confirmPossibleDuplicate) {
         // Account only — see DEPOSIT_CONFIRM_ROLES's own Javadoc for why this is not
         // ACCOUNT_ROLES (which would still let the CEO through).
         requireRole(actor, DEPOSIT_CONFIRM_ROLES);
@@ -1085,7 +1108,7 @@ public class TicketService {
         }
         RecordPaymentRequest request = new RecordPaymentRequest(
             "DEPOSIT", amount, null, "ยืนยันรับมัดจำ", notice != null ? notice.id() : null, null, false);
-        return recordPaymentInternal(ticketId, request, actor);
+        return recordPaymentInternal(ticketId, request, actor, confirmPossibleDuplicate);
     }
 
     /**
@@ -1157,23 +1180,12 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         requireTicket(ticketId);
         throw new ApiException(HttpStatus.CONFLICT,
-            "ออกคำขอนำเข้าทั้งดีลไม่ได้แล้ว — ให้ฝ่ายขายสร้างและออกเลขใบขอซื้อรายโรงงานแทน");
+            "ออกคำขอนำเข้าทั้งงานไม่ได้แล้ว — ให้ฝ่ายขายสร้างและออกเลขใบขอซื้อรายโรงงานแทน");
     }
 
-    /**
-     * The DEAL-level side effects of a per-factory ใบขอซื้อ's FIRST issue for this deal (V184):
-     * {@code fulfillment_status -> IR_ISSUED} (only while still null — a no-op on every later
-     * factory's own issue, so {@link ImportRequestService#issue} may call this unconditionally after
-     * every successful per-factory issue), the {@code IR_ISSUED} event naming the row that produced
-     * it, and {@code autoAdvanceStage(PROCUREMENT)} — the same three effects {@link
-     * #issueImportRequest} already writes for the legacy one-shot action, so a deal cannot tell which
-     * path raised its first import request.
-     *
-     * <p><strong>Not a controller entry point.</strong> Same contract as {@link
-     * #applyPurchaseOrderRollup}/{@link #applyImportRequestRollup}: no {@link #requireRole} here —
-     * {@code ImportRequestService} has already authorised the caller against the specific ใบขอซื้อ row
-     * before this fires, and this method is reachable only from that service.
-     */
+    /** The DEAL-level side effects of a per-factory ใบขอซื้อ's FIRST issue for this deal: fulfillment_status ->
+     * IR_ISSUED, the IR_ISSUED event naming the row that produced it, and autoAdvanceStage. Not a controller entry
+     * point. */
     @Transactional
     public void recordFirstImportRequestIssued(long ticketId, long importRequestId, UserPrincipal actor) {
         // LOCK before the fulfilment check, not after — two factories on
@@ -1259,18 +1271,12 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
-        // Deliberately NOT guarded by hasLivePurchaseOrders (unlike markShipping/markGoodsReceived
-        // below): IR_SENT is a pre-shipment milestone the POs say nothing about yet —
-        // TicketRepository#deriveImportStatus returns null while every live PO is still OPEN — so
-        // a ticket-level IR_SENT can never contradict the PO rollup.
-        //
-        // IR-tracked refusal (V184): follows hasLivePurchaseOrders's own refuse-don't-delegate
-        // reasoning below — a ticket-level click cannot say which per-factory ใบขอซื้อ this concerns,
-        // and the per-factory rollup (applyImportRequestRollup) is the source of truth for this axis
-        // once any factory IR has been issued through the stored aggregate.
+        // Deliberately NOT guarded by hasLivePurchaseOrders: IR_SENT is a pre-shipment milestone the POs say nothing
+        // about yet — TicketRepository#deriveImportStatus returns null while every live PO is still OPEN — so a
+        // ticket-level IR_SENT can never contradict the PO rollup.
         if (tickets.hasLiveImportRequests(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
         }
         if (!FulfilmentStatus.IR_ISSUED.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องออกใบขอซื้อ (IR) ก่อนจึงจะทำเครื่องหมายว่าส่ง IR แล้วได้");
@@ -1286,22 +1292,18 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
-        // Refuse, don't delegate. A ticket-level "start shipping" click cannot say WHICH factory
-        // shipped — container ref, ETD/ETA are per-factory PO detail that only the PO aggregate
-        // (ProcurementService) legitimately owns, so "delegating" this click would mean fabricating
-        // that detail. On a PO-tracked deal the PO rollup (applyPurchaseOrderRollup below) is the
-        // source of truth for this axis; refusing is the only option that invents no data.
-        // Unconditional on PO presence — not merely "when they disagree" — because a ticket-level
-        // write that happens to already agree with the PO rollup would still have bypassed it.
+        // Refuse, don't delegate. A ticket-level "start shipping" click cannot say WHICH factory shipped — container
+        // ref, ETD/ETA are per-factory PO detail that only the PO aggregate (ProcurementService) legitimately owns, so
+        // "delegating" this click would mean fabricating that detail.
         if (tickets.hasLivePurchaseOrders(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกการขนส่งที่ใบสั่งซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกการขนส่งที่ใบสั่งซื้อของแต่ละโรงงาน");
         }
-        // IR-tracked refusal (V184) — same reasoning as the PO guard immediately above, for the
-        // per-factory ใบขอซื้อ aggregate instead of the (dormant) PO one.
+        // IR-tracked refusal (V184) — same reasoning as the PO guard immediately above, for the per-factory ใบขอซื้อ
+        // aggregate instead of the (dormant) PO one.
         if (tickets.hasLiveImportRequests(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
         }
         if (!FulfilmentStatus.IR_SENT.equals(s.fulfillmentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT, "ต้องส่งใบขอนำเข้า (IR) ก่อนจึงจะทำเครื่องหมายว่าเริ่มจัดส่งได้");
@@ -1315,32 +1317,28 @@ public class TicketService {
         requireRole(actor, FULFILMENT_ROLES);
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
-        // Same refuse-not-delegate reasoning as markShipping above: a ticket-level "goods
-        // received" click cannot say which factory's shipment arrived, and on a PO-tracked deal
-        // the PO rollup is the source of truth for this axis, not this button.
+        // Same refuse-not-delegate reasoning as markShipping above: a ticket-level "goods received" click cannot say
+        // which factory's shipment arrived, and on a PO-tracked deal the PO rollup is the source of truth for this
+        // axis, not this button.
         if (tickets.hasLivePurchaseOrders(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกรับสินค้าที่ใบสั่งซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบสั่งซื้อโรงงาน — ต้องบันทึกรับสินค้าที่ใบสั่งซื้อของแต่ละโรงงาน");
         }
         // IR-tracked refusal (V184) — same reasoning, for the per-factory ใบขอซื้อ aggregate.
         if (tickets.hasLiveImportRequests(ticketId)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
+                "งานนี้ติดตามการนำเข้าด้วยใบขอซื้อรายโรงงาน — ต้องบันทึกความคืบหน้าที่ใบขอซื้อของแต่ละโรงงาน");
         }
         if (!FulfilmentStatus.SHIPPING.equals(s.fulfillmentStatus())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้");
+            throw new ApiException(HttpStatus.CONFLICT, "งานต้องอยู่ในขั้นตอนจัดส่งก่อนจึงจะทำเครื่องหมายว่าได้รับสินค้าได้");
         }
         applyGoodsReceived(s, actor);
         return requireTicket(ticketId);
     }
 
-    /**
-     * The GOODS_RECEIVED side-effects, factored out of {@link #markGoodsReceived} so that method
-     * and {@link #applyPurchaseOrderRollup} (the PO-tracked path, called from {@code
-     * ProcurementService}) share exactly one implementation and can never drift apart on what
-     * "goods received" means. Behaviour is byte-for-byte what {@code markGoodsReceived} always did
-     * after its status guard — only the guard itself stayed behind in the caller.
-     */
+    /** The GOODS_RECEIVED side-effects, factored out of #markGoodsReceived so that method and
+     * #applyPurchaseOrderRollup (the PO-tracked path, called from ProcurementService) share exactly one
+     * implementation and can never drift apart on what "goods received" means. */
     private void applyGoodsReceived(TicketSummaryDto s, UserPrincipal actor) {
         tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.GOODS_RECEIVED);
         // Also advance payment track to AWAITING_FINAL_PAYMENT if deposit was paid
@@ -1353,36 +1351,22 @@ public class TicketService {
         }
         tickets.addEvent(s.id(), actor.id(), actor.name(),
             TicketEventKind.GOODS_RECEIVED, s.status(), s.status(), null);
-        // Goods are at the warehouse (S17) — advance to DELIVERY_SCHEDULING (S18)
-        // so the "schedule delivery / collect balance" step is reached before
-        // DELIVERED, instead of the pipeline jumping PROCUREMENT → DELIVERED.
+        // Goods are at the warehouse (S17) — advance to DELIVERY_SCHEDULING (S18) so the "schedule delivery / collect
+        // balance" step is reached before DELIVERED, instead of the pipeline jumping PROCUREMENT → DELIVERED.
         autoAdvanceStage(s, DealStage.DELIVERY_SCHEDULING, actor);
     }
 
-    /**
-     * The SHIPPING write + event, factored out of {@link #markShipping} for the same reason as
-     * {@link #applyGoodsReceived} just above.
-     */
+    /** The SHIPPING write + event, factored out of #markShipping for the same reason as #applyGoodsReceived just
+     * above. */
     private void applyShipping(TicketSummaryDto s, UserPrincipal actor) {
         tickets.updateFulfillmentStatus(s.id(), FulfilmentStatus.SHIPPING);
         tickets.addEvent(s.id(), actor.id(), actor.name(),
             TicketEventKind.SHIPPING, s.status(), s.status(), null);
     }
 
-    /**
-     * Rolls this deal's live factory-PO statuses up into {@code fulfillment_status}. Called by
-     * {@code ProcurementService} at the end of every PO mutation ({@code recordShippingDetail},
-     * {@code recordGoodsReceived}, {@code cancel}) so a PO-tracked deal's ticket-level flag tracks
-     * the PO aggregate automatically — the ticket-level setters above refuse for exactly this
-     * class of deal, so nothing else advances this axis for it.
-     *
-     * <p><strong>Not a controller entry point.</strong> No {@link #requireRole} call here —
-     * authorisation already happened inside {@code ProcurementService} ({@code RAW_PO_ROLES =
-     * {import, ceo}}), and this method is reachable only from that service, never from any
-     * controller. A future reader adding a controller endpoint onto this method directly must add
-     * its own authorisation check first — do not mistake the absence of one here for "no check
-     * needed".
-     */
+    /** Rolls this deal's live factory-PO statuses up into fulfillment_status. No #requireRole call here —
+     * authorisation already happened inside ProcurementService (RAW_PO_ROLES = {import, ceo}), and this method is
+     * reachable only from that service, never from any controller. */
     @Transactional
     public void applyPurchaseOrderRollup(long ticketId, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
@@ -1390,16 +1374,15 @@ public class TicketService {
         if (target == null) {
             return;
         }
-        // Delivery-axis firewall: once the ticket has left the import axis (a delivery has
-        // started, or the deal was always a stock deal) a late PO mutation must never write here
-        // again — this is what protects the FULLY_DELIVERED close gate (deliveryGateComplete
-        // above) from being clobbered back down to GOODS_RECEIVED by a straggling PO.
+        // Delivery-axis firewall: once the ticket has left the import axis a late PO mutation must never write here
+        // again — this is what protects the FULLY_DELIVERED close gate from being clobbered back down to
+        // GOODS_RECEIVED by a straggling PO.
         if (!FulfilmentStatus.isImportAxis(s.fulfillmentStatus())) {
             return;
         }
-        // Monotonic: only ever advance, never downgrade. importRank is -1 for anything not on the
-        // import axis, but that case is already excluded by the firewall above, so both ranks here
-        // are real positions on IMPORT_SEQUENCE.
+        // Monotonic: only ever advance, never downgrade. importRank is -1 for anything not on the import axis, but
+        // that case is already excluded by the firewall above, so both ranks here are real positions on
+        // IMPORT_SEQUENCE.
         if (FulfilmentStatus.importRank(target) <= FulfilmentStatus.importRank(s.fulfillmentStatus())) {
             return;
         }
@@ -1535,7 +1518,7 @@ public class TicketService {
                 "เลือกที่มาสินค้าได้หลังจากยืนยันคำสั่งซื้อของลูกค้าแล้วเท่านั้น (ตั้งแต่ขั้นตอน ORDER_RECEIVED)");
         }
         if (s.fulfillmentStatus() != null) {
-            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้");
         }
         Map<Long, Boolean> wanted = new LinkedHashMap<>();
         for (ProcurementSourceRequest.Line line : req.lines()) {
@@ -1549,12 +1532,12 @@ public class TicketService {
         }
         // Cheap pre-check so a second decision never writes; the latch below stays as the race guard.
         if (tickets.findProcurementSourceDecidedAt(ticketId).isPresent()) {
-            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้");
         }
         if (!tickets.isLegacyStockSourceDeal(ticketId)) {
             boolean changes = ticket.items().stream().anyMatch(i -> wanted.get(i.id()) != isFromStock(i));
             if (changes) {
-                throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
+                throw new ApiException(HttpStatus.CONFLICT, "งานนี้ใช้ที่มาสินค้าตามใบเสนอราคา แก้ไขไม่ได้");
             }
         } else {
             List<StockReservationRequest.Line> lines = ticket.items().stream()
@@ -1570,7 +1553,7 @@ public class TicketService {
             }
         }
         if (!tickets.markProcurementSourceDecided(ticketId, actor.id())) {
-            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของดีลนี้แล้ว แก้ไขไม่ได้");
+            throw new ApiException(HttpStatus.CONFLICT, "เลือกที่มาสินค้าของงานนี้แล้ว แก้ไขไม่ได้");
         }
         long stock = wanted.values().stream().filter(Boolean::booleanValue).count();
         tickets.addEvent(ticketId, actor.id(), actor.name(), TicketEventKind.PROCUREMENT_SOURCE_DECIDED,
@@ -1683,9 +1666,9 @@ public class TicketService {
             .map(item -> nullToZero(item.qty()))
             .reduce(BigDecimal.ZERO, BigDecimal::add);
         String customer = blankToNull(s.customerName()) == null ? "ไม่ระบุลูกค้า" : s.customerName().trim();
-        // "no import journey" is asserted only when the branch above actually set FROM_STOCK.
-        // allCovered alone is not enough — a deal already off the import axis skips that write,
-        // and autoAdvanceStage can still no-op on lifecycle/stage, so the stage is not claimed.
+        // "no import journey" is asserted only when the branch above actually set FROM_STOCK. allCovered alone is not
+        // enough — a deal already off the import axis skips that write, and autoAdvanceStage can still no-op on
+        // lifecycle/stage, so the stage is not claimed.
         String coverage = leavesTheImportAxis
             ? " (ครบทั้งดีล — ดีลนี้จะไม่ผ่านขั้นตอนนำเข้า)"
             : "";
@@ -1764,9 +1747,8 @@ public class TicketService {
     @Transactional
     public TicketDto recordPartialDelivery(long ticketId, RecordDeliveryRequest request, UserPrincipal actor) {
         TicketDto ticket = requireTicket(ticketId);
-        // Ownership-aware, so the ticket must be loaded BEFORE the gate — unlike a plain role check.
-        // See canWriteDelivery: stages 13-14 are Sales's, and the owning rep is identified by the
-        // deal's own createdById.
+        // Ownership-aware, so the ticket must be loaded BEFORE the gate — unlike a plain role check. See
+        // canWriteDelivery: stages 13-14 are Sales's, and the owning rep is identified by the deal's own createdById.
         requireDeliveryAccess(ticket.summary(), actor);
         return recordDeliveryInternal(ticket, request, actor, false);
     }
@@ -1858,9 +1840,8 @@ public class TicketService {
                 completing ? "ส่งมอบครบจากปุ่ม completeDelivery" : message,
                 RelatedDocumentType.DELIVERY_RECORD, deliveryId);
             autoAdvanceStage(updatedSummary, DealStage.DELIVERED, actor);
-            // Second CLOSED_PAID gate: a deal paid in full before delivery closes
-            // exactly when delivery completes (reload so fulfilment reflects the
-            // just-written FULLY_DELIVERED).
+            // Second CLOSED_PAID gate: a deal paid in full before delivery closes exactly when delivery completes (reload
+            // so fulfilment reflects the just-written FULLY_DELIVERED).
             TicketSummaryDto afterDelivery = requireTicket(s.id()).summary();
             maybeAdvanceClosedPaid(afterDelivery, "FULLY_PAID".equals(afterDelivery.paymentStatus()), actor);
             // Hand-off: account collects any balance, then confirms the deal is close-ready.
@@ -1882,6 +1863,11 @@ public class TicketService {
 
     @Transactional
     public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor) {
+        return confirmFinalPayment(ticketId, actor, false);
+    }
+
+    @Transactional
+    public TicketDto confirmFinalPayment(long ticketId, UserPrincipal actor, boolean confirmPossibleDuplicate) {
         // Account only — see PAYMENT_RECORD_ROLES's own Javadoc. ACCOUNT_ROLES would let the CEO
         // through.
         requireRole(actor, PAYMENT_RECORD_ROLES);
@@ -1891,14 +1877,14 @@ public class TicketService {
         requireActive(s);
         if (!canConfirmFinalPaymentNow(s)) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรือดีลนี้ได้รับการยกเว้นมัดจำ) และดีลต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
+                "ต้องรับชำระมัดจำแล้วหรือรอชำระเงินงวดสุดท้าย (หรืองานนี้ได้รับการยกเว้นมัดจำ) และงานต้องถึงขั้นส่งมอบ (รอสินค้า/นำเข้าเสร็จสิ้น) ก่อนจึงจะยืนยันรับชำระเงินครบถ้วนได้");
         }
         BigDecimal outstanding = payableAmount(ticket).subtract(nullToZero(tickets.sumPaid(ticketId)));
         if (outstanding.signum() <= 0) {
             if (!"FULLY_PAID".equals(s.paymentStatus())) {
-                // Multi-hop walk: DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID (REQUIRED)
-                // or CUSTOMER_CONFIRMED -> AWAITING_FINAL_PAYMENT -> FULLY_PAID (bypass) — both
-                // admitted by canConfirmFinalPaymentNow below, both walked in one call.
+                // Multi-hop walk: DEPOSIT_PAID -> AWAITING_FINAL_PAYMENT -> FULLY_PAID (REQUIRED) or CUSTOMER_CONFIRMED ->
+                // AWAITING_FINAL_PAYMENT -> FULLY_PAID (bypass) — both admitted by canConfirmFinalPaymentNow below, both
+                // walked in one call.
                 int rows = tickets.advancePaymentStatus(
                     ticketId, s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
                 requirePaymentAdvanced(rows);
@@ -1911,16 +1897,98 @@ public class TicketService {
         }
         RecordPaymentRequest request = new RecordPaymentRequest(
             "BALANCE", outstanding, null, "ยืนยันชำระส่วนที่เหลือ", null, null, false);
-        return recordPaymentInternal(ticketId, request, actor);
+        return recordPaymentInternal(ticketId, request, actor, confirmPossibleDuplicate);
     }
 
     @Transactional
     public TicketDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
+        return recordPayment(ticketId, request, actor, false);
+    }
+
+    /**
+     * {@code confirmPossibleDuplicate}: account has seen the "อาจซ้ำกับ RE-… ที่อัปโหลดแล้ว" warning (409
+     * POSSIBLE_DUPLICATE, review H1) and says this is a different payment.
+     */
+    @Transactional
+    public TicketDto recordPayment(long ticketId, RecordPaymentRequest request, UserPrincipal actor,
+                                   boolean confirmPossibleDuplicate) {
         // Account only — see PAYMENT_RECORD_ROLES's own Javadoc. ACCOUNT_ROLES would let the CEO
         // through.
         requireRole(actor, PAYMENT_RECORD_ROLES);
         requireAccountScope(ticketId, actor);
-        return recordPaymentInternal(ticketId, request, actor);
+        return recordPaymentInternal(ticketId, request, actor, confirmPossibleDuplicate);
+    }
+
+    /**
+     * Records one Express receipt row on a deal (spec 2026-11-15 §7.8, plan task 3.3) and returns the new receipt id.
+     * The row's amount, date and Express document number come from account's uploaded file, never from the caller's
+     * typing. Differences from {@link #recordPayment}, each deliberate:
+     * <ul>
+     *   <li>{@code source = 'EXPRESS'}, {@code receipt_ref} = the Express document number (V213's
+     *       ux_payment_receipt_express_ref makes a second copy impossible), {@code customer_name} as printed;</li>
+     *   <li>kind is decided here, not chosen: DEPOSIT while a REQUIRED-deposit deal's deposit is not yet settled,
+     *       else BALANCE (plan decision 4); never ADJUSTMENT;</li>
+     *   <li>an overpayment is refused (409) instead of offered with a reason, and so is a deal that is not ACTIVE (409):
+     *       the caller leaves the row unmatched for a person to look at;</li>
+     *   <li>reconciliation may advance the deposit (DEPOSIT_PAID / AWAITING_FINAL_PAYMENT, so DEPOSIT_RECEIVED), but it
+     *       NEVER walks payment_status to FULLY_PAID, so CLOSED_PAID can never be reached by an upload (spec §11, "no
+     *       deal closes without a human step"). Account's existing {@link #confirmFinalPayment} is still the step that
+     *       does both, and finds nothing outstanding.</li>
+     * </ul>
+     * Who: {@link #EXPRESS_RECEIPT_ROLES} (account). A refusal is an {@link ExpressReceiptRefusal} carrying its reason
+     * as a code (review M2): DEAL_NOT_ACTIVE, OVERPAYMENT, DUPLICATE (the number landed meanwhile).
+     */
+    @Transactional
+    public long recordExpressReceipt(long ticketId, BigDecimal amount, Instant receivedAt, String expressDocNo,
+                                     String customerName, UserPrincipal actor) {
+        requireRole(actor, EXPRESS_RECEIPT_ROLES);
+        if (amount == null || amount.signum() <= 0) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ยอดรับชำระต้องมากกว่า 0");
+        }
+        String ref = blankToNull(expressDocNo);
+        if (ref == null) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "ต้องมีเลขที่เอกสาร Express");
+        }
+        tickets.lockTicketForUpdate(ticketId);
+        TicketDto ticket = requireTicket(ticketId);
+        TicketSummaryDto s = ticket.summary();
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.DEAL_NOT_ACTIVE,
+                "งานไม่ได้อยู่ในสถานะ ACTIVE จึงบันทึกรับเงินไม่ได้");
+        }
+        BigDecimal payable = payableAmount(ticket);
+        BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
+        if (paid.add(amount).compareTo(payable) > 0) {
+            throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.OVERPAYMENT,
+                "ยอดนี้เกินยอดที่งานต้องชำระ ให้ฝ่ายบัญชีตรวจสอบ");
+        }
+        boolean depositWasSettled = depositSettled(s);
+        String kind = expressReceiptKind(ticketId, s, depositWasSettled);
+        long receiptId;
+        try {
+            receiptId = tickets.insertExpressReceipt(ticketId, kind, amount, actor.id(), receivedAt, ref,
+                blankToNull(customerName));
+        } catch (DataIntegrityViolationException e) {
+            throw new ExpressReceiptRefusal(ExpressReceiptRefusal.Reason.DUPLICATE, "เลขที่เอกสาร Express นี้ถูกบันทึกแล้ว");
+        }
+        BigDecimal newPaid = paid.add(amount);
+        tickets.addEventWithDocument(ticketId, actor.id(), actor.name(), TicketEventKind.PAYMENT_RECORDED,
+            s.status(), s.status(),
+            "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable + " — Express " + ref,
+            RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
+        tickets.applyReceiptToExpectedPayments(ticketId, kind, amount, bangkokDate(receivedAt), receiptId);
+        reconcilePaymentStatus(ticketId, actor, false);
+        boolean settledNow = depositSettled(requireTicket(ticketId).summary());
+        if (settledNow) {
+            routeAllStockDealToDelivery(ticketId, actor);
+        }
+        if (settledNow && !depositWasSettled) {
+            notifyRepOfDepositConfirmed(requireTicket(ticketId).summary(), amount);
+        } else if (depositWasSettled) {
+            notifyRepOfPaymentReceived(requireTicket(ticketId).summary(), amount,
+                payable.subtract(nullToZero(tickets.sumPaid(ticketId))), actor);
+        }
+        return receiptId;
     }
 
     /** The {@code /api/tickets} entrypoint: ceo only since the H1 lockdown (billing is out of scope for the finance page). */
@@ -1940,7 +2008,8 @@ public class TicketService {
         return requireTicket(ticketId);
     }
 
-    private TicketDto recordPaymentInternal(long ticketId, RecordPaymentRequest request, UserPrincipal actor) {
+    private TicketDto recordPaymentInternal(long ticketId, RecordPaymentRequest request, UserPrincipal actor,
+                                            boolean confirmPossibleDuplicate) {
         // Account only, re-checked here even though
         // every caller (recordPayment, confirmFinalPayment, confirmDepositPaid) already checks its
         // own role — see PAYMENT_RECORD_ROLES's own Javadoc.
@@ -1960,6 +2029,16 @@ public class TicketService {
         BigDecimal amount = request.amount();
         if (amount == null || amount.signum() <= 0) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ยอดรับชำระต้องมากกว่า 0");
+        }
+        if (!"ADJUSTMENT".equals(kind) && !confirmPossibleDuplicate) {
+            // Review H1, reverse order: the same payment may already be on the deal from an Express upload.
+            String twin = tickets.findExpressTwin(ticketId, amount, bangkokDate(request.receivedAt()),
+                th.co.glr.hr.salesboard.receipts.ReceiptImportRepository.TWIN_DAYS).orElse(null);
+            if (twin != null) {
+                throw new ApiException(HttpStatus.CONFLICT,
+                    "อาจซ้ำกับ " + twin + " ที่อัปโหลดแล้ว — ยืนยันอีกครั้งถ้าเป็นเงินคนละรายการ",
+                    Map.of("code", "POSSIBLE_DUPLICATE", "expressDocNo", twin));
+            }
         }
         BigDecimal payable = payableAmount(ticket);
         BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
@@ -1996,7 +2075,8 @@ public class TicketService {
             "kind=" + kind + ", amount=" + amount + ", paid=" + newPaid + ", payable=" + payable
                 + (note != null ? " — " + note : ""),
             RelatedDocumentType.PAYMENT_RECEIPT, receiptId);
-        reconcilePaymentStatus(ticketId, actor);
+        tickets.applyReceiptToExpectedPayments(ticketId, kind, amount, bangkokDate(request.receivedAt()), receiptId);
+        reconcilePaymentStatus(ticketId, actor, true);
         // Deposit settled (a notice alone is not money): an all-stock deal is ready to deliver.
         boolean settledNow = depositSettled(requireTicket(ticketId).summary());
         if (settledNow) {
@@ -2054,23 +2134,23 @@ public class TicketService {
             "/tickets/" + s.id());
     }
 
-    private void reconcilePaymentStatus(long ticketId, UserPrincipal actor) {
+    /**
+     * {@code allowFullyPaid = false} (an Express upload, {@link #recordExpressReceipt}) skips the FULLY_PAID walk — and
+     * with it {@link #maybeAdvanceClosedPaid} — leaving only the deposit advance below.
+     */
+    private void reconcilePaymentStatus(long ticketId, UserPrincipal actor, boolean allowFullyPaid) {
         TicketDto ticket = requireTicket(ticketId);
         TicketSummaryDto s = ticket.summary();
         BigDecimal payable = payableAmount(ticket);
         BigDecimal paid = nullToZero(tickets.sumPaid(ticketId));
-        if (payable.signum() > 0 && paid.compareTo(payable) >= 0) {
-            // Rule 4/5 tightening: null may only advance to CUSTOMER_CONFIRMED. A payment
-            // recorded (by account) before the customer was ever confirmed must not silently
-            // promote payment_status straight to FULLY_PAID — it stays null until confirmCustomer
-            // eventually runs. Deliberate behaviour change; see the branch report.
+        if (allowFullyPaid && payable.signum() > 0 && paid.compareTo(payable) >= 0) {
+            // Rule 4/5 tightening: null may only advance to CUSTOMER_CONFIRMED. A payment recorded (by account) before the
+            // customer was ever confirmed must not silently promote payment_status straight to FULLY_PAID — it stays null
+            // until confirmCustomer eventually runs.
             if (s.paymentStatus() != null && !"FULLY_PAID".equals(s.paymentStatus())) {
-                // The walk PERSISTS every hop, so a REQUIRED deal jumping from DEPOSIT_PAID goes
-                // through AWAITING_FINAL_PAYMENT on the way. The column moves on immediately, so
-                // without an event nothing durable records that the state was ever reached —
-                // emit one per intermediate hop so the deal's payment history shows the passage
-                // rather than appearing to leap. The final hop keeps its own FULLY_PAID event
-                // below, so intermediates are every hop except the last.
+                // The walk PERSISTS every hop, so a REQUIRED deal jumping from DEPOSIT_PAID goes through
+                // AWAITING_FINAL_PAYMENT on the way. The final hop keeps its own FULLY_PAID event below, so intermediates are
+                // every hop except the last.
                 List<String> hops = PaymentTrack.stepsBetween(
                     s.depositPolicy(), s.paymentStatus(), PaymentTrack.FULLY_PAID);
                 int rows = tickets.advancePaymentStatus(
@@ -2091,54 +2171,30 @@ public class TicketService {
         if (paid.signum() <= 0 || "FULLY_PAID".equals(s.paymentStatus())) {
             return;
         }
-        // Rule 5: null is no longer a valid starting point for anything but CUSTOMER_CONFIRMED.
-        // A bare drop of the old "s.paymentStatus() == null ||" leading clause would NOT be
-        // enough on its own: the bypass-policy clause below is unconditional on paymentStatus, so
-        // it would silently re-admit a null paymentStatus for any bypass-policy deal (an account
-        // payment recorded before confirmCustomer ever ran) straight into an illegal
-        // null -> AWAITING_FINAL_PAYMENT call below. Guarded explicitly instead.
+        // Rule 5: null is no longer a valid starting point for anything but CUSTOMER_CONFIRMED. Guarded explicitly
+        // instead.
         boolean eligibleForDepositAdvance =
             s.paymentStatus() != null
                 && ("CUSTOMER_CONFIRMED".equals(s.paymentStatus())
                     || "DEPOSIT_NOTICE_ISSUED".equals(s.paymentStatus())
                     || DepositPolicy.bypassesDepositNotice(s.depositPolicy()));
-        // The idempotency guard MUST compare against the policy-resolved target, not the
-        // DEPOSIT_PAID literal. On a bypass policy the target is AWAITING_FINAL_PAYMENT, so a
-        // literal comparison never matches and a SECOND partial payment re-enters this block,
-        // asking PaymentTrack for an AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT self-loop
-        // it correctly refuses -> IllegalStateException -> 500, and because recordPayment is
-        // @Transactional the receipt insert rolls back too, so the instalment cannot be recorded
-        // at all. Found by adversarial review; the pre-existing test records only ONE partial
-        // payment, which is why the suite was green.
+        // The idempotency guard MUST compare against the policy-resolved target, not the DEPOSIT_PAID literal. Found
+        // by adversarial review; the pre-existing test records only ONE partial payment, which is why the suite was
+        // green.
         String depositTarget = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
             ? PaymentTrack.AWAITING_FINAL_PAYMENT
             : PaymentTrack.DEPOSIT_PAID;
         if (eligibleForDepositAdvance && !depositTarget.equals(s.paymentStatus())) {
-            // ⚠ Semantic change (site 6): the bypass path has no DEPOSIT_PAID state at all — a
-            // bypass deal's first payment now targets AWAITING_FINAL_PAYMENT, the corresponding
-            // state on that path, instead of the DEPOSIT_PAID literal PaymentTrack now refuses
-            // for a bypass policy. This makes a partially-paid bypass deal visible to the
-            // account role's list scope (ACCOUNT_PENDING_PAYMENT_STATUSES contains
-            // AWAITING_FINAL_PAYMENT, not DEPOSIT_PAID) where it previously was not — see
-            // PaymentTrackIntegrationTest for the real-DB proof. Deliberate; see the branch report.
-            //
-            // Event emission is UNCHANGED from before this branch (per the branch plan: "event
-            // emission stays exactly as it is today at all 7 sites") — TicketEventKind.DEPOSIT_PAID
-            // fires regardless of which literal the walk actually targets, since the business
-            // event is the same ("the deposit-equivalent first payment arrived"); only the
-            // persisted payment_status value differs by policy.
+            // ⚠ Semantic change (site 6): the bypass path has no DEPOSIT_PAID state at all — a bypass deal's first payment
+            // now targets AWAITING_FINAL_PAYMENT, the corresponding state on that path, instead of the DEPOSIT_PAID
+            // literal PaymentTrack now refuses for a bypass policy.
             int rows = tickets.advancePaymentStatus(
                 ticketId, s.depositPolicy(), s.paymentStatus(), depositTarget);
             requirePaymentAdvanced(rows);
             tickets.addEvent(ticketId, actor.id(), actor.name(),
                 TicketEventKind.DEPOSIT_PAID, s.status(), s.status(), null);
             autoAdvanceStage(s, DealStage.DEPOSIT_RECEIVED, actor);
-            // Site 7: only reachable when site 6 targeted DEPOSIT_PAID (REQUIRED policy) — a
-            // bypass deal already landed on AWAITING_FINAL_PAYMENT above, and PaymentTrack has no
-            // AWAITING_FINAL_PAYMENT -> AWAITING_FINAL_PAYMENT self-loop, so this block must not
-            // run again for it. "expected" below is depositTarget — the value JUST written above
-            // in this same method — never the stale s.paymentStatus() read before it (a stale
-            // expected would make the compare-and-set return 0 and wrongly 409 a legitimate flow).
+            // Site 7: only reachable when site 6 targeted DEPOSIT_PAID.
             if (PaymentTrack.DEPOSIT_PAID.equals(depositTarget)
                     && "GOODS_RECEIVED".equals(s.fulfillmentStatus())) {
                 int rows2 = tickets.advancePaymentStatus(
@@ -2150,15 +2206,31 @@ public class TicketService {
         }
     }
 
+    /**
+     * An Express receipt is DEPOSIT money while the deal's latest ISSUED deposit notice is still owed (its total
+     * payable above the DEPOSIT receipts so far) — not only until the first instalment settles the deposit on the
+     * payment track (review N2, probe Q2). With no notice: DEPOSIT while a REQUIRED deposit is unsettled. Else BALANCE.
+     */
+    private String expressReceiptKind(long ticketId, TicketSummaryDto s, boolean depositSettled) {
+        var notice = tickets.latestIssuedDepositNotice(ticketId).orElse(null);
+        if (notice != null && notice.totalPayable() != null) {
+            return notice.totalPayable().compareTo(tickets.sumDepositReceipts(ticketId)) > 0 ? "DEPOSIT" : "BALANCE";
+        }
+        return DepositPolicy.REQUIRED.equals(s.depositPolicy()) && !depositSettled ? "DEPOSIT" : "BALANCE";
+    }
+
+    /** The Asia/Bangkok calendar date of a receipt (now when it has no time). */
+    private static java.time.LocalDate bangkokDate(Instant at) {
+        return (at == null ? Instant.now() : at).atZone(java.time.ZoneId.of("Asia/Bangkok")).toLocalDate();
+    }
+
     private BigDecimal signedPaymentAmount(String kind, BigDecimal amount) {
         return "ADJUSTMENT".equals(kind) ? amount.negate() : amount;
     }
 
-    /**
-     * Payment payable precedence for Phase 3: latest ACCEPTED quotation (BUYER, then
-     * OWNER, then any), latest ISSUED/SENT quotation with the same recipient preference,
-     * latest issued deposit notice total, then approved line totals.
-     */
+    /** Payment payable precedence for Phase 3: latest ACCEPTED quotation (BUYER, then OWNER, then any), latest
+     * ISSUED/SENT quotation with the same recipient preference, latest issued deposit notice total, then approved
+     * line totals. */
     private BigDecimal payableAmount(TicketDto ticket) {
         return nullToZero(tickets.payableAmount(ticket.summary().id()));
     }
@@ -2177,17 +2249,15 @@ public class TicketService {
 
     private TicketItemDto requireLineItem(Map<Long, TicketItemDto> itemsById, Long itemId) {
         if (itemId == null || !itemsById.containsKey(itemId)) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในดีล");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในงาน");
         }
         return itemsById.get(itemId);
     }
 
     private boolean warehouseDeliveryAvailable(TicketSummaryDto s, long ticketId) {
-        // Goods reaching the warehouse is a permanent fact — the current status is enough
-        // when it's still GOODS_RECEIVED, but once a delivery flips it to
-        // PARTIALLY_DELIVERED we fall back to the GOODS_RECEIVED event so a stock-first
-        // partial delivery can't wrongly block the warehouse remainder (Case 8: 40 from
-        // stock delivered first, 60 imported still to go).
+        // Goods reaching the warehouse is a permanent fact — the current status is enough when it's still
+        // GOODS_RECEIVED, but once a delivery flips it to PARTIALLY_DELIVERED we fall back to the GOODS_RECEIVED event
+        // so a stock-first partial delivery can't wrongly block the warehouse remainder.
         return FulfilmentStatus.GOODS_RECEIVED.equals(s.fulfillmentStatus())
             || tickets.hasReceivedGoods(ticketId);
     }
@@ -2221,11 +2291,8 @@ public class TicketService {
     }
 
     private boolean canConfirmFinalPaymentNow(TicketSummaryDto s) {
-        // Rule 4/5 (payment-track state machine): null may only advance to CUSTOMER_CONFIRMED —
-        // it no longer qualifies as "deposit bypassed" here, even on a bypass policy. A bypass
-        // deal must have confirmCustomer's CUSTOMER_CONFIRMED write behind it before final
-        // payment can walk it on to AWAITING_FINAL_PAYMENT -> FULLY_PAID. Deliberate behaviour
-        // change; see the branch report.
+        // Rule 4/5 (payment-track state machine): null may only advance to CUSTOMER_CONFIRMED — it no longer qualifies
+        // as "deposit bypassed" here, even on a bypass policy. Deliberate behaviour change; see the branch report.
         boolean depositBypassed = DepositPolicy.bypassesDepositNotice(s.depositPolicy())
             && "CUSTOMER_CONFIRMED".equals(s.paymentStatus());
         // Owner ruling 2026-11-07: closed until money-milestone 3 is done (DELIVERY_SCHEDULING or later).
@@ -2236,21 +2303,17 @@ public class TicketService {
             || depositBypassed);
     }
 
-    // ── Deal pipeline (V50): 14-stage journey on the ticket itself ──────────
-    // NOTE on sales_manager: handoff 58 made it read+comment-only on the ticket's
-    // OPERATIONAL actions, and that stands. The pipeline stage/lost/reopen fields
-    // are the deliberate, user-approved exception — following up the team's deals
-    // is exactly this role's job. Never extend it beyond these three methods.
+    // Deal pipeline (V50): 14-stage journey on the ticket itself ────────── NOTE on sales_manager: handoff 58 made
+    // it read+comment-only on the ticket's OPERATIONAL actions, and that stands. Never extend it beyond these
+    // three methods.
 
     // The three target-stage sets live in DealStage (SALES_TARGET_STAGES / ACCOUNT_TARGET_STAGES
     // / IMPORT_TARGET_STAGES) so that the gate a client is TOLD about and the gate that is
     // ENFORCED are the same object. They are a permission surface and
     // requireStageWriteAccess keys off exactly them.
 
-    /**
-     * The {@code /api/tickets} entrypoint. H1 lockdown: refuses {@code account} outright -- account moves a
-     * money stage through {@link #financeUpdateStage}, on deals inside its list scope only.
-     */
+    /** The /api/tickets entrypoint. H1 lockdown: refuses account outright -- account moves a money stage through
+     * #financeUpdateStage, on deals inside its list scope only. */
     @Transactional
     public TicketDto updateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
         if ("account".equals(actor.role())) {
@@ -2259,11 +2322,9 @@ public class TicketService {
         return updateStageInternal(ticketId, targetStage, note, actor);
     }
 
-    /**
-     * The finance entrypoint: account or ceo, a MONEY stage only ({@link DealStage#ACCOUNT_TARGET_STAGES}:
-     * DEPOSIT_RECEIVED / CLOSED_PAID), account row-scoped. The stage rules themselves -- write gate, fact
-     * gates, note rule, tracking readiness -- are the untouched {@link #updateStageInternal}.
-     */
+    /** The finance entrypoint: account or ceo, a MONEY stage only (DealStage#ACCOUNT_TARGET_STAGES:
+     * DEPOSIT_RECEIVED / CLOSED_PAID), account row-scoped. The stage rules themselves -- write gate, fact gates,
+     * note rule, tracking readiness -- are the untouched #updateStageInternal. */
     @Transactional
     public TicketDto financeUpdateStage(long ticketId, String targetStage, String note, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
@@ -2337,16 +2398,15 @@ public class TicketService {
      */
     private void requireStageMoveAllowed(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
         requireStageWriteAccess(s, targetStage, actor);
-        // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES
-        // a reopen, so a live reopened deal still carries one. Checked before
-        // requireActive so a lost deal gets this specific message.
+        // Keyed on the lifecycle, not on lost_reason: since V58 the reason SURVIVES a reopen, so a live reopened deal
+        // still carries one. Checked before requireActive so a lost deal gets this specific message.
         if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลถูกทำเครื่องหมายเสียงานแล้ว — เปิดดีลใหม่ก่อนแก้ไขสถานะ");
+                "งานถูกทำเครื่องหมายเสียงานแล้ว — เปิดงานอีกครั้งก่อนแก้ไขสถานะ");
         }
         requireActive(s);
         if (targetStage.equals(s.salesStage())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้อยู่ในขั้นตอน " + targetStage + " อยู่แล้ว");
         }
         // Once the order is confirmed (the deal is at or past ขั้น 10) a manual
         // move may not rewind below ORDER_RECEIVED. Keyed on the CURRENT stage only: no repository call here.
@@ -2370,11 +2430,7 @@ public class TicketService {
             throw new ApiException(HttpStatus.CONFLICT,
                 DealRoute.refusalMessage(s.entryChannel(), targetStage));
         }
-        // The fact gate. Deliberately BEFORE the note and tracking-field rules: those two ask
-        // "has the rep done the paperwork?", and a deal whose facts do not support the target stage
-        // must be refused whatever the paperwork says. Ordering it after them would have produced
-        // the misleading pair "write a note" -> "…now the fact is missing", and would have let a
-        // reader mistake the note rule for the thing doing the work.
+        // Validate stage facts before notes and tracking fields so missing business prerequisites are reported first.
         requireStageFactsHold(s, targetStage);
     }
 
@@ -2396,40 +2452,9 @@ public class TicketService {
         }
     }
 
-    /**
-     * Per-stage verdicts for this caller on this deal — one entry for every stage in
-     * {@link DealStage#ORDER}, including the deal's current one.
-     *
-     * <p><strong>This is the client's answer to "where may I move this deal, and what will it
-     * cost me?", and it is produced by running the real gates.</strong> Each entry comes from
-     * calling {@link #requireStageMoveAllowed} (plus {@link #requireStageAdvanceReadiness} for a
-     * forward target) inside a try/catch and reading the verdict off whether an
-     * {@link ApiException} came back — the same technique the removed {@code canSetStage} used for
-     * the write gate alone. There is therefore exactly one implementation of "can this stage be
-     * reached", and a UI rendering these decisions cannot drift from it, because it has nothing
-     * of its own to drift with.
-     *
-     * <p>{@code blockedReason} is the refused call's own message, so the tooltip a rep reads
-     * before clicking is verbatim the error they would have got by clicking. That makes it the one
-     * deliberate exception to "user-facing Thai copy lives in the frontend": only this service
-     * knows <em>why</em> a specific stage is refused, and duplicating fifteen reasons client-side
-     * would recreate the problem this method exists to remove.
-     *
-     * <p>{@code requiresReason} is {@link DealStage#requiresJustification} — not a refusal, a
-     * cost. It is reported even for a blocked stage: whether a note would be needed does not
-     * depend on the gates, and suppressing it would make the field's meaning conditional.
-     *
-     * <p>Cost: one extra {@code hasActivitySinceLastStageChange} query per {@link #actions} call,
-     * hoisted out of the loop. The gates themselves touch no repository — and that is now
-     * <em>enforced</em> rather than merely claimed here:
-     * {@code TicketActionsQueryCountIntegrationTest} counts the SQL a real {@code actions} call
-     * issues against a real Postgres, and fails if any statement runs twice or if the total varies
-     * with the deal's stage. Measured there, the fifteen evaluations cost ~21µs against a ~2.4ms
-     * call — under 1% of the endpoint, about a tenth of a single query round trip — so the loop is
-     * deliberately left as it is. The guard exists for the next edit: a repository call added to
-     * any gate below turns one query into fifteen on the hottest sales endpoint, and every
-     * behavioural test stays green while it happens.
-     */
+    /** Per-stage verdicts for this caller on this deal — one entry for every stage in DealStage#ORDER, including
+     * the deal's current one. This is the client's answer to "where may I move this deal, and what will it cost
+     * me?", and it is produced by running the real gates. */
     private List<StageDecisionDto> stageDecisions(TicketSummaryDto s, UserPrincipal actor) {
         boolean hasRecentActivity = tickets.hasActivitySinceLastStageChange(s.id());
         List<StageDecisionDto> decisions = new ArrayList<>(DealStage.ORDER.size());
@@ -2504,21 +2529,35 @@ public class TicketService {
      * repair.
      */
     private void requireStageFactsHold(TicketSummaryDto s, String targetStage) {
-        if (DealStage.ORDER_RECEIVED.equals(targetStage) && !customerOrderVerified(s)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน ORDER_RECEIVED ไม่ได้: ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า");
+        String refusal = stageFactRefusal(s.paymentStatus(), s.fulfillmentStatus(), s.quotedRecipients(), targetStage);
+        if (refusal != null) {
+            throw new ApiException(HttpStatus.CONFLICT, refusal);
         }
-        if (DealStage.DEPOSIT_RECEIVED.equals(targetStage) && !depositReceived(s)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน DEPOSIT_RECEIVED ไม่ได้: ยังไม่ได้รับชำระมัดจำ");
+    }
+
+    /**
+     * The stage-fact gate as a pure, non-throwing function of the three facts it reads (see
+     * {@link #requireStageFactsHold}, which is now a thin throw around this): null when {@code targetStage}'s fact
+     * holds, else the refusal message. Public so the one-time pipeline import (salesboard/pipelineimport) evaluates
+     * the SAME gate — for a deal it is about to create, every fact is absent ({@code null, null, Set.of()}) — instead
+     * of a second copy that could drift.
+     */
+    public static String stageFactRefusal(String paymentStatus, String fulfillmentStatus, Set<String> quotedRecipients,
+                                          String targetStage) {
+        if (DealStage.ORDER_RECEIVED.equals(targetStage) && !PaymentTrack.isValid(paymentStatus)) {
+            return "เลื่อนไปขั้นตอน ORDER_RECEIVED ไม่ได้: ยังไม่ได้ยืนยันคำสั่งซื้อของลูกค้า";
         }
-        if (DealStage.DELIVERED.equals(targetStage) && !deliveryGateComplete(s)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน DELIVERED ไม่ได้: ยังส่งมอบสินค้าไม่ครบ");
+        if (DealStage.DEPOSIT_RECEIVED.equals(targetStage)
+                && !(paymentStatus != null && DEPOSIT_RECEIVED_STATES.contains(paymentStatus))) {
+            return "เลื่อนไปขั้นตอน DEPOSIT_RECEIVED ไม่ได้: ยังไม่ได้รับชำระมัดจำ";
         }
-        if (DealStage.CLOSED_PAID.equals(targetStage) && !closedPaidFactsHold(s)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน");
+        boolean fullyDelivered = FulfilmentStatus.FULLY_DELIVERED.equals(fulfillmentStatus);
+        if (DealStage.DELIVERED.equals(targetStage) && !fullyDelivered) {
+            return "เลื่อนไปขั้นตอน DELIVERED ไม่ได้: ยังส่งมอบสินค้าไม่ครบ";
+        }
+        if (DealStage.CLOSED_PAID.equals(targetStage)
+                && !(PaymentTrack.FULLY_PAID.equals(paymentStatus) && fullyDelivered)) {
+            return "เลื่อนไปขั้นตอน CLOSED_PAID ไม่ได้: ต้องรับชำระเงินครบและส่งมอบสินค้าครบก่อน";
         }
         // The three quote stages. ขั้น 4/5/8 claim "this party has been
         // quoted", so their fact is a quotation on the deal addressed to that party. A 409 ("there
@@ -2528,12 +2567,12 @@ public class TicketService {
         // Not circular: creating the quotation moves the deal via #autoAdvanceStage, which never
         // reaches this method (StageFactGateIntegrationTest#theQuoteStagesStillArriveAutomatically).
         String quotedRecipient = quotationRecipientForStage(targetStage);
-        if (quotedRecipient != null && !s.quotedRecipients().contains(quotedRecipient)) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                "เลื่อนไปขั้นตอน " + targetStage + " ไม่ได้: ยังไม่มีใบเสนอราคาถึง"
-                    + QuotationRecipient.thaiLabel(quotedRecipient)
-                    + " — ขั้นนี้อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้รับรายนี้");
+        if (quotedRecipient != null && (quotedRecipients == null || !quotedRecipients.contains(quotedRecipient))) {
+            return "เลื่อนไปขั้นตอน " + targetStage + " ไม่ได้: ยังไม่มีใบเสนอราคาถึง"
+                + QuotationRecipient.thaiLabel(quotedRecipient)
+                + " — ขั้นนี้อัปเดตอัตโนมัติเมื่อสร้างใบเสนอราคาถึงผู้รับรายนี้";
         }
+        return null;
     }
 
     /**
@@ -2574,29 +2613,14 @@ public class TicketService {
         return PaymentTrack.FULLY_PAID.equals(s.paymentStatus()) && deliveryGateComplete(s);
     }
 
-    /**
-     * The payment-track states that mean the deposit (or, on a bypass policy, the first money
-     * against the deal) has actually been received — the fact behind {@link
-     * DealStage#DEPOSIT_RECEIVED} (S11).
-     *
-     * <p>Read off the auto-advance site rather than invented: {@code reconcilePaymentStatus}
-     * advances the stage immediately after writing {@code depositTarget}, which is {@code
-     * DEPOSIT_PAID} on the REQUIRED path and {@code AWAITING_FINAL_PAYMENT} on a bypass policy
-     * (that path has no DEPOSIT_PAID state at all). {@code FULLY_PAID} is included because it is
-     * strictly later on both paths — a deal paid in full has necessarily passed this point.
-     *
-     * <p>{@code DEPOSIT_NOTICE_ISSUED} is deliberately absent: issuing the notice is a document,
-     * not a receipt, and {@code confirmDepositPaid} exists precisely because the money is a
-     * separate event.
-     */
+    /** The payment-track states that mean the deposit (or, on a bypass policy, the first money against the deal)
+     * has actually been received — the fact behind DealStage#DEPOSIT_RECEIVED (S11). */
     private static final Set<String> DEPOSIT_RECEIVED_STATES = Set.of(
         PaymentTrack.DEPOSIT_PAID, PaymentTrack.AWAITING_FINAL_PAYMENT, PaymentTrack.FULLY_PAID);
 
-    /**
-     * See {@link #DEPOSIT_RECEIVED_STATES}. Null-checked before the lookup: {@code Set.of(...)}
-     * is an immutable set whose {@code contains(null)} throws NPE rather than returning false —
-     * the same trap {@link DealStage#requiresJustification} documents for {@code List.of().indexOf}.
-     */
+    /** See #DEPOSIT_RECEIVED_STATES. Null-checked before the lookup: Set.of(...) is an immutable set whose
+     * contains(null) throws NPE rather than returning false — the same trap DealStage#requiresJustification
+     * documents for List.of().indexOf. */
     private static boolean depositReceived(TicketSummaryDto s) {
         return s.paymentStatus() != null && DEPOSIT_RECEIVED_STATES.contains(s.paymentStatus());
     }
@@ -2604,24 +2628,172 @@ public class TicketService {
     // ── Deal tracking + activity (V83, "kill the weekly report") ─────────────────────────────
 
     /**
-     * Log a follow-up. Deliberately NOT gated on {@link #requireActive} — a rep can still record
-     * why a deal went quiet (or what happened before it was lost) on a non-ACTIVE deal, and the
-     * one place this matters for enforcement ({@link #updateStage}'s gate) only ever runs on an
-     * ACTIVE deal anyway (see {@link #requireActive} there).
+     * Records follow-ups even on inactive deals so their history remains explainable.
+     *
+     * <p>Slice 6.4: an optional {@code nextFollowUpAt} (the call dialog's ตามครั้งถัดไป) also writes ONLY
+     * {@code sales.ticket.next_follow_up_at}, in this transaction. Setting the date is held to exactly what setting it
+     * through {@link #updateTracking} takes — requireDealOwnership (already checked here for the activity) plus
+     * requireActive — and the date must be today or later in Asia/Bangkok. Every check runs before any write, so a
+     * refused request writes neither the date nor the activity. Never routed through updateTracking: that is a full
+     * replace and would wipe the designer/owner/buyer names.
      */
     @Transactional
     public DealActivityDto addActivity(long ticketId, DealActivityRequest request, UserPrincipal actor) {
         if (!DealActivityKind.isValid(request.kind())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับประเภทกิจกรรม '" + request.kind() + "'");
         }
+        if (request.nextFollowUpAt() != null) {
+            tickets.lockTicketForUpdate(ticketId); // so requireActiveForFollowUp reads the locked row
+        }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        LocalDate nextFollowUpAt = request.nextFollowUpAt();
+        if (nextFollowUpAt != null) {
+            // updateTracking's requireActive, with a message that says it is the DATE that cannot be set (fix round 1,
+            // M1): the same activity without a date is still accepted on a non-ACTIVE deal.
+            requireActiveForFollowUp(s, "งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามครั้งถัดไปไม่ได้ — บันทึกได้โดยไม่ใส่วัน");
+            requireFollowUpNotPast(nextFollowUpAt, bangkokToday());
+        }
         long id = tickets.insertDealActivity(ticketId, request.activityDate(), request.kind(),
             blankToNull(request.note()), actor.id());
+        if (nextFollowUpAt != null) {
+            tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
+        }
         return tickets.findActivitiesByTicket(ticketId).stream()
             .filter(a -> a.id() == id)
             .findFirst()
             .orElseThrow();
+    }
+
+    /**
+     * The deal's sales-side write check, for callers outside this class (VisitService hangs a visit on a deal):
+     * 404 when the deal does not exist, 403 unless the actor is its owner/keyer with the sales role, or is
+     * sales_manager / ceo — the same {@link #requireDealOwnership} that guards {@link #addActivity}. Returns the
+     * deal's summary so the caller can check its lifecycle.
+     */
+    public TicketSummaryDto requireDealWriteAccess(long ticketId, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        requireDealOwnership(s, actor);
+        return s;
+    }
+
+    /**
+     * Writes the SITE_VISIT activity for a visit that was ticked done, attributed to {@code visitOwnerId} — the
+     * person who went. No actor check here: VisitService has already verified the caller may write the VISIT (its
+     * owner, or sales_manager / ceo). With {@code onlyIfStillOwner}, nothing is written unless the visit's owner is
+     * the deal's current owner ({@code created_by}) — NOT merely its keyer: a reassignment through
+     * TicketRepository#moveOwnerToSalesRep leaves the ex-owner as keyer (review NEW-A). An ex-owner's tick must not
+     * reset the quiet clock on, or add history to, the deal now held by someone else; the tick stays on the visit.
+     * Returns whether it wrote.
+     * Only VisitService calls this; the deal write check stays on visit creation.
+     */
+    @Transactional
+    public boolean recordVisitActivity(long ticketId, java.time.LocalDate activityDate, String note, long visitOwnerId,
+                                       boolean onlyIfStillOwner) {
+        return recordVisitActivity(ticketId, activityDate, note, visitOwnerId, onlyIfStillOwner, null);
+    }
+
+    /**
+     * As above; when it writes the activity and {@code nextFollowUpAt} is set, it also writes ONLY
+     * {@code next_follow_up_at} (slice 6.4). The caller must have run {@link #requireVisitFollowUpWritable} first —
+     * this never writes the date without writing the activity, so it can never land where the activity does not.
+     *
+     * <p>Fix round 1 (the reassignment race): with a date, the owner is RE-CHECKED under the deal's row lock
+     * ({@link TicketRepository#lockTicketForUpdate}, the lock the deal-party and quotation writes take), in the
+     * caller's transaction. A deal reassigned between the caller's check and this write is refused (403) rather than
+     * returning "not written" — the date was asked for and cannot land — so the caller's transaction rolls back the
+     * visit's tick with it. The activity and the date are then written together under that lock.
+     */
+    @Transactional
+    public boolean recordVisitActivity(long ticketId, LocalDate activityDate, String note, long visitOwnerId,
+                                       boolean onlyIfStillOwner, LocalDate nextFollowUpAt) {
+        if (nextFollowUpAt != null) {
+            tickets.lockTicketForUpdate(ticketId);
+        }
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (onlyIfStillOwner && s.createdById() != visitOwnerId) {
+            if (nextFollowUpAt != null) {
+                throw visitFollowUpNotOnDeal();
+            }
+            return false;
+        }
+        tickets.insertDealActivity(ticketId, activityDate, DealActivityKind.SITE_VISIT, note, visitOwnerId);
+        if (nextFollowUpAt != null) {
+            tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
+        }
+        return true;
+    }
+
+    /**
+     * Slice 6.4: may a visit's ตามต่อ set this deal's next follow-up date? Only where three EXISTING rules all hold, so it
+     * is never looser than any path that sets the date today:
+     * <ol>
+     *   <li>the visit's SITE_VISIT activity lands on the deal — {@link #recordVisitActivity}'s rule: the visit's owner
+     *       is the deal's current owner ({@code created_by}), not merely its keyer. A visit whose tick stays on the
+     *       visit (deal moved, a keyer's or a manager's own visit) cannot move the deal's date either; 403;</li>
+     *   <li>the caller passes {@link #requireDealOwnership} — the gate {@link #updateTracking} and {@link #addActivity}
+     *       use; 403;</li>
+     *   <li>the deal is ACTIVE — updateTracking's requireActive; 409;</li>
+     * </ol>
+     * and the date is today or later on the Asia/Bangkok calendar ({@code bangkokToday} is the visit service's own
+     * clock); 400. Takes the deal's row lock (must run inside the caller's transaction), so the owner/ACTIVE checks read
+     * the deal as it is under the lock; still writes nothing.
+     */
+    public void requireVisitFollowUpWritable(long ticketId, long visitOwnerId, LocalDate nextFollowUpAt,
+                                             LocalDate bangkokToday, UserPrincipal actor) {
+        tickets.lockTicketForUpdate(ticketId);
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (s.createdById() != visitOwnerId) {
+            throw visitFollowUpNotOnDeal();
+        }
+        requireDealOwnership(s, actor);
+        requireActiveForFollowUp(s, "งานนี้ไม่ได้อยู่ระหว่างดำเนินการ จึงตั้งวันตามต่อไม่ได้ — บันทึกเข้าพบได้โดยไม่ใส่วัน");
+        requireFollowUpNotPast(nextFollowUpAt, bangkokToday);
+    }
+
+    /**
+     * Fix round 1 (M3): a one-step visit log de-duplicated within a minute (VisitService#create) carries a date the
+     * first log did not apply — write it, as a fresh log would have. The caller has already run
+     * {@link #requireVisitFollowUpWritable}; the owner is re-checked under the deal's row lock exactly as in
+     * {@link #recordVisitActivity}. No second activity: the first log's activity is the record.
+     */
+    @Transactional
+    public void recordVisitFollowUp(long ticketId, long visitOwnerId, LocalDate nextFollowUpAt) {
+        tickets.lockTicketForUpdate(ticketId);
+        if (requireTicket(ticketId).summary().createdById() != visitOwnerId) {
+            throw visitFollowUpNotOnDeal();
+        }
+        tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
+    }
+
+    private static ApiException visitFollowUpNotOnDeal() {
+        return new ApiException(HttpStatus.FORBIDDEN, "การเข้าพบนี้ไม่ได้บันทึกลงงาน จึงตั้งวันตามต่อของงานไม่ได้");
+    }
+
+    /** requireActive's rule (409 unless ACTIVE) with a message naming the follow-up date as what is refused. */
+    private static void requireActiveForFollowUp(TicketSummaryDto s, String message) {
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT, message);
+        }
+    }
+
+    /** The one date rule for a follow-up set from a call or a visit: today or later in Asia/Bangkok. No upper bound —
+     * the tracking path that already sets this date has none. */
+    public static void requireFollowUpNotPast(LocalDate nextFollowUpAt, LocalDate bangkokToday) {
+        if (nextFollowUpAt != null && nextFollowUpAt.isBefore(bangkokToday)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันตามครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้");
+        }
+    }
+
+    /**
+     * The whole-deal read rule of {@link #get} without the read: import refused, then {@link #requireViewAccess}
+     * (viewer role; account refused; a sales rep only their own/keyed deal). 404 when the deal does not exist. For
+     * callers outside this class that serve something hanging off a deal to whoever may open it (slice 6.5's planned
+     * visits) — one definition, so the two cannot drift.
+     */
+    public void requireDealReadAccess(long ticketId, UserPrincipal actor) {
+        refuseImportWholeDealRead(actor);
+        requireViewAccess(ticketId, actor);
     }
 
     public List<DealActivityDto> listActivities(long ticketId, UserPrincipal actor) {
@@ -2630,14 +2802,37 @@ public class TicketService {
         return tickets.findActivitiesByTicket(ticketId);
     }
 
-    /** Sets the rep-facing tracking fields (win% override, counterparty names, next follow-up). */
+    /**
+     * Sets the rep-facing tracking fields (win% override, counterparty names, next follow-up).
+     *
+     * <p>The next follow-up date is KEPT when absent (set when sent, cleared by clearNextFollowUpAt), so a stale form
+     * no longer overwrites a date a call or visit set in the meantime.
+     */
     @Transactional
     public TicketDto updateTracking(long ticketId, TrackingUpdateRequest request, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
         tickets.updateTracking(ticketId, request.winProbability(), blankToNull(request.designerName()),
-            blankToNull(request.ownerName()), blankToNull(request.buyerName()), request.nextFollowUpAt());
+            blankToNull(request.ownerName()), blankToNull(request.buyerName()));
+        if (Boolean.TRUE.equals(request.clearNextFollowUpAt())) {
+            tickets.updateNextFollowUpAt(ticketId, null);
+        } else if (request.nextFollowUpAt() != null) {
+            tickets.updateNextFollowUpAt(ticketId, request.nextFollowUpAt());
+        }
+        if (request.expectedQuarter() != null) { // null = keep (see TrackingUpdateRequest); "" = clear
+            tickets.updateExpectedQuarter(ticketId, blankToNull(request.expectedQuarter()));
+        }
+        // V220 มูลค่าโดยประมาณ: kept when absent, like expectedQuarter; clearEstimatedValue clears it. Same gate as every
+        // other tracking field (requireDealOwnership + requireActive above, unchanged).
+        if (Boolean.TRUE.equals(request.clearEstimatedValue())) {
+            tickets.updateEstimatedValue(ticketId, null);
+        } else if (request.estimatedValue() != null) {
+            if (request.estimatedValue().signum() <= 0) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "มูลค่าโดยประมาณต้องมากกว่า 0");
+            }
+            tickets.updateEstimatedValue(ticketId, request.estimatedValue());
+        }
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(), "tracking fields updated");
         return requireTicket(ticketId);
@@ -2667,7 +2862,7 @@ public class TicketService {
                 "เปลี่ยนลูกค้าไม่ได้ เนื่องจากมีใบเสนอราคาที่ส่งขออนุมัติแล้ว");
         }
         if (pricingRequests.hasOpenForTicket(ticketId)) {
-            throw new ApiException(HttpStatus.CONFLICT, "เปลี่ยนลูกค้าไม่ได้ เนื่องจากดีลนี้มีคำขอราคาอยู่");
+            throw new ApiException(HttpStatus.CONFLICT, "เปลี่ยนลูกค้าไม่ได้ เนื่องจากงานนี้มีคำขอราคาอยู่");
         }
         CustomerDto customer = customers.findById(request.customerId())
             .orElseThrow(() -> new ApiException(HttpStatus.BAD_REQUEST, "ไม่พบลูกค้าที่เลือก"));
@@ -2700,10 +2895,10 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
-        // Lifecycle, not lost_reason — a reopened deal is ACTIVE and still carries
-        // the reason it was lost for last time; it must be losable again.
+        // Lifecycle, not lost_reason — a reopened deal is ACTIVE and still carries the reason it was lost for last
+        // time; it must be losable again.
         if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ถูกทำเครื่องหมายเสียงานไปแล้ว");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ถูกทำเครื่องหมายเสียงานไปแล้ว");
         }
         tickets.markDealLost(ticketId, reason);
         // Stage untouched by design: reopening resumes exactly where the deal was.
@@ -2713,17 +2908,13 @@ public class TicketService {
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_LOST,
             actor.name() + " บันทึกว่าดีลเสียงาน (" + DealLostReason.label(reason) + ")" + noteSuffix(note),
             IMPORT_STOP, ACCOUNT_REFUND);
-        // Terminal deal state: a lost deal can never receive Import's pricing, so
-        // any pricing request still open on it (DRAFT/SUBMITTED/IMPORT_REVIEWING/
-        // MORE_INFO_REQUIRED) is cancelled here too rather than stranded in a queue
-        // forever. See PricingRequestService.cancelOpenForTicket's Javadoc for why
-        // this has no role check of its own. placeOnHold/markDormant deliberately do
-        // NOT do this — see those methods.
+        // Terminal deal state: a lost deal can never receive Import's pricing, so any pricing request still open on it
+        // (DRAFT/SUBMITTED/IMPORT_REVIEWING/ MORE_INFO_REQUIRED) is cancelled here too rather than stranded in a queue
+        // forever. placeOnHold/markDormant deliberately do NOT do this — see those methods.
         CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, DeadDealCause.LOST, actor);
         if (cancelResult.hasAbandoned()) {
-            // cancelOpenForTicket already logged the per-row detail; this ties the
-            // abandonment back to the deal action that triggered it, for whoever is
-            // grepping logs after the fact. The deal's own lost-marking above still
+            // cancelOpenForTicket already logged the per-row detail; this ties the abandonment back to the deal action
+            // that triggered it, for whoever is grepping logs after the fact. The deal's own lost-marking above still
             // committed — an abandoned pricing request must never roll that back.
             log.warn("markLost: ticket {} left {} pricing request(s) still open after the cascade: {}",
                 ticketId, cancelResult.abandonedCount(), cancelResult.abandonedIds());
@@ -2736,7 +2927,7 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         if (!DealLifecycle.CLOSED_LOST.equals(s.lifecycle()) || s.lostReason() == null) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดีลนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน");
+            throw new ApiException(HttpStatus.CONFLICT, "งานนี้ยังไม่ได้ถูกทำเครื่องหมายเสียงาน");
         }
         tickets.clearDealLost(ticketId);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -2760,6 +2951,65 @@ public class TicketService {
         String stage = stageForQuotationRecipient(recipientType);
         if (stage != null) {
             autoAdvanceStage(s, stage, actor);
+        }
+    }
+
+    /**
+     * Where a quotation with no named recipient (UNSPECIFIED — legacy rows and their revisions/reorders) puts a deal.
+     * Round-2 N1, following the owner-approved V204 reading that a direct quotation is addressed to a buyer: it
+     * advances like a BUYER quotation — QUOTE_BUYER when that is on the deal's route, else the nearest on-route stage
+     * before it (DealStage.ORDER walked backwards). QUOTE_BUYER is on every route today, so the fallback is
+     * defensive. Never null: LEAD_APPROACH is on every route. V210's backfill restates this in SQL; its integration
+     * test pins the two together for every channel.
+     */
+    public static String stageForUnspecifiedRecipient(String entryChannel) {
+        return nearestOnRouteAtOrBefore(stageForQuotationRecipient(QuotationRecipient.BUYER),
+            stage -> DealRoute.isOnRoute(entryChannel, stage));
+    }
+
+    /** The latest stage at or before {@code stage} in {@link DealStage#ORDER} that {@code onRoute} accepts. */
+    static String nearestOnRouteAtOrBefore(String stage, java.util.function.Predicate<String> onRoute) {
+        for (int i = DealStage.indexOf(stage); i >= 0; i--) {
+            String candidate = DealStage.ORDER.get(i);
+            if (onRoute.test(candidate)) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * A quotation that reached the customer (DEAL_DIRECT approval, PRICING_REQUEST-origin issue) fills its deal
+     * (spec 2026-11-15 §7.2, corrected by review H1/H2). The stage advances forward-only onto the recipient's stage,
+     * or for an UNSPECIFIED recipient onto {@link #stageForUnspecifiedRecipient} (like a BUYER one, though it fills no buyer_name). A party name is
+     * written only from a source that names that party ({@link TicketRepository#partyNameFromQuotation}) and only into
+     * a blank column — designer_name from the D.Co. for any recipient (round-2 N3):
+     * a name the rep typed is never overwritten, and the bill-to customer is never taken for the designer. A
+     * non-ACTIVE deal is left untouched.
+     */
+    public void applyApprovedQuotation(long ticketId, long quotationId, String recipientType, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
+            return;
+        }
+        if (QuotationRecipient.isAddressable(recipientType)) {
+            advanceStageForCustomerQuotationIssue(ticketId, recipientType, actor);
+        } else {
+            String target = stageForUnspecifiedRecipient(s.entryChannel());
+            if (target != null) {
+                autoAdvanceStage(s, target, actor);
+            }
+        }
+        // Round-2 N3: the quotation's D.Co. (unit_code) names the project's designer whoever the document is addressed
+        // to, so designer_name fills from the directory for ANY recipient. buyer_name only for a document ADDRESSED to
+        // a buyer: an UNSPECIFIED one advances like a buyer's (above) but names nobody, because the BUYER party V204
+        // gave it is the deal's bill-to customer, and the bill-to is never a name source (final review).
+        // owner_name has no real source and is never filled.
+        tickets.partyNameFromQuotation(quotationId, QuotationRecipient.DESIGNER)
+            .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, QuotationRecipient.DESIGNER, name));
+        if (QuotationRecipient.BUYER.equals(recipientType)) {
+            tickets.partyNameFromQuotation(quotationId, QuotationRecipient.BUYER)
+                .ifPresent(name -> tickets.fillPartyNameIfBlank(ticketId, QuotationRecipient.BUYER, name));
         }
     }
 
@@ -2857,9 +3107,8 @@ public class TicketService {
      * very transition that recorded it.
      */
     private void autoAdvanceStage(TicketSummaryDto s, String targetStage, UserPrincipal actor) {
-        // ACTIVE is the whole test. The old `lostReason != null` clause would now
-        // silently disable auto-advance on every reopened deal, since V58 keeps the
-        // reason after a reopen.
+        // ACTIVE is the whole test. The old `lostReason != null` clause would now silently disable auto-advance on
+        // every reopened deal, since V58 keeps the reason after a reopen.
         if (!DealLifecycle.ACTIVE.equals(s.lifecycle())) {
             return;
         }
@@ -2884,39 +3133,62 @@ public class TicketService {
 
     @Transactional
     public TicketDto placeOnHold(long ticketId, String note, UserPrincipal actor) {
+        return placeOnHold(ticketId, note, null, actor);
+    }
+
+    /** {@link #placeOnHold} with the optional วันที่จะกลับมาดู (V220). The authorization checks are the method's
+     * existing two, unchanged and in the same order; the date is validated only after them, so a caller who may not
+     * pause the deal is told 403, never a date error. */
+    @Transactional
+    public TicketDto placeOnHold(long ticketId, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        // Fix round 1, ruling 5: hold on a deal ALREADY on hold changes only its return date (and logs the note) —
+        // no lifecycle change, no notification, no second ON_HOLD event. Same permission check, above, first.
+        if (DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
+            return changePauseReturnOn(s, note, pauseReturnOn, actor);
+        }
         requireActive(s);
+        requireReturnDateNotPast(pauseReturnOn);
         tickets.updateLifecycle(ticketId, DealLifecycle.ON_HOLD);
+        tickets.updatePauseReturnOn(ticketId, pauseReturnOn);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.ON_HOLD, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_ON_HOLD,
             actor.name() + " พักดีลไว้ชั่วคราว" + noteSuffix(note), IMPORT_PAUSE, ACCOUNT_WAIT);
-        // Deliberately does NOT call pricingRequests.cancelOpenForTicket, unlike
-        // markLost/cancel. ON_HOLD is temporary — resume() brings the deal straight
-        // back to ACTIVE — so cancelling in-progress pricing work here would destroy
-        // it for no reason. The default queue already hides these requests while the
-        // deal is not ACTIVE (PricingRequestRepository.findSummaries'
-        // activeDealsOnly); resume() un-hides them with their status intact. Do not
-        // "fix" this into symmetry with the terminal-state methods.
+        // Deliberately does NOT call pricingRequests.cancelOpenForTicket, unlike markLost/cancel. Do not "fix" this
+        // into symmetry with the terminal-state methods.
         return requireTicket(ticketId);
     }
 
     @Transactional
     public TicketDto markDormant(long ticketId, String note, UserPrincipal actor) {
+        return markDormant(ticketId, note, null, actor);
+    }
+
+    /** {@link #markDormant} with the optional วันที่จะกลับมาดู (V220); the existing checks run first, unchanged. On an
+     * ON_HOLD deal this is also the "re-pause with a new date" the owner ruling names: the new date (or none)
+     * replaces the old one. */
+    @Transactional
+    public TicketDto markDormant(long ticketId, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
-        if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) && !DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "พัก dormant ได้เฉพาะดีลที่ active หรือ on hold");
+        // Fix round 1, ruling 5: dormant on a deal ALREADY dormant changes only its return date (see placeOnHold).
+        if (DealLifecycle.DORMANT.equals(s.lifecycle())) {
+            return changePauseReturnOn(s, note, pauseReturnOn, actor);
         }
+        if (!DealLifecycle.ACTIVE.equals(s.lifecycle()) && !DealLifecycle.ON_HOLD.equals(s.lifecycle())) {
+            throw new ApiException(HttpStatus.CONFLICT, "พัก dormant ได้เฉพาะงานที่ active หรือ on hold");
+        }
+        requireReturnDateNotPast(pauseReturnOn);
         tickets.updateLifecycle(ticketId, DealLifecycle.DORMANT);
+        tickets.updatePauseReturnOn(ticketId, pauseReturnOn);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.DORMANT, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_DORMANT,
             actor.name() + " พักดีลไว้ระยะยาว (dormant)" + noteSuffix(note), IMPORT_PAUSE, ACCOUNT_WAIT);
-        // Same deliberate asymmetry as placeOnHold: DORMANT is temporary (resume()
-        // returns it to ACTIVE), so no pricingRequests.cancelOpenForTicket call here
-        // either. Do not "fix" this into symmetry with markLost/cancel.
+        // Same deliberate asymmetry as placeOnHold: DORMANT is temporary (resume() returns it to ACTIVE), so no
+        // pricingRequests.cancelOpenForTicket call here either. Do not "fix" this into symmetry with markLost/cancel.
         return requireTicket(ticketId);
     }
 
@@ -2925,9 +3197,11 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         if (!DealLifecycle.ON_HOLD.equals(s.lifecycle()) && !DealLifecycle.DORMANT.equals(s.lifecycle())) {
-            throw new ApiException(HttpStatus.CONFLICT, "ดำเนินการต่อได้เฉพาะดีลที่พักไว้");
+            throw new ApiException(HttpStatus.CONFLICT, "ดำเนินการต่อได้เฉพาะงานที่พักไว้");
         }
         tickets.updateLifecycle(ticketId, DealLifecycle.ACTIVE);
+        // V220: a resumed deal has no return date to come back on.
+        tickets.updatePauseReturnOn(ticketId, null);
         tickets.addEvent(ticketId, actor.id(), actor.name(),
             TicketEventKind.RESUMED, s.salesStage(), s.salesStage(), blankToNull(note));
         notifyDealLifecycle(s, actor, TicketEventKind.DEAL_RESUMED,
@@ -2952,29 +3226,27 @@ public class TicketService {
 
     @Transactional
     public TicketDto setEntryChannel(long ticketId, String value, String note, UserPrincipal actor) {
-        // UNSPECIFIED is valid as STORED but never as INPUT: once a channel has been stated it must
-        // not be possible to un-state it. Same guard shape as generateQuotation's
-        // QuotationRecipient.UNSPECIFIED check above — see EntryChannel's Javadoc and V144.
+        // UNSPECIFIED is valid as STORED but never as INPUT: once a channel has been stated it must not be possible to
+        // un-state it. Same guard shape as generateQuotation's QuotationRecipient.UNSPECIFIED check above — see
+        // EntryChannel's Javadoc and V144.
         if (!EntryChannel.isValid(value) || EntryChannel.UNSPECIFIED.equals(value)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "ไม่รองรับช่องทางรับงาน '" + value + "'");
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
         requireActive(s);
-        // "Changing a STATED channel needs a reason." Both DESIGNER_LED and UNSPECIFIED count as
-        // unstated here and neither requires a note: UNSPECIFIED is the V144 default, and
-        // DESIGNER_LED is the pre-V144 default that was never backfilled (V144's data cutoff), so
-        // an untouched deal reads one or the other purely by age. Dropping UNSPECIFIED from this
-        // list would make the FIRST statement of a channel on every new deal demand a reason.
+        // "Changing a STATED channel needs a reason." Both DESIGNER_LED and UNSPECIFIED count as unstated here and
+        // neither requires a note: UNSPECIFIED is the V144 default, and DESIGNER_LED is the pre-V144 default that was
+        // never backfilled, so an untouched deal reads one or the other purely by age.
         boolean changingExistingNonDefault =
             entryChannelIsStated(s) && !s.entryChannel().equals(value);
         if (changingExistingNonDefault && (note == null || note.isBlank())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "การเปลี่ยน entry channel ต้องระบุเหตุผล");
         }
         tickets.updateEntryChannel(ticketId, value);
-        // Do not inline this back into setEntryChannel: addPolicyActions reads the SAME predicate
-        // to tell the client whether SET_ENTRY_CHANNEL needs a note, so the advertisement and the
-        // 400 cannot disagree. See entryChannelIsStated.
+        // Do not inline this back into setEntryChannel: addPolicyActions reads the SAME predicate to tell the client
+        // whether SET_ENTRY_CHANNEL needs a note, so the advertisement and the 400 cannot disagree. See
+        // entryChannelIsStated.
         String message = "entry_channel → " + value
             + (note != null && !note.isBlank() ? " — " + note.trim() : "");
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -2996,11 +3268,9 @@ public class TicketService {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireActive(s);
         requireDepositPolicyWriteAccess(s, actor);
-        // Rule 4 (payment-track state machine): once a deposit invoice has actually been issued
-        // (or paid, or further), waiving the deposit policy after the fact is no longer a policy
-        // change a rep/account can make retroactively — the customer already has a real document
-        // in hand quoting a deposit; undoing that is a credit note, not a policy flip. Only a
-        // not-yet-started payment track (null) or one still at CUSTOMER_CONFIRMED may waive.
+        // Rule 4: once a deposit invoice has actually been issued, waiving the deposit policy after the fact is no
+        // longer a policy change a rep/account can make retroactively — the customer already has a real document in
+        // hand quoting a deposit; undoing that is a credit note, not a policy flip.
         if (s.paymentStatus() != null && !PaymentTrack.CUSTOMER_CONFIRMED.equals(s.paymentStatus())) {
             throw new ApiException(HttpStatus.CONFLICT,
                 "ยกเลิกนโยบายมัดจำไม่ได้: มีการออกใบแจ้งรับมัดจำแล้ว — การแก้ไขต้องออกเป็นใบลดหนี้ ไม่ใช่การเปลี่ยนนโยบาย");
@@ -3148,7 +3418,7 @@ public class TicketService {
         TicketDto ticket = requireTicket(ticketId);
         String currentStatus = ticket.summary().status();
         if (TicketStatus.CLOSED.equals(currentStatus) || TicketStatus.CANCELLED.equals(currentStatus)) {
-            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถยกเลิกดีลที่ปิดหรือถูกยกเลิกไปแล้วได้");
+            throw new ApiException(HttpStatus.CONFLICT, "ไม่สามารถยกเลิกงานที่ปิดหรือถูกยกเลิกไปแล้วได้");
         }
         if (!DealOwnership.isOwnerOrKeyer(ticket.summary(), actor.id())) {
             throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
@@ -3157,8 +3427,8 @@ public class TicketService {
         String message = blankToNull(note) == null
             ? "ยกเลิกดีล (" + reason + ")"
             : "ยกเลิกดีล (" + reason + ") — " + note.trim();
-        // The guard above already excluded the two terminal statuses, which are the only two
-        // TicketStatus.ALLOWED does not let reach CANCELLED.
+        // The guard above already excluded the two terminal statuses, which are the only two TicketStatus.ALLOWED does
+        // not let reach CANCELLED.
         requireStatusAdvanced(
             tickets.transitionStatus(ticketId, currentStatus, TicketStatus.CANCELLED));
         tickets.addEvent(ticketId, actor.id(), actor.name(),
@@ -3167,9 +3437,8 @@ public class TicketService {
         notifyDealLifecycle(ticket.summary(), actor, TicketEventKind.DEAL_CANCELLED,
             actor.name() + " ยกเลิกดีล (" + DealCancelReason.label(reason) + ")" + noteSuffix(note),
             IMPORT_STOP, ACCOUNT_REFUND);
-        // Terminal deal state: same cascade as markLost above — a cancelled deal
-        // can never receive Import's pricing, so any pricing request still open on
-        // it is cancelled too.
+        // Terminal deal state: same cascade as markLost above — a cancelled deal can never receive Import's pricing,
+        // so any pricing request still open on it is cancelled too.
         CancelOpenForTicketResult cancelResult = pricingRequests.cancelOpenForTicket(ticketId, reason, DeadDealCause.CANCELLED, actor);
         if (cancelResult.hasAbandoned()) {
             log.warn("cancel: ticket {} left {} pricing request(s) still open after the cascade: {}",
@@ -3186,8 +3455,7 @@ public class TicketService {
         String st = s.status();
         boolean isOwner = DealOwnership.isOwnerOrKeyer(s, actor.id());
 
-        // DRAFT included since V50: a lightweight lead-stage deal gets its product
-        // items here before submit().
+        // DRAFT included since V50: a lightweight lead-stage deal gets its product items here before submit().
         boolean salesCanEdit = SALES_ROLES.contains(actor.role()) && isOwner
             && Set.of(TicketStatus.DRAFT, TicketStatus.SUBMITTED, TicketStatus.IN_REVIEW,
                       TicketStatus.PRICE_PROPOSED).contains(st);
@@ -3199,11 +3467,8 @@ public class TicketService {
         // live on it (ticket_item is written from it when the order is confirmed), so they are not
         // typed in here — see DirectQuotationLocks. AFTER the 403 above on purpose.
         DirectQuotationLocks.requireNoLiveDirectQuotation(tickets, ticketId);
-        // Sales editing items (brand/model/qty/etc.) must NOT be able to clobber import's
-        // proposed price or CEO's approved/manual price — only proposePrice (import) is
-        // allowed to replace pricing wholesale. Merge request items onto the ticket's
-        // existing items by position (request order = display order); pricing fields
-        // always come from the existing item at that position, never the request.
+        // Sales editing items (brand/model/qty/etc.) must NOT be able to clobber import's proposed price or CEO's
+        // approved/manual price — only proposePrice (import) is allowed to replace pricing wholesale.
         List<TicketItemDto> merged = mergeEditedItemsPreservingPricing(ticketId, ticket.items(), request.items());
         tickets.replaceItemsPreservingPricing(ticketId, merged);
         tickets.setHasEdits(ticketId, true);
@@ -3218,15 +3483,14 @@ public class TicketService {
         for (int i = 0; i < requestItems.size(); i++) {
             TicketItemRequest r = requestItems.get(i);
             TicketItemDto prior = i < existingItems.size() ? existingItems.get(i) : null;
-            // Request wins; a request that omits unitBasis inherits the prior item's
-            // basis (an API edit must not silently flip an SQM item back to PIECE).
+            // Request wins; a request that omits unitBasis inherits the prior item's basis (an API edit must not silently
+            // flip an SQM item back to PIECE).
             String unitBasis = (r.unitBasis() != null && !r.unitBasis().isBlank())
                 ? r.unitBasis()
                 : (prior != null && prior.unitBasis() != null ? prior.unitBasis() : "PIECE");
-            // "currency" (display currency, distinct from rawCurrency) is pricing-adjacent
-            // metadata, not a descriptive field the request is meant to drive — carry it
-            // over like the other pricing fields, falling back to the request/THB only
-            // for brand-new rows that have no prior item to inherit from.
+            // "currency" (display currency, distinct from rawCurrency) is pricing-adjacent metadata, not a descriptive
+            // field the request is meant to drive — carry it over like the other pricing fields, falling back to the
+            // request/THB only for brand-new rows that have no prior item to inherit from.
             String currency = prior != null
                 ? prior.currency()
                 : ((r.currency() != null && !r.currency().isBlank()) ? r.currency() : "THB");
@@ -3254,25 +3518,15 @@ public class TicketService {
                 unitBasis,
                 prior != null ? prior.manualPrice() : null,
                 prior != null ? prior.manualOverrideReason() : null,
-                // Pricing fields above are guarded (request can never overwrite them — see this
-                // method's own comment above). The catalog link is a descriptive field, not a
-                // pricing one, so — same as brand/model/etc. — the request wins outright: the
-                // frontend already carries the prior link forward (or clears it when the user
-                // hand-edits a descriptive field, see TicketCreateModal.jsx's updateItem), so
-                // this stays a pure passthrough with no merge logic of its own.
+                // Pricing fields above are guarded (request can never overwrite them — see this method's own comment above).
                 BigDecimal.ZERO, BigDecimal.ZERO, null,
                 r.catalogPriceId(), r.catalogProductCode(),
-                // source/catalogPrice/catalogCurrency/catalogPriceUnit/sqmPerPiece are read-path-only
-                // (resolved by findItemsByTicketId's LEFT JOIN, never written back) — same derivation
-                // the compat constructors use.
+                // source/catalogPrice/catalogCurrency/catalogPriceUnit/sqmPerPiece are read-path-only (resolved by
+                // findItemsByTicketId's LEFT JOIN, never written back) — same derivation the compat constructors use.
                 r.catalogPriceId() != null ? "catalog" : "custom", null, null, null, null,
-                // V148: weightMultiplier is a sales_manager/CEO decision (setItemWeightMultipliers),
-                // never something this sales/import item-edit request carries an opinion on -- same
-                // "guarded, prior wins" treatment as proposedPrice/approvedPrice/calcedCost above,
-                // not the "request wins" treatment brand/model/qty get. replaceItemsPreservingPricing
-                // gives every edited row a brand-new item_id (DELETE + re-INSERT), so this is the
-                // ONLY thing standing between an innocuous item edit and silently resetting a
-                // manager-approved weight back to the column default of 1.
+                // V148: weightMultiplier is a sales_manager/CEO decision (setItemWeightMultipliers), never something this
+                // sales/import item-edit request carries an opinion on -- same "guarded, prior wins" treatment as
+                // proposedPrice/approvedPrice/calcedCost above, not the "request wins" treatment brand/model/qty get.
                 prior != null ? prior.weightMultiplier() : 1,
                 sourcedFromStock, stockSalePrice
             ));
@@ -3300,11 +3554,8 @@ public class TicketService {
         return projectForRole(requireTicket(ticketId), actor.role());
     }
 
-    /**
-     * The finance entrypoint for a deal comment: account or ceo, account row-scoped. Writes the same
-     * COMMENTED event as {@link #comment}; the caller (FinanceDealService) returns the finance view,
-     * never the full ticket.
-     */
+    /** The finance entrypoint for a deal comment: account or ceo, account row-scoped. Writes the same COMMENTED
+     * event as #comment; the caller (FinanceDealService) returns the finance view, never the full ticket. */
     @Transactional
     public void financeComment(long ticketId, CommentRequest request, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
@@ -3314,13 +3565,9 @@ public class TicketService {
             TicketEventKind.COMMENTED, null, null, request.message());
     }
 
-    /**
-     * Deprecated: manual price override for a legacy {@code ticket_item} row. Superseded by
-     * editing sale price on the PricingDecision aggregate — see
-     * {@link th.co.glr.hr.pricingdecision.PricingDecisionService#update}. Reachable only for
-     * legacy tickets stuck at {@code price_proposed}; no controller route exposes this
-     * anymore.
-     */
+    /** Deprecated: manual price override for a legacy ticket_item row. Superseded by editing sale price on the
+     * PricingDecision aggregate — see th.co.glr.hr.pricingdecision.PricingDecisionService#update. Reachable only
+     * for legacy tickets stuck at price_proposed; no controller route exposes this anymore. */
     @Deprecated
     @Transactional
     public TicketDto overrideItemPrice(long ticketId, long itemId, OverridePriceRequest request, UserPrincipal actor) {
@@ -3334,7 +3581,7 @@ public class TicketService {
         boolean itemExists = requireTicket(ticketId).items().stream()
             .anyMatch(it -> it.id() == itemId);
         if (!itemExists) {
-            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในดีล");
+            throw new ApiException(HttpStatus.NOT_FOUND, "ไม่พบรายการนี้ในงาน");
         }
         tickets.updateItemManualPrice(itemId, request.manualPrice(), request.reason());
         // Audit trail: an override must not silently change an item's price with no
@@ -3348,19 +3595,17 @@ public class TicketService {
 
     // --- helpers ---
 
-    // assertFactoryEmailAllowed (the gate for the now-deleted POST /tickets/{id}/factory-emails/
-    // send) was removed alongside that route: factory RFQ email is manual-only now, recorded via
-    // FactoryQuoteService.send, which is gated by its own IMPORT_ROLES check — see that class.
+    // assertFactoryEmailAllowed (the gate for the now-deleted POST /tickets/{id}/factory-emails/ send) was removed
+    // alongside that route: factory RFQ email is manual-only now, recorded via FactoryQuoteService.send, which is
+    // gated by its own IMPORT_ROLES check — see that class.
 
     public TicketActionsResponse actions(long ticketId, UserPrincipal actor) {
         return buildActions(requireViewAccess(ticketId, actor), actor);
     }
 
-    /**
-     * The finance entrypoint for the action list: account or ceo (account row-scoped). Runs the SAME
-     * {@link #buildActions} as {@link #actions} -- one readiness rule, no second copy -- without the
-     * ticket view-access check that refuses account. FinanceDealService narrows the result to money actions.
-     */
+    /** The finance entrypoint for the action list: account or ceo (account row-scoped). Runs the SAME #buildActions
+     * as #actions -- one readiness rule, no second copy -- without the ticket view-access check that refuses
+     * account. FinanceDealService narrows the result to money actions. */
     public TicketActionsResponse financeActions(long ticketId, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
         TicketDto ticket = requireTicket(ticketId);
@@ -3368,12 +3613,8 @@ public class TicketService {
         return buildActions(ticket, actor);
     }
 
-    /**
-     * {@link #financeActions} minus the account row-scope re-check, for a caller that has ALREADY authorised and
-     * scoped the request (FinanceDealService). Needed because an authorised account action may legitimately move
-     * the deal out of account's list scope; re-checking scope when rebuilding the response would 403 AFTER the
-     * write committed. Role is still enforced.
-     */
+    /** #financeActions minus the account row-scope re-check, for a caller that has ALREADY authorised and scoped
+     * the request (FinanceDealService). Role is still enforced. */
     public TicketActionsResponse financeActionsAlreadyScoped(long ticketId, UserPrincipal actor) {
         requireRole(actor, ACCOUNT_ROLES);
         return buildActions(requireTicket(ticketId), actor);
@@ -3394,7 +3635,7 @@ public class TicketService {
             // CustomerQuotationService replacement.
             if (canDealOwnership(s, actor)) {
                 actions.add(new TicketActionDto("MARK_LOST", "lifecycle", "เสียงาน", List.of("reason")));
-                actions.add(new TicketActionDto("PLACE_ON_HOLD", "lifecycle", "พักดีลไว้"));
+                actions.add(new TicketActionDto("PLACE_ON_HOLD", "lifecycle", "พักงานไว้"));
                 actions.add(new TicketActionDto("MARK_DORMANT", "lifecycle", "พัก dormant"));
             }
         } else if ((DealLifecycle.ON_HOLD.equals(s.lifecycle()) || DealLifecycle.DORMANT.equals(s.lifecycle()))
@@ -3404,7 +3645,7 @@ public class TicketService {
                 actions.add(new TicketActionDto("MARK_DORMANT", "lifecycle", "พัก dormant"));
             }
         } else if (DealLifecycle.CLOSED_LOST.equals(s.lifecycle()) && canDealOwnership(s, actor)) {
-            actions.add(new TicketActionDto("REOPEN", "lifecycle", "เปิดดีลใหม่"));
+            actions.add(new TicketActionDto("REOPEN", "lifecycle", "เปิดงานอีกครั้ง"));
         }
         TicketActionState state = new TicketActionState(s.lifecycle(), s.salesStage(), s.paymentStatus(),
             s.fulfillmentStatus(), s.status());
@@ -3509,20 +3750,8 @@ public class TicketService {
         }
     }
 
-    /**
-     * "A channel has actually been STATED on this deal" — the state half of
-     * {@link #setEntryChannel}'s {@code changingExistingNonDefault} rule, extracted so the rule has
-     * exactly one definition.
-     *
-     * <p>Both {@link EntryChannel#DESIGNER_LED} and {@link EntryChannel#UNSPECIFIED} count as
-     * UNSTATED: UNSPECIFIED is the V144 column default, and DESIGNER_LED is the pre-V144 default
-     * that was deliberately never backfilled, so an untouched deal reads one or the other purely by
-     * age (see {@link EntryChannel}'s data-cutoff note).
-     *
-     * <p>{@link #addPolicyActions} reads this to advertise whether {@code SET_ENTRY_CHANNEL} needs
-     * a {@code note}, which is the point of extracting it: the client is TOLD the rule instead of
-     * keeping its own copy, and the advertisement cannot drift from the 400 that enforces it.
-     */
+    /** "A channel has actually been STATED on this deal" — the state half of #setEntryChannel's
+     * changingExistingNonDefault rule, extracted so the rule has exactly one definition. */
     private static boolean entryChannelIsStated(TicketSummaryDto s) {
         return s.entryChannel() != null
             && !EntryChannel.DESIGNER_LED.equals(s.entryChannel())
@@ -3771,30 +4000,69 @@ public class TicketService {
                       TicketStatus.PRICE_PROPOSED).contains(s.status());
     }
 
-    // canSetStage(s, targetStage, actor) — a try/catch around requireStageWriteAccess — is gone.
-    // It answered a strictly weaker question than the one its only caller (addStageActions) needed:
-    // "may this role write this stage?" rather than "can this deal reach it?", which is why
-    // ADVANCE_STAGE was advertised into fact-gated stages that 409 on click. stageDecisions runs
-    // the full gate chain by the same try/catch technique and addStageActions now reads it.
+    // canSetStage(s, targetStage, actor) — a try/catch around requireStageWriteAccess — is gone. stageDecisions
+    // runs the full gate chain by the same try/catch technique and addStageActions now reads it.
 
     private TicketDto requireTicket(long id) {
         return tickets.findById(id)
-            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบดีลนี้"));
+            .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "ไม่พบงานนี้"));
     }
 
     private TicketSummaryDto loadAndVerifyStatus(long ticketId, String expectedStatus) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (!expectedStatus.equals(s.status())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ต้องการสถานะ '" + expectedStatus + "' แต่ดีลนี้อยู่ในสถานะ '" + s.status() + "'");
+                "ต้องการสถานะ '" + expectedStatus + "' แต่งานนี้อยู่ในสถานะ '" + s.status() + "'");
         }
         return s;
+    }
+
+    /** The clock the return-date check reads; the system clock in the app. Tests fix it to an instant at which the
+     * Bangkok and UTC calendar dates differ (00:00–06:59 Bangkok). */
+    private java.time.Clock clock = java.time.Clock.systemUTC();
+
+    void useClock(java.time.Clock clock) {
+        this.clock = clock;
+    }
+
+    /** Today on the Asia/Bangkok calendar, from {@link #clock}. */
+    private LocalDate bangkokToday() {
+        return LocalDate.ofInstant(clock.instant(), java.time.ZoneId.of("Asia/Bangkok"));
+    }
+
+    /** {@link #get}'s import refusal: import reads its own projected deal page, never the whole deal. */
+    private void refuseImportWholeDealRead(UserPrincipal actor) {
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
+    }
+
+    /** วันที่จะกลับมาดู may be today or later on the Asia/Bangkok calendar (QuietRule#returningSql reads the same
+     * date) — whatever zone the clock carries; null means "no date". */
+    private void requireReturnDateNotPast(LocalDate pauseReturnOn) {
+        LocalDate bangkokToday = LocalDate.ofInstant(clock.instant(), java.time.ZoneId.of("Asia/Bangkok"));
+        if (pauseReturnOn != null && pauseReturnOn.isBefore(bangkokToday)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันที่จะกลับมาดูต้องเป็นวันนี้หรือหลังจากนี้");
+        }
+    }
+
+    /**
+     * Fix round 1, ruling 5: the date-only change of an already-paused deal (hold on ON_HOLD, dormant on DORMANT).
+     * Writes the new date (or none) and records it as a POLICY_CHANGED event with the note — no lifecycle change, no
+     * notification, no second pause event. The caller has already run the pause's permission check.
+     */
+    private TicketDto changePauseReturnOn(TicketSummaryDto s, String note, LocalDate pauseReturnOn, UserPrincipal actor) {
+        requireReturnDateNotPast(pauseReturnOn);
+        tickets.updatePauseReturnOn(s.id(), pauseReturnOn);
+        tickets.addEvent(s.id(), actor.id(), actor.name(), TicketEventKind.POLICY_CHANGED, s.salesStage(), s.salesStage(),
+            "pause_return_on → " + (pauseReturnOn == null ? "ไม่ระบุ" : pauseReturnOn.toString()) + noteSuffix(note));
+        return requireTicket(s.id());
     }
 
     private void requireActive(TicketSummaryDto summary) {
         if (!DealLifecycle.ACTIVE.equals(summary.lifecycle())) {
             throw new ApiException(HttpStatus.CONFLICT,
-                "ดีลไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
+                "งานไม่ได้อยู่ในสถานะ ACTIVE (" + summary.lifecycle() + ") จึงแก้ไขขั้นตอนนี้ไม่ได้");
         }
     }
 

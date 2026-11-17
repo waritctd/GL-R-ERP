@@ -46,15 +46,9 @@ import th.co.glr.hr.ticket.DealActivityRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Full-stack wiring test for the finance routes (added in the Opus review of H1, kept as part of the suite).
- *
- * <p>Live wiring proof: the FULL Spring context (real controllers, real Jackson, real SecurityFilterChain AND the
- * real CsrfCookieFilter, in production order) against real Postgres. Every /api/finance/deals route is called with
- * EXACTLY the path and JSON body hrApi.js / its callers send (TicketDetailPage.handleRecordPayment /
- * handleSetBilling, UpdateStageModal, the `{}` revoke body), with the XSRF cookie + X-XSRF-TOKEN header pair the
- * real client (client.js csrfHeaders) sends.
- */
+/** Full-stack wiring test for the finance routes (added in the Opus review of H1, kept as part of the suite).
+ * Live wiring proof: the FULL Spring context (real controllers, real Jackson, real SecurityFilterChain AND the
+ * real CsrfCookieFilter, in production order) against real Postgres. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")

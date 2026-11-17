@@ -25,13 +25,8 @@ import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * P9 + P11: two behavioural proofs of {@link PayrollService#process}/{@link PayrollService#preview}
- * against real Postgres that a Mockito-based unit test cannot reach -- re-processing a month is a
- * real DELETE+INSERT sequence against real rows, and "does attendance affect pay" can only be
- * answered by putting real rows in {@code hr.attendance_punch} and watching what {@code preview}
- * does (or, here, does not) do with them.
- */
+/** P9 + P11: two behavioural proofs of PayrollService#process/PayrollService#preview against real Postgres that
+ * a Mockito-based unit test cannot reach. */
 class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository payrollRepository;
     private PayrollService payrollService;
@@ -48,9 +43,8 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             mock(NotificationService.class),
             mock(TicketRepository.class),
             mock(AttachmentRepository.class), new CeoApproverRepository(jdbc));
-        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix --
-        // PayrollService gained a LeaveRepository dependency for #suggestedInputs, unrelated to what
-        // this test exercises.
+        // Leave -> payroll unpaid-day deduction (2026-07-23): mechanical constructor-arity fix -- PayrollService
+        // gained a LeaveRepository dependency for #suggestedInputs, unrelated to what this test exercises.
         payrollService = new PayrollService(
             payrollRepository,
             new PayrollCalculator(),
@@ -72,28 +66,9 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
 
     // ---- P9: re-processing a month replaces lines, it does not duplicate the period -------------
 
-    /**
-     * Processes March 2026 twice through the real service: once with no per-run inputs (gross =
-     * base salary = 30,000.00), then again with a 5,000.00 specialPay1 for the same employee (gross
-     * = 35,000.00). Asserts there is exactly one {@code hr.payroll_period} row for the month both
-     * before and after the second run, exactly one {@code hr.payroll_line} row for the employee, and
-     * that row reflects the SECOND run's figures -- not both, and not the first run's stale values.
-     *
-     * <p><b>FLAG (no fix applied, per instructions):</b> {@link
-     * PayrollRepository#saveProcessedPeriod} finds-or-inserts the period, unconditionally {@code
-     * DELETE}s that period's lines, then re-inserts the freshly computed ones -- all as ordinary
-     * statements with no {@code SELECT ... FOR UPDATE}, advisory lock, or serializable isolation.
-     * {@code hr.payroll_period} does have a UNIQUE index on {@code payroll_month}
-     * ({@code ux_payroll_period_month}, V15), so two concurrent {@code process()} calls for a month
-     * that has NEVER been processed cannot silently duplicate the period row -- the loser's {@code
-     * INSERT} throws a unique-violation. But two concurrent {@code process()} calls for a month that
-     * HAS already been processed race on the DELETE+INSERT of its lines with no such backstop: it is
-     * a lost-update, not a duplication -- whichever transaction commits last silently wins in full,
-     * discarding the other caller's inputs with no error, no warning, and no audit trail
-     * distinguishing "my process() call was silently overwritten" from "nothing happened." This test
-     * asserts the (currently correct, sequential) replace behaviour; it does not exercise or fix the
-     * concurrent case, per the task instructions not to add a lock here.
-     */
+    /** Processes March 2026 twice through the real service: once with no per-run inputs (gross = base salary =
+     * 30,000.00), then again with a 5,000.00 specialPay1 for the same employee (gross = 35,000.00). FOR UPDATE,
+     * advisory lock, or serializable isolation. */
     @Test
     void reprocessingTheSameMonthThroughTheServiceReplacesLinesRatherThanDuplicating() {
         long employeeId = seedEmployee("REPROC-001", "รีโปรเซส", "ทดสอบ", new BigDecimal("30000.00"));
@@ -126,16 +101,7 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
 
     // ---- P11: §76 -- real lateness/early-leave attendance data never moves payroll pay -----------
 
-    /**
-     * Complements the static source-scan guard ({@code LatenessNeverAffectsPayrollTest}, which only
-     * proves payroll/commission source code never references the {@code late_minutes}/{@code
-     * early_leave_minutes} column names) with a runtime, real-DB proof: insert real {@code
-     * hr.attendance_punch} rows showing a clearly-late clock-in and a clearly-early clock-out on
-     * several work days inside the payroll month, then assert {@link PayrollService#preview}
-     * produces byte-identical figures to a baseline preview taken before any punches existed at all.
-     * Thai Labour Protection Act §76 forbids deducting wages for lateness/absence; payroll must not
-     * even indirectly react to it.
-     */
+    /** Verifies real late/early attendance punches leave payroll preview amounts unchanged. */
     @Test
     void realLatenessAndEarlyLeavePunchesNeverAffectThePayrollPreview() {
         long employeeId = seedEmployee("S76-001", "มาสาย", "ทดสอบ", new BigDecimal("30000.00"));
@@ -246,11 +212,9 @@ class PayrollReprocessAndAttendanceDataFlowIntegrationTest extends AbstractPostg
             """,
             Map.of("code", code, "first", firstNameTh, "last", lastNameTh, "salary", salary),
             Long.class);
-        // Task 2 (2026-07-29): this file is about reprocessing/attendance-data flow, not
-        // classification -- classify every non-salary component REGULAR_REPROJECT (matching the
-        // pre-task-2 blended engine exactly) and seed the real production SSO-inclusion defaults, so
-        // whichever special-pay slot a given test fills in never trips the new unclassified-component
-        // blocker.
+        // Task 2: this file is about reprocessing/attendance-data flow, not classification -- classify every
+        // non-salary component REGULAR_REPROJECT and seed the real production SSO-inclusion defaults, so whichever
+        // special-pay slot a given test fills in never trips the new unclassified-component blocker.
         seedRegularTaxTreatment(employeeId, 2026,
             PayrollComponent.SPECIAL_PAY_1, PayrollComponent.SPECIAL_PAY_2, PayrollComponent.SPECIAL_PAY_3,
             PayrollComponent.SPECIAL_PAY_4, PayrollComponent.SPECIAL_PAY_5, PayrollComponent.SPECIAL_PAY_6,

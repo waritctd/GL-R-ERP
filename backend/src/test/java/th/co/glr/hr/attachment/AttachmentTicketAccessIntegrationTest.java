@@ -30,49 +30,9 @@ import th.co.glr.hr.employee.UpsertEmployeeRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Issue #389, step 2 of CLAUDE.md's "Permission changes must ship evidence": the ENFORCEMENT of
- * {@code TicketAccessPolicy}'s decision, through the real {@link AttachmentController} and the
- * real {@link AttachmentRepository}/{@link TicketRepository} against real Postgres. Mockito
- * cannot reach this — a mocked ticket repository happily returns whatever summary the test hands
- * it, while the real {@code sales.ticket} row (and its nullable {@code assigned_to}) is what the
- * gate actually reads in production.
- *
- * <p><b>The defect.</b> {@code AttachmentController} decided ticket-document access with one
- * blanket constant, {@code MANAGER_ROLES = {hr, sales_manager, ceo}}, used for reads and writes
- * alike, and it was wrong in both directions:
- * <ul>
- *   <li>{@code hr} — which is refused the deal itself, its quotations, its payment ledger and its
- *       activity feed everywhere else in the system ({@code TicketService.VIEWER_ROLES} excludes
- *       it, as does the frontend's {@code canViewTickets}) — could list and download every
- *       customer contract, PO and tax invoice on every deal, with no participant relationship at
- *       all. That single constant was the only place hr held any sales access.</li>
- *   <li>{@code account} — the role that confirms deposit and final-payment receipts
- *       ({@code TicketService.ACCOUNT_ROLES}) and the ONLY role permitted to file invoice
- *       evidence ({@code CommissionService#createFromDeal}) — was refused outright, so it could
- *       be asked to confirm money against a document it could not open.</li>
- * </ul>
- *
- * <p><b>The fix.</b> Reading a deal's documents is aligned with reading the deal
- * ({@code TicketAccessPolicy#canViewDocuments}, sharing {@code VIEWER_ROLES} with
- * {@code TicketService} as one constant rather than two drifting copies), with one deliberate
- * narrowing: {@code import} is refused unless it is a participant, because the documents carry the
- * approved customer price that four other gates already withhold from it. Writing is a separate,
- * narrower question again ({@code TicketAccessPolicy#canManageDocuments}): participants plus
- * sales_manager/ceo, and pointedly NOT account — the tax invoice keeps exactly one entry point.
- *
- * <p>Every case below is written wrong-way-round: "hr asks for a deal it does not participate in
- * → 403" and "account uploads → 403" are the assertions that matter; the positive controls exist
- * only to prove the gate is not simply denying everything.
- *
- * <p><b>MUTATION-CHECK RECORD.</b> Reverted {@code AttachmentController#requireTicketReadAccess}
- * and {@code #requireTicketWriteAccess} to the pre-fix vulnerability — a single
- * {@code Set.of("hr", "sales_manager", "ceo")} participant-or-manager check shared by reads and
- * writes — then rebuilt from clean ({@code rm -rf target/classes}, so no stale {@code .class}
- * could mask it). Exactly the expected tests went red and nothing else; see the report in the
- * commit body for the full list. Reverted afterwards; {@code git diff} of production code against
- * the pre-mutation tree was empty.
- */
+/** Issue #389, step 2 of CLAUDE.md's "Permission changes must ship evidence": the ENFORCEMENT of
+ * TicketAccessPolicy's decision, through the real AttachmentController and the real
+ * AttachmentRepository/TicketRepository against real Postgres. */
 class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final String UPLOAD_DIR = "/tmp/glr-attachment-ticket-access-test-uploads";
 
@@ -117,15 +77,13 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         ticketId = insertTicket(salesOwner.id(), assignee.id());
         FileStorageService.StoredFile stored = storeFile("contract-" + UUID.randomUUID() + ".pdf");
         attachmentPath = stored.filePath();
-        // Uploaded by the CEO, not by any actor under test, so no assertion below can accidentally
-        // pass through the "uploader may always reach their own file" shortcut.
+        // Uploaded by the CEO, not by any actor under test, so no assertion below can accidentally pass through the
+        // "uploader may always reach their own file" shortcut.
         attachmentId = attachments.save(ticketId, null, stored.fileName(), stored.filePath(),
             stored.mimeType(), stored.fileSize(), "OTHER", ceo.id()).id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Problem 1: hr held sales-document access it holds nowhere else in the system.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void hrCannotListTheDocumentsOfADealItDoesNotParticipateIn() {
@@ -157,10 +115,8 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
             .isTrue();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Everyone else who must stay out. These already held before #389 and must keep holding —
-    // narrowing hr must not have loosened anything on the way past.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Everyone else who must stay out. These already held before #389 and must keep holding — narrowing hr must
+    // not have loosened anything on the way past.
 
     @Test
     void aSalesRepWhoIsNeitherCreatorNorAssigneeIsRefusedEverything() {
@@ -178,11 +134,9 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertForbidden(() -> controller.delete(attachmentId, sessionFor(employee)));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Problem 2: account must be able to OPEN the receipt it confirms money against — but the
-    // tax invoice keeps exactly one entry point (CommissionService#createFromDeal), so account
-    // gaining read must NOT hand it a second write path.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Problem 2: account must be able to OPEN the receipt it confirms money against — but the tax invoice keeps
+    // exactly one entry point (CommissionService#createFromDeal), so account gaining read must NOT hand it a
+    // second write path.
 
     @Test
     void accountCannotUploadADocument_theTaxInvoiceKeepsExactlyOneEntryPoint() {
@@ -199,9 +153,9 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         assertThat(attachments.findById(attachmentId)).isPresent();
     }
 
-    // H1 lockdown: account is ROW-SCOPED to its list scope. The fixture deal is at the default (lead)
-    // stage, so it is refused until the deal is put inside the scope (S12); all four attach types stay
-    // readable there (AttachType is exactly {PO, SIGNED_QUOTATION, INVOICE, OTHER}, so no type filter).
+    // H1 lockdown: account is ROW-SCOPED to its list scope. The fixture deal is at the default (lead) stage, so it
+    // is refused until the deal is put inside the scope (S12); all four attach types stay readable there
+    // (AttachType is exactly {PO, SIGNED_QUOTATION, INVOICE, OTHER}, so no type filter).
     @Test
     void accountCanOpenTheDocumentItMustConfirmMoneyAgainst_onlyInsideItsListScope() {
         assertForbidden(() -> controller.list(ticketId, sessionFor(account)));
@@ -217,9 +171,7 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
             .doesNotThrowAnyException();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Positive controls: the roles whose job this is keep the access they had.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void theDealsOwnRepAndItsAssigneeAndOversightRolesKeepFullAccess() {
@@ -233,16 +185,9 @@ class AttachmentTicketAccessIntegrationTest extends AbstractPostgresIntegrationT
         }
     }
 
-    /**
-     * Import's refusal (issue #389 review), enforced end-to-end, now bounded by ROW SCOPE (owner
-     * ruling 2026-09-30): import reads a deal's documents only when the deal is inside its import
-     * scope ({@code TicketRepository#isInImportScope}) or it is the deal's participant. The
-     * fixture deal here is a bare early-pipeline ticket (default stage, no pricing request) — OUTSIDE
-     * import's scope — so a non-participant import is still refused everything, including every
-     * write. The in-scope grant is pinned in {@code ImportCommentAndDocumentAuthzIntegrationTest}.
-     * {@code importUser} here is NOT this deal's assignee; the separate {@code assignee} actor
-     * (also role {@code import}) proves the participant grant still works.
-     */
+    /** Import's refusal (issue #389 review), enforced end-to-end, now bounded by ROW SCOPE (owner ruling
+     * 2026-09-30): import reads a deal's documents only when the deal is inside its import scope
+     * (TicketRepository#isInImportScope) or it is the deal's participant. */
     @Test
     void importIsRefusedDocumentsOnAnOutOfScopeDealItHasNotPickedUp() {
         assertForbidden(() -> controller.list(ticketId, sessionFor(importUser)));

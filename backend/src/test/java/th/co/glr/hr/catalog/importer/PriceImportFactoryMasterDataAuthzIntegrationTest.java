@@ -28,37 +28,17 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
-/**
- * Factory master-data write endpoints — {@code POST}/{@code PUT /api/price-import/factories} and
- * {@code GET /api/price-import/countries} — added/fixed alongside the price_catalog.factories /
- * sales.factory_config merge (V163). {@code createFactory} used to pass {@code country = null} on
- * a blank input; V151 made {@code price_catalog.factories.country} NOT NULL + FK, so that raised a
- * bare 500 via {@code ApiExceptionHandler.handleDataAccess} ("cannot add a factory") instead of a
- * clean 400. Country is now REQUIRED and validated against {@code price_catalog.country} up front.
- *
- * <p>Runs the REAL {@link PriceImportController} over the REAL {@link PriceImportService} /
- * {@link FactoryConfigRepository} on REAL Postgres, per CLAUDE.md's "Permission changes must ship
- * evidence": a Mockito-mocked repository passes happily while the SQL does something else, and
- * this repo has been bitten by exactly that. {@code AttendanceScopeIntegrationTest} is the
- * reference shape; {@code CatalogPricingReadAuthzIntegrationTest} is the closest sibling (same
- * real-controller-over-real-Postgres MockMvc technique, one package over).
- *
- * <p>Every denial case is written <strong>wrong way round</strong>: it asks whether a caller who
- * should NOT reach the write can reach it — and additionally confirms no row was created/changed
- * as a side effect — rather than only confirming the permitted roles can reach their own writes.
- */
+/** Factory master-data write endpoints — POST/PUT /api/price-import/factories and GET
+ * /api/price-import/countries — added/fixed alongside the price_catalog.factories / sales.factory_config merge
+ * (V163). Country is now REQUIRED and validated against price_catalog.country up front. */
 class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
 
     /** Everyone outside PriceImportController.requireImporter's ceo/import gate. */
     private static final List<String> DENIED_ROLES =
         List.of("employee", "warehouse", "qc", "hr", "sales", "sales_manager", "account");
 
-    /**
-     * PR-B REVIEW ROUND 1, B2: everyone outside {@code requireCountriesReader}'s widened
-     * ceo/import/sales/sales_manager gate for the countries picker specifically. Deliberately a
-     * SEPARATE list from {@link #DENIED_ROLES} above — sales/sales_manager moved from denied to
-     * permitted for THIS ONE endpoint only; every write endpoint above must keep refusing them.
-     */
+    /** PR-B REVIEW ROUND 1, B2: everyone outside requireCountriesReader's widened ceo/import/sales/sales_manager
+     * gate for the countries picker specifically. */
     private static final List<String> DENIED_COUNTRIES_READ_ROLES =
         List.of("employee", "warehouse", "qc", "hr", "account");
 
@@ -68,9 +48,9 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
     void wireRealCollaborators() {
         SessionContext sessions = new SessionContext();
 
-        // ImportEngine (file-parsing) is mocked -- irrelevant to every test in this class, which
-        // never touches /upload or /upload-commit. Everything else here is real: real jdbc (from
-        // AbstractPostgresIntegrationTest), real FactoryConfigRepository, real PriceImportService.
+        // ImportEngine (file-parsing) is mocked -- irrelevant to every test in this class, which never touches /upload
+        // or /upload-commit. Everything else here is real: real jdbc (from AbstractPostgresIntegrationTest), real
+        // FactoryConfigRepository, real PriceImportService.
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.findAndRegisterModules();
         PriceImportService service =
@@ -143,10 +123,8 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
         assertThat(countFactoriesNamed("New Factory Ceo")).isEqualTo(1L);
     }
 
-    /**
-     * THE FIX: {@code country = null} used to reach the NOT NULL + FK column and 500. Now a
-     * clean 400, and — the part a status-code-only assertion would miss — no half-written row.
-     */
+    /** THE FIX: country = null used to reach the NOT NULL + FK column and 500. Now a clean 400, and — the part a
+     * status-code-only assertion would miss — no half-written row. */
     @Test
     void createFactoryRejectsABlankCountryWith400NotA500() throws Exception {
         mvc.perform(post("/api/price-import/factories").session(session("import"))
@@ -158,14 +136,8 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
         assertThat(countFactoriesNamed("No Country Factory")).isZero();
     }
 
-    /**
-     * {@code 'XX'} — not {@code 'ZZ'}, since V184 seeded {@code 'ZZ'} (อื่นๆ) as a real, always-
-     * valid catch-all country (owner decision 09-18). This test previously used {@code 'ZZ'} back
-     * when it really was unseeded/unknown; it is now genuinely unknown to price_catalog.country
-     * (there is no more 'XX' sentinel either — see V184's own comment), so it still exercises the
-     * "unknown code" branch of {@code requireValidCountry} rather than accidentally drifting onto
-     * the ZZ-pairing rule ({@link #createFactoryRejectsZzWithNoCountryOtherWith400NotA500} below).
-     */
+    /** 'XX' — not 'ZZ', since V184 seeded 'ZZ' (อื่นๆ) as a real, always- valid catch-all country (owner decision
+     * 09-18). */
     @Test
     void createFactoryRejectsAnUnknownCountryCodeWith400NotA500() throws Exception {
         mvc.perform(post("/api/price-import/factories").session(session("import"))
@@ -230,22 +202,15 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
         assertThat(countFactoriesNamed("Duplicate Name Factory")).isEqualTo(1L);
     }
 
-    // ── create: currency/email/unit length validation (MEDIUM 5, review remediation) ─────────
-    //
-    // The country fix above (createFactoryRejectsABlankCountryWith400NotA500 /
-    // ...UnknownCountryCodeWith400NotA500) closed ONE way this endpoint 500'd on bad input, but
-    // normalizeCurrency only uppercased/trimmed — it never checked length — and email/unit had no
-    // length check at all. default_currency is CHAR(3), email is VARCHAR(200), unit is VARCHAR(30)
-    // (V163): an out-of-range value for any of the three still reached Postgres, raised a 22001
-    // ("value too long"/mismatched fixed-length), and came back out through
-    // ApiExceptionHandler.handleDataAccess as the exact bare 500 this whole change exists to
-    // remove. These pin the same "clean 400, no half-written row" shape for all three.
+    // create: currency/email/unit length validation ───────── The country fix above closed ONE way this endpoint
+    // 500'd on bad input, but normalizeCurrency only uppercased/trimmed — it never checked length — and email/unit
+    // had no length check at all.
 
     @Test
     void createFactoryRejectsAnInvalidLengthCurrencyWith400NotA500() throws Exception {
-        // "EURO" (4 chars) would 22001 outright; "TH" (2 chars) would not error at all — CHAR(3)
-        // BLANK-PADS a too-short value instead of rejecting it, silently storing "TH " with a
-        // trailing space. Both must be refused up front.
+        // "EURO" (4 chars) would 22001 outright; "TH" (2 chars) would not error at all — CHAR(3) BLANK-PADS a
+        // too-short value instead of rejecting it, silently storing "TH " with a trailing space. Both must be refused
+        // up front.
         for (String badCurrency : List.of("EURO", "TH")) {
             mvc.perform(post("/api/price-import/factories").session(session("import"))
                     .contentType(MediaType.APPLICATION_JSON)
@@ -384,14 +349,9 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
             Map.of("id", factoryId), String.class)).isEqualTo("Neverland");
     }
 
-    /**
-     * REVIEW ROUND 1, S6: a ZZ factory that already has a stored {@code countryOther} must stay
-     * EDITABLE from a request that omits the field entirely — today's UI has no text input for it
-     * yet (PR-B adds one; {@code PriceImportPage}'s picker hides 'ZZ' from NEW selections for
-     * exactly this reason). Country UNCHANGED (still 'ZZ') is the case that matters; {@link
-     * #updateFactoryReturns400ForZzWithNoCountryOtherNotA500} above already pins the "country
-     * CHANGED to ZZ" case, which must still demand one.
-     */
+    /** REVIEW ROUND 1, S6: a ZZ factory that already has a stored countryOther must stay EDITABLE from a request
+     * that omits the field entirely — today's UI has no text input for it yet (PR-B adds one; PriceImportPage's
+     * picker hides 'ZZ' from NEW selections for exactly this reason). */
     @Test
     void updateFactoryKeepsTheStoredCountryOther_whenTheRequestOmitsItAndCountryIsUnchanged() throws Exception {
         long factoryId = jdbc.queryForObject("""
@@ -478,11 +438,9 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
 
     // ── countries picker: authz ───────────────────────────────────────────────────────────────
 
-    /**
-     * PR-B REVIEW ROUND 1, B2: wrong-way-round — roles with no business reason to see the country
-     * picker (employee/warehouse/qc/hr/account) must still 403. sales/sales_manager are
-     * DELIBERATELY EXCLUDED from this list now — see {@link #importCeoSalesSalesManagerCanListCountries}.
-     */
+    /** PR-B REVIEW ROUND 1, B2: wrong-way-round — roles with no business reason to see the country picker
+     * (employee/warehouse/qc/hr/account) must still 403. sales/sales_manager are DELIBERATELY EXCLUDED from this
+     * list now — see #importCeoSalesSalesManagerCanListCountries. */
     @Test
     void rolesOutsideTheWidenedCountriesGateCannotListCountries() throws Exception {
         for (String role : DENIED_COUNTRIES_READ_ROLES) {
@@ -491,13 +449,9 @@ class PriceImportFactoryMasterDataAuthzIntegrationTest extends AbstractPostgresI
         }
     }
 
-    /**
-     * PR-B REVIEW ROUND 1, B2 (owner-approved default): the owning sales rep's new-factory country
-     * picker on {@code ImportRequestFactoryCard} (V184 createDrafts auto-create path) needs to read
-     * this list — country codes are not sensitive, so READ widens to sales + sales_manager
-     * alongside the existing import/ceo. Writes (createFactory/updateFactory) are untouched — see
-     * the DENIED_ROLES-gated tests above, which still include sales/sales_manager.
-     */
+    /** PR-B REVIEW ROUND 1, B2 (owner-approved default): the owning sales rep's new-factory country picker on
+     * ImportRequestFactoryCard (V184 createDrafts auto-create path) needs to read this list — country codes are
+     * not sensitive, so READ widens to sales + sales_manager alongside the existing import/ceo. */
     @Test
     void importCeoSalesSalesManagerCanListCountries() throws Exception {
         for (String role : List.of("import", "ceo", "sales", "sales_manager")) {

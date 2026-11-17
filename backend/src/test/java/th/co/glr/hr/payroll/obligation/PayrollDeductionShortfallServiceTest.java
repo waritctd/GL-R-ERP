@@ -13,10 +13,8 @@ import org.springframework.http.HttpStatus;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiException;
 
-/**
- * Unit-tests the DECISION: which role may read the shortfall ledger. Mockito proves the branch
- * chosen; {@link PayrollDeductionShortfallScopeIntegrationTest} proves it survives into real SQL.
- */
+/** Unit-tests the DECISION: which role may read the shortfall ledger. Mockito proves the branch chosen;
+ * PayrollDeductionShortfallScopeIntegrationTest proves it survives into real SQL. */
 class PayrollDeductionShortfallServiceTest {
     private final PayrollDeductionShortfallRepository repository = mock(PayrollDeductionShortfallRepository.class);
     private final PayrollDeductionShortfallService service = new PayrollDeductionShortfallService(repository);

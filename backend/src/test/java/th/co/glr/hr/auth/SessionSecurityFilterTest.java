@@ -21,16 +21,9 @@ import org.springframework.mock.web.MockHttpSession;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 
-/**
- * {@link SessionSecurityFilter}'s per-request account re-check (owner ruling 2026-10-06), at the
- * level where the cases that are awkward to stage over real HTTP can be stated exactly — above
- * all the one that matters most operationally: a lookup that FAILS must not log anybody out.
- *
- * <p>The behaviour end to end (real login, real cookie, real database row changed underneath it)
- * is {@code config.SessionLifetimeIntegrationTest}; this class does not repeat that, and is not a
- * substitute for it — a mocked resolver proves the filter's branches, not that a deactivated
- * employee is actually shut out.
- */
+/** SessionSecurityFilter's per-request account re-check (owner ruling 2026-10-06), at the level where the cases
+ * that are awkward to stage over real HTTP can be stated exactly — above all the one that matters most
+ * operationally: a lookup that FAILS must not log anybody out. */
 class SessionSecurityFilterTest {
 
     private final SessionAccountResolver accounts = mock(SessionAccountResolver.class);
@@ -69,8 +62,8 @@ class SessionSecurityFilterTest {
 
         assertThat(seen.getPrincipal()).isEqualTo(now);
         assertThat(seen.getAuthorities()).extracting(Object::toString).containsExactly("ROLE_EMPLOYEE");
-        // Controllers and MustChangePasswordFilter read the principal back out of the SESSION,
-        // not the security context — so it has to be there, not only on the request.
+        // Controllers and MustChangePasswordFilter read the principal back out of the SESSION, not the security
+        // context — so it has to be there, not only on the request.
         assertThat(session.getAttribute(SessionContext.SESSION_USER_KEY)).isEqualTo(now);
         // …and it is still a signed-in session, so the next request is re-checked too.
         assertThat(session.getAttribute(SessionContext.SESSION_SIGNED_IN_AT_KEY)).isNotNull();
@@ -98,11 +91,9 @@ class SessionSecurityFilterTest {
         assertThat(session.isInvalid()).isTrue();
     }
 
-    /**
-     * The safety property. The database being unreachable for one request must cost that request —
-     * a 500 — and nothing else. Reading a failed lookup as "this account is inactive" would end
-     * the session of every single person who happened to make a request during the blip.
-     */
+    /** The safety property. The database being unreachable for one request must cost that request — a 500 — and
+     * nothing else. Reading a failed lookup as "this account is inactive" would end the session of every single
+     * person who happened to make a request during the blip. */
     @Test
     void signedIn_andTheLookupFails_theFailurePropagates_andTheSessionIsLeftAlone() {
         UserPrincipal hr = principal(7, "hr", false);
@@ -118,13 +109,9 @@ class SessionSecurityFilterTest {
 
     // ── a session with no sign-in record is trusted as it always was ─────────────────────────
 
-    /**
-     * Not a production case — {@link SessionContext#signIn} is the only thing that ever puts a
-     * principal into a session there. This is the shape ~50 test classes plant by hand
-     * ({@code session.setAttribute(SESSION_USER_KEY, principal(id, "account"))}), usually with no
-     * employee row behind the role. Pinned so that it stays exactly what those tests rely on: the
-     * planted role is the role, and the database is not consulted at all.
-     */
+    /** Not a production case — SessionContext#signIn is the only thing that ever puts a principal into a session
+     * there. This is the shape ~50 test classes plant by hand (session.setAttribute(SESSION_USER_KEY,
+     * principal(id, "account"))), usually with no employee row behind the role. */
     @Test
     void plantedPrincipal_withNoSignInRecord_runsAsPlanted_andTheDatabaseIsNotAsked() throws Exception {
         UserPrincipal planted = principal(999, "account", false);

@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { DEAL_STAGE_CATALOG } from '../../data/dealStageCatalog.js';
 import { MONEY_TRACK, isMilestoneSkipped, isPastProcurement, moneyMilestoneOf } from './moneyMilestone.js';
 
-// Pins the mirror of th.co.glr.hr.ticket.MoneyMilestone (backend). The stage list comes from the
-// guarded catalog fixture (which stageCatalog.test.js pins against DealStage.java), so a stage added
-// to the backend forces a decision here instead of silently mapping to nothing.
+// Pins the mirror of th.co.glr.hr.ticket.MoneyMilestone (backend). The stage list comes from the guarded
+// catalog fixture (which stageCatalog.test.js pins against DealStage.java), so a stage added to the backend
+// forces a decision here instead of silently mapping to nothing.
 describe('moneyMilestone (mirrors MoneyMilestone.java)', () => {
   it('the track is the five milestones, in order, with the backend labels', () => {
     expect(MONEY_TRACK.map((m) => [m.index, m.key, m.label])).toEqual([

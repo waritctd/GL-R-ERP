@@ -44,16 +44,8 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms the role-scoped งานขาย views (Phase B) against the real service and the real SQL —
- * mirrors {@code AttendanceScopeIntegrationTest}. mockApi.js / salesViewScope.js approximate this
- * at the UI layer, but per CLAUDE.md's "Permission changes must ship evidence" section, only this
- * proves the decision survives the WHERE clause and actually filters rows; Mockito cannot reach
- * that (a mocked repository would happily "pass" while the SQL does something else).
- *
- * <p>Every case here asks the question the wrong way round — can this caller reach a deal, or a
- * sub-resource, they should not — rather than confirming they can reach their own.
- */
+/** Confirms the role-scoped งานขาย views (Phase B) against the real service and the real SQL — mirrors
+ * AttendanceScopeIntegrationTest. */
 class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -86,8 +78,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         pricingRequestService = new PricingRequestService(
             pricingRequests, tickets, notifications, new ObjectMapper(), contacts, fileStorage, factoryQuoteCarryForward());
 
-        // Real TicketService, wired the same way TicketRepositoryIntegrationTest wires the
-        // repository.
+        // Real TicketService, wired the same way TicketRepositoryIntegrationTest wires the repository.
         ticketService = new TicketService(tickets, notifications,
             new ObjectMapper(), customers, new QuotationRenderer(), pricingRequestService, new th.co.glr.hr.auth.EmployeeAuthRepository(jdbc), new th.co.glr.hr.customer.ContactRepository(jdbc), new th.co.glr.hr.customer.ProjectRepository(jdbc),
             new th.co.glr.hr.dealquotation.DealQuotationRepository(jdbc, new th.co.glr.hr.catalog.CatalogRepository(jdbc)));
@@ -96,10 +87,9 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             notifications, new DepositNoticePdfRenderer(), customers,
             new CustomerQuotationRepository(jdbc));
 
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService (markReadyForCosting's
-        // auto-advance check) and, in production, PricingDecisionService — this file only reads
-        // through PricingCostingService (see pricingCostingService.get below), so the calculator
-        // is wired but never exercised beyond satisfying the constructor.
+        // V141: shared by FactoryQuoteService and, in production, PricingDecisionService — this file only reads
+        // through PricingCostingService, so the calculator is wired but never exercised beyond satisfying the
+        // constructor.
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests,
@@ -109,8 +99,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             new FactoryConfigRepository(jdbc),
             notifications, fileStorage, landedCostCalculator);
 
-        // V141: PricingCostingService is READ-ONLY now (list/get) — the 8-arg convenience
-        // constructor that assembled its own LandedCostCalculator is gone.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — the 8-arg convenience constructor that assembled
+        // its own LandedCostCalculator is gone.
         pricingCostingService = new PricingCostingService(pricingCostings, pricingRequests, tickets);
 
         EmployeeRepository employees = new EmployeeRepository(
@@ -144,18 +134,9 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsIn(listPage(importUser))).contains(ticketId);
     }
 
-    /**
-     * The state the whole import worklist exists to serve, and the one the scope used to hide.
-     *
-     * <p>A deal awaiting its IR sits at DEPOSIT_RECEIVED with an ACCEPTED pricing request — the
-     * customer has said yes, so the request is terminal. Under the old PROCUREMENT floor BOTH
-     * disjuncts were false and the row simply did not come back, while PROCUREMENT is written only
-     * by {@code issueImportRequest} itself. Import could not see the deal until after doing the
-     * thing it needed the deal in order to do.
-     *
-     * <p>Deliberately builds the terminal pricing request rather than leaving none: without it the
-     * test would pass on the stage clause alone even if the terminal-status logic were wrong.
-     */
+    /** The state the whole import worklist exists to serve, and the one the scope used to hide. Under the old
+     * PROCUREMENT floor BOTH disjuncts were false and the row simply did not come back, while PROCUREMENT is
+     * written only by issueImportRequest itself. */
     @Test
     void importListPage_dealAwaitingItsImportRequest_isReturned() {
         long ticketId = createTicket(DealStage.DEPOSIT_RECEIVED);
@@ -164,12 +145,9 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsIn(listPage(importUser))).contains(ticketId);
     }
 
-    /**
-     * The deposit-bypass path. {@code issueImportRequest} accepts DEPOSIT_NOTICE_ISSUED and a
-     * bypass policy's CUSTOMER_CONFIRMED, and a deal in either is still standing at ORDER_RECEIVED
-     * — the stage only advances to DEPOSIT_RECEIVED once money lands. A floor of DEPOSIT_RECEIVED
-     * would leave this case broken, so the floor is ORDER_RECEIVED and this pins it.
-     */
+    /** The deposit-bypass path. issueImportRequest accepts DEPOSIT_NOTICE_ISSUED and a bypass policy's
+     * CUSTOMER_CONFIRMED, and a deal in either is still standing at ORDER_RECEIVED — the stage only advances to
+     * DEPOSIT_RECEIVED once money lands. */
     @Test
     void importListPage_orderReceivedDealWithNoLivePricingRequest_isReturned() {
         long ticketId = createTicket(DealStage.ORDER_RECEIVED);
@@ -178,12 +156,9 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsIn(listPage(importUser))).contains(ticketId);
     }
 
-    /**
-     * Wrong way round: the widening must not have become "import sees everything". NEGOTIATION is
-     * the stage immediately below the new ORDER_RECEIVED floor, and with only a terminal pricing
-     * request neither disjunct holds — so it stays out. Without this, moving the floor to
-     * LEAD_APPROACH by accident would pass every other test in this class.
-     */
+    /** Wrong way round: the widening must not have become "import sees everything". NEGOTIATION is the stage
+     * immediately below the new ORDER_RECEIVED floor, and with only a terminal pricing request neither disjunct
+     * holds — so it stays out. */
     @Test
     void importListPage_stageJustBelowTheFloorWithOnlyATerminalPricingRequest_isNotReturned() {
         long ticketId = createTicket(DealStage.NEGOTIATION);
@@ -261,11 +236,9 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsIn(listPage(accountUser))).contains(ticketId);
     }
 
-    // Moved from DELIVERED to NEGOTIATION (S9) when the account list scope gained the "every ORDER
-    // stage from ORDER_RECEIVED" disjunct: DELIVERED is now in scope for stage alone, so it could
-    // no longer prove "past due date but fully paid is not returned". The intent is unchanged --
-    // the overdue disjunct must not fire on a settled balance -- so the deal now sits below S10
-    // where stage cannot admit it either.
+    // Moved from DELIVERED to NEGOTIATION (S9) when the account list scope gained the "every ORDER stage from
+    // ORDER_RECEIVED" disjunct: DELIVERED is now in scope for stage alone, so it could no longer prove "past due
+    // date but fully paid is not returned".
     @Test
     void accountListPage_pastDueDateButFullyPaid_isNotReturned() {
         long ticketId = createTicket(DealStage.NEGOTIATION);
@@ -277,12 +250,7 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(idsIn(listPage(accountUser))).doesNotContain(ticketId);
     }
 
-    // ── account list scoping: the money worklist is every live order from S10 on (H1) ───────
-    //
-    // The old scope keyed only on payment_status (DEPOSIT_NOTICE_ISSUED / AWAITING_FINAL_PAYMENT)
-    // or overdue-with-balance, so a deal sitting at DEPOSIT_PAID through PROCUREMENT (S12-S17)
-    // vanished from account's list at exactly the stage where it is waiting on goods, and
-    // bypass-policy / fully-paid / closed-paid deals never appeared at all.
+    // Checks account's worklist includes live orders throughout fulfilment, beyond narrow payment-status filters.
 
     @Test
     void accountListPage_orderReceivedWithNoPaymentStatus_isReturned() {
@@ -349,13 +317,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(ids).doesNotContain(byLifecycle, byStatus);
     }
 
-    /**
-     * Forces the COUNT branch: a page that is exactly full skips the "rows.size() &lt; size"
-     * shortcut, so {@code countSummaries} really runs and must apply the identical fragment.
-     * The out-of-scope rows (lost / NEGOTIATION / cancelled) would inflate a count that
-     * drifted from the row query. (The quotation_only exclusion was dropped by develop's
-     * deal-route staging, so a quotation-only container is no longer an out-of-scope fixture.)
-     */
+    /** Forces the COUNT branch: a page that is exactly full skips the "rows.size() < size" shortcut, so
+     * countSummaries really runs and must apply the identical fragment. */
     @Test
     void accountListPage_countPathAgreesWithRows() {
         createTicket(DealStage.ORDER_RECEIVED);
@@ -379,12 +342,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     // ── import: quotation is not part of its read surface ───────────────────
 
-    /**
-     * import no longer reaches GET /tickets/{id} (it has its own per-deal endpoint,
-     * GET /api/import/deals/{id}, which never carries a quotation — see
-     * ImportDealAuthzIntegrationTest). The quotation stays projected out of the one ticket-DTO
-     * path import can still hit, {@code comment}, which re-fetches and re-projects the ticket.
-     */
+    /** import no longer reaches GET /tickets/{id} (it has its own per-deal endpoint, GET /api/import/deals/{id},
+     * which never carries a quotation — see ImportDealAuthzIntegrationTest). */
     @Test
     void importGet_isRefused_andImportCommentStillProjectsTheQuotationOut() {
         long ticketId = createTicket(DealStage.QUOTE_BUYER);
@@ -423,8 +382,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThatThrownBy(() -> ticketService.listPayments(ticketId, importUser))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
 
-        // Positive control: ceo can read the ledger. (H1 lockdown: account no longer reads it through
-        // /tickets -- it reads it inside the finance deal view.)
+        // Positive control: ceo can read the ledger. (H1 lockdown: account no longer reads it through /tickets -- it
+        // reads it inside the finance deal view.)
         assertThat(ticketService.listPayments(ticketId, ceoUser)).isEmpty();
         assertThatThrownBy(() -> ticketService.listPayments(ticketId, accountUser))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
@@ -459,8 +418,8 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Test
     void accountFactoryQuoteGet_deniedBeforeAnyLookup() {
-        // The role gate runs before the repository lookup, so a non-existent id is enough to
-        // distinguish "denied" (403) from "role passed, resource not found" (404).
+        // The role gate runs before the repository lookup, so a non-existent id is enough to distinguish "denied"
+        // (403) from "role passed, resource not found" (404).
         assertThatThrownBy(() -> factoryQuoteService.get(999_999L, accountUser))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(403));
         assertThatThrownBy(() -> factoryQuoteService.get(999_999L, importUser))
@@ -475,30 +434,13 @@ class TicketScopeIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus().value()).isEqualTo(404));
     }
 
-    // ── L2 (Stage L): sales own-only created_by row-scope ───────────────────────
-    //
-    // TicketRepository.findSummaries/countSummaries carry
-    // "AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)", bound by TicketService
-    // only when actor.role().equals("sales"). The import/account appendRoleScope slices above are
-    // thoroughly tested; this own-only filter — the one that actually protects a sales rep's deal
-    // data from a colleague — was not. Written wrong-way-round: can rep A see rep B's ticket.
-    //
-    // Note: the "injection guard" case from the Stage L spec (a caller passing another rep's id as
-    // a filter param) does not apply here — TicketService.list/listPage never accept a createdBy
-    // parameter from the caller at all; the filter is derived solely from actor.role()/actor.id()
-    // server-side, so there is no parameter surface to inject through.
+    // L2 (Stage L): sales own-only created_by row-scope ───────────────────────
+    // TicketRepository.findSummaries/countSummaries carry "AND (:createdBy::bigint IS NULL OR t.created_by =
+    // :createdBy)", bound by TicketService only when actor.role().equals("sales").
 
-    /**
-     * MUTATION-CHECK RECORD (actually run, not simulated): temporarily changed both occurrences
-     * of {@code AND (:createdBy::bigint IS NULL OR t.created_by = :createdBy)} in {@link
-     * TicketRepository#findSummaries} and {@link TicketRepository#countSummaries} to {@code AND
-     * (TRUE)} (neutralizing the sales own-only predicate) and ran this class (20 tests). Exactly
-     * two went red — {@code salesListPage_ownOnly_excludesOtherRepsTicket} and {@code
-     * salesList_ownOnly_excludesOtherRepsTicket} (both failed with "expected not to contain [the
-     * other rep's ticket id], but found it") — while all 18 import/account/ceo scoping tests
-     * above stayed green (they exercise {@code appendRoleScope}, a separate predicate). Reverted
-     * both occurrences; {@code git diff} against the pre-mutation tree was empty afterwards.
-     */
+    /** MUTATION-CHECK RECORD: temporarily changed both occurrences of AND in TicketRepository#findSummaries and
+     * TicketRepository#countSummaries to AND and ran this class. Reverted both occurrences; git diff against the
+     * pre-mutation tree was empty afterwards. */
     @Test
     void salesListPage_ownOnly_excludesOtherRepsTicket() {
         long ticketA = createTicket(DealStage.LEAD_APPROACH, salesRepId, "พนักงานขาย ทดสอบ");

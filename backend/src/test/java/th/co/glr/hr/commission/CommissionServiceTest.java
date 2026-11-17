@@ -78,8 +78,8 @@ class CommissionServiceTest {
             .thenReturn(new FileStorageService.StoredFile("invoice.pdf", "/tmp/invoice.pdf", "application/pdf", 100L));
         when(commissionAttachments.saveWithContent(eq(500L), eq("invoice.pdf"), eq("/tmp/invoice.pdf"), eq("application/pdf"), eq(100L), eq(30L), any(byte[].class)))
             .thenReturn(700L);
-        // FLAG-10 (2026-07-23): commission on money received in month M is paid in payroll month
-        // M+1 -- invoiceDate June 15 lands payroll_month July 1, not June 1.
+        // FLAG-10 (2026-07-23): commission on money received in month M is paid in payroll month M+1 -- invoiceDate
+        // June 15 lands payroll_month July 1, not June 1.
         when(commissions.createCommissionRecord(eq(500L), eq((Long) null), eq(30L), eq(30L), eq(LocalDate.of(2026, 7, 1)),
                 eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null)))
             .thenReturn(900L);
@@ -107,10 +107,8 @@ class CommissionServiceTest {
             .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
-    // ── Slice A2 (AUTHZ CHANGE): sales can no longer submit/create commissions at all. Written
-    // wrong-way-round per CLAUDE.md — the "sales is rejected, nothing is created" case is the one
-    // that matters. Real-DB enforcement (through the real service + repository, not Mockito) is
-    // proven by CommissionAutoCreateIntegrationTest, including the mutation-check. ────────────
+    // Slice A2 (AUTHZ CHANGE): sales can no longer submit/create commissions at all. Written wrong-way-round per
+    // CLAUDE.md — the "sales is rejected, nothing is created" case is the one that matters.
 
     @Test
     void submitAsSales_isForbidden_andCreatesNoRecord() {
@@ -134,9 +132,9 @@ class CommissionServiceTest {
         verify(commissions, never()).hasActiveCommissionForTicket(anyLong());
     }
 
-    // ── Step 9 gate + cross-check decision (unit level — the SQL enforcement itself is proven by
-    // CommissionDealLinkageIntegrationTest against real Postgres, per CLAUDE.md's "unit-test the
-    // decision, integration-test the enforcement"). ──────────────────────────────────────────
+    // Step 9 gate + cross-check decision (unit level — the SQL enforcement itself is proven by
+    // CommissionDealLinkageIntegrationTest against real Postgres, per CLAUDE.md's "unit-test the decision,
+    // integration-test the enforcement").
 
     @Test
     void submitWithLinkedTicketNotFound_rejectsBeforeTouchingTheInvoice() {
@@ -240,10 +238,8 @@ class CommissionServiceTest {
         verify(tickets, never()).payableAmountExVat(anyLong());
     }
 
-    // ── Slice A2 createFromDeal decision-level tests (unit) — role gate, salesRepId resolution,
-    // grossAmount defaulting, and the duplicate/CLOSED_PAID guards. Real-DB enforcement (through
-    // the real service + repository against real Postgres, including the wrong-way-round authz
-    // case and its mutation-check) is CommissionAutoCreateIntegrationTest. ────────────────────
+    // Slice A2 createFromDeal decision-level tests (unit) — role gate, salesRepId resolution, grossAmount
+    // defaulting, and the duplicate/CLOSED_PAID guards.
 
     @Test
     void createFromDeal_requiresInvoiceFile() {
@@ -383,11 +379,9 @@ class CommissionServiceTest {
         verify(calculator).calculateInvoice(eq(new BigDecimal("9999.00")), any(), any(), any(), any(), any(), any(), any());
     }
 
-    /**
-     * FLAG-10 (2026-07-23, owner-confirmed against reconciled real May 2026 accountant data):
-     * commission on money received in month M is paid in payroll month M+1 -- invoiceDate May 20
-     * must land {@code payroll_month} June 1, not May 1.
-     */
+    /** FLAG-10 (2026-07-23, owner-confirmed against reconciled real May 2026 accountant data): commission on money
+     * received in month M is paid in payroll month M+1 -- invoiceDate May 20 must land payroll_month June 1, not
+     * May 1. */
     @Test
     void submit_shiftsPayrollMonthToTheMonthAfterInvoiceDate_flag10() {
         SubmitCommissionRequest request = new SubmitCommissionRequest(
@@ -413,10 +407,8 @@ class CommissionServiceTest {
             eq(calculation), eq((BigDecimal) null), eq(false), eq((BigDecimal) null));
     }
 
-    /**
-     * FLAG-10 companion for the other SALE-commission creation site: the accountant auto-create
-     * trigger must shift by the same +1 month, not just the manual {@link #submit} path.
-     */
+    /** FLAG-10 companion for the other SALE-commission creation site: the accountant auto-create trigger must shift
+     * by the same +1 month, not just the manual #submit path. */
     @Test
     void createFromDeal_shiftsPayrollMonthToTheMonthAfterInvoiceDate_flag10() {
         long ticketId = 42L;
@@ -443,11 +435,9 @@ class CommissionServiceTest {
             eq(calculation), any(), eq(false), eq((BigDecimal) null));
     }
 
-    /**
-     * FLAG-10 boundary: the HR-picked manual-entry month is already a target payroll month, not a
-     * money-received date, so it must NOT go through the +1 shift -- only get normalized to day 1
-     * exactly as before. A May 15 pick must land May 1, never June 1.
-     */
+    /** FLAG-10 boundary: the HR-picked manual-entry month is already a target payroll month, not a money-received
+     * date, so it must NOT go through the +1 shift -- only get normalized to day 1 exactly as before. A May 15
+     * pick must land May 1, never June 1. */
     @Test
     void createManualCommission_explicitPayrollMonthIsNormalizedButNotShifted_flag10() {
         when(commissions.createManualCommission(eq(CommissionKind.INCENTIVE), eq(30L), eq(500L),
@@ -640,9 +630,9 @@ class CommissionServiceTest {
             false,
             null,
             null,
-            // V148 (per-item stock-commission weighting): NULL here -- this fixture predates the
-            // feature and effectiveWeight() falls back to the plain weightMultiplier (1) above,
-            // matching this record's behavior before V148 existed.
+            // V148 (per-item stock-commission weighting): NULL here -- this fixture predates the feature and
+            // effectiveWeight() falls back to the plain weightMultiplier (1) above, matching this record's behavior before
+            // V148 existed.
             null
         );
     }
@@ -655,9 +645,9 @@ class CommissionServiceTest {
         return new UserPrincipal(30L, "sales@glr.co.th", "Sales", "sales", 30L, true, LocalDate.now(), false, null, false);
     }
 
-    // Slice A2: account replaces sales as the day-to-day commission-creation actor. Same id (30L)
-    // as salesUser() so the pre-existing mock stubs below (keyed on submittedById/uploadedBy=30L)
-    // keep working unchanged — only the role differs.
+    // Slice A2: account replaces sales as the day-to-day commission-creation actor. Same id (30L) as salesUser()
+    // so the pre-existing mock stubs below (keyed on submittedById/uploadedBy=30L) keep working unchanged — only
+    // the role differs.
     private UserPrincipal accountUser() {
         return new UserPrincipal(30L, "account@glr.co.th", "Account", "account", 30L, true, LocalDate.now(), false, null, false);
     }

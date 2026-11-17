@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
@@ -21,7 +21,12 @@ import {
   formatThaiDate,
   fulfilmentStatusLabel,
   overdueBadgeLabel,
+  bangkokTodayIso,
 } from '../../utils/format.js';
+import {
+  bangkokDateOf, dealAmountLabel, isNoMovement, lastMovementIso, rangeFromParams, setRangeEdge, shiftRange, sumAmount, WEEK_KEYS, weekPredicates,
+} from './movementRange.js';
+import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 import { StageProgressBar } from './DealStageStepper.jsx';
 import { dealHref } from '../finance/dealHref.js';
 import { dealInScope } from './salesViewScope.js';
@@ -31,13 +36,12 @@ import {
 import { routeName } from './stageMeta.js';
 import { TicketCreateModal } from './TicketCreateModal.jsx';
 
-// Same selector Modal.jsx traps on — kept identical so the two overlay
-// surfaces agree on what "focusable" means.
+// Same selector Modal.jsx traps on — kept identical so the two overlay surfaces agree on what "focusable"
+// means.
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])';
 
-// Role-scoped views, Phase A: roles whose list page distinguishes "my
-// worklist" from "every deal I may read" — everyone else (sales already only
-// ever receives its own deals from the API; ceo/sales_manager are oversight
+// Role-scoped views, Phase A: roles whose list page distinguishes "my worklist" from "every deal I may read" —
+// everyone else (sales already only ever receives its own deals from the API; ceo/sales_manager are oversight
 // and want the full list) has no such distinction, so no toggle is shown.
 const WORKLIST_ROLES = new Set(['import', 'account']);
 
@@ -47,8 +51,8 @@ function scopeCopy(role, inboxOnly) {
       eyebrow: 'ขอบเขตฝ่ายนำเข้า',
       title: inboxOnly ? 'ต้องดำเนินการ' : 'ทั้งหมด',
       description: inboxOnly
-        ? 'ดีลที่อยู่ในช่วงขอราคา จัดซื้อ หรือนำเข้า'
-        : 'ทุกดีลที่ฝ่ายนำเข้าอ่านได้',
+        ? 'งานที่อยู่ในช่วงขอราคา จัดซื้อ หรือนำเข้า'
+        : 'ทุกงานที่ฝ่ายนำเข้าอ่านได้',
     };
   }
   if (role === 'account') {
@@ -56,15 +60,15 @@ function scopeCopy(role, inboxOnly) {
       eyebrow: 'ขอบเขตฝ่ายบัญชี',
       title: inboxOnly ? 'ต้องดำเนินการ' : 'ทั้งหมด',
       description: inboxOnly
-        ? 'ดีลที่มีงานรับเงินหรือติดตามชำระ'
-        : 'ทุกดีลที่ฝ่ายบัญชีอ่านได้',
+        ? 'งานที่รอรับเงินหรือติดตามชำระ'
+        : 'ทุกงานที่ฝ่ายบัญชีอ่านได้',
     };
   }
   if (role === 'sales') {
     return {
       eyebrow: 'ขอบเขตฝ่ายขาย',
-      title: 'ดีลของฉัน',
-      description: 'ดีลที่อยู่ในความรับผิดชอบของคุณ',
+      title: 'งานของฉัน',
+      description: 'งานที่อยู่ในความรับผิดชอบของคุณ',
     };
   }
   if (role === 'sales_manager') {
@@ -77,7 +81,7 @@ function scopeCopy(role, inboxOnly) {
   if (role === 'ceo') {
     return {
       eyebrow: 'ขอบเขตผู้บริหาร',
-      title: 'ทุกดีลที่มองเห็นได้',
+      title: 'ทุกงานที่มองเห็นได้',
       description: 'มุมมองติดตามท่อขายและสถานะงาน',
     };
   }
@@ -108,14 +112,14 @@ function worklistReason(role, deal, catalog = EMPTY_STAGE_CATALOG) {
   return null;
 }
 
-// Thai phase names. The phase ID LIST is the backend catalog's (see stageCatalog.js); only the
-// wording is ours. Kept in step with DealStageStepper's own PHASE_NAME by the design system, not by
-// a shared constant — these are two different renderings of the same five words.
+// Thai phase names. The phase ID LIST is the backend catalog's (see stageCatalog.js); only the wording is
+// ours. Kept in step with DealStageStepper's own PHASE_NAME by the design system, not by a shared constant —
+// these are two different renderings of the same five words.
 const PHASE_NAME = { 1: 'การเข้าถึงโครงการ', 2: 'งานสเปค', 3: 'ประมูลและเจรจา', 4: 'คำสั่งซื้อและนำเข้า', 5: 'ส่งมอบและปิดงาน' };
 const phaseName = (id) => PHASE_NAME[id] ?? `เฟส ${id}`;
 
-// Per-phase dot accents. Static class map — Tailwind's scanner needs the full
-// class names in source, so no `bg-phase-${id}` interpolation.
+// Per-phase dot accents. Static class map — Tailwind's scanner needs the full class names in source, so no
+// `bg-phase-${id}` interpolation.
 const PHASE_STYLES = {
   1: { dot: 'bg-phase-1' },
   2: { dot: 'bg-phase-2' },
@@ -124,7 +128,7 @@ const PHASE_STYLES = {
   5: { dot: 'bg-phase-5' },
 };
 
-const STALE_DAYS = 7;
+const WEEK_KEYS_SET = new Set(WEEK_KEYS);
 const LIFECYCLE_FILTERS = [
   { value: '', label: 'ทั้งหมด', tone: 'neutral' },
   { value: 'ON_HOLD', label: dealLifecycleLabel('ON_HOLD').label, tone: dealLifecycleLabel('ON_HOLD').tone },
@@ -133,23 +137,17 @@ const LIFECYCLE_FILTERS = [
   { value: 'CANCELLED', label: dealLifecycleLabel('CANCELLED').label, tone: dealLifecycleLabel('CANCELLED').tone },
   { value: 'COMPLETED', label: dealLifecycleLabel('COMPLETED').label, tone: dealLifecycleLabel('COMPLETED').tone },
 ];
-// Statuses meaning "goods are in and delivery hasn't started" — deliberately a two-item SUBSET of
-// importActions.js's three-item delivery-ready list (DELIVERY_READY_FULFILMENT_STATUSES also
-// includes PARTIALLY_DELIVERED), not a reuse of that constant: PARTIALLY_DELIVERED already has its
-// own 'partial_delivery' flag below, and folding it into this one too would make the two filters
-// overlap instead of the crisp, non-overlapping pair this is meant to be. Not imported from
-// importActions.js either way — that list is module-private there, and this is a narrower,
-// page-local grouping for the list filter, not the fulfilment-chain decision itself.
+// Statuses meaning "goods are in and delivery hasn't started". Not imported from importActions.js either way —
+// that list is module-private there, and this is a narrower, page-local grouping for the list filter, not the
+// fulfilment-chain decision itself.
 const AWAITING_DELIVERY_STATUSES = ['GOODS_RECEIVED', 'FROM_STOCK'];
 const FLAG_FILTERS = [
   { value: 'overdue', label: overdueBadgeLabel(true).label, tone: overdueBadgeLabel(true).tone },
   {
     value: 'awaiting_delivery',
-    // 'รอส่งมอบ' is a literal label, not fulfilmentStatusLabel(...).label — that helper labels ONE
-    // status ('สินค้าถึงโกดังแล้ว' / 'สินค้าจากสต็อก'), but this filter groups TWO statuses under one
-    // "awaiting delivery" flag, so no single call to it produces the right words. The TONE is still
-    // borrowed from it ('success', shared by both matched statuses) for consistency with how
-    // GOODS_RECEIVED/FROM_STOCK already read everywhere else on this page.
+    // 'รอส่งมอบ' is a literal label, not fulfilmentStatusLabel(...).label — that helper labels ONE status
+    // ('สินค้าถึงโกดังแล้ว' / 'สินค้าจากสต็อก'), but this filter groups TWO statuses under one "awaiting delivery"
+    // flag, so no single call to it produces the right words.
     label: 'รอส่งมอบ',
     tone: fulfilmentStatusLabel('GOODS_RECEIVED').tone,
   },
@@ -162,13 +160,14 @@ function daysSince(iso) {
   return Math.max(0, Math.floor(diff / 86400000));
 }
 
-function DaysBadge({ stageUpdatedAt }) {
+/** Days since the stage last changed — informational only. It paints no warning: the app's one meaning of
+ * "quiet" is the 14-day QuietRule served as `deal.stale` (spec 2026-11-15 §7.5, review M5). */
+export function DaysBadge({ stageUpdatedAt }) {
   const days = daysSince(stageUpdatedAt);
   if (days == null) return <span>-</span>;
-  const stale = days > STALE_DAYS;
   return (
-    <span className={`text-xs font-bold ${stale ? 'text-warning' : 'text-text-muted'}`}>
-      {stale ? <Icon name="clock" size={12} /> : null} {days === 0 ? 'วันนี้' : `${days} วัน`}
+    <span className="text-xs font-bold text-text-muted">
+      {days === 0 ? 'วันนี้' : `${days} วัน`}
     </span>
   );
 }
@@ -186,9 +185,9 @@ function matchesSearch(deal, query) {
 }
 
 // ── Manager live pipeline (sales_manager/ceo) ──
-// `deal.stale` (no deal_activity logged in 7 days; computed server/mock-side, see
-// dealTrackingMeta.js's computeStale) is unrelated to the DaysBadge/STALE_DAYS above (days since
-// the STAGE last changed): "has anyone followed up recently", not "how long in this stage".
+// `deal.stale` is the 14-day QuietRule (no activity, stage change or quotation issue for
+// app.sales.quiet-days days; computed server-side, mirrored by dealTrackingMeta.js's computeStale). The
+// DaysBadge above only reports days since the STAGE last changed and flags nothing.
 const MANAGER_PIPELINE_ROLES = new Set(['sales_manager', 'ceo']);
 
 /**
@@ -207,15 +206,9 @@ function TrackingBadges({ deal }) {
   );
 }
 
-/**
- * Groups every deal the viewer may see into the three buckets that replace a
- * rep's weekly Excel report: won (stage ≥ ORDER_RECEIVED, still ACTIVE),
- * expected (ACTIVE, pre-order — the win-weighted forecast), and lost
- * (CLOSED_LOST). Paused (ON_HOLD/DORMANT) and terminal-but-not-lost
- * (CANCELLED/COMPLETED) deals are deliberately excluded from all three: they
- * are neither a live forecast nor a definitive loss, so folding them into
- * either bucket would misstate it.
- */
+/** Groups every deal the viewer may see into the three buckets that replace a rep's weekly Excel report: won
+ * (stage ≥ ORDER_RECEIVED, still ACTIVE), expected (ACTIVE, pre-order — the win-weighted forecast), and lost
+ * (CLOSED_LOST). */
 function groupDealsForPipeline(deals, catalog) {
   const won = [];
   const expected = [];
@@ -225,8 +218,8 @@ function groupDealsForPipeline(deals, catalog) {
     if (deal.lifecycle !== 'ACTIVE') continue;
     const idx = stageIndexIn(catalog, deal.salesStage);
     const orderReceivedIdx = stageIndexIn(catalog, 'ORDER_RECEIVED');
-    // orderReceivedIdx is -1 until the catalog loads; without the guard every deal would count as
-    // "won" for a frame, which would misstate the forecast on screen.
+    // orderReceivedIdx is -1 until the catalog loads; without the guard every deal would count as "won" for a
+    // frame, which would misstate the forecast on screen.
     (orderReceivedIdx >= 0 && idx >= orderReceivedIdx ? won : expected).push(deal);
   }
   const sumValue = (list) => list.reduce((sum, deal) => sum + (Number(deal.amountPayable) || 0), 0);
@@ -249,7 +242,7 @@ function groupDealsForPipeline(deals, catalog) {
  * "ภาพรวมทีม": the live-pipeline replacement for the weekly report, computed off the same deal
  * list the table below renders.
  */
-function TeamPipelineSummary({ groups }) {
+function TeamPipelineSummary({ groups, quietDays }) {
   const items = [
     { key: 'won', label: 'ยอดที่สั่งซื้อแล้ว', tone: 'success', group: groups.won },
     { key: 'expected', label: 'ยอดคาดหวัง', tone: 'info', group: groups.expected },
@@ -261,7 +254,8 @@ function TeamPipelineSummary({ groups }) {
         <h2 id="ticket-pipeline-title">ภาพรวมทีม</h2>
         {groups.staleActiveCount > 0 ? (
           <StatusBadge tone="warning">
-            <Icon name="clock" size={12} /> {groups.staleActiveCount} ดีลเงียบ (ไม่มีการติดตาม 7 วัน)
+            <Icon name="clock" size={12} /> {groups.staleActiveCount} งานเงียบ
+            {quietDays != null ? ` (ไม่มีความเคลื่อนไหว ${quietDays} วัน)` : null}
           </StatusBadge>
         ) : null}
       </div>
@@ -271,7 +265,7 @@ function TeamPipelineSummary({ groups }) {
             <dt>{item.label}</dt>
             <dd>
               <strong>{formatMoney(item.group.total)}</strong>
-              <StatusBadge tone={item.tone}>{item.group.count} ดีล</StatusBadge>
+              <StatusBadge tone={item.tone}>{item.group.count} งาน</StatusBadge>
             </dd>
             {item.key === 'expected' ? (
               <small>คาดการณ์ถ่วงน้ำหนัก: {formatMoney(item.group.forecast)}</small>
@@ -283,12 +277,7 @@ function TeamPipelineSummary({ groups }) {
   );
 }
 
-// `showTracking` (sales_manager/ceo only) renders the "เงียบ" stale badge
-// here rather than in `ProgressCell`. It lives in the `stage` column, not
-// `progress`, specifically because the tablet band (721–1040px, see
-// styles.css) hides the `progress` column to fit the row — the stale flag
-// would otherwise silently disappear for a manager at that width even
-// though nothing about it stopped being true.
+// `showTracking` (sales_manager/ceo only) renders the "เงียบ" stale badge here rather than in `ProgressCell`.
 function WorkStageCell({ deal, role, catalog, showTracking = false }) {
   const reason = worklistReason(role, deal, catalog);
   return (
@@ -348,9 +337,9 @@ function ProgressCell({ deal, catalog }) {
   );
 }
 
-// NOTE: 'lost' keys on lifecycle, never on lostReason. Since V57 the reason
-// SURVIVES a reopen, so a live reopened deal still carries one — testing the
-// reason would render it as เสียงาน and drop it out of the phase counts.
+// NOTE: 'lost' keys on lifecycle, never on lostReason. Since V57 the reason SURVIVES a reopen, so a live
+// reopened deal still carries one — testing the reason would render it as เสียงาน and drop it out of the phase
+// counts.
 function DealStageCell({ deal, catalog }) {
   if (deal.lifecycle === 'CLOSED_LOST') {
     const lost = dealLostReasonLabel(deal.lostReason);
@@ -396,7 +385,7 @@ function DealOpenButton({ deal, onOpen }) {
       type="button"
       className="ticket-card-open-button"
       onClick={() => onOpen(deal)}
-      aria-label={`เปิดดีล ${deal.code}`}
+      aria-label={`เปิดงาน ${deal.code}`}
     >
       เปิด
       <Icon name="chevronRight" size={14} />
@@ -445,11 +434,8 @@ function DealCard({ deal, catalog, reason = null, showTracking = false, onOpen }
   );
 }
 
-/**
- * Account's money-worklist card: leads with the amount and the specific
- * pending money action instead of the pipeline stage (account doesn't act on
- * the pipeline stage directly — it acts on a payment).
- */
+/** Account's money-worklist card: leads with the amount and the specific pending money action instead of the
+ * pipeline stage (account doesn't act on the pipeline stage directly — it acts on a payment). */
 function MoneyWorklistCard({ deal, onOpen }) {
   const reason = worklistReason('account', deal);
   return (
@@ -486,11 +472,105 @@ function MoneyWorklistCard({ deal, onOpen }) {
   );
 }
 
+// ── sales / sales_manager / ceo movement list ──
+const SALES_GRID = 'ticket-sales-table grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,1.1fr)]';
+const OWNER_GRID = 'ticket-sales-table grid-cols-[minmax(0,2fr)_minmax(0,1fr)_minmax(0,1.4fr)_minmax(0,0.9fr)_minmax(0,1.1fr)_minmax(0,1.1fr)]';
+const WEEK_CHIPS = [
+  { key: '', label: 'ทั้งหมด' },
+  { key: 'moved', label: 'ขยับขั้น' },
+  { key: 'activity', label: 'มีกิจกรรม' },
+  { key: 'due', label: 'นัดติดตาม' },
+  { key: 'overdue', label: 'เลยนัด' },
+  { key: 'silent', label: 'ไม่เคลื่อนไหว' },
+];
+
+function ActivityCell({ deal }) {
+  const today = bangkokTodayIso();
+  const last = lastMovementIso(deal);
+  const days = last ? Math.max(0, Math.round((new Date(`${today}T00:00:00Z`) - new Date(`${last}T00:00:00Z`)) / 86400000)) : null;
+  const silent = isNoMovement(deal);
+  if (days == null) return <span className="text-text-muted">-</span>;
+  return (
+    <span className="flex min-w-0 flex-col">
+      <span className={`text-sm tabular-nums ${silent ? 'font-extrabold text-danger' : 'font-bold text-text'}`}>
+        {days === 0 ? 'วันนี้' : days === 1 ? 'เมื่อวาน' : `${days} วันก่อน`}
+      </span>
+      <span className="text-2xs text-text-muted">{formatThaiDate(last)}</span>
+    </span>
+  );
+}
+
+function NextFollowUpCell({ deal }) {
+  const next = bangkokDateOf(deal.nextFollowUpAt);
+  const today = bangkokTodayIso();
+  if (!next) return <span className="text-xs text-text-muted">ยังไม่ได้นัด</span>;
+  if (next < today) return <StatusBadge tone="danger">เลยนัด {formatThaiDate(next)}</StatusBadge>;
+  if (next === today) return <StatusBadge tone="teal">นัดวันนี้</StatusBadge>;
+  return <span className="text-sm text-text">{formatThaiDate(next)}</span>;
+}
+
+function SalesDealCard({ deal, catalog, showOwner = false, onOpen }) {
+  return (
+    <>
+      <div className="ticket-card-topline">
+        <code>{deal.code}</code>
+        <strong className="tabular-nums">{dealAmountLabel(deal)}</strong>
+      </div>
+      <strong className="ticket-card-title">{deal.customerName || deal.title}</strong>
+      {deal.projectName ? <span className="ticket-card-project">{deal.projectName}</span> : null}
+      {showOwner ? <span className="text-xs text-text-muted">ผู้ดูแล: {deal.createdByName}</span> : null}
+      <DealStageCell deal={deal} catalog={catalog} />
+      <div className="grid grid-cols-2 gap-2">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <small className="text-2xs text-text-muted">ความเคลื่อนไหวล่าสุด</small>
+          <ActivityCell deal={deal} />
+        </span>
+        <span className="flex min-w-0 flex-col items-start gap-0.5">
+          <small className="text-2xs text-text-muted">นัดติดตามถัดไป</small>
+          <NextFollowUpCell deal={deal} />
+        </span>
+      </div>
+      <DealOpenButton deal={deal} onOpen={onOpen} />
+    </>
+  );
+}
+
+function buildSalesColumns({ role, catalog }) {
+  const base = buildDealColumns({ role, isManagerView: false, catalog });
+  const [customer, owner, stage] = base;
+  return [
+    customer,
+    ...(role !== 'sales' ? [owner] : []),
+    { ...stage, header: 'ขั้นตอน', render: (deal) => <DealStageCell deal={deal} catalog={catalog} /> },
+    {
+      key: 'value',
+      header: 'มูลค่า',
+      sortable: true,
+      sortAccessor: (deal) => Number(deal.amountPayable) || 0,
+      render: (deal) => <span className="block text-right text-sm font-bold tabular-nums text-text">{dealAmountLabel(deal)}</span>,
+    },
+    {
+      key: 'date',
+      header: 'ความเคลื่อนไหวล่าสุด',
+      sortable: true,
+      sortAccessor: (deal) => lastMovementIso(deal) ?? '',
+      render: (deal) => <ActivityCell deal={deal} />,
+    },
+    {
+      key: 'next',
+      header: 'นัดติดตามถัดไป',
+      sortable: true,
+      sortAccessor: (deal) => bangkokDateOf(deal.nextFollowUpAt) ?? '9999',
+      render: (deal) => <NextFollowUpCell deal={deal} />,
+    },
+  ];
+}
+
 function buildDealColumns({ role, isManagerView, catalog }) {
   return [
     {
       key: 'customer',
-      header: 'ดีล / ลูกค้า / โครงการ',
+      header: 'งาน / ลูกค้า / โครงการ',
       searchAccessor: (deal) => [deal.code, deal.customerName, deal.projectName, deal.title].filter(Boolean).join(' '),
       // This Link (not the row's `onRowClick`, a mouse-only convenience) is the row's keyboard and
       // assistive-tech activation target, like PricingRequestQueuePage.jsx's `requestCode` column.
@@ -542,7 +622,11 @@ function buildDealColumns({ role, isManagerView, catalog }) {
   ];
 }
 
-export function TicketListPage({ user, showToast }) {
+/**
+ * `viewSwitch` (from AllDealsPage) is the งานทั้งหมด header's บอร์ด button, rendered beside งานใหม่; absent when the
+ * table is rendered on its own.
+ */
+export function TicketListPage({ user, showToast, viewSwitch = null }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   // Phase filter + search live in the URL so list → detail → back keeps them. The stage cell does
@@ -550,10 +634,14 @@ export function TicketListPage({ user, showToast }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const phaseFilter = searchParams.get('phase') ?? '';
   const lifecycleFilter = searchParams.get('life') ?? '';
+  // sales, sales_manager and ceo share the range/movement UI; the latter two keep ผู้ดูแล.
+  const isSales = ['sales', 'sales_manager', 'ceo'].includes(user.role);
+  const showOwnerCol = user.role !== 'sales';
+  const ownerParam = showOwnerCol ? searchParams.get('owner') ?? '' : '';
+  const weekFilter = isSales ? searchParams.get('week') ?? '' : '';
   const flagFilter = searchParams.get('flag') ?? '';
-  // Role-scoped views, Phase A: import/account default to their own worklist
-  // (dealInScope) — ?inbox=0 opts back into every deal the role may read.
-  // sales/ceo/sales_manager have no such distinction (see WORKLIST_ROLES).
+  // Role-scoped views, Phase A: import/account default to their own worklist (dealInScope) — ?inbox=0 opts back
+  // into every deal the role may read. sales/ceo/sales_manager have no such distinction (see WORKLIST_ROLES).
   const hasWorklistDistinction = WORKLIST_ROLES.has(user.role);
   const inboxOnly = hasWorklistDistinction && searchParams.get('inbox') !== '0';
   const searchText = searchParams.get('q') ?? '';
@@ -576,14 +664,31 @@ export function TicketListPage({ user, showToast }) {
 
   const canCreate = ROLE_PERMISSIONS.canCreateTickets.includes(user.role);
 
-  // The pipeline's shape (stage order, phases, gates), fetched once from GET /api/meta/deal-stages.
-  // Deliberately NOT folded into `loading` below: the deal list must still render if the
-  // enumeration is slow. Every lookup over it is written to answer safely for the empty catalog.
+  // The pipeline's shape (stage order, phases, gates), fetched once from GET /api/meta/deal-stages. Deliberately
+  // NOT folded into `loading` below: the deal list must still render if the enumeration is slow. Every lookup
+  // over it is written to answer safely for the empty catalog.
   const { catalog: stageCatalog } = useStageCatalog();
 
+  // Date range (URL from/to; absent = last 7 days). Only the movement roles send it to the server.
+  const fromParam = searchParams.get('from');
+  const toParam = searchParams.get('to');
+  const range = useMemo(() => rangeFromParams(fromParam, toParam), [fromParam, toParam]);
+  // The quiet threshold (app.sales.quiet-days) is served with the team overview; the ภาพรวมทีม badge names it
+  // instead of hard-coding 14 (round-2 LOW 4). Manager view only (the endpoint is sales_manager/ceo), on its own key
+  // with a 60 s staleTime so a ['tickets'] invalidation never refetches the team overview for one number.
+  const teamOverviewQuery = useQuery({
+    queryKey: queryKeys.salesBoardQuietDays(),
+    queryFn: () => api.salesBoard.teamOverview(),
+    enabled: isManagerView,
+    staleTime: 60_000,
+  });
+  const quietDays = teamOverviewQuery.data?.quietDays ?? null;
   const ticketsQuery = useQuery({
-    queryKey: queryKeys.ticketList(''),
-    queryFn: () => api.tickets.list({}).then((response) => response.tickets || []),
+    queryKey: isSales ? queryKeys.ticketListByRange(range.from, range.to) : queryKeys.ticketList(''),
+    queryFn: () => api.tickets.list(isSales ? { movementFrom: range.from, movementTo: range.to } : {})
+      .then((response) => response.tickets || []),
+    // keep the previous rows on screen while a shifted range loads
+    placeholderData: isSales ? keepPreviousData : undefined,
   });
   const allDeals = useMemo(() => ticketsQuery.data ?? [], [ticketsQuery.data]);
   const loading = ticketsQuery.isLoading;
@@ -596,8 +701,8 @@ export function TicketListPage({ user, showToast }) {
     if (ticketsQuery.error) showToast('error', ticketsQuery.error.message || 'โหลดข้อมูลไม่สำเร็จ');
   }, [ticketsQuery.error, showToast]);
 
-  // Phase strip doubles as a compact filter — never a 14-stage tab bar.
-  // Lifecycle buckets live in the additional filters below, so phase counts stay active-only.
+  // Phase strip doubles as a compact filter — never a 14-stage tab bar. Lifecycle buckets live in the additional
+  // filters below, so phase counts stay active-only.
   const phaseCounts = useMemo(() => {
     const counts = {};
     for (const phaseId of stageCatalog.phases) counts[phaseId] = 0;
@@ -647,12 +752,15 @@ export function TicketListPage({ user, showToast }) {
     all: allDeals.length,
   } : null), [allDeals, hasWorklistDistinction, stageCatalog, user.role]);
 
-  const deals = useMemo(() => {
+  // Every filter EXCEPT the movement chip: the chips' counts are taken over exactly these rows, so a chip's
+  // number equals the rows it leaves when clicked.
+  const baseDeals = useMemo(() => {
     return allDeals.filter((deal) => {
       const lost = deal.lifecycle === 'CLOSED_LOST';
-      // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase
-      // filter matches on ACTIVE too — paused/terminal deals are reached via the lifecycle
-      // chips below. This keeps each phase card's count equal to the rows it filters to.
+      // Phase cards are the active-pipeline funnel (counts are ACTIVE-only), so the phase filter matches on ACTIVE
+      // too — paused/terminal deals are reached via the lifecycle chips below. This keeps each phase card's count
+      // equal to the rows it filters to.
+      if (ownerParam && String(deal.createdById) !== ownerParam) return false;
       const phaseOk = !phaseFilter
         || (deal.lifecycle === 'ACTIVE' && findStage(stageCatalog, deal.salesStage)?.phase === Number(phaseFilter));
       const lifeOk = !lifecycleFilter || (lifecycleFilter === 'CLOSED_LOST' ? lost : deal.lifecycle === lifecycleFilter);
@@ -664,7 +772,17 @@ export function TicketListPage({ user, showToast }) {
       const searchOk = matchesSearch(deal, searchText);
       return phaseOk && lifeOk && flagOk && inboxOk && searchOk;
     });
-  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, stageCatalog, user.role, searchText]);
+  }, [allDeals, flagFilter, lifecycleFilter, phaseFilter, inboxOnly, stageCatalog, user.role, searchText, ownerParam]);
+
+  const todayIso = bangkokTodayIso();
+  const weekMatches = useCallback((key, deal) => weekPredicates[key](deal, range, todayIso), [range, todayIso]);
+  const weekCounts = useMemo(() => (isSales
+    ? Object.fromEntries(WEEK_CHIPS.map((c) => [c.key, c.key ? baseDeals.filter((d) => weekMatches(c.key, d)).length : baseDeals.length]))
+    : null), [isSales, baseDeals, weekMatches]);
+  const deals = useMemo(
+    () => (isSales && WEEK_KEYS_SET.has(weekFilter) ? baseDeals.filter((d) => weekMatches(weekFilter, d)) : baseDeals),
+    [isSales, baseDeals, weekFilter, weekMatches],
+  );
 
   const hasActiveMoreFilters = Boolean(lifecycleFilter || flagFilter);
   const showMoreFilters = moreFiltersOpen;
@@ -676,11 +794,8 @@ export function TicketListPage({ user, showToast }) {
   const isMobile = useIsMobile();
   const mobileSheetOpen = showMoreFilters && isMobile;
 
-  // A lifecycle/flag filter becoming active reveals the sheet, so a deep link
-  // or an external filter change is never silently applied behind a closed
-  // panel. Toggling a chip from inside the sheet is a no-op here (already
-  // open), and closing the sheet by hand does not re-trigger this — the effect
-  // only fires on the false -> true transition.
+  // A lifecycle/flag filter becoming active reveals the sheet, so a deep link or an external filter change is
+  // never silently applied behind a closed panel.
   useEffect(() => {
     if (hasActiveMoreFilters) setMoreFiltersOpen(true);
   }, [hasActiveMoreFilters]);
@@ -688,6 +803,7 @@ export function TicketListPage({ user, showToast }) {
   const activeFilterCount = [
     searchText.trim(),
     phaseFilter,
+    weekFilter,
     lifecycleFilter,
     flagFilter,
     hasWorklistDistinction && searchParams.get('inbox') === '0' ? 'all' : '',
@@ -700,6 +816,7 @@ export function TicketListPage({ user, showToast }) {
         filters.push(`เฟส ${phaseFilter}: ${phaseName(Number(phaseFilter))}`);
       }
     }
+    if (weekFilter) filters.push(`ช่วงวันที่: ${WEEK_CHIPS.find((c) => c.key === weekFilter)?.label ?? weekFilter}`);
     if (lifecycleFilter) filters.push(`สถานะงาน: ${dealLifecycleLabel(lifecycleFilter).label}`);
     if (flagFilter) {
       const flag = FLAG_FILTERS.find((item) => item.value === flagFilter);
@@ -707,7 +824,7 @@ export function TicketListPage({ user, showToast }) {
     }
     if (hasWorklistDistinction && searchParams.get('inbox') === '0') filters.push('ขอบเขต: ทั้งหมด');
     return filters;
-  }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText, stageCatalog]);
+  }, [flagFilter, hasWorklistDistinction, lifecycleFilter, phaseFilter, searchParams, searchText, stageCatalog, weekFilter]);
 
   // Phase chips, WorklistFilters-driven. The "all" chip is named after its action ("ทั้งหมด"),
   // since clicking it clears the phase filter and lists every deal including
@@ -736,24 +853,28 @@ export function TicketListPage({ user, showToast }) {
     { key: '0', label: 'ทั้งหมด', count: inboxCounts.all },
   ] : null), [hasWorklistDistinction, inboxCounts]);
 
+  const weekChipItems = useMemo(() => (weekCounts
+    ? WEEK_CHIPS.map((c) => ({ ...c, count: weekCounts[c.key] })) : null), [weekCounts]);
+
   const tableColumns = useMemo(
-    () => buildDealColumns({ role: user.role, isManagerView, catalog: stageCatalog }),
-    [isManagerView, stageCatalog, user.role],
+    () => (isSales ? buildSalesColumns({ role: user.role, catalog: stageCatalog })
+      : buildDealColumns({ role: user.role, isManagerView, catalog: stageCatalog })),
+    [isSales, isManagerView, stageCatalog, user.role],
   );
 
   const emptyDescription = useMemo(() => {
-    if (searchText.trim()) return 'ไม่พบดีลที่ตรงกับคำค้นหาและตัวกรองที่เลือก';
+    if (searchText.trim()) return 'ไม่พบงานที่ตรงกับคำค้นหาและตัวกรองที่เลือก';
     if (phaseFilter) {
       return stageCatalog.phases.includes(Number(phaseFilter))
-        ? `ไม่มีดีลในเฟส ${phaseFilter} · ${phaseName(Number(phaseFilter))}`
-        : 'ไม่มีดีลในเฟสที่เลือก';
+        ? `ไม่มีงานในเฟส ${phaseFilter} · ${phaseName(Number(phaseFilter))}`
+        : 'ไม่มีงานในเฟสที่เลือก';
     }
-    if (flagFilter === 'overdue') return 'ไม่มีดีลที่เกินกำหนดชำระ';
-    if (flagFilter === 'awaiting_delivery') return 'ไม่มีดีลที่รอส่งมอบ';
-    if (flagFilter === 'partial_delivery') return 'ไม่มีดีลที่ส่งมอบบางส่วน';
-    if (lifecycleFilter) return `ไม่มีดีลในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
-    if (inboxOnly) return 'ไม่มีดีลที่ต้องดำเนินการตอนนี้ — ลองดูแท็บ "ทั้งหมด"';
-    return 'ยังไม่มีดีลในเงื่อนไขที่เลือก';
+    if (flagFilter === 'overdue') return 'ไม่มีงานที่เกินกำหนดชำระ';
+    if (flagFilter === 'awaiting_delivery') return 'ไม่มีงานที่รอส่งมอบ';
+    if (flagFilter === 'partial_delivery') return 'ไม่มีงานที่ส่งมอบบางส่วน';
+    if (lifecycleFilter) return `ไม่มีงานในสถานะ${dealLifecycleLabel(lifecycleFilter).label}`;
+    if (inboxOnly) return 'ไม่มีงานที่ต้องดำเนินการตอนนี้ — ลองดูแท็บ "ทั้งหมด"';
+    return 'ยังไม่มีงานในเงื่อนไขที่เลือก';
   }, [flagFilter, lifecycleFilter, inboxOnly, phaseFilter, searchText, stageCatalog]);
 
   function invalidateTicketsList() {
@@ -766,6 +887,32 @@ export function TicketListPage({ user, showToast }) {
       if (value) next.set(key, value); else next.delete(key);
       return next;
     }, { replace: true });
+  }
+
+  const ownerName = ownerParam ? (allDeals.find((d) => String(d.createdById) === ownerParam)?.createdByName ?? ownerParam) : '';
+
+  function setRangeParams(from, to) {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('from', from);
+      next.set('to', to);
+      return next;
+    }, { replace: true });
+  }
+  const shiftBy = (days) => {
+    const next = shiftRange(range, days);
+    setRangeParams(next.from, next.to);
+  };
+  const resetRange = () => setSearchParams((prev) => {
+    const next = new URLSearchParams(prev);
+    next.delete('from');
+    next.delete('to');
+    return next;
+  }, { replace: true });
+  function setRange(which, value) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return;
+    const next = setRangeEdge(range, which, value);
+    setRangeParams(next.from, next.to);
   }
 
   function clearFilters() {
@@ -781,9 +928,8 @@ export function TicketListPage({ user, showToast }) {
     restoreFocus(() => filterToggleRef.current?.focus());
   }, []);
 
-  // Escape closes the sheet at every width; Tab is only trapped when the sheet
-  // is the mobile modal. Mirrors the keyboard contract of Modal.jsx so the two
-  // overlay surfaces behave identically for a keyboard user.
+  // Escape closes the sheet at every width; Tab is only trapped when the sheet is the mobile modal. Mirrors the
+  // keyboard contract of Modal.jsx so the two overlay surfaces behave identically for a keyboard user.
   useEffect(() => {
     if (!showMoreFilters) return undefined;
 
@@ -799,9 +945,8 @@ export function TicketListPage({ user, showToast }) {
       if (items.length === 0) return;
       const first = items[0];
       const last = items[items.length - 1];
-      // Focus that has escaped the sheet (or never entered it) is pulled back
-      // in. `inert` already does this in browsers that support it; this keeps
-      // the trap correct where it does not.
+      // Focus that has escaped the sheet (or never entered it) is pulled back in. `inert` already does this in
+      // browsers that support it; this keeps the trap correct where it does not.
       if (!sheet?.contains(document.activeElement)) {
         event.preventDefault();
         first.focus();
@@ -820,8 +965,8 @@ export function TicketListPage({ user, showToast }) {
     return () => document.removeEventListener('keydown', onKeyDown);
   }, [showMoreFilters, mobileSheetOpen, closeMoreFilters]);
 
-  // Opening the modal sheet moves focus into it. Focus is restored to the
-  // toggle by closeMoreFilters, which every dismissal path routes through.
+  // Opening the modal sheet moves focus into it. Focus is restored to the toggle by closeMoreFilters, which
+  // every dismissal path routes through.
   useEffect(() => {
     if (!mobileSheetOpen) return;
     const sheet = filterSheetRef.current;
@@ -833,11 +978,10 @@ export function TicketListPage({ user, showToast }) {
     mutationFn: (payload) => api.tickets.create(payload),
     onSuccess: (response) => {
       setCreating(false);
-      showToast('success', 'สร้างดีลเรียบร้อย');
+      showToast('success', 'สร้างงานเรียบร้อย');
       invalidateTicketsList();
-      // Commit 6: a new deal starts as an empty DRAFT with no price-request
-      // flow of its own any more (see TicketService.create, commit 5) — land
-      // the user straight on the deal page, where PricingRequestPanel prompts
+      // Commit 6: a new deal starts as an empty DRAFT with no price-request flow of its own any more (see
+      // TicketService.create, commit 5) — land the user straight on the deal page, where PricingRequestPanel prompts
       // them to create the pricing request that actually starts pricing.
       const newTicketId = response?.ticket?.summary?.id;
       if (newTicketId != null) navigate(`/tickets/${newTicketId}`);
@@ -848,9 +992,8 @@ export function TicketListPage({ user, showToast }) {
     await createMutation.mutateAsync(payload);
   }
 
-  // The modal sheet is portalled to <body> so the page root itself can be
-  // marked inert while it is open — an ancestor cannot inert its own overlay.
-  // On desktop the sheet must stay in the page's normal flow (it is a
+  // The modal sheet is portalled to <body> so the page root itself can be marked inert while it is open — an
+  // ancestor cannot inert its own overlay. On desktop the sheet must stay in the page's normal flow (it is a
   // `.page-stack` child), so it renders in place there.
   function renderFilterSheet(sheet) {
     return mobileSheetOpen ? createPortal(sheet, document.body) : sheet;
@@ -866,14 +1009,14 @@ export function TicketListPage({ user, showToast }) {
     >
       <SalesTabs role={user.role} />
       <PageHeader
-        title="รายการดีล"
-        subtitle="ติดตามดีลตามขอบเขตบทบาทและตัวกรองที่เลือก"
+        title="งานทั้งหมด"
+        subtitle="ติดตามงานตามขอบเขตบทบาทและตัวกรองที่เลือก"
         // Denser mobile heading/actions treatment, set here directly: a legacy-layer override via
         // a `.ticket-list-page` ancestor selector in styles.css would lose to Tailwind's utilities
         // layer (see styles-css-loses-to-tailwind-utilities).
         headingClassName="mobile:leading-[1.15]"
         subtitleClassName="mobile:mt-0.5 mobile:text-sm mobile:leading-[1.35]"
-        actionsClassName="mobile:grid mobile:w-full mobile:grid-cols-[44px_minmax(0,1fr)] mobile:gap-2 [&>*:only-child]:mobile:col-start-1"
+        actionsClassName={`mobile:grid mobile:w-full mobile:gap-2 [&>*:only-child]:mobile:col-start-1 ${viewSwitch ? 'mobile:grid-cols-[44px_minmax(0,1fr)_minmax(0,1fr)]' : 'mobile:grid-cols-[44px_minmax(0,1fr)]'}`}
         actions={(
           <>
             <Button
@@ -881,15 +1024,16 @@ export function TicketListPage({ user, showToast }) {
               type="button"
               onClick={invalidateTicketsList}
               loading={refreshing}
-              title="รีเฟรชรายการดีล"
-              aria-label="รีเฟรชรายการดีล"
+              title="รีเฟรชงานทั้งหมด"
+              aria-label="รีเฟรชงานทั้งหมด"
             >
               <Icon name="refresh" />
             </Button>
+            {viewSwitch}
             {canCreate ? (
               <Button type="button" onClick={() => setCreating(true)}>
                 <Icon name="plus" />
-                สร้างดีลใหม่
+                งานใหม่
               </Button>
             ) : null}
           </>
@@ -900,7 +1044,7 @@ export function TicketListPage({ user, showToast }) {
           footer stays the single statement of "how many rows matched". */}
       <section
         className="flex flex-col gap-3 rounded-md border border-border bg-surface p-3.5 mobile:gap-2.5 mobile:p-2.5"
-        aria-label="ขอบเขตและตัวกรองรายการดีล"
+        aria-label="ขอบเขตและตัวกรองงานทั้งหมด"
       >
         <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
           <span className="text-2xs font-extrabold text-text-muted">{scope.eyebrow}</span>
@@ -918,28 +1062,65 @@ export function TicketListPage({ user, showToast }) {
         ) : null}
 
         <WorklistFilters
-          ariaLabel="ตัวกรองเฟสของดีล"
+          ariaLabel="ตัวกรองเฟสของงาน"
           items={phaseChipItems}
           activeKey={phaseFilter}
           onSelect={selectPhase}
         />
+
+        {isSales ? (
+          <>
+            <div className="flex flex-wrap items-center gap-2" role="group" aria-label="ช่วงวันที่">
+              <span className="shrink-0 text-2xs font-extrabold text-text-muted">ช่วงวันที่</span>
+              <Button variant="icon" type="button" aria-label="เลื่อนช่วงวันที่ย้อนหลัง 1 วัน" title="เลื่อนช่วงวันที่ย้อนหลัง 1 วัน" onClick={() => shiftBy(-1)}>
+                <Icon name="chevronLeft" size={16} />
+              </Button>
+              <div className="w-44 shrink-0"><ThaiDateInput key={range.from} className="text-base" aria-label="ตั้งแต่วันที่" value={range.from} onChange={(e) => setRange('from', e.target.value)} /></div>
+              <span aria-hidden="true">–</span>
+              <div className="w-44 shrink-0"><ThaiDateInput key={range.to} className="text-base" aria-label="ถึงวันที่" value={range.to} onChange={(e) => setRange('to', e.target.value)} /></div>
+              <Button variant="icon" type="button" aria-label="เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน" title="เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน" onClick={() => shiftBy(1)}>
+                <Icon name="chevronRight" size={16} />
+              </Button>
+              <Button variant="text" type="button" size="sm" className="mobile:min-h-[44px]" onClick={resetRange}>7 วันล่าสุด</Button>
+            </div>
+            {ownerParam ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className="ticket-filter-chip is-active"
+                  aria-label={`ผู้ดูแล: ${ownerName} (ล้างตัวกรอง)`}
+                  onClick={() => updateParam('owner', '')}
+                >
+                  <span>ผู้ดูแล: {ownerName}</span>
+                  <Icon name="close" size={12} />
+                </button>
+              </div>
+            ) : null}
+            <WorklistFilters
+              ariaLabel="ตัวกรองความเคลื่อนไหว"
+              items={weekChipItems}
+              activeKey={weekFilter}
+              onSelect={(key) => updateParam('week', key)}
+            />
+          </>
+        ) : null}
 
         {/* Spacing/reflow live here as utilities, not in styles.css: index.css orders
             `@layer theme, legacy, utilities`, so a `.ticket-filter-bar` rule in the legacy layer
             always loses to FilterBar's own utilities. `mobile:` is the shared <=720px variant. */}
         <FilterBar
           className="ticket-filter-bar !border-0 !bg-transparent !p-0 gap-3 mobile:grid mobile:grid-cols-[minmax(0,1fr)_auto] mobile:items-center mobile:gap-2"
-          aria-label="ค้นหาและตัวกรองรายการดีล"
+          aria-label="ค้นหาและตัวกรองงานทั้งหมด"
         >
           <label className="ticket-filter-search search-field">
-            <span className="sr-only">ค้นหาดีล</span>
+            <span className="sr-only">ค้นหางาน</span>
             <Icon name="search" />
             <input
               type="search"
               value={searchText}
               placeholder="ค้นหาเลขที่ / บริษัท / โครงการ / ผู้ดูแล"
               onChange={(event) => updateParam('q', event.target.value)}
-              aria-label="ค้นหาดีล"
+              aria-label="ค้นหางาน"
             />
           </label>
           <Button
@@ -987,9 +1168,8 @@ export function TicketListPage({ user, showToast }) {
             ref={filterSheetRef}
             className="ticket-filter-sheet"
             aria-label="ตัวกรองเพิ่มเติม"
-            // Only the mobile bottom sheet is a modal dialog. On desktop the
-            // same node stays an inline labelled region, so announcing it as a
-            // dialog there would be a lie to a screen reader.
+            // Only the mobile bottom sheet is a modal dialog. On desktop the same node stays an inline labelled region, so
+            // announcing it as a dialog there would be a lie to a screen reader.
             role={mobileSheetOpen ? 'dialog' : 'region'}
             aria-modal={mobileSheetOpen ? 'true' : undefined}
             tabIndex={mobileSheetOpen ? -1 : undefined}
@@ -1051,7 +1231,7 @@ export function TicketListPage({ user, showToast }) {
         columns={tableColumns}
         rows={deals}
         getRowKey={(deal) => deal.id}
-        gridClassName="ticket-worklist-table"
+        gridClassName={isSales ? (showOwnerCol ? OWNER_GRID : SALES_GRID) : 'ticket-worklist-table'}
         // No repeated `เปิด ›` column: the row's onClick is a mouse-only convenience for opening
         // the deal. The identity cell's own `<Link to={`/tickets/${deal.id}`}>` above is the
         // keyboard/assistive-tech affordance, since a `<tr role="button">` would prune every other
@@ -1063,8 +1243,18 @@ export function TicketListPage({ user, showToast }) {
         // filters; it gives the "filtered out of how many" denominator. DataTable appends the
         // clause only when it differs from what matched.
         unfilteredTotal={allDeals.length}
+        footerRow={isSales ? ({ rows }) => (
+          <tr className={`${showOwnerCol ? OWNER_GRID : SALES_GRID} data-row`} data-testid="deal-list-footer">
+            <td className="text-sm font-extrabold">รวม {rows.length} รายการ</td>
+            {showOwnerCol ? <td /> : null}
+            <td />
+            <td className="text-right text-sm font-extrabold tabular-nums">{formatMoney(sumAmount(rows))}</td>
+            <td />
+            <td />
+          </tr>
+        ) : undefined}
         mobileCard={(deal) => (
-          user.role === 'account'
+          isSales ? <SalesDealCard deal={deal} catalog={stageCatalog} showOwner={showOwnerCol} onOpen={openDeal} /> : user.role === 'account'
             ? <MoneyWorklistCard deal={deal} onOpen={openDeal} />
             : <DealCard deal={deal} catalog={stageCatalog} reason={worklistReason(user.role, deal, stageCatalog)} showTracking={isManagerView} onOpen={openDeal} />
         )}
@@ -1074,13 +1264,13 @@ export function TicketListPage({ user, showToast }) {
         onRetry={() => ticketsQuery.refetch()}
         emptyState={{
           icon: 'fileText',
-          title: activeFilterCount > 0 ? 'ไม่พบดีลที่ตรงกับตัวกรอง' : 'ไม่มีดีล',
+          title: activeFilterCount > 0 ? 'ไม่พบงานที่ตรงกับตัวกรอง' : 'ไม่มีงาน',
           description: emptyDescription,
         }}
       />
 
       {/* Summary metrics come after the worklist ("next action before summary metrics"). */}
-      {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} /> : null}
+      {isManagerView && pipelineGroups ? <TeamPipelineSummary groups={pipelineGroups} quietDays={quietDays} /> : null}
 
       {creating ? (
         <TicketCreateModal user={user} onClose={() => setCreating(false)} onSubmit={handleCreate} />

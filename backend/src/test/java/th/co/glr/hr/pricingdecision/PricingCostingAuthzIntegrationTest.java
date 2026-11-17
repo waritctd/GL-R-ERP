@@ -66,24 +66,8 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * V141 ("CEO owns costing") required authz evidence — CLAUDE.md's "Permission changes must ship
- * evidence, not a claim": {@code recalculateCost}/{@code overrideItemCost} replace what used to be
- * an {@code import}-only write surface ({@code PricingCostingService.createDraft/recalculate/
- * submit}, all deleted) with a CEO-only one ({@link PricingDecisionService#CEO_ROLES}). That is
- * exactly the class of change CLAUDE.md requires a real-DB integration test through the real Java
- * service for — never inferred from {@code mockApi.js}.
- *
- * <p>Written WRONG-WAY-ROUND throughout: every negative test asserts the caller <b>cannot</b>
- * reach what they should not, not that the CEO can reach their own — and asserts the
- * <b>absence</b> of the write in the database afterward (a query, not merely the thrown status
- * code), per CLAUDE.md's "Assert the caller cannot reach what they shouldn't" + "Mutation-check
- * the guard" requirements.
- *
- * <p>{@code import}'s continuing READ access ({@code list}/{@code get} on {@link
- * PricingCostingService}) is the one deliberately preserved grant (plan section 2.4) — proven as
- * a positive control, not assumed.
- */
+/** V141 required authz evidence — CLAUDE.md's "Permission changes must ship evidence, not a claim":
+ * recalculateCost/overrideItemCost replace what used to be an import-only write surface with a CEO-only one. */
 class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -165,10 +149,8 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // recalculateCost — wrong-way-round: import/sales/sales_manager/account all refused,
-    // ceo (positive control) can.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // recalculateCost — wrong-way-round: import/sales/sales_manager/account all refused, ceo (positive control)
+    // can.
 
     @Test
     void recalculateCost_refusesImportSalesSalesManagerAndAccount_ceoCanStillWrite() {
@@ -187,34 +169,25 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
         }
 
         // Assert the ABSENCE of the write, not merely the thrown status code: recalculateCost's
-        // replaceItemsPreservingOverrides deletes+reinserts every pricing_costing_item row (which
-        // would have bumped calculated_at to a fresh now()), and updateFrozenCosts would have
-        // changed the decision item's frozen cost — neither happened.
+        // replaceItemsPreservingOverrides deletes+reinserts every pricing_costing_item row (which would have bumped
+        // calculated_at to a fresh now), and updateFrozenCosts would have changed the decision item's frozen cost.
         PricingDecisionItemDto itemAfterForbiddenAttempts = decisionService.get(decision.id(), importActor).items()
             .stream().filter(i -> i.id() == itemBefore.id()).findFirst().orElseThrow();
         assertThat(itemAfterForbiddenAttempts.frozenLandedCostPerPieceThb()).isEqualByComparingTo(frozenCostBefore);
         assertThat(costingItemFor(decision.pricingCostingId(), itemBefore.pricingRequestItemId()).calculatedAt())
             .isEqualTo(calculatedAtBefore);
 
-        // Positive control: ceo (CEO_ROLES) is NOT stopped by the role gate — proven by reaching
-        // all the way past requireRole into the real repository write, unlike the four roles
-        // above which never get past requireRole at all (403, before any DB access). This used to
-        // be unable to assert success: recalculateCost was broken by an unrelated, unconditional
-        // production bug (found while writing this test — see PricingCostingRepository
-        // #replaceItemsPreservingOverrides's own javadoc for the full account of the fix). Now
-        // that PricingCostingRepository#replaceItemsPreservingOverrides is an UPSERT instead of a
-        // delete+reinsert, ceo's call genuinely SUCCEEDS and the write actually lands — proving
-        // ceo reaches the real write path, not merely past the role gate.
+        // Positive control: ceo (CEO_ROLES) is NOT stopped by the role gate — proven by reaching all the way past
+        // requireRole into the real repository write, unlike the four roles above which never get past requireRole at
+        // all (403, before any DB access).
         PricingDecisionDto recalculatedByCeo = decisionService.recalculateCost(decision.id(), ceoActor);
         assertThat(recalculatedByCeo.status()).isEqualTo(PricingDecisionStatus.DRAFT);
         assertThat(costingItemFor(decision.pricingCostingId(), itemBefore.pricingRequestItemId()).calculatedAt())
             .isAfter(calculatedAtBefore);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // overrideItemCost — wrong-way-round: import/sales/sales_manager/account all refused,
-    // ceo (positive control) can.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // overrideItemCost — wrong-way-round: import/sales/sales_manager/account all refused, ceo (positive control)
+    // can.
 
     @Test
     void overrideItemCost_refusesImportSalesSalesManagerAndAccount_ceoCanStillWrite() {
@@ -256,10 +229,8 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
             .isEqualByComparingTo("999.0000");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Positive control: import keeps its deliberately-preserved READ grant (list/get) even
-    // though its WRITE access to costing is gone entirely.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Positive control: import keeps its deliberately-preserved READ grant (list/get) even though its WRITE access
+    // to costing is gone entirely.
 
     @Test
     void import_canStillReadListAndGet_theDeliberatelyPreservedGrant() {
@@ -272,16 +243,8 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
             .isEqualTo(decision.pricingCostingId());
     }
 
-    /**
-     * The three Import-era costing WRITE paths are severed, not deleted — they 409 for EVERY role,
-     * including the CEO, because the action itself no longer exists rather than having moved to a
-     * different actor. The routes survive only so the pending frontend pass can drop
-     * {@code routes.js}/{@code hrApi.js}/{@code mockApi.js} together without {@code
-     * contract.test.js} going red in the meantime (same treatment {@code TicketService#submit} got).
-     *
-     * <p>Asserted wrong-way-round on purpose: the point is that nobody can reach them, and that no
-     * costing row appears as a side effect of trying.
-     */
+    /** The three Import-era costing WRITE paths are severed, not deleted — they 409 for EVERY role, including the
+     * CEO, because the action itself no longer exists rather than having moved to a different actor. */
     @Test
     void theThreeImportCostingWritePaths_areSeveredFor409_forEveryRoleIncludingCeo_andWriteNothing() {
         long pricingRequestId = twoItemSubmittedCosting();
@@ -314,9 +277,7 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
             .isEqualTo("READY_FOR_CEO_REVIEW");
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private long countCostingsFor(long pricingRequestId) {
         Long count = jdbc.queryForObject(
@@ -331,10 +292,8 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
             .findFirst().orElseThrow();
     }
 
-    /** Two-item, two-factory scenario driven to READY_FOR_CEO_REVIEW — the precondition every
-     * startReview call below starts from. V141 ("CEO owns costing"): markReadyForCosting's
-     * auto-advance (once the LAST factory quote resolves) is what gets the request here; no
-     * standalone costing row exists until a test calls decisionService.startReview itself. */
+    /** Two-item, two-factory scenario driven to READY_FOR_CEO_REVIEW — the precondition every startReview call
+     * below starts from. */
     private long twoItemSubmittedCosting() {
         long pricingRequestId = pricingRequestService.createDraft(ticketId, twoItemPricingRequest(), salesActor)
             .summary().id();
@@ -375,10 +334,9 @@ class PricingCostingAuthzIntegrationTest extends AbstractPostgresIntegrationTest
     ) {
         Long productId = "Factory A-CostingAuthz".equals(factory) ? catalogProductIdFactoryA
             : "Factory B-CostingAuthz".equals(factory) ? catalogProductIdFactoryB : null;
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead. roundToFullBox=false +
-        // piecesInput=qty keeps the derived requestedQty byte-identical to `qty`.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
+        // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         return new PricingRequestRequests.PricingRequestItemRequest(null, productId, null, brand, model,
             brand + " " + model, "White", "Matte", "60x60", factory, null, null, null, null,
             QuantityType.CONFIRMED, null, null, null,

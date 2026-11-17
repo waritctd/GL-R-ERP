@@ -2,59 +2,9 @@ package th.co.glr.hr.leave;
 
 import java.math.BigDecimal;
 
-/**
- * Per-calendar-year quota attribution for a single leave request (V118 cross-year quota fix,
- * 2026-08-02). A request's [startDate, endDate] range almost always falls inside one calendar year,
- * but a long request (MATERNITY, up to 98 working days / ~136 calendar days -- §5.4) can span a 31
- * Dec/1 Jan boundary. {@code hr.leave_request} keeps total_days/paid_days/unpaid_days as the SUMS
- * across every year touched (so {@code chk_leave_paid_unpaid_sum} still holds); this record is one
- * row of the true per-year breakdown, persisted in {@code hr.leave_request_quota_year} and computed
- * in {@link LeaveService#submit}.
- *
- * <p><b>Design decision (per-year-independent quota AND paid cap):</b> days falling in year A consume
- * year A's own remaining quota and year A's own {@code paid_days_cap} allowance; days in year B
- * consume year B's, entirely independently -- a fresh allotment, not a shared budget split across the
- * boundary. This is simple and matches how {@code hr.leave_type}'s quota/cap columns are already
- * inherently per-calendar-year concepts everywhere else in this codebase (see {@link
- * LeaveRepository#sumUsedDays}/{@link LeaveRepository#sumPaidDays}, both keyed by year). The known
- * consequence: a request that happens to straddle 31 Dec can receive MORE total paid days than an
- * otherwise-identical same-year request would, because each side of the boundary gets its own fresh
- * cap (e.g. a 98-day MATERNITY request split 44/54 across the boundary can pay up to 44+45=89 days,
- * not 45) -- see LeaveService's submit() Javadoc and the branch's PR description for the concrete
- * worked example. This is a stated design choice, not an oversight; flagged here so a future reader
- * does not "fix" it without knowing it was deliberate.
- *
- * <p>{@code quotaRemainingBefore}/{@code quotaRemainingAfter} are this year's own remaining-quota
- * figures (mirroring {@code hr.leave_request}'s own columns of the same name, which now reflect only
- * the request's START year -- see that table's column comments).
- *
- * <p>{@code carriedInDays}/{@code ownQuotaDays} (V161, §5.3.5 pool attribution, 2026-09-03): how this
- * year's quota-consuming amount (i.e. {@code quotaRemainingBefore - quotaRemainingAfter} -- NOT
- * {@code totalDays}, which can overstate it when a request runs past what remained, and NOT {@code
- * paidDays}, which can understate it for a paid-days-capped type -- see
- * {@link LeaveService#computeQuotaSplit}'s Javadoc) was split across the two quota pools, per the
- * requester's {@link SubmitLeaveRequest#quotaPoolPreference()}/{@link
- * LeavePreviewRequest#quotaPoolPreference()} (or its CARRIED_IN_FIRST default). Both are always {@code
- * ZERO} for a leave type where {@link LeaveTypeDto#carriesForward()} is FALSE -- there is only ever
- * one pool for such a type, and it is {@code ownQuotaDays}. {@code
- * carriedInDays + ownQuotaDays = quotaRemainingBefore - quotaRemainingAfter} always (structurally
- * enforced by {@code chk_lrqy_pool_matches_consumed}, V161) -- this is the SAME figure the two pool
- * fields split, just not summed a second time.
- *
- * <p>{@code public} (Phase A0b, was package-private): {@code LeavePreviewDto} now carries a {@code
- * List<LeaveQuotaYearSplit>} in the {@code POST /api/leave/preview} response, so this needs to be
- * visible outside the package for Jackson to serialize it reliably. No other change.
- *
- * <p>{@code unpaidByRuleDays} (V164, owner-approved change, 2026-09-09): THIS YEAR's slice of the
- * request's whole-request {@code unpaid_by_rule_days} (see {@code hr.leave_request}'s V164 column
- * comment and {@link LeaveService#computeQuotaSplit}'s Javadoc for the latest-year-first allocation
- * across years) -- a SUBSET of {@code unpaidDays}, never a third bucket. Owner ruling #1 (the
- * "single most important correctness property" of V164) is enforced HERE, per year, not only on the
- * request's own split: {@link LeaveRepository#sumUsedDays} subtracts this column so a WARN-ed
- * request's unpaid-by-rule days never reduce a LATER request's remaining quota either -- see that
- * method's Javadoc for why summing plain {@code totalDays} alone would have silently reintroduced
- * quota consumption through the back door of a second, later request in the same year.
- */
+/** Per-calendar-year quota attribution for a single leave request (V118 cross-year quota fix, 2026-08-02). Both
+ * are always ZERO for a leave type where LeaveTypeDto#carriesForward() is FALSE -- there is only ever one pool
+ * for such a type, and it is ownQuotaDays. */
 public record LeaveQuotaYearSplit(
     int quotaYear,
     BigDecimal totalDays,

@@ -22,11 +22,8 @@ class ProfileRequestServiceTest {
     private final EmployeeRepository employees = mock(EmployeeRepository.class);
     private final AuditService auditService = mock(AuditService.class);
     private final NotificationRepository notifications = mock(NotificationRepository.class);
-    // update()'s personal-delivery notification now goes through NotificationService#notify rather
-    // than notifications.notifyEmployeeOfProfileRequest — see ProfileRequestService's constructor
-    // Javadoc. Mocked like every other collaborator here: this class is a Mockito-only unit test
-    // (no Postgres), and none of its cases assert on notification content — that coverage lives in
-    // ProfileRequestNotificationIntegrationTest, which pins the actual recipient address.
+    // update()'s personal-delivery notification now goes through NotificationService#notify rather than
+    // notifications.notifyEmployeeOfProfileRequest — see ProfileRequestService's constructor Javadoc.
     private final NotificationService notificationService = mock(NotificationService.class);
     private final ProfileRequestService service =
         new ProfileRequestService(profileRequests, employees, auditService, notifications, notificationService);

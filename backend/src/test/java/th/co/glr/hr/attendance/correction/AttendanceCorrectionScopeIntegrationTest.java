@@ -25,18 +25,9 @@ import th.co.glr.hr.notification.CeoApproverRepository;
 import th.co.glr.hr.notification.NotificationService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms attendance-correction authorization against the real service and the real SQL.
- *
- * <p>This feature adds a brand-new role gate (CEO-only approval, no manager stage at all — see
- * {@link AttendanceCorrectionService} class javadoc). Per CLAUDE.md, that requires a real-DB
- * integration test through the real service, not a claim inferred from {@code mockApi.js}. Every
- * case here (besides the CEO-approves positive case, kept deliberately minimal — see its own
- * javadoc) asks the question the wrong way round: can this caller reach or act on data they should
- * not, rather than confirming they can reach their own.
- *
- * <p>Modelled directly on {@code AttendanceScopeIntegrationTest}'s structure and idioms.
- */
+/** Confirms attendance-correction authorization against the real service and the real SQL. This feature adds a
+ * brand-new role gate (CEO-only approval, no manager stage at all — see AttendanceCorrectionService class
+ * javadoc). */
 class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final ZoneOffset BANGKOK_OFFSET = ZoneOffset.ofHours(7);
@@ -61,11 +52,8 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
             new AttendanceDailyCalculator(),
             new CompanyWideWorkScheduleResolver(properties),
             new DbHolidayCalendar(jdbc));
-        // Audit/notification are downstream of the guard, same convention
-        // OvertimeRetroactiveScopeIntegrationTest uses — stubbing them keeps this test about who may
-        // act on whose rows. The repository AND the attendance-write path (AttendanceDailyService)
-        // are real, so the CEO-approve positive case genuinely exercises the punch insert +
-        // is_manual_override write, not just a status flip.
+        // Audit/notification are downstream of the guard, same convention OvertimeRetroactiveScopeIntegrationTest uses
+        // — stubbing them keeps this test about who may act on whose rows.
         service = new AttendanceCorrectionService(
             repository,
             dailyService,
@@ -92,12 +80,8 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
 
     // --- approve: division manager is not the CEO -----------------------------------------------
 
-    /**
-     * The case that matters most: this feature has NO manager stage at all, so a division manager —
-     * who WOULD be able to approve overtime for their own division — must still get 403 here. If
-     * {@code requireCeo} ever regressed to also accept a manager, this is the test that must catch
-     * it (see the mutation-check in this class's PR description).
-     */
+    /** The case that matters most: this feature has NO manager stage at all, so a division manager — who WOULD be
+     * able to approve overtime for their own division — must still get 403 here. */
     @Test
     void aDivisionManagerCannotApproveAnotherEmployeesCorrection() {
         long requestId = submitAsAndReturnId(salesStaff);
@@ -112,10 +96,8 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
 
     // --- approve: self-approval is blocked, even for the requester -------------------------------
 
-    /**
-     * A plain employee attempting to approve their OWN request must also 403 — self-approval is not
-     * a carve-out {@code requireCeo} makes for the requester.
-     */
+    /** A plain employee attempting to approve their OWN request must also 403 — self-approval is not a carve-out
+     * requireCeo makes for the requester. */
     @Test
     void anEmployeeCannotApproveTheirOwnCorrectionRequest() {
         long requestId = submitAsAndReturnId(salesStaff);
@@ -148,12 +130,9 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
     void anEmployeeCannotListAnotherEmployeesRequests() {
         submitAsAndReturnId(anotherStaff);
 
-        // Same convention as AttendanceScopeIntegrationTest.anEmployeeAskingForSomeoneElseIsRejected:
-        // asking for a specific out-of-scope employee's rows is refused outright (403), rather than
-        // silently returning zero rows the caller could confuse with "no requests exist". There is
-        // no GET /{id} on this controller -- list(employeeId=...) IS the by-employee read surface,
-        // hence this exercises service.list, not a separate by-id lookup (review
-        // #attendance-correction-request: the prior test name implied one existed).
+        // Same convention as AttendanceScopeIntegrationTest.anEmployeeAskingForSomeoneElseIsRejected: asking for a
+        // specific out-of-scope employee's rows is refused outright (403), rather than silently returning zero rows
+        // the caller could confuse with "no requests exist".
         assertThatThrownBy(() -> service.list(employee(salesStaff), anotherStaff, null))
             .isInstanceOf(ApiException.class)
             .extracting(exception -> ((ApiException) exception).getStatus())
@@ -172,13 +151,8 @@ class AttendanceCorrectionScopeIntegrationTest extends AbstractPostgresIntegrati
 
     // --- approve: the CEO succeeding is the contrast case, kept minimal --------------------------
 
-    /**
-     * Positive case for contrast only — per CLAUDE.md's wrong-way-round rule, this is NOT the test
-     * that matters most (the four cases above are). Included so the suite also proves the CEO path
-     * is not accidentally broken by the same guard that blocks everyone else, and because the real
-     * (non-mocked) {@link AttendanceDailyService} wiring lets this exercise the actual punch-insert +
-     * {@code is_manual_override} write, not just a status flip.
-     */
+    /** Positive case for contrast only — per CLAUDE.md's wrong-way-round rule, this is NOT the test that matters
+     * most (the four cases above are). */
     @Test
     void theCeoCanApproveAndTheCorrectionLandsOnAttendance() {
         long requestId = submitAsAndReturnId(salesStaff);

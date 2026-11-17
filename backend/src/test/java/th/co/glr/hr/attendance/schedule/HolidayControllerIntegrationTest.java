@@ -20,24 +20,9 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms the manual holiday-refresh trigger's role gate against the real controller and the
- * real service — CLAUDE.md "Permission changes must ship evidence", because {@code
- * POST /api/holidays/fetch} is a brand-new authorization rule.
- *
- * <p>{@code AppProperties} is constructed with no {@code BOT_HOLIDAY_API_TOKEN} (its default is
- * blank), exactly as the "no TEST_DB_URL/no Docker" note in this repo's CLAUDE.md requires tests to
- * avoid any real network call: with a blank token, {@link BotHolidayFetchService#fetchNow()}
- * returns immediately without ever constructing an HTTP request (mirrors {@code BotFxFetchService}'s
- * own guard, which reads the separate {@code BOT_FX_API_TOKEN} — see {@code AppProperties.Bot}).
- * That means this test exercises the real {@link HolidayController} → real {@link
- * BotHolidayFetchService} role-gate path with zero network traffic and zero writes to {@code
- * hr.holiday} — exactly what is needed to prove the gate itself, without needing a live BOT
- * payload this branch cannot obtain.
- *
- * <p>Every forbidden case asks the question the wrong way round: can a caller who should not reach
- * this endpoint actually reach it.
- */
+/** Confirms the manual holiday-refresh trigger's role gate against the real controller and the real service —
+ * CLAUDE.md "Permission changes must ship evidence", because POST /api/holidays/fetch is a brand-new
+ * authorization rule. */
 class HolidayControllerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private HolidayController controller;
@@ -64,8 +49,8 @@ class HolidayControllerIntegrationTest extends AbstractPostgresIntegrationTest {
         Map<String, List<FetchOutcome>> response = fetchNow(hr());
 
         assertThat(response).containsKey("outcomes");
-        // No token configured -> the service returns immediately with nothing fetched; the point
-        // of this assertion is that the call was let through at all, not what it fetched.
+        // No token configured -> the service returns immediately with nothing fetched; the point of this assertion is
+        // that the call was let through at all, not what it fetched.
         assertThat(response.get("outcomes")).isEmpty();
     }
 
@@ -125,12 +110,7 @@ class HolidayControllerIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(found).extracting(HolidayDto::holidayDate).contains(date);
     }
 
-    /**
-     * The core requirement CLAUDE.md calls out: a manual write can never produce a {@code BANK} row.
-     * Asserted on ONE fixture together with the opposite (a BANK row inserted directly by the
-     * reconcile path) so the assertion is not vacuous — see the class javadoc's "wrong way round"
-     * discipline and the repo's "assert both sides" testing rule.
-     */
+    /** The core requirement CLAUDE.md calls out: a manual write can never produce a BANK row. */
     @Test
     void aManualCreateIsAlwaysCompanySourcedNeverBank() {
         LocalDate manualDate = LocalDate.of(2027, 3, 1);
@@ -148,18 +128,16 @@ class HolidayControllerIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo("BANK");
     }
 
-    /**
-     * The other half of the same requirement: a subsequent BOT reconcile must not delete the
-     * COMPANY row a manual write created, even when that reconcile's fetch does not include that
-     * date (which is exactly what would happen to a stray BANK row).
-     */
+    /** The other half of the same requirement: a subsequent BOT reconcile must not delete the COMPANY row a manual
+     * write created, even when that reconcile's fetch does not include that date (which is exactly what would
+     * happen to a stray BANK row). */
     @Test
     void aSubsequentBotReconcileDoesNotDeleteTheManuallyCreatedCompanyRow() {
         LocalDate manualDate = LocalDate.of(2027, 4, 1);
         createHoliday(hr(), manualDate, "วันหยุดบริษัท");
 
-        // The reconcile's fetch for 2027 does not include manualDate at all -- exactly the shape
-        // that deletes a stale BANK row.
+        // The reconcile's fetch for 2027 does not include manualDate at all -- exactly the shape that deletes a stale
+        // BANK row.
         holidayRepository.reconcileBankHolidaysForYear(2027, List.of(
             new HolidayRepository.BankHoliday(LocalDate.of(2027, 4, 15), "วันหยุดธนาคารอื่น")));
 
@@ -202,23 +180,14 @@ class HolidayControllerIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
-    /**
-     * V129 widened {@code hr.holiday.name_th} to {@code TEXT}, removing the database's own length
-     * guard (production BOT names have measured 137 characters for a real substitution-day + full
-     * royal title entry). {@link HolidayAdminService#MAX_NAME_LENGTH} (500) replaces that guard at
-     * the application layer.
-     *
-     * <p>Both sides asserted on ONE fixture, per CLAUDE.md's testing rule: a name at the real
-     * measured length (137 chars, well under the 500 bound) must be accepted, while a name past the
-     * bound must be rejected with 400 and never reach the database. A one-sided test (only the
-     * rejection) would also pass if the bound were set absurdly low and rejected legitimate BOT
-     * names too — which is exactly the regression this bound must not reintroduce.
-     */
+    /** V129 widened hr.holiday.name_th to TEXT, removing the database's own length guard (production BOT names have
+     * measured 137 characters for a real substitution-day + full royal title entry).
+     * HolidayAdminService#MAX_NAME_LENGTH (500) replaces that guard at the application layer. */
     @Test
     void aRealisticallyLongNameIsAcceptedAndAnAbsurdlyLongOneIsRejected() {
-        // Mirrors the measured longest real BOT holiday name (137 chars: substitution-day prefix +
-        // King Rama X's full royal title + special-holiday designation) -- built programmatically to
-        // hit exactly that length rather than hand-counting Thai characters.
+        // Mirrors the measured longest real BOT holiday name (137 chars: substitution-day prefix + King Rama X's full
+        // royal title + special-holiday designation) -- built programmatically to hit exactly that length rather than
+        // hand-counting Thai characters.
         String realisticName = ("วันหยุดชดเชยวันเฉลิมพระชนมพรรษาพระบาทสมเด็จพระปรเมนทรรามาธิบดี"
             + "ศรีสินทรมหาวชิราลงกรณ พระวชิรเกล้าเจ้าอยู่หัว (วันหยุดพิเศษเพิ่มเติม)"
             + "ก".repeat(200)).substring(0, 137);

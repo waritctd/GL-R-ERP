@@ -12,19 +12,9 @@ import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrittenConsentDto;
 import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrittenConsentUpsertRequest;
 
-/**
- * Business logic for the written-consent record (issue #376, task 4). <b>A recordable field, NOT an
- * enforcement gate</b> -- nothing here, and nothing in {@code PayrollCalculator}, reads {@code
- * consent_on_file} to decide whether a deduction runs. It exists solely to give HR a place to start
- * answering the issue's own open question ("which deductions actually have written employee consent
- * on file?") without pretending the answer is already known.
- *
- * <p>Restricted to the four deduction kinds that are HR-typed catch-alls rather than a statutory
- * figure or a court order -- see {@code hr.deduction_written_consent}'s CHECK constraint (V107) and
- * {@link th.co.glr.hr.payroll.PayrollDeductionClassification} for why {@code WITHHOLDING_TAX}/{@code
- * SOCIAL_SECURITY}/{@code STUDENT_LOAN} (item (1), no consent question) and {@code
- * LEGAL_EXECUTION_GARNISHMENT} (compelled by court order regardless of consent) are excluded.
- */
+/** Business logic for the written-consent record (issue #376, task 4). A recordable field, NOT an enforcement
+ * gate -- nothing here, and nothing in PayrollCalculator, reads consent_on_file to decide whether a deduction
+ * runs. */
 @Service
 public class DeductionWrittenConsentService {
     private static final Set<String> VIEW_ROLES = Set.of("hr", "ceo");

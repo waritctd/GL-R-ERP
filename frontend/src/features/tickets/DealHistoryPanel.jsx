@@ -1,5 +1,6 @@
 /* Hallmark · genre: modern-minimal · macrostructure: Workbench · design-system: design.md · designed-as-app · pre-emit critique: P4 H4 E5 S4 R5 V5 */
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Button } from '../../components/common/Button.jsx';
 import { EmptyState } from '../../components/common/EmptyState.jsx';
 import { Icon } from '../../components/common/Icon.jsx';
@@ -8,23 +9,24 @@ import { SkeletonText } from '../../components/common/Skeleton.jsx';
 import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { bangkokTodayIso, formatMoney, formatThaiDate, PAYMENT_KIND_LABEL } from '../../utils/format.js';
 import { ACTIVITY_KINDS, activityKindLabel } from './dealTrackingMeta.js';
+import { showsPlannedVisits, TIMELINE_FILTERS, timelineRowMatches } from './dealTimeline.js';
+import { shortDayLabel, timeLabel, weekStartIso } from '../salesBoard/visitWeek.js';
+import { CANCEL_REASON_LABEL, LOST_REASON_F_CODE, LOST_REASON_LABEL } from './stageMeta.js';
 import { ThaiDateInput } from '../../components/common/ThaiDateInput.jsx';
 
-// Moved verbatim from TicketDetailPage.jsx (IA rebuild — see
-// docs/ui-repair/02-information-architecture/): this is the label table for
-// `ticket.events`, unrelated to the DealActivityKind taxonomy
-// (dealTrackingMeta.js's ACTIVITY_KINDS) that backs the activity log merged
-// in below. Kept as one map, not duplicated — see this file's own history if
-// TicketDetailPage ever needs it again.
+// Moved verbatim from TicketDetailPage.jsx (IA rebuild — see docs/ui-repair/02-information-architecture/):
+// this is the label table for `ticket.events`, unrelated to the DealActivityKind taxonomy
+// (dealTrackingMeta.js's ACTIVITY_KINDS) that backs the activity log merged in below.
 export const EVENT_KIND_LABEL = {
-  CREATED:            'สร้างดีล',
-  STAGE_CHANGED:      'เปลี่ยนสถานะดีล',
+  // Owner ruling 2026-11-16: labels say งาน, not ดีล (the kinds themselves are untouched).
+  CREATED:            'สร้างงาน',
+  STAGE_CHANGED:      'เปลี่ยนสถานะงาน',
   MARKED_LOST:        'เสียงาน',
-  REOPENED:           'เปิดดีลอีกครั้ง',
-  ON_HOLD:            'พักดีลไว้',
+  REOPENED:           'เปิดงานอีกครั้ง',
+  ON_HOLD:            'พักงานไว้',
   DORMANT:            'พัก dormant',
   RESUMED:            'ดำเนินการต่อ',
-  POLICY_CHANGED:     'เปลี่ยนนโยบายดีล',
+  POLICY_CHANGED:     'เปลี่ยนนโยบายงาน',
   PAYMENT_RECORDED:   'บันทึกรับชำระเงิน',
   BILLING_UPDATED:    'อัปเดตข้อมูลวางบิล',
   SUBMITTED:          'ส่งเรื่องเข้าระบบ',
@@ -40,16 +42,16 @@ export const EVENT_KIND_LABEL = {
   PRICE_REVISED:      'แก้ไขราคาที่เสนอ',
   REVISION_REQUESTED: 'ขอแก้ไข',
   // GLA-74 part 1 ("สร้างจากใบเดิม" / สั่งเหมือนเดิม, V186) -- a genuinely new kind, not a reuse of
-  // REVISION_REQUESTED: a reorder clones an APPROVED quotation into an independent draft without
-  // ever revising, rejecting, or touching the source, so "ขอแก้ไข" above would misdescribe it.
+  // REVISION_REQUESTED: a reorder clones an APPROVED quotation into an independent draft without ever revising,
+  // rejecting, or touching the source, so "ขอแก้ไข" above would misdescribe it.
   DEAL_QUOTATION_REORDERED: 'สร้างจากใบเดิม (สั่งเหมือนเดิม)',
-  // Owner ruling 2026-09-19 ("a deal may hold only ONE APPROVED DEAL_DIRECT quotation") -- the
-  // same-ticket sweep DealQuotationService#approve fires once per sibling it actually
-  // supersedes. Missing here would leave the raw kind string on screen (Opus review finding).
+  // Owner ruling 2026-09-19 ("a deal may hold only ONE APPROVED DEAL_DIRECT quotation") -- the same-ticket sweep
+  // DealQuotationService#approve fires once per sibling it actually supersedes. Missing here would leave the raw
+  // kind string on screen (Opus review finding).
   DEAL_QUOTATION_SUPERSEDED: 'ใบเสนอราคาถูกแทนที่',
-  // GLA-136 (V193) -- DealQuotationService#promoteToDeal: the customer ordered on an APPROVED
-  // direct quotation. Relabelled by slice 2 (IA §4/§8): under the linked design the deal already
-  // exists, so what this event records is the ORDER, in the same words as the CTA that fires it.
+  // GLA-136 (V193) -- DealQuotationService#promoteToDeal: the customer ordered on an APPROVED direct quotation.
+  // Relabelled by slice 2 (IA §4/§8): under the linked design the deal already exists, so what this event
+  // records is the ORDER, in the same words as the CTA that fires it.
   DEAL_PROMOTED_FROM_QUOTATION: 'ยืนยันคำสั่งซื้อจากใบเสนอราคา',
   CLOSED:             'ปิดเรื่อง',
   CANCELLED:          'ยกเลิก',
@@ -57,10 +59,9 @@ export const EVENT_KIND_LABEL = {
   COMMENTED:          'ความคิดเห็น',
   COMMENT:            'ความคิดเห็น',
   PRICE_OVERRIDDEN:   'แก้ไขราคาด้วยตนเอง (CEO)',
-  // Dual-track post-quotation events (see backend TicketEventKind.java) — payment
-  // and fulfillment labels mirror the DealStagePanel's การชำระเงิน/การนำเข้า
-  // sub-status chips so an event and its chip read
-  // as the same real-world action.
+  // Dual-track post-quotation events (see backend TicketEventKind.java) — payment and fulfillment labels mirror
+  // the DealStagePanel's การชำระเงิน/การนำเข้า sub-status chips so an event and its chip read as the same
+  // real-world action.
   CUSTOMER_CONFIRMED:     'ลูกค้ายืนยันคำสั่งซื้อ',
   DEPOSIT_NOTICE_ISSUED:  'ออกใบแจ้งมัดจำ',
   DEPOSIT_PAID:           'รับมัดจำแล้ว',
@@ -74,8 +75,8 @@ export const EVENT_KIND_LABEL = {
   DELIVERY_COMPLETED:     'ส่งมอบครบแล้ว',
   AWAITING_FINAL_PAYMENT: 'รอชำระส่วนที่เหลือ',
   FULLY_PAID:             'ชำระครบแล้ว',
-  CLOSE_CONFIRMED:        'ยืนยันการปิดดีล',
-  CLOSE_CONFIRM_REVOKED:  'ถอนการยืนยันปิดดีล',
+  CLOSE_CONFIRMED:        'ยืนยันการปิดงาน',
+  CLOSE_CONFIRM_REVOKED:  'ถอนการยืนยันปิดงาน',
   ORDER_CONFIRMED_FROM_QUOTATION: 'ยืนยันคำสั่งซื้อจากใบเสนอราคา',
   DEAL_QUOTATION_SUBMITTED: 'ส่งใบเสนอราคาขออนุมัติ',
   DEAL_QUOTATION_APPROVED: 'อนุมัติใบเสนอราคา',
@@ -87,7 +88,24 @@ export const EVENT_KIND_LABEL = {
 
 // The backend writes "kind=…, amount=…, paid=…, payable=… — note" (TicketService#recordPayment); old rows
 // keep it, so it is formatted here. Anything not in that shape is shown as written.
+// TicketService.cancel / markLost write "ยกเลิกดีล (CODE)[ — note]" / "เสียงาน (CODE)[ — note]". This is the one place
+// a cancelled or lost deal's reason is displayed, so the code reads as its label: the cancel codes offered since
+// 2026-11-16 and the retired ones already-cancelled deals carry (CANCEL_REASON_LABEL holds both), and the lost codes
+// with their F1–F8 tag. A message not in that shape, or an unknown code, is shown as written.
+const REASON_MESSAGE = /^(ยกเลิกดีล|เสียงาน) \(([A-Z_]+)\)(?: — (.*))?$/s;
+
+function reasonMessage(event) {
+  const m = REASON_MESSAGE.exec(event.message ?? '');
+  if (!m) return event.message;
+  const label = event.kind === 'CANCELLED'
+    ? CANCEL_REASON_LABEL[m[2]]
+    : (LOST_REASON_LABEL[m[2]] ? `${LOST_REASON_F_CODE[m[2]] ?? ''} ${LOST_REASON_LABEL[m[2]]}`.trim() : null);
+  if (!label) return event.message;
+  return m[3] ? `${label} — ${m[3]}` : label;
+}
+
 function eventMessage(event) {
+  if (event.kind === 'CANCELLED' || event.kind === 'MARKED_LOST') return reasonMessage(event);
   if (event.kind !== 'PAYMENT_RECORDED') return event.message;
   const m = /^kind=(\w+), amount=(-?[\d.]+), paid=([-\d.]+), payable=([-\d.]+)(?: — (.*))?$/s.exec(event.message ?? '');
   if (!m || !PAYMENT_KIND_LABEL[m[1]]) return event.message;
@@ -122,13 +140,22 @@ function eventDotClass(kind) {
 // Read on every render/reset, not once at module load: today's date in Bangkok, never the UTC date.
 const emptyActivityDraft = () => ({ activityDate: bangkokTodayIso(), kind: 'CALL', note: '' });
 
-/** `Date.parse`-safe timestamp, or `null` for a missing/unparseable value —
- * rows with a `null` timestamp sort last rather than crashing `Array#sort` or
- * floating to the top as `NaN` would. */
+/** `Date.parse`-safe timestamp, or `null` for a missing/unparseable value — rows with a `null` timestamp sort
+ * last rather than crashing `Array#sort` or floating to the top as `NaN` would. */
 function toTimestamp(value) {
   if (!value) return null;
   const t = new Date(value).getTime();
   return Number.isNaN(t) ? null : t;
+}
+
+// An undo of a per-factory step advance (V216) is written as IMPORT_STEP_ADVANCED with the message
+// "โรงงาน <name>: เลิกทำ <from> → <to>" (ImportRequestService#undoStep / mockApi undoStep) — no event kind of its own.
+const IMPORT_STEP_UNDO_MARKER = ': เลิกทำ ';
+function eventLabel(event) {
+  if (event.kind === 'IMPORT_STEP_ADVANCED' && (event.message ?? '').includes(IMPORT_STEP_UNDO_MARKER)) {
+    return 'ฝ่ายนำเข้าเลิกทำการเลื่อนขั้นตอน';
+  }
+  return EVENT_KIND_LABEL[event.kind] ?? event.kind;
 }
 
 function EventRow({ event }) {
@@ -140,7 +167,7 @@ function EventRow({ event }) {
     <li className="ticket-event">
       <span className={eventDotClass(event.kind)} />
       <div className="min-w-0 flex-1">
-        <strong className="block text-sm text-text">{EVENT_KIND_LABEL[event.kind] ?? event.kind}</strong>
+        <strong className="block text-sm text-text">{eventLabel(event)}</strong>
         <span className="text-xs text-icon-muted">{event.actorName}</span>
         {event.message ? (
           <p className="mt-1 rounded bg-surface-muted px-2 py-1 text-xs text-text-muted">{eventMessage(event)}</p>
@@ -164,10 +191,9 @@ function EventRow({ event }) {
   );
 }
 
-// Same rendering DealTrackingPanel's activity log used before this merge —
-// a `StatusBadge` (not a coloured dot) is what visually marks a row as "a
-// rep's own follow-up" rather than "the system's audit trail" (the event
-// rows' `eventDotClass` dot).
+// Same rendering DealTrackingPanel's activity log used before this merge — a `StatusBadge` (not a coloured
+// dot) is what visually marks a row as "a rep's own follow-up" rather than "the system's audit trail" (the
+// event rows' `eventDotClass` dot).
 function ActivityRow({ activity }) {
   return (
     <li className="flex flex-col gap-0.5 rounded-lg border border-border-subtle bg-surface-subtle px-3 py-2">
@@ -182,39 +208,48 @@ function ActivityRow({ activity }) {
 }
 
 /**
- * "ประวัติดีล" (IA rebuild — see docs/ui-repair/02-information-architecture/):
- * one chronological history merging the system audit trail (`ticket.events`,
- * formerly its own "ประวัติการดำเนินการ" panel ~1,500px away from this one)
- * with the rep's own follow-up log (`activities`, formerly DealTrackingPanel's
- * "ประวัติการติดตาม (Activity log)"). Two separate timelines describing the
- * same deal is exactly the redundancy this rebuild folds — see the measured
- * facts in TicketDetailPage's own doc comments.
- *
- * Sorted by `event.createdAt` / `activity.activityDate` descending — those are
- * each stream's own canonical timestamp field (see dealTrackingMeta.js's
- * `lastStageChangeAt`/`hasActivitySince`, which already key activities off
- * `activityDate`, not `createdAt`). A row with no parseable timestamp sorts
- * last rather than crashing or floating to the top.
- *
- * Both input affordances survive verbatim: the comment box (`canComment`,
- * moved from TicketDetailPage's own state/handler — passed down rather than
- * duplicated so `resetActionDrafts` still clears it after any action) and the
- * add-activity form (`canAddActivity`, state now owned locally here since
- * DealTrackingPanel no longer renders it).
- *
- * FIX 1 (Opus review): this tab (and so this panel) now renders for every
- * viewer of the deal — the audit trail (`events`) and the comment box
- * (`canComment`) are backed by `TicketService.projectForRole`/`comment`'s
- * `requireViewAccess`, which every viewer passes. Only the follow-up feed
- * (`activities`, `TicketService.listActivities`) stays genuinely gated on
- * `requireDealOwnership` — the parent never fetches it for a role that gate
- * would refuse (`activitiesQuery`'s own `enabled`), so `activities` here is
- * always `[]` for those roles, not a real "nothing logged yet" answer.
- * `canViewActivityFeed` (true only for the roles that DID fetch it) exists
- * so the empty state below can tell those two situations apart instead of
- * claiming "ยังไม่มีประวัติ ... กิจกรรมจะปรากฏที่นี่" when the feed was simply
- * never asked for on this viewer's behalf.
+ * Slice 6.5 (prototype screen D): one PLANNED visit on this deal, above the dated history — it is what happens next,
+ * not something that happened. A dashed card with นัดไว้ (or เลยวันนัด once its day has passed unticked), who is being
+ * met, when, by whom, and the purpose. With `href` the whole card opens the นัดเข้าพบ page on the week holding the
+ * visit (`?week=<Monday>`), where it is ticked.
  */
+function PlannedVisitRow({ visit, todayIso, href }) {
+  const overdue = visit.plannedDate < todayIso;
+  const when = [shortDayLabel(visit.plannedDate, todayIso), timeLabel(visit.plannedTime)].filter(Boolean).join(' · ');
+  const body = (
+    <>
+      <span className="flex flex-wrap items-center gap-2">
+        <StatusBadge tone={overdue ? 'warning' : 'info'}>{overdue ? 'เลยวันนัด' : 'นัดไว้'}</StatusBadge>
+        <strong className="min-w-0 text-sm text-text [overflow-wrap:anywhere]">{`นัดเข้าพบ · ${visit.contactName}`}</strong>
+      </span>
+      <span className="text-xs font-bold text-text-secondary">
+        {when}
+        {visit.ownerName ? <span className="font-normal text-text-muted">{` · ${visit.ownerName}`}</span> : null}
+      </span>
+      {visit.note ? <span className="text-xs text-text-secondary [overflow-wrap:anywhere]">{visit.note}</span> : null}
+    </>
+  );
+  const card = 'flex flex-col gap-1 rounded-lg border border-dashed border-border-strong bg-surface px-3 py-2';
+  return (
+    <li data-testid="timeline-planned-visit" className={href ? '' : card}>
+      {href ? (
+        <Link
+          to={`${href}?week=${weekStartIso(visit.plannedDate)}`}
+          className={`${card} min-h-11 no-underline transition-colors hover:border-primary hover:bg-surface-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary`}
+        >
+          {body}
+        </Link>
+      ) : body}
+    </li>
+  );
+}
+
+/** "ประวัติ" (drawing a-deal, on the ภาพรวม tab): one chronological history merging the system audit trail with the
+ * rep's own follow-up log (`activities`, formerly DealTrackingPanel's "ประวัติการติดตาม"), filtered by
+ * ทั้งหมด / เข้าพบ / เอกสาร (dealTimeline.js). The note composer (comment + the any-kind activity form) is closed
+ * until "+ บันทึก" — the header's โทรแล้ว / นัดเข้าพบ are the everyday way to log a touch now. Each half keeps its
+ * own gate (`canComment`, `canAddActivity`); "+ บันทึก" shows when either applies. A row with no parseable
+ * timestamp sorts last rather than crashing or floating to the top. */
 export function DealHistoryPanel({
   events = [],
   activities = [],
@@ -228,10 +263,18 @@ export function DealHistoryPanel({
   canAddActivity = false,
   onAddActivity,
   addingActivity = false,
+  // Slice 6.5: the deal's PLANNED visits as the server served them to this viewer (already narrowed to the visits they
+  // may read); `visitsHref` links each to the นัดเข้าพบ page when the viewer may open it; `todayIso` marks the overdue.
+  plannedVisits = [],
+  visitsHref = null,
+  todayIso = bangkokTodayIso(),
 }) {
   const [activityDraft, setActivityDraft] = useState(emptyActivityDraft);
+  const [filter, setFilter] = useState('all');
+  const [composerOpen, setComposerOpen] = useState(false);
+  const canNote = canComment || canAddActivity;
 
-  const rows = useMemo(() => {
+  const allRows = useMemo(() => {
     const eventRows = events.map((event) => ({ key: `event-${event.id}`, type: 'event', ts: toTimestamp(event.createdAt), event }));
     const activityRows = activities.map((activity) => ({ key: `activity-${activity.id}`, type: 'activity', ts: toTimestamp(activity.activityDate), activity }));
     return [...eventRows, ...activityRows].sort((a, b) => {
@@ -239,31 +282,9 @@ export function DealHistoryPanel({
       if (a.ts == null) return 1;
       if (b.ts == null) return -1;
       if (b.ts !== a.ts) return b.ts - a.ts;
-      // FIX 4 (Opus review — comparator was not a strict weak ordering): the
-      // old tiebreak below only compared `event.id` when BOTH rows were
-      // events, and fell through to a bare `0` for every other combination
-      // (event-vs-activity, activity-vs-activity). That made the "tie"
-      // relation non-transitive: for two events E1(id 1)/E2(id 2) and an
-      // activity A sharing one instant, cmp(E1,A)=0 and cmp(A,E2)=0 (neither
-      // is event-vs-event) implied E1~A~E2, yet cmp(E1,E2) actually resolves
-      // via the id tiebreak to a definite (non-zero) order — Array#sort has
-      // no obligation to honor a comparator whose "equal" pairs aren't
-      // mutually consistent, so the final order for that trio depended on
-      // the engine's internal comparison sequence, not on any rule this file
-      // states. D5: sales.ticket_event.created_at defaults to Postgres now()
-      // (transaction_timestamp()), so every event written in the same
-      // transaction (e.g. confirmCustomer's CUSTOMER_CONFIRMED then
-      // STAGE_CHANGED) shares one identical instant — this is the case the
-      // tiebreak exists for at all.
-      //
-      // Fixed by applying ONE secondary key to every row regardless of kind,
-      // not just to event/event pairs: events sort before activities at a
-      // shared instant (arbitrary but FIXED, so every pair — including one
-      // event and one activity — now has a definite, mutually consistent
-      // order instead of a same-kind-only special case), and within one kind
-      // a numerically higher id (written later) sorts first — the exact
-      // event-vs-event rule the passing D5 test below already requires,
-      // unchanged.
+      // FIX 4 (Opus review — comparator was not a strict weak ordering): the old tiebreak below only compared
+      // `event.id` when BOTH rows were events, and fell through to a bare `0` for every other combination
+      // (event-vs-activity, activity-vs-activity).
       const aRank = a.type === 'event' ? 0 : 1;
       const bRank = b.type === 'event' ? 0 : 1;
       if (aRank !== bRank) return aRank - bRank;
@@ -272,6 +293,9 @@ export function DealHistoryPanel({
       return bId - aId;
     });
   }, [events, activities]);
+  const rows = allRows.filter((row) => timelineRowMatches(row, filter));
+  const upcoming = showsPlannedVisits(filter) ? plannedVisits : [];
+  const nothing = rows.length === 0 && upcoming.length === 0;
 
   async function submitActivity() {
     if (!activityDraft.activityDate) return;
@@ -284,28 +308,73 @@ export function DealHistoryPanel({
   }
 
   return (
-    <Panel title="ประวัติดีล" actions={<span className="text-2xs font-normal text-text-muted">History</span>}>
+    <Panel
+      title="ประวัติ"
+      data-testid="deal-timeline"
+      actions={(
+        <div className="flex flex-wrap items-center gap-1.5">
+          {canNote ? (
+            <Button
+              type="button" variant="secondary" size="sm" className="mobile:min-h-[44px]"
+              aria-expanded={composerOpen}
+              onClick={() => setComposerOpen((open) => !open)}
+            >
+              + บันทึก
+            </Button>
+          ) : null}
+          <div role="group" aria-label="กรองประวัติ" className="flex flex-wrap gap-1">
+            {TIMELINE_FILTERS.map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                aria-pressed={filter === option.id}
+                onClick={() => setFilter(option.id)}
+                className={`min-h-[32px] rounded-full border px-3 text-xs font-bold mobile:min-h-[44px] ${filter === option.id
+                  ? 'border-primary bg-primary-bg text-primary'
+                  : 'border-border-input bg-surface text-text-secondary hover:bg-surface-hover'}`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    >
+      {composerOpen && canNote ? (
+        <Composer
+          canComment={canComment}
+          commentText={commentText}
+          onCommentTextChange={onCommentTextChange}
+          onSubmitComment={onSubmitComment}
+          commentSubmitting={commentSubmitting}
+          canAddActivity={canAddActivity}
+          activityDraft={activityDraft}
+          setActivityDraft={setActivityDraft}
+          addingActivity={addingActivity}
+          submitActivity={submitActivity}
+        />
+      ) : null}
       <div className="ticket-events">
-        {rows.length === 0 && !loading ? (
-          // FIX 1 (Opus review): when `canViewActivityFeed` is false,
-          // `activities` is always `[]` because it was never fetched for
-          // this viewer (see the parent's `activitiesQuery.enabled`) — an
-          // empty `events` list here only proves the AUDIT TRAIL is empty,
-          // not that "nothing has happened on this deal". The default copy
-          // ("เหตุการณ์และกิจกรรมจะปรากฏที่นี่") promises the follow-up feed will
-          // show up here too, which is untrue for these viewers — say what
-          // this panel actually knows instead.
+        {nothing && !loading && (allRows.length > 0 || plannedVisits.length > 0) ? (
+          <p className="m-0 px-1 py-3 text-sm text-text-muted">ไม่มีรายการในตัวกรองนี้</p>
+        ) : nothing && !loading ? (
+          // FIX 1 (Opus review): when `canViewActivityFeed` is false, `activities` is always `[]` because it was never
+          // fetched for this viewer (see the parent's `activitiesQuery.enabled`) — an empty `events` list here only
+          // proves the AUDIT TRAIL is empty, not that "nothing has happened on this deal".
           canViewActivityFeed ? (
             <EmptyState icon="clock" title="ยังไม่มีประวัติ" description="เหตุการณ์และกิจกรรมจะปรากฏที่นี่" />
           ) : (
             <EmptyState
               icon="clock"
               title="ยังไม่มีประวัติการดำเนินการ"
-              description="บันทึกกิจกรรมติดตามแสดงเฉพาะเจ้าของดีล ผู้จัดการฝ่ายขาย และ CEO"
+              description="บันทึกกิจกรรมติดตามแสดงเฉพาะเจ้าของงาน ผู้จัดการฝ่ายขาย และ CEO"
             />
           )
         ) : (
           <ul className="m-0 flex list-none flex-col gap-2 p-0">
+            {upcoming.map((visit) => (
+              <PlannedVisitRow key={`visit-${visit.id}`} visit={visit} todayIso={todayIso} href={visitsHref} />
+            ))}
             {rows.map((row) => (
               row.type === 'event'
                 ? <EventRow key={row.key} event={row.event} />
@@ -313,9 +382,8 @@ export function DealHistoryPanel({
             ))}
           </ul>
         )}
-        {/* activitiesQuery loading never blocks the events that are already
-            part of the ticket payload — this is an additive "more is coming"
-            line, not a full-panel skeleton swap. */}
+        {/* activitiesQuery loading never blocks the events that are already part of the ticket payload — this is an
+         * additive "more is coming" line, not a full-panel skeleton swap. */}
         {loading ? (
           <div className="px-1 pt-2">
             <SkeletonText lines={2} />
@@ -323,8 +391,20 @@ export function DealHistoryPanel({
         ) : null}
       </div>
 
+    </Panel>
+  );
+}
+
+/** "+ บันทึก"'s composer: the comment box (`canComment`) and the any-kind activity form (`canAddActivity`), each
+ * behind its own gate exactly as before. */
+function Composer({
+  canComment, commentText, onCommentTextChange, onSubmitComment, commentSubmitting,
+  canAddActivity, activityDraft, setActivityDraft, addingActivity, submitActivity,
+}) {
+  return (
+    <div className="mb-3 flex flex-col rounded-md border border-border-subtle bg-surface-muted">
       {canComment ? (
-        <div className="flex flex-col gap-2 border-t border-border p-4">
+        <div className="flex flex-col gap-2 p-4">
           <textarea
             rows={2}
             value={commentText}
@@ -343,7 +423,7 @@ export function DealHistoryPanel({
       ) : null}
 
       {canAddActivity ? (
-        <div className="mt-1 flex flex-col gap-2 border-t border-border p-4">
+        <div className="flex flex-col gap-2 p-4 [&:not(:first-child)]:border-t [&:not(:first-child)]:border-border">
           <h3 className="m-0 text-sm font-extrabold text-text">บันทึกกิจกรรมติดตาม</h3>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
             <label className="flex flex-col gap-1 text-xs font-bold text-text-secondary">
@@ -386,6 +466,6 @@ export function DealHistoryPanel({
           </Button>
         </div>
       ) : null}
-    </Panel>
+    </div>
   );
 }

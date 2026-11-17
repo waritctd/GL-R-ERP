@@ -34,6 +34,11 @@ test('Import changes Sales currency, sees live baht, and persists the supplier r
     context = await browser.newContext({ baseURL: testInfo.project.use.baseURL, storageState: await sessions.import.storageState(), viewport: { width: 1440, height: 1000 } });
     const page = await context.newPage();
     await page.goto(`/pricing-requests/${id}`);
+    // Spec §7.11 item 2: a currency Sales set (and the draft still uses) shows as a read-only chip; แก้สกุลเงิน reveals
+    // the select. Assert the chip carries Sales' EUR before opening it.
+    const salesCurrencyChip = page.getByTestId(`pcr-sales-currency-${quote.id}`);
+    await expect(salesCurrencyChip).toContainText('EUR');
+    await salesCurrencyChip.getByRole('button', { name: 'แก้สกุลเงิน' }).click();
     const currency = page.getByRole('combobox', { name: 'สกุลเงินที่โรงงานเสนอ' });
     await expect(currency).toHaveValue('EUR');
     await page.getByRole('textbox', { name: /^ราคาที่เสนอ/ }).fill('20');

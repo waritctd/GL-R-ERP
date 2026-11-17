@@ -7,6 +7,9 @@ import { DealPaymentSection } from './DealPaymentSection.jsx';
 import { api } from '../../api/index.js';
 import { downloadBlob } from '../../utils/download.js';
 import { formatThaiDate } from '../../utils/format.js';
+import {
+  chainDepositBlockedReason, chainDepositState, chainRemainingBlockedReason, chainRemainingState,
+} from '../../api/mockDocumentChainRules.js';
 
 globalThis.React = React;
 
@@ -20,9 +23,32 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         listByTicket: vi.fn(), issue: vi.fn(), preview: vi.fn(), downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       storedRemainingInvoices: { listForTicket: vi.fn(), download: vi.fn() },
+      documentChain: { get: vi.fn() },
     },
   };
 });
+
+// Document chain (2026-11-17): the step STATES now come from the server's summary (GET /tickets/{id}/document-chain).
+// Each fixture's summary is the one the server would compute from the same deal facts — built here through the
+// mock's mirror of DocumentChainRules, which documentChainCases.test.js pins to the Java rules' state table.
+function chainFor({ summary, depositNotices = [], remainingInvoices = [], user }) {
+  const f = {
+    status: summary.status, lifecycle: summary.lifecycle ?? 'ACTIVE', depositPolicy: summary.depositPolicy ?? 'REQUIRED',
+    paymentStatus: summary.paymentStatus ?? null, fulfillmentStatus: summary.fulfillmentStatus ?? null,
+    noticeDraft: depositNotices.some((d) => d.status === 'DRAFT'), noticeIssued: depositNotices.some((d) => d.status === 'ISSUED'),
+    invoiceDraft: remainingInvoices.some((r) => r.status === 'DRAFT'), invoiceIssued: remainingInvoices.some((r) => r.status === 'ISSUED'),
+  };
+  const mayWrite = user.role === 'sales' && Number(summary.createdById) === Number(user.id);
+  const remainingState = chainRemainingState(f);
+  const remainingReason = chainRemainingBlockedReason(f);
+  return {
+    ticketId: 19, dealStatus: f.status, lifecycle: f.lifecycle,
+    order: { confirmed: f.paymentStatus != null, confirmable: false, confirmedFromQuotationId: null, confirmedAt: null },
+    deposit: { policy: f.depositPolicy, state: chainDepositState(f), blockedReason: chainDepositBlockedReason(f) },
+    remaining: { state: remainingState, blockedReason: remainingReason, canCreate: remainingState === 'TO_CREATE' && remainingReason == null },
+    viewer: { mayConfirmOrder: false, mayWriteDepositNotice: mayWrite, mayWriteRemainingInvoice: mayWrite },
+  };
+}
 
 const owner = { id: 1, role: 'sales' };
 const otherSales = { id: 2, role: 'sales' };
@@ -52,6 +78,7 @@ function renderSection({
   else api.depositNotices.listByTicket.mockResolvedValue({ depositNotices });
   if (remainingFails) api.storedRemainingInvoices.listForTicket.mockRejectedValue(new Error('boom'));
   else api.storedRemainingInvoices.listForTicket.mockResolvedValue({ remainingInvoices });
+  api.documentChain.get.mockResolvedValue({ documentChain: chainFor({ summary, depositNotices, remainingInvoices, user }) });
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const showToast = vi.fn();
   const utils = render(
@@ -80,13 +107,16 @@ const settled = async () => {
 
 beforeEach(() => { vi.clearAllMocks(); });
 
-describe('DealPaymentSection — one panel, no วางบิล', () => {
-  it('is a single "การชำระเงิน" panel with the three steps and the timeline, and no สถานะการเงิน or วางบิล text', async () => {
+// Deal page redesign (drawing a-deal-money, 2026-11-16): the one "การชำระเงิน" panel became three KPI tiles, then
+// รับแล้ว (the timeline) beside เอกสาร (the three steps) — same steps, same rows.
+describe('DealPaymentSection — KPI tiles, รับแล้ว beside เอกสาร, no วางบิล', () => {
+  it('is three KPI tiles plus the รับแล้ว timeline and the เอกสาร steps, and no สถานะการเงิน or วางบิล text', async () => {
     const { container } = renderSection();
     await settled();
-    expect(screen.getAllByRole('heading', { level: 2 }).map((h) => h.textContent)).toEqual(['การชำระเงิน']);
-    expect(screen.getByRole('heading', { level: 3, name: 'เอกสารและการรับชำระ' })).toBeTruthy();
-    expect(screen.getByRole('heading', { level: 3, name: 'ไทม์ไลน์การชำระเงิน' })).toBeTruthy();
+    expect(screen.queryAllByRole('heading', { level: 2 })).toHaveLength(0);
+    expect(within(screen.getByTestId('money-kpis')).getAllByTestId('money-kpi')).toHaveLength(3);
+    expect(within(screen.getByTestId('money-documents')).getByRole('heading', { level: 3, name: 'เอกสาร' })).toBeTruthy();
+    expect(within(screen.getByTestId('money-received')).getByRole('heading', { level: 3, name: 'รับแล้ว' })).toBeTruthy();
     expect(['payment-step-deposit', 'payment-step-remaining', 'payment-step-final'].every((id) => screen.getByTestId(id))).toBe(true);
     expect(screen.getByText('ใบแจ้งยอดเงินรับมัดจำ')).toBeTruthy();
     expect(container.textContent).not.toMatch(/สถานะการเงิน|วางบิล|ครบกำหนดชำระ|ติดตามครั้งถัดไป|ใบวางบิล/);
@@ -95,8 +125,10 @@ describe('DealPaymentSection — one panel, no วางบิล', () => {
   it('shows the stage and overdue badges only when they apply', async () => {
     const first = renderSection({ summary: summaryOf({ paymentStage: 'PARTIALLY_PAID', overdue: true }) });
     await settled();
-    expect(screen.getByText('ชำระบางส่วน')).toBeTruthy();
-    expect(screen.getByText('เกินกำหนด')).toBeTruthy();
+    // The stage also names the มูลค่างาน tile now, so the badge is read inside เอกสาร.
+    const documents = screen.getByTestId('money-documents');
+    expect(within(documents).getByText('ชำระบางส่วน')).toBeTruthy();
+    expect(within(documents).getByText('เกินกำหนด')).toBeTruthy();
     first.unmount();
     renderSection({ summary: summaryOf({ overdue: false }) });
     await settled();
@@ -104,13 +136,17 @@ describe('DealPaymentSection — one panel, no วางบิล', () => {
   });
 });
 
-describe('DealPaymentSection — balance strip and progress bar', () => {
+describe('DealPaymentSection — KPI tiles and progress bar', () => {
+  // The three figures were the balance strip's ยอดที่ต้องชำระ / ชำระแล้ว / คงเหลือ; they are the drawn tiles
+  // มูลค่างาน / รับแล้ว / คงค้าง now, still the server's amountPayable / amountPaid / amountOutstanding.
+  const tile = (label) => within(screen.getByTestId('money-kpis')).getByText(label).closest('[data-testid="money-kpi"]');
+
   it('keeps the three figures and fills the bar with amountPaid / amountPayable', async () => {
     renderSection({ summary: summaryOf({ amountPayable: 1000, amountPaid: 400, amountOutstanding: 600 }) });
     await settled();
-    expect(within(screen.getByText('ยอดที่ต้องชำระ').parentElement).getByText('฿1,000.00')).toBeTruthy();
-    expect(within(screen.getByText('ชำระแล้ว', { selector: 'span' }).parentElement).getByText('฿400.00')).toBeTruthy();
-    expect(within(screen.getByText('คงเหลือ').parentElement).getByText('฿600.00')).toBeTruthy();
+    expect(within(tile('มูลค่างาน')).getByText('฿1,000.00')).toBeTruthy();
+    expect(within(tile('รับแล้ว')).getByText('฿400.00')).toBeTruthy();
+    expect(within(tile('คงค้าง')).getByText('฿600.00')).toBeTruthy();
     const bar = screen.getByRole('progressbar');
     expect(bar.getAttribute('aria-valuenow')).toBe('40');
     expect(bar.getAttribute('aria-label')).toBe('ชำระแล้ว 40%');
@@ -129,14 +165,15 @@ describe('DealPaymentSection — balance strip and progress bar', () => {
     expect(screen.getByText(`ชำระแล้ว ${expected}%`)).toBeTruthy();
   });
 
-  it('คงเหลือ is red only while above 0', async () => {
+  it('คงค้าง is red only while above 0', async () => {
     const first = renderSection({ summary: summaryOf({ amountOutstanding: 600 }) });
     await settled();
-    expect(screen.getByText('฿600.00', { selector: 'strong' }).className).toContain('text-danger');
+    expect(tile('คงค้าง').querySelector('strong').textContent).toBe('฿600.00');
+    expect(tile('คงค้าง').querySelector('strong').className).toContain('text-danger');
     first.unmount();
     renderSection({ summary: summaryOf({ amountPayable: 1000, amountPaid: 1000, amountOutstanding: 0 }) });
     await settled();
-    expect(screen.getByText('คงเหลือ').parentElement.querySelector('strong').className).not.toContain('text-danger');
+    expect(tile('คงค้าง').querySelector('strong').className).not.toContain('text-danger');
   });
 });
 
@@ -382,6 +419,37 @@ describe('DealPaymentSection — step 2 ใบแจ้งหนี้ส่ว�
   });
 });
 
+describe('DealPaymentSection — fix round 1: never a button the server refuses', () => {
+  // F-2: the legacy cancelled status on an ACTIVE lifecycle is a dead deal (the quotation card says งานนี้ยกเลิกแล้ว).
+  it('a legacy cancelled-status deal on an ACTIVE lifecycle offers no create, and says why', async () => {
+    renderSection({ summary: summaryOf({ status: 'cancelled', lifecycle: 'ACTIVE', paymentStatus: 'CUSTOMER_CONFIRMED' }) });
+    await settled();
+    expect(deposit().queryByRole('button', { name: 'สร้างใบแจ้งยอดเงินรับมัดจำ' })).toBeNull();
+    expect(deposit().getByText(/งานพักหรือปิดอยู่/)).toBeTruthy();
+  });
+
+  // Surviving mutation F17: the create button follows the server's canCreate, not merely the TO_CREATE state.
+  it('deposit received but the goods are not in: no สร้างใบแจ้งหนี้ส่วนที่เหลือ even for the manager, and the reason', async () => {
+    renderSection({
+      summary: summaryOf({ paymentStatus: 'DEPOSIT_PAID', status: 'quotation_issued', fulfillmentStatus: null }),
+      depositNotices: [issuedNotice], canManageRemainingInvoice: true,
+    });
+    await settled();
+    expect(remaining().getByText('ยังไม่ออก')).toBeTruthy();
+    expect(remaining().queryByRole('button', { name: 'สร้างใบแจ้งหนี้ส่วนที่เหลือ' })).toBeNull();
+    expect(remaining().getByText('ออกได้เมื่อสินค้าถึงขั้นรับ/ส่งมอบแล้ว')).toBeTruthy();
+  });
+
+  // F-4 on the deal page: an unconfirmed no-deposit deal waits on the order, not on a deposit.
+  it('an unconfirmed no-deposit deal: step 2 never says รอรับมัดจำก่อน', async () => {
+    renderSection({ summary: summaryOf({ status: 'draft', depositPolicy: 'CREDIT_CUSTOMER', paymentStatus: null }), canManageRemainingInvoice: true });
+    await settled();
+    expect(remaining().queryByText('รอรับมัดจำก่อน')).toBeNull();
+    expect(remaining().getByText('ยังไม่ถึงขั้นตอน')).toBeTruthy();
+    expect(remaining().queryByRole('button')).toBeNull();
+  });
+});
+
 describe('DealPaymentSection — deposit receipt date', () => {
   it('shows the LATEST deposit receipt date, whatever order the receipts arrive in', async () => {
     renderSection({
@@ -442,9 +510,93 @@ describe('DealPaymentSection — step 3 รับชำระครบ, and the 
   });
 });
 
+// Drawing m-deposit-issue (2026-11-16): the issue confirm is rebuilt; what it SENDS must not change. Every figure in
+// this fixture differs from every other, so reading one field where another belongs fails.
+describe('DealPaymentSection — ใบแจ้งมัดจำ issue confirm (drawing m-deposit-issue)', () => {
+  const notice = {
+    ...draftNotice, depositPercent: 0.3, subtotal: 1240000.11, depositAmount: 372000.03, vatPercent: 0.07,
+    vatAmount: 26040.02, totalPayable: 398040.05, customerName: 'บริษัท ลุมพินี เรสซิเดนซ์ จำกัด', reference: 'QT-2026-0201',
+    updatedAt: 'stamp-7',
+  };
+  const props = { summary: summaryOf({ paymentStatus: 'CUSTOMER_CONFIRMED' }), depositNotices: [notice] };
+  const openConfirm = async () => {
+    fireEvent.click(deposit().getByRole('button', { name: 'ออกเอกสาร' }));
+    return screen.findByRole('dialog', { name: 'ยืนยันการออกเอกสาร' });
+  };
+
+  // Payload identity — captured against the pre-rebuild dialog and kept green through it.
+  it('confirm sends exactly one issue(id, { expectedUpdatedAt }) with the listed draft\'s stamp, nothing else', async () => {
+    api.depositNotices.issue.mockResolvedValue({ depositNotice: { docNumber: 'GLRD6900099' } });
+    renderSection(props);
+    await settled();
+    const dialog = await openConfirm();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'ออกเอกสาร' }));
+    await waitFor(() => expect(api.depositNotices.issue).toHaveBeenCalledTimes(1));
+    expect(api.depositNotices.issue.mock.calls).toEqual([[31, { expectedUpdatedAt: 'stamp-7' }]]);
+    expect(api.depositNotices.preview).not.toHaveBeenCalled();
+  });
+
+  it('ยกเลิก, Escape and ✕ close it and send nothing', async () => {
+    renderSection(props);
+    await settled();
+    fireEvent.click(within(await openConfirm()).getByRole('button', { name: 'ยกเลิก' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    await openConfirm();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    fireEvent.click(within(await openConfirm()).getByRole('button', { name: 'ปิด' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(api.depositNotices.issue).not.toHaveBeenCalled();
+  });
+
+  it('shows the drawn summary line and rows, each from its own served field', async () => {
+    renderSection(props);
+    await settled();
+    const dialog = within(await openConfirm());
+    expect(dialog.getByTestId('deposit-issue-summary').textContent)
+      .toBe('มัดจำ 30% · 398,040.05 บาท รวม VAT · ถึง บริษัท ลุมพินี เรสซิเดนซ์ จำกัด');
+    const row = (label) => dialog.getByText(label, { exact: false }).closest('tr');
+    expect(row('มูลค่าสินค้า').textContent).toContain('QT-2026-0201');
+    expect(row('มูลค่าสินค้า').textContent).toContain('1,240,000.11');
+    expect(row('มัดจำ 30% (ก่อน VAT)').textContent).toContain('372,000.03');
+    expect(row('VAT 7%').textContent).toContain('26,040.02');
+    expect(row('ยอดที่ลูกค้าต้องชำระ').textContent).toContain('398,040.05');
+    expect(dialog.getByText(/ยอดเริ่มต้นเติมจากใบเสนอราคา/)).toBeTruthy();
+    // Fix round 1, F2: this opener issues the saved draft exactly as listed, so it is not an estimate.
+    expect(dialog.queryByTestId('deposit-issue-estimate')).toBeNull();
+  });
+
+  it('keeps the irreversibility warning, and its own labels never say ดีล', async () => {
+    renderSection(props);
+    await settled();
+    const dialog = await openConfirm();
+    expect(within(dialog).getByTestId('deposit-issue-warning').textContent).toMatch(/หลังจากนี้จะไม่สามารถแก้ไขได้/);
+    expect(dialog.textContent).not.toContain('ดีล');
+  });
+
+  // Fix round 1, F4: first in the scrolling body, so it is on screen with the footer's ออกเอกสาร on a short phone.
+  it('puts the irreversibility warning first in the scrolling body', async () => {
+    renderSection(props);
+    await settled();
+    const dialog = await openConfirm();
+    const body = dialog.querySelector('.modal-body');
+    expect(body.firstElementChild.firstElementChild).toBe(within(dialog).getByTestId('deposit-issue-warning'));
+  });
+
+  it('a notice with no reference shows the value row without an อ้างอิง', async () => {
+    renderSection({ ...props, depositNotices: [{ ...notice, reference: null }] });
+    await settled();
+    const dialog = within(await openConfirm());
+    const row = dialog.getByText('มูลค่าสินค้า', { exact: false }).closest('tr');
+    expect(row.textContent).not.toContain('อ้างอิง');
+    expect(row.textContent).toContain('1,240,000.11');
+  });
+});
+
 describe('DealPaymentSection — the timeline (moved here unchanged)', () => {
   const summary = summaryOf({ paymentStage: 'PARTIALLY_PAID', paymentStatus: 'DEPOSIT_PAID' });
-  const timelineItems = () => within(screen.getByRole('heading', { level: 3, name: 'ไทม์ไลน์การชำระเงิน' }).parentElement)
+  // The timeline is the รับแล้ว card now (was the "ไทม์ไลน์การชำระเงิน" block).
+  const timelineItems = () => within(screen.getByTestId('money-received'))
     .queryAllByRole('listitem').map((li) => li.textContent);
 
   it('merges money-track events and receipts, newest first, and drops non-payment events', async () => {
@@ -490,16 +642,12 @@ describe('DealPaymentSection — the timeline (moved here unchanged)', () => {
     expect(timelineItems()).toHaveLength(0);
   });
 
-  it('shows บันทึกรับชำระเงิน only when granted, and never a ตั้งค่าการวางบิล button', async () => {
-    const onRecordPayment = vi.fn();
-    const first = renderSection({ summary, canRecordPayment: true, onRecordPayment });
-    await settled();
-    fireEvent.click(screen.getByRole('button', { name: 'บันทึกรับชำระเงิน' }));
-    expect(onRecordPayment).toHaveBeenCalledTimes(1);
-    expect(screen.queryByRole('button', { name: 'ตั้งค่าการวางบิล' })).toBeNull();
-    first.unmount();
-    renderSection({ summary, canRecordPayment: false });
+  // Spec 2026-11-15 §7.11 item 8: the sales page's payment form was unreachable dead UI (account records payments on
+  // /finance/deals/:id and never mounts the sales deal page), so this section never offers one.
+  it('never shows บันทึกรับชำระเงิน nor a ตั้งค่าการวางบิล button', async () => {
+    renderSection({ summary, user: { id: 1, role: 'account' } });
     await settled();
     expect(screen.queryByRole('button', { name: 'บันทึกรับชำระเงิน' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'ตั้งค่าการวางบิล' })).toBeNull();
   });
 });

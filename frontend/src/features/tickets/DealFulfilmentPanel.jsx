@@ -1,12 +1,16 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { api, ROLE_PERMISSIONS } from '../../api/index.js';
 import { queryKeys } from '../../api/queryKeys.js';
 import { Button } from '../../components/common/Button.jsx';
 import { ConfirmDialog } from '../../components/common/ConfirmDialog.jsx';
+import {
+  DialogCallout, DialogSummary, DialogTable, dialogTd, dialogTh,
+} from '../../components/common/DocumentDialogParts.jsx';
 import { FormField } from '../../components/common/FormField.jsx';
 import { Panel } from '../../components/common/Layout.jsx';
 import { Modal } from '../../components/common/Modal.jsx';
+import { StatusBadge } from '../../components/common/StatusBadge.jsx';
 import { cn } from '../../utils/cn.js';
 import { downloadBlob } from '../../utils/download.js';
 import { formatThaiDate, fulfilmentStatusLabel } from '../../utils/format.js';
@@ -29,6 +33,83 @@ function parseFactoryNames(message, prefix) {
     .filter(Boolean);
 }
 
+// Slice 6c (prototype item 6.6): the confirm's per-factory preview. Every figure is the server's
+// (ImportRequestService's dry run of createDrafts' split, ImportRequestSplitPreview); this only words it. The
+// lead time reads like ImportRequestFactoryCard's "ระยะเวลานำเข้า min–max วัน".
+const LEAD_TIME_SOURCE_LABEL = { QUOTATION: 'ตามใบเสนอราคา', COUNTRY_DEFAULT: 'ค่าเริ่มต้นของประเทศ' };
+// The unplaced-lines warning doubles as the disabled confirm's stated reason (aria-describedby), fix round L5.
+const IR_UNPLACED_REASON_ID = 'ir-confirm-unplaced-reason';
+
+function irPreviewLeadLine(factory) {
+  if (factory.leadTimeMinDays != null && factory.leadTimeMaxDays != null) {
+    return `นำเข้าประมาณ ${factory.leadTimeMinDays}–${factory.leadTimeMaxDays} วัน`;
+  }
+  // createDrafts refuses with the country (new factory) or the lead-time 409 and the panel's popup asks — before
+  // anything is issued.
+  return factory.newFactory
+    ? 'ยังไม่มีระยะเวลานำเข้า · จะให้เลือกประเทศของโรงงานก่อนออก'
+    : 'ยังไม่มีระยะเวลานำเข้า · จะให้ระบุก่อนออก';
+}
+
+function IrSplitPreview({ preview }) {
+  const factories = preview.factories ?? [];
+  const unplaced = preview.linesWithoutFactory ?? [];
+  return (
+    <>
+      {factories.length > 0 ? (
+        <>
+          <DialogSummary icon="truck" testId="ir-confirm-summary">
+            {`${factories.length} โรงงาน · ส่งถึงฝ่ายนำเข้าทันที`}
+          </DialogSummary>
+          <ul aria-label="โรงงานที่จะออกใบขอซื้อ" className="m-0 list-none border-t border-border p-0" data-testid="ir-confirm-factories">
+            {factories.map((f, i) => {
+              const source = f.leadTimeMinDays != null ? LEAD_TIME_SOURCE_LABEL[f.leadTimeSource] : null;
+              return (
+                // A name may repeat only if the server sent it twice; the index keeps keys unique regardless.
+                <li key={`${f.factoryName}-${i}`} className="flex flex-col gap-0.5 border-b border-border px-1 py-2">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                      <strong className="text-sm text-text [overflow-wrap:anywhere]" data-testid="ir-confirm-factory-name">
+                        {f.factoryName?.trim() ? f.factoryName : 'โรงงานไม่มีชื่อ'}
+                      </strong>
+                      {f.newFactory ? (
+                        <span className="rounded-sm bg-info-bg-alt px-1.5 text-2xs font-bold text-info" data-testid="ir-confirm-factory-new">
+                          โรงงานใหม่
+                        </span>
+                      ) : null}
+                    </span>
+                    <span className="shrink-0 text-sm font-bold tabular-nums text-text-secondary" data-testid="ir-confirm-factory-count">
+                      {`${f.itemCount} รายการ`}
+                    </span>
+                  </div>
+                  <p className="m-0 text-xs text-text-secondary">
+                    <span data-testid="ir-confirm-factory-lead">{irPreviewLeadLine(f)}</span>
+                    {source ? (
+                      <>
+                        <span aria-hidden="true" className="text-text-muted"> · </span>
+                        <span className="text-2xs text-text-muted" data-testid="ir-confirm-factory-source">{source}</span>
+                      </>
+                    ) : null}
+                  </p>
+                </li>
+              );
+            })}
+          </ul>
+        </>
+      ) : null}
+      {unplaced.length > 0 ? (
+        <DialogCallout tone="warn" testId="ir-confirm-unplaced" id={IR_UNPLACED_REASON_ID}>
+          {`${unplaced.length} รายการยังไม่มีโรงงาน — ออกใบขอซื้อไม่ได้จนกว่าจะระบุโรงงาน: ${unplaced
+            .map((l) => {
+              const label = l.code || `รายการ ${l.ticketItemId}`;
+              return l.size ? `${label} (${l.size})` : label;
+            }).join(', ')}`}
+        </DialogCallout>
+      ) : null}
+    </>
+  );
+}
+
 // One factory NAME's country pick, for the createDrafts auto-create path: a real country, or 'ZZ'
 // อื่นๆ with a required typed name (same pairing rule PriceImportService/ImportRequestService
 // enforce server-side).
@@ -43,7 +124,7 @@ function NewFactoryCountryModal({ factoryNames, countries, countriesError, onClo
   return (
     <Modal
       title="ระบุประเทศของโรงงานใหม่"
-      subtitle="ดีลนี้มีรายการที่ต้องสร้างใบขอซื้อให้โรงงานที่ยังไม่มีในระบบ"
+      subtitle="งานนี้มีรายการที่ต้องสร้างใบขอซื้อให้โรงงานที่ยังไม่มีในระบบ"
       onClose={onClose}
       footer={(
         <>
@@ -155,9 +236,9 @@ function FactoryLeadTimeModal({ factoryNames, onClose, onSubmit, submitting }) {
 // ที่มาของสินค้าที่ส่งมอบ — the select and the history read the same words; the wire value stays the code.
 const DELIVERY_SOURCE_LABELS = { WAREHOUSE: 'คลังสินค้า', STOCK: 'สต็อก' };
 
-// One frame + one title style for every block on the tab (①, the per-factory tracker, the legacy
-// preview, ②): 16px padding (12px on a phone), 12px between rows, radius-md. The tracker block adds
-// `border-border-strong` on top of this so it is the one that leads.
+// One frame + one title style for every block on the tab (①, the per-factory tracker, the legacy preview, ②):
+// 16px padding (12px on a phone), 12px between rows, radius-md. The tracker block adds `border-border-strong`
+// on top of this so it is the one that leads.
 const STEP_BOX = 'flex flex-col gap-3 rounded-md border border-border bg-surface p-4 mobile:p-3';
 const STEP_TITLE = 'text-md font-extrabold text-text';
 
@@ -253,8 +334,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
 
   const [deliveryOpen, setDeliveryOpen] = useState(false);
   const [deliveryDraft, setDeliveryDraft] = useState({ source: 'WAREHOUSE', note: '', lines: {} });
-  // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from
-  // the stock-declaration modal above, matching the backend's separate authorization boundary
+  // V148 (per-item stock-commission weighting): sales_manager/ceo only -- a separate control from the
+  // stock-declaration modal above, matching the backend's separate authorization boundary
   // (TicketService#setItemWeightMultipliers, gated to a DIFFERENT role set than reserveStock).
   const [weightOpen, setWeightOpen] = useState(false);
   const [weightDraft, setWeightDraft] = useState({});
@@ -286,29 +367,17 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     queryFn: () => api.storedImportRequests.listForTicket(ticketId).then((r) => r.importRequests ?? []),
     enabled: !!ticketId && canReadStoredIr,
   });
-  // Read-only server flag from its own endpoint (the list stays rows-only for the import pages). Under the
-  // rows key's prefix, so invalidating the rows refreshes it too. Only an explicit `false` hides the create controls — an older
-  // backend that omits it (undefined) keeps them. `uncoveredFactoryNames` feeds the create confirm; an older backend omits it.
-  const coverageQuery = useQuery({
-    queryKey: [...queryKeys.storedImportRequests(ticketId), 'coverage'],
-    queryFn: () => api.storedImportRequests.coverage(ticketId),
-    enabled: !!ticketId && canReadStoredIr,
-  });
-  const allFactoriesCovered = coverageQuery.data?.hasUncoveredFactories === false;
   const storedIrRows = storedIrQuery.data ?? [];
   const liveStoredIrRows = storedIrRows
     .filter((r) => r.status !== 'SUPERSEDED')
     .sort((a, b) => (a.factoryName ?? '').localeCompare(b.factoryName ?? '', 'th') || a.version - b.version);
   // A FAILED fetch must not read as "this deal has zero stored IRs": an empty `?? []` on error
-  // would show "ยังไม่มีใบขอซื้อสำหรับดีลนี้" where an error belongs, and (via `hasStoredIrs` false)
+  // would show "ยังไม่มีใบขอซื้อสำหรับงานนี้" where an error belongs, and (via `hasStoredIrs` false)
   // resurrect the legacy per-brand block. Treating an ERROR as "has stored IRs" is the safe
   // direction: the legacy block stays hidden and the real error shows.
   const hasStoredIrs = storedIrRows.length > 0 || storedIrQuery.isError;
-  // Yang's rollup chip (origin/feat/per-factory-import-tracking's FactoryImportProgressPanel,
-  // "ถึงไทย X/N โรงงาน") ported onto THIS deal's stored rows — reuses storedIrQuery above rather
-  // than adding a second query. N = live (non-SUPERSEDED) rows that have actually been ISSUED
-  // (carry an importStep at all); X = how many of those reached Thailand, i.e. AWAITING_CUSTOMS
-  // (S16) or later. A DRAFT row has no importStep yet, so it does not count toward N.
+  // Yang's rollup chip (origin/feat/per-factory-import-tracking's FactoryImportProgressPanel, "ถึงไทย X/N
+  // โรงงาน") ported onto THIS deal's stored rows — reuses storedIrQuery above rather than adding a second query.
   const issuedIrRows = liveStoredIrRows.filter((r) => r.importStep != null);
   const arrivedIrCount = issuedIrRows
     .filter((r) => importStepIndex(r.importStep) >= importStepIndex('AWAITING_CUSTOMS')).length;
@@ -356,6 +425,24 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     : [];
   const [lineFactories, setLineFactories] = useState({});
   const allLinesPicked = factorylessLines.every((l) => lineFactories[l.id]);
+  // The picks made so far, in the createDrafts `itemFactories` shape (buildCreatePayload below sends the same pairs).
+  const pickedItemFactories = factorylessLines
+    .filter((l) => lineFactories[l.id])
+    .map((l) => ({ ticketItemId: Number(l.id), factoryId: Number(lineFactories[l.id]) }));
+  // Read-only server flag from its own endpoint (the list stays rows-only for the import pages). Under the
+  // rows key's prefix, so invalidating the rows refreshes it too. Only an explicit `false` hides the create controls — an older
+  // backend that omits it (undefined) keeps them. `uncoveredFactoryNames` feeds the create confirm; an older backend omits it.
+  // Slice 6c: `splitPreview` is ImportRequestService's dry run of createDrafts' per-factory split (null for import and
+  // sales_manager, absent on an older backend). The unsaved picks go with the read so the preview places those lines
+  // where the create will; they are in the key, and the previous answer stays shown while a new pick is re-checked.
+  const coverageQuery = useQuery({
+    queryKey: [...queryKeys.storedImportRequests(ticketId), 'coverage', pickedItemFactories],
+    queryFn: () => api.storedImportRequests.coverage(ticketId,
+      pickedItemFactories.length > 0 ? pickedItemFactories : undefined),
+    enabled: !!ticketId && canReadStoredIr,
+    placeholderData: keepPreviousData,
+  });
+  const allFactoriesCovered = coverageQuery.data?.hasUncoveredFactories === false;
   const factoryNamesQuery = useQuery({
     queryKey: queryKeys.factoryNames(),
     queryFn: () => api.factoryConfigs.names().then((r) => r?.factories ?? []),
@@ -488,8 +575,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const brandsQuery = useQuery({
     queryKey: queryKeys.importRequestBrands(ticketId),
     queryFn: () => api.importRequests.brands(ticketId).then((r) => r.brands ?? []),
-    // Import/CEO only — the same pair ImportRequestService.IR_ROLES enforces. Gating the QUERY, not
-    // just the markup, keeps a 403 out of the console for every sales viewer of this tab.
+    // Import/CEO only — the same pair ImportRequestService.IR_ROLES enforces. Gating the QUERY, not just the
+    // markup, keeps a 403 out of the console for every sales viewer of this tab.
     enabled: !!ticketId && isFulfilment,
   });
   const irBrands = brandsQuery.data ?? [];
@@ -515,8 +602,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   const downloadIrMutation = useMutation({
     mutationFn: (brand) => api.importRequests.download(ticketId, brand, irRef.trim() || null, null),
     onSuccess: (blob, brand) => {
-      // Hand the file over rather than navigating: the response is an authenticated GET, so an
-      // <a href> would issue a second unauthenticated request in some browsers.
+      // Hand the file over rather than navigating: the response is an authenticated GET, so an would issue a second
+      // unauthenticated request in some browsers.
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -582,7 +669,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     onError,
   });
   const completeDeliveryMutation = useMutation({
-    mutationFn: () => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้าดีล' }),
+    mutationFn: () => api.tickets.completeDelivery(ticketId, { note: 'ส่งมอบครบจากหน้ารายละเอียดงาน' }),
     onSuccess: () => { showToast?.('success', 'ส่งมอบครบแล้ว'); invalidateAfterFulfilmentChange(); },
     onError,
   });
@@ -591,7 +678,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
   // TicketDetailPage's shared actionMutation/doAction.
   //
   // The status/fulfillmentStatus matching for the four linear fulfilment-chain steps is
-  // importActions.js's nextFulfilmentActionCode, shared with ImportOverview's worklist CTA and
+  // importActions.js's nextFulfilmentActionCode, shared with
   // ImportFulfilmentPage (งานนำเข้า), so those surfaces never disagree with this panel about which
   // stage a deal is at. ImportFulfilmentPage performs the same four transitions from a list row,
   // so it invalidates the same query-key set as invalidateAfterFulfilmentChange above; change one
@@ -614,10 +701,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     // Same ownership-aware server answer as recordDelivery (TicketService#canDeclareStockCoverage).
     reserveStock:       hasAction('RESERVE_STOCK'),
     completeDelivery:   hasAction('COMPLETE_DELIVERY'),
-    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock
-    // above, this DOES keep a local role check alongside hasAction(), matching every other entry
-    // in this object except reserveStock's own documented exception. The backend gate
-    // (TicketService#ITEM_WEIGHT_ROLES) is sales_manager/ceo, never isFulfilment (import/ceo).
+    // V148 (per-item stock-commission weighting): sales_manager/ceo only -- unlike reserveStock above, this DOES
+    // keep a local role check alongside hasAction(), matching every other entry in this object except
+    // reserveStock's own documented exception.
     setItemWeight:      hasAction('SET_ITEM_WEIGHT_MULTIPLIER') && (role === 'sales_manager' || role === 'ceo'),
   };
   // The server refuses the deal-level chain once ANY live per-factory row exists, DRAFT included
@@ -677,16 +763,56 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
     .map((f) => f.factoryName);
   const serverNames = coverageQuery.isError ? undefined : coverageQuery.data?.uncoveredFactoryNames;
   const confirmNames = serverNames ? [...new Set([...serverNames, ...pickedNames])] : [];
+  // Slice 6c: the server's dry run of the split, already including the picks (they went with the read). When it is
+  // there it is the whole answer — nothing is added to it by name on this side.
+  const splitPreview = coverageQuery.isError ? null : (coverageQuery.data?.splitPreview ?? null);
+  // Fix round L5: the warning says the IR cannot be issued while a line has no factory, so the button agrees. The
+  // server's 409 (ImportRequestService#resolveFactoryGroups) stays the backstop.
+  const hasUnplacedLines = (splitPreview?.linesWithoutFactory?.length ?? 0) > 0;
   const coverageLoading = coverageQuery.isFetching;
+  // Drawing m-ir (2026-11-16): "N โรงงาน" and a โรงงาน table. The factories are the same `confirmNames` the old
+  // one-line confirm named (the server's coverage names plus the rep's picks). The drawing's per-factory รายการ count
+  // and ระยะเวลานำเข้า were not built then because coverage returned names only; slice 6c adds them from
+  // `splitPreview` (IrSplitPreview above), and the names-only table stays as the fallback for a backend without it.
+  // "ส่งถึงฝ่ายนำเข้าทันที" is what createDrafts does: each new row is issued at once and
+  // ImportRequestService#notifyImportOfIssuedIr notifies the import role.
   let createConfirmMessage = 'กำลังตรวจสอบโรงงาน…';
   if (!coverageLoading && allFactoriesCovered) {
     // Another session issued the last one since this page loaded: a create now would only 409.
     createConfirmMessage = 'ทุกโรงงานมีใบขอซื้อแล้ว — ไม่มีใบขอซื้อที่ต้องออก';
   } else if (!coverageLoading) {
-    const what = confirmNames.length > 0
-      ? `จะออกใบขอซื้อ (IR) ${confirmNames.length} ใบ: ${confirmNames.join(', ')}`
-      : `ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน${pickedNames.length > 0 ? ` (โรงงานที่เลือก: ${pickedNames.join(', ')})` : ''}`;
-    createConfirmMessage = `${what} — การดำเนินการนี้ย้อนกลับไม่ได้`;
+    createConfirmMessage = (
+      <div className="flex flex-col gap-3.5">
+        {/* First in the scrolling body, so a short phone shows it with the footer's ออกใบขอซื้อ (fix round 1, F4).
+            Not the drawing's "แก้ไขหรือลบไม่ได้" (F1): an issued IR can be corrected by a ฉบับแก้ไข —
+            ImportRequestService#revise, same requireFullWrite gate as createDrafts, until the goods are RECEIVED —
+            but it can never be deleted. */}
+        <DialogCallout tone="warn" testId="ir-confirm-warning">
+          ออกเลข IR แล้วลบไม่ได้ · แก้ได้ด้วยการออกฉบับแก้ไขเท่านั้น
+        </DialogCallout>
+        {splitPreview ? (
+          <IrSplitPreview preview={splitPreview} />
+        ) : confirmNames.length > 0 ? (
+          <>
+            <DialogSummary icon="truck" testId="ir-confirm-summary">
+              {`${confirmNames.length} โรงงาน · ส่งถึงฝ่ายนำเข้าทันที`}
+            </DialogSummary>
+            <DialogTable label="โรงงานที่จะออกใบขอซื้อ">
+              <thead><tr><th scope="col" className={dialogTh}>โรงงาน</th></tr></thead>
+              <tbody>
+                {confirmNames.map((name) => <tr key={name}><td className={dialogTd}>{name}</td></tr>)}
+              </tbody>
+            </DialogTable>
+            <p className="m-0 text-xs text-text-muted">รายการและระยะเวลานำเข้าของแต่ละโรงงานจะแสดงในใบขอซื้อแต่ละใบหลังออก</p>
+          </>
+        ) : (
+          // Names unavailable (older backend, or the re-check failed): the generic line, still naming the picks.
+          <DialogSummary icon="truck" testId="ir-confirm-summary">
+            {`ระบบจะออกเลขใบขอซื้อ (IR) หนึ่งใบต่อโรงงาน · ส่งถึงฝ่ายนำเข้าทันที${pickedNames.length > 0 ? ` (โรงงานที่เลือก: ${pickedNames.join(', ')})` : ''}`}
+          </DialogSummary>
+        )}
+      </div>
+    );
   }
 
   return (
@@ -702,8 +828,8 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
               <strong className={STEP_TITLE}>นำเข้าสินค้า</strong>
               <StepRoleTag owners={['import', 'ceo']} viewerRole={role} />
             </div>
-            {/* The same at-a-glance strip import's own per-deal page shows (fulfilment status →
-                ถึงไทย X/N โรงงาน → ส่งมอบ N%), so the two surfaces read as one system. */}
+            {/* The same at-a-glance strip import's own per-deal page shows (fulfilment status → ถึงไทย X/N โรงงาน → ส่งมอบ
+             * N%), so the two surfaces read as one system. */}
             <ImportStatusStrip
               testIdPrefix="deal-fulfilment"
               fulfilment={fs ? fsLabel : null}
@@ -860,7 +986,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                 โหลดใบขอซื้อรายโรงงานไม่สำเร็จ — {storedIrQuery.error?.message || 'ลองรีเฟรชหน้านี้อีกครั้ง'}
               </p>
             ) : liveStoredIrRows.length === 0 ? (
-              <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับดีลนี้</p>
+              <p className="text-xs text-text-muted">ยังไม่มีใบขอซื้อสำหรับงานนี้</p>
             ) : (
               <div className="flex flex-col gap-3">
                 {liveStoredIrRows.map((row) => (
@@ -870,10 +996,12 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
                     ticketId={ticketId}
                     canFullWrite={canFullWriteStoredIr}
                     canFooterWrite={canFooterWriteStoredIr}
-                    canAdvance={canAdvanceStoredIr}
+                    canSetLeadTime={canAdvanceStoredIr}
                     canEmailWrite={canEmailWriteStoredIr}
                     showOrderEmail={role !== 'sales'}
                     showToast={showToast}
+                    dealNoun="งาน"
+                    showReadOnlyChip
                   />
                 ))}
               </div>
@@ -927,9 +1055,9 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             </p>
 
             {brandsQuery.isLoading ? (
-              <p className="text-xs text-text-muted">กำลังโหลดแบรนด์ในดีลนี้…</p>
+              <p className="text-xs text-text-muted">กำลังโหลดแบรนด์ในงานนี้…</p>
             ) : brandsQuery.isError ? (
-              <p className="text-xs text-danger">ไม่สามารถโหลดแบรนด์ในดีลนี้ได้</p>
+              <p className="text-xs text-danger">ไม่สามารถโหลดแบรนด์ในงานนี้ได้</p>
             ) : irBrands.length === 0 ? (
               <p className="text-xs text-text-muted">
                 ยังไม่มีแบรนด์ในรายการสินค้า — ต้องระบุแบรนด์ก่อนจึงจะออกใบขอซื้อได้
@@ -999,34 +1127,65 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
             </div>
           </div>
 
-          <div className="flex flex-col gap-1.5">
-            {items.map((item) => {
-              const ordered = Number(item.qty || 0);
-              const delivered = Number(item.qtyDelivered || 0);
-              const remaining = Math.max(0, ordered - delivered);
-              return (
-                <div key={item.id} className="flex items-center justify-between gap-2 rounded-md border border-border-subtle px-3 py-2 text-xs">
-                  <div className="min-w-0">
-                    <strong className="block truncate">{item.brand} {item.model || ''}</strong>
-                    <span className="text-2xs text-text-muted">
-                      จากสต็อก {Number(item.qtyFromStock || 0).toLocaleString('en-US')} · คงเหลือ {remaining.toLocaleString('en-US')}
-                    </span>
-                  </div>
-                  {can.reserveStock ? (
-                    <label className="flex shrink-0 items-center gap-1.5 font-bold text-text-secondary">
-                      <input
-                        type="checkbox" data-testid={`deal-fulfilment-reserve-stock-${item.id}`}
-                        checked={Number(item.qtyFromStock || 0) >= ordered}
-                        disabled={reserveStockMutation.isPending}
-                        onChange={(e) => setPendingStock({ item, qtyFromStock: e.target.checked ? ordered : 0 })}
-                      />
-                      จากสต็อก
-                    </label>
-                  ) : null}
-                  <strong className="shrink-0">{delivered.toLocaleString('en-US')} / {ordered.toLocaleString('en-US')}</strong>
-                </div>
-              );
-            })}
+          {/* Drawing a-deal-ship: one row per item, สั่ง / ส่งแล้ว / เหลือ / ที่มา. Every figure is the item's own
+              qty / qtyDelivered / qtyFromStock, as the list it replaces showed them; ที่มา says คลัง for the part
+              reserved from stock and นำเข้า for the rest (the only two sources, see ProcurementSourceDialog). */}
+          <div className="-mx-1 overflow-x-auto px-1">
+            <table aria-label="การส่งสินค้าให้ลูกค้า" className="w-full min-w-[30rem] border-collapse text-xs">
+              <thead>
+                <tr className="border-b border-border text-left text-2xs font-bold text-text-muted">
+                  <th scope="col" className="py-2 pr-3 font-bold">รายการ</th>
+                  <th scope="col" className="px-2 py-2 text-right font-bold">สั่ง</th>
+                  <th scope="col" className="px-2 py-2 text-right font-bold">ส่งแล้ว</th>
+                  <th scope="col" className="px-2 py-2 text-right font-bold">เหลือ</th>
+                  <th scope="col" className="py-2 pl-3 font-bold">ที่มา</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const ordered = Number(item.qty || 0);
+                  const delivered = Number(item.qtyDelivered || 0);
+                  const remaining = Math.max(0, ordered - delivered);
+                  const fromStock = Math.min(ordered, Number(item.qtyFromStock || 0));
+                  // Not reserved from stock is นำเข้า only once the procurement source is decided; while it is
+                  // pending (procurementSource.pending) nothing is known yet (fix round 1).
+                  const restLabel = sourcePending ? 'ยังไม่กำหนด' : 'นำเข้า';
+                  const restTone = sourcePending ? 'warning' : 'info';
+                  const sourceChips = fromStock >= ordered && ordered > 0
+                    ? [{ key: 'stock', label: 'คลัง', tone: 'neutral' }]
+                    : fromStock > 0
+                      ? [
+                        { key: 'stock', label: `คลัง ${fromStock.toLocaleString('en-US')}`, tone: 'neutral' },
+                        { key: 'rest', label: `${restLabel} ${(ordered - fromStock).toLocaleString('en-US')}`, tone: restTone },
+                      ]
+                      : [{ key: 'rest', label: restLabel, tone: restTone }];
+                  return (
+                    <tr key={item.id} className="border-b border-border-subtle align-middle last:border-b-0">
+                      <td className="max-w-[16rem] py-2 pr-3 font-bold text-text [overflow-wrap:anywhere]">{`${item.brand ?? ''} ${item.model || ''}`.trim()}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{ordered.toLocaleString('en-US')}</td>
+                      <td className="px-2 py-2 text-right tabular-nums">{delivered.toLocaleString('en-US')}</td>
+                      <td className={cn('px-2 py-2 text-right tabular-nums', remaining > 0 && 'font-extrabold text-text')}>{remaining.toLocaleString('en-US')}</td>
+                      <td className="py-2 pl-3">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          {sourceChips.map((chip) => <StatusBadge key={chip.key} tone={chip.tone}>{chip.label}</StatusBadge>)}
+                          {can.reserveStock ? (
+                            <label className="flex min-h-[44px] items-center gap-1.5 font-bold text-text-secondary">
+                              <input
+                                type="checkbox" data-testid={`deal-fulfilment-reserve-stock-${item.id}`}
+                                checked={Number(item.qtyFromStock || 0) >= ordered}
+                                disabled={reserveStockMutation.isPending}
+                                onChange={(e) => setPendingStock({ item, qtyFromStock: e.target.checked ? ordered : 0 })}
+                              />
+                              จากสต็อก
+                            </label>
+                          ) : null}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
 
           <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-2.5">
@@ -1057,57 +1216,105 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
       </div>
 
       {deliveryOpen ? (
+        // Drawing m-delivery (2026-11-16). The request is unchanged (handleRecordDelivery): source, note, and the
+        // lines with a qty > 0. Not built from the drawing: "งวดที่ N · นัดส่ง …" (no delivery round or appointment
+        // reaches this panel) and "วันที่ส่ง" (RecordDeliveryRequest has no date — the server stamps the record).
+        // Every figure is the item's own qty / qtyDelivered and the remaining the tracker table above derives.
         <Modal
           title="บันทึกการส่งสินค้า"
+          subtitle={summary?.projectName || summary?.title || undefined}
           onClose={() => setDeliveryOpen(false)}
           footer={(
             <>
               <Button type="button" variant="secondary" onClick={() => setDeliveryOpen(false)}>ยกเลิก</Button>
               <Button type="button" variant="primary" disabled={recordDeliveryMutation.isPending}
                 onClick={handleRecordDelivery} data-testid="deal-fulfilment-record-delivery-submit">
-                บันทึก
+                บันทึกการส่ง
               </Button>
             </>
           )}
         >
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3.5">
+            {/* First in the scrolling body, like the deposit and IR warnings: TicketController has no route to void a
+                recorded delivery, and recording one can advance the stage. */}
+            <DialogCallout tone="warn" testId="delivery-warning">
+              บันทึกแล้วแก้ไขหรือลบไม่ได้ ตรวจจำนวนก่อนกดบันทึก
+            </DialogCallout>
+            <DialogSummary icon="truck" testId="delivery-summary">
+              {/* Slice 6.1, the drawn "ส่งงวดที่ N": the deliveries already recorded on this deal (sales.delivery_record,
+                  the history this panel already loads) plus this one — said only once that history has loaded, never
+                  guessed from an empty list that is still on its way. */}
+              {`${deliveriesQuery.isSuccess ? `ส่งงวดที่ ${deliveryRecords.length + 1} · ` : ''}เหลือส่ง ${items.filter((item) => Number(item.qty || 0) - Number(item.qtyDelivered || 0) > 0).length} รายการ`}
+            </DialogSummary>
+            {/* Phones (≤520px, mobile-xs): the สั่ง / ส่งแล้ว / เหลือส่ง columns fold into a line under the name, so
+                the table is two columns — name and the ส่งครั้งนี้ input — and the input is in view at 320px with no
+                sideways scrolling (fix round 1, F5). Same figures either way. */}
+            <DialogTable label="รายการที่ส่งครั้งนี้">
+              <thead>
+                <tr>
+                  <th scope="col" className={dialogTh}>รายการ</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>สั่ง</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>ส่งแล้ว</th>
+                  <th scope="col" className={`${dialogTh} text-right mobile-xs:hidden`}>เหลือส่ง</th>
+                  <th scope="col" className={`${dialogTh} text-right`}>ส่งครั้งนี้</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const ordered = Number(item.qty || 0);
+                  const delivered = Number(item.qtyDelivered || 0);
+                  const remaining = Math.max(0, ordered - delivered);
+                  const name = `${item.brand ?? ''} ${item.model || ''}`.trim();
+                  return (
+                    <tr key={item.id}>
+                      <td className={`${dialogTd} [overflow-wrap:anywhere]`}>
+                        <span className="font-bold">{name}</span>
+                        <span className="hidden text-xs text-text-muted mobile-xs:block" data-testid={`delivery-line-figures-${item.id}`}>
+                          {`สั่ง ${ordered.toLocaleString('en-US')} · ส่งแล้ว ${delivered.toLocaleString('en-US')} · เหลือส่ง ${remaining.toLocaleString('en-US')}`}
+                        </span>
+                      </td>
+                      <td className={`${dialogTd} text-right mobile-xs:hidden`}>{ordered.toLocaleString('en-US')}</td>
+                      <td className={`${dialogTd} text-right mobile-xs:hidden`}>{delivered.toLocaleString('en-US')}</td>
+                      <td className={cn(dialogTd, 'text-right mobile-xs:hidden', remaining > 0 && 'font-extrabold text-text')}>
+                        {remaining.toLocaleString('en-US')}
+                      </td>
+                      <td className={`${dialogTd} text-right`}>
+                        <input type="number" min="0" max={remaining} step="0.01" inputMode="decimal"
+                          className="min-h-[44px] w-20 text-right"
+                          aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
+                          value={deliveryDraft.lines[item.id] ?? ''}
+                          onChange={(e) => setDeliveryDraft((draft) => ({
+                            ...draft,
+                            lines: { ...draft.lines, [item.id]: e.target.value },
+                          }))} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </DialogTable>
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               แหล่งสินค้า
-              <select value={deliveryDraft.source}
+              <select value={deliveryDraft.source} className="min-h-[44px]"
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, source: e.target.value }))}>
                 {Object.entries(DELIVERY_SOURCE_LABELS).map(([code, label]) => (
                   <option key={code} value={code}>{label}</option>
                 ))}
               </select>
             </label>
-            <div className="flex flex-col gap-2">
-              {items.map((item) => {
-                const remaining = Math.max(0, Number(item.qty || 0) - Number(item.qtyDelivered || 0));
-                return (
-                  <label key={item.id} className="grid grid-cols-[1fr_120px] items-center gap-2.5 text-sm">
-                    <span>
-                      <span className="sr-only">จำนวนส่งมอบ</span>
-                      <strong>{item.brand} {item.model || ''}</strong>
-                      <small className="block text-text-muted">
-                        คงเหลือ {remaining.toLocaleString('en-US')} · ส่งแล้ว {Number(item.qtyDelivered || 0).toLocaleString('en-US')}
-                      </small>
-                    </span>
-                    <input type="number" min="0" max={remaining} step="0.01"
-                      aria-label={`จำนวนส่งมอบ ${item.brand} ${item.model || ''}`}
-                      value={deliveryDraft.lines[item.id] ?? ''}
-                      onChange={(e) => setDeliveryDraft((draft) => ({
-                        ...draft,
-                        lines: { ...draft.lines, [item.id]: e.target.value },
-                      }))} />
-                  </label>
-                );
-              })}
-            </div>
             <label className="flex flex-col gap-1.5 text-sm font-bold text-text-secondary">
               หมายเหตุ
               <textarea className="min-h-16" value={deliveryDraft.note}
                 onChange={(e) => setDeliveryDraft((draft) => ({ ...draft, note: e.target.value }))} />
             </label>
+            {/* What TicketService#recordDeliveryInternal does once every line is delivered: FULLY_DELIVERED,
+                autoAdvanceStage(DELIVERED) — rep code S9 (DealStage.REP_CODE); a no-op when the deal is already
+                there or past it, hence "ถ้ายังไม่ถึง" — and a DELIVERY_COMPLETED notice to the account role.
+                Conditional: whether THIS save completes the deal is the server's call. S9 is named once (fix round 1,
+                F6): a fully paid deal goes on to CLOSED_PAID, which is also S9, so a step name would mislead. */}
+            <DialogCallout tone="info" testId="delivery-info">
+              ถ้าบันทึกครั้งนี้ทำให้ส่งครบทุกรายการ ระบบจะบันทึกว่าส่งครบ เลื่อนงานไป S9 (ถ้ายังไม่ถึง) และแจ้งฝ่ายบัญชี
+            </DialogCallout>
           </div>
         </Modal>
       ) : null}
@@ -1129,7 +1336,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
           <div className="flex flex-col gap-3">
             <p className="text-xs text-text-muted">
               น้ำหนัก 2 หรือ 3 เท่ามีผลเฉพาะสัดส่วนของแต่ละรายการที่มาจากสต็อกเท่านั้น ส่วนที่สั่งนำเข้ายังคงนับ 1 เท่าเสมอ
-              การตั้งค่านี้จะมีผลกับค่าคอมมิชชั่นครั้งถัดไปที่บันทึกสำหรับดีลนี้เท่านั้น ไม่กระทบรายการที่บันทึกไปแล้ว
+              การตั้งค่านี้จะมีผลกับค่าคอมมิชชั่นครั้งถัดไปที่บันทึกสำหรับงานนี้เท่านั้น ไม่กระทบรายการที่บันทึกไปแล้ว
             </p>
             {items.map((item) => (
               <label key={item.id} className="grid grid-cols-[1fr_110px] items-center gap-2.5 text-sm">
@@ -1159,7 +1366,7 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         open={pendingStock != null}
         title={pendingStock?.qtyFromStock ? 'ยืนยันสินค้าจากสต็อก' : 'ยกเลิกสินค้าจากสต็อก'}
         message={pendingStock?.qtyFromStock
-          ? `${pendingStock.item.brand} ${pendingStock.item.model ?? ''} จำนวน ${Number(pendingStock.qtyFromStock).toLocaleString('en-US')} จะถูกบันทึกว่ามาจากสต็อก เมื่อทุกรายการมาจากสต็อก ดีลจะข้ามขั้นสั่งนำเข้า (IR) และย้ายไปขั้นนัดส่งสินค้าทันที ตัวเลขนี้ใช้คำนวณค่าคอมมิชชั่นส่วนสินค้าจากสต็อก และผู้จัดการฝ่ายขายจะได้รับแจ้งเพื่อตรวจทาน`
+          ? `${pendingStock.item.brand} ${pendingStock.item.model ?? ''} จำนวน ${Number(pendingStock.qtyFromStock).toLocaleString('en-US')} จะถูกบันทึกว่ามาจากสต็อก เมื่อทุกรายการมาจากสต็อก งานจะข้ามขั้นสั่งนำเข้า (IR) และย้ายไปขั้นนัดส่งสินค้าทันที ตัวเลขนี้ใช้คำนวณค่าคอมมิชชั่นส่วนสินค้าจากสต็อก และผู้จัดการฝ่ายขายจะได้รับแจ้งเพื่อตรวจทาน`
           : `${pendingStock?.item.brand} ${pendingStock?.item.model ?? ''} จะกลับไปอยู่ในรายการนำเข้า`}
         confirmLabel={pendingStock?.qtyFromStock ? 'ยืนยันจากสต็อก' : 'กลับไปสั่งนำเข้า'}
         busy={reserveStockMutation.isPending}
@@ -1176,9 +1383,10 @@ export const DealFulfilmentPanel = forwardRef(function DealFulfilmentPanel({
         open={confirmingCreate}
         title="ยืนยันการออกใบขอซื้อ (IR)"
         message={createConfirmMessage}
-        confirmLabel="ออกใบขอซื้อ (IR)"
+        confirmLabel="ออกใบขอซื้อ"
         busy={createDraftsMutation.isPending}
-        confirmDisabled={coverageLoading || allFactoriesCovered}
+        confirmDisabled={coverageLoading || allFactoriesCovered || hasUnplacedLines}
+        confirmDescribedBy={!coverageLoading && hasUnplacedLines ? IR_UNPLACED_REASON_ID : undefined}
         // Close first: a second click on the open dialog would send twice.
         onConfirm={() => { setConfirmingCreate(false); createDraftsMutation.mutate(buildCreatePayload()); }}
         onCancel={() => setConfirmingCreate(false)}

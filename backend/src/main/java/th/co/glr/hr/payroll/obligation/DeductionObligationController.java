@@ -23,16 +23,8 @@ import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligati
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.DeductionObligationUpdateRequest;
 import th.co.glr.hr.payroll.obligation.DeductionObligationDtos.MyDeductionObligationsResponse;
 
-/**
- * HTTP surface for the deduction-obligation record + remittance ledger (issue #373). Every
- * {@code @PreAuthorize} here is doubled by an equivalent {@code requireRole}/
- * {@code requireEmployeeActor} check in {@link DeductionObligationService} — copy of the
- * {@code TaxAllowanceDeclarationController}/{@code Service} idiom.
- *
- * <p>Deliberately NO employee-facing mutation endpoint anywhere in this class — decision 4: the
- * dispute route for both กยศ and กรมบังคับคดี is to the authority, never to HR, so there is nothing
- * for an employee to edit here. {@code GET .../me} is the only employee-facing route.
- */
+/** HTTP surface for the deduction-obligation record + remittance ledger (issue #373). GET .../me is the only
+ * employee-facing route. */
 @RestController
 @RequestMapping("/api/payroll/deduction-obligations")
 public class DeductionObligationController {

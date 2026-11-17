@@ -27,15 +27,9 @@ import th.co.glr.hr.attendance.schedule.HolidayRepository.BankHoliday;
 import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Unit-tests {@link BotHolidayFetchService#parseHolidays} against the shapes it must now accept:
- * BOT's documented bare top-level array, and the {@code result}-wrapped envelope a real production
- * call actually returned on 2026-08-03 (plus two deeper envelope candidates kept as insurance —
- * see the class javadoc). Elements carry {@code Date} (ISO {@code yyyy-MM-dd}), {@code
- * HolidayDescriptionThai} and {@code HolidayDescription} (see the class javadoc for the full field
- * list and the {@code Authorization}-header clarification). No network is used — these are
- * hand-written JSON strings standing in for a response body.
- */
+/** Unit-tests BotHolidayFetchService#parseHolidays against the shapes it must now accept: BOT's documented bare
+ * top-level array, and the result-wrapped envelope a real production call actually returned on 2026-08-03
+ * (plus two deeper envelope candidates kept as insurance — see the class javadoc). */
 class BotHolidayFetchServiceTest {
 
     private final BotHolidayFetchService service = new BotHolidayFetchService(
@@ -64,17 +58,8 @@ class BotHolidayFetchServiceTest {
             new BankHoliday(LocalDate.of(2026, 4, 17), "ชดเชยวันสงกรานต์"));
     }
 
-    /**
-     * The case that is actually failing in production: BOT wraps the array in a {@code result}
-     * envelope rather than returning it bare, confirmed against a real call on 2026-08-03 (see the
-     * class javadoc). Driven through {@link #processResponse} — what actually runs in production —
-     * with a mocked {@link HolidayRepository} so the write path can complete instead of NPE-ing on
-     * the {@code null} repository the other tests in this class use. Asserts both sides on this one
-     * fixture: the wrapped holiday is written and reflected in the outcome (presence), and the "no
-     * holidays parsed" WARN this exact response used to trigger before this fix is absent (absence)
-     * — proving the successful path took over cleanly rather than merely returning a non-empty list
-     * while still also warning.
-     */
+    /** The case that is actually failing in production: BOT wraps the array in a result envelope rather than
+     * returning it bare, confirmed against a real call on 2026-08-03 (see the class javadoc). */
     @Test
     void aResultWrappedArrayParsesCorrectly() {
         String json = """
@@ -104,17 +89,9 @@ class BotHolidayFetchServiceTest {
         }
     }
 
-    /**
-     * The bug this class was reported for: a {@link DataIntegrityViolationException} from the write
-     * step (e.g. production's real {@code value too long for type character varying(120)} against
-     * the pre-V129 column) must WARN with the fact that parsing succeeded but the write failed —
-     * never share {@link #fetchYear}'s "no data for {@code year}" INFO wording, which is reserved
-     * for BOT genuinely having nothing published. Both sides are asserted on the same JSON fixture
-     * and the same log capture so the split is proven real, not just two independently-passing
-     * tests: the first call (repository throws) takes the loud WARN path and must not also log the
-     * quiet "reconciled" INFO message; the second call, same fixture, repository now succeeding,
-     * takes the quiet path and must not also log the loud "database write failed" WARN message.
-     */
+    /** The bug this class was reported for: a DataIntegrityViolationException from the write step (e.g.
+     * production's real value too long for type character varying against the pre-V129 column) must WARN with the
+     * fact that parsing succeeded but the write failed. */
     @Test
     void aDatabaseWriteFailureLogsALoudWarningWhileASuccessfulWriteOnTheSameFixtureStaysQuiet() {
         String json = """
@@ -131,9 +108,9 @@ class BotHolidayFetchServiceTest {
         ListAppender<ILoggingEvent> appender = attachLogAppender();
 
         try {
-            // First invocation throws (simulating the production write failure); the second, same
-            // arguments, succeeds as a no-op mock call -- Mockito's default for an unstubbed void
-            // call -- so the very same fixture can drive both the loud and the quiet path below.
+            // First invocation throws (simulating the production write failure); the second, same arguments, succeeds as a
+            // no-op mock call -- Mockito's default for an unstubbed void call -- so the very same fixture can drive both
+            // the loud and the quiet path below.
             doThrow(new DataIntegrityViolationException(
                     "ERROR: value too long for type character varying(120)"))
                 .doNothing()
@@ -142,8 +119,8 @@ class BotHolidayFetchServiceTest {
 
             BotHolidayFetchService.FetchOutcome failedOutcome = service.processResponse(json, 2026);
 
-            // Outcome contract unchanged on a write failure: holidayCount 0, applied false, exactly
-            // as any other failed/empty fetch -- even though one holiday genuinely parsed.
+            // Outcome contract unchanged on a write failure: holidayCount 0, applied false, exactly as any other
+            // failed/empty fetch -- even though one holiday genuinely parsed.
             assertThat(failedOutcome.holidayCount()).isZero();
             assertThat(failedOutcome.applied()).isFalse();
             assertThat(appender.list).anyMatch(event ->
@@ -172,10 +149,8 @@ class BotHolidayFetchServiceTest {
         }
     }
 
-    /**
-     * One layer deeper than the confirmed live shape: {@code result.data}, kept as a named
-     * candidate in case BOT nests further the way its other APIs do.
-     */
+    /** One layer deeper than the confirmed live shape: result.data, kept as a named candidate in case BOT nests
+     * further the way its other APIs do. */
     @Test
     void aResultDataShapeParses() {
         String json = """
@@ -192,11 +167,8 @@ class BotHolidayFetchServiceTest {
             new BankHoliday(LocalDate.of(2026, 7, 6), "วันอาสาฬหบูชา"));
     }
 
-    /**
-     * The deepest named candidate: {@code result.data.data_detail}, the exact envelope shape {@code
-     * BotFxFetchService}'s own BOT endpoint uses — cheap insurance kept for that reason, per the
-     * class javadoc.
-     */
+    /** The deepest named candidate: result.data.data_detail, the exact envelope shape BotFxFetchService's own BOT
+     * endpoint uses — cheap insurance kept for that reason, per the class javadoc. */
     @Test
     void aResultDataDataDetailShapeParses() {
         String json = """
@@ -215,15 +187,9 @@ class BotHolidayFetchServiceTest {
             new BankHoliday(LocalDate.of(2026, 12, 31), "วันสิ้นปี"));
     }
 
-    /**
-     * Proves the candidate list is a fixed set of named locations, not a tree search: an unrelated
-     * array sitting under a field name that is not one of the four named candidates must never be
-     * picked up, even though it is Date-shaped and appears earlier in the document than {@code
-     * result}. Asserts both sides on one fixture -- the real, {@code result}-wrapped holiday is
-     * present, and the decoy under the unrelated field is absent -- so a regression that widened
-     * candidate selection back into a search would be caught by the absence assertion even if the
-     * presence assertion alone would not.
-     */
+    /** Proves the candidate list is a fixed set of named locations, not a tree search: an unrelated array sitting
+     * under a field name that is not one of the four named candidates must never be picked up, even though it is
+     * Date-shaped and appears earlier in the document than result. */
     @Test
     void anUnrelatedArrayElsewhereInTheDocumentIsNeverPickedOverTheNamedCandidate() {
         String json = """
@@ -312,14 +278,8 @@ class BotHolidayFetchServiceTest {
         assertThat(service.parseHolidays(json, 2026)).isEmpty();
     }
 
-    /**
-     * The diagnosability requirement: an HTTP-200-but-unrecognised-shape response must not be a
-     * silent INFO log indistinguishable from "BOT genuinely has nothing published for this year" —
-     * it must WARN and name the response's field names, so the day the token is finally set, a
-     * shape mismatch is fixable in one iteration instead of by guesswork. Exercises {@link
-     * BotHolidayFetchService#processResponse}, the seam that skips the real HTTP call, against a
-     * response shaped nothing like the documented fields.
-     */
+    /** The diagnosability requirement: an HTTP-200-but-unrecognised-shape response must not be a silent INFO log
+     * indistinguishable from "BOT genuinely has nothing published for this year". */
     @Test
     void aTwoHundredResponseWithAnUnrecognisedShapeLogsAWarningNamingTheFieldsSeen() {
         String json = """
@@ -347,18 +307,8 @@ class BotHolidayFetchServiceTest {
         }
     }
 
-    /**
-     * The strict-parse guard, driven end-to-end through {@link BotHolidayFetchService#processResponse}
-     * rather than just {@link BotHolidayFetchService#parseHolidays}: a wrong-shaped-but-HTTP-200
-     * response — here, an envelope that looks superficially like the accepted candidates (it has a
-     * {@code result} object) but nests the array under a field name ({@code holidays}) that is not
-     * one of the four named candidates — must write nothing and must WARN, not silently succeed
-     * with the wrong holidays or silently do nothing at INFO. {@code holidays} is {@code null} in
-     * this test's {@code service} — if this path incorrectly called {@code
-     * reconcileBankHolidaysForYear}, this test would fail with an NPE rather than a soft assertion
-     * failure, which is a second, independent tripwire on top of the {@code holidayCount()}/WARN
-     * assertions below.
-     */
+    /** The strict-parse guard, driven end-to-end through BotHolidayFetchService#processResponse rather than just
+     * BotHolidayFetchService#parseHolidays: a wrong-shaped-but-HTTP-200 response. */
     @Test
     void aWrongShapedTwoHundredResponseTakesTheWarnAndWriteNothingPath() {
         String json = """
@@ -386,8 +336,8 @@ class BotHolidayFetchServiceTest {
 
     @Test
     void aGenuinelyEmptyArrayResponseAlsoLogsTheSameWarning() {
-        // Same code path either way -- see the class javadoc on why this branch cannot tell "shape
-        // changed" apart from "BOT has nothing yet", and therefore always surfaces the diagnostic.
+        // Same code path either way -- see the class javadoc on why this branch cannot tell "shape changed" apart from
+        // "BOT has nothing yet", and therefore always surfaces the diagnostic.
         ListAppender<ILoggingEvent> appender = attachLogAppender();
 
         try {
@@ -400,22 +350,17 @@ class BotHolidayFetchServiceTest {
         }
     }
 
-    /**
-     * {@link BotHolidayFetchService#MANUAL_FETCH_COOLDOWN}: the manual-trigger endpoint's only
-     * protection against burning BOT's 100-calls/hour token budget via a double-submit or a retry
-     * loop, since {@code runFetch()} itself has no rate limiting. All four cases below use the
-     * package-private {@code Clock}-injecting constructor so the guard is exercised deterministically
-     * — no real wall-clock sleep, no bare {@code Instant.now()} that would make CI flaky.
-     */
+    /** BotHolidayFetchService#MANUAL_FETCH_COOLDOWN: the manual-trigger endpoint's only protection against burning
+     * BOT's 100-calls/hour token budget via a double-submit or a retry loop, since runFetch() itself has no rate
+     * limiting. */
     @Test
     void cooldownBlocksASecondImmediateManualCall() {
         MutableClock clock = new MutableClock(Instant.parse("2026-06-01T10:00:00Z"), BANGKOK);
         BotHolidayFetchService service = serviceWithClock(clock);
         service.fetchNow(); // first attempt: token is blank, so this returns an empty list, not a throw
 
-        // Second call, same instant: refused, and distinguishably so -- a 429 the caller can tell
-        // apart from "fetch ran and BOT genuinely had nothing", which a silently-returned empty
-        // list could never do.
+        // Second call, same instant: refused, and distinguishably so -- a 429 the caller can tell apart from "fetch
+        // ran and BOT genuinely had nothing", which a silently-returned empty list could never do.
         assertThatThrownBy(service::fetchNow)
             .isInstanceOf(ApiException.class)
             .extracting(ex -> ((ApiException) ex).getStatus())
@@ -433,16 +378,9 @@ class BotHolidayFetchServiceTest {
         assertThatCode(service::fetchNow).doesNotThrowAnyException();
     }
 
-    /**
-     * The interaction the coordinator specifically flagged as a "nasty, slow-to-notice bug" risk:
-     * {@link BotHolidayFetchService#scheduledFetch()} must run its fetch logic even when a manual
-     * attempt happened moments earlier and would itself be well within {@code
-     * MANUAL_FETCH_COOLDOWN}. Proven two ways in one test: (a) {@code scheduledFetch()} throws
-     * nothing, where {@code fetchNow()} at the same instant would; and (b) the token-missing WARN
-     * log — which only fires from inside {@code runFetch()}'s body — actually appears, so this is
-     * positive evidence the scheduled path executed its fetch logic rather than merely not throwing
-     * for an unrelated reason.
-     */
+    /** The interaction the coordinator specifically flagged as a "nasty, slow-to-notice bug" risk:
+     * BotHolidayFetchService#scheduledFetch() must run its fetch logic even when a manual attempt happened moments
+     * earlier and would itself be well within MANUAL_FETCH_COOLDOWN. */
     @Test
     void scheduledFetchStillRunsEvenImmediatelyAfterAManualAttempt() {
         MutableClock clock = new MutableClock(Instant.parse("2026-06-01T10:00:00Z"), BANGKOK);

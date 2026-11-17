@@ -20,18 +20,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.LorYor01Deta
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceAttachmentDto;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationDto;
 
-/**
- * Persistence for {@code hr.tax_allowance_declaration} (V105). Deliberately writes NO SQL against
- * {@code hr.employee_tax_allowance} — the parent table is only ever touched by
- * {@code PayrollRepository#upsertTaxAllowances}/{@code #markTaxAllowanceVerified}/
- * {@code #setTaxAllowanceVerificationDeadline}, called from
- * {@link TaxAllowanceDeclarationService#apply}. That separation is the whole point of this table:
- * see {@code V105}'s header comment.
- *
- * <p>Every mutation here is a conditional {@code UPDATE ... WHERE declaration_id = :id AND status =
- * '...'} with a rowcount check in the caller, never a bare row load followed by a save — there is no
- * {@code @Version} anywhere in this repo (copy of the profile-request concurrency idiom).
- */
+/** Persistence for hr.tax_allowance_declaration (V105). WHERE declaration_id = :id AND status = '...' with a
+ * rowcount check in the caller, never a bare row load followed by a save — there is no @Version anywhere in
+ * this repo (copy of the profile-request concurrency idiom). */
 @Repository
 public class TaxAllowanceDeclarationRepository {
     private static final String SELECT_COLUMNS = """
@@ -126,15 +117,9 @@ public class TaxAllowanceDeclarationRepository {
         return count != null && count > 0;
     }
 
-    /**
-     * Inserts a new PENDING declaration and returns its generated id.
-     *
-     * <p>{@code effective_month} is written as the literal 1 and is NOT a parameter: a ล.ย.01 is a
-     * whole-tax-year declaration (owner ruling 2026-08-31, see {@link
-     * TaxAllowanceDeclarationService#WHOLE_YEAR_EFFECTIVE_MONTH}). The column survives because
-     * {@code hr.employee_tax_allowance}'s primary key still carries it and pre-ruling rows still
-     * hold months 2-12; nothing this method writes ever will again.
-     */
+    /** Inserts a new PENDING declaration and returns its generated id. effective_month is written as the literal 1
+     * and is NOT a parameter: a ล.ย.01 is a whole-tax-year declaration (owner ruling 2026-08-31, see
+     * TaxAllowanceDeclarationService#WHOLE_YEAR_EFFECTIVE_MONTH). */
     public long insert(
         long employeeId, int taxYear, PayrollTaxAllowanceInput allowances,
         String documentReference, long submittedById, boolean onBehalf, LorYor01Details form
@@ -264,13 +249,8 @@ public class TaxAllowanceDeclarationRepository {
             Map.of("id", declarationId, "employeeId", employeeId));
     }
 
-    /**
-     * Administrative withdraw of ANY pending declaration for an employee/tax-year, used only by
-     * {@code createOnBehalf} to clear the way before inserting an HR-authored row — otherwise an
-     * employee-submitted PENDING row still sitting in the queue would collide with
-     * {@code uq_tad_one_pending_per_employee_year} and the insert would fail with a raw constraint
-     * violation instead of a clean outcome.
-     */
+    /** Administrative withdraw of ANY pending declaration for an employee/tax-year, used only by createOnBehalf to
+     * clear the way before inserting an HR-authored row. */
     public int withdrawAnyPending(long employeeId, int taxYear) {
         return jdbc.update("""
             UPDATE hr.tax_allowance_declaration
@@ -280,11 +260,9 @@ public class TaxAllowanceDeclarationRepository {
             Map.of("employeeId", employeeId, "taxYear", taxYear));
     }
 
-    /**
-     * Marks every OTHER APPROVED declaration for this employee/tax-year as SUPERSEDED by the given
-     * (newly-approved) id. MUST run before the conditional approve UPDATE below, in the same
-     * transaction — {@code uq_tad_one_approved_per_employee_year} is not deferrable.
-     */
+    /** Marks every OTHER APPROVED declaration for this employee/tax-year as SUPERSEDED by the given
+     * (newly-approved) id. MUST run before the conditional approve UPDATE below, in the same transaction —
+     * uq_tad_one_approved_per_employee_year is not deferrable. */
     public int supersedeApproved(long employeeId, int taxYear, long supersededById) {
         return jdbc.update("""
             UPDATE hr.tax_allowance_declaration
@@ -326,19 +304,9 @@ public class TaxAllowanceDeclarationRepository {
                 .addValue("reviewerNote", reviewerNote));
     }
 
-    /**
-     * Conditional flag-the-declaration-applied step. Deliberately runs BEFORE the
-     * {@code hr.employee_tax_allowance} promotion in {@link TaxAllowanceDeclarationService#apply}:
-     * the {@code applied_at IS NULL} guard in the WHERE clause is what makes a concurrent double-apply
-     * 409 on the SECOND caller before it ever reaches the allowance table, with no {@code @Version}
-     * needed.
-     *
-     * <p>{@code expiresOn} is also set here (2026-08-01, the yearly-expiry PR) — the SAME value
-     * {@code TaxAllowanceDeclarationService#apply} passes to the parent table's {@code
-     * setTaxAllowanceVerificationDeadline}, so the two never drift apart. This is what {@code
-     * idx_tad_expiry_sweep} (V105) exists for: {@link #findExpirySweepCandidates} reads this column
-     * directly rather than re-deriving a deadline from the parent table.
-     */
+    /** Conditional flag-the-declaration-applied step. expiresOn is also set here (2026-08-01, the yearly-expiry PR)
+     * — the SAME value TaxAllowanceDeclarationService#apply passes to the parent table's
+     * setTaxAllowanceVerificationDeadline, so the two never drift apart. */
     public int markApplied(long declarationId, long appliedById, LocalDate expiresOn) {
         return jdbc.update("""
             UPDATE hr.tax_allowance_declaration
@@ -353,14 +321,9 @@ public class TaxAllowanceDeclarationRepository {
                 .addValue("expiresOn", expiresOn));
     }
 
-    // ---- Yearly expiry (2026-08-01) -----------------------------------------------------------
-    //
-    // See TaxAllowanceDeclarationService#expireOverdueVerifications for the full sweep and
-    // TaxAllowanceExpiryWorker for the @Scheduled trigger. THE trap (plan doc): a dated row on the
-    // PARENT table (hr.employee_tax_allowance) must have EVERY row for the employee/tax-year
-    // expired at once, via PayrollRepository#expireTaxAllowanceVerification -- never just the row
-    // this declaration happens to reference -- or #findTaxAllowancesByEmployee's DISTINCT ON
-    // ... ORDER BY effective_month DESC silently falls back to an older still-VERIFIED row.
+    // Yearly expiry (2026-08-01) ----------------------------------------------------------- See
+    // TaxAllowanceDeclarationService#expireOverdueVerifications for the full sweep and TaxAllowanceExpiryWorker
+    // for the @Scheduled trigger.
 
     /** One row eligible for the expiry sweep: applied, still APPROVED, past its expires_on date. */
     public record ExpirySweepCandidate(long declarationId, long employeeId, int taxYear) {}
@@ -377,12 +340,9 @@ public class TaxAllowanceDeclarationRepository {
                 rs.getLong("declaration_id"), rs.getLong("employee_id"), rs.getInt("tax_year")));
     }
 
-    /**
-     * Conditional APPROVED -> EXPIRED. Guarded by the same {@code status = 'APPROVED' AND
-     * applied_at IS NOT NULL} shape {@link #findExpirySweepCandidates} selects on, so a second sweep
-     * run over the same row matches zero rows instead of re-stamping {@code expired_at} — the
-     * idempotency the sweep needs with no extra bookkeeping.
-     */
+    /** Conditional APPROVED -> EXPIRED. Guarded by the same status = 'APPROVED' AND applied_at IS NOT NULL shape
+     * #findExpirySweepCandidates selects on, so a second sweep run over the same row matches zero rows instead of
+     * re-stamping expired_at — the idempotency the sweep needs with no extra bookkeeping. */
     public int expireApplied(long declarationId) {
         return jdbc.update("""
             UPDATE hr.tax_allowance_declaration
@@ -392,12 +352,9 @@ public class TaxAllowanceDeclarationRepository {
             Map.of("id", declarationId));
     }
 
-    /**
-     * Conditional EXPIRED -> APPROVED (the reverify mirror). {@code expired_at} is cleared back to
-     * NULL in the SAME statement -- required by {@code chk_tad_expired_consistent}, which demands
-     * {@code (status = 'EXPIRED') = (expired_at IS NOT NULL)} on every row, including this one the
-     * moment it stops being EXPIRED.
-     */
+    /** Conditional EXPIRED -> APPROVED (the reverify mirror). expired_at is cleared back to NULL in the SAME
+     * statement -- required by chk_tad_expired_consistent, which demands (status = 'EXPIRED') = (expired_at IS NOT
+     * NULL) on every row, including this one the moment it stops being EXPIRED. */
     public int reverify(long declarationId, long reverifiedById, LocalDate newExpiresOn) {
         return jdbc.update("""
             UPDATE hr.tax_allowance_declaration
@@ -411,22 +368,15 @@ public class TaxAllowanceDeclarationRepository {
                 .addValue("newExpiresOn", newExpiresOn));
     }
 
-    // ---- Evidence attachments (hr.file_attachment, domain='tax_allowance_declaration') --------
-    //
-    // The download gate itself lives ENTIRELY in the service
-    // (TaxAllowanceDeclarationService#requireOwnerOrHr, re-resolved from the parent declaration on
-    // every call) -- this repository only ever does the plain CRUD against hr.file_attachment,
-    // exactly like FactoryQuoteRepository's own attachment methods it is modelled on.
+    // Evidence attachments -------- The download gate itself lives ENTIRELY in the service -- this repository only
+    // ever does the plain CRUD against hr.file_attachment, exactly like FactoryQuoteRepository's own attachment
+    // methods it is modelled on.
 
     private static final String ATTACHMENT_DOMAIN = "tax_allowance_declaration";
 
-    /**
-     * V134 storage-durability fix: {@code filePath} here is the bare correlation key {@code
-     * FileStorageService#storeInDatabase} computed, and {@code content} is inserted into {@code
-     * hr.file_attachment_blob} in the SAME transaction as the {@code hr.file_attachment} insert
-     * below ({@code TaxAllowanceDeclarationService#uploadAttachment} is {@code @Transactional}),
-     * flipping {@code storage_state} straight to {@code DATABASE}.
-     */
+    /** V134 storage-durability fix: filePath here is the bare correlation key FileStorageService#storeInDatabase
+     * computed, and content is inserted into hr.file_attachment_blob in the SAME transaction as the
+     * hr.file_attachment insert below, flipping storage_state straight to DATABASE. */
     public TaxAllowanceAttachmentDto saveAttachmentWithContent(
         long declarationId, String fileName, String filePath, String mimeType, Long fileSize, long uploadedBy,
         String sectionKey, byte[] content
@@ -504,11 +454,8 @@ public class TaxAllowanceDeclarationRepository {
     public record AttachmentFileLocation(String filePath, String storageState) {
     }
 
-    /**
-     * Audited tombstone -- keeps the row and the file on disk, only records who deleted it, when,
-     * and why. Guarded by {@code deleted_at IS NULL} so a second call cannot overwrite an existing
-     * tombstone's {@code deleted_by}/{@code delete_reason}.
-     */
+    /** Audited tombstone -- keeps the row and the file on disk, only records who deleted it, when, and why. Guarded
+     * by deleted_at IS NULL so a second call cannot overwrite an existing tombstone's deleted_by/delete_reason. */
     public int tombstoneAttachment(long attachmentId, long deletedBy, String reason) {
         return jdbc.update("""
             UPDATE hr.file_attachment
@@ -569,10 +516,9 @@ public class TaxAllowanceDeclarationRepository {
             rs.getInt("disabled_care_count"),
             rs.getBoolean("disability_card_holder"),
             rs.getInt("parent_care_count"),
-            // ข้อ 9 (V137) is read into BOTH views of this row: here, so that apply() promotes it
-            // into employee_tax_allowance and payroll sees it, and again into LorYor01Details below
-            // so the rendered PDF prints it. One column, two shapes -- the payroll-facing
-            // PayrollTaxAllowanceInput and the form-facing LorYor01Details. Keep them in step.
+            // ข้อ 9 (V137) is read into BOTH views of this row: here, so that apply() promotes it into
+            // employee_tax_allowance and payroll sees it, and again into LorYor01Details below so the rendered PDF prints
+            // it. Keep them in step.
             rs.getBigDecimal("provident_fund_allowance")
         );
         LorYor01Details lorYor01 = new LorYor01Details(
@@ -589,8 +535,8 @@ public class TaxAllowanceDeclarationRepository {
                 rs.getString("addr_postal_code")),
             rs.getString("marital_state"),
             rs.getString("spousal_status"),
-            // getObject, not getBoolean: these three are genuinely nullable and getBoolean would
-            // turn "not answered" into a confident false on the form.
+            // getObject, not getBoolean: these three are genuinely nullable and getBoolean would turn "not answered" into
+            // a confident false on the form.
             (Boolean) rs.getObject("spouse_has_income"),
             (Integer) rs.getObject("children_total"),
             rs.getBigDecimal("child_extra_allowance"),

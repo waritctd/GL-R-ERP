@@ -21,11 +21,9 @@ import th.co.glr.hr.ticket.DealLifecycle;
 import th.co.glr.hr.ticket.DealStage;
 import th.co.glr.hr.ticket.DepositPolicy;
 
-/**
- * GET /api/finance/deals/{id} against the real service and real Postgres (H1, owner decision A2).
- * Written wrong-way-round: every role that must NOT reach a deal, and every key that must NOT
- * appear in the payload, is asserted before the happy path is.
- */
+/** GET /api/finance/deals/{id} against the real service and real Postgres (H1, owner decision A2). Written
+ * wrong-way-round: every role that must NOT reach a deal, and every key that must NOT appear in the payload,
+ * is asserted before the happy path is. */
 class FinanceDealIntegrationTest extends FinanceDealTestBase {
 
     // ── who may NOT reach it (wrong way round first) ────────────────────────────────────────

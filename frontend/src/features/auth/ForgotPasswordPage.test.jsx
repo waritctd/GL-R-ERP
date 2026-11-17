@@ -43,15 +43,14 @@ describe('ForgotPasswordPage', () => {
 
     await waitFor(() => expect(api.auth.forgotPassword).toHaveBeenCalledWith({ email: 'someone@glr.co.th' }));
     expect(await screen.findByText(/ตรวจสอบกล่องอีเมลของคุณ/)).not.toBeNull();
-    // The form is gone once the confirmation renders - there is no "try a different email"
-    // affordance shown in place, only the way back to /login.
+    // The form is gone once the confirmation renders - there is no "try a different email" affordance shown in
+    // place, only the way back to /login.
     expect(screen.queryByTestId('forgot-password-email')).toBeNull();
   });
 
   it('shows the SAME generic confirmation whether or not the address exists - there is no not-found branch', async () => {
-    // The whole point of the endpoint's anti-enumeration contract is that a resolved promise
-    // never distinguishes the two cases - this test proves the page has nothing to distinguish
-    // even if it wanted to.
+    // The whole point of the endpoint's anti-enumeration contract is that a resolved promise never distinguishes
+    // the two cases - this test proves the page has nothing to distinguish even if it wanted to.
     const genericResponse = { message: 'หากอีเมลนี้มีอยู่ในระบบ เราได้ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปให้แล้ว กรุณาตรวจสอบกล่องอีเมลของคุณ' };
     api.auth.forgotPassword.mockResolvedValue(genericResponse);
     render(<ForgotPasswordPage onNavigateToLogin={vi.fn()} />);

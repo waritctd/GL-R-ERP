@@ -2,11 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Avatar } from '../common/Avatar.jsx';
 import { Icon } from '../common/Icon.jsx';
 
-/**
- * Structure mirrors NotificationBell (open state, outside-click close, popover
- * anchored in the topbar) so the two header popovers behave identically. The
- * topbar sits outside `.content-scroll`, so absolute positioning is not clipped.
- */
+/** Structure mirrors NotificationBell (open state, outside-click close, popover anchored in the topbar) so the
+ * two header popovers behave identically. The topbar sits outside `.content-scroll`, so absolute positioning
+ * is not clipped. */
 export function UserMenu({
   user,
   employee,
@@ -115,11 +113,35 @@ export function UserMenu({
             </button>
           )}
 
+          {user.employeeId ? (
+            <button
+              ref={(node) => { itemRefs.current[1] = node; }}
+              type="button"
+              role="menuitem"
+              className={itemClass}
+              onClick={() => select(() => onNavigate('/tax-allowance'))}
+            >
+              <Icon name="calculator" size={17} />
+              ค่าลดหย่อนภาษี
+            </button>
+          ) : null}
+
+          <button
+            ref={(node) => { itemRefs.current[2] = node; }}
+            type="button"
+            role="menuitem"
+            className={itemClass}
+            onClick={() => select(() => onNavigate('/whats-new'))}
+          >
+            <Icon name="sparkles" size={17} />
+            มีอะไรใหม่
+          </button>
+
           <div className="border-t border-border" />
 
           {onViewAs && (
             <button
-              ref={(node) => { itemRefs.current[1] = node; }}
+              ref={(node) => { itemRefs.current[3] = node; }}
               type="button"
               role="menuitem"
               className={itemClass}
@@ -131,7 +153,7 @@ export function UserMenu({
           )}
 
           <button
-            ref={(node) => { itemRefs.current[2] = node; }}
+            ref={(node) => { itemRefs.current[4] = node; }}
             type="button"
             role="menuitem"
             className={itemClass}

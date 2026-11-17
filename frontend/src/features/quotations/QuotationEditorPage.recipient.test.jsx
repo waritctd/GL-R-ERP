@@ -153,11 +153,11 @@ beforeEach(() => {
 describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
   it('opens on เลือกดีลที่มีอยู่, and บันทึกร่าง says a deal must be picked first', async () => {
     renderEditor('/quotations/new');
-    expect(await screen.findByRole('heading', { name: 'ดีล' })).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'เลือกดีลที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
-    expect(await screen.findByRole('combobox', { name: /ดีล/ })).not.toBeNull();
+    expect(await screen.findByRole('heading', { name: 'งาน' })).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'เลือกงานที่มีอยู่' }).getAttribute('aria-pressed')).toBe('true');
+    expect(await screen.findByRole('combobox', { name: /^งาน/ })).not.toBeNull();
     expect(saveButton().disabled).toBe(true);
-    expect(saveButton().title).toContain('ต้องเลือกดีลก่อนบันทึกร่าง');
+    expect(saveButton().title).toContain('ต้องเลือกงานก่อนบันทึกร่าง');
   });
 
   // A ผู้ติดต่อ belongs to ONE customer and the server refuses another customer's contactId
@@ -176,7 +176,7 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
     }));
     api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
     renderEditor('/quotations/new', { idRoute: 'probe' });
-    fireEvent.focus(await screen.findByRole('combobox', { name: /ดีล/ }));
+    fireEvent.focus(await screen.findByRole('combobox', { name: /^งาน/ }));
     fireEvent.mouseDown(await screen.findByRole('option', { name: /DL-2026-0018/ }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/quotations/new?ticket=18'));
     await waitFor(() => expect(api.tickets.get).toHaveBeenCalledWith(18));
@@ -187,8 +187,8 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
     fireEvent.click(await screen.findByRole('option', { name: /สมศรี/ }));
     expect(screen.getByText('สมศรี ลูกค้าแรก')).not.toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'เปลี่ยนดีล' }));
-    fireEvent.focus(await screen.findByRole('combobox', { name: /ดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'เปลี่ยนงาน' }));
+    fireEvent.focus(await screen.findByRole('combobox', { name: /^งาน/ }));
     fireEvent.mouseDown(await screen.findByRole('option', { name: /DL-2026-0019/ }));
     await waitFor(() => expect(screen.getByTestId('location').textContent).toBe('/quotations/new?ticket=19'));
     // Settled on deal 19 (its stage preselects ผู้รับ) before looking, so a loading frame cannot pass for it.
@@ -206,7 +206,7 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
 
   it('สร้างดีลใหม่ brings back the customer/project card; ผู้รับใบเสนอราคา is required there too', async () => {
     renderEditor('/quotations/new');
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     expect(await screen.findByLabelText(/^ลูกค้า/)).not.toBeNull();
     expect(recipientGroup()).not.toBeNull();
     expect(saveButton().title).toContain('ต้องเลือกผู้รับใบเสนอราคา');
@@ -219,14 +219,14 @@ describe('/quotations/new — step 1 is "ดีล" (slice 2 §A)', () => {
     api.dealQuotations.create.mockResolvedValue({ quotation: { id: 99 } });
     renderEditor('/quotations/new', { idRoute: 'probe' });
 
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'ก้าวหน้า' } });
     fireEvent.mouseDown(await screen.findByRole('option', { name: /ก้าวหน้า/ }));
     await waitFor(() => expect(api.customers.projects).toHaveBeenCalledWith(1));
     fireEvent.focus(await screen.findByLabelText(/^โครงการ/));
     fireEvent.mouseDown(await screen.findByRole('option', { name: /โครงการ B1/ }));
     // A NEW deal needs a real ช่องทางรับงาน too.
-    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }));
     fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
     await fillCompleteQuotationItem();
 
@@ -249,7 +249,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ salesStage }) } });
     renderEditor('/quotations/new?ticket=18');
     await waitFor(() => expect(screen.getByRole('radio', { name: radioName }).getAttribute('aria-checked')).toBe('true'));
-    expect(screen.queryByText(/ดีลจะอยู่ที่ขั้น/)).toBeNull();
+    expect(screen.queryByText(/(ดีล|งาน)จะอยู่ที่ขั้น/)).toBeNull();
   });
 
   it('a deal at any other stage leaves it empty — the rep must choose before saving', async () => {
@@ -297,7 +297,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     await waitFor(() => expect(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }).getAttribute('aria-checked')).toBe('true'));
     await fillCompleteQuotationItem();
     await waitFor(() => expect(saveButton().disabled).toBe(true));
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
+    expect(saveButton().title).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
   }, 10000);
 
   // The summary serves only the NEWEST live direct quotation; the server (DirectQuotationLocks) checks every live
@@ -318,7 +318,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     await fillCompleteQuotationItem();
     await waitFor(() => expect(api.dealQuotations.listForTicket).toHaveBeenCalledWith(18));
     await waitFor(() => expect(saveButton().disabled).toBe(true));
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0002-1)');
+    expect(saveButton().title).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0002-1)');
   }, 10000);
 
   it('?recipient=BUYER: only an APPROVED designer row (plus a cancelled one) -> บันทึกร่าง stays enabled and the create goes out', async () => {
@@ -355,7 +355,7 @@ describe('/quotations/new?ticket= — recipient preselected from the deal stage 
     expect(within(notice).getByRole('link', { name: 'เปิดใบเสนอราคา' }).getAttribute('href')).toBe('/quotations/77');
     await fillCompleteQuotationItem();
     expect(saveButton().disabled).toBe(true);
-    expect(saveButton().title).toContain('ดีลนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
+    expect(saveButton().title).toContain('งานนี้มีใบเสนอราคาที่ใช้งานอยู่ (QT-2026-0077-1)');
   }, 10000);
 });
 
@@ -367,7 +367,7 @@ describe('editor header strip — ดีล <code> · customer · stage · เ�
     expect(strip.textContent).toContain('DL-2026-0018');
     expect(strip.textContent).toContain(CUSTOMER.name);
     expect(strip.textContent).toContain('เสนอราคาเจ้าของโครงการ');
-    expect(within(strip).getByRole('link', { name: 'เปิดดีล' }).getAttribute('href')).toBe('/tickets/18');
+    expect(within(strip).getByRole('link', { name: 'เปิดงาน' }).getAttribute('href')).toBe('/tickets/18');
   });
 
   it('on an existing DRAFT: the same strip, from the deal summary', async () => {
@@ -387,7 +387,7 @@ describe('editor header strip — ดีล <code> · customer · stage · เ�
     const strip = await screen.findByTestId('quotation-deal-strip');
     expect(strip.textContent).toContain('DL-2026-0018');
     expect(strip.textContent).toContain('เสนอราคาผู้ซื้อ/ผู้รับเหมา');
-    expect(within(strip).getByRole('link', { name: 'เปิดดีล' }).getAttribute('href')).toBe('/tickets/18');
+    expect(within(strip).getByRole('link', { name: 'เปิดงาน' }).getAttribute('href')).toBe('/tickets/18');
     expect(api.tickets.get).not.toHaveBeenCalled();
   });
 
@@ -402,7 +402,7 @@ describe('editor header strip — ดีล <code> · customer · stage · เ�
 
   it('is hidden while inline-creating — there is no deal yet', async () => {
     renderEditor('/quotations/new');
-    await screen.findByRole('heading', { name: 'ดีล' });
+    await screen.findByRole('heading', { name: 'งาน' });
     expect(screen.queryByTestId('quotation-deal-strip')).toBeNull();
   });
 
@@ -410,7 +410,7 @@ describe('editor header strip — ดีล <code> · customer · stage · เ�
     api.tickets.get.mockResolvedValue({ ticket: { summary: ticketSummary({ createdById: 6 }) } });
     renderEditor('/quotations/new?ticket=18', { user: qcGrantUser });
     const strip = await screen.findByTestId('quotation-deal-strip');
-    expect(within(strip).queryByRole('link', { name: 'เปิดดีล' })).toBeNull();
+    expect(within(strip).queryByRole('link', { name: 'เปิดงาน' })).toBeNull();
   });
 });
 
@@ -533,7 +533,7 @@ describe('a direct-quotation status change refreshes the deal (liveDirectQuotati
 // inline-notice pattern as a live direct quotation, and บันทึกร่าง is disabled with the reason
 // (DESIGN.md §14).
 describe('/quotations/new?ticket= — a deal with a live pricing request (one pricing route per deal)', () => {
-  const LIVE_PR_MESSAGE = 'ดีลนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
+  const LIVE_PR_MESSAGE = 'งานนี้มีคำขอราคาที่ยังดำเนินการอยู่ — ใช้ใบเสนอราคาจากคำขอราคา หรือยกเลิกคำขอราคาก่อน';
   const pr = (status) => ({ id: 501, requestCode: 'PCR-2026-0501', ticketId: 18, status });
 
   it.each([['DRAFT'], ['SUBMITTED'], ['QUOTATION_ACCEPTED']])('%s: inline notice + บันทึกร่าง disabled with the reason', async (status) => {
@@ -561,7 +561,7 @@ describe('/quotations/new?ticket= — a deal with a live pricing request (one pr
 });
 
 // Owner ruling 2026-11-07: DealRoute.refusalMessage's sentence (the server's 409), shown beside a disabled off-route pill.
-const routeSentence = (channelPhrase, no) => `ดีลนี้เป็น${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`;
+const routeSentence = (channelPhrase, no) => `ช่องทางรับงานของงานนี้คือ${channelPhrase} — ขั้นที่ ${no} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`;
 const isDisabled = (el) => el.disabled || el.getAttribute('aria-disabled') === 'true';
 const checkedRecipients = () => within(recipientGroup()).getAllByRole('radio').map((r) => r.getAttribute('aria-checked'));
 
@@ -571,12 +571,12 @@ const checkedRecipients = () => within(recipientGroup()).getAllByRole('radio').m
 describe('new-deal card — ช่องทางรับงาน pre-fills ผู้รับใบเสนอราคา (owner ruling #2)', () => {
   async function openCreateCard() {
     renderEditor('/quotations/new');
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     await screen.findByLabelText(/^ลูกค้า/);
   }
 
   it.each([
-    ['ผู้ออกแบบนำดีล', ['true', 'false', 'false']],
+    ['ผู้ออกแบบนำงานมา', ['true', 'false', 'false']],
     ['เจ้าของติดต่อโดยตรง', ['false', 'true', 'false']],
     ['ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', ['false', 'false', 'true']],
   ])('choosing %s pre-fills the matching recipient', async (channel, expected) => {
@@ -590,7 +590,7 @@ describe('new-deal card — ช่องทางรับงาน pre-fills �
 
   it('while the rep has not picked a recipient, changing the channel re-fills it', async () => {
     await openCreateCard();
-    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }));
     await waitFor(() => expect(checkedRecipients()).toEqual(['true', 'false', 'false']));
     fireEvent.click(screen.getByRole('button', { name: 'เจ้าของติดต่อโดยตรง' }));
     await waitFor(() => expect(checkedRecipients()).toEqual(['false', 'true', 'false']));
@@ -598,7 +598,7 @@ describe('new-deal card — ช่องทางรับงาน pre-fills �
 
   it('doesn\'t overwrite a deliberate pick: a later channel change leaves the rep\'s recipient — now off-route, so the route sentence says so', async () => {
     await openCreateCard();
-    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำดีล' }));
+    fireEvent.click(screen.getByRole('button', { name: 'ผู้ออกแบบนำงานมา' }));
     await waitFor(() => expect(checkedRecipients()).toEqual(['true', 'false', 'false']));
     // The rep deliberately picks เจ้าของโครงการ…
     fireEvent.click(screen.getByRole('radio', { name: 'เจ้าของโครงการ' }));

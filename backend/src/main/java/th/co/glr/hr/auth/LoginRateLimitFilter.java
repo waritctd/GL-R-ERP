@@ -16,16 +16,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 import th.co.glr.hr.config.AppProperties;
 
-/**
- * Throttles {@code POST /api/auth/login} to blunt credential brute-forcing
- * (advisory GHSA-8m9r-9vhj-mr52). Counts failures per client IP and per account (email);
- * once either trips its limit the key is locked for a cool-down window and further attempts
- * get {@code 429 Too Many Requests} with a {@code Retry-After} header before the request ever
- * reaches the auth logic. A successful login clears both counters.
- *
- * <p>Ordered after {@link th.co.glr.hr.config.CsrfCookieFilter} ({@code @Order(0)}); login is
- * CSRF-exempt so ordering is not security-sensitive here.
- */
+/** Throttles POST /api/auth/login to blunt credential brute-forcing (advisory GHSA-8m9r-9vhj-mr52). Ordered
+ * after th.co.glr.hr.config.CsrfCookieFilter (@Order(0)); login is CSRF-exempt so ordering is not
+ * security-sensitive here. */
 @Component
 @Order(1)
 public class LoginRateLimitFilter extends OncePerRequestFilter {
@@ -102,11 +95,9 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
         }
     }
 
-    /**
-     * Best-effort client IP. Behind the Vercel/Render proxy the real client is the leftmost
-     * X-Forwarded-For entry; falls back to the socket address otherwise. XFF is client-spoofable,
-     * which is why per-account limiting runs alongside per-IP.
-     */
+    /** Best-effort client IP. Behind the Vercel/Render proxy the real client is the leftmost X-Forwarded-For entry;
+     * falls back to the socket address otherwise. XFF is client-spoofable, which is why per-account limiting runs
+     * alongside per-IP. */
     private String clientIp(HttpServletRequest request) {
         String forwarded = request.getHeader("X-Forwarded-For");
         if (forwarded != null && !forwarded.isBlank()) {

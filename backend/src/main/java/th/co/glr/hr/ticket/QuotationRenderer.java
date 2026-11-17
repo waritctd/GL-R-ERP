@@ -97,9 +97,9 @@ public class QuotationRenderer {
     // byte-fidelity with a file nobody has. Swapping in a genuine F-SM-008.xls later is confined
     // to #TEMPLATE and the row constants above.
     private static final String EN_TITLE = "QUOTATION";
-    // The 8 column headings, in the template's own column order (see #TITLE_ROW's dump):
-    // A ลำดับ, B รายละเอียด (BLANK in the Thai template — the English form labels it), C จำนวน,
-    // D หน่วย, E ราคา, F..G ส่วนลด (a merged pair), H คงเหลือ, I เป็นเงิน.
+    // The 8 column headings, in the template's own column order (see #TITLE_ROW's dump): A ลำดับ, B รายละเอียด
+    // (BLANK in the Thai template — the English form labels it), C จำนวน, D หน่วย, E ราคา, F..G ส่วนลด (a merged
+    // pair), H คงเหลือ, I เป็นเงิน.
     /** B1 on an English document — see #writeEnglishHeaderLabels for why this exact spelling. */
     static final String EN_COMPANY_NAME = "G.L.&R. TAPS AND TILES COMPANY LIMITED";
     /** B2 on an English document — must fit before the badge image; see #writeEnglishHeaderLabels. */
@@ -114,10 +114,9 @@ public class QuotationRenderer {
     private static final String EN_COL_NET_PRICE = "Net price";
     private static final String EN_COL_AMOUNT_PREFIX = "Amount";
     private static final String EN_LABEL_REF = "Ref.";
-    // ⚠️ ASK-THE-OWNER: QN6900902-6 prints "D.Co." here and QN6900933 prints "D.Name" — the same
-    // slot, two labels. "D.Co." is used because it appears on the more recent of the two samples
-    // and is the closer reading of หน่วยงาน (the company/unit the enquiry came through). Flagged
-    // in the PR; changing it is this one constant.
+    // ⚠️ ASK-THE-OWNER: QN6900902-6 prints "D.Co." here and QN6900933 prints "D.Name" — the same slot, two labels.
+    // "D.Co." is used because it appears on the more recent of the two samples and is the closer reading of
+    // หน่วยงาน (the company/unit the enquiry came through).
     private static final String EN_LABEL_UNIT_CODE = "D.Co.";
     private static final String EN_LABEL_DATE = "Date";
     private static final String EN_LABEL_ATTN = "Attn :";
@@ -139,30 +138,24 @@ public class QuotationRenderer {
     private static final String TH_FORM_TAG = "F-SM-002 (03)";
     private static final String EN_FORM_TAG = "F-SM-008 (01)";
 
-    // Template layout per document-generation-fix.md §A2-A3
-    // The template's item zone is 0-based rows 9–20; the first item row (A10) starts the table.
+    // Template layout per document-generation-fix.md §A2-A3 The template's item zone is 0-based rows 9–20; the
+    // first item row (A10) starts the table.
     private static final int ITEM_START_ROW = 9; // 0-based (= row 10 in 1-based)
     private static final int TITLE_ROW = 6;      // 0-based: ลำดับ … เป็นเงิน (บาท), last of the repeated rows A1:I7
 
-    // Flow layout: pack rows one per emitted item-row from ITEM_START_ROW and relocate the footer
-    // block (notes/totals/signature) to sit right after the last emitted row, so any row count
-    // paginates cleanly (Excel-like: fit columns to one page wide, paginate down, letterhead
-    // repeated). Row 12 is a fully-bordered item row whose cell styles are cloned into rows past
-    // the template's original item zone.
+    // Flow layout: pack rows one per emitted item-row from ITEM_START_ROW and relocate the footer block
+    // (notes/totals/signature) to sit right after the last emitted row, so any row count paginates cleanly
+    // (Excel-like: fit columns to one page wide, paginate down, letterhead repeated).
     private static final int ITEM_STYLE_PROTO_ROW = 12;
-    private static final int FOOTER_START = 22; // 0-based: หมายเหตุ … totals … signature … F-SM-002
-    // H3: every row constant from 28 (0-based) onward is +1 versus the RAW template, because
-    // #insertLine3ContinuationRow permanently shifts every such row down by one at the START of
-    // every render — see that method's Javadoc for why (line 3 had no continuation row and wrapped
-    // into the border below it). These constants describe the layout AFTER that shift, not the
-    // template file's own raw row numbers.
+    private static final int FOOTER_START = 22; // 0-based: หมายเหตุ … totals … signature … F-SM-002 H3: every row constant from 28 onward is +1 versus the RAW
+    // template, because #insertLine3ContinuationRow permanently shifts every such row down by one at the START of
+    // every render — see that method's Javadoc for why.
     private static final int FOOTER_END   = 47;
     private static final int SUBTOTAL_ROW = 38; // I39
     private static final int VAT_ROW      = 39; // I40
     private static final int TOTAL_ROW    = 40; // I41
-    private static final int SALESPERSON_FORMULA_ROW = 45; // A46 lookup formula → blanked; also
-                                                             // the "(name)" row under the signature
-                                                             // labels once blanked (see writeSignatureBlock)
+    private static final int SALESPERSON_FORMULA_ROW = 45; // A46 lookup formula → blanked; also the "(name)" row under the signature labels once blanked (see
+    // writeSignatureBlock)
     private static final int LABELS_ROW = 44;               // A45 "ผู้พิมพ์___...ผู้สั่งซื้อ___" (all four in ONE cell)
     // Signature block rows: the "ตกลงสั่งซื้อ…" line sits one row above the labels, the "วันที่…"
     // line one row below the names (LABELS_ROW and SALESPERSON_FORMULA_ROW).
@@ -197,32 +190,17 @@ public class QuotationRenderer {
     private static final int PROJECT_ROW = 7;       // B8
     private static final int LABEL_VALUE_COL = 1;   // column B
 
-    // Remark rows (H3: post-shift numbering — see #FOOTER_END's comment). Originally lines
-    // 1/2/4/5/6 each spanned a "head" row (the numbered sentence) plus a "continuation" row
-    // (unnumbered, wraps onto the next line); lines 3/7/8 got only a single row. Line 3 is
-    // DYNAMIC (composed lead-time groups, docs/sales/quotation-v2-plan.md's "Printed lines" §3) and routinely
-    // needs more than one row's worth of text — with no continuation row of its own, its overflow
-    // wrapped straight into the border of the row below (line 4's head row), which is exactly what
-    // the reviewer's reference render showed. #insertLine3ContinuationRow gives it one, matching
-    // every other multi-row line, by permanently inserting a row after (old) row 27 and shifting
-    // everything from (old) row 28 down by one for the rest of THIS render.
+    // Remark rows (H3: post-shift numbering — see #FOOTER_END's comment). Originally lines 1/2/4/5/6 each spanned
+    // a "head" row (the numbered sentence) plus a "continuation" row (unnumbered, wraps onto the next line); lines
+    // 3/7/8 got only a single row.
     private static final int[] REMARK_HEAD_ROWS = {23, 25, 27, 29, 31, 33, 35, 36};
     private static final Map<Integer, Integer> REMARK_CONTINUATION_ROWS = Map.of(
         0, 24, 1, 26, 2, 28, 3, 30, 4, 32, 5, 34
     );
 
-    // layout-spec §3 (v2/full-remarks render only): each of the 8 remark lines is ONE merged B..I
-    // cell and NEVER wraps — it no longer needs a continuation row, and column B..I is roughly 8x
-    // wider than column B alone, so a wrapped remark sentence fits on one row at this width in
-    // every observed fixture. Packing all 8 lines onto 8 CONSECUTIVE rows starting at
-    // REMARK_HEAD_ROWS[0] frees the template's original head+continuation rows 31..37 (6 unused
-    // continuation rows for lines 5-6-7-8's slots plus the always-blank trailing row 37 — see
-    // #compactRemarksSection's own Javadoc) — those must be physically removed, not just left
-    // blank, or "no blank rows"/"box closes directly under the last remark line" (layout-spec §3)
-    // is violated. #compactRemarksSection removes them with one shiftRows call; every row constant
-    // at or past REMARK_V2_COMPACT_FIRST_UNUSED must add REMARK_V2_COMPACT_SHIFT for the rest of a
-    // v2/full render (mirrors how #insertLine3ContinuationRow's own shift is baked into FOOTER_END
-    // etc. already — see that field's comment).
+    // layout-spec §3 (v2/full-remarks render only): each of the 8 remark lines is ONE merged B..I cell and NEVER
+    // wraps — it no longer needs a continuation row, and column B..I is roughly 8x wider than column B alone, so a
+    // wrapped remark sentence fits on one row at this width in every observed fixture.
     private static final int REMARK_V2_COMPACT_FIRST_UNUSED =
         REMARK_HEAD_ROWS[0] + REMARK_HEAD_ROWS.length; // 31 — first row past the 8 packed lines
     private static final int REMARK_V2_COMPACT_LAST_UNUSED =
@@ -269,8 +247,8 @@ public class QuotationRenderer {
     // The floor leaves headroom below ≈0.60 while still paginating a genuinely long quote — a
     // 12-item render computes ≈0.40, comfortably under this floor either way.
     private static final double MIN_SCALE = 0.55;
-    // Money-column sizing: padding chars + width units per char, calibrated so an 8-figure baht total
-    // never clips to "###" in the totals column's larger bold font.
+    // Money-column sizing: padding chars + width units per char, calibrated so an 8-figure baht total never clips
+    // to "###" in the totals column's larger bold font.
     private static final int MONEY_PAD_CHARS = 1;
     private static final int MONEY_UNITS_PER_CHAR = 300;
 
@@ -285,10 +263,9 @@ public class QuotationRenderer {
         return toXls(ticket, quotation, customer);
     }
 
-    // PDF is the XLS template converted to PDF by LibreOffice (soffice --headless).
-    // This ensures the PDF is pixel-identical to the XLS output.
-    // Requires LibreOffice: brew install --cask libreoffice  (macOS)
-    //                       apt-get install -y libreoffice-calc  (Ubuntu/Docker)
+    // PDF is the XLS template converted to PDF by LibreOffice (soffice --headless). This ensures the PDF is
+    // pixel-identical to the XLS output. Requires LibreOffice: brew install --cask libreoffice (macOS) apt-get
+    // install -y libreoffice-calc (Ubuntu/Docker)
     public byte[] toPdf(TicketDto ticket, QuotationDto quotation, CustomerDto customer) {
         return LibreOfficePdfConverter.convert(toXls(ticket, quotation, customer));
     }
@@ -351,21 +328,16 @@ public class QuotationRenderer {
             Sheet sh = wb.getSheet("Update");
             if (sh == null) sh = wb.getSheetAt(0);
 
-            // H3: must run BEFORE anything below touches a row ≥ 28 (0-based) — every such row
-            // constant on this class already assumes this shift happened (see FOOTER_END's own
-            // comment).
+            // must run BEFORE anything below touches a row ≥ 28 (0-based) — every such row constant on this class already
+            // assumes this shift happened (see FOOTER_END's own comment).
             insertLine3ContinuationRow(sh);
 
-            // layout-spec §3: v2/full-remarks compaction (see REMARK_V2_COMPACT_SHIFT's own
-            // Javadoc) — must also run before anything touches a row ≥ REMARK_V2_COMPACT_FIRST_UNUSED.
-            // footerShift folds into every footer-block row constant used below, exactly like
-            // insertLine3ContinuationRow's shift already folds into FOOTER_END etc.
+            // layout-spec §3: v2/full-remarks compaction (see REMARK_V2_COMPACT_SHIFT's own Javadoc) — must also run
+            // before anything touches a row ≥ REMARK_V2_COMPACT_FIRST_UNUSED.
             int remarkLineCount = model.remarkLines() != null ? model.remarkLines().size() : 0;
-            // V182: model.forceCompactRemarks() (set only by DealQuotationRenderAdapter, for its new
-            // 3/4-line non-tile remark set — see that field's own Javadoc) supersedes the size check
-            // rather than duplicating it, so a short remark list still gets the packed/compacted
-            // layout instead of falling through to the legacy head-row-plus-gaps path, whose "unused"
-            // rows still carry the template's own baked tile-oriented text.
+            // V182: model.forceCompactRemarks supersedes the size check rather than duplicating it, so a short remark list
+            // still gets the packed/compacted layout instead of falling through to the legacy head-row-plus-gaps path,
+            // whose "unused" rows still carry the template's own baked tile-oriented text.
             boolean v2CompactRemarks = model.signatureLabelsV2()
                 && (remarkLineCount >= REMARK_V2_MIN_LINES || model.forceCompactRemarks());
             // A 7-line render (the lead-time line dropped) removes ONE
@@ -375,10 +347,9 @@ public class QuotationRenderer {
                 compactRemarksSection(sh, remarkLineCount);
             }
 
-            // Title cell H1 (row 0, col 7) — "ใบเสนอราคา" carries ~25 leading spaces to
-            // position it in Excel. LibreOffice's wider substitute font pushes the trailing
-            // sara-aa (า) past the print-area right edge (col I), clipping it. Re-anchor
-            // with fewer leading spaces so it stays right-aligned but fits within the page.
+            // Title cell H1 (row 0, col 7) — "ใบเสนอราคา" carries ~25 leading spaces to position it in Excel.
+            // LibreOffice's wider substitute font pushes the trailing sara-aa (า) past the print-area right edge (col I),
+            // clipping it.
             boolean english = model.isEnglish();
             String currency = model.currencyCode();
 
@@ -389,18 +360,13 @@ public class QuotationRenderer {
                 setStr(sh, 0, 7, "        " + titleCell.getStringCellValue().strip());
             }
             if (english) {
-                // The company block, the right-hand labels and the 8 column headings. Kept in one
-                // method so every English-only overwrite of a TEMPLATE-OWNED cell is in one place
-                // and a reviewer can see the whole list at once. The "***" under the title is
-                // already in the template at I2 and is common to both forms, so nothing writes it.
+                // The company block, the right-hand labels and the 8 column headings. Kept in one method so every English-only
+                // overwrite of a TEMPLATE-OWNED cell is in one place and a reviewer can see the whole list at once.
                 writeEnglishHeaderLabels(sh);
                 writeEnglishColumnTitles(sh, currency);
             }
 
-            // ⚠️ B4 — the single easiest thing to get wrong on this form. The Thai document prints
-            // "30 กรกฎาคม 2569" (Buddhist era); the English one prints "September 8, 2026" — an
-            // English month NAME and a COMMON-era year. #englishDate and #thaiDate sit next to each
-            // other at the bottom of this class for exactly that reason.
+            // ⚠️ B4 — the single easiest thing to get wrong on this form.
             setStr(sh, 3, 1, english ? englishDate(model.issueDate()) : thaiDate(model.issueDate()));
             // I3 was ฝ่าย / Dept. — never printed (see DEPT_VALUE_ROW). Written as the
             // empty string, which is what a blank deptCode produces; model.deptCode() is
@@ -477,8 +443,8 @@ public class QuotationRenderer {
                 }
             }
 
-            // One-off template data fix, independent of the caller: strip the stray "+B27:B29"
-            // cell reference the template author left in B27's (line 2's continuation) text.
+            // One-off template data fix, independent of the caller: strip the stray "+B27:B29" cell reference the template
+            // author left in B27's (line 2's continuation) text.
             stripStrayCellReference(sh);
             writeRemarks(sh, model.remarkLines(), v2CompactRemarks);
 
@@ -499,8 +465,8 @@ public class QuotationRenderer {
                 ? BigDecimal.ZERO
                 : subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
 
-            // ① Size the money columns to the actual numbers so nothing ever clips to "###",
-            //    whatever the magnitude. Must run before the width scale below is measured.
+            // ① Size the money columns to the actual numbers so nothing ever clips to "###", whatever the magnitude. Must
+            // run before the width scale below is measured.
             sizeMoneyColumns(sh, items, subtotal.add(vat));
             // A revision suffix ("QT-2026-0034-1") would be
             // clipped off เลขที่อ้างอิง / Ref. at I4 -- #sizeMoneyColumns above sizes column I only
@@ -512,8 +478,8 @@ public class QuotationRenderer {
             // the same reason #sizeMoneyColumns must.
             fitColumnToText(sh, NUMBER_VALUE_ROW, VALUE_COL, model.number());
 
-            // Consistent page margins (corner padding) on every layout and every page — set before
-            // the scale math below so the width/height equations account for them.
+            // Consistent page margins (corner padding) on every layout and every page — set before the scale math below so
+            // the width/height equations account for them.
             applyMargins(sh);
 
             boolean alwaysShowSeq = model.signatureLabelsV2();
@@ -523,13 +489,7 @@ public class QuotationRenderer {
             List<ItemLayout> layouts = layoutItems(sh, items, alwaysShowSeq);
             int emittedRows = countEmittedRows(items, layouts);
 
-            // Pick the layout from the real geometry rather than hardcoded row counts:
-            //   contentH = letterhead + emittedRows·rowHeight + footer   (all measured from the template)
-            //   onePageScale = min(widthScale, printableHeight / contentH)
-            // ② ≤ native row budget  → footer anchored at its native rows (fills one page like Excel).
-            // ③ still fits one page at a readable scale (≥ MIN_SCALE) → shrink the whole quote to one
-            //    page instead of stranding a near-empty second page.
-            // ④ otherwise            → paginate at natural scale.
+            // Choose single-page or paginated layout from measured content height, keeping the minimum readable scale.
             int footerEnd = FOOTER_END + footerShift;
             int delta;
             if (emittedRows <= NATIVE_ITEM_CAPACITY) {
@@ -604,26 +564,9 @@ public class QuotationRenderer {
         return toXls(model);
     }
 
-    /**
-     * The direct-deal path's PDF ({@code DealQuotationService} is the only caller). Which engine
-     * prints it is {@code app.quotation.pdf-renderer}:
-     * <ul>
-     *   <li>{@code xls} (default) — the POI template converted by {@link LibreOfficePdfConverter},
-     *       exactly as before;</li>
-     *   <li>{@code chromium} — the SAME POI sheet this method just rendered, drawn as HTML by
-     *       {@link th.co.glr.hr.common.sheet.SheetHtmlRenderer} and printed by headless Chromium
-     *       ({@link th.co.glr.hr.common.ChromiumPdfPrinter}). Fails loudly with 503 when no
-     *       Chromium can be launched — never a silent fallback to the other engine.</li>
-     * </ul>
-     * Both engines consume one row plan: the workbook. See {@code QuotationHtmlDocument} and
-     * {@code HtmlXlsFidelityTest} for the pixel/rule-level proof that the two renders agree.
-     *
-     * <p>Whichever engine produced the PDF, {@link #appendTermsAndConditionsPage} appends the
-     * company's terms & conditions form as the document's final page(s) before returning — the
-     * SAME page regardless of {@code model.documentLanguage()}. This is the only PDF path that
-     * gets it: {@link #toXls}/{@link #toXlsx} and the legacy {@code toPdf(TicketDto, QuotationDto,
-     * CustomerDto)} overload are unaffected.
-     */
+    /** The direct-deal path's PDF (DealQuotationService is the only caller). Fails loudly with 503 when no Chromium
+     * can be launched — never a silent fallback to the other engine. Both engines consume one row plan: the
+     * workbook. */
     public byte[] toPdf(QuotationRenderModel model) {
         byte[] xls = toXls(model);
         byte[] pdf;
@@ -643,9 +586,9 @@ public class QuotationRenderer {
 
     // ── terms & conditions page ───────────────────────────────────────────────────────────────
 
-    /** Classpath location of the company's terms & conditions form — see the class Javadoc's
-     * "Terms & conditions page" note. Package-private so the test can assert its own page count
-     * against the real resource rather than hardcoding one. */
+    /** Classpath location of the company's terms & conditions form — see the class Javadoc's "Terms & conditions
+     * page" note. Package-private so the test can assert its own page count against the real resource rather than
+     * hardcoding one. */
     static final String TERMS_AND_CONDITIONS_FORM = "forms/quotation_terms_and_conditions.pdf";
 
     private static byte[] termsAndConditionsBytes() throws IOException {
@@ -654,11 +597,8 @@ public class QuotationRenderer {
         }
     }
 
-    /**
-     * Appends the terms & conditions form onto {@code basePdf} via {@link #appendPdf}, wrapping
-     * any {@link IOException} to match this class's existing error style (see {@link #toXls}'s
-     * own catch block a few lines above).
-     */
+    /** Appends the terms & conditions form onto basePdf via #appendPdf, wrapping any IOException to match this
+     * class's existing error style (see #toXls's own catch block a few lines above). */
     private byte[] appendTermsAndConditionsPage(byte[] basePdf) {
         try {
             return appendPdf(basePdf, termsAndConditionsBytes());
@@ -667,13 +607,9 @@ public class QuotationRenderer {
         }
     }
 
-    /**
-     * Appends every page of {@code extraPdf} onto {@code basePdf} (in that order) and returns the
-     * combined bytes. Package-private test seam: {@code QuotationRendererTest} calls this
-     * directly with a minimal in-memory PDFBox document as {@code basePdf} so the merge itself can
-     * be asserted without LibreOffice or Chromium in the loop. Not hardcoded to the terms
-     * resource — {@link #appendTermsAndConditionsPage} is the one caller that supplies it.
-     */
+    /** Appends every page of extraPdf onto basePdf (in that order) and returns the combined bytes. Package-private
+     * test seam: QuotationRendererTest calls this directly with a minimal in-memory PDFBox document as basePdf so
+     * the merge itself can be asserted without LibreOffice or Chromium in the loop. */
     static byte[] appendPdf(byte[] basePdf, byte[] extraPdf) throws IOException {
         try (PDDocument base = Loader.loadPDF(basePdf);
              PDDocument extra = Loader.loadPDF(extraPdf)) {
@@ -694,9 +630,8 @@ public class QuotationRenderer {
     public static final String PDF_RENDERER_XLS = "xls";
     public static final String PDF_RENDERER_CHROMIUM = "chromium";
 
-    // app.quotation.pdf-renderer — see application.yml. A field initialiser rather than a
-    // constructor argument so `new QuotationRenderer()` (tests, hand-wired services) keeps the
-    // long-standing LibreOffice engine.
+    // app.quotation.pdf-renderer — see application.yml. A field initialiser rather than a constructor argument so
+    // `new QuotationRenderer()` (tests, hand-wired services) keeps the long-standing LibreOffice engine.
     @org.springframework.beans.factory.annotation.Value("${app.quotation.pdf-renderer:xls}")
     private String pdfRenderer = PDF_RENDERER_XLS;
 
@@ -710,28 +645,23 @@ public class QuotationRenderer {
 
     // ── layout ──────────────────────────────────────────────────────────────────
 
-    /**
-     * ≤ {@link #NATIVE_ITEM_CAPACITY} emitted rows: fill from the top, one row each, and leave the
-     * footer block (notes/totals/signature) at its native template rows so it sits anchored near the
-     * page bottom — filling the page exactly like the Excel template's "Save as PDF".
-     */
+    /** ≤ #NATIVE_ITEM_CAPACITY emitted rows: fill from the top, one row each, and leave the footer block
+     * (notes/totals/signature) at its native template rows so it sits anchored near the page bottom — filling the
+     * page exactly like the Excel template's "Save as PDF". */
     private void renderSinglePage(Sheet sh, List<RenderItem> items, List<ItemLayout> layouts, BigDecimal subtotal,
                                    boolean alwaysShowSeq,
                                    int footerShift, boolean englishForm) {
         int emitted = fillItems(sh, items, layouts, alwaysShowSeq);
-        // Blank the template item-zone rows the items didn't reach: the pre-seeded "2."/"แผ่น"/"Net"
-        // placeholder at row 12 and the per-row H/I formulas through row 21 would otherwise show as
-        // phantom lines below the last real item. Content only — the footer stays put.
+        // Blank the template item-zone rows the items didn't reach: the pre-seeded "2."/"แผ่น"/"Net" placeholder at
+        // row 12 and the per-row H/I formulas through row 21 would otherwise show as phantom lines below the last real
+        // item. Content only — the footer stays put.
         for (int r = ITEM_START_ROW + emitted; r < FOOTER_START; r++) {
             for (int c = 0; c <= 8; c++) clearCell(sh, r, c);
         }
         setNum(sh, SUBTOTAL_ROW + footerShift, 8, subtotal.doubleValue()); // I38; I39/I40 are template formulas
         shrinkToFitIfOverflow(sh, SUBTOTAL_ROW + footerShift, 8, moneyPreview(subtotal));
-        // I39/I40 stay Excel FORMULAS here (untouched) — LibreOffice computes their displayed
-        // value at PDF-conversion time (wb.setForceFormulaRecalculation(true)), so Java never
-        // holds a literal double for them on this branch. Reproduce the same VAT_RATE arithmetic
-        // purely to PREDICT the formula's displayed width; the formula cell itself is untouched —
-        // #shrinkToFitIfOverflow only ever swaps the CellStyle, never the cell's formula/value.
+        // I39/I40 stay Excel FORMULAS here (untouched) — LibreOffice computes their displayed value at PDF-conversion
+        // time (wb.setForceFormulaRecalculation(true)), so Java never holds a literal double for them on this branch.
         BigDecimal vatPreview = englishForm
             ? BigDecimal.ZERO
             : subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
@@ -742,17 +672,9 @@ public class QuotationRenderer {
         fitToOnePage(sh);
     }
 
-    /**
-     * Fill items (one row per description line, plus optional heading rows), relocating the
-     * footer block (notes/totals/signature) to sit immediately below the last emitted row, and
-     * write the totals as computed values at the moved rows. Returns the row offset (delta) the
-     * footer was shifted by. The footer must be captured and CLEARED before filling — an emitted
-     * row count beyond the native zone would otherwise be overwritten by leftover footer content.
-     * {@code footerShift} folds in the v2/full-remarks compaction (see
-     * {@link #REMARK_V2_COMPACT_SHIFT}) — by the time this runs the sheet's OWN rows have already
-     * been physically compacted, so the footer's captured range must end at {@code FOOTER_END +
-     * footerShift}, not the raw template constant.
-     */
+    /** Fill items (one row per description line, plus optional heading rows), relocating the footer block
+     * (notes/totals/signature) to sit immediately below the last emitted row, and write the totals as computed
+     * values at the moved rows. */
     private int layoutFlowing(Sheet sh, List<RenderItem> items, List<ItemLayout> layouts, BigDecimal subtotal,
                                boolean alwaysShowSeq,
                                int footerShift, boolean englishForm) {
@@ -769,11 +691,8 @@ public class QuotationRenderer {
         applyHeights(sh, heights, FOOTER_START + delta);
         for (int[] m : merges) sh.addMergedRegion(new CellRangeAddress(m[0] + delta, m[1] + delta, m[2], m[3]));
 
-        // v3b: ZERO on an English document. Like toXls's own copy of this expression, it is NOT
-        // what removes the VAT row — #applyEnglishTotals clears these rows outright a moment later
-        // — so a mutation here is invisible to the tests. It is written anyway so that the value
-        // briefly held in this cell is never a rate the document does not charge, which is what
-        // the next edit to this method would otherwise inherit.
+        // v3b: ZERO on an English document. It is written anyway so that the value briefly held in this cell is never
+        // a rate the document does not charge, which is what the next edit to this method would otherwise inherit.
         BigDecimal vat = englishForm
             ? BigDecimal.ZERO
             : subtotal.multiply(VAT_RATE).setScale(2, RoundingMode.HALF_UP);
@@ -788,15 +707,8 @@ public class QuotationRenderer {
         return delta;
     }
 
-    // layout-spec §1: the table body is ONE box with only vertical column rules — no horizontal
-    // rule under any item/description/heading/remark row. The ONLY horizontal rules are under the
-    // column-title row (row 6, template-native), at the bottom of the whole box just above
-    // รวมเป็นเงิน (legacy path: the template's own closing row, which travels with the footer block
-    // on #layoutFlowing's relocation — see #placeBlock; v2 path: remark line 8, see
-    // #compactRemarksSection), and at the bottom of every paginated page fragment (see
-    // #insertNoSplitPageBreaks). So this method must NOT stripe every row in [firstRow, lastRow]
-    // with a border (that painted the "grid under every row" the reviewer rejected) — it borders
-    // ONLY {@code lastRow}, across A..I, exactly as the caller's own name promises.
+    // layout-spec §1: the table body is ONE box with only vertical column rules — no horizontal rule under any
+    // item/description/heading/remark row.
     private void closeItemTableBorders(Sheet sh, int firstRow, int lastRow) {
         Workbook wb = sh.getWorkbook();
         Map<Short, CellStyle> cache = new HashMap<>();
@@ -819,13 +731,9 @@ public class QuotationRenderer {
 
     // ── item rows (heading + description lines) ──────────────────────────────────
 
-    /**
-     * Writes every item's rows from {@link #ITEM_START_ROW} — an optional underlined heading row
-     * (only when {@code headingLabel} is non-null and differs from the previous item's raw
-     * label), then one row per description line (qty/unit/price/discount/net/amount on the first
-     * row only). Rows past the template's native zone (row 20) get the item-row style cloned from
-     * {@link #ITEM_STYLE_PROTO_ROW}. Returns the total number of rows emitted.
-     */
+    /** Writes every item's rows from #ITEM_START_ROW — an optional underlined heading row (only when headingLabel
+     * is non-null and differs from the previous item's raw label), then one row per description line
+     * (qty/unit/price/discount/net/amount on the first row only). */
     private int fillItems(Sheet sh, List<RenderItem> items, List<ItemLayout> layouts, boolean alwaysShowSeq) {
         Row proto = sh.getRow(ITEM_STYLE_PROTO_ROW);
         boolean showSeq = alwaysShowSeq || items.size() > 1;
@@ -833,8 +741,8 @@ public class QuotationRenderer {
         int seq = 0;
         String prevLabel = null;
         boolean prevSet = false;
-        // H1: local to this render call — see #underlinedStyle's Javadoc for why this can never
-        // again be a field on this @Component singleton.
+        // local to this render call — see #underlinedStyle's Javadoc for why this can never again be a field on this
+        // @Component singleton.
         Map<Short, CellStyle> underlineCache = new HashMap<>();
         // Per render call, like underlineCache (this class is a Spring singleton — see H1 below).
         Map<String, CellStyle> qtyFormatCache = new HashMap<>();
@@ -850,11 +758,8 @@ public class QuotationRenderer {
             prevLabel = item.headingLabel();
             prevSet = true;
 
-            // layout-spec §2: every printed line must stay INSIDE column B — wrap width-aware
-            // (alwaysShowSeq is true only for the v2/direct-deal path; legacy items keep the
-            // template's own wrap-text-cell/tall-row behaviour on their single description line,
-            // never this multi-row emission — see the class Javadoc's "stays content-equivalent").
-            // The wrap itself was decided in #layoutItems (narrower beside a BESIDE thumbnail).
+            // layout-spec §2: every printed line must stay INSIDE column B — wrap width-aware. The wrap itself was decided
+            // in #layoutItems (narrower beside a BESIDE thumbnail).
             List<String> physicalLines = layout.lines();
 
             int firstRow = r;
@@ -879,8 +784,8 @@ public class QuotationRenderer {
                 ensureRowStyle(sh, r, proto);
                 fillContinuationRow(sh, r, "");
                 if (below) {
-                    // Exactly the item-row height #layoutItems counted in — a native template row
-                    // here can be 23.25pt, and the page arithmetic assumes the prototype's.
+                    // Exactly the item-row height #layoutItems counted in — a native template row here can be 23.25pt, and the
+                    // page arithmetic assumes the prototype's.
                     Row pictureRow = sh.getRow(r);
                     pictureRow.setHeightInPoints((float) itemRowHeight(sh));
                 }
@@ -893,11 +798,8 @@ public class QuotationRenderer {
         return r - ITEM_START_ROW;
     }
 
-    /** Pure count of {@link #fillItems}'s row output, with NO sheet side effects — needed to pick
-     * the layout branch (which decides whether the footer must move) before any row is written.
-     * Must stay in exact lockstep with {@link #fillItems}'s own row math, including the v2
-     * width-aware wrap — a mismatch here picks the wrong layout branch for the row count that
-     * actually gets written. */
+    /** Pure count of #fillItems's row output, with NO sheet side effects — needed to pick the layout branch (which
+     * decides whether the footer must move) before any row is written. */
     private int countEmittedRows(List<RenderItem> items, List<ItemLayout> layouts) {
         int rows = 0;
         String prevLabel = null;
@@ -912,10 +814,9 @@ public class QuotationRenderer {
         return rows;
     }
 
-    // Width-aware wrap budget for an item's printed lines (description/size/calculation), at
-    // column B's own width and the item row's font — the SAME column {@link #REMARK_LINE_CHAR_BUDGET}
-    // already calibrates for, so it reuses that value rather than a second magic number: item rows
-    // and remark rows are the same font size in the template (see both rows' captured heights).
+    // Width-aware wrap budget for an item's printed lines, at column B's own width and the item row's font — the
+    // SAME column #REMARK_LINE_CHAR_BUDGET already calibrates for, so it reuses that value rather than a second
+    // magic number: item rows and remark rows are the same font size in the template.
     private List<String> wrapDescriptionLines(List<String> lines) {
         return wrapDescriptionLines(lines, REMARK_LINE_CHAR_BUDGET);
     }
@@ -1054,11 +955,8 @@ public class QuotationRenderer {
         // the registered account name on her bank block ("G.L.& R. Taps and Tiles Co., Ltd.")
         // agrees with her form in substance, so there is no legal-name reason to differ from it.
         setStr(sh, 0, 1, "                          " + EN_COMPANY_NAME);
-        // Her own address wording, which is shorter than the transliteration this replaced and so
-        // FITS before the URS/UKAS badge. The old line ("201 Soi Sukhumvit 63, Sukhumvit Rd.,
-        // Khlong Tan Nuea, Watthana, Bangkok 10110") ran under the badge image and printed as
-        // "…Bangkok 101" — the postcode was clipped on every English quotation. Spelled
-        // "Sukhumvit", the road's standard romanization, where her form has "Sukumvit".
+        // Her own address wording, which is shorter than the transliteration this replaced and so FITS before the
+        // URS/UKAS badge. Spelled "Sukhumvit", the road's standard romanization, where her form has "Sukumvit".
         setStr(sh, 1, 1, "                           " + EN_COMPANY_ADDRESS);
         setStr(sh, 2, 1, "                            Tel. +662 711 5995    e-mail : info@glr.co.th"
             + "    Line:@glr_tiles");
@@ -1068,20 +966,15 @@ public class QuotationRenderer {
         setStr(sh, 3, 0, EN_LABEL_DATE);                                  // A4  วันที่       -> Date
         setStr(sh, ATTN_ROW, 0, EN_LABEL_ATTN);                           // A5  เรียน       -> Attn :
 
-        // B23 "หมายเหตุ" — the remark box's own label. Written HERE, before #layoutFlowing captures
-        // and relocates the footer block, so it travels with that block on a multi-page document
-        // exactly like the eight remark lines under it do.
+        // B23 "หมายเหตุ" — the remark box's own label. Written HERE, before #layoutFlowing captures and relocates the
+        // footer block, so it travels with that block on a multi-page document exactly like the eight remark lines
+        // under it do.
         setStr(sh, FOOTER_START, LABEL_VALUE_COL, EN_REMARKS_LABEL);
     }
 
-    /**
-     * The 8 column headings on {@link #TITLE_ROW}. Column B carries NO heading in the Thai template
-     * (its รายละเอียด column is labelled only by the box itself) — the English form labels it
-     * "Description &amp; Conditions", so this WRITES a cell the Thai path leaves empty. F and G are
-     * one merged pair in the template, so the ส่วนลด heading is written at F.
-     *
-     * <p>The เป็นเงิน heading carries the currency: "Amount (USD)".
-     */
+    /** The 8 column headings on #TITLE_ROW. Column B carries NO heading in the Thai template (its รายละเอียด column
+     * is labelled only by the box itself) — the English form labels it "Description & Conditions", so this WRITES
+     * a cell the Thai path leaves empty. */
     private void writeEnglishColumnTitles(Sheet sh, String currency) {
         setStr(sh, TITLE_ROW, 0, EN_COL_ITEMS);                     // A ลำดับ
         setStr(sh, TITLE_ROW, 1, EN_COL_DESCRIPTION);               // B (blank in the Thai form)
@@ -1093,22 +986,9 @@ public class QuotationRenderer {
         setStr(sh, TITLE_ROW, 8, EN_COL_AMOUNT_PREFIX + " (" + currency + ")"); // I เป็นเงิน (บาท)
     }
 
-    /**
-     * The English footer's totals: <b>Grand Total ({currency}) and NOTHING else.</b> The Thai form
-     * prints three rows — รวมเป็นเงิน / ภาษีมูลค่าเพิ่ม 7% / รวมเป็นเงินทั้งสิ้น; her English samples
-     * print ONE, with no subtotal row and <b>no VAT row</b>.
-     *
-     * <p>Runs AFTER {@code renderSinglePage}/{@code layoutFlowing} rather than instead of them, so
-     * the Thai path stays byte-for-byte what it was and this is a clearly-scoped overwrite of three
-     * rows. That ordering also matters for the single-page path specifically: there, I39 and I40
-     * are the TEMPLATE'S OWN FORMULAS (={I38*H39}, ={SUM(I38+I39)}), and clearing I38/H39 without
-     * replacing I40 with a literal would leave the grand total computing off blanked cells. Every
-     * cell below is therefore explicitly written or explicitly cleared.
-     *
-     * <p>The label is written across a merged E..H range: "Grand Total (USD)" is far longer than
-     * "รวมเป็นเงินทั้งสิ้น" and column H alone clips it. E..H is free on this row (the template's own
-     * merge on the VAT row is E..G, one row above, and is cleared here anyway).
-     */
+    /** The English footer's totals: Grand Total ({currency}) and NOTHING else. The Thai form prints three rows —
+     * รวมเป็นเงิน / ภาษีมูลค่าเพิ่ม 7% / รวมเป็นเงินทั้งสิ้น; her English samples print ONE, with no subtotal row
+     * and no VAT row. */
     private void applyEnglishTotals(Sheet sh, int shift, BigDecimal subtotal, String currency) {
         int subtotalRow = SUBTOTAL_ROW + shift;
         int vatRow = VAT_ROW + shift;
@@ -1117,17 +997,14 @@ public class QuotationRenderer {
         // No subtotal row: the label (H38) and its value (I38) both go.
         clearCell(sh, subtotalRow, SALES_LINE_COL);
         clearCell(sh, subtotalRow, VALUE_COL);
-        // No VAT row: the "ภาษีมูลค่าเพิ่ม" label (E39, merged E:G), the 0.07 rate (H39) and the
-        // computed VAT (I39). All three, or a stray "0.07" prints on an English page.
+        // No VAT row: the "ภาษีมูลค่าเพิ่ม" label (E39, merged E:G), the 0.07 rate (H39) and the computed VAT (I39).
+        // All three, or a stray "0.07" prints on an English page.
         for (int c = 4; c <= VALUE_COL; c++) {
             clearCell(sh, vatRow, c);
         }
 
-        // ⚠️ Clear E..H FIRST. The template's own "รวมเป็นเงินทั้งสิ้น" lives at H, and a merged
-        // region does not erase the cells it covers — it only stops Excel DRAWING them. Merging
-        // E..H over the top and writing the English label at E therefore left the Thai string
-        // sitting in H in the emitted file, where SheetHtmlRenderer (the Chromium PDF path, which
-        // walks CELLS) would still find it. Caught by
+        // ⚠️ Clear E..H FIRST. The template's own "รวมเป็นเงินทั้งสิ้น" lives at H, and a merged region does not erase
+        // the cells it covers — it only stops Excel DRAWING them. Caught by
         // DealQuotationEnglishFormTest#totals_leaveNoVatTextAnywhereOnTheEnglishSheet.
         for (int c = 4; c <= SALES_LINE_COL; c++) {
             clearCell(sh, totalRow, c);
@@ -1149,9 +1026,9 @@ public class QuotationRenderer {
         hideRowWithoutBorders(sh, vatRow);
     }
 
-    /** Blanks every cell A..I of {@code rowIdx}, strips all four borders from each (cloning the
-     * cell's style so the shared template style other rows use is untouched), and collapses the
-     * row to zero height. English totals only — see {@link #applyEnglishTotals}. */
+    /** Blanks every cell A..I of rowIdx, strips all four borders from each (cloning the cell's style so the shared
+     * template style other rows use is untouched), and collapses the row to zero height. English totals only — see
+     * #applyEnglishTotals. */
     private void hideRowWithoutBorders(Sheet sh, int rowIdx) {
         Row row = sh.getRow(rowIdx);
         if (row == null) return;
@@ -1207,23 +1084,9 @@ public class QuotationRenderer {
         }
     }
 
-    /**
-     * H3: line 3 (กำหนดส่งมอบสินค้า — a DYNAMIC, composed list of lead-time groups) is the only
-     * remark line among 1/2/3/4/5/6 with no continuation row: lines 1/2/4/5/6 each already got
-     * one in the template's original design, but line 3's "head" row (originally row 27) sits
-     * directly against line 4's head row (originally row 28) with nothing in between. A long
-     * lead-time list therefore wrapped straight into line 4's border — the reviewer's reference
-     * render shows exactly this.
-     *
-     * <p>Inserts ONE blank row after (raw template) row 27 via {@link Sheet#shiftRows}, which
-     * physically relocates every row from 28 onward down by one — the new row 28 is empty (no
-     * style) until this method clones one from an existing continuation row (24) onto it, so it
-     * reads as the same kind of unnumbered wrap row as its siblings. Every row constant on this
-     * class from {@code REMARK_HEAD_ROWS[3]} onward already assumes this shift ran — see
-     * {@link #FOOTER_END}'s comment — so this must run exactly once, before any of them are used,
-     * which {@link #toXls(QuotationRenderModel)} enforces by calling it immediately after opening
-     * the (always-fresh-per-render) workbook.
-     */
+    /** line 3 is the only remark line among 1/2/3/4/5/6 with no continuation row: lines 1/2/4/5/6 each already got
+     * one in the template's original design, but line 3's "head" row sits directly against line 4's head row with
+     * nothing in between. */
     private void insertLine3ContinuationRow(Sheet sh) {
         int lastRow = sh.getLastRowNum();
         sh.shiftRows(28, lastRow, 1);
@@ -1233,23 +1096,8 @@ public class QuotationRenderer {
         }
     }
 
-    /**
-     * Writes each supplied remark line into the template's numbered "head" row (see
-     * {@link #REMARK_HEAD_ROWS}), wrapping into that line's continuation row (if it has one, per
-     * {@link #REMARK_CONTINUATION_ROWS}) whenever the text would run past
-     * {@link #REMARK_LINE_CHAR_BUDGET} at column B..I's width — H3's general fix, not just line
-     * 3's specific one: ANY remark line composed at render time (not just line 3's lead-time
-     * groups) is protected the same way. Only when ALL 8 lines are supplied (the direct-deal path
-     * always sends 8 — see docs/sales/quotation-v2-plan.md) does an UNWRAPPED line also blank its
-     * continuation row — its text fits on one line, so the old composed-sentence-with-baked-in-
-     * continuation-text convention no longer applies. The legacy wrappers send exactly 3 (matching
-     * this renderer's pre-existing behaviour), so their continuation rows are left untouched.
-     *
-     * <p>{@code full} is the SAME {@code v2CompactRemarks} decision {@link #toXls(QuotationRenderModel)}
-     * already computed (size &gt;= {@link #REMARK_V2_MIN_LINES}, OR {@code
-     * QuotationRenderModel#forceCompactRemarks()} — V182) — passed in rather than recomputed here,
-     * so the two can never disagree about which layout a given render actually used.
-     */
+    /** Writes each supplied remark line into the template's numbered "head" row, wrapping into that line's
+     * continuation row whenever the text would run past #REMARK_LINE_CHAR_BUDGET at column B..I's width. */
     private void writeRemarks(Sheet sh, List<String> remarkLines, boolean full) {
         if (remarkLines == null) return;
         if (full) {
@@ -1274,8 +1122,8 @@ public class QuotationRenderer {
             openRemarkBox(sh, FOOTER_START, REMARK_HEAD_ROWS[0] + clampToPackedSlots(remarkLines.size()) - 1);
             return;
         }
-        // Legacy (3 lines): unchanged — template's own head+continuation rows, single column B,
-        // width-aware wrap into the continuation row when a composed line runs long.
+        // Legacy (3 lines): unchanged — template's own head+continuation rows, single column B, width-aware wrap into
+        // the continuation row when a composed line runs long.
         for (int i = 0; i < remarkLines.size() && i < REMARK_HEAD_ROWS.length; i++) {
             String line = remarkLines.get(i);
             Integer continuationRow = REMARK_CONTINUATION_ROWS.get(i);
@@ -1309,10 +1157,9 @@ public class QuotationRenderer {
         return REMARK_V2_COMPACT_SHIFT - (REMARK_HEAD_ROWS.length - n);
     }
 
-    /** Caps a packed remark-line count at {@link #REMARK_HEAD_ROWS}{@code .length} (8) — the
-     * physical number of packed slots the template has. Shared by every row-math call site that
-     * turns a line count into a row offset, so none of them can be driven past the slots that
-     * actually exist. See {@link #remarkV2CompactShift}'s Javadoc for what goes wrong without it. */
+    /** Caps a packed remark-line count at #REMARK_HEAD_ROWS.length (8) — the physical number of packed slots the
+     * template has. Shared by every row-math call site that turns a line count into a row offset, so none of them
+     * can be driven past the slots that actually exist. */
     private static int clampToPackedSlots(int actualLineCount) {
         return Math.min(actualLineCount, REMARK_HEAD_ROWS.length);
     }
@@ -1334,12 +1181,8 @@ public class QuotationRenderer {
      */
     private void compactRemarksSection(Sheet sh, int actualLineCount) {
         int lastRow = sh.getLastRowNum();
-        // The shiftRows START stays fixed at REMARK_V2_COMPACT_LAST_UNUSED + 1 (38) — that is the
-        // first row of REAL content (the totals block) either way. Only the SHIFT MAGNITUDE grows
-        // by one when actualLineCount is 7, which is what erases one extra row (30, the
-        // now-unused 8th packed slot) by overwriting it with content shifted up from below —
-        // exactly the same "widen the removed range at its START" effect, achieved without moving
-        // the startRow argument itself.
+        // The shiftRows START stays fixed at REMARK_V2_COMPACT_LAST_UNUSED + 1 (38) — that is the first row of REAL
+        // content (the totals block) either way.
         sh.shiftRows(REMARK_V2_COMPACT_LAST_UNUSED + 1, lastRow, remarkV2CompactShift(actualLineCount));
         // The removed range's LAST row (template row 37 post-H3 / raw 36) was not merely blank: it
         // was the row that CLOSED the item+remark box — every cell A..I carries the box's bottom
@@ -1355,28 +1198,15 @@ public class QuotationRenderer {
         closeItemTableBorders(sh, REMARK_HEAD_ROWS[0], REMARK_HEAD_ROWS[0] + clampToPackedSlots(actualLineCount) - 1);
     }
 
-    // layout-spec §3 + html-fidelity-spec §8: each remark line is ONE merged B..H cell (see
-    // REMARK_BOX_LAST_COL) — v2 only ({@code full} = all 8 lines supplied); the legacy path's 3
-    // remark lines keep the template's own single-column-B cells untouched (stays
-    // content-equivalent, see the class Javadoc).
+    // layout-spec §3 + html-fidelity-spec §8: each remark line is ONE merged B..H cell (see REMARK_BOX_LAST_COL) —
+    // v2 only (full = all 8 lines supplied); the legacy path's 3 remark lines keep the template's own
+    // single-column-B cells untouched (stays content-equivalent, see the class Javadoc).
     private void mergeRemarkRow(Sheet sh, int row) {
         mergeIfAbsent(sh, row, row, REMARK_BOX_FIRST_COL, REMARK_BOX_LAST_COL);
     }
 
-    /**
-     * html-fidelity-spec §8 — closes the remark box (see {@link #REMARK_BOX_LAST_COL}) over rows
-     * {@code labelRow} ("หมายเหตุ :") .. {@code lastLineRow} (line 8): the label row becomes the
-     * same merged B..H cell as the eight lines under it and carries the box's TOP rule on every
-     * cell B..H (both engines read a merged region's perimeter from the perimeter cells' own
-     * borders — see {@code SheetPlan#borders}); the left (B) and right (H) edges are the
-     * template's own cell borders on every remark row, re-asserted here so a template edit can
-     * never quietly open the box. The covered cells' values (the template's per-row H/I formulas)
-     * are blanked, styles kept: column I stays an open column beside the box, so its cells must
-     * keep their verticals but show nothing. The bottom rule is the form's own A..I closing rule
-     * under line 8 ({@link #compactRemarksSection}), and the box travels with the footer block
-     * ({@link #layoutFlowing} moves merges and styles together), so it lands directly under the
-     * last item line wherever that is.
-     */
+    /** html-fidelity-spec §8 — closes the remark box (see #REMARK_BOX_LAST_COL) over rows labelRow ("หมายเหตุ :")
+     * .. */
     private void openRemarkBox(Sheet sh, int labelRow, int lastLineRow) {
         Map<String, CellStyle> cache = new HashMap<>();
         for (int r = labelRow; r <= lastLineRow; r++) {
@@ -1390,10 +1220,9 @@ public class QuotationRenderer {
 
     private enum Side { TOP, RIGHT, BOTTOM, LEFT }
 
-    /** Gives cells {@code firstCol..lastCol} of {@code row} a THIN border on {@code side}, cloning
-     * the cell's own style (the template's font/alignment/other borders stay). Cells that already
-     * carry it are left alone; {@code cache} (one per render call — never a field, see
-     * {@link #underlinedStyle}) keys the clones by source style + side. */
+    /** Gives cells firstCol..lastCol of row a THIN border on side, cloning the cell's own style (the template's
+     * font/alignment/other borders stay). Cells that already carry it are left alone; cache (one per render call —
+     * never a field, see #underlinedStyle) keys the clones by source style + side. */
     private void addThinBorder(Sheet sh, int row, int firstCol, int lastCol, Side side, Map<String, CellStyle> cache) {
         Workbook wb = sh.getWorkbook();
         for (int c = firstCol; c <= lastCol; c++) {
@@ -1423,17 +1252,9 @@ public class QuotationRenderer {
         }
     }
 
-    /**
-     * H3: a plain greedy word-wrap at whitespace boundaries, so a long remark line (line 3's
-     * composed lead-time groups today; {@code customerNotes} too, if a future caller ever routes
-     * it through a remark-shaped slot — this helper is deliberately not line-3-specific) breaks
-     * into readable chunks instead of clipping mid-word at the column edge. Never splits a single
-     * word, even one longer than {@code maxChars} — an unbroken run that long is not this
-     * helper's problem to solve mid-word. Only the first TWO chunks ever reach the sheet (one
-     * head row + one continuation row — the template has no third slot); a caller supplying text
-     * so long it needs a third row will render two crowded rows and not a clipped one, which is
-     * the same trade-off {@link #REMARK_CONTINUATION_ROWS} already makes for every other line.
-     */
+    /** a plain greedy word-wrap at whitespace boundaries, so a long remark line breaks into readable chunks instead
+     * of clipping mid-word at the column edge. Never splits a single word, even one longer than maxChars — an
+     * unbroken run that long is not this helper's problem to solve mid-word. */
     private List<String> wrapToWidth(String text, int maxChars) {
         List<String> lines = new ArrayList<>();
         StringBuilder current = new StringBuilder();
@@ -1500,10 +1321,9 @@ public class QuotationRenderer {
         return result.isEmpty() ? List.of(line) : result;
     }
 
-    /** The item-path twin of {@link #wrapToWidth} — same plain greedy word-wrap at whitespace,
-     * never splitting a single word, but measured by {@link #visibleLength} rather than
-     * {@code String.length()}. {@link #wrapToWidth} itself stays untouched (byte-identical) for
-     * the legacy remark continuation-row path. */
+    /** The item-path twin of #wrapToWidth — same plain greedy word-wrap at whitespace, never splitting a single
+     * word, but measured by #visibleLength rather than String.length(). #wrapToWidth itself stays untouched
+     * (byte-identical) for the legacy remark continuation-row path. */
     List<String> wrapGreedyByVisibleWidth(String text, int maxVisibleChars) {
         List<String> lines = new ArrayList<>();
         StringBuilder current = new StringBuilder();
@@ -1546,13 +1366,12 @@ public class QuotationRenderer {
     private static final int SIG_APPROVER_INDEX = 2; // ผู้จัดการฝ่ายขาย — where the signature image anchors
     private static final String BLANK_NAME_PLACEHOLDER = "(..........................)";
     private static final String BLANK_DATE_PLACEHOLDER = "วันที่........./........./.........";
-    // Fraction of the A..I row's total pixel width that S1 (labels+underscores) should fill —
-    // matching the template's own original row 44, which ran its four-label string almost but not
-    // quite edge-to-edge.
+    // Fraction of the A..I row's total pixel width that S1 (labels+underscores) should fill — matching the
+    // template's own original row 44, which ran its four-label string almost but not quite edge-to-edge.
     private static final double SIGNATURE_ROW_FILL_FRACTION = 0.95;
-    // ผู้อนุมัติ is slot index SIG_APPROVER_INDEX of SIG_LABELS.length equal-width slots — its centre
-    // sits at (index + 0.5) / count of the way across A..I, i.e. (2.5×W)/(4×W) = 0.625 of the total
-    // width, regardless of the slot's actual pixel width, since all four slots are equal.
+    // ผู้อนุมัติ is slot index SIG_APPROVER_INDEX of SIG_LABELS.length equal-width slots — its centre sits at
+    // (index + 0.5) / count of the way across A..I, i.e. (2.5×W)/(4×W) = 0.625 of the total width, regardless of
+    // the slot's actual pixel width, since all four slots are equal.
     private static final double SIGNATURE_APPROVER_SLOT_CENTER_FRACTION =
         (SIG_APPROVER_INDEX + 0.5) / SIG_LABELS.length;
     // Measured via soffice --convert-to pdf + PDFBox on this exact template/font: AWT's estimate
@@ -1572,27 +1391,21 @@ public class QuotationRenderer {
     // is a property of THIS font/LibreOffice build: recalibrate with the same PDFBox technique if
     // the licensed fonts or LibreOffice version change and the drift reappears.
     private static final double SIGNATURE_SPACE_TO_UNDERSCORE_SCALE = 0.6634 / 0.6528;
-    // AWT's unscaled Graphics2D#getFontRenderContext() measures glyph advances at ~72 DPI (1 unit =
-    // 1/72in), while POI's Sheet#getColumnWidthInPixels — the other pixel figure this class works
-    // in — assumes 96 DPI screen pixels (its own javadoc says so). Scale every AWT measurement up so
-    // both share one space.
+    // AWT's unscaled Graphics2D#getFontRenderContext() measures glyph advances at ~72 DPI (1 unit = 1/72in), while
+    // POI's Sheet#getColumnWidthInPixels — the other pixel figure this class works in — assumes 96 DPI screen
+    // pixels (its own javadoc says so).
     private static final double AWT_FONT_METRICS_TO_96DPI_PIXELS = 96.0 / 72.0;
-    // Thai combining marks (tone marks + vowel signs that stack on the preceding base character) —
-    // used ONLY by the {@link #textUnits} fallback below, for the rare case AWT's own font metrics
-    // throw (e.g. a headless box that can't construct a Graphics2D at all) and this class falls back
-    // to a simpler character-counting estimate instead of real pixel measurement. Ranges: U+0E31
-    // (mai han-akat), U+0E34-U+0E3A (vowel signs I/II/UE/UEE/U/UU + phinthu), U+0E47-U+0E4E (mai
-    // taikhu + the four tone marks + thanthakhat + nikhahit).
+    // Thai combining marks — used ONLY by the #textUnits fallback below, for the rare case AWT's own font metrics
+    // throw and this class falls back to a simpler character-counting estimate instead of real pixel measurement.
     private static final java.util.regex.Pattern THAI_COMBINING_MARK =
         java.util.regex.Pattern.compile("[ัิ-ฺ็-๎]");
-    // Used only if AWT font metrics are unavailable at all (see #textUnits above) — a mid-size-
-    // Thai-glyph-at-14pt guess, so the row still lays out something reasonable rather than throwing.
+    // Used only if AWT font metrics are unavailable at all (see #textUnits above) — a mid-size- Thai-glyph-at-14pt
+    // guess, so the row still lays out something reasonable rather than throwing.
     private static final double FALLBACK_AVG_CHAR_WIDTH_PX = 6.5;
 
-    /** The label row's real AWT font (resolved once per render off the template's own style) plus a
-     * ready {@link java.awt.font.FontRenderContext}, threaded through the S1/S2/S3 pixel-measurement
-     * helpers below so each only constructs the {@code Font}/{@code Graphics2D} once rather than per
-     * call. */
+    /** The label row's real AWT font (resolved once per render off the template's own style) plus a ready
+     * java.awt.font.FontRenderContext, threaded through the S1/S2/S3 pixel-measurement helpers below so each only
+     * constructs the Font/Graphics2D once rather than per call. */
     private record SignatureFontMetrics(java.awt.Font awtFont, java.awt.font.FontRenderContext frc) {
         static final SignatureFontMetrics UNAVAILABLE = new SignatureFontMetrics(null, null);
 
@@ -1601,18 +1414,8 @@ public class QuotationRenderer {
         }
     }
 
-    /**
-     * v2 only ({@code signatureLabelsV2}): rebuilds the signature block as S0 (ตกลงสั่งซื้อ…,
-     * right-aligned over the right edge), S1 (label+underscores), S2 ("(name)" or a dotted
-     * placeholder, centred per slot), S3 (วันที่…., centred per slot) — replacing the template's
-     * original one-cell-per-row text (blanked first). S1-S3 are each ONE merged A:I cell built from
-     * four equal-PIXEL-width slots (see the class comment above {@link #SIG_LABELS}), left-aligned
-     * with NO shrink-to-fit — unlike S0, these rows are sized to already fit at the template's
-     * normal font, so shrinking would only make them harder to read for no reason. Legacy renders
-     * ({@code signatureLabelsV2 = false}) never call into this — the template's original single-cell
-     * labels and blank names stand untouched, matching QuotationRendererTest's "พนักงานขาย"
-     * assertion.
-     */
+    /** v2 only: rebuilds the signature block as S0, S1, S2 ("" or a dotted placeholder, centred per slot), S3 —
+     * replacing the template's original one-cell-per-row text. */
     private void writeSignatureBlock(Sheet sh, Signatories sig, boolean v2, int delta, int footerShift,
                                      boolean english) {
         if (!v2) {
@@ -1624,13 +1427,13 @@ public class QuotationRenderer {
         int nameRow = SALESPERSON_FORMULA_ROW + footerShift + delta;
         int dateRow = DATE_ROW + footerShift + delta;
 
-        // Resolve the label row's real font BEFORE #clearCell/#writeFixedWidthRow touch anything —
-        // clearCell only blanks the VALUE and keeps the style, but reading it first is clearer intent.
+        // Resolve the label row's real font BEFORE #clearCell/#writeFixedWidthRow touch anything — clearCell only
+        // blanks the VALUE and keeps the style, but reading it first is clearer intent.
         SignatureFontMetrics fontMetrics = resolveSignatureFontMetrics(sh, labelsRow);
 
-        // Blank the template's original one-cell-per-row strings before laying the new ranges —
-        // #getOrKeep on a merged range's non-top-left cell would otherwise leave stray leftover
-        // text peeking out from under a narrower new merge.
+        // Blank the template's original one-cell-per-row strings before laying the new ranges — #getOrKeep on a merged
+        // range's non-top-left cell would otherwise leave stray leftover text peeking out from under a narrower new
+        // merge.
         for (int c = 0; c <= 8; c++) {
             clearCell(sh, orderLineRow, c);
             clearCell(sh, labelsRow, c);
@@ -1638,11 +1441,9 @@ public class QuotationRenderer {
             clearCell(sh, dateRow, c);
         }
 
-        // layout-spec §5 asks for this right-aligned "over the ผู้สั่งซื้อ column" — but H:I alone
-        // (≈154px) is far narrower than the ~40-character sentence needs, and a MERGED cell clips
-        // overflow instead of spilling into empty neighbours the way a plain cell would. Widen the
-        // merge leftward to C:I: still ends flush at the same right edge (right-aligned), just
-        // with enough room to actually hold the whole sentence without clipping its own start.
+        // layout-spec §5 asks for this right-aligned "over the ผู้สั่งซื้อ column" — but H:I alone (≈154px) is far
+        // narrower than the ~40-character sentence needs, and a MERGED cell clips overflow instead of spilling into
+        // empty neighbours the way a plain cell would.
         mergeIfAbsent(sh, orderLineRow, orderLineRow, 2, 8);
         setRightAligned(sh, orderLineRow, 2,
             english ? EN_ORDER_LINE : "ตกลงสั่งซื้อสินค้าตามราคาและเงื่อนไขข้างต้น");
@@ -1660,8 +1461,8 @@ public class QuotationRenderer {
         double totalWidthPx = totalColumnWidthPixelsLibreOffice(sh, 0, 8);
         double slotWidthPx = totalWidthPx * SIGNATURE_ROW_FILL_FRACTION / labels.length;
         double underscoreWidthPx = charRunWidthPx(fontMetrics, '_');
-        // See #SIGNATURE_SPACE_TO_UNDERSCORE_SCALE's own Javadoc for why the raw AWT estimate is
-        // corrected here rather than used as-is.
+        // See #SIGNATURE_SPACE_TO_UNDERSCORE_SCALE's own Javadoc for why the raw AWT estimate is corrected here rather
+        // than used as-is.
         double spaceWidthPx = charRunWidthPx(fontMetrics, ' ') * SIGNATURE_SPACE_TO_UNDERSCORE_SCALE;
 
         String[] names = {
@@ -1744,9 +1545,9 @@ public class QuotationRenderer {
         writeFixedWidthRow(sh, nameRow, namesLine.toString());
         writeFixedWidthRow(sh, dateRow, datesLine.toString());
 
-        // Slot 0 (ผู้พิมพ์) and slot 1 (พนักงานขาย) draw the rep-selected person's signature
-        // image, same as the approver always has — independent per slot, so one missing a
-        // signature never affects the other. Slot 2 (ผู้จัดการฝ่ายขาย) is unchanged.
+        // Slot 0 (ผู้พิมพ์) and slot 1 (พนักงานขาย) draw the rep-selected person's signature image, same as the
+        // approver always has — independent per slot, so one missing a signature never affects the other. Slot 2
+        // (ผู้จัดการฝ่ายขาย) is unchanged.
         if (sig != null && sig.printedBySignaturePng() != null) {
             anchorSlotSignature(sh, labelsRow, sig.printedBySignaturePng(), sig.printedBySignatureMime(),
                 runStart[0], runEnd[0]);
@@ -1772,9 +1573,8 @@ public class QuotationRenderer {
         return signatureDateText(date, false);
     }
 
-    /** v3b: the English slot reads {@code "Date 8/9/2026"} — a <b>CE</b> year, where the Thai one
-     * adds 543 — and its empty placeholder is {@code "Date ..../..../...."} rather than
-     * {@code "วันที่ ..../..../...."}. Same unpadded d/M shape in both. */
+    /** v3b: the English slot reads "Date 8/9/2026" — a CE year, where the Thai one adds 543 — and its empty
+     * placeholder is "Date ..../..../...." rather than "วันที่ ..../..../....". Same unpadded d/M shape in both. */
     static String signatureDateText(LocalDate date, boolean english) {
         if (date == null) return english ? EN_BLANK_DATE_PLACEHOLDER : BLANK_DATE_PLACEHOLDER;
         String dm = date.getDayOfMonth() + "/" + date.getMonthValue() + "/";
@@ -1825,18 +1625,17 @@ public class QuotationRenderer {
         }
     }
 
-    /** The real 96dpi-pixel width of {@code text} rendered in the label row's own font — the
-     * layout-spec §5-suggested "better" alternative to character counting. Falls back to {@link
-     * #textUnits}{@code (text) * }{@link #FALLBACK_AVG_CHAR_WIDTH_PX} when {@code metrics} is
-     * {@link SignatureFontMetrics#UNAVAILABLE}. */
+    /** The real 96dpi-pixel width of text rendered in the label row's own font — the layout-spec §5-suggested
+     * "better" alternative to character counting. Falls back to #textUnits(text) * #FALLBACK_AVG_CHAR_WIDTH_PX
+     * when metrics is SignatureFontMetrics#UNAVAILABLE. */
     private double textWidthPx(SignatureFontMetrics metrics, String text) {
         if (text == null || text.isEmpty()) return 0;
         if (!metrics.isAvailable()) return textUnits(text) * FALLBACK_AVG_CHAR_WIDTH_PX;
         return metrics.awtFont().getStringBounds(text, metrics.frc()).getWidth() * AWT_FONT_METRICS_TO_96DPI_PIXELS;
     }
 
-    /** The real 96dpi-pixel width of ONE {@code c}, measured over a 10-character run and divided
-     * down — reduces per-glyph rounding/kerning noise versus measuring a single character alone. */
+    /** The real 96dpi-pixel width of ONE c, measured over a 10-character run and divided down — reduces per-glyph
+     * rounding/kerning noise versus measuring a single character alone. */
     private double charRunWidthPx(SignatureFontMetrics metrics, char c) {
         return textWidthPx(metrics, String.valueOf(c).repeat(10)) / 10.0;
     }
@@ -1920,11 +1719,8 @@ public class QuotationRenderer {
         return cursorPx + leftSpaces * spacePx + textWidthPx(metrics, text);
     }
 
-    /** Writes one already-fully-padded S1/S2/S3 string into its merged A:I cell — LEFT aligned (the
-     * per-slot centring/padding above already did the visual alignment work; a cell-level CENTER
-     * would re-centre the whole concatenated string instead), no wrap, and deliberately NO
-     * shrink-to-fit (layout-spec §5: these rows are sized to already fit at the template's normal
-     * font, unlike S0 above). */
+    /** Writes one already-fully-padded S1/S2/S3 string into its merged A:I cell — LEFT aligned, no wrap, and
+     * deliberately NO shrink-to-fit. */
     private void writeFixedWidthRow(Sheet sh, int row, String text) {
         Cell cell = getOrKeep(sh, row, 0);
         cell.setCellValue(text);
@@ -1942,11 +1738,9 @@ public class QuotationRenderer {
         CellStyle style = sh.getWorkbook().createCellStyle();
         style.cloneStyleFrom(cell.getCellStyle());
         style.setAlignment(org.apache.poi.ss.usermodel.HorizontalAlignment.CENTER);
-        // ผู้ตรวจ's C:D range is only ≈94px (จำนวน/หน่วย were never meant to hold prose) — too
-        // narrow for "(name)" or "วันที่…." at the sheet's normal font, and a MERGED cell clips
-        // overflow rather than spilling into its (also occupied, on this row) neighbours.
-        // ShrinkToFit is Excel/LO's own built-in answer to exactly this: auto-shrink the FONT to
-        // the cell's real width rather than clip text or force layout changes for one narrow range.
+        // ผู้ตรวจ's C:D range is only ≈94px (จำนวน/หน่วย were never meant to hold prose) — too narrow for "(name)" or
+        // "วันที่…." at the sheet's normal font, and a MERGED cell clips overflow rather than spilling into its (also
+        // occupied, on this row) neighbours.
         style.setShrinkToFit(true);
         cell.setCellStyle(style);
     }
@@ -2017,12 +1811,9 @@ public class QuotationRenderer {
                 ? Workbook.PICTURE_TYPE_JPEG : Workbook.PICTURE_TYPE_PNG;
             int pictureIdx = wb.addPicture(png, pictureType);
 
-            // Provisional box (replaced wholesale by #placeSignaturePicture, which recomputes every
-            // anchor corner from runStartPx/runEndPx — this slot's OWN run, passed in above): always
-            // seeded on the approver slot's centre column regardless of which slot is actually being
-            // anchored, since #placeSignaturePicture only ever falls back to it in the DEGENERATE
-            // (zero-width run) case and otherwise overwrites this box entirely. The labels row and
-            // the one above it are just a starting row range for the initial (throwaway) anchor.
+            // Provisional box: always seeded on the approver slot's centre column regardless of which slot is actually
+            // being anchored, since #placeSignaturePicture only ever falls back to it in the DEGENERATE case and otherwise
+            // overwrites this box entirely.
             double totalWidthPx = totalColumnWidthPixels(sh, 0, 8);
             int[] center = absolutePixelToColumn(sh, totalWidthPx * SIGNATURE_APPROVER_SLOT_CENTER_FRACTION, 0, 8);
             ClientAnchor anchor = patriarch.createAnchor(center[1], 0, center[1], 0,
@@ -2034,22 +1825,9 @@ public class QuotationRenderer {
         }
     }
 
-    /**
-     * Whether ImageIO can decode {@code imageBytes} at all — the same check
-     * {@code org.apache.poi.ss.util.ImageUtils#getImageDimension} makes internally, run here
-     * BEFORE any workbook shape exists so a decode failure can be handled by never creating one
-     * (see {@link #anchorSlotSignature}'s Javadoc for why that matters — POI silently keeps a
-     * degenerate shape LibreOffice then silently drops). Returns the decoded natural size, or
-     * {@code null} on anything ImageIO rejects — a missing reader (unsupported/corrupt format,
-     * {@code ImageIO.read} returns {@code null}) or a reader that throws partway through (e.g. a
-     * CMYK JPEG, which some JDKs recognise by header but cannot actually decode).
-     *
-     * <p>Delegates to {@link th.co.glr.hr.common.ImageDecodability}, the shared probe
-     * {@code EmployeeSignatureService#upload} now runs at UPLOAD time so a bad image is rejected
-     * and re-encoded before it is ever stored, rather than silently degrading here months later.
-     * This render-time check stays as defence in depth for signatures stored before that fix
-     * shipped.
-     */
+    /** Whether ImageIO can decode imageBytes at all — the same check
+     * org.apache.poi.ss.util.ImageUtils#getImageDimension makes internally, run here BEFORE any workbook shape
+     * exists so a decode failure can be handled by never creating one. */
     private static java.awt.Dimension decodableImageSize(byte[] imageBytes) {
         return th.co.glr.hr.common.ImageDecodability.size(imageBytes);
     }
@@ -2061,13 +1839,13 @@ public class QuotationRenderer {
     // ink whatever font/column widths the template carries.
     private static final double SIGNATURE_RUN_WIDTH_FRACTION = 0.60;
     private static final double SIGNATURE_MAX_HEIGHT_MM = 8.0;
-    // Only when the run could not be measured at all (AWT font metrics unavailable AND the
-    // character-count fallback produced a degenerate run) — never in a normal render.
+    // Only when the run could not be measured at all (AWT font metrics unavailable AND the character-count
+    // fallback produced a degenerate run) — never in a normal render.
     private static final double SIGNATURE_FALLBACK_WIDTH_MM = 16.0;
     private static final double MM_PER_INCH = 25.4;
-    // Assumed image DPI for Picture#getImageDimension()'s pixel dimensions — POI/Excel's own
-    // convention for a raster image with no embedded DPI metadata (PNG signature uploads here
-    // are screen-captured or scanned at typical screen resolution, not print resolution).
+    // Assumed image DPI for Picture#getImageDimension()'s pixel dimensions — POI/Excel's own convention for a
+    // raster image with no embedded DPI metadata (PNG signature uploads here are screen-captured or scanned at
+    // typical screen resolution, not print resolution).
     private static final double ASSUMED_IMAGE_DPI = 96.0;
     // The underscore RULE itself sits this far above the labels row's BOTTOM edge — roughly the
     // 14pt font's descent, i.e. the row's text baseline. Everything vertical is measured from
@@ -2078,12 +1856,12 @@ public class QuotationRenderer {
     // rule at 262.54 mm, 1.62 mm THROUGH it). Keep this positive; a negative value would put the ink back
     // across the rule.
     private static final double SIGNATURE_LIFT_ABOVE_RULE_MM = 1.5;
-    // Never walk the anchor more than this many rows away from the labels row — a corrupt row
-    // height must not send the walk off the sheet.
+    // Never walk the anchor more than this many rows away from the labels row — a corrupt row height must not send
+    // the walk off the sheet.
     private static final int SIGNATURE_MAX_ROW_WALK = 8;
     private static final double POINTS_PER_INCH = 72.0;
-    // HSSF two-cell anchors express dx in 1/1024 of the column width and dy in 1/256 of the row
-    // height (the HTML engine, SheetHtmlRenderer#anchorY, reads the same units).
+    // HSSF two-cell anchors express dx in 1/1024 of the column width and dy in 1/256 of the row height (the HTML
+    // engine, SheetHtmlRenderer#anchorY, reads the same units).
     private static final int HSSF_DY_UNITS = 256;
 
     /**
@@ -2123,9 +1901,8 @@ public class QuotationRenderer {
         double fontToAnchor = fontPixelToAnchorPixelScale(sh);
         double runStartAnchorPx = textPixelToAnchorPixel(runStartPx, fontToAnchor);
         double runEndAnchorPx = textPixelToAnchorPixel(runEndPx, fontToAnchor);
-        // Degenerate run (font metrics unavailable and the char-count fallback produced nothing
-        // usable): fall back to a fixed box centred on the whole slot rather than render a
-        // zero-width picture.
+        // Degenerate run (font metrics unavailable and the char-count fallback produced nothing usable): fall back to
+        // a fixed box centred on the whole slot rather than render a zero-width picture.
         double runWidthAnchorPx = runEndAnchorPx - runStartAnchorPx;
         double maxWidthAnchorPx;
         double runCentreAnchorPx;
@@ -2137,9 +1914,9 @@ public class QuotationRenderer {
             runCentreAnchorPx = totalWidthPx * SIGNATURE_APPROVER_SLOT_CENTER_FRACTION;
         }
 
-        // The aspect ratio must be preserved in PHYSICAL space, so the width cap (an anchor-pixel
-        // figure) converts back to font pixels before the height is derived from it; row heights,
-        // unlike column widths, are exact twips in the file and need no such correction.
+        // The aspect ratio must be preserved in PHYSICAL space, so the width cap (an anchor-pixel figure) converts
+        // back to font pixels before the height is derived from it; row heights, unlike column widths, are exact twips
+        // in the file and need no such correction.
         double naturalHeightMm = natural.height / ASSUMED_IMAGE_DPI * MM_PER_INCH;
         double scale = maxWidthAnchorPx * fontToAnchor / natural.width;
         if (naturalHeightMm * scale > SIGNATURE_MAX_HEIGHT_MM) {
@@ -2153,9 +1930,8 @@ public class QuotationRenderer {
         int[] start = absolutePixelToColumn(sh, leftPx, 0, 8);
         int[] end = absolutePixelToColumn(sh, leftPx + widthPx, 0, 8);
 
-        // Vertical: the rule sits SIGNATURE_BASELINE_LIFT_MM above the labels row's bottom edge;
-        // the ink's bottom is SIGNATURE_LIFT_ABOVE_RULE_MM above THAT, and the top is the scaled height
-        // above the bottom.
+        // Vertical: the rule sits SIGNATURE_BASELINE_LIFT_MM above the labels row's bottom edge; the ink's bottom is
+        // SIGNATURE_LIFT_ABOVE_RULE_MM above THAT, and the top is the scaled height above the bottom.
         double liftPt = SIGNATURE_BASELINE_LIFT_MM / MM_PER_INCH * POINTS_PER_INCH;
         double sitAbovePt = SIGNATURE_LIFT_ABOVE_RULE_MM / MM_PER_INCH * POINTS_PER_INCH;
         double bottomFromRowTopPt = rowHeightPoints(sh, labelsRow) - liftPt - sitAbovePt;
@@ -2173,13 +1949,9 @@ public class QuotationRenderer {
         anchor.setDy2(bottom[1]);
     }
 
-    /**
-     * Converts an offset in POINTS from {@code baseRow}'s TOP edge — negative (above it) or larger
-     * than the row's own height (below it) both allowed — into HSSF's {@code [rowIndex, dyUnits]}
-     * anchor pair, walking whole rows in either direction. The vertical counterpart of
-     * {@link #absolutePixelToColumn}. Walks at most {@link #SIGNATURE_MAX_ROW_WALK} rows so a
-     * degenerate (zero-height) row can never spin this loop.
-     */
+    /** Converts an offset in POINTS from baseRow's TOP edge — negative (above it) or larger than the row's own
+     * height (below it) both allowed — into HSSF's [rowIndex, dyUnits] anchor pair, walking whole rows in either
+     * direction. */
     private int[] rowOffsetToAnchor(Sheet sh, int baseRow, double offsetPt) {
         return rowOffsetToAnchor(sh, baseRow, offsetPt, SIGNATURE_MAX_ROW_WALK);
     }
@@ -2201,22 +1973,8 @@ public class QuotationRenderer {
         return new int[]{row, dy};
     }
 
-    /**
-     * Font pixels are NOT anchor pixels. The signature rows' text is positioned by the FONT's own
-     * advances (what {@link #textWidthPx} measures), while a {@link ClientAnchor} is positioned by
-     * COLUMN widths — and LibreOffice does not compute a column's width the way POI's
-     * {@link Sheet#getColumnWidthInPixels} does. LibreOffice scales the XLS 1/256-character width
-     * unit by the workbook default font's widest digit ({@code XclRoot::SetCharWidth}, replicated
-     * exactly by {@link LibreOfficeMetrics#columnTwips}); on this template that comes out ~3%
-     * NARROWER than POI's figure, which is a systematic ~5 mm leftward error on a signature
-     * anchored two thirds of the way across the page — measured, not guessed: the picture landed
-     * at 132.2 mm on a page where its underscore run centred at 137.6 mm.
-     *
-     * <p>Returns {@code (LibreOffice's A..I width) / (POI's A..I width)}, both in 96 dpi pixels —
-     * the factor that turns an anchor pixel into a font pixel, and (dividing) a font pixel into
-     * the anchor pixel that lands at the same physical place on the page. Falls back to 1.0 (the
-     * uncorrected behaviour) if the column unit cannot be measured at all.
-     */
+    /** Font pixels are NOT anchor pixels. Falls back to 1.0 (the uncorrected behaviour) if the column unit cannot
+     * be measured at all. */
     private double fontPixelToAnchorPixelScale(Sheet sh) {
         try {
             int charWidthTwips = LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
@@ -2234,9 +1992,9 @@ public class QuotationRenderer {
         }
     }
 
-    /** An offset in FONT pixels from the merged cell's left edge (plus LibreOffice's own text
-     * inset, which the string is drawn after) as an absolute ANCHOR pixel offset from column A's
-     * left edge — see {@link #fontPixelToAnchorPixelScale}. */
+    /** An offset in FONT pixels from the merged cell's left edge (plus LibreOffice's own text inset, which the
+     * string is drawn after) as an absolute ANCHOR pixel offset from column A's left edge — see
+     * #fontPixelToAnchorPixelScale. */
     private double textPixelToAnchorPixel(double textPx, double fontToAnchor) {
         double insetPx = LibreOfficeMetrics.TEXT_INSET_TWIPS / (double) LibreOfficeMetrics.TWIPS_PER_INCH
             * ASSUMED_IMAGE_DPI;
@@ -2252,13 +2010,9 @@ public class QuotationRenderer {
         return row != null ? row.getHeightInPoints() : sh.getDefaultRowHeightInPoints();
     }
 
-    /** The lower-level primitive {@link #placeSignaturePicture} builds on — takes an ABSOLUTE
-     * pixel offset (relative to {@code firstCol}'s left edge) and returns
-     * {@code [columnIndex, dxUnits]} (dx in HSSF's 1/1024-of-that-column's-own-width units), so a
-     * {@link ClientAnchor} can start or end mid-column instead of only ever landing on a whole
-     * column boundary. A target past the last column's right edge clamps
-     * to {@code lastCol} at its full width (dx 1023) rather than searching further — the caller
-     * must never be handed a column outside the sheet's own printable range. */
+    /** The lower-level primitive #placeSignaturePicture builds on — takes an ABSOLUTE pixel offset and returns
+     * [columnIndex, dxUnits], so a ClientAnchor can start or end mid-column instead of only ever landing on a
+     * whole column boundary. */
     private int[] absolutePixelToColumn(Sheet sh, double target, int firstCol, int lastCol) {
         double cumulative = 0;
         for (int c = firstCol; c <= lastCol; c++) {
@@ -2318,26 +2072,13 @@ public class QuotationRenderer {
 
     // ── per-item pictures ─────────────────────────────────────────────────────────
 
-    /**
-     * How one item prints: its physical description {@code lines}, its picture plan (null when it
-     * has none), and the TOTAL rows it occupies — text rows, plus the rows a BELOW picture sits
-     * on, or padding up to a BESIDE thumbnail's height. Heading rows are counted separately (they
-     * belong to a location group, not an item).
-     */
+    /** How one item prints: its physical description lines, its picture plan (null when it has none), and the TOTAL
+     * rows it occupies — text rows, plus the rows a BELOW picture sits on, or padding up to a BESIDE thumbnail's
+     * height. */
     private record ItemLayout(List<String> lines, PicturePlan picture, int rows) {}
 
-    /**
-     * Where a picture goes, in engine-neutral terms: a horizontal slice of column B expressed as
-     * FRACTIONS of its width ({@code leftFraction}, {@code widthFraction}), and a height in points
-     * from the top of its first row. Fractions, not pixels, because a {@link ClientAnchor}'s dx is
-     * itself a fraction of its column — so the picture lands on the same slice of column B in
-     * LibreOffice and in the HTML engine however each one sizes the column. That is the lesson of
-     * the signature's 5 mm drift (see {@link #fontPixelToAnchorPixelScale}): that drift came from
-     * positioning an anchor with FONT-advance pixels; nothing here is measured in font pixels.
-     * The aspect ratio IS a physical quantity, so column B's physical width is taken from
-     * LibreOffice's own column arithmetic ({@link #descriptionColumnMm}), the width both engines
-     * actually print.
-     */
+    /** Where a picture goes, in engine-neutral terms: a horizontal slice of column B expressed as FRACTIONS of its
+     * width (leftFraction, widthFraction), and a height in points from the top of its first row. */
     private record PicturePlan(ItemPicture source, boolean beside, double leftFraction, double widthFraction,
                                double heightPt, int textBudget) {}
 
@@ -2380,10 +2121,9 @@ public class QuotationRenderer {
             int textRows = Math.max(1, lines.size());
             int rows = textRows;
             if (plan != null) {
-                // The picture plus a pad above and below, in whole item rows. The pad keeps the
-                // anchor's bottom strictly INSIDE the picture's last row — a bottom on the next
-                // row's top edge would belong to the next item (and, across a page break, the
-                // HTML engine would drop a picture whose end row is on another page).
+                // The picture plus a pad above and below, in whole item rows. The pad keeps the anchor's bottom strictly
+                // INSIDE the picture's last row — a bottom on the next row's top edge would belong to the next item (and,
+                // across a page break, the HTML engine would drop a picture whose end row is on another page).
                 int pictureRows = (int) Math.ceil((plan.heightPt() + 2 * PICTURE_PAD_PT) / rowHeightPt - 1e-9);
                 rows = plan.beside() ? Math.max(textRows, pictureRows) : textRows + pictureRows;
             }
@@ -2395,8 +2135,8 @@ public class QuotationRenderer {
     private PicturePlan planPicture(ItemPicture picture, double columnMm, double rowHeightPt) {
         int[] natural = th.co.glr.hr.dealquotation.QuotationItemPictures.headerDimensions(picture.data());
         if (natural == null || columnMm <= 0) {
-            // Validated at upload, so this is a corrupt stored row: print the item without it
-            // rather than fail the whole document.
+            // Validated at upload, so this is a corrupt stored row: print the item without it rather than fail the whole
+            // document.
             log.warn("Quotation item picture unreadable; rendering the item without it");
             return null;
         }
@@ -2415,8 +2155,8 @@ public class QuotationRenderer {
                 heightMm = widthMm * aspect;
             }
             leftMm = columnMm - PICTURE_INSET_MM - widthMm;
-            // Wrap the item's text to the part of column B left of the thumbnail, in the same
-            // characters-per-column-width unit REMARK_LINE_CHAR_BUDGET is calibrated in.
+            // Wrap the item's text to the part of column B left of the thumbnail, in the same characters-per-column-width
+            // unit REMARK_LINE_CHAR_BUDGET is calibrated in.
             double textFraction = (leftMm - BESIDE_TEXT_GAP_MM) / columnMm;
             textBudget = Math.max(BESIDE_MIN_TEXT_BUDGET, (int) Math.floor(REMARK_LINE_CHAR_BUDGET * textFraction));
         } else {
@@ -2432,8 +2172,8 @@ public class QuotationRenderer {
             heightMm / MM_PER_INCH * POINTS_PER_INCH, textBudget);
     }
 
-    /** Column B's printed width in mm, by LibreOffice's column arithmetic (the width both the
-     * LibreOffice PDF and the HTML engine lay out); POI's own figure only if that is unavailable. */
+    /** Column B's printed width in mm, by LibreOffice's column arithmetic (the width both the LibreOffice PDF and
+     * the HTML engine lay out); POI's own figure only if that is unavailable. */
     private double descriptionColumnMm(Sheet sh) {
         try {
             int charWidthTwips = LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
@@ -2445,13 +2185,8 @@ public class QuotationRenderer {
         }
     }
 
-    /**
-     * Anchors the picture inside column B (col1 == col2 == B, so it can never reach the จำนวน
-     * column), from {@code topRow}'s top edge plus a pad, for exactly the planned height. Reuses the
-     * template's existing drawing patriarch, like {@link #anchorSlotSignature}; a failure is
-     * logged and the item prints without its picture — its rows are already reserved, so nothing
-     * below moves.
-     */
+    /** Anchors the picture inside column B (col1 == col2 == B, so it can never reach the จำนวน column), from
+     * topRow's top edge plus a pad, for exactly the planned height. */
     private void anchorItemPicture(Sheet sh, PicturePlan plan, int topRow) {
         try {
             Drawing<?> patriarch = sh.getDrawingPatriarch();
@@ -2480,9 +2215,9 @@ public class QuotationRenderer {
 
     // ── dynamic-layout geometry & sizing ──────────────────────────────────────────
 
-    // ① Size each money column to the widest number it will actually show, so values never clip to
-    //    "###" whatever the magnitude. E/H (unit price, net) size to the largest unit price; I
-    //    (amount) sizes to the grand total — the biggest number on the document.
+    // ① Size each money column to the widest number it will actually show, so values never clip to "###" whatever
+    // the magnitude. E/H (unit price, net) size to the largest unit price; I (amount) sizes to the grand total —
+    // the biggest number on the document.
     private void sizeMoneyColumns(Sheet sh, List<RenderItem> items, BigDecimal grandTotal) {
         BigDecimal maxUnit = BigDecimal.ZERO;
         for (RenderItem it : items) {
@@ -2587,16 +2322,14 @@ public class QuotationRenderer {
         }
     }
 
-    /** The plain-ASCII preview of what a {@code #,##0.00}-formatted money cell (E/H/I, and the
-     * totals it shares column I with) will actually display, for {@link #shrinkToFitIfOverflow}'s
-     * width measurement. */
+    /** The plain-ASCII preview of what a #,##0.00-formatted money cell (E/H/I, and the totals it shares column I
+     * with) will actually display, for #shrinkToFitIfOverflow's width measurement. */
     private static String moneyPreview(BigDecimal value) {
         return String.format(Locale.US, "%,.2f", value != null ? value : BigDecimal.ZERO);
     }
 
-    /** Same idea for the จำนวน/Qty column (C): whole numbers by default (the template's own
-     * {@code #,##0}), or two decimal places when {@link RenderItem#qtyFormat()} asked for it (the
-     * English per-sqm row — see that field's own Javadoc). */
+    /** Same idea for the จำนวน/Qty column (C): whole numbers by default (the template's own #,##0), or two decimal
+     * places when RenderItem#qtyFormat() asked for it (the English per-sqm row — see that field's own Javadoc). */
     private static String qtyPreview(BigDecimal value, String qtyFormat) {
         BigDecimal v = value != null ? value : BigDecimal.ONE;
         return qtyFormat != null
@@ -2605,8 +2338,8 @@ public class QuotationRenderer {
     }
 
 
-    // ② Natural width scale — the scale at which the A..I columns just fit the printable page width
-    //    (≈0.86 with the real fonts; recomputes automatically after ① widens a column).
+    // ② Natural width scale — the scale at which the A..I columns just fit the printable page width (≈0.86 with
+    // the real fonts; recomputes automatically after ① widens a column).
     private double naturalWidthScale(Sheet sh) {
         double columnsW = 0;
         for (int c = 0; c <= 8; c++) columnsW += sh.getColumnWidthInPixels(c) * 72.0 / 96.0; // px → pt
@@ -2615,8 +2348,8 @@ public class QuotationRenderer {
         return columnsW <= 0 ? 1.0 : Math.min(1.0, printableW / columnsW);
     }
 
-    // ③ Scale at which the whole quote (letterhead + emittedRows + footer) fits on one page — the
-    //    min of the width scale and the height-fit scale.
+    // ③ Scale at which the whole quote (letterhead + emittedRows + footer) fits on one page — the min of the width
+    // scale and the height-fit scale.
     private double onePageScale(Sheet sh, int emittedRows, int footerShift) {
         double contentH = sumRowHeights(sh, 0, ITEM_START_ROW - 1)      // letterhead + column titles
                         + emittedRows * itemRowHeight(sh)                // items
@@ -2691,8 +2424,8 @@ public class QuotationRenderer {
             usedOnPage += blockHmm;
             r += blockRows;
         }
-        // The whole tail — remark box, totals, ตกลงสั่งซื้อ, signature rows, F-SM-002 — is one
-        // block: never split, and never parted from the remark box.
+        // The whole tail — remark box, totals, ตกลงสั่งซื้อ, signature rows, F-SM-002 — is one block: never split, and
+        // never parted from the remark box.
         int footerHmm = scaledRowsHmm(sh, footerStartRow, footerEndRow, zoom);
         if (usedOnPage > 0 && usedOnPage + footerHmm > capacity) {
             sh.setRowBreak(footerStartRow - 1);
@@ -2700,9 +2433,8 @@ public class QuotationRenderer {
         }
     }
 
-    /** The zoom LibreOffice prints {@link #fitToWidthPaginate}'s sheet at (fit 1 wide, height
-     * unconstrained): columns A..I in twips exactly as LibreOffice converts them, against the
-     * page width minus the sheet's own margins. */
+    /** The zoom LibreOffice prints #fitToWidthPaginate's sheet at (fit 1 wide, height unconstrained): columns A..I
+     * in twips exactly as LibreOffice converts them, against the page width minus the sheet's own margins. */
     private int fitWidthZoomPercent(Sheet sh) {
         int charWidth = th.co.glr.hr.common.sheet.LibreOfficeMetrics.charWidthTwips(sh.getWorkbook());
         long contentWidthTwips = 0;
@@ -2717,8 +2449,8 @@ public class QuotationRenderer {
             availableWidthTwips, 0, 1, 0);
     }
 
-    /** Rows {@code from..to} as LibreOffice prints them at {@code zoom}: each row's twips scaled
-     * and truncated to 1/100 mm on its own (the plan's unit), then summed. */
+    /** Rows from..to as LibreOffice prints them at zoom: each row's twips scaled and truncated to 1/100 mm on its
+     * own (the plan's unit), then summed. */
     private int scaledRowsHmm(Sheet sh, int from, int to, int zoom) {
         int sum = 0;
         for (int r = from; r <= to; r++) {
@@ -2730,8 +2462,8 @@ public class QuotationRenderer {
         return sum;
     }
 
-    // Consistent page margins (inches) on every layout so content has corner padding and every page
-    // lines up the same way. Applied before the scale equations so they account for the padding.
+    // Consistent page margins (inches) on every layout so content has corner padding and every page lines up the
+    // same way. Applied before the scale equations so they account for the padding.
     private void applyMargins(Sheet sh) {
         sh.setMargin(PageMargin.LEFT, 0.3);
         sh.setMargin(PageMargin.RIGHT, 0.3);
@@ -2753,14 +2485,8 @@ public class QuotationRenderer {
         return s;
     }
 
-    // Single page: fit the whole quote onto exactly one page (1 wide × 1 tall), like Excel's
-    // "fit to 1×1" print setting on the template. With the correct narrow Thai fonts installed this
-    // lands at ≈ the template's native 86% scale; LibreOffice shrinks a hair more if needed so the
-    // anchored footer never spills to a 2nd page.
-    // Single page, content ≤ the template's native item-zone row budget: LibreOffice's own
-    // FitToPage=1×1 auto-calc only ever has to shrink a MILD amount here (the template's native
-    // ~86%, per this class's own long-standing comment) and is proven reliable at that range by
-    // every renderSinglePage-path test in this suite.
+    // Single page: fit the whole quote onto exactly one page (1 wide × 1 tall), like Excel's "fit to 1×1" print
+    // setting on the template.
     private void fitToOnePage(Sheet sh) {
         sh.setFitToPage(true);
         sh.setAutobreaks(true);
@@ -2770,15 +2496,7 @@ public class QuotationRenderer {
         ps.setFitHeight((short) 1);
     }
 
-    // H4/layout-spec §6: the flowing-layout branch can need a MUCH more aggressive shrink (the
-    // 5-item reference with wrapped calc lines computes ≈60%) — and LibreOffice's headless PDF
-    // conversion of a legacy HSSF FitToPage=1×1 hint does NOT reliably auto-calculate a scale that
-    // low: it silently TRUNCATES the sheet at the natural one-page boundary instead of shrinking
-    // (confirmed by rendering this exact fixture — เงื่อนไข/totals/signature simply vanished, with
-    // no error and a "1 page" PDF). An EXPLICIT print `scale` percentage is a different, much
-    // simpler LibreOffice code path (no auto-fit search) and reliably shrinks text+geometry
-    // together at any percentage — so the flowing branch computes its own required scale
-    // (#onePageScale) and sets it directly here rather than delegating the arithmetic to LO.
+    // H4/layout-spec §6: the flowing-layout branch can need a MUCH more aggressive shrink.
     private void fitToOnePageAtScale(Sheet sh, double scalePercent) {
         sh.setFitToPage(false);
         sh.setAutobreaks(true);
@@ -2787,9 +2505,8 @@ public class QuotationRenderer {
         ps.setScale((short) Math.round(scalePercent));
     }
 
-    // Multi-page: fit columns to one page wide (never spill columns onto a 2nd horizontal page) but
-    // leave the height unconstrained (FitHeight=0) so items paginate down across as many pages as
-    // needed.
+    // Multi-page: fit columns to one page wide (never spill columns onto a 2nd horizontal page) but leave the
+    // height unconstrained (FitHeight=0) so items paginate down across as many pages as needed.
     private void fitToWidthPaginate(Sheet sh) {
         sh.setFitToPage(true);
         sh.setAutobreaks(true);
@@ -2905,18 +2622,15 @@ public class QuotationRenderer {
     // Preserve template cell style — get existing cell, only create if absent
     private void setStr(Sheet sh, int rowIdx, int colIdx, String value) {
         Cell cell = getOrKeep(sh, rowIdx, colIdx);
-        // Drop any template formula (e.g. B4 =TODAY()) so our literal value wins;
-        // otherwise POI keeps the formula and LibreOffice recalculates + reformats it.
+        // Drop any template formula (e.g. B4 =TODAY()) so our literal value wins; otherwise POI keeps the formula and
+        // LibreOffice recalculates + reformats it.
         if (cell.getCellType() == CellType.FORMULA) cell.setBlank();
         cell.setCellValue(value != null ? value : "");
     }
 
-    /** {@link #setStr}, plus shrink-to-fit — for a merged cell whose text length is no longer
-     * bounded by a single short value (see PHONE_ROW's call site: it now carries an address AND a
-     * phone number, folded onto one line because the template has no free row for either). A
-     * merged cell clips overflow rather than wrapping, so without this an unusually long value
-     * silently truncates on the printed document rather than shrinking to fit — the same built-in
-     * answer #setCentered/#setRightAligned already apply to their own narrow ranges. */
+    /** #setStr, plus shrink-to-fit — for a merged cell whose text length is no longer bounded by a single short
+     * value (see PHONE_ROW's call site: it now carries an address AND a phone number, folded onto one line because
+     * the template has no free row for either). */
     private void setStrShrinkToFit(Sheet sh, int rowIdx, int colIdx, String value) {
         setStr(sh, rowIdx, colIdx, value);
         Cell cell = getOrKeep(sh, rowIdx, colIdx);
@@ -2952,9 +2666,9 @@ public class QuotationRenderer {
         return cell;
     }
 
-    // Adds a merged region unless one already covers this exact range — a render can run twice
-    // through the same renderer instance (see #underlinedStyle's own H1 Javadoc for why), and a
-    // duplicate addMergedRegion on a re-render throws.
+    // Adds a merged region unless one already covers this exact range — a render can run twice through the same
+    // renderer instance (see #underlinedStyle's own H1 Javadoc for why), and a duplicate addMergedRegion on a
+    // re-render throws.
     private void mergeIfAbsent(Sheet sh, int firstRow, int lastRow, int firstCol, int lastCol) {
         for (int i = 0; i < sh.getNumMergedRegions(); i++) {
             CellRangeAddress m = sh.getMergedRegion(i);
@@ -2984,8 +2698,8 @@ public class QuotationRenderer {
         return d.getDayOfMonth() + " " + THAI_MONTHS[d.getMonthValue() - 1] + " " + (d.getYear() + 543);
     }
 
-    // LOW: zero-pad dd/mm ("01/09/2569", not "1/9/2569") -- a bare single-digit day/month read as
-    // a typo on a customer-facing document next to the fully-padded thaiDate() above.
+    // LOW: zero-pad dd/mm ("01/09/2569", not "1/9/2569") -- a bare single-digit day/month read as a typo on a
+    // customer-facing document next to the fully-padded thaiDate() above.
     private String shortThaiDate(LocalDate d) {
         if (d == null) return "";
         return String.format("%02d/%02d/%d", d.getDayOfMonth(), d.getMonthValue(), d.getYear() + 543);

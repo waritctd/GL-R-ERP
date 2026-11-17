@@ -2,10 +2,8 @@ package th.co.glr.hr.attendance.schedule;
 
 import java.time.LocalDate;
 
-/**
- * One {@code hr.work_schedule_assignment} row (V115), with its {@link WorkSchedule} already
- * resolved — the join {@link WorkScheduleAssignmentRepository#findAllAssignments()} performs once.
- */
+/** One hr.work_schedule_assignment row (V115), with its WorkSchedule already resolved — the join
+ * WorkScheduleAssignmentRepository#findAllAssignments() performs once. */
 public record ScheduleAssignment(
     ScopeType scopeType,
     long scopeId,

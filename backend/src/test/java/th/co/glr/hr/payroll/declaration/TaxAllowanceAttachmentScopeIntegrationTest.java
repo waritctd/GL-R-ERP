@@ -29,22 +29,9 @@ import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowance
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceDeclarationSubmitRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Evidence upload/download authorization, driven through the real {@link
- * TaxAllowanceDeclarationService} + real Postgres — the gap Mockito-based unit tests cannot cover
- * (issue #28), same reasoning as {@code AttendanceScopeIntegrationTest}, which every scope test in
- * this package is modelled on. Written wrong-way-round: every case asks "can a caller reach a file
- * they should not", never "can they reach their own".
- *
- * <p><b>The download gate is the security-critical part of the whole evidence feature.</b> Every
- * case below pins {@code TaxAllowanceDeclarationService#requireOwnerOrHr}'s two properties at
- * once: (1) it is re-resolved from the PARENT declaration on EVERY call, never cached from upload
- * time, and (2) it deliberately does NOT copy {@code AttachmentController
- * #requireAttachmentAccess}'s uploader short-circuit — see {@link
- * #accessIsRecheckedOnEveryDownloadNeverCachedFromUploadTime} for the case that specifically pins
- * the second property, and this class's own javadoc mutation-check note in the PR body for how
- * that pin was verified to actually fail if the short-circuit is reintroduced.
- */
+/** Evidence upload/download authorization, driven through the real TaxAllowanceDeclarationService + real
+ * Postgres — the gap Mockito-based unit tests cannot cover (issue #28), same reasoning as
+ * AttendanceScopeIntegrationTest, which every scope test in this package is modelled on. */
 import th.co.glr.hr.config.AppProperties;
 
 import th.co.glr.hr.payroll.declaration.loryor01.LorYor01Renderer;
@@ -107,15 +94,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
-    /**
-     * The anti-{@code requireAttachmentAccess} case. HR uploads ON BEHALF of employeeA (HR is the
-     * uploader; employeeA is the declaration's beneficiary and the ONLY employee this evidence is
-     * about). If the download gate copied {@code AttachmentController#requireAttachmentAccess}'s
-     * {@code actor.id() == dto.uploadedBy()} short-circuit, the very same HR principal — even
-     * stripped of the "hr" role, e.g. after a demotion — would keep permanent access. It must not:
-     * the SAME attachment is 200 while the caller still holds "hr", and 404 the instant the role
-     * check alone would fail, regardless of who physically uploaded it.
-     */
+    /** The anti-requireAttachmentAccess case. HR uploads ON BEHALF of employeeA (HR is the uploader; employeeA is
+     * the declaration's beneficiary and the ONLY employee this evidence is about). */
     @Test
     void accessIsRecheckedOnEveryDownloadNeverCachedFromUploadTime() {
         long declarationId = submit(employeeA);
@@ -131,11 +111,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
     }
 
-    /**
-     * Decision #5 / plan open question #2's deliberate asymmetry: CEO reads the declaration
-     * REGISTER (payroll amounts) but never its evidence (personal medical/insurance/family
-     * documents).
-     */
+    /** Decision #5 / plan open question #2's deliberate asymmetry: CEO reads the declaration REGISTER (payroll
+     * amounts) but never its evidence (personal medical/insurance/family documents). */
     @Test
     void ceoCannotDownloadOrListEvidenceWhileTheRegisterStillReturns200() {
         long declarationId = submit(employeeA);
@@ -166,9 +143,9 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
         assertThat(stillThere.fileName()).isEqualTo(uploaded.fileName());
     }
 
-    // --- sectionKey (V135, feat/tax-allowance-sections) -------------------------------------------
-    // Not an authorization change -- the owner/HR access check above is untouched; these four cases
-    // cover the new data field's own validation only (CLAUDE.md's scope note on this task).
+    // sectionKey (V135, feat/tax-allowance-sections) ------------------------------------------- Not an
+    // authorization change -- the owner/HR access check above is untouched; these four cases cover the new data
+    // field's own validation only (CLAUDE.md's scope note on this task).
 
     @Test
     void aValidSectionKeyIsAcceptedAndReturned() {
@@ -176,8 +153,8 @@ class TaxAllowanceAttachmentScopeIntegrationTest extends AbstractPostgresIntegra
         TaxAllowanceAttachmentDto uploaded = uploadPdf(declarationId, "item7", employeeActor(employeeA));
 
         assertThat(uploaded.sectionKey()).isEqualTo("item7");
-        // Persisted, not just echoed back -- re-fetching through a fresh query proves the column
-        // round-trips through hr.file_attachment, not just through the in-memory DTO this call returned.
+        // Persisted, not just echoed back -- re-fetching through a fresh query proves the column round-trips through
+        // hr.file_attachment, not just through the in-memory DTO this call returned.
         assertThat(repository.findAttachment(uploaded.attachmentId()).orElseThrow().sectionKey())
             .isEqualTo("item7");
     }

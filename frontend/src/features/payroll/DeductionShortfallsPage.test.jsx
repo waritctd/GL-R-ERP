@@ -16,8 +16,8 @@ vi.mock('../../api/index.js', async (importOriginal) => {
   };
 });
 
-// Field-for-field with PayrollDeductionShortfallDto. Only LEGAL_EXECUTION_GARNISHMENT is
-// representable — recordGarnishmentShortfalls writes no other kind.
+// Field-for-field with PayrollDeductionShortfallDto. Only LEGAL_EXECUTION_GARNISHMENT is representable —
+// recordGarnishmentShortfalls writes no other kind.
 const rows = [
   {
     id: 1,
@@ -81,10 +81,9 @@ describe('DeductionShortfallsPage', () => {
     expect(screen.getByText('฿1,879.50')).not.toBeNull();
   });
 
-  // Regression: initialSort's key is `dir`, not `direction` (DataTable.jsx reads
-  // `initialSort.dir === 'desc'`). Spelling it wrong silently sorted OLDEST month first, which
-  // contradicts the server's own `ORDER BY s.payroll_month DESC`. Feeding rows in ascending order
-  // is what makes this test able to fail — pre-sorted input would pass either way.
+  // Regression: initialSort's key is `dir`, not `direction` (DataTable.jsx reads `initialSort.dir === 'desc'`).
+  // Spelling it wrong silently sorted OLDEST month first, which contradicts the server's own `ORDER BY
+  // s.payroll_month DESC`.
   it('defaults to newest payroll month first, even when the server order is reversed', async () => {
     api.payroll.getDeductionShortfalls.mockResolvedValue({ items: [rows[1], rows[0]] });
     renderPage();
@@ -126,8 +125,8 @@ describe('DeductionShortfallsPage', () => {
     renderPage();
     await screen.findByText('สมชาย ใจดี');
 
-    // Collapsed by default: renderExpanded returns null until the row is opened, so the paragraph
-    // of legal Thai is not sitting inline under every row.
+    // Collapsed by default: renderExpanded returns null until the row is opened, so the paragraph of legal Thai is
+    // not sitting inline under every row.
     expect(screen.queryByText(/ส่วนต่างยังไม่ได้ส่งให้เจ้าหนี้/)).toBeNull();
 
     const toggle = screen.getByRole('button', { name: /ดูเหตุผลที่หักไม่ครบของ สมชาย ใจดี/ });
@@ -154,8 +153,8 @@ describe('DeductionShortfallsPage', () => {
     api.payroll.getDeductionShortfalls.mockResolvedValue({ items: [] });
     renderPage();
 
-    // DataTable announces the zero-row message in a live region as well as the EmptyState title,
-    // so the text legitimately appears more than once.
+    // DataTable announces the zero-row message in a live region as well as the EmptyState title, so the text
+    // legitimately appears more than once.
     expect((await screen.findAllByText('ไม่มียอดค้างหัก')).length).toBeGreaterThan(0);
     expect(screen.getByText(/หักเงินตามหมายบังคับคดีได้ครบ/)).not.toBeNull();
   });

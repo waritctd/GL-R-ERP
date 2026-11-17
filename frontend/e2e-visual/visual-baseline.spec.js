@@ -1,71 +1,6 @@
-// Opt-in full-page visual-regression harness for the styles.css retirement.
-//
-// ── NO LONGER RUNS IN CI (owner decision, 2026-08-10) ────────────────────────
-// `.github/workflows/visual-ci.yml` was deleted and `visual` was removed from
-// main's required status checks. The harness itself — this spec, its helpers,
-// accepted-changes.txt, playwright.visual.config.js and the `test:visual` npm
-// script — is deliberately KEPT and still works; only the automatic PR run is
-// gone. Run it by hand:
-//
-//   cd frontend && VISUAL_BASELINE=1 npm run test:visual
-//
-// Why it went: the gate compares at maxDiffPixelRatio 0 against the merge base,
-// which is right for a CSS port (must change nothing) and wrong for deliberate
-// redesign work. The self-service responsive overhaul changes pixels on every
-// surface at every band on purpose, so the gate would have needed an
-// accepted-changes entry per surface per viewport — the accept mechanism turned
-// into a rubber stamp, which is worse than no gate.
-//
-// What is now unguarded: the four CSS-port failure modes the deleted workflow's
-// header documented (a ported rule gaining priority, an element losing a rule it
-// still needs, a deleted rule whose replacement is never applied, a merge
-// reuniting new markup with a deleted class). `npm run lint`, `npm test` and
-// `npm run build` were green for every one of them, and jsdom has no layout
-// engine — so nothing automated catches them today. Run this harness by hand
-// around any future CSS-port slice, and consider restoring the workflow (it is
-// in git history) once the redesign settles.
-//
-// A CSS→Tailwind port is supposed to change nothing on screen, and neither
-// Vitest (jsdom has no layout engine) nor the behavioural e2e specs can prove
-// that. This does: it captures every main surface at the app's three responsive
-// bands and diffs them pixel-for-pixel against a baseline taken before the
-// change. It has already caught two regressions no other check saw — Tailwind's
-// `text-*` utilities bundling a line-height the ported rule did not set, and a
-// `@layer legacy` override losing to a utility it used to beat on specificity.
-//
-// SKIPPED by default: the baselines are large PNGs of payroll/employee/
-// commission screens, so they are gitignored (see .gitignore) rather than
-// committed to this public repo, and a spec with no baselines would fail CI.
-//
-// Usage, per migration slice (or `npm run test:visual` in place of
-// `npx playwright test --config playwright.visual.config.js` below):
-//   1. On the unchanged tree:
-//        VISUAL_BASELINE=1 npx playwright test --config playwright.visual.config.js visual-baseline --update-snapshots
-//   2. Make the change.
-//   3. VISUAL_BASELINE=1 npx playwright test --config playwright.visual.config.js visual-baseline
-//      Any output is a real difference — read the *-diff.png under
-//      test-results/ before assuming it is noise.
-//
-// ── CAPTURE THE BASELINE AND THE DIFF ON THE SAME DAY ────────────────────────
-// These screenshots contain today's date: the dashboard greeting ("8 ส.ค. 2569"),
-// request rows, and the attendance grid all render it. A baseline taken before
-// midnight and diffed after produces a wall of red — 12 of 15 surfaces on
-// 2026-08-08/09 — that is entirely one changed digit per screenshot. It reads
-// exactly like a catastrophic regression and is not one.
-//
-// The tell: `import` is the only role whose dashboard renders no date, so a pure
-// rollover shows up as "everything failed except import". If you see that shape,
-// re-capture the baseline and re-run before investigating anything else. Always
-// open a *-diff.png — the pass/fail count alone cannot distinguish a rollover
-// from a real defect, and this harness's whole value is that a human looks.
-//
-// (Freezing the clock would remove the hazard, but the app reads Bangkok "today"
-// in several places — useIsMobile-style hooks, attendance's day grid, leave
-// balances — so a frozen date changes which rows render and would need its own
-// verification. Same-day capture is the cheaper correct answer.)
-//
-// PW_CHROMIUM overrides the browser binary for sandboxes whose preinstalled
-// Chromium does not match the pinned @playwright/test revision.
+// Opt-in full-page visual-regression harness for the styles.css retirement. ── NO LONGER RUNS IN CI (owner
+// decision, 2026-08-10) ──────────────────────── `.github/workflows/visual-ci.yml` was deleted and `visual`
+// was removed from main's required status checks.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { test, expect } from '@playwright/test';
@@ -78,31 +13,9 @@ if (process.env.PW_CHROMIUM) {
   test.use({ launchOptions: { executablePath: process.env.PW_CHROMIUM } });
 }
 
-// ── WHY THE POINTER HAS TO BE PARKED BEFORE EVERY CAPTURE ────────────────────
-// Playwright's mouse does not move on its own, and `spaGoto` navigates via
-// history.pushState rather than a click -- so the pointer stays wherever
-// `loginAs` last clicked, for the whole test, across every route. Whatever
-// element happens to land under that stale coordinate on each new page renders
-// `:hover`, and the screenshot bakes it in.
-//
-// That is not stable across runs. StatCard renders a real <button> with a
-// hover affordance whenever it has an onClick (see StatCard.jsx), and
-// /ticket-overview is a grid of them, so a few pixels of layout or scroll
-// difference between two runs moves the highlight to a DIFFERENT tile and the
-// diff reports a change nobody made. Observed for real on PR #615 run
-// 31270806243: `mobile-ceo-ticket-overview` failed at 797 pixels / ratio 0.01
-// on the first attempt and passed on retry, with the expected image showing
-// "ยกเลิกเดือนนี้" shaded and the actual showing the tile BELOW it shaded
-// instead -- the hover had simply moved down one tile. Reproduced locally at
-// 527 pixels / ratio 0.01 by parking the pointer over a tile on purpose.
-//
-// It is a required check with maxDiffPixelRatio: 0, so an intermittent false
-// diff blocks unrelated PRs at random -- worse than no check at all.
-//
-// (0, 0) does NOT fix it: measured, the topbar still matches `:hover` there.
-// A negative coordinate is outside the content area entirely and leaves
-// `document.querySelectorAll(':hover')` empty -- also measured. Do not
-// "simplify" this to (0, 0).
+// WHY THE POINTER HAS TO BE PARKED BEFORE EVERY CAPTURE ──────────────────── Playwright's mouse does not move
+// on its own, and `spaGoto` navigates via history.pushState rather than a click -- so the pointer stays
+// wherever `loginAs` last clicked, for the whole test, across every route.
 async function parkPointer(page) {
   await page.mouse.move(-20, -20);
 }
@@ -125,32 +38,15 @@ const SURFACES = [
 const snapshotName = (vpName, role, route) =>
   `${vpName}-${role}-${route === '/' ? 'home' : route.replace(/\//g, '-').replace(/^-/, '')}`;
 
-// ── ACCEPTING AN INTENDED PIXEL CHANGE ───────────────────────────────────────
-// The gate runs at maxDiffPixelRatio: 0 against a baseline taken from the merge
-// base, so a PR that deliberately changes the UI fails by construction. That is
-// correct for a CSS port -- which is supposed to change nothing -- but wrong for
-// a feature. PR #615 is the real case: it added a suggested-rate row to
-// OvertimePanel, and `desktop-hr-employee-requests` and
-// `desktop-employee-employee-requests` failed on the attempt AND the retry,
-// because the change was genuine. It was merged with the check red.
-//
-// Merging red is the thing to avoid. It trains reviewers to override a required
-// gate, and that is how a real regression eventually goes through. So: name the
-// snapshot in accepted-changes.txt, against your PR number, with a reason.
-//
-// An accepted snapshot is STILL captured and STILL compared -- the run just does
-// not fail on it, and the -diff.png is still uploaded (the workflow's upload step
-// is `if: always()` for exactly this). You accept a change after reading the
-// image, not instead of reading it.
-//
-// Nothing needs updating afterwards: the baseline comes from the merge base, so
-// once the PR merges its pixels ARE the baseline. Accepted once, then simply true.
+// ACCEPTING AN INTENDED PIXEL CHANGE ─────────────────────────────────────── The gate runs at
+// maxDiffPixelRatio: 0 against a baseline taken from the merge base, so a PR that deliberately changes the UI
+// fails by construction.
 const PR_NUMBER = process.env.VISUAL_PR_NUMBER;
 const ALL_SNAPSHOTS = new Set(
   VIEWPORTS.flatMap(({ name }) => SURFACES.flatMap(([role, routes]) => routes.map((r) => snapshotName(name, role, r)))),
 );
-// Throws on a malformed line, or on an entry for THIS PR naming a snapshot that
-// does not exist -- loud at load time beats a typo silently meaning "not accepted".
+// Throws on a malformed line, or on an entry for THIS PR naming a snapshot that does not exist -- loud at load
+// time beats a typo silently meaning "not accepted".
 const ACCEPTED = loadAcceptedChanges(
   path.join(path.dirname(fileURLToPath(import.meta.url)), 'accepted-changes.txt'),
   PR_NUMBER,
@@ -163,14 +59,13 @@ if (ACCEPTED.size) {
 for (const { name: vpName, width, height } of VIEWPORTS) {
   for (const [role, routes] of SURFACES) {
     test(`${vpName}-${role}`, async ({ page }) => {
-      // One login + N routes per test; comparing N full-page screenshots blows
-      // the 30s default well before the last route.
+      // One login + N routes per test; comparing N full-page screenshots blows the 30s default well before the last
+      // route.
       test.setTimeout(300_000);
       await page.setViewportSize({ width, height });
       await loginAs(page, role);
-      // The login toast auto-dismisses on a timer; whether it is still on
-      // screen when a screenshot lands is a race, not a style fact. Wait it
-      // out once so every capture below is deterministic.
+      // The login toast auto-dismisses on a timer; whether it is still on screen when a screenshot lands is a race,
+      // not a style fact. Wait it out once so every capture below is deterministic.
       await page.getByText('เข้าสู่ระบบสำเร็จ').waitFor({ state: 'hidden', timeout: 20_000 }).catch(() => {});
       for (const route of routes) {
         await spaGoto(page, route);
@@ -187,16 +82,14 @@ for (const { name: vpName, width, height } of VIEWPORTS) {
             timeout: 30_000,
           });
           if (reason) {
-            // Not a failure: a change can legitimately show at one viewport and not
-            // another. But an entry that never fires is usually a typo or a leftover,
-            // so say so rather than letting it sit there looking load-bearing.
+            // Not a failure: a change can legitimately show at one viewport and not another. But an entry that never fires
+            // is usually a typo or a leftover, so say so rather than letting it sit there looking load-bearing.
             console.log(`[visual] NOTE ${name} is listed in accepted-changes.txt for PR #${PR_NUMBER} but did not differ — stale entry?`);
           }
         } catch (err) {
           if (!reason) throw err;
-          // Playwright has already written -expected/-actual/-diff into test-results
-          // and attached them to the report by the time it throws, so swallowing the
-          // error here keeps the evidence and only drops the failure.
+          // Playwright has already written -expected/-actual/-diff into test-results and attached them to the report by
+          // the time it throws, so swallowing the error here keeps the evidence and only drops the failure.
           console.log(`[visual] ACCEPTED ${name} (PR #${PR_NUMBER}) — ${reason}`);
           console.log(
             String(err.message)

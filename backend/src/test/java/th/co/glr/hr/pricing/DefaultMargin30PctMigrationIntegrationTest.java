@@ -17,16 +17,9 @@ import th.co.glr.hr.pricing.PricingFormulaConfigRequests.DutyRateRequest;
 import th.co.glr.hr.pricing.PricingFormulaConfigRequests.FreightRateRequest;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * BUSINESS-LOGIC CHANGE, owner-requested 2026-10-01: the default margin (กำไร) on
- * {@code sales.pricing_formula_config} moves from 20% to 30% (migration V197).
- *
- * <p>Real-Postgres proof of three things Mockito cannot reach: the seeded current config really
- * is 30% after a fresh migrate; the column DEFAULT really changed; and -- the guard that
- * matters -- a CEO who already customised the margin (e.g. 24%) is NOT overwritten when the
- * migration's SQL runs against their data. The last is proven by re-running the migration file's
- * own text against rows the test sets up, since the golden-template DB has already applied it.
- */
+/** BUSINESS-LOGIC CHANGE, owner-requested 2026-10-01: the default margin (กำไร) on sales.pricing_formula_config
+ * moves from 20% to 30% (migration V197). The last is proven by re-running the migration file's own text
+ * against rows the test sets up, since the golden-template DB has already applied it. */
 class DefaultMargin30PctMigrationIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final String MIGRATION = "/db/migration/V197__pricing_formula_default_margin_30pct.sql";
 

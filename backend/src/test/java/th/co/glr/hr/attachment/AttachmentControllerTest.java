@@ -135,12 +135,9 @@ class AttachmentControllerTest {
             .andExpect(status().isNotFound());
     }
 
-    /**
-     * Issue #389: {@code hr} used to sit in this controller's own {@code MANAGER_ROLES} and so
-     * could read every deal's documents, despite being refused the deal itself everywhere else.
-     * These two tests asserted that behaviour; they now assert its absence. The enforcement
-     * against real Postgres lives in {@link AttachmentTicketAccessIntegrationTest}.
-     */
+    /** hr used to sit in this controller's own MANAGER_ROLES and so could read every deal's documents, despite
+     * being refused the deal itself everywhere else. These two tests asserted that behaviour; they now assert its
+     * absence. */
     @Test
     void hrIsRefusedOnDownload_itHasNoSalesAccessAnywhereElse() throws Exception {
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(attachment()));
@@ -167,11 +164,8 @@ class AttachmentControllerTest {
             .andExpect(status().isOk());
     }
 
-    /**
-     * #389's other direction: {@code account} confirms the money these documents evidence, so it
-     * may now open them — but it may NOT upload, because the tax invoice keeps exactly one entry
-     * point ({@code CommissionService#createFromDeal}).
-     */
+    /** #389's other direction: account confirms the money these documents evidence, so it may now open them — but
+     * it may NOT upload, because the tax invoice keeps exactly one entry point (CommissionService#createFromDeal). */
     @Test
     void accountCanListButCannotUpload() throws Exception {
         when(ticketRepository.findById(TICKET_ID)).thenReturn(Optional.of(ticket()));
@@ -232,8 +226,8 @@ class AttachmentControllerTest {
         AttachmentDto dto = attachment();
         when(attachmentRepository.findById(ATTACHMENT_ID)).thenReturn(Optional.of(dto));
         when(attachmentRepository.findFilePathById(ATTACHMENT_ID)).thenReturn(missingFilePath());
-        // Default Mockito boolean stub is false -- explicit here so the "guard passed" branch of
-        // this test is not accidentally relying on that default.
+        // Default Mockito boolean stub is false -- explicit here so the "guard passed" branch of this test is not
+        // accidentally relying on that default.
         when(attachmentRepository.backsLiveCommission(missingFilePath())).thenReturn(false);
 
         UserPrincipal uploader = principal(UPLOADER_ID, "sales");
@@ -247,13 +241,8 @@ class AttachmentControllerTest {
             eq(uploader), eq("DELETE_ATTACHMENT"), eq("attachment"), eq(ATTACHMENT_ID), eq(dto), isNull());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // F5 (2026-07-30): the guard's DECISION (resolveScope-style) — every collaborator mocked,
-    // proving the branch AttachmentController#delete takes for a given backsLiveCommission()
-    // answer. AttachmentCommissionEvidenceIntegrationTest (real Postgres, real AttachmentRepository
-    // running the actual join) is the other half CLAUDE.md requires — this mock cannot prove the
-    // SQL behind backsLiveCommission() actually reaches the right rows.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // the guard's DECISION (resolveScope-style) — every collaborator mocked, proving the branch
+    // AttachmentController#delete takes for a given backsLiveCommission() answer.
 
     @Test
     void deleteRefusedWhenFileBacksALiveCommission() throws Exception {

@@ -24,18 +24,8 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.config.AppProperties;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Confirms attendance authorization against the real service and the real SQL.
- *
- * <p>This exists because {@code mockApi.js} is explicitly <strong>not</strong> authoritative for
- * permissions — CLAUDE.md records a case (issue #199) where an agent read the mock's gates as the
- * backend's and reported a permission rule that production did not have. Unit tests on
- * {@code resolveScope} prove the decision; only this proves the decision survives the WHERE clause
- * and actually filters rows.
- *
- * <p>Every case here asks the question the wrong way round — can this caller reach data they should
- * not — rather than confirming they can reach their own.
- */
+/** Confirms attendance authorization against the real service and the real SQL. Unit tests on resolveScope
+ * prove the decision; only this proves the decision survives the WHERE clause and actually filters rows. */
 class AttendanceScopeIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
@@ -107,10 +97,8 @@ class AttendanceScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(employeeIdsIn(days)).doesNotContain(factoryStaff);
     }
 
-    /**
-     * The attack the divisionId parameter invites. It must be ignored for a manager, not merged, so
-     * the request silently stays inside their own ฝ่าย instead of hopping to another.
-     */
+    /** The attack the divisionId parameter invites. It must be ignored for a manager, not merged, so the request
+     * silently stays inside their own ฝ่าย instead of hopping to another. */
     @Test
     void aManagerCannotUseTheDivisionParameterToReachAnotherDivision() {
         List<AttendanceDailyDto> days =
@@ -120,10 +108,8 @@ class AttendanceScopeIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(employeeIdsIn(days)).contains(salesManager, salesStaff);
     }
 
-    /**
-     * Asking for a specific out-of-division employee must yield nothing rather than that person's
-     * data — both predicates AND in the WHERE clause, which a mocked repository cannot demonstrate.
-     */
+    /** Asking for a specific out-of-division employee must yield nothing rather than that person's data — both
+     * predicates AND in the WHERE clause, which a mocked repository cannot demonstrate. */
     @Test
     void aManagerAskingForAnOutOfDivisionEmployeeGetsNoRows() {
         List<AttendanceDailyDto> days =

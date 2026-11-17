@@ -28,19 +28,8 @@ import th.co.glr.hr.common.ApiException;
 import th.co.glr.hr.mail.Mailer;
 
 // NOTE ON MOCK LIFETIME: NotificationRepository/Mailer below are Mockito mocks wired as Spring @Bean
-// singletons. Spring caches the ApplicationContext across every @Test method that shares this exact
-// @SpringJUnitConfig, so both mocks are the SAME object for every test in this class, and Mockito's
-// invocation history on them accumulates across tests unless reset. resetMocks() below clears both
-// before every test so a verify()/verifyNoInteractions() in one test can never be made to pass or
-// fail by what a DIFFERENT test happened to do first.
-//
-// Confirmed live, not just by reasoning: before this reset existed,
-// markReadSucceedsWhenRepositoryUpdatesOwnedNotification's verify(notifications).markRead(42L, 7L)
-// only stayed green because surefire happened to run it BEFORE
-// markReadRejectsMissingOrUnownedNotification re-invoked that exact same mock call with the same
-// args - order-dependent, not actually pinned by either test. The surefire report
-// (target/surefire-reports/TEST-th.co.glr.hr.notification.NotificationServiceTest.xml) lists
-// markReadSucceeds... before markReadRejects..., which is what let it slip through.
+// singletons. resetMocks() below clears both before every test so a verify()/verifyNoInteractions() in one
+// test can never be made to pass or fail by what a DIFFERENT test happened to do first.
 @SpringJUnitConfig(NotificationServiceTest.TestConfig.class)
 class NotificationServiceTest {
 
@@ -91,13 +80,9 @@ class NotificationServiceTest {
         assertThat(result).isEqualTo(saved);
         verify(notifications).insert(7L, "LEAVE_SUBMITTED", "Leave submitted",
             "Your leave request was submitted.", "/leave/1");
-        // The dead-code defect this locks in: NotificationService used to call the email service's
-        // 4-arg overload, so recipientName/link never reached the email (always the generic greeting,
-        // never a portal link) even though notify() receives both. Assert BOTH the name-driven
-        // greeting AND the link actually reach the mailer - either dropped is the regression. The
-        // 5th argument (inline images) is always the GL&R logo - see NotificationEmailServiceTest for
-        // the dedicated coverage of that; here it's just asserted present so this call keeps matching
-        // the real 5-arg Mailer.sendHtml signature.
+        // The dead-code defect this locks in: NotificationService used to call the email service's 4-arg overload, so
+        // recipientName/link never reached the email (always the generic greeting, never a portal link) even though
+        // notify() receives both.
         verify(mailer).sendHtml(
             eq("employee@glr.co.th"),
             eq("[GL&R Portal] Leave submitted"),
@@ -112,13 +97,9 @@ class NotificationServiceTest {
             argThat(images -> images.size() == 1 && "glr-logo".equals(images.get(0).contentId())));
     }
 
-    // This TestConfig has overrideTo="" (blank, matching prod/demo) - pins that prod/demo behaviour
-    // does NOT change by this fix: an employee who exists but has no address on file still gets no
-    // email when no override is configured. See NotificationServiceOverrideConfiguredTest for the
-    // overrideTo-set case, which is where the actual regression lived (the bug this whole change
-    // fixes: app.mail.override-to never got a chance to run for an addressless employee, because
-    // NotificationService used to gate on the address itself before NotificationEmailService, which
-    // owns override-to, ever saw the recipient).
+    // This TestConfig has overrideTo="" (blank, matching prod/demo) - pins that prod/demo behaviour does NOT
+    // change by this fix: an employee who exists but has no address on file still gets no email when no override
+    // is configured.
     @Test
     void notifySkipsEmailWhenEmployeeHasNoEmailAndNoOverrideConfigured() {
         NotificationDto saved = new NotificationDto(
@@ -142,11 +123,8 @@ class NotificationServiceTest {
         verifyNoInteractions(mailer);
     }
 
-    // The only case findEmployeeRecipient() still returns empty for: no employee row at all. That
-    // must skip email under every override configuration, since there is no employee id left to
-    // notify about. See NotificationServiceOverrideConfiguredTest for the overrideTo-set variant of
-    // this same case - override-to can rescue an addressless employee, but it cannot fabricate a
-    // recipient for an id nobody recognises.
+    // The only case findEmployeeRecipient() still returns empty for: no employee row at all. That must skip email
+    // under every override configuration, since there is no employee id left to notify about.
     @Test
     void notifySkipsEmailWhenEmployeeRowIsMissing() {
         NotificationDto saved = new NotificationDto(
@@ -246,16 +224,8 @@ class NotificationServiceTest {
     }
 }
 
-// A SEPARATE top-level test class (package-private, like the one above - Java allows more than one
-// per file as long as at most one is public), not a JUnit @Nested inner class. This is deliberate:
-// Spring's @NestedTestConfiguration default (INHERIT) analogises a @Nested class's own context
-// configuration to a subclass re-declaring @ContextConfiguration in a superclass hierarchy, which
-// does not obviously guarantee this class's overrideTo="tester@example.com" TestConfig fully
-// replaces (rather than merges with or is shadowed by) NotificationServiceTest's overrideTo="".
-// Getting that ambiguity wrong would silently run these "override configured" tests against the
-// blank-override context instead - exactly the kind of vacuous-but-green test this bug fix cannot
-// afford. Two independent top-level classes, each with its own @SpringJUnitConfig, sidestep the
-// question entirely: each is unambiguously its own context-cache key.
+// A SEPARATE top-level test class (package-private, like the one above - Java allows more than one per file as
+// long as at most one is public), not a JUnit @Nested inner class.
 @SpringJUnitConfig(NotificationServiceOverrideConfiguredTest.TestConfig.class)
 class NotificationServiceOverrideConfiguredTest {
 
@@ -273,28 +243,8 @@ class NotificationServiceOverrideConfiguredTest {
         reset(notifications, mailer);
     }
 
-    // THE regression test for this bug. Before the fix, NotificationService.notify() called
-    // findEmployeeEmail(), which returned Optional.empty() for exactly this employee (row exists, no
-    // address on file) - so NotificationEmailService.send(), and therefore app.mail.override-to, was
-    // never reached at all, despite being configured. Observed on UAT 2026-08-09: one welfare submit
-    // fanned out 5 notifications, and the 3 recipients with no email on file were silently dropped
-    // despite APP_MAIL_OVERRIDE_TO being set.
-    //
-    // #782 UPDATE: this test used to assert mailer.sendHtml received "tester@example.com" - the
-    // override ADDRESS - and a body containing "no email on file", because NotificationEmailService
-    // used to compute both itself (the swap, and a redirect note that happened to name the reason).
-    // Neither happens in this class any more (see its overrideConfigured Javadoc): recipient
-    // redirection AND the distinguishing note now live entirely in
-    // th.co.glr.hr.mail.OverrideRedirectingMailer, which wraps the REAL Mailer bean in production but
-    // is NOT present in this test's hand-wired TestConfig (mailer() below is a bare mock) - so `to` is
-    // asserted null here, and the body is asserted to be the ORDINARY template with no note of any
-    // kind, exactly what a no-override send would also produce. What this test still proves is the
-    // half that is genuinely still this layer's: an addressless employee is NOT skipped when an
-    // override is configured (attempts the send instead). The address-swap itself is proven end-to-end
-    // against a real decorator in
-    // th.co.glr.hr.mail.MailOverrideContainmentTest#notificationEmailServiceStillRedirectsWhenTheEmployeeHasNoAddressOnFile.
-    // Losing either half silently would be exactly the kind of regression this file exists to catch,
-    // so neither is dropped - each now lives at the layer that actually owns it.
+    // THE regression test for this bug. What this test still proves is the half that is genuinely still this
+    // layer's: an addressless employee is NOT skipped when an override is configured (attempts the send instead).
     @Test
     void notifyStillAttemptsEmailWhenEmployeeHasNoEmailOnFileAndOverrideIsConfigured() {
         NotificationDto saved = new NotificationDto(
@@ -327,10 +277,8 @@ class NotificationServiceOverrideConfiguredTest {
             argThat(images -> images.size() == 1 && "glr-logo".equals(images.get(0).contentId())));
     }
 
-    // Even with an override configured, a MISSING employee row must still skip email - override-to
-    // can rescue an employee that exists but has no address, not fabricate a recipient for an id
-    // nobody recognises. Mirrors NotificationServiceTest.notifySkipsEmailWhenEmployeeRowIsMissing
-    // under the opposite override configuration; both must agree.
+    // Even with an override configured, a MISSING employee row must still skip email - override-to can rescue an
+    // employee that exists but has no address, not fabricate a recipient for an id nobody recognises.
     @Test
     void notifySkipsEmailWhenEmployeeRowIsMissing() {
         NotificationDto saved = new NotificationDto(

@@ -6,11 +6,9 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
 import java.util.List;
 
-/**
- * A batch of device-user rows (User ID + card number) pulled from the SC700, used to backfill
- * hr.employee.badge_card_no so historical card punches resolve to the right employee. The device
- * User ID (Pin) is matched against hr.employee.employee_code.
- */
+/** A batch of device-user rows (User ID + card number) pulled from the SC700, used to backfill
+ * hr.employee.badge_card_no so historical card punches resolve to the right employee. The device User ID (Pin)
+ * is matched against hr.employee.employee_code. */
 public record AttendanceCardBackfillRequest(
     @JsonProperty("mappings")
     @NotEmpty

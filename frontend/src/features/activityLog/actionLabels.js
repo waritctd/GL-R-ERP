@@ -1,9 +1,5 @@
-// Thai labels for hr.audit_log action codes.
-//
-// The raw codes are readable to a developer and to nobody else, and this page exists so a
-// non-developer can answer "who requested what, who approved what". Anything missing falls back to
-// the raw code rather than to a blank — a new action added on the backend must degrade to
-// something you can still search for, not disappear.
+// Thai labels for hr.audit_log action codes. Anything missing falls back to the raw code rather than to a
+// blank — a new action added on the backend must degrade to something you can still search for, not disappear.
 
 const ACTION_LABELS = {
   // Auth

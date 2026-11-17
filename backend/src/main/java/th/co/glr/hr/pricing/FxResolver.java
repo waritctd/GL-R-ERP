@@ -77,8 +77,8 @@ public final class FxResolver {
                 "ยังไม่มีอัตราแลกเปลี่ยนสำหรับสกุลเงิน " + currency
                     + " — กรุณาตั้งค่าที่ ตั้งค่า CEO → อัตราแลกเปลี่ยน ก่อนคำนวณต้นทุน"));
         if (rate.effectiveDate() == null) {
-            // A null date can't be printed usefully — its own branch/wording rather than folding
-            // it into the "stale" message below, which names an actual date.
+            // A null date can't be printed usefully — its own branch/wording rather than folding it into the "stale"
+            // message below, which names an actual date.
             throw new ApiException(HttpStatus.UNPROCESSABLE_CONTENT,
                 "อัตราแลกเปลี่ยน " + currency + " ไม่มีวันที่มีผล (effective date)"
                     + " — กรุณาปรับปรุงที่ ตั้งค่า CEO → อัตราแลกเปลี่ยน ก่อนคำนวณต้นทุน");

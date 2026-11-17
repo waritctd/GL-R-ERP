@@ -3,44 +3,12 @@ package th.co.glr.hr.payroll;
 import java.util.EnumMap;
 import java.util.Map;
 
-/**
- * The classification table issue #376 asks for: every {@link PayrollDeductionKind} the engine
- * supports, its {@link DeductionRuleClass} (who directs it), its {@link DeductionCapGroup} (which
- * limit applies), and the cited legal basis for both -- assigned independently so a deduction's
- * source of authority and its applicable limit are never conflated (the mistake #373 originally
- * made: assuming ม.76's cap governed กยศ. because both "sound statutory").
- *
- * <p><b>Anything uncertain is left {@code null} with a mandatory {@link Entry#needsReviewReason()}
- * rather than guessed at</b> -- the issue's own instruction: "Do not encode a limit without a cited
- * source ... anything uncertain stays unenforced with a needs review marker rather than being
- * guessed at." {@link #classify} never returns a partially-populated {@link Entry} silently; every
- * {@code null} field is paired with a reason a reviewer can read.
- *
- * <p><b>Nothing here enforces anything.</b> This is a read-only lookup table. In particular, {@link
- * DeductionCapGroup#LABOUR_ACT_SECTION_76} is assigned to {@link PayrollDeductionKind#WARNING_LETTER}
- * candidates in spirit only -- see that entry's own {@code needsReviewReason} -- and {@link
- * PayrollCalculator} applies NO ม.76 arithmetic anywhere. Only {@link
- * DeductionCapGroup#LED_GARNISHMENT} corresponds to a cap the engine actually enforces today (via
- * {@link PayrollGarnishmentType}), and this classification does not duplicate that machinery, only
- * names it.
- *
- * <p><b>{@link DeductionRuleClass#VOLUNTARY} has no assignee today.</b> GL&R runs no provident fund
- * (removed 2026-07-29, see {@code PayrollCalculator#retirementAllowance}'s own comment) and has no
- * other dedicated voluntary-deduction column -- a genuinely voluntary deduction, if one exists,
- * would currently be typed into {@link PayrollDeductionKind#OTHER_PRETAX}/{@link
- * PayrollDeductionKind#OTHER_POST_TAX}, which is exactly why those two stay wholly unclassified
- * below rather than being assigned {@code INTERNAL_RECOVERY} by default.
- */
+/** The classification table issue #376 asks for: every PayrollDeductionKind the engine supports, its
+ * DeductionRuleClass, its DeductionCapGroup, and the cited legal basis for both. This is a read-only lookup
+ * table. */
 public final class PayrollDeductionClassification {
 
-    /**
-     * @param ruleClass       who directs the deduction, or {@code null} if unconfirmed (see {@code needsReviewReason}).
-     * @param capGroup        which statutory limit applies, or {@code null} if unconfirmed.
-     * @param legalBasis      the cited statute/section this classification rests on. Always present, even for a
-     *                        partially-{@code null} entry, so a reviewer knows what IS settled.
-     * @param needsReviewReason the open question blocking a null field, quoting the issue's own open question where
-     *                        applicable. {@code null} only when both {@code ruleClass} and {@code capGroup} are set.
-     */
+    /** Selects affected frontend tests, including readers outside the import graph. */
     public record Entry(DeductionRuleClass ruleClass, DeductionCapGroup capGroup, String legalBasis, String needsReviewReason) {
         public Entry {
             if (legalBasis == null || legalBasis.isBlank()) {

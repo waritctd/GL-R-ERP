@@ -62,9 +62,8 @@ describe('NotificationBell', () => {
     fireEvent.click(item);
 
     await waitFor(() => expect(api.notifications.markRead).toHaveBeenCalledWith(1));
-    // Invalidating queryKeys.notifications() triggers a background refetch —
-    // this is the same key the bell polls with refetchInterval, and the key
-    // other pages' mutations invalidate to live-update the bell.
+    // Invalidating queryKeys.notifications() triggers a background refetch — this is the same key the bell polls
+    // with refetchInterval, and the key other pages' mutations invalidate to live-update the bell.
     await waitFor(() => expect(api.notifications.list).toHaveBeenCalledTimes(2));
   });
 
@@ -94,5 +93,21 @@ describe('NotificationBell', () => {
     await waitFor(() => expect(api.notifications.markRead).toHaveBeenCalledWith(1));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'การแจ้งเตือน' })).toBeNull());
     expect(document.activeElement).toBe(trigger);
+  });
+
+  // มีอะไรใหม่ (release notice): its bell row gets its own glyph rather than the generic bell fallback, so it reads
+  // as an announcement, not as one more workflow event.
+  it('gives a RELEASE_NOTE row the sparkles icon', async () => {
+    api.notifications.list.mockResolvedValue({
+      notifications: [
+        { id: 5, type: 'RELEASE_NOTE', message: 'มีอะไรใหม่: อัปเดตระบบขาย', read: false, createdAt: new Date().toISOString(), link: '/whats-new/2026-11-16' },
+      ],
+    });
+    renderBell();
+
+    fireEvent.click(await screen.findByRole('button', { name: /การแจ้งเตือน/ }));
+    const row = (await screen.findByText(/มีอะไรใหม่: อัปเดตระบบขาย/)).closest('button');
+    expect(row.querySelector('svg.lucide-sparkles')).not.toBeNull();
+    expect(row.querySelector('svg.lucide-bell')).toBeNull();
   });
 });

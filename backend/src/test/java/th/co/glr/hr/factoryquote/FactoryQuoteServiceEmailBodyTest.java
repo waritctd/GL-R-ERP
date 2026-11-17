@@ -22,21 +22,8 @@ import th.co.glr.hr.pricingrequest.PricingRequestRepository;
 import th.co.glr.hr.pricingrequest.PricingRequestStatus;
 import th.co.glr.hr.ticket.TicketRepository;
 
-/**
- * Unit-tests {@link FactoryQuoteService#emailBody} — the RFQ draft-body template — by invoking it
- * directly via reflection (it is private), with every collaborator mocked, no database involved.
- * Same "no database" style as {@link FactoryQuoteServiceAttachmentTest}: this is a pure
- * string-formatting concern, not an authorization decision, so no real-Postgres counterpart is
- * required here.
- *
- * <p>2026-09 rewrite: the template moved from a fixed-width {@code String.format} table (which
- * falls apart in real, proportional-font mail clients, and only listed brand/model/size/
- * quantity/unit) to one numbered block per item that also surfaces colour, surface (texture), the
- * catalog product code, and the line's special requirement. The cases below pin: a fully
- * populated line renders every one of those fields, a sparse line never prints "null" or a
- * dangling empty label, and the packing-details ask (pieces per box, m&sup2; per box, box weight)
- * is present alongside the pricing/lead-time request.
- */
+/** Unit-tests FactoryQuoteService#emailBody — the RFQ draft-body template — by invoking it directly via
+ * reflection (it is private), with every collaborator mocked, no database involved. */
 class FactoryQuoteServiceEmailBodyTest {
 
     private final FactoryQuoteRepository quotes = mock(FactoryQuoteRepository.class);
@@ -77,8 +64,8 @@ class FactoryQuoteServiceEmailBodyTest {
     @Test
     void sparseLine_omitsBlankFieldsWithoutEmptyLabelsOrNullText() throws Exception {
         PricingRequestSummaryDto summary = summary();
-        // Only brand/model/qty populated — everything else (color, texture, size, unit, catalog
-        // code, special requirement) is null, the common shape for a line entered by hand.
+        // Only brand/model/qty populated — everything else (color, texture, size, unit, catalog code, special
+        // requirement) is null, the common shape for a line entered by hand.
         PricingRequestItemDto item = item(
             "Bode", "Terra 30x30", null, null, null, null, new BigDecimal("45.50"), null, null, null);
         when(pricingRequests.findIncludedInFactoryEmailAttachmentFiles(summary.id())).thenReturn(List.of());
@@ -93,9 +80,9 @@ class FactoryQuoteServiceEmailBodyTest {
         assertThat(body).doesNotContain("Size:");
         assertThat(body).doesNotContain("Special requirement:");
         assertThat(body).doesNotContain("(Code:");
-        // No dangling label with nothing after it (e.g. a stray "Quantity:" with no value) — the
-        // greeting's own ": " lead-in to the item list is fine, so this checks for the specific
-        // per-item labels left with no content, not any line ending in a colon.
+        // No dangling label with nothing after it (e.g. a stray "Quantity:" with no value) — the greeting's own ": "
+        // lead-in to the item list is fine, so this checks for the specific per-item labels left with no content, not
+        // any line ending in a colon.
         assertThat(body.lines()).noneMatch(line ->
             line.trim().matches("(Colour|Surface|Size|Special requirement|Quantity):\\s*"));
     }

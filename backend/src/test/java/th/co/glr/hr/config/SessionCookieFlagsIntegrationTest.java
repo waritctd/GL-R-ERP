@@ -23,20 +23,8 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import th.co.glr.hr.support.PostgresTestSupport;
 
-/**
- * Pure verification test (asserts current behavior, changes nothing): pins the session cookie
- * flags on the real {@code POST /api/auth/login} response over the real embedded servlet
- * container (needed because {@code server.servlet.session.cookie.*} — {@code HttpOnly},
- * {@code SameSite}, {@code Secure} — is applied by Spring Session's cookie serializer at the
- * servlet-container layer, which {@code MockMvc.webAppContextSetup} does not exercise; see
- * {@link SecurityHeadersFilterTest} / {@link th.co.glr.hr.auth.LoginRateLimitFilterTest} for the
- * filter-level header/rate-limit coverage this test intentionally does not duplicate).
- *
- * <p>Boots the real context on a random port and needs a real Postgres, resolved by
- * {@link PostgresTestSupport} (TEST_DB_URL override, else a throwaway Testcontainers Postgres);
- * skipped gracefully when neither is available, mirroring the other integration tests in this
- * package.
- */
+/** Pure verification test: pins the session cookie flags on the real POST /api/auth/login response over the
+ * real embedded servlet container. */
 @EnabledIf(
     value = "th.co.glr.hr.support.PostgresTestSupport#isAvailable",
     disabledReason = "No TEST_DB_URL and no Docker available for Testcontainers Postgres")
@@ -68,8 +56,8 @@ class SessionCookieFlagsIntegrationTest {
         seedActiveEmployee(email);
 
         String requestBody = "{\"email\":\"" + email + "\",\"password\":\"" + PASSWORD + "\"}";
-        // No CookieHandler attached, so raw Set-Cookie headers are visible on the response
-        // instead of being consumed by an in-JVM cookie jar.
+        // No CookieHandler attached, so raw Set-Cookie headers are visible on the response instead of being consumed
+        // by an in-JVM cookie jar.
         HttpClient client = HttpClient.newHttpClient();
         HttpRequest request = HttpRequest.newBuilder()
             .uri(URI.create("http://127.0.0.1:" + port + "/api/auth/login"))
@@ -92,9 +80,9 @@ class SessionCookieFlagsIntegrationTest {
         assertThat(sessionCookie).containsIgnoringCase("HttpOnly");
         assertThat(sessionCookie).containsIgnoringCase("SameSite=Lax");
 
-        // server.servlet.session.cookie.secure defaults to true (application.yml); assert the
-        // Secure attribute is present only when that property actually resolves true in this
-        // context, so the test tracks configuration rather than hardcoding an assumption.
+        // server.servlet.session.cookie.secure defaults to true (application.yml); assert the Secure attribute is
+        // present only when that property actually resolves true in this context, so the test tracks configuration
+        // rather than hardcoding an assumption.
         boolean secureConfigured = secureCookieConfigured();
         if (secureConfigured) {
             assertThat(sessionCookie).containsIgnoringCase("Secure");

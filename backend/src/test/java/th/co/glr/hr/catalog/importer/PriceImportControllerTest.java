@@ -17,10 +17,8 @@ import th.co.glr.hr.auth.SessionContext;
 import th.co.glr.hr.auth.UserPrincipal;
 import th.co.glr.hr.common.ApiExceptionHandler;
 
-// #205: every /api/price-import endpoint must be ceo/import only — reads included, since
-// even listing factories or a factory's raw import profile shouldn't be visible to a plain
-// employee or sales user. `commit` is the highest-stakes endpoint (flips a version ACTIVE and
-// archives the prior one), so it gets its own explicit coverage alongside a representative read.
+// #205: every /api/price-import endpoint must be ceo/import only — reads included, since even listing
+// factories or a factory's raw import profile shouldn't be visible to a plain employee or sales user.
 class PriceImportControllerTest {
     private final PriceImportService service = mock(PriceImportService.class);
     private final MockMvc mvc = MockMvcBuilders

@@ -15,15 +15,9 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.attendance.schedule.WorkSchedule;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Exercises the daily roll-up SQL against a real PostgreSQL database.
- *
- * <p>These cases exist because Mockito cannot reach them. The override guard lives in an
- * {@code ON CONFLICT ... DO UPDATE ... WHERE} clause, absent days come from {@code generate_series},
- * and badge resolution is a correlated subquery — a mocked repository would happily "pass" all three
- * while the real statements did something else. This repository has been bitten by exactly that
- * before.
- */
+/** Exercises the daily roll-up SQL against a real PostgreSQL database. These cases exist because Mockito cannot
+ * reach them. The override guard lives in an ON CONFLICT ... DO UPDATE ... This repository has been bitten by
+ * exactly that before. */
 class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private static final ZoneId BANGKOK = ZoneId.of("Asia/Bangkok");
@@ -45,8 +39,8 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
     }
 
     private long insertEmployee(String code, String badge, Long divisionId, LocalDate hireDate) {
-        // HashMap, not Map.of: badge and divisionId are legitimately null in several cases here and
-        // Map.of rejects nulls.
+        // HashMap, not Map.of: badge and divisionId are legitimately null in several cases here and Map.of rejects
+        // nulls.
         Map<String, Object> params = new java.util.HashMap<>();
         params.put("code", code);
         params.put("badge", badge);
@@ -90,10 +84,8 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
             repository.findApprovedOvertimeMinutes(employeeId, date), false)));
     }
 
-    /**
-     * The guard that matters most. It lives in SQL precisely so no caller can forget it — which
-     * also means only a real database can prove it works.
-     */
+    /** The guard that matters most. It lives in SQL precisely so no caller can forget it — which also means only a
+     * real database can prove it works. */
     @Test
     void upsertRefusesToOverwriteAManuallyOverriddenRow() {
         long employeeId = insertEmployee("E100", "E100", null, LocalDate.of(2020, 1, 1));
@@ -228,10 +220,8 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
         assertThat(rows).extracting(AttendanceDailyRow::employeeId).doesNotContain(outside);
     }
 
-    /**
-     * A manager asking for someone in another division gets nothing rather than that person's data:
-     * both predicates AND, so the out-of-division id simply matches no rows.
-     */
+    /** A manager asking for someone in another division gets nothing rather than that person's data: both
+     * predicates AND, so the out-of-division id simply matches no rows. */
     @Test
     void divisionScopeAndEmployeeFilterCombineSoAManagerCannotReachOutside() {
         long sales = insertDivision("SL2", "ฝ่ายขาย 2");
@@ -263,10 +253,8 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
         assertThat(all).extracting(AttendanceEmployeeOption::employeeId).contains(stranger);
     }
 
-    /**
-     * Reads division_id, which is INTEGER in the schema — a blind (Long) cast throws at runtime.
-     * This runs on every recalculation, so it has to be exercised against a real result set.
-     */
+    /** Reads division_id, which is INTEGER in the schema — a blind (Long) cast throws at runtime. This runs on
+     * every recalculation, so it has to be exercised against a real result set. */
     @Test
     void divisionLookupWidensTheIntegerColumnWithoutCasting() {
         long division = insertDivision("SL4", "ฝ่ายขาย 4");
@@ -277,13 +265,9 @@ class AttendanceDailyRepositoryIntegrationTest extends AbstractPostgresIntegrati
         assertThat(repository.findDivisionId(withoutDivision)).isNull();
     }
 
-    /**
-     * The production failure this bulk path exists for: a real backfill spans thousands of
-     * employee-days. The per-day form issued three queries each — ~14k round trips in one
-     * transaction — which timed out against the hosted database and wrote nothing at all.
-     *
-     * <p>Also exercises the chunked upsert, since the row count here exceeds UPSERT_CHUNK.
-     */
+    /** The production failure this bulk path exists for: a real backfill spans thousands of employee-days. The
+     * per-day form issued three queries each — ~14k round trips in one transaction — which timed out against the
+     * hosted database and wrote nothing at all. */
     @Test
     void bulkRangeLoadReturnsEveryEmployeeDayAndSurvivesChunkedUpsert() {
         LocalDate start = LocalDate.of(2026, 3, 2);

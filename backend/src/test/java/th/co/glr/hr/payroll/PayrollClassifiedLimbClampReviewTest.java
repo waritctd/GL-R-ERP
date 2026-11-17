@@ -9,21 +9,8 @@ import org.junit.jupiter.api.Test;
 import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculation;
 import th.co.glr.hr.payroll.PayrollClassifiedCalculationDtos.PayrollClassifiedCalculationInput;
 
-/**
- * REVIEW test (task 2, 2026-07-29). The three-stage layering in {@link
- * PayrollCalculator#calculateClassified} clamps the REGULAR limb's taxable figure at zero
- * ({@code taxableRegularOnly = (regularAnnualProjection - expense - allowances).max(ZERO)}) and then
- * stacks the KNOWN and CUMULATIVE limbs on top of the clamped value. When an employee's allowances
- * plus expense deduction exceed their REGULAR limb alone -- a modest salary with real declared
- * allowances, plus a large irregular commission -- the unused allowance headroom is destroyed by the
- * clamp instead of sheltering the other two limbs.
- *
- * <p>The invariant asserted here is the one the whole engine exists to satisfy and is independent of
- * how the limbs are layered: total annual taxable income must be
- * {@code projectedAnnualIncome - taxExpenseDeduction - taxAllowanceTotal}, using the engine's OWN
- * reported figures for each term. Nothing about ป.96's three-limb split changes that identity --
- * the limbs decide WHEN tax is withheld, never how much annual income is taxable.
- */
+/** REVIEW test (task 2, 2026-07-29). Nothing about ป.96's three-limb split changes that identity -- the limbs
+ * decide WHEN tax is withheld, never how much annual income is taxable. */
 class PayrollClassifiedLimbClampReviewTest {
     private final PayrollCalculator calculator = new PayrollCalculator();
 
@@ -40,9 +27,8 @@ class PayrollClassifiedLimbClampReviewTest {
         Map<PayrollComponent, Boolean> sso = new EnumMap<>(PayrollComponent.class);
         sso.put(PayrollComponent.SALARY, Boolean.TRUE);
 
-        // Ordinary, entirely legal declarations: spouse 60,000 + life 100,000 + home-loan interest
-        // 100,000. Together with the 60,000 personal allowance these exceed the 180,000 annualised
-        // salary on their own.
+        // Ordinary, entirely legal declarations: spouse 60,000 + life 100,000 + home-loan interest 100,000. Together
+        // with the 60,000 personal allowance these exceed the 180,000 annualised salary on their own.
         PayrollTaxAllowanceInput allowances = new PayrollTaxAllowanceInput(
             new BigDecimal("60000.00"),  // spouse
             BigDecimal.ZERO,             // child
@@ -89,13 +75,9 @@ class PayrollClassifiedLimbClampReviewTest {
             .isEqualByComparingTo(calculator.progressiveTax(expectedTaxable));
     }
 
-    /**
-     * REVIEW test: the legacy {@link PayrollCalculator#calculate} derives the SSO wage base from
-     * {@code baseSalary - unpaidLeaveDeduction + leaveDeductionRefund}, so an employee on unpaid
-     * leave contributes on wages actually paid (and the 2026-07-23 cancel-after-close auto-refund
-     * restores the contribution). {@code calculateClassified} sums raw component amounts with no
-     * leave adjustment, so the contribution is computed on the nominal salary instead.
-     */
+    /** REVIEW test: the legacy PayrollCalculator#calculate derives the SSO wage base from baseSalary -
+     * unpaidLeaveDeduction + leaveDeductionRefund, so an employee on unpaid leave contributes on wages actually
+     * paid (and the 2026-07-23 cancel-after-close auto-refund restores the contribution). */
     @Test
     void unpaidLeaveMustStillReduceTheSsoWageBase() {
         Map<PayrollComponent, BigDecimal> amounts = new EnumMap<>(PayrollComponent.class);

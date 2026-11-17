@@ -90,13 +90,7 @@ import th.co.glr.hr.ticket.TicketService;
 import th.co.glr.hr.ticket.TicketStatus;
 import th.co.glr.hr.ticket.TicketSummaryDto;
 
-/**
- * Real-DB acceptance + authz + concurrency coverage for Step 6 (Deposit, Payment, and Order
- * Confirmation). Drives a single-item deal through the REAL Steps 1-5 services (no shortcuts) to
- * {@code PricingRequestStatus.QUOTATION_ACCEPTED}, then exercises {@link OrderConfirmationService}
- * against the real, already-tested {@link TicketService}/{@link DepositNoticeService} pipeline it
- * bridges into.
- */
+/** Real-DB acceptance + authz + concurrency coverage for Step 6 (Deposit, Payment, and Order Confirmation). */
 class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -149,8 +143,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         factoryQuoteRepository = factoryQuotes;
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
@@ -159,8 +153,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             landedCostCalculator);
 
         costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         decisionRepository = new PricingDecisionRepository(jdbc);
@@ -206,16 +200,14 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         ticketId = created.summary().id();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Acceptance scenario (end to end, real Postgres)
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void fullChain_quotationAcceptedThroughDepositPaid_composesWithoutShortcuts() {
         long pricingRequestId = driveToQuotationAccepted();
 
-        // No pricing chain has ever touched the legacy ticket status machine — confirms the
-        // task's own premise before the bridge acts.
+        // No pricing chain has ever touched the legacy ticket status machine — confirms the task's own premise before
+        // the bridge acts.
         assertThat(jdbc.queryForObject(
             "SELECT status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
             .isEqualTo(TicketStatus.DRAFT);
@@ -249,10 +241,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             new OrderConfirmationRequests.ConfirmOrderRequest(UUID.randomUUID().toString()), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
 
-        // ── Step 6.2: deposit notice from the accepted quotation (DepositPolicy's own 50%
-        //    default — req.depositPercent()=null — so the FULL deposit-notice amount paid below
-        //    is a genuine PARTIAL payment against the quotation's total, landing on DEPOSIT_PAID
-        //    rather than FULLY_PAID) ──────────────────────────────────────────────────────────
+        // Step 6.2: deposit notice from the accepted quotation (DepositPolicy's own 50% default —
+        // req.depositPercent()=null — so the FULL deposit-notice amount paid below is a genuine PARTIAL payment
+        // against the quotation's total, landing on DEPOSIT_PAID rather than FULLY_PAID)
         CustomerQuotationDto acceptedQuotation = quotationRepository.findByPricingRequest(pricingRequestId).stream()
             .filter(q -> QuotationStatus.ACCEPTED.equals(q.docStatus()))
             .findFirst().orElseThrow();
@@ -265,9 +256,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(draftNotice.subtotal()).isEqualByComparingTo(acceptedQuotation.subtotalAmount());
         assertThat(draftNotice.reference()).isEqualTo(acceptedQuotation.number());
 
-        // Traces to the quotation, NOT to any sales.ticket_item row — Step 4/5 never wrote a
-        // ticket_item price column for this deal, so a legacy-fallback build (which reads
-        // approved_price from ticket_item) would have produced ZERO items here, not one.
+        // Traces to the quotation, NOT to any sales.ticket_item row — Step 4/5 never wrote a ticket_item price column
+        // for this deal, so a legacy-fallback build (which reads approved_price from ticket_item) would have produced
+        // ZERO items here, not one.
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.ticket_item WHERE ticket_id = :id AND approved_price IS NOT NULL
             """, Map.of("id", ticketId), Long.class)).isZero();
@@ -294,11 +285,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.payment_receipt WHERE ticket_id = :id", Map.of("id", ticketId), Long.class))
             .isEqualTo(1L);
-        // The FULL deposit-notice amount (DepositPolicy's own 50% default of the quotation
-        // total) was paid, in one shot, with NO override note (recordPaymentInternal only
-        // requires one when the overpayment guard actually trips) — proving item 3's fix: a
-        // full-amount DEPOSIT payment on a new-chain deal must not be flagged as an overpayment
-        // just because payableAmount() used to be blind to the new chain's own quotation total.
+        // The FULL deposit-notice amount was paid, in one shot, with NO override note — proving item 3's fix: a
+        // full-amount DEPOSIT payment on a new-chain deal must not be flagged as an overpayment just because
+        // payableAmount used to be blind to the new chain's own quotation total.
         BigDecimal paid = jdbc.queryForObject(
             "SELECT amount FROM sales.payment_receipt WHERE ticket_id = :id", Map.of("id", ticketId), BigDecimal.class);
         // QA-01 (owner ruling 2026-10-28): the receipt is the notice's VAT-INCLUSIVE totalPayable
@@ -319,12 +308,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(1L);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Deposit-notice autofill (branch fix: DepositNoticeService.createDraft's own header
-    // autofill + new-chain item fallback), driven through the TICKET-LEVEL route — i.e. the
-    // route DepositNoticePage's "สร้างเอกสารฉบับร่าง" button actually calls, not the
-    // pricing-request-scoped createDepositNoticeFromQuotation bridge exercised above.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Deposit-notice autofill, driven through the TICKET-LEVEL route — i.e. the route DepositNoticePage's
+    // "สร้างเอกสารฉบับร่าง" button actually calls, not the pricing-request-scoped createDepositNoticeFromQuotation
+    // bridge exercised above.
 
     @Test
     void createDraft_ticketLevelRoute_autofillsHeaderAndSourcesItemsFromAcceptedQuotation() {
@@ -332,9 +318,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
 
-        // Precondition matching the branch's own diagnosis: every ticket_item on this deal still
-        // carries approved_price = NULL — Steps 1-5 never write that legacy column, so the
-        // TicketService.approve-only writer never ran.
+        // Precondition matching the branch's own diagnosis: every ticket_item on this deal still carries
+        // approved_price = NULL — Steps 1-5 never write that legacy column, so the TicketService.approve-only writer
+        // never ran.
         assertThat(jdbc.queryForObject("""
             SELECT COUNT(*) FROM sales.ticket_item WHERE ticket_id = :id AND approved_price IS NOT NULL
             """, Map.of("id", ticketId), Long.class)).isZero();
@@ -346,8 +332,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         TicketSummaryDto ticketSummary = tickets.findById(ticketId).orElseThrow().summary();
         CustomerDto customer = new CustomerRepository(jdbc).findById(ticketSummary.customerId()).orElseThrow();
 
-        // The ticket-level route, called with no explicit items/header — exactly what
-        // DepositNoticePage's fallback path (and the pre-fix production behaviour) both call.
+        // The ticket-level route, called with no explicit items/header — exactly what DepositNoticePage's fallback
+        // path (and the pre-fix production behaviour) both call.
         DepositNoticeDto draft = depositNoticeService.createDraft(ticketId,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
 
@@ -358,37 +344,22 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(draft.items().get(0).netUnitPrice())
             .isEqualByComparingTo(accepted.items().get(0).finalUnitPrice());
 
-        // Header: customerTaxId/customerAddress from the customer master via ticket.customerId,
-        // projectName from the ticket summary itself.
+        // Header: customerTaxId/customerAddress from the customer master via ticket.customerId, projectName from the
+        // ticket summary itself.
         assertThat(draft.customerTaxId()).isEqualTo(customer.taxId());
         assertThat(draft.customerAddress()).isEqualTo(customer.address() + " " + customer.branch());
         assertThat(draft.projectName()).isEqualTo(ticketSummary.projectName());
         assertThat(ticketSummary.projectName()).isNotBlank(); // guards against a vacuously-true assertion above
     }
 
-    /**
-     * Review finding (fixed before merge, not deferred):
-     * {@code CustomerQuotationRepository.findByTicket} originally copied {@code
-     * findByPricingRequest}'s {@code ORDER BY quotation_revision_no, quotation_id} — but that
-     * counter is scoped to a single pricing request (V74's own migration comment), so it is not
-     * comparable across the multiple pricing requests one ticket can have. This deal has TWO
-     * independent pricing requests: PR#1 is revised once (while still ISSUED, before the customer
-     * ever accepts anything) and THEN accepted, so its accepted quotation ends at {@code
-     * quotation_revision_no = 2} — but PR#2 is created and accepted strictly AFTER that, at its
-     * own first-ever {@code quotation_revision_no = 1}. Sorted by the old key, PR#1's revision-2
-     * row would sort AFTER PR#2's revision-1 row despite being older, so a forward "latest wins"
-     * scan would land on the wrong (superseded-by-time) pricing request's quotation — wrong
-     * quantities and wrong money on a customer financial document. Sorted by {@code quotation_id}
-     * alone (the fix), the actually-newer PR#2 row wins.
-     */
+    /** Review finding: CustomerQuotationRepository.findByTicket originally copied findByPricingRequest's ORDER BY
+     * quotation_revision_no, quotation_id — but that counter is scoped to a single pricing request, so it is not
+     * comparable across the multiple pricing requests one ticket can have. */
     @Test
     void createDraft_picksTheNewerPricingRequestsAcceptedQuotation_notTheOneWithTheHigherRevisionNo() {
-        // PR#1 (created FIRST, raw factory price 100.00): drive to quotation v1 ISSUED — NOT yet
-        // accepted. CustomerQuotationService.createRevision is reachable ONLY from ISSUED/
-        // REVISION_REQUESTED (its own guard rejects ACCEPTED, among others), so the revision must
-        // happen BEFORE the customer's acceptance, not after. Create + issue a commercial-only
-        // revision (v2 — this also immediately supersedes v1, per createRevision's own write),
-        // THEN accept v2. PR#1's accepted quotation ends at revision_no = 2.
+        // PR#1 (created FIRST, raw factory price 100.00): drive to quotation v1 ISSUED — NOT yet accepted. Create +
+        // issue a commercial-only revision (v2 — this also immediately supersedes v1, per createRevision's own write),
+        // THEN accept v2.
         long pr1Id = driveToQuotationIssuedNotYetAccepted(new BigDecimal("100.00"));
         CustomerQuotationDto pr1V1Issued = quotationRepository.findByPricingRequest(pr1Id).stream()
             .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus())).findFirst().orElseThrow();
@@ -396,10 +367,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             new CreateRevisionRequest("correction", UUID.randomUUID().toString()), salesActor);
         CustomerQuotationDto pr1V2Issued = quotationService.issue(pr1V2Draft.id(),
             new IssueCustomerQuotationRequest(UUID.randomUUID().toString()), salesActor);
-        // recordOutcome returns the quotation it just updated — use that directly rather than a
-        // second findByPricingRequest().filter(ACCEPTED).findFirst() lookup, which would be
-        // ambiguous if more than one row were ever ACCEPTED at once (it can't be here, since v1
-        // is already SUPERSEDED, but this sidesteps the assumption entirely).
+        // recordOutcome returns the quotation it just updated — use that directly rather than a second
+        // findByPricingRequest.filter.findFirst lookup, which would be ambiguous if more than one row were ever
+        // ACCEPTED at once.
         CustomerQuotationDto pr1Accepted = quotationService.recordOutcome(pr1V2Issued.id(),
             new RecordQuotationOutcomeRequest(QuotationStatus.ACCEPTED, "ยืนยันหลังแก้ไข", UUID.randomUUID().toString()),
             salesActor);
@@ -411,32 +381,17 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         // below is driven too: once PR#1's order is confirmed (walk 4, W4-04) the deal can start no new
         // pricing round, so a second request can no longer be submitted.
 
-        // PR#2 (created SECOND, raw factory price 250.00 — deliberately different so its line
-        // item is distinguishable from PR#1's): its own first-ever quotation, revision 1 — a
-        // LOWER revision_no than PR#1's, but a HIGHER quotation_id (created strictly later).
-        //
-        // GLA-123 slice S3 MAJOR 5 fix (Opus review, 2026-09-23): this used to call the shared
-        // driveToQuotationAccepted(rawUnitPrice) helper, which (in an earlier, now-reverted fix)
-        // superseded PR#1's own ACCEPTED row via raw SQL before accepting PR#2 through the real
-        // API — self-consistent, but it made THIS test vacuous: with only one ACCEPTED row ever
-        // existing, DepositNoticeService#createDraft's own "pick the newest accepted chain, not
-        // the higher revision_no" selection logic never had two real ACCEPTED candidates to
-        // discriminate between. R8 (recordOutcome's own guard) correctly refuses a second
-        // ACCEPTED through the real API while PR#1's is still live — no production caller can
-        // reach "two rows ACCEPTED at once" — but that DB shape is exactly what this test needs
-        // to prove createDraft's selection query is correct, independent of R8. So: drive PR#2 to
-        // ISSUED through the real API (unchanged), then flip it to ACCEPTED with a DIRECT SQL
-        // UPDATE — bypassing recordOutcome (and therefore R8) deliberately and explicitly. PR#1's
-        // own row is left untouched — genuinely still ACCEPTED, exactly as the test's own name
-        // ("PICKS the newer... not the one with the higher revision no") requires.
+        // PR#2 (created SECOND, raw factory price 250.00 — deliberately different so its line item is distinguishable
+        // from PR#1's): its own first-ever quotation, revision 1 — a LOWER revision_no than PR#1's, but a HIGHER
+        // quotation_id (created strictly later).
         long pr2Id = driveToQuotationIssuedNotYetAccepted(new BigDecimal("250.00"));
         CustomerQuotationDto pr2Issued = quotationRepository.findByPricingRequest(pr2Id).stream()
             .filter(q -> QuotationStatus.ISSUED.equals(q.docStatus())).findFirst().orElseThrow();
         jdbc.update("UPDATE sales.quotation SET doc_status = 'ACCEPTED', accepted_at = now() WHERE quotation_id = :id",
             Map.of("id", pr2Issued.id()));
-        // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED ->
-        // QUOTATION_ACCEPTED) — confirmOrder gates on THIS column, not sales.quotation.doc_status,
-        // so the raw-SQL bypass above must carry that write too or confirmOrder below 409s.
+        // recordOutcome ALSO transitions the pricing request's own status (QUOTATION_ISSUED -> QUOTATION_ACCEPTED) —
+        // confirmOrder gates on THIS column, not sales.quotation.doc_status, so the raw-SQL bypass above must carry
+        // that write too or confirmOrder below 409s.
         jdbc.update("UPDATE sales.pricing_request SET status = 'QUOTATION_ACCEPTED' WHERE pricing_request_id = :id",
             Map.of("id", pr2Id));
         assertThat(pricingRequestService.get(pr2Id, salesActor).summary().status())
@@ -451,18 +406,15 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         DepositNoticeDto draft = depositNoticeService.createDraft(ticketId,
             new DepositNoticeDraftRequest(null, null, null, null, null, null, null, null), salesActor);
 
-        // Wrong-way-round: PR#1's (superseded-by-time, higher-revision) price must be ABSENT —
-        // not merely "PR#2's price is present", which an off-by-one bug could satisfy by
-        // coincidence if the two prices ever collided.
+        // Wrong-way-round: PR#1's (superseded-by-time, higher-revision) price must be ABSENT — not merely "PR#2's
+        // price is present", which an off-by-one bug could satisfy by coincidence if the two prices ever collided.
         assertThat(draft.items()).hasSize(1);
         assertThat(draft.items().get(0).netUnitPrice())
             .isEqualByComparingTo(pr2Accepted.items().get(0).finalUnitPrice())
             .isNotEqualByComparingTo(pr1Accepted.items().get(0).finalUnitPrice());
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Authorization
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void confirmOrder_nonOwningSalesRep_cannotConfirm() {
@@ -487,14 +439,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    /**
-     * Reuses the existing, real backend authz gate on {@code confirmDepositPaid} (GLA-118:
-     * {@code DEPOSIT_CONFIRM_ROLES} = {@code {account}}, no CEO fallback) — cited, not re-proven:
-     * {@code TicketServiceTest.confirmDepositPaid_rejectsSalesRole}/{@code
-     * confirmDepositPaid_rejectsImportRole} already cover this at the unit level. This test only
-     * proves it holds for a NEW-CHAIN deal specifically (real DB, real quotation-sourced payable
-     * amount).
-     */
+    /** Reuses the existing, real backend authz gate on confirmDepositPaid (GLA-118: DEPOSIT_CONFIRM_ROLES = {account}, no CEO
+     * fallback) — cited, not re-proven: TicketServiceTest.confirmDepositPaid_rejectsSalesRole/confirmDepositPaid_rejectsImportRole
+     * already cover this at the unit level. */
     @Test
     void confirmDepositPaid_salesActor_cannotReach_onNewChainDeal() {
         long pricingRequestId = driveToQuotationAccepted();
@@ -505,9 +452,7 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Guard: reachable ONLY from QUOTATION_ACCEPTED
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void confirmOrder_beforeQuotationAccepted_isRejected() {
@@ -520,14 +465,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo(TicketStatus.DRAFT);
     }
 
-    /**
-     * The ticket-status gate: the bridge only knows how to move a {@code draft} ticket to {@code
-     * quotation_issued} (or proceed on one already there). A ticket carrying any other status
-     * (here a pre-redesign {@code approved} deal) must be refused BEFORE the first write — not
-     * after {@code markOrderConfirmed} has already committed, which (without a proxy, as in this
-     * hand-wired suite; and in prod only if the transaction proxy were ever bypassed) strands the
-     * deal half-confirmed with the retry then 409ing on "already confirmed".
-     */
+    /** The ticket-status gate: the bridge only knows how to move a draft ticket to quotation_issued (or proceed on
+     * one already there). */
     @Test
     void confirmOrder_ticketInAnUnbridgeableStatus_isRefusedBeforeAnyWrite() {
         long pricingRequestId = driveToQuotationAccepted();
@@ -563,8 +502,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo("approved");
     }
 
-    /** Both statuses the bridge CAN handle still confirm: draft (first confirm, the normal path
-     * exercised by every other test here) and quotation_issued (a later accepted revision). */
+    /** Both statuses the bridge CAN handle still confirm: draft (first confirm, the normal path exercised by every
+     * other test here) and quotation_issued (a later accepted revision). */
     @Test
     void confirmOrder_ticketAlreadyQuotationIssued_stillConfirms() {
         long pricingRequestId = driveToQuotationAccepted();
@@ -578,20 +517,11 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             Map.of("id", pricingRequestId), Boolean.class)).isTrue();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // The CEO-credit-terms bypass path — reaches order-confirmed without a deposit notice.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Traces {@code TicketService.issueImportRequest}'s {@code depositPolicyBypassesNotice} logic
-     * for a real credit-terms deal: bypasses the deposit notice entirely and, because {@code
-     * issueImportRequest} advances straight to {@code DealStage.PROCUREMENT} (the whole import
-     * journey lives inside that one stage — see {@code DealStage}'s own Javadoc), the deal SKIPS
-     * {@code DealStage.DEPOSIT_RECEIVED} rather than landing on it. paymentStatus stays
-     * CUSTOMER_CONFIRMED throughout (no payment was ever recorded), and no deposit_notice row is
-     * ever created for this ticket — this is the actual bypass shape the DealStage/paymentStatus/
-     * DepositPolicy machinery already models, reported here as found rather than assumed.
-     */
+    /** Traces TicketService.issueImportRequest's depositPolicyBypassesNotice logic for a real credit-terms deal:
+     * bypasses the deposit notice entirely and, because issueImportRequest advances straight to
+     * DealStage.PROCUREMENT, the deal SKIPS DealStage.DEPOSIT_RECEIVED rather than landing on it. */
     @Test
     void ceoCreditTermsBypass_reachesOrderConfirmed_withoutADepositNotice() {
         long pricingRequestId = driveToQuotationAccepted();
@@ -615,26 +545,11 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             .isZero();
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Transaction-harness coverage (test/transaction-harness): confirmOrder's write sequence is
-    // lockPricingRequest -> replay check -> markOrderConfirmed (1) ->
-    // markQuotationIssuedForOrderConfirmation (2) -> tickets.addEvent (3) -> reconcileTicketItems
-    // (4) -> ticketService.confirmCustomer (5-6) -> pricingRequests.addEvent ORDER_CONFIRMED (7)
-    // -> notifications.notifyByRoleForPricingRequest (8, last). Every hand-wired integration test
-    // in this suite — including every OTHER test in this very file — drives orderConfirmation
-    // with `new OrderConfirmationService(...)`, which has NO Spring AOP proxy, so @Transactional
-    // on confirmOrder does nothing for them: every JDBC statement auto-commits independently.
-    // These two tests close that gap.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Exercise order confirmation through a real transaction proxy to verify late failures roll back preceding
+    // writes.
 
-    /**
-     * Real proxy, real rollback: fails at the LAST write (the notification) and proves all seven
-     * writes before it are undone. Built via {@link AbstractPostgresIntegrationTest#transactional}
-     * so {@code confirmOrder}'s own {@code @Transactional} — not a test-supplied transaction — is
-     * what has to do the work; see {@link
-     * #confirmOrder_withoutTheProxy_strandsTheDealHalfConfirmed_theHarnessDefectItself()} for the
-     * vacuity control proving this assertion is not trivially true.
-     */
+    /** Real proxy, real rollback: fails at the LAST write (the notification) and proves all seven writes before it
+     * are undone. */
     @Test
     void confirmOrder_failingAfterEveryWrite_rollsBackAllOfThem_whenProxied() {
         long pricingRequestId = driveToQuotationAccepted();
@@ -677,38 +592,17 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             .as("reconcileTicketItems's UPDATE/INSERT on sales.ticket_item (write 4) must not survive")
             .isEqualTo(itemsBefore);
 
-        // The deal must not be stuck: a subsequent confirm through the REAL (non-failing) service
-        // — the retry production depends on — succeeds.
+        // The deal must not be stuck: a subsequent confirm through the REAL (non-failing) service — the retry
+        // production depends on — succeeds.
         OrderConfirmationDtos.OrderConfirmationResultDto retried = orderConfirmation.confirmOrder(
             pricingRequestId, new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor);
         assertThat(retried.ticket().summary().status()).isEqualTo(TicketStatus.QUOTATION_ISSUED);
         assertThat(retried.pricingRequest().orderConfirmedAt()).isNotNull();
     }
 
-    /**
-     * The vacuity control, and the reason the assertions above are not passing for a trivial
-     * reason. Same injected failure, but calls the RAW un-proxied service exactly as all other
-     * integration tests in this suite do — no {@link AbstractPostgresIntegrationTest#transactional}
-     * wrapping. Because {@code @Transactional} does nothing without a real AOP proxy, every write
-     * before the injected failure COMMITS independently, stranding the deal half-confirmed:
-     * {@code order_confirmed_at} is set, the ticket sits at {@code quotation_issued}, {@code
-     * confirmCustomer}'s payment/stage writes landed, and the reconciliation write(s) survive
-     * independently of everything after them — and a retry now 409s, because {@code
-     * markOrderConfirmed}'s own compare-and-set already fired. The deal is confirmed but the
-     * notification the accepted order depends on never fired, and nothing will ever re-drive it;
-     * only hand-written SQL frees it in production today.
-     *
-     * <p>(Reviewer's note: an earlier draft of this Javadoc claimed {@code confirmCustomer} "never
-     * ran, paymentStatus stays NULL". That was wrong — {@code confirmCustomer} is writes 5-6, i.e.
-     * strictly BEFORE the injected 8th-write failure, so its writes commit like all the others.
-     * The claim is now pinned by an assertion below rather than asserted only in prose.)
-     *
-     * <p>Documents today's broken auto-commit behaviour deliberately — it asserts the DEFECT, not
-     * a desired outcome, and should be DELETED the day the base test harness itself runs inside a
-     * real Spring context with proxied beans (at which point every plain, hand-wired service in
-     * this suite would roll back correctly and this divergent-behaviour test would no longer
-     * describe reality).
-     */
+    /** The vacuity control, and the reason the assertions above are not passing for a trivial reason. Same injected
+     * failure, but calls the RAW un-proxied service exactly as all other integration tests in this suite do — no
+     * AbstractPostgresIntegrationTest#transactional wrapping. */
     @Test
     void confirmOrder_withoutTheProxy_strandsTheDealHalfConfirmed_theHarnessDefectItself() {
         long pricingRequestId = driveToQuotationAccepted();
@@ -732,10 +626,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(ticketItemSnapshot())
             .as("reconcileTicketItems's write also survives independently of everything after it")
             .isNotEqualTo(itemsBefore);
-        // Pins the corrected claim in this method's Javadoc: confirmCustomer (writes 5-6) runs
-        // strictly BEFORE the injected 8th-write failure, so its writes commit too. The exact
-        // mirror image of the proxied test's "payment_status IS NULL / zero CUSTOMER_CONFIRMED
-        // events" assertions — which is what makes those two non-vacuous.
+        // Pins the corrected claim in this method's Javadoc: confirmCustomer (writes 5-6) runs strictly BEFORE the
+        // injected 8th-write failure, so its writes commit too.
         assertThat(jdbc.queryForObject(
             "SELECT payment_status FROM sales.ticket WHERE ticket_id = :id", Map.of("id", ticketId), String.class))
             .as("confirmCustomer's updatePaymentStatus write (5) survives without a proxy")
@@ -744,18 +636,16 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             .as("confirmCustomer's own ticket_event write (6) survives without a proxy")
             .isOne();
 
-        // The consequence that matters: the deal is confirmed but never fully processed, and a
-        // retry 409s because markOrderConfirmed's compare-and-set already fired.
+        // The consequence that matters: the deal is confirmed but never fully processed, and a retry 409s because
+        // markOrderConfirmed's compare-and-set already fired.
         assertThatThrownBy(() -> orderConfirmation.confirmOrder(pricingRequestId,
             new OrderConfirmationRequests.ConfirmOrderRequest(null), salesActor))
             .isInstanceOfSatisfying(ApiException.class, e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.CONFLICT));
     }
 
-    /** Identical to the fixture's {@code orderConfirmation} except its {@code
-     * NotificationRepository} is a mock that throws on the LAST write of confirmOrder's sequence
-     * — every other dependency (pricingRequests, tickets, ticketService, quotationRepository,
-     * depositNoticeService) stays REAL, so everything before that last write is genuinely
-     * exercised against real Postgres. */
+    /** Identical to the fixture's orderConfirmation except its NotificationRepository is a mock that throws on the
+     * LAST write of confirmOrder's sequence — every other dependency stays REAL, so everything before that last
+     * write is genuinely exercised against real Postgres. */
     private OrderConfirmationService wireFailingOrderConfirmationService() {
         NotificationRepository failingNotifications = mock(NotificationRepository.class);
         doThrow(new IllegalStateException("injected failure after every confirmOrder write"))
@@ -785,26 +675,17 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
         return count == null ? 0 : count;
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Mutation-check evidence (verbatim red output recorded in the branch handoff)
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // See docs/agent-handoffs/95_feat-sales-deposit-order-confirmation.md "Authz Evidence" for
-    // the mutation-check narrative against these three tests:
-    //   confirmOrder_beforeQuotationAccepted_isRejected        (the QUOTATION_ACCEPTED-only gate)
-    //   fullChain_..._composesWithoutShortcuts's replay assertions (the clientRequestId guard)
-    //   confirmOrder_nonOwningSalesRep_cannotConfirm            (the owner-only guard)
+    // Mutation-check history is recorded in docs/agent-handoffs/95_feat-sales-deposit-order-confirmation.md.
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private long driveToQuotationAccepted() {
         return driveToQuotationAccepted(new BigDecimal("100.00"));
     }
 
-    /** Same drive, parameterized on the factory's raw unit price — so two independent pricing
-     * requests on the SAME ticket (see the cross-pricing-request ordering test below) can be
-     * driven to two DISTINGUISHABLE accepted quotations. */
+    /** Same drive, parameterized on the factory's raw unit price — so two independent pricing requests on the SAME
+     * ticket (see the cross-pricing-request ordering test below) can be driven to two DISTINGUISHABLE accepted
+     * quotations. */
     private long driveToQuotationAccepted(BigDecimal rawUnitPrice) {
         long pricingRequestId = driveToQuotationIssuedNotYetAccepted(rawUnitPrice);
         CustomerQuotationDto issued = quotationRepository.findByPricingRequest(pricingRequestId).stream()
@@ -823,8 +704,8 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private long driveToQuotationIssuedNotYetAccepted(BigDecimal rawUnitPrice) {
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now
+        // required on every item PricingRequestService#createDraft persists —
         // requestedQty/requestedUnit/requestedUnitBasis are derived instead.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             null, catalogProductId, null, "SCG", "Tile OC", "SCG Tile OC", "White", "Matte", "60x60", FACTORY,
@@ -855,10 +736,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
-        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
-        // computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the (only, here) factory quote is ready — Import no longer creates/recalculates/submits a costing
+        // of its own; the CEO's startReview below computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -877,10 +757,9 @@ class OrderConfirmationIntegrationTest extends AbstractPostgresIntegrationTest {
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

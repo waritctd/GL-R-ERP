@@ -13,16 +13,9 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 
-/**
- * CR-1 (GLA-167) A8 — the route table of {@link FactoryQuoteController}. "ส่งแล้ว" is replaced by
- * "ติดต่อโรงงานแล้ว": {@code POST /api/factory-quotes/{id}/send} must be gone (not aliased) and
- * {@code POST /api/factory-quotes/{id}/contacted} must exist. A reflection check rather than a
- * MockMvc one because it needs no Spring context, so it is cheap and cannot be satisfied by a
- * catch-all handler.
- *
- * <p>The committed digest guard ({@code ApiSurfaceContractTest}) separately fails until
- * {@code docs/api/api-surface.json} is regenerated — that is the repo's own record of the change.
- */
+/** CR-1 (GLA-167) A8 — the route table of FactoryQuoteController. "ส่งแล้ว" is replaced by "ติดต่อโรงงานแล้ว":
+ * POST /api/factory-quotes/{id/send} must be gone (not aliased) and POST /api/factory-quotes/{id/contacted}
+ * must exist. */
 class FactoryQuoteControllerMappingTest {
 
     @Test

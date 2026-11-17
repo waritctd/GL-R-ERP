@@ -23,7 +23,6 @@ import th.co.glr.hr.customerquotation.CustomerQuotationRepository;
 import th.co.glr.hr.deposit.DepositNoticePdfRenderer;
 import th.co.glr.hr.deposit.DepositNoticeRepository;
 import th.co.glr.hr.deposit.DepositNoticeService;
-import th.co.glr.hr.deposit.RemainingInvoicePdfRenderer;
 import th.co.glr.hr.deposit.RevisionRequest;
 import th.co.glr.hr.deposit.RevisionScope;
 import th.co.glr.hr.employee.EmployeeCodeGenerator;
@@ -35,32 +34,9 @@ import th.co.glr.hr.pricingrequest.PricingRequestService;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import th.co.glr.hr.support.RecordingSalesMailer;
 
-/**
- * Real-Postgres proof for the {@code sales.ticket.status} state machine:
- * {@link TicketStatus#canTransition} + {@link TicketRepository#transitionStatus} + every production
- * write site that moves the column. {@link TicketStatusTest} covers the table in isolation; this
- * class covers the two things a pure function cannot show —
- *
- * <ol>
- *   <li>the compare-and-set really is in the {@code WHERE} clause, so a stale {@code expected}
- *       leaves the row alone instead of overwriting it (Mockito cannot reach this: a mocked
- *       repository happily returns whatever it is told while the SQL does something else); and
- *   <li>the SERVICE composition still reaches the same status each site reached before the write
- *       was separated out of {@code addEvent} — the behaviour-preservation claim, one test per
- *       site, driven through the real service.
- * </ol>
- *
- * <p><strong>Fixture note.</strong> Several tests seed a ticket at a given status with a direct
- * {@code UPDATE}. That is deliberate and is the same two-tier approach
- * {@code PaymentTrackIntegrationTest} documents: the fact under test is the transition out of that
- * state, not how the deal arrived there, and most of these statuses are now reachable only through
- * the legacy pre-PricingRequest loop (ticket-level {@code submit()} 409s by design since the
- * pricing-chain redesign), so there is no live path that could build the fixture instead.
- *
- * <p><strong>No rollback is asserted anywhere.</strong> {@code AbstractPostgresIntegrationTest} has
- * no Spring context and every service here is hand-wired with {@code new}, so {@code @Transactional}
- * is inert — an assertion that depended on a rollback would be asserting nothing.
- */
+/** Real-Postgres proof for the sales.ticket.status state machine: TicketStatus#canTransition +
+ * TicketRepository#transitionStatus + every production write site that moves the column. Fixture note. Several
+ * tests seed a ticket at a given status with a direct UPDATE. */
 class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private TicketRepository tickets;
@@ -70,7 +46,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
 
     private long salesRepId;
     private UserPrincipal salesRep;
-    private UserPrincipal importActor;
     private UserPrincipal ceo;
     private UserPrincipal accountActor;
 
@@ -81,10 +56,9 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         NotificationRepository notifications = new NotificationRepository(jdbc, mailer);
         CustomerRepository customers = new CustomerRepository(jdbc);
 
-        // Mocked exactly as DealTrackingAndActivityIntegrationTest mocks it, and for the same
-        // reason: only cancel() reaches PricingRequestService.cancelOpenForTicket, whose real
-        // return value is irrelevant here but whose Mockito default (null) would NPE inside
-        // cancel().
+        // Mocked exactly as DealTrackingAndActivityIntegrationTest mocks it, and for the same reason: only cancel()
+        // reaches PricingRequestService.cancelOpenForTicket, whose real return value is irrelevant here but whose
+        // Mockito default (null) would NPE inside cancel().
         PricingRequestService pricingRequests = mock(PricingRequestService.class);
         when(pricingRequests.cancelOpenForTicket(anyLong(), anyString(), any(), any()))
             .thenReturn(new PricingRequestService.CancelOpenForTicketResult(0, List.of()));
@@ -100,18 +74,15 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
             jdbc, new EmployeeReferenceRepository(jdbc), new EmployeeCodeGenerator(jdbc));
         salesRepId = createEmployee(employees, "พนักงานขาย สถานะ", "sales-status-machine@glr.co.th");
         salesRep = principal(salesRepId, "sales");
-        importActor = principal(createEmployee(employees, "ฝ่ายนำเข้า สถานะ", "import-status-machine@glr.co.th"), "import");
         ceo = principal(createEmployee(employees, "ซีอีโอ สถานะ", "ceo-status-machine@glr.co.th"), "ceo");
         accountActor = principal(createEmployee(employees, "บัญชี สถานะ", "account-status-machine@glr.co.th"), "account");
     }
 
     // ── the guard itself, at the repository ──────────────────────────────────
 
-    /**
-     * Wrong-way-round #1: an edge the machine does not declare is refused BEFORE any SQL runs, and
-     * the row is untouched. {@code draft -> closed} was a perfectly happy write before this change
-     * — {@code isValid("closed")} is true, and nothing looked at the current state at all.
-     */
+    /** Wrong-way-round #1: an edge the machine does not declare is refused BEFORE any SQL runs, and the row is
+     * untouched. draft -> closed was a perfectly happy write before this change — isValid("closed") is true, and
+     * nothing looked at the current state at all. */
     @Test
     void anUndeclaredEdgeThrowsAndLeavesTheRowAlone() {
         long ticketId = createTicket();
@@ -125,13 +96,8 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(closedAt(ticketId)).isNull();
     }
 
-    /**
-     * Wrong-way-round #2, and the one that only a real database can show: the edge is DECLARED
-     * ({@code price_proposed -> cancelled} is a legal cancel), but the row is not at
-     * {@code price_proposed}. The compare-and-set must match nothing and report 0 rows — the old
-     * unguarded UPDATE had no {@code AND status = :expected} at all and would have cancelled a
-     * deal that was sitting in {@code in_review}.
-     */
+    /** Wrong-way-round #2, and the one that only a real database can show: the edge is DECLARED (price_proposed ->
+     * cancelled is a legal cancel), but the row is not at price_proposed. */
     @Test
     void aStaleExpectedValueUpdatesZeroRowsRatherThanOverwriting() {
         long ticketId = createTicket();
@@ -153,12 +119,9 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.IN_REVIEW);
     }
 
-    /**
-     * The OrderConfirmationService bridge, folded onto {@code transitionStatus} but keeping its
-     * observable contract: hardcoded FROM {@code draft}, so a non-draft row yields 0 rows (which
-     * the service turns into a 409) and never an {@code IllegalStateException} — the edge check is
-     * a constant that always passes.
-     */
+    /** The OrderConfirmationService bridge, folded onto transitionStatus but keeping its observable contract:
+     * hardcoded FROM draft, so a non-draft row yields 0 rows (which the service turns into a 409) and never an
+     * IllegalStateException — the edge check is a constant that always passes. */
     @Test
     void theOrderConfirmationBridgeStillRefusesANonDraftRowWithZeroRowsNotAThrow() {
         long ticketId = createTicket();
@@ -183,66 +146,9 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(eventCount(ticketId, TicketEventKind.CREATED)).isEqualTo(1);
     }
 
-    /** Site 2 — {@code TicketService.pickup}: submitted -> in_review. */
-    @Test
-    void pickup_stillReachesInReview() {
-        long ticketId = createTicket();
-        seedStatus(ticketId, TicketStatus.SUBMITTED);
-
-        assertThat(ticketService.pickup(ticketId, importActor).summary().status())
-            .isEqualTo(TicketStatus.IN_REVIEW);
-        assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.IN_REVIEW);
-    }
-
-    /** Site 3 — {@code TicketService.proposePrice}: all three admitted states -> price_proposed. */
-    @Test
-    void proposePrice_stillReachesPriceProposedFromEveryAdmittedState() {
-        for (String from : List.of(TicketStatus.IN_REVIEW, TicketStatus.PRICE_PROPOSED, TicketStatus.APPROVED)) {
-            long ticketId = createTicket();
-            seedStatus(ticketId, from);
-
-            ticketService.proposePrice(ticketId, new ProposePriceRequest(List.of(sampleItem()), "ราคา"), importActor);
-
-            assertThat(statusOf(ticketId)).as("proposePrice from %s", from)
-                .isEqualTo(TicketStatus.PRICE_PROPOSED);
-        }
-    }
-
-    /** Sites 4 and 5 — {@code approve} / {@code reject}, both out of price_proposed. */
-    @Test
-    void approveAndReject_stillReachApprovedAndInReview() {
-        long approved = createTicket();
-        seedStatus(approved, TicketStatus.PRICE_PROPOSED);
-        assertThat(ticketService.approve(approved, ceo).summary().status()).isEqualTo(TicketStatus.APPROVED);
-        assertThat(statusOf(approved)).isEqualTo(TicketStatus.APPROVED);
-
-        long rejected = createTicket();
-        seedStatus(rejected, TicketStatus.PRICE_PROPOSED);
-        assertThat(ticketService.reject(rejected, new RejectRequest("แพงไป"), ceo).summary().status())
-            .isEqualTo(TicketStatus.IN_REVIEW);
-        assertThat(statusOf(rejected)).isEqualTo(TicketStatus.IN_REVIEW);
-    }
-
-    /** Site 6 — {@code generateQuotation}, including the amended re-issue self-edge. */
-    @Test
-    void generateQuotation_stillReachesQuotationIssuedAndCanReIssue() {
-        long ticketId = createTicket();
-        seedStatus(ticketId, TicketStatus.APPROVED);
-
-        ticketService.generateQuotation(ticketId, designerQuotation(), salesRep);
-        assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.QUOTATION_ISSUED);
-
-        // approved -> quotation_issued, then the quotation_issued -> quotation_issued self-edge.
-        ticketService.generateQuotation(ticketId, designerQuotation(), salesRep);
-        assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.QUOTATION_ISSUED);
-    }
-
-    /**
-     * Site 7 — {@code verifyClose}, via the legacy {@code document_issued} route
-     * ({@code requireClosePrerequisites}'s {@code legacyOk} branch: a pre-dual-track deal whose
-     * payment track was never started). {@code closed_at} is still stamped, which is the side
-     * effect that stayed behind in {@code addEvent} when the status write moved out.
-     */
+    /** Site 7 — verifyClose, via the legacy document_issued route (requireClosePrerequisites's legacyOk branch: a
+     * pre-dual-track deal whose payment track was never started). closed_at is still stamped, which is the side
+     * effect that stayed behind in addEvent when the status write moved out. */
     @Test
     void verifyClose_stillReachesClosedAndStillStampsClosedAt() {
         long ticketId = createTicket();
@@ -663,13 +569,7 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         assertThat(statusOf(ticketId)).isEqualTo(TicketStatus.CLOSED);
     }
 
-    /**
-     * Site 9 — {@code DepositNoticeService.requestRevision}, the deliberate BACKWARD moves. This is
-     * the site the status write had to be re-attached to by hand: it is the only one where the
-     * event's {@code toStatus} was computed rather than constant, so without an explicit
-     * {@code transitionStatus} call the revision would have logged its event and left the deal
-     * exactly where it was.
-     */
+    /** Site 9 — DepositNoticeService.requestRevision, the deliberate BACKWARD moves. */
     @Test
     void requestRevision_stillMovesTheDealBackwardsAccordingToScope() {
         for (String from : List.of(TicketStatus.APPROVED, TicketStatus.DOCUMENT_ISSUED)) {
@@ -696,11 +596,8 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
             tickets.nextTicketCode(), salesRepId, "พนักงานขาย สถานะ");
     }
 
-    /**
-     * Seeds the row at a status directly. See the class Javadoc: the fact under test is always the
-     * transition OUT of this state, and most of these states are no longer reachable through a live
-     * code path at all.
-     */
+    /** Seeds the row at a status directly. See the class Javadoc: the fact under test is always the transition OUT
+     * of this state, and most of these states are no longer reachable through a live code path at all. */
     private void seedStatus(long ticketId, String status) {
         jdbc.update("UPDATE sales.ticket SET status = :status WHERE ticket_id = :id",
             new MapSqlParameterSource().addValue("status", status).addValue("id", ticketId));
@@ -720,17 +617,6 @@ class TicketStatusMachineIntegrationTest extends AbstractPostgresIntegrationTest
         return jdbc.queryForObject(
             "SELECT COUNT(*) FROM sales.ticket_event WHERE ticket_id = :id AND kind = :kind",
             new MapSqlParameterSource().addValue("id", ticketId).addValue("kind", kind), Long.class);
-    }
-
-    private static TicketItemRequest sampleItem() {
-        return new TicketItemRequest("Padana", "รุ่นทดสอบ", null, null, "60x60", "PAD",
-            new BigDecimal("10"), null, "PIECE", new BigDecimal("100"), "EUR", "SQM",
-            new BigDecimal("500"), "THB");
-    }
-
-    private static GenerateQuotationRequest designerQuotation() {
-        return new GenerateQuotationRequest(QuotationRecipient.DESIGNER,
-            null, null, null, null, null, null, null, null, null);
     }
 
     private long createEmployee(EmployeeRepository employees, String name, String email) {

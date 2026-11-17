@@ -8,11 +8,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// Regression coverage for the three save-race defects PR #932 shipped in
-// QuotationEditorPage.jsx (lost edits on save, submit-vs-autosave, dropped item ids) plus the
-// autosave error backoff. Fixtures/mocking pattern copied from QuotationEditorPage.v3.test.jsx
-// (that file owns the v3/v3b behaviour; this one owns the save-sequencing behaviour) rather than
-// imported, since that file exports nothing -- see its own header comment for why a separate file.
+// Regression coverage for the three save-race defects PR #932 shipped in QuotationEditorPage.jsx (lost edits
+// on save, submit-vs-autosave, dropped item ids) plus the autosave error backoff.
 vi.setConfig({ testTimeout: 15000 });
 
 vi.mock('../../api/index.js', async (importOriginal) => {
@@ -27,10 +24,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
         downloadPdf: vi.fn(), downloadXlsx: vi.fn(),
       },
       catalog: { prices: vi.fn() },
-      // Consumed by DesignerPicker.jsx (owner ask 2026-09-12, "D.Co. auto-fill from a
-      // ผู้ออกแบบ pick") -- getByCode default-resolves to undefined so the picker's own
-      // resolved-name hint effect just finds nothing rather than throwing when a test
-      // never sets a unitCode.
+      // Consumed by DesignerPicker.jsx (owner ask 2026-09-12, "D.Co. auto-fill from a ผู้ออกแบบ pick") -- getByCode
+      // default-resolves to undefined so the picker's own resolved-name hint effect just finds nothing rather than
+      // throwing when a test never sets a unitCode.
       designers: { search: vi.fn(), getByCode: vi.fn().mockRejectedValue(new Error('not found')) },
       customers: {
         search: vi.fn(), create: vi.fn(), update: vi.fn(), projects: vi.fn(), createProject: vi.fn(),
@@ -50,9 +46,6 @@ const CONTACTS = [
 ];
 
 // A COMPLETE stored tile row (validateQuotationItem finds nothing missing), server id 101.
-// leadTimeMinDays/leadTimeMaxDays are SET (owner feedback #7, 2026-09-14: submit now refuses a
-// TILE row with neither) -- this file's ส่งขออนุมัติ assertions are about save/submit RACES, not
-// lead-time completeness, so the fixture must not trip the new gate.
 const TILE_ITEM = {
   id: 101, seq: 1, lineType: 'TILE', locationLabel: null, catalogPriceId: null, productCode: null,
   brand: 'Marazzi', model: 'Trilogy', color: 'Ash', texture: 'Matt', sizeText: '60x60', thicknessMm: 10,
@@ -96,8 +89,8 @@ function renderEditor(path, showToast = vi.fn()) {
   return showToast;
 }
 
-/** A promise this test resolves/rejects by hand, to hold one PUT "in flight" across several
- * assertions -- the shape every case below needs to force the race it is checking. */
+/** A promise this test resolves/rejects by hand, to hold one PUT "in flight" across several assertions -- the
+ * shape every case below needs to force the race it is checking. */
 function deferred() {
   let resolve;
   let reject;
@@ -172,8 +165,8 @@ describe('lost edit on save (#932 defect 1)', () => {
     fireEvent.change(priceInput, { target: { value: '1234' } });
     expect(priceInput.value).toBe('1234');
 
-    // PUT #1's server echo resolves AFTER the newer edit — it reflects what was SENT (900), not
-    // what is now on screen.
+    // PUT #1's server echo resolves AFTER the newer edit — it reflects what was SENT (900), not what is now on
+    // screen.
     first.resolve({
       quotation: draft({
         items: [{ ...TILE_ITEM, listPriceSqm: 900, unitPrice: 302.56, netUnitPrice: 302.56, lineAmount: 17245.92 }],
@@ -183,8 +176,8 @@ describe('lost edit on save (#932 defect 1)', () => {
     // The merge must never clobber a field the rep is actively editing, regardless of timing.
     await waitFor(() => expect(priceInput.value).toBe('1234'));
 
-    // dirty must have stayed true, so the next debounce tick fires a SECOND PUT carrying 1234 —
-    // the bug's OTHER symptom was this PUT silently reverting to send the stale 900 instead.
+    // dirty must have stayed true, so the next debounce tick fires a SECOND PUT carrying 1234 — the bug's OTHER
+    // symptom was this PUT silently reverting to send the stale 900 instead.
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(2), { timeout: 4000 });
     expect(api.dealQuotations.update.mock.calls[1][1].items[0]).toMatchObject({ listPriceSqm: 1234, unitPrice: null });
   });
@@ -230,8 +223,8 @@ describe('submit vs autosave (#932 defect 2)', () => {
 
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1));
 
-    // Hold submit's own pre-save PUT in flight PAST where the 2s autosave debounce would have
-    // fired -- a still-scheduled (uncancelled) timer would show up as a second call here.
+    // Hold submit's own pre-save PUT in flight PAST where the 2s autosave debounce would have fired -- a
+    // still-scheduled (uncancelled) timer would show up as a second call here.
     await new Promise((r) => { setTimeout(r, AUTOSAVE_DELAY_MS + 500); });
     expect(api.dealQuotations.update).toHaveBeenCalledTimes(1);
     expect(api.dealQuotations.submit).not.toHaveBeenCalled();
@@ -317,8 +310,8 @@ describe('autosave error backoff (#932 defect 4, optional)', () => {
     await waitFor(() => expect(api.dealQuotations.update).toHaveBeenCalledTimes(1), { timeout: 4000 });
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'ยอดรวมหลังหักส่วนลดพิเศษติดลบ'));
 
-    // Wait past TWO more debounce periods with NO further edit -- the backoff must suppress both,
-    // and the error must not re-toast.
+    // Wait past TWO more debounce periods with NO further edit -- the backoff must suppress both, and the error
+    // must not re-toast.
     await new Promise((r) => { setTimeout(r, AUTOSAVE_DELAY_MS * 2 + 500); });
     expect(api.dealQuotations.update).toHaveBeenCalledTimes(1);
     expect(showToast.mock.calls.filter((c) => c[0] === 'error')).toHaveLength(1);
@@ -330,11 +323,9 @@ describe('autosave error backoff (#932 defect 4, optional)', () => {
 });
 
 describe('submit after rejection navigates to the new revision (owner clarification 2026-09-15)', () => {
-  // DealQuotationService#submit's own status-machine comment: submitting a ตีกลับ'd draft now
-  // mints a revision of ITSELF instead of resubmitting the SAME row, so res.quotation.id can now
-  // differ from this page's own `id`. Mirrors reviseMutation's onSuccess (the "สร้างฉบับแก้ไข"
-  // button already had to solve this exact "server minted a different id" case) -- see
-  // submitMutation's own onSuccess comment.
+  // DealQuotationService#submit's own status-machine comment: submitting a ตีกลับ'd draft now mints a revision
+  // of ITSELF instead of resubmitting the SAME row, so res.quotation.id can now differ from this page's own
+  // `id`.
   it('navigates to the new revision\'s id, and does not cache the new data under the old id\'s key', async () => {
     const showToast = renderEditor('/quotations/5');
     await screen.findByLabelText('หมายเหตุเพิ่มเติม');

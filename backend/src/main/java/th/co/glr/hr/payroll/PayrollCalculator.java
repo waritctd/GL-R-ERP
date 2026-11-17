@@ -20,39 +20,20 @@ public class PayrollCalculator {
     private static final BigDecimal EIGHT = new BigDecimal("8");
     private static final BigDecimal SSO_RATE = new BigDecimal("0.05");
     private static final BigDecimal SSO_MIN_BASE = new BigDecimal("1650.00");
-    // SSO wage ceiling raised by Royal Gazette effective 1 Jan 2026 (2569):
-    // max wage base 17,500 -> max 875/month -> 10,500/year (17,500 x 5% x 12).
-    // Schedule: 2026-2028 = 17,500; 2029-2031 = 20,000; 2032+ = 23,000.
+    // SSO wage ceiling raised by Royal Gazette effective 1 Jan 2026 (2569): max wage base 17,500 -> max 875/month
+    // -> 10,500/year (17,500 x 5% x 12). Schedule: 2026-2028 = 17,500; 2029-2031 = 20,000; 2032+ = 23,000.
     private static final BigDecimal SSO_MAX_BASE = new BigDecimal("17500.00");
     private static final BigDecimal SSO_YEAR_CAP = new BigDecimal("10500.00");
     private static final BigDecimal PERSONAL_ALLOWANCE = new BigDecimal("60000.00");
     private static final BigDecimal EXPENSE_DEDUCTION_CAP = new BigDecimal("100000.00");
-    // ยกเว้นเงินได้ 190,000 for a taxpayer aged 65+, or holding a บัตรประจำตัวคนพิการ at any age
-    // (กฎกระทรวง ฉบับที่ 126). Per person, across ALL income types combined.
+    // ยกเว้นเงินได้ 190,000 for a taxpayer aged 65+, or holding a บัตรประจำตัวคนพิการ at any age (กฎกระทรวง
+    // ฉบับที่ 126). Per person, across ALL income types combined.
     private static final BigDecimal ELDERLY_DISABLED_EXEMPTION = new BigDecimal("190000.00");
     private static final int ELDERLY_EXEMPTION_AGE = 65;
     // SSF purchases were deductible for ปีภาษี 2563-2567 only; ปีภาษี 2568 = Gregorian 2025.
     private static final int SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR = 2025;
-    // Thai ESG (กองทุนรวมไทยเพื่อความยั่งยืน): the enhanced ฿300,000 ceiling applies ONLY to units
-    // purchased 1 Jan 2024 - 31 Dec 2026 (ปีภาษี 2567-2569) -- bounded on BOTH sides, unlike SSF's
-    // one-way sunset above. Before 2024 and from ปีภาษี 2570 (Gregorian 2027) onward, the ceiling
-    // is its original ฿100,000. This is NOT a sunset to zero -- the deduction continues
-    // indefinitely outside the window, only the absolute ceiling steps down, and the 30% of
-    // assessable income rate is unchanged in every regime. If a later Royal Decree extends the
-    // enhanced window, this is a one-constant edit (also update TaxAllowanceCapCatalog's and
-    // mockApi.js's mirrors of these same two constants).
-    //
-    // Deliberately NOT modelled as ฿0 before the fund's actual ~21 Nov 2023 launch: that would
-    // require tracking each unit's purchase date, which this schema does not do (one declared
-    // figure per tax year, not per purchase), and no employee_tax_allowance row this old exists to
-    // need it. ฿100,000 below the window is the law's OWN pre-enhancement figure, so it is the
-    // correct answer for every year this system can actually be asked about -- not a guess standing
-    // in for a rule this schema cannot express.
-    //
-    // Mixed comparison direction from SSF above is deliberate, not a typo: SSF's cutoff is a
-    // one-way sunset (>=, "this year and every year after"), so one comparison suffices. Thai ESG's
-    // enhancement is temporary at BOTH ends, so it needs a closed range (>= first year AND <= last
-    // year) -- do not "simplify" this to a single inequality when copying the pattern elsewhere.
+    // Thai ESG (กองทุนรวมไทยเพื่อความยั่งยืน): the enhanced ฿300,000 ceiling applies ONLY to units purchased 1 Jan
+    // 2024 - 31 Dec 2026 (ปีภาษี 2567-2569) -- bounded on BOTH sides, unlike SSF's one-way sunset above.
     private static final int THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR = 2024;
     private static final int THAI_ESG_ENHANCED_CAP_LAST_TAX_YEAR = 2026;
     private static final BigDecimal MIN_NET_AFTER_LEGAL_EXECUTION = new BigDecimal("20000.00");
@@ -121,18 +102,11 @@ public class PayrollCalculator {
         BigDecimal specialPayTotal = specialPays.stream().reduce(ZERO, BigDecimal::add);
         BigDecimal overtimePay = money(input.overtimePay());
         BigDecimal commissionPay = money(input.commissionPay());
-        // ค่าตอบแทนกรรมการ (director remuneration, sheet column G). It IS taxable income (the sheet's
-        // W = SUM(G:V) for directors), so it joins grossEarnings here. It is deliberately NOT folded
-        // into ssoWageBase below: director remuneration is not wages under the Social Security Act, and
-        // the sheet carries no SSO row at all for directors.
+        // ค่าตอบแทนกรรมการ (director remuneration, sheet column G). It IS taxable income (the sheet's W = SUM(G:V) for
+        // directors), so it joins grossEarnings here.
         BigDecimal directorRemuneration = money(input.directorRemuneration());
-        // The two ป.96/2543 limbs (see COMMISSION_SPECIAL_PAY_INDEX above for why the split falls here).
-        // Director remuneration is REGULAR: paid every month (owner-confirmed), so เงินได้ที่จ่ายตาม
-        // ปกติ under ข้อ 2.1, not a เงินพิเศษ under ข้อ 2.5. The amount changing occasionally does not
-        // move it -- ข้อ 2.4 covers that, and this limb re-projects from year-to-date every period.
-        // Only พิเศษ 7 is recurring; every other slot is occasional (see COMMISSION_SPECIAL_PAY_INDEX).
-        // Deliberately index-based rather than a range: the classification is not contiguous, and
-        // writing it as a range is exactly the mistake this replaces.
+        // The two ป.96/2543 limbs (see COMMISSION_SPECIAL_PAY_INDEX above for why the split falls here). Only พิเศษ 7
+        // is recurring; every other slot is occasional (see COMMISSION_SPECIAL_PAY_INDEX).
         BigDecimal recurringSpecialPayTotal = specialPays.get(COMMISSION_SPECIAL_PAY_INDEX);
         BigDecimal occasionalSpecialPayTotal = ZERO;
         for (int slot = 0; slot < SPECIAL_PAY_SLOTS; slot += 1) {
@@ -140,20 +114,20 @@ public class PayrollCalculator {
                 occasionalSpecialPayTotal = occasionalSpecialPayTotal.add(specialPays.get(slot));
             }
         }
-        // commissionPay (fed from CommissionService) joins พิเศษ 7 in the regular limb -- it is the
-        // same income by another route. overtimePay is occasional and stays in the variable limb.
+        // commissionPay (fed from CommissionService) joins พิเศษ 7 in the regular limb -- it is the same income by
+        // another route. overtimePay is occasional and stays in the variable limb.
         BigDecimal regularGrossEarnings = money(baseSalary.add(recurringSpecialPayTotal)
             .add(commissionPay).add(directorRemuneration));
-        // Dedicated one-off pay (V94): เงินโบนัส and อื่นๆ. ข้อ 2.5 names เงินโบนัส explicitly, so this
-        // is the limb it belongs in -- the same treatment the พิเศษ slots get, but from a field that
-        // cannot be confused with a recurring allowance.
+        // Dedicated one-off pay (V94): เงินโบนัส and อื่นๆ. ข้อ 2.5 names เงินโบนัส explicitly, so this is the limb it
+        // belongs in -- the same treatment the พิเศษ slots get, but from a field that cannot be confused with a
+        // recurring allowance.
         BigDecimal bonusPay = money(input.bonusPay());
         BigDecimal otherOneOffPay = money(input.otherOneOffPay());
         BigDecimal variableGrossEarnings = money(occasionalSpecialPayTotal.add(overtimePay)
             .add(bonusPay).add(otherOneOffPay));
-        // Taxable earnings only (sheet column A). Non-taxable income (sheet column D)
-        // is excluded from tax and SSO and added back to net pay at the end. Identical to the
-        // pre-split expression by construction -- the two limbs partition exactly the same terms.
+        // Taxable earnings only (sheet column A). Non-taxable income (sheet column D) is excluded from tax and SSO and
+        // added back to net pay at the end. Identical to the pre-split expression by construction -- the two limbs
+        // partition exactly the same terms.
         BigDecimal grossEarnings = money(regularGrossEarnings.add(variableGrossEarnings));
         BigDecimal nonTaxableIncome = money(input.nonTaxableIncome());
 
@@ -172,10 +146,7 @@ public class PayrollCalculator {
         // income exactly as they would have if the original deduction had never happened.
         BigDecimal leaveRefundDays = quantity(input.leaveRefundDays());
         BigDecimal leaveDeductionRefund = money(dailyRate.multiply(leaveRefundDays));
-        // The three missing PRE-TAX deductions (sheet columns Z/AA/AB: หักตามใบเตือน, หัก 6
-        // ลูกค้าคืนสินค้า, อื่นๆ). The sheet's AC (รวมรายหักที่ต้องคิดภาษี) is these three plus unpaid
-        // leave, and AD = W - AC is what gets taxed -- so they must reduce grossTaxableIncome exactly
-        // like unpaidLeaveDeduction already does, not land in the post-tax otherPostTaxDeductions.
+        // The three missing PRE-TAX deductions (sheet columns Z/AA/AB: หักตามใบเตือน, หัก 6 ลูกค้าคืนสินค้า, อื่นๆ).
         BigDecimal warningLetterDeduction = money(input.warningLetterDeduction());
         BigDecimal customerReturnDeduction = money(input.customerReturnDeduction());
         BigDecimal otherPretaxDeduction = money(input.otherPretaxDeduction());
@@ -184,27 +155,8 @@ public class PayrollCalculator {
             .add(warningLetterDeduction)
             .add(customerReturnDeduction)
             .add(otherPretaxDeduction));
-        // Pre-tax deductions come off the REGULAR limb first and spill onto the variable limb only if
-        // regular would go negative. They describe unworked days and chargebacks against ordinary pay,
-        // so charging them to the regular limb is the faithful reading; the spill exists purely so a
-        // deduction larger than the month's salary still lands somewhere instead of being lost.
-        //
-        // INVARIANT (pinned by test): regularTaxableIncome + variableTaxableIncome is, to the satang,
-        // the same grossTaxableIncome the single-limb code produced -- max(0, gross - preTaxDeductions).
-        // PayrollExcelReconciliationTest's net-pay identity and every downstream figure depend on it.
-        //
-        // The VARIABLE limb is deliberately NOT floored at zero. commissionPay arrives negative when a
-        // month's CLAWBACK rows exceed its sales (CommissionRepository stores clawback amounts negated),
-        // and a negative เงินพิเศษ is a real reduction of the year's cumulative figure under ข้อ 2.5 --
-        // annualVariableIncome below is a running total, so the clawback belongs in it with its sign
-        // intact. Flooring each limb independently was a defect: it discarded the reduction AND broke
-        // the invariant, letting grossTaxableIncome exceed grossEarnings, so an employee paid 40,000
-        // was taxed on 50,000 and that 50,000 reached their ภ.ง.ด.1 and 50 ทวิ.
-        //
-        // Only the COMBINED figure is floored, exactly as the single-limb code floored its one figure.
-        // When the combined total would go negative the variable limb is raised to cancel the regular
-        // limb rather than the other way round: a debt beyond this month's whole pay cannot be
-        // annualised as if it recurred, which is what charging it to the regular limb would do.
+        // Pre-tax deductions come off the REGULAR limb first and spill onto the variable limb only if regular would go
+        // negative. Only the COMBINED figure is floored, exactly as the single-limb code floored its one figure.
         BigDecimal regularTaxableIncome = money(regularGrossEarnings.subtract(preTaxDeductions).max(ZERO));
         BigDecimal preTaxDeductionSpill = money(preTaxDeductions.subtract(regularGrossEarnings).max(ZERO));
         BigDecimal variableTaxableIncome = money(variableGrossEarnings.subtract(preTaxDeductionSpill));
@@ -213,15 +165,12 @@ public class PayrollCalculator {
         }
         BigDecimal grossTaxableIncome = money(regularTaxableIncome.add(variableTaxableIncome));
 
-        // ssoWageBase stays derived from baseSalary only -- director remuneration and the pre-tax
-        // deductions above never touch it, matching the sheet's blank SSO column for directors and the
-        // existing base-salary-only SSO treatment for everyone else. The refund credit runs through
-        // this same wage base (added back, mirroring unpaidLeaveDeduction's subtraction) so SSO
-        // recomputes on the restored income too; ssoWageBase(...)'s existing [MIN,MAX] clamp already
-        // protects against a refund pushing the base past the 17,500 ceiling.
+        // ssoWageBase stays derived from baseSalary only -- director remuneration and the pre-tax deductions above
+        // never touch it, matching the sheet's blank SSO column for directors and the existing base-salary-only SSO
+        // treatment for everyone else.
         BigDecimal ssoWageBase = ssoWageBase(baseSalary.subtract(unpaidLeaveDeduction).add(leaveDeductionRefund));
-        // เงินสมทบ is rounded to whole baht by มาตรา 46 วรรคท้าย -- see wholeBaht. Applied here, not
-        // just in SsoExporter, so the payslip deduction and the สปส.1-10 filing carry one number.
+        // เงินสมทบ is rounded to whole baht by มาตรา 46 วรรคท้าย -- see wholeBaht. Applied here, not just in
+        // SsoExporter, so the payslip deduction and the สปส.1-10 filing carry one number.
         BigDecimal monthlySso = wholeBaht(ssoWageBase.multiply(SSO_RATE));
         BigDecimal remainingSsoCap = SSO_YEAR_CAP.subtract(money(yearToDate.socialSecurity())).max(ZERO);
         BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
@@ -236,15 +185,15 @@ public class PayrollCalculator {
         // ข้อ 2.1 -- regular pay is annualised: multiplied by the number of times it will still be paid.
         BigDecimal annualRegularIncome = money(money(yearToDate.regularIncome())
             .add(regularTaxableIncome.multiply(BigDecimal.valueOf(monthsRemaining))));
-        // ข้อ 2.5 -- เงินพิเศษที่จ่ายเป็นครั้งคราว is taken at its ACTUAL cumulative amount for the year
-        // and is NOT multiplied out. This is the clause the old single-limb projection violated: it
-        // multiplied a one-off bonus by the remaining months, projecting income that will never exist.
+        // ข้อ 2.5 -- เงินพิเศษที่จ่ายเป็นครั้งคราว is taken at its ACTUAL cumulative amount for the year and is NOT
+        // multiplied out. This is the clause the old single-limb projection violated: it multiplied a one-off bonus by
+        // the remaining months, projecting income that will never exist.
         BigDecimal annualVariableIncome = money(money(yearToDate.variableIncome()).add(variableTaxableIncome));
         BigDecimal projectedAnnualIncome = money(annualRegularIncome.add(annualVariableIncome));
 
-        // ข้อ 2.2 run twice, exactly as ข้อ 2.5 directs: once on regular pay alone, once with the
-        // เงินพิเศษ added. The allowance breakdown is recomputed for each base rather than shared,
-        // because several ค่าลดหย่อน caps are percentages of เงินได้ and so legitimately differ.
+        // ข้อ 2.2 run twice, exactly as ข้อ 2.5 directs: once on regular pay alone, once with the เงินพิเศษ added. The
+        // allowance breakdown is recomputed for each base rather than shared, because several ค่าลดหย่อน caps are
+        // percentages of เงินได้ and so legitimately differ.
         AnnualTaxAssessment regularOnly = assessAnnualTax(
             annualRegularIncome, allowances, yearToDate, socialSecurity, monthsRemaining,
             input.taxYear(), input.taxpayerAge());
@@ -260,9 +209,9 @@ public class PayrollCalculator {
         // ข้อ 2.5 -- the tax attributable to the เงินพิเศษ is the DIFFERENCE between the two runs.
         BigDecimal variableAnnualTax = money(withVariable.tax().subtract(regularOnly.tax()));
 
-        // ข้อ 2.3 -- the regular limb's annual tax, net of what has already been withheld on it, spread
-        // over the periods that remain. ข้อ 2.5 -- the variable limb's tax, net of what has already
-        // been withheld on IT specifically, falls due in full in the period the เงินพิเศษ is paid.
+        // ข้อ 2.3 -- the regular limb's annual tax, net of what has already been withheld on it, spread over the
+        // periods that remain. ข้อ 2.5 -- the variable limb's tax, net of what has already been withheld on IT
+        // specifically, falls due in full in the period the เงินพิเศษ is paid.
         BigDecimal regularWithholdingRaw = regularOnly.tax()
             .subtract(money(yearToDate.regularWithholdingTax()))
             .divide(BigDecimal.valueOf(monthsRemaining), MONEY_SCALE, RoundingMode.HALF_UP);
@@ -340,15 +289,15 @@ public class PayrollCalculator {
             .subtract(withVariable.tax())
             .max(ZERO));
 
-        // The withheld total must be carried forward SPLIT, because next period's ข้อ 2.5 arithmetic
-        // nets against what was withheld on the variable limb specifically. The two parts always sum
-        // to what was actually withheld -- that is what makes the carry-forward reconcile.
+        // The withheld total must be carried forward SPLIT, because next period's ข้อ 2.5 arithmetic nets against what
+        // was withheld on the variable limb specifically. The two parts always sum to what was actually withheld --
+        // that is what makes the carry-forward reconcile.
         BigDecimal regularWithholdingTax;
         BigDecimal variableWithholdingTax;
         if (withholdingTaxOverride != null) {
-            // An override is a flat instruction with no limb structure behind it. Attributing it all
-            // to the regular limb keeps the variable limb's YTD honest: nothing was withheld under
-            // ข้อ 2.5 this period, so next period must not behave as though something was.
+            // An override is a flat instruction with no limb structure behind it. Attributing it all to the regular limb
+            // keeps the variable limb's YTD honest: nothing was withheld under ข้อ 2.5 this period, so next period must
+            // not behave as though something was.
             regularWithholdingTax = withholdingTax;
             variableWithholdingTax = ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         } else if (withholdingTax.signum() == 0) {
@@ -436,14 +385,8 @@ public class PayrollCalculator {
         );
     }
 
-    /**
-     * One full คำชี้แจง ภ.ง.ด.1 ข้อ 2.2 pass: from an annualised เงินได้พึงประเมิน, take ค่าใช้จ่าย
-     * (50% capped at 100,000, shared across มาตรา 40(1) and 40(2)) and ค่าลดหย่อน, then apply the
-     * มาตรา 48(1) progressive scale.
-     *
-     * <p>Run twice per period — once on regular pay alone and once with the เงินพิเศษ included — so
-     * that ข้อ 2.5 can take the difference between them.
-     */
+    /** One full คำชี้แจง ภ.ง.ด.1 ข้อ 2.2 pass: from an annualised เงินได้พึงประเมิน, take ค่าใช้จ่าย (50% capped at
+     * 100,000, shared across มาตรา 40(1) and 40(2)) and ค่าลดหย่อน, then apply the มาตรา 48(1) progressive scale. */
     private AnnualTaxAssessment assessAnnualTax(
         BigDecimal annualIncome,
         PayrollTaxAllowanceInput allowances,
@@ -453,12 +396,9 @@ public class PayrollCalculator {
         int taxYear,
         int taxpayerAge
     ) {
-        // ยกเว้นเงินได้ 190,000 (V93) comes off FIRST, before ค่าใช้จ่าย. That order is the RD's own:
-        // ใบแสดงสิทธิการได้รับยกเว้นเงินได้ฯ ข้อ 1 reads "1. มาตรา 40(1) เงินเดือน" -> "2. หัก เงินได้ที่
-        // ได้รับการยกเว้น" -> "3. คงเหลือ (1.-2.) ยกไปกรอกใน ภ.ง.ด.90", and the 50% expense deduction
-        // is then taken on that remainder. Doing it the other way round would over-deduct expenses.
-        // Floored first: a clawback large enough to outweigh the year's other เงินพิเศษ can drive the
-        // projected figure negative, and a negative income must not produce a negative ค่าใช้จ่าย.
+        // ยกเว้นเงินได้ 190,000 (V93) comes off FIRST, before ค่าใช้จ่าย. Floored first: a clawback large enough to
+        // outweigh the year's other เงินพิเศษ can drive the projected figure negative, and a negative income must not
+        // produce a negative ค่าใช้จ่าย.
         BigDecimal positiveAnnualIncome = money(annualIncome.max(ZERO));
         BigDecimal exemptIncome = exemptIncome(allowances, taxpayerAge, positiveAnnualIncome);
         BigDecimal assessableIncome = money(positiveAnnualIncome.subtract(exemptIncome).max(ZERO));
@@ -475,20 +415,11 @@ public class PayrollCalculator {
             expenseDeduction, breakdown, taxableAnnualIncome, progressiveTax(taxableAnnualIncome));
     }
 
-    /**
-     * ยกเว้นเงินได้ 190,000 บาท under กฎกระทรวง ฉบับที่ 126 — for a taxpayer aged 65 or over in the tax
-     * year, or one holding a บัตรประจำตัวคนพิการ at any age. Capped at the income itself, and per
-     * person across all income types (here, employment income is the only type the engine sees).
-     *
-     * <p>{@code taxpayerAge} of zero means "date of birth unknown" — the exemption then rests on the
-     * disability declaration alone rather than being granted on an assumption.
-     */
-    /**
-     * Flags a ล.ย.01 declaration that carries a baht amount but no head count, so the per-head cap has
-     * clamped it to nothing. Visible on the payslip rather than silent: an allowance vanishing without
-     * explanation is the failure mode a reviewer caught in the request-body path, and the note is what
-     * makes the same contradiction detectable if it ever reaches here from anywhere else.
-     */
+    /** ยกเว้นเงินได้ 190,000 บาท under กฎกระทรวง ฉบับที่ 126 — for a taxpayer aged 65 or over in the tax year, or
+     * one holding a บัตรประจำตัวคนพิการ at any age. Capped at the income itself, and per person across all income
+     * types (here, employment income is the only type the engine sees). */
+    /** Flags a ล.ย.01 declaration that carries a baht amount but no head count, so the per-head cap has clamped it
+     * to nothing. */
     private String clampedAllowanceNote(PayrollTaxAllowanceInput allowances) {
         StringBuilder note = new StringBuilder();
         appendClampWarning(note, "ค่าลดหย่อนบุตร",
@@ -498,11 +429,9 @@ public class PayrollCalculator {
         return note.toString();
     }
 
-    /**
-     * Fires on ANY clamp, not only a zero head count. A STALE count clamps just as silently as a
-     * missing one -- a stored count of 1 against a 90,000 declaration quietly discards 60,000 -- and
-     * the first version of this warning only covered the zero case, which review caught.
-     */
+    /** Fires on ANY clamp, not only a zero head count. A STALE count clamps just as silently as a missing one -- a
+     * stored count of 1 against a 90,000 declaration quietly discards 60,000 -- and the first version of this
+     * warning only covered the zero case, which review caught. */
     private void appendClampWarning(StringBuilder note, String label, BigDecimal declared, BigDecimal cap) {
         if (declared.compareTo(cap) <= 0) {
             return;
@@ -636,8 +565,8 @@ public class PayrollCalculator {
             ssoWageBaseRaw = ssoWageBaseRaw.add(componentAmount);
         }
         BigDecimal ssoWageBase = ssoWageBase(ssoWageBaseRaw);
-        // เงินสมทบ is rounded to whole baht by มาตรา 46 วรรคท้าย -- see wholeBaht. Applied here, not
-        // just in SsoExporter, so the payslip deduction and the สปส.1-10 filing carry one number.
+        // เงินสมทบ is rounded to whole baht by มาตรา 46 วรรคท้าย -- see wholeBaht. Applied here, not just in
+        // SsoExporter, so the payslip deduction and the สปส.1-10 filing carry one number.
         BigDecimal monthlySso = wholeBaht(ssoWageBase.multiply(SSO_RATE));
         BigDecimal remainingSsoCap = SSO_YEAR_CAP.subtract(money(yearToDate.socialSecurity())).max(ZERO);
         BigDecimal socialSecurity = min(monthlySso, remainingSsoCap);
@@ -781,29 +710,21 @@ public class PayrollCalculator {
         BigDecimal computedWithholding = wholeBaht(exactWithholding);
         withholdRegular = withholdRegular.add(computedWithholding.subtract(exactWithholding));
 
-        // Rounded too, for the same reason: an HR-typed override REPLACES the withheld amount
-        // outright, so a satang override would put a satang straight back onto the filing and the
-        // transfer file, defeating the rule above.
+        // Rounded too, for the same reason: an HR-typed override REPLACES the withheld amount outright, so a satang
+        // override would put a satang straight back onto the filing and the transfer file, defeating the rule above.
         BigDecimal withholdingTaxOverride = input.withholdingTaxOverride() == null ? null : wholeBaht(input.withholdingTaxOverride());
         BigDecimal withholdingTax = computedWithholding;
         BigDecimal withholdingTaxRegularLimb = withholdRegular;
         BigDecimal withholdingTaxCumulativeLimb = withholdCumulative;
-        // The per-head allowance clamp note (บุตร / คนพิการ) was wired into the legacy #calculate
-        // engine only. PayrollService#calculateLine has called #calculateClassified exclusively since
-        // task 2, so an unlawful clamp on the live engine went un-announced on every payslip -- the
-        // exact silent-clamp failure mode V93 exists to prevent, just moved to the engine nobody was
-        // still watching. Wired here to match #calculate's own pattern (see clampedAllowanceNote's own
-        // javadoc: "Visible on the payslip rather than silent").
+        // The per-head allowance clamp note (บุตร / คนพิการ) was wired into the legacy #calculate engine only. Wired
+        // here to match #calculate's own pattern (see clampedAllowanceNote's own javadoc: "Visible on the payslip
+        // rather than silent").
         String calculationNote = "Classified per-component withholding (ป.96/2543 ข้อ 1(4)/(5)/(6)), SSO 5% cap by inclusion matrix, and garnishment cap by payment type applied."
             + clampedAllowanceNote(allowances);
         if (withholdingTaxOverride != null) {
             withholdingTax = withholdingTaxOverride;
-            // The override REPLACES the final withheld amount only -- every projection/annual-tax
-            // figure above is retained for transparency (same guardrail as the single-limb V88
-            // override). Attributed entirely to the regular limb for next period's YTD bookkeeping:
-            // there is no principled way to split a single HR-typed override across three limbs, and
-            // crediting the catch-all regular limb (rather than inventing cumulative-limb withholding
-            // that was never actually computed) avoids under-taxing a future period's cumulative limb.
+            // The override REPLACES the final withheld amount only -- every projection/annual-tax figure above is retained
+            // for transparency (same guardrail as the single-limb V88 override).
             withholdingTaxRegularLimb = withholdingTaxOverride;
             withholdingTaxCumulativeLimb = ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
             calculationNote = calculationNote
@@ -968,8 +889,8 @@ public class PayrollCalculator {
             return ZERO.setScale(MONEY_SCALE, RoundingMode.HALF_UP);
         }
         return switch (type) {
-            // Identical to the legacy single-rule engine's legalExecutionDeduction: max 30% of gross
-            // taxable income, must leave >= ฿20,000 net.
+            // Identical to the legacy single-rule engine's legalExecutionDeduction: max 30% of gross taxable income, must
+            // leave >= ฿20,000 net.
             case SALARY -> {
                 BigDecimal capByRate = percentOf(grossTaxableIncome, GARNISHMENT_SALARY_MAX_RATE.toPlainString());
                 BigDecimal capByFloor = netBeforeGarnishment.subtract(MIN_NET_AFTER_LEGAL_EXECUTION).max(ZERO);
@@ -989,9 +910,9 @@ public class PayrollCalculator {
                 BigDecimal cap = percentOf(base, GARNISHMENT_OVERTIME_MAX_RATE.toPlainString());
                 yield money(min(requested, cap));
             }
-            // No percentage cap -- must leave >= ฿300,000 net. Not modeled by any dedicated severance
-            // component today (this system has no termination-payout concept yet), so applied against
-            // the general net-before-garnishment floor as a best-effort stub.
+            // No percentage cap -- must leave >= ฿300,000 net. Not modeled by any dedicated severance component today
+            // (this system has no termination-payout concept yet), so applied against the general net-before-garnishment
+            // floor as a best-effort stub.
             case SEVERANCE -> {
                 BigDecimal capByFloor = netBeforeGarnishment.subtract(MIN_NET_AFTER_SEVERANCE_GARNISHMENT).max(ZERO);
                 yield money(min(requested, capByFloor));
@@ -1036,13 +957,9 @@ public class PayrollCalculator {
         BigDecimal childCap = childAllowanceCap(input);
         BigDecimal disabledCareCap = disabledCareAllowanceCap(input);
 
-        // A declared amount with a ZERO head count is a contradiction, and the cap resolves it against
-        // the amount -- deriving a count here instead would defeat the cap completely, since any figure
-        // could then be claimed by simply declaring nobody. It must not pass SILENTLY though: callers
-        // that legitimately hold an amount but no count (a pre-V93 row, a per-run HR entry) resolve it
-        // before reaching this point -- see PayrollService#headCountFor and
-        // PayrollTaxAllowanceInput's legacy constructor -- so anything arriving here contradictory is a
-        // data error, and #clampedAllowanceNote surfaces it on the payslip's calculation note.
+        // A declared amount with a ZERO head count is a contradiction, and the cap resolves it against the amount --
+        // deriving a count here instead would defeat the cap completely, since any figure could then be claimed by
+        // simply declaring nobody.
         BigDecimal family = min(money(input.spouseAllowance()), new BigDecimal("60000.00"))
             .add(min(money(input.childAllowance()), childCap))
             .add(parentCareAllowance(input))
@@ -1055,14 +972,9 @@ public class PayrollCalculator {
         BigDecimal parentHealth = min(money(input.parentHealthInsuranceAllowance()), new BigDecimal("15000.00"));
 
         BigDecimal retirement = retirementAllowance(input, projectedAnnualIncome, taxYear);
-        // Thai ESG has its own ceiling, separate from the 500,000 retirement cluster above (groupId
-        // stays null in the catalogue mirror). ฿300,000 for units purchased 1 Jan 2024 - 31 Dec 2026;
-        // ฿100,000 outside that window on EITHER side -- see THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR /
-        // _LAST_TAX_YEAR above. taxYear == 0 means "not supplied" (a legacy TEST call site --
-        // PayrollCalculator#calculate has zero production callers; PayrollService always resolves a
-        // real taxYear) and falls outside the window like any other unenhanced year, but this is
-        // unobservable in practice: every such call site declares a zero Thai ESG allowance, and
-        // min(0, anyCeiling) is 0 regardless of which ceiling applies.
+        // Thai ESG has its own ceiling, separate from the 500,000 retirement cluster above (groupId stays null in the
+        // catalogue mirror). ฿300,000 for units purchased 1 Jan 2024 - 31 Dec 2026; ฿100,000 outside that window on
+        // EITHER side -- see THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR / _LAST_TAX_YEAR above.
         BigDecimal thaiEsgCeiling = taxYear >= THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR
                 && taxYear <= THAI_ESG_ENHANCED_CAP_LAST_TAX_YEAR
             ? new BigDecimal("300000.00")
@@ -1181,10 +1093,9 @@ public class PayrollCalculator {
         rmf = min(rmf, remainingCluster);
         remainingCluster = remainingCluster.subtract(rmf);
 
-        // SSF (กองทุนรวมเพื่อการออม) was deductible for ปีภาษี 2563-2567 only. Purchases from ปีภาษี
-        // 2568 (Gregorian 2025) carry no deduction, so the declared figure is ignored from that year.
-        // The stored column and past years are untouched -- they still have to explain past filings.
-        // taxYear == 0 means "not supplied" (a legacy call site) and keeps the pre-V93 behaviour.
+        // SSF (กองทุนรวมเพื่อการออม) was deductible for ปีภาษี 2563-2567 only. Purchases from ปีภาษี 2568 (Gregorian
+        // 2025) carry no deduction, so the declared figure is ignored from that year. The stored column and past years
+        // are untouched -- they still have to explain past filings.
         BigDecimal ssf = taxYear >= SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR
             ? ZERO
             : min(money(input.ssfAllowance()), min(percentOf(projectedAnnualIncome, "0.30"), new BigDecimal("200000.00")));
@@ -1270,12 +1181,8 @@ public class PayrollCalculator {
         return (value == null ? ZERO : value).setScale(0, RoundingMode.HALF_UP).setScale(MONEY_SCALE);
     }
 
-    /**
-     * Whole baht rounded toward zero — the deduction-side counterpart to {@link #wholeBaht}, for the
-     * computed leave figures only (see their call site for why the direction differs). FLOOR and
-     * DOWN coincide here because a leave deduction is never negative; DOWN is used so a negative
-     * input could never round away from zero and deduct MORE than the exact amount.
-     */
+    /** Whole baht rounded toward zero — the deduction-side counterpart to #wholeBaht, for the computed leave
+     * figures only (see their call site for why the direction differs). */
     private BigDecimal wholeBahtDown(BigDecimal value) {
         return (value == null ? ZERO : value).setScale(0, RoundingMode.DOWN).setScale(MONEY_SCALE);
     }

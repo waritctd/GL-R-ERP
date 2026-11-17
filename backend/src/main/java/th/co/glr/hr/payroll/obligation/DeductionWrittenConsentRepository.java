@@ -12,12 +12,7 @@ import th.co.glr.hr.payroll.PayrollDeductionKind;
 import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrittenConsentDto;
 import th.co.glr.hr.payroll.obligation.DeductionWrittenConsentDtos.DeductionWrittenConsentUpsertRequest;
 
-/**
- * Persistence for {@code hr.deduction_written_consent} (V107, issue #376). One row per (employee,
- * deduction kind) -- an upsert, not an append-only log, since this records a CURRENT fact ("is
- * consent on file right now"), not a history of changes (the audit log already covers who changed
- * it and when, see {@code AuditService}).
- */
+/** Persistence for hr.deduction_written_consent (V107, issue #376). */
 @Repository
 public class DeductionWrittenConsentRepository {
     private static final String SELECT_COLUMNS = """

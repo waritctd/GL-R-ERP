@@ -2,39 +2,9 @@ import { useState } from 'react';
 import { Icon } from '../../components/common/Icon.jsx';
 import { cn } from '../../utils/cn.js';
 
-/**
- * TypePicker — group → type (plan §"Type grouping"), replacing the flat 12-option `<select>`.
- * Two-step disclosure so twelve types never compete with equal weight: each group is a
- * button-toggled panel, containing native `<input type="radio">`s each wrapped in a real
- * `<label>`. `groups[0]` is open by default per the plan ("group 1 open by default").
- *
- * ONE bordered surface for the whole control (not one box per group -- card-diet rule, plan
- * §"Craft rules"): groups are separated by a divider (`divide-y`), matching the
- * typography-plus-divider pattern `LeavePage.jsx:572-583` uses for its own grouped rows, rather
- * than nesting four bordered boxes inside the Panel that already wraps this whole form.
- *
- * A collapsed group's content is driven from STATE, not the `hidden` attribute alone. `[hidden] {
- * display: none }` is a rule in Tailwind's own PREFLIGHT (base) layer, and any `display` utility --
- * `flex` here -- sits in the utilities layer, which by `@layer` precedence always wins over base.
- * So `hidden` + `className="flex"` on one element does NOT hide it: the "collapsed" group stays
- * visually and interactively open, with `aria-expanded="false"` lying to assistive tech while every
- * radio underneath is still tabbable. (This is NOT about `styles.css` load order -- that file
- * governs a different cascade problem; see the radio sizing note below.) `hidden={!isOpen}` is kept
- * alongside the `hidden`/`flex` class branch as a belt-and-suspenders semantic signal, but the
- * class branch is what actually controls rendering.
- *
- * Each group gets its own native radio `name` (not one name shared across all twelve): with the
- * collapse now actually working, `Tab`/arrow-key roving-tabindex on a single shared `name` would
- * only ever reach the checked radio's own group, permanently trapping keyboard users out of every
- * other group. Cross-group mutual exclusivity still holds because `checked` is fully controlled
- * from `value` (React re-renders every radio's `checked` prop on every selection, regardless of
- * `name`) -- the native same-`name` auto-exclusivity was never load-bearing.
- *
- * Keyboard operable end to end: group headers are real `<button>`s (Enter/Space toggles,
- * `aria-expanded`/`aria-controls` wired), and radios are native inputs (arrow-key selection
- * within a group, Tab between groups) — nothing here is a div with an onClick standing in for a
- * real control.
- */
+/** TypePicker — group → type (plan §"Type grouping"), replacing the flat 12-option `<select>`. Two-step
+ * disclosure so twelve types never compete with equal weight: each group is a button-toggled panel, containing
+ * native `<input type="radio">`s each wrapped in a real `<label>`. */
 export function TypePicker({ groups, value, onSelect, className }) {
   const [openKeys, setOpenKeys] = useState(() => new Set(groups[0] ? [groups[0].key] : []));
 
@@ -50,14 +20,9 @@ export function TypePicker({ groups, value, onSelect, className }) {
   return (
     <div
       className={cn(
-        // Chrome harmonized with the พนักงาน select's own control styling (styles.css's shared
-        // `input/select/textarea` rule: 1.5px border-border-input, rounded-md, bg-surface) so this
-        // reads as the same family of control, even though it stays a grouped-radio disclosure
-        // underneath, not an actual <select> -- see the file-level comment above. Deliberately NOT
-        // `overflow-hidden`: the group headers are flush against the wrapper's edges with no
-        // padding, so clipping overflow also clips their :focus-visible ring (an outset outline +
-        // box-shadow, styles.css) on three sides -- the picker's primary keyboard affordance. The
-        // corners squaring off in a header's hover state is a fainter cost than that.
+        // Chrome harmonized with the พนักงาน select's own control styling so this reads as the same family of control,
+        // even though it stays a grouped-radio disclosure underneath, not an actual <select> -- see the file-level
+        // comment above.
         'divide-y divide-border-subtle rounded-md border-[1.5px] border-border-input bg-surface',
         className,
       )}
@@ -72,25 +37,18 @@ export function TypePicker({ groups, value, onSelect, className }) {
             <button
               type="button"
               id={buttonId}
-              // `min-h-10` + `px-3` match the select's 40px height / 12px horizontal padding
-              // rhythm (styles.css: `height: 40px; padding: 0 12px`) for the same reason as the
-              // border/radius/background above -- one visual family, same disclosure behavior.
-              // `appearance-none border-0`: this project ships NO Tailwind preflight, so a bare
-              // <button> keeps the UA's own button chrome. Measured here before the fix:
-              // `border: 2px outset rgb(0, 0, 0)` — an actual black bevel around every group
-              // header, which is what made this control read as foreign to every other surface.
-              // Nothing in the class list below sets a border, so there was nothing to override
-              // it. Same defect and same fix Tabs.jsx documents for its own tablist buttons; the
-              // rounded/1.5px border of the group *container* above is the intended edge.
+              // `min-h-10` + `px-3` match the select's 40px height / 12px horizontal padding rhythm (styles.css: `height:
+              // 40px; padding: 0 12px`) for the same reason as the border/radius/background above -- one visual family, same
+              // disclosure behavior.
               className="flex min-h-10 w-full appearance-none items-center justify-between gap-2 border-0 bg-surface px-3 py-2.5 text-left text-sm font-bold text-text hover:bg-surface-subtle"
               aria-expanded={isOpen}
               aria-controls={panelId}
               onClick={() => toggleGroup(group.key)}
             >
               {group.label}
-              {/* Chevron doubles as the dropdown-affordance cue the select gets for free from its
-                  native browser arrow, and as the existing expand/collapse indicator -- up when
-                  open, down when collapsed, same icon this button already used. */}
+              {/* Chevron doubles as the dropdown-affordance cue the select gets for free from its native browser arrow, and
+               * as the existing expand/collapse indicator -- up when open, down when collapsed, same icon this button
+               * already used. */}
               <Icon name={isOpen ? 'chevronUp' : 'chevronDown'} size={16} className="shrink-0 text-icon-muted" />
             </button>
             <div
@@ -98,10 +56,9 @@ export function TypePicker({ groups, value, onSelect, className }) {
               role="radiogroup"
               aria-labelledby={buttonId}
               hidden={!isOpen}
-              // The `flex`/`hidden` utility classes are mutually exclusive by construction (never
-              // both present at once) -- see the file-level comment on why that matters: with
-              // both present, whichever Tailwind happens to emit later in its generated
-              // stylesheet wins regardless of the `hidden` DOM attribute.
+              // The `flex`/`hidden` utility classes are mutually exclusive by construction (never both present at once) --
+              // see the file-level comment on why that matters: with both present, whichever Tailwind happens to emit later
+              // in its generated stylesheet wins regardless of the `hidden` DOM attribute.
               className={cn(
                 'flex-col gap-0.5 border-t border-border-subtle p-1.5',
                 isOpen ? 'flex' : 'hidden',
@@ -121,15 +78,8 @@ export function TypePicker({ groups, value, onSelect, className }) {
                     value={type.requestType}
                     checked={value === type.requestType}
                     onChange={() => onSelect(type.requestType)}
-                    // The explicit size is no longer load-bearing, only deliberate. It used to be
-                    // the workaround for `styles.css`'s blanket `input, select, textarea
-                    // { width: 100% }`, which a bare radio inherited like any other input and which
-                    // ballooned it to fill the label (measured: 1040px wide inside a 1060px label
-                    // at 1440 viewport, pushing the Thai text off the right edge). That base rule
-                    // now excludes checkbox/radio outright and resets them, so a bare radio is
-                    // ~13px on its own. `h-4 w-4` is kept because 16px reads better beside 14px
-                    // Thai text than the 13px UA default, and `shrink-0` because a flex row full
-                    // of long Thai labels would otherwise squash it.
+                    // The explicit size is no longer load-bearing, only deliberate. That base rule now excludes checkbox/radio
+                    // outright and resets them, so a bare radio is ~13px on its own.
                     className="h-4 w-4 shrink-0"
                   />
                   {type.thaiLabel}

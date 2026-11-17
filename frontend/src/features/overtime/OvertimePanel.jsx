@@ -33,8 +33,8 @@ const OVERTIME_TABLE_GRID = 'grid-cols-[minmax(0,1.15fr)_minmax(0,1.35fr)_minmax
 // `items-end`, not `items-center`: see MyLeaveTab.jsx's FILTER_BAR_CLASS. This form renders for
 // every viewer, so the stagger was live on the OT tab.
 const FILTER_BAR_CLASS = 'flex flex-wrap gap-[10px] items-end bg-surface border border-border rounded-md p-[14px]';
-// FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form>
-// for onSubmit/noValidate, so its exact (2-column) utility string is reproduced here.
+// FormGrid (Layout.jsx) renders a <div>; the submit form needs to be a native <form> for onSubmit/noValidate,
+// so its exact (2-column) utility string is reproduced here.
 const FORM_GRID_CLASS = 'grid gap-[14px] mobile:grid-cols-1 grid-cols-2';
 
 function bangkokDateParts(date = new Date()) {
@@ -292,9 +292,9 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     name: ['workDate', 'startTime', 'endDate', 'endTime', 'employeeId', 'dayType'],
   });
   const isBackdated = Boolean(selectedWorkDate) && selectedWorkDate < todayIso();
-  // Composed the same way submitOvertime composes the real payload -- comparing the two "date+time"
-  // strings lexicographically is equivalent to comparing them as instants, since both share the
-  // same fixed +07:00 offset (Thailand has no DST) and the same zero-padded width.
+  // Composed the same way submitOvertime composes the real payload -- comparing the two "date+time" strings
+  // lexicographically is equivalent to comparing them as instants, since both share the same fixed +07:00 offset
+  // (Thailand has no DST) and the same zero-padded width.
   const hasTimeRangeError = Boolean(
     selectedWorkDate && startTime && selectedEndDate && endTime
       && `${selectedEndDate}T${endTime}` <= `${selectedWorkDate}T${startTime}`,
@@ -321,10 +321,9 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
       .then((response) => response.calendarContext),
     enabled: Boolean(debouncedVerdictWorkDate) && isFilingForSelf,
   });
-  // nonWorkingDates, not holidays[0] -- the schedule-aware answer (a holiday OR the caller's own
-  // resolved non-workday), mirroring OvertimeService#suggestDayType's exact predicate
-  // (LeaveCalendarContextDto.java:20-25). holidays is still read, but only to show the specific
-  // hr.holiday NAME when one exists for this date -- it is no longer what decides the verdict.
+  // nonWorkingDates, not holidays[0] -- the schedule-aware answer (a holiday OR the caller's own resolved
+  // non-workday), mirroring OvertimeService#suggestDayType's exact predicate
+  // (LeaveCalendarContextDto.java:20-25).
   const verdictNonWorkingDates = dayTypeVerdictQuery.data?.nonWorkingDates ?? [];
   const verdictHolidayMatch = (dayTypeVerdictQuery.data?.holidays ?? [])
     .find((holiday) => holiday.holidayDate === debouncedVerdictWorkDate) ?? null;
@@ -515,9 +514,9 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     return Boolean(user.manager && Number(request.employeeId) !== Number(user.employeeId));
   }
 
-  // hasManagerApprover === false means the server will route SUBMITTED straight to the CEO: either
-  // the employee's ฝ่าย has no ผู้จัดการ, or they are one themselves. Mirrors
-  // OvertimeService.approve()'s dispatch -- offering the wrong button here is a guaranteed 403.
+  // hasManagerApprover === false means the server will route SUBMITTED straight to the CEO: either the
+  // employee's ฝ่าย has no ผู้จัดการ, or they are one themselves. Mirrors OvertimeService.approve()'s dispatch
+  // -- offering the wrong button here is a guaranteed 403.
   function hasManagerStage(request) {
     return request.hasManagerApprover !== false;
   }
@@ -559,16 +558,14 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
     cancelMutation.mutate({ id, reviewerNote });
   }
 
-  // UpcomingHolidays' own window: "next ~90 days" per the design brief -- independent of the
-  // requests-list filter range above (appliedFilters), which exists for a different purpose
-  // (browsing past/pending OT requests, not "what's coming up").
+  // UpcomingHolidays' own window: "next ~90 days" per the design brief -- independent of the requests-list
+  // filter range above (appliedFilters), which exists for a different purpose (browsing past/pending OT
+  // requests, not "what's coming up").
   const holidayWindowFrom = todayIso();
   const holidayWindowTo = addDaysIso(90);
 
-  // The stat strip and the filter bar are both ABOUT the history table at the bottom of this
-  // panel: the strip counts the rows in the selected range, the bar chooses that range. They are
-  // rendered as one unit here so the two views below can place them where each one's primary task
-  // actually is, rather than one order having to serve both.
+  // The stat strip and the filter bar are both ABOUT the history table at the bottom of this panel: the strip
+  // counts the rows in the selected range, the bar chooses that range.
   const historyControls = (
     <>
       <CompactStatRow
@@ -621,10 +618,8 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
 
   return (
     <PageStack>
-      {/*
-        No PageHeader here: this is a tab inside RequestsPage, which owns the page title. Two
-        stacked headers is what you get if this panel keeps its own.
-      */}
+      {/* No PageHeader here: this is a tab inside RequestsPage, which owns the page title. Two stacked headers is
+       * what you get if this panel keeps its own. */}
       <div className="flex items-center justify-between gap-3">
         <p className="m-0 text-sm text-text-muted">
           {canSubmitForTeam ? 'ยื่นคำขอแทนทีมและอนุมัติจากเวลาสแกนจริง' : 'ยื่นคำขอ OT และดูประวัติของคุณ'}
@@ -705,8 +700,8 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               LeaveRequestPage's calendar-context note. */}
           <div className={formGridSpan2} aria-live="polite" aria-busy={dayTypeVerdictQuery.isFetching}>
             {!isFilingForSelf ? (
-              // /api/leave/calendar-context is self-scoped -- filing for someone else previews
-              // nothing rather than the wrong employee's schedule (see isFilingForSelf's comment).
+              // /api/leave/calendar-context is self-scoped -- filing for someone else previews nothing rather than the wrong
+              // employee's schedule (see isFilingForSelf's comment).
               <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-dashed border-border-muted bg-surface px-3 py-1.5 text-xs font-medium text-text-muted">
                 <Icon name="info" size={13} />
                 ระบบจะเสนออัตราให้เมื่อส่งคำขอ
@@ -746,8 +741,8 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
               {...register('dayType')}
               value={selectedDayType ?? ''}
               onChange={(event) => {
-                // The employee is making their OWN choice from here on -- see dayTypeDirtyRef's
-                // comment: the suggestion-fill effect must not overwrite it again for this date.
+                // The employee is making their OWN choice from here on -- see dayTypeDirtyRef's comment: the suggestion-fill
+                // effect must not overwrite it again for this date.
                 dayTypeDirtyRef.current = true;
                 setValue('dayType', event.target.value, { shouldDirty: true, shouldValidate: true });
               }}
@@ -845,8 +840,8 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
         </SafeForm>
       </Panel>
 
-      {/* Self-service view: the counts and the range filter arrive here, immediately above the
-          history table they describe — see the ordering note near the top of this return. */}
+      {/* Self-service view: the counts and the range filter arrive here, immediately above the history table they
+       * describe — see the ordering note near the top of this return. */}
       {canSubmitForTeam ? null : historyControls}
 
       {/*
@@ -880,8 +875,8 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           const managerCancellable = canManagerCancel(request);
           return (
             <div className={`${OVERTIME_TABLE_GRID} data-row`} key={request.id}>
-              {/* Mobile order (step 8 rule 7 — summary -> actions -> details): this
-                  span is the summary (who/when) and stays first on every viewport. */}
+              {/* Mobile order (step 8 rule 7 — summary -> actions -> details): this span is the summary (who/when) and stays
+               * first on every viewport. */}
               <span data-label="วันที่ / พนักงาน" className="mobile:order-1">
                 <strong>{formatWorkDate(request.workDate)}</strong>
                 <small>{request.employeeName || request.employeeCode || request.employeeId}</small>
@@ -907,15 +902,9 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                       title={request.calculationNote || 'ระบบแนะนำอัตราอื่นจากที่ระบุไว้ — โปรดตรวจสอบก่อนอนุมัติ'}
                     >
                       <Icon name="triangleAlert" size={11} />
-                      {/* The stored rate at submit is always the SUGGESTION, never the employee's
-                          raw claim (see OvertimeService#submit's SECURITY comment) -- so
-                          suggestedDayType usually already equals the rate shown just above, and
-                          repeating "แนะนำ 3x" beside an already-3x rate would read as a contradiction
-                          that isn't there. Only name the suggested rate when it has actually
-                          DRIFTED from what is stored (a calendar/schedule correction since
-                          submission/approval); otherwise a plain "ตรวจสอบ" is honest about there
-                          being a flag (see the tooltip/calculationNote for what it is) without
-                          implying the visible rate is wrong. */}
+                      {/* The stored rate at submit is always the SUGGESTION, never the employee's raw claim -- so suggestedDayType
+                       * usually already equals the rate shown just above, and repeating "แนะนำ 3x" beside an already-3x rate would
+                       * read as a contradiction that isn't there. */}
                       {request.suggestedDayType && request.suggestedDayType !== request.dayType
                         ? `แนะนำ ${request.suggestedDayType === 'HOLIDAY' ? '3x' : '1.5x'}`
                         : 'ตรวจสอบ'}
@@ -946,10 +935,9 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
                   <small>CEO: {request.ceoApprovedByName || '-'} · {formatDateTime(request.ceoApprovedAt)}</small>
                 ) : null}
               </span>
-              {/* Approve/reject visually differentiated per DESIGN.md (danger stays
-                  outlined, not filled) and step 9 rule 2 — mirrors the exact
-                  success/danger icon-button tinting CommissionPage uses for the
-                  same manager/CEO review pattern. */}
+              {/* Approve/reject visually differentiated per DESIGN.md (danger stays outlined, not filled) and step 9 rule 2 —
+               * mirrors the exact success/danger icon-button tinting CommissionPage uses for the same manager/CEO review
+               * pattern. */}
               <RowActions className="mobile:order-3 mobile:flex-wrap">
                 {reviewable ? (
                   <>
@@ -1003,16 +991,12 @@ export function OvertimePanel({ user, currentEmployee, showToast }) {
           const canOverrideDayType = request.status === 'SUBMITTED';
           const flagged = canOverrideDayType
             && (request.suggestedDayType === 'HOLIDAY' || hasDayTypeFlag(request));
-          // The rate that will ACTUALLY apply once this approval completes: the approver's live
-          // selection when one is on offer, else whatever is already frozen/suggested.
+          // The rate that will ACTUALLY apply once this approval completes: the approver's live selection when one is on
+          // offer, else whatever is already frozen/suggested.
           const effectiveDayType = (canOverrideDayType && confirmState?.dayType) || request.dayType;
-          // Three outcomes, because there are three routes. Quoted from api.overtime.approve
-          // (src/api/mockApi.js): the SUBMITTED->MANAGER_APPROVED step computes
-          // payableMinutes = round(actualMinutes * multiplier) right there; the
-          // MANAGER_APPROVED->APPROVED (CEO) step only flips status and keeps the minutes the
-          // manager step already computed. The manager-less route does BOTH at once, so its copy
-          // has to promise the calculation as well as the final status -- telling a CEO their
-          // one click "only flips the status" would be wrong on the one route that pays out.
+          // Three outcomes, because there are three routes. The manager-less route does BOTH at once, so its copy has to
+          // promise the calculation as well as the final status -- telling a CEO their one click "only flips the status"
+          // would be wrong on the one route that pays out.
           const rateLabel = effectiveDayType === 'HOLIDAY' ? '3x (วันหยุด)' : '1.5x (วันทำงานปกติ)';
           let nextStep;
           if (isDirectCeoStep) {

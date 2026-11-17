@@ -54,15 +54,7 @@ public class FactoryQuoteCarryForward {
         this.landedCosts = landedCosts;
     }
 
-    /**
-     * Attempts the carry-forward for a request that has just been submitted.
-     *
-     * @return {@code true} only when quotes were copied AND the child is fully costable, i.e. only
-     *     when the caller should advance it straight to {@code READY_FOR_CEO_REVIEW}. Every other
-     *     outcome returns {@code false} and leaves the request on the normal Import path. This
-     *     method never throws for a "not eligible" case — ineligibility is the common case, not an
-     *     error.
-     */
+    /** Attempts the carry-forward for a request that has just been submitted. */
     public boolean carryForwardOnSubmit(PricingRequestSummaryDto child, long actorId) {
         Long parentId = child.parentPricingRequestId();
         if (parentId == null) {
@@ -72,18 +64,13 @@ public class FactoryQuoteCarryForward {
         if (parent == null) {
             return false;
         }
-        // Idempotency / safety: never copy onto a request that already has factory quotes of its
-        // own. submit() runs once per request (DRAFT -> SUBMITTED is compare-and-set), so this
-        // should be unreachable; if it ever is reachable, doing nothing is the safe answer,
-        // because a second copy would trip uq_factory_quote_current_factory.
+        // Idempotency / safety: never copy onto a request that already has factory quotes of its own.
         if (!quotes.findByPricingRequest(child.id()).isEmpty()) {
             return false;
         }
         List<PricingRequestItemDto> childItems = pricingRequests.findItems(child.id());
-        // Stock lines (V194): a request carrying any stock line takes the ordinary submit routing
-        // (all-in-Thailand straight to the CEO, otherwise Import confirms the ETAs). Copying a
-        // parent's factory quotes onto a request whose lines changed SOURCE is exactly the kind of
-        // fuzzy carry this class refuses to make.
+        // Stock lines (V194): a request carrying any stock line takes the ordinary submit routing (all-in-Thailand
+        // straight to the CEO, otherwise Import confirms the ETAs).
         if (childItems.stream().anyMatch(item -> item.stockSource() != null)) {
             return false;
         }
@@ -92,9 +79,9 @@ public class FactoryQuoteCarryForward {
         if (itemIdMapping == null) {
             return false;
         }
-        // The parent must be costable BEFORE anything is copied. This is what makes the
-        // post-copy re-check below a belt-and-braces assertion rather than the only gate: if the
-        // parent could not be costed, its quotes are not a shortcut worth taking.
+        // The parent must be costable BEFORE anything is copied. This is what makes the post-copy re-check below a
+        // belt-and-braces assertion rather than the only gate: if the parent could not be costed, its quotes are not a
+        // shortcut worth taking.
         if (!landedCosts.isFullyResolvable(parent)) {
             return false;
         }
@@ -114,11 +101,9 @@ public class FactoryQuoteCarryForward {
         return th.co.glr.hr.pricingrequest.CeoReviewNotice.costsOrNull(landedCosts, summary);
     }
 
-    /**
-     * Stock lines (V194): {@link LandedCostCalculator#isReadyForCeoReview} - the ONE readiness
-     * predicate - exposed to {@code PricingRequestService}, which cannot take a new constructor
-     * dependency (every hand-wired test builds it positionally).
-     */
+    /** Stock lines (V194): LandedCostCalculator#isReadyForCeoReview - the ONE readiness predicate - exposed to
+     * PricingRequestService, which cannot take a new constructor dependency (every hand-wired test builds it
+     * positionally). */
     public boolean isReadyForCeoReview(PricingRequestSummaryDto summary) {
         return landedCosts.isReadyForCeoReview(summary);
     }
@@ -188,11 +173,8 @@ public class FactoryQuoteCarryForward {
             // different countries are not the same order, so the difference must not pass silently.
             && Objects.equals(a.originCountryOther(), b.originCountryOther())
             && sameAmount(a.thicknessMm(), b.thicknessMm())
-            // compareTo, not equals: BigDecimal.equals("10").equals("10.00") is FALSE (scale is
-            // part of equality), and a quantity re-entered with a different scale is the same
-            // quantity. Using equals here would silently disable the shortcut for half the real
-            // inputs — a quiet performance bug rather than a correctness one, which is exactly the
-            // kind that survives review.
+            // compareTo, not equals: BigDecimal.equals("10").equals("10.00") is FALSE (scale is part of equality), and a
+            // quantity re-entered with a different scale is the same quantity.
             && sameAmount(a.requestedQty(), b.requestedQty())
             && sameAmount(a.requestedQtySqm(), b.requestedQtySqm());
     }

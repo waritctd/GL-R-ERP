@@ -12,13 +12,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Exercises {@link PayrollRepository}'s persistence path against a real PostgreSQL database: process
- * a payroll period + lines and read them back by month, asserting the stored money figures survive
- * the INSERT/SELECT round-trip. The Mockito-based service/calculator unit tests never touch the SQL,
- * so this is the only coverage of the payroll write path and the {@code findLines} join back to
- * {@code hr.employee}.
- */
+/** Exercises PayrollRepository's persistence path against a real PostgreSQL database: process a payroll period
+ * + lines and read them back by month, asserting the stored money figures survive the INSERT/SELECT
+ * round-trip. */
 class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
     private PayrollRepository repository;
 
@@ -98,10 +94,8 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(readBack.lines().get(0).netPay()).isEqualByComparingTo("29250.00");
     }
 
-    // ------------------------------------------------------------------------------------------
-    // Reconciliation additions (2026-07-21, C1/C2/C3): tax-allowance upsert round-trip, YTD-seed
-    // merge with payroll_line, and director remuneration surviving insert + read.
-    // ------------------------------------------------------------------------------------------
+    // Reconciliation additions (2026-07-21, C1/C2/C3): tax-allowance upsert round-trip, YTD-seed merge with
+    // payroll_line, and director remuneration surviving insert + read.
 
     @Test
     void directorRemunerationOnTheEmployeeSurvivesInsertAndReadBackThroughFindActiveEmployees() {
@@ -166,16 +160,8 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(rows.get(0).employeeCode()).isEqualTo("EMP-001");
     }
 
-    // ------------------------------------------------------------------------------------------
-    // verification_status reset on overwrite (2026-08-08 fix). PUT /api/payroll/tax-allowances
-    // (PayrollController, HR-only) reaches upsertTaxAllowances directly with no verification step of
-    // its own, unlike TaxAllowanceDeclarationService#apply, which always re-verifies in the same
-    // transaction right after (see TaxAllowanceApplySeamIntegrationTest for that regression guard).
-    // Before the fix, overwriting a VERIFIED row's amounts through this bare upsert silently left
-    // verification_status = 'VERIFIED' on brand-new, never-reviewed figures -- and
-    // findTaxAllowancesByEmployee applies VERIFIED rows to withholding same as GRANDFATHERED_UNVERIFIED.
-    // Every assertion here is written wrong-way-round: it asserts the bad outcome CANNOT happen.
-    // ------------------------------------------------------------------------------------------
+    // verification_status reset on overwrite (2026-08-08 fix). Every assertion here is written wrong-way-round: it
+    // asserts the bad outcome CANNOT happen.
 
     @Test
     void overwritingAVerifiedRowsAmountsThroughTheLegacyPathDoesNotLeaveItVerified() {
@@ -184,14 +170,14 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         repository.upsertTaxAllowances(2026,
             List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "doc-v1")), hr);
 
-        // HR verifies against supporting documents -- a real reviewer/timestamp/deadline attached,
-        // exactly how a genuine apply()/reverify() leaves the row.
+        // HR verifies against supporting documents -- a real reviewer/timestamp/deadline attached, exactly how a
+        // genuine apply()/reverify() leaves the row.
         repository.markTaxAllowanceVerified(alice, 2026, hr);
         repository.setTaxAllowanceVerificationDeadline(alice, 2026, LocalDate.of(2026, 12, 31));
         assertThat(verificationStatusOf(alice, 1)).isEqualTo("VERIFIED");
 
-        // A later, unrelated overwrite through the SAME legacy path changes the declared amount --
-        // nobody has reviewed this new figure.
+        // A later, unrelated overwrite through the SAME legacy path changes the declared amount -- nobody has reviewed
+        // this new figure.
         repository.upsertTaxAllowances(2026,
             List.of(taxAllowanceUpsert(alice, new BigDecimal("90000.00"), 1, "doc-v1")), hr);
 
@@ -217,8 +203,8 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         OffsetDateTime verifiedAtBefore = verifiedAtOf(alice, 1);
         assertThat(verifiedAtBefore).isNotNull();
 
-        // Same employee, same year/month, IDENTICAL figures -- a genuine no-op re-save (e.g. a
-        // retried request), not a real edit.
+        // Same employee, same year/month, IDENTICAL figures -- a genuine no-op re-save (e.g. a retried request), not a
+        // real edit.
         repository.upsertTaxAllowances(2026,
             List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "doc-v1")), hr);
 
@@ -238,8 +224,8 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         repository.upsertTaxAllowances(2026, List.of(
             taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "doc-jan"),
             taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 6, "doc-jun")), hr);
-        // markTaxAllowanceVerified has NO effective_month -- it verifies the WHOLE year's lineage at
-        // once, exactly as the real declaration workflow's apply()/reverify() do.
+        // markTaxAllowanceVerified has NO effective_month -- it verifies the WHOLE year's lineage at once, exactly as
+        // the real declaration workflow's apply()/reverify() do.
         repository.markTaxAllowanceVerified(alice, 2026, hr);
         repository.setTaxAllowanceVerificationDeadline(alice, 2026, LocalDate.of(2026, 12, 31));
         assertThat(verificationStatusOf(alice, 1)).isEqualTo("VERIFIED");
@@ -268,8 +254,8 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         repository.markTaxAllowanceVerified(alice, 2026, hr);
         assertThat(verificationStatusOf(alice, 1)).isEqualTo("VERIFIED");
 
-        // Same declared amount, but a DIFFERENT document was supplied -- VERIFIED meant HR confirmed
-        // receipt-A.pdf specifically, not whatever this new reference points to.
+        // Same declared amount, but a DIFFERENT document was supplied -- VERIFIED meant HR confirmed receipt-A.pdf
+        // specifically, not whatever this new reference points to.
         repository.upsertTaxAllowances(2026,
             List.of(taxAllowanceUpsert(alice, new BigDecimal("60000.00"), 1, "receipt-B.pdf")), hr);
 
@@ -278,17 +264,8 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualTo("GRANDFATHERED_UNVERIFIED");
     }
 
-    /**
-     * Opus review finding F1 (2026-08-08, blocking, fixed before merge): an earlier version of this
-     * fix reset ANY content change to GRANDFATHERED_UNVERIFIED regardless of the row's PRIOR status.
-     * From EXPIRED_UNVERIFIED that was a silent PROMOTION -- GRANDFATHERED_UNVERIFIED IS applied to
-     * payroll (findTaxAllowancesByEmployee excludes only EXPIRED_UNVERIFIED), so a lapsed,
-     * no-longer-reviewed declaration would have re-entered withholding on nothing more than a bare
-     * amount edit through the legacy PUT, with no reviewer, no deadline, and no automated way back
-     * out (the sweep only re-examines declarations still APPROVED in hr.tax_allowance_declaration).
-     * Wrong-way-round: asserts the promotion CANNOT happen, and separately that the row's PRE-EXPIRY
-     * verifier/timestamp survive as genuine history rather than being laundered away.
-     */
+    /** Opus review finding F1 (2026-08-08, blocking, fixed before merge): an earlier version of this fix reset ANY
+     * content change to GRANDFATHERED_UNVERIFIED regardless of the row's PRIOR status. */
     @Test
     void overwritingAnExpiredRowsAmountsDoesNotPromoteItBackIntoPayroll() {
         long alice = seedEmployee("EMP-309", "อลิสา", "reset5");
@@ -299,16 +276,16 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         OffsetDateTime verifiedAtBeforeExpiry = verifiedAtOf(alice, 1);
         assertThat(verifiedAtBeforeExpiry).isNotNull();
 
-        // The verification lapsed -- the sweep's real effect (expireTaxAllowanceVerification), not a
-        // hand-set status. The row is now excluded from payroll.
+        // The verification lapsed -- the sweep's real effect (expireTaxAllowanceVerification), not a hand-set status.
+        // The row is now excluded from payroll.
         repository.expireTaxAllowanceVerification(alice, 2026);
         assertThat(verificationStatusOf(alice, 1)).isEqualTo("EXPIRED_UNVERIFIED");
         assertThat(repository.findTaxAllowancesByEmployee(LocalDate.of(2026, 6, 1)))
             .as("EXPIRED_UNVERIFIED must be excluded from payroll before the overwrite (sanity)")
             .doesNotContainKey(alice);
 
-        // A later, unrelated amount edit through the legacy path -- nobody reviewed this new figure,
-        // and nobody re-verified the lapsed declaration either.
+        // A later, unrelated amount edit through the legacy path -- nobody reviewed this new figure, and nobody
+        // re-verified the lapsed declaration either.
         repository.upsertTaxAllowances(2026,
             List.of(taxAllowanceUpsert(alice, new BigDecimal("90000.00"), 1, "doc-v1")), hr);
 
@@ -397,8 +374,8 @@ class PayrollRepositoryIntegrationTest extends AbstractPostgresIntegrationTest {
         // both: seed (50,000) + payroll_line's gross_taxable_income (20,000) = 70,000.
         assertThat(ytd.get(both).taxableIncome()).isEqualByComparingTo("70000.00");
         assertThat(ytd.get(both).socialSecurity()).isEqualByComparingTo("3500.00");
-        // the line() helper hardcodes withholdingTax to zero (it only parameterizes totalDeductions),
-        // so "both" only carries the seed's 1,000 withholding here.
+        // the line() helper hardcodes withholdingTax to zero (it only parameterizes totalDeductions), so "both" only
+        // carries the seed's 1,000 withholding here.
         assertThat(ytd.get(both).withholdingTax()).isEqualByComparingTo("1000.00");
 
         List<th.co.glr.hr.payroll.PayrollReconciliationDtos.YtdSeedDto> rows = repository.findYtdSeedRows(2026);

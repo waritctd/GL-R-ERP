@@ -55,18 +55,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * The NEW commission / finance API proven wired at the HTTP layer: the REAL {@link CommissionController}
- * and REAL {@link FinanceDealController} (with {@link ApiExceptionHandler}) behind MockMvc standalone
- * setup, hand-wired to the real services and repositories over real Postgres. Every JSON key asserted
- * here is one the frontend actually reads (CommissionPage.jsx PendingCommissionCard / PendingApprovalView
- * / adjustWeight / loadPending, FinanceDealPage.jsx, FinanceMilestoneSections.jsx, and hrApi.js
- * createFromDeal), so a renamed / dropped record component fails here instead of in the browser.
- *
- * <p>Authz note: {@code @PreAuthorize} is NOT active in standalone MockMvc (no method-security proxy),
- * so the 403 cases below are produced by the SERVICE gate ({@link CommissionService}), surfaced
- * through {@link ApiExceptionHandler}. They prove the service refuses, not that the annotation does.
- */
+/** The NEW commission / finance API proven wired at the HTTP layer: the REAL CommissionController and REAL
+ * FinanceDealController (with ApiExceptionHandler) behind MockMvc standalone setup, hand-wired to the real
+ * services and repositories over real Postgres. */
 class CommissionFinanceHttpWiringIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final LocalDate JUNE_INVOICE = LocalDate.of(2026, 6, 15);
 
@@ -298,8 +289,8 @@ class CommissionFinanceHttpWiringIntegrationTest extends AbstractPostgresIntegra
         List<Integer> weightsBefore = tickets.findById(ticketId).orElseThrow().items().stream()
             .map(TicketItemDto::weightMultiplier).toList();
 
-        // NB: standalone MockMvc has no method-security proxy, so @PreAuthorize is inert here; these 403s
-        // come from the service-level role gate via ApiExceptionHandler.
+        // NB: standalone MockMvc has no method-security proxy, so @PreAuthorize is inert here; these 403s come from
+        // the service-level role gate via ApiExceptionHandler.
         for (UserPrincipal caller : List.of(repActor, accountActor, importActor, hrActor)) {
             assertThat(commissionMvc.perform(get("/api/commissions/pending-approval").session(session(caller)))
                 .andReturn().getResponse().getStatus()).as("GET pending-approval as %s", caller.role()).isEqualTo(403);
@@ -315,9 +306,7 @@ class CommissionFinanceHttpWiringIntegrationTest extends AbstractPostgresIntegra
             .isEqualTo(weightsBefore);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // shape assertions
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     /** Every field CommissionPage.jsx reads off a pending entry, with its JSON type. */
     private static void assertPendingEntryShape(JsonNode entry) {
@@ -353,9 +342,7 @@ class CommissionFinanceHttpWiringIntegrationTest extends AbstractPostgresIntegra
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // fixtures
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private record ItemSpec(int qty, int qtyFromStock, int price, int weight) {}
 

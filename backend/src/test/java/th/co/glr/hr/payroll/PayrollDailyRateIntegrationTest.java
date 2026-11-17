@@ -16,21 +16,9 @@ import th.co.glr.hr.commission.CommissionService;
 import th.co.glr.hr.leave.LeaveRepository;
 import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 
-/**
- * Daily-rate (pay_type = 'D') payroll support (2026-07-30, owner-requested payroll-math fix).
- *
- * <p>Before this fix, {@code PayrollService} put {@code employee.current_salary} straight into
- * {@code PayrollComponent.SALARY} regardless of {@code hr.employee.pay_type}, so a daily-rate
- * employee's PER-DAY rate was paid as their MONTHLY salary. Verified in production: employee_id
- * 203 (พัฒวุฒิ สังฆวาส, code 10060, ฿450/day) would be paid ฿450 instead of the accountant's real
- * figures for each month, e.g. ฿11,250 for 25 days in May/Jun/Jul 2026.
- *
- * <p>Driven through the real {@link PayrollService} + real Postgres (not Mockito), exactly like
- * {@code PayrollCustomerReturnRoundTripIntegrationTest}: the point under test is that
- * {@code daysWorked} survives an actual INSERT/SELECT round trip through {@link PayrollRepository}
- * and that the SALARY/SSO/tax arithmetic is correct end to end, which a mocked repository would
- * "pass" regardless of what the SQL and calculator actually produce.
- */
+/** Daily-rate (pay_type = 'D') payroll support (2026-07-30, owner-requested payroll-math fix). Before this fix,
+ * PayrollService put employee.current_salary straight into PayrollComponent.SALARY regardless of
+ * hr.employee.pay_type, so a daily-rate employee's PER-DAY rate was paid as their MONTHLY salary. */
 class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
     private static final BigDecimal DAY_RATE = new BigDecimal("450.00");
 
@@ -63,11 +51,9 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
                 new th.co.glr.hr.payroll.obligation.PayrollDeductionShortfallRepository(jdbc)));
     }
 
-    /**
-     * The reference data from the accountant's workbooks (task spec): {@code rate * daysWorked}
-     * must reproduce every one of these six real monthly figures exactly, and the SALARY component
-     * gross-earnings figure is what actually gets taxed/SSO'd -- not the raw ฿450 rate.
-     */
+    /** The reference data from the accountant's workbooks (task spec): rate * daysWorked must reproduce every one
+     * of these six real monthly figures exactly, and the SALARY component gross-earnings figure is what actually
+     * gets taxed/SSO'd -- not the raw ฿450 rate. */
     @Test
     void ratesTimesDaysWorkedReproducesEverySixMonthsOfAccountantFigures() {
         long employeeId = seedEmployee("DR-001", "พัฒวุฒิ", "สังฆวาส", DAY_RATE, "D");
@@ -104,11 +90,9 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(reloaded.payType()).isEqualTo("D");
     }
 
-    /**
-     * Design constraint 3: unpaid leave for a daily-rate employee must be deducted at the TRUE
-     * ฿450/day rate, not grossPay/30 (which would be ฿11,250/30 = ฿375/day for a 25-day month --
-     * a completely different, wrong figure that happens to depend on how many days were worked).
-     */
+    /** Design constraint 3: unpaid leave for a daily-rate employee must be deducted at the TRUE ฿450/day rate, not
+     * grossPay/30 (which would be ฿11,250/30 = ฿375/day for a 25-day month -- a completely different, wrong figure
+     * that happens to depend on how many days were worked). */
     @Test
     void unpaidLeaveIsDeductedAtTheTrueDailyRateNotGrossOverThirty() {
         long employeeId = seedEmployee("DR-002", "ทดสอบ", "วันลา", DAY_RATE, "D");
@@ -126,10 +110,8 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo("11250.00");
     }
 
-    /**
-     * Design constraint 4: SSO and tax must follow the CORRECTED gross base (rate * daysWorked),
-     * not the raw ฿450 rate that would previously have been fed straight into SALARY.
-     */
+    /** Design constraint 4: SSO and tax must follow the CORRECTED gross base (rate * daysWorked), not the raw ฿450
+     * rate that would previously have been fed straight into SALARY. */
     @Test
     void ssoIsComputedOnTheCorrectedGrossBaseNotTheRawDayRate() {
         long employeeId = seedEmployee("DR-003", "ทดสอบ", "ประกันสังคม", DAY_RATE, "D");
@@ -148,11 +130,9 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo("563.00");
     }
 
-    /**
-     * Design constraint 1 (the primary regression risk): a monthly employee's computed pay must not
-     * change by one satang. pay_type is NULL here (172 real rows have no pay_type at all), which
-     * must be treated identically to 'M'.
-     */
+    /** Design constraint 1 (the primary regression risk): a monthly employee's computed pay must not change by one
+     * satang. pay_type is NULL here (172 real rows have no pay_type at all), which must be treated identically to
+     * 'M'. */
     @Test
     void monthlyEmployeeWithNullPayTypeIsUnaffectedByDailyRateSupport() {
         long employeeId = seedEmployee("DR-004", "ทดสอบ", "รายเดือน", new BigDecimal("30000.00"), null);
@@ -183,9 +163,7 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo("18");
     }
 
-    /**
-     * Explicit pay_type = 'M' is the same as NULL -- both are monthly.
-     */
+    /** Explicit pay_type = 'M' is the same as NULL -- both are monthly. */
     @Test
     void explicitMonthlyPayTypeBehavesIdenticallyToNull() {
         long employeeId = seedEmployee("DR-005", "ทดสอบ", "เอ็มชัดเจน", new BigDecimal("30000.00"), "M");
@@ -200,16 +178,8 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(reloaded.payType()).isEqualTo("M");
     }
 
-    /**
-     * Finding 3 fix (Opus review, 2026-07-30): {@code findLines} used to read {@code e.pay_type} LIVE
-     * off the employee join, so editing the employee's {@code pay_type} AFTER processing retroactively
-     * changed how an already-processed line reported itself -- the days-worked figure would vanish
-     * from the reload (payType no longer 'D') while {@code days_worked} stayed on the row, and a
-     * reprocess of the same month would silently recompute SALARY as the bare rate again, reintroducing
-     * the exact bug this branch fixes. {@code pay_type} is now frozen on {@code payroll_line} at
-     * processing time (mirroring {@code hr.overtime_request.salary_basis}), so a re-open must keep
-     * reporting the pay_type AS OF THE RUN, not the employee's current value.
-     */
+    /** findLines used to read e.pay_type LIVE off the employee join, so editing the employee's pay_type AFTER
+     * processing retroactively changed how an already-processed line reported itself. */
     @Test
     void reopeningAProcessedLineReportsThePayTypeAsOfTheRunNotTheEmployeesCurrentValue() {
         long employeeId = seedEmployee("DR-006", "ทดสอบ", "ล็อคประเภท", DAY_RATE, "D");
@@ -218,8 +188,8 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
 
         payrollService.process(new ProcessPayrollRequest(month, List.of(input)), hr());
 
-        // Someone edits the employee's pay_type AFTER the month is already processed -- e.g. HR
-        // corrects a miscoded employee, or (Finding 7) the cleanup migration flips a stale row.
+        // Someone edits the employee's pay_type AFTER the month is already processed -- e.g. HR corrects a miscoded
+        // employee, or (Finding 7) the cleanup migration flips a stale row.
         jdbc.update(
             "UPDATE hr.employee SET pay_type = 'M' WHERE employee_id = :employeeId",
             new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("employeeId", employeeId));
@@ -239,11 +209,9 @@ class PayrollDailyRateIntegrationTest extends AbstractPostgresIntegrationTest {
             .isEqualByComparingTo("11250.00");
     }
 
-    /**
-     * Finding 4 fix (Opus review, 2026-07-30): 31 is the INCLUSIVE ceiling (see V103's {@code
-     * chk_payroll_line_days_worked_range} and {@code PayrollService#MAX_DAYS_WORKED}) -- a real
-     * 31-day month must still be payable in full, not off-by-one rejected.
-     */
+    /** 31 is the INCLUSIVE ceiling (see V103's chk_payroll_line_days_worked_range and
+     * PayrollService#MAX_DAYS_WORKED) -- a real 31-day month must still be payable in full, not off-by-one
+     * rejected. */
     @Test
     void exactlyThirtyOneDaysIsAcceptedAsTheInclusiveCeiling() {
         long employeeId = seedEmployee("DR-007", "สามสิบเอ็ด", "วัน", DAY_RATE, "D");

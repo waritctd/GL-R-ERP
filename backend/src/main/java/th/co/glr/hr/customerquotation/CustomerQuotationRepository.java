@@ -167,13 +167,7 @@ public class CustomerQuotationRepository {
         String customerName, String customerAddress, String customerTaxId, String customerPhone,
         String projectName, List<NewItem> items) {}
 
-    /**
-     * Inserts a new DRAFT quotation row + its item snapshot in one transaction. Does not check
-     * idempotency itself (the caller checks {@link #findIdByClientRequestId} first, under the
-     * same {@link #lockPricingRequest} hold, mirroring {@code PricingDecisionRepository.createDraft}'s
-     * contract) and does not supersede any prior row (the caller does that explicitly when
-     * creating a revision, so a first-ever create never accidentally supersedes anything).
-     */
+    /** Inserts a new DRAFT quotation row + its item snapshot in one transaction. */
     @Transactional
     public long insertDraft(InsertDraftParams p) {
         Integer maxVersion = jdbc.queryForObject("""
@@ -273,8 +267,8 @@ public class CustomerQuotationRepository {
             """, batch);
     }
 
-    /** Draft-only mutation (rule 8: issued quotations are immutable) — the WHERE clause is the
-     * enforcement, not a service-layer check the caller could forget. */
+    /** Draft-only mutation (rule 8: issued quotations are immutable) — the WHERE clause is the enforcement, not a
+     * service-layer check the caller could forget. */
     public int updateHeader(long quotationId, String paymentTerms, String leadTime, String deliveryTerms,
                             LocalDate validityDate, String customerNotes) {
         return jdbc.update("""
@@ -298,9 +292,9 @@ public class CustomerQuotationRepository {
     public record ItemUpdate(long itemId, String description, String itemNotes, BigDecimal salesDiscount,
                              BigDecimal finalUnitPrice, BigDecimal lineSubtotal, BigDecimal vat, BigDecimal lineTotal) {}
 
-    /** Returns rows touched — the caller compares against the requested count to detect an
-     * itemId that does not belong to this quotation, exactly like
-     * {@code PricingDecisionRepository.updateItems}. Draft-only via the WHERE clause. */
+    /** Returns rows touched — the caller compares against the requested count to detect an itemId that does not
+     * belong to this quotation, exactly like PricingDecisionRepository.updateItems. Draft-only via the WHERE
+     * clause. */
     public int updateItems(long quotationId, List<ItemUpdate> updates) {
         if (updates.isEmpty()) {
             return 0;
@@ -341,9 +335,9 @@ public class CustomerQuotationRepository {
         return total;
     }
 
-    /** Recomputes the quotation-level subtotal from its current item rows — always called after
-     * {@link #updateItems} in the same transaction so total_amount never drifts from the sum of
-     * its own lines (rule 3: server calculates subtotal/VAT/total, never trusts the client). */
+    /** Recomputes the quotation-level subtotal from its current item rows — always called after #updateItems in the
+     * same transaction so total_amount never drifts from the sum of its own lines (rule 3: server calculates
+     * subtotal/VAT/total, never trusts the client). */
     public void recalculateTotal(long quotationId) {
         jdbc.update("""
             UPDATE sales.quotation
@@ -353,9 +347,9 @@ public class CustomerQuotationRepository {
             """, Map.of("id", quotationId));
     }
 
-    /** Compare-and-set DRAFT/READY_TO_ISSUE -> ISSUED. Rowcount 0 means not open for issuing —
-     * the service distinguishes "already issued by this same idempotency key" (replay) from a
-     * genuine conflict, exactly like {@code PricingDecisionRepository.approve}. */
+    /** Compare-and-set DRAFT/READY_TO_ISSUE -> ISSUED. Rowcount 0 means not open for issuing — the service
+     * distinguishes "already issued by this same idempotency key" (replay) from a genuine conflict, exactly like
+     * PricingDecisionRepository.approve. */
     public int issue(long quotationId, String issueClientRequestId) {
         return jdbc.update("""
             UPDATE sales.quotation

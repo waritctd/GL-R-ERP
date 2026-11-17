@@ -15,15 +15,9 @@ vi.mock('../../api/index.js', () => ({
   api: { catalog: { prices: vi.fn().mockResolvedValue({ items: [] }) } },
 }));
 
-// Sales feedback #1 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ".
-// Owner ruling of the same day: on a THAI quotation every tile price box is typed per ตร.ม.
-// INCLUDING VAT — ราคาตั้ง in all three price modes, and ราคาสุทธิ too — and the system works out
-// the per-แผ่น figure the document prints. The English form keeps its per-piece USD inputs.
-//
-// What these tests are and are not evidence of: they pin the EDITOR — which box asks for what,
-// what a row sends, what a saved row reads back as. The conversion itself is the server's
-// (WastageCalculator#perPieceExVatFromSqmIncVat, pinned by WastageCalculatorPerSqmPriceTest against
-// the owner's own documents); nothing here computes it, and nothing here could prove it right.
+// Sales feedback #1 (แจ้งปัญหาการใช้งาน เสนอราคา, 2026-10-06) — "แก้เป็น ตร.ม. รวม VAT ทุกแบบ". Owner ruling
+// of the same day: on a THAI quotation every tile price box is typed per ตร.ม. The English form keeps its
+// per-piece USD inputs.
 
 // The owner's 60×120: 0.72 ตร.ม./แผ่น → 1.39 แผ่น/ตร.ม.
 const complete = {
@@ -50,14 +44,14 @@ describe('itemInputFromRow — a Thai tile row states its prices per ตร.ม.
     });
   });
 
-  // The row keeps the server's last per-แผ่น answer (to show it under the box). It is a derived
-  // figure, never a second price to send beside the one it was derived from.
+  // The row keeps the server's last per-แผ่น answer (to show it under the box). It is a derived figure, never a
+  // second price to send beside the one it was derived from.
   it('never sends back the per-แผ่น figure the server derived', () => {
     expect(itemInputFromRow({ ...typed, unitPrice: 1210.25 }, 'NET')).toMatchObject({ listPriceSqm: 1800, unitPrice: null });
   });
 
-  // The no-drift guarantee for everything saved before this change: 1,748.13 a piece is NOT
-  // re-sent as "2,599.99 per ตร.ม.", which would come back as some other per-piece figure.
+  // The no-drift guarantee for everything saved before this change: 1,748.13 a piece is NOT re-sent as "2,599.99
+  // per ตร.ม.", which would come back as some other per-piece figure.
   it('a row saved before this change still sends its per-แผ่น price, untouched', () => {
     expect(itemInputFromRow(legacy, 'NET')).toMatchObject({ unitPrice: 1748.13, listPriceSqm: null, directNetPriceSqm: null });
   });
@@ -94,8 +88,8 @@ describe('itemInputFromRow — a Thai tile row states its prices per ตร.ม.
     });
   });
 
-  // calculate-line infers the price mode FROM THE ROW (it has no quotation): a net per ตร.ม. left
-  // over from DIRECT_NET would make a NET row preview as ราคาสุทธิ.
+  // calculate-line infers the price mode FROM THE ROW (it has no quotation): a net per ตร.ม. left over from
+  // DIRECT_NET would make a NET row preview as ราคาสุทธิ.
   it('a net per ตร.ม. left on the row travels in DIRECT_NET only', () => {
     const row = { ...typed, directNetPriceSqm: 790, specialPriceSqm: 790 };
     expect(itemInputFromRow(row, 'NET').directNetPriceSqm).toBeNull();
@@ -157,8 +151,8 @@ describe('validateQuotationItem — the price a Thai tile row needs is a per-ต
     expect(validateQuotationItem({ ...complete, directNetPriceSqm: 790 }, 'DIRECT_NET')).toEqual({});
   });
 
-  // The per-แผ่น figure is the server's answer and arrives a moment after typing — or not at all
-  // when a preview is refused. A row must not read "ขาด ราคา" for a price the rep has typed.
+  // The per-แผ่น figure is the server's answer and arrives a moment after typing — or not at all when a preview
+  // is refused. A row must not read "ขาด ราคา" for a price the rep has typed.
   it('does not wait for the per-แผ่น figure the server derives', () => {
     expect(validateQuotationItem({ ...typed, unitPrice: null }, 'NET')).toEqual({});
     expect(validateQuotationItem({ ...typed, unitPrice: null, directNetPriceSqm: 790, netUnitPrice: null }, 'DIRECT_NET')).toEqual({});
@@ -186,8 +180,8 @@ describe('validateQuotationItem — the price a Thai tile row needs is a per-ต
     }
   });
 
-  // ItemInput.listPriceSqm / directNetPriceSqm are @Digits(fraction = 2): a third decimal is a 400
-  // from bean validation, so the editor says so on the field instead of letting the save fail.
+  // ItemInput.listPriceSqm / directNetPriceSqm are @Digits(fraction = 2): a third decimal is a 400 from bean
+  // validation, so the editor says so on the field instead of letting the save fail.
   it('refuses more than two decimals on either per-ตร.ม. price', () => {
     expect(validateQuotationItem({ ...complete, listPriceSqm: 1800.125 }, 'NET')).toEqual({ unitPrice: 'ทศนิยมได้ไม่เกิน 2 ตำแหน่ง' });
     expect(validateQuotationItem({ ...typed, directNetPriceSqm: 790.125 }, 'DIRECT_NET'))
@@ -220,8 +214,8 @@ describe('rowHasPriceForPreview — a per-ตร.ม. price is a price', () => {
     expect(rowHasPriceForPreview({ ...complete, specialPriceSqm: 790 }, 'SPECIAL_SQM')).toBe(false);
   });
 
-  // The server refuses to turn a per-ตร.ม. price into a per-แผ่น one with no area per piece —
-  // there is nothing honest to preview, so nothing is asked.
+  // The server refuses to turn a per-ตร.ม. price into a per-แผ่น one with no area per piece — there is nothing
+  // honest to preview, so nothing is asked.
   it('does not preview a per-ตร.ม. price on a row with no แผ่น/ตร.ม.', () => {
     expect(rowHasPriceForPreview({ ...typed, sqmPerPiece: null }, 'NET')).toBe(false);
     expect(rowHasPriceForPreview({ ...complete, sqmPerPiece: null, directNetPriceSqm: 790 }, 'DIRECT_NET')).toBe(false);
@@ -280,8 +274,8 @@ describe('availablePriceModes — the Thai editor says per ตร.ม.; the CEO\
     expect(en.SPECIAL_SQM.label).toBe('ราคา USD/ตร.ม.');
   });
 
-  // PRICE_MODE_OPTIONS is also the CEO's pricing screen's list (PricingRequestDetailPage), where
-  // prices ARE typed per แผ่น. It must not start saying ตร.ม. as a side effect of this change.
+  // PRICE_MODE_OPTIONS is also the CEO's pricing screen's list (PricingRequestDetailPage), where prices ARE
+  // typed per แผ่น. It must not start saying ตร.ม. as a side effect of this change.
   it('PRICE_MODE_OPTIONS itself is untouched', () => {
     const base = byCode(PRICE_MODE_OPTIONS);
     expect(base.NET.hint).toBe('กรอกราคาตั้งต่อแผ่นและส่วนลด % (แบบเดิม)');
@@ -317,8 +311,8 @@ describe('QuotationItemRow — the Thai price boxes', () => {
       expect(onChange).toHaveBeenLastCalledWith({ listPriceSqm: 1800 });
     });
 
-    // Emptying the box must leave it EMPTY. Were the old per-แผ่น figure kept, the box would refill
-    // itself with that figure's per-ตร.ม. equivalent the moment the last digit was deleted.
+    // Emptying the box must leave it EMPTY. Were the old per-แผ่น figure kept, the box would refill itself with
+    // that figure's per-ตร.ม. equivalent the moment the last digit was deleted.
     it('clearing the box clears the price altogether', () => {
       const { onChange } = renderRow({ ...typed, unitPrice: 1210.25 });
       fireEvent.change(screen.getByLabelText(/^ราคา\/ตร\.ม\./), { target: { value: '' } });
@@ -354,9 +348,9 @@ describe('QuotationItemRow — the Thai price boxes', () => {
       expect(screen.getByTestId('list-per-piece-0').textContent).toBe('คิดจากราคา ฿1,748.13/แผ่น (ก่อน VAT)');
     });
 
-    // A row saved before this change whose แผ่น/ตร.ม. has since been cleared: the per-แผ่น price
-    // is still there (and still what a save sends), but it cannot be shown per ตร.ม. — so the box
-    // is empty, and an empty box with no word of explanation would read as "no price".
+    // A row saved before this change whose แผ่น/ตร.ม. has since been cleared: the per-แผ่น price is still there
+    // (and still what a save sends), but it cannot be shown per ตร.ม. — so the box is empty, and an empty box with
+    // no word of explanation would read as "no price".
     it('a per-แผ่น price that cannot be shown per ตร.ม. is still named, with what is needed to show it', () => {
       renderRow({ ...legacy, sqmPerPiece: null });
       expect(screen.getByLabelText(/^ราคา\/ตร\.ม\./).value).toBe('');
@@ -364,8 +358,8 @@ describe('QuotationItemRow — the Thai price boxes', () => {
         .toBe('ราคา ฿1,748.13/แผ่น (ก่อน VAT) · กรอกแผ่น/ตร.ม. เพื่อแสดงเป็นราคาต่อ ตร.ม.');
     });
 
-    // The per-แผ่น figure is the figure the document prints; a screen-reader user tabbing into the
-    // box should hear it, not only see it.
+    // The per-แผ่น figure is the figure the document prints; a screen-reader user tabbing into the box should hear
+    // it, not only see it.
     it('the line under the box describes the box', () => {
       renderRow({ ...typed, unitPrice: 1210.25 });
       const note = screen.getByTestId('list-per-piece-0');
@@ -395,8 +389,8 @@ describe('QuotationItemRow — the Thai price boxes', () => {
       expect(screen.getByText('เว้นว่าง = ใช้ราคาสุทธิ (พิมพ์ส่วนลดเป็น Net)')).not.toBeNull();
     });
 
-    // One line under each box, not three under one: once ราคาตั้ง is filled in, "leave it blank"
-    // has nothing left to say and gives way to what the price comes to per แผ่น.
+    // One line under each box, not three under one: once ราคาตั้ง is filled in, "leave it blank" has nothing left
+    // to say and gives way to what the price comes to per แผ่น.
     it('the line under ราคาสุทธิ describes that box, and a per-แผ่น net with no แผ่น/ตร.ม. is still named', () => {
       renderRow({ ...complete, sqmPerPiece: null, directNetPrice: 500, netUnitPrice: 500 }, { priceMode: 'DIRECT_NET' });
       const box = screen.getByLabelText(/^ราคาสุทธิ\/ตร\.ม\./);
@@ -453,12 +447,9 @@ describe('QuotationItemRow — the Thai price boxes', () => {
     });
   });
 
-  // jsdom has no layout engine, so this pins the MECHANISM, not the pixels (those were measured
-  // in a browser: at an 820px window this grid's columns are 142px, the in-field "บาท/ตร.ม."
-  // reserves 72px of that, and a price of 1041.11 was cut to "1041."). When the box itself is too
-  // narrow for both, the unit steps aside and the number gets the room — the label still carries
-  // the unit. A container query on the box, not a viewport breakpoint: the same squeeze happens
-  // in the tablet band and at the narrow end of the desktop band, with the sidebar open.
+  // jsdom has no layout engine, so this pins the MECHANISM, not the pixels (those were measured in a browser: at
+  // an 820px window this grid's columns are 142px, the in-field "บาท/ตร.ม." reserves 72px of that, and a price
+  // of 1041.11 was cut to "1041.").
   describe('a narrow price box shows the price, not the unit', () => {
     const unitOf = (box) => box.parentElement.querySelector('[aria-hidden="true"]');
 
@@ -477,12 +468,9 @@ describe('QuotationItemRow — the Thai price boxes', () => {
       expect(box.className).toContain('@max-[11rem]:pr-3');
     });
 
-    // …and the row the price boxes sit in goes from four columns to two when the ROW is narrow.
-    // Measured at a 1045px window (desktop band, sidebar open — what an iPad in landscape gets):
-    // four columns of 133px, a 133px "ราคา/ตร.ม. (รวม VAT) *" that wrapped beside a "ส่วนลด %" that
-    // did not, and a price input sitting one line lower than its neighbours. Four columns need
-    // ~170px each for the longest label here (164px), hence 45rem. A container query on the row
-    // for the same reason as above; `mobile:` still takes it to one column on a phone.
+    // …and the row the price boxes sit in goes from four columns to two when the ROW is narrow. Four columns need
+    // ~170px each for the longest label here (164px), hence 45rem. A container query on the row for the same
+    // reason as above; `mobile:` still takes it to one column on a phone.
     it('the price row is two columns until the row itself is 45rem wide, and one on a phone', () => {
       renderRow(complete);
       const box = screen.getByLabelText(/^ราคา\/ตร\.ม\./);
@@ -490,15 +478,15 @@ describe('QuotationItemRow — the Thai price boxes', () => {
       expect(priceRow).not.toBeNull();
       expect(priceRow.className).toContain('@min-[45rem]:grid-cols-4');
       expect(priceRow.className).toContain('mobile:grid-cols-1');
-      // The container is a wrapper around the price row ONLY, never the whole <li>: a query
-      // container is also a layout-containment and stacking boundary, and the row holds the
-      // catalogue dropdown, which has to stay free to overlap the row beneath it.
+      // The container is a wrapper around the price row ONLY, never the whole : a query container is also a
+      // layout-containment and stacking boundary, and the row holds the catalogue dropdown, which has to stay free
+      // to overlap the row beneath it.
       expect(priceRow.parentElement.className).toBe('@container');
       expect(box.closest('li').className).not.toContain('@container');
     });
 
-    // The wrong-way-round case. เผื่อ's "กรอกเอง" box uses the same component, and ITS label does not
-    // say % or แผ่น — the unit inside the field is the only place that distinction lives.
+    // The wrong-way-round case. เผื่อ's "กรอกเอง" box uses the same component, and ITS label does not say % or
+    // แผ่น — the unit inside the field is the only place that distinction lives.
     it('the เผื่อ box never drops its unit: nothing else on screen says whether it is % or แผ่น', () => {
       renderRow(complete);
       const waste = document.getElementById('waste-0');

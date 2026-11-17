@@ -12,9 +12,9 @@ import { DealStagePanel } from './DealStagePanel.jsx';
 import { nextStageIn } from './stageCatalog.js';
 import { AUTO_STAGE_HINT, GATE_LABEL } from './stageMeta.js';
 
-// The guided-advance flow calls api.tickets.{updateTracking,addActivity} directly (then defers the
-// actual stage move to the parent's onUpdateStage), so the module is mocked here (vitest hoists
-// vi.mock above the imports). Other tests in this file are presentational and never touch it.
+// The guided-advance flow calls api.tickets.{updateTracking,addActivity} directly (then defers the actual
+// stage move to the parent's onUpdateStage), so the module is mocked here (vitest hoists vi.mock above the
+// imports). Other tests in this file are presentational and never touch it.
 vi.mock('../../api/index.js', () => ({
   api: {
     tickets: {
@@ -26,9 +26,9 @@ vi.mock('../../api/index.js', () => ({
 
 globalThis.React = React;
 
-// The panel no longer takes a `user` and no longer decides anything: it renders the server's
-// availableActions plus its per-stage stageDecisions (TicketService.stageDecisions), over the
-// backend-served stage catalog. Both are supplied here as the API supplies them.
+// The panel no longer takes a `user` and no longer decides anything: it renders the server's availableActions
+// plus its per-stage stageDecisions (TicketService.stageDecisions), over the backend-served stage catalog.
+// Both are supplied here as the API supplies them.
 const catalog = DEAL_STAGE_CATALOG;
 
 // "Everything the server would allow": enough for the UPDATE_STAGE gate, which asks whether ANY
@@ -75,6 +75,12 @@ function QueryWrapper({ children }) {
   return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
 }
 
+// Deal page redesign (2026-11-16): the stage number + headline, the owner line and the phase summary moved behind
+// ดูขั้นตอนทั้งหมด (the page's S stepper and ขั้นต่อไป card replaced the visible pip block).
+function openSteps() {
+  act(() => { screen.getByRole('button', { name: /ดูขั้นตอนทั้งหมด/ }).click(); });
+}
+
 function renderPanel(props = {}) {
   return render(
     <DealStagePanel
@@ -106,12 +112,9 @@ function renderPanelWithRef(props = {}) {
   return { ref, ...utils };
 }
 
-// Ticket-detail IA rebuild Phase 1: แก้ไขสถานะ…/เสียงาน/พักดีลไว้/พัก dormant
-// no longer render inline here — TicketDetailPage's header overflow menu and
-// bottom danger zone trigger them via this forwardRef instead (see the
-// component's own doc comment). Each exposed opener re-checks its own gate
-// before acting, so a caller invoking one this deal doesn't actually allow
-// is a no-op rather than a forced action.
+// Ticket-detail IA rebuild Phase 1: แก้ไขสถานะ…/เสียงาน/พักดีลไว้/พัก dormant no longer render inline here —
+// TicketDetailPage's header overflow menu and bottom danger zone trigger them via this forwardRef instead (see
+// the component's own doc comment).
 describe('DealStagePanel imperative handle (overflow menu / danger zone triggers)', () => {
   it('openEditStage() is a no-op when UPDATE_STAGE is not in availableActions', () => {
     const { ref } = renderPanelWithRef({ availableActions: [] });
@@ -174,7 +177,7 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
 
   it('openEditStage() keeps an off-route stage in the blocked list with its reason, even though the deal never sat on it', () => {
     const offRoute = allAllowed.map((d) => (d.stage === 'QUOTE_OWNER'
-      ? { ...d, allowed: false, onRoute: false, blockedReason: 'ขั้นนี้ไม่อยู่ในเส้นทางของดีลนี้' } : d));
+      ? { ...d, allowed: false, onRoute: false, blockedReason: 'ขั้นนี้ไม่อยู่ในเส้นทางนี้' } : d));
     const { ref } = renderPanelWithRef({
       summary: baseSummary({ salesStage: 'QUOTE_BUYER' }),
       availableActions: [{ action: 'UPDATE_STAGE' }],
@@ -183,7 +186,7 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     });
     act(() => ref.current.openEditStage());
     fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    expect(screen.getByTestId('update-stage-blocked-list').textContent).toContain('ขั้นนี้ไม่อยู่ในเส้นทางของดีลนี้');
+    expect(screen.getByTestId('update-stage-blocked-list').textContent).toContain('ขั้นนี้ไม่อยู่ในเส้นทางนี้');
   });
 
   it('openEditStage() offers every stage when the deal skipped none (no STAGE_CHANGED events)', () => {
@@ -197,10 +200,12 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
     expect(offered).toEqual(expect.arrayContaining(['QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER']));
   });
 
-  it('openHold() is a no-op without PLACE_ON_HOLD, and opens the note modal with it', () => {
+  // พักดีลไว้ / พัก dormant are ONE พักงาน dialog since the m-hold drawing (2026-11-16); these used to assert the
+  // two old note-modal titles. openHold preselects พักชั่วคราว, openDormant ไม่เคลื่อนไหว.
+  it('openHold() is a no-op without PLACE_ON_HOLD, and opens พักงาน on พักชั่วคราว with it', () => {
     const { ref, rerender } = renderPanelWithRef({ availableActions: [] });
     act(() => ref.current.openHold());
-    expect(screen.queryByText('พักดีลไว้', { selector: 'h2' })).toBeNull();
+    expect(screen.queryByText('พักงาน', { selector: 'h2' })).toBeNull();
 
     rerender(
       <DealStagePanel
@@ -213,13 +218,45 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
       />,
     );
     act(() => ref.current.openHold());
-    expect(screen.getByText('พักดีลไว้', { selector: 'h2' })).not.toBeNull();
+    expect(screen.getByText('พักงาน', { selector: 'h2' })).not.toBeNull();
+    expect(screen.getByRole('radio', { name: /พักชั่วคราว/ }).getAttribute('aria-checked')).toBe('true');
   });
 
-  it('openDormant() is a no-op without MARK_DORMANT, and opens the note modal with it', () => {
+  // Deal page redesign (2026-11-16): the paused / lost banners' buttons moved to the ขั้นต่อไป card, which calls these.
+  // Same gates the banners had: RESUME on a paused deal, REOPEN on a lost one.
+  it('openResume() opens the resume note modal only on a paused deal with RESUME (wrong-way: active deal, no RESUME)', () => {
+    const paused = baseSummary({ lifecycle: 'ON_HOLD' });
+    const { ref, rerender } = renderPanelWithRef({ summary: paused, availableActions: [] });
+    act(() => ref.current.openResume());
+    expect(screen.queryByText('ดำเนินการต่อ', { selector: 'h2' })).toBeNull();
+
+    rerender(<DealStagePanel ref={ref} summary={baseSummary()} stageDecisions={allAllowed} catalog={catalog} availableActions={[{ action: 'RESUME' }]} {...noopHandlers} />);
+    act(() => ref.current.openResume());
+    expect(screen.queryByText('ดำเนินการต่อ', { selector: 'h2' })).toBeNull();
+
+    rerender(<DealStagePanel ref={ref} summary={paused} stageDecisions={allAllowed} catalog={catalog} availableActions={[{ action: 'RESUME' }]} {...noopHandlers} />);
+    act(() => ref.current.openResume());
+    expect(screen.getByText('ดำเนินการต่อ', { selector: 'h2' })).not.toBeNull();
+  });
+
+  it('reopen() calls onReopen only on a lost deal with REOPEN (wrong-way: lost without REOPEN, active with REOPEN)', () => {
+    const onReopen = vi.fn();
+    const lost = baseSummary({ lifecycle: 'CLOSED_LOST' });
+    const { ref, rerender } = renderPanelWithRef({ summary: lost, availableActions: [], onReopen });
+    act(() => ref.current.reopen());
+    rerender(<DealStagePanel ref={ref} summary={baseSummary()} stageDecisions={allAllowed} catalog={catalog} availableActions={[{ action: 'REOPEN' }]} {...noopHandlers} onReopen={onReopen} />);
+    act(() => ref.current.reopen());
+    expect(onReopen).not.toHaveBeenCalled();
+
+    rerender(<DealStagePanel ref={ref} summary={lost} stageDecisions={allAllowed} catalog={catalog} availableActions={[{ action: 'REOPEN' }]} {...noopHandlers} onReopen={onReopen} />);
+    act(() => ref.current.reopen());
+    expect(onReopen).toHaveBeenCalledTimes(1);
+  });
+
+  it('openDormant() is a no-op without MARK_DORMANT, and opens พักงาน on ไม่เคลื่อนไหว with it', () => {
     const { ref, rerender } = renderPanelWithRef({ availableActions: [] });
     act(() => ref.current.openDormant());
-    expect(screen.queryByText('พัก dormant', { selector: 'h2' })).toBeNull();
+    expect(screen.queryByText('พักงาน', { selector: 'h2' })).toBeNull();
 
     rerender(
       <DealStagePanel
@@ -232,7 +269,10 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
       />,
     );
     act(() => ref.current.openDormant());
-    expect(screen.getByText('พัก dormant', { selector: 'h2' })).not.toBeNull();
+    expect(screen.getByText('พักงาน', { selector: 'h2' })).not.toBeNull();
+    expect(screen.getByRole('radio', { name: /ไม่เคลื่อนไหว/ }).getAttribute('aria-checked')).toBe('true');
+    // Wrong-way: without PLACE_ON_HOLD the พักชั่วคราว choice is shown but cannot be picked.
+    expect(screen.getByRole('radio', { name: /พักชั่วคราว/ }).disabled).toBe(true);
   });
 
   it('openMarkLost() is a no-op without MARK_LOST, and opens MarkLostModal with it', () => {
@@ -288,11 +328,9 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
   // only on its OWN precondition (readyToAdvance for เลื่อนไป, nothing for the other three) and
   // never re-derives actionLoading.
   it('openAdvance() is a no-op while actionLoading is true, even though the gate and advanceReady both pass', () => {
-    // A fresh local spy, not the shared noopHandlers.onUpdateStage — that
-    // mock already has a call recorded from the "gate and advanceReady both
-    // satisfied" test above it (this file never resets mocks between tests),
-    // so asserting against it here would pass or fail on stale state instead
-    // of this test's own action.
+    // A fresh local spy, not the shared noopHandlers.onUpdateStage — that mock already has a call recorded from
+    // the "gate and advanceReady both satisfied" test above it, so asserting against it here would pass or fail on
+    // stale state instead of this test's own action.
     const onUpdateStage = vi.fn();
     const { ref } = renderPanelWithRef({
       availableActions: [{ action: 'ADVANCE_STAGE', targetStage: 'SPEC_APPROVED' }],
@@ -313,13 +351,13 @@ describe('DealStagePanel imperative handle (overflow menu / danger zone triggers
   it('openHold() is a no-op while actionLoading is true, even though PLACE_ON_HOLD is available', () => {
     const { ref } = renderPanelWithRef({ availableActions: [{ action: 'PLACE_ON_HOLD' }], actionLoading: true });
     act(() => ref.current.openHold());
-    expect(screen.queryByText('พักดีลไว้', { selector: 'h2' })).toBeNull();
+    expect(screen.queryByText('พักงาน', { selector: 'h2' })).toBeNull();
   });
 
   it('openDormant() is a no-op while actionLoading is true, even though MARK_DORMANT is available', () => {
     const { ref } = renderPanelWithRef({ availableActions: [{ action: 'MARK_DORMANT' }], actionLoading: true });
     act(() => ref.current.openDormant());
-    expect(screen.queryByText('พัก dormant', { selector: 'h2' })).toBeNull();
+    expect(screen.queryByText('พักงาน', { selector: 'h2' })).toBeNull();
   });
 
   it('does not render an inline "เลื่อนไป" button any more (moved to the header overflow menu)', () => {
@@ -363,8 +401,8 @@ describe('DealStagePanel Slice A "chip diet" — removed sub-status rows stay go
     });
     expect(screen.queryByText('ยอดชำระ:')).toBeNull();
     expect(screen.queryByText('นโยบายมัดจำ:')).toBeNull();
-    // PAYMENT_SUBSTEPS moved to the money tab (TicketDetailPage), not
-    // deleted — but it never renders from inside THIS panel either way.
+    // PAYMENT_SUBSTEPS moved to the money tab (TicketDetailPage), not deleted — but it never renders from inside
+    // THIS panel either way.
     expect(screen.queryByText('การชำระเงิน:')).toBeNull();
     expect(screen.queryByText('ลูกค้ายืนยัน')).toBeNull();
   });
@@ -378,8 +416,9 @@ describe('DealStagePanel Slice A "chip diet" — removed sub-status rows stay go
 
   it('still renders the pipeline\'s own stage content (this panel is not empty — only the duplicated rows are gone)', () => {
     renderPanel({ summary: baseSummary({ salesStage: 'QUOTE_DESIGN_SIDE' }) });
+    openSteps();
     // S4's wording is the designer alone (the project owner has their own stage, QUOTE_OWNER, S5).
-    expect(screen.getByText('เสนอราคาผู้ออกแบบ')).not.toBeNull();
+    expect(screen.getByTestId('deal-stage-headline').textContent).toBe('เสนอราคาผู้ออกแบบ');
   });
 });
 
@@ -394,8 +433,9 @@ describe('DealStagePanel headline names the counterparty', () => {
 
   it('reads "ได้รับใบสั่งซื้อจากผู้รับเหมา/ผู้ซื้อ" at ORDER_RECEIVED', () => {
     renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }) });
-    expect(screen.getByText('ได้รับใบสั่งซื้อจากผู้รับเหมา/ผู้ซื้อ')).not.toBeNull();
-    expect(screen.queryByText('ได้รับใบสั่งซื้อ')).toBeNull();
+    openSteps();
+    // The headline (not the full stepper's list of every stage's own label, which is also open now).
+    expect(screen.getByTestId('deal-stage-headline').textContent).toBe('ได้รับใบสั่งซื้อจากผู้รับเหมา/ผู้ซื้อ');
   });
 
   // Wrong-way-round: the override is for ONE stage; every other headline is the stage's own label.
@@ -412,6 +452,7 @@ describe('DealStagePanel headline names the counterparty', () => {
     'shows "ผู้รับผิดชอบ: <department>" under the title at %s',
     (salesStage) => {
       renderPanel({ summary: baseSummary({ salesStage }) });
+      openSteps();
       const gate = catalog.stages.find((stage) => stage.code === salesStage).gate;
       expect(screen.getByTestId('deal-stage-owner').textContent).toBe(`ผู้รับผิดชอบ: ${GATE_LABEL[gate]}`);
     },
@@ -422,6 +463,7 @@ describe('DealStagePanel headline names the counterparty', () => {
     'the owner line at %s follows the 2026-10-29 ruling',
     (salesStage, department) => {
       renderPanel({ summary: baseSummary({ salesStage }) });
+      openSteps();
       expect(screen.getByTestId('deal-stage-owner').textContent).toBe(`ผู้รับผิดชอบ: ${department}`);
     },
   );
@@ -431,8 +473,8 @@ describe('DealStagePanel headline names the counterparty', () => {
     expect(screen.queryByTestId('deal-stage-owner')).toBeNull();
   });
 
-  // The primary action lives in the sticky header, so with no `primaryAction` the panel must not
-  // leave an empty flex row behind — each empty row still costs a full gap-3 of dead space.
+  // The primary action lives in the sticky header, so with no `primaryAction` the panel must not leave an empty
+  // flex row behind — each empty row still costs a full gap-3 of dead space.
   it('renders no empty placeholder rows when there is no primaryAction', () => {
     renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }), docActions: <a href="#doc">doc</a> });
     expect(screen.getByTestId('deal-stage-panel').querySelectorAll('div:empty')).toHaveLength(0);
@@ -465,11 +507,15 @@ describe('DealStagePanel focused default view', () => {
   const phaseCount = catalog.phases.length;
   const meta = catalog.stages.find((stage) => stage.code === 'PRESENTATION');
 
-  it('shows ONE "เฟส N จาก M" summary, not a per-phase bar for every phase', () => {
+  // Deal page redesign (2026-11-16): the S stepper above the page replaced the default view's phase summary; the
+  // "เฟส N จาก M" summary moved behind ดูขั้นตอนทั้งหมด, beside the full tracker.
+  it('shows no phase summary or per-phase bar on the default strip, and ONE "เฟส N จาก M" summary behind ดูขั้นตอนทั้งหมด', () => {
     renderPanel();
-    expect(screen.getByText(`เฟส ${meta.phase} จาก ${phaseCount}`, { exact: false })).not.toBeNull();
+    expect(screen.queryByText(`เฟส ${meta.phase} จาก ${phaseCount}`, { exact: false })).toBeNull();
     // The old tracker and badge each rendered a bare "เฟส N" span.
     expect(screen.queryAllByText(/^เฟส \d$/)).toHaveLength(0);
+    openSteps();
+    expect(screen.getAllByText(`เฟส ${meta.phase} จาก ${phaseCount}`, { exact: false })).toHaveLength(1);
   });
 
   it('brings the full phase tracker back inside "ดูขั้นตอนทั้งหมด"', () => {
@@ -480,8 +526,8 @@ describe('DealStagePanel focused default view', () => {
 
   it('does not render the unlabeled gate chip next to the stage name', () => {
     renderPanel({ summary: baseSummary({ salesStage: 'ORDER_RECEIVED' }) });
-    // Exact match: the merged next-step line may still MENTION a department, the chip was the
-    // bare label on its own.
+    // Exact match: the merged next-step line may still MENTION a department, the chip was the bare label on its
+    // own.
     expect(screen.queryByText('ฝ่ายขาย')).toBeNull();
     expect(screen.queryByText('ฝ่ายบัญชี')).toBeNull();
   });
@@ -781,6 +827,36 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     }
   });
 
+  // Fix round 1, ruling 6: PUT /tracking REPLACES every column, so the guided advance must send the three party names
+  // back as the deal holds them — it used to send only the date and win%, erasing designer/owner/buyer.
+  it('the guided advance keeps the designer, owner and buyer names', async () => {
+    api.tickets.updateTracking.mockClear();
+    const onUpdateStage = vi.fn().mockResolvedValue({});
+    renderPanel({
+      summary: baseSummary({
+        id: 502, designerName: 'เทพสตูดิโอ', ownerName: 'คุณเจ้าของ', buyerName: 'บริษัท ผู้รับเหมา',
+        winProbabilityOverride: 40, estimatedValue: 750000,
+      }),
+      availableActions: [],
+      stageDecisions: readinessBlocked,
+      onUpdateStage,
+    });
+
+    fireEvent.click(screen.getByTestId('guided-advance-open'));
+    fireEvent.change(screen.getByTestId('guided-advance-followup'), { target: { value: '2026-12-05' } });
+    fireEvent.blur(screen.getByTestId('guided-advance-followup'));
+    fireEvent.change(screen.getByTestId('guided-advance-note'), { target: { value: 'โทรแล้ว' } });
+    fireEvent.click(screen.getByTestId('guided-advance-submit'));
+
+    await waitFor(() => expect(onUpdateStage).toHaveBeenCalled());
+    expect(api.tickets.updateTracking).toHaveBeenCalledWith(502, expect.objectContaining({
+      designerName: 'เทพสตูดิโอ', ownerName: 'คุณเจ้าของ', buyerName: 'บริษัท ผู้รับเหมา',
+      // The win% field ("ถ้ามี") was left blank: the rep's override goes back unchanged, never cleared.
+      winProbability: 40,
+      estimatedValue: 750000,
+    }));
+  });
+
   // The page keys activities with a string route param, the panel with the numeric summary.id.
   it('queryKeys.ticketActivities normalises the id like ticketDetail, so "6" and 6 share a key', () => {
     expect(queryKeys.ticketActivities('6')).toEqual(queryKeys.ticketActivities(6));
@@ -790,7 +866,7 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
     const otherBlock = allAllowed.map((decision) => (
       decision.stage === 'SPEC_APPROVED'
         ? {
-          ...decision, allowed: false, requiresReason: false, blockedReason: 'ดีลถูกพักไว้',
+          ...decision, allowed: false, requiresReason: false, blockedReason: 'งานถูกพักไว้',
         }
         : decision
     ));
@@ -804,13 +880,9 @@ describe('DealStagePanel guided advance (readiness gate)', () => {
   });
 });
 
-/**
- * Route-aware navigation (deal-route-staging). The deal's entry channel decides which stages it
- * visits; the server serves the verdict per stage as `onRoute` on stageDecisions (StageDecisionDto)
- * and `entryChannel` on the summary. These tests build both by hand and pass them DIRECTLY as
- * props — never through mockApi.js, which does not emit `onRoute`: a mock-driven test would see
- * every stage on-route and pass vacuously.
- */
+/** Route-aware navigation (deal-route-staging). These tests build both by hand and pass them DIRECTLY as props
+ * — never through mockApi.js, which does not emit `onRoute`: a mock-driven test would see every stage on-route
+ * and pass vacuously. */
 describe('DealStagePanel route awareness', () => {
   const OWNER_OFF = ['QUOTE_DESIGN_SIDE'];
   const BUYER_OFF = ['QUOTE_DESIGN_SIDE', 'QUOTE_OWNER', 'OWNER_SIGNOFF', 'AWAITING_BUYER'];
@@ -820,7 +892,7 @@ describe('DealStagePanel route awareness', () => {
     allowed: !off.includes(stage.code),
     requiresReason: false,
     blockedReason: off.includes(stage.code)
-      ? `ดีลนี้ไม่ผ่านเส้นทาง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`
+      ? `งานนี้ไม่ผ่านเส้นทาง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`
       : null,
     onRoute: !off.includes(stage.code),
   }));
@@ -828,7 +900,7 @@ describe('DealStagePanel route awareness', () => {
 
   describe('route line', () => {
     it.each([
-      ['DESIGNER_LED', [], 'QUOTE_BUYER', 'เส้นทาง · ผู้ออกแบบนำดีล', '15 ขั้น'],
+      ['DESIGNER_LED', [], 'QUOTE_BUYER', 'เส้นทาง · ผู้ออกแบบนำงานมา', '15 ขั้น'],
       ['OWNER_DIRECT', OWNER_OFF, 'SPEC_APPROVED', 'เส้นทาง · เจ้าของติดต่อโดยตรง', '14 ขั้น'],
       ['BUYER_DIRECT', BUYER_OFF, 'QUOTE_BUYER', 'เส้นทาง · ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง', '11 ขั้น'],
     ])('%s names the route and its stage count, never a route position (W5-02)', (channel, off, salesStage, name, total) => {
@@ -861,6 +933,7 @@ describe('DealStagePanel route awareness', () => {
       summary: baseSummary({ salesStage: 'QUOTE_BUYER', entryChannel: 'BUYER_DIRECT' }),
       stageDecisions: routeDecisions(BUYER_OFF),
     });
+    openSteps();
     // The bar's own text (PhaseSummary), distinct from the route line's longer sentence.
     expect(screen.getByText('ผ่านมาแล้ว 4 จาก 11 ขั้น')).not.toBeNull();
     expect(screen.queryByText('ผ่านมาแล้ว 8 จาก 15 ขั้น')).toBeNull();
@@ -1057,15 +1130,18 @@ describe('DealStagePanel route awareness', () => {
       [undefined, 'ผู้ออกแบบอนุมัติสเปค'],
     ])('the headline at S3 for %s reads %s', (channel, wording) => {
       renderPanel({ summary: baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: channel }) });
-      expect(screen.getByText(wording)).not.toBeNull();
+      openSteps();
+      expect(screen.getByTestId('deal-stage-headline').textContent).toBe(wording);
     });
 
-    it('also words S3 inside the ON_HOLD branch, which builds its own label', () => {
+    // The ON_HOLD banner that built its own "ขั้นเดิมยังอยู่ที่ …" label is gone (the ขั้นต่อไป card names a paused
+    // deal now); the stage headline behind ดูขั้นตอนทั้งหมด still words S3 by the channel on a paused deal.
+    it('also words S3 on a paused deal', () => {
       renderPanel({
         summary: baseSummary({ salesStage: 'SPEC_APPROVED', lifecycle: 'ON_HOLD', entryChannel: 'OWNER_DIRECT' }),
       });
-      expect(screen.getByText(/เจ้าของตกลงตามสเปคแล้ว/)).not.toBeNull();
-      expect(screen.queryByText(/ผู้ออกแบบอนุมัติสเปค/)).toBeNull();
+      openSteps();
+      expect(screen.getByTestId('deal-stage-headline').textContent).toBe('เจ้าของตกลงตามสเปคแล้ว');
     });
   });
 
@@ -1111,7 +1187,7 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
     allowed: !off.includes(stage.code),
     requiresReason: false,
     blockedReason: off.includes(stage.code)
-      ? `ดีลนี้เป็นเจ้าของติดต่อโดยตรง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางของดีลนี้ — แก้ช่องทางดีลก่อน`
+      ? `ช่องทางรับงานของงานนี้คือเจ้าของติดต่อโดยตรง — ขั้นที่ ${index + 1} ไม่อยู่ในเส้นทางนี้ — แก้ช่องทางรับงานก่อน`
       : null,
     onRoute: !off.includes(stage.code),
   }));
@@ -1119,7 +1195,7 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
   const STATED = { action: 'SET_ENTRY_CHANNEL', kind: 'policy', requiredFields: ['value', 'note'] };
   const UPDATE = { action: 'UPDATE_STAGE' };
   const ownerDeal = () => baseSummary({ salesStage: 'SPEC_APPROVED', entryChannel: 'OWNER_DIRECT' });
-  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทางดีล/ });
+  const toggles = () => screen.queryAllByRole('button', { name: /แก้ช่องทาง/ });
   // Asserts the control exists BEFORE clicking, so a missing remedy fails as an assertion.
   const firstToggle = () => {
     expect(toggles().length).toBeGreaterThan(0);
@@ -1147,9 +1223,9 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
       onSetEntryChannel,
     });
     showSteps();
-    expect(within(screen.getByTestId('off-route-group')).getAllByRole('button', { name: /แก้ช่องทางดีล/ })).toHaveLength(1);
+    expect(within(screen.getByTestId('off-route-group')).getAllByRole('button', { name: /แก้ช่องทาง/ })).toHaveLength(1);
     fireEvent.click(firstToggle());
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
     expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: null });
   });
@@ -1199,9 +1275,9 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
     });
     act(() => ref.current.openEditStage());
     fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
-    fireEvent.click(within(screen.getByTestId('update-stage-blocked-list')).getByRole('button', { name: /แก้ช่องทางดีล/ }));
+    fireEvent.click(within(screen.getByTestId('update-stage-blocked-list')).getByRole('button', { name: /แก้ช่องทางรับงาน/ }));
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
-    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('radio', { name: /ผู้ออกแบบนำงานมา/ }));
     fireEvent.change(screen.getByTestId('entry-channel-fix-reason'), { target: { value: 'มีผู้ออกแบบจริง' } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกช่องทางใหม่' }));
     expect(onSetEntryChannel).toHaveBeenCalledWith({ value: 'DESIGNER_LED', note: 'มีผู้ออกแบบจริง' });
@@ -1217,5 +1293,141 @@ describe('DealStagePanel แก้ช่องทางดีล wiring', () => 
     act(() => ref.current.openEditStage());
     fireEvent.click(screen.getByTestId('update-stage-blocked-toggle'));
     expect(toggles()).toHaveLength(0);
+  });
+});
+
+// The rebuilt lifecycle dialogs (owner-approved drawings, 2026-11-16) as the deal page opens them through this panel.
+describe('DealStagePanel — พักงาน and ย้ายไป S2 (m-hold / m-stage)', () => {
+  it('พักงาน posts the chosen lifecycle through the SAME handler as before, now with the return date', async () => {
+    const onHold = vi.fn().mockResolvedValue();
+    const onDormant = vi.fn().mockResolvedValue();
+    const { ref } = renderPanelWithRef({
+      availableActions: [{ action: 'PLACE_ON_HOLD' }, { action: 'MARK_DORMANT' }], onHold, onDormant,
+    });
+
+    act(() => ref.current.openHold());
+    fireEvent.click(screen.getByRole('button', { name: '2 สัปดาห์' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'พักงาน' })); });
+    expect(onHold).toHaveBeenCalledWith({ note: undefined, pauseReturnOn: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) });
+    expect(onDormant).not.toHaveBeenCalled();
+
+    act(() => ref.current.openHold());
+    fireEvent.click(screen.getByRole('radio', { name: /ไม่เคลื่อนไหว/ }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'พักงาน' })); });
+    expect(onDormant).toHaveBeenCalledWith({ note: undefined, pauseReturnOn: null });
+  });
+
+  const s1Decisions = (blockedReason = null) => allAllowed.map((decision) => (decision.stage === 'SPEC_APPROVED'
+    ? { ...decision, allowed: blockedReason == null, blockedReason, onRoute: true } : decision));
+
+  it('openMoveToS2() is a no-op with no S2 verdict, past S1, or when S2 is refused for a reason the rep cannot clear', () => {
+    const { ref, rerender } = renderPanelWithRef({
+      availableActions: [{ action: 'UPDATE_STAGE' }],
+      stageDecisions: allAllowed.filter((decision) => decision.stage !== 'SPEC_APPROVED'),
+    });
+    act(() => ref.current.openMoveToS2());
+    expect(screen.queryByTestId('move-s2-modal')).toBeNull();
+
+    rerender(<DealStagePanel ref={ref} summary={baseSummary({ salesStage: 'SPEC_APPROVED' })} stageDecisions={s1Decisions()} catalog={catalog} availableActions={[{ action: 'UPDATE_STAGE' }]} {...noopHandlers} />);
+    act(() => ref.current.openMoveToS2());
+    expect(screen.queryByTestId('move-s2-modal')).toBeNull();
+
+    rerender(<DealStagePanel ref={ref} summary={baseSummary()} stageDecisions={s1Decisions('ไม่มีสิทธิ์เข้าถึงรายการนี้')} catalog={catalog} availableActions={[{ action: 'UPDATE_STAGE' }]} {...noopHandlers} />);
+    act(() => ref.current.openMoveToS2());
+    expect(screen.queryByTestId('move-s2-modal')).toBeNull();
+  });
+
+  it('from S1 with the gate met, ย้ายไป S2 moves straight to SPEC_APPROVED with the note', async () => {
+    const onUpdateStage = vi.fn().mockResolvedValue();
+    api.tickets.updateTracking.mockClear();
+    api.tickets.addActivity.mockClear();
+    const { ref } = renderPanelWithRef({
+      summary: baseSummary({ salesStage: 'LEAD_APPROACH', nextFollowUpAt: '2026-12-01' }),
+      availableActions: [{ action: 'UPDATE_STAGE' }], stageDecisions: s1Decisions(), onUpdateStage,
+    });
+
+    act(() => ref.current.openMoveToS2());
+    fireEvent.change(screen.getByPlaceholderText('เช่น ผู้ออกแบบเลือก Raku 20×20 สีขาว'), { target: { value: 'Raku ขาว' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'ย้ายไป S2' })); });
+
+    expect(onUpdateStage).toHaveBeenCalledWith({ stage: 'SPEC_APPROVED', note: 'Raku ขาว' });
+    expect(api.tickets.updateTracking).not.toHaveBeenCalled();
+    expect(api.tickets.addActivity).not.toHaveBeenCalled();
+  });
+
+  it('with the readiness gate unmet it collects what is missing, KEEPS the tracking fields, then moves', async () => {
+    const onUpdateStage = vi.fn().mockResolvedValue();
+    api.tickets.updateTracking.mockClear();
+    api.tickets.addActivity.mockClear();
+    const summary = baseSummary({
+      id: 42, salesStage: 'PRESENTATION', nextFollowUpAt: null, designerName: 'เทพสตูดิโอ', ownerName: 'คุณเจ้าของ',
+      buyerName: null, winProbabilityOverride: 35, estimatedValue: 1200000,
+    });
+    const { ref } = renderPanelWithRef({
+      summary, availableActions: [{ action: 'UPDATE_STAGE' }], hasRecentActivity: false,
+      stageDecisions: s1Decisions(STAGE_ADVANCE_GATE_MESSAGE), onUpdateStage,
+    });
+
+    act(() => ref.current.openMoveToS2());
+    const date = screen.getByLabelText(/วันติดตามครั้งถัดไป/);
+    fireEvent.change(date, { target: { value: '01/12/2569' } });
+    fireEvent.blur(date);
+    fireEvent.change(screen.getByPlaceholderText('เช่น ผู้ออกแบบเลือก Raku 20×20 สีขาว'), { target: { value: 'ตกลงสเปคแล้ว' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'ย้ายไป S2' })); });
+
+    // updateTracking REPLACES every tracking column, so the other fields are sent back as they are.
+    expect(api.tickets.updateTracking).toHaveBeenCalledWith(42, {
+      nextFollowUpAt: '2026-12-01', designerName: 'เทพสตูดิโอ', ownerName: 'คุณเจ้าของ', buyerName: null, winProbability: 35,
+      // Fix round 1, ruling 6: the estimate goes back as held too (the endpoint keeps an absent one, so this is belt
+      // and braces, but every guided move resends every field it does not edit).
+      estimatedValue: 1200000,
+    });
+    expect(api.tickets.addActivity).toHaveBeenCalledWith(42, expect.objectContaining({ kind: 'OTHER', note: 'ตกลงสเปคแล้ว' }));
+    expect(onUpdateStage).toHaveBeenCalledWith({ stage: 'SPEC_APPROVED', note: 'ตกลงสเปคแล้ว' });
+  });
+
+  // Fix round 1, ruling 1: the channel stays required at creation, so the "ยังไม่ได้ระบุช่องทางงาน" route-line row the
+  // first round added (for channel-less deals) is gone again — the route line is unchanged from before this slice.
+  it('adds no "channel not stated" row to the route line', () => {
+    renderPanel({
+      summary: baseSummary({ entryChannel: 'UNSPECIFIED' }),
+      availableActions: [{ action: 'SET_ENTRY_CHANNEL', requiredFields: ['value'] }],
+      onSetEntryChannel: vi.fn(),
+    });
+    expect(screen.queryByTestId('entry-channel-unstated')).toBeNull();
+    expect(screen.queryByText('ยังไม่ได้ระบุช่องทางงาน')).toBeNull();
+  });
+
+  // Fix round 1, ruling 5: a paused deal's return date is changed in place, from either pause state, with the same
+  // gate as resuming (RESUME is listed exactly when the caller may hold/dormant it — TicketService.canDealOwnership).
+  it('openChangeReturnDate() is a no-op on an active deal or without RESUME', () => {
+    const { ref, rerender } = renderPanelWithRef({ availableActions: [{ action: 'RESUME' }] });
+    act(() => ref.current.openChangeReturnDate());
+    expect(screen.queryByTestId('pause-deal-modal')).toBeNull();
+
+    rerender(<DealStagePanel ref={ref} summary={baseSummary({ lifecycle: 'ON_HOLD' })} stageDecisions={allAllowed} catalog={catalog} availableActions={[]} {...noopHandlers} />);
+    act(() => ref.current.openChangeReturnDate());
+    expect(screen.queryByTestId('pause-deal-modal')).toBeNull();
+  });
+
+  it.each([
+    ['ON_HOLD', 'พักชั่วคราว', 'onHold'],
+    ['DORMANT', 'ไม่เคลื่อนไหว', 'onDormant'],
+  ])('on a %s deal it opens "เปลี่ยนวันที่จะกลับมาดู" on the current state and date, and posts the same state', async (lifecycle, choice, handler) => {
+    const handlers = { ...noopHandlers, onHold: vi.fn().mockResolvedValue(), onDormant: vi.fn().mockResolvedValue() };
+    const { ref } = renderPanelWithRef({
+      summary: baseSummary({ lifecycle, pauseReturnOn: '2099-01-15' }),
+      availableActions: [{ action: 'RESUME' }, ...(lifecycle === 'ON_HOLD' ? [{ action: 'MARK_DORMANT' }] : [])],
+      ...handlers,
+    });
+
+    act(() => ref.current.openChangeReturnDate());
+    const modal = screen.getByTestId('pause-deal-modal');
+    expect(within(modal).getByRole('heading', { name: 'เปลี่ยนวันที่จะกลับมาดู' })).toBeTruthy();
+    expect(within(modal).getByRole('radio', { name: new RegExp(choice) }).getAttribute('aria-checked')).toBe('true');
+    expect(within(modal).getByLabelText('วันที่จะกลับมาดู').value).toBe('15/01/2642');
+    await act(async () => { fireEvent.click(within(modal).getByRole('button', { name: 'บันทึกวันที่' })); });
+
+    expect(handlers[handler]).toHaveBeenCalledWith({ note: undefined, pauseReturnOn: '2099-01-15' });
   });
 });

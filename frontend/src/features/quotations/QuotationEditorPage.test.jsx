@@ -72,8 +72,8 @@ function renderEditor(initialPath, user = salesUser) {
   return { ...result, queryClient };
 }
 
-// Full DealQuotationDto shape, matching the fixture in the "shows ยังไม่บันทึก" test above --
-// factored out so the new tests below don't each hand-roll the whole DTO.
+// Full DealQuotationDto shape, matching the fixture in the "shows ยังไม่บันทึก" test above -- factored out so
+// the new tests below don't each hand-roll the whole DTO.
 function baseQuotation(overrides = {}) {
   return {
     id: 5, number: 'QT-2026-0005', ticketId: 18, docStatus: 'DRAFT',
@@ -139,9 +139,9 @@ describe('QuotationEditorPage item calc wiring', () => {
     expect(api.dealQuotations.calculateLine).toHaveBeenCalledWith(expect.objectContaining({ listPriceSqm: 350 }), 'TH');
 
     expect(await screen.findByText('(พื้นที่ 36 ตร.ม. รวม 100 แผ่น)')).not.toBeNull();
-    // getAllByText, not getByText: with only one item, its own line amount and the M6
-    // provisional "รวมเป็นเงิน" subtotal are the SAME number (before VAT) and both render --
-    // this asserts the calculated amount reached the screen at all, not which element shows it.
+    // getAllByText, not getByText: with only one item, its own line amount and the M6 provisional "รวมเป็นเงิน"
+    // subtotal are the SAME number (before VAT) and both render -- this asserts the calculated amount reached the
+    // screen at all, not which element shows it.
     expect(screen.getAllByText('฿35,000.00').length).toBeGreaterThanOrEqual(1);
   });
 
@@ -222,8 +222,8 @@ describe('QuotationEditorPage item calc wiring', () => {
     resolveSecond({ item: { lineAmount: 2000, calculationLine: 'newer', unitPrice: 134.47 } });
     expect(await screen.findByText('newer')).not.toBeNull();
 
-    // The OLDER request settles LAST -- it must be discarded outright, including its own
-    // (irrelevant) echoed input fields, not merged over what the newer response already set.
+    // The OLDER request settles LAST -- it must be discarded outright, including its own (irrelevant) echoed input
+    // fields, not merged over what the newer response already set.
     resolveFirst({ item: { lineAmount: 1000, calculationLine: 'older', unitPrice: 67.24, listPriceSqm: 100 } });
     await new Promise((resolve) => { setTimeout(resolve, 50); }); // let any wrongly-queued update flush
 
@@ -306,14 +306,13 @@ describe('QuotationEditorPage new-quotation authorization (#M2)', () => {
   it('the owning sales rep on their own deal can create -- sees the editor form', async () => {
     renderEditor('/quotations/new?ticket=18', salesUser);
 
-    // findBy, not getBy after the heading: the heading renders before the ticket query
-    // resolves (it doesn't depend on `ticket`), so asserting straight off it races the
-    // canCreateDealQuotation(user, ticket) check, which DOES need the ticket loaded.
+    // findBy, not getBy after the heading: the heading renders before the ticket query resolves (it doesn't depend
+    // on `ticket`), so asserting straight off it races the canCreateDealQuotation(user, ticket) check, which DOES
+    // need the ticket loaded.
     expect(await screen.findByRole('button', { name: /เพิ่มรายการ/ })).not.toBeNull();
-    // Header renders real ticket-derived values, not "-" -- proves `ticket.customerName` is no
-    // longer reading off an envelope key (`r.ticket`) the backend never sends. It appears twice
-    // (the page subtitle AND the ข้อมูลลูกค้าและผู้ขาย panel), so this asserts presence, not
-    // singularity.
+    // Header renders real ticket-derived values, not "-" -- proves `ticket.customerName` is no longer reading off
+    // an envelope key (`r.ticket`) the backend never sends. It appears twice (the page subtitle AND the
+    // ข้อมูลลูกค้าและผู้ขาย panel), so this asserts presence, not singularity.
     expect(screen.getAllByText(/บริษัท แฟชั่นไอส์แลนด์ จำกัด/).length).toBeGreaterThan(0);
   });
 });
@@ -361,8 +360,8 @@ describe('QuotationEditorPage client-side validation (#M4, item completeness own
 
   it('disables บันทึกร่าง and lists a per-row "ขาด ..." summary until every item field is complete', async () => {
     renderEditor('/quotations/new?ticket=18');
-    // findBy: waits out the ticket query so canCreateDealQuotation has what it needs to render
-    // the editable form (and its บันทึกร่าง button) at all.
+    // findBy: waits out the ticket query so canCreateDealQuotation has what it needs to render the editable form
+    // (and its บันทึกร่าง button) at all.
     await screen.findByRole('button', { name: 'บันทึกร่าง' });
 
     // 0 items yet. .disabled, not toBeDisabled: this project does not wire up jest-dom's matchers
@@ -377,8 +376,8 @@ describe('QuotationEditorPage client-side validation (#M4, item completeness own
     expect(screen.queryByText('ต้องมีรายการสินค้าอย่างน้อย 1 รายการ')).toBeNull();
 
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
-    // An item exists now, but every required field is still blank -- the per-row summary names
-    // ALL of them (quotationMeta.test.js pins the exact wording; this only checks it renders).
+    // An item exists now, but every required field is still blank -- the per-row summary names ALL of them
+    // (quotationMeta.test.js pins the exact wording; this only checks it renders).
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
     expect(screen.getByText(/รายการที่ 1: ขาด/)).not.toBeNull();
 
@@ -419,17 +418,16 @@ describe('QuotationEditorPage client-side validation (#M4, item completeness own
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
   });
 
-  // "not on first paint": a freshly-added blank row is missing almost everything, but nobody has
-  // touched it yet -- the inline per-field red hint stays quiet (the top-of-form summary already
-  // said the row is incomplete) until the rep actually edits that row, at which point its hints
-  // switch on.
+  // "not on first paint": a freshly-added blank row is missing almost everything, but nobody has touched it yet
+  // -- the inline per-field red hint stays quiet (the top-of-form summary already said the row is incomplete)
+  // until the rep actually edits that row, at which point its hints switch on.
   it('a freshly-added blank row shows no inline field hints until the rep edits it', async () => {
     renderEditor('/quotations/new?ticket=18');
     await screen.findByRole('button', { name: /เพิ่มรายการ/ });
     fireEvent.click(screen.getByRole('button', { name: /เพิ่มรายการ/ }));
 
-    // Untouched: the row-level summary above already says it's incomplete, but this specific
-    // field-level hint has not switched on yet.
+    // Untouched: the row-level summary above already says it's incomplete, but this specific field-level hint has
+    // not switched on yet.
     expect(screen.queryByText('กรุณาระบุสี')).toBeNull();
 
     fireEvent.change(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/), { target: { value: 'Trilogy' } });
@@ -454,8 +452,8 @@ describe('QuotationEditorPage approval flow (#M5, #M8)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'อนุมัติ' }));
     expect(api.dealQuotations.approve).not.toHaveBeenCalled();
-    // The modal names the quotation and its grand total -- scoped to the dialog since the
-    // number also appears in the page's own <h1>.
+    // The modal names the quotation and its grand total -- scoped to the dialog since the number also appears in
+    // the page's own .
     const dialog = within(screen.getByRole('dialog'));
     expect(dialog.getByText(/QT-2026-0005/)).not.toBeNull();
     expect(dialog.getByText(/5,350/)).not.toBeNull();
@@ -509,8 +507,8 @@ describe('QuotationEditorPage approval flow (#M5, #M8)', () => {
     focusManager.setFocused(true);
     await waitFor(() => expect(api.dealQuotations.get).toHaveBeenCalledTimes(2));
 
-    // Tear this tree down completely -- its query observer must stop reacting to focusManager
-    // before the next scenario toggles focus again, or it double-counts into the shared mock.
+    // Tear this tree down completely -- its query observer must stop reacting to focusManager before the next
+    // scenario toggles focus again, or it double-counts into the shared mock.
     unmount();
     queryClient.clear();
 
@@ -519,8 +517,8 @@ describe('QuotationEditorPage approval flow (#M5, #M8)', () => {
       quotation: baseQuotation({ docStatus: 'PENDING_APPROVAL', number: 'QT-2026-0005' }),
     });
     // salesUser owns this deal (salesRepId: 6 in baseQuotation) but is never an approver --
-    // canApproveDealQuotation is role-only (sales_manager/ceo), so this must stay false for them
-    // regardless of ownership.
+    // canApproveDealQuotation is role-only (sales_manager/ceo), so this must stay false for them regardless of
+    // ownership.
     renderEditor('/quotations/5', salesUser);
     await waitFor(() => expect(api.dealQuotations.get).toHaveBeenCalledTimes(1));
 
@@ -528,9 +526,8 @@ describe('QuotationEditorPage approval flow (#M5, #M8)', () => {
     try {
       focusManager.setFocused(false);
       focusManager.setFocused(true);
-      // A virtual clock advance, not a real sleep -- deterministically drains any timer a
-      // (wrongly) scheduled refetch would use, immune to how much real CPU time this process
-      // actually gets under contention.
+      // A virtual clock advance, not a real sleep -- deterministically drains any timer a (wrongly) scheduled
+      // refetch would use, immune to how much real CPU time this process actually gets under contention.
       await act(async () => { await vi.advanceTimersByTimeAsync(200); });
     } finally {
       vi.useRealTimers();
@@ -647,9 +644,9 @@ describe('QuotationEditorPage inline deal creation', () => {
   const testCustomer = { id: 1, name: 'บริษัท ก้าวหน้า คอนสตรัคชั่น จำกัด', taxId: '0105565012345' };
   const testProject = { id: 1, customerId: 1, name: 'โครงการ Central Ladprao ชั้น B1' };
 
-  // Renders the real editor at /quotations/new with no ticket query param, plus a stand-in for
-  // /quotations/:id that just names the id it landed on -- avoids needing api.dealQuotations.get
-  // to resolve just to observe that navigate() fired to the right place.
+  // Renders the real editor at /quotations/new with no ticket query param, plus a stand-in for /quotations/:id
+  // that just names the id it landed on -- avoids needing api.dealQuotations.get to resolve just to observe that
+  // navigate() fired to the right place.
   function IdProbe() {
     const { id } = useParams();
     return <p>navigated-to-{id}</p>;
@@ -669,14 +666,14 @@ describe('QuotationEditorPage inline deal creation', () => {
     );
     // /quotations/new opens on "เลือกดีลที่มีอยู่"; this block is about the OTHER branch, so every
     // case starts by choosing สร้างดีลใหม่. (QuotationEditorPage.recipient.test.jsx covers the pick branch.)
-    fireEvent.click(screen.getByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(screen.getByRole('button', { name: 'สร้างงานใหม่' }));
     return { ...result, showToast, queryClient };
   }
 
-  // ช่องทางรับงาน is required to save (UNSPECIFIED is never a choice), so the helper picks one unless
-  // a test is specifically about the gate.
+  // ช่องทางรับงาน is required to save (UNSPECIFIED is never a choice), so the helper picks one unless a test is
+  // specifically about the gate.
   function pickEntryChannel() {
-    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำดีล/ }));
+    fireEvent.click(screen.getByRole('button', { name: /ผู้ออกแบบนำงานมา/ }));
   }
 
   async function selectCustomerAndProject({ channel = true } = {}) {
@@ -714,9 +711,9 @@ describe('QuotationEditorPage inline deal creation', () => {
   it('gates บันทึกร่าง on ลูกค้า + โครงการ, with Thai inline hints, in addition to the existing item checks', async () => {
     renderInlineCreate();
 
-    await screen.findByLabelText(/^ลูกค้า/); // card rendered instead of the read-only ticket summary
-    // Same V7 split as the item-completeness test above: gated from the first paint, but a
-    // pristine /quotations/new does not open with ลูกค้า and โครงการ already flagged red.
+    await screen.findByLabelText(/^ลูกค้า/); // card rendered instead of the read-only ticket summary Same V7 split as the item-completeness test above:
+    // gated from the first paint, but a pristine /quotations/new does not open with ลูกค้า and โครงการ already
+    // flagged red.
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).title)
       .toContain('ต้องเลือกลูกค้าก่อนบันทึกร่าง');
@@ -733,8 +730,8 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     // Filling the item alone unblocks บันทึกร่าง; ผู้สั่งซื้อ is not a gate.
     await fillOneValidItem();
-    // ช่องทางรับงาน is the last gate: everything else is complete but no channel is picked, and
-    // ยังไม่ระบุช่องทาง is not offered as a choice, so saving stays blocked until one of the three is.
+    // ช่องทางรับงาน is the last gate: everything else is complete but no channel is picked, and ยังไม่ระบุช่องทาง
+    // is not offered as a choice, so saving stays blocked until one of the three is.
     await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).title)
       .toContain('ต้องเลือกช่องทางรับงานก่อนบันทึกร่าง'));
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(true);
@@ -813,7 +810,7 @@ describe('QuotationEditorPage inline deal creation', () => {
   }, 10000);
 
   it('a tickets.create failure leaves the form intact and toasts the backend\'s Thai message, without ever calling dealQuotations.create', async () => {
-    const backendError = new Error('สร้างดีลไม่สำเร็จ: ชื่อลูกค้าซ้ำในระบบ');
+    const backendError = new Error('สร้างงานไม่สำเร็จ: ชื่อลูกค้าซ้ำในระบบ');
     api.tickets.create.mockRejectedValueOnce(backendError);
 
     const { showToast } = renderInlineCreate();
@@ -825,8 +822,8 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', backendError.message));
     expect(api.dealQuotations.create).not.toHaveBeenCalled();
-    // The form is untouched -- the selected customer chip and the item's typed values are still
-    // exactly what the rep entered, so they don't have to redo any of it before retrying.
+    // The form is untouched -- the selected customer chip and the item's typed values are still exactly what the
+    // rep entered, so they don't have to redo any of it before retrying.
     expect(screen.getAllByText(testCustomer.name).length).toBeGreaterThan(0);
     expect(screen.getByLabelText(/^ราคา\/ตร\.ม\./).value).toBe('850');
     expect(screen.getByLabelText(/^รุ่น \/ ค้นหาแคตตาล็อก/).value).toBe('Trilogy');
@@ -846,8 +843,8 @@ describe('QuotationEditorPage inline deal creation', () => {
     await waitFor(() => expect(showToast).toHaveBeenCalledWith('error', 'บันทึกไม่สำเร็จ (ทดสอบ)'));
     expect(api.tickets.create).toHaveBeenCalledTimes(1);
 
-    // Retry: the SAME ticket id is reused (createdTicketId state), so this must NOT call
-    // tickets.create a second time -- only dealQuotations.create, again, on ticket 42.
+    // Retry: the SAME ticket id is reused (createdTicketId state), so this must NOT call tickets.create a second
+    // time -- only dealQuotations.create, again, on ticket 42.
     api.dealQuotations.create.mockResolvedValueOnce({ quotation: { id: 99 } });
     fireEvent.click(screen.getByRole('button', { name: 'บันทึกร่าง' }));
 
@@ -881,12 +878,12 @@ describe('QuotationEditorPage inline deal creation', () => {
       await selectCustomerAndProject({ channel: false });
       const notice = within(await screen.findByTestId('existing-deal-notice'));
       expect(api.tickets.openForProject).toHaveBeenCalledWith(testProject.name);
-      expect(notice.getByText('โครงการนี้มีดีลของคุณอยู่แล้ว')).toBeTruthy();
+      expect(notice.getByText('โครงการนี้มีงานของคุณอยู่แล้ว')).toBeTruthy();
       expect(notice.getByText('DL-2026-0280')).toBeTruthy();
       expect(notice.getByText('2 ผู้รับเหมา')).toBeTruthy();
       expect(notice.getByText('บริษัท ตัวอย่าง คอนสตรัคชั่น · บจก.สมมติ ก่อสร้าง')).toBeTruthy();
       // The helper picked ผู้ออกแบบ: the notice names THAT role, not always "ผู้รับเหมา".
-      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้ออกแบบในดีลเดิม`) }).checked).toBe(true);
+      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้ออกแบบในงานเดิม`) }).checked).toBe(true);
       expect(notice.getByTestId('existing-deal-result').textContent).toBe('จะสร้างใบเสนอราคาใหม่ภายใต้ DL-2026-0280 · เสนอแก่ผู้ออกแบบ');
       // Attaching makes no deal, so ช่องทางรับงาน is not asked.
       expect(screen.queryByRole('group', { name: 'ช่องทางรับงาน' })).toBeNull();
@@ -909,7 +906,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     it('when the deal refuses the quotation, the party this save added is taken back', async () => {
       api.tickets.addParty.mockResolvedValue({ party: { id: 33 } });
       api.tickets.removeParty.mockResolvedValue(null);
-      api.dealQuotations.create.mockRejectedValueOnce(Object.assign(new Error('ผู้รับนี้ไม่ตรงช่องทางของดีล'), { status: 409 }));
+      api.dealQuotations.create.mockRejectedValueOnce(Object.assign(new Error('ผู้รับนี้ไม่ตรงช่องทางของงาน'), { status: 409 }));
       renderInlineCreate();
       await selectCustomerAndProject({ channel: false });
       await screen.findByTestId('existing-deal-notice');
@@ -920,7 +917,7 @@ describe('QuotationEditorPage inline deal creation', () => {
     });
 
     it('a customer already bidding on the deal is reused, not refused', async () => {
-      api.tickets.addParty.mockRejectedValue(Object.assign(new Error('อยู่ในดีลนี้แล้ว'), { status: 409 }));
+      api.tickets.addParty.mockRejectedValue(Object.assign(new Error('อยู่ในงานนี้แล้ว'), { status: 409 }));
       api.tickets.parties.mockResolvedValue({ parties: [
         { id: 43, customerId: testCustomer.id, role: 'BUYER' },
         { id: 44, customerId: testCustomer.id, role: 'DESIGNER' },
@@ -940,7 +937,7 @@ describe('QuotationEditorPage inline deal creation', () => {
       await selectCustomerAndProject({ channel: false });
       fireEvent.click(screen.getByRole('radio', { name: 'ผู้ซื้อ / ผู้รับเหมา' }));
       const notice = within(await screen.findByTestId('existing-deal-notice'));
-      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้รับเหมาในดีลเดิม`) })).toBeTruthy();
+      expect(notice.getByRole('radio', { name: new RegExp(`เพิ่ม ${testCustomer.name} เป็นผู้รับเหมาในงานเดิม`) })).toBeTruthy();
       expect(notice.getByTestId('existing-deal-result').textContent).toBe('จะสร้างใบเสนอราคาใหม่ภายใต้ DL-2026-0280 · ผู้รับเหมา 3 ราย');
       await fillOneValidItem();
       await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
@@ -952,8 +949,8 @@ describe('QuotationEditorPage inline deal creation', () => {
       api.tickets.create.mockResolvedValue({ ticket: { summary: { id: 42 } } });
       renderInlineCreate();
       await selectCustomerAndProject({ channel: false });
-      fireEvent.click(within(await screen.findByTestId('existing-deal-notice')).getByRole('radio', { name: /สร้างดีลใหม่แยกต่างหาก/ }));
-      expect(screen.getByTestId('existing-deal-result').textContent).toContain('จะสร้างดีลใหม่');
+      fireEvent.click(within(await screen.findByTestId('existing-deal-notice')).getByRole('radio', { name: /สร้างงานใหม่แยกต่างหาก/ }));
+      expect(screen.getByTestId('existing-deal-result').textContent).toContain('จะสร้างงานใหม่');
       pickEntryChannel();
       await fillOneValidItem();
       await waitFor(() => expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false));
@@ -1122,9 +1119,9 @@ describe('QuotationEditorPage inline deal creation', () => {
 
     await screen.findByRole('button', { name: /เพิ่มรายการ/ });
     expect(screen.queryByLabelText(/^ลูกค้า/)).toBeNull(); // the สร้างดีลใหม่ branch's own field, not this mode's
-    const link = screen.getByRole('link', { name: /เปิดดีล/ });
+    const link = screen.getByRole('link', { name: /เปิดงาน/ });
     expect(link.getAttribute('href')).toBe('/tickets/18');
-    expect(screen.queryByRole('link', { name: 'ดูรายละเอียดดีลนี้' })).toBeNull();
+    expect(screen.queryByRole('link', { name: /^ดูรายละเอียด(ดีล|งาน)นี้$/ })).toBeNull();
   });
 });
 
@@ -1149,9 +1146,9 @@ function ticketFixture(overrides = {}) {
   };
 }
 
-// A saved DRAFT whose items are already grouped by ตำแหน่งติดตั้ง: TWO items under "ชั้น 1", then
-// one under "ชั้น 2". Deliberately non-adjacent labels are covered by the "two runs of the same
-// label" case in its own test below.
+// A saved DRAFT whose items are already grouped by ตำแหน่งติดตั้ง: TWO items under "ชั้น 1", then one under
+// "ชั้น 2". Deliberately non-adjacent labels are covered by the "two runs of the same label" case in its own
+// test below.
 function groupedItem(seq, locationLabel, model) {
   return {
     id: 100 + seq, seq, locationLabel, model, color: 'Ivory', texture: 'Lappato', sizeText: '60x120',
@@ -1241,9 +1238,9 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
     ]);
     renderEditor('/quotations/5');
 
-    // Two groups, labelled and numbered in document order — not three, and not one per item.
-    // waitFor, not a bare find: the group input exists from first paint (one empty group is the
-    // initial state) and only takes its label once the seeding effect has run.
+    // Two groups, labelled and numbered in document order — not three, and not one per item. waitFor, not a bare
+    // find: the group input exists from first paint (one empty group is the initial state) and only takes its
+    // label once the seeding effect has run.
     await waitFor(() => expect(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 1/).value).toBe('ชั้น 1'));
     expect(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 2/).value).toBe('ชั้น 2');
     expect(screen.queryByLabelText(/^ตำแหน่งติดตั้งที่ 3/)).toBeNull();
@@ -1251,8 +1248,8 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
     expect(screen.getByText('1 รายการ')).not.toBeNull();
   });
 
-  // Two SEPARATE runs of the same label are two groups, because that is what the document prints.
-  // Collecting all "ชั้น 1" rows together would reorder the items the rep deliberately arranged.
+  // Two SEPARATE runs of the same label are two groups, because that is what the document prints. Collecting all
+  // "ชั้น 1" rows together would reorder the items the rep deliberately arranged.
   it('does not merge two non-adjacent runs of the same label into one group', async () => {
     draftWithItems([
       groupedItem(0, 'ชั้น 1', 'Trilogy'),
@@ -1328,8 +1325,8 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
     let scrollIntoView;
     let originalScrollIntoView;
     beforeEach(() => {
-      // jsdom does not implement scrollIntoView at all; a spy on the prototype is what lets these
-      // tests see WHICH element the editor scrolled to (`mock.contexts`).
+      // jsdom does not implement scrollIntoView at all; a spy on the prototype is what lets these tests see WHICH
+      // element the editor scrolled to (`mock.contexts`).
       originalScrollIntoView = Element.prototype.scrollIntoView;
       scrollIntoView = vi.fn();
       Element.prototype.scrollIntoView = scrollIntoView;
@@ -1351,8 +1348,8 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
 
       for (const buttons of [addTileButtons(), addPlainButtons()]) {
         expect(buttons).toHaveLength(2);
-        // Position 1's button: under its item (flat row 0), still above position 2 — the bottom
-        // of ITS box, not the bottom of the whole list.
+        // Position 1's button: under its item (flat row 0), still above position 2 — the bottom of ITS box, not the
+        // bottom of the whole list.
         expect(follows(document.getElementById('notes-0'), buttons[0])).toBe(true);
         expect(follows(buttons[0], secondLabel)).toBe(true);
         expect(buttons[0].closest('section')).toBe(firstLabel.closest('section'));
@@ -1378,8 +1375,8 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
 
     it('offers "เพิ่มตำแหน่ง" once — after the last position, before ส่วนลดพิเศษ', async () => {
       await twoGroupDraft();
-      // ONE button: the header copy is gone rather than duplicated, so there is a single place to
-      // look for it and it is always next to where the new position will appear.
+      // ONE button: the header copy is gone rather than duplicated, so there is a single place to look for it and it
+      // is always next to where the new position will appear.
       const addGroupButtons = screen.getAllByRole('button', { name: /เพิ่มตำแหน่ง/ });
       expect(addGroupButtons).toHaveLength(1);
       expect(follows(addTileButtons()[1], addGroupButtons[0])).toBe(true);
@@ -1391,8 +1388,8 @@ describe('QuotationEditorPage ตำแหน่งติดตั้ง groups 
 
     it('adding a tile row focuses and scrolls to THAT row\'s รุ่น field, wherever it landed', async () => {
       await twoGroupDraft();
-      // Into position 1 — the new row lands at flat index 1, in the MIDDLE of the list (position
-      // 2's row moves to index 2). Focusing "the last row" would be the wrong row here.
+      // Into position 1 — the new row lands at flat index 1, in the MIDDLE of the list (position 2's row moves to
+      // index 2). Focusing "the last row" would be the wrong row here.
       fireEvent.click(addTileButtons()[0]);
 
       await waitFor(() => expect(document.activeElement?.id).toBe('model-1'));
@@ -1549,7 +1546,7 @@ describe('QuotationEditorPage ผู้ติดต่อ picker (owner rulings 
     api.customers.search.mockResolvedValue({ customers: [{ id: 5, name: 'บริษัท แฟชั่นไอส์แลนด์ จำกัด' }] });
     api.customers.projects.mockResolvedValue({ projects: [] });
     renderEditor('/quotations/new');
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     fireEvent.change(await screen.findByLabelText(/^ลูกค้า/), { target: { value: 'แฟชั่น' } });
     fireEvent.mouseDown(await screen.findByRole('option', { name: /แฟชั่นไอส์แลนด์/ }));
 
@@ -1599,7 +1596,7 @@ describe('QuotationEditorPage ผู้ติดต่อ picker (owner rulings 
   it('an inline-create quotation (no deal yet) renders the picker too, waiting for a customer', async () => {
     renderEditor('/quotations/new');
     // The inline (new-deal) branch is behind the ดีล step's "สร้างดีลใหม่".
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     // DealCustomerCard itself renders no ผู้ติดต่อ control -- the picker lives on the editor,
     // right next to the card, same as the ticket/existing-draft path.
@@ -1614,7 +1611,7 @@ describe('QuotationEditorPage ผู้ติดต่อ picker (owner rulings 
   // customer id for the picker — the editor must still render, with the picker in its own
   // "pick a customer first" state rather than a control that fails on use.
   it('a draft whose deal could not be loaded still renders, with the picker disabled', async () => {
-    api.tickets.get.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงดีลนี้'));
+    api.tickets.get.mockRejectedValue(new Error('ไม่มีสิทธิ์เข้าถึงงานนี้'));
     api.dealQuotations.get.mockResolvedValue({ quotation: baseQuotation() });
     renderEditor('/quotations/5');
 
@@ -1656,7 +1653,7 @@ describe('QuotationEditorPage — the ผู้สั่งซื้อ field is
   it('the same on a quotation that creates its deal inline', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     await screen.findByLabelText(/^ลูกค้า/);
     expect(screen.getByLabelText(/^ผู้ติดต่อ/).id).toBe('quotation-contact');
@@ -1676,7 +1673,7 @@ describe('QuotationEditorPage — the ผู้สั่งซื้อ field is
   it('the inline-create field carries the same hint', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
 
     await screen.findByLabelText(/^ลูกค้า/);
     expect(hintOf(screen.getByLabelText(/^ผู้ติดต่อ/))).toBe(HINT);
@@ -1724,8 +1721,8 @@ describe('QuotationEditorPage — ฝ่าย is gone (sales feedback Admin 1d,
 
     await waitFor(() => expect(api.dealQuotations.create).toHaveBeenCalledTimes(1));
     const sent = api.dealQuotations.create.mock.calls[0][1];
-    // Stated, not omitted: a full save says every field, so the server is never left to decide
-    // what a missing key means.
+    // Stated, not omitted: a full save says every field, so the server is never left to decide what a missing key
+    // means.
     expect(sent).toHaveProperty('deptCode', null);
   });
 
@@ -1819,7 +1816,7 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
   it('is offered on an inline-created quotation too (no deal exists yet)', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     await screen.findByLabelText(/^ลูกค้า/);
     expect(screen.getByRole('checkbox', { name: new RegExp(TOGGLE) }).checked).toBe(false);
   });
@@ -1834,7 +1831,7 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
   it('sits directly under the โครงการ box on an inline-created quotation', async () => {
     renderEditor('/quotations/new');
     // /quotations/new opens on เลือกดีลที่มีอยู่; the inline card is the other branch.
-    fireEvent.click(await screen.findByRole('button', { name: 'สร้างดีลใหม่' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'สร้างงานใหม่' }));
     const project = await screen.findByLabelText(/^โครงการ/);
 
     expect(nextFormControlAfter(project)).toBe(screen.getByRole('checkbox', { name: new RegExp(TOGGLE) }));
@@ -1849,11 +1846,11 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
     expect(nextFormControlAfter(screen.getByLabelText(/^โครงการ/))).toBe(box);
     expect(follows(box, document.getElementById('salesRepDisplayIdCard'))).toBe(true);
     // The consequence is on screen, not left to be discovered on the PDF.
-    expect(screen.getByText(/ชื่อโครงการยังอยู่ในดีล/)).not.toBeNull();
+    expect(screen.getByText(/ชื่อโครงการยังบันทึกไว้ในงาน/)).not.toBeNull();
   });
 
-  // The wrong-way-round case: a document that already hides its project must not start printing
-  // it again just because the rep saved something else.
+  // The wrong-way-round case: a document that already hides its project must not start printing it again just
+  // because the rep saved something else.
   it('a draft that hides its project loads TICKED, and a save that never touches the box keeps it', async () => {
     draft({ hideProjectName: true });
     renderEditor('/quotations/5');
@@ -1901,11 +1898,8 @@ describe('QuotationEditorPage ไม่แสดงชื่อโครงก�
   });
 });
 
-// This repo's Node ships a BROKEN built-in global `localStorage` (it needs --localstorage-file,
-// and it shadows jsdom's) -- `clear` is not even a function on it. See TicketCreateModal.test.jsx's
-// own note. So these tests stub the whole global rather than clearing it: an in-memory Storage for
-// the happy path, and a THROWING one for the private-window path, which is the case quotationPrefs
-// exists to survive.
+// This repo's Node ships a BROKEN built-in global `localStorage` (it needs --localstorage-file, and it shadows
+// jsdom's) -- `clear` is not even a function on it. See TicketCreateModal.test.jsx's own note.
 function stubLocalStorage(impl) {
   vi.stubGlobal('localStorage', impl);
 }
@@ -1982,23 +1976,22 @@ describe('QuotationEditorPage sales conveniences (owner ask 2026-09-10)', () => 
     renderEditor('/quotations/new?ticket=18');
 
     await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ });
-    // The normal deposit controls are back: unticked checkbox, % chips visible, no payment-term
-    // dropdown.
+    // The normal deposit controls are back: unticked checkbox, % chips visible, no payment-term dropdown.
     expect(screen.getByRole('checkbox', { name: /ไม่รับมัดจำ/ }).checked).toBe(false);
     expect(screen.getByRole('button', { name: '30%' })).not.toBeNull();
     expect(screen.queryByLabelText('เงื่อนไขการชำระเงิน')).toBeNull();
   });
 
-  // The whole prefs layer must degrade silently: the ACCESSOR itself throws in a private window,
-  // so a bare read would take the editor down rather than starting from the app defaults.
+  // The whole prefs layer must degrade silently: the ACCESSOR itself throws in a private window, so a bare read
+  // would take the editor down rather than starting from the app defaults.
   it('renders normally when localStorage throws on every access', async () => {
     stubLocalStorage(throwingStorage());
     api.dealQuotations.create.mockResolvedValue({ quotation: { id: 9 } });
 
     renderEditor('/quotations/new?ticket=18');
 
-    // Terms fall back to the app defaults (nothing pressed), not to a crash — asserted BEFORE the
-    // save, because a successful create navigates to /quotations/{id} and this form unmounts.
+    // Terms fall back to the app defaults (nothing pressed), not to a crash — asserted BEFORE the save, because a
+    // successful create navigates to /quotations/{id} and this form unmounts.
     fireEvent.click(await screen.findByRole('button', { name: /เพิ่มรายการในตำแหน่งนี้/ }));
     expect(screen.getByRole('button', { name: '50%' }).getAttribute('aria-pressed')).toBe('false');
     expect(screen.getByRole('button', { name: '30%' }).getAttribute('aria-pressed')).toBe('false');
@@ -2042,9 +2035,9 @@ describe('QuotationEditorPage sales conveniences (owner ask 2026-09-10)', () => 
     renderEditor('/quotations/5');
 
     await waitFor(() => expect(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 1/).value).toBe('ชั้น 1'));
-    // Precondition, stated out loud: autosave only ever runs on a form that would SAVE. If this
-    // is disabled the test below would pass for the wrong reason (nothing fired because nothing
-    // could fire), which is the vacuous shape this repo keeps getting bitten by.
+    // Precondition, stated out loud: autosave only ever runs on a form that would SAVE. If this is disabled the
+    // test below would pass for the wrong reason (nothing fired because nothing could fire), which is the vacuous
+    // shape this repo keeps getting bitten by.
     expect(screen.getByRole('button', { name: 'บันทึกร่าง' }).disabled).toBe(false);
     fireEvent.change(screen.getByLabelText(/^ตำแหน่งติดตั้งที่ 1/), { target: { value: 'ชั้น 1 - โซน A' } });
 
@@ -2163,10 +2156,7 @@ describe('QuotationEditorPage terms card — item 2 + item 4 (owner ruling 2026-
     expect(payload.fullPaymentTerm).toBe('ON_DELIVERY');
   });
 
-  // This is the ONLY thing this change leaves untouched (task scope: prefs, not editing). An
-  // existing quotation always loads its own server-stored terms regardless of what is (or is not)
-  // remembered for a NEW quotation — noDeposit here comes from `quotation.depositPercent === 0`,
-  // never from quotationPrefs.js.
+  // This is the ONLY thing this change leaves untouched (task scope: prefs, not editing).
   it('loading an existing quotation saved with depositPercent 0 restores the ticked checkbox and its chosen term', async () => {
     api.dealQuotations.get.mockResolvedValue({
       quotation: existingDraftWithOneItem({ depositPercent: 0, remainderMode: null, creditDays: null, fullPaymentTerm: 'ON_DELIVERY' }),

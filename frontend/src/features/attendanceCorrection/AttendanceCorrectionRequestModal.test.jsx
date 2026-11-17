@@ -91,9 +91,9 @@ describe('AttendanceCorrectionRequestModal — submit flow', () => {
     expect(api.attendanceCorrection.create).not.toHaveBeenCalled();
   });
 
-  // New in this split (fix/attendance-correction-on-attendance-page): the old inline panel form
-  // just reset itself in place after a successful create. As a modal, it must also close itself,
-  // or the just-submitted form stays open with a stale toast as the only feedback.
+  // New in this split (fix/attendance-correction-on-attendance-page): the old inline panel form just reset
+  // itself in place after a successful create. As a modal, it must also close itself, or the just-submitted form
+  // stays open with a stale toast as the only feedback.
   it('closes itself after a successful create', async () => {
     const { onClose } = renderModal();
     const workDate = todayIso();

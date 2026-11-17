@@ -93,22 +93,9 @@ import th.co.glr.hr.ticket.TicketItemRequest;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Commission redesign Slice A2 — real-DB acceptance coverage for the accountant auto-create
- * trigger (sales does nothing to get commission) and, per CLAUDE.md's "Permission changes must
- * ship evidence", the AUTHZ change that goes with it: sales can no longer create/submit a
- * commission at all.
- *
- * <p>Drives a real chain deal (Steps 1-8, same fixture as {@link CommissionDealLinkageIntegrationTest})
- * to {@link DealStage#CLOSED_PAID}, then through the real {@link CommissionService}, backed by a
- * real {@link CommissionRepository}, {@link TicketRepository}, and {@link AttachmentRepository}
- * against real Postgres. {@link AuditService} and {@link NotificationService} are mocked
- * deliberately — side effects of the decision, not the SQL/authz behavior under test.
- *
- * <p>Every authz case here is written the wrong way round (CLAUDE.md): "sales cannot reach this"
- * is the assertion that matters, not "account can reach their own". See {@code
- * createFromDealAsSales_isForbidden_andCreatesNoCommissionRecord} for the mutation-check record.
- */
+/** Commission redesign Slice A2 — real-DB acceptance coverage for the accountant auto-create trigger (sales
+ * does nothing to get commission) and, per CLAUDE.md's "Permission changes must ship evidence", the AUTHZ
+ * change that goes with it: sales can no longer create/submit a commission at all. */
 class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTest {
     private TicketRepository tickets;
     private PricingRequestRepository pricingRequests;
@@ -153,8 +140,8 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         FactoryQuoteRepository factoryQuotes = new FactoryQuoteRepository(jdbc);
         FxRateRepository fxRates = new FxRateRepository(jdbc);
         PricingFormulaEngine formulaEngine = new PricingFormulaEngine(new PricingFormulaConfigRepository(jdbc));
-        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting
-        // auto-advance check and PricingDecisionService's startReview/recalculateCost.
+        // V141 ("CEO owns costing"): shared by FactoryQuoteService's markReadyForCosting auto-advance check and
+        // PricingDecisionService's startReview/recalculateCost.
         th.co.glr.hr.pricingcosting.LandedCostCalculator landedCostCalculator =
             new th.co.glr.hr.pricingcosting.LandedCostCalculator(factoryQuotes, pricingRequests, fxRates,
                 new FactoryConfigRepository(jdbc), new CatalogRepository(jdbc), formulaEngine);
@@ -163,8 +150,8 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
             landedCostCalculator);
 
         PricingCostingRepository costingRepository = new PricingCostingRepository(jdbc);
-        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing
-        // create/recalculate/submit is gone; the CEO computes it via PricingDecisionService.
+        // V141: PricingCostingService is READ-ONLY now (list/get) — Import's costing create/recalculate/submit is
+        // gone; the CEO computes it via PricingDecisionService.
         costingService = new PricingCostingService(costingRepository, pricingRequests, tickets);
 
         PricingDecisionRepository decisionRepository = new PricingDecisionRepository(jdbc);
@@ -211,11 +198,9 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
     private void insertFactory(String name) {
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // Happy chain: account creates → SUBMITTED, owner = deal's rep (not the accountant) →
-    // sales_manager edits + reason recomputes → sales_manager approve → MANAGER_APPROVED →
-    // ceo approve → APPROVED. Also proves the same upload flips the ticket's invoiceOnFile.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // Happy chain: account creates → SUBMITTED, owner = deal's rep (not the accountant) → sales_manager edits +
+    // reason recomputes → sales_manager approve → MANAGER_APPROVED → ceo approve → APPROVED. Also proves the same
+    // upload flips the ticket's invoiceOnFile.
 
     @Test
     void createFromDeal_happyChain_thenManagerEditsAndBothApprovalsSucceed() {
@@ -252,18 +237,11 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(approved.status()).isEqualTo(CommissionStatus.APPROVED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Wrong-way-round AUTHZ (the tests that matter): sales cannot create, and cannot approve.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
-    /**
-     * MUTATION-CHECK RECORD (per CLAUDE.md "Permission changes must ship evidence"):
-     * temporarily changed {@code CommissionService.CREATE_FROM_DEAL_ROLES} from
-     * {@code Set.of("account")} to {@code Set.of("account", "sales")} (reintroducing the
-     * vulnerability this test guards against) — this specific test went red (expected FORBIDDEN,
-     * got a created SUBMITTED commission instead) and no other test in the suite flipped. Reverted
-     * the change; `git diff` against the pre-mutation tree was empty afterwards.
-     */
+    /** MUTATION-CHECK RECORD: temporarily changed CommissionService.CREATE_FROM_DEAL_ROLES from Set.of to Set.of —
+     * this specific test went red and no other test in the suite flipped. Reverted the change; `git diff` against
+     * the pre-mutation tree was empty afterwards. */
     @Test
     void createFromDealAsSales_isForbidden_andCreatesNoCommissionRecord() {
         long ticketId = driveDealToClosedPaid(new BigDecimal("10"));
@@ -309,10 +287,8 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(stillManagerApproved.status()).isEqualTo(CommissionStatus.MANAGER_APPROVED);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
-    // grossAmount defaulting: omitted → the deal's real payable amount; provided → used as given.
-    // Two separate deals — createFromDeal only allows one live commission per deal.
-    // ─────────────────────────────────────────────────────────────────────────────────────
+    // grossAmount defaulting: omitted → the deal's real payable amount; provided → used as given. Two separate
+    // deals — createFromDeal only allows one live commission per deal.
 
     @Test
     void createFromDeal_omittedGrossAmount_defaultsFromDealPayable() {
@@ -368,9 +344,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(created.dealAmountMismatch()).isTrue(); // flagged, not blocked
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Duplicate guard: a second commission for the same deal is rejected outright.
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     @Test
     void createFromDeal_secondCallForSameDeal_isRejected_andCreatesNoSecondRecord() {
@@ -403,9 +377,7 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(countCommissionRecords()).isEqualTo(before);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────────────────
     // Fixture helpers (same pattern as CommissionDealLinkageIntegrationTest).
-    // ─────────────────────────────────────────────────────────────────────────────────────
 
     private SubmitCommissionRequest submitRequestLinkedTo(long ticketId, BigDecimal grossAmount) {
         long dealOwnerId = ticketService.get(ticketId, ceoActor).summary().createdById();
@@ -433,8 +405,8 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         return ticketId;
     }
 
-    /** Same as {@link #driveDealToClosedPaid} but stops right after delivery — DELIVERED, not yet
-     * CLOSED_PAID. Used by the "gate rejects a not-yet-closed deal" test. */
+    /** Same as #driveDealToClosedPaid but stops right after delivery — DELIVERED, not yet CLOSED_PAID. Used by the
+     * "gate rejects a not-yet-closed deal" test. */
     private long driveDealThroughDeliveryOnly(BigDecimal quantity) {
         long catalogProductId = insertCatalogProduct(FACTORY, "IT",
             "TEST-COMM-A2-" + UUID.randomUUID().toString().substring(0, 8), new BigDecimal("100.00"), "THB", "per_piece");
@@ -451,11 +423,9 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         long ticketId = created.summary().id();
         long ticketItemId = created.items().get(0).id();
 
-        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a
-        // quantity are now required on every item PricingRequestService#createDraft persists —
-        // requestedQty/requestedUnit/requestedUnitBasis are derived instead, so this fixture
-        // supplies the tile fields directly. roundToFullBox=false + piecesInput=quantity keeps the
-        // derived requestedQty byte-identical to `quantity`, which this file's assertions depend on.
+        // V185 (direct-deal-form parity): color/texture/thicknessMm/sqmPerPiece/piecesPerBox/a quantity are now required
+        // on every item PricingRequestService#createDraft persists — requestedQty/requestedUnit/requestedUnitBasis are
+        // derived instead, so this fixture supplies the tile fields directly.
         PricingRequestRequests.PricingRequestItemRequest item = new PricingRequestRequests.PricingRequestItemRequest(
             ticketItemId, catalogProductId, null, "SCG", "Tile Commission A2", "SCG Tile Commission A2",
             "White", "Matte", "60x60", FACTORY, null, null, null, null,
@@ -480,15 +450,15 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(issuedNotice.status()).isEqualTo("ISSUED");
         ticketService.confirmDepositPaid(ticketId, accountActor);
 
-        // S18 owner decision 2026-09-28: import no longer declares stock coverage. This is setup for
-        // a commission test, so the CEO (allowed on any deal) stands in for the declarer.
+        // S18 owner decision 2026-09-28: import no longer declares stock coverage. This is setup for a commission
+        // test, so the CEO (allowed on any deal) stands in for the declarer.
         ticketService.reserveStock(ticketId,
             new StockReservationRequest(List.of(
                 new StockReservationRequest.Line(ticketItemId, quantity, "จองครบจากสต็อก"))),
             ceoActor);
-        // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep}
-        // to {ceo, owning-rep} only -- import no longer completes delivery. salesActor (the deal
-        // owner) is used here instead of importActor; this fixture is not testing delivery authz.
+        // V184: completeDelivery's gate (canWriteDelivery) transferred from {import,ceo,owning-rep} to {ceo,
+        // owning-rep} only -- import no longer completes delivery. salesActor (the deal owner) is used here instead of
+        // importActor; this fixture is not testing delivery authz.
         TicketDto delivered = ticketService.completeDelivery(
             ticketId, new CompleteDeliveryRequest("ส่งครบ", "คุณลูกค้า"), salesActor);
         assertThat(delivered.summary().fulfillmentStatus()).isEqualTo(FulfilmentStatus.FULLY_DELIVERED);
@@ -518,10 +488,9 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
             UUID.randomUUID().toString());
         FactoryQuoteDto responded = factoryQuoteService.receive(draft.id(), response, importActor);
         factoryQuoteService.markReadyForCosting(responded.id(), importActor);
-        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to
-        // READY_FOR_CEO_REVIEW the moment the (only, here) factory quote is ready — Import no
-        // longer creates/recalculates/submits a costing of its own; the CEO's startReview below
-        // computes it.
+        // V141 ("CEO owns costing"): markReadyForCosting auto-advances the request straight to READY_FOR_CEO_REVIEW
+        // the moment the (only, here) factory quote is ready — Import no longer creates/recalculates/submits a costing
+        // of its own; the CEO's startReview below computes it.
 
         PricingDecisionDto decision = decisionService.startReview(pricingRequestId,
             new StartPricingDecisionRequest(new BigDecimal("0.20"), "THB", null, UUID.randomUUID().toString()), ceoActor);
@@ -542,10 +511,9 @@ class CommissionAutoCreateIntegrationTest extends AbstractPostgresIntegrationTes
     }
 
     private void drainDispatches() {
-        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) --
-        // there is no dispatch/worker queue left to drain. Kept (rather than removing
-        // every call site) so this helper's callers do not all need to be revisited
-        // individually.
+        // No-op now: FactoryQuoteService.send is synchronous (manual-RFQ redesign) -- there is no dispatch/worker
+        // queue left to drain. Kept (rather than removing every call site) so this helper's callers do not all need to
+        // be revisited individually.
     }
 
     private TicketItemRequest ticketItem(String brand, String model, String factory) {

@@ -23,18 +23,14 @@ import th.co.glr.hr.support.AbstractPostgresIntegrationTest;
 import tools.jackson.databind.DeserializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
-/**
- * The CEO thickness-defaults surface (V152 + its editor).
- *
- * <p>Authorization cases are written wrong-way-round on purpose: each asserts the caller
- * <em>cannot</em> reach what they should not, and that a rejected write left the database
- * untouched. "The CEO can save" is the easy case and proves the least.
- */
+/** The CEO thickness-defaults surface (V152 + its editor). Authorization cases are written wrong-way-round on
+ * purpose: each asserts the caller cannot reach what they should not, and that a rejected write left the
+ * database untouched. "The CEO can save" is the easy case and proves the least. */
 class ThicknessDefaultIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private MockMvc mockMvc;
-    // collection_thickness_default.updated_by REFERENCES hr.employee, so a CEO write whose caller
-    // id has no matching row is rejected by the FK rather than by authz.
+    // collection_thickness_default.updated_by REFERENCES hr.employee, so a CEO write whose caller id has no
+    // matching row is rejected by the FK rather than by authz.
     private long employeeId;
 
     @BeforeEach
@@ -165,8 +161,8 @@ class ThicknessDefaultIntegrationTest extends AbstractPostgresIntegrationTest {
                 .content(body(factoryId, "MONOCOLOR", "null")))
             .andExpect(status().isOk());
 
-        // Back to the honest state, NOT a stored 0 -- a zero would silently pick the lowest
-        // freight band instead of refusing to price.
+        // Back to the honest state, NOT a stored 0 -- a zero would silently pick the lowest freight band instead of
+        // refusing to price.
         assertThat(storedDefaults()).isZero();
         assertThat(statusOf(priceId)).isEqualTo("NO_THICKNESS");
     }
@@ -184,16 +180,8 @@ class ThicknessDefaultIntegrationTest extends AbstractPostgresIntegrationTest {
         assertThat(storedDefaults()).isZero();
     }
 
-    /**
-     * The subtle one: a size-level override is the escape hatch for a collection whose trim differs
-     * from its field tile. A bulk collection-level save must not wipe it.
-     *
-     * <p>{@code size_norm = '200X200'} is the V172 canonical form (derived from
-     * {@code width_mm}/{@code height_mm}, both 200 in {@link #seedRowWithoutThickness}), not the
-     * pre-V172 raw-text form ('20X20' from {@code size_raw = '20x20'}) — the override must be
-     * expressed in whatever form {@code product_prices.size_norm} actually takes for the join to
-     * fire at all.
-     */
+    /** The subtle one: a size-level override is the escape hatch for a collection whose trim differs from its field
+     * tile. A bulk collection-level save must not wipe it. */
     @Test
     void aBulkCollectionSaveLeavesSizeLevelOverridesIntact() throws Exception {
         long priceId = seedRowWithoutThickness("TD F5", "ANTHOLOGY");

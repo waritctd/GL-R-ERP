@@ -6,16 +6,8 @@ import { api } from '../../api/index.js';
 
 globalThis.React = React;
 
-// UX-07: product delete used to fire a native window.confirm() instead of the
-// shared branded ConfirmDialog already used elsewhere in this same file (see
-// the upload/commit confirm below). These tests cover the guard the fix adds:
-// clicking delete must open the dialog and must NOT call the delete API until
-// the dialog is explicitly confirmed.
-//
-// updateFactory/countries (V163 factory master-data merge): country is now a required <select>
-// sourced from GET /api/price-import/countries instead of a free-text 2-letter input, and every
-// factory row gets its own แก้ไข action backed by PUT /api/price-import/factories/{factoryId} —
-// see the "factory master data" describe block below.
+// UX-07: product delete used to fire a native window.confirm() instead of the shared branded ConfirmDialog
+// already used elsewhere in this same file (see the upload/commit confirm below).
 vi.mock('../../api/index.js', () => ({
   api: {
     priceImport: {
@@ -81,8 +73,8 @@ describe('PriceImportPage product delete (UX-07)', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'ลบ' }));
 
-    // The native dialog must never be invoked — the branded ConfirmDialog
-    // (Modal with an <h2> title) replaces it entirely.
+    // The native dialog must never be invoked — the branded ConfirmDialog (Modal with an title) replaces it
+    // entirely.
     expect(nativeConfirm).not.toHaveBeenCalled();
     expect(screen.getByRole('heading', { name: 'ลบสินค้า' })).not.toBeNull();
     expect(screen.getByText('ยืนยันลบ "Stone Series"?')).not.toBeNull();
@@ -99,8 +91,8 @@ describe('PriceImportPage product delete (UX-07)', () => {
     fireEvent.click(confirmButton);
 
     await waitFor(() => expect(api.catalog.deleteProduct).toHaveBeenCalledWith(501));
-    // loadProducts(factoryId) refresh: prices() is called once on factory
-    // select and once more after a successful delete.
+    // loadProducts(factoryId) refresh: prices() is called once on factory select and once more after a successful
+    // delete.
     await waitFor(() => expect(api.catalog.prices).toHaveBeenCalledTimes(2));
   });
 
@@ -130,10 +122,8 @@ describe('PriceImportPage product delete (UX-07)', () => {
   });
 });
 
-// V163 merged sales.factory_config (the RFQ email directory that matched 0% of the real
-// factories by name) onto price_catalog.factories, and added a country <select> (was free-text,
-// the direct cause of "cannot add a factory" 500ing on a typo) plus an edit action per factory row
-// — this is the only place จัดซื้อ can now put a real RFQ email on a real factory.
+// V163 merged sales.factory_config onto price_catalog.factories, and added a country <select> plus an edit
+// action per factory row — this is the only place จัดซื้อ can now put a real RFQ email on a real factory.
 describe('PriceImportPage factory master data (V163)', () => {
   it('lists every factory with its master data and flags a missing RFQ email', async () => {
     api.priceImport.factories.mockResolvedValue([

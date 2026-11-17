@@ -8,12 +8,8 @@ import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisio
 import th.co.glr.hr.pricingdecision.PricingDecisionRequests.UpdatePricingDecisionRequest;
 import tools.jackson.databind.json.JsonMapper;
 
-/**
- * Wire-shape pin for {@code PUT /api/pricing-decisions/{id}}: deserialises raw JSON with the same
- * mapper family Spring MVC uses (Jackson 3, {@code tools.jackson}). Jackson 3 rejects a body that
- * leaves a primitive {@code boolean} creator property absent, which made the CEO's "ปรับราคาเอง"
- * save (it sends only four item fields) 400 with a bare "คำขอไม่ถูกต้อง". Absent flag == false.
- */
+/** Wire-shape pin for PUT /api/pricing-decisions/{id}: deserialises raw JSON with the same mapper family Spring
+ * MVC uses (Jackson 3, tools.jackson). Absent flag == false. */
 class PricingDecisionRequestsWireShapeTest {
 
     private final JsonMapper mapper = JsonMapper.builder().build();

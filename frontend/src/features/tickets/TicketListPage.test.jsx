@@ -5,6 +5,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TicketListPage } from './TicketListPage.jsx';
 import { api } from '../../api/index.js';
+import { bangkokTodayIso } from '../../utils/format.js';
 
 globalThis.React = React;
 
@@ -39,6 +40,9 @@ vi.mock('../../api/index.js', async (importOriginal) => {
       tickets: {
         list: vi.fn(),
         create: vi.fn(),
+      },
+      salesBoard: {
+        teamOverview: vi.fn(),
       },
     },
   };
@@ -102,6 +106,10 @@ function renderTicketListPage(user = salesUser, initialEntries = ['/tickets'], c
     </QueryClientProvider>,
   );
 }
+
+// The progress column, route-aware progress bar and plain mobile card belong to the layout of the roles that
+// do NOT use the movement list (sales / sales_manager / ceo have their own columns, covered below).
+const renderLegacyLayout = () => renderTicketListPage(importUser, ['/tickets?inbox=0']);
 
 describe('TicketListPage', () => {
   beforeEach(() => {
@@ -193,10 +201,16 @@ describe('TicketListPage', () => {
   it('renders rows from a mocked api.tickets.list', async () => {
     renderTicketListPage();
 
-    expect(screen.getByRole('heading', { level: 1, name: 'รายการดีล' })).toBeTruthy();
+    expect(screen.getByRole('heading', { level: 1, name: 'งานทั้งหมด' })).toBeTruthy();
+    expect(screen.getByText('ติดตามงานตามขอบเขตบทบาทและตัวกรองที่เลือก')).toBeTruthy();
     expect(await screen.findByText('บริษัท ทดสอบ จำกัด')).not.toBeNull();
     expect(screen.getByText('PR-2026-0501')).not.toBeNull();
-    expect(api.tickets.list).toHaveBeenCalledWith({});
+    // sales now also sends the default movement range (see 'movement range' below); the plain
+    // no-params call is what an unchanged role (account/import) still makes.
+    expect(api.tickets.list).toHaveBeenCalledWith(expect.objectContaining({
+      movementFrom: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+      movementTo: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/),
+    }));
   });
 
   // The desktop table does not end every row in an identical `เปิด ›` button; the row itself is a
@@ -236,6 +250,70 @@ describe('TicketListPage', () => {
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/501'));
   });
 
+  // Owner ruling 2026-11-16: the table is part of งานทั้งหมด, so its own labels say งาน. Only DATA (a deal titled
+  // "ดีลใหม่…") may still contain ดีล.
+  it.each([['sales', salesUser], ['sales_manager', managerUser]])('%s: no label on the table view says ดีล', async (_r, user) => {
+    renderTicketListPage(user);
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    fireEvent.click(screen.getByRole('button', { name: /ตัวกรอง$/ }));
+
+    const visible = document.body.textContent;
+    const labels = [...document.querySelectorAll('[aria-label],[title],[placeholder]')]
+      .map((el) => [el.getAttribute('aria-label'), el.getAttribute('title'), el.getAttribute('placeholder')].join(' '))
+      .join(' ');
+    const withoutData = `${visible} ${labels}`.replaceAll('ดีลใหม่ยังไม่มีขอราคา', '').replaceAll('บริษัท ดีลใหม่ จำกัด', '');
+    expect(withoutData).not.toContain('ดีล');
+    expect(screen.getByRole('columnheader', { name: /งาน \/ ลูกค้า \/ โครงการ/ })).toBeTruthy();
+  });
+
+  // Round-2 LOW 4: the quiet threshold is configurable (app.sales.quiet-days), so the copy reads it from the API.
+  it('the ภาพรวมทีม quiet badge names the threshold the API serves, not a hard-coded 14', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({ reps: [], stale: [], quietDays: 21 });
+    api.tickets.list.mockResolvedValue({
+      tickets: [{
+        id: 601, code: 'PR-2026-0601', title: 'ดีลเงียบ', customerName: 'บริษัท เงียบ จำกัด', status: 'submitted',
+        createdByName: 'สมชาย ใจดี', createdAt: '2026-07-01T09:00:00.000Z', salesStage: 'QUOTE_DESIGN_SIDE',
+        lifecycle: 'ACTIVE', lostReason: null, overdue: false, fulfillmentStatus: null, stale: true,
+        stageUpdatedAt: '2026-07-01T09:00:00.000Z',
+      }],
+    });
+    renderTicketListPage(managerUser);
+
+    expect(await screen.findByText(/1 งานเงียบ \(ไม่มีความเคลื่อนไหว 21 วัน\)/)).toBeTruthy();
+  });
+
+  // Final review: the threshold is near-static, so it must not refetch on every ['tickets'] invalidation (an activity,
+  // a stage move, a lost deal) — own key outside 'tickets', and a 60 s staleTime.
+  it('fetches the quiet threshold once for a manager, outside the tickets key, with a 60 s staleTime', async () => {
+    api.salesBoard.teamOverview.mockResolvedValue({ reps: [], stale: [], quietDays: 14 });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={['/tickets']}>
+          <TicketListPage user={managerUser} showToast={vi.fn()} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(api.salesBoard.teamOverview).toHaveBeenCalledTimes(1));
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    const listCalls = api.tickets.list.mock.calls.length;
+
+    await queryClient.invalidateQueries({ queryKey: ['tickets'] });
+
+    await waitFor(() => expect(api.tickets.list.mock.calls.length).toBeGreaterThan(listCalls));
+    expect(api.salesBoard.teamOverview).toHaveBeenCalledTimes(1);
+    const boardQueries = queryClient.getQueryCache().getAll().filter((q) => q.queryKey.includes('salesBoard'));
+    expect(boardQueries).toHaveLength(1);
+    expect(boardQueries[0].queryKey[0]).not.toBe('tickets');
+    expect(boardQueries[0].options.staleTime).toBe(60_000);
+  });
+
+  it('does not ask for the team overview at all for a rep', async () => {
+    renderTicketListPage(salesUser);
+    await screen.findByText('บริษัท ทดสอบ จำกัด');
+    expect(api.salesBoard.teamOverview).not.toHaveBeenCalled();
+  });
+
   it('shows create for Sales and hides it for non-Sales ticket-list roles', async () => {
     const rolesWithoutCreate = [
       { employeeId: 2, name: 'Manager ทดสอบ', role: 'sales_manager' },
@@ -245,13 +323,13 @@ describe('TicketListPage', () => {
     ];
 
     const { unmount } = renderTicketListPage(salesUser);
-    expect(await screen.findByRole('button', { name: /สร้างดีลใหม่/ })).toBeTruthy();
+    expect(await screen.findByRole('button', { name: /งานใหม่/ })).toBeTruthy();
     unmount();
 
     for (const roleUser of rolesWithoutCreate) {
       const view = renderTicketListPage(roleUser);
-      await screen.findByRole('heading', { name: 'รายการดีล' });
-      expect(screen.queryByRole('button', { name: /สร้างดีลใหม่/ })).toBeNull();
+      await screen.findByRole('heading', { name: 'งานทั้งหมด' });
+      expect(screen.queryByRole('button', { name: /งานใหม่/ })).toBeNull();
       view.unmount();
     }
   });
@@ -261,11 +339,11 @@ describe('TicketListPage', () => {
 
     expect(await screen.findByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
     expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
-    expect(screen.getByRole('searchbox', { name: 'ค้นหาดีล' }).value).toBe('เกินกำหนด');
+    expect(screen.getByRole('searchbox', { name: 'ค้นหางาน' }).value).toBe('เกินกำหนด');
     expect(screen.getByText('ค้นหาในรายการ')).toBeTruthy();
     expect(screen.getByText('เฟส 5: ส่งมอบและปิดงาน')).toBeTruthy();
 
-    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหาดีล' }), { target: { value: 'พักไว้' } });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'ค้นหางาน' }), { target: { value: 'พักไว้' } });
     expect(screen.getByTestId('location-display').textContent).toContain('q=%E0%B8%9E%E0%B8%B1%E0%B8%81%E0%B9%84%E0%B8%A7%E0%B9%89');
 
     fireEvent.click(screen.getByRole('button', { name: /เฟส 4/ }));
@@ -296,7 +374,7 @@ describe('TicketListPage', () => {
 
     expect(await screen.findByText('บริษัท เกินกำหนด จำกัด')).not.toBeNull();
     expect(screen.queryByText('บริษัท ทดสอบ จำกัด')).toBeNull();
-    expect(screen.queryByRole('button', { name: /สร้างดีลใหม่/ })).toBeNull();
+    expect(screen.queryByRole('button', { name: /งานใหม่/ })).toBeNull();
     const scopeToggle = within(screen.getByLabelText('เลือกขอบเขตรายการ'));
     expect(scopeToggle.getByRole('button', { name: /ต้องดำเนินการ/ }).getAttribute('aria-pressed')).toBe('true');
 
@@ -354,7 +432,7 @@ describe('TicketListPage', () => {
     };
     api.tickets.list.mockResolvedValueOnce({ tickets: [longDeal] });
 
-    const { container } = renderTicketListPage();
+    const { container } = renderLegacyLayout();
 
     const card = await screen.findByRole('listitem');
     const cardScope = within(card);
@@ -364,15 +442,15 @@ describe('TicketListPage', () => {
     expect(cardScope.getByText(longDeal.projectName).className).toContain('ticket-card-project');
     expect(cardScope.getByText(longDeal.createdByName, { exact: false }).className).toContain('ticket-card-owner');
     expect(cardScope.getByText(/เสนอราคาผู้ออกแบบ/)).toBeTruthy();
-    expect(cardScope.getByRole('button', { name: 'เปิดดีล PR-2026-0507' })).toBeTruthy();
-    expect(screen.getByRole('searchbox', { name: 'ค้นหาดีล' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: /สร้างดีลใหม่/ })).toBeTruthy();
+    expect(cardScope.getByRole('button', { name: 'เปิดงาน PR-2026-0507' })).toBeTruthy();
+    expect(screen.getByRole('searchbox', { name: 'ค้นหางาน' })).toBeTruthy();
+    // (the create button is sales-only; its visibility is pinned in 'shows create for Sales ...')
 
     const filterToggle = screen.getByRole('button', { name: /^ตัวกรอง/ });
     filterToggle.focus();
     fireEvent.click(filterToggle);
-    // This case stubs the mobile viewport, where the sheet is a modal dialog
-    // rather than the desktop inline region (see the modal-contract suite).
+    // This case stubs the mobile viewport, where the sheet is a modal dialog rather than the desktop inline region
+    // (see the modal-contract suite).
     const filterSheet = screen.getByRole('dialog', { name: 'ตัวกรองเพิ่มเติม' });
     expect(filterSheet).toBeTruthy();
 
@@ -396,23 +474,23 @@ describe('TicketListPage', () => {
     await screen.findByText('บริษัท ทดสอบ จำกัด');
     expect(api.tickets.list).toHaveBeenCalledTimes(1);
 
-    fireEvent.click(screen.getByRole('button', { name: /สร้างดีลใหม่/ }));
+    fireEvent.click(screen.getByRole('button', { name: /งานใหม่/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันสร้าง (stub)' }));
 
     await waitFor(() => expect(api.tickets.create).toHaveBeenCalledWith({ title: 'โครงการใหม่' }));
     await waitFor(() => expect(api.tickets.list).toHaveBeenCalledTimes(2));
-    expect(showToast).toHaveBeenCalledWith('success', 'สร้างดีลเรียบร้อย');
+    expect(showToast).toHaveBeenCalledWith('success', 'สร้างงานเรียบร้อย');
   });
 
   it('distinguishes filtered-empty copy from a truly empty ticket list', async () => {
     const { unmount } = renderTicketListPage(salesUser, ['/tickets?q=ไม่พบแน่นอน']);
     // EmptyState's visible `<strong>` title is `aria-hidden` when `titleAnnouncedElsewhere` is set
     // (DataTable always passes it), so it is never itself what a screen reader hears.
-    expect(await screen.findByText('ไม่พบดีลที่ตรงกับตัวกรอง')).toBeTruthy();
+    expect(await screen.findByText('ไม่พบงานที่ตรงกับตัวกรอง')).toBeTruthy();
     // All 5 role-scoped deals filtered out by the search: the live-region announcement, unlike the
     // visible EmptyState heading, carries the "(กรองจาก 5)" denominator, so the two are different strings.
-    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่พบดีลที่ตรงกับตัวกรอง (กรองจาก 5)');
-    expect(screen.getByText('ไม่พบดีลที่ตรงกับคำค้นหาและตัวกรองที่เลือก')).toBeTruthy();
+    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่พบงานที่ตรงกับตัวกรอง (กรองจาก 5)');
+    expect(screen.getByText('ไม่พบงานที่ตรงกับคำค้นหาและตัวกรองที่เลือก')).toBeTruthy();
     unmount();
 
     api.tickets.list.mockResolvedValueOnce({ tickets: [] });
@@ -420,9 +498,9 @@ describe('TicketListPage', () => {
     // A truly empty list has no unfiltered population to denominate against, so no clause is
     // appended and the heading and live-region text are identical: this distinguishes "filtered
     // down to nothing" from "there was nothing to begin with".
-    expect((await screen.findAllByText('ไม่มีดีล')).length).toBe(2);
-    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่มีดีล');
-    expect(screen.getByText('ยังไม่มีดีลในเงื่อนไขที่เลือก')).toBeTruthy();
+    expect((await screen.findAllByText('ไม่มีงาน')).length).toBe(2);
+    expect(document.querySelector('[aria-live="polite"]').textContent).toBe('ไม่มีงาน');
+    expect(screen.getByText('ยังไม่มีงานในเงื่อนไขที่เลือก')).toBeTruthy();
   });
 
   it('does not render role-sensitive financial internals in sales-visible rows or cards', async () => {
@@ -472,7 +550,7 @@ describe('TicketListPage', () => {
     );
 
     await screen.findByText('บริษัท ทดสอบ จำกัด');
-    fireEvent.click(screen.getByRole('button', { name: /สร้างดีลใหม่/ }));
+    fireEvent.click(screen.getByRole('button', { name: /งานใหม่/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'ยืนยันสร้าง (stub)' }));
 
     await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets/502'));
@@ -587,8 +665,8 @@ describe('TicketListPage', () => {
       expect(screen.getByText('บริษัท จากสต็อก จำกัด')).not.toBeNull();
       expect(screen.queryByText('บริษัท ส่งมอบบางส่วน จำกัด')).toBeNull();
 
-      // Toggling the SAME chip again clears the filter (same on/off pattern the lifecycle chip
-      // test above uses) — the excluded deal reappears.
+      // Toggling the SAME chip again clears the filter (same on/off pattern the lifecycle chip test above uses) —
+      // the excluded deal reappears.
       fireEvent.click(flagChip);
       expect(screen.getByText('บริษัท ส่งมอบบางส่วน จำกัด')).not.toBeNull();
     });
@@ -664,8 +742,8 @@ describe('TicketListPage', () => {
       expect(sheet.contains(document.activeElement)).toBe(true);
       expect(document.activeElement).toBe(focusables[0]);
 
-      // Tab off the last control wraps to the first, and shift+Tab off the
-      // first wraps to the last — focus never lands on the inert page behind.
+      // Tab off the last control wraps to the first, and shift+Tab off the first wraps to the last — focus never
+      // lands on the inert page behind.
       const last = focusables[focusables.length - 1];
       last.focus();
       fireEvent.keyDown(document, { key: 'Tab' });
@@ -689,8 +767,7 @@ describe('TicketListPage', () => {
       const { sheet } = await openMobileSheet();
       const pageRoot = document.querySelector('.ticket-list-page');
 
-      // The sheet is portalled out of the page root, so inerting the root
-      // cannot swallow the sheet itself.
+      // The sheet is portalled out of the page root, so inerting the root cannot swallow the sheet itself.
       expect(pageRoot.contains(sheet)).toBe(false);
       expect(pageRoot.hasAttribute('inert')).toBe(true);
       expect(pageRoot.getAttribute('aria-hidden')).toBe('true');
@@ -715,8 +792,8 @@ describe('TicketListPage', () => {
     it('closes on scrim click and restores focus', async () => {
       const { toggle } = await openMobileSheet();
 
-      // The scrim specifically — the header close button carries the same
-      // accessible name, so target the backdrop element itself.
+      // The scrim specifically — the header close button carries the same accessible name, so target the backdrop
+      // element itself.
       fireEvent.click(document.querySelector('.ticket-filter-backdrop'));
 
       expect(screen.queryByRole('dialog')).toBeNull();
@@ -729,7 +806,7 @@ describe('TicketListPage', () => {
   // stage column so it survives the 721–1040px band, which hides the progress column.
   describe('progress column and stage-column stale flag', () => {
     function stageCellOf(container) {
-      return container.querySelector('td[data-label="ขั้นตอน / เหตุผลงาน"]');
+      return container.querySelector('td[data-label^="ขั้นตอน"]');
     }
 
     function progressCellOf(container) {
@@ -737,7 +814,7 @@ describe('TicketListPage', () => {
     }
 
     it('shows only the stage fraction for a live ACTIVE deal, never a percentage', async () => {
-      const { container } = renderTicketListPage(salesUser);
+      const { container } = renderLegacyLayout();
       await screen.findByText('บริษัท ทดสอบ จำกัด');
 
       // Deal 501 is QUOTE_DESIGN_SIDE, stage no. 4 of 15. Scoped to its own row: every row shares
@@ -750,7 +827,7 @@ describe('TicketListPage', () => {
     });
 
     it('prefixes the lifecycle onto the fraction for a paused (ON_HOLD) deal instead of asserting bare live progress', async () => {
-      const { container } = renderTicketListPage(salesUser);
+      const { container } = renderLegacyLayout();
       await screen.findByText('บริษัท พักไว้ จำกัด');
 
       const rows = Array.from(container.querySelectorAll('tr.data-row'));
@@ -785,7 +862,7 @@ describe('TicketListPage', () => {
         ],
       });
 
-      const { container } = renderTicketListPage(salesUser);
+      const { container } = renderLegacyLayout();
       await screen.findByText('บริษัท ยกเลิกไม่ระบุขั้นตอน จำกัด');
 
       const rows = Array.from(container.querySelectorAll('tr.data-row'));
@@ -820,7 +897,7 @@ describe('TicketListPage', () => {
         ],
       });
 
-      const { container } = renderTicketListPage(salesUser);
+      const { container } = renderLegacyLayout();
       await screen.findByText('บริษัท ยกเลิกมีขั้นตอน จำกัด');
 
       const stageCell = stageCellOf(container);
@@ -848,47 +925,13 @@ describe('TicketListPage', () => {
         ],
       });
 
-      const { container } = renderTicketListPage(salesUser);
+      const { container } = renderLegacyLayout();
       await screen.findByText('บริษัท เสร็จสมบูรณ์มีขั้นตอน จำกัด');
 
       const stageCell = stageCellOf(container);
       expect(stageCell.textContent).toContain('เสร็จสมบูรณ์');
     });
 
-    it('drops the win% badge but keeps the เงียบ stale badge in the stage column, for a manager view', async () => {
-      api.tickets.list.mockResolvedValueOnce({
-        tickets: [
-          {
-            id: 601,
-            code: 'PR-2026-0601',
-            title: 'โครงการเงียบ (manager)',
-            customerName: 'บริษัท ผู้จัดการ จำกัด',
-            status: 'in_review',
-            createdByName: 'สมชาย ใจดี',
-            createdAt: '2026-07-06T09:00:00.000Z',
-            salesStage: 'NEGOTIATION',
-            lifecycle: 'ACTIVE',
-            lostReason: null,
-            overdue: false,
-            fulfillmentStatus: null,
-            stageUpdatedAt: '2026-07-06T09:00:00.000Z',
-            stale: true,
-            winProbabilityOverride: null,
-          },
-        ],
-      });
-
-      const { container } = renderTicketListPage(managerUser);
-      await screen.findByText('บริษัท ผู้จัดการ จำกัด');
-
-      const stageCell = stageCellOf(container);
-      const progressCell = progressCellOf(container);
-      expect(stageCell.textContent).toContain('เงียบ');
-      expect(progressCell.textContent).not.toContain('เงียบ');
-      // The win% badge is gone outright: not moved, not duplicated elsewhere.
-      expect(progressCell.textContent).not.toMatch(/%/);
-      expect(stageCell.textContent).not.toMatch(/%/);
-    });
   });
 
   /**
@@ -919,8 +962,7 @@ describe('TicketListPage', () => {
           stageUpdatedAt: '2026-07-06T09:00:00.000Z',
           stale: false,
           amountPayable: '1000000',
-          // 25, NOT the 70 WIN_PROBABILITY_DEFAULTS.NEGOTIATION would give. The disagreement is
-          // the assertion.
+          // 25, NOT the 70 WIN_PROBABILITY_DEFAULTS.NEGOTIATION would give. The disagreement is the assertion.
           winProbabilityOverride: null,
           effectiveWinProbability: 25,
         },
@@ -939,11 +981,303 @@ describe('TicketListPage', () => {
   // The "all phases" chip is labelled `ทั้งหมด` with no count: it lists every deal including
   // CLOSED_LOST/CANCELLED/COMPLETED, and the single statement of the filtered total is
   // DataTable's own footer.
+  describe('movement range (sales / sales_manager / ceo)', () => {
+    const ceoUser = { employeeId: 5, name: 'CEO ทดสอบ', role: 'ceo' };
+    const TODAY = bangkokTodayIso();
+    const addDays = (iso, delta) => {
+      const d = new Date(`${iso}T00:00:00.000Z`);
+      d.setUTCDate(d.getUTCDate() + delta);
+      return d.toISOString().slice(0, 10);
+    };
+    const moveDeal = (id, name, extra) => ({
+      id, code: `MV-${id}`, title: `โครงการ ${id}`, customerName: name, status: 'in_review',
+      createdById: 11, createdByName: 'สมชาย', createdAt: '2026-07-01T09:00:00.000Z',
+      salesStage: 'NEGOTIATION', lifecycle: 'ACTIVE', lostReason: null, overdue: false, fulfillmentStatus: null,
+      stageUpdatedAt: '2026-07-01T09:00:00.000Z', amountPayable: 100, nextFollowUpAt: null, lastActivityAt: null,
+      stageChangedInRange: false, activityInRange: false, ...extra,
+    });
+    const MOVE_DEALS = [
+      moveDeal(701, 'ลูกค้า-ขยับ', { stageChangedInRange: true, amountPayable: 1000 }),
+      moveDeal(702, 'ลูกค้า-กิจกรรม', { activityInRange: true, amountPayable: 0, lastActivityAt: TODAY }),
+      moveDeal(703, 'ลูกค้า-เงียบ', { amountPayable: 500, createdById: 12, createdByName: 'สมหญิง' }),
+      moveDeal(704, 'ลูกค้า-นัด', { amountPayable: 250, nextFollowUpAt: TODAY }),
+      moveDeal(705, 'ลูกค้า-ปิดแพ้', { amountPayable: 9999, lifecycle: 'CLOSED_LOST' }),
+    ];
+    const rangeGroup = () => screen.getByRole('group', { name: 'ช่วงวันที่' });
+    const weekChips = () => within(screen.getByLabelText('ตัวกรองความเคลื่อนไหว'));
+    let shown = MOVE_DEALS; // the fixture whose names rowNames() looks for
+    const rowNames = () => shown.map((d) => d.customerName).filter((n) => screen.queryByText(n));
+    const columnHeaders = () => screen.getAllByRole('columnheader').map((th) => th.textContent.trim());
+    const lastListArgs = () => api.tickets.list.mock.calls.at(-1)[0];
+
+    beforeEach(() => {
+      shown = MOVE_DEALS;
+      api.tickets.list.mockResolvedValue({ tickets: MOVE_DEALS });
+    });
+
+    it('sales: renders the ช่วงวันที่ row with the default 7-day range and sends it to the API', async () => {
+      renderTicketListPage(salesUser, ['/tickets'], <LocationDisplay />);
+      await screen.findByText('ลูกค้า-ขยับ');
+
+      expect(within(rangeGroup()).getByRole('button', { name: '7 วันล่าสุด' })).toBeTruthy();
+      expect(within(rangeGroup()).getByRole('button', { name: 'เลื่อนช่วงวันที่ย้อนหลัง 1 วัน' })).toBeTruthy();
+      expect(within(rangeGroup()).getByRole('button', { name: 'เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน' })).toBeTruthy();
+      expect(lastListArgs()).toMatchObject({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
+      // default = absent from the URL
+      expect(screen.getByTestId('location-display').textContent).toBe('/tickets');
+      // phase chips unchanged
+      expect(screen.getByLabelText('ตัวกรองเฟสของงาน')).toBeTruthy();
+    });
+
+    it('next shifts from/to in the URL by one day and re-queries with the shifted range; "7 วันล่าสุด" clears it', async () => {
+      renderTicketListPage(salesUser, ['/tickets'], <LocationDisplay />);
+      await screen.findByText('ลูกค้า-ขยับ');
+
+      fireEvent.click(within(rangeGroup()).getByRole('button', { name: 'เลื่อนช่วงวันที่ไปข้างหน้า 1 วัน' }));
+      const from = addDays(TODAY, -5);
+      const to = addDays(TODAY, 1);
+      await waitFor(() => expect(screen.getByTestId('location-display').textContent).toContain(`from=${from}`));
+      expect(screen.getByTestId('location-display').textContent).toContain(`to=${to}`);
+      await waitFor(() => expect(lastListArgs()).toMatchObject({ movementFrom: from, movementTo: to }));
+
+      fireEvent.click(within(rangeGroup()).getByRole('button', { name: '7 วันล่าสุด' }));
+      await waitFor(() => expect(screen.getByTestId('location-display').textContent).toBe('/tickets'));
+      await waitFor(() => expect(lastListArgs()).toMatchObject({ movementFrom: addDays(TODAY, -6), movementTo: TODAY }));
+    });
+
+    it('reads from/to from the URL', async () => {
+      renderTicketListPage(salesUser, ['/tickets?from=2026-11-06&to=2026-11-12']);
+      await screen.findByText('ลูกค้า-ขยับ');
+      expect(lastListArgs()).toMatchObject({ movementFrom: '2026-11-06', movementTo: '2026-11-12' });
+    });
+
+    it('each week chip filters rows by its rule, with counts', async () => {
+      renderTicketListPage(salesUser, ['/tickets'], <LocationDisplay />);
+      await screen.findByText('ลูกค้า-ขยับ');
+      expect(rowNames()).toHaveLength(5);
+
+      const chip = (re) => weekChips().getByRole('button', { name: re });
+      expect(chip(/^ขยับขั้น/).textContent).toMatch(/1/);
+      expect(chip(/^มีกิจกรรม/).textContent).toMatch(/1/);
+      expect(chip(/^นัดติดตาม/).textContent).toMatch(/1/);
+      expect(chip(/^ไม่เคลื่อนไหว/).textContent).toMatch(/2/);
+
+      fireEvent.click(chip(/^ขยับขั้น/));
+      await waitFor(() => expect(rowNames()).toEqual(['ลูกค้า-ขยับ']));
+      expect(screen.getByTestId('location-display').textContent).toContain('week=moved');
+
+      fireEvent.click(chip(/^มีกิจกรรม/));
+      await waitFor(() => expect(rowNames()).toEqual(['ลูกค้า-กิจกรรม']));
+
+      fireEvent.click(chip(/^นัดติดตาม/));
+      await waitFor(() => expect(rowNames()).toEqual(['ลูกค้า-นัด']));
+
+      // ACTIVE with neither flag; the CLOSED_LOST deal is excluded
+      fireEvent.click(chip(/^ไม่เคลื่อนไหว/));
+      await waitFor(() => expect(rowNames()).toEqual(['ลูกค้า-เงียบ', 'ลูกค้า-นัด']));
+    });
+
+    it('เลยนัด chip lists exactly the ACTIVE deals whose follow-up is before today (today and closed deals excluded)', async () => {
+      api.tickets.list.mockResolvedValue({
+        tickets: [
+          moveDeal(711, 'ลูกค้า-เกินนัด', { nextFollowUpAt: addDays(TODAY, -3) }),
+          moveDeal(712, 'ลูกค้า-นัดวันนี้', { nextFollowUpAt: TODAY }),
+          moveDeal(713, 'ลูกค้า-ปิดเกินนัด', { nextFollowUpAt: addDays(TODAY, -3), lifecycle: 'CLOSED_LOST' }),
+        ],
+      });
+      renderTicketListPage(salesUser, ['/tickets'], <LocationDisplay />);
+      await screen.findByText('ลูกค้า-เกินนัด');
+      const chip = weekChips().getByRole('button', { name: /^เลยนัด/ });
+      expect(chip.textContent).toMatch(/1/);
+      fireEvent.click(chip);
+      await waitFor(() => expect(screen.getByText('ลูกค้า-เกินนัด')).toBeTruthy());
+      expect(screen.queryByText('ลูกค้า-นัดวันนี้')).toBeNull();
+      expect(screen.queryByText('ลูกค้า-ปิดเกินนัด')).toBeNull();
+      expect(screen.getByTestId('location-display').textContent).toContain('week=overdue');
+    });
+
+    it('the active-filter summary says ช่วงวันที่, never สัปดาห์นี้', async () => {
+      renderTicketListPage(salesUser, ['/tickets?week=silent']);
+      await screen.findByText('ลูกค้า-เงียบ');
+      expect(screen.getByLabelText('ตัวกรองที่ใช้').textContent).toContain('ช่วงวันที่: ไม่เคลื่อนไหว');
+      expect(document.body.textContent).not.toContain('สัปดาห์นี้');
+    });
+
+    // Every movement signal considers ACTIVE deals only, so a chip never lists a paused deal.
+    it('a week chip never lists a non-ACTIVE deal: ?owner&week=activity shows only the ACTIVE flagged deal', async () => {
+      api.tickets.list.mockResolvedValue({
+        tickets: [
+          moveDeal(721, 'ลูกค้า-ใช้งาน', { activityInRange: true }),
+          moveDeal(722, 'ลูกค้า-พักไว้', { activityInRange: true, stageChangedInRange: true, lifecycle: 'ON_HOLD' }),
+        ],
+      });
+      renderTicketListPage(managerUser, ['/tickets?owner=11&week=activity']);
+      await screen.findByText('ลูกค้า-ใช้งาน');
+      expect(screen.queryByText('ลูกค้า-พักไว้')).toBeNull();
+      expect(weekChips().getByRole('button', { name: /^มีกิจกรรม/ }).textContent).toMatch(/1/);
+      expect(weekChips().getByRole('button', { name: /^ขยับขั้น/ }).textContent).toMatch(/0/);
+    });
+
+    // A chip's count must equal the rows it leaves: counted after EVERY other filter (search, lifecycle, ...).
+    async function expectEveryChipCountToEqualItsRows() {
+      for (const re of [/^ขยับขั้น/, /^มีกิจกรรม/, /^นัดติดตาม/, /^เลยนัด/, /^ไม่เคลื่อนไหว/]) {
+        const chip = weekChips().getByRole('button', { name: re });
+        const count = Number(/(\d+)\s*$/.exec(chip.textContent)[1]);
+        fireEvent.click(chip);
+        await waitFor(() => expect(rowNames()).toHaveLength(count));
+      }
+    }
+
+    it('chip counts equal the rows after clicking, under a search term', async () => {
+      api.tickets.list.mockResolvedValue({
+        tickets: [
+          moveDeal(731, 'ลูกค้า-อัลฟา', { stageChangedInRange: true }),
+          moveDeal(732, 'ลูกค้า-อัลฟาสอง', { activityInRange: true }),
+          moveDeal(733, 'ลูกค้า-เบตา'),
+          moveDeal(734, 'ลูกค้า-เบตาสอง', { nextFollowUpAt: TODAY }),
+        ],
+      });
+      shown = (await api.tickets.list()).tickets;
+      renderTicketListPage(salesUser, ['/tickets?q=อัลฟา']);
+      await screen.findByText('ลูกค้า-อัลฟา');
+      expect(weekChips().getByRole('button', { name: /^ไม่เคลื่อนไหว/ }).textContent).toMatch(/0/);
+      await expectEveryChipCountToEqualItsRows();
+    });
+
+    it('chip counts equal the rows after clicking, under a lifecycle filter', async () => {
+      api.tickets.list.mockResolvedValue({
+        tickets: [
+          moveDeal(741, 'ลูกค้า-ใช้งานหนึ่ง', { activityInRange: true }),
+          moveDeal(742, 'ลูกค้า-ใช้งานสอง'),
+          moveDeal(743, 'ลูกค้า-พักหนึ่ง', { lifecycle: 'ON_HOLD', activityInRange: true }),
+        ],
+      });
+      shown = (await api.tickets.list()).tickets;
+      renderTicketListPage(salesUser, ['/tickets?life=ON_HOLD']);
+      await screen.findByText('ลูกค้า-พักหนึ่ง');
+      await expectEveryChipCountToEqualItsRows();
+    });
+
+    it('impossible dates or from > to in the URL fall back to the default range and are not sent to the API', async () => {
+      for (const query of ['from=2026-02-30&to=2026-03-01', 'from=2026-11-12&to=2026-11-06']) {
+        api.tickets.list.mockClear();
+        const view = renderTicketListPage(salesUser, [`/tickets?${query}`]);
+        await screen.findByText('ลูกค้า-ขยับ');
+        expect(lastListArgs()).toEqual({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
+        view.unmount();
+      }
+    });
+
+    it('sales mobile card: amount, last-movement text, next follow-up badge; a zero amount reads "—"', async () => {
+      stubMobile();
+      api.tickets.list.mockResolvedValue({
+        tickets: [
+          moveDeal(751, 'ลูกค้า-การ์ดเลยนัด', { amountPayable: 1234.5, lastActivityAt: TODAY, nextFollowUpAt: addDays(TODAY, -2) }),
+          moveDeal(752, 'ลูกค้า-การ์ดศูนย์', { amountPayable: 0, nextFollowUpAt: TODAY }),
+        ],
+      });
+      renderTicketListPage(salesUser);
+      await screen.findByText('ลูกค้า-การ์ดเลยนัด');
+      const cardOf = (name) => screen.getAllByRole('listitem').find((li) => li.textContent.includes(name));
+
+      const card = cardOf('ลูกค้า-การ์ดเลยนัด');
+      expect(card.textContent).toContain('฿1,234.50');
+      expect(card.textContent).toContain('ความเคลื่อนไหวล่าสุด');
+      expect(card.textContent).toContain('วันนี้'); // lastActivityAt is today
+      expect(card.textContent).toContain('นัดติดตามถัดไป');
+      expect(card.textContent).toContain('เลยนัด');
+
+      const zero = cardOf('ลูกค้า-การ์ดศูนย์');
+      expect(zero.textContent).toContain('—');
+      expect(zero.textContent).not.toContain('฿0.00');
+      expect(zero.textContent).toContain('นัดวันนี้');
+    });
+
+    it('opens on ?week=silent', async () => {
+      renderTicketListPage(salesUser, ['/tickets?week=silent']);
+      await screen.findByText('ลูกค้า-เงียบ');
+      expect(rowNames()).toEqual(['ลูกค้า-เงียบ', 'ลูกค้า-นัด']);
+    });
+
+    it('chip counts respect the current phase filter', async () => {
+      renderTicketListPage(salesUser, ['/tickets?phase=5']);
+      await screen.findByRole('heading', { name: 'งานทั้งหมด' });
+      // every fixture deal is NEGOTIATION (phase 3), so phase 5 leaves nothing to count
+      await waitFor(() => expect(weekChips().getByRole('button', { name: /^ไม่เคลื่อนไหว/ }).textContent).toMatch(/0/));
+    });
+
+    it('sales columns: งาน/ลูกค้า/โครงการ, ขั้นตอน, มูลค่า, ความเคลื่อนไหวล่าสุด, นัดติดตามถัดไป — no ผู้ดูแล, no ความคืบหน้า', async () => {
+      renderTicketListPage(salesUser);
+      await screen.findByText('ลูกค้า-ขยับ');
+      const headers = columnHeaders().join('|');
+      for (const h of ['งาน', 'ขั้นตอน', 'มูลค่า', 'ความเคลื่อนไหวล่าสุด', 'นัดติดตามถัดไป']) expect(headers).toContain(h);
+      expect(headers).not.toContain('ผู้ดูแล');
+      expect(headers).not.toContain('ความคืบหน้า');
+    });
+
+    it('a deal whose amountPayable is 0 shows "—", not ฿0.00', async () => {
+      renderTicketListPage(salesUser);
+      await screen.findByText('ลูกค้า-กิจกรรม');
+      const row = screen.getByText('ลูกค้า-กิจกรรม').closest('tr');
+      expect(row.textContent).toContain('—');
+      expect(row.textContent).not.toContain('฿0.00');
+    });
+
+    it('footer shows the row count and the total value of the rows shown', async () => {
+      renderTicketListPage(salesUser, ['/tickets']);
+      await screen.findByText('ลูกค้า-ขยับ');
+      const footer = screen.getByTestId('deal-list-footer');
+      expect(footer.textContent).toContain('5 รายการ');
+      expect(footer.textContent).toContain('฿11,749.00');
+
+      fireEvent.click(weekChips().getByRole('button', { name: /^ไม่เคลื่อนไหว/ }));
+      await waitFor(() => expect(screen.getByTestId('deal-list-footer').textContent).toContain('2 รายการ'));
+      expect(screen.getByTestId('deal-list-footer').textContent).toContain('฿750.00');
+    });
+
+    it.each([['sales_manager', managerUser], ['ceo', ceoUser]])('%s: same range row and chips, and the ผู้ดูแล column is kept', async (_role, user) => {
+      renderTicketListPage(user);
+      await screen.findByText('ลูกค้า-ขยับ');
+      expect(within(rangeGroup()).getByRole('button', { name: '7 วันล่าสุด' })).toBeTruthy();
+      expect(weekChips().getByRole('button', { name: /^ไม่เคลื่อนไหว/ })).toBeTruthy();
+      const headers = columnHeaders().join('|');
+      expect(headers).toContain('ผู้ดูแล');
+      expect(headers).toContain('ความเคลื่อนไหวล่าสุด');
+      expect(headers).not.toContain('ความคืบหน้า');
+      expect(lastListArgs()).toMatchObject({ movementFrom: addDays(TODAY, -6), movementTo: TODAY });
+    });
+
+    it('?owner=<id> lists only that owner, shows a removable "ผู้ดูแล: ชื่อ" chip, and counts respect it', async () => {
+      renderTicketListPage(managerUser, ['/tickets?owner=12'], <LocationDisplay />);
+      await screen.findByText('ลูกค้า-เงียบ');
+      expect(rowNames()).toEqual(['ลูกค้า-เงียบ']);
+      expect(weekChips().getByRole('button', { name: /^ขยับขั้น/ }).textContent).toMatch(/0/);
+      expect(weekChips().getByRole('button', { name: /^ไม่เคลื่อนไหว/ }).textContent).toMatch(/1/);
+
+      fireEvent.click(screen.getByRole('button', { name: /ผู้ดูแล: สมหญิง/ }));
+      await waitFor(() => expect(screen.getByTestId('location-display').textContent).not.toContain('owner='));
+      await waitFor(() => expect(rowNames()).toHaveLength(5));
+    });
+
+    // UNCHANGED ROLE: account/import render exactly as before.
+    it.each([['account', accountUser], ['import', importUser]])('%s: no range row, old columns, API called without movement params', async (_role, user) => {
+      renderTicketListPage(user, ['/tickets?inbox=0']); // inbox=0: every deal the role may read, not the worklist subset
+      await screen.findByText('ลูกค้า-ขยับ');
+      expect(screen.queryByRole('group', { name: 'ช่วงวันที่' })).toBeNull();
+      expect(screen.queryByLabelText('ตัวกรองความเคลื่อนไหว')).toBeNull();
+      const headers = columnHeaders().join('|');
+      expect(headers).toContain('ผู้ดูแล');
+      expect(headers).toContain('ความคืบหน้า');
+      expect(lastListArgs()).not.toHaveProperty('movementFrom');
+      expect(lastListArgs()).not.toHaveProperty('movementTo');
+    });
+  });
+
   it('labels the all-phases chip "ทั้งหมด" with no count', async () => {
     renderTicketListPage(salesUser);
     await screen.findByText('บริษัท ทดสอบ จำกัด');
 
-    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของดีล'));
+    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของงาน'));
     const allChip = phaseGroup.getByRole('button', { name: 'ทั้งหมด' });
     expect(allChip.textContent.trim()).toBe('ทั้งหมด');
   });
@@ -956,7 +1290,7 @@ describe('TicketListPage', () => {
     renderTicketListPage(salesUser);
     await screen.findByText('บริษัท ทดสอบ จำกัด');
 
-    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของดีล'));
+    const phaseGroup = within(screen.getByLabelText('ตัวกรองเฟสของงาน'));
     const phase1Chip = phaseGroup.getByRole('button', { name: /เฟส 1 ·/ });
     const phase3Chip = phaseGroup.getByRole('button', { name: /เฟส 3 ·/ });
     const phase5Chip = phaseGroup.getByRole('button', { name: /เฟส 5 ·/ });
@@ -973,7 +1307,7 @@ describe('TicketListPage', () => {
     const OWNER_S3 = 'เจ้าของตกลงตามสเปคแล้ว';
     const BUYER_S3 = 'ผู้ซื้อ/ผู้รับเหมาตกลงตามสเปคแล้ว';
     const DESIGNER_S3 = 'ผู้ออกแบบอนุมัติสเปค';
-    const ROUTE_NAMES = ['ผู้ออกแบบนำดีล', 'เจ้าของติดต่อโดยตรง', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'];
+    const ROUTE_NAMES = ['ผู้ออกแบบนำงานมา', 'เจ้าของติดต่อโดยตรง', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'];
 
     function routeDeal(id, name, salesStage, entryChannel) {
       const deal = {
@@ -1008,7 +1342,7 @@ describe('TicketListPage', () => {
         .find((row) => row.textContent.includes(customerName));
     }
     function stageCellOfRow(container, customerName) {
-      return rowOf(container, customerName).querySelector('td[data-label="ขั้นตอน / เหตุผลงาน"]');
+      return rowOf(container, customerName).querySelector('td[data-label^="ขั้นตอน"]');
     }
 
     it('a ROW for an owner-direct deal at SPEC_APPROVED reads เจ้าของตกลงตามสเปคแล้ว', async () => {
@@ -1053,7 +1387,7 @@ describe('TicketListPage', () => {
     });
 
     it.each([
-      ['DESIGNER_LED', 'ผู้ออกแบบนำดีล'],
+      ['DESIGNER_LED', 'ผู้ออกแบบนำงานมา'],
       ['OWNER_DIRECT', 'เจ้าของติดต่อโดยตรง'],
       ['BUYER_DIRECT', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'],
     ])('a ROW shows the Thai route name for %s', async (channel, routeName) => {
@@ -1063,7 +1397,7 @@ describe('TicketListPage', () => {
     });
 
     it.each([
-      ['DESIGNER_LED', 'ผู้ออกแบบนำดีล'],
+      ['DESIGNER_LED', 'ผู้ออกแบบนำงานมา'],
       ['OWNER_DIRECT', 'เจ้าของติดต่อโดยตรง'],
       ['BUYER_DIRECT', 'ผู้ซื้อ/ผู้รับเหมาติดต่อโดยตรง'],
     ])('a mobile CARD shows the Thai route name for %s', async (channel, routeName) => {
@@ -1107,7 +1441,7 @@ describe('TicketListPage', () => {
       const withRoute = stageCellOfRow(container, 'ลูกค้าดีไซเนอร์เทียบ').textContent;
       const withoutRoute = stageCellOfRow(container, 'ลูกค้าไม่มีช่องทางเทียบ').textContent;
       expect(withoutRoute).toContain('4. เสนอราคาผู้ออกแบบ');
-      expect(withRoute.replace('ผู้ออกแบบนำดีล', '')).toBe(withoutRoute);
+      expect(withRoute.replace('ผู้ออกแบบนำงานมา', '')).toBe(withoutRoute);
     });
 
     it('a CLOSED_LOST row keeps its เสียงาน badge and shows no route marker', async () => {
@@ -1148,7 +1482,7 @@ describe('TicketListPage', () => {
 
     async function renderProgressRows(deals) {
       api.tickets.list.mockResolvedValueOnce({ tickets: deals });
-      const view = renderTicketListPage(salesUser);
+      const view = renderLegacyLayout();
       await screen.findByText(deals[0].customerName);
       return view;
     }
@@ -1241,7 +1575,7 @@ describe('TicketListPage', () => {
       api.tickets.list.mockResolvedValueOnce({
         tickets: [progressDeal(14, 'ลูกค้าการ์ดผู้ซื้อ', 'QUOTE_BUYER', 'BUYER_DIRECT')],
       });
-      renderTicketListPage(salesUser);
+      renderLegacyLayout();
       const card = await screen.findByRole('listitem');
       const bar = card.querySelector('[aria-hidden="true"].flex');
       expect(Array.from(bar.children).map((seg) => Number(seg.style.flexGrow))).toEqual([2, 1, 2, 3, 3]);

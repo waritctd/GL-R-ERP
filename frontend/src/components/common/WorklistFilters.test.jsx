@@ -59,11 +59,8 @@ describe('WorklistFilters', () => {
     }
   });
 
-  // FIX F2 (review-remediation): `overflow-x-auto` forces `overflow-y` to
-  // compute as `auto` too, so the scroller clips at its own padding box.
-  // `scroll-px-1`/`px-1`/`py-1` give a chip's focus ring room on every side
-  // (including the first/last chip against the scroller's own edge) instead
-  // of being clipped there.
+  // FIX F2 (review-remediation): `overflow-x-auto` forces `overflow-y` to compute as `auto` too, so the scroller
+  // clips at its own padding box.
   it('gives the scroller room via scroll-px-1/px-1/py-1 so a chip focus ring is not clipped at the scroll edge (FIX F2)', () => {
     render(<WorklistFilters items={items} activeKey="" onSelect={() => {}} ariaLabel="ตัวกรอง" />);
 
@@ -79,9 +76,8 @@ describe('WorklistFilters', () => {
     );
     const scroller = container.querySelector('[role="group"]');
 
-    // jsdom never lays out real box metrics, so the affordance is exercised
-    // by driving the same scroll geometry the component reads (scrollLeft /
-    // clientWidth / scrollWidth) and firing the scroll listener it attaches.
+    // jsdom never lays out real box metrics, so the affordance is exercised by driving the same scroll geometry
+    // the component reads (scrollLeft / clientWidth / scrollWidth) and firing the scroll listener it attaches.
     Object.defineProperty(scroller, 'clientWidth', { configurable: true, value: 100 });
     Object.defineProperty(scroller, 'scrollWidth', { configurable: true, value: 400 });
     Object.defineProperty(scroller, 'scrollLeft', { configurable: true, value: 0, writable: true });

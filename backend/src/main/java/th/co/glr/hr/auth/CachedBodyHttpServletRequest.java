@@ -12,10 +12,8 @@ import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import org.springframework.util.StreamUtils;
 
-/**
- * Buffers the request body so it can be read more than once: the rate-limit filter reads it
- * to extract the login email, and the controller still reads it via {@code @RequestBody}.
- */
+/** Buffers the request body so it can be read more than once: the rate-limit filter reads it to extract the
+ * login email, and the controller still reads it via @RequestBody. */
 class CachedBodyHttpServletRequest extends HttpServletRequestWrapper {
     private final byte[] body;
 

@@ -28,8 +28,8 @@ public record PayrollTaxAllowanceInput(
     int childCount,
     int childCountDouble,
     int disabledCareCount,
-    // บัตรประจำตัวคนพิการ. With it, the ยกเว้นเงินได้ 190,000 (กฎกระทรวง ฉบับที่ 126) applies at any
-    // age; without it, only from 65. See PayrollCalculator#assessAnnualTax.
+    // บัตรประจำตัวคนพิการ. With it, the ยกเว้นเงินได้ 190,000 (กฎกระทรวง ฉบับที่ 126) applies at any age; without
+    // it, only from 65. See PayrollCalculator#assessAnnualTax.
     boolean disabilityCardHolder,
     // Parent allowance per qualifying head: ฿30,000 PER qualifying parent,
     // ฿120,000 = the four-parent maximum -- NOT a flat cap regardless of count.
@@ -170,14 +170,8 @@ public record PayrollTaxAllowanceInput(
         );
     }
 
-    /**
-     * Legacy 17-arg constructor: branch 118's own original signature (16 base allowances +
-     * {@code parentCareCount}, no ล.ย.01 completeness fields) before those fields (V93, branch 117)
-     * were merged in. Kept so pre-merge task-2 call sites that supply {@code parentCareCount}
-     * explicitly -- including {@code PayrollClassifiedLimbClampReviewTest} -- still compile. The
-     * ล.ย.01 fields default the same way the 16-arg legacy constructor above does; {@code
-     * parentCareCount} is taken from the caller, not defaulted.
-     */
+    /** Legacy 17-arg constructor: branch 118's own original signature (16 base allowances + parentCareCount, no
+     * ล.ย.01 completeness fields) before those fields (V93, branch 117) were merged in. */
     public PayrollTaxAllowanceInput(
         BigDecimal spouseAllowance,
         BigDecimal childAllowance,

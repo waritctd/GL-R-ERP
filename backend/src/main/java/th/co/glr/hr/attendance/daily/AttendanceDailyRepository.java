@@ -18,10 +18,8 @@ import th.co.glr.hr.attendance.AttendanceSql;
 @Repository
 public class AttendanceDailyRepository {
 
-    /**
-     * The one definition of badge resolution, shared with the punch list. Never inline a copy: a
-     * divergence here would make a punch visible in one view and invisible in the other, silently.
-     */
+    /** The one definition of badge resolution, shared with the punch list. Never inline a copy: a divergence here
+     * would make a punch visible in one view and invisible in the other, silently. */
     private static final String RESOLVED_EMPLOYEE_JOIN = AttendanceSql.RESOLVED_EMPLOYEE_JOIN;
 
     /** Rows per batched upsert during a backfill. */
@@ -33,12 +31,9 @@ public class AttendanceDailyRepository {
         this.jdbc = jdbc;
     }
 
-    /**
-     * Every (employee, date) pair with at least one punch in the range, for employees whose badge
-     * resolves. Pairs whose badge does not resolve are skipped here — {@code employee_id} is NOT
-     * NULL on the daily table, so they cannot be stored; they surface through
-     * {@link #findUnmappedBadges} instead.
-     */
+    /** Every (employee, date) pair with at least one punch in the range, for employees whose badge resolves. Pairs
+     * whose badge does not resolve are skipped here — employee_id is NOT NULL on the daily table, so they cannot
+     * be stored; they surface through #findUnmappedBadges instead. */
     public List<EmployeeDay> findPairsWithPunches(LocalDate fromDate, LocalDate toDate) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("fromDate", fromDate)
@@ -56,14 +51,8 @@ public class AttendanceDailyRepository {
         );
     }
 
-    /**
-     * Every punch in the range, grouped by (employee, date), in one query.
-     *
-     * <p>The bulk counterpart to {@link #findPunchesFor}. A historical backfill covers thousands of
-     * employee-days; fetching each one separately meant thousands of round trips to a hosted
-     * database inside a single transaction, which times out and rolls back the whole job rather
-     * than being merely slow.
-     */
+    /** Every punch in the range, grouped by (employee, date), in one query. The bulk counterpart to
+     * #findPunchesFor. */
     public Map<EmployeeDay, List<PunchRecord>> findPunchesInRange(
             LocalDate fromDate, LocalDate toDate, Long employeeId) {
         MapSqlParameterSource params = new MapSqlParameterSource()
@@ -110,12 +99,8 @@ public class AttendanceDailyRepository {
         return byEmployee;
     }
 
-    /**
-     * Department per employee, in one query — {@code TieredWorkScheduleResolver} needs it
-     * alongside division for every row. Kept as its own method (rather than folded into
-     * {@link #findDivisionIdsByEmployee}) so neither method's existing callers/tests need to change
-     * shape; callers that need both call both, once each per batch, never once per employee-day.
-     */
+    /** Department per employee, in one query — TieredWorkScheduleResolver needs it alongside division for every
+     * row. */
     public Map<Long, Long> findDepartmentIdsByEmployee() {
         Map<Long, Long> byEmployee = new HashMap<>();
         jdbc.query(
@@ -127,12 +112,9 @@ public class AttendanceDailyRepository {
         return byEmployee;
     }
 
-    /**
-     * APPROVED overtime minutes for every employee-day in the range, in one query.
-     *
-     * <p>Same APPROVED-only rule as {@link #findApprovedOvertimeMinutes} — MANAGER_APPROVED is half
-     * of the dual-approval gate and must contribute nothing.
-     */
+    /** APPROVED overtime minutes for every employee-day in the range, in one query. Same APPROVED-only rule as
+     * #findApprovedOvertimeMinutes — MANAGER_APPROVED is half of the dual-approval gate and must contribute
+     * nothing. */
     public Map<EmployeeDay, Integer> findApprovedOvertimeMinutesInRange(
             LocalDate fromDate, LocalDate toDate) {
         MapSqlParameterSource params = new MapSqlParameterSource()
@@ -177,13 +159,7 @@ public class AttendanceDailyRepository {
         );
     }
 
-    /**
-     * Minutes of APPROVED overtime for that employee and date.
-     *
-     * <p>MANAGER_APPROVED is excluded deliberately: V34 introduced CEO approval as the second half
-     * of a dual-approval gate, so counting the half-approved state would leak un-finalised overtime
-     * into a pay-relevant figure and defeat the control that migration exists to impose.
-     */
+    /** Minutes of APPROVED overtime for that employee and date. */
     public int findApprovedOvertimeMinutes(long employeeId, LocalDate workDate) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("employeeId", employeeId)
@@ -199,27 +175,14 @@ public class AttendanceDailyRepository {
         return minutes == null ? 0 : minutes;
     }
 
-    /**
-     * Upserts a derived row, <strong>never overwriting an HR correction</strong>.
-     *
-     * <p>The {@code is_manual_override} guard lives in the {@code DO UPDATE ... WHERE} clause rather
-     * than in a Java {@code if}. That makes clobbering structurally impossible from every write path
-     * — live punch, .dat import, badge backfill, overtime decision, HR endpoint, nightly job and
-     * backfill all go through this one statement — instead of depending on six callers each
-     * remembering to check.
-     *
-     * @return true when a row was inserted or updated; false when an override blocked the write
-     */
+    /** Upserts a derived row, never overwriting an HR correction. The is_manual_override guard lives in the DO
+     * UPDATE ... WHERE clause rather than in a Java if. */
     public boolean upsert(AttendanceDailyRecord record) {
         return upsertAll(List.of(record)) > 0;
     }
 
-    /**
-     * Batch form of {@link #upsert}, carrying the same override guard.
-     *
-     * <p>Chunked because a full backfill produces thousands of rows and a single unbounded batch
-     * risks exceeding the driver's statement limits.
-     */
+    /** Batch form of #upsert, carrying the same override guard. Chunked because a full backfill produces thousands
+     * of rows and a single unbounded batch risks exceeding the driver's statement limits. */
     public int upsertAll(List<AttendanceDailyRecord> records) {
         if (records.isEmpty()) {
             return 0;
@@ -295,31 +258,9 @@ public class AttendanceDailyRepository {
             .addValue("punchCount", record.punchCount());
     }
 
-    /**
-     * Writes one day's derived row as an <strong>authoritative HR correction</strong> — unlike
-     * {@link #upsert}/{@link #upsertAll} (which defer to an existing {@code is_manual_override}),
-     * this always wins and always sets {@code is_manual_override = TRUE}, the same unconditional
-     * shape as {@link #upsertWfhPresent} just below. Used by
-     * {@code AttendanceCorrectionService#approve} after it inserts the corrected punch(es): the
-     * caller computes {@code record} the ordinary way (via {@code AttendanceDailyCalculator}, from
-     * the day's now-corrected punch set), and this method is only responsible for making that
-     * computed row stick — see {@code AttendanceDailyService#applyManualCorrection}.
-     *
-     * <p>Once written, the row is protected the same way any other manual override is: {@link
-     * #upsertAll}'s {@code WHERE is_manual_override = FALSE} guard means a later device re-sync or
-     * backfill recalculation can never silently overwrite it again. This method's own WRITE (this
-     * method called again for the same day) is itself unconditional, exactly like {@link
-     * #upsertWfhPresent} — a second CEO-approved correction is always allowed to write a new row.
-     *
-     * <p><strong>That does not mean a second correction can narrow an earlier one's recorded time.</strong>
-     * Corrections only ADD a punch; they never remove one, and {@code record} here is computed by
-     * {@code AttendanceDailyCalculator} as {@code check_in = MIN(punch_time)} /
-     * {@code check_out = MAX(punch_time)} over the day's full (now-corrected) punch set. A second
-     * correction that tries to move {@code check_in} LATER than an already-recorded punch has no
-     * effect on the derived value — the earlier, earlier-in-the-day punch still wins the MIN. Only
-     * widening the window (an earlier check-in, or a later check-out) actually changes what's
-     * recorded (review #attendance-correction-request).
-     */
+    /** Writes one day's derived row as an authoritative HR correction — unlike #upsert/#upsertAll (which defer to
+     * an existing is_manual_override), this always wins and always sets is_manual_override = TRUE, the same
+     * unconditional shape as #upsertWfhPresent just below. */
     public void upsertOverride(AttendanceDailyRecord record) {
         jdbc.update("""
             INSERT INTO hr.attendance_daily (
@@ -352,19 +293,9 @@ public class AttendanceDailyRepository {
             """, upsertParams(record).addValue("isAbsent", record.absent()));
     }
 
-    /**
-     * Marks a roster of employees present for one date with no punches — the CEO/HR stand-up or WFH
-     * case. The manual mark is <strong>authoritative</strong>: it supersedes whatever daily row
-     * existed for that employee/date, <em>including a scanner-derived one</em> (the CEO ticked them
-     * present, so that wins). This only overwrites the derived {@code attendance_daily} roll-up —
-     * the raw {@code attendance_punch} rows are never touched, so un-marking the person (dropping
-     * them from a later roster, then the nightly recalc) restores the punch-derived view. Once
-     * written, the row's {@code is_manual_override = TRUE} keeps the nightly recalc from reverting
-     * it, via {@link #upsertAll}'s {@code WHERE is_manual_override = FALSE} guard.
-     *
-     * @return the number of rows inserted or refreshed — always {@code employeeIds.size()}, since
-     *         the mark now wins unconditionally
-     */
+    /** Marks a roster of employees present for one date with no punches — the CEO/HR stand-up or WFH case. The
+     * manual mark is authoritative: it supersedes whatever daily row existed for that employee/date, including a
+     * scanner-derived one (the CEO ticked them present, so that wins). */
     public int upsertWfhPresent(LocalDate workDate, Set<Long> employeeIds, String notes) {
         if (employeeIds.isEmpty()) {
             return 0;
@@ -420,18 +351,12 @@ public class AttendanceDailyRepository {
             .addValue("notes", notes);
     }
 
-    /**
-     * Removes previously-marked WFH rows for a date that were not resubmitted — the other half of
-     * {@link #upsertWfhPresent}'s "set the roster" semantics, so unchecking a name on a later
-     * submission removes the earlier mark.
-     *
-     * <p>Scoped tightly to rows this feature itself could have created ({@code is_manual_override =
-     * TRUE AND site_code = 'WFH' AND check_in IS NULL}) so neither a scanner row nor any other kind
-     * of manual correction is ever a delete candidate.
-     */
+    /** Removes previously-marked WFH rows for a date that were not resubmitted — the other half of
+     * #upsertWfhPresent's "set the roster" semantics, so unchecking a name on a later submission removes the
+     * earlier mark. */
     public int clearWfhNotInRoster(LocalDate workDate, Set<Long> keepEmployeeIds) {
-        // An empty IN (...) list is invalid SQL; a sentinel that can never be a real employee_id
-        // (BIGINT IDENTITY starts at 1) makes "keep no one" behave as "clear every WFH mark".
+        // An empty IN (...) list is invalid SQL; a sentinel that can never be a real employee_id (BIGINT IDENTITY
+        // starts at 1) makes "keep no one" behave as "clear every WFH mark".
         List<Long> keep = keepEmployeeIds.isEmpty() ? List.of(-1L) : List.copyOf(keepEmployeeIds);
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("workDate", workDate)
@@ -447,13 +372,9 @@ public class AttendanceDailyRepository {
             """, params);
     }
 
-    /**
-     * One row per employee per day across the whole range, including days with no attendance at all
-     * so the UI can render "-" rather than silently omitting them.
-     *
-     * <p>{@code generate_series} CROSS JOIN the scoped employees, bounded by hire date so rows never
-     * predate employment. The caller must cap the range: this is employees × days.
-     */
+    /** One row per employee per day across the whole range, including days with no attendance at all so the UI can
+     * render "-" rather than silently omitting them. generate_series CROSS JOIN the scoped employees, bounded by
+     * hire date so rows never predate employment. */
     public List<AttendanceDailyRow> findRange(AttendanceDailyFilter filter) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("fromDate", filter.fromDate())
@@ -525,10 +446,8 @@ public class AttendanceDailyRepository {
         ));
     }
 
-    /**
-     * Badges that scanned in the range but resolve to no employee, grouped <em>by badge</em> rather
-     * than per punch — a badge that scanned 200 times is one problem to fix, not 200 rows to read.
-     */
+    /** Badges that scanned in the range but resolve to no employee, grouped by badge rather than per punch — a
+     * badge that scanned 200 times is one problem to fix, not 200 rows to read. */
     public List<UnmappedBadge> findUnmappedBadges(LocalDate fromDate, LocalDate toDate) {
         MapSqlParameterSource params = new MapSqlParameterSource()
             .addValue("fromDate", fromDate)
@@ -631,15 +550,9 @@ public class AttendanceDailyRepository {
             LocalDate.class);
     }
 
-    /**
-     * A division's display name -- used by {@code AttendanceMonthlySummaryService} to name a
-     * division-scoped export's title line ("ฝ่าย: ...") without a second query against {@code
-     * attendance_daily} itself; this reads {@code hr.division} only, once per export, never per row.
-     *
-     * @return {@code null} if the id does not resolve to a row -- should not happen for a real
-     *     {@code AttendanceScope.divisionId()}, but a label lookup miss is safer left to the
-     *     caller's own fallback text than thrown as an error over what is purely report cosmetics.
-     */
+    /** A division's display name -- used by AttendanceMonthlySummaryService to name a division-scoped export's
+     * title line ("ฝ่าย: ...") without a second query against attendance_daily itself; this reads hr.division
+     * only, once per export, never per row. */
     public String findDivisionName(long divisionId) {
         List<String> found = jdbc.query(
             "SELECT name_th FROM hr.division WHERE division_id = :divisionId",
@@ -668,10 +581,8 @@ public class AttendanceDailyRepository {
         return found.isEmpty() ? null : found.get(0);
     }
 
-    /**
-     * {@code division_id} is INTEGER in the schema, so a blind {@code (Long)} cast throws
-     * ClassCastException at runtime. Widen through Number instead.
-     */
+    /** division_id is INTEGER in the schema, so a blind (Long) cast throws ClassCastException at runtime. Widen
+     * through Number instead. */
     private static Long nullableLong(Object value) {
         return value instanceof Number number ? number.longValue() : null;
     }

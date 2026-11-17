@@ -1,9 +1,13 @@
 package th.co.glr.hr.ticket;
 
 import jakarta.validation.Valid;
+import java.math.BigDecimal;
 import java.time.LocalDate;
+import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.Size;
 import java.util.List;
 
 public record CreateTicketRequest(
@@ -23,15 +27,8 @@ public record CreateTicketRequest(
     // Optional: a deal may start at the lead stage with no product items
     // yet (lightweight DRAFT); items arrive later via editItems before submit.
     List<@Valid TicketItemRequest> items,
-    /**
-     * Optional วันติดตามครั้งถัดไป, set at creation.
-     *
-     * <p>Exists because the stage-advance readiness gate
-     * ({@code TicketService#requireStageAdvanceReadiness}) refuses EVERY forward move while
-     * {@code next_follow_up_at} is null — so a deal created without one could not be advanced at
-     * all, and the rep met that refusal on their very first action with no clue it was coming.
-     * Collecting it here is what makes a freshly created deal actually movable.
-     */
+    /** Optional วันติดตามครั้งถัดไป, set at creation. Collecting it here is what makes a freshly created deal
+     * actually movable. */
     LocalDate nextFollowUpAt,
     /**
      * Optional; {@code true} records that the deal was created quotation-first
@@ -46,8 +43,27 @@ public record CreateTicketRequest(
      * the commission, is notified) and the actor is recorded in {@code keyed_by} and keeps full access.
      * Must be an active employee who can enter deals ({@code TicketService#create} validates).
      */
-    Long ownerEmployeeId
+    Long ownerEmployeeId,
+    /** Optional ผู้ออกแบบ (short create form): the designer's name, written to {@code sales.ticket.designer_name} —
+     * the same column the tracking form and the quotation fill write. */
+    @Size(max = 200) String designerName,
+    /** Optional มูลค่าโดยประมาณ (THB): written to its own column {@code sales.ticket.estimated_value} (V220), the
+     * board / forecast's LAST value fallback (after a quotation and imported_value). > 0, and NUMERIC(14,2) — the
+     * precision of imported_value (V215). Editable afterwards through PUT /tracking. */
+    @DecimalMin(value = "0", inclusive = false) @Digits(integer = 12, fraction = 2) BigDecimal estimatedValue,
+    /** Optional เริ่มที่: {@code LEAD_APPROACH} (S1, the default) or {@code SPEC_APPROVED} (S2). Anything else is a
+     * 400; starting at S2 needs the same stage write access as moving a deal there by hand. */
+    String startStage
 ) {
+    /** The twelve-argument shape before the short create form's fields. */
+    public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
+                               Long projectId, Long contactId, String note, String entryChannel,
+                               List<TicketItemRequest> items, LocalDate nextFollowUpAt, Boolean quotationOnly,
+                               Long ownerEmployeeId) {
+        this(title, priority, customerName, customerId, projectId, contactId, note, entryChannel,
+            items, nextFollowUpAt, quotationOnly, ownerEmployeeId, null, null, null);
+    }
+
     /** The pre-owner eleven-argument shape: the actor owns the deal. */
     public CreateTicketRequest(String title, String priority, String customerName, Long customerId,
                                Long projectId, Long contactId, String note, String entryChannel,

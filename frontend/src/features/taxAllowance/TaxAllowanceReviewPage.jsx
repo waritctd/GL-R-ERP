@@ -88,11 +88,7 @@ function OnBehalfModal({ row, caps, onClose, onSubmit, submitting }) {
   const defaultValues = defaultAllowanceValues(row.declaration);
   return (
     <Modal title={`ยื่นแทนพนักงาน — ${row.employeeName}`} subtitle="HR เป็นผู้ยื่นแทน" onClose={onClose}>
-      {/* sectioned=false: keeps this modal's ORIGINAL "every group expanded" layout. It is a
-          one-off compact entry for staff who never log in (decision #9) -- no evidence attachment
-          exists on the on-behalf endpoint, and there is no returning-user "which section did I
-          already start" need for a single-sitting form, so the #tax-allowance-sections step flow
-          (TaxAllowancePage's own self-service screen) is deliberately not turned on here. */}
+      {/* sectioned=false: keeps this modal's ORIGINAL "every group expanded" layout. */}
       <TaxAllowanceForm
         caps={caps}
         defaultValues={defaultValues}
@@ -150,8 +146,8 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     [currentYear],
   );
   const requestedYear = Number(searchParams.get('year'));
-  // An out-of-range or garbage `?year=` falls back to the current year instead of leaving the
-  // <select> on a blank option that matches nothing in the list.
+  // An out-of-range or garbage `?year=` falls back to the current year instead of leaving the <select> on a
+  // blank option that matches nothing in the list.
   const taxYear = yearOptions.includes(requestedYear) ? requestedYear : currentYear;
   const search = searchParams.get('q') || '';
 
@@ -160,8 +156,8 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     [canListEmployees],
   );
   const requestedStatus = searchParams.get('status') || '';
-  // A `?status=NONE` deep-link handed to a viewer whose chip row does not offer NONE would
-  // otherwise pin them to a permanently empty table with no visible chip to clear.
+  // A `?status=NONE` deep-link handed to a viewer whose chip row does not offer NONE would otherwise pin them to
+  // a permanently empty table with no visible chip to clear.
   const statusFilter = visibleStatusChips.some((chip) => chip.key === requestedStatus)
     ? requestedStatus
     : '';
@@ -204,9 +200,9 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     queryKey: queryKeys.taxAllowances(taxYear),
     queryFn: () => api.payroll.getTaxAllowances(taxYear).then((response) => response.items || []),
   });
-  // Same queryKey/queryFn shape as useHrData's own employees query (no params) — deliberately, so
-  // this shares one cache entry with it instead of colliding under the same key with a
-  // differently-filtered result. Filtered to active employees locally instead.
+  // Same queryKey/queryFn shape as useHrData's own employees query (no params) — deliberately, so this shares
+  // one cache entry with it instead of colliding under the same key with a differently-filtered result. Filtered
+  // to active employees locally instead.
   const employeesQuery = useQuery({
     queryKey: queryKeys.employees(),
     queryFn: () => api.employees.list().then((response) => response.employees || []),
@@ -220,11 +216,8 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
   const rows = useMemo(() => {
     const declarations = declarationsQuery.data ?? [];
     const payrollAllowances = payrollAllowancesQuery.data ?? [];
-    // Prefer a non-terminal (not WITHDRAWN/SUPERSEDED) row over a terminal one when both exist for
-    // the same employee — same "current declaration" rule as taxAllowanceStatus.selectCurrentDeclaration.
-    // An employee whose only rows are terminal (e.g. a withdrawn draft) correctly ends up with NO
-    // entry here, so taxAllowanceStatusInfo(null) below reports them as ยังไม่ได้ยื่น, not the raw
-    // WITHDRAWN status string.
+    // Prefer a non-terminal (not WITHDRAWN/SUPERSEDED) row over a terminal one when both exist for the same
+    // employee — same "current declaration" rule as taxAllowanceStatus.selectCurrentDeclaration.
     const currentByEmployee = new Map();
     for (const item of declarations) {
       if (['WITHDRAWN', 'SUPERSEDED'].includes(item.status)) continue;
@@ -344,10 +337,9 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     {
       key: 'status',
       header: 'สถานะ',
-      // The disagreement flag rides in THIS column (not a 9th one — the table is tight at 1040px,
-      // see REGISTER_GRID above) so the summary row still answers "is there a problem here" even
-      // when a declaration exists and keeps its own ordinary badge; "what exactly" is the expanded
-      // row's job (TaxAllowanceBreakdown), not this cell's.
+      // The disagreement flag rides in THIS column so the summary row still answers "is there a problem here" even
+      // when a declaration exists and keeps its own ordinary badge; "what exactly" is the expanded row's job, not
+      // this cell's.
       render: (row) => (
         <span className="inline-flex flex-wrap items-center gap-1.5">
           <StatusBadge tone={row.statusInfo.tone}>{row.statusInfo.label}</StatusBadge>
@@ -379,10 +371,9 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     {
       key: 'evidence',
       header: 'หลักฐาน (n)',
-      // requireOwnerOrHr (TaxAllowanceDeclarationService) never grants CEO evidence access — a
-      // personal medical/insurance/family document, distinct from the declaration's AMOUNTS CEO
-      // can see via this same register. Rendering "-" rather than attempting (and silently
-      // showing a wrong "0" on the inevitable 404) keeps that distinction honest for CEO viewers.
+      // requireOwnerOrHr (TaxAllowanceDeclarationService) never grants CEO evidence access — a personal
+      // medical/insurance/family document, distinct from the declaration's AMOUNTS CEO can see via this same
+      // register.
       render: (row) => (canReview
         ? <TaxAllowanceEvidenceCount declarationId={row.declaration?.declarationId ?? null} />
         : <span className="text-text-muted" title="เฉพาะฝ่ายบุคคลดูหลักฐานได้">-</span>),
@@ -390,8 +381,8 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
     {
       key: 'applied',
       header: 'ใช้กับเงินเดือน',
-      // Post-ruling rows all read 1 = the whole tax year. A pre-ruling row keeps naming its month,
-      // because it genuinely only applies from that month on (see TaxAllowanceBreakdown's twin).
+      // Post-ruling rows all read 1 = the whole tax year. A pre-ruling row keeps naming its month, because it
+      // genuinely only applies from that month on (see TaxAllowanceBreakdown's twin).
       render: (row) => (row.declaration?.appliedAt
         ? <span>{Number(row.declaration.appliedEffectiveMonth) === 1
           ? 'ทั้งปีภาษี'
@@ -452,10 +443,9 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
         // the employee page's noun order (TaxAllowancePage.jsx: "ค่าลดหย่อนภาษี (แบบ ล.ย.01)"): both
         // pages are titles for the same object, ล.ย.01.
         title="ตรวจสอบค่าลดหย่อนภาษี (แบบ ล.ย.01)"
-        // The two audiences are looking at genuinely different tables, so they are told so. HR
-        // sees one row per active employee (non-filers included, synthesized below); a viewer
-        // without employee-list access sees only declarations that exist. Same honesty the
-        // evidence column already practises for a viewer who cannot open attachments.
+        // The two audiences are looking at genuinely different tables, so they are told so. HR sees one row per active
+        // employee (non-filers included, synthesized below); a viewer without employee-list access sees only
+        // declarations that exist.
         subtitle={canListEmployees
           ? 'ใครมีค่าลดหย่อนอะไรบ้าง — ต่อการยื่นแบบ ล.ย.01 ของพนักงานทุกคน'
           // Appended, not edited in place: the original sentence stays byte-identical (existing
@@ -478,9 +468,8 @@ export function TaxAllowanceReviewPage({ user, showToast }) {
             ))}
           </select>
         </FormField>
-        {/* `min-w-0 flex-1` so the chip row keeps its own horizontal scroller (WorklistFilters
-            handles overflow + 44px touch targets internally) instead of forcing the whole
-            filter row wide at 360px. */}
+        {/* `min-w-0 flex-1` so the chip row keeps its own horizontal scroller (WorklistFilters handles overflow + 44px
+         * touch targets internally) instead of forcing the whole filter row wide at 360px. */}
         <div className="min-w-0 flex-1">
           <WorklistFilters
             items={visibleStatusChips}

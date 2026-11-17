@@ -27,17 +27,9 @@ import th.co.glr.hr.ticket.QuotationRenderer;
 import th.co.glr.hr.ticket.TicketRepository;
 import th.co.glr.hr.ticket.TicketService;
 
-/**
- * Proves the ใบขอซื้อ actually assembles from a real deal, through the real SQL.
- *
- * <p>The renderer has its own test and the assembler is pure, so the gap this closes is the one
- * neither can: {@link ImportRequestQueryRepository}'s queries had never been executed against
- * Postgres at all. A form that renders beautifully from hand-built data proves nothing about
- * whether the deal's own columns reach it.
- *
- * <p>Authorisation cases are written the wrong way round per CLAUDE.md — each asks whether a caller
- * can reach a document they should not, rather than confirming the happy path.
- */
+/** Proves the ใบขอซื้อ actually assembles from a real deal, through the real SQL. The renderer has its own test
+ * and the assembler is pure, so the gap this closes is the one neither can: ImportRequestQueryRepository's
+ * queries had never been executed against Postgres at all. */
 class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTest {
 
     private ImportRequestService service;
@@ -52,10 +44,9 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
 
     @BeforeEach
     void wireRealCollaborators() {
-        // V184 widened the constructor to 6 args (factories/tickets/ticketService, for the STORED
-        // per-factory path this class does not exercise) — the PREVIEW path under test here
-        // (render/brands/pageCount) is untouched by that migration, see ImportRequestService's own
-        // Javadoc, so these three collaborators are wired but never actually invoked by this class.
+        // V184 widened the constructor to 6 args — the PREVIEW path under test here is untouched by that migration,
+        // see ImportRequestService's own Javadoc, so these three collaborators are wired but never actually invoked by
+        // this class.
         TicketRepository tickets = new TicketRepository(jdbc);
         NotificationRepository notifications = new NotificationRepository(jdbc, SalesNotificationMailer.NO_OP);
         CustomerRepository customers = new CustomerRepository(jdbc);
@@ -103,11 +94,8 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
         assertThat(text).contains("Lithos Nero Nat", "Terrazzo White Nat");
         // One IR per brand: the LEA line belongs on its own form and must not leak onto this one.
         assertThat(text).doesNotContain("Ceppo Grigio");
-        // Values that can only have come through the SQL, not from the caller. Asserted token by
-        // token, not as one string: สั่งมาให้ is a 52.5pt column, so a real company name wraps
-        // across the rows its merged cell spans and is not contiguous in the text layer. The point
-        // of the assertion is that the DEAL's customer reached the form — not that it fitted on one
-        // line, which it cannot.
+        // Values that can only have come through the SQL, not from the caller. The point of the assertion is that the
+        // DEAL's customer reached the form — not that it fitted on one line, which it cannot.
         assertThat(text).contains("บริษัท").contains("ยู่ฮุย").contains("จำกัด");
         // Caller-supplied values still print.
         assertThat(text).contains("IR69068").contains("Within 21/5/26");
@@ -120,16 +108,9 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
             .hasMessageContaining("NoSuchBrand");
     }
 
-    /**
-     * F-SM-001 has no unbranded variant and "Brand" is a header field, so a deal carrying a line
-     * with no brand must refuse outright — bucketing it under whichever brand was asked for would
-     * print the wrong thing on a controlled document.
-     *
-     * <p>The brand is BLANK, not null, and that is not a stylistic choice:
-     * {@code sales.ticket_item.brand} is {@code NOT NULL} (V8), so Postgres rejects a null outright.
-     * This test was written with a null first and the insert itself failed — which is how the
-     * service's null branch was found to be unreachable. Blank is the reachable case.
-     */
+    /** F-SM-001 has no unbranded variant and "Brand" is a header field, so a deal carrying a line with no brand
+     * must refuse outright — bucketing it under whichever brand was asked for would print the wrong thing on a
+     * controlled document. */
     @Test
     void aDealWithABlankBrandedLineIsRefusedEvenForABrandThatIsPresent() {
         insertItem(ticketId, "   ", "Unbranded Filler", "30x30 cm", "10", "pcs", 3);
@@ -175,11 +156,9 @@ class ImportRequestServiceIntegrationTest extends AbstractPostgresIntegrationTes
             .hasMessageContaining("ไม่มีสิทธิ์");
     }
 
-    /**
-     * CEO is in the pair deliberately — {@code IR_ROLES} mirrors
-     * {@code TicketService.FULFILMENT_ROLES}, which is {import, ceo}. Note mockApi gates the sibling
-     * fulfilment endpoints on 'import' alone, so mock-mode testing as CEO diverges from this.
-     */
+    /** CEO is in the pair deliberately — IR_ROLES mirrors TicketService.FULFILMENT_ROLES, which is {import, ceo}.
+     * Note mockApi gates the sibling fulfilment endpoints on 'import' alone, so mock-mode testing as CEO diverges
+     * from this. */
     @Test
     void ceoCanRenderAnImportRequest() throws Exception {
         assertThat(service.render(ticketId, "Padana", null, null, ceoUser)).isNotEmpty();

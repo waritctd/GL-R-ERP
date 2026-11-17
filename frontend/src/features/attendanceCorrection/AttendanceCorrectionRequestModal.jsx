@@ -12,11 +12,8 @@ import { Modal } from '../../components/common/Modal.jsx';
 import { SafeForm } from '../../components/common/SafeForm.jsx';
 import { ThaiDateController } from '../../components/common/ThaiDateInput.jsx';
 
-// FormGrid (Layout.jsx) renders a <div>; this submit form needs native submit semantics
-// (Enter-to-submit, and a modal-FOOTER button linked in via form="<id>" -- see SafeForm.jsx's
-// own doc comment on that exact pattern, and EmployeeFormModal.jsx for another call site that
-// uses it) plus this exact 2-col shape, so the utility string is reproduced here the same way
-// AttendanceCorrectionPanel.jsx's own former submit form (and OvertimePanel.jsx) did.
+// FormGrid renders a <div>; this submit form needs native submit semantics plus this exact 2-col shape, so the
+// utility string is reproduced here the same way AttendanceCorrectionPanel.jsx's own former submit form did.
 const FORM_GRID_CLASS = 'grid gap-[14px] mobile:grid-cols-1 grid-cols-2';
 
 function bangkokDateParts(date = new Date()) {
@@ -85,21 +82,9 @@ function apiDateTime(value) {
   return value.length === 16 ? `${value}:00+07:00` : `${value}+07:00`;
 }
 
-/**
- * The submit half of "ขอแก้ไขเวลาเข้า-ออกงาน" -- split out of what used to be a standing
- * `<Panel>` inside AttendanceCorrectionPanel.jsx (fix/attendance-correction-on-attendance-page)
- * so the request FORM lives behind a button on /attendance instead of a tab on
- * /employee-requests. AttendanceCorrectionPanel.jsx keeps the list/review half and still shares
- * this feature's one query key ('attendanceCorrection') -- this modal invalidates it on a
- * successful create exactly as the old inline form did, so the list below picks the new
- * SUBMITTED row up on its own.
- *
- * Deliberately does NOT take a `user` prop even though its caller (AttendancePage.jsx) has one
- * in scope: AttendancePage decides whether this modal is reachable at all
- * (`canRequestCorrection`) before ever mounting it, and the create payload never carries an
- * employeeId either -- `AttendanceCorrectionService#submit` derives the actor from the session
- * (`requireEmployeeId(user)`, backend). There is nothing left here for a `user` prop to gate.
- */
+/** The submit half of "ขอแก้ไขเวลาเข้า-ออกงาน" -- split out of what used to be a standing `<Panel>` inside
+ * AttendanceCorrectionPanel.jsx (fix/attendance-correction-on-attendance-page) so the request FORM lives
+ * behind a button on /attendance instead of a tab on /employee-requests. */
 export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
   const queryClient = useQueryClient();
 
@@ -119,9 +104,9 @@ export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
   const createMutation = useMutation({
     mutationFn: (payload) => api.attendanceCorrection.create(payload).then((response) => response.request),
     onSuccess: () => {
-      // No reset(defaultForm()) here -- onClose() below unmounts this modal immediately, so a form
-      // reset right before that would never have anything left to render into (N2, adversarial
-      // review: it was dead code, not a guard against a re-open carrying stale values).
+      // No reset(defaultForm()) here -- onClose() below unmounts this modal immediately, so a form reset right
+      // before that would never have anything left to render into (N2, adversarial review: it was dead code, not a
+      // guard against a re-open carrying stale values).
       showToast('success', 'ส่งคำขอแก้ไขเวลาแล้ว');
       queryClient.invalidateQueries({ queryKey: ['attendanceCorrection'] });
       onClose();
@@ -151,16 +136,8 @@ export function AttendanceCorrectionRequestModal({ showToast, onClose }) {
   }
 
   // Wording (owner, 2026-08-10): "ลืมสแกน" → "เวลาสแกน" throughout this modal and the panel's
-  // CORRECTION_TYPE_LABELS. The old copy named the employee's mistake ("when you FORGOT to
-  // scan"), but a scan can also be missing because the reader failed, the shift changed, or WFH
-  // was marked after the fact — in those cases the form was accusing the person filing it. Naming
-  // the DATA being corrected (the scan time) covers every reason and reads as a correction rather
-  // than a confession. The type options are now the SAME strings the history table renders, so the
-  // list and the form agree instead of describing the same three values two different ways.
-  //
-  // One deviation, deliberate: the date field became "วันที่ที่ต้องการแก้ไข", not
-  // "วันที่ที่เวลาสแกน" — the literal substitution is not grammatical Thai, and this phrasing
-  // matches the "รายการที่ต้องแก้ไข" field directly beneath it.
+  // CORRECTION_TYPE_LABELS. Naming the DATA being corrected (the scan time) covers every reason and reads as a
+  // correction rather than a confession.
   return (
     <Modal
       title="ขอแก้ไขเวลาเข้า-ออกงาน"

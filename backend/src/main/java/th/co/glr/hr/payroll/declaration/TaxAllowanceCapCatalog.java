@@ -6,36 +6,18 @@ import org.springframework.stereotype.Component;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceCapEntry;
 import th.co.glr.hr.payroll.declaration.TaxAllowanceDeclarationDtos.TaxAllowanceCapKind;
 
-/**
- * Read-only catalogue of every ค่าลดหย่อน cap {@code PayrollCalculator} enforces, for
- * {@code GET /api/payroll/tax-allowances/caps} (decision #1: caps must be surfaced inline, sourced
- * from the backend, never hardcoded in the UI).
- *
- * <p><b>Deliberately NOT wired into {@code PayrollCalculator}.</b> That class is untouchable for a
- * cosmetic refactor per CLAUDE.md; this catalogue is a hand-maintained mirror, and
- * {@code TaxAllowanceCapCatalogTest} proves correspondence by DRIVING the real calculator (via
- * {@code PayrollService#preview}) rather than reading its source — if a literal here drifts from
- * {@code PayrollCalculator}'s actual one, that test fails, naming the field. See that test and
- * {@code PayrollCalculator}'s {@code allowanceBreakdown}/{@code retirementAllowance}/
- * {@code childAllowanceCap}/{@code disabledCareAllowanceCap}/{@code parentCareAllowance} for the
- * literals this mirrors.
- */
+/** Read-only catalogue of every ค่าลดหย่อน cap PayrollCalculator enforces, for GET
+ * /api/payroll/tax-allowances/caps (decision #1: caps must be surfaced inline, sourced from the backend, never
+ * hardcoded in the UI). Deliberately NOT wired into PayrollCalculator. */
 @Component
 public class TaxAllowanceCapCatalog {
     private static final BigDecimal SIXTY_THOUSAND = new BigDecimal("60000.00");
     private static final BigDecimal THIRTY_THOUSAND = new BigDecimal("30000.00");
-    // SSF (กองทุนรวมเพื่อการออม) purchases stopped being deductible from ปีภาษี 2568 (Gregorian
-    // 2025) onward — mirrors PayrollCalculator's private SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR exactly.
+    // SSF (กองทุนรวมเพื่อการออม) purchases stopped being deductible from ปีภาษี 2568 (Gregorian 2025) onward —
+    // mirrors PayrollCalculator's private SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR exactly.
     private static final int SSF_FIRST_NON_DEDUCTIBLE_TAX_YEAR = 2025;
-    // Thai ESG (กองทุนรวมไทยเพื่อความยั่งยืน): the enhanced ฿300,000 ceiling applies ONLY to units
-    // purchased 1 Jan 2024 - 31 Dec 2026 (ปีภาษี 2567-2569) — bounded on BOTH sides, unlike SSF's
-    // one-way sunset above. Before 2024 and from ปีภาษี 2570 (Gregorian 2027) onward, the ceiling
-    // is its original ฿100,000 — NOT a sunset to zero like SSF, and the 30% of assessable income
-    // rate is unchanged in every regime, only the absolute ceiling steps down. Mirrors
-    // PayrollCalculator's private THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR / _LAST_TAX_YEAR exactly
-    // (see that class for why ฿0 before the fund's actual launch date is deliberately NOT modelled,
-    // and why the comparison direction differs from SSF's above). If a later Royal Decree extends
-    // the enhanced window, update both constants together (and mockApi.js's mirror).
+    // Thai ESG (กองทุนรวมไทยเพื่อความยั่งยืน): the enhanced ฿300,000 ceiling applies ONLY to units purchased 1 Jan
+    // 2024 - 31 Dec 2026 (ปีภาษี 2567-2569) — bounded on BOTH sides, unlike SSF's one-way sunset above.
     private static final int THAI_ESG_ENHANCED_CAP_FIRST_TAX_YEAR = 2024;
     private static final int THAI_ESG_ENHANCED_CAP_LAST_TAX_YEAR = 2026;
 
@@ -56,8 +38,8 @@ public class TaxAllowanceCapCatalog {
                 SIXTY_THOUSAND, null, null, null, null, true),
             new TaxAllowanceCapEntry("child", TaxAllowanceCapKind.PER_HEAD, null,
                 THIRTY_THOUSAND, null, null, null, null, true),
-            // 2nd-or-later child born from พ.ศ. 2561 onward: an ADDITIONAL 30,000 per such head, on
-            // top of the plain child rate above — see PayrollCalculator#childAllowanceCap.
+            // 2nd-or-later child born from พ.ศ. 2561 onward: an ADDITIONAL 30,000 per such head, on top of the plain child
+            // rate above — see PayrollCalculator#childAllowanceCap.
             new TaxAllowanceCapEntry("child_double", TaxAllowanceCapKind.PER_HEAD, null,
                 THIRTY_THOUSAND, null, null, null, null, true),
             new TaxAllowanceCapEntry("disabled_care", TaxAllowanceCapKind.PER_HEAD, null,
@@ -76,14 +58,9 @@ public class TaxAllowanceCapCatalog {
             new TaxAllowanceCapEntry("parent_health_insurance", TaxAllowanceCapKind.FLAT, null,
                 new BigDecimal("15000.00"), null, null, null, null, true),
 
-            // ---- การออม/ลงทุน: ข้อ 9 -> RMF -> SSF -> pension share one 500,000 cluster ----
-            // ข้อ 9 ล.ย.01 (V137): one box for กองทุนสำรองเลี้ยงชีพ / กบข. / กองทุนสงเคราะห์
-            // ครูโรงเรียนเอกชน / กอช., consumed FIRST. Its ฿30,000 is กอช.'s -- the tightest of the
-            // four, chosen because the form cannot say which fund the figure came from and กอช. is
-            // the only one reachable by a GL&R employee. NO percent-of-income rate: กอช.'s limit is
-            // a flat baht figure (PVD's, which the engine deliberately does not use, is the one with
-            // the 15%-of-wages component). Mirrors PayrollCalculator#PROVIDENT_FUND_ALLOWANCE_CAP;
-            // see #retirementAllowance there for the source and the revisit condition.
+            // การออม/ลงทุน: ข้อ 9 -> RMF -> SSF -> pension share one 500,000 cluster ---- ข้อ 9 ล.ย.01 (V137): one box for
+            // กองทุนสำรองเลี้ยงชีพ / กบข. / กองทุนสงเคราะห์ ครูโรงเรียนเอกชน / กอช., consumed FIRST. is the only one
+            // reachable by a GL&R employee.
             new TaxAllowanceCapEntry("provident_fund", TaxAllowanceCapKind.FLAT, "retirement",
                 THIRTY_THOUSAND, new BigDecimal("500000.00"), null, null, null, true),
             new TaxAllowanceCapEntry("rmf", TaxAllowanceCapKind.PERCENT_OF_INCOME, "retirement",
@@ -101,8 +78,8 @@ public class TaxAllowanceCapCatalog {
             new TaxAllowanceCapEntry("home_loan_interest", TaxAllowanceCapKind.FLAT, null,
                 new BigDecimal("100000.00"), null, null, null, null, true),
 
-            // ---- บริจาค: education (x2) + general share 10% of income-after-other-deductions;
-            // political sits OUTSIDE that cap entirely, its own flat 10,000 ----
+            // บริจาค: education (x2) + general share 10% of income-after-other-deductions; political sits OUTSIDE that cap
+            // entirely, its own flat 10,000
             new TaxAllowanceCapEntry("education_donation", TaxAllowanceCapKind.PERCENT_OF_INCOME, "donation",
                 null, null, null, new BigDecimal("0.10"), new BigDecimal("2"), true),
             new TaxAllowanceCapEntry("general_donation", TaxAllowanceCapKind.PERCENT_OF_INCOME, "donation",
