@@ -66,6 +66,13 @@ public class FeedbackRepository {
     }
 
     /** Submissions by this reporter in the last hour (rate limit). */
+    /** Stamps the first release; true only for the call that stamped it, so the done email goes out once. */
+    public boolean markFirstRelease(long id) {
+        return jdbc.update("""
+            UPDATE hr.feedback_request SET released_at = now() WHERE feedback_id = :id AND released_at IS NULL
+            """, Map.of("id", id)) == 1;
+    }
+
     public int countLastHour(long employeeId) {
         return jdbc.queryForObject("""
             SELECT COUNT(*) FROM hr.feedback_request
