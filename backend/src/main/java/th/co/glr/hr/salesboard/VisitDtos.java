@@ -27,10 +27,27 @@ public final class VisitDtos {
     /**
      * POST /api/sales/visits. {@code done = true} records a visit that already happened (the phone's บันทึกเข้าพบ):
      * it is created DONE in one step and needs {@code plannedDate} = today (Asia/Bangkok).
+     * {@code nextFollowUpAt} (slice 6.4, optional) is the log dialog's ตามต่อ: the deal's next follow-up date, accepted
+     * only on a {@code done} log on a deal where the visit's activity lands on the deal (see
+     * {@link VisitService#create}); absent leaves the deal's date unchanged.
      */
     public record CreateVisitRequest(Long ticketId, String contactName, LocalDate plannedDate, LocalTime plannedTime,
-                                     String note, Boolean done) {}
+                                     String note, Boolean done, LocalDate nextFollowUpAt) {
+        /** The shape before slice 6.4: no follow-up date. */
+        public CreateVisitRequest(Long ticketId, String contactName, LocalDate plannedDate, LocalTime plannedTime,
+                                  String note, Boolean done) {
+            this(ticketId, contactName, plannedDate, plannedTime, note, done, null);
+        }
+    }
 
-    /** POST /api/sales/visits/{id}/done. The note replaces the planned note when given. */
-    public record VisitDoneRequest(String note) {}
+    /**
+     * POST /api/sales/visits/{id}/done. The note replaces the planned note when given. {@code nextFollowUpAt}
+     * (slice 6.4, optional): the deal's next follow-up date, under the same rule as {@link CreateVisitRequest}'s.
+     */
+    public record VisitDoneRequest(String note, LocalDate nextFollowUpAt) {
+        /** The shape before slice 6.4: no follow-up date. */
+        public VisitDoneRequest(String note) {
+            this(note, null);
+        }
+    }
 }

@@ -53,7 +53,18 @@ public class VisitController {
     @PostMapping("/{id}/done")
     VisitDto done(@PathVariable long id, @RequestBody(required = false) VisitDoneRequest request,
                   HttpSession session) {
-        return service.markDone(id, request == null ? null : request.note(), sessions.requireUser(session));
+        return service.markDone(id, request == null ? null : request.note(),
+            request == null ? null : request.nextFollowUpAt(), sessions.requireUser(session));
+    }
+
+    /**
+     * The deal's PLANNED visits that the caller could already read through this controller's lists (slice 6.5): their
+     * own on a deal they may open; every owner's for sales_manager / ceo. Scope lives in {@link VisitService} and the
+     * repository's WHERE.
+     */
+    @GetMapping("/deal/{ticketId}/planned")
+    List<VisitDto> plannedOnDeal(@PathVariable long ticketId, HttpSession session) {
+        return service.plannedOnDeal(ticketId, sessions.requireUser(session));
     }
 
     @PostMapping("/{id}/cancel")

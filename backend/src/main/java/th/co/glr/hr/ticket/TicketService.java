@@ -244,9 +244,7 @@ public class TicketService {
         // read (every item's cost fields, the full event feed) is therefore refused to it. This
         // guard is on this ONE read only: requireViewAccess (shared by actions, listDeliveries,
         // comment, ...) is deliberately untouched, and so are import's /import-requests routes.
-        if (IMPORT_ROLES.contains(actor.role())) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
-        }
+        refuseImportWholeDealRead(actor);
         TicketDto ticket = requireViewAccess(id, actor);
         // Display-only fallback, scoped to THIS single read endpoint on purpose. Every
         // other reader of ticket.items() (actions()'s canRecordDelivery/
@@ -2628,7 +2626,16 @@ public class TicketService {
 
     // ── Deal tracking + activity (V83, "kill the weekly report") ─────────────────────────────
 
-    /** Records follow-ups even on inactive deals so their history remains explainable. */
+    /**
+     * Records follow-ups even on inactive deals so their history remains explainable.
+     *
+     * <p>Slice 6.4: an optional {@code nextFollowUpAt} (the call dialog's ตามครั้งถัดไป) also writes ONLY
+     * {@code sales.ticket.next_follow_up_at}, in this transaction. Setting the date is held to exactly what setting it
+     * through {@link #updateTracking} takes — requireDealOwnership (already checked here for the activity) plus
+     * requireActive — and the date must be today or later in Asia/Bangkok. Every check runs before any write, so a
+     * refused request writes neither the date nor the activity. Never routed through updateTracking: that is a full
+     * replace and would wipe the designer/owner/buyer names.
+     */
     @Transactional
     public DealActivityDto addActivity(long ticketId, DealActivityRequest request, UserPrincipal actor) {
         if (!DealActivityKind.isValid(request.kind())) {
@@ -2636,8 +2643,16 @@ public class TicketService {
         }
         TicketSummaryDto s = requireTicket(ticketId).summary();
         requireDealOwnership(s, actor);
+        LocalDate nextFollowUpAt = request.nextFollowUpAt();
+        if (nextFollowUpAt != null) {
+            requireActive(s);
+            requireFollowUpNotPast(nextFollowUpAt, bangkokToday());
+        }
         long id = tickets.insertDealActivity(ticketId, request.activityDate(), request.kind(),
             blankToNull(request.note()), actor.id());
+        if (nextFollowUpAt != null) {
+            tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
+        }
         return tickets.findActivitiesByTicket(ticketId).stream()
             .filter(a -> a.id() == id)
             .findFirst()
@@ -2669,12 +2684,71 @@ public class TicketService {
     @Transactional
     public boolean recordVisitActivity(long ticketId, java.time.LocalDate activityDate, String note, long visitOwnerId,
                                        boolean onlyIfStillOwner) {
+        return recordVisitActivity(ticketId, activityDate, note, visitOwnerId, onlyIfStillOwner, null);
+    }
+
+    /**
+     * As above; when it writes the activity and {@code nextFollowUpAt} is set, it also writes ONLY
+     * {@code next_follow_up_at} (slice 6.4). The caller must have run {@link #requireVisitFollowUpWritable} first —
+     * this never writes the date without writing the activity, so it can never land where the activity does not.
+     */
+    @Transactional
+    public boolean recordVisitActivity(long ticketId, LocalDate activityDate, String note, long visitOwnerId,
+                                       boolean onlyIfStillOwner, LocalDate nextFollowUpAt) {
         TicketSummaryDto s = requireTicket(ticketId).summary();
         if (onlyIfStillOwner && s.createdById() != visitOwnerId) {
             return false;
         }
         tickets.insertDealActivity(ticketId, activityDate, DealActivityKind.SITE_VISIT, note, visitOwnerId);
+        if (nextFollowUpAt != null) {
+            tickets.updateNextFollowUpAt(ticketId, nextFollowUpAt);
+        }
         return true;
+    }
+
+    /**
+     * Slice 6.4: may a visit's ตามต่อ set this deal's next follow-up date? Only where three EXISTING rules all hold, so it
+     * is never looser than any path that sets the date today:
+     * <ol>
+     *   <li>the visit's SITE_VISIT activity lands on the deal — {@link #recordVisitActivity}'s rule: the visit's owner
+     *       is the deal's current owner ({@code created_by}), not merely its keyer. A visit whose tick stays on the
+     *       visit (deal moved, a keyer's or a manager's own visit) cannot move the deal's date either; 403;</li>
+     *   <li>the caller passes {@link #requireDealOwnership} — the gate {@link #updateTracking} and {@link #addActivity}
+     *       use; 403;</li>
+     *   <li>the deal is ACTIVE — updateTracking's requireActive; 409;</li>
+     * </ol>
+     * and the date is today or later on the Asia/Bangkok calendar ({@code bangkokToday} is the visit service's own
+     * clock); 400. Writes nothing.
+     */
+    public void requireVisitFollowUpWritable(long ticketId, long visitOwnerId, LocalDate nextFollowUpAt,
+                                             LocalDate bangkokToday, UserPrincipal actor) {
+        TicketSummaryDto s = requireTicket(ticketId).summary();
+        if (s.createdById() != visitOwnerId) {
+            throw new ApiException(HttpStatus.FORBIDDEN,
+                "การเข้าพบนี้ไม่ได้บันทึกลงงาน จึงตั้งวันตามต่อของงานไม่ได้");
+        }
+        requireDealOwnership(s, actor);
+        requireActive(s);
+        requireFollowUpNotPast(nextFollowUpAt, bangkokToday);
+    }
+
+    /** The one date rule for a follow-up set from a call or a visit: today or later in Asia/Bangkok. No upper bound —
+     * the tracking path that already sets this date has none. */
+    public static void requireFollowUpNotPast(LocalDate nextFollowUpAt, LocalDate bangkokToday) {
+        if (nextFollowUpAt != null && nextFollowUpAt.isBefore(bangkokToday)) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "วันตามครั้งถัดไปต้องเป็นวันนี้หรือหลังจากนี้");
+        }
+    }
+
+    /**
+     * The whole-deal read rule of {@link #get} without the read: import refused, then {@link #requireViewAccess}
+     * (viewer role; account refused; a sales rep only their own/keyed deal). 404 when the deal does not exist. For
+     * callers outside this class that serve something hanging off a deal to whoever may open it (slice 6.5's planned
+     * visits) — one definition, so the two cannot drift.
+     */
+    public void requireDealReadAccess(long ticketId, UserPrincipal actor) {
+        refuseImportWholeDealRead(actor);
+        requireViewAccess(ticketId, actor);
     }
 
     public List<DealActivityDto> listActivities(long ticketId, UserPrincipal actor) {
@@ -3894,6 +3968,18 @@ public class TicketService {
 
     void useClock(java.time.Clock clock) {
         this.clock = clock;
+    }
+
+    /** Today on the Asia/Bangkok calendar, from {@link #clock}. */
+    private LocalDate bangkokToday() {
+        return LocalDate.ofInstant(clock.instant(), java.time.ZoneId.of("Asia/Bangkok"));
+    }
+
+    /** {@link #get}'s import refusal: import reads its own projected deal page, never the whole deal. */
+    private void refuseImportWholeDealRead(UserPrincipal actor) {
+        if (IMPORT_ROLES.contains(actor.role())) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "ไม่มีสิทธิ์เข้าถึงรายการนี้");
+        }
     }
 
     /** วันที่จะกลับมาดู may be today or later on the Asia/Bangkok calendar (QuietRule#returningSql reads the same

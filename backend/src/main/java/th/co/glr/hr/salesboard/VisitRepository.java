@@ -18,6 +18,8 @@ import th.co.glr.hr.ticket.TicketRepository;
 /**
  * sales.visit (V211). Scope lives in the WHERE clause: {@link #findOwn} adds {@code v.owner_id = :ownerId};
  * {@link #findAll} has no owner predicate and is reached only through {@code VisitService}'s sales_manager/ceo gate.
+ * The same pair exists for one deal's PLANNED visits (slice 6.5): {@link #findPlannedOnDealOwnedBy} (owner predicate)
+ * and {@link #findPlannedOnDeal} (sales_manager/ceo only), both behind {@code VisitService#plannedOnDeal}.
  * Both take an inclusive {@code planned_date} range (the service caps it at 31 days) and order by
  * {@code planned_date, planned_time NULLS LAST, visit_id} — mockApi.salesBoard.visits mirrors this ORDER BY.
  */
@@ -63,6 +65,21 @@ public class VisitRepository {
     public List<VisitDto> findAll(LocalDate from, LocalDate to) {
         return jdbc.query(SELECT + " WHERE v.planned_date BETWEEN :from AND :to" + ORDER,
             Map.of("from", from, "to", to), VisitRepository::map);
+    }
+
+    /**
+     * Slice 6.5: one deal's PLANNED visits owned by {@code ownerId} — a sales rep's view on the deal page; the owner
+     * predicate is the same one {@link #findOwn} carries. Same ORDER BY as the lists; no LIMIT, as they have none.
+     */
+    public List<VisitDto> findPlannedOnDealOwnedBy(long ticketId, long ownerId) {
+        return jdbc.query(SELECT + " WHERE v.ticket_id = :ticketId AND v.status = 'PLANNED' AND v.owner_id = :ownerId"
+            + ORDER, Map.of("ticketId", ticketId, "ownerId", ownerId), VisitRepository::map);
+    }
+
+    /** Slice 6.5: one deal's PLANNED visits, every owner's. Only for the sales_manager / ceo view, as {@link #findAll}. */
+    public List<VisitDto> findPlannedOnDeal(long ticketId) {
+        return jdbc.query(SELECT + " WHERE v.ticket_id = :ticketId AND v.status = 'PLANNED'" + ORDER,
+            Map.of("ticketId", ticketId), VisitRepository::map);
     }
 
     public Optional<VisitDto> findById(long visitId) {
