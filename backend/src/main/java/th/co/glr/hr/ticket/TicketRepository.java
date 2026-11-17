@@ -2272,20 +2272,29 @@ public class TicketRepository {
             """, batch);
     }
 
+    /**
+     * {@code deliveredAt} (slice 6d) is the moment the goods went, for a back-dated delivery; {@code null} stamps the
+     * row with the insert time ({@code now()}), exactly as before. {@code created_at} is always the insert time.
+     */
     @Transactional
     public long insertDeliveryRecord(long ticketId, String source, long deliveredBy, String note,
-                                     String recipientName, List<RecordDeliveryRequest.Line> lines) {
+                                     String recipientName, List<RecordDeliveryRequest.Line> lines,
+                                     java.time.Instant deliveredAt) {
         GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note, recipient_name)
-            VALUES (:ticketId, :source, :deliveredBy, :note, :recipientName)
+            INSERT INTO sales.delivery_record (ticket_id, source, delivered_by, note, recipient_name, delivered_at)
+            VALUES (:ticketId, :source, :deliveredBy, :note, :recipientName,
+                    COALESCE(CAST(:deliveredAt AS timestamptz), now()))
             """,
             new MapSqlParameterSource()
                 .addValue("ticketId", ticketId)
                 .addValue("source", source)
                 .addValue("deliveredBy", deliveredBy)
                 .addValue("note", note)
-                .addValue("recipientName", recipientName),
+                .addValue("recipientName", recipientName)
+                .addValue("deliveredAt",
+                    deliveredAt == null ? null : deliveredAt.atOffset(java.time.ZoneOffset.UTC),
+                    java.sql.Types.TIMESTAMP_WITH_TIMEZONE),
             keyHolder,
             new String[] {"delivery_id"});
         long deliveryId = keyHolder.getKey().longValue();
