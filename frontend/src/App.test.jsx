@@ -255,13 +255,15 @@ describe('App / route branches division managers to DivisionManagerOverview', ()
   });
 });
 
-// Release lockdown (SELF_SERVICE_ONLY — app/features.js): everyone except HR and CEO lands on the self-service
-// view at '/', and every non-self-service route answers with the access-denied page.
+// Release lockdown (SELF_SERVICE_ONLY — app/features.js): a locked role lands on the self-service view at '/' (import and account keep their own dashboard),
+// and every non-self-service, non-released route answers with the access-denied page.
 describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
   const salesUser = { employeeId: 41, name: 'พนักงานขาย ทดสอบ', role: 'sales', email: 'sales@glr.co' };
   // import stays locked after the sales release (owner ruling 2026-10-22); sales does not.
   const importUser = { employeeId: 42, name: 'ฝ่ายนำเข้า ทดสอบ', role: 'import', email: 'import@glr.co' };
-  const importUserNoEmployeeId = { employeeId: null, name: 'ผู้ใช้ระบบ ทดสอบ', role: 'import', email: 'noemp@glr.co' };
+  const accountUser = { employeeId: 43, name: 'ฝ่ายบัญชี ทดสอบ', role: 'account', email: 'account@glr.co' };
+  const warehouseUser = { employeeId: 44, name: 'คลังสินค้า ทดสอบ', role: 'warehouse', email: 'wh@glr.co' };
+  const warehouseUserNoEmployeeId = { employeeId: null, name: 'ผู้ใช้ระบบ ทดสอบ', role: 'warehouse', email: 'noemp@glr.co' };
   const hrUser = { employeeId: 40, name: 'ฝ่ายบุคคล ทดสอบ', role: 'hr', email: 'hr@glr.co' };
 
   afterEach(() => {
@@ -288,11 +290,26 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
     );
   }
 
-  it('lands a locked import user on EmployeeSelfService, not their worklist', async () => {
+  // Owner ruling 2026-11-17: import and account stay locked (paths) but land on their own dashboards.
+  it('lands a locked import user on the import dashboard, not self-service', async () => {
     await renderLockedAppAt('/', importUser);
 
+    expect(await screen.findByRole('heading', { name: 'งานนำเข้า' })).toBeTruthy();
+    expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
+  });
+
+  it('lands a locked account user on the finance dashboard, not self-service', async () => {
+    await renderLockedAppAt('/', accountUser);
+
+    expect(await screen.findByRole('heading', { name: 'ภาพรวมการเงิน' })).toBeTruthy();
+    expect(screen.queryByText(/เวลาทำงานและคำขอของคุณ/)).toBeNull();
+  });
+
+  it('still lands another locked role (warehouse) on EmployeeSelfService', async () => {
+    await renderLockedAppAt('/', warehouseUser);
+
     // EmployeeSelfService's greeting has NO comma; EmployeeDashboard's does ("สวัสดี, คุณ…").
-    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${importUser.name}` })).toBeTruthy();
+    expect(await screen.findByRole('heading', { name: `สวัสดี คุณ${warehouseUser.name}` })).toBeTruthy();
     expect(screen.getByText(/เวลาทำงานและคำขอของคุณ/)).toBeTruthy();
   });
 
@@ -305,10 +322,10 @@ describe('App / release lockdown (SELF_SERVICE_ONLY)', () => {
   });
 
   it('falls back to EmployeeDashboard for a locked user with no employee row', async () => {
-    await renderLockedAppAt('/', importUserNoEmployeeId);
+    await renderLockedAppAt('/', warehouseUserNoEmployeeId);
 
-    expect(await screen.findByRole('heading', { name: `สวัสดี, คุณ${importUserNoEmployeeId.name}` })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: `สวัสดี คุณ${importUserNoEmployeeId.name}` })).toBeNull();
+    expect(await screen.findByRole('heading', { name: `สวัสดี, คุณ${warehouseUserNoEmployeeId.name}` })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: `สวัสดี คุณ${warehouseUserNoEmployeeId.name}` })).toBeNull();
   });
 
   it('refuses a locked role the deal pipeline at /tickets', async () => {

@@ -1,4 +1,4 @@
-import { canAccessPath, isSelfServiceLocked } from '../../app/permissions.js';
+import { canAccessPath, landsOnSelfService } from '../../app/permissions.js';
 
 /** Every role DivisionAccessPolicy.roleFor can return, in the order the ทั้งหมด tab lists their sections. Must equal
  * the backend's ReleaseNoticePolicy.ROLES: an unknown role is a 400 at publish time. */
@@ -34,10 +34,11 @@ function representativeUser(role) {
 }
 
 /** Whether `user` can open the page `entry` describes TODAY: the route guard and the release lockdown both apply
- * (canAccessPath), and a landing entry describes the role's own dashboard, which a locked viewer does not get. */
+ * (canAccessPath), and a landing entry describes the role's own dashboard, which a viewer whose `/` is the
+ * self-service landing does not get. */
 export function entryVisibleTo(entry, user) {
   if (!user) return false;
-  if (entry.landing && isSelfServiceLocked(user)) return false;
+  if (entry.landing && landsOnSelfService(user)) return false;
   return canAccessPath(entry.path, user);
 }
 

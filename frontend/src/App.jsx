@@ -10,7 +10,7 @@ import { ResetPasswordPage } from './features/auth/ResetPasswordPage.jsx';
 import { useHrData } from './hooks/useHrData.js';
 import { useToast } from './hooks/useToast.js';
 import { SALES_ENABLED } from './app/features.js';
-import { hasPermission, isDivisionManager, isSelfServiceLocked } from './app/permissions.js';
+import { hasPermission, isDivisionManager, landsOnSelfService } from './app/permissions.js';
 import { RequireAccess } from './app/RequireAccess.jsx';
 import { userFromAuthResponse } from './app/authUser.js';
 import { clearLastPage, recordPage } from './features/whatsNew/lastPage.js';
@@ -141,13 +141,10 @@ export function App() {
   // EmployeeDashboard. `!isDivisionManager(user)` reuses the single source of truth (permissions.js);
   // a manager-flagged employee lands on DivisionManagerOverview above, never here.
   const isPlainEmployee = user?.role === 'employee' && !isDivisionManager(user);
-  // Release lockdown (SELF_SERVICE_ONLY — see app/features.js). False for HR and CEO, who keep the
-  // role -> Overview chain below; true for every other role, which short-circuits that chain to the
-  // self-service landing. It has to override the chain rather than sit inside it: a sales rep's
-  // SalesOverview, a sales_manager's ManagerOverview and a division manager's DivisionManagerOverview
-  // all render pipeline or team data the lock is meant to remove, and each is chosen ABOVE the
-  // self-service branch.
-  const selfServiceLocked = isSelfServiceLocked(user);
+  // Release lockdown (SELF_SERVICE_ONLY — see app/features.js). A locked role short-circuits the
+  // role -> Overview chain below to the self-service landing, except the roles that keep their own
+  // dashboard (permissions.js#landsOnSelfService). Path access is RequireAccess's job, not this.
+  const selfServiceLocked = landsOnSelfService(user);
 
   useEffect(() => {
     let alive = true;

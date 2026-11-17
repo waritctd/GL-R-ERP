@@ -1,5 +1,5 @@
 import { ROLE_PERMISSIONS } from '../api/routes.js';
-import { SELF_SERVICE_ONLY } from './features.js';
+import { SALES_ENABLED, SELF_SERVICE_ONLY } from './features.js';
 import { canCreateDealQuotationStandalone } from '../features/quotations/quotationMeta.js';
 
 export function hasPermission(role, key) {
@@ -195,6 +195,17 @@ export function isReleasedPath(path, user) {
 export function isSelfServiceLocked(user) {
   if (!SELF_SERVICE_ONLY) return false;
   return !SELF_SERVICE_EXEMPT_ROLES.includes(user?.role);
+}
+
+// Locked roles that still get their own dashboard at `/` (owner ruling 2026-11-17): import lands on
+// ImportOverview, account on AccountOverview. They stay locked; RELEASED_PATHS_BY_ROLE still bounds
+// where they can go. Only while SALES_ENABLED, since those dashboards are sales screens.
+const OWN_LANDING_LOCKED_ROLES = ['import', 'account'];
+
+/** Whether `/` is the self-service landing for `user`: locked, and not a role that keeps its own dashboard.
+ * The landing only; path access is isSelfServiceLocked + canAccessPath. */
+export function landsOnSelfService(user) {
+  return isSelfServiceLocked(user) && !(SALES_ENABLED && OWN_LANDING_LOCKED_ROLES.includes(user?.role));
 }
 
 // The lockdown is an ALLOWLIST, not a blocklist, and that direction is the whole point. The prefix test
